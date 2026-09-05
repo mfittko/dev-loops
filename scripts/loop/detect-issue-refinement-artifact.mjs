@@ -12,9 +12,9 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 const USAGE = `Usage:
   detect-issue-refinement-artifact.mjs --repo <owner/name> --issue <number>
   detect-issue-refinement-artifact.mjs --input <path>
-Detect whether a GitHub issue carries the full refinement artifact
-matrix (Acceptance criteria checklist + DoD checklist + explicit
-Non-goals section, or a complete linked refinement doc).
+Detect whether a GitHub issue carries the refinement floor: the
+authoritative AC→DoD mapping matrix (a two-column table) + an explicit
+Non-goals section, or a complete linked refinement doc (#1951).
 Required (exactly one):
   --repo <owner/name>   Repository slug (e.g. owner/name)
   --issue <number>      Issue number
@@ -24,12 +24,12 @@ Success output (stdout, JSON):
     "ok": true,
     "repo": "owner/name",
     "issue": 532,
-    "source": "issue-body-ac" | "issue-body-dod" | "linked-doc" | "missing",
+    "source": "issue-body-matrix" | "issue-body-ac" | "issue-body-dod" | "linked-doc" | "missing",
     "hasACs": true | false,
     "acItems": [...],
     "dodItems": [...],
     "linkedDoc": { "found": true, "path": "...", "reason": "..." },
-    "finding": "missing_refinement_artifact" | "missing_dod_checklist" | "missing_ac_checklist" | "missing_explicit_non_goals" | null,
+    "finding": "missing_refinement_artifact" | "missing_ac_dod_matrix" | "malformed_ac_dod_matrix" | "missing_explicit_non_goals" | null,
     "reason": "..."
   }
 Error output (stderr, JSON):

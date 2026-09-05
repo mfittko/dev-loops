@@ -20,13 +20,11 @@ async function runDetect(args) {
 }
 
 const REFINED_BODY = [
-  "## Acceptance criteria",
+  "## AC / DoD matrix",
   "",
-  "- [ ] the thing works",
-  "",
-  "## Definition of done",
-  "",
-  "- all checks pass",
+  "| Criterion outcome | Required completion evidence |",
+  "|---|---|",
+  "| the feature works end to end | a focused test proves the feature works |",
   "",
   "## Non-goals",
   "",

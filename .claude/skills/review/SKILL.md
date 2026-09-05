@@ -84,9 +84,13 @@ repeat phases those gates run:
    coordination-context read, no auto-resolve, no forbidden-action check
    (those are draft/pre-approval-only machinery `review` never touches). See
    [Checkpoint Verdict Comment Contract](../docs/gate-review-comment-contract.md#review-gate-submit-modes-1840)
-   for the `--submit` vocabulary. `approve`/`request-changes` additionally
-   REQUIRE `--interactive-confirm` (#1888) — fail closed unless provably
-   interactive, so omitting `--auto` is not a license for a headless caller.
+   for the `--submit` vocabulary. `approve`/`request-changes`/`discard`
+   additionally REQUIRE `--interactive-confirm` (#1888/#1912) — fail closed
+   unless provably interactive, so omitting `--auto` is not a license for a
+   headless caller. When an own same-head pending review already exists,
+   `comment`/`request-changes`/`approve` SUBMIT it via `/reviews/<id>/events`
+   (preserving inline comments) rather than creating a second review (which
+   422s); `discard` DELETES it (#1912).
 
    <!-- rule: REVIEW-GATE-VERDICT-CANONICAL -->
    `REVIEW-GATE-VERDICT-CANONICAL`: the `review` verdict MUST be posted through
@@ -110,7 +114,12 @@ repeat phases those gates run:
    - **Interactive run:** the review was posted `--submit pending` — an
      author-only draft, invisible to other reviewers until submitted. Present
      an `AskUserQuestion` multiple choice (mirroring `/loop-grill`'s
-     interactive pattern, `skills/loop-grill/SKILL.md`):
+     interactive pattern, `skills/loop-grill/SKILL.md`). No-dangling
+     guarantee (#1848): every **Submit as** choice CONSUMES the pending draft
+     in place — it submits the existing pending review via `/events` (same
+     review id), never creating a second review — so the run leaves exactly
+     ONE review and no orphaned pending draft; **Leave pending** keeps exactly
+     the one draft and **Discard** leaves none:
      - **Leave pending (default)** — print the PR review URL and how to
        finish it (open the URL, or re-invoke with `--submit comment`, or
        `--submit approve --interactive-confirm`/`--submit
@@ -118,23 +127,34 @@ repeat phases those gates run:
        — see the option below); warn it stays invisible to other reviewers
        until submitted.
      - **Submit as Comment** — re-run `upsert-checkpoint-verdict.mjs --gate
-       review --submit comment` for the SAME round (do not re-fan-out).
+       review --submit comment` for the SAME round (do not re-fan-out). The
+       re-run detects the caller's own same-head pending review and SUBMITS
+       it via `POST /repos/<owner>/<repo>/pulls/<n>/reviews/<id>/events`
+       (event `COMMENT`), preserving its inline comments — it does NOT create
+       a second review (a second create 422s: GitHub allows only one pending
+       review per user per PR, #1912).
      - **Submit as Request-changes** — same re-run with `--submit
        request-changes --interactive-confirm` (#1888: the token records that
-       a human made this choice in this prompt). State inline: this is a
+       a human made this choice in this prompt). Submits the existing pending
+       review via `/events` (event `REQUEST_CHANGES`). State inline: this is a
        GitHub-native review event that can BLOCK merge (branch protection)
        until dismissed, independent of any dev-loops gate.
      - **Submit as Approve** — same re-run with `--submit approve
        --interactive-confirm` (#1888: the token records that a human made
-       this choice in this prompt). State
+       this choice in this prompt). Submits the existing pending review via
+       `/events` (event `APPROVE`). State
        inline: this is a GitHub-native review event that SATISFIES a
        required-approvals branch-protection rule, independent of any
        dev-loops gate — it never satisfies `draft_gate`/`pre_approval_gate`
        evidence (see [Non-evidence, by construction](#non-evidence-by-construction)
        below).
-     - **Discard** — delete the pending draft review (`gh api -X DELETE
-       repos/<owner>/<repo>/pulls/<n>/reviews/<id>`) so no dangling artifact
-       is left.
+     - **Discard** — re-run `upsert-checkpoint-verdict.mjs --gate review
+       --submit discard --interactive-confirm`, which DELETES the caller's
+       own pending draft review (`DELETE /pulls/<pr>/reviews/<id>`) so no dangling
+       artifact is left (#1912). `discard` is destructive, so like
+       approve/request-changes it is refused headless and fails closed
+       without `--interactive-confirm`. This is distinct from **Leave
+       pending**, which keeps the draft in place.
    - **`--auto`/headless run:** skip the prompt entirely; the round already
      posted `--submit comment` (the default, and the only escalation-capable
      mode headless is allowed — `approve`/`request-changes` are refused

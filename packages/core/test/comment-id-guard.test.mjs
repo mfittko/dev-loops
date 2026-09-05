@@ -4,6 +4,7 @@ import { describe, test } from "bun:test";
 import {
   extractIssuePrIds,
   guardCommentBodyNoIssuePrIds,
+  neutralizeBareIssuePrIds,
 } from "../src/github/comment-id-guard.mjs";
 
 describe("comment-id-guard (#1731 no-issue/PR-ids-in-comments)", () => {
@@ -210,5 +211,25 @@ describe("comment-id-guard (#1731 no-issue/PR-ids-in-comments)", () => {
       guardCommentBodyNoIssuePrIds(verdictBody, { ref: "gate verdict body" }),
       verdictBody,
     );
+  });
+
+  test("neutralizeBareIssuePrIds strips the leading # from bare refs (#1922)", () => {
+    // The whole point: a neutralized body no longer trips the guard.
+    const raw = "duplicates #1807 and ##1584 behavior";
+    const neutralized = neutralizeBareIssuePrIds(raw);
+    assert.equal(neutralized, "duplicates 1807 and 1584 behavior");
+    assert.deepEqual(extractIssuePrIds(neutralized), []);
+    assert.doesNotThrow(() => guardCommentBodyNoIssuePrIds(neutralized));
+    // Digits not preceded by # are untouched; hex SHAs stay intact.
+    assert.equal(neutralizeBareIssuePrIds("version 1807 stable"), "version 1807 stable");
+    assert.equal(
+      neutralizeBareIssuePrIds("head deb5837b21440cc757c2ae67430363584125d7d7"),
+      "head deb5837b21440cc757c2ae67430363584125d7d7",
+    );
+    // A lone # not before a digit is left alone (not an auto-link candidate).
+    assert.equal(neutralizeBareIssuePrIds("C# and #tag"), "C# and #tag");
+    // Non-string input is returned unchanged.
+    assert.equal(neutralizeBareIssuePrIds(42), 42);
+    assert.equal(neutralizeBareIssuePrIds(null), null);
   });
 });

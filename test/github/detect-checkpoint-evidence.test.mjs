@@ -1546,7 +1546,7 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7): a real l
         "    angles:",
         "      - dry",
         "      - kiss",
-        "      - name: pr-checklist-matrix",
+        "      - name: pr-checklist",
         "        mandatory: true",
         "  fanout:",
         "    groups:",
@@ -1560,7 +1560,7 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7): a real l
     const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-21");
     await mkdir(ledgerDir, { recursive: true });
     // 2 fresh dispatch units (the "process" group + the singleton
-    // pr-checklist-matrix), 2 distinct reviewers — meets the floor exactly.
+    // pr-checklist), 2 distinct reviewers — meets the floor exactly.
     await writeFile(
       path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
       `${JSON.stringify({
@@ -1570,7 +1570,7 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7): a real l
           perAngle: [
             { angle: "dry", reviewer: "review-a", group: "process" },
             { angle: "kiss", reviewer: "review-a", group: "process" },
-            { angle: "pr-checklist-matrix", reviewer: "review-b" },
+            { angle: "pr-checklist", reviewer: "review-b" },
           ],
         },
       })}\n`,
@@ -1612,7 +1612,7 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7): the SAME
         "    angles:",
         "      - dry",
         "      - kiss",
-        "      - name: pr-checklist-matrix",
+        "      - name: pr-checklist",
         "        mandatory: true",
         "  fanout:",
         "    maxAnglesPerGroup: 1",
@@ -1635,7 +1635,7 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7): the SAME
           perAngle: [
             { angle: "dry", reviewer: "review-a", group: "made-up" },
             { angle: "kiss", reviewer: "review-a", group: "made-up" },
-            { angle: "pr-checklist-matrix", reviewer: "review-b" },
+            { angle: "pr-checklist", reviewer: "review-b" },
           ],
         },
       })}\n`,
@@ -1682,7 +1682,7 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7, #1601): t
         "    angles:",
         "      - dry",
         "      - kiss",
-        "      - name: pr-checklist-matrix",
+        "      - name: pr-checklist",
         "        mandatory: true",
         "  fanout:",
         "    groups:",
@@ -1707,7 +1707,7 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7, #1601): t
           perAngle: [
             { angle: "dry", reviewer: "review-a", group: "process" },
             { angle: "kiss", reviewer: "review-a", group: "process" },
-            { angle: "pr-checklist-matrix", reviewer: "review-b" },
+            { angle: "pr-checklist", reviewer: "review-b" },
           ],
         },
       })}\n`,
@@ -1821,14 +1821,14 @@ test("buildPreMergeGateCheck FAILS closed when fan-out provenance is missing a m
         ledgerPath: "tmp/b.json",
         ledgerExists: true,
         provenance: { distinctReviewers: 2, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }] },
-        mandatoryAngles: ["pr-checklist-matrix", "yagni"],
-        anglePool: ["dry", "kiss", "pr-checklist-matrix", "yagni"],
+        mandatoryAngles: ["pr-checklist", "yagni"],
+        anglePool: ["dry", "kiss", "pr-checklist", "yagni"],
       },
     ],
   });
   assert.equal(result.ok, false);
   assert.ok(
-    result.failures.some((f) => f.includes("missing mandatory angle(s): pr-checklist-matrix, yagni") && f.includes("route to conductor")),
+    result.failures.some((f) => f.includes("missing mandatory angle(s): pr-checklist, yagni") && f.includes("route to conductor")),
     JSON.stringify(result.failures),
   );
 });
@@ -1878,7 +1878,7 @@ test("buildPreMergeGateCheck WARNS (does not fail) on a foreign angle when rejec
   assert.match(result.warnings[0], /rejectForeignAngles is false/);
 });
 
-test("buildPreMergeGateCheck accepts the fan-in synthetic pr-checklist-matrix angle when the pool omits it (#1494)", () => {
+test("buildPreMergeGateCheck accepts the fan-in synthetic pr-checklist angle when the pool omits it (#1494)", () => {
   const result = buildPreMergeGateCheck(cleanEvidence(), 0, null, {
     required: true,
     gates: [
@@ -1887,7 +1887,7 @@ test("buildPreMergeGateCheck accepts the fan-in synthetic pr-checklist-matrix an
         executionMode: "fanout_fanin",
         ledgerPath: "tmp/b.json",
         ledgerExists: true,
-        provenance: { distinctReviewers: 2, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "pr-checklist-matrix", reviewer: "review-b" }] },
+        provenance: { distinctReviewers: 2, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "pr-checklist", reviewer: "review-b" }] },
         mandatoryAngles: [],
         anglePool: ["dry", "kiss"],
       },
@@ -1906,9 +1906,9 @@ test("buildPreMergeGateCheck accepts a delta-suffixed angle as covering its base
         executionMode: "fanout_fanin",
         ledgerPath: "tmp/b.json",
         ledgerExists: true,
-        provenance: { distinctReviewers: 2, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "pr-checklist-matrix-delta-at-current-head", reviewer: "review-b" }] },
-        mandatoryAngles: ["pr-checklist-matrix"],
-        anglePool: ["dry", "kiss", "pr-checklist-matrix"],
+        provenance: { distinctReviewers: 2, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "pr-checklist-delta-at-current-head", reviewer: "review-b" }] },
+        mandatoryAngles: ["pr-checklist"],
+        anglePool: ["dry", "kiss", "pr-checklist"],
       },
     ],
   });
@@ -1925,8 +1925,8 @@ test("buildPreMergeGateCheck FAILS closed when mandatory angles are configured b
         ledgerPath: "tmp/b.json",
         ledgerExists: true,
         provenance: null,
-        mandatoryAngles: ["pr-checklist-matrix"],
-        anglePool: ["dry", "pr-checklist-matrix"],
+        mandatoryAngles: ["pr-checklist"],
+        anglePool: ["dry", "pr-checklist"],
       },
     ],
   });
@@ -1969,8 +1969,8 @@ test("buildPreMergeGateCheck angle-coverage enforcement is skipped for an inline
         ledgerPath: "tmp/b.json",
         ledgerExists: true,
         provenance: null,
-        mandatoryAngles: ["pr-checklist-matrix"],
-        anglePool: ["pr-checklist-matrix"],
+        mandatoryAngles: ["pr-checklist"],
+        anglePool: ["pr-checklist"],
       },
     ],
   });
@@ -2781,7 +2781,7 @@ async function writeLedger(tempDir, gate) {
   await import("node:fs/promises").then((fs) => fs.mkdir(dir, { recursive: true }));
   // Provenance covering the shipped extension-defaults mandatory angle for each
   // gate: fanout_fanin ledgers must record it for merge-evidence angle coverage.
-  const mandatory = gate === "draft_gate" ? "pr-description" : "pr-checklist-matrix";
+  const mandatory = gate === "draft_gate" ? "pr-description" : "pr-checklist";
   const provenance = {
     distinctReviewers: 2,
     perAngle: [
@@ -2951,7 +2951,7 @@ test("deriveEvidenceState: both gates clean but an unrelated pre-merge failure (
 
 test("buildFanoutEnforcement + buildPreMergeGateCheck PASSES on an auto-chunked N>1 round (AC7, #1601)", async () => {
   // No configured groups; maxAnglesPerGroup: 2 → resolveFanoutGroups auto-chunks
-  // [a,b,c,d] into group:a+b + group:c+d, with pr-checklist-matrix a leftover
+  // [a,b,c,d] into group:a+b + group:c+d, with pr-checklist a leftover
   // singleton. A ledger recording one reviewer per chunk (shared identity within
   // the chunk, distinct across chunks) must PASS requireFanoutProvenance —
   // countFreshDispatchUnits counts 3 dispatch units, not 5 angles.
@@ -2970,7 +2970,7 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck PASSES on an auto-chunked 
         "      - b",
         "      - c",
         "      - d",
-        "      - name: pr-checklist-matrix",
+        "      - name: pr-checklist",
         "        mandatory: true",
         "  fanout:",
         "    maxAnglesPerGroup: 2",
@@ -2992,7 +2992,7 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck PASSES on an auto-chunked 
             { angle: "b", reviewer: "review-a", group: "group:a+b" },
             { angle: "c", reviewer: "review-b", group: "group:c+d" },
             { angle: "d", reviewer: "review-b", group: "group:c+d" },
-            { angle: "pr-checklist-matrix", reviewer: "review-c" },
+            { angle: "pr-checklist", reviewer: "review-c" },
           ],
         },
       })}\n`,

@@ -2283,6 +2283,32 @@ test("renderBriefingPrefix: deterministic — two renders of identical input pro
   assert.equal(a.text, b.text);
 });
 
+test("renderBriefingPrefix: pins the WORKTREE-ABSOLUTE findings write dir so a reviewer cannot default to the primary checkout tmp/ (#1978)", () => {
+  const { text } = renderBriefingPrefix(renderInput());
+  // The absolute per-angle findings dir under THIS worktree, with a generic
+  // <angle> placeholder (angle identity stays out of the byte-identical prefix).
+  const sha = renderInput().headSha;
+  assert.ok(
+    text.includes(`/repo/worktree/tmp/gate-reviews/owner-repo/pr-9/draft_gate-${sha}/<angle>.json`),
+    "briefing pins the worktree-absolute per-angle findings path",
+  );
+  // The findings-writer CLI is pinned to the worktree tmp/ too.
+  assert.ok(text.includes('--tmp-root "/repo/worktree/tmp"'), "briefing pins --tmp-root to the worktree tmp/");
+  assert.ok(/Findings write-path invariant/.test(text), "briefing names the findings write-path invariant");
+  assert.ok(/primary checkout/i.test(text), "briefing warns against the primary checkout tmp/");
+  // Byte-identity across reviewers: the write-path invariant carries no angle
+  // name (uses the <angle> placeholder), so it stays identical for every
+  // reviewer of the round.
+  assert.ok(!text.includes(`/gate-reviews/owner-repo/pr-9/draft_gate-${sha}/security.json`));
+});
+
+test("renderBriefingPrefix: findings write-path uses the head-specific worktree dir for a different gate/head (#1978)", () => {
+  const sha = "deadbeef12345";
+  const { text } = renderBriefingPrefix(renderInput({ gate: "pre_approval_gate", headSha: sha, worktreeRoot: "/wt/issue-1" }));
+  assert.ok(text.includes(`/wt/issue-1/tmp/gate-reviews/owner-repo/pr-9/pre_approval_gate-${sha}/<angle>.json`));
+  assert.ok(text.includes('--tmp-root "/wt/issue-1/tmp"'));
+});
+
 // ---------------------------------------------------------------------------
 // "## Reviewer token discipline" section
 // ---------------------------------------------------------------------------
@@ -2973,6 +2999,8 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       "Mandatory: before doing any angle-specific work, run `node scripts/github/verify-fresh-review-context.mjs --scope draft-gate-<your-dispatch-unit> --context-path tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json --prefix-file tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.briefing-prefix.txt` once — <your-dispatch-unit> is your angle name for a per-angle dispatch, or `group-<name>` for a grouped dispatch (run once for the whole group, never once per angle in it). Refuse to proceed on contamination or a missing artifact.",
       "",
       `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as ONE compound command that enters this worktree first (\`cd "${path.resolve(repoRoot)}" && node scripts/github/verify-fresh-review-context.mjs ...\`) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${path.resolve(repoRoot)}" ...\` and every file read via an absolute path under ${path.resolve(repoRoot)}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
+      "",
+      `Findings write-path invariant: WRITE every findings artifact under THIS worktree's tmp/, never the primary checkout's. Write each per-angle findings artifact to the ABSOLUTE path \`${path.resolve(repoRoot)}/tmp/gate-reviews/owner-repo/pr-80/draft_gate-${options.headSha}/<angle>.json\` (\`<angle>\` = your angle name), and pass \`--tmp-root "${path.resolve(repoRoot)}/tmp"\` to any findings-writer CLI (e.g. \`write-gate-findings-log.mjs\`). Cwd-relative \`tmp/...\` resolves against whatever checkout the command started in — a findings artifact written to the primary checkout's tmp/ is invisible to fan-in and fails the gate as missing evidence.`,
       "",
       "## Reviewer source-read invariant",
       "",

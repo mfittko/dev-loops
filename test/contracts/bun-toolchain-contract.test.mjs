@@ -116,7 +116,7 @@ describe("Bun 1.4.1 toolchain authority", () => {
       readRepo(".claude/skills/copilot-pr-followup/SKILL.md"),
       readRepo("packages/core/src/loop/handoff-envelope.mjs"),
       readRepo("skills/docs/release-runbook.md"),
-      readRepo("docs/decisions/0059-bun-development-toolchain.md"),
+      readRepo("docs/decisions/0060-bun-development-toolchain.md"),
       readRepo(path.join("docs", "benchmarks", "bun-1.4.1", "README.md")),
     ]);
 

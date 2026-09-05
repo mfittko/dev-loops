@@ -118,12 +118,12 @@ Optional:
 
 Contract:
 - checks `requested_reviewers` first so an existing Copilot request is detected without mutating PR state again
-- requests Copilot via `gh pr edit <pr> --repo <owner/name> --add-reviewer @copilot`
+- requests Copilot via the REST endpoint `gh api repos/<owner>/<name>/pulls/<pr>/requested_reviewers -X POST -f 'reviewers[]=copilot-pull-request-reviewer[bot]'` (the app-style `[bot]` login). `gh pr edit --add-reviewer @copilot` and the GraphQL `requestReviews` botIds mutation are silent no-ops on repos whose Copilot reviewer is the bot, so they are not used (#1918)
 - is suitable both for the first request after ready-for-review and for later explicit re-requests after follow-up fix commits land on the PR head
 - enforces a round cap (default: 5, configurable via `maxCopilotRounds` in settings); clean round-cap PRs with new commits, resolved threads, and green current GitHub CI automatically re-open for a normal re-request, while `--force-rerequest-review` remains the operator override for other new-commit cases
 - should be paired with a fresh unresolved-thread check after Copilot posts again; requesting review alone does not complete the loop
 - verifies the result through `gh api repos/<owner>/<name>/pulls/<pr>/requested_reviewers`
-- the verification read is eventually consistent: an immediate read can still see stale (empty) state right after a genuinely successful request, so the helper retries the read on a fixed backoff (~30s total) before declaring failure; the `gh pr edit` request itself is issued exactly once and never re-issued per probe. A verification read that throws (transient gh failure) also consumes a scheduled retry instead of failing immediately; only a throw on the final attempt propagates, as the raw underlying error
+- the verification read is eventually consistent: an immediate read can still see stale (empty) state right after a genuinely successful request, so the helper retries the read on a fixed backoff (~30s total) before declaring failure; the requested_reviewers POST itself is issued exactly once and never re-issued per probe. A verification read that throws (transient gh failure) also consumes a scheduled retry instead of failing immediately; only a throw on the final attempt propagates, as the raw underlying error
 - does **not** rely on `gh pr view --json reviewRequests`, which can be incomplete for Copilot reviewer state
 - normalizes known repository/tooling limitations into a machine-readable `unavailable` result instead of forcing callers to parse ad hoc stderr
 

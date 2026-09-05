@@ -37,9 +37,9 @@ function buildBody({ scope, nonGoals = "", includeSections = true, boundary }) {
     nonGoals || "- not needed",
     "",
     "## AC / DoD matrix",
-    "| Item | Type |",
+    "| Criterion outcome | Required completion evidence |",
     "|---|---|",
-    "| ac-1 | dod |",
+    "| the feature works end to end | a focused test proves the feature works |",
     "",
   ].join("\n");
 }
@@ -111,23 +111,20 @@ test("runRefinementCompletenessChecker flags missing sections", () => {
 
   const result = runRefinementCompletenessChecker(tree);
   assert.equal(result.ok, false);
-  assert.ok(result.errors.some((entry) => entry.code === "missing_acceptance_criteria"));
-  assert.ok(result.errors.some((entry) => entry.code === "missing_definition_of_done"));
+  // #1951: the matrix + Non-goals are the required artifacts; issue-side AC/DoD
+  // checklists are no longer required (the matrix is the AC→DoD authority).
   assert.ok(result.errors.some((entry) => entry.code === "missing_non_goals"));
   assert.ok(result.errors.some((entry) => entry.code === "missing_ac_dod_matrix"));
+  assert.ok(!result.errors.some((entry) => entry.code === "missing_acceptance_criteria"));
+  assert.ok(!result.errors.some((entry) => entry.code === "missing_definition_of_done"));
 });
 
 
-test("runRefinementCompletenessChecker flags missing checkbox and invalid matrix", () => {
+test("runRefinementCompletenessChecker flags a heading-but-no-table matrix as missing; issue-side checklists are not required (#1951)", () => {
   const body = [
     "## Scope",
     "- owns root",
-    "",
-    "## Acceptance criteria",
-    "no checkbox here",
-    "",
-    "## Definition of done",
-    "- [ ] has done checklist",
+    "This issue owns root. It does NOT own api (#2).",
     "",
     "## Non-goals",
     "- not needed",
@@ -145,7 +142,75 @@ test("runRefinementCompletenessChecker flags missing checkbox and invalid matrix
 
   const result = runRefinementCompletenessChecker(tree);
   assert.equal(result.ok, false);
-  assert.ok(result.errors.some((entry) => entry.code === "missing_acceptance_checkbox"));
+  // #1951/Copilot: presence is resolved via the shared detector, so a heading
+  // with no table is "missing" (no matrix), not "invalid".
+  assert.ok(result.errors.some((entry) => entry.code === "missing_ac_dod_matrix"));
+  // #1951: no AC checklist / checkbox / DoD section is present, and that is fine.
+  assert.ok(!result.errors.some((entry) => entry.code === "missing_acceptance_checkbox"));
+  assert.ok(!result.errors.some((entry) => entry.code === "missing_definition_of_done"));
+});
+
+test("#1951/Copilot runRefinementCompletenessChecker accepts a valid matrix under an ALTERNATE heading (not the literal '## AC / DoD matrix')", () => {
+  const body = [
+    "## Scope",
+    "- owns root",
+    "This issue owns root. It does NOT own api (#2).",
+    "",
+    "## AC → DoD mapping",
+    "| Criterion outcome | Required completion evidence |",
+    "|---|---|",
+    "| the feature works end to end | a focused test proves the feature works |",
+    "",
+    "## Non-goals",
+    "- not needed",
+  ].join("\n");
+  const tree = normalizeTreePayload({ root: 1, issues: [{ number: 1, children: [], body }] });
+  const result = runRefinementCompletenessChecker(tree);
+  assert.equal(result.ok, true, result.errors.map((e) => e.message).join("\n"));
+});
+
+test("#1951 runRefinementCompletenessChecker passes a matrix-only node (no issue-side AC/DoD checklists)", () => {
+  const body = [
+    "## Scope",
+    "- owns root",
+    "This issue owns root. It does NOT own api (#2).",
+    "",
+    "## AC / DoD matrix",
+    "| Criterion outcome | Required completion evidence |",
+    "|---|---|",
+    "| the feature works end to end | a focused test proves the feature works |",
+    "",
+    "## Non-goals",
+    "- not needed",
+  ].join("\n");
+  const tree = normalizeTreePayload({ root: 1, issues: [{ number: 1, children: [], body }] });
+  const result = runRefinementCompletenessChecker(tree);
+  assert.equal(result.ok, true, result.errors.map((e) => e.message).join("\n"));
+});
+
+test("#1951 runRefinementCompletenessChecker flags an identifier-only/tautological matrix as invalid", () => {
+  const body = [
+    "## Scope",
+    "- owns root",
+    "This issue owns root. It does NOT own api (#2).",
+    "",
+    "## Acceptance criteria",
+    "- [ ] has acceptance checkbox",
+    "",
+    "## Definition of done",
+    "- [ ] has done checklist",
+    "",
+    "## Non-goals",
+    "- not needed",
+    "",
+    "## AC / DoD matrix",
+    "| AC | DoD |",
+    "|---|---|",
+    "| AC1 | D1 |",
+  ].join("\n");
+  const tree = normalizeTreePayload({ root: 1, issues: [{ number: 1, children: [], body }] });
+  const result = runRefinementCompletenessChecker(tree);
+  assert.equal(result.ok, false);
   assert.ok(result.errors.some((entry) => entry.code === "invalid_ac_dod_matrix"));
 });
 
@@ -164,9 +229,9 @@ function buildNoOwnershipBody() {
     "- not needed",
     "",
     "## AC / DoD matrix",
-    "| Item | Type |",
+    "| Criterion outcome | Required completion evidence |",
     "|---|---|",
-    "| ac-1 | dod |",
+    "| the feature works end to end | a focused test proves the feature works |",
   ].join("\n");
 }
 

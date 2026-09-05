@@ -158,7 +158,69 @@ async function listUnmergedFiles({ cwd, env }) {
  * tell an add from a modify, which silently duplicates/resurrects entries).
  *
  * Keep-both order: ours block then theirs block, preserving each side's order.
+ *
+ * Same-named `### <Type>` subsections (e.g. both sides add a `### Fixed` block)
+ * are MERGED under a single heading via `mergeKeepBothSubsections` so keep-both
+ * never emits two consecutive same-named headings (a structurally wrong
+ * changelog). Distinct subsections stay separate; item order is preserved.
  */
+
+/**
+ * Merge two kept-both conflict blocks, deduping same-named `### <Type>`
+ * subsections. Lines before the first `### ` heading are preamble (kept as-is,
+ * ours then theirs). Each `### ` heading opens a subsection; a heading that
+ * repeats (matched by trimmed text) has its items appended to the first
+ * occurrence's body — trimming the seam blanks — instead of opening a second
+ * same-named heading. Blocks with no `### ` heading collapse to plain
+ * ours-then-theirs concatenation (unchanged behavior).
+ */
+export function mergeKeepBothSubsections(ours, theirs) {
+  const splitSubsections = (lines) => {
+    const preamble = [];
+    const sections = [];
+    let current = null;
+    for (const line of lines) {
+      if (/^###\s/.test(line)) {
+        current = { heading: line, body: [] };
+        sections.push(current);
+      } else if (current) {
+        current.body.push(line);
+      } else {
+        preamble.push(line);
+      }
+    }
+    return { preamble, sections };
+  };
+
+  const a = splitSubsections(ours);
+  const b = splitSubsections(theirs);
+  const out = [...a.preamble, ...b.preamble];
+  const merged = [];
+  const byHeading = new Map();
+  for (const section of [...a.sections, ...b.sections]) {
+    const key = section.heading.trim();
+    const existing = byHeading.get(key);
+    if (existing) {
+      while (existing.body.length > 0 && existing.body[existing.body.length - 1].trim() === "") {
+        existing.body.pop();
+      }
+      let start = 0;
+      while (start < section.body.length && section.body[start].trim() === "") {
+        start += 1;
+      }
+      existing.body.push(...section.body.slice(start));
+    } else {
+      const copy = { heading: section.heading, body: [...section.body] };
+      byHeading.set(key, copy);
+      merged.push(copy);
+    }
+  }
+  for (const section of merged) {
+    out.push(section.heading, ...section.body);
+  }
+  return out;
+}
+
 export function resolveAdditiveChangelog(content) {
   const lines = content.split("\n");
   const out = [];
@@ -211,8 +273,9 @@ export function resolveAdditiveChangelog(content) {
     if (base.some((b) => b.trim().length > 0)) {
       return { safe: false, reason: "CHANGELOG conflict modifies or deletes a shared line (non-empty merge base)" };
     }
-    // Keep both sides, in order.
-    out.push(...ours, ...theirs);
+    // Keep both sides, in order — merging any same-named `### <Type>`
+    // subsection so keep-both never emits two consecutive same-named headings.
+    out.push(...mergeKeepBothSubsections(ours, theirs));
     resolvedAnyHunk = true;
   }
 

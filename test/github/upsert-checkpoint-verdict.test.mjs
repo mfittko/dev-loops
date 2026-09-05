@@ -11,7 +11,9 @@ import {
   buildInlineExecutionWarning,
   parseUpsertCheckpointVerdictCliArgs,
   normalizeStructuredFindings,
+  renderAngleVerdictDigest,
   renderGateReviewCommentBody,
+  renderStructuredFindings,
   summarizeCheckpointVerdictText,
   upsertCheckpointVerdict,
 } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
@@ -2845,7 +2847,7 @@ test("normalizeStructuredFindings preserves unparseable entries through render's
     executionMode: "fanout_fanin",
     structuredFindings: angles,
   });
-  assert.match(body, /\[`unparseable`\]/);
+  assert.match(body, /finding could not be interpreted/);
   assert.match(body, /severity: `high`/);
 });
 
@@ -2893,17 +2895,22 @@ test("renderGateReviewCommentBody reports an unparseable finding explicitly in t
     structuredFindings: angles,
   });
   // The unparseable entry is distinguishable from a non-blocking parseable finding.
-  assert.match(body, /\[`unparseable`\] finding could not be interpreted/);
+  assert.match(body, /finding could not be interpreted/);
   assert.match(body, /severity: `low`/);
   // The digest counts the unparseable finding so it is not undercounted.
   assert.match(body, /1 angle reviewed; 2 findings/);
 });
 
-test("renderGateReviewCommentBody's reduced per-angle digest (finding-surface round) counts unparseable findings (#1526)", () => {
-  // A round that carries its own finding surface (nonLocatableFindings is an array)
-  // renders the REDUCED per-angle digest (renderAngleVerdictDigest) instead of the
-  // full breakdown. That reduced digest must also count unparseable findings, or a
-  // finding-surface round would undercount the very findings it surfaces.
+test("renderGateReviewCommentBody's ledger-path body-only list renders a real finding while the digest still counts an unparseable structuredFindings entry (#1526, #1942)", () => {
+  // A round that carries its own finding surface (`nonLocatableFindings` is an
+  // array) renders the body-only bulleted list from the LEDGER's own flat
+  // findings (#1942 pivot) — never a table. `structuredFindings` (this
+  // round's --findings-json angle/verdict summary) still drives the
+  // `**Findings summary:**` digest count independently, so an unparseable
+  // entry it carries is never silently dropped from that count even though
+  // the ledger path does not render it as its own bullet (unparseable
+  // structured entries have no ledger-flat-finding analogue: readGateFindingsLedger
+  // requires every ledger finding to already carry a valid summary/severity).
   const angles = normalizeStructuredFindings([
     { angle: "correctness", verdict: "findings_present", findings: [{ severity: "nice-to-have", summary: "ok" }, { severity: "nice-to-have" }] },
   ]);
@@ -2915,11 +2922,106 @@ test("renderGateReviewCommentBody's reduced per-angle digest (finding-surface ro
     nextAction: "fix",
     executionMode: "fanout_fanin",
     structuredFindings: angles,
-    // An array (even empty) selects the reduced digest path.
+    nonLocatableFindings: [{ severity: "low", angle: "correctness", summary: "ok" }],
+  });
+  // 1 parseable + 1 unparseable = 2 findings counted in the digest line.
+  assert.match(body, /1 angle reviewed; 2 findings/);
+  // The ledger's own real finding renders in full as a body-only bullet.
+  assert.match(body, /^- 🟡 low — ok _\(correctness\)_$/m);
+});
+
+test("renderGateReviewCommentBody URL-encodes an untrusted body-only finding file path so it cannot forge a link/image on the verdict body (#1942 renderer-security)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    repo: "owner/repo",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: normalizeStructuredFindings([{ angle: "correctness", verdict: "findings_present", findings: [{ severity: "high", summary: "x" }] }]),
+    nonLocatableFindings: [{ severity: "high", angle: "correctness", summary: "boom", file: "a)b.js", line: 3 }],
+  });
+  // The `)` in the path must be percent-encoded in the URL destination so it
+  // cannot close the markdown `(...)` early and let a following `[x](url)`
+  // forge a live link/image.
+  assert.match(body, /\/blob\/abc1234000000000000000000000000000000000\/a%29b\.js#L3\)/);
+  assert.doesNotMatch(body, /\/a\)b\.js#L3/, "raw unencoded path must never reach the URL destination");
+});
+
+test("renderStructuredFindings renders no double-space and no dangling em-dash when a finding has no severity (#1964 copilot)", () => {
+  // A finding with a missing/empty severity has no emoji and no severity word;
+  // the bullet must be `- <summary>` with a single space, never `-  <summary>`
+  // (double space) or a leading ` — `.
+  const body = renderStructuredFindings([
+    { angle: "correctness", verdict: "findings_present", findings: [{ severity: "", summary: "no-severity finding" }], unparseable: [] },
+  ]);
+  assert.match(body, /^- no-severity finding _\(correctness\)_$/m);
+  assert.doesNotMatch(body, /^- {2}/m, "no double space after the bullet");
+  // An unknown (non-legend) severity keeps its word but has no emoji, still one space.
+  const unknown = renderStructuredFindings([
+    { angle: "correctness", verdict: "findings_present", findings: [{ severity: "spicy", summary: "odd" }], unparseable: [] },
+  ]);
+  assert.match(unknown, /^- spicy — odd _\(correctness\)_$/m);
+  assert.doesNotMatch(unknown, /^- {2}/m, "no double space for an unknown-severity finding");
+});
+
+test("renderGateReviewCommentBody aggregate **Inline findings:** line breaks severities down in SEVERITY_ORDER and dedups touched angles (#1942)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    repo: "owner/repo",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: normalizeStructuredFindings([{ angle: "correctness", verdict: "findings_present", findings: [{ severity: "high", summary: "x" }] }]),
+    // Multi-severity, and angle "a" repeats — the line must count 3, break down
+    // high before low (SEVERITY_ORDER), and list each angle once in first-seen order.
+    locatableFindings: [
+      { severity: "high", angle: "a", summary: "s1" },
+      { severity: "low", angle: "a", summary: "s2" },
+      { severity: "low", angle: "b", summary: "s3" },
+    ],
     nonLocatableFindings: [],
   });
-  // 1 parseable + 1 unparseable = 2 findings in the reduced one-liner.
-  assert.match(body, /`correctness` → `findings_present` \(2 findings\)/);
+  assert.match(body, /^\*\*Inline findings:\*\* 3 \(🔴 1 high · 🟡 2 low\) — on the diff, see Files changed\. Angles: a, b\.$/m);
+});
+
+test("renderGateReviewCommentBody does not crash the verdict post on a lone surrogate in a body-only finding path (#1942 fail-closed)", () => {
+  // A lone surrogate makes encodeURI throw URIError; toWellFormed() must
+  // neutralize it so one malformed path never crashes the whole gate post.
+  assert.doesNotThrow(() => {
+    const body = renderGateReviewCommentBody({
+      gate: "draft_gate",
+      headSha: "abc1234000000000000000000000000000000000",
+      repo: "owner/repo",
+      verdict: "findings_present",
+      findingsSummary: "ignored",
+      nextAction: "fix",
+      executionMode: "fanout_fanin",
+      structuredFindings: normalizeStructuredFindings([{ angle: "correctness", verdict: "findings_present", findings: [{ severity: "high", summary: "x" }] }]),
+      nonLocatableFindings: [{ severity: "high", angle: "correctness", summary: "boom", file: "a\uD800b.js", line: 3 }],
+    });
+    assert.ok(body.includes("boom"));
+  });
+});
+
+test("renderGateReviewCommentBody renders an un-normalizable body-only finding as an unparseable bullet instead of silently dropping it (#1942 #1526 never-drop)", () => {
+  const body = renderGateReviewCommentBody({
+    gate: "draft_gate",
+    headSha: "abc1234000000000000000000000000000000000",
+    repo: "owner/repo",
+    verdict: "findings_present",
+    findingsSummary: "ignored",
+    nextAction: "fix",
+    executionMode: "fanout_fanin",
+    structuredFindings: normalizeStructuredFindings([{ angle: "correctness", verdict: "findings_present", findings: [{ severity: "high", summary: "x" }] }]),
+    // No usable summary -> normalizeFlatFindingWithAngle returns null; it must
+    // still surface (it gets a suppression marker stamped), never vanish.
+    nonLocatableFindings: [{ severity: "high", angle: "correctness" }],
+  });
+  assert.match(body, /finding could not be interpreted/);
 });
 
 // --- Size-budget fields (phase 3 of the fail-closed PR size budget): the
@@ -3160,7 +3262,7 @@ test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json car
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
         // The clean verdict is posted AND the unparseable finding is surfaced in the body.
-        assertStdinIncludes: ["**Verdict:** clean", "unparseable"],
+        assertStdinIncludes: ["**Verdict:** clean", "finding could not be interpreted"],
         stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
       },
     ]);
@@ -4016,13 +4118,17 @@ test("renderGateReviewCommentBody renders structured per-angle fan-in findings a
     ],
   });
 
-  // Structured block is multi-line with one bullet per angle and nested findings.
-  // severity/verdict/disposition render inside backtick code spans (enum
-  // labels, never prose — see sanitizeStructuredCodeSpan).
-  assert.match(body, /\n- `correctness` → `findings_present`\n/);
-  assert.match(body, /\n {2}- \[`high`\] off-by-one in loop bound \(`src\/loop\.mjs:42`\) — _`accepted-for-fix`_\n/);
-  assert.match(body, /\n {2}- \[`medium`\] missing null guard\n/);
-  assert.match(body, /\n- `acceptance-criteria` → `clean`/);
+  // No-ledger structured block is a body-only, findings-first bulleted list:
+  // one bullet per finding (severity-ordered), a leading emoji + severity
+  // word, angle in trailing brackets, and a trailing clean-angle roster line
+  // (#1942, pivoted to the two-track shape — NEVER a markdown table).
+  // severity/disposition/file:line render inside backtick code spans (enum
+  // labels/refs, never prose — see sanitizeStructuredCodeSpan); the bullet
+  // order follows SEVERITY_ORDER (high before medium).
+  assert.doesNotMatch(body, /\| Finding \| Angles \|/, "no markdown table");
+  assert.match(body, /\n- 🔴 high — off-by-one in loop bound _`src\/loop\.mjs:42`_ — _`accepted-for-fix`_ _\(correctness\)_\n/);
+  assert.match(body, /\n- 🟠 medium — missing null guard _\(correctness\)_\n/);
+  assert.match(body, /\n\*\*Clean \(1\):\*\* acceptance-criteria/);
   // Newlines are preserved (not collapsed to a run-on line).
   assert.ok(body.split("\n").length > 8, "structured body should be multi-line");
   // The free-text summary is NOT rendered; the digest line is used instead.
@@ -4168,8 +4274,9 @@ test("renderGateReviewCommentBody sanitizes structured angle/finding text and su
       },
     ],
   });
-  // Angle backtick stripped (no premature code-span close).
-  assert.match(body, /\n- `weirdangle` → `findings_present`\n/);
+  // Angle backtick stripped (no premature code-span close) — rendered bare
+  // in the trailing `_(angle)_` bracket suffix.
+  assert.match(body, /_\(weirdangle\)_/);
   // Embedded newline collapsed; HTML-comment delimiters neutralized.
   assert.match(body, /line one line two &lt;!-- dev-loops:gate-findings gate=draft_gate --&gt;/);
   assert.doesNotMatch(body, /<!-- dev-loops:gate-findings/);
@@ -4192,7 +4299,7 @@ test("renderGateReviewCommentBody sanitizes structured angle/finding text and su
 // link/image syntax, so the value can never break out of its literal
 // position. summary also neutralizes the `![` image-embed form (a
 // read-receipt/IP-leak vector via an auto-loaded remote image).
-test("renderGateReviewCommentBody neutralizes markdown link/image injection via severity/verdict/disposition/summary (renderer-security)", () => {
+test("renderGateReviewCommentBody neutralizes markdown link/image injection via disposition/summary, and never renders an unrecognized severity's raw text (renderer-security)", () => {
   const body = renderGateReviewCommentBody({
     gate: "draft_gate",
     headSha: "abc1234000000000000000000000000000000000",
@@ -4214,12 +4321,21 @@ test("renderGateReviewCommentBody neutralizes markdown link/image injection via 
       },
     ],
   });
-  // A crafted severity/verdict/disposition never closes its own `[...]`/`_..._`
-  // wrapper early: the whole value, including its embedded `](url)`, is
-  // wrapped in ITS OWN backtick code span — CommonMark parses a code span
-  // before link syntax, so this renders as inert literal text, never a link.
-  assert.match(body, /\[`must-fix\]\(https:\/\/evil\.example\)`\]/);
-  assert.match(body, /→ `findings_present\]\(https:\/\/evil\.example\)`\n/);
+  // The body-only bulleted list (#1942) never renders a per-angle "verdict"
+  // string at all — a crafted verdict value therefore never reaches the
+  // rendered body in the first place. The severity WORD is now rendered as
+  // bare prose (unlike the old table, which used severity only for its
+  // leading emoji), so a crafted severity's raw text can appear — but it can
+  // never form a LIVE markdown link: sanitizeStructuredInline neutralizes
+  // every `[`/`![` on the line (here, the summary's own leak-image bracket),
+  // so a bare `](url)` with no preceding live `[` on the whole rendered line
+  // stays inert literal text.
+  assert.doesNotMatch(body, /findings_present\]\(https:\/\/evil\.example\)/);
+  assert.doesNotMatch(body, /\[must-fix\]\(https:\/\/evil\.example\)/, "no LIVE link formed around the crafted severity");
+  // A crafted disposition never closes its own `_..._` wrapper early: the
+  // whole value, including its embedded `](url)`, is wrapped in ITS OWN
+  // backtick code span — CommonMark parses a code span before link syntax, so
+  // this renders as inert literal text, never a link.
   assert.match(body, /_`accepted-for-fix\]\(https:\/\/evil\.example\)`_/);
   // The image-embed form in summary is neutralized (no bare `![`).
   assert.doesNotMatch(body, /!\[leak\]/);
@@ -4266,7 +4382,7 @@ test("renderGateReviewCommentBody strips a backtick from summary so it cannot sh
   // including its embedded `](url)`, which stays inert literal code text —
   // never a live link — because no earlier stray backtick stole its opening
   // delimiter.
-  assert.match(body, /\(`a\.mjs\]\(https:\/\/evil\.example\)`\)/);
+  assert.match(body, /_`a\.mjs\]\(https:\/\/evil\.example\)`_/);
 });
 
 // Regression (renderer-security, PR#1513 gate review round 4): summary is
@@ -4390,9 +4506,9 @@ test("renderGateReviewCommentBody renders NESTED per-angle findings input correc
       { angle: "tests", verdict: "clean", findings: [] },
     ],
   });
-  assert.match(body, /\n- `correctness` → `findings_present`\n/);
-  assert.match(body, /\n {2}- \[`high`\] bad bound \(`x\.mjs:3`\)\n/); // "must-fix" input normalizes to canonical "high"
-  assert.match(body, /\n- `tests` → `clean`/);
+  // "must-fix" input normalizes to canonical "high" -> 🔴.
+  assert.match(body, /\n- 🔴 high — bad bound _`x\.mjs:3`_ _\(correctness\)_\n/);
+  assert.match(body, /\n\*\*Clean \(1\):\*\* tests/);
   assert.match(body, /\*\*Findings summary:\*\* 2 angles reviewed; 1 finding \(see per-angle breakdown below\)\./);
   const parsed = parseGateReviewCommentMarkerBody(body);
   assert.ok(parsed);
@@ -4508,16 +4624,18 @@ test("renderGateReviewCommentBody groups FLAT per-finding input by angle without
       { severity: "must-fix", summary: "no-angle finding" },
     ],
   });
-  // Findings are NOT dropped: grouped per angle. Legacy-spelled input
-  // ("must-fix"/"worth-fixing-now"/"nice-to-have") normalizes to the
-  // canonical output vocabulary.
-  assert.match(body, /\n- `correctness` → `findings_present`\n/);
-  assert.match(body, /\n {2}- \[`high`\] off-by-one \(`src\/loop\.mjs`\) — _`accepted-for-fix`_\n/);
-  assert.match(body, /\n {2}- \[`medium`\] missing guard\n/);
-  assert.match(body, /\n- `style` → `findings_present`\n/);
-  assert.match(body, /\n {2}- \[`low`\] naming nit\n/);
-  assert.match(body, /\n- `general` → `findings_present`\n/);
-  assert.match(body, /\n {2}- \[`high`\] no-angle finding\n/);
+  // Findings are NOT dropped: rendered as one flat, severity-ordered bulleted
+  // list (#1942), each finding tagged with its own attributing angle in
+  // trailing brackets — off-by-one (correctness, high) and no-angle finding
+  // (general, high) both sort ahead of missing guard (correctness, medium)
+  // and naming nit (style, low); the two high findings keep their input order
+  // (off-by-one before no-angle finding) since ties never re-sort. Legacy-
+  // spelled input ("must-fix"/"worth-fixing-now"/"nice-to-have") normalizes to
+  // the canonical output vocabulary.
+  assert.match(body, /\n- 🔴 high — off-by-one _`src\/loop\.mjs`_ — _`accepted-for-fix`_ _\(correctness\)_\n/);
+  assert.match(body, /\n- 🟠 medium — missing guard _\(correctness\)_\n/);
+  assert.match(body, /\n- 🔴 high — no-angle finding _\(general\)_\n/);
+  assert.match(body, /\n- 🟡 low — naming nit _\(style\)_\n/);
   // 3 angles (correctness, style, general), 4 findings total — none dropped.
   assert.match(body, /\*\*Findings summary:\*\* 3 angles reviewed; 4 findings \(see per-angle breakdown below\)\./);
   const parsed = parseGateReviewCommentMarkerBody(body);
@@ -4678,11 +4796,11 @@ test("renderGateReviewCommentBody renders an angle-less NESTED entry under `gene
       },
     ],
   });
-  // Both angle-less entries render under `general` — findings are NOT dropped.
-  // Legacy-spelled input normalizes to the canonical output vocabulary.
-  assert.match(body, /\n- `general` → `findings_present`\n/);
-  assert.match(body, /\n {2}- \[`high`\] angle-less nested finding\n/);
-  assert.match(body, /\n {2}- \[`medium`\] blank-angle nested finding\n/);
+  // Both angle-less entries render under `general` (two separate bullets) —
+  // findings are NOT dropped. Legacy-spelled input normalizes to the
+  // canonical output vocabulary.
+  assert.match(body, /\n- 🔴 high — angle-less nested finding _\(general\)_\n/);
+  assert.match(body, /\n- 🟠 medium — blank-angle nested finding _\(general\)_\n/);
   // The structured digest is used; the free-text fallback is NOT rendered.
   assert.match(body, /per-angle breakdown below/);
   assert.doesNotMatch(body, /must NOT be rendered/);
@@ -4735,7 +4853,7 @@ test("upsert-checkpoint-verdict rejects a fanout_fanin verdict whose --findings-
     await writeFile(
       findingsPath,
       JSON.stringify([
-        { angle: "pr-checklist-matrix", verdict: "clean", findings: [] },
+        { angle: "pr-checklist", verdict: "clean", findings: [] },
         { angle: "acceptance-criteria", verdict: "clean", findings: [] },
         { angle: "yagni", verdict: "clean", findings: [] },
         { angle: "contradiction-lens", verdict: "clean", findings: [] },
@@ -4760,18 +4878,18 @@ test("upsert-checkpoint-verdict rejects a fanout_fanin verdict whose --findings-
   }, { prefix: "dev-loops-upsert-angle-coverage-foreign-" });
 });
 
-test("upsert-checkpoint-verdict accepts the fan-in synthetic pr-checklist-matrix angle outside the gate's configured pool (#1494)", async () => {
+test("upsert-checkpoint-verdict accepts the fan-in synthetic pr-checklist angle outside the gate's configured pool (#1494)", async () => {
   await withTempDir(async (tempDir) => {
     const findingsPath = path.join(tempDir, "findings.json");
     // consolidate-fanin --out shape: draft-pool angles plus the synthetic
-    // matrix entry its --pr-checklist-matrix clean flag upserts. draft_gate's
-    // pool does not list pr-checklist-matrix; the upsert must not reject it.
+    // matrix entry its --pr-checklist clean flag upserts. draft_gate's
+    // pool does not list pr-checklist; the upsert must not reject it.
     await writeFile(
       findingsPath,
       JSON.stringify([
         { angle: "pr-description", verdict: "clean", findings: [] },
         { angle: "scope", verdict: "clean", findings: [] },
-        { angle: "pr-checklist-matrix", verdict: "clean", findings: [] },
+        { angle: "pr-checklist", verdict: "clean", findings: [] },
       ]),
       "utf8",
     );
@@ -5086,9 +5204,9 @@ test("upsert-checkpoint-verdict --findings-json renders structured per-angle fin
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
         assertStdinIncludes: [
           "**Execution mode:** fanout_fanin",
-          "- `correctness` → `findings_present`",
-          "  - [`high`] broken edge case (`a.mjs:7`)", // "must-fix" input normalizes to canonical "high"
-          "- `coverage` → `clean`",
+          "Body-only findings — no anchorable changed line, so carried in full here (plain list, angle in brackets, `file:line` linked to the blob when known):",
+          "- 🔴 high — broken edge case _`a.mjs:7`_ _(correctness)_", // "must-fix" input normalizes to canonical "high"
+          "**Clean (2):** coverage, pr-description",
           "**Findings summary:** 3 angles reviewed; 1 finding (see per-angle breakdown below).",
         ],
         stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
@@ -5104,6 +5222,95 @@ test("upsert-checkpoint-verdict --findings-json renders structured per-angle fin
     assert.equal(out.action, "created");
     assert.equal(out.executionMode, "fanout_fanin");
   }, { prefix: "dev-loops-upsert-findings-json-" });
+});
+
+test("renderStructuredFindings/renderAngleVerdictDigest: both exported renderers produce the identical body-only list, never a table (#1942 'both renderers' AC)", () => {
+  const sections = [
+    { angle: "coverage", verdict: "clean", findings: [], unparseable: [] },
+    { angle: "correctness", verdict: "findings_present", findings: [{ severity: "high", summary: "off-by-one", file: "a.mjs", line: 7 }], unparseable: [] },
+  ];
+  const viaStructured = renderStructuredFindings(sections);
+  const viaDigest = renderAngleVerdictDigest(sections);
+  assert.equal(viaDigest, viaStructured, "renderAngleVerdictDigest must render the same body-only list as renderStructuredFindings");
+  assert.doesNotMatch(viaStructured, /\|/, "never a markdown table");
+  assert.match(viaStructured, /^- 🔴 high — off-by-one _`a\.mjs:7`_ _\(correctness\)_$/m);
+  assert.match(viaStructured, /\*\*Clean \(1\):\*\* coverage/);
+});
+
+test("renderStructuredFindings: emoji legend pins every severity marker, with the severity word (#1942)", () => {
+  const sections = [{
+    angle: "correctness",
+    verdict: "findings_present",
+    findings: [
+      { severity: "high", summary: "h" },
+      { severity: "question", summary: "q" },
+      { severity: "medium", summary: "m" },
+      { severity: "low", summary: "l" },
+      { severity: "nit", summary: "n" },
+    ],
+    unparseable: [],
+  }];
+  const body = renderStructuredFindings(sections);
+  // Bullet order follows SEVERITY_ORDER (high, question, medium, low, nit);
+  // each finding carries its own severity emoji AND severity word.
+  assert.match(body, /^- 🔴 high — h _\(correctness\)_$/m);
+  assert.match(body, /^- 🔵 question — q _\(correctness\)_$/m);
+  assert.match(body, /^- 🟠 medium — m _\(correctness\)_$/m);
+  assert.match(body, /^- 🟡 low — l _\(correctness\)_$/m);
+  assert.match(body, /^- ⚪ nit — n _\(correctness\)_$/m);
+});
+
+test("renderStructuredFindings: all-findings round emits no Clean line; all-clean round emits no findings list header (#1942)", () => {
+  const allFindings = renderStructuredFindings([
+    { angle: "correctness", verdict: "findings_present", findings: [{ severity: "high", summary: "boom" }], unparseable: [] },
+  ]);
+  assert.match(allFindings, /^- 🔴 high — boom _\(correctness\)_$/m);
+  assert.doesNotMatch(allFindings, /\*\*Clean \(/, "no clean angles -> no Clean roster line");
+
+  const allClean = renderStructuredFindings([
+    { angle: "coverage", verdict: "clean", findings: [], unparseable: [] },
+    { angle: "pr-description", verdict: "clean", findings: [], unparseable: [] },
+  ]);
+  assert.doesNotMatch(allClean, /Body-only findings/, "no findings-bearing angles -> no findings-list header");
+  assert.match(allClean, /^\*\*Clean \(2\):\*\* coverage, pr-description$/m);
+});
+
+test("renderStructuredFindings: a literal pipe in a finding summary needs no table-cell escaping (#1942, no table)", () => {
+  const body = renderStructuredFindings([
+    { angle: "correctness", verdict: "findings_present", findings: [{ severity: "high", summary: "a | b split" }], unparseable: [] },
+  ]);
+  // A plain bulleted list has no column boundary a literal `|` could break,
+  // so the summary renders untouched (never table-cell-escaped to `\|`).
+  assert.match(body, /^- 🔴 high — a \| b split _\(correctness\)_$/m);
+});
+
+test("renderStructuredFindings: a markdown-injection angle is neutralized in both the trailing angle bracket and the Clean line (#1942 renderer-security)", () => {
+  // A live link/image needs the OPENING bracket; sanitizeStructuredInline
+  // entity-encodes it (`[` -> `&#91;`, `![` -> `!&#91;`) so an untrusted angle
+  // cannot inject a clickable link or an auto-loaded (IP-leaking) remote image
+  // onto the single-surface verdict body.
+  const link = "[evil](http://x)";
+  const image = "![img](http://x)";
+  const findingsBearing = renderStructuredFindings([
+    { angle: link, verdict: "findings_present", findings: [{ severity: "high", summary: "s" }], unparseable: [] },
+  ]);
+  assert.doesNotMatch(findingsBearing, /\[evil\]\(http:\/\/x\)/, "the angle bracket must not render a live markdown link from an untrusted angle");
+  assert.match(findingsBearing, /&#91;evil\]\(http:\/\/x\)/, "the link's opening bracket must be entity-encoded");
+  const clean = renderStructuredFindings([
+    { angle: image, verdict: "clean", findings: [], unparseable: [] },
+  ]);
+  assert.doesNotMatch(clean, /!\[img\]\(http:\/\/x\)/, "Clean roster must not render a live auto-loaded image from an untrusted angle");
+  assert.match(clean, /!&#91;img\]\(http:\/\/x\)/, "the image's opening bracket must be entity-encoded");
+});
+
+test("renderStructuredFindings: an unparseable finding renders its own bullet, never dropped (#1942 #1526)", () => {
+  const body = renderStructuredFindings([
+    { angle: "correctness", verdict: "findings_present", findings: [], unparseable: [{ severity: "a|b" }] },
+  ]);
+  assert.match(body, /finding could not be interpreted/);
+  // A plain list needs no pipe-escaping (never a table cell); the raw
+  // severity still goes through a code span so it stays inert literal text.
+  assert.match(body, /severity: `a\|b`/);
 });
 
 test("upsert-checkpoint-verdict --findings-json structured verdict renders the gateEvidenceNote on its own labeled line (parity with free-text)", async () => {
@@ -5126,7 +5333,7 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
         },
         // pre_approval_gate's configured mandatory angles (gates.preApproval.mandatoryAngles):
         // a fanout_fanin verdict's structured per-angle results must cover them.
-        { angle: "pr-checklist-matrix", verdict: "clean", findings: [] },
+        { angle: "pr-checklist", verdict: "clean", findings: [] },
         { angle: "acceptance-criteria", verdict: "clean", findings: [] },
         { angle: "yagni", verdict: "clean", findings: [] },
         { angle: "contradiction-lens", verdict: "clean", findings: [] },
@@ -5186,7 +5393,7 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
         assertStdinIncludes: [
           "### Gate review: `pre_approval_gate`",
           "**Execution mode:** fanout_fanin",
-          "- `dry` → `findings_present`",
+          "- 🟠 medium — minor nit worth noting _(dry)_",
           // The structured single-line digest stays plain; the gateEvidenceNote
           // renders on its own labeled line, not spliced into the digest.
           "**Findings summary:** 5 angles reviewed; 1 finding (see per-angle breakdown below).",
@@ -5237,7 +5444,7 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
     assert.match(body, /\n\*\*Gate evidence note:\*\* Copilot review rounds exhausted/);
     assert.doesNotMatch(body, /\*\*Findings summary:\*\*[^\n]*; Copilot review rounds exhausted/);
     // The structured per-angle bullet is unchanged by carrying the note.
-    assert.match(body, /\n- `correctness` → `findings_present`\n/);
+    assert.match(body, /\n- 🟠 medium — minor nit worth noting _\(correctness\)_\n/);
     const parsed = parseGateReviewCommentMarkerBody(body);
     assert.ok(parsed, "structured body with gateEvidenceNote must parse via the marker parser");
     assert.equal(parsed.contractComplete, true);
@@ -5875,21 +6082,31 @@ test("upsert-checkpoint-verdict --findings-ledger posts ONE review: inline locat
     assert.equal(postedPayload.event, "COMMENT");
     assert.equal(postedPayload.commit_id, SINGLE_SURFACE_HEAD);
 
-    // The locatable finding is an inline comment on the review, and its text
-    // appears there and nowhere else.
+    // The locatable finding's full text lives ENTIRELY on its own inline
+    // comment (#1942, pivoted to the two-track shape) — the body never
+    // restates or per-row references it, only the aggregate
+    // `**Inline findings:**` count/pointer line.
     assert.equal(postedPayload.comments.length, 1);
     assert.equal(postedPayload.comments[0].path, "src/db.mjs");
     assert.equal(postedPayload.comments[0].line, 2);
     assert.equal(postedPayload.comments[0].side, "RIGHT");
     assert.match(postedPayload.comments[0].body, /SQL injection in the query builder/);
-    assert.doesNotMatch(postedPayload.body, /SQL injection in the query builder/);
+    assert.doesNotMatch(postedPayload.body, /SQL injection in the query builder/, "a locatable finding's full text must never be echoed in the body");
+    assert.match(postedPayload.body, /\*\*Inline findings:\*\* 1 \(🔴 1 high\) — on the diff, see Files changed\. Angles: correctness\.$/m);
 
-    // The body-filed finding's text appears exactly once in the body.
+    // The body-filed finding's text appears exactly once in the body (its
+    // own body-only bullet — never a table, never echoed on an inline comment
+    // too).
     assert.equal(postedPayload.body.split(BODY_FILED_FINDING.summary).length - 1, 1);
 
-    // The per-angle digest carries angle, verdict and counts only.
-    assert.match(postedPayload.body, /^- `correctness` → `findings_present` \(1 finding\)$/m);
-    assert.match(postedPayload.body, /^- `coverage` → `findings_present` \(1 finding\)$/m);
+    // The body-only bulleted list carries the non-locatable finding's own
+    // text, and the clean angles collapse into one trailing roster line.
+    assert.match(postedPayload.body, /^- 🟡 low — inconsistent casing in constants _\(coverage\)_$/m);
+    assert.match(postedPayload.body, /^\*\*Clean \(2\):\*\* pr-description, scope$/m);
+    // The body-filed finding still stamps its own invisible marker (#1942) —
+    // load-bearing for cross-round suppression/deferral, never rendered as
+    // visible text.
+    assert.match(postedPayload.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=low angle=coverage round=1 disposition=deferred -->$/m);
     // The gate-scoped round marker rides on the same body.
     assert.match(postedPayload.body, /^<!-- dev-loops:gate-findings-review draft_gate [0-9a-f]{40} round=1 -->$/m);
   }, { prefix: "dev-loops-upsert-single-surface-" });
@@ -6196,8 +6413,12 @@ test("upsert-checkpoint-verdict posts a withheld fanout_fanin verdict when --fin
 // which is itself the proof that none of them ran.
 // ---------------------------------------------------------------------------
 
-function reviewGateFindingSurfaceEntries({ issueComments = [], reviews = [], threads = [], files = [] } = {}) {
+function reviewGateFindingSurfaceEntries({ issueComments = [], reviews = [], threads = [], files = [], pendingReviews = [] } = {}) {
   return [
+    // #1912: findOwnPendingReview scans the raw reviews list FIRST (before the
+    // resolveFindingSurface reads below) to decide submit-existing-pending vs.
+    // create. Default [] = no own pending review, so the create path is taken.
+    { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify(pendingReviews) + "\n" },
     { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },
     { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify(reviews) + "\n" },
     { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify(issueComments) + "\n" },
@@ -6594,6 +6815,459 @@ test("upsert-checkpoint-verdict --gate review --submit pending creates the revie
   }, { prefix: "dev-loops-upsert-review-submit-pending-" });
 });
 
+// ---------------------------------------------------------------------------
+// #1912 — pending -> submit re-run no longer 422s: when the caller already has
+// an own PENDING review on the same head, a --gate review --submit re-run
+// SUBMITS that pending review via /reviews/<id>/events (mapped event),
+// preserving its inline comments; discard DELETEs it; leave-pending is a noop;
+// the create path is unchanged when no own pending exists.
+// ---------------------------------------------------------------------------
+
+// An own PENDING review on the same head, as GitHub's list-reviews endpoint
+// returns it to its own author (author-only, so no visible marker — exactly
+// what the same-head marker scan misses). `id` 8001, on SINGLE_SURFACE_HEAD.
+const OWN_PENDING_REVIEW = { id: 8001, state: "PENDING", commit_id: SINGLE_SURFACE_HEAD, user: { login: "gate-bot" }, body: "### Gate review: `review`\n(pending draft)" };
+
+for (const { submit, expectedEvent, needsConfirm } of [
+  { submit: "comment", expectedEvent: "COMMENT", needsConfirm: false },
+  { submit: "request-changes", expectedEvent: "REQUEST_CHANGES", needsConfirm: true },
+  { submit: "approve", expectedEvent: "APPROVE", needsConfirm: true },
+]) {
+  test(`#1912: --gate review --submit ${submit} with an own same-head PENDING review SUBMITS it via /events (event ${expectedEvent}), never creating a second review (no 422)`, async () => {
+    await withTempDir(async (tempDir) => {
+      const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+      const entries = [
+        // findOwnPendingReview scan: the caller's own pending review is present.
+        { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify([OWN_PENDING_REVIEW]) + "\n" },
+        // The ONLY mutation is the events submit — never a create POST.
+        {
+          assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews/8001/events", "--input", "-"],
+          stdout: '{"id":8001,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-8001"}\n',
+        },
+      ];
+      const { runChild, calls } = makeGhMock(entries);
+      const result = await upsertCheckpointVerdict({
+        repo: "owner/repo",
+        pr: 17,
+        gate: "review",
+        headSha: SINGLE_SURFACE_HEAD,
+        nextAction: "none — informational review, no re-gate required",
+        findingsLedger: ledgerPath,
+        executionMode: "fanout_fanin",
+        submit,
+        ...(needsConfirm ? { interactiveConfirm: true } : {}),
+      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+
+      assert.equal(result.ok, true);
+      assert.equal(result.action, "submitted");
+      assert.equal(result.submit, submit);
+      assert.equal(result.commentId, 8001);
+      // The events submit carries the mapped event.
+      const eventsCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews/8001/events"));
+      assert.ok(eventsCall, "expected a /reviews/8001/events submit call");
+      assert.equal(JSON.parse(eventsCall.stdinText).event, expectedEvent);
+      // No create-review POST ever reached GitHub (the 422 path is not taken).
+      const createCall = calls.find((c) => c.args.includes("POST") && c.args.includes("repos/owner/repo/pulls/17/reviews"));
+      assert.equal(createCall, undefined);
+    }, { prefix: "dev-loops-upsert-review-submit-pending-events-" });
+  });
+}
+
+// #1848 — interactive /loop-review Submit leaves NO dangling pending draft. The
+// interactive Phase 4 Submit-as choice re-runs `--gate review --submit <mode>`
+// against the SAME head as the Phase 3 `--submit pending` draft, so it must
+// resolve to submit-in-place (#1912 shared path): the pending draft's own id is
+// SUBMITTED via /events, and NO second review is created — after the run the PR
+// carries exactly one review (the submitted one) and no orphaned author-only
+// draft. This is the AC pin for the Submit path with a stubbed reviews API.
+for (const { submit, needsConfirm } of [
+  { submit: "comment", needsConfirm: false },
+  { submit: "request-changes", needsConfirm: true },
+  { submit: "approve", needsConfirm: true },
+]) {
+  test(`#1848: interactive Submit as ${submit} consumes the same-head pending draft in place (one review, no dangling draft)`, async () => {
+    await withTempDir(async (tempDir) => {
+      const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+      const entries = [
+        { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify([OWN_PENDING_REVIEW]) + "\n" },
+        {
+          assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews/8001/events", "--input", "-"],
+          stdout: '{"id":8001,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-8001"}\n',
+        },
+      ];
+      const { runChild, calls } = makeGhMock(entries);
+      const result = await upsertCheckpointVerdict({
+        repo: "owner/repo",
+        pr: 17,
+        gate: "review",
+        headSha: SINGLE_SURFACE_HEAD,
+        nextAction: "none — informational review, no re-gate required",
+        findingsLedger: ledgerPath,
+        executionMode: "fanout_fanin",
+        submit,
+        ...(needsConfirm ? { interactiveConfirm: true } : {}),
+      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+      // The one submitted review reuses the pending draft's id — the draft is
+      // consumed, not left dangling alongside a second review.
+      assert.equal(result.action, "submitted");
+      assert.equal(result.commentId, 8001);
+      // No create-review POST was issued: no second/duplicate review exists.
+      const createCall = calls.find((c) => c.args.includes("POST") && c.args.includes("repos/owner/repo/pulls/17/reviews"));
+      assert.equal(createCall, undefined);
+      // The pending draft was NOT deleted (submit-in-place, not delete-first).
+      const deleteCall = calls.find((c) => c.args.includes("DELETE"));
+      assert.equal(deleteCall, undefined);
+    }, { prefix: "dev-loops-upsert-1848-no-dangling-" });
+  });
+}
+
+test("#1912: submitting an own pending review via /events preserves its inline comments (the draft is submitted as-is — no re-post, no comments key)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    const entries = [
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify([OWN_PENDING_REVIEW]) + "\n" },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews/8001/events", "--input", "-"],
+        stdout: '{"id":8001,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-8001"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath,
+      executionMode: "fanout_fanin",
+      submit: "comment",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    const eventsCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews/8001/events"));
+    const payload = JSON.parse(eventsCall.stdinText);
+    // The events endpoint submits the pending review's existing inline comments
+    // as-is; the submit payload never re-sends a `comments` array (which would
+    // duplicate or drop them).
+    assert.equal("comments" in payload, false);
+    assert.equal(payload.event, "COMMENT");
+  }, { prefix: "dev-loops-upsert-review-submit-preserve-inline-" });
+});
+
+test("#1912: --gate review --submit discard DELETEs the caller's own same-head pending review (and never creates one)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    const entries = [
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify([OWN_PENDING_REVIEW]) + "\n" },
+      { assertArgs: ["api", "-X", "DELETE", "repos/owner/repo/pulls/17/reviews/8001"], stdout: "" },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath,
+      executionMode: "fanout_fanin",
+      submit: "discard",
+      interactiveConfirm: true,
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.ok, true);
+    assert.equal(result.action, "discarded");
+    assert.equal(result.commentId, 8001);
+    const deleteCall = calls.find((c) => c.args.includes("DELETE") && c.args.includes("repos/owner/repo/pulls/17/reviews/8001"));
+    assert.ok(deleteCall, "expected a DELETE /reviews/8001 call");
+    const createCall = calls.find((c) => c.args.includes("POST") && c.args.includes("repos/owner/repo/pulls/17/reviews"));
+    assert.equal(createCall, undefined);
+  }, { prefix: "dev-loops-upsert-review-discard-" });
+});
+
+test("#1912: --gate review --submit discard requires --interactive-confirm (fail closed; no DELETE without it)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    const { runChild, calls } = makeGhMock([]);
+    await assert.rejects(
+      upsertCheckpointVerdict({
+        repo: "owner/repo",
+        pr: 17,
+        gate: "review",
+        headSha: SINGLE_SURFACE_HEAD,
+        nextAction: "none — informational review, no re-gate required",
+        findingsLedger: ledgerPath,
+        executionMode: "fanout_fanin",
+        submit: "discard",
+      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir }),
+      /--submit discard requires --interactive-confirm/i,
+    );
+    // Fail-closed BEFORE any GitHub read/mutation.
+    assert.equal(calls.length, 0);
+  }, { prefix: "dev-loops-upsert-review-discard-noconfirm-" });
+});
+
+test("#1912: --gate review --submit pending with an own same-head PENDING review is a noop (leave-pending leaves it in place — no create, no submit, no delete)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    const entries = [
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify([OWN_PENDING_REVIEW]) + "\n" },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath,
+      executionMode: "fanout_fanin",
+      submit: "pending",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.ok, true);
+    assert.equal(result.action, "noop");
+    assert.equal(result.commentId, 8001);
+    // Only the pending-scan read ran; no mutation of any kind.
+    assert.equal(calls.filter((c) => c.args.includes("POST") || c.args.includes("DELETE") || c.args.includes("PUT")).length, 0);
+  }, { prefix: "dev-loops-upsert-review-leave-pending-" });
+});
+
+test("#1912: a STALE own pending review on a DIFFERENT head is DELETEd before falling through to create (GitHub's one-pending-per-PR limit is PR-scoped, so leaving it would 422 the create)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    // A pending review left on an EARLIER head is not this round's surface, but
+    // GitHub's one-pending-per-PR-per-user limit means it would 422 any create
+    // while present — so it must be deleted before the create, never submitted
+    // via /events (its inline comments point at the stale head).
+    const stalePending = { id: 7777, state: "PENDING", commit_id: "def45670000000000000000000000000000000000", user: { login: "gate-bot" }, body: "### Gate review: `review`\n**Reviewed head SHA:** `def45670000000000000000000000000000000000`\n(stale draft)" };
+    const entries = [
+      // findOwnPendingReview scan finds the stale (wrong-head) pending.
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify([stalePending]) + "\n" },
+      // It is deleted (cleared) so the create below cannot 422.
+      { assertArgs: ["api", "-X", "DELETE", "repos/owner/repo/pulls/17/reviews/7777"], stdout: "" },
+      // Then the create path runs (resolveFindingSurface reads + POST create).
+      { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+      {
+        assertArgs: ["api", "graphql"],
+        assertArgContains: ["reviewThreads"],
+        stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } }) + "\n",
+      },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":960,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-960"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath,
+      executionMode: "fanout_fanin",
+      submit: "comment",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.action, "created");
+    // The stale pending was DELETEd (the create can no longer 422).
+    assert.ok(calls.find((c) => c.args.includes("DELETE") && c.args.includes("repos/owner/repo/pulls/17/reviews/7777")), "expected a DELETE of the stale pending review");
+    // It was never submitted via /events (its content is stale).
+    assert.equal(calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews/7777/events")), undefined);
+  }, { prefix: "dev-loops-upsert-review-stale-pending-" });
+});
+
+test("#1912: --gate review --submit discard with NO own pending review is a noop (nothing to delete; never falls through to create)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    const entries = [
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath,
+      executionMode: "fanout_fanin",
+      submit: "discard",
+      interactiveConfirm: true,
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.action, "noop");
+    assert.equal(result.commentId, null);
+    // No DELETE and no create POST — nothing to do.
+    assert.equal(calls.filter((c) => c.args.includes("DELETE") || c.args.includes("POST")).length, 0);
+  }, { prefix: "dev-loops-upsert-review-discard-nopending-" });
+});
+
+test("#1912: findOwnPendingReview fail-closed guard — a pending entry with a non-integer id is treated as absent, so the create path runs (no submit/delete against an unidentifiable draft)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    // A malformed pending review (id is not an integer) must not be treated as
+    // a resolvable own pending — it is skipped and the round creates fresh.
+    const malformed = { id: "not-an-int", state: "PENDING", commit_id: SINGLE_SURFACE_HEAD, user: { login: "gate-bot" } };
+    const entries = [
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify([malformed]) + "\n" },
+      { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+      {
+        assertArgs: ["api", "graphql"],
+        assertArgContains: ["reviewThreads"],
+        stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } }) + "\n",
+      },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":962,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-962"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath,
+      executionMode: "fanout_fanin",
+      submit: "comment",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.action, "created");
+    // No DELETE/events against the malformed entry.
+    assert.equal(calls.find((c) => c.args.includes("DELETE")), undefined);
+  }, { prefix: "dev-loops-upsert-review-malformed-pending-" });
+});
+
+test("#1912 (Copilot): a FOREIGN same-head pending review (no dev-loops gate-review header — e.g. a human's manual draft) is NEVER submitted or deleted (data-loss guard); the round falls through to create", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    // A manual review-in-progress on the same token: same head, integer id. Its
+    // body QUOTES the dev-loops header lower down (citing another comment) but
+    // does NOT start with it — the start-anchored guard must treat it as absent
+    // so the tool never clobbers the human's draft (#1912 Copilot round 2).
+    const foreignPending = { id: 5555, state: "PENDING", commit_id: SINGLE_SURFACE_HEAD, user: { login: "gate-bot" }, body: "WIP: still drafting my own comments\n\n> quoting the bot: ### Gate review: `review`\n" };
+    const entries = [
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify([foreignPending]) + "\n" },
+      { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[]\n" },
+      {
+        assertArgs: ["api", "graphql"],
+        assertArgContains: ["reviewThreads"],
+        stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } }) + "\n",
+      },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":963,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-963"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath,
+      executionMode: "fanout_fanin",
+      submit: "comment",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.action, "created");
+    // The human's draft (id 5555) is never submitted or deleted.
+    assert.equal(calls.find((c) => c.args.includes("DELETE") && c.args.includes("repos/owner/repo/pulls/17/reviews/5555")), undefined);
+    assert.equal(calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews/5555/events")), undefined);
+  }, { prefix: "dev-loops-upsert-review-foreign-pending-" });
+});
+
+test("#1912: --gate review --submit comment with NO own pending review creates a fresh review (no regression to the create path)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    const entries = [
+      ...reviewGateFindingSurfaceEntries({ files: null }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":961,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-961"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath,
+      executionMode: "fanout_fanin",
+      submit: "comment",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.action, "created");
+    assert.equal(result.submit, "comment");
+    const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    assert.equal(JSON.parse(postCall.stdinText).event, "COMMENT");
+    // No events submit path was taken.
+    assert.equal(calls.find((c) => c.args.some((a) => a.includes("/reviews/") && a.endsWith("/events"))), undefined);
+  }, { prefix: "dev-loops-upsert-review-create-no-pending-" });
+});
+
+test("#1912: a fanout_fanin round posted with --findings-json and NO --findings-ledger emits a one-line warning naming --findings-ledger as the inline-comment source", async () => {
+  await withTempDir(async (tempDir) => {
+    const findingsJsonPath = path.join(tempDir, "findings.json");
+    await writeFile(findingsJsonPath, JSON.stringify([
+      { angle: "correctness", verdict: "findings_present", findings: [{ severity: "medium", summary: "a finding with no ledger" }] },
+    ]), "utf8");
+    // Routed through --gate review (no coordination-context reads): the footgun
+    // is gate-agnostic, and review keeps the mock to the pending-scan + create.
+    const entries = [
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":970,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-970"}\n',
+      },
+    ];
+    const { runChild } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsSummary: "one finding",
+      findingsJson: findingsJsonPath,
+      findingsSeverityCounts: { medium: 1 },
+      nextAction: "fix",
+      executionMode: "fanout_fanin",
+      submit: "comment",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.ok(result.findingsLedgerWarning, "expected a findingsLedgerWarning");
+    assert.match(result.findingsLedgerWarning, /--findings-ledger/);
+    assert.match(result.findingsLedgerWarning, /inline comment/i);
+  }, { prefix: "dev-loops-upsert-findings-json-no-ledger-warn-" });
+});
+
+test("#1912: a fanout_fanin round WITH --findings-ledger emits NO findings-source warning (the footgun does not fire on the correct combination)", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+    const entries = [
+      ...reviewGateFindingSurfaceEntries({ files: null }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":971,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-971"}\n',
+      },
+    ];
+    const { runChild } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath,
+      executionMode: "fanout_fanin",
+      submit: "comment",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+    assert.equal(result.findingsLedgerWarning, undefined);
+  }, { prefix: "dev-loops-upsert-ledger-no-warn-" });
+});
+
 test("normalizeStructuredFindings aliases the legacy severity so no posted body renders it", () => {
   const angles = normalizeStructuredFindings([
     { angle: "docs", verdict: "findings_present", findings: [{ severity: "defer", summary: "legacy entry" }] },
@@ -6608,8 +7282,10 @@ test("normalizeStructuredFindings aliases the legacy severity so no posted body 
     executionMode: "fanout_fanin",
     structuredFindings: angles,
   });
-  assert.ok(body.includes("[`low`]"));
-  assert.ok(!body.includes("[`defer`]"));
+  // The body-only list renders severity as its emoji AND canonical word
+  // (#1942) — "low" 🟡, never the retired "defer" spelling anywhere.
+  assert.ok(body.includes("🟡 low — legacy entry"));
+  assert.ok(!body.includes("defer"));
 });
 
 // ---------------------------------------------------------------------------

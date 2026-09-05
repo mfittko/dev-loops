@@ -267,6 +267,133 @@ test("write-guard hook allows a gitignored path under strict enforcement", () =>
 });
 
 // ---------------------------------------------------------------------------
+// Wrong-checkout guard — e2e hook script behavior (boundary 1)
+// ---------------------------------------------------------------------------
+// The pure decider is unit-tested in packages/core/test/claude-hook-decisions.test.mjs;
+// these exercise the hand-authored hook WIRING end to end: the git-worktree-list /
+// check-ignore fact resolution, realpathNearestExisting, the suggested-path hint, AND the
+// outer-catch fail-safe that denies an escaping write when `git worktree list` is
+// unresolvable while cwd is under a worktree (AC4). Always-on: no DEVLOOPS_MAIN_AGENT_READONLY.
+// Mutation anchor: revert the catch-block fail-safe and the escaping-target deny stops firing.
+
+// Hermetic git env for the throwaway fixtures: pin an identity (CI runners may omit
+// user.name/email) AND clear any ambient GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE so the
+// fixture's git commands can never operate on the wrong repo (e.g. when these tests run
+// inside a git hook or a CI step that sets them). Matches the repo's fixture convention.
+const HERMETIC_GIT_ENV = (() => {
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t",
+  };
+  for (const v of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"]) delete env[v];
+  return env;
+})();
+// `-c commit.gpgsign=false` (a repo-local signing config would fail the throwaway commit)
+// and `-c core.hooksPath=` (never run this repo's own hooks against the fixture).
+const gitFixture = (args, cwd) =>
+  spawnSync("git", ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=", ...args], { cwd, encoding: "utf8", env: HERMETIC_GIT_ENV });
+
+// A self-contained main checkout + a real linked worktree under its tmp/worktrees/, in os.tmpdir()
+// (never under this repo, so it never pollutes repoRoot's own `git worktree list`).
+function makeMainAndLinkedWorktree() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wcg-e2e-"));
+  const main = path.join(root, "main");
+  fs.mkdirSync(main, { recursive: true });
+  const git = (args, cwd) => gitFixture(args, cwd);
+  git(["init", "-q", "-b", "main"], main);
+  fs.writeFileSync(path.join(main, "seed.txt"), "seed\n", "utf8");
+  git(["add", "seed.txt"], main);
+  git(["commit", "-qm", "seed"], main);
+  const wt = path.join(main, "tmp", "worktrees", "dev-loops", "issue-x");
+  fs.mkdirSync(path.dirname(wt), { recursive: true });
+  git(["worktree", "add", "-q", "-b", "issue-x", wt], main);
+  return { root, main, wt };
+}
+
+test("write-guard hook DENIES a main-checkout tracked-path write while cwd is a linked worktree (#1994 e2e, AC1)", () => {
+  const { root, main, wt } = makeMainAndLinkedWorktree();
+  try {
+    const { code, json } = runHook("pre-tool-use-write-guard.mjs", {
+      tool_name: "Write",
+      tool_input: { file_path: path.join(main, "scripts", "x.mjs") }, // MAIN checkout, not the worktree
+      cwd: wt,
+    });
+    assert.equal(code, 0);
+    assert.ok(json, "expected a structured deny decision");
+    assert.equal(json.hookSpecificOutput.permissionDecision, "deny");
+    assert.match(json.hookSpecificOutput.permissionDecisionReason, /WORKTREE-WRONG-CHECKOUT-GUARD/);
+    // the hint names the worktree-local path to use instead
+    assert.match(json.hookSpecificOutput.permissionDecisionReason, /issue-x[/\\]scripts[/\\]x\.mjs/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("write-guard hook ALLOWS an in-worktree write from a linked worktree cwd (#1994 e2e, AC2)", () => {
+  const { root, wt } = makeMainAndLinkedWorktree();
+  try {
+    const { code, json } = runHook("pre-tool-use-write-guard.mjs", {
+      tool_name: "Write",
+      tool_input: { file_path: path.join(wt, "scripts", "x.mjs") },
+      cwd: wt,
+    });
+    assert.equal(code, 0);
+    assert.equal(json, null, "an in-worktree write must be allowed");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("write-guard hook DENIES again with DEVLOOPS_ALLOW_MAIN unset but ALLOWS with it set (#1994 e2e, AC3 override)", () => {
+  const { root, main, wt } = makeMainAndLinkedWorktree();
+  try {
+    const payload = { tool_name: "Write", tool_input: { file_path: path.join(main, "scripts", "x.mjs") }, cwd: wt };
+    assert.equal(runHook("pre-tool-use-write-guard.mjs", payload).json.hookSpecificOutput.permissionDecision, "deny");
+    const overridden = runHook("pre-tool-use-write-guard.mjs", payload, { DEVLOOPS_ALLOW_MAIN: "1" });
+    assert.equal(overridden.json, null, "DEVLOOPS_ALLOW_MAIN=1 authorizes the deliberate main-checkout write");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// AC4 fail-safe, hook Path B: `git worktree list` is UNRESOLVABLE (cwd is a non-git dir whose
+// path is under tmp/worktrees/). The guard must still refuse a write escaping cwd's subtree.
+function makeNonGitWorktreeDir() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wcg-nogit-"));
+  const dir = path.join(root, "tmp", "worktrees", "dev-loops", "issue-y");
+  fs.mkdirSync(dir, { recursive: true });
+  return { root, dir };
+}
+
+test("write-guard hook FAILS SAFE (deny) on an unresolvable git-worktree-list context while under a worktree (#1994 e2e, AC4)", () => {
+  const { root, dir } = makeNonGitWorktreeDir();
+  try {
+    // Target escapes cwd's subtree → deny (fail-safe).
+    const escaping = runHook("pre-tool-use-write-guard.mjs", {
+      tool_name: "Write", tool_input: { file_path: path.join(os.tmpdir(), "elsewhere.txt") }, cwd: dir,
+    });
+    assert.equal(escaping.code, 0);
+    assert.ok(escaping.json, "expected a structured deny decision");
+    assert.equal(escaping.json.hookSpecificOutput.permissionDecision, "deny");
+    assert.match(escaping.json.hookSpecificOutput.permissionDecisionReason, /WORKTREE-WRONG-CHECKOUT-GUARD/);
+
+    // A write inside cwd's own subtree is still allowed.
+    const inside = runHook("pre-tool-use-write-guard.mjs", {
+      tool_name: "Write", tool_input: { file_path: path.join(dir, "sub", "f.txt") }, cwd: dir,
+    });
+    assert.equal(inside.json, null, "in-cwd-subtree write must be allowed even when git-list is unresolvable");
+
+    // The override authorizes the escaping write.
+    const overridden = runHook("pre-tool-use-write-guard.mjs", {
+      tool_name: "Write", tool_input: { file_path: path.join(os.tmpdir(), "elsewhere.txt") }, cwd: dir,
+    }, { DEVLOOPS_ALLOW_MAIN: "1" });
+    assert.equal(overridden.json, null, "DEVLOOPS_ALLOW_MAIN=1 overrides the fail-safe deny");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // SubagentStop uncommitted-work guard (#1619) — e2e hook script behavior
 // ---------------------------------------------------------------------------
 // The guard fires only under tmp/worktrees/. Build a throwaway git repo there so the hook's

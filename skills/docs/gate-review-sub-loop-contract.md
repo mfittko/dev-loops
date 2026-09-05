@@ -647,8 +647,16 @@ prompt per angle under `mode: per-angle` (bypasses configured groups: one single
 grouped mode, the default — including `gate:full`, which dispatches grouped as of ADR 0048), in that order —
 never angle-first. The invariant block MUST be byte-identical across every reviewer of the
 same gate pass and MUST carry, at minimum: the repo, PR number, head SHA, and worktree path; the
-`write-gate-context.mjs` gate-context artifact path (`GATE-EXEC-BUILD-ONCE-SEED`); and the
-mandatory `verify-fresh-review-context.mjs` instruction above. Angle identity MUST appear
+`write-gate-context.mjs` gate-context artifact path (`GATE-EXEC-BUILD-ONCE-SEED`); the
+mandatory `verify-fresh-review-context.mjs` instruction above; and the **findings write-path
+invariant** — the WORKTREE-ABSOLUTE per-angle findings directory (`<worktree>/tmp/gate-reviews/<repo-slug>/pr-<N>/<gate>-<headSha>/`)
+a reviewer MUST write into (`GATE-EXEC-FINDINGS-WRITE-PATH`, #1978). A reviewer's shell cwd is
+not trustworthy across its commands (each may start in the primary checkout, not the worktree),
+so a cwd-relative `tmp/...` write can land in the primary checkout's tmp/ where fan-in never
+looks — surfacing only as a late "missing evidence" failure. Pinning the absolute dir (and
+`--tmp-root <worktree>/tmp` for any findings-writer CLI) in the byte-identical prefix prevents
+that at dispatch; `consolidate-fanin.mjs` additionally detects a findings artifact stranded in
+the primary checkout and names it in the missing-evidence diagnostic rather than failing opaque. Angle identity MUST appear
 ONLY in the suffix (the angle-specific prompt, e.g.
 `COPILOT-FOLLOWUP-ADVERSARIAL-BRIEFING`'s persona prompt) and the reviewer's `--scope` flag
 — never inside the invariant block, or the byte-identity requirement is violated by
@@ -1225,8 +1233,8 @@ included — plus the `{ overallVerdict, findings }` wrapper (written to
 threads `overallVerdict` into the durable ledger for verdict-consistency
 enforcement, #1616; the latter unwraps and ignores it), so neither tool needs
 an improvised `--jq`/`node -e` extraction step to materialize it — the severity counts, and
-the overall verdict, upserting the mandatory `pr-checklist-matrix` entry when
-asked (`--pr-checklist-matrix clean`; since #1877 the completeness half of that
+the overall verdict, upserting the mandatory `pr-checklist` entry when
+asked (`--pr-checklist clean`; since #1877 the completeness half of that
 angle is enforced deterministically by the pre-approval unchecked-box block, so
 this upsert records the fan-in bookkeeping entry, not the enforcement itself —
 see [Acceptance Criteria Verification](acceptance-criteria-verification.md)).
@@ -1271,55 +1279,51 @@ measured by actually rendering a candidate `--out` shape through
 `upsert-checkpoint-verdict.mjs`'s own render path and catching its
 length-exceeded throw, not an approximated size, so a shape this CLI accepts
 never later throws when `upsert-checkpoint-verdict.mjs` posts it. A round too
-large to render even at minimum summary length exits 0 with
-`commentBudgetExceeded: true` and degrades `--out` through four tiers, PROVIDED
-`--ledger-out` was also given; without `--ledger-out` the same over-budget
-round instead FAILS CLOSED (exit 1) at the point it would degrade, since a
-degraded round's only durable, unbudgeted record is the ledger and nothing
-would land on disk (the findings would exist only on that process's stdout,
-which the sanctioned ledger/post path cannot consume). Which
-tier an angle lands on is NOT decided by whether that angle's own marker fits
-in isolation: angles are upgraded one at a time, in order of each angle's
-most urgent severity (SEVERITY_ORDER's own rank; ties by artifact index), and
-an upgrade is kept only while the WHOLE round still renders — so a low-only
-angle can stay bare purely because a more urgent angle consumed the budget
-first, even though its own verbose sentence would fit alone:
+large to render is shrunk by hard-truncating every finding's summary evenly
+(halving the per-finding cap down to a 16-char floor) until the whole round
+renders — SHORTENING each finding's own text, never replacing it with a
+synthetic omitted-count/ledger-pointer marker (#1942: such a marker names the
+local disposition ledger, which lives only on the runner's disk and is
+invisible to a GitHub reader, so it could never actually surface a withheld
+finding to a reviewer). A round too large to render even at that 16-char
+floor exits 0 with `commentBudgetExceeded: true` and WITHHOLDS `--out`
+entirely, PROVIDED `--ledger-out` was also given; without `--ledger-out` the
+same over-budget round instead FAILS CLOSED (exit 1) at the point it would
+withhold, since a withheld round's only durable, unbudgeted record is the
+ledger and nothing would land on disk (the findings would exist only on that
+process's stdout, which the sanctioned ledger/post path cannot consume):
 
-1. **real (unmarked)** — an angle whose own real findings, tried at their
-   ORIGINAL pre-shrink length first and falling back to the
-   whole-round-shrunk length, still let the whole round render keeps them
-   as-is, since a marker is a compression and must never replace real
-   content with something bigger.
-2. **verbose** — failing that, that angle's findings are replaced with ONE
-   synthetic marker finding naming its omitted count and severity breakdown.
-3. **bare** — that angle's marker shortens to a bare omitted-count line when
-   neither its real findings nor the verbose sentence fit.
-4. **withheld** — reached only when even the CHEAPEST per-angle shape (the
-   bare line, or an angle's own real findings when those render shorter)
-   across the WHOLE round still does not fit: `findingsJson` in the result is
+1. **real (hard-truncated)** — every finding keeps its own real text, shrunk
+   as far as the 16-char floor allows; there is no per-angle marker/upgrade
+   ladder to decide between, since every angle degrades the same way (its
+   own findings, shorter).
+2. **withheld** — reached only when even the whole round hard-truncated to
+   the 16-char floor still does not fit: `findingsJson` in the result is
    emitted empty and `--out`, if given, is REMOVED from disk (deleted, not
    merely skipped — a stale prior-round `--out` is never left for a caller to
-   read as this round's findings).
+   read as this round's findings). This is an absolute structural floor (far
+   more angles than any single comment can hold even hard-truncated), not a
+   per-finding degradation choice.
 
-Tiers 1-3 keep the REAL angle set and each angle's REAL verdict intact (never
-collapsed into one foreign section, which would fail
+The hard-truncated case keeps the REAL angle set and each angle's REAL
+verdict intact (never collapsed into one foreign section, which would fail
 `upsert-checkpoint-verdict.mjs`'s mandatory-angle/pool validation). Only in
-tier 4 is `--out` never written (or removed if it already existed); whoever
-posts the verdict via the
+the withheld case is `--out` never written (or removed if it already
+existed); whoever posts the verdict via the
 [Gate comment command](../copilot-pr-followup/SKILL.md#mandatory-gate-comment-command-contract)
 MUST check for `--out`'s existence before passing `--findings-json <path>` —
 passing a path that was never written fails closed with ENOENT; fall back to
 that command's `--findings-summary` instead, naming the round size and
 pointing at the ledger (`--ledger-out`), which is always complete regardless
-of tier. Dropping `--findings-json` does NOT also drop
+of outcome. Dropping `--findings-json` does NOT also drop
 `--findings-severity-counts` — that flag's requirement is scoped to
 `verdict === "clean"` under a gate with `blockCleanOnFindingSeverities`
-configured, independent of execution mode, so a clean tier-4 round must still
-pass it. Which artifact proves angle coverage depends on whether the comment
-can carry per-angle data: `--findings-json`'s per-angle shape lets
+configured, independent of execution mode, so a clean withheld round must
+still pass it. Which artifact proves angle coverage depends on whether the
+comment can carry per-angle data: `--findings-json`'s per-angle shape lets
 `upsert-checkpoint-verdict.mjs` check coverage straight off the comment
 content, but ANY `fanout_fanin` verdict posted without `--findings-json` —
-tier 4's withheld round is the motivating case, but the code does not
+the withheld round is the motivating case, but the code does not
 distinguish it from a normal-sized round that simply omitted the flag —
 carries no per-angle data to check that way. For that case,
 `upsert-checkpoint-verdict.mjs` instead proves coverage from the round's
@@ -1332,7 +1336,7 @@ the ledger records no valid provenance at all. It shares
 check above and `detect-checkpoint-evidence.mjs`'s own read-time
 re-validation below — passing the gate's `pool` on every call site — so the
 three can never define "covered" differently for either the mandatory-angle
-or the foreign-angle half of the check. A tier-4 round MUST still write its
+or the foreign-angle half of the check. A withheld round MUST still write its
 findings-log ledger via `write-gate-findings-log.mjs --provenance` covering
 the gate's mandatory angles, and pass `--findings-ledger` when posting the
 verdict, so this check actually runs; this is a MECHANISM, not a policy
@@ -1353,16 +1357,20 @@ invalid provenance fails closed there regardless of `requireFanoutProvenance`.
 Only the CI gate-evidence verifier bypasses this, by calling
 `detect-checkpoint-evidence.mjs` with `--skip-fanout-ledger-check`; the
 sanctioned pre-merge invocation runs without that flag, so the check is live
-on the merge path by default. Pass `--provenance` on the tier-4 ledger write
-regardless, since it is the only record of mandatory-angle coverage this round
-can have, and a missing one fails both the write-time post and the
-merge-evidence check closed. `commentBudgetExceeded: true` is set on every degraded round
-(tiers 1-4 alike), so it does NOT distinguish tier 4 from tiers 1-3 — `--out`'s
-existence is the only correct discriminator. On a marker-collapsed round, the
-posted `**Findings summary:**` digest counts the real totals (not the marker
-lines) when the caller also passes `--findings-severity-counts` with this
-consolidation's own `severityCounts` (always the true, unbudgeted totals);
-the marker text and the ledger always carry the true numbers regardless.
+on the merge path by default. Pass `--provenance` on the withheld round's
+ledger write regardless, since it is the only record of mandatory-angle
+coverage this round can have, and a missing one fails both the write-time
+post and the merge-evidence check closed. `commentBudgetExceeded: true` means
+the round is withheld: a round that fits after hard truncation (even at the
+16-char floor) is indistinguishable from an unshrunk one — it carries no flag
+at all, only shorter finding text. `commentBudgetExceeded` and `--out`'s
+existence therefore now agree exactly (`--out` written iff the flag is
+absent). On a withheld round (`findingsJson`
+emitted empty), the posted `**Findings summary:**` digest still counts the
+real totals (never zero) when the caller also passes
+`--findings-severity-counts` with this consolidation's own `severityCounts`
+(always the true, unbudgeted totals); the ledger always carries the true
+numbers regardless.
 
 Consolidation:
 
@@ -1775,14 +1783,24 @@ resolved-in SHA (for findings resolved in a later pass).
 `GATE-EXEC-FINDING-THREADS`: A gate round has exactly ONE visible surface: the PR review of type
 COMMENT that `upsert-checkpoint-verdict.mjs` posts. Pass that round's ledger to it via
 `--findings-ledger <path>` — the same durable log `write-gate-findings-log.mjs` just wrote — and
-the verdict body and the round's findings land together on that one review. A locatable finding
-(an in-diff `file:line`) becomes an inline comment on that review; every other finding is filed
-in the review body, with every rendered content line blockquoted so it can never be mistaken for
-a genuine gate verdict field by the line-start `gate:`/`head sha:`/`verdict:`/`summary:`
-structured field parser. Each finding's TEXT appears exactly once across the round: in its inline
-comment, or in the body-filed block. The per-angle breakdown in the body therefore degrades to
-`angle → verdict (+ finding count)` one-liners; a round posted WITHOUT `--findings-ledger` keeps
-the full per-angle breakdown, since that body is then the only place those findings would appear.
+the verdict body and the round's findings land together on that one review, split into TWO TRACKS
+by locatability (`GATE-COMMENT-SINGLE-SURFACE`, #1942): a **locatable** finding (an in-diff
+`file:line`) becomes an inline comment on that review, and its full text lives ENTIRELY there —
+the body never restates or per-row references it, only a single aggregate `**Inline findings:**`
+line (count, severity breakdown, touched angle names) pointing at the inline comments. A
+**non-locatable** ("body-filed") finding has no inline carrier, so it renders in full as its own
+plain bulleted list item in the body (never a table row) — summary, `file:line` blob-linked when
+known, and its angle in trailing brackets. A finding's full text therefore lives in EXACTLY ONE
+reader-reachable carrier, never both and never neither. A finding's own free text can never be
+mistaken for a genuine gate verdict field by the line-start `gate:`/`head sha:`/`verdict:`/
+`summary:` structured field parser: each body-list item runs through the same sanitizer the rest
+of the structured render uses (neutralizing markdown/HTML forgery and collapsing any embedded
+newline to a space), so no finding's text can ever reach column 0 of its own logical line. A
+non-locatable finding additionally stamps one INVISIBLE fingerprint+disposition marker (below) on
+the review body — this marker, never the finding's visible text, is what cross-round suppression
+and deferral tracking read back; the per-angle breakdown does NOT degrade to an
+`angle → verdict (+ finding count)` one-liner just because a round also carries
+`--findings-ledger`.
 
 A finding anchored to unchanged code has no in-diff `file:line` and is therefore always
 body-filed, tracked through the disposition ledger and its fingerprint rather than a review
@@ -1816,7 +1834,10 @@ add inline comments to a submitted review), so every still-unposted finding is b
 correction rather than dropped.
 
 After the verdict post AND after the Phase 5 (Retry) fixer triage pass, at every gate close, run
-`close-gate-findings.mjs --ledger <path>` against that same ledger. It posts NOTHING of its own —
+`close-gate-findings.mjs --ledger <path> --allowed-refs <governing-issue>` against that same ledger
+(`<governing-issue>` = the PR's governing/closing issue, resolved deterministically from
+`closingIssuesReferences` — never hardcoded; see the copilot-pr-followup SKILL step 7 for the
+resolution + scoped-allowlist rationale). It posts NOTHING of its own —
 it runs only the thread disposition pass (`GATE-EXEC-THREAD-DISPOSITION`). The defer-close for
 low findings runs AFTER the fixer triages them (#1585): the fixer sees every gate-authored
 finding first (fix-if-cheap-in-the-same-commit, else defer), then the disposition pass acts as
@@ -1998,7 +2019,7 @@ no issue: it records a one-line audit entry in the durable ledger (fingerprint, 
 ## Execution mode and fan-out evidence enforcement
 
 Each gate verdict records an `executionMode` (`fanout_fanin` or `inline_single_agent`,
-default `inline_single_agent`) via the [Gate comment command](../copilot-pr-followup/SKILL.md#mandatory-gate-comment-command-contract); inline runs must declare an `--inline-reason`. A `fanout_fanin` verdict passes the structured per-angle review results via `--findings-json` (the per-angle `{angle, verdict, findings}` artifacts that feed `consolidateFanin`, or the flat `toFindingsLogShape` output grouped by `.angle`) so the comment renders a per-angle breakdown; `--findings-summary` is the `inline_single_agent` fallback, plus the one `fanout_fanin` exception — a round posted without `--findings-json` (the tier-4/withheld `consolidate-fanin` case is the motivating one, where `--out` was never written and `--findings-json` would fail closed with ENOENT), which instead proves mandatory-angle coverage from `--findings-ledger`'s provenance and is refused when neither artifact is supplied on a gate with mandatory angles configured — see [Phase 3 — Consolidation](#phase-3--consolidation-fan-in-synthesis-and-disposition-ledger) for the full artifact/coverage rule; not restated here. Fan-out evidence enforcement is **ON by default** (`gates.requireFanoutEvidence`): a clean gate verdict requires the gate to run via `--execution-mode fanout_fanin` with a findings-log ledger for the head SHA. Enforcement runs at **both** boundaries, sharing one acceptance predicate (`evaluateInlineFanoutMode`, `detect-checkpoint-evidence.mjs`) so the two can never drift: the **produce step** (`upsert-checkpoint-verdict.mjs`) refuses to record an under-qualified `inline_single_agent` verdict for a required gate BEFORE it is ever posted — for every verdict value (`clean`, `findings_present`, `blocked`), since mode qualification does not depend on the conclusion — and the **pre-merge evidence check** (`buildPreMergeGateCheck`) remains the fail-closed net for a required gate otherwise (e.g. a verdict posted before enforcement existed, or a hand-edited comment). Repos can opt out with `gates.requireFanoutEvidence: false`; there is no per-post override. Live context-builder/fan-out execution (epic #867) is what makes `fanout_fanin` producible — distinct from this contract's own sub-loop phase numbering (preamble / fanout / fanin).
+default `inline_single_agent`) via the [Gate comment command](../copilot-pr-followup/SKILL.md#mandatory-gate-comment-command-contract); inline runs must declare an `--inline-reason`. A `fanout_fanin` verdict passes the structured per-angle review results via `--findings-json` (the per-angle `{angle, verdict, findings}` artifacts that feed `consolidateFanin`, or the flat `toFindingsLogShape` output grouped by `.angle`) so the comment renders a per-angle breakdown; `--findings-summary` is the `inline_single_agent` fallback, plus the one `fanout_fanin` exception — a round posted without `--findings-json` (the withheld `consolidate-fanin` case is the motivating one, where `--out` was never written and `--findings-json` would fail closed with ENOENT), which instead proves mandatory-angle coverage from `--findings-ledger`'s provenance and is refused when neither artifact is supplied on a gate with mandatory angles configured — see [Phase 3 — Consolidation](#phase-3--consolidation-fan-in-synthesis-and-disposition-ledger) for the full artifact/coverage rule; not restated here. Fan-out evidence enforcement is **ON by default** (`gates.requireFanoutEvidence`): a clean gate verdict requires the gate to run via `--execution-mode fanout_fanin` with a findings-log ledger for the head SHA. Enforcement runs at **both** boundaries, sharing one acceptance predicate (`evaluateInlineFanoutMode`, `detect-checkpoint-evidence.mjs`) so the two can never drift: the **produce step** (`upsert-checkpoint-verdict.mjs`) refuses to record an under-qualified `inline_single_agent` verdict for a required gate BEFORE it is ever posted — for every verdict value (`clean`, `findings_present`, `blocked`), since mode qualification does not depend on the conclusion — and the **pre-merge evidence check** (`buildPreMergeGateCheck`) remains the fail-closed net for a required gate otherwise (e.g. a verdict posted before enforcement existed, or a hand-edited comment). Repos can opt out with `gates.requireFanoutEvidence: false`; there is no per-post override. Live context-builder/fan-out execution (epic #867) is what makes `fanout_fanin` producible — distinct from this contract's own sub-loop phase numbering (preamble / fanout / fanin).
 
 ### Light-mode inline acceptance (under-threshold micro-PRs)
 
@@ -2035,7 +2056,7 @@ findings-log ledger** for the reviewed head (the single-agent path's
 `write-gate-findings-log.mjs` writes it). Finding posting is likewise uniform: the inline
 verdict takes `--findings-ledger <path>` for that same ledger, so the reduced review path
 never reduces what gets threaded, and the close afterwards runs
-`close-gate-findings.mjs --ledger <path>` for the disposition pass exactly as
+`close-gate-findings.mjs --ledger <path> --allowed-refs <governing-issue>` for the disposition pass exactly as
 [Finding threads and disposition](#finding-threads-and-disposition) requires for a fan-out
 close. `requireFanoutProvenance`, when enabled, is
 enforced **only for `fanout_fanin` verdicts** — a light inline verdict is already
@@ -2198,7 +2219,7 @@ dynamic resolution may legitimately dispatch catalog angles then, with a
 disabled entry still a hard ceiling. A delta-suffixed angle (`<angle>-delta-at-...`, e.g. a re-review scoped
 to only the current head's delta) counts toward its base angle for both checks.
 Fan-in synthetic angles (`FANIN_SYNTHETIC_ANGLES` from `@dev-loops/core/loop/gate-fanin`;
-currently `pr-checklist-matrix`, the entry `consolidate-fanin --pr-checklist-matrix clean`
+currently `pr-checklist`, the entry `consolidate-fanin --pr-checklist clean`
 upserts) are always legal in the foreign-angle check, regardless of pool config,
 `gates.rejectForeignAngles`, or an `enabled: false` entry for the angle. The entry is
 minted by the fan-in itself, never dispatched from the pool, so a gate whose pool omits
@@ -2206,7 +2227,7 @@ the angle (e.g. the shipped draft pool) accepts it without listing it per-gate; 
 disabled-entry ceiling above still governs pool WIDENING (dynamic dispatch), while this
 exemption covers only the fan-in-minted recorded entry. The angle may additionally be
 pool-configured where a gate wants it reviewed as a real angle — the shipped preApproval
-pool lists `pr-checklist-matrix` as mandatory. Since #1877 the angle's completeness duty is
+pool lists `pr-checklist` as mandatory. Since #1877 the angle's completeness duty is
 machine-backed: the deterministic pre-approval block (`upsert-checkpoint-verdict.mjs`, see
 [Acceptance Criteria Verification](acceptance-criteria-verification.md) step 7) fails the gate
 closed on any unchecked `- [ ]` in the PR body's AC/DoD checklist, so the angle's reviewer

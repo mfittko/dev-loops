@@ -23,8 +23,8 @@ import { fetchIssueBody } from "../loop/detect-issue-refinement-artifact.mjs";
 import { applyDevloopsBoard } from "./_resolve-project.mjs";
 import { nonSuccessBoardColumn } from "@dev-loops/core/loop/queue-board-sync";
 import {
-  MISSING_AC_CHECKLIST_FINDING,
-  MISSING_DOD_CHECKLIST_FINDING,
+  MALFORMED_AC_DOD_MATRIX_FINDING,
+  MISSING_AC_DOD_MATRIX_FINDING,
   MISSING_EXPLICIT_NON_GOALS_FINDING,
   detectIssueRefinementArtifact,
   REFINEMENT_ARTIFACT_SOURCES,
@@ -136,12 +136,12 @@ const BODY_FETCH_CONCURRENCY = 4;
 
 // The enqueue gate's per-finding vocabulary (one taxonomy, no drift):
 // a matrix miss reports the actually-missing arm, not the full source
-// list — an AC-only issue is missing its DoD checklist, not everything.
+// list — a matrix-missing issue names the mapping table, not everything.
 // Keys derive from the exported findings so the map cannot drift from the
 // predicate's vocabulary (a typo'd key would silently fall back).
 const MISSING_BY_FINDING = new Map([
-  [MISSING_DOD_CHECKLIST_FINDING, ["Definition of done checklist"]],
-  [MISSING_AC_CHECKLIST_FINDING, ["Acceptance criteria checklist"]],
+  [MISSING_AC_DOD_MATRIX_FINDING, ["AC→DoD mapping matrix"]],
+  [MALFORMED_AC_DOD_MATRIX_FINDING, ["valid AC→DoD mapping matrix"]],
   [MISSING_EXPLICIT_NON_GOALS_FINDING, ["explicit Non-goals section"]],
 ]);
 

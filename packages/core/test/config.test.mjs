@@ -859,7 +859,7 @@ describe("loader — graceful degradation", () => {
           "gates:",
           "  preApproval:",
           "    angles: [dry]",
-          "    mandatoryAngles: [pr-checklist-matrix]",
+          "    mandatoryAngles: [pr-checklist]",
           "    excludeAngles: [yagni]",
           "",
         ].join("\n"),
@@ -3254,14 +3254,14 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
     ],
     preApproval: [
       "dry", "kiss", "yagni", "srp", "soc", "deep", "docs", "ocp", "lsp", "isp",
-      "dip", "renderer-security", "pr-checklist-matrix", "acceptance-criteria",
+      "dip", "renderer-security", "pr-checklist", "acceptance-criteria",
       "contradiction-lens", "correctness-final", "ui-validation",
     ],
     spike: ["scope", "docs"],
   };
   const PRE_1404_MANDATORY_SETS = {
     draft: ["pr-description"],
-    preApproval: ["pr-checklist-matrix", "acceptance-criteria", "yagni", "contradiction-lens"],
+    preApproval: ["pr-checklist", "acceptance-criteria", "yagni", "contradiction-lens"],
     spike: [],
   };
   // draft's and preApproval's blocking sets are NOT the pre-#1404 baseline:
@@ -3328,9 +3328,10 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
     isp: ["review", "Interface Segregation Principle"],
     dip: ["review", "Dependency Inversion Principle"],
     "renderer-security": ["review", "Review this change for renderer security"],
-    // #1877: the prompt was rewritten from the soft completeness judgment to
-    // the truthfulness backstop behind the deterministic pre-approval block.
-    "pr-checklist-matrix": ["review", "Completeness is enforced deterministically"],
+    // #1877/#1951: the prompt is the truthfulness + derivation-fidelity
+    // backstop behind the deterministic pre-approval block; it opens by naming
+    // the PR's list-form checklists derived from the issue matrix.
+    "pr-checklist": ["review", "Verify the PR carries self-contained list-form"],
     "acceptance-criteria": ["review", "Verify that each acceptance criterion and definition-of-done item"],
   };
   // Angles used by the shipped gates that never had a personas[angle] entry
@@ -3485,7 +3486,7 @@ describe("shipped defaults docs and deep angle wiring", () => {
     }
   });
 
-  test("D4: pr-checklist-matrix persona resolves and appears in pre-approval gate angles after settings opt-in", async () => {
+  test("D4: pr-checklist persona resolves and appears in pre-approval gate angles after settings opt-in", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-D4-"));
     try {
       const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
@@ -3499,20 +3500,22 @@ describe("shipped defaults docs and deep angle wiring", () => {
       const { loadDevLoopConfig, resolveReviewerRole, resolveGateAngles } = await import("../src/config/config.mjs");
       const result = await loadDevLoopConfig({ repoRoot: tmpDir });
 
-      const checklistRole = resolveReviewerRole(result.config, "pr-checklist-matrix");
+      const checklistRole = resolveReviewerRole(result.config, "pr-checklist");
       const preApprovalAngles = resolveGateAngles(result.config, "preApproval");
 
       assert.deepEqual(result.errors, []);
       assert.equal(checklistRole.persona, "review");
-      // #1877: the angle is the truthfulness backstop behind the deterministic
-      // completeness block — it must name the matrix, checked boxes, the
+      // #1877/#1951: the angle is the truthfulness + derivation-fidelity
+      // backstop behind the deterministic completeness block — it must name the
+      // issue matrix, the derived PR checklists, checked boxes, the
       // unchecked-box block, and the completeness-not-truthfulness boundary.
       assert.match(checklistRole.prompt, /checked/i);
-      assert.match(checklistRole.prompt, /AC\/DoD\/Non-goals matrix/i);
+      assert.match(checklistRole.prompt, /mapping matrix/i);
+      assert.match(checklistRole.prompt, /derived/i);
       assert.match(checklistRole.prompt, /unchecked/i);
       assert.match(checklistRole.prompt, /completeness/i);
       assert.match(checklistRole.prompt, /TRUTHFULNESS/i);
-      assert.ok(preApprovalAngles.includes("pr-checklist-matrix"), "pr-checklist-matrix must be in pre-approval gate angles after settings opt-in");
+      assert.ok(preApprovalAngles.includes("pr-checklist"), "pr-checklist must be in pre-approval gate angles after settings opt-in");
       assert.equal(checklistRole.fallback, false);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
@@ -5292,11 +5295,11 @@ describe("gates.rejectForeignAngles (#1196)", () => {
 describe("resolveGateAngleContract (#1196 — shared angle enforcement contract)", () => {
   test("returns exclude-filtered mandatory angles + the resolveGateAngles pool by default", () => {
     const config = {
-      gates: { preApproval: { angles: ["dry", "kiss", { name: "pr-checklist-matrix", mandatory: true }] } },
+      gates: { preApproval: { angles: ["dry", "kiss", { name: "pr-checklist", mandatory: true }] } },
     };
     const { mandatoryAngles, pool } = resolveGateAngleContract(config, "preApproval");
-    assert.deepEqual(mandatoryAngles, ["pr-checklist-matrix"]);
-    assert.deepEqual(pool, ["pr-checklist-matrix", "dry", "kiss"]);
+    assert.deepEqual(mandatoryAngles, ["pr-checklist"]);
+    assert.deepEqual(pool, ["pr-checklist", "dry", "kiss"]);
   });
 
   test("an excluded mandatory angle is dropped from BOTH sides (no missing-mandatory/foreign deadlock)", () => {
@@ -5306,7 +5309,7 @@ describe("resolveGateAngleContract (#1196 — shared angle enforcement contract)
           angles: [
             "dry",
             "kiss",
-            { name: "pr-checklist-matrix", mandatory: true },
+            { name: "pr-checklist", mandatory: true },
             { name: "yagni", mandatory: true, enabled: false },
           ],
         },
@@ -5315,7 +5318,7 @@ describe("resolveGateAngleContract (#1196 — shared angle enforcement contract)
     const { mandatoryAngles, pool } = resolveGateAngleContract(config, "preApproval");
     // yagni is neither required (missing-mandatory) nor allowed (foreign):
     // it simply leaves the contract, so a fanout write omitting it passes.
-    assert.deepEqual(mandatoryAngles, ["pr-checklist-matrix"]);
+    assert.deepEqual(mandatoryAngles, ["pr-checklist"]);
     assert.ok(!pool.includes("yagni"));
   });
 

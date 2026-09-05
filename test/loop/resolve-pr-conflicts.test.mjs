@@ -6,6 +6,7 @@ import path from "node:path";
 import { describe, test } from "bun:test";
 
 import {
+  mergeKeepBothSubsections,
   parseResolvePrConflictsCliArgs,
   resolveAdditiveChangelog,
   resolvePrConflicts,
@@ -121,6 +122,78 @@ describe("resolveAdditiveChangelog", () => {
     const result = resolveAdditiveChangelog(conflicted);
     assert.equal(result.safe, false);
   });
+
+  test("merges duplicate '### Fixed' subsections into ONE heading (both sides add a Fixed block)", () => {
+    const conflicted = [
+      "## Unreleased",
+      "",
+      "<<<<<<< HEAD",
+      "### Fixed",
+      "- ours fix (#100)",
+      "",
+      "||||||| base",
+      "=======",
+      "### Fixed",
+      "- theirs fix (#101)",
+      "",
+      ">>>>>>> origin/main",
+      "## v1.0.1",
+    ].join("\n");
+    const result = resolveAdditiveChangelog(conflicted);
+    assert.equal(result.safe, true);
+    // exactly one "### Fixed" heading, not two consecutive ones
+    assert.equal((result.content.match(/^### Fixed$/gmu) || []).length, 1);
+    // both items retained, ours before theirs
+    assert.match(result.content, /- ours fix \(#100\)/);
+    assert.match(result.content, /- theirs fix \(#101\)/);
+    assert.ok(result.content.indexOf("#100") < result.content.indexOf("#101"));
+    // items are contiguous under the single heading (no interleaved heading)
+    assert.match(result.content, /### Fixed\n- ours fix \(#100\)\n- theirs fix \(#101\)/);
+    assert.doesNotMatch(result.content, /<<<<<<<|\|\|\|\|\|\|\||=======|>>>>>>>/);
+  });
+
+  test("keeps DISTINCT '### <Type>' subsections separate (Fixed vs Added)", () => {
+    const conflicted = [
+      "## Unreleased",
+      "",
+      "<<<<<<< HEAD",
+      "### Fixed",
+      "- ours fix (#100)",
+      "",
+      "||||||| base",
+      "=======",
+      "### Added",
+      "- theirs feature (#101)",
+      "",
+      ">>>>>>> origin/main",
+    ].join("\n");
+    const result = resolveAdditiveChangelog(conflicted);
+    assert.equal(result.safe, true);
+    assert.equal((result.content.match(/^### Fixed$/gmu) || []).length, 1);
+    assert.equal((result.content.match(/^### Added$/gmu) || []).length, 1);
+    assert.match(result.content, /- ours fix \(#100\)/);
+    assert.match(result.content, /- theirs feature \(#101\)/);
+  });
+});
+
+describe("mergeKeepBothSubsections", () => {
+  test("plain list blocks (no heading) concatenate ours-then-theirs unchanged", () => {
+    assert.deepEqual(
+      mergeKeepBothSubsections(["- a", "- b"], ["- c"]),
+      ["- a", "- b", "- c"],
+    );
+  });
+
+  test("same heading merges bodies; distinct headings stay separate", () => {
+    assert.deepEqual(
+      mergeKeepBothSubsections(["### Fixed", "- a"], ["### Fixed", "- b"]),
+      ["### Fixed", "- a", "- b"],
+    );
+    assert.deepEqual(
+      mergeKeepBothSubsections(["### Fixed", "- a"], ["### Added", "- b"]),
+      ["### Fixed", "- a", "### Added", "- b"],
+    );
+  });
 });
 
 // ── real-git fixtures ────────────────────────────────────────────────
@@ -207,6 +280,46 @@ describe("resolvePrConflicts (real git)", () => {
       assert.match(merged, /- theirs added \(#101\)/);
       assert.doesNotMatch(merged, /<<<<<<<|>>>>>>>/);
       // no unmerged paths remain
+      const status = git(workDir, ["diff", "--name-only", "--diff-filter=U"]);
+      assert.equal(status.trim(), "");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("both sides add a '### Fixed' block: merges into ONE heading (real git, #1958)", async () => {
+    // Base has an empty `## Unreleased`; each side inserts its own `### Fixed`
+    // block at the same spot → add/add conflict with an empty merge base.
+    const base = [
+      "# Changelog",
+      "",
+      "## Unreleased",
+      "",
+      "## v1.0.1",
+      "- released thing (#1)",
+      "",
+    ].join("\n");
+    const insert = (item) => base.replace("## Unreleased\n\n", `## Unreleased\n\n### Fixed\n- ${item}\n\n`);
+    const { tempDir, workDir } = await setupDivergedRepo({
+      baseFile: "CHANGELOG.md",
+      baseContent: base,
+      oursContent: insert("ours fix (#100)"),
+      theirsContent: insert("theirs fix (#101)"),
+    });
+    try {
+      const result = await resolvePrConflicts(
+        { repoRoot: workDir, base: "main", verify: false, push: false },
+        { env: GIT_ENV },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.action, "resolved");
+      const merged = await readFile(path.join(workDir, "CHANGELOG.md"), "utf8");
+      // exactly one "### Fixed" heading, not two consecutive same-named ones
+      assert.equal((merged.match(/^### Fixed$/gmu) || []).length, 1);
+      assert.match(merged, /- ours fix \(#100\)/);
+      assert.match(merged, /- theirs fix \(#101\)/);
+      assert.ok(merged.indexOf("#100") < merged.indexOf("#101"));
+      assert.doesNotMatch(merged, /<<<<<<<|>>>>>>>/);
       const status = git(workDir, ["diff", "--name-only", "--diff-filter=U"]);
       assert.equal(status.trim(), "");
     } finally {

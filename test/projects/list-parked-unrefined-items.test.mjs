@@ -10,7 +10,8 @@ import { main, parseCliArgs } from "../../scripts/projects/list-parked-unrefined
 const ISOLATED_CWD = mkdtempSync(nodePath.join(tmpdir(), "parked-unrefined-isolated-"));
 after(() => rmSync(ISOLATED_CWD, { recursive: true, force: true }));
 
-const REFINED_BODY = "## Acceptance criteria\n- [ ] It does the thing\n\n## Definition of done\n- [x] All checks pass\n\n## Non-goals\n- none\n";
+const MATRIX = "## AC / DoD matrix\n| Criterion outcome | Required completion evidence |\n|---|---|\n| the feature works end to end | a focused test proves the feature works |\n\n";
+const REFINED_BODY = MATRIX + "## Non-goals\n- none\n";
 const UNREFINED_BODY = "Just some prose describing a problem. No ACs, no DoD.";
 
 // runChild stub: drives list-queue-items (GraphQL) AND the per-issue
@@ -85,40 +86,40 @@ describe("list-parked-unrefined-items (#1258 discovery helper)", () => {
     assert.equal(item.issueNumber, 42);
     assert.equal(item.title, "Un-refined");
     assert.equal(item.finding, "missing_refinement_artifact");
-    assert.match(item.reason, /no Acceptance criteria/i);
+    assert.match(item.reason, /AC→DoD mapping matrix/i);
     assert.deepEqual(item.missing, [
-      "Acceptance criteria section",
-      "Definition of done section",
+      "AC→DoD mapping matrix (a two-column table)",
+      "explicit Non-goals section",
       "linked refinement doc",
     ]);
   });
 
-  it("reports the actually-missing matrix arm for a #1877 matrix miss (one taxonomy with the enqueue gate)", async () => {
+  it("reports missing_ac_dod_matrix for a checklist-only body (one taxonomy with the enqueue gate, #1951)", async () => {
     const r = await run(boardRunChild({
-      columns: { Backlog: [{ issueNumber: 55, title: "AC-only (matrix miss)" }] },
-      bodies: { 55: "## Acceptance criteria\n\n- [ ] AC1\n\n## Non-goals\n\n- none\n" },
+      columns: { Backlog: [{ issueNumber: 55, title: "checklist-only (matrix miss)" }] },
+      bodies: { 55: "## Acceptance criteria\n\n- [ ] AC1\n\n## Definition of done\n\n- [ ] DoD1\n\n## Non-goals\n\n- none\n" },
     }));
     assert.equal(r.items.length, 1);
     const [item] = r.items;
-    assert.equal(item.finding, "missing_dod_checklist");
-    assert.deepEqual(item.missing, ["Definition of done checklist"]);
+    assert.equal(item.finding, "missing_ac_dod_matrix");
+    assert.deepEqual(item.missing, ["AC→DoD mapping matrix"]);
   });
 
-  it("reports the actually-missing matrix arm for a DoD-only body (missing_ac_checklist arm)", async () => {
+  it("reports malformed_ac_dod_matrix for an identifier-only matrix (#1951)", async () => {
     const r = await run(boardRunChild({
-      columns: { Backlog: [{ issueNumber: 56, title: "DoD-only (matrix miss)" }] },
-      bodies: { 56: "## Definition of done\n\n- [ ] DoD1\n\n## Non-goals\n\n- none\n" },
+      columns: { Backlog: [{ issueNumber: 56, title: "identifier-only matrix" }] },
+      bodies: { 56: "## AC / DoD matrix\n\n| AC | DoD |\n|---|---|\n| AC1 | D1 |\n\n## Non-goals\n\n- none\n" },
     }));
     assert.equal(r.items.length, 1);
     const [item] = r.items;
-    assert.equal(item.finding, "missing_ac_checklist");
-    assert.deepEqual(item.missing, ["Acceptance criteria checklist"]);
+    assert.equal(item.finding, "malformed_ac_dod_matrix");
+    assert.deepEqual(item.missing, ["valid AC→DoD mapping matrix"]);
   });
 
   it("reports the actually-missing matrix arm for a Non-goals miss (missing_explicit_non_goals arm)", async () => {
     const r = await run(boardRunChild({
       columns: { Backlog: [{ issueNumber: 57, title: "No Non-goals" }] },
-      bodies: { 57: "## Acceptance criteria\n\n- [ ] AC1\n\n## Definition of done\n\n- [ ] DoD1\n" },
+      bodies: { 57: MATRIX },
     }));
     assert.equal(r.items.length, 1);
     const [item] = r.items;

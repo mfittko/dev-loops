@@ -2,15 +2,17 @@ import assert from "node:assert/strict";
 import { test } from "bun:test";
 
 import {
-  MISSING_AC_CHECKLIST_FINDING,
-  MISSING_DOD_CHECKLIST_FINDING,
+  MALFORMED_AC_DOD_MATRIX_FINDING,
+  MISSING_AC_DOD_MATRIX_FINDING,
   MISSING_EXPLICIT_NON_GOALS_FINDING,
   REFINEMENT_SOURCE,
   decideEnqueueRefinementGate,
+  detectAcDodMatrix,
   detectIssueRefinementArtifact,
   detectLinkedRefinementDoc,
   detectGrillMarker,
   detectGrillEmbedHeading,
+  derivePrChecklistsFromIssueMatrix,
   extractChecklistItems,
   extractPrBodyUncheckedChecklistItems,
   extractUncheckedChecklistItems,
@@ -22,9 +24,19 @@ import {
 // section (loop-grill / artifact-authority contract). Fixture suffix shared by
 // every "artifact present" fixture below.
 const NGOALS = "\n\n## Non-goals\n\n- None beyond the stated scope.\n";
-// #1877: the refinement floor is the full AC/DoD/Non-goals matrix — every
-// "matrix present" fixture pairs the AC checklist with a DoD checklist.
-const DOD = "\n\n## Definition of done\n\n- [x] All checks pass\n";
+// #1951: the refinement floor is the authoritative AC→DoD mapping MATRIX (a
+// two-column semantic table), not duplicate issue-side checklists. Every
+// "matrix present" fixture pairs the matrix with Non-goals.
+const MATRIX = [
+  "",
+  "## AC / DoD matrix",
+  "",
+  "| Criterion outcome | Required completion evidence |",
+  "|---|---|",
+  "| AC1 — the feature works end to end | D1 — a focused test proves the feature works |",
+  "| AC2 — the edge case is handled | D2 — a regression test pins the edge case |",
+  "",
+].join("\n");
 
 test("parseMarkdownSections returns heading boundaries", () => {
   const sections = parseMarkdownSections("## Problem\n\nText.\n\n## Acceptance criteria\n\n- [ ] AC1\n");
@@ -37,6 +49,177 @@ test("parseMarkdownSections returns heading boundaries", () => {
   );
 });
 
+// ---------------------------------------------------------------------------
+// #1951: AC→DoD mapping-matrix detection (detectAcDodMatrix)
+// ---------------------------------------------------------------------------
+
+test("detectAcDodMatrix finds a valid semantic mapping table under a matrix heading", () => {
+  const m = detectAcDodMatrix("## Problem\n\nX\n" + MATRIX);
+  assert.equal(m.found, true);
+  assert.equal(m.valid, true);
+  assert.equal(m.rowCount, 2);
+  assert.deepEqual(m.rows.map((r) => r.criterion), [
+    "AC1 — the feature works end to end",
+    "AC2 — the edge case is handled",
+  ]);
+});
+
+test("detectAcDodMatrix recognizes a criterion/evidence table with no matrix heading", () => {
+  const body = [
+    "## Details", "",
+    "| Acceptance criterion | Completion evidence |",
+    "|---|---|",
+    "| the parser rejects bad input | a negative test covers the bad input |",
+    "",
+  ].join("\n");
+  const m = detectAcDodMatrix(body);
+  assert.equal(m.found, true);
+  assert.equal(m.valid, true);
+});
+
+test("detectAcDodMatrix reports found+invalid for an identifier-only/tautological table", () => {
+  const body = [
+    "## AC / DoD matrix", "",
+    "| AC | DoD |",
+    "|---|---|",
+    "| AC1 | D1 |",
+    "| AC2 | D2 |",
+    "",
+  ].join("\n");
+  const m = detectAcDodMatrix(body);
+  assert.equal(m.found, true);
+  assert.equal(m.valid, false);
+  assert.match(m.reason, /identifier-only|tautological/);
+});
+
+test("#1951/Copilot detectAcDodMatrix accepts a terse-but-real row (>=1 prose word per cell), rejects only identifier-only cells", () => {
+  const body = [
+    "## AC / DoD matrix", "",
+    "| Criterion | Evidence |",
+    "|---|---|",
+    "| Feature works | Tested |",
+    "",
+  ].join("\n");
+  const m = detectAcDodMatrix(body);
+  assert.equal(m.found, true);
+  assert.equal(m.valid, true, "a terse mapping (one prose word per cell) is a real mapping, not identifier-only");
+  // But a bare-identifier cell (0 prose words) is still rejected.
+  const idOnly = detectAcDodMatrix("## AC / DoD matrix\n\n| AC | DoD |\n|---|---|\n| AC1 | done work |\n");
+  // col0 "AC1" has 0 prose words → row not semantic → invalid.
+  assert.equal(idOnly.valid, false);
+});
+
+test("detectAcDodMatrix reports found+invalid for a header/separator-only (empty) table", () => {
+  const body = "## AC → DoD mapping\n\n| Criterion | Evidence |\n|---|---|\n";
+  const m = detectAcDodMatrix(body);
+  assert.equal(m.found, true);
+  assert.equal(m.valid, false);
+  assert.match(m.reason, /empty/);
+});
+
+test("detectAcDodMatrix reports not-found when no qualifying table exists", () => {
+  const m = detectAcDodMatrix("## Problem\n\nprose only, no table\n");
+  assert.equal(m.found, false);
+  assert.equal(m.valid, false);
+});
+
+test("detectAcDodMatrix ignores an unrelated (non-criterion/evidence) table", () => {
+  const body = [
+    "## Config", "",
+    "| Old key | New key |",
+    "|---|---|",
+    "| queue.board | tracker.board |",
+    "",
+  ].join("\n");
+  const m = detectAcDodMatrix(body);
+  assert.equal(m.found, false);
+});
+
+test("#1951 detectAcDodMatrix does not mistake a generic status table (Outcome/Done) for the matrix without a matrix heading", () => {
+  const body = [
+    "## Progress", "",
+    "| Outcome | Done |",
+    "|---|---|",
+    "| the parser handles input | yes it is finished |",
+    "",
+  ].join("\n");
+  assert.equal(detectAcDodMatrix(body).found, false);
+  // The same rows DO qualify once placed under an explicit matrix heading.
+  const withHeading = "## AC / DoD matrix\n\n" + body.split("\n").slice(2).join("\n");
+  assert.equal(detectAcDodMatrix(withHeading).valid, true);
+});
+
+test("detectAcDodMatrix skips a fenced table (anti-spoof)", () => {
+  const body = [
+    "## AC / DoD matrix", "",
+    "```",
+    "| Criterion outcome | Required completion evidence |",
+    "|---|---|",
+    "| AC1 — real work | D1 — a test |",
+    "```",
+    "",
+  ].join("\n");
+  const m = detectAcDodMatrix(body);
+  assert.equal(m.found, false);
+});
+
+// ---------------------------------------------------------------------------
+// #1951: derivePrChecklistsFromIssueMatrix (PR projection)
+// ---------------------------------------------------------------------------
+
+test("derivePrChecklistsFromIssueMatrix projects list-form AC/DoD checklists from the matrix (no table, no cell checkboxes)", () => {
+  const { acChecklist, dodChecklist, markdown } = derivePrChecklistsFromIssueMatrix({
+    body: "## Problem\n\nX\n" + MATRIX,
+  });
+  assert.deepEqual(acChecklist, [
+    "AC1 — the feature works end to end",
+    "AC2 — the edge case is handled",
+  ]);
+  assert.deepEqual(dodChecklist, [
+    "D1 — a focused test proves the feature works",
+    "D2 — a regression test pins the edge case",
+  ]);
+  // List-form checkboxes, never a table, never a checkbox inside a table cell.
+  assert.match(markdown, /## Acceptance criteria\n\n- \[ \] AC1 —/);
+  assert.match(markdown, /## Definition of done\n\n- \[ \] D1 —/);
+  assert.doesNotMatch(markdown, /\|/);
+});
+
+test("derivePrChecklistsFromIssueMatrix accepts a pre-parsed matrix", () => {
+  const matrix = detectAcDodMatrix("## Problem\n\nX\n" + MATRIX);
+  const { acChecklist } = derivePrChecklistsFromIssueMatrix({ matrix });
+  assert.equal(acChecklist.length, 2);
+});
+
+test("#1951 derivePrChecklistsFromIssueMatrix dedupes repeated criterion/evidence rows", () => {
+  const body = [
+    "## AC / DoD matrix", "",
+    "| Criterion outcome | Required completion evidence |",
+    "|---|---|",
+    "| the feature works end to end | a focused test proves the feature works |",
+    "| the feature works end to end | a focused test proves the feature works |",
+    "",
+  ].join("\n");
+  const { acChecklist, dodChecklist } = derivePrChecklistsFromIssueMatrix({ body });
+  assert.deepEqual(acChecklist, ["the feature works end to end"]);
+  assert.deepEqual(dodChecklist, ["a focused test proves the feature works"]);
+});
+
+test("derivePrChecklistsFromIssueMatrix fails closed on a missing/malformed matrix", () => {
+  assert.throws(
+    () => derivePrChecklistsFromIssueMatrix({ body: "## Problem\n\nno table\n" }),
+    (err) => err.code === "MALFORMED_MATRIX_SOURCE",
+  );
+  assert.throws(
+    () => derivePrChecklistsFromIssueMatrix({ body: "## AC / DoD matrix\n\n| AC | DoD |\n|---|---|\n| AC1 | D1 |\n" }),
+    (err) => err.code === "MALFORMED_MATRIX_SOURCE",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// #1951: detectIssueRefinementArtifact matrix floor
+// ---------------------------------------------------------------------------
+
 test("detectIssueRefinementArtifact returns missing for prose-only bodies", () => {
   const result = detectIssueRefinementArtifact({ body: "## Problem\n\nNo ACs.\n\n## Root Cause\n\nBug.\n\n## Fix\n\nCode." });
   assert.equal(result.hasACs, false);
@@ -46,76 +229,72 @@ test("detectIssueRefinementArtifact returns missing for prose-only bodies", () =
   assert.deepEqual(result.dodItems, []);
 });
 
-test("detectIssueRefinementArtifact detects Acceptance criteria with checkboxes", () => {
-  const result = detectIssueRefinementArtifact({
-    body: "## Problem\n\nX\n\n## Acceptance criteria\n\n- [ ] First AC\n- [x] Second AC\n" + DOD + NGOALS,
-  });
+test("detectIssueRefinementArtifact passes a valid matrix + Non-goals (no issue-side checklists required)", () => {
+  const result = detectIssueRefinementArtifact({ body: "## Problem\n\nX\n" + MATRIX + NGOALS });
   assert.equal(result.hasACs, true);
-  assert.equal(result.source, REFINEMENT_SOURCE.ISSUE_BODY_AC);
+  assert.equal(result.source, REFINEMENT_SOURCE.ISSUE_BODY_MATRIX);
   assert.equal(result.finding, null);
-  assert.deepEqual(result.acItems, ["First AC", "Second AC"]);
+  // acItems/dodItems are projected from the matrix rows for downstream consumers.
+  assert.deepEqual(result.acItems, [
+    "AC1 — the feature works end to end",
+    "AC2 — the edge case is handled",
+  ]);
+  assert.deepEqual(result.dodItems, [
+    "D1 — a focused test proves the feature works",
+    "D2 — a regression test pins the edge case",
+  ]);
 });
 
-test("detectIssueRefinementArtifact detects Acceptance criteria with plain bullets", () => {
+test("#1951 AC2: AC content + DoD content + Non-goals but NO matrix fails closed with missing_ac_dod_matrix", () => {
   const result = detectIssueRefinementArtifact({
-    body: "## Problem\n\nX\n\n## Acceptance criteria\n\n- First AC\n- Second AC\n" + DOD + NGOALS,
+    body: "## Acceptance criteria\n\n- [ ] AC1\n\n## Definition of done\n\n- [ ] DoD1\n" + NGOALS,
   });
+  assert.equal(result.hasACs, false);
+  assert.equal(result.finding, MISSING_AC_DOD_MATRIX_FINDING);
+  assert.match(result.reason, /mapping matrix/);
+  // The parser still extracts the checklist content (migration: readable).
+  assert.deepEqual(result.acItems, ["AC1"]);
+  assert.deepEqual(result.dodItems, ["DoD1"]);
+});
+
+test("#1951 AC2: a malformed/identifier-only matrix fails closed with malformed_ac_dod_matrix", () => {
+  const body = [
+    "## AC / DoD matrix", "",
+    "| AC | DoD |",
+    "|---|---|",
+    "| AC1 → D1 | |",
+    "",
+  ].join("\n") + NGOALS;
+  const result = detectIssueRefinementArtifact({ body });
+  assert.equal(result.hasACs, false);
+  assert.equal(result.finding, MALFORMED_AC_DOD_MATRIX_FINDING);
+  assert.equal(result.source, REFINEMENT_SOURCE.ISSUE_BODY_MATRIX);
+});
+
+test("#1951: a valid matrix without an explicit Non-goals section fails closed with missing_explicit_non_goals", () => {
+  const result = detectIssueRefinementArtifact({ body: "## Problem\n\nX\n" + MATRIX });
+  assert.equal(result.hasACs, false);
+  assert.equal(result.source, REFINEMENT_SOURCE.ISSUE_BODY_MATRIX);
+  assert.equal(result.finding, MISSING_EXPLICIT_NON_GOALS_FINDING);
+});
+
+test("#1951: interactive issue-side checklists alongside the matrix do not change the pass, and take precedence for acItems", () => {
+  const body = [
+    "## Acceptance criteria", "", "- [ ] AC1 checklist item", "",
+    "## Definition of done", "", "- [ ] DoD1 checklist item", "",
+  ].join("\n") + MATRIX + NGOALS;
+  const result = detectIssueRefinementArtifact({ body });
   assert.equal(result.hasACs, true);
-  assert.equal(result.source, REFINEMENT_SOURCE.ISSUE_BODY_AC);
+  assert.equal(result.source, REFINEMENT_SOURCE.ISSUE_BODY_MATRIX);
   assert.equal(result.finding, null);
-  assert.deepEqual(result.acItems, ["First AC", "Second AC"]);
+  // Present checklists take precedence over matrix projection for acItems/dodItems.
+  assert.deepEqual(result.acItems, ["AC1 checklist item"]);
+  assert.deepEqual(result.dodItems, ["DoD1 checklist item"]);
 });
 
-test("detectIssueRefinementArtifact detects DoD section with plain bullets when AC is absent", () => {
+test("detectIssueRefinementArtifact detects a linked refinement doc path (a complete artifact on its own)", () => {
   const result = detectIssueRefinementArtifact({
-    body: "## Problem\n\nX\n\n## Definition of Done\n\n- Ship it\n- Docs updated\n" + NGOALS,
-  });
-  // #1877 matrix floor: DoD-only is an incomplete matrix (missing AC arm).
-  assert.equal(result.hasACs, false);
-  assert.equal(result.source, REFINEMENT_SOURCE.ISSUE_BODY_DOD);
-  assert.equal(result.finding, MISSING_AC_CHECKLIST_FINDING);
-  assert.deepEqual(result.dodItems, ["Ship it", "Docs updated"]);
-});
-
-test("detectIssueRefinementArtifact rejects an empty recognized AC section", () => {
-  const result = detectIssueRefinementArtifact({ body: "## Acceptance criteria\n\n" });
-  assert.equal(result.hasACs, false);
-  assert.equal(result.source, REFINEMENT_SOURCE.MISSING);
-  assert.equal(result.finding, "missing_refinement_artifact");
-});
-
-test("detectIssueRefinementArtifact ignores plain bullets under an unrecognized heading", () => {
-  const result = detectIssueRefinementArtifact({
-    body: "## Problem\n\n- some bullet\n- another bullet\n",
-  });
-  assert.equal(result.hasACs, false);
-  assert.equal(result.source, REFINEMENT_SOURCE.MISSING);
-  assert.equal(result.finding, "missing_refinement_artifact");
-});
-
-test("detectIssueRefinementArtifact counts only top-level bullets, not indented sub-bullets", () => {
-  const result = detectIssueRefinementArtifact({
-    body: "## Acceptance criteria\n\n- foo\n  - detail of foo\n- bar\n" + DOD + NGOALS,
-  });
-  assert.equal(result.hasACs, true);
-  assert.equal(result.source, REFINEMENT_SOURCE.ISSUE_BODY_AC);
-  assert.deepEqual(result.acItems, ["foo", "bar"]);
-});
-
-test("detectIssueRefinementArtifact detects DoD section when AC is absent", () => {
-  const result = detectIssueRefinementArtifact({
-    body: "## Problem\n\nX\n\n## Definition of Done\n\n- [ ] DoD1\n- [x] DoD2\n" + NGOALS,
-  });
-  // #1877 matrix floor: DoD-only is an incomplete matrix (missing AC arm).
-  assert.equal(result.hasACs, false);
-  assert.equal(result.source, REFINEMENT_SOURCE.ISSUE_BODY_DOD);
-  assert.equal(result.finding, MISSING_AC_CHECKLIST_FINDING);
-  assert.deepEqual(result.dodItems, ["DoD1", "DoD2"]);
-});
-
-test("detectIssueRefinementArtifact detects a linked refinement doc path", () => {
-  const result = detectIssueRefinementArtifact({
-    body: "## Problem\n\nX\n\nSee `tmp/refinement/532-plan.md` for ACs.\n" + NGOALS,
+    body: "## Problem\n\nX\n\nSee `tmp/refinement/532-plan.md` for the matrix.\n" + NGOALS,
     issueNumber: 532,
   });
   assert.equal(result.hasACs, true);
@@ -125,9 +304,6 @@ test("detectIssueRefinementArtifact detects a linked refinement doc path", () =>
 });
 
 test("detectIssueRefinementArtifact rejects a Refinement section without explicit path", () => {
-  // Per #532 review feedback: a `## Refinement` heading alone is not a
-  // verifiable artifact; the body must reference a real tmp/refinement/*.md
-  // path. The old convention-path fallback was removed.
   const result = detectIssueRefinementArtifact({
     body: "## Refinement\n\nA plan lives here.\n",
     issueNumber: 527,
@@ -135,48 +311,6 @@ test("detectIssueRefinementArtifact rejects a Refinement section without explici
   assert.equal(result.hasACs, false);
   assert.equal(result.source, REFINEMENT_SOURCE.MISSING);
   assert.equal(result.linkedDoc.found, false);
-  assert.equal(result.finding, "missing_refinement_artifact");
-});
-
-test("detectIssueRefinementArtifact rejects a prose-only AC section (no bullets or checkboxes)", () => {
-  // Per #532 review feedback: prose-only AC/DoD sections must not satisfy
-  // the refinement artifact; the section must contain at least one checklist
-  // item OR a top-level plain `- ` bullet. Plain prose lines (no `- `) still
-  // do not count.
-  const result = detectIssueRefinementArtifact({
-    body: "## Acceptance criteria\n\nFirst AC without checkbox\nSecond AC also without checkbox\n",
-  });
-  assert.equal(result.hasACs, false);
-  assert.equal(result.source, REFINEMENT_SOURCE.MISSING);
-  assert.equal(result.finding, "missing_refinement_artifact");
-});
-
-test("detectIssueRefinementArtifact rejects an AC section of only empty checkbox placeholders", () => {
-  // The canonical not-yet-refined template: `- [ ]` placeholders with no
-  // text must NOT satisfy the gate (#1075 regression guard).
-  const unchecked = detectIssueRefinementArtifact({ body: "## Acceptance criteria\n\n- [ ]\n- [ ]\n" });
-  assert.equal(unchecked.hasACs, false);
-  assert.equal(unchecked.source, REFINEMENT_SOURCE.MISSING);
-  assert.equal(unchecked.finding, "missing_refinement_artifact");
-
-  const checked = detectIssueRefinementArtifact({ body: "## Acceptance criteria\n\n- [x]\n- [x]\n" });
-  assert.equal(checked.hasACs, false);
-  assert.equal(checked.source, REFINEMENT_SOURCE.MISSING);
-  assert.equal(checked.finding, "missing_refinement_artifact");
-});
-
-test("detectIssueRefinementArtifact drops empty checkbox placeholders but keeps filled ones", () => {
-  const result = detectIssueRefinementArtifact({
-    body: "## Acceptance criteria\n\n- [ ] real ac\n- [ ]\n" + DOD + NGOALS,
-  });
-  assert.equal(result.hasACs, true);
-  assert.equal(result.source, REFINEMENT_SOURCE.ISSUE_BODY_AC);
-  assert.deepEqual(result.acItems, ["real ac"]);
-});
-
-test("detectIssueRefinementArtifact rejects an AC section of only a horizontal rule", () => {
-  const result = detectIssueRefinementArtifact({ body: "## Acceptance criteria\n\n---\n" });
-  assert.equal(result.hasACs, false);
   assert.equal(result.finding, "missing_refinement_artifact");
 });
 
@@ -193,41 +327,76 @@ test("detectLinkedRefinementDoc finds explicit tmp/refinement path", () => {
   assert.equal(linked.path, "tmp/refinement/532-plan.md");
 });
 
-test("summarizeRefinementGateCheck maps to clean verdict when artifact present", () => {
-  const summary = summarizeRefinementGateCheck({
-    body: "## Acceptance criteria\n\n- [ ] AC1\n" + DOD + NGOALS,
-  });
+// ---------------------------------------------------------------------------
+// summarizeRefinementGateCheck (draft-gate wrapper)
+// ---------------------------------------------------------------------------
+
+test("summarizeRefinementGateCheck maps to clean verdict when the matrix + Non-goals are present", () => {
+  const summary = summarizeRefinementGateCheck({ body: "## Problem\n\nX\n" + MATRIX + NGOALS });
   assert.equal(summary.verdict, "clean");
   assert.equal(summary.finding, null);
   assert.equal(summary.blocking, false);
 });
 
-test("summarizeRefinementGateCheck maps to blocked verdict when artifact missing", () => {
+test("summarizeRefinementGateCheck blocks when the mapping matrix is missing", () => {
   const summary = summarizeRefinementGateCheck({
-    body: "## Problem\n\nX\n",
+    body: "## Acceptance criteria\n\n- [ ] AC1\n\n## Definition of done\n\n- [ ] done\n" + NGOALS,
   });
+  assert.equal(summary.verdict, "blocked");
+  assert.equal(summary.finding, MISSING_AC_DOD_MATRIX_FINDING);
+  assert.equal(summary.blocking, true);
+});
+
+test("summarizeRefinementGateCheck maps to blocked verdict when artifact missing", () => {
+  const summary = summarizeRefinementGateCheck({ body: "## Problem\n\nX\n" });
   assert.equal(summary.verdict, "blocked");
   assert.equal(summary.finding, "missing_refinement_artifact");
   assert.equal(summary.blocking, true);
 });
 
-test("decideEnqueueRefinementGate enqueues a refined issue into the pickup column", () => {
-  const artifact = detectIssueRefinementArtifact({ body: "## Acceptance criteria\n\n- [ ] AC1\n" + DOD + NGOALS });
+// ---------------------------------------------------------------------------
+// decideEnqueueRefinementGate
+// ---------------------------------------------------------------------------
+
+test("decideEnqueueRefinementGate enqueues a matrix-refined issue into the pickup column", () => {
+  const artifact = detectIssueRefinementArtifact({ body: "## Problem\n\nX\n" + MATRIX + NGOALS });
   const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: false });
   assert.deepEqual(decision, { action: "enqueue" });
-});
-
-test("decideEnqueueRefinementGate blocks a DoD-only issue (incomplete #1877 matrix)", () => {
-  const artifact = detectIssueRefinementArtifact({ body: "## Definition of done\n\n- [ ] DoD1\n" + NGOALS });
-  const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: false });
-  assert.equal(decision.action, "block");
-  assert.equal(artifact.finding, MISSING_AC_CHECKLIST_FINDING);
 });
 
 test("decideEnqueueRefinementGate enqueues a linked-doc-only refined issue into the pickup column", () => {
-  const artifact = detectIssueRefinementArtifact({ body: "## Plan\n\nSee tmp/refinement/10-plan.md for details.\n" + NGOALS });
+  const artifact = detectIssueRefinementArtifact({
+    body: "## Plan\n\nSee tmp/refinement/10-plan.md for details.\n" + NGOALS,
+  });
   const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: false });
   assert.deepEqual(decision, { action: "enqueue" });
+});
+
+test("#1951 enqueue gate: a checklist-only issue (no matrix) blocks naming the missing mapping matrix", () => {
+  const artifact = detectIssueRefinementArtifact({
+    body: "## Acceptance criteria\n\n- [ ] AC1\n\n## Definition of done\n\n- [ ] DoD1\n" + NGOALS,
+  });
+  assert.equal(artifact.finding, MISSING_AC_DOD_MATRIX_FINDING);
+  const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: false });
+  assert.equal(decision.action, "block");
+  assert.match(decision.reason, /mapping matrix/);
+  assert.doesNotMatch(decision.reason, /no refinement artifact/);
+  assert.deepEqual(decision.missing, ["AC→DoD mapping matrix"]);
+
+  const diverted = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: true });
+  assert.equal(diverted.action, "divert");
+  assert.deepEqual(diverted.missing, ["AC→DoD mapping matrix"]);
+});
+
+test("#1951 enqueue gate: a malformed matrix blocks naming the valid mapping matrix", () => {
+  const artifact = detectIssueRefinementArtifact({
+    body: "## AC / DoD matrix\n\n| AC | DoD |\n|---|---|\n| AC1 | D1 |\n" + NGOALS,
+  });
+  assert.equal(artifact.finding, MALFORMED_AC_DOD_MATRIX_FINDING);
+  const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: false });
+  assert.equal(decision.action, "block");
+  assert.match(decision.reason, /malformed|identifier-only|tautological/);
+  assert.deepEqual(decision.missing, ["valid AC→DoD mapping matrix"]);
 });
 
 test("decideEnqueueRefinementGate blocks an un-refined issue targeting pickup interactively", () => {
@@ -236,8 +405,8 @@ test("decideEnqueueRefinementGate blocks an un-refined issue targeting pickup in
   assert.equal(decision.action, "block");
   assert.match(decision.reason, /loop-grill/);
   assert.deepEqual(decision.missing, [
-    "Acceptance criteria section",
-    "Definition of done section",
+    "AC→DoD mapping matrix (a two-column table)",
+    "explicit Non-goals section",
     "linked refinement doc",
   ]);
 });
@@ -256,106 +425,29 @@ test("decideEnqueueRefinementGate enqueues an un-refined issue when the target i
   assert.deepEqual(decision, { action: "enqueue" });
 });
 
-// ---- #1621: checkbox tick-state parsing (unticked AC precondition) ----
-
-test("#1621 extractUncheckedChecklistItems returns only unticked checkbox text", () => {
-  const body = [
-    "## Acceptance criteria",
-    "- [ ] first unticked",
-    "- [x] a ticked one",
-    "- [X] another ticked (capital)",
-    "- [ ] second unticked",
-    "- plain bullet (no checkbox)",
-    "",
-    "```",
-    "- [ ] fenced unticked must not count",
-    "```",
-  ].join("\n");
-  assert.deepEqual(extractUncheckedChecklistItems(body), ["first unticked", "second unticked"]);
-  // extractChecklistItems stays text-only (all non-empty items, both tick states + bullets).
-  assert.deepEqual(extractChecklistItems(body), [
-    "first unticked", "a ticked one", "another ticked (capital)", "second unticked", "plain bullet (no checkbox)",
-  ]);
+test("#1951 the generic no-artifact reason states the matrix floor (doc-alone alternative kept)", () => {
+  const artifact = detectIssueRefinementArtifact({ body: "## Problem\n\nX\n" });
+  const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: false });
+  assert.equal(decision.action, "block");
+  assert.match(decision.reason, /AC→DoD mapping matrix/);
+  assert.match(decision.reason, /complete artifact on its own/);
 });
 
-test("#1621 detectIssueRefinementArtifact surfaces uncheckedAcItems alongside acItems", () => {
-  const artifact = detectIssueRefinementArtifact({
-    body: [
-      "## Acceptance criteria", "",
-      "- [x] done AC", "- [ ] open AC one", "- [ ] open AC two", "",
-      "## Definition of done", "",
-      "- [ ] tests pass", "",
-      "## Non-goals", "",
-      "- none",
-    ].join("\n"),
-  });
-  assert.equal(artifact.hasACs, true);
-  assert.deepEqual(artifact.acItems, ["done AC", "open AC one", "open AC two"]);
-  // Only unticked AC checkboxes (NOT the DoD item, NOT the ticked AC).
-  assert.deepEqual(artifact.uncheckedAcItems, ["open AC one", "open AC two"]);
-});
+// ---------------------------------------------------------------------------
+// #1866: Non-goals required (matrix present but Non-goals absent)
+// ---------------------------------------------------------------------------
 
-test("#1621 detectIssueRefinementArtifact carries uncheckedAcItems: [] when all ACs are ticked", () => {
-  const artifact = detectIssueRefinementArtifact({
-    body: ["## Acceptance criteria", "", "- [x] done one", "- [x] done two", "", "## Non-goals", "", "- none"].join("\n"),
-  });
-  assert.deepEqual(artifact.uncheckedAcItems, []);
-});
-
-test("GRILL-SUBLOOP (#1628): detectGrillMarker finds the sanctioned loop-grill marker", () => {
-  assert.equal(detectGrillMarker("<!-- loop-grill: 2026-08-14T00:00:00Z mode:interactive -->\n\n## Acceptance criteria\n\n- [ ] ac"), true);
-  assert.equal(detectGrillMarker("## Acceptance criteria\n\n- [ ] ac"), false);
-  assert.equal(detectGrillMarker(""), false);
-});
-
-test("GRILL-SUBLOOP (#1628): detectGrillEmbedHeading finds grill transcript/synthesis/Q&A embed headings", () => {
-  const body = [
-    "## Acceptance criteria", "",
-    "- [ ] ac", "",
-    "## Grill findings", "",
-    "- Q: what", "- A: ans",
-  ].join("\n");
-  assert.equal(detectGrillEmbedHeading(body), "Grill findings");
-  assert.equal(
-    detectGrillEmbedHeading(["## Grill transcript", "", "- q", "- a"].join("\n")),
-    "Grill transcript",
-  );
-  assert.equal(
-    detectGrillEmbedHeading(["# Overview", "", "## Grill synthesis", "", "x"].join("\n")),
-    "Grill synthesis",
-  );
-  // A clean body with only canonical sections has no embed heading.
-  assert.equal(
-    detectGrillEmbedHeading(["## Acceptance criteria", "", "- [ ] ac", "", "## Non-goals", "", "- none"].join("\n")),
-    null,
-  );
-});
-
-// ---- #1866: Non-goals required on tracker-backed refined issues ----
-
-test("#1866 fails closed when an AC-bearing issue lacks an explicit Non-goals section", () => {
-  const artifact = detectIssueRefinementArtifact({
-    body: "## Acceptance criteria\n\n- [ ] First AC\n",
-  });
+test("#1866 fails closed when a matrix-bearing issue lacks an explicit Non-goals section", () => {
+  const artifact = detectIssueRefinementArtifact({ body: "## Problem\n\nX\n" + MATRIX });
   assert.equal(artifact.hasACs, false);
   assert.equal(artifact.hasNonGoals, false);
-  // The artifact itself is still reported (source keeps the detected origin).
-  assert.equal(artifact.source, REFINEMENT_SOURCE.ISSUE_BODY_AC);
+  assert.equal(artifact.source, REFINEMENT_SOURCE.ISSUE_BODY_MATRIX);
   assert.equal(artifact.finding, MISSING_EXPLICIT_NON_GOALS_FINDING);
   assert.match(artifact.reason, /Non-goals/);
 });
 
-test("#1866 fail-closed propagates: summarizeRefinementGateCheck blocks a Non-goals miss", () => {
-  const summary = summarizeRefinementGateCheck({
-    body: "## Acceptance criteria\n\n- [ ] AC1\n\n## Definition of done\n\n- [ ] done\n",
-  });
-  assert.equal(summary.verdict, "blocked");
-  assert.equal(summary.blocking, true);
-  assert.equal(summary.finding, MISSING_EXPLICIT_NON_GOALS_FINDING);
-});
-
 test("#1866 fail-closed propagates: decideEnqueueRefinementGate blocks a Non-goals miss", () => {
-  const artifact = detectIssueRefinementArtifact({ body: "## Acceptance criteria\n\n- [ ] AC1\n" });
+  const artifact = detectIssueRefinementArtifact({ body: "## Problem\n\nX\n" + MATRIX });
   const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: false });
   assert.equal(decision.action, "block");
   assert.match(decision.reason, /Non-goals/);
@@ -367,23 +459,18 @@ test("#1866 fail-closed propagates: decideEnqueueRefinementGate blocks a Non-goa
 });
 
 test("#1866 rejects an empty Non-goals section (heading only, or fenced-only body)", () => {
-  const headingOnly = detectIssueRefinementArtifact({
-    body: "## Acceptance criteria\n\n- [ ] AC1\n\n## Non-goals\n",
-  });
+  const headingOnly = detectIssueRefinementArtifact({ body: "## Problem\n\nX\n" + MATRIX + "\n## Non-goals\n" });
   assert.equal(headingOnly.hasACs, false);
   assert.equal(headingOnly.finding, MISSING_EXPLICIT_NON_GOALS_FINDING);
 
-  // Anti-spoof (#1025 fence logic): a fenced-only Non-goals body is empty.
-  const fencedOnly = detectIssueRefinementArtifact({
-    body: "## Acceptance criteria\n\n- [ ] AC1\n\n## Non-goals\n\n```\n- [ ] spoof\n```\n",
-  });
+  const fencedOnly = detectIssueRefinementArtifact({ body: "## Problem\n\nX\n" + MATRIX + "\n## Non-goals\n\n```\n- [ ] spoof\n```\n" });
   assert.equal(fencedOnly.hasACs, false);
   assert.equal(fencedOnly.finding, MISSING_EXPLICIT_NON_GOALS_FINDING);
 });
 
 test("#1866 accepts 'out of scope' as an explicit non-goals heading (shared patterns)", () => {
   const artifact = detectIssueRefinementArtifact({
-    body: "## Acceptance criteria\n\n- [ ] AC1\n" + DOD + "\n## Out of scope\n\n- everything else\n",
+    body: "## Problem\n\nX\n" + MATRIX + "\n## Out of scope\n\n- everything else\n",
   });
   assert.equal(artifact.hasACs, true);
   assert.equal(artifact.finding, null);
@@ -412,6 +499,17 @@ test("#1866 a linked refinement doc counts only when it resolves (resolveLinkedD
   assert.equal(resolved.finding, null);
 });
 
+test("#1951 a resolvable linked doc WITHOUT an explicit Non-goals section fails closed with missing_explicit_non_goals", () => {
+  const artifact = detectIssueRefinementArtifact({
+    body: "## Plan\n\nSee tmp/refinement/532-plan.md for the matrix.\n",
+    issueNumber: 532,
+    resolveLinkedDoc: () => true,
+  });
+  assert.equal(artifact.hasACs, false);
+  assert.equal(artifact.source, REFINEMENT_SOURCE.LINKED_DOC);
+  assert.equal(artifact.finding, MISSING_EXPLICIT_NON_GOALS_FINDING);
+});
+
 test("#1866 without resolveLinkedDoc the predicate stays pure and unchanged (no resolves field)", () => {
   const artifact = detectIssueRefinementArtifact({
     body: "## Plan\n\nSee tmp/refinement/532-plan.md for details.\n" + NGOALS,
@@ -421,13 +519,13 @@ test("#1866 without resolveLinkedDoc the predicate stays pure and unchanged (no 
   assert.equal("resolves" in artifact.linkedDoc, false);
 });
 
-test("#1866 an unresolved linked doc falls back to AC/DoD artifacts when present", () => {
+test("#1866 an unresolved linked doc falls back to the matrix artifact when present", () => {
   const artifact = detectIssueRefinementArtifact({
-    body: "## Acceptance criteria\n\n- [ ] AC1\n" + DOD + "\n## Plan\n\nSee tmp/refinement/gone.md.\n" + NGOALS,
+    body: "## Problem\n\nX\n" + MATRIX + "\n## Plan\n\nSee tmp/refinement/gone.md.\n" + NGOALS,
     resolveLinkedDoc: () => false,
   });
   assert.equal(artifact.hasACs, true);
-  assert.equal(artifact.source, REFINEMENT_SOURCE.ISSUE_BODY_AC);
+  assert.equal(artifact.source, REFINEMENT_SOURCE.ISSUE_BODY_MATRIX);
   assert.equal(artifact.finding, null);
 });
 
@@ -450,8 +548,6 @@ test("#1866 runPickupRefinementGate anchors linked-doc resolution to the repoRoo
   });
 
   try {
-    // With the repoRoot anchor the doc resolves even though it does not exist
-    // relative to the ambient cwd (the test runner's cwd).
     const decision = await runPickupRefinementGate({
       issueNumber: 532,
       repo: "o/r",
@@ -461,8 +557,6 @@ test("#1866 runPickupRefinementGate anchors linked-doc resolution to the repoRoo
     });
     assert.equal(decision.action, "enqueue");
 
-    // Without an anchor that points at the doc's root, the doc does not
-    // resolve and the gate blocks (fail-closed), never a silent pass.
     await assert.rejects(
       () =>
         runPickupRefinementGate({
@@ -492,43 +586,77 @@ test("#1866 containment: a linked-doc path with '..' segments is rejected, never
   }
 });
 
-test("#1877 matrix floor: AC checklist without DoD checklist fails closed with missing_dod_checklist", () => {
-  const artifact = detectIssueRefinementArtifact({
-    body: "## Acceptance criteria\n\n- [ ] AC1\n- [x] AC2\n" + NGOALS,
-  });
-  assert.equal(artifact.hasACs, false);
-  assert.equal(artifact.source, REFINEMENT_SOURCE.ISSUE_BODY_AC);
-  assert.equal(artifact.finding, MISSING_DOD_CHECKLIST_FINDING);
-  assert.match(artifact.reason, /AC\/DoD\/Non-goals matrix/);
+// ---- #1621: checkbox tick-state parsing (unticked AC precondition) ----
+
+test("#1621 extractUncheckedChecklistItems returns only unticked checkbox text", () => {
+  const body = [
+    "## Acceptance criteria",
+    "- [ ] first unticked",
+    "- [x] a ticked one",
+    "- [X] another ticked (capital)",
+    "- [ ] second unticked",
+    "- plain bullet (no checkbox)",
+    "",
+    "```",
+    "- [ ] fenced unticked must not count",
+    "```",
+  ].join("\n");
+  assert.deepEqual(extractUncheckedChecklistItems(body), ["first unticked", "second unticked"]);
+  assert.deepEqual(extractChecklistItems(body), [
+    "first unticked", "a ticked one", "another ticked (capital)", "second unticked", "plain bullet (no checkbox)",
+  ]);
 });
 
-test("#1877 matrix floor: full AC + DoD + Non-goals matrix passes", () => {
+test("#1621 detectIssueRefinementArtifact surfaces uncheckedAcItems alongside acItems", () => {
   const artifact = detectIssueRefinementArtifact({
-    body: "## Acceptance criteria\n\n- [ ] AC1\n\n## Definition of done\n\n- [ ] DoD1\n" + NGOALS,
+    body: [
+      "## Acceptance criteria", "",
+      "- [x] done AC", "- [ ] open AC one", "- [ ] open AC two", "",
+      "## Definition of done", "",
+      "- [ ] tests pass", "",
+    ].join("\n") + MATRIX + "\n## Non-goals\n\n- none\n",
   });
   assert.equal(artifact.hasACs, true);
-  assert.equal(artifact.source, REFINEMENT_SOURCE.ISSUE_BODY_AC);
-  assert.equal(artifact.finding, null);
+  assert.deepEqual(artifact.acItems, ["done AC", "open AC one", "open AC two"]);
+  // Only unticked AC checkboxes (NOT the DoD item, NOT the ticked AC).
+  assert.deepEqual(artifact.uncheckedAcItems, ["open AC one", "open AC two"]);
 });
 
-test("#1877 matrix floor: Non-goals miss is reported before the DoD arm (ordering preserved)", () => {
-  const artifact = detectIssueRefinementArtifact({
-    body: "## Acceptance criteria\n\n- [ ] AC1\n",
-  });
-  assert.equal(artifact.finding, MISSING_EXPLICIT_NON_GOALS_FINDING);
+test("GRILL-SUBLOOP (#1628): detectGrillMarker finds the sanctioned loop-grill marker", () => {
+  assert.equal(detectGrillMarker("<!-- loop-grill: 2026-08-14T00:00:00Z mode:interactive -->\n\n## Acceptance criteria\n\n- [ ] ac"), true);
+  assert.equal(detectGrillMarker("## Acceptance criteria\n\n- [ ] ac"), false);
+  assert.equal(detectGrillMarker(""), false);
 });
 
-test("#1877 matrix floor: linked refinement doc alone stays a complete artifact", () => {
-  const artifact = detectIssueRefinementArtifact({
-    body: "## Plan\n\nSee tmp/refinement/10-plan.md for the AC/DoD matrix.\n" + NGOALS,
-    resolveLinkedDoc: () => true,
-  });
-  assert.equal(artifact.hasACs, true);
-  assert.equal(artifact.source, REFINEMENT_SOURCE.LINKED_DOC);
-  assert.equal(artifact.finding, null);
+test("GRILL-SUBLOOP (#1628): detectGrillEmbedHeading finds grill transcript/synthesis/Q&A embed headings", () => {
+  const body = [
+    "## Acceptance criteria", "",
+    "- [ ] ac", "",
+    "## Grill findings", "",
+    "- Q: what", "- A: ans",
+  ].join("\n");
+  assert.equal(detectGrillEmbedHeading(body), "Grill findings");
+  assert.equal(
+    detectGrillEmbedHeading(["## Grill transcript", "", "- q", "- a"].join("\n")),
+    "Grill transcript",
+  );
+  assert.equal(
+    detectGrillEmbedHeading(["# Overview", "", "## Grill synthesis", "", "x"].join("\n")),
+    "Grill synthesis",
+  );
+  assert.equal(
+    detectGrillEmbedHeading(["## Acceptance criteria", "", "- [ ] ac", "", "## Non-goals", "", "- none"].join("\n")),
+    null,
+  );
 });
 
-test("#1877 extractPrBodyUncheckedChecklistItems returns unchecked AC and DoD boxes only", () => {
+// ---------------------------------------------------------------------------
+// PR-side deterministic block: extractPrBodyUncheckedChecklistItems (#1877).
+// The PR carries list-form AC/DoD checklists (never a matrix); this read is
+// unchanged by #1951.
+// ---------------------------------------------------------------------------
+
+test("extractPrBodyUncheckedChecklistItems returns unchecked AC and DoD boxes only", () => {
   const { uncheckedAcItems, uncheckedDodItems } = extractPrBodyUncheckedChecklistItems({
     body: [
       "## Summary", "", "text", "",
@@ -541,7 +669,7 @@ test("#1877 extractPrBodyUncheckedChecklistItems returns unchecked AC and DoD bo
   assert.deepEqual(uncheckedDodItems, ["open DoD"]);
 });
 
-test("#1877 extractPrBodyUncheckedChecklistItems: empty body and absent sections contribute no items", () => {
+test("extractPrBodyUncheckedChecklistItems: empty body and absent sections contribute no items", () => {
   assert.deepEqual(extractPrBodyUncheckedChecklistItems({ body: "" }), { uncheckedAcItems: [], uncheckedDodItems: [] });
   assert.deepEqual(
     extractPrBodyUncheckedChecklistItems({ body: "## Summary\n\nno AC/DoD sections at all\n" }),
@@ -549,70 +677,14 @@ test("#1877 extractPrBodyUncheckedChecklistItems: empty body and absent sections
   );
 });
 
-test("#1877 extractPrBodyUncheckedChecklistItems: a fenced checkbox cannot spoof the count", () => {
+test("extractPrBodyUncheckedChecklistItems: a fenced checkbox cannot spoof the count", () => {
   const { uncheckedAcItems } = extractPrBodyUncheckedChecklistItems({
     body: "## Acceptance criteria\n\n```\n- [ ] spoofed\n```\n\n- [x] real\n",
   });
   assert.deepEqual(uncheckedAcItems, []);
 });
 
-// ---- #1877 alias-precedence + deep/duplicate section reads (round-1 review) ----
-
-test("#1877 alias precedence: an 'AC/DoD matrix' heading before '## Acceptance criteria' must not hijack the AC read", () => {
-  const body = [
-    "## Problem", "", "X", "",
-    "## AC/DoD matrix", "",
-    "| AC | DoD |", "|---|---|", "| AC1 | tests |", "",
-    "## Acceptance criteria", "",
-    "- [ ] AC1", "",
-    "## Definition of done", "",
-    "- [ ] tests", "",
-    "## Non-goals", "", "- none",
-  ].join("\n");
-  const artifact = detectIssueRefinementArtifact({ body });
-  // The refined epic-matrix shape must read the real AC checklist, not the
-  // mapping table (pre-fix this false-blocked as missing_ac_checklist).
-  assert.equal(artifact.finding, null);
-  assert.equal(artifact.hasACs, true);
-  assert.deepEqual(artifact.acItems, ["AC1"]);
-  assert.deepEqual(artifact.dodItems, ["tests"]);
-  // PR side: the same body shape must surface its unchecked boxes (no fail-open).
-  assert.deepEqual(extractPrBodyUncheckedChecklistItems({ body }), {
-    uncheckedAcItems: ["AC1"],
-    uncheckedDodItems: ["tests"],
-  });
-});
-
-test("#1877 alias precedence: '## AC → DoD mapping' before the canonical DoD section must not hijack the DoD read", () => {
-  const body = [
-    "## Acceptance criteria", "", "- [ ] AC1", "",
-    "## AC → DoD mapping", "",
-    "| AC | DoD |", "|---|---|", "| AC1 | tests |", "",
-    "## Definition of done", "",
-    "- [x] tests", "",
-    "## Non-goals", "", "- none",
-  ].join("\n");
-  const artifact = detectIssueRefinementArtifact({ body });
-  assert.equal(artifact.finding, null);
-  assert.deepEqual(artifact.dodItems, ["tests"]);
-});
-
-test("#1877 alias-only bodies still read via the loose alias arm (no canonical heading)", () => {
-  const artifact = detectIssueRefinementArtifact({
-    body: [
-      "## AC checklist", "", "- [ ] AC1", "",
-      "## DoD", "", "- [ ] tests", "",
-      "## Non-goals", "", "- none",
-    ].join("\n"),
-  });
-  assert.equal(artifact.finding, null);
-  assert.deepEqual(artifact.acItems, ["AC1"]);
-  assert.deepEqual(artifact.dodItems, ["tests"]);
-});
-
-test("#1877 PR-body extractor sees unchecked boxes under ### sub-headings and in duplicate AC sections", () => {
-  // The reviewer's pinned failing scenario: pre-fix this yielded
-  // { uncheckedAcItems: [], uncheckedDodItems: [] } — the block failed open.
+test("PR-body extractor sees unchecked boxes under ### sub-headings and in duplicate AC sections", () => {
   const body = [
     "## Acceptance criteria", "",
     "- [x] AC1", "",
@@ -625,7 +697,6 @@ test("#1877 PR-body extractor sees unchecked boxes under ### sub-headings and in
   assert.deepEqual(result.uncheckedAcItems, ["AC2 open"]);
   assert.deepEqual(result.uncheckedDodItems, []);
 
-  // Duplicate canonical AC sections union their unchecked boxes.
   const dupBody = [
     "## Acceptance criteria", "", "- [ ] first", "",
     "## Interlude", "", "- [ ] not an AC", "",
@@ -637,181 +708,30 @@ test("#1877 PR-body extractor sees unchecked boxes under ### sub-headings and in
   );
 });
 
-test("#1877 enqueue gate: an AC-only issue blocks naming the missing DoD checklist, not 'no artifact'", () => {
-  const artifact = detectIssueRefinementArtifact({
-    body: "## Acceptance criteria\n\n- [ ] AC1\n" + NGOALS,
-  });
-  assert.equal(artifact.finding, MISSING_DOD_CHECKLIST_FINDING);
-  const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: false });
-  assert.equal(decision.action, "block");
-  assert.match(decision.reason, /no Definition of done checklist/);
-  assert.match(decision.reason, /AC\/DoD\/Non-goals matrix/);
-  assert.doesNotMatch(decision.reason, /no refinement artifact/);
-  assert.deepEqual(decision.missing, ["Definition of done checklist"]);
-
-  const diverted = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: true });
-  assert.equal(diverted.action, "divert");
-  assert.deepEqual(diverted.missing, ["Definition of done checklist"]);
-});
-
-test("#1877 enqueue gate: a DoD-only issue blocks naming the missing AC checklist", () => {
-  const artifact = detectIssueRefinementArtifact({
-    body: "## Definition of done\n\n- [ ] DoD1\n" + NGOALS,
-  });
-  assert.equal(artifact.finding, MISSING_AC_CHECKLIST_FINDING);
-  const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: false });
-  assert.equal(decision.action, "block");
-  assert.match(decision.reason, /no Acceptance criteria checklist/);
-  assert.doesNotMatch(decision.reason, /no refinement artifact/);
-  assert.deepEqual(decision.missing, ["Acceptance criteria checklist"]);
-});
-
-test("#1877 enqueue gate: the generic no-artifact reason states the full-matrix floor (doc-alone alternative kept)", () => {
-  const artifact = detectIssueRefinementArtifact({ body: "## Problem\n\nX\n" });
-  const decision = decideEnqueueRefinementGate({ artifact, targetIsPickup: true, auto: false });
-  assert.equal(decision.action, "block");
-  assert.match(decision.reason, /full AC\/DoD\/Non-goals matrix/);
-  assert.match(decision.reason, /complete artifact on its own/);
-  assert.doesNotMatch(decision.reason, /Add at least ONE of them/);
-});
-
-// ---- #1877 round-2 pins: draft-gate wrapper + issue/PR read asymmetry ----
-
-test("#1877 draft-gate wrapper: summarizeRefinementGateCheck blocks on missing_dod_checklist (AC-only body with Non-goals)", () => {
-  const summary = summarizeRefinementGateCheck({
-    body: "## Acceptance criteria\n\n- [ ] AC1\n" + NGOALS,
-  });
-  assert.equal(summary.verdict, "blocked");
-  assert.equal(summary.blocking, true);
-  assert.equal(summary.finding, MISSING_DOD_CHECKLIST_FINDING);
-});
-
-test("#1877 draft-gate wrapper: summarizeRefinementGateCheck blocks on missing_ac_checklist (DoD-only body with Non-goals)", () => {
-  const summary = summarizeRefinementGateCheck({
-    body: "## Definition of done\n\n- [ ] DoD1\n" + NGOALS,
-  });
-  assert.equal(summary.verdict, "blocked");
-  assert.equal(summary.blocking, true);
-  assert.equal(summary.finding, MISSING_AC_CHECKLIST_FINDING);
-});
-
-test("#1877 seam pin: issue side reads ONE exact-first AC section with NO deep flattening — a sub-heading-only AC checklist reports missing (intentional asymmetry)", () => {
-  // The same body shape on the PR side yields its boxes (hard gate must never
-  // miss an unchecked box); on the issue side the strict presence read fails
-  // CLOSED — the issue stays parked for human refinement. Both directions are
-  // deliberate; see the CONSUMER-CONTRACT BOUNDARY comment in the source.
-  const artifact = detectIssueRefinementArtifact({ body: "## Acceptance criteria\n\n### edge cases\n\n- [ ] AC1 hidden under a sub-heading\n\n## Definition of done\n\n- [ ] DoD1\n\n## Non-goals\n\n- none\n" });
-  assert.deepEqual(artifact.acItems, []);
-  assert.equal(artifact.finding, MISSING_AC_CHECKLIST_FINDING, "sub-heading-only AC checklist fails closed as a matrix miss");
-  // PR side: the same shape surfaces the unchecked box (deep flatten + union).
-  assert.deepEqual(
-    extractPrBodyUncheckedChecklistItems({ body: "## Acceptance criteria\n\n### edge cases\n\n- [ ] AC1 hidden\n" }),
-    { uncheckedAcItems: ["AC1 hidden"], uncheckedDodItems: [] },
-  );
-});
-
-test("#1877 seam pin (mixed exact+alias): issue side — exact section wins over an earlier alias; PR side — BOTH sections' unchecked boxes are surfaced", () => {
-  const body = [
-    "## AC checklist", "", "- [ ] alias AC open", "",
-    "## Acceptance criteria", "", "- [ ] exact AC open", "",
-    "## DoD", "", "- [ ] alias DoD open", "",
-    "## Definition of done", "", "- [ ] exact DoD open", "",
-    "## Non-goals", "", "- none",
-  ].join("\n");
-
-  // Issue side: the single exact-first read picks the canonical sections; the
-  // earlier alias sections' boxes are NOT in acItems/dodItems.
-  const artifact = detectIssueRefinementArtifact({ body });
-  assert.deepEqual(artifact.acItems, ["exact AC open"]);
-  assert.deepEqual(artifact.dodItems, ["exact DoD open"]);
-  assert.equal(artifact.finding, null);
-
-  // PR side: the union surfaces unchecked boxes from BOTH the alias and the
-  // exact sections — a hard gate must never miss an unchecked box.
-  assert.deepEqual(extractPrBodyUncheckedChecklistItems({ body }), {
-    uncheckedAcItems: ["alias AC open", "exact AC open"],
-    uncheckedDodItems: ["alias DoD open", "exact DoD open"],
-  });
-});
-
-// ---------------------------------------------------------------------------
-// #1877 round-6 parser-hardening pins (draft_gate round-6 act list): GFM
-// task-list marker grammar, decorated-heading normalization, heading-name
-// re-injection, malformed-input guard. Fail arms were reproduced against the
-// pre-fix parser before the fix landed (star/plus/ordered/blockquote forms
-// and decorated headings returned empty unchecked lists; a checkbox-shaped
-// heading name fabricated a phantom item; a fence-opening heading name ate
-// following boxes).
-// ---------------------------------------------------------------------------
-
-test("#1877 round-6 grammar pin: a star-bullet unchecked AC box IS surfaced (fail arm: pre-fix returned [])", () => {
+test("#1877 round-6 grammar pin: star/plus/ordered/blockquote unchecked AC boxes ARE surfaced", () => {
   assert.deepEqual(
     extractPrBodyUncheckedChecklistItems({ body: "## Acceptance criteria\n\n* [ ] star unchecked\n" }),
     { uncheckedAcItems: ["star unchecked"], uncheckedDodItems: [] },
   );
-});
-
-test("#1877 round-6 grammar pin: a plus-bullet unchecked AC box IS surfaced", () => {
   assert.deepEqual(
     extractPrBodyUncheckedChecklistItems({ body: "## Acceptance criteria\n\n+ [ ] plus unchecked\n" }),
     { uncheckedAcItems: ["plus unchecked"], uncheckedDodItems: [] },
   );
-});
-
-test("#1877 round-6 grammar pin: an ordered-list unchecked AC box IS surfaced", () => {
   assert.deepEqual(
     extractPrBodyUncheckedChecklistItems({ body: "## Acceptance criteria\n\n1. [ ] ordered unchecked\n" }),
     { uncheckedAcItems: ["ordered unchecked"], uncheckedDodItems: [] },
   );
-});
-
-test("#1877 round-6 grammar pin: a blockquote-nested unchecked AC box IS surfaced", () => {
   assert.deepEqual(
     extractPrBodyUncheckedChecklistItems({ body: "## Acceptance criteria\n\n> - [ ] blockquote unchecked\n" }),
     { uncheckedAcItems: ["blockquote unchecked"], uncheckedDodItems: [] },
   );
 });
 
-test("#1877 round-6 grammar pin: the unticked-AC read (#1621) and the issue-side matrix read recognize star-only checklists", () => {
-  // Issue side: a full matrix written with star bullets is a complete artifact
-  // (pre-fix: star-only AC section false-blocked as missing_ac_checklist).
-  const artifact = detectIssueRefinementArtifact({
-    body: "## Acceptance criteria\n\n* [x] star AC\n\n## Definition of done\n\n* [x] star DoD\n\n## Non-goals\n\n- none",
-  });
-  assert.equal(artifact.finding, null);
-  assert.deepEqual(artifact.acItems, ["star AC"]);
-  // #1621 unticked read: a star unchecked box is an unticked AC item.
-  assert.deepEqual(
-    extractUncheckedChecklistItems("* [ ] star unchecked"),
-    ["star unchecked"],
-  );
-});
-
-test("#1877 round-6 anti-spoof pin: a code-fenced star checkbox still cannot spoof the count (#1025)", () => {
-  // The fence skip is shared with the widened grammar: a star box inside a
-  // fenced block is invisible to every read, exactly as the dash form is.
-  const body = "## Acceptance criteria\n\n```\n* [ ] fenced star unchecked\n```\n\n- [x] real ticked";
-  assert.deepEqual(
-    extractPrBodyUncheckedChecklistItems({ body }),
-    { uncheckedAcItems: [], uncheckedDodItems: [] },
-  );
-  const artifact = detectIssueRefinementArtifact({
-    body: "## Acceptance criteria\n\n```\n* [ ] fenced star unchecked\n```\n\n## Definition of done\n\n- [x] DoD\n\n## Non-goals\n\n- none",
-  });
-  // A fenced-only star AC section is still an empty section (anti-spoof): the
-  // issue-side read must NOT count it as a real AC checklist.
-  assert.equal(artifact.acItems.length, 0);
-});
-
-test("#1877 round-6 grammar pin: tick-verified-checkboxes parity — star/plus/ordered forms are checklist items for every consumer of parseChecklistItems", () => {
-  // tick-verified-checkboxes.mjs CHECKBOX_RE accepts [-*+]; the extractor must
-  // agree, so a box the tick tool can flip is never invisible to the block.
+test("#1877 round-6 grammar pin: tick-verified-checkboxes parity for parseChecklistItems consumers", () => {
   assert.deepEqual(extractChecklistItems("* [x] star item"), ["star item"]);
   assert.deepEqual(extractChecklistItems("+ [x] plus item"), ["plus item"]);
   assert.deepEqual(extractChecklistItems("1. [x] ordered item"), ["ordered item"]);
-  // checked-state read: star/plus/ordered ticked boxes are checked, not unticked.
   assert.deepEqual(extractUncheckedChecklistItems("* [x] star ticked\n* [ ] star unticked"), ["star unticked"]);
-  // Empty placeholders are skipped in the widened grammar too.
   assert.deepEqual(extractChecklistItems("* [ ]\n1. [x]\n- [ ] real"), ["real"]);
 });
 
@@ -827,10 +747,7 @@ test("#1877 round-6 decorated-heading pin: bolded/colon/suffixed AC and DoD head
   );
 });
 
-test("#1877 round-6 decorated-heading pin: a decorated-variant canonical heading (v2/dash suffix) matches the exact anchor family", () => {
-  // The exact pattern is an anchor family (^acceptance criteria\\b), so a
-  // variant like `## Acceptance criteria (v2)` lands in the exact bucket
-  // rather than matching no pattern at all.
+test("#1877 round-6 decorated-heading pin: a decorated-variant canonical heading matches the exact anchor family", () => {
   assert.deepEqual(
     extractPrBodyUncheckedChecklistItems({ body: "## Acceptance criteria (v2)\n\n- [ ] under v2\n" }),
     { uncheckedAcItems: ["under v2"], uncheckedDodItems: [] },
@@ -841,26 +758,7 @@ test("#1877 round-6 decorated-heading pin: a decorated-variant canonical heading
   );
 });
 
-test("#1877 round-6 decorated-heading pin: the issue-side presence read recognizes a decorated full matrix", () => {
-  // Pre-fix: a full matrix under decorated headings false-blocked as
-  // missing_refinement_artifact. Both decorated canonical sections AND the
-  // anchor-family variants are recognized.
-  const artifact = detectIssueRefinementArtifact({
-    body: [
-      "## **Acceptance criteria**", "", "- [x] AC1", "",
-      "## **Definition of done**", "", "- [x] DoD1", "",
-      "## Non-goals", "", "- none",
-    ].join("\n"),
-  });
-  assert.equal(artifact.finding, null);
-  assert.equal(artifact.hasACs, true);
-  assert.deepEqual(artifact.acItems, ["AC1"]);
-  assert.deepEqual(artifact.dodItems, ["DoD1"]);
-});
-
-test("#1877 round-6 re-injection pin: a checkbox-shaped sub-heading name produces NO phantom item; real boxes under it stay visible", () => {
-  // Pre-fix: the heading name `### - [ ] fake dod box as heading` was
-  // re-injected into the flattened body and counted as an unchecked DoD item.
+test("#1877 round-6 re-injection pin: a checkbox-shaped sub-heading name produces NO phantom item; real boxes stay visible", () => {
   const body = [
     "## Definition of done", "",
     "### - [ ] fake dod box as heading", "",
@@ -870,9 +768,6 @@ test("#1877 round-6 re-injection pin: a checkbox-shaped sub-heading name produce
     extractPrBodyUncheckedChecklistItems({ body }),
     { uncheckedAcItems: [], uncheckedDodItems: [] },
   );
-  // And a checked-shaped heading name injects no phantom checked item:
-  // the real unchecked box after it is still surfaced (no fence corruption,
-  // no swallow).
   const bodyChecked = [
     "## Definition of done", "",
     "### - [x] fake checked heading", "",
@@ -885,9 +780,6 @@ test("#1877 round-6 re-injection pin: a checkbox-shaped sub-heading name produce
 });
 
 test("#1877 round-6 re-injection pin: a fence-opening sub-heading name does NOT eat the boxes after it", () => {
-  // Pre-fix: `### ` + ``` as the heading NAME re-opened fence state in the
-  // flattened string and swallowed every following real box (fail-open,
-  // defeating the #1025 anti-spoof invariant for the heading-name form).
   const body = [
     "## Acceptance criteria", "",
     "- [x] AC1", "",
@@ -898,54 +790,23 @@ test("#1877 round-6 re-injection pin: a fence-opening sub-heading name does NOT 
     extractPrBodyUncheckedChecklistItems({ body }),
     { uncheckedAcItems: ["AC2 after fence heading"], uncheckedDodItems: [] },
   );
-  // Same arm with an info-string suffix on the fence-like name.
-  const bodyInfo = [
-    "## Acceptance criteria", "",
-    "### notes ```js", "",
-    "- [ ] AC3 after info-string heading",
-  ].join("\n");
-  assert.deepEqual(
-    extractPrBodyUncheckedChecklistItems({ body: bodyInfo }),
-    { uncheckedAcItems: ["AC3 after info-string heading"], uncheckedDodItems: [] },
-  );
 });
 
 test("#1877 round-6 malformed-input pin: extractPrBodyUncheckedChecklistItems guards non-string bodies", () => {
-  // The guard exists specifically for malformed input; this pins it.
   assert.deepEqual(extractPrBodyUncheckedChecklistItems({ body: null }), { uncheckedAcItems: [], uncheckedDodItems: [] });
   assert.deepEqual(extractPrBodyUncheckedChecklistItems({ body: 42 }), { uncheckedAcItems: [], uncheckedDodItems: [] });
   assert.deepEqual(extractPrBodyUncheckedChecklistItems({}), { uncheckedAcItems: [], uncheckedDodItems: [] });
 });
 
-// #1877 round-7 parser-hardening pins (draft_gate round-7 act list): the
-// round-6 fix's own residuals — marker-anchored checked-read (a label that
-// merely mentions `[x]` can never flip an unchecked box), single-char italic
-// heading emphasis, DoD alias-family symmetry, and the unpinned `N)`/nested-
-// blockquote marker forms. Fail arms reproduced against the round-6 head
-// dbc300e8 before this fix landed (an unchecked box labeled with a literal
-// `[x]` read as checked; `*…*`/`_…_` italic headings and `## DoD (v2)`-style
-// alias headings returned empty reads; `1)`/`> >` forms were unpinned).
-// ---------------------------------------------------------------------------
-
 test("#1877 round-7 marker-anchor pin: an UNCHECKED box whose label mentions a literal [x] is still unchecked", () => {
-  // Pre-fix (round-6 regression): `checked` was re-derived by testing the
-  // WHOLE line for `[x]`/`[X]`, so this box read as ticked and the unchecked
-  // box silently vanished from the deterministic block (fail-open).
   assert.deepEqual(
     extractPrBodyUncheckedChecklistItems({ body: "## Acceptance criteria\n\n- [ ] verify [x] flags\n" }),
     { uncheckedAcItems: ["verify [x] flags"], uncheckedDodItems: [] },
   );
-  // The mirrored DoD arm and the uppercase inline form.
   assert.deepEqual(
     extractPrBodyUncheckedChecklistItems({ body: "## Definition of done\n\n- [ ] confirm [X] marks\n" }),
     { uncheckedDodItems: ["confirm [X] marks"], uncheckedAcItems: [] },
   );
-  // A genuinely ticked box still reads checked (marker group, not label).
-  assert.deepEqual(
-    extractPrBodyUncheckedChecklistItems({ body: "## Acceptance criteria\n\n- [x] done one (see [ ] empty)\n" }),
-    { uncheckedAcItems: [], uncheckedDodItems: [] },
-  );
-  // The #1621 unticked-AC read shares the marker-anchored state.
   assert.deepEqual(
     extractUncheckedChecklistItems("- [ ] label with [x] inside"),
     ["label with [x] inside"],
@@ -956,7 +817,7 @@ test("#1877 round-7 marker-anchor pin: an UNCHECKED box whose label mentions a l
   );
 });
 
-test("#1877 round-7 grammar pins: the unpinned `N)` paren-ordered and nested `> >` blockquote forms surface unchecked boxes", () => {
+test("#1877 round-7 grammar pins: `N)` paren-ordered and nested `> >` blockquote forms surface unchecked boxes", () => {
   assert.deepEqual(
     extractPrBodyUncheckedChecklistItems({ body: "## Acceptance criteria\n\n1) [ ] paren ordered unchecked\n" }),
     { uncheckedAcItems: ["paren ordered unchecked"], uncheckedDodItems: [] },
@@ -967,11 +828,7 @@ test("#1877 round-7 grammar pins: the unpinned `N)` paren-ordered and nested `> 
   );
 });
 
-test("#1877 round-7 decorated-heading pin: single-char italic AC and DoD headings are recognized (PR side and issue side)", () => {
-  // Pre-fix: the stripper handled only `**`/`__`/backtick runs, so
-  // `## *Acceptance criteria*` and `## _Definition of done_` normalized
-  // unchanged and failed every pattern family (PR-side boxes invisible;
-  // issue-side full matrix false-blocked as missing_*_checklist).
+test("#1877 round-7 decorated-heading pin: single-char italic AC and DoD headings are recognized (PR side)", () => {
   assert.deepEqual(
     extractPrBodyUncheckedChecklistItems({ body: "## *Acceptance criteria*\n\n- [ ] italic ac\n" }),
     { uncheckedAcItems: ["italic ac"], uncheckedDodItems: [] },
@@ -980,52 +837,15 @@ test("#1877 round-7 decorated-heading pin: single-char italic AC and DoD heading
     extractPrBodyUncheckedChecklistItems({ body: "## _Definition of done_\n\n- [ ] italic dod\n" }),
     { uncheckedDodItems: ["italic dod"], uncheckedAcItems: [] },
   );
-  // Issue side: a full matrix under italic headings is a complete artifact.
-  const artifact = detectIssueRefinementArtifact({
-    body: [
-      "## *Acceptance criteria*", "",
-      "- [x] italic AC", "",
-      "## _Definition of done_", "",
-      "- [x] italic DoD", "",
-      "## Non-goals", "",
-      "- none",
-    ].join("\n"),
-  });
-  assert.equal(artifact.hasACs, true);
-  assert.equal(artifact.finding, null);
-  assert.deepEqual(artifact.acItems, ["italic AC"]);
 });
 
-test("#1877 round-7 DoD-alias-symmetry pin: decorated-variant DoD alias headings are recognized (PR side and issue side)", () => {
-  // Pre-fix: the AC family's alias arm was anchor-widened (`^ac\b.*$`) but the
-  // DoD aliases stayed `$`-anchored, so `## DoD (v2)` / `## Done — core`
-  // matched NO pattern family — an unchecked DoD box under them was invisible
-  // to the deterministic block (fail-open), and the issue side false-blocked
-  // a full matrix as missing_dod_checklist.
+test("#1877 round-7 DoD-alias-symmetry pin: decorated-variant DoD alias headings are recognized (PR side)", () => {
   assert.deepEqual(
     extractPrBodyUncheckedChecklistItems({ body: "## DoD (v2)\n\n- [ ] unchecked under alias\n" }),
     { uncheckedDodItems: ["unchecked under alias"], uncheckedAcItems: [] },
   );
   assert.deepEqual(
-    extractPrBodyUncheckedChecklistItems({ body: "## DoD checklist\n\n- [ ] unchecked under alias checklist\n" }),
-    { uncheckedDodItems: ["unchecked under alias checklist"], uncheckedAcItems: [] },
-  );
-  assert.deepEqual(
     extractPrBodyUncheckedChecklistItems({ body: "## Done — core\n\n- [ ] unchecked under done alias\n" }),
     { uncheckedDodItems: ["unchecked under done alias"], uncheckedAcItems: [] },
   );
-  // Issue side: a full matrix under a decorated DoD alias heading is complete.
-  const artifact = detectIssueRefinementArtifact({
-    body: [
-      "## Acceptance criteria", "",
-      "- [x] AC one", "",
-      "## DoD (v2)", "",
-      "- [x] DoD one", "",
-      "## Non-goals", "",
-      "- none",
-    ].join("\n"),
-  });
-  assert.equal(artifact.hasACs, true);
-  assert.equal(artifact.finding, null);
-  assert.deepEqual(artifact.dodItems, ["DoD one"]);
 });

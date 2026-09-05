@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
+<title>dev-loops: The State Graph Is the Surface</title>
+<style>
+:root{--bg:#07101d;--panel:#101c2f;--panel2:#14243b;--ink:#f4f7fb;--copy:#bdc9d9;--muted:#7f93aa;--cyan:#61dafb;--violet:#ad8cff;--green:#66e3a4;--amber:#ffc46b;--red:#ff7d90;--line:#29415d;--font:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--mono:"SFMono-Regular",Consolas,monospace}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;height:100vh;overflow-y:auto;scroll-snap-type:y mandatory;background:var(--bg);color:var(--ink);font-family:var(--font)}
+.slide{position:relative;min-height:100vh;scroll-snap-align:start;display:flex;align-items:center;padding:clamp(1.5rem,4vh,4rem) clamp(1.2rem,5vw,5rem);overflow:hidden;background:radial-gradient(circle at 87% 10%,#6d4cff2b,transparent 28%),radial-gradient(circle at 10% 85%,#00c6ff18,transparent 26%),linear-gradient(150deg,#07101d,#0b1626 58%,#0d192a)}
+.slide:before{content:"";position:absolute;inset:0;background-image:linear-gradient(#8ca4bd0a 1px,transparent 1px),linear-gradient(90deg,#8ca4bd0a 1px,transparent 1px);background-size:44px 44px;pointer-events:none}.inner{position:relative;width:min(90rem,100%);margin:auto}.kicker{margin:0 0 .65rem;color:var(--cyan);font:650 clamp(.68rem,.85vw,.95rem)/1 var(--mono);letter-spacing:.16em;text-transform:uppercase}
+h1,h2,h3,p{margin-top:0}h1{font-size:clamp(2.5rem,6.6vw,6rem);line-height:.96;letter-spacing:-.055em;margin-bottom:1.2rem;max-width:13ch}h2{font-size:clamp(2rem,4.2vw,4.2rem);line-height:1.02;letter-spacing:-.04em;margin-bottom:clamp(1.1rem,2vw,2rem);max-width:20ch}h3{font-size:clamp(1rem,1.35vw,1.35rem);color:#dfe7f2;margin-bottom:.55rem}.lede{font-size:clamp(1.15rem,2.1vw,1.75rem);line-height:1.42;color:var(--copy);max-width:50rem}.accent{color:var(--violet)}.cyan{color:var(--cyan)}.green{color:var(--green)}.amber{color:var(--amber)}
+.grid{display:grid;gap:clamp(.8rem,1.5vw,1.4rem)}.two{grid-template-columns:repeat(2,minmax(0,1fr))}.three{grid-template-columns:repeat(3,minmax(0,1fr))}.four{grid-template-columns:repeat(4,minmax(0,1fr))}.card{background:linear-gradient(145deg,#16263edb,#0e1b2ee8);border:1px solid var(--line);border-radius:20px;padding:clamp(1rem,1.6vw,1.6rem);box-shadow:0 20px 55px #0005;min-width:0}.card p,.card li{color:var(--copy);font-size:clamp(.88rem,1.15vw,1.1rem);line-height:1.48}.card p:last-child{margin-bottom:0}ul{margin:.35rem 0 0;padding-left:1.15rem}li+li{margin-top:.45rem}.number{font:700 clamp(2rem,4vw,4rem)/1 var(--mono);color:var(--violet);margin-bottom:.75rem}.quote{font-size:clamp(1.6rem,3.7vw,3.5rem);line-height:1.14;letter-spacing:-.035em;max-width:24ch}.quote strong{color:var(--cyan)}
+.flow{display:flex;align-items:stretch;gap:.55rem;flex-wrap:wrap}.node{flex:1 1 8rem;min-width:7rem;padding:1rem .8rem;border:1px solid var(--line);border-radius:15px;background:#101f34;text-align:center;font:600 clamp(.76rem,1vw,.98rem)/1.35 var(--mono);color:#dfe7f2}.node.fact{border-color:#3b87a2}.node.state{border-color:#755cc1}.node.act{border-color:#2e8d64}.arrow{display:flex;align-items:center;color:var(--muted);font-size:1.5rem}.cycle{margin-top:1rem;color:var(--muted);font:500 clamp(.78rem,1vw,.95rem)/1.4 var(--mono);text-align:center}.gate{border-color:#8f7448}.human{border-color:#a95768}.tiny{font-size:clamp(.76rem,.9vw,.9rem)!important;color:var(--muted)!important}.eyebrow{font:650 .78rem/1 var(--mono);text-transform:uppercase;letter-spacing:.12em;color:var(--violet)}
+.state-table{width:100%;border-collapse:collapse;font-size:clamp(.78rem,1vw,1rem)}.state-table th{text-align:left;color:var(--cyan);font:650 .78rem/1.2 var(--mono);letter-spacing:.06em;text-transform:uppercase}.state-table th,.state-table td{padding:.75rem .65rem;border-bottom:1px solid var(--line)}.state-table td{color:var(--copy)}code{font-family:var(--mono);color:#d9ccff;background:#9c7aff15;border:1px solid #9c7aff2c;border-radius:5px;padding:.08em .32em}
+.split-label{display:inline-block;margin-bottom:.7rem;padding:.35rem .6rem;border-radius:999px;font:650 .72rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;background:#61dafb18;color:var(--cyan)}.callout{margin-top:1.2rem;padding:1rem 1.2rem;border-left:3px solid var(--violet);background:#ad8cff0c;color:var(--copy);font-size:clamp(.9rem,1.2vw,1.1rem);line-height:1.45}.footer{position:absolute;right:1.2rem;bottom:1rem;color:#72869d;font:500 .72rem/1 var(--mono)}
+.progress{position:fixed;z-index:5;left:0;bottom:0;height:3px;width:0;background:linear-gradient(90deg,var(--cyan),var(--violet));transition:width .2s}.help{position:fixed;z-index:5;right:1rem;top:.8rem;color:#8094aa;font:500 .7rem/1 var(--mono)}
+@media(max-width:850px){.two,.three,.four{grid-template-columns:1fr}.slide{overflow:visible;min-height:100vh}.arrow{display:none}h1{max-width:16ch}.help{display:none}}
+@media(max-height:720px) and (min-width:851px){.slide{padding-top:1rem;padding-bottom:1rem}.card{padding:.85rem 1rem}h2{margin-bottom:.8rem}.card p,.card li{line-height:1.32}.flow{gap:.35rem}.node{padding:.7rem .5rem}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}body{scroll-snap-type:none}}
+</style>
+</head>
+<body tabindex="0">
+<nav class="help" aria-label="Presentation navigation">← → navigate · home/end jump</nav><div class="progress" id="progress" aria-hidden="true"></div>
+<main tabindex="-1">
+
+<section class="slide" id="hero"><div class="inner">
+  <p class="kicker">dev-loops · v1</p>
+  <h1>The State Graph Is the <span class="accent">Surface</span></h1>
+  <p class="lede">Delivery handoffs can lose context, hide waits, and carry approvals based on stale evidence. dev-loops makes each handoff an explicit state with one legal next move.</p>
+  <div class="callout">The graph preserves policy. The loop keeps returning to current evidence.</div>
+</div><span class="footer">01 / 12</span></section>
+
+<section class="slide" id="landscape"><div class="inner">
+  <p class="kicker">The landscape</p><h2>Three ideas converge</h2>
+  <div class="grid three">
+    <article class="card"><p class="number">01</p><h3>Ralph loops</h3><p>Persistence across bounded runs, backed by durable artifacts.</p></article>
+    <article class="card"><p class="number">02</p><h3>Evaluated loops</h3><p>Selection pressure through measurable outcomes and keep-or-revert decisions.</p></article>
+    <article class="card"><p class="number">03</p><h3>Graph engineering</h3><p>Explicit branches, waits, cycles, and boundaries between policy and judgment.</p></article>
+  </div>
+  <div class="callout"><strong class="cyan">dev-loops</strong> composes these ideas around authoritative modeled state.</div>
+</div><span class="footer">02 / 12</span></section>
+
+<section class="slide" id="reframe"><div class="inner">
+  <p class="kicker">The reframe</p>
+  <p class="quote">The graph follows the <strong>work</strong>. The current state determines who can move it forward.</p>
+  <div class="flow" style="margin-top:2rem"><div class="node fact">authoritative facts</div><div class="arrow">→</div><div class="node state">modeled state</div><div class="arrow">→</div><div class="node act">legal action</div><div class="arrow">→</div><div class="node fact">new evidence</div></div>
+  <p class="cycle">↖──────────────── refresh from the world ────────────────↙</p>
+</div><span class="footer">03 / 12</span></section>
+
+<section class="slide" id="public-contract"><div class="inner">
+  <p class="kicker">The public contract</p><h2>Five dimensions compile the surface</h2>
+  <table class="state-table"><thead><tr><th>Dimension</th><th>Question</th><th>What it unlocks</th></tr></thead><tbody>
+    <tr><td><code>target</code></td><td>Which artifact is active?</td><td>Stable identity</td></tr>
+    <tr><td><code>ownership</code></td><td>Who carries durable responsibility?</td><td>Strategy family</td></tr>
+    <tr><td><code>nextActor</code></td><td>Who should act now?</td><td>Concrete handoff</td></tr>
+    <tr><td><code>status</code></td><td>Active, waiting, blocked, approval-ready, merge-ready, done?</td><td>Route, wait, or stop</td></tr>
+    <tr><td><code>authorization</code></td><td>Is this mutation authorized?</td><td>Safe boundary</td></tr>
+  </tbody></table>
+  <div class="callout">Start, continue, inspect, steer, wait, approve, and merge are projections over this model.</div>
+</div><span class="footer">04 / 12</span></section>
+
+<section class="slide" id="composition"><div class="inner">
+  <p class="kicker">Composition</p><h2>One surface, nested graphs</h2>
+  <div class="grid three">
+    <article class="card"><span class="split-label">Public graph</span><h3>Operator meaning</h3><ul><li>artifact and ownership</li><li>status and authorization</li><li>next visible action</li></ul></article>
+    <article class="card"><span class="split-label">Lifecycle graph</span><h3>Change progression</h3><ul><li>intake and refinement</li><li>implementation and gates</li><li>approval and merge</li></ul></article>
+    <article class="card"><span class="split-label">Inner graphs</span><h3>Focused mechanics</h3><ul><li>review and fix cycles</li><li>CI and external waits</li><li>UI evidence capture</li></ul></article>
+  </div>
+  <div class="callout">The conductor joins these machines through narrow contracts and refreshes their interpreted state at every boundary.</div>
+</div><span class="footer">05 / 12</span></section>
+
+<section class="slide" id="delivery"><div class="inner">
+  <p class="kicker">Delivery progression</p><h2>Clean evidence still meets human authority</h2>
+  <div class="flow"><div class="node">intake</div><div class="arrow">→</div><div class="node">refine</div><div class="arrow">→</div><div class="node act">implement</div><div class="arrow">→</div><div class="node gate">draft gate</div><div class="arrow">→</div><div class="node">feedback</div><div class="arrow">→</div><div class="node gate">pre-approval</div></div>
+  <div class="flow" style="margin-top:1rem;justify-content:flex-end"><div class="node human">human approval</div><div class="arrow">→</div><div class="node human">merge authorization</div><div class="arrow">→</div><div class="node act">merge</div></div>
+  <div class="callout">Findings and changed evidence route back to implementation or feedback resolution. A clean gate never grants merge authority by itself.</div>
+</div><span class="footer">06 / 12</span></section>
+
+<section class="slide" id="cycle"><div class="inner">
+  <p class="kicker">A single cycle</p><h2>Observe. Resolve. Act once. Refresh.</h2>
+  <div class="grid four">
+    <article class="card"><p class="number">1</p><h3>Observe</h3><p>Read the artifact, head, checks, threads, ownership, and approvals.</p></article>
+    <article class="card"><p class="number">2</p><h3>Resolve</h3><p>Interpret one state and its allowed transitions.</p></article>
+    <article class="card"><p class="number">3</p><h3>Act</h3><p>Execute one bounded mutation or wait.</p></article>
+    <article class="card"><p class="number">4</p><h3>Refresh</h3><p>Rebuild truth before choosing again.</p></article>
+  </div>
+  <div class="callout">A fresh session can continue because durable facts carry the workflow forward.</div>
+</div><span class="footer">07 / 12</span></section>
+
+<section class="slide" id="backend"><div class="inner">
+  <p class="kicker">The v1 backend boundary</p><h2>One tracker seam; one GitHub-coupled PR plane</h2>
+  <div class="grid two">
+    <article class="card"><span class="split-label">Provider seam</span><h3>Issues and board / queue</h3><p>The stable <code>Tracker</code> interface supports a registered provider. GitHub ships as the built-in default.</p></article>
+    <article class="card"><span class="split-label">GitHub-coupled</span><h3>Pull requests and delivery evidence</h3><p>PRs, review threads, CI, Copilot review, head SHAs, and merge truth use GitHub in v1.</p></article>
+  </div>
+  <div class="callout">A future non-GitHub PR host needs its own independent seam.</div>
+</div><span class="footer">08 / 12</span></section>
+
+<section class="slide" id="responsibility"><div class="inner">
+  <p class="kicker">Responsibility</p><h2>Policy, judgment, and authority each have a home</h2>
+  <div class="grid three">
+    <article class="card"><h3 class="cyan">Deterministic code</h3><ul><li>normalizes facts</li><li>enforces transitions</li><li>checks current-head evidence</li><li>fails closed</li></ul></article>
+    <article class="card"><h3 class="accent">Agents</h3><ul><li>refine and explore</li><li>implement and diagnose</li><li>review through focused lenses</li><li>explain trade-offs</li></ul></article>
+    <article class="card"><h3 class="amber">Humans</h3><ul><li>resolve ambiguity</li><li>set policy</li><li>approve risk</li><li>authorize merge</li></ul></article>
+  </div>
+</div><span class="footer">09 / 12</span></section>
+
+<section class="slide" id="applicability"><div class="inner">
+  <p class="kicker">Applicability</p><h2>The change lifecycle spans greenfield and brownfield</h2>
+  <div class="grid two">
+    <article class="card"><span class="split-label">Greenfield</span><ul><li>new plan or tracker item</li><li>architecture established during refinement</li><li>tests and implementation grow together</li></ul></article>
+    <article class="card"><span class="split-label">Brownfield</span><ul><li>existing behavior and history enter the evidence bundle</li><li>compatibility and migration constrain the solution</li><li>regression and contract gates grow stronger</li></ul></article>
+  </div>
+  <div class="callout">Portability beyond this bootstrap repository is not yet established: the planned second-repository pilot has not started, and repeated external runs remain required future evidence.</div>
+</div><span class="footer">10 / 12</span></section>
+
+<section class="slide" id="learning"><div class="inner">
+  <p class="kicker">Learning</p><h2>Two loops improve different horizons</h2>
+  <div class="grid two">
+    <article class="card"><span class="split-label">Current change</span><h3>Operational correction</h3><div class="flow"><div class="node state">state</div><div class="arrow">→</div><div class="node act">act</div><div class="arrow">→</div><div class="node gate">verify</div></div><p class="tiny">Findings return the change to another bounded cycle.</p></article>
+    <article class="card"><span class="split-label">Future changes</span><h3>Workflow learning</h3><div class="flow"><div class="node fact">trace</div><div class="arrow">→</div><div class="node state">decision</div><div class="arrow">→</div><div class="node act">contract + test</div></div><p class="tiny">Retrospectives and escaped defects harden later runs.</p></article>
+  </div>
+  <div class="callout">An evaluated meta-loop can compare candidate graph versions on correctness, review burden, latency, cost, and policy violations.</div>
+</div><span class="footer">11 / 12</span></section>
+
+<section class="slide" id="close"><div class="inner">
+  <p class="kicker">Takeaway</p>
+  <p class="quote"><strong>The state graph preserves authority across worker and evidence changes, and every loop returns to it.</strong></p>
+  <div class="grid three" style="margin-top:2rem"><article class="card"><h3>Durable</h3><p>Facts survive sessions.</p></article><article class="card"><h3>Explainable</h3><p>Every route has a reason.</p></article><article class="card"><h3>Governed</h3><p>Human authority remains explicit.</p></article></div>
+</div><span class="footer">12 / 12</span></section>
+</main>
+
+<script>
+const slides=[...document.querySelectorAll('.slide')];const bar=document.getElementById('progress');let index=0;
+function go(i){index=Math.max(0,Math.min(slides.length-1,i));slides[index].scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});}
+function sync(){const center=scrollY+innerHeight/2;let best=0,dist=Infinity;slides.forEach((s,i)=>{const d=Math.abs(s.offsetTop+s.offsetHeight/2-center);if(d<dist){best=i;dist=d}});index=best;bar.style.width=((index+1)/slides.length*100)+'%';}
+addEventListener('keydown',e=>{const t=e.target;if(e.defaultPrevented||e.altKey||e.ctrlKey||e.metaKey||e.shiftKey||e.isComposing||(t instanceof Element&&(t.matches('input,textarea,select')||t.closest('[contenteditable]'))))return;if(['ArrowRight','ArrowDown','PageDown',' '].includes(e.key)){e.preventDefault();go(index+1)}if(['ArrowLeft','ArrowUp','PageUp'].includes(e.key)){e.preventDefault();go(index-1)}if(e.key==='Home'){e.preventDefault();go(0)}if(e.key==='End'){e.preventDefault();go(slides.length-1)}});addEventListener('scroll',sync,{passive:true});sync();
+</script>
+</body>
+</html>

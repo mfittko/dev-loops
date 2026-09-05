@@ -23,17 +23,20 @@ import { listIssueComments, resolveAuthenticatedLogin, sanitizeCodeSpan, sanitiz
 import { VALID_DISPOSITIONS } from "./write-gate-findings-log.mjs";
 import {
   buildCommentableLineSet,
+  buildNonLocatableFindingMarker,
   buildReviewHeaderMarker,
   collectSuppressedFingerprints,
   createGateReview,
+  discardPendingReview,
   fetchPrFiles,
+  findOwnPendingReview,
   fingerprintFinding,
   isLocatableFinding,
   listPrReviews,
   readGateFindingsLedger,
   renderInlineCommentBody,
-  renderNonLocatableBlock,
   resolveGateRound,
+  submitPendingReview,
   updateGateReview,
 } from "./_gate-finding-surface.mjs";
 import { fetchAllReviewThreads } from "./list-review-threads.mjs";
@@ -44,16 +47,22 @@ const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // resolveReviewSubmitEvent below: "pending" maps to a falsy value so
 // createGateReview (_gate-finding-surface.mjs) omits `event` from the payload
 // entirely, which is what leaves the review PENDING (author-only draft).
-const REVIEW_SUBMIT_MODES = new Set(["pending", "comment", "request-changes", "approve"]);
+// `discard` (#1912) deletes the caller's own pending review; like
+// approve/request-changes it is a deliberate interactive choice (destructive),
+// so it stays OUT of HEADLESS_ALLOWED and requires --interactive-confirm.
+const REVIEW_SUBMIT_MODES = new Set(["pending", "comment", "request-changes", "approve", "discard"]);
 const DEFAULT_REVIEW_SUBMIT_MODE = "comment";
 // Only these two modes may ever be reached without a deliberate interactive
 // choice (--auto/headless review runs, and the default when --submit is
-// omitted). approve/request-changes are reachable only via the review skill's
-// interactive multiple-choice, never automatically.
+// omitted). approve/request-changes/discard are reachable only via the review
+// skill's interactive multiple-choice, never automatically.
 const HEADLESS_ALLOWED_REVIEW_SUBMIT_MODES = new Set(["pending", "comment"]);
 function resolveReviewSubmitEvent(mode) {
   switch (mode) {
     case "pending": return null;
+    // discard never submits a review event — it deletes the pending draft — so
+    // it maps to a falsy event and is dispatched on its own path (#1912).
+    case "discard": return null;
     case "comment": return "COMMENT";
     case "approve": return "APPROVE";
     case "request-changes": return "REQUEST_CHANGES";
@@ -193,7 +202,7 @@ Optional:
   --gate <draft_gate|pre_approval_gate|review>     Auto-resolved from coordination state (draft_gate/pre_approval_gate only; review is never auto-resolved)
                                             when omitted. Explicit gate is validated
                                             against allowed coordination actions.
-  --submit <pending|comment|request-changes|approve>
+  --submit <pending|comment|request-changes|approve|discard>
                                             SCOPED TO --gate review ONLY (#1840):
                                             how the review's own PR review is
                                             submitted. Passing --submit on
@@ -213,14 +222,23 @@ Optional:
                                             with that GitHub review event — a
                                             native GitHub branch-protection
                                             signal independent of any dev-loops
-                                            gate. --auto (headless) allows only
+                                            gate. When the caller already has an
+                                            own PENDING review on the same head,
+                                            \`comment\`/\`request-changes\`/
+                                            \`approve\` SUBMIT that pending review
+                                            via /reviews/<id>/events (preserving
+                                            its inline comments) instead of
+                                            creating a second one, which 422s
+                                            (#1912). \`discard\` DELETES the
+                                            caller's own pending review. --auto
+                                            (headless) allows only
                                             \`pending\`/\`comment\`; \`approve\`/
-                                            \`request-changes\` are REFUSED
-                                            headless so automation can never
-                                            auto-approve or auto-block a PR —
-                                            they are reachable only through an
-                                            interactive choice. #1888: they
-                                            additionally REQUIRE
+                                            \`request-changes\`/\`discard\` are
+                                            REFUSED headless so automation can
+                                            never auto-approve, auto-block, or
+                                            auto-delete — they are reachable only
+                                            through an interactive choice. #1888/
+                                            #1912: they additionally REQUIRE
                                             --interactive-confirm even WITHOUT
                                             --auto (the flag's absence proves
                                             nothing — a headless caller can
@@ -228,7 +246,8 @@ Optional:
                                             closed unless provably interactive.
   --interactive-confirm                    The explicit interactive-confirmation
                                             token for --submit
-                                            approve|request-changes (#1888).
+                                            approve|request-changes|discard
+                                            (#1888/#1912).
                                             Pass it ONLY from the review skill's
                                             interactive multiple-choice submit
                                             step after a human made the choice;
@@ -687,7 +706,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     if (token.name === "submit") {
       const raw = requireTokenValue(token, parseError).trim().toLowerCase();
       if (!REVIEW_SUBMIT_MODES.has(raw)) {
-        throw parseError("--submit must be one of: pending, comment, request-changes, approve");
+        throw parseError("--submit must be one of: pending, comment, request-changes, approve, discard");
       }
       options.submit = raw;
       continue;
@@ -770,7 +789,17 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   // review skill's interactive multiple-choice.
   if (options.gate === "review" && options.auto && options.submit !== undefined && !HEADLESS_ALLOWED_REVIEW_SUBMIT_MODES.has(options.submit)) {
     throw parseError(
-      `--submit ${options.submit} is not allowed with --auto (headless review runs may only leave a review pending or submit it as a comment); approve/request-changes are reachable only via the interactive submit choice.`,
+      `--submit ${options.submit} is not allowed with --auto (headless review runs may only leave a review pending or submit it as a comment); approve/request-changes/discard are reachable only via the interactive submit choice.`,
+    );
+  }
+  // Discard is destructive (deletes the caller's own pending review, #1912),
+  // so it fails closed exactly like approve/request-changes: reachable only via
+  // the interactive submit choice, never headless. Its own message so a
+  // discard caller is told precisely what is required. Checked before the
+  // approve/request-changes guard so discard never borrows their wording.
+  if (options.gate === "review" && options.submit === "discard" && !options.interactiveConfirm) {
+    throw parseError(
+      `--submit discard requires --interactive-confirm (fail closed, #1912): discarding deletes the caller's own pending review, reachable only via the review skill's interactive submit choice. Headless/agent callers may use --submit pending or --submit comment.`,
     );
   }
   // PROVABLE interactivity, not caller self-identification (#1888): the
@@ -1069,93 +1098,224 @@ export function normalizeStructuredFindings(input) {
   }
   return angles.length > 0 ? angles : null;
 }
-// Render the consolidated per-angle fan-in findings as a readable, multi-line
-// markdown block: one section per angle (angle label + per-angle verdict),
-// nested findings carrying severity and an optional file:line reference. Newlines
-// are intentionally PRESERVED — this block is NOT run through collapseWhitespace /
-// summarizeCheckpointVerdictText. The whole block is bounded by
-// MAX_GATE_COMMENT_TEXT_LENGTH and THROWS above it (enforcePostedCommentLimit).
-// The leading single-line digest is what the marker parser captures for the
-// `**Findings summary:**` field; the structured body is nested below it and is
-// deliberately written so no nested line matches a gate field regex (no
-// `verdict:` / `next action:` / `execution mode:` line starts) — belt-and-braces
-// alongside the parser's actual guards. The real guards against a per-angle
-// finding's own free text forging a field (including `next action`, which
-// renders after this block) are: (1) parseGateReviewCommentFields is
-// first-NON-EMPTY-wins per field, so a genuine line rendered before this block
-// always wins over a spoofed one rendered after it, and (2) any free-text
-// field that preserves newlines (the --findings-file path above) has every
-// continuation line blockquoted (`> `) before splicing, so an embedded
-// "next action:"/"execution mode:"/etc. line can never sit at column 0 of its
-// own logical line for the parser to match. This template's own bullet/
-// backtick shape is a redundant third layer, not the only guard.
-// Exported so
-// consolidate-fanin.mjs can measure whether a candidate findingsJson shape
-// actually renders (catching this throw) instead of approximating its
-// rendered size — the exact bound this function enforces, not an estimate of
-// it (see consolidate-fanin.mjs's fitsRenderBudget).
-export function renderStructuredFindings(angles) {
-  const lines = [];
-  for (const { angle, verdict, findings, unparseable } of angles) {
-    // severity/verdict/disposition are enum labels, never prose — rendered
-    // inside a backtick code span (like the angle label and file ref already
-    // are) rather than bare, so a reviewer-supplied value crafted to look like
-    // markdown link/image syntax (e.g. a severity of `high](url)`) cannot
-    // break out of its literal `[...]`/`_..._` position: sanitizeStructuredCodeSpan
-    // strips any backtick from the value first, so the span it is wrapped in
-    // below can never be prematurely closed by the value's own content.
-    const angleLabel = sanitizeStructuredCodeSpan(angle);
-    lines.push(`- \`${angleLabel}\` → \`${sanitizeStructuredCodeSpan(verdict)}\``);
-    for (const finding of findings) {
-      const severity = sanitizeStructuredCodeSpan(finding.severity) || "finding";
-      const summary = sanitizeStructuredInline(finding.summary);
-      let location = "";
-      if (finding.file) {
-        const fileRef = sanitizeStructuredCodeSpan(finding.file);
-        const lineRef = Number.isFinite(finding.line) ? `:${finding.line}` : "";
-        if (fileRef.length > 0) {
-          location = ` (\`${fileRef}${lineRef}\`)`;
-        }
-      }
-      const dispositionSuffix = finding.disposition
-        ? ` — _\`${sanitizeStructuredCodeSpan(finding.disposition)}\`_`
-        : "";
-      // Judge relevance-based disposition (#1525).
-      const judgeSuffix = finding.judgeDisposition
-        ? ` — judge: _\`${sanitizeStructuredCodeSpan(finding.judgeDisposition)}\`_`
-        : "";
-      lines.push(`  - [\`${severity}\`] ${summary}${location}${dispositionSuffix}${judgeSuffix}`);
+// Leading severity emoji marker for a body-only finding line (#1942, pivoted
+// to the two-track shape). Row/line ORDER still follows SEVERITY_ORDER's rank
+// (imported above); this legend listing order is independent and fixed:
+// high, medium, low, nit, question. An unknown/empty severity renders no
+// emoji (undefined lookup -> falsy).
+const SEVERITY_EMOJI = Object.freeze({
+  high: "🔴",
+  medium: "🟠",
+  low: "🟡",
+  nit: "⚪",
+  question: "🔵",
+});
+// Normalize a single flat (ledger/consolidator) finding into the same
+// render-ready shape normalizeStructuredFinding produces, but also carrying
+// its own `.angle` — flat findings (ledger-surfaced or flattened out of a
+// per-angle section) are attributed to exactly one angle, unlike the nested
+// per-angle shape where the angle lives on the section, not the finding.
+function normalizeFlatFindingWithAngle(raw) {
+  const entry = normalizeStructuredFinding(raw);
+  if (!entry) return null;
+  if (raw && typeof raw === "object" && typeof raw.angle === "string" && raw.angle.trim().length > 0) {
+    entry.angle = raw.angle.trim();
+  }
+  return entry;
+}
+// Flatten normalizeStructuredFindings' per-angle sections into the SAME flat
+// finding shape normalizeFlatFindingWithAngle produces, so the no-ledger path
+// (structuredFindings alone, no finding surface) and the ledger path can share
+// one body-only list renderer. Each real finding is tagged with its own
+// section's angle; an unparseable entry (#1526, never dropped) is tagged
+// `unparseable: true` so renderBodyOnlyFindingsList renders its own
+// "could not be interpreted" bullet instead of a normal finding line.
+function flattenAnglesForBodyList(angles) {
+  const flat = [];
+  for (const section of angles) {
+    for (const f of section.findings) {
+      flat.push({ ...f, angle: section.angle });
     }
-    // A finding the normalizer could not interpret is reported explicitly as
-    // unparseable — never dropped (#1526). Its severity (when readable) is
-    // rendered so a reader can see whether it sat at a blocking severity;
-    // the `unparseable` label itself distinguishes "could not interpret this
-    // finding" from a normal `[severity]` finding that is simply not blocking.
-    for (const u of unparseable ?? []) {
-      const sev = sanitizeStructuredCodeSpan(u.severity) || "none";
-      lines.push(`  - [\`unparseable\`] finding could not be interpreted (severity: \`${sev}\` — counted toward the clean-verdict tally, not dropped)`);
+    for (const u of section.unparseable ?? []) {
+      flat.push({ unparseable: true, severity: u.severity, angle: section.angle });
     }
+  }
+  return flat;
+}
+// The clean-angle roster: every angle carrying zero findings AND zero
+// unparseable entries, in input order, collapsed into one trailing line.
+// Returns null (never rendered) when no angle qualifies.
+function selectCleanAngles(angles) {
+  return angles.filter(
+    (angle) => angle.findings.length === 0 && (!Array.isArray(angle.unparseable) || angle.unparseable.length === 0),
+  );
+}
+function renderCleanRosterLine(angles) {
+  const clean = selectCleanAngles(angles);
+  if (clean.length === 0) return null;
+  const names = clean.map((angle) => sanitizeStructuredInline(angle.angle)).join(", ");
+  return `**Clean (${clean.length}):** ${names}`;
+}
+// A body-only finding's file:line location: linked to the blob at the head
+// SHA when the caller knows `repo`/`headSha` (the ledger path, which always
+// has both), else the same non-linked italic code span the renderer has
+// always used (the no-ledger path, and any caller of the bare
+// renderStructuredFindings/renderAngleVerdictDigest exports, which take no
+// repo/headSha argument). The URL's own `file` path segment is the RAW
+// (trimmed) value — sanitizeStructuredCodeSpan is a display-text transform,
+// not a URL-safe one — while the visible backticked text still goes through
+// sanitizeStructuredCodeSpan like every other code-span field here.
+// URL-encode a finding's `file` for a markdown link DESTINATION. `finding.file`
+// is untrusted (reviewer/producer text): a raw `)` closes the `(...)`
+// destination early and a following `[x](url)`/`![x](url)` forges a live
+// link/auto-loaded image on the verdict body; a raw `#`/`?` corrupts the URL
+// into a false anchor/query. encodeURI keeps `/` path separators (and the
+// already-safe unreserved set) but leaves exactly `( ) # ?` unencoded, so
+// entity-encode those four residues on top of it. The visible backticked text
+// (displayFile) is a separate display-only transform.
+function encodeBlobPathSegment(file) {
+  // toWellFormed() first: a lone surrogate in the untrusted path makes
+  // encodeURI throw URIError, which would otherwise propagate up and crash the
+  // whole verdict post (one malformed finding blocking the entire gate comment).
+  // It replaces any lone surrogate with U+FFFD so encoding always succeeds.
+  return encodeURI(String(file).toWellFormed()).replace(/[()#?]/gu, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+function renderBodyOnlyFindingLocation(finding, { repo, headSha } = {}) {
+  if (!finding.file) return "";
+  const displayFile = sanitizeStructuredCodeSpan(finding.file);
+  if (displayFile.length === 0) return "";
+  const lineRef = Number.isFinite(finding.line) ? `:${finding.line}` : "";
+  if (typeof repo === "string" && repo.trim().length > 0 && typeof headSha === "string" && headSha.trim().length > 0) {
+    const anchor = Number.isFinite(finding.line) ? `#L${finding.line}` : "";
+    return ` [\`${displayFile}${lineRef}\`](https://github.com/${repo}/blob/${headSha}/${encodeBlobPathSegment(finding.file)}${anchor})`;
+  }
+  return ` _\`${displayFile}${lineRef}\`_`;
+}
+// One body-only finding's full bullet line: emoji + severity word, the
+// sanitized summary, the file:line location (blob-linked when known), the
+// existing disposition/judge suffixes, and the contributing angle in trailing
+// brackets. This is the ONE place a body-only finding's full text is rendered
+// — degradation under budget pressure (consolidate-fanin.mjs) shortens the
+// summary text, never replaces it with an omitted-count/ledger pointer.
+function renderBodyOnlyFindingLine(finding, ctx) {
+  // Emoji lookup runs on the RAW (normalized-only) severity string — an
+  // arbitrary/crafted value simply matches no key and renders no emoji, never
+  // a code-injection risk since a Map/object lookup cannot execute a value.
+  const emoji = SEVERITY_EMOJI[finding.severity] ?? "";
+  // The severity WORD is rendered bare (like angle/summary), so it goes
+  // through the same bare-prose sanitizer (sanitizeStructuredInline) a
+  // producer other than consolidateFanin could otherwise abuse to forge a
+  // markdown link/image (renderer-security regression).
+  const safeSeverity = finding.severity ? sanitizeStructuredInline(finding.severity) : "";
+  // Build the leading severity marker from whichever of emoji/word is present
+  // and join with a single space, so a finding with no emoji (unknown severity)
+  // or no severity at all never renders a double space or a dangling " — ".
+  const marker = [emoji, safeSeverity].filter(Boolean).join(" ");
+  const markerPrefix = marker ? `${marker} — ` : "";
+  const summary = sanitizeStructuredInline(finding.summary);
+  const location = renderBodyOnlyFindingLocation(finding, ctx);
+  const dispositionSuffix = finding.disposition
+    ? ` — _\`${sanitizeStructuredCodeSpan(finding.disposition)}\`_`
+    : "";
+  // Judge relevance-based disposition (#1525).
+  const judgeSuffix = finding.judgeDisposition
+    ? ` — judge: _\`${sanitizeStructuredCodeSpan(finding.judgeDisposition)}\`_`
+    : "";
+  const angleSuffix = finding.angle ? ` _(${sanitizeStructuredInline(finding.angle)})_` : "";
+  return `- ${markerPrefix}${summary}${location}${dispositionSuffix}${judgeSuffix}${angleSuffix}`;
+}
+// An unparseable entry (#1526) is never dropped: it renders its own
+// "could not be interpreted" bullet, distinguishable from a normal finding.
+function renderUnparseableBodyLine(finding) {
+  const sev = sanitizeStructuredCodeSpan(finding.severity) || "none";
+  const angleSuffix = finding.angle ? ` _(${sanitizeStructuredInline(finding.angle)})_` : "";
+  return `- ⚪ finding could not be interpreted (severity: \`${sev}\`)${angleSuffix}`;
+}
+const BODY_ONLY_FINDINGS_HEADER = "Body-only findings — no anchorable changed line, so carried in full here (plain list, angle in brackets, `file:line` linked to the blob when known):";
+// Render a flat list of body-only findings (each already normalized via
+// normalizeFlatFindingWithAngle, or flattened via flattenAnglesForBodyList) as
+// a plain bulleted list — NEVER a markdown table (#1942): this track is
+// usually 0-2 findings, and a table's Angles column wraps letter-by-letter at
+// GitHub's comment width. Sorted by severityRank ascending (high first);
+// ties preserve input order via an explicit index tiebreak rather than
+// relying on Array#sort's own stability. Returns [] (nothing rendered) for an
+// empty list.
+function renderBodyOnlyFindingsList(findings, ctx = {}) {
+  if (!Array.isArray(findings) || findings.length === 0) return [];
+  const decorated = findings.map((f, index) => ({
+    f,
+    index,
+    rank: f.unparseable ? SEVERITY_ORDER.length : severityRank(f.severity),
+  }));
+  decorated.sort((a, b) => a.rank - b.rank || a.index - b.index);
+  const lines = [BODY_ONLY_FINDINGS_HEADER, ""];
+  for (const { f } of decorated) {
+    lines.push(f.unparseable ? renderUnparseableBodyLine(f) : renderBodyOnlyFindingLine(f, ctx));
+  }
+  return lines;
+}
+// The no-ledger shape both renderStructuredFindings and renderAngleVerdictDigest
+// render (#1942): flatten the per-angle sections into one body-only bulleted
+// list (no repo/headSha here — neither exported function takes them, so a
+// file:line renders in the same non-linked italic form it always has), then
+// the trailing clean-angle roster line. The whole block is bounded by
+// MAX_GATE_COMMENT_TEXT_LENGTH and THROWS above it (enforcePostedCommentLimit)
+// — consolidate-fanin.mjs's fitsRenderBudget measures fit by actually
+// rendering a candidate through this function and catching that throw, not by
+// approximating its size.
+function renderStructuredFindingsBlock(angles) {
+  const lines = renderBodyOnlyFindingsList(flattenAnglesForBodyList(angles));
+  const cleanLine = renderCleanRosterLine(angles);
+  if (cleanLine) {
+    if (lines.length > 0) lines.push("");
+    lines.push(cleanLine);
   }
   return enforcePostedCommentLimit(lines.join("\n"), MAX_GATE_COMMENT_TEXT_LENGTH, "--findings-json structured findings render");
 }
-// The reduced per-angle breakdown for a round that carries its own finding
-// surface: angle, per-angle verdict, and the finding COUNT — never a finding's
-// text, which lives exactly once on this same review (an inline comment, or the
-// body-filed block). Unbounded by construction: one short line per angle, and
-// the angle pool is config-bounded, so this can never approach the posted-body
-// budget the way a full breakdown can.
+// Exported so consolidate-fanin.mjs can measure whether a candidate
+// findingsJson shape actually renders (catching renderStructuredFindingsBlock's
+// length-exceeded throw) instead of approximating its rendered size, and so
+// existing callers/tests that render the full per-angle breakdown keep this
+// name. Both this and renderAngleVerdictDigest render the identical body-only
+// list + clean roster (#1942) — there is no longer a distinct "full" vs
+// "reduced" shape.
+export function renderStructuredFindings(angles) {
+  return renderStructuredFindingsBlock(angles);
+}
+// Kept as a separate exported name for existing callers (renderGateReviewCommentBody's
+// no-ledger branch) and tests; renders the SAME body-only list + clean roster
+// as renderStructuredFindings (#1942).
 export function renderAngleVerdictDigest(angles) {
-  return angles
-    .map(({ angle, verdict, findings, unparseable }) => {
-      // An unparseable finding still occupies a finding slot, so it counts
-      // toward the per-angle total — otherwise the digest would undercount a
-      // round that the clean-verdict tally and the rendered breakdown both see
-      // (#1526).
-      const count = findings.length + (Array.isArray(unparseable) ? unparseable.length : 0);
-      const suffix = count === 0 ? "" : ` (${count} finding${count === 1 ? "" : "s"})`;
-      return `- \`${sanitizeStructuredCodeSpan(angle)}\` → \`${sanitizeStructuredCodeSpan(verdict)}\`${suffix}`;
-    })
-    .join("\n");
+  return renderStructuredFindingsBlock(angles);
+}
+// The aggregate line for every LOCATABLE finding this round carried (#1942):
+// a locatable finding's full text lives ENTIRELY on its own inline PR review
+// comment (_gate-finding-surface.mjs's renderInlineCommentBody) — this line
+// never restates or per-row references it, only the count/severity
+// breakdown/touched-angle pointer. `locatableFindings` is the raw ledger
+// finding shape (severity, angle, summary, ...), read only for its severity
+// and angle — the summary text is deliberately never touched here.
+function buildInlineFindingsAggregateLine(locatableFindings) {
+  const counts = new Map();
+  const angleOrder = [];
+  const seenAngles = new Set();
+  for (const f of locatableFindings) {
+    const sev = /** @type {string} */ (normalizeSeverity(typeof f?.severity === "string" ? f.severity : ""));
+    counts.set(sev, (counts.get(sev) ?? 0) + 1);
+    const angle = typeof f?.angle === "string" ? f.angle.trim() : "";
+    if (angle.length > 0 && !seenAngles.has(angle)) {
+      seenAngles.add(angle);
+      angleOrder.push(angle);
+    }
+  }
+  const breakdown = SEVERITY_ORDER
+    .filter((sev) => (counts.get(sev) ?? 0) > 0)
+    .map((sev) => `${SEVERITY_EMOJI[sev]} ${counts.get(sev)} ${sev}`)
+    .join(" · ");
+  const angleSuffix = angleOrder.length > 0
+    ? ` Angles: ${angleOrder.map((a) => sanitizeStructuredInline(a)).join(", ")}.`
+    : "";
+  return `**Inline findings:** ${locatableFindings.length} (${breakdown}) — on the diff, see Files changed.${angleSuffix}`;
 }
 // Build the single-line digest shown on the `**Findings summary:**` line when a
 // structured per-angle block is rendered. The marker/parse contract requires this
@@ -1252,7 +1412,19 @@ function renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, 
     `**Size-budget waiver:** ${waiverLine}`,
   ];
 }
-export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings }) {
+// `nonLocatableFindings` (present iff an array — the --findings-ledger/finding-
+// surface path) now drives the VISIBLE body-only findings list directly, in
+// full (#1942 pivot): a non-locatable finding has no inline carrier, so the
+// body is the only place its text lives. `locatableFindings` (the SAME
+// round's inline-carried findings) drives only the aggregate
+// `**Inline findings:**` count/breakdown/angle-pointer line — never a
+// per-finding row, since that finding's full text already lives on its own
+// inline PR review comment (produced elsewhere from this same finding
+// surface). `nonLocatableFindings` also still drives one thing beyond visible
+// rendering: an invisible fingerprint+disposition marker per non-locatable
+// finding, load-bearing for GATE-EXEC-FINDING-THREADS's cross-round
+// suppression/deferral tracking.
+export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings }) {
   const lines = [
     `### Gate review: \`${gate}\``,
   ];
@@ -1275,41 +1447,73 @@ export function renderGateReviewCommentBody({ gate, headSha, verdict, findingsSu
     const sevs = blockCleanOnFindingSeverities.join(", ");
     lines.push(`**Blocking severities:** ${sevs} (clean requires no findings matching these severities)`);
   }
-  // When structured per-angle fan-in data is supplied, render it as a readable
-  // multi-line block. The `**Findings summary:**` line still carries a non-empty
-  // single-line digest so the marker/parse contract (which captures only that
-  // one line) keeps round-tripping; the structured breakdown is nested below it
-  // with newlines preserved (NOT collapsed to a run-on line).
+  // When structured per-angle fan-in data is supplied (--findings-json), the
+  // `**Findings summary:**` digest is computed from it; otherwise the digest
+  // is the caller's free-text findingsSummary, unchanged either way regardless
+  // of whether this round also carries a finding surface (#1942 pivot — the
+  // digest line's own computation never changes; only the block below it does).
   const angles = normalizeStructuredFindings(structuredFindings);
-  // A round that carries its own finding surface (this review's inline comments
-  // plus the body-filed block below) renders each finding's TEXT exactly once,
-  // on that surface. The per-angle breakdown then degrades to `angle → verdict
-  // (+ finding count)` one-liners: repeating each summary here would put the
-  // same text twice on the SAME visible surface. A bare verdict post (no
-  // findings ledger, so no finding surface at all) keeps the full breakdown —
-  // it is the only place those findings would otherwise appear.
+  lines.push(
+    "",
+    `**Findings summary:** ${angles ? buildStructuredFindingsDigest(angles, findingsSeverityCounts) : findingsSummary}`,
+  );
+  // Two tracks by locatability (#1942 pivot), rendered at TOP LEVEL — never
+  // through the blockquoted --findings-summary/--findings-file continuation-
+  // line path:
+  //   - LEDGER path (`nonLocatableFindings` is an array — this round carries
+  //     its own finding surface, resolveFindingSurface's locatable/
+  //     nonLocatable split): a locatable finding is carried ENTIRELY by its
+  //     own inline PR review comment (renderInlineCommentBody, produced
+  //     elsewhere from this same surface) — the body states only the
+  //     aggregate `**Inline findings:**` count/breakdown/angle-pointer line,
+  //     never a per-finding row. A non-locatable finding has no inline
+  //     carrier, so it renders in full as a body-only bulleted list item.
+  //   - NO-LEDGER path (`structuredFindings` alone): every finding is
+  //     body-only (no inline carrier exists), so the SAME body-only list
+  //     renderer (renderStructuredFindings/renderAngleVerdictDigest, flattening
+  //     the per-angle sections) renders them all, followed by the clean-angle
+  //     roster.
+  // The clean-angle roster (`**Clean (N):**`) is sourced from `structuredFindings`
+  // in BOTH paths — it is the only place per-angle clean/findings-bearing
+  // status is known; the ledger's own flat findings carry no angle-clean
+  // concept of their own.
   const hasFindingSurface = Array.isArray(nonLocatableFindings);
-  if (angles) {
-    lines.push(
-      "",
-      `**Findings summary:** ${buildStructuredFindingsDigest(angles, findingsSeverityCounts)}`,
-      "",
-      hasFindingSurface ? renderAngleVerdictDigest(angles) : renderStructuredFindings(angles),
-    );
-  } else {
-    lines.push(
-      "",
-      `**Findings summary:** ${findingsSummary}`,
-    );
-  }
   if (hasFindingSurface) {
-    lines.push("", "**Body-filed findings** (no in-diff location):");
-    if (nonLocatableFindings.length === 0) {
-      lines.push("", "> None — every finding this round is an inline comment on this review.");
-    } else {
-      for (const finding of nonLocatableFindings) {
-        lines.push("", renderNonLocatableBlock(finding, { round }));
-      }
+    if (Array.isArray(locatableFindings) && locatableFindings.length > 0) {
+      lines.push("", buildInlineFindingsAggregateLine(locatableFindings));
+    }
+    // Never drop a body-filed finding from the VISIBLE list: every entry gets a
+    // suppression marker stamped below, so one that fails normalization (no
+    // usable summary) must still render — as an unparseable row (#1526) — or it
+    // is invisible yet marked-suppressed, i.e. silently lost next round. Map
+    // rather than filter-Boolean.
+    const bodyOnlyRows = nonLocatableFindings.map(
+      (f) => normalizeFlatFindingWithAngle(f)
+        ?? { unparseable: true, severity: readRawSeverity(f), angle: typeof f?.angle === "string" ? f.angle.trim() : "" },
+    );
+    if (bodyOnlyRows.length > 0) {
+      lines.push("", renderBodyOnlyFindingsList(bodyOnlyRows, { repo, headSha }).join("\n"));
+    }
+    if (angles) {
+      const cleanLine = renderCleanRosterLine(angles);
+      if (cleanLine) lines.push("", cleanLine);
+    }
+  } else if (angles) {
+    lines.push("", renderStructuredFindings(angles));
+  }
+  // A round that carries its own finding surface (nonLocatableFindings is an
+  // array) stamps one INVISIBLE marker per body-filed finding — never its
+  // visible text, which the body-only bulleted list above already carries in
+  // full. GATE-EXEC-FINDING-THREADS's cross-round fingerprint suppression
+  // (collectSuppressedFingerprints) and disposition=deferred tracking
+  // (isFileableDeferral/isDeferredAtRound, follow-up-issue filing) all read
+  // this exact marker back off the posted review body; dropping it would
+  // silently re-surface the same finding as "new" every round with no
+  // durable disposition — a semantics change the display-only regrouping
+  // above must not cause (#1942).
+  if (Array.isArray(nonLocatableFindings)) {
+    for (const finding of nonLocatableFindings) {
+      lines.push(buildNonLocatableFindingMarker(finding, { round }));
     }
   }
   // The gate-evidence note (e.g. the round-cap / round-exhaustion fallback note)
@@ -1879,10 +2083,15 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (isReviewGate && reviewSubmitMode !== undefined && !HEADLESS_ALLOWED_REVIEW_SUBMIT_MODES.has(reviewSubmitMode)) {
     if (options.auto) {
       throw new Error(
-        `--submit ${reviewSubmitMode} is not allowed with --auto (headless review runs may only leave a review pending or submit it as a comment); approve/request-changes are reachable only via the interactive submit choice.`,
+        `--submit ${reviewSubmitMode} is not allowed with --auto (headless review runs may only leave a review pending or submit it as a comment); approve/request-changes/discard are reachable only via the interactive submit choice.`,
       );
     }
     if (options.interactiveConfirm !== true) {
+      if (reviewSubmitMode === "discard") {
+        throw new Error(
+          `--submit discard requires --interactive-confirm (fail closed, #1912): discarding deletes the caller's own pending review, reachable only via the review skill's interactive submit choice. Headless/agent callers may use --submit pending or --submit comment.`,
+        );
+      }
       throw new Error(
         `--submit approve|request-changes requires --interactive-confirm (fail closed unless provably interactive, #1888): these are GitHub-native branch-protection signals, reachable only via the review skill's interactive submit choice. Headless/agent callers may use --submit pending or --submit comment.`,
       );
@@ -2149,7 +2358,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // matrix. ANY unchecked `- [ ]` in the PR body's Acceptance criteria or
   // Definition of done sections fails the round closed — a PR cannot reach
   // approval with an open acceptance criterion. This is the deterministic
-  // replacement for the soft pr-checklist-matrix reviewer judgment: it
+  // replacement for the soft pr-checklist reviewer judgment: it
   // enforces COMPLETENESS (nothing left unchecked/forgotten), NOT
   // truthfulness — a dishonestly-ticked `[x]` passes this mechanical check
   // and stays the reviewer/judge's responsibility. It composes with
@@ -2461,6 +2670,74 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const gateEvidence = isReviewGate ? { strict: null, marker: null } : selectGateEvidence(evidence, options.gate);
   const existing = isReviewGate ? null : summarizeExistingComment({ ...gateEvidence, headSha: canonicalHeadSha });
   const warning = isReviewGate ? null : detectStaleGateCommentWarning({ strict: gateEvidence.strict, headSha: canonicalHeadSha, gate: options.gate });
+  // FINDINGS-SOURCE FOOTGUN WARNING (#1912): a fanout_fanin round posted with
+  // --findings-json but no --findings-ledger silently files ZERO inline
+  // comments — the --findings-ledger (consolidate-fanin --ledger-out →
+  // write-gate-findings-log) is the ONLY inline-comment source. Name the
+  // missing source so the caller knows why no inline comments appeared.
+  // Advisory only: it never blocks the post and is surfaced on every path.
+  const findingsLedgerWarning = ((options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin" && options.findingsJson && !options.findingsLedger)
+    ? "WARNING: --findings-json without --findings-ledger files zero inline comments — the --findings-ledger (consolidate-fanin --ledger-out → write-gate-findings-log) is the only inline-comment source. Pass --findings-ledger to file inline findings."
+    : null;
+  // PENDING-REVIEW RESOLUTION (#1912): GitHub allows only ONE pending review
+  // per user per PR (PR-scoped, NOT head-scoped), so a --gate review --submit
+  // re-run must RESOLVE the caller's own pending review rather than POST a
+  // second one, which 422s regardless of the pending review's head. The
+  // pending review is author-only so the same-head marker scan
+  // (summarizeExistingComment, keyed on marker.visible) never sees it; detect
+  // it directly off the raw reviews list. Resolved BEFORE resolveFindingSurface
+  // so the submit/discard paths skip the round/inline-comment reads a create
+  // would need.
+  if (isReviewGate) {
+    const ownPending = await findOwnPendingReview({ repo: options.repo, pr: options.pr, headSha: canonicalHeadSha }, gh);
+    const baseResult = {
+      ok: true,
+      repo: options.repo,
+      pr: options.pr,
+      gate: options.gate,
+      headSha: canonicalHeadSha,
+      currentHeadSha: evidence?.currentHeadSha ?? canonicalHeadSha,
+      surface: "review",
+      submit: reviewSubmitMode,
+      executionMode: options.executionMode ?? DEFAULT_EXECUTION_MODE,
+      blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
+      ...(findingsLedgerWarning ? { findingsLedgerWarning } : {}),
+    };
+    if (reviewSubmitMode === "discard") {
+      // Discard deletes the caller's own pending review (any head); with none
+      // present it is a no-op (nothing to delete) and must NOT fall through to
+      // create one.
+      if (ownPending) {
+        await discardPendingReview({ repo: options.repo, pr: options.pr, reviewId: ownPending.id }, gh);
+      }
+      return { ...baseResult, action: ownPending ? "discarded" : "noop", commentId: ownPending ? ownPending.id : null };
+    }
+    if (ownPending && ownPending.sameHead) {
+      // Leave pending: keep the author-only same-head draft in place (noop).
+      if (reviewSubmitMode === "pending") {
+        return { ...baseResult, action: "noop", commentId: ownPending.id };
+      }
+      // comment | request-changes | approve: submit the existing same-head
+      // pending review via /events with the mapped event, preserving its inline
+      // comments.
+      const submitted = await submitPendingReview(
+        { repo: options.repo, pr: options.pr, reviewId: ownPending.id, event: resolveReviewSubmitEvent(reviewSubmitMode) },
+        gh,
+      );
+      return { ...baseResult, action: "submitted", commentId: submitted.reviewId, commentUrl: submitted.reviewUrl };
+    }
+    if (ownPending) {
+      // STALE pending on a DIFFERENT head (or a commit_id-less draft): it is not
+      // this round's surface, but GitHub's one-pending-per-PR-per-user limit
+      // means it would 422 the create below. Delete it, then fall through to
+      // create a fresh review (or fresh pending) at the current head. (#1912
+      // draft_gate correctness finding: head-scoped detection alone left this
+      // create path still 422-ing.)
+      await discardPendingReview({ repo: options.repo, pr: options.pr, reviewId: ownPending.id }, gh);
+    }
+    // No own pending review (or a stale one just cleared): fall through to the
+    // create path below (a fresh review is posted for the round).
+  }
   // The round's finding surface (this same review): resolved BEFORE the body is
   // rendered, since the body carries the round number, the body-filed findings,
   // and the reduced per-angle digest that depends on them.
@@ -2475,7 +2752,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     structuredFindings,
     gateEvidenceNote: coordination?.gateEvidenceNote ?? null,
     blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
-    ...(findingSurface ? { round: findingSurface.round, nonLocatableFindings: findingSurface.nonLocatable } : {}),
+    ...(findingSurface ? { round: findingSurface.round, nonLocatableFindings: findingSurface.nonLocatable, locatableFindings: findingSurface.locatable } : {}),
   });
   // ISSUE/PR-ID GUARD (#1731): the rendered gate verdict body must never emit a
   // raw issue/PR id (fail-closed unless explicitly allowlisted). Guarded here at
@@ -2580,6 +2857,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       ...findingSurfaceFields,
       ...(existingInlineReason ? { inlineReason: existingInlineReason } : {}),
       ...(warning ? { warning } : {}),
+      ...(findingsLedgerWarning ? { findingsLedgerWarning } : {}),
       ...(escalateGateFullLabel ? { gateFullLabelApplied: true } : {}),
     };
   }
@@ -2627,6 +2905,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       ...findingSurfaceFields,
       ...(options.inlineReason ? { inlineReason: options.inlineReason } : {}),
       ...(warning ? { warning } : {}),
+      ...(findingsLedgerWarning ? { findingsLedgerWarning } : {}),
       ...(updateVerificationWarning ? { verificationWarning: updateVerificationWarning } : {}),
       ...(escalateGateFullLabel ? { gateFullLabelApplied: true } : {}),
     };
@@ -2686,6 +2965,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     ...(isReviewGate ? { submit: reviewSubmitMode } : {}),
     ...(options.inlineReason ? { inlineReason: options.inlineReason } : {}),
     ...(warning ? { warning } : {}),
+    ...(findingsLedgerWarning ? { findingsLedgerWarning } : {}),
     ...(verificationWarning ? { verificationWarning } : {}),
     ...(escalateGateFullLabel ? { gateFullLabelApplied: true } : {}),
   };
@@ -2719,6 +2999,12 @@ async function main() {
     // Suppress it under --silent, which contracts to zero output (exit code only).
     if (inlineWarning && !options.silent) {
       process.stderr.write(`${inlineWarning}\n`);
+    }
+    // Surface the findings-source footgun warning (#1912) on stderr too, so a
+    // CLI caller sees why a --findings-json-only fanout round filed no inline
+    // comments. Same success-only, --silent-suppressed posture as above.
+    if (result?.findingsLedgerWarning && !options.silent) {
+      process.stderr.write(`${result.findingsLedgerWarning}\n`);
     }
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
   } catch (error) {

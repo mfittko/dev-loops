@@ -9,8 +9,8 @@ import {
   loadRefinementArtifact,
 } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 
-// AC/DoD body that detectIssueRefinementArtifact recognises as refined.
-// #1877: the refinement floor is the full AC/DoD/Non-goals matrix.
+// Matrix body that detectIssueRefinementArtifact recognises as refined.
+// #1951: the refinement floor is the authoritative AC→DoD mapping matrix.
 const REFINED_BODY = [
   "## Acceptance criteria",
   "- [ ] first",
@@ -19,6 +19,11 @@ const REFINED_BODY = [
   "",
   "## Definition of done",
   "- [ ] tests pass",
+  "",
+  "## AC / DoD matrix",
+  "| Criterion outcome | Required completion evidence |",
+  "|---|---|",
+  "| the feature works end to end | a focused test proves the feature works |",
   "",
   "## Non-goals",
   "- none",
@@ -158,7 +163,7 @@ test("loadRefinementArtifact: single-issue draft PR unchanged — present when r
   assert.equal(result.linkedIssue, 42);
   assert.deepEqual(result.linkedIssues, [42]);
   // Single-issue reason is the raw artifact reason (no umbrella framing).
-  assert.match(result.reason, /Acceptance criteria checklist item/);
+  assert.match(result.reason, /AC→DoD mapping matrix/);
 });
 
 test("loadRefinementArtifact: single-issue draft PR unchanged — missing when unrefined", async () => {

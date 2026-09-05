@@ -83,6 +83,9 @@ test("rejects an agent-authored commit missing the attribution trailers", async 
     assert.equal(result.blocked, true);
     assert.match(result.stderr, /missing required trailer: Co-Authored-By/);
     assert.match(result.stderr, /missing required trailer: Claude-Session/);
+    // The rejection must echo a CONCRETE expected-format example so the author
+    // never has to grep the docs to learn the trailer's shape (issue #1959).
+    assert.match(result.stderr, /Claude-Session: https:\/\/claude\.ai\/code\/session_/);
     assert.equal(git(dir, ["rev-list", "--count", "HEAD"]).trim(), "1", "the refusal must be the only effect");
   } finally {
     await rm(dir, { recursive: true, force: true });

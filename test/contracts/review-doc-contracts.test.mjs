@@ -386,9 +386,10 @@ test("CI runs verify as a parallel suite matrix gated by a fail-closed aggregati
       `verify-suite matrix must include ${suite}`,
     );
   }
-  for (const shard of ["1/4", "2/4", "3/4", "4/4"]) {
-    assert.match(verifySuiteSection, new RegExp(`shard: ${shard.replace("/", "\\/")}`));
-  }
+  const scriptShards = [
+    ...verifySuiteSection.matchAll(/-\s+suite:\s*test:scripts\s*\n\s*shard:\s*(\d+\/\d+)/g),
+  ].map(([, shard]) => shard);
+  assert.deepEqual(scriptShards, ["1/4", "2/4", "3/4", "4/4"]);
   assert.match(verifySuiteSection, /bun run \$\{\{\s*matrix\.suite\s*\}\} --parallel=2 --shard=\$\{\{\s*matrix\.shard\s*\}\}/);
 
   // Fail-closed aggregation: the gate must run on `if: always()` (else a failed

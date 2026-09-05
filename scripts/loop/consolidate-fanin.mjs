@@ -43,15 +43,18 @@
  * measured by actually RENDERING a candidate shape through
  * upsert-checkpoint-verdict.mjs's own normalizeStructuredFindings/
  * renderStructuredFindings and catching the length-exceeded throw — never an
- * approximated size. A round too large to render even at minimum summary
- * length degrades "findingsJson"/--out through four tiers (real -> verbose
- * marker -> bare marker -> withheld) when --ledger-out was given, or FAILS
- * CLOSED (exit 1) otherwise — the normative tier-by-tier algorithm is owned by
- * the Gate Review Sub-Loop Contract's Phase 3 "Consolidation: fan-in synthesis
- * and disposition ledger" section (skills/docs/gate-review-sub-loop-contract.md),
+ * approximated size. A round too large to render is hard-truncated (every
+ * finding's own summary shrunk evenly, down to a 16-char floor — never
+ * replaced with a synthetic omitted-count/ledger-pointer marker, #1942) when
+ * --ledger-out was given; a round still too large even at that floor is
+ * WITHHELD ("findingsJson"/--out empty/removed), or FAILS CLOSED (exit 1)
+ * without --ledger-out — the normative algorithm is owned by the Gate Review
+ * Sub-Loop Contract's Phase 3 "Consolidation: fan-in synthesis and
+ * disposition ledger" section (skills/docs/gate-review-sub-loop-contract.md),
  * not restated here; see the --out flag below for the CLI-facing summary.
  */
-import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { requireTokenValue } from "../_cli-primitives.mjs";
@@ -59,16 +62,17 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "../github/_carried-angles.mjs";
+import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { isPostedCommentLimitError, normalizeStructuredFindings, renderStructuredFindings } from "../github/upsert-checkpoint-verdict.mjs";
 import { verifyBriefingPrefixesForHead } from "../github/verify-briefing-prefixes.mjs";
 import { verifyDispatchPromptLayoutForHead } from "../github/verify-dispatch-prompt-layout.mjs";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkResolvedAngleEvidence, consolidateFanin, normalizeSeverity, severityRank, tallySeverities, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
+import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkResolvedAngleEvidence, consolidateFanin, normalizeSeverity, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 import { enforceCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
 import { enforcePrimerEvidence } from "@dev-loops/core/loop/primer-evidence";
 
-const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate|review>] [--out <path>] [--ledger-out <path>] [--pr-checklist-matrix clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>] [--expected-dispatch-units <n>] [--tmp-root <path>]
+const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate|review>] [--out <path>] [--ledger-out <path>] [--pr-checklist clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>] [--expected-dispatch-units <n>] [--tmp-root <path>]
 Consolidate the per-angle *.json findings artifacts a gate-review fan-out wrote into
 --findings-dir into the JSON shapes write-gate-findings-log.mjs, post-gate-findings.mjs
 (--findings / --findings-file), and upsert-checkpoint-verdict.mjs (--findings-json) accept.
@@ -99,16 +103,17 @@ Optional:
                                  rather than silently falling back to the shipped default severities.
   --out <path>                  Write the nested per-angle "findingsJson" shape (below) to this
                                  path as JSON — the exact input upsert-checkpoint-verdict.mjs's
-                                 --findings-json accepts. Once the whole round is still over the
-                                 gate-comment render budget AT MINIMUM SUMMARY LENGTH (a round that
-                                 fits once its summaries are shrunk never degrades), this file
-                                 degrades through the four tiers documented in the Gate Review
-                                 Sub-Loop Contract's Phase 3 (skills/docs/gate-review-sub-loop-contract.md)
-                                 — REMOVED (deleted, not skipped) in the rare tier-4/withheld case.
-                                 --ledger-out is unaffected either way. A round still over the render
-                                 budget at minimum summary length FAILS CLOSED (exit 1) when
-                                 --ledger-out was not also given — a degraded round otherwise has no
-                                 durable record of its findings anywhere.
+                                 --findings-json accepts. A round over the gate-comment render
+                                 budget has every finding's summary hard-truncated evenly (down to
+                                 a 16-char floor) until it fits — never replaced with a synthetic
+                                 omitted-count/ledger-pointer marker (#1942). A round still over
+                                 budget even at that floor is WITHHELD (documented in the Gate
+                                 Review Sub-Loop Contract's Phase 3,
+                                 skills/docs/gate-review-sub-loop-contract.md): this file is
+                                 REMOVED (deleted, not skipped) rather than written.
+                                 --ledger-out is unaffected either way. A withheld round FAILS
+                                 CLOSED (exit 1) when --ledger-out was not also given — a degraded
+                                 round otherwise has no durable record of its findings anywhere.
   --ledger-out <path>            Write the { overallVerdict, findings } wrapper to this path as
                                  JSON — overallVerdict is this CLI's computed verdict (the same
                                  value reported on stdout), findings is the flat per-finding shape
@@ -122,15 +127,15 @@ Optional:
                                  it resolves to the same path as --out — one write would otherwise
                                  destroy the other. Neither --out nor --ledger-out may resolve to a
                                  DIRECT TOP-LEVEL sibling of --findings-dir's own artifacts (also
-                                 rejected at parse time, exit 1) — the withheld tier deletes --out
+                                 rejected at parse time, exit 1) — a withheld round deletes --out
                                  outright (so an --out aliased to a reviewer artifact would delete it),
                                  and a .json write there would be picked up as a per-angle findings
                                  artifact by the NEXT consolidation of that same directory. A path in a
                                  SUBdirectory of --findings-dir (e.g. <findings-dir>/out/findings.json)
                                  is unaffected — artifact discovery is top-level-only, so it can never
                                  be re-read as an artifact.
-  --pr-checklist-matrix clean    When no pr-checklist-matrix angle artifact was found, upsert
-                                 { angle: "pr-checklist-matrix", verdict: "clean", findings: [] }
+  --pr-checklist clean    When no pr-checklist angle artifact was found, upsert
+                                 { angle: "pr-checklist", verdict: "clean", findings: [] }
   --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean
                                  head (the "angle" field of each entry in resolve-angle-carry-forward.mjs's
                                  plan.carried) rather than freshly reviewed this round — Phase 2 dispatches
@@ -143,7 +148,7 @@ Optional:
                                  artifact for that angle, if present — matched by base name and
                                  case-insensitively, same rule resolve-angle-carry-forward.mjs uses — always
                                  wins; this never overrides one). Same upsert semantics as
-                                 --pr-checklist-matrix, generalized, plus the two guards below. FAILS CLOSED
+                                 --pr-checklist, generalized, plus the two guards below. FAILS CLOSED
                                  (exit 1) on any named angle whose angleReviewSurface(...).kind !== "kinds"
                                  (@dev-loops/core/loop/gate-carry-forward) — the SAME predicate
                                  resolve-angle-carry-forward.mjs's own producer uses for plan.carried
@@ -248,8 +253,8 @@ Output (stdout, JSON):
     "out"?: "<path>", "ledgerOut"?: "<path>" }
   "out"/"ledgerOut" echo the --out/--ledger-out path back onto the result ONLY when this call actually
   wrote a file there — "ledgerOut" whenever --ledger-out was given (that write always completes in
-  full before any later throw in this function), "out" whenever --out was given AND the round did not
-  withhold it (tier 4; see "commentBudgetExceeded" above) — so ONE invocation with --jq, --out, and
+  full before any later throw in this function), "out" whenever --out was given AND the round was
+  not withheld (see "commentBudgetExceeded" above) — so ONE invocation with --jq, --out, and
   --ledger-out together (e.g. --jq '.severityCounts') both writes every consumer artifact and reports
   verdict/severityCounts/where-they-landed on stdout, with no second invocation ever needed to
   re-extract a different shape or rediscover a path the caller itself just passed in.
@@ -275,15 +280,16 @@ Output (stdout, JSON):
   (--out) alone is bounded against upsert-checkpoint-verdict.mjs's OWN rendered-block limit — fit is
   measured by actually rendering a candidate through that CLI's normalizeStructuredFindings/
   renderStructuredFindings and catching the throw, not an approximated size. A round over that
-  bound degrades through the four tiers (real -> verbose marker -> bare marker -> withheld)
-  documented in the Gate Review Sub-Loop Contract's Phase 3
-  (skills/docs/gate-review-sub-loop-contract.md); "commentBudgetExceeded": true marks every
-  degraded round (tiers 1-4 alike; --out's existence is what distinguishes tier 4). "findings"/
-  --ledger-out is always unaffected. NOTE: upsert-checkpoint-verdict.mjs's posted "Findings
-  summary:" digest is derived from "findingsJson" (undercounting marker-collapsed findings) UNLESS
+  bound is hard-truncated (every finding's own summary shrunk evenly to a 16-char floor — never
+  replaced with a synthetic omitted-count/ledger-pointer marker, #1942) and, if still over budget
+  even at that floor, WITHHELD — documented in the Gate Review Sub-Loop Contract's Phase 3
+  (skills/docs/gate-review-sub-loop-contract.md). "commentBudgetExceeded": true means withheld: a
+  round that fits after hard truncation carries no flag at all, only shorter finding text, so the
+  flag and --out's existence now agree exactly. "findings"/--ledger-out is always unaffected. NOTE: upsert-checkpoint-verdict.mjs's
+  posted "Findings summary:" digest is derived from "findingsJson" (0 on a withheld round) UNLESS
   the caller also passes --findings-severity-counts with this CLI's own "severityCounts" (always
-  the true, unbudgeted totals) — "findings"/--ledger-out and the marker text's own breakdown
-  always carry the true numbers regardless.
+  the true, unbudgeted totals) — "findings"/--ledger-out always carries the true numbers
+  regardless.
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Success
@@ -328,7 +334,7 @@ const MAX_FINDING_TEXT_LENGTH = 2000;
 // recommendation, "file" was previously copied through unbounded (gate-fanin's
 // consolidateFanin only .trim()s it), so an oversized value could not be
 // compressed by fitFindingsToRenderBudget (which only shrinks summary) and
-// would force a real, short finding into the marker/withheld tiers instead.
+// would force a real, short finding into the withheld tier instead.
 const MAX_FINDING_FILE_LENGTH = 300;
 function truncateFindingText(value, limit = MAX_FINDING_TEXT_LENGTH) {
   if (typeof value !== "string" || value.length <= limit) return value;
@@ -364,18 +370,30 @@ export function fitsRenderBudget(findingsJson) {
   }
 }
 
+// Hard floor for fitFindingsToRenderBudget's per-finding truncation below —
+// well under the prior 40-char floor (#1942): budget degradation must SHORTEN
+// real finding text as far as it reasonably can before this module ever
+// considers a round unrenderable, since there is no marker tier left to fall
+// back to (see buildBudgetMarkedFindingsJson below). truncateFindingText
+// still appends " …", so a 16-char cap still leaves a few real words legible.
+const MIN_FINDING_SUMMARY_CAP = 16;
+
 // Shrink the longest summaries evenly until the candidate actually renders —
 // deterministic. Returns whether the (mutated in place) findingsJson now fits;
 // the caller decides what to do when the floor is reached and it still does
-// not (see buildAngleMarker below). A round too large to render never blocks
-// the durable ledger write, but that guarantee comes from the ledger being
-// written BEFORE this function runs (see the write ordering below), not from
-// this function itself: it still propagates any non-length-bound error that
-// fitsRenderBudget rethrows (a real shape/producer defect).
+// not (see buildBudgetMarkedFindingsJson below). A round too large to render
+// never blocks the durable ledger write, but that guarantee comes from the
+// ledger being written BEFORE this function runs (see the write ordering
+// below), not from this function itself: it still propagates any
+// non-length-bound error that fitsRenderBudget rethrows (a real shape/
+// producer defect).
 function fitFindingsToRenderBudget(findingsJson) {
   let cap = MAX_FINDING_TEXT_LENGTH;
-  while (!fitsRenderBudget(findingsJson) && cap > 40) {
-    cap = Math.floor(cap / 2);
+  while (!fitsRenderBudget(findingsJson) && cap > MIN_FINDING_SUMMARY_CAP) {
+    // Clamp to the floor so halving (…31→15) can never overshoot below
+    // MIN_FINDING_SUMMARY_CAP; the documented floor is the actual minimum
+    // truncation length, not one below it.
+    cap = Math.max(MIN_FINDING_SUMMARY_CAP, Math.floor(cap / 2));
     for (const a of findingsJson) {
       for (const f of a.findings) {
         f.summary = truncateFindingText(f.summary, cap);
@@ -385,161 +403,23 @@ function fitFindingsToRenderBudget(findingsJson) {
   return fitsRenderBudget(findingsJson);
 }
 
-// Floor reached and still over budget: the fan-in has too many findings to
-// render in one gate comment no matter how short each summary gets. Collapse
-// ONE angle's findings to a single synthetic marker finding rather than
-// failing closed — the durable ledger (--ledger-out) already carries every
-// finding in full; only the rendered comment is space-constrained. The angle
-// name and its real verdict are PRESERVED (never collapsed into a foreign
-// section) — upsert-checkpoint-verdict.mjs's fanout_fanin mode validates the
-// posted angle set against the gate's configured mandatory angles/pool, so a
-// synthetic angle name or a missing real one would make the verdict itself
-// unpostable, which is the exact failure this exists to avoid. `verbose`
-// states the omitted count and severity breakdown; the caller (below) picks
-// `false` for a bare "N omitted — in ledger" line, decided PER ANGLE so a
-// round with a mix of wide and narrow angles keeps the breakdown wherever it
-// actually fits rather than dropping it everywhere the instant any single
-// angle can't afford it. Never partially truncates the marker text itself —
-// always the whole verbose sentence or the whole bare one, so a marker is
-// always lossless or bare, never a mangled hybrid.
-function buildAngleMarker(a, verbose) {
-  if (a.findings.length === 0) return a; // clean angle: nothing omitted
-  // tallySeverities normalizes defensively, same as angleWorstSeverityRank's
-  // sibling normalization below: findingsJson is always consolidateFanin's
-  // own OUTPUT (already normalized) through every call site today, but this
-  // function must not silently drop a differently-spelled severity from the
-  // breakdown/representative selection (or, worse, leak a legacy spelling
-  // into the posted marker text) if that upstream guarantee ever lapses.
-  const bySeverity = tallySeverities(a.findings);
-  // Represent the angle by its own highest-severity dropped finding — same
-  // severity+disposition pairing consolidateFanin already derived, so the
-  // marker's "disposition" still matches every other findingsJson finding's
-  // severity-derived disposition (accepted-for-fix for a blocking severity,
-  // needs-answer for a LOCATABLE question, deferred otherwise).
-  const representative = SEVERITY_ORDER
-    .map((s) => a.findings.find((f) => normalizeSeverity(f.severity) === s))
-    .find(Boolean) ?? a.findings[0];
-  // Built from SEVERITY_ORDER (not hand-listed severity names) so a severity
-  // added there is automatically included in the breakdown instead of being
-  // silently omitted from the only in-comment record a marker-collapsed round
-  // carries.
-  const severityBreakdown = SEVERITY_ORDER.map((s) => `${s}: ${bySeverity[s]}`).join(", ");
-  const summary = verbose
-    ? `${a.findings.length} finding(s) omitted from this comment (${severityBreakdown}) — in the disposition ledger`
-    : `${a.findings.length} omitted — in ledger`;
-  return {
-    angle: a.angle,
-    verdict: a.verdict,
-    findings: [{ severity: normalizeSeverity(representative.severity), summary, disposition: representative.disposition }],
-  };
-}
-
-// Build the over-budget --out shape once fitFindingsToRenderBudget has given
-// up on the WHOLE round's real findings: seed every angle with findings at
-// whichever costs less in isolation, its bare marker or its own real findings
-// (see the seed loop below), so an early, single render check tells us
-// whether ANY per-angle shape can fit at all (tier 4 below). If that seed
-// fits, greedily upgrade the angles still seeded bare, one at a time in
-// blocking-severity order, trying that angle's REAL findings (the pre-shrink
-// original first, then the whole-round-shrunk form) before its verbose
-// marker — a marker is a compression and must never replace real content
-// with something bigger. An angle already seeded with its real findings is
-// never revisited: it already holds its ideal (real, unmarked) shape. Every
-// upgrade is kept only while the WHOLE round still renders. Returns
-// { commentFindingsJson, withheldOut }.
-// The angle's own worst (most urgent) severity among its real findings, as a
-// SEVERITY_ORDER index (0 = high, lower is more urgent); a clean angle (no
-// findings) ranks last. Used only to ORDER the greedy upgrade below by
-// decision value, never to change which findings a marker represents.
-function angleWorstSeverityRank(a) {
-  let best = SEVERITY_ORDER.length;
-  for (const f of a.findings) {
-    // severityRank (@dev-loops/core/loop/gate-fanin) is the one rank rule
-    // this and upsert-checkpoint-verdict.mjs's rendering both share — it
-    // normalizes first, so an un-normalized legacy-spelled severity (e.g.
-    // "must-fix") ranks by its canonical spelling instead of falling through
-    // to the unknown-severity rank (which would starve the angle of the
-    // scarce verbose-marker budget it should have won).
-    const rank = severityRank(f.severity);
-    if (rank < best) best = rank;
-  }
-  return best;
-}
-
-// Render-cost proxy for one angle's candidate shape, in isolation — used only
-// to pick the cheaper of two shapes for the SAME angle (bare marker vs its
-// own real findings), never to judge whole-round fit (that stays an actual
-// renderStructuredFindings call over the whole array). A candidate so large
-// that even alone it exceeds the comment-length bound sorts last (Infinity),
-// since it can never be the cheaper choice.
-function angleRenderCost(a) {
-  try {
-    return renderStructuredFindings(normalizeStructuredFindings([a])).length;
-  } catch (err) {
-    // Same length-vs-shape discrimination as fitsRenderBudget above: only a
-    // length-bound throw means "too expensive", never a shape/producer defect.
-    if (isPostedCommentLimitError(err)) return Infinity;
-    throw err;
-  }
-}
-
-function buildBudgetMarkedFindingsJson(findingsJson, originalFindingsJson) {
-  const bareMarkers = findingsJson.map((a) => buildAngleMarker(a, false));
-  // The bare marker is USUALLY the cheapest possible per-angle shape, but not
-  // always: a narrow angle carrying very few, very short real findings can
-  // render shorter than even the compressed "N omitted — in ledger" line.
-  // Seed each angle with whichever of the two costs less in isolation, so the
-  // tier-4 feasibility probe below tests the actual cheapest achievable shape
-  // instead of assuming bare-everywhere always is the smallest. An angle
-  // seeded with its own real findings here already holds its ideal (real,
-  // unmarked) form and is never later replaced with a marker — a marker is a
-  // compression and must never replace real content with something bigger.
-  const marked = findingsJson.map((a, i) => {
-    if (a.findings.length === 0) return a; // clean angle: nothing to compress
-    return angleRenderCost(a) <= angleRenderCost(bareMarkers[i]) ? a : bareMarkers[i];
-  });
-  if (!fitsRenderBudget(marked)) {
-    // Structural floor: this many real angles (far beyond the default
-    // fan-out cap) means even the cheapest per-angle shape available cannot
-    // fit — no per-angle shape can, no matter how short the text gets.
+// Floor reached and still over budget: fitFindingsToRenderBudget has already
+// hard-truncated every finding's summary to MIN_FINDING_SUMMARY_CAP and the
+// whole round still cannot render. There is no marker tier to degrade to
+// (#1942: a synthetic "N omitted — in ledger"/"N finding(s) omitted from this
+// comment (...) — in the disposition ledger" pointer is invisible to a
+// GitHub reader — the local disposition ledger it names lives only on the
+// runner's disk — so it can never replace real finding text). The
+// hard-truncated `findingsJson` (real, just short) IS the over-budget shape.
+// ponytail: absolute structural floor — hundreds of angles exceed any single
+// comment even hard-truncated; withhold to the durable ledger (--ledger-out
+// is already complete by the time this runs). Upgrade path: paginate the
+// verdict across multiple comments if this ever fires in practice.
+function buildBudgetMarkedFindingsJson(findingsJson) {
+  if (!fitsRenderBudget(findingsJson)) {
     return { commentFindingsJson: [], withheldOut: true };
   }
-  // Upgrade angles to the verbose breakdown in order of blocking severity
-  // (high carriers first), not artifact-index/filename order — the
-  // scarce comment budget must land on the angles whose omitted findings
-  // carry the most decision weight, not on whichever angle happens to sort
-  // first alphabetically. Ties break by index, so the order stays
-  // deterministic. Angles already seeded with their real findings above hold
-  // their ideal shape already and are excluded — there is nothing "up" from
-  // real to upgrade to.
-  const upgradeOrder = findingsJson
-    .map((_, i) => i)
-    .filter((i) => findingsJson[i].findings.length > 0 && marked[i] === bareMarkers[i])
-    .sort((i, j) => angleWorstSeverityRank(findingsJson[i]) - angleWorstSeverityRank(findingsJson[j]) || i - j);
-  for (const i of upgradeOrder) {
-    const bare = marked[i];
-    // Try the angle's real findings first — the PRE-SHRINK original, not the
-    // already-summary-floor-shrunk findingsJson (fitFindingsToRenderBudget
-    // mutated that array in place trying to fit the whole round, so by the
-    // time we get here every summary is already crushed to the minimum
-    // length; offering that as "real" would let a marker-tier round replace
-    // a high-severity angle's readable finding with an unreadable 31-char stub
-    // even when ~1750 chars of budget are unused) — then the shrunk form,
-    // then the verbose marker, keeping the first candidate that still lets
-    // the WHOLE round render; fall back to bare when none fit.
-    let upgraded = false;
-    for (const candidate of [originalFindingsJson[i], findingsJson[i], buildAngleMarker(findingsJson[i], true)]) {
-      marked[i] = candidate;
-      if (fitsRenderBudget(marked)) {
-        upgraded = true;
-        break;
-      }
-    }
-    if (!upgraded) {
-      marked[i] = bare; // neither this angle's real findings nor its verbose breakdown fit — keep it bare
-    }
-  }
-  return { commentFindingsJson: marked, withheldOut: false };
+  return { commentFindingsJson: findingsJson, withheldOut: false };
 }
 
 // Bound to write-gate-findings-log.mjs's OWN carriedFromHead validation
@@ -616,7 +496,7 @@ export function parseConsolidateFaninCliArgs(argv) {
     gate: undefined,
     out: undefined,
     ledgerOut: undefined,
-    prChecklistMatrix: undefined,
+    prChecklist: undefined,
     carriedAngles: undefined,
     carryForwardPlan: undefined,
     resolvedAngles: undefined,
@@ -636,7 +516,7 @@ export function parseConsolidateFaninCliArgs(argv) {
       gate: { type: "string" },
       out: { type: "string" },
       "ledger-out": { type: "string" },
-      "pr-checklist-matrix": { type: "string" },
+      "pr-checklist": { type: "string" },
       "carried-angles": { type: "string" },
       "carry-forward-plan": { type: "string" },
       "resolved-angles": { type: "string" },
@@ -698,8 +578,8 @@ export function parseConsolidateFaninCliArgs(argv) {
       options.ledgerOut = ledgerOut;
       continue;
     }
-    if (token.name === "pr-checklist-matrix") {
-      options.prChecklistMatrix = requireTokenValue(token, parseError);
+    if (token.name === "pr-checklist") {
+      options.prChecklist = requireTokenValue(token, parseError);
       continue;
     }
     if (token.name === "carried-angles") {
@@ -972,16 +852,71 @@ function validateArtifactShape(raw, sourceLabel) {
   }
 }
 
-// Resolve the --pr-checklist-matrix upsert value: only the literal "clean"
+// Resolve the --pr-checklist upsert value: only the literal "clean"
 // keyword is accepted (the mandatory-angle convenience). AC1 only requires
 // upserting the mandatory clean entry when nothing covers it; no documented
 // caller ever passes a custom artifact, so that speculative surface is not
 // offered.
-function resolvePrChecklistMatrixUpsert(rawValue) {
+function resolvePrChecklistUpsert(rawValue) {
   if (rawValue.trim().toLowerCase() !== "clean") {
-    throw new Error('--pr-checklist-matrix accepts only "clean"');
+    throw new Error('--pr-checklist accepts only "clean"');
   }
   return { angle: FANIN_SYNTHETIC_ANGLES[0], verdict: "clean", findings: [] };
+}
+
+/**
+ * AC2 (#1978) — clear diagnostic for a misplaced findings artifact. A fan-out
+ * reviewer whose write command started in the PRIMARY checkout (cwd is not
+ * trustworthy across a reviewer's commands) writes its per-angle artifact to
+ * the primary checkout's tmp/ instead of this worktree's, so fan-in finds no
+ * evidence in --findings-dir and fails with a confusing "missing evidence"
+ * error. When that happens, resolve the primary checkout (git-common-dir's
+ * parent) and check whether the SAME relative findings path holds stray *.json
+ * artifacts there; if so, return a diagnostic suffix naming the misplacement so
+ * the failure is actionable up front rather than opaque.
+ *
+ * Returns "" (append nothing) when: repoRoot is not a linked worktree (the
+ * primary checkout IS repoRoot — a single-checkout run, AC3 unaffected),
+ * --findings-dir is not inside the worktree, git is unavailable, or no stray
+ * artifacts exist in the primary checkout. Best-effort: never throws, only
+ * enriches an error that is already being raised.
+ *
+ * @param {string} findingsDir — the round's --findings-dir (worktree-relative or absolute)
+ * @param {string} repoRoot — the worktree root (options.repoRoot ?? process.cwd())
+ * @returns {Promise<string>} a diagnostic suffix, or ""
+ */
+export async function detectMisplacedFindingsDiagnostic(findingsDir, repoRoot) {
+  const resolvedRepoRoot = path.resolve(repoRoot);
+  let primaryRoot;
+  try {
+    let gitDir;
+    try {
+      gitDir = execFileSync("git", ["-C", resolvedRepoRoot, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).trim();
+    } catch {
+      gitDir = path.resolve(resolvedRepoRoot, execFileSync("git", ["-C", resolvedRepoRoot, "rev-parse", "--git-common-dir"], { encoding: "utf8" }).trim());
+    }
+    primaryRoot = path.dirname(gitDir);
+  } catch {
+    return "";
+  }
+  // Single-checkout run: the primary checkout IS this checkout — nothing was
+  // "misplaced" elsewhere. AC3: existing single-checkout runs are unaffected.
+  // Compare via realpath so a symlinked tmp root (macOS /var -> /private/var)
+  // does not read the same directory as two different paths.
+  const realOr = async (p) => { try { return await realpath(p); } catch { return path.resolve(p); } };
+  if (await realOr(primaryRoot) === await realOr(resolvedRepoRoot)) return "";
+  const rel = path.relative(resolvedRepoRoot, path.resolve(resolvedRepoRoot, findingsDir));
+  // --findings-dir outside the worktree — can't map it into the primary checkout.
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return "";
+  const primaryFindingsDir = path.join(primaryRoot, rel);
+  let stray;
+  try {
+    stray = (await readdir(primaryFindingsDir)).filter((n) => n.endsWith(".json"));
+  } catch {
+    return "";
+  }
+  if (stray.length === 0) return "";
+  return ` — MISPLACED FINDINGS: ${stray.length} findings artifact(s) were found in the PRIMARY checkout at ${primaryFindingsDir} (${stray.sort().join(", ")}), not in this worktree's --findings-dir. A reviewer wrote findings to the primary checkout's tmp/ instead of this worktree's (${path.resolve(resolvedRepoRoot, findingsDir)}). Reviewer briefings pin the worktree-absolute findings dir; re-dispatch the reviewer(s) or move these artifacts into the worktree --findings-dir.`;
 }
 
 export async function consolidateGateFanin(options) {
@@ -1043,7 +978,8 @@ export async function consolidateGateFanin(options) {
   // guard still catches the real mistake (an empty dir with no carry plan at
   // all) without blocking the feature's own maximum-saving case.
   if (files.length === 0 && (options.carriedAngles?.length ?? 0) === 0) {
-    throw new Error(`--findings-dir "${dir}" contains no *.json findings artifacts`);
+    const misplaced = await detectMisplacedFindingsDiagnostic(dir, options.repoRoot ?? process.cwd());
+    throw new Error(`--findings-dir "${dir}" contains no *.json findings artifacts${misplaced}`);
   }
 
   // Head-stamp exemption membership: EXACT declared carried names, normalized
@@ -1269,12 +1205,12 @@ export async function consolidateGateFanin(options) {
     }
   }
 
-  if (options.prChecklistMatrix !== undefined) {
-    const hasPrChecklistMatrix = rawArtifacts.some(
+  if (options.prChecklist !== undefined) {
+    const hasPrChecklist = rawArtifacts.some(
       (a) => typeof a.angle === "string" && a.angle.trim() === FANIN_SYNTHETIC_ANGLES[0],
     );
-    if (!hasPrChecklistMatrix) {
-      rawArtifacts.push(resolvePrChecklistMatrixUpsert(options.prChecklistMatrix));
+    if (!hasPrChecklist) {
+      rawArtifacts.push(resolvePrChecklistUpsert(options.prChecklist));
     }
   }
 
@@ -1327,7 +1263,7 @@ export async function consolidateGateFanin(options) {
   }
 
   // A carried angle (Phase 1.2's plan.carried) got no Phase 2 artifact — upsert
-  // its clean entry the same way --pr-checklist-matrix does, so it is not
+  // its clean entry the same way --pr-checklist does, so it is not
   // invisible to findingsJson/checkFanoutAngleCoverage/the posted verdict
   // comment. A REAL artifact for that angle always wins (e.g. Phase 1 resolved
   // it fresh for the first time this head even though a stale plan still named
@@ -1420,11 +1356,22 @@ export async function consolidateGateFanin(options) {
   }));
 
   const consolidated = consolidateFanin({ angleResults: rawArtifacts, blockCleanOnFindingSeverities });
-  // Bound each finding's free-text fields before they reach either output
-  // shape — see MAX_FINDING_TEXT_LENGTH above.
+  // Neutralize + bound each finding's free-text fields before they reach EITHER
+  // output shape (#1922). This is the ONE canonical pipeline seam: both the flat
+  // ledger (toFindingsLogShape below) and the nested findingsJson (--out) source
+  // their finding text from `consolidated.findings`, so a bare `#<digits>` a
+  // reviewer put in its summary/recommendation is neutralized to a guard-safe
+  // form (`#123` -> `123`) here, once, on RAW text before any render/sanitize —
+  // rather than at every downstream render call site. Without it,
+  // upsert-checkpoint-verdict.mjs's comment-id guard fail-closes on the reviewer's
+  // own incidental issue reference and refuses to post the verdict. Deliberate
+  // cross-references are unaffected: they live on the verdict body's structured
+  // fields and round-trip through the guard's `allowedRefs` at post time, not
+  // through reviewer finding prose. Neutralize BEFORE truncate so a `#` at a
+  // truncation boundary can never survive. See MAX_FINDING_TEXT_LENGTH above.
   for (const f of consolidated.findings) {
-    f.summary = truncateFindingText(f.summary);
-    if (f.recommendation) f.recommendation = truncateFindingText(f.recommendation);
+    f.summary = truncateFindingText(neutralizeBareIssuePrIds(f.summary));
+    if (f.recommendation) f.recommendation = truncateFindingText(neutralizeBareIssuePrIds(f.recommendation));
     if (f.file) f.file = truncateFindingText(f.file, MAX_FINDING_FILE_LENGTH);
   }
   // toFindingsLogShape's output ({ severity, angle, summary, disposition?, files? })
@@ -1489,8 +1436,9 @@ export async function consolidateGateFanin(options) {
       carriedAngles: options.carriedAngles ?? [],
     });
     if (missingAngles.length > 0) {
+      const misplaced = await detectMisplacedFindingsDiagnostic(options.findingsDir, options.repoRoot ?? process.cwd());
       throw new Error(
-        `GATE-EXEC-RESOLVED-ANGLE-EVIDENCE: fan-in computed a "clean" verdict but --resolved-angles names angle(s) with no evidence at all: ${missingAngles.join(", ")} — each expected either a per-angle findings artifact in --findings-dir or a proven carried-forward entry in --carried-angles/--carry-forward-plan; neither was found`,
+        `GATE-EXEC-RESOLVED-ANGLE-EVIDENCE: fan-in computed a "clean" verdict but --resolved-angles names angle(s) with no evidence at all: ${missingAngles.join(", ")} — each expected either a per-angle findings artifact in --findings-dir or a proven carried-forward entry in --carried-angles/--carry-forward-plan; neither was found${misplaced}`,
       );
     }
   }
@@ -1544,19 +1492,12 @@ export async function consolidateGateFanin(options) {
     };
   });
 
-  // Snapshot BEFORE fitFindingsToRenderBudget mutates findingsJson in place
-  // (it shrinks every summary evenly, in-place, chasing the whole-round
-  // budget) — buildBudgetMarkedFindingsJson needs the pristine, un-shrunk
-  // findings as its tier-1 "real" candidate; the post-shrink array alone
-  // would only ever offer an already-floor-shrunk stub.
-  const originalFindingsJson = structuredClone(findingsJson);
   const wholeRoundFits = fitFindingsToRenderBudget(findingsJson);
   let commentFindingsJson = findingsJson;
   let withheldOut = false;
   if (!wholeRoundFits) {
-    // A degraded round's only durable record is --ledger-out (the marker text
-    // in "findingsJson"/--out names the machine-local findings ledger, and
-    // tier 4 writes no --out file at all). Without --ledger-out nothing
+    // A degraded round's only durable record is --ledger-out (a withheld
+    // round writes no --out file at all). Without --ledger-out nothing
     // durable lands on disk — the full findings exist only on this process's
     // stdout, which the sanctioned ledger/post path cannot consume — exactly
     // the "success envelope over zero durable evidence" this CLI's own guards
@@ -1568,7 +1509,7 @@ export async function consolidateGateFanin(options) {
         `fan-in round (${findingsJson.length} angles) is over the gate-comment render budget and would degrade "findingsJson"/--out, but --ledger-out was not given — re-run with --ledger-out <path> so the round's findings are not lost`,
       );
     }
-    ({ commentFindingsJson, withheldOut } = buildBudgetMarkedFindingsJson(findingsJson, originalFindingsJson));
+    ({ commentFindingsJson, withheldOut } = buildBudgetMarkedFindingsJson(findingsJson));
   }
 
   const result = {
@@ -1621,8 +1562,8 @@ export async function consolidateGateFanin(options) {
     } else {
       await mkdir(path.dirname(options.out), { recursive: true });
       await writeFile(options.out, `${JSON.stringify(commentFindingsJson, null, 2)}\n`, "utf8");
-      // Echoed only when a file actually landed at this path — the tier-4
-      // withheld case above deletes rather than writes it, and a result
+      // Echoed only when a file actually landed at this path — the withheld
+      // case above deletes rather than writes it, and a result
       // claiming "out" then would send a caller to read a file that does
       // not exist (or is stale from an earlier round).
       result.out = options.out;

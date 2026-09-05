@@ -40,7 +40,7 @@ import { baseAngleName, reviewerBudgetPreflight, scheduleFanoutWaves } from "@de
 import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities } from "@dev-loops/core/loop/review-dispatch-plan";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { REFINEMENT_SOURCE, detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
+import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { CHECKPOINT_SENTINEL_PREFIX } from "./verify-fresh-review-context.mjs";
 
 import { parseNonNegativeInteger, parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
@@ -1314,8 +1314,13 @@ export function renderBriefingPrefix({
     `Mandatory: before doing any angle-specific work, run \`node scripts/github/verify-fresh-review-context.mjs --scope ${gateScopePrefix(gate)}<your-dispatch-unit> --context-path ${contextPath} --prefix-file ${briefingPrefixPath}\` once — <your-dispatch-unit> is your angle name for a per-angle dispatch, or \`group-<name>\` for a grouped dispatch (run once for the whole group, never once per angle in it). Refuse to proceed on contamination or a missing artifact.`,
   );
   lines.push("");
+  const findingsDir = path.join(worktreeRoot, buildGateReviewsDir({ repo, pr, gate, headSha }));
   lines.push(
     `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as ONE compound command that enters this worktree first (\`cd "${worktreeRoot}" && node scripts/github/verify-fresh-review-context.mjs ...\`) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${worktreeRoot}" ...\` and every file read via an absolute path under ${worktreeRoot}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
+  );
+  lines.push("");
+  lines.push(
+    `Findings write-path invariant: WRITE every findings artifact under THIS worktree's tmp/, never the primary checkout's. Write each per-angle findings artifact to the ABSOLUTE path \`${findingsDir}/<angle>.json\` (\`<angle>\` = your angle name), and pass \`--tmp-root "${worktreeRoot}/tmp"\` to any findings-writer CLI (e.g. \`write-gate-findings-log.mjs\`). Cwd-relative \`tmp/...\` resolves against whatever checkout the command started in — a findings artifact written to the primary checkout's tmp/ is invisible to fan-in and fails the gate as missing evidence.`,
   );
   lines.push("");
   lines.push(renderSourceReadInvariantSection(worktreeRoot));
@@ -2558,15 +2563,18 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  * seeded with this verbatim instead of re-deriving the diff + adjacent code.
  */
 // #1866 review-gate coverage guard: hasAcChecklist must reflect "an AC
-// checklist exists" (artifact source = issue-body AC), independent of the
-// Non-goals floor the predicate also enforces, so a PR body with a real AC
-// checklist but no Non-goals still keeps the acceptance-criteria angle.
+// checklist exists", independent of the Non-goals floor the predicate also
+// enforces, so a PR body with a real AC checklist but no Non-goals still keeps
+// the acceptance-criteria angle. #1951: this runs on the PR body, which carries
+// list-form AC/DoD checklists (never a matrix), so read `acItems` directly
+// rather than the artifact source — the matrix floor is an issue-side concern.
 function detectRefinementHasAcChecklist(prBody) {
   const artifact = detectIssueRefinementArtifact({ body: prBody });
-  // Exact semantics: an AC checklist exists only when the artifact source IS
-  // the issue-body AC checklist. A missing_explicit_non_goals finding on a
-  // DoD-only or linked-doc-only body does NOT imply an AC checklist.
-  return artifact.source === REFINEMENT_SOURCE.ISSUE_BODY_AC;
+  // An AC checklist exists when the body carries acceptance-criteria checklist
+  // items (`acItems`). A missing_explicit_non_goals finding does NOT clear
+  // acItems, so a PR body with a real AC checklist but no Non-goals still
+  // reports true.
+  return artifact.acItems.length > 0;
 }
 
 export async function buildGateContext(input, { repoRoot = process.cwd() } = {}) {
@@ -2874,7 +2882,17 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
         );
       }
       const body = typeof issue.body === "string" ? issue.body : "";
-      if (detectIssueRefinementArtifact({ body, issueNumber: number }).hasACs) anyRefined = true;
+      // "gives a reviewer real criteria to read" — true when the linked issue is
+      // refined (`hasACs`: a valid AC→DoD matrix + Non-goals, or a resolvable
+      // linked refinement doc + Non-goals) OR simply carries AC content
+      // (`acItems`, e.g. a pre-#1951 AC-checklist issue). #1951/Copilot review:
+      // include `hasACs` so a linked-doc-refined issue — which intentionally
+      // returns `acItems: []` (its criteria live in the doc) — is not
+      // misclassified as unrefined; keep `acItems` so a checklist-bearing issue
+      // still counts. This is "provides criteria", NOT the refinement floor the
+      // draft gate enforces separately.
+      const artifact = detectIssueRefinementArtifact({ body, issueNumber: number });
+      if (artifact.hasACs || artifact.acItems.length > 0) anyRefined = true;
       bodies.push({ label, body });
     }
     // A single linked issue renders exactly as before (no redundant `### #N`
@@ -2893,8 +2911,12 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
   } else {
     // Caller supplied the issue body text directly (without also supplying
     // --acceptance-criteria) — classify it as given rather than making a
-    // network call whose result would be discarded.
-    options.acceptanceCriteriaSource = detectIssueRefinementArtifact({ body: options.issueBody }).hasACs
+    // network call whose result would be discarded. #1951/Copilot review: use
+    // `hasACs || acItems.length` (same predicate as the multi-issue loop above)
+    // so a linked-doc-refined body — `hasACs` true, `acItems: []` — is not
+    // misclassified as linked-issue-unrefined.
+    const suppliedArtifact = detectIssueRefinementArtifact({ body: options.issueBody });
+    options.acceptanceCriteriaSource = suppliedArtifact.hasACs || suppliedArtifact.acItems.length > 0
       ? "linked-issue"
       : "linked-issue-unrefined";
   }

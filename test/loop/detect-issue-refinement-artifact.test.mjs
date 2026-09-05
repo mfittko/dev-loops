@@ -54,7 +54,7 @@ test("detectIssueRefinementArtifactFromOptions handles --input with ACs", async 
       JSON.stringify({
         repo: "owner/repo",
         issue: 532,
-        body: "## Acceptance criteria\n\n- [ ] First AC\n- [x] Second AC\n\n## Definition of done\n\n- [x] All checks pass\n\n## Non-goals\n\n- None.\n",
+        body: "## Acceptance criteria\n\n- [ ] First AC\n- [x] Second AC\n\n## AC / DoD matrix\n\n| Criterion outcome | Required completion evidence |\n|---|---|\n| the feature works end to end | a focused test proves the feature works |\n\n## Non-goals\n\n- None.\n",
       }),
       "utf8",
     );
@@ -63,7 +63,7 @@ test("detectIssueRefinementArtifactFromOptions handles --input with ACs", async 
     assert.equal(result.repo, "owner/repo");
     assert.equal(result.issue, 532);
     assert.equal(result.hasACs, true);
-    assert.equal(result.source, "issue-body-ac");
+    assert.equal(result.source, "issue-body-matrix");
     assert.deepEqual(result.acItems, ["First AC", "Second AC"]);
     assert.equal(result.finding, null);
   } finally {

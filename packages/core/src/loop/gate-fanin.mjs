@@ -287,8 +287,8 @@ export function severityRank(severity) {
 /**
  * A zero-initialized severity→count map, one key per SEVERITY_ORDER entry, in
  * SEVERITY_ORDER's order. The shared starting point every severity tally in
- * this codebase (consolidateFanin's own `bySeverity`, consolidate-fanin.mjs's
- * `buildAngleMarker`, reconcile-draft-gate.mjs's no-findings placeholder) used
+ * this codebase (consolidateFanin's own `bySeverity`,
+ * reconcile-draft-gate.mjs's no-findings placeholder) used
  * to hand-roll separately via `Object.fromEntries(SEVERITY_ORDER.map((s) =>
  * [s, 0]))` — one copy here means a severity added to SEVERITY_ORDER is
  * zero-initialized everywhere at once.
@@ -305,10 +305,9 @@ export function zeroSeverityCounts() {
  * finding whose normalized severity is not a recognized SEVERITY_ORDER member
  * is silently excluded from the tally rather than inflating an unknown key —
  * every routed call site here counts already-validated findings in practice
- * (consolidateFanin validates every result's severity before this runs;
- * buildAngleMarker tallies consolidateFanin's own output), so this guard is a
- * defensive floor against future drift, not an escape hatch for accepting
- * unvalidated severities. `findings` and its entries are NOT nullish-tolerant:
+ * (consolidateFanin validates every result's severity before this runs), so
+ * this guard is a defensive floor against future drift, not an escape hatch
+ * for accepting unvalidated severities. `findings` and its entries are NOT nullish-tolerant:
  * a nullish `findings` argument throws (not iterable), and a nullish
  * individual entry throws reading `.severity` — no routed caller passes
  * either shape, so a caller that does gets a loud failure instead of a
@@ -696,7 +695,7 @@ export function fanoutReviewerPairingError(perAngle, resolvedGroups = null) {
 
 /**
  * Base angle name for a delta-suffixed re-review entry (`<angle>-delta-at-...`,
- * e.g. `pr-checklist-matrix-delta-at-current-head`): a re-review scoped to only
+ * e.g. `pr-checklist-delta-at-current-head`): a re-review scoped to only
  * the current head's delta still counts toward its base angle for both
  * mandatory-angle coverage and pool-membership checks.
  *
@@ -742,12 +741,12 @@ export function checkFanoutAngleCoverage(recordedAngles, { mandatoryAngles = [],
 
 /**
  * Angles the fan-in itself mandates and may synthesize (consolidate-fanin's
- * `--pr-checklist-matrix clean` upsert) without them appearing in any gate's
+ * `--pr-checklist clean` upsert) without them appearing in any gate's
  * configured `angles` pool. Always legal in the foreign-angle check above —
  * requiring every consumer repo to also list them per-gate would make the two
  * tools contradict the shared contract they implement.
  */
-export const FANIN_SYNTHETIC_ANGLES = Object.freeze(["pr-checklist-matrix"]);
+export const FANIN_SYNTHETIC_ANGLES = Object.freeze(["pr-checklist"]);
 
 /**
  * Validate a round's RESOLVED angle set — the full angle list the round
@@ -813,7 +812,7 @@ export function checkResolvedAngleEvidence(resolvedAngles, { recordedAngles, car
 export const DEFAULT_MAX_FANOUT_REVIEWERS = 8;
 
 // Every sanctioned angle name is a short, hand-authored slug (e.g.
-// "contradiction-lens", "pr-checklist-matrix"); nothing legitimate ever
+// "contradiction-lens", "pr-checklist"); nothing legitimate ever
 // approaches this length. Bounding it here, at the trust boundary this
 // function already owns, fails a pathological artifact closed as malformed —
 // the same place every other angle-result defect is caught — instead of
