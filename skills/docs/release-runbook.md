@@ -94,9 +94,9 @@ generic "continue" instructions never satisfy this gate.
 
 **What counts as a genuine approval (and what the gate refuses).** An
 `approve release v<version>` comment satisfies the gate only when it is a fresh,
-un-quoted, first-person assertion by the operator. The gate fails closed on each
-of the following, so post the approval as a plain top-level comment written by
-the operator **after** cutting the release commit:
+un-quoted, top-level assertion authored by the operator. The gate fails closed on
+each of the following, so post the approval as a plain top-level comment written
+by the operator **after** cutting the release commit:
 
 - **Must post-date the release commit.** The approval comment's timestamp must
   be strictly **after** the release commit being tagged (the commit's committer
@@ -113,12 +113,14 @@ the operator **after** cutting the release commit:
   blocks, and block quotes before matching (`stripNonAssertionMarkdown`), so an
   `approve release v<version>` phrase quoted inside backticks, a fenced block, or
   a `>` quote does **not** count.
-- **Must not be agent-authored handoff/reference text.** A phrase governed by an
-  instructional/handoff verb — "post `approve release v…`", "the runbook says to
-  state `approve release v…`", "this **requires** an `approve release v…`
-  comment" — is a **reference** to the approval act, not the act itself, and is
-  refused (`instructsApproval`). Agent-authored summaries or handoff notes that
-  merely mention the phrase never satisfy the gate.
+- **Must not be instructional/handoff/reference text.** A phrase governed by an
+  instructional/handoff verb — "post `approve release v…`", "a note stating
+  `approve release v…`", "this **requires** an `approve release v…` comment" — is
+  a **reference** to the approval act, not the act itself, and is refused
+  (`instructsApproval`). This refusal keys on the phrasing, not on who wrote it:
+  an instructional occurrence never counts even in the operator's own comment, and
+  an agent-authored summary or handoff note that merely references the phrase never
+  satisfies the gate (such a comment also fails the operator-authored check below).
 - **Must not be negated.** A negation in the same clause ("do not approve
   release v…", "cannot approve release v…") or a same-sentence retraction
   ("approve release v…; do not proceed") is refused.
