@@ -1314,8 +1314,13 @@ export function renderBriefingPrefix({
     `Mandatory: before doing any angle-specific work, run \`node scripts/github/verify-fresh-review-context.mjs --scope ${gateScopePrefix(gate)}<your-dispatch-unit> --context-path ${contextPath} --prefix-file ${briefingPrefixPath}\` once — <your-dispatch-unit> is your angle name for a per-angle dispatch, or \`group-<name>\` for a grouped dispatch (run once for the whole group, never once per angle in it). Refuse to proceed on contamination or a missing artifact.`,
   );
   lines.push("");
+  const findingsDir = path.join(worktreeRoot, buildGateReviewsDir({ repo, pr, gate, headSha }));
   lines.push(
     `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as ONE compound command that enters this worktree first (\`cd "${worktreeRoot}" && node scripts/github/verify-fresh-review-context.mjs ...\`) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${worktreeRoot}" ...\` and every file read via an absolute path under ${worktreeRoot}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
+  );
+  lines.push("");
+  lines.push(
+    `Findings write-path invariant: WRITE every findings artifact under THIS worktree's tmp/, never the primary checkout's. Write each per-angle findings artifact to the ABSOLUTE path \`${findingsDir}/<angle>.json\` (\`<angle>\` = your angle name), and pass \`--tmp-root "${worktreeRoot}/tmp"\` to any findings-writer CLI (e.g. \`write-gate-findings-log.mjs\`). Cwd-relative \`tmp/...\` resolves against whatever checkout the command started in — a findings artifact written to the primary checkout's tmp/ is invisible to fan-in and fails the gate as missing evidence.`,
   );
   lines.push("");
   lines.push(renderSourceReadInvariantSection(worktreeRoot));

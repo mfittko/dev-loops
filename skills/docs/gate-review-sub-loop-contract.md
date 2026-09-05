@@ -647,8 +647,16 @@ prompt per angle under `mode: per-angle` (bypasses configured groups: one single
 grouped mode, the default — including `gate:full`, which dispatches grouped as of ADR 0048), in that order —
 never angle-first. The invariant block MUST be byte-identical across every reviewer of the
 same gate pass and MUST carry, at minimum: the repo, PR number, head SHA, and worktree path; the
-`write-gate-context.mjs` gate-context artifact path (`GATE-EXEC-BUILD-ONCE-SEED`); and the
-mandatory `verify-fresh-review-context.mjs` instruction above. Angle identity MUST appear
+`write-gate-context.mjs` gate-context artifact path (`GATE-EXEC-BUILD-ONCE-SEED`); the
+mandatory `verify-fresh-review-context.mjs` instruction above; and the **findings write-path
+invariant** — the WORKTREE-ABSOLUTE per-angle findings directory (`<worktree>/tmp/gate-reviews/<repo-slug>/pr-<N>/<gate>-<headSha>/`)
+a reviewer MUST write into (`GATE-EXEC-FINDINGS-WRITE-PATH`, #1978). A reviewer's shell cwd is
+not trustworthy across its commands (each may start in the primary checkout, not the worktree),
+so a cwd-relative `tmp/...` write can land in the primary checkout's tmp/ where fan-in never
+looks — surfacing only as a late "missing evidence" failure. Pinning the absolute dir (and
+`--tmp-root <worktree>/tmp` for any findings-writer CLI) in the byte-identical prefix prevents
+that at dispatch; `consolidate-fanin.mjs` additionally detects a findings artifact stranded in
+the primary checkout and names it in the missing-evidence diagnostic rather than failing opaque. Angle identity MUST appear
 ONLY in the suffix (the angle-specific prompt, e.g.
 `COPILOT-FOLLOWUP-ADVERSARIAL-BRIEFING`'s persona prompt) and the reviewer's `--scope` flag
 — never inside the invariant block, or the byte-identity requirement is violated by

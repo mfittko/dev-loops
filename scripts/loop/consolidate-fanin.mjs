@@ -53,7 +53,8 @@
  * disposition ledger" section (skills/docs/gate-review-sub-loop-contract.md),
  * not restated here; see the --out flag below for the CLI-facing summary.
  */
-import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { requireTokenValue } from "../_cli-primitives.mjs";
@@ -863,6 +864,61 @@ function resolvePrChecklistUpsert(rawValue) {
   return { angle: FANIN_SYNTHETIC_ANGLES[0], verdict: "clean", findings: [] };
 }
 
+/**
+ * AC2 (#1978) — clear diagnostic for a misplaced findings artifact. A fan-out
+ * reviewer whose write command started in the PRIMARY checkout (cwd is not
+ * trustworthy across a reviewer's commands) writes its per-angle artifact to
+ * the primary checkout's tmp/ instead of this worktree's, so fan-in finds no
+ * evidence in --findings-dir and fails with a confusing "missing evidence"
+ * error. When that happens, resolve the primary checkout (git-common-dir's
+ * parent) and check whether the SAME relative findings path holds stray *.json
+ * artifacts there; if so, return a diagnostic suffix naming the misplacement so
+ * the failure is actionable up front rather than opaque.
+ *
+ * Returns "" (append nothing) when: repoRoot is not a linked worktree (the
+ * primary checkout IS repoRoot — a single-checkout run, AC3 unaffected),
+ * --findings-dir is not inside the worktree, git is unavailable, or no stray
+ * artifacts exist in the primary checkout. Best-effort: never throws, only
+ * enriches an error that is already being raised.
+ *
+ * @param {string} findingsDir — the round's --findings-dir (worktree-relative or absolute)
+ * @param {string} repoRoot — the worktree root (options.repoRoot ?? process.cwd())
+ * @returns {Promise<string>} a diagnostic suffix, or ""
+ */
+export async function detectMisplacedFindingsDiagnostic(findingsDir, repoRoot) {
+  const resolvedRepoRoot = path.resolve(repoRoot);
+  let primaryRoot;
+  try {
+    let gitDir;
+    try {
+      gitDir = execFileSync("git", ["-C", resolvedRepoRoot, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).trim();
+    } catch {
+      gitDir = path.resolve(resolvedRepoRoot, execFileSync("git", ["-C", resolvedRepoRoot, "rev-parse", "--git-common-dir"], { encoding: "utf8" }).trim());
+    }
+    primaryRoot = path.dirname(gitDir);
+  } catch {
+    return "";
+  }
+  // Single-checkout run: the primary checkout IS this checkout — nothing was
+  // "misplaced" elsewhere. AC3: existing single-checkout runs are unaffected.
+  // Compare via realpath so a symlinked tmp root (macOS /var -> /private/var)
+  // does not read the same directory as two different paths.
+  const realOr = async (p) => { try { return await realpath(p); } catch { return path.resolve(p); } };
+  if (await realOr(primaryRoot) === await realOr(resolvedRepoRoot)) return "";
+  const rel = path.relative(resolvedRepoRoot, path.resolve(resolvedRepoRoot, findingsDir));
+  // --findings-dir outside the worktree — can't map it into the primary checkout.
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return "";
+  const primaryFindingsDir = path.join(primaryRoot, rel);
+  let stray;
+  try {
+    stray = (await readdir(primaryFindingsDir)).filter((n) => n.endsWith(".json"));
+  } catch {
+    return "";
+  }
+  if (stray.length === 0) return "";
+  return ` — MISPLACED FINDINGS: ${stray.length} findings artifact(s) were found in the PRIMARY checkout at ${primaryFindingsDir} (${stray.sort().join(", ")}), not in this worktree's --findings-dir. A reviewer wrote findings to the primary checkout's tmp/ instead of this worktree's (${path.resolve(resolvedRepoRoot, findingsDir)}). Reviewer briefings pin the worktree-absolute findings dir; re-dispatch the reviewer(s) or move these artifacts into the worktree --findings-dir.`;
+}
+
 export async function consolidateGateFanin(options) {
   // Re-normalize/validate headSha here, not only in the CLI parser: a direct
   // programmatic caller bypasses parseConsolidateFaninCliArgs, and an
@@ -922,7 +978,8 @@ export async function consolidateGateFanin(options) {
   // guard still catches the real mistake (an empty dir with no carry plan at
   // all) without blocking the feature's own maximum-saving case.
   if (files.length === 0 && (options.carriedAngles?.length ?? 0) === 0) {
-    throw new Error(`--findings-dir "${dir}" contains no *.json findings artifacts`);
+    const misplaced = await detectMisplacedFindingsDiagnostic(dir, options.repoRoot ?? process.cwd());
+    throw new Error(`--findings-dir "${dir}" contains no *.json findings artifacts${misplaced}`);
   }
 
   // Head-stamp exemption membership: EXACT declared carried names, normalized
@@ -1379,8 +1436,9 @@ export async function consolidateGateFanin(options) {
       carriedAngles: options.carriedAngles ?? [],
     });
     if (missingAngles.length > 0) {
+      const misplaced = await detectMisplacedFindingsDiagnostic(options.findingsDir, options.repoRoot ?? process.cwd());
       throw new Error(
-        `GATE-EXEC-RESOLVED-ANGLE-EVIDENCE: fan-in computed a "clean" verdict but --resolved-angles names angle(s) with no evidence at all: ${missingAngles.join(", ")} — each expected either a per-angle findings artifact in --findings-dir or a proven carried-forward entry in --carried-angles/--carry-forward-plan; neither was found`,
+        `GATE-EXEC-RESOLVED-ANGLE-EVIDENCE: fan-in computed a "clean" verdict but --resolved-angles names angle(s) with no evidence at all: ${missingAngles.join(", ")} — each expected either a per-angle findings artifact in --findings-dir or a proven carried-forward entry in --carried-angles/--carry-forward-plan; neither was found${misplaced}`,
       );
     }
   }
