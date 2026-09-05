@@ -342,19 +342,26 @@ export function normalizeSeverityCounts(counts) {
 }
 
 /**
- * Resolve a finding's file path from EITHER shape the shared floor accepts:
- * `file` (singular string, hand-authored / future-producer ledgers) or
+ * Resolve a finding's effective file path from EITHER shape the shared floor
+ * accepts: `file` (singular string, hand-authored / future-producer ledgers) or
  * `files[0]` (the array shape consolidate-fanin / write-gate-findings-log emit).
  * The ONE resolver `hasLocatableShape` and every downstream consumer keys on,
  * so a consumer reading `finding.files[0]` directly can never crash on a
- * singular-`file` finding that already passed the floor. Returns `undefined`
- * when neither shape names a string path.
+ * singular-`file` finding that already passed the floor. The value is TRIMMED
+ * and a whitespace-only `file` is treated as ABSENT (it falls back to
+ * `files[0]`, not shadows it), so the resolved path both matches the trimmed
+ * commentable-line-set keys and is a valid GitHub review-comment `path` even
+ * for an untrimmed hand-authored ledger entry (`readGateFindingsLedger` trims
+ * `files[]` but not a singular `file`). Returns `undefined` when neither shape
+ * names a non-blank string path.
  * @param {{ file?: unknown, files?: unknown }} finding
  * @returns {string|undefined}
  */
 export function resolveFindingFile(finding) {
-  if (typeof finding?.file === "string") return finding.file;
-  if (Array.isArray(finding?.files) && typeof finding.files[0] === "string") return finding.files[0];
+  if (typeof finding?.file === "string" && finding.file.trim().length > 0) return finding.file.trim();
+  if (Array.isArray(finding?.files) && typeof finding.files[0] === "string" && finding.files[0].trim().length > 0) {
+    return finding.files[0].trim();
+  }
   return undefined;
 }
 

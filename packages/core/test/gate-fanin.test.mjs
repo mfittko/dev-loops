@@ -1359,6 +1359,15 @@ describe("resolveFindingFile (#1900): one shared file resolver for both shapes",
     assert.equal(resolveFindingFile({ files: [3] }), undefined);
     assert.equal(resolveFindingFile(null), undefined);
   });
+  test("trims the resolved path so it matches trimmed lookup keys / is a valid `path`", () => {
+    assert.equal(resolveFindingFile({ file: "src/a.mjs ", line: 2 }), "src/a.mjs");
+    assert.equal(resolveFindingFile({ files: ["  src/a.mjs  "], line: 2 }), "src/a.mjs");
+  });
+  test("a whitespace-only `file` is absent and falls back to `files[0]`, not shadowing it", () => {
+    assert.equal(resolveFindingFile({ file: "   ", files: ["src/a.mjs"], line: 2 }), "src/a.mjs");
+    assert.equal(resolveFindingFile({ file: "   " }), undefined);
+    assert.equal(hasLocatableShape({ file: "   ", files: ["src/a.mjs"], line: 2 }), true);
+  });
   test("hasLocatableShape accepts a singular-`file` finding via the shared resolver", () => {
     assert.equal(hasLocatableShape({ file: "src/a.mjs", line: 1 }), true);
     assert.equal(hasLocatableShape({ files: ["src/a.mjs"], line: 1 }), true);
