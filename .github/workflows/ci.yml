@@ -156,7 +156,7 @@ jobs:
 
       - name: Run ${{ matrix.suite }} shard ${{ matrix.shard }}
         if: matrix.shard != ''
-        run: bun run ${{ matrix.suite }} --shard=${{ matrix.shard }}
+        run: bun run ${{ matrix.suite }} --parallel=1 --shard=${{ matrix.shard }}
 
   verify:
     needs: [changes, verify-suite, viewer-smoke]
