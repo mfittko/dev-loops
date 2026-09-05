@@ -241,6 +241,15 @@ test("parseCloseGateFindingsCliArgs: --tmp-root overrides the default", () => {
   assert.equal(parseCloseGateFindingsCliArgs(["--ledger", "x.json", "--tmp-root", "custom-tmp"]).tmpRoot, "custom-tmp");
 });
 
+test("parseCloseGateFindingsCliArgs: --allowed-refs parses to a deduped positive-int id list (default [])", () => {
+  assert.deepEqual(parseCloseGateFindingsCliArgs(["--ledger", "x.json"]).allowedRefs, []);
+  assert.deepEqual(parseCloseGateFindingsCliArgs(["--ledger", "x.json", "--allowed-refs", "1951, 1951, 42"]).allowedRefs, ["1951", "42"]);
+});
+
+test("parseCloseGateFindingsCliArgs: --allowed-refs rejects a non-positive-integer id", () => {
+  assert.throws(() => parseCloseGateFindingsCliArgs(["--ledger", "x.json", "--allowed-refs", "abc"]), /--allowed-refs must be a comma-separated list of positive integers/);
+});
+
 test("parseCloseGateFindingsCliArgs requires --ledger", () => {
   assert.throws(() => parseCloseGateFindingsCliArgs([]), /Missing required argument: --ledger/);
 });
@@ -670,6 +679,54 @@ test("an unresolved nit thread is resolved in-thread immediately, at round 1, an
       assert.equal(result.deferredResolved, 1);
       assert.equal(result.unresolvedGateThreadCount, 0);
       assert.equal(result.followUpIssueNumber, undefined, "a nit-only round creates no follow-up issue");
+    },
+  ));
+});
+
+// #1973: the disposition reply body embeds the finding's own summary
+// (buildMeritRationale), so a finding that legitimately cites the PR's own
+// governing issue as a bare `#N` trips the comment-id guard when the reply is
+// posted. Without --allowed-refs, that bare ref stays fail-closed: the reply is
+// refused, the target is recorded in dispositionFailures, and the thread stays
+// unresolved (mirroring reply-resolve-review-thread's no-ids rule).
+test("#1973: a bare governing-issue ref in a finding summary is fail-closed without --allowed-refs", async () => {
+  const govRefBody = `${buildFindingMarker({ fp: "abcabcabcabcabc0", severity: "nit", angle: "naming", round: 1 })}\n**nit** (\`naming\`): mirror the guard fix for #1951 governing issue`;
+  const thread = threadNode({ id: "THREAD_GOVREF", path: "src/x.mjs", line: 4, commentId: 6270, body: govRefBody });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    // No POST/resolve entries: the guard refuses BEFORE any mutating gh call.
+    roundEntries({ threads: [thread] }),
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, repoRoot });
+      assert.equal(result.deferredResolved, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+      assert.equal(result.dispositionFailures.length, 1);
+      assert.equal(result.dispositionFailures[0].commentId, 6270);
+      assert.match(result.dispositionFailures[0].error, /comment-id-guard refused/);
+    },
+  ));
+});
+
+// #1973: the SAME finding passes once its governing-issue id is whitelisted via
+// --allowed-refs — same shape/semantics as reply-resolve-review-thread. The
+// reply posts and the thread resolves normally.
+test("#1973: a whitelisted governing-issue ref passes with --allowed-refs", async () => {
+  const govRefBody = `${buildFindingMarker({ fp: "abcabcabcabcabc0", severity: "nit", angle: "naming", round: 1 })}\n**nit** (\`naming\`): mirror the guard fix for #1951 governing issue`;
+  const thread = threadNode({ id: "THREAD_GOVREF_OK", path: "src/x.mjs", line: 4, commentId: 6280, body: govRefBody });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ threads: [thread] }),
+      {
+        assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/6280/replies`, "--input", "-"],
+        assertStdinIncludes: ["#1951"],
+        stdout: `${JSON.stringify({ id: 7160, html_url: `https://github.com/${REPO}/pull/${PR}#discussion_r7160` })}\n`,
+      },
+      resolveThreadEntry("THREAD_GOVREF_OK"),
+    ],
+    async ({ env, ghCommand, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath, allowedRefs: ["1951"] }, { env, ghCommand, repoRoot });
+      assert.equal(result.deferredResolved, 1);
+      assert.equal(result.unresolvedGateThreadCount, 0);
+      assert.equal(result.dispositionFailures, undefined);
     },
   ));
 });
