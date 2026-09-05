@@ -424,8 +424,8 @@ test("runWatchCycle integration keeps initial request-review -> waiting_for_copi
         stdout: '{"headRefOid":"newsha","reviews":[]}\n',
       },
       {
-        assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
-        stdout: "https://github.com/owner/repo/pull/17\n",
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
+        stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -516,7 +516,7 @@ if (args[0] === "pr" && args[1] === "view" && !args.includes("--json")) {
   process.exit(0);
 }
 
-if (args[0] === "api" && args[1] === "repos/owner/repo/pulls/17/requested_reviewers") {
+if (args[0] === "api" && args[1] === "repos/owner/repo/pulls/17/requested_reviewers" && !args.includes("-X")) {
   const requested = existsSync(requestedStatePath);
   write(requested ? { users: [{ login: "Copilot" }], teams: [] } : { users: [], teams: [] });
   process.exit(0);
@@ -556,9 +556,9 @@ if (args[0] === "pr" && args[1] === "view" && args.includes("--json") && args.in
   process.exit(0);
 }
 
-if (args[0] === "pr" && args[1] === "edit" && args.includes("--add-reviewer") && args.includes("@copilot")) {
+if (args[0] === "api" && args.includes("-X") && args.includes("POST") && args.some((a) => a.includes("requested_reviewers"))) {
   writeFileSync(requestedStatePath, "requested\\n");
-  write("https://github.com/owner/repo/pull/17\\n");
+  write({ requested_reviewers: [{ login: "copilot-pull-request-reviewer[bot]" }] });
   process.exit(0);
 }
 
