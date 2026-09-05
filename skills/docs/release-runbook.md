@@ -92,6 +92,41 @@ generic "continue" instructions never satisfy this gate.
 - A prerelease (`rc`/`next`/`beta`/…) is out of scope: the gate applies to
   stable releases only and the prerelease flow is unchanged.
 
+**What counts as a genuine approval (and what the gate refuses).** An
+`approve release v<version>` comment satisfies the gate only when it is a fresh,
+un-quoted, first-person assertion by the operator. The gate fails closed on each
+of the following, so post the approval as a plain top-level comment written by
+the operator **after** cutting the release commit:
+
+- **Must post-date the release commit.** The approval comment's timestamp must
+  be strictly **after** the release commit being tagged (the commit's committer
+  date). An older approval — one carried over from a prior or reverted cut — is
+  **stale** and is rejected: it never authorizes a later release. If a first cut
+  was rolled back, the operator must post a **new** approval after the new
+  release commit. (`resolveApprovalState` compares each comment's `created_at`
+  against the release-commit date.)
+- **Timestamp must be verifiable.** A matching approval whose `created_at`
+  cannot be parsed is refused as **unverifiable** — the gate cannot confirm it
+  post-dates the release commit, so it fails closed rather than assume freshness.
+- **Must be a real assertion, not quoted text.** The phrase must appear as
+  ordinary prose. The gate strips code spans, fenced code blocks, indented code
+  blocks, and block quotes before matching (`stripNonAssertionMarkdown`), so an
+  `approve release v<version>` phrase quoted inside backticks, a fenced block, or
+  a `>` quote does **not** count.
+- **Must not be agent-authored handoff/reference text.** A phrase governed by an
+  instructional/handoff verb — "post `approve release v…`", "the runbook says to
+  state `approve release v…`", "this **requires** an `approve release v…`
+  comment" — is a **reference** to the approval act, not the act itself, and is
+  refused (`instructsApproval`). Agent-authored summaries or handoff notes that
+  merely mention the phrase never satisfy the gate.
+- **Must not be negated.** A negation in the same clause ("do not approve
+  release v…", "cannot approve release v…") or a same-sentence retraction
+  ("approve release v…; do not proceed") is refused.
+- **Must match this exact version and be authored by the operator.** A blanket
+  merge authorization, a generic "continue", or an approval for a different
+  version (including a prerelease of the same `X.Y.Z`, e.g. `v1.0.0-rc.7` ≠
+  `v1.0.0`) does not match; only a comment by the operator (repo owner) counts.
+
 The refusal names exactly what is missing:
 
 ```text
