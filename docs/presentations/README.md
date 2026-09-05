@@ -1,21 +1,31 @@
 # Presentation decks
 
-Public-audience talks on dev-loops. The self-contained, CSP-safe HTML render
-(`*.html`) is the source of truth for publishing. Some decks also keep a Slidev
-source (`*-presentation.md`), which tracks the slide headlines; its body text
-predates the HTML's storytelling restructure and A/B-contrast deslop, so the two
-diverge below the headline level and the HTML is not regenerated from it. The
-deep-dive deck was merged directly from two earlier HTML decks and has no Slidev
-source. Edit the `.html` for anything that ships (headlines and body), and mirror
-only headline changes back to any `.md` that exists.
+Public-audience talks on dev-loops. The four self-contained, CSP-safe HTML decks
+listed below are the source of truth for publishing. Edit the `.html` for
+anything that ships.
 
 | Deck | HTML render | Topic |
 | --- | --- | --- |
-| Introducing dev-loops | [`introducing-dev-loops.html`](introducing-dev-loops.html) | The concept, the data behind it, and how to run the loop on your own project. |
-| dev-loops: A Deep Dive | [`dev-loops-deep-dive.html`](dev-loops-deep-dive.html) | Explicit handoffs on a state graph (Part 1) and measuring the waiting between actions (Part 2). |
+| Introducing dev-loops | [`introducing-dev-loops.html`](introducing-dev-loops.html) | Why fast code still waits, how pullable next actions restore momentum, and how to start with one issue. |
+| dev-loops: Control & Observability | [`dev-loops-deep-dive.html`](dev-loops-deep-dive.html) | Explicit delivery control (Act I) and measuring the waiting between actions (Act II). |
 | The State Graph Is the Surface | [`state-graph-surface.html`](state-graph-surface.html) | How authoritative state, bounded loops, evidence, and human authority compose into one control surface. |
+| How dev-loops Decided Itself Into Shape | [`how-dev-loops-decided-itself.html`](how-dev-loops-decided-itself.html) | The project's recorded corrections and two reversals, narrated as a decision ledger. |
 
-Headline companion: [`state-graph-surface-presentation.md`](state-graph-surface-presentation.md).
+## Markdown presentation material
+
+[`state-graph-surface-presentation.md`](state-graph-surface-presentation.md) is
+the State Graph deck's headline companion. It mirrors headline-level changes,
+but its body predates the HTML storytelling restructure and is not used to
+generate the published deck.
+
+[`applied-dev-loops-presentation.md`](applied-dev-loops-presentation.md) and
+[`process-observability-presentation.md`](process-observability-presentation.md),
+along with their `*-review-notes.md` files, are legacy Slidev sources and notes.
+They remain as historical presentation material; they are not headline
+companions for the publishable HTML decks and are not part of the Pages build.
+
+The Introducing, Deep Dive, and History HTML decks have no corresponding
+Markdown presentation source or headline companion.
 
 The self-contained `.html` files inline all CSS and diagrams (no Slidev runtime,
 no CDN, no remote resources) and ship a strict `Content-Security-Policy`, so they
@@ -36,11 +46,10 @@ node scripts/pages/build-site.mjs          # writes ./site/ (gitignored)
 npx http-server site                       # or: python3 -m http.server -d site
 ```
 
-`scripts/pages/build-site.mjs` copies the deck HTML—including
-`state-graph-surface.html`—into `site/` and generates `site/index.html` (the
-intro article) with a nav linking the deep-dive article and the decks. `site/`
-is assembled, never hand-maintained, and is gitignored —
-only the script and workflow are committed.
+`scripts/pages/build-site.mjs` copies all four deck HTML files into `site/` and
+generates `site/index.html` (the intro article) with a nav linking the deep-dive
+article and every deck. `site/` is assembled, never hand-maintained, and is
+gitignored — only the script and workflow are committed.
 
 ## GitHub Pages deploy
 
