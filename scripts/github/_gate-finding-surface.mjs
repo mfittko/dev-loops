@@ -14,7 +14,7 @@ import path from "node:path";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { matchGateReviewCommentHeader } from "@dev-loops/core/github/copilot-helpers";
 import { createIssue as coreCreateIssue, commentIssue as coreCommentIssue, listIssues as coreListIssues } from "@dev-loops/core/github/issue-ops";
-import { VALID_SEVERITIES, hasLocatableShape, normalizeSeverity } from "@dev-loops/core/loop/gate-fanin";
+import { VALID_SEVERITIES, hasLocatableShape, normalizeSeverity, resolveFindingFile } from "@dev-loops/core/loop/gate-fanin";
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import {
   parseJsonText,
@@ -577,7 +577,7 @@ export function isLocatableFinding(finding, commentableSet) {
   // uses; this adds the one thing only a caller holding the diff can check —
   // whether that file:line actually falls inside it.
   if (!hasLocatableShape(finding)) return false;
-  return commentableSet.has(`${finding.files[0]}:${finding.line}`);
+  return commentableSet.has(`${resolveFindingFile(finding)}:${finding.line}`);
 }
 
 // ---------------------------------------------------------------------------
