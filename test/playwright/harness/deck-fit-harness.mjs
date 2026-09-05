@@ -260,18 +260,18 @@ export function defineDeckSuite({
     }
   });
 
-  if (desktopFit) test(`${sliceId} desktop fit check fails on deliberately-clipped content`, async ({ page }) => {
+  if (desktopFit) test(`${sliceId} desktop fit check fails on a deliberately-tall section`, async ({ page }) => {
     const { server, url } = await startServer();
     try {
       await page.setViewportSize({ width: 1280, height: 800 });
       await page.goto(url, { waitUntil: "domcontentloaded" });
       await page.evaluate(() => {
         const section = document.querySelector("section");
-        const tall = document.createElement("div");
-        tall.style.cssText = "height:1600px;width:10px";
-        section?.appendChild(tall);
+        if (section) section.style.minHeight = `${window.innerHeight + 200}px`;
       });
       const m = await measureFit(page);
+      expect(m.clipped).toEqual([]);
+      expect(m.oversizedSections.length).toBeGreaterThan(0);
       expect(() => assertDesktopFit(m)).toThrow(/sections exceed the desktop viewport height/);
     } finally {
       await stopFixtureServer(server);
