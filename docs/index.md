@@ -46,7 +46,7 @@ Start here for repository documentation.
 ## Presentations
 
 - [Presentation deck guide](./presentations/README.md) — publishing, local viewing, and the distinction between HTML decks and Markdown presentation material
-- [Introducing dev-loops (deck)](./presentations/introducing-dev-loops.html) — the approachable entry story: ship the change, lose the coordination chase
+- [Introducing dev-loops (deck)](./presentations/introducing-dev-loops.html) — an approachable guide to why delivery stalls and how one issue moves through the loop
 - [dev-loops: Control & Observability (deep-dive deck)](./presentations/dev-loops-deep-dive.html) — explicit delivery control and measurable waiting between actions
 - [The State Graph Is the Surface (deck)](./presentations/state-graph-surface.html) — the graph/loop reframe in a self-contained presentation
 - [How dev-loops Decided Itself Into Shape (history deck)](./presentations/how-dev-loops-decided-itself.html) — the project's recorded corrections and reversals
@@ -54,8 +54,7 @@ Start here for repository documentation.
 ### Markdown presentation material
 
 - [The State Graph Is the Surface (headline companion)](./presentations/state-graph-surface-presentation.md) — the sole headline-level companion to a publishable HTML deck
-- [Applied Dev Loops (legacy Slidev source)](./presentations/applied-dev-loops-presentation.md) and [review notes](./presentations/applied-dev-loops-review-notes.md) — historical material, not a source or companion for a current HTML deck
-- [Process Observability (legacy Slidev source)](./presentations/process-observability-presentation.md) and [review notes](./presentations/process-observability-review-notes.md) — historical material, not a source or companion for a current HTML deck
+- [Applied Dev Loops](./presentations/applied-dev-loops-presentation.md) with its [review notes](./presentations/applied-dev-loops-review-notes.md), and [Process Observability](./presentations/process-observability-presentation.md) with its [review notes](./presentations/process-observability-review-notes.md) — archived Slidev material from earlier presentations
 - `docs/presentations/style.css`
 
 ## Canonical-owner pointers

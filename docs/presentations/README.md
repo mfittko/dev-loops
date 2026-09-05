@@ -14,15 +14,14 @@ anything that ships.
 ## Markdown presentation material
 
 [`state-graph-surface-presentation.md`](state-graph-surface-presentation.md) is
-the State Graph deck's headline companion. It mirrors headline-level changes,
-but its body predates the HTML storytelling restructure and is not used to
-generate the published deck.
+the State Graph deck's headline companion and tracks its headline-level changes.
+The published HTML deck is maintained independently.
 
 [`applied-dev-loops-presentation.md`](applied-dev-loops-presentation.md) and
 [`process-observability-presentation.md`](process-observability-presentation.md),
 along with their `*-review-notes.md` files, are legacy Slidev sources and notes.
-They remain as historical presentation material; they are not headline
-companions for the publishable HTML decks and are not part of the Pages build.
+They preserve historical presentation material. The Pages build uses the four
+HTML decks listed above.
 
 The Introducing, Deep Dive, and History HTML decks have no corresponding
 Markdown presentation source or headline companion.
@@ -46,10 +45,10 @@ node scripts/pages/build-site.mjs          # writes ./site/ (gitignored)
 npx http-server site                       # or: python3 -m http.server -d site
 ```
 
-`scripts/pages/build-site.mjs` copies all four deck HTML files into `site/` and
-generates `site/index.html` (the intro article) with a nav linking the deep-dive
-article and every deck. `site/` is assembled, never hand-maintained, and is
-gitignored — only the script and workflow are committed.
+`scripts/pages/build-site.mjs` assembles `site/` from committed sources. It copies
+all four deck HTML files and generates `site/index.html` (the intro article) with
+a nav linking the deep-dive article and every deck. The generated `site/`
+directory is gitignored.
 
 ## GitHub Pages deploy
 
