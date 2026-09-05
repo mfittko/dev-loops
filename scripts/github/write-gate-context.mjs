@@ -2906,8 +2906,12 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
   } else {
     // Caller supplied the issue body text directly (without also supplying
     // --acceptance-criteria) — classify it as given rather than making a
-    // network call whose result would be discarded.
-    options.acceptanceCriteriaSource = detectIssueRefinementArtifact({ body: options.issueBody }).acItems.length > 0
+    // network call whose result would be discarded. #1951/Copilot review: use
+    // `hasACs || acItems.length` (same predicate as the multi-issue loop above)
+    // so a linked-doc-refined body — `hasACs` true, `acItems: []` — is not
+    // misclassified as linked-issue-unrefined.
+    const suppliedArtifact = detectIssueRefinementArtifact({ body: options.issueBody });
+    options.acceptanceCriteriaSource = suppliedArtifact.hasACs || suppliedArtifact.acItems.length > 0
       ? "linked-issue"
       : "linked-issue-unrefined";
   }

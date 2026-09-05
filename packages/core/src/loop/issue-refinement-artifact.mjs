@@ -904,7 +904,7 @@ export function detectIssueRefinementArtifact({ body = "", issueNumber = null, r
       hasACs: false,
       source: REFINEMENT_SOURCE.MISSING,
       reason:
-        "Issue body carries AC/DoD/Non-goals content but no authoritative AC→DoD mapping matrix table; " +
+        "Issue body carries Acceptance criteria / Definition of done content but no authoritative AC→DoD mapping matrix table; " +
         "under matrix-on-issue/checklist-on-PR the mapping table is the authoritative issue artifact " +
         "(rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR; e.g. run the loop-grill synthesis). " +
         "Refusing: the refinement check fails closed without the mapping matrix.",
@@ -1290,8 +1290,8 @@ export function decideEnqueueRefinementGate({ artifact, targetIsPickup, auto = f
   // checklists) — the mapping table is the authoritative issue artifact.
   if (artifact.finding === MISSING_AC_DOD_MATRIX_FINDING) {
     const reason =
-      "Issue carries AC/DoD/Non-goals content but no authoritative AC→DoD mapping matrix — under matrix-on-issue/checklist-on-PR the mapping table is the authoritative issue artifact (#1951). " +
-      "Add a semantic AC→DoD mapping table to the issue body (each acceptance-criterion outcome mapped to its required completion evidence) " +
+      "Issue carries Acceptance criteria / Definition of done content but no authoritative AC→DoD mapping matrix — under matrix-on-issue/checklist-on-PR the mapping table is the authoritative issue artifact (#1951). " +
+      "Add a semantic AC→DoD mapping table to the issue body (each acceptance-criterion outcome mapped to its required completion evidence), and an explicit Non-goals section if one is not already present " +
       "(rule ARTIFACT-TRACKER-ISSUE-REFINEMENT-FLOOR; e.g. run `/dev-loops:loop-grill <issue> --auto` (or `/loop-grill <issue> --auto` in the dev-loops repo itself)) — refusing to enqueue without the mapping matrix.";
     return { action: auto ? "divert" : "block", reason, missing: ["AC→DoD mapping matrix"] };
   }
