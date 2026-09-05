@@ -84,7 +84,7 @@ if (process.env.CLAUDECODE === "1") {
     errors.push("missing required trailer: Co-Authored-By: Claude <model> <noreply@anthropic.com>");
   }
   if (!/^Claude-Session:\s*\S+/imu.test(message)) {
-    errors.push("missing required trailer: Claude-Session: <url>");
+    errors.push("missing required trailer: Claude-Session: <url> (e.g. Claude-Session: https://claude.ai/code/session_abc123)");
   }
 }
 
