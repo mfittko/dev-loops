@@ -90,6 +90,11 @@ test('build-site: publishes exactly the four supported presentation decks', () =
   );
 });
 
+test('build-site: history metadata scopes the shown reversals as selected examples', () => {
+  const historyDeck = DECKS.find(({ file }) => file === 'how-dev-loops-decided-itself.html');
+  assert.match(historyDeck.description, /Two selected reversals from the project’s larger decision history/);
+});
+
 test('build-site: relative repoRoot uses the same default output as its absolute path', async () => {
   const repoRoot = await mkdtemp(join(tmpdir(), 'pages-relative-root-'));
   const relativeRoot = relative(process.cwd(), repoRoot);

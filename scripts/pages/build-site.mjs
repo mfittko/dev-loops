@@ -58,7 +58,7 @@ export const DECKS = [
     file: 'how-dev-loops-decided-itself.html',
     title: 'How dev-loops Decided Itself Into Shape',
     subtitle: 'A decision ledger of recorded corrections and reversals',
-    description: 'How explicit decisions, visible consequences, and two reversals shaped the project.',
+    description: 'Two selected reversals from the project’s larger decision history, with their consequences and corrections.',
     navLabel: 'History (deck)',
   },
 ];

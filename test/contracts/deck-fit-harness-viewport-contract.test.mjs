@@ -54,7 +54,7 @@ test('desktop and mobile deck screenshots are captured only after deterministic 
     const setup = deckSuite.slice(priorCapture, captureCall.index);
     assert.match(
       setup,
-      /await alignDeckSectionForCapture\(page, section, [^;]+\);\s*$/,
+      /await alignDeckSectionForCapture\(page, section, [^;]+\);\s*(?:const capturePaths = )?$/,
       `${flow} capture must await alignment and exact chrome assertions immediately before writing screenshot evidence`,
     );
   }
@@ -68,4 +68,35 @@ test('desktop and mobile deck screenshots are captured only after deterministic 
     /await assertDeckChromeState\(page, section, index, total\);/,
     'alignment must await the exact counter and proportional progress assertion before returning',
   );
+  assert.match(
+    deckSuite,
+    /clip:\s*\{ x: 0, y: 0, width: MOBILE\.width, height: MOBILE\.height \}/,
+    'mobile evidence must use an integer viewport clip instead of fractional element bounds',
+  );
+  assert.match(
+    deckSuite,
+    /pngDimensions\(await readFile\(capturePaths\.screenshotPath\)\)/,
+    'mobile evidence must assert the written PNG dimensions',
+  );
+});
+
+test('deck-fit measures both horizontal edges and sibling collisions with negative controls', async () => {
+  const source = await readFile(new URL('../../test/playwright/harness/deck-fit-harness.mjs', import.meta.url), 'utf8');
+
+  assert.match(source, /r\.left < -1 \|\| r\.right > iw \+ 1/, 'fit measurement must catch left and right viewport clipping');
+  assert.match(source, /siblingOverlaps\.push/, 'fit measurement must report visible sibling collisions');
+  assert.match(source, /deliberately-left-clipped element/, 'the shared deck suite must prove left clipping fails');
+  assert.match(source, /deliberately-overlapping siblings/, 'the shared deck suite must prove sibling overlap fails');
+});
+
+test('every rewritten deep-dive slide is a captured named state', async () => {
+  const source = await readFile(new URL('../../test/playwright/harness/deck-fit-harness.mjs', import.meta.url), 'utf8');
+  const deepDiveRegistry = source.slice(
+    source.indexOf('"deep-dive-deck":'),
+    source.indexOf('"state-graph-surface-deck":'),
+  );
+
+  for (const id of ['safe-pauses', 'steering', 'trust', 'handoff', 'blind-spot', 'metrics']) {
+    assert.match(deepDiveRegistry, new RegExp(`id: "${id}"[^\\n]+capture: true`), `${id} must emit a desktop named-state bundle`);
+  }
 });

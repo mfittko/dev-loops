@@ -55,8 +55,8 @@ export async function measureFit(page) {
       const r = el.getBoundingClientRect();
       if (r.width === 0 || r.height === 0) continue;
       // Diagrams must now FIT, not scroll: no overflow-x:auto exemption.
-      if (r.right > iw + 1) {
-        hOffenders.push(`<${el.tagName.toLowerCase()} class="${el.className}"> right=${Math.round(r.right)} "${(el.textContent || "").trim().slice(0, 32)}"`);
+      if (r.left < -1 || r.right > iw + 1) {
+        hOffenders.push(`<${el.tagName.toLowerCase()} class="${el.className}"> left=${Math.round(r.left)} right=${Math.round(r.right)} "${(el.textContent || "").trim().slice(0, 32)}"`);
       }
     }
     // Vertical clip: a section whose content is taller than its box while its
@@ -65,6 +65,7 @@ export async function measureFit(page) {
     const oversizedSections = [];
     const contentEdgeOffenders = [];
     const contentInsets = [];
+    const siblingOverlaps = [];
     for (const el of document.querySelectorAll("section")) {
       const oy = getComputedStyle(el).overflowY;
       if ((oy === "hidden" || oy === "clip") && el.clientHeight + 1 < el.scrollHeight) {
@@ -89,6 +90,27 @@ export async function measureFit(page) {
           );
         }
       }
+      for (const parent of el.querySelectorAll("*")) {
+        const children = [...parent.children].filter((child) => {
+          const rect = child.getBoundingClientRect();
+          const style = getComputedStyle(child);
+          return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none" && style.display !== "inline" && style.position !== "absolute" && style.position !== "fixed";
+        });
+        for (let firstIndex = 0; firstIndex < children.length; firstIndex += 1) {
+          const first = children[firstIndex];
+          const firstRect = first.getBoundingClientRect();
+          for (const second of children.slice(firstIndex + 1)) {
+            const secondRect = second.getBoundingClientRect();
+            const overlapWidth = Math.min(firstRect.right, secondRect.right) - Math.max(firstRect.left, secondRect.left);
+            const overlapHeight = Math.min(firstRect.bottom, secondRect.bottom) - Math.max(firstRect.top, secondRect.top);
+            if (overlapWidth > 1 && overlapHeight > 1) {
+              siblingOverlaps.push(
+                `<section id="${el.id}"> <${first.tagName.toLowerCase()} class="${first.className}"> overlaps <${second.tagName.toLowerCase()} class="${second.className}"> by ${Math.round(overlapWidth)}x${Math.round(overlapHeight)}`,
+              );
+            }
+          }
+        }
+      }
     }
     return {
       hOffenders,
@@ -96,6 +118,7 @@ export async function measureFit(page) {
       oversizedSections,
       contentEdgeOffenders,
       contentInsets,
+      siblingOverlaps,
       pageScrollWidth: document.scrollingElement.scrollWidth,
       innerWidth: iw,
     };
@@ -183,6 +206,7 @@ export function assertDeckFit(m, viewportLabel = `${m.innerWidth}px viewport`) {
   // line rarely fires on its own — the per-element check above is the real catch.
   expect(m.pageScrollWidth, "page scrollWidth exceeds the viewport (defensive check)").toBeLessThanOrEqual(m.innerWidth + 1);
   expect(m.clipped, `sections clip content with overflow:hidden (taller than their box):\n${m.clipped.join("\n")}`).toEqual([]);
+  expect(m.siblingOverlaps ?? [], `visible sibling elements overlap in the ${viewportLabel}:\n${(m.siblingOverlaps ?? []).join("\n")}`).toEqual([]);
   expect(
     m.contentEdgeOffenders ?? [],
     `section content violates the ${viewportLabel} safe area (minimum 16px top/bottom inset):\n${(m.contentEdgeOffenders ?? []).join("\n")}`,
@@ -277,6 +301,14 @@ export async function alignDeckSectionForCapture(page, section, index, total) {
     await new Promise(requestAnimationFrame);
   });
   await assertDeckChromeState(page, section, index, total);
+}
+
+export function pngDimensions(buffer) {
+  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  if (!Buffer.isBuffer(buffer) || buffer.length < 24 || !buffer.subarray(0, 8).equals(signature) || buffer.toString("ascii", 12, 16) !== "IHDR") {
+    throw new Error("named-state screenshot must be a PNG with an IHDR header");
+  }
+  return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
 }
 
 // Registry-driven runner: defines the full per-deck suite from one data entry.
@@ -431,10 +463,16 @@ export function defineDeckSuite({
       if (evidenceAssertions) assertA11yClean(await new AxeBuilder({ page }).analyze());
 
       const section = page.locator(`#${mobileCapture.id}`);
+      const screenshotTarget = {
+        screenshot: ({ path: screenshotPath }) => page.screenshot({
+          path: screenshotPath,
+          clip: { x: 0, y: 0, width: MOBILE.width, height: MOBILE.height },
+        }),
+      };
       await alignDeckSectionForCapture(page, section, ids.indexOf(mobileCapture.id), ids.length);
-      await captureNamedUiState({
+      const capturePaths = await captureNamedUiState({
         page,
-        screenshotTarget: section,
+        screenshotTarget,
         testInfo,
         sliceId,
         stateName: mobileCapture.stateName,
@@ -448,6 +486,7 @@ export function defineDeckSuite({
         },
         captureConsole: async () => runtimeReport,
       });
+      expect(pngDimensions(await readFile(capturePaths.screenshotPath)), "mobile named-state PNG must exactly match its w390h844 artifact slug").toEqual(MOBILE);
       if (evidenceAssertions) assertRuntimeClean(runtimeReport);
     } finally {
       await stopFixtureServer(server);
@@ -466,6 +505,44 @@ export function defineDeckSuite({
       });
       const m = await measureFit(page);
       expect(() => assertMobileFit(m)).toThrow(/elements overflow/);
+    } finally {
+      await stopFixtureServer(server);
+    }
+  });
+
+  test(`${sliceId} mobile fit check fails on a deliberately-left-clipped element`, async ({ page }) => {
+    const { server, url } = await startServer();
+    try {
+      await settleMobile(page, url);
+      await page.evaluate(() => {
+        const clippedLeft = document.createElement("div");
+        clippedLeft.style.cssText = "position:relative;left:-500px;width:20px;height:20px";
+        document.querySelector("section .inner")?.appendChild(clippedLeft);
+      });
+      const m = await measureFit(page);
+      expect(m.hOffenders.some((offender) => offender.includes("left="))).toBe(true);
+      expect(() => assertMobileFit(m)).toThrow(/elements overflow/);
+    } finally {
+      await stopFixtureServer(server);
+    }
+  });
+
+  test(`${sliceId} mobile fit check fails on deliberately-overlapping siblings`, async ({ page }) => {
+    const { server, url } = await startServer();
+    try {
+      await settleMobile(page, url);
+      await page.evaluate(() => {
+        const parent = document.createElement("div");
+        const first = document.createElement("div");
+        const second = document.createElement("div");
+        first.style.cssText = "width:40px;height:40px";
+        second.style.cssText = "width:40px;height:40px;margin-top:-40px";
+        parent.append(first, second);
+        document.querySelector("section .inner")?.appendChild(parent);
+      });
+      const m = await measureFit(page);
+      expect(m.siblingOverlaps.length).toBeGreaterThan(0);
+      expect(() => assertMobileFit(m)).toThrow(/sibling elements overlap/);
     } finally {
       await stopFixtureServer(server);
     }
@@ -558,19 +635,19 @@ export const DECK_REGISTRY = {
       { id: "interrupt-cost", stateName: "Interrupt cost (delay pattern)", capture: true },
       // Part 1 — eliminating coordination delay
       { id: "core-idea", stateName: "Core idea", capture: true },
-      { id: "safe-pauses", stateName: "Safe pauses", capture: false },
-      { id: "steering", stateName: "Steering", capture: false },
+      { id: "safe-pauses", stateName: "Safe pauses", capture: true },
+      { id: "steering", stateName: "Steering", capture: true },
       { id: "parallel-review", stateName: "Parallel review", capture: true },
       { id: "self-healing", stateName: "Self-healing recovery", capture: true },
-      { id: "trust", stateName: "Trust / never-lie", capture: false },
+      { id: "trust", stateName: "Trust / never-lie", capture: true },
       { id: "why-graphs", stateName: "Why graphs", capture: true },
       // Part 2 — make the waiting visible
-      { id: "handoff", stateName: "Handoff cost", capture: false },
-      { id: "blind-spot", stateName: "Blind spot", capture: false },
+      { id: "handoff", stateName: "Handoff cost", capture: true },
+      { id: "blind-spot", stateName: "Blind spot", capture: true },
       { id: "observable-state", stateName: "Observable state", capture: true },
       { id: "measurement-loop", stateName: "Measurement loop", capture: true },
       { id: "instrumented", stateName: "Instrumented", capture: true },
-      { id: "metrics", stateName: "Metrics", capture: false },
+      { id: "metrics", stateName: "Metrics", capture: true },
       { id: "close", stateName: "Close", capture: true },
     ],
   },

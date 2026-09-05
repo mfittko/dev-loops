@@ -6,10 +6,10 @@ anything that ships.
 
 | Deck | HTML render | Topic |
 | --- | --- | --- |
-| Introducing dev-loops | [`introducing-dev-loops.html`](introducing-dev-loops.html) | Why fast code still waits, how pullable next actions restore momentum, and how to start with one issue. |
+| Introducing dev-loops | [`introducing-dev-loops.html`](introducing-dev-loops.html) | Why delivery stalls between actions, how pullable next actions restore momentum, and how to start with one issue. |
 | dev-loops: Control & Observability | [`dev-loops-deep-dive.html`](dev-loops-deep-dive.html) | Explicit delivery control (Act I) and measuring the waiting between actions (Act II). |
 | The State Graph Is the Surface | [`state-graph-surface.html`](state-graph-surface.html) | How authoritative state, bounded loops, evidence, and human authority compose into one control surface. |
-| How dev-loops Decided Itself Into Shape | [`how-dev-loops-decided-itself.html`](how-dev-loops-decided-itself.html) | The project's recorded corrections and two reversals, narrated as a decision ledger. |
+| How dev-loops Decided Itself Into Shape | [`how-dev-loops-decided-itself.html`](how-dev-loops-decided-itself.html) | The project's decision ledger, illustrated through two selected reversals from the larger recorded history. |
 
 ## Markdown presentation material
 
