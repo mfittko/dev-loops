@@ -27,37 +27,34 @@ function hasScopeBoundary(body) {
   return SCOPE_BOUNDARY_PATTERN.test(body);
 }
 
-// #1951: validate the mapping table's SHAPE, not just the presence of pipe
-// lines — an identifier-only/tautological table (`AC1 → D1`) or an empty
-// header/separator-only table is invalid. Shares `detectAcDodMatrix` with the
-// deterministic refinement detector so the epic verifier and the enqueue/draft
-// gate cannot drift on what counts as a valid matrix.
-function hasValidMatrix(issueBody) {
-  return detectAcDodMatrix(typeof issueBody === "string" ? issueBody : "").valid === true;
-}
-
 export function runRefinementCompletenessChecker(tree) {
   const errors = [];
 
   for (const issue of tree.issues) {
     const nonGoals = extractSection(issue.body, "Non-goals");
-    const acDodMatrix = extractSection(issue.body, "AC / DoD matrix");
-
     // #1951: the AC→DoD mapping matrix is the authoritative issue artifact for
     // AC and DoD; interactive issue-side `## Acceptance criteria` /
     // `## Definition of done` checklists are NOT required (they duplicate the
     // matrix). loop-grill synthesizes a matrix-only body, so requiring the
     // checklists here would false-block a grill-refined epic node. The floor is
     // a valid mapping matrix + explicit Non-goals + an explicit scope boundary.
+    //
+    // Matrix presence AND shape are resolved through the SHARED `detectAcDodMatrix`
+    // (same detector the enqueue/draft gate uses), not a literal `## AC / DoD
+    // matrix` heading match — so a valid matrix authored under an alternate
+    // recognized heading (`## AC → DoD mapping`) or a criterion/evidence-headed
+    // table is not false-rejected (#1951/Copilot review): `!found` → missing,
+    // `found && !valid` → invalid.
+    const matrix = detectAcDodMatrix(issue.body);
 
     if (!nonGoals) {
       errors.push({ code: "missing_non_goals", issue: issue.number, message: "Missing ## Non-goals section." });
     }
 
-    if (!acDodMatrix) {
-      errors.push({ code: "missing_ac_dod_matrix", issue: issue.number, message: "Missing ## AC / DoD matrix section." });
-    } else if (!hasValidMatrix(issue.body)) {
-      errors.push({ code: "invalid_ac_dod_matrix", issue: issue.number, message: "AC / DoD matrix section must contain a semantic table mapping each acceptance-criterion outcome to concrete completion evidence (an empty or identifier-only/tautological table is invalid)." });
+    if (!matrix.found) {
+      errors.push({ code: "missing_ac_dod_matrix", issue: issue.number, message: "Missing AC→DoD mapping matrix (a two-column table mapping each acceptance-criterion outcome to its required completion evidence)." });
+    } else if (!matrix.valid) {
+      errors.push({ code: "invalid_ac_dod_matrix", issue: issue.number, message: "AC→DoD mapping matrix must be a semantic table mapping each acceptance-criterion outcome to concrete completion evidence (an empty or identifier-only/tautological table is invalid)." });
     }
 
     if (!hasScopeBoundary(issue.body)) {

@@ -497,10 +497,16 @@ function cellProseWordCount(cell) {
   return runs.filter((w) => w.toLowerCase() !== "dod").length;
 }
 
-// A matrix data row is semantic when BOTH mapped cells carry real prose (>=2
-// prose words each): rejects `AC1 | D1`, `AC1 → D1`, and empty cells.
+// A matrix data row is semantic when BOTH mapped cells carry at least one real
+// prose word (a letter-run of >=3 chars, excluding the `dod` token). This
+// rejects the identifier-only/tautological rows the contract names — `AC1 | D1`,
+// `AC1 → D1`, `DoD`, and empty cells (all 0 prose words) — WITHOUT false-
+// rejecting a legitimately terse-but-real mapping (e.g. `Feature works |
+// Regression test added`). The threshold is deliberately >=1, not >=2: the goal
+// is to reject bare identifiers, not to mandate a minimum verbosity (#1951
+// draft_gate/Copilot review).
 function rowIsSemantic(criterion, evidence) {
-  return cellProseWordCount(criterion) >= 2 && cellProseWordCount(evidence) >= 2;
+  return cellProseWordCount(criterion) >= 1 && cellProseWordCount(evidence) >= 1;
 }
 
 /**

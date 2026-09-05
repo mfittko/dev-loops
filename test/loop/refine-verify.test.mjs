@@ -120,7 +120,7 @@ test("runRefinementCompletenessChecker flags missing sections", () => {
 });
 
 
-test("runRefinementCompletenessChecker flags an invalid (no-table) matrix; issue-side checklists are not required (#1951)", () => {
+test("runRefinementCompletenessChecker flags a heading-but-no-table matrix as missing; issue-side checklists are not required (#1951)", () => {
   const body = [
     "## Scope",
     "- owns root",
@@ -142,10 +142,31 @@ test("runRefinementCompletenessChecker flags an invalid (no-table) matrix; issue
 
   const result = runRefinementCompletenessChecker(tree);
   assert.equal(result.ok, false);
-  assert.ok(result.errors.some((entry) => entry.code === "invalid_ac_dod_matrix"));
+  // #1951/Copilot: presence is resolved via the shared detector, so a heading
+  // with no table is "missing" (no matrix), not "invalid".
+  assert.ok(result.errors.some((entry) => entry.code === "missing_ac_dod_matrix"));
   // #1951: no AC checklist / checkbox / DoD section is present, and that is fine.
   assert.ok(!result.errors.some((entry) => entry.code === "missing_acceptance_checkbox"));
   assert.ok(!result.errors.some((entry) => entry.code === "missing_definition_of_done"));
+});
+
+test("#1951/Copilot runRefinementCompletenessChecker accepts a valid matrix under an ALTERNATE heading (not the literal '## AC / DoD matrix')", () => {
+  const body = [
+    "## Scope",
+    "- owns root",
+    "This issue owns root. It does NOT own api (#2).",
+    "",
+    "## AC → DoD mapping",
+    "| Criterion outcome | Required completion evidence |",
+    "|---|---|",
+    "| the feature works end to end | a focused test proves the feature works |",
+    "",
+    "## Non-goals",
+    "- not needed",
+  ].join("\n");
+  const tree = normalizeTreePayload({ root: 1, issues: [{ number: 1, children: [], body }] });
+  const result = runRefinementCompletenessChecker(tree);
+  assert.equal(result.ok, true, result.errors.map((e) => e.message).join("\n"));
 });
 
 test("#1951 runRefinementCompletenessChecker passes a matrix-only node (no issue-side AC/DoD checklists)", () => {

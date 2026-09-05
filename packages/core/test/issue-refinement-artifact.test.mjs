@@ -92,6 +92,23 @@ test("detectAcDodMatrix reports found+invalid for an identifier-only/tautologica
   assert.match(m.reason, /identifier-only|tautological/);
 });
 
+test("#1951/Copilot detectAcDodMatrix accepts a terse-but-real row (>=1 prose word per cell), rejects only identifier-only cells", () => {
+  const body = [
+    "## AC / DoD matrix", "",
+    "| Criterion | Evidence |",
+    "|---|---|",
+    "| Feature works | Tested |",
+    "",
+  ].join("\n");
+  const m = detectAcDodMatrix(body);
+  assert.equal(m.found, true);
+  assert.equal(m.valid, true, "a terse mapping (one prose word per cell) is a real mapping, not identifier-only");
+  // But a bare-identifier cell (0 prose words) is still rejected.
+  const idOnly = detectAcDodMatrix("## AC / DoD matrix\n\n| AC | DoD |\n|---|---|\n| AC1 | done work |\n");
+  // col0 "AC1" has 0 prose words → row not semantic → invalid.
+  assert.equal(idOnly.valid, false);
+});
+
 test("detectAcDodMatrix reports found+invalid for a header/separator-only (empty) table", () => {
   const body = "## AC → DoD mapping\n\n| Criterion | Evidence |\n|---|---|\n";
   const m = detectAcDodMatrix(body);
@@ -172,6 +189,20 @@ test("derivePrChecklistsFromIssueMatrix accepts a pre-parsed matrix", () => {
   const matrix = detectAcDodMatrix("## Problem\n\nX\n" + MATRIX);
   const { acChecklist } = derivePrChecklistsFromIssueMatrix({ matrix });
   assert.equal(acChecklist.length, 2);
+});
+
+test("#1951 derivePrChecklistsFromIssueMatrix dedupes repeated criterion/evidence rows", () => {
+  const body = [
+    "## AC / DoD matrix", "",
+    "| Criterion outcome | Required completion evidence |",
+    "|---|---|",
+    "| the feature works end to end | a focused test proves the feature works |",
+    "| the feature works end to end | a focused test proves the feature works |",
+    "",
+  ].join("\n");
+  const { acChecklist, dodChecklist } = derivePrChecklistsFromIssueMatrix({ body });
+  assert.deepEqual(acChecklist, ["the feature works end to end"]);
+  assert.deepEqual(dodChecklist, ["a focused test proves the feature works"]);
 });
 
 test("derivePrChecklistsFromIssueMatrix fails closed on a missing/malformed matrix", () => {
@@ -466,6 +497,17 @@ test("#1866 a linked refinement doc counts only when it resolves (resolveLinkedD
   assert.equal(resolved.source, REFINEMENT_SOURCE.LINKED_DOC);
   assert.equal(resolved.linkedDoc.resolves, true);
   assert.equal(resolved.finding, null);
+});
+
+test("#1951 a resolvable linked doc WITHOUT an explicit Non-goals section fails closed with missing_explicit_non_goals", () => {
+  const artifact = detectIssueRefinementArtifact({
+    body: "## Plan\n\nSee tmp/refinement/532-plan.md for the matrix.\n",
+    issueNumber: 532,
+    resolveLinkedDoc: () => true,
+  });
+  assert.equal(artifact.hasACs, false);
+  assert.equal(artifact.source, REFINEMENT_SOURCE.LINKED_DOC);
+  assert.equal(artifact.finding, MISSING_EXPLICIT_NON_GOALS_FINDING);
 });
 
 test("#1866 without resolveLinkedDoc the predicate stays pure and unchanged (no resolves field)", () => {

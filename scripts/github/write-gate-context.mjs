@@ -2877,10 +2877,17 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
         );
       }
       const body = typeof issue.body === "string" ? issue.body : "";
-      // #1951: "gives a reviewer real criteria to read" is AC-content presence
-      // (checklist items or matrix-derived criteria), not the full matrix
-      // refinement floor (`hasACs`) the draft gate enforces separately.
-      if (detectIssueRefinementArtifact({ body, issueNumber: number }).acItems.length > 0) anyRefined = true;
+      // "gives a reviewer real criteria to read" — true when the linked issue is
+      // refined (`hasACs`: a valid AC→DoD matrix + Non-goals, or a resolvable
+      // linked refinement doc + Non-goals) OR simply carries AC content
+      // (`acItems`, e.g. a pre-#1951 AC-checklist issue). #1951/Copilot review:
+      // include `hasACs` so a linked-doc-refined issue — which intentionally
+      // returns `acItems: []` (its criteria live in the doc) — is not
+      // misclassified as unrefined; keep `acItems` so a checklist-bearing issue
+      // still counts. This is "provides criteria", NOT the refinement floor the
+      // draft gate enforces separately.
+      const artifact = detectIssueRefinementArtifact({ body, issueNumber: number });
+      if (artifact.hasACs || artifact.acItems.length > 0) anyRefined = true;
       bodies.push({ label, body });
     }
     // A single linked issue renders exactly as before (no redundant `### #N`
