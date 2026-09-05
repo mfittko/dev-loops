@@ -112,6 +112,44 @@ export function extractIssuePrIds(body) {
   return [...found];
 }
 
+// A consecutive run of number-sign(s) immediately before a digit. Strip EVERY
+// number-sign in the run (`#123` and `##123` alike leave `123`), or a leftover
+// still auto-links AND trips the decode-aware guard. A lookahead consumes only
+// the number-sign(s), keeping the digits.
+const BARE_ISSUE_PR_ID_RE = /#+(?=\d)/g;
+
+/**
+ * The sanctioned pre-guard transform for GENERATED comment bodies (#1922):
+ * neutralize a bare `#<digits>` auto-link token to a guard-safe, non-auto-linking
+ * form by stripping the leading `#` (`#123` -> `123`). Auto-link syntax requires
+ * the leading `#`, so the result neither auto-links on GitHub nor trips
+ * `guardCommentBodyNoIssuePrIds` — and because no decode path can reassemble a
+ * `#` from bare digits, the guard's entity-decode surface stays satisfied too.
+ *
+ * This is deliberately SEPARATE from `guardCommentBodyNoIssuePrIds`: the guard
+ * stays fail-closed for human-authored bodies (it must still REFUSE a bare id a
+ * person typed), while gate generators opt into this transform on their OWN
+ * generated finding text before handing it to the guard. It does NOT weaken the
+ * guard.
+ *
+ * Run on RAW text BEFORE any markdown sanitizer (sanitizeInline/sanitizeCodeSpan)
+ * emits its own numeric character references (e.g. `&#91;` for `[`): this strips
+ * `#` before digits without distinguishing an entity's digits from a bare id's,
+ * so applying it post-sanitize would corrupt an already-emitted entity
+ * (`&#91;` -> `&91;`).
+ *
+ * ponytail: strips only a LITERAL `#` before digits — every form a review agent
+ * actually authors (`#123`). It does NOT mirror the guard's full entity-decode
+ * surface; text already carrying an entity-encoded number-sign adjacent to
+ * digits (`&num;123`) is unreachable from reviewer prose, and the guard remains
+ * the fail-closed backstop for it. Returns non-string input unchanged (stringly
+ * callers coerce first).
+ */
+export function neutralizeBareIssuePrIds(value) {
+  if (typeof value !== "string") return value;
+  return value.replace(BARE_ISSUE_PR_ID_RE, "");
+}
+
 // A caller-supplied allowlist is normally already an array (or other
 // iterable) of ids. Guard the one mis-shaped input that would otherwise
 // silently produce the wrong set: a plain CSV string. `Array.from` over a

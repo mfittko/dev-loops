@@ -61,6 +61,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "../github/_carried-angles.mjs";
+import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { isPostedCommentLimitError, normalizeStructuredFindings, renderStructuredFindings } from "../github/upsert-checkpoint-verdict.mjs";
 import { verifyBriefingPrefixesForHead } from "../github/verify-briefing-prefixes.mjs";
 import { verifyDispatchPromptLayoutForHead } from "../github/verify-dispatch-prompt-layout.mjs";
@@ -1298,11 +1299,22 @@ export async function consolidateGateFanin(options) {
   }));
 
   const consolidated = consolidateFanin({ angleResults: rawArtifacts, blockCleanOnFindingSeverities });
-  // Bound each finding's free-text fields before they reach either output
-  // shape — see MAX_FINDING_TEXT_LENGTH above.
+  // Neutralize + bound each finding's free-text fields before they reach EITHER
+  // output shape (#1922). This is the ONE canonical pipeline seam: both the flat
+  // ledger (toFindingsLogShape below) and the nested findingsJson (--out) source
+  // their finding text from `consolidated.findings`, so a bare `#<digits>` a
+  // reviewer put in its summary/recommendation is neutralized to a guard-safe
+  // form (`#123` -> `123`) here, once, on RAW text before any render/sanitize —
+  // rather than at every downstream render call site. Without it,
+  // upsert-checkpoint-verdict.mjs's comment-id guard fail-closes on the reviewer's
+  // own incidental issue reference and refuses to post the verdict. Deliberate
+  // cross-references are unaffected: they live on the verdict body's structured
+  // fields and round-trip through the guard's `allowedRefs` at post time, not
+  // through reviewer finding prose. Neutralize BEFORE truncate so a `#` at a
+  // truncation boundary can never survive. See MAX_FINDING_TEXT_LENGTH above.
   for (const f of consolidated.findings) {
-    f.summary = truncateFindingText(f.summary);
-    if (f.recommendation) f.recommendation = truncateFindingText(f.recommendation);
+    f.summary = truncateFindingText(neutralizeBareIssuePrIds(f.summary));
+    if (f.recommendation) f.recommendation = truncateFindingText(neutralizeBareIssuePrIds(f.recommendation));
     if (f.file) f.file = truncateFindingText(f.file, MAX_FINDING_FILE_LENGTH);
   }
   // toFindingsLogShape's output ({ severity, angle, summary, disposition?, files? })
