@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
-import { requireTokenValue } from "../_cli-primitives.mjs";
+import { parseAllowedRefsCsv, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { listIssueComments, resolveAuthenticatedLogin, runGhJson, sanitizeInline } from "./post-gate-findings.mjs";
@@ -69,6 +69,13 @@ Required:
 Optional:
   --tmp-root <path>            Root tmp directory for the local findings-log fallback
                                 count (default: tmp/)
+  --allowed-refs <csv>         Explicit allowlist of issue/PR ids a disposition reply
+                                body may cite (same shape/semantics as
+                                reply-resolve-review-thread): the bare-#N comment-id
+                                guard opens only for these ids (e.g. the PR's own
+                                governing issue quoted in a deferred finding's
+                                summary). Without it, un-whitelisted bare refs stay
+                                fail-closed.
 
 Output (stdout, JSON):
   { "ok": true, "repo": "...", "pr": 42, "gate": "...", "headSha": "...", "round": N,
@@ -360,7 +367,7 @@ function findExistingFollowUpIssueNumber(threads, login) {
 // fetched alongside `threads` (fetchThreadsWithFullBodies) — reused here as
 // the reply-target validation snapshot rather than re-fetching it, since it is
 // already fresh (fetched immediately before this pass runs).
-async function runDispositionPass({ repo, pr, round, threads, snapshot, login, mediumFixWindow }, { env, ghCommand }) {
+async function runDispositionPass({ repo, pr, round, threads, snapshot, login, mediumFixWindow, allowedRefs = [] }, { env, ghCommand }) {
   // #1672: Before stamping, detect any contract-violating disposition=deferred
   // stamps already present on gate-authored threads (a subagent bypass).
   detectContractViolatingDeferredStamps(threads, login, round, mediumFixWindow);
@@ -453,7 +460,7 @@ async function runDispositionPass({ repo, pr, round, threads, snapshot, login, m
           const message = dispositionMessage({ fp: target.fp, severity: target.severity, angle: target.angle, round, mediumFixWindow, repo, issueNumber, body: target.body, operatorVisible: target.operatorVisible });
           await stampDeferredDisposition({ repo, commentId: target.commentId, round, mediumFixWindow, issueNumber }, { env, ghCommand });
           await replyAndMaybeResolve(
-            { repo, pr, commentId: target.commentId, threadId: target.threadId, body: message, resolve: true, validatedSnapshot: snapshot },
+            { repo, pr, commentId: target.commentId, threadId: target.threadId, body: message, resolve: true, validatedSnapshot: snapshot, allowedRefs },
             { env, ghCommand },
           );
           fileableResolved += 1;
@@ -470,7 +477,7 @@ async function runDispositionPass({ repo, pr, round, threads, snapshot, login, m
     try {
       const message = unfiledResolutionMessage({ fp: target.fp, severity: target.severity, angle: target.angle, round, body: target.body, operatorVisible: target.operatorVisible, mediumFixWindow });
       await replyAndMaybeResolve(
-        { repo, pr, commentId: target.commentId, threadId: target.threadId, body: message, resolve: true, validatedSnapshot: snapshot },
+        { repo, pr, commentId: target.commentId, threadId: target.threadId, body: message, resolve: true, validatedSnapshot: snapshot, allowedRefs },
         { env, ghCommand },
       );
       unfiledResolved += 1;
@@ -491,13 +498,14 @@ async function runDispositionPass({ repo, pr, round, threads, snapshot, login, m
 // ---------------------------------------------------------------------------
 
 export function parseCloseGateFindingsCliArgs(argv) {
-  const options = { help: false, ledgerPath: undefined, tmpRoot: "tmp" };
+  const options = { help: false, ledgerPath: undefined, tmpRoot: "tmp", allowedRefs: [] };
   const { tokens } = parseArgs({
     args: [...argv],
     options: {
       help: { type: "boolean", short: "h" },
       ledger: { type: "string" },
       "tmp-root": { type: "string" },
+      "allowed-refs": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -529,6 +537,10 @@ export function parseCloseGateFindingsCliArgs(argv) {
         throw parseError("--tmp-root requires a non-empty path");
       }
       options.tmpRoot = t;
+      continue;
+    }
+    if (token.name === "allowed-refs") {
+      options.allowedRefs = parseAllowedRefsCsv(requireTokenValue(token, parseError), "--allowed-refs", parseError);
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -578,7 +590,7 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
   // this round posted anything of its own.
   const { threads, snapshot } = await fetchThreadsWithFullBodies({ repo, pr }, gh);
   const { deferredResolved, followUpIssueNumber, dispositionFailures } = await runDispositionPass(
-    { repo, pr, round, threads, snapshot, login, mediumFixWindow },
+    { repo, pr, round, threads, snapshot, login, mediumFixWindow, allowedRefs: options.allowedRefs ?? [] },
     gh,
   );
 
