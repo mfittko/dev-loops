@@ -610,10 +610,9 @@ export function defineDeckSuite({
       const targetIndex = Math.min(1, ids.length - 1);
       const section = page.locator(`#${ids[targetIndex]}`);
       await alignDeckSectionForCapture(page, section, targetIndex, ids.length);
-      await page.evaluate(() => {
-        const counter = document.querySelector(".count") ?? document.querySelector("section .footer");
-        counter?.style.setProperty("visibility", "hidden", "important");
-      });
+      const count = page.locator(".count");
+      const counter = await count.count() ? count : section.locator(".footer");
+      await counter.evaluate((element) => element.style.setProperty("visibility", "hidden", "important"));
       await expect(assertDeckChromeState(page, section, targetIndex, ids.length, { timeout: 100 })).rejects.toThrow(/counter must be visible/);
     } finally {
       await stopFixtureServer(server);
