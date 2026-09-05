@@ -1834,7 +1834,10 @@ add inline comments to a submitted review), so every still-unposted finding is b
 correction rather than dropped.
 
 After the verdict post AND after the Phase 5 (Retry) fixer triage pass, at every gate close, run
-`close-gate-findings.mjs --ledger <path>` against that same ledger. It posts NOTHING of its own —
+`close-gate-findings.mjs --ledger <path> --allowed-refs <governing-issue>` against that same ledger
+(`<governing-issue>` = the PR's governing/closing issue, resolved deterministically from
+`closingIssuesReferences` — never hardcoded; see the copilot-pr-followup SKILL step 7 for the
+resolution + scoped-allowlist rationale). It posts NOTHING of its own —
 it runs only the thread disposition pass (`GATE-EXEC-THREAD-DISPOSITION`). The defer-close for
 low findings runs AFTER the fixer triages them (#1585): the fixer sees every gate-authored
 finding first (fix-if-cheap-in-the-same-commit, else defer), then the disposition pass acts as
@@ -2053,7 +2056,7 @@ findings-log ledger** for the reviewed head (the single-agent path's
 `write-gate-findings-log.mjs` writes it). Finding posting is likewise uniform: the inline
 verdict takes `--findings-ledger <path>` for that same ledger, so the reduced review path
 never reduces what gets threaded, and the close afterwards runs
-`close-gate-findings.mjs --ledger <path>` for the disposition pass exactly as
+`close-gate-findings.mjs --ledger <path> --allowed-refs <governing-issue>` for the disposition pass exactly as
 [Finding threads and disposition](#finding-threads-and-disposition) requires for a fan-out
 close. `requireFanoutProvenance`, when enabled, is
 enforced **only for `fanout_fanin` verdicts** — a light inline verdict is already
