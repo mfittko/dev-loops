@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { buildParseError, isDirectCliRun, formatCliError } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { canonicalizeScope } from "./_gate-names.mjs";
 const USAGE = `Usage: verify-fresh-review-context.mjs [--help] [--scope <name>] [--context-path <path>]
        [--prefix-hash <sha256>|--prefix-file <path>] [--same-head-retry]
 Verify that the current scoped-reviewer session has fresh context.
@@ -139,11 +140,17 @@ function resolveScope(argv) {
   return resolveFlagValue(argv, "--scope");
 }
 function resolveValidatedScope(argv) {
-  const raw = resolveScope(argv);
-  if (raw === null) return null;
+  const rawInput = resolveScope(argv);
+  if (rawInput === null) return null;
+  // Canonicalize a gate-id-derived scope (underscore) to the hyphen-only
+  // convention BEFORE validating and keying the sentinel, so an underscore
+  // form validates on the first attempt and shares one sentinel with its
+  // hyphenated twin (#1957). "" stays "" (canonicalize is a no-op on it) and
+  // still fails closed below.
+  const raw = rawInput === "" ? rawInput : canonicalizeScope(rawInput);
   if (raw === "" || !VALID_SCOPE_RE.test(raw)) {
     process.stderr.write(`${formatCliError(
-      parseError(`Invalid --scope value "${raw}": must be non-empty and contain only alphanumeric characters and hyphens.`)
+      parseError(`Invalid --scope value "${rawInput}": must be non-empty and contain only alphanumeric characters and hyphens.`)
     )}\n`);
     return undefined; // signals invalid
   }

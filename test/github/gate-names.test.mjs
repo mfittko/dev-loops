@@ -9,6 +9,8 @@ import {
   GATE_NAMES,
   LIFECYCLE_GATES,
   REVIEW_GATE,
+  canonicalizeScope,
+  gateScopePrefix,
   normalizeGate,
 } from "../../scripts/github/_gate-names.mjs";
 
@@ -34,4 +36,20 @@ test("normalizeGate still accepts every tier member", () => {
   for (const gate of GATE_NAMES) {
     assert.equal(normalizeGate(gate), gate);
   }
+});
+
+// Issue #1957: canonicalizeScope maps a gate-id-derived scope's underscores to
+// the hyphen-only convention every --scope validator (VALID_SCOPE_RE) enforces,
+// so a gate-group scope validates without a self-correction retry.
+test("canonicalizeScope maps underscore gate ids to the hyphen scope convention", () => {
+  assert.equal(canonicalizeScope("draft_gate-group-docs-surface"), "draft-gate-group-docs-surface");
+  assert.equal(canonicalizeScope("pre_approval_gate-group-a"), "pre-approval-gate-group-a");
+  // Idempotent on already-canonical (hyphen-only) scopes.
+  assert.equal(canonicalizeScope("draft-gate-coverage"), "draft-gate-coverage");
+});
+
+test("gateScopePrefix reuses canonicalizeScope so the two normalizations never drift", () => {
+  assert.equal(gateScopePrefix("draft_gate"), "draft-gate-");
+  assert.equal(gateScopePrefix("pre_approval_gate"), "pre-approval-gate-");
+  assert.equal(gateScopePrefix("draft_gate"), `${canonicalizeScope("draft_gate")}-`);
 });

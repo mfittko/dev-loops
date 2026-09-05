@@ -193,6 +193,29 @@ test("record-dispatch-prompt-layout.mjs writes a record readable back by the ver
   });
 });
 
+// Issue #1957: an underscore gate-id-derived scope must record on the first
+// attempt (no hyphen self-correction) and key the record by the canonical
+// hyphenated form.
+test("record-dispatch-prompt-layout.mjs canonicalizes an underscore gate-id-derived --scope", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const relPath = await writeGateContextPrefix(tmpDir);
+    const promptFile = path.join(tmpDir, "prompt.txt");
+    await writeFile(promptFile, `${PREFIX_BYTES}## Angle: coverage\nDo the thing.`, "utf8");
+    const result = runRecordCli(
+      ["--scope", "draft_gate-group-docs-surface", "--head-sha", HEAD_SHA, "--prefix-path", relPath, "--prompt-file", promptFile],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).recorded, true);
+    // Record keyed and stored under the canonical hyphenated scope.
+    const recordRaw = await readFile(
+      dispatchPromptLayoutRecordPath(path.join(tmpDir, "tmp"), "draft-gate-group-docs-surface", HEAD_SHA),
+      "utf8",
+    );
+    assert.equal(JSON.parse(recordRaw).scope, "draft-gate-group-docs-surface");
+  });
+});
+
 test("record-dispatch-prompt-layout.mjs refuses (exit 1) a non-canonical --prefix-path basename", async () => {
   await withTmpDir(async (tmpDir) => {
     const promptFile = path.join(tmpDir, "prompt.txt");
