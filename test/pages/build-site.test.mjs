@@ -1,10 +1,10 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, win32 } from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildSite, injectNav, resolveRepoUrl, ARTICLES, DECKS, NAV_LINKS, STATE_ATLAS } from '../../scripts/pages/build-site.mjs';
+import { assertSafeOutputRelationship, assertUniquePublishTargets, buildSite, injectNav, resolveRepoUrl, ARTICLES, DECKS, LANDING, NAV_LINKS, STATE_ATLAS } from '../../scripts/pages/build-site.mjs';
 
 // A deck publishes under its outFile when set (the deep-dive article and deck
 // share the source basename), else its source file name.
@@ -33,6 +33,13 @@ test('build-site: index is the intro article, all resources published, nav links
       await stat(join(out, deckOut(d))); // throws if missing
     }
 
+    const stateGraphDeck = DECKS.find((d) => d.file === 'state-graph-surface.html');
+    assert.ok(stateGraphDeck, 'state-graph deck is registered for Pages publication');
+    assert.equal(
+      await readFile(join(out, deckOut(stateGraphDeck)), 'utf8'),
+      await readFile(join(process.cwd(), 'docs', 'presentations', stateGraphDeck.file), 'utf8'),
+      'Pages copies the CSP-safe state-graph deck byte-for-byte',
+    );
     const index = await readFile(join(out, 'index.html'), 'utf8');
     // The landing page is the intro article (its content), not the old deck index.
     assert.ok(index.includes('Introducing dev-loops'), 'index is the intro article');
@@ -63,10 +70,105 @@ test('build-site: index is the intro article, all resources published, nav links
         ...DECKS.map((d) => deckOut(d)),
         STATE_ATLAS.file,
         'assets/mermaid.min.js',
+        '.dev-loops-pages-output',
       ].sort(),
     );
   } finally {
     await rm(out, { recursive: true, force: true });
+  }
+});
+
+test('build-site: relative repoRoot uses the same default output as its absolute path', async () => {
+  const repoRoot = await mkdtemp(join(tmpdir(), 'pages-relative-root-'));
+  const relativeRoot = relative(process.cwd(), repoRoot);
+  try {
+    await writeFile(join(repoRoot, 'package.json'), JSON.stringify({ repository: REPO_URL }), 'utf8');
+    await mkdir(join(repoRoot, 'docs', 'articles'), { recursive: true });
+    await mkdir(join(repoRoot, 'docs', 'presentations'), { recursive: true });
+    await mkdir(join(repoRoot, 'scripts', 'loop', 'inspect-run-viewer', 'vendor'), { recursive: true });
+    await writeFile(join(repoRoot, 'docs', 'articles', LANDING.file), '<style></style><body>landing</body>', 'utf8');
+    for (const article of ARTICLES) {
+      await writeFile(join(repoRoot, 'docs', 'articles', article.file), '<style></style><body>article</body>', 'utf8');
+    }
+    for (const deck of DECKS) {
+      await writeFile(join(repoRoot, 'docs', 'presentations', deck.file), `deck: ${deck.file}`, 'utf8');
+    }
+    await writeFile(join(repoRoot, 'scripts', 'loop', 'inspect-run-viewer', 'vendor', 'mermaid.min.js'), '', 'utf8');
+
+    const result = await buildSite({ repoRoot: relativeRoot });
+
+    assert.equal(result.out, join(repoRoot, 'site'));
+    await stat(join(result.out, 'index.html'));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('build-site: invalid repoRoot preserves a pre-existing site directory', async () => {
+  const repoRoot = await mkdtemp(join(tmpdir(), 'pages-invalid-root-'));
+  const sentinel = join(repoRoot, 'site', 'sentinel.txt');
+  try {
+    await mkdir(join(repoRoot, 'site'));
+    await writeFile(sentinel, 'preserve me', 'utf8');
+
+    await assert.rejects(() => buildSite({ repoRoot }), /package\.json/);
+
+    assert.equal(await readFile(sentinel, 'utf8'), 'preserve me');
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('build-site: incomplete repoRoot with valid package metadata preserves a pre-existing site directory', async () => {
+  const repoRoot = await mkdtemp(join(tmpdir(), 'pages-incomplete-root-'));
+  const sentinel = join(repoRoot, 'site', 'sentinel.txt');
+  try {
+    await writeFile(join(repoRoot, 'package.json'), JSON.stringify({ repository: REPO_URL }), 'utf8');
+    await mkdir(join(repoRoot, 'docs', 'articles'), { recursive: true });
+    await mkdir(join(repoRoot, 'docs', 'presentations'), { recursive: true });
+    await mkdir(join(repoRoot, 'scripts', 'loop', 'inspect-run-viewer', 'vendor'), { recursive: true });
+    for (const article of ARTICLES) {
+      await writeFile(join(repoRoot, 'docs', 'articles', article.file), '<style></style><body>article</body>', 'utf8');
+    }
+    for (const deck of DECKS) {
+      await writeFile(join(repoRoot, 'docs', 'presentations', deck.file), `deck: ${deck.file}`, 'utf8');
+    }
+    await writeFile(join(repoRoot, 'scripts', 'loop', 'inspect-run-viewer', 'vendor', 'mermaid.min.js'), '', 'utf8');
+    await mkdir(join(repoRoot, 'site'));
+    await writeFile(sentinel, 'preserve me', 'utf8');
+
+    await assert.rejects(() => buildSite({ repoRoot }), /introducing-dev-loops\.html/);
+
+    assert.equal(await readFile(sentinel, 'utf8'), 'preserve me');
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('build-site: complete repoRoot with a malformed article preserves a pre-existing site directory', async () => {
+  const repoRoot = await mkdtemp(join(tmpdir(), 'pages-malformed-root-'));
+  const sentinel = join(repoRoot, 'site', 'sentinel.txt');
+  try {
+    await writeFile(join(repoRoot, 'package.json'), JSON.stringify({ repository: REPO_URL }), 'utf8');
+    await mkdir(join(repoRoot, 'docs', 'articles'), { recursive: true });
+    await mkdir(join(repoRoot, 'docs', 'presentations'), { recursive: true });
+    await mkdir(join(repoRoot, 'scripts', 'loop', 'inspect-run-viewer', 'vendor'), { recursive: true });
+    await writeFile(join(repoRoot, 'docs', 'articles', LANDING.file), '<style></style><body>landing</body>', 'utf8');
+    for (const article of ARTICLES) {
+      await writeFile(join(repoRoot, 'docs', 'articles', article.file), '<body>article without style</body>', 'utf8');
+    }
+    for (const deck of DECKS) {
+      await writeFile(join(repoRoot, 'docs', 'presentations', deck.file), `deck: ${deck.file}`, 'utf8');
+    }
+    await writeFile(join(repoRoot, 'scripts', 'loop', 'inspect-run-viewer', 'vendor', 'mermaid.min.js'), '', 'utf8');
+    await mkdir(join(repoRoot, 'site'));
+    await writeFile(sentinel, 'preserve me', 'utf8');
+
+    await assert.rejects(() => buildSite({ repoRoot }), /cannot inject nav/);
+
+    assert.equal(await readFile(sentinel, 'utf8'), 'preserve me');
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
   }
 });
 
@@ -158,4 +260,74 @@ test('build-site refuses to wipe repoRoot itself', async () => {
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
+});
+
+test('build-site refuses repository-internal output directories without deleting them', async () => {
+  const repoRoot = await mkdtemp(join(tmpdir(), 'pages-internal-out-'));
+  const docsDir = join(repoRoot, 'docs');
+  const sentinel = join(docsDir, 'sentinel.txt');
+  try {
+    await mkdir(docsDir);
+    await writeFile(sentinel, 'preserve me', 'utf8');
+    await assert.rejects(() => buildSite({ repoRoot, outDir: docsDir }), /refusing to wipe unsafe output dir/);
+    assert.equal(await readFile(sentinel, 'utf8'), 'preserve me');
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('build-site refuses a nonempty external directory it does not own', async () => {
+  const out = await mkdtemp(join(tmpdir(), 'pages-unowned-'));
+  const sentinel = join(out, 'sentinel.txt');
+  try {
+    await writeFile(sentinel, 'preserve me', 'utf8');
+    await assert.rejects(() => buildSite({ outDir: out }), /refusing to wipe unowned output dir/);
+    assert.equal(await readFile(sentinel, 'utf8'), 'preserve me');
+  } finally {
+    await rm(out, { recursive: true, force: true });
+  }
+});
+
+test('build-site reuses an external directory only after marking it as owned', async () => {
+  const out = await mkdtemp(join(tmpdir(), 'pages-owned-'));
+  try {
+    await buildSite({ outDir: out });
+    await buildSite({ outDir: out });
+    assert.equal(await readFile(join(out, '.dev-loops-pages-output'), 'utf8'), 'owned by scripts/pages/build-site.mjs\n');
+  } finally {
+    await rm(out, { recursive: true, force: true });
+  }
+});
+
+test('build-site resolves an external parent symlink before allowing deletion', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'pages-symlink-parent-'));
+  const link = join(parent, 'repo-link');
+  const sentinel = join(process.cwd(), 'docs', 'sentinel-never-create.txt');
+  try {
+    await symlink(process.cwd(), link, 'dir');
+    await assert.rejects(() => buildSite({ outDir: join(link, 'docs') }), /refusing to wipe unsafe output dir/);
+    await assert.rejects(() => stat(sentinel), { code: 'ENOENT' });
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test('Pages output relationship guard uses Windows containment semantics', () => {
+  assert.throws(
+    () => assertSafeOutputRelationship('C:\\repo', 'C:\\repo\\docs', win32),
+    /refusing to wipe unsafe output dir/,
+  );
+  assert.throws(
+    () => assertSafeOutputRelationship('C:\\repo', 'C:\\', win32),
+    /refusing to wipe unsafe output dir/,
+  );
+  assert.doesNotThrow(() => assertSafeOutputRelationship('C:\\repo', 'D:\\preview', win32));
+});
+
+test('Pages output targets reject cross-family collisions', () => {
+  assert.doesNotThrow(() => assertUniquePublishTargets(['index.html', 'deck.html', 'assets/runtime.js']));
+  assert.throws(() => assertUniquePublishTargets(['index.html', 'deck.html', 'index.html']), /duplicate Pages output target index\.html/);
+  assert.throws(() => assertUniquePublishTargets(['index.html', 'sub/../index.html']), /unsafe Pages output target/);
+  assert.throws(() => assertUniquePublishTargets(['index.html', '../outside.html']), /unsafe Pages output target/);
+  assert.throws(() => assertUniquePublishTargets(['assets', 'assets/runtime.js']), /duplicate Pages output target/);
 });
