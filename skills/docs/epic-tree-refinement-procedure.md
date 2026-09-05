@@ -164,9 +164,14 @@ stay in the GitHub sub-issues API, not prose parent/child links or a duplicated 
 checklist in parent bodies.
 
 <!-- rule: EPIC-REFINEMENT-REQUIRED-CONTRACTS -->
-Each issue in the tree MUST carry: an AC checklist, a DoD checklist, a non-goals section, an
-AC/DoD matrix, and an explicit scope boundary in the format
-`"This issue owns X. It does NOT own Y (#NNN) or Z (#MMM)."`
+Each issue in the tree MUST carry: the authoritative AC→DoD mapping matrix (a two-column
+table mapping each acceptance-criterion outcome to its required completion evidence), a
+non-goals section, and an explicit scope boundary in the format
+`"This issue owns X. It does NOT own Y (#NNN) or Z (#MMM)."` (#1951). Interactive issue-side
+AC / DoD checklists are NOT required — the matrix is the authoritative AC→DoD artifact and
+`loop-grill` synthesizes a matrix-only body; the PR carries the derived list-form checklists.
+The deterministic verifier is `refinement-completeness-checker.mjs` (shares `detectAcDodMatrix`
+with the enqueue/draft gate), which rejects a missing/empty/identifier-only matrix.
 
 <!-- rule: EPIC-REFINEMENT-CONFIRM-BEFORE-MUTATE -->
 `EPIC-REFINEMENT-CONFIRM-BEFORE-MUTATE`: The procedure MUST write the refined body to
@@ -200,9 +205,7 @@ The procedure is complete when all issues in the tree satisfy [EPIC-REFINEMENT-R
 
 | Check | How to verify |
 |---|---|
-| AC checklist present | Issue body contains `## Acceptance Criteria` with at least one `- [ ]` item |
-| DoD checklist present | Issue body contains `## Definition of Done` with at least one `- [ ]` item |
-| AC/DoD matrix present | Issue body contains a two-column table mapping AC items to DoD items |
+| AC/DoD matrix present + valid | Issue body contains a two-column `## AC / DoD matrix` table mapping each criterion outcome to concrete completion evidence (empty or identifier-only tables are rejected); this is the authoritative AC→DoD artifact (#1951) |
 | Non-goals present | Issue body contains `## Non-goals` section |
 | Scope boundary present | Issue body contains explicit `"This issue owns ... It does NOT own ..."` text |
 | No orphaned responsibilities | Each thing the parent delegates maps to exactly one child |

@@ -96,7 +96,7 @@ test("parseConsolidateFaninCliArgs parses required + optional args", () => {
   assert.equal(result.gate, "draft_gate");
   assert.equal(result.out, "/tmp/out.json");
   assert.equal(result.ledgerOut, "/tmp/ledger.json");
-  assert.equal(result.prChecklistMatrix, "clean");
+  assert.equal(result.prChecklist, "clean");
 });
 
 test("parseConsolidateFaninCliArgs rejects a whitespace-only --ledger-out value", () => {
@@ -864,7 +864,7 @@ test("consolidateGateFanin rejects a --pr-checklist value other than \"clean\"",
     { "dry.json": { angle: "dry", verdict: "clean", findings: [] } },
     async (dir) => {
       await assert.rejects(
-        () => consolidateGateFanin({ findingsDir: dir, prChecklistMatrix: '{"angle":"scope","verdict":"findings_present","findings":[]}' }),
+        () => consolidateGateFanin({ findingsDir: dir, prChecklist: '{"angle":"scope","verdict":"findings_present","findings":[]}' }),
         /accepts only "clean"/,
       );
     },
@@ -875,7 +875,7 @@ test("consolidateGateFanin upserts a clean pr-checklist angle when missing", asy
   await withFindingsDir(
     { "dry.json": { angle: "dry", verdict: "clean", findings: [] } },
     async (dir) => {
-      const result = await consolidateGateFanin({ findingsDir: dir, prChecklistMatrix: "clean" });
+      const result = await consolidateGateFanin({ findingsDir: dir, prChecklist: "clean" });
       assert.deepEqual(
         result.angles.find((a) => a.angle === "pr-checklist"),
         { angle: "pr-checklist", verdict: "clean", findingCount: 0 },
@@ -895,7 +895,7 @@ test("consolidateGateFanin does not upsert pr-checklist when an artifact already
       },
     },
     async (dir) => {
-      const result = await consolidateGateFanin({ findingsDir: dir, prChecklistMatrix: "clean" });
+      const result = await consolidateGateFanin({ findingsDir: dir, prChecklist: "clean" });
       assert.equal(result.angles.length, 1);
       assert.equal(result.angles[0].findingCount, 1);
     },
@@ -1737,7 +1737,7 @@ test("e2e: all-clean fan-out with pr-checklist upsert passes upsert-verdict pars
       "dry.json": { angle: "dry", verdict: "clean", findings: [] },
     },
     async (dir) => {
-      const result = await consolidateGateFanin({ findingsDir: dir, prChecklistMatrix: "clean" });
+      const result = await consolidateGateFanin({ findingsDir: dir, prChecklist: "clean" });
       const normalized = normalizeStructuredFindings(result.findingsJson);
       assert.ok(Array.isArray(normalized), "nested shape must normalize (not be rejected as unrenderable)");
       const { missingMandatory, foreignAngles } = checkFanoutAngleCoverage(result.findingsJson, {

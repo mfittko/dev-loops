@@ -12,7 +12,7 @@ import {
 
 const USAGE = `Usage:
   refinement-completeness-checker.mjs --input <path> [--json]
-Validate required refinement sections: Acceptance criteria, Definition of done, Non-goals, AC / DoD matrix, and scope-boundary ownership prose (missing_scope_boundary).${"\n"}${DEFAULT_USAGE_SUFFIX}`;
+Validate required refinement artifacts (#1951): the AC / DoD mapping matrix (a valid semantic table), an explicit Non-goals section, and scope-boundary ownership prose (missing_scope_boundary). Interactive issue-side Acceptance criteria / Definition of done checklists are not required — the matrix is the authoritative AC→DoD artifact.${"\n"}${DEFAULT_USAGE_SUFFIX}`;
 
 // ponytail: distance caps ({0,200}? and {0,120}?) bound the gap between
 // "owns"/"does not own"/(#N) so a single match cannot span the whole body.
@@ -25,13 +25,6 @@ function hasScopeBoundary(body) {
     return false;
   }
   return SCOPE_BOUNDARY_PATTERN.test(body);
-}
-
-function hasCheckbox(sectionText) {
-  if (typeof sectionText !== "string") {
-    return false;
-  }
-  return /^\s*-\s*\[\s\]\s+/imu.test(sectionText);
 }
 
 // #1951: validate the mapping table's SHAPE, not just the presence of pipe
@@ -47,20 +40,15 @@ export function runRefinementCompletenessChecker(tree) {
   const errors = [];
 
   for (const issue of tree.issues) {
-    const acceptanceCriteria = extractSection(issue.body, "Acceptance criteria");
-    const definitionOfDone = extractSection(issue.body, "Definition of done");
     const nonGoals = extractSection(issue.body, "Non-goals");
     const acDodMatrix = extractSection(issue.body, "AC / DoD matrix");
 
-    if (!acceptanceCriteria) {
-      errors.push({ code: "missing_acceptance_criteria", issue: issue.number, message: "Missing ## Acceptance criteria section." });
-    } else if (!hasCheckbox(acceptanceCriteria)) {
-      errors.push({ code: "missing_acceptance_checkbox", issue: issue.number, message: "Acceptance criteria section must include at least one '- [ ]' checkbox." });
-    }
-
-    if (!definitionOfDone) {
-      errors.push({ code: "missing_definition_of_done", issue: issue.number, message: "Missing ## Definition of done section." });
-    }
+    // #1951: the AC→DoD mapping matrix is the authoritative issue artifact for
+    // AC and DoD; interactive issue-side `## Acceptance criteria` /
+    // `## Definition of done` checklists are NOT required (they duplicate the
+    // matrix). loop-grill synthesizes a matrix-only body, so requiring the
+    // checklists here would false-block a grill-refined epic node. The floor is
+    // a valid mapping matrix + explicit Non-goals + an explicit scope boundary.
 
     if (!nonGoals) {
       errors.push({ code: "missing_non_goals", issue: issue.number, message: "Missing ## Non-goals section." });

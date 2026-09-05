@@ -494,7 +494,7 @@ export function parseConsolidateFaninCliArgs(argv) {
     gate: undefined,
     out: undefined,
     ledgerOut: undefined,
-    prChecklistMatrix: undefined,
+    prChecklist: undefined,
     carriedAngles: undefined,
     carryForwardPlan: undefined,
     resolvedAngles: undefined,
@@ -577,7 +577,7 @@ export function parseConsolidateFaninCliArgs(argv) {
       continue;
     }
     if (token.name === "pr-checklist") {
-      options.prChecklistMatrix = requireTokenValue(token, parseError);
+      options.prChecklist = requireTokenValue(token, parseError);
       continue;
     }
     if (token.name === "carried-angles") {
@@ -855,7 +855,7 @@ function validateArtifactShape(raw, sourceLabel) {
 // upserting the mandatory clean entry when nothing covers it; no documented
 // caller ever passes a custom artifact, so that speculative surface is not
 // offered.
-function resolvePrChecklistMatrixUpsert(rawValue) {
+function resolvePrChecklistUpsert(rawValue) {
   if (rawValue.trim().toLowerCase() !== "clean") {
     throw new Error('--pr-checklist accepts only "clean"');
   }
@@ -1147,12 +1147,12 @@ export async function consolidateGateFanin(options) {
     }
   }
 
-  if (options.prChecklistMatrix !== undefined) {
-    const hasPrChecklistMatrix = rawArtifacts.some(
+  if (options.prChecklist !== undefined) {
+    const hasPrChecklist = rawArtifacts.some(
       (a) => typeof a.angle === "string" && a.angle.trim() === FANIN_SYNTHETIC_ANGLES[0],
     );
-    if (!hasPrChecklistMatrix) {
-      rawArtifacts.push(resolvePrChecklistMatrixUpsert(options.prChecklistMatrix));
+    if (!hasPrChecklist) {
+      rawArtifacts.push(resolvePrChecklistUpsert(options.prChecklist));
     }
   }
 
