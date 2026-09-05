@@ -36,7 +36,7 @@ export const DECKS = [
     file: 'introducing-dev-loops.html',
     title: 'Introducing dev-loops',
     subtitle: 'A coordination runtime for AI-assisted development',
-    description: 'The concept, the data behind it, and how to run the loop on your own project.',
+    description: 'Why delivery stalls, how the governed signal path works, and how to run one issue through the loop.',
     navLabel: 'Intro (deck)',
   },
   {

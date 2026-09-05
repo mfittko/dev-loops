@@ -262,13 +262,13 @@ function captureRuntimeErrors(page) {
 export async function assertDeckChromeState(page, section, index, total, { timeout = 5_000 } = {}) {
   const expectedCount = `${String(index + 1).padStart(2, "0")} / ${String(total).padStart(2, "0")}`;
   const count = page.locator(".count");
+  const footer = section.locator(".footer");
+  const countSurfaces = await count.count() + await footer.count();
+  expect(countSurfaces, "deck must expose exactly one supported visible slide counter").toBe(1);
   if (await count.count()) {
     await expect(count, "visible slide counter must match the section being captured").toHaveText(expectedCount, { timeout });
   } else {
-    const footer = section.locator(".footer");
-    if (await footer.count()) {
-      await expect(footer, "visible slide footer must match the section being captured").toHaveText(expectedCount, { timeout });
-    }
+    await expect(footer, "visible slide footer must match the section being captured").toHaveText(expectedCount, { timeout });
   }
 
   const progress = page.locator(".chrome .bar, #progress");
@@ -582,6 +582,23 @@ export function defineDeckSuite({
       });
       await page.evaluate(() => new Promise(requestAnimationFrame));
       await expect(assertDeckChromeState(page, section, targetIndex, ids.length, { timeout: 100 })).rejects.toThrow();
+    } finally {
+      await stopFixtureServer(server);
+    }
+  });
+
+  test(`${sliceId} capture-state assertion fails when the slide counter is missing`, async ({ page }) => {
+    const { server, url } = await startServer();
+    try {
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.goto(url, { waitUntil: "domcontentloaded" });
+      const targetIndex = Math.min(1, ids.length - 1);
+      const section = page.locator(`#${ids[targetIndex]}`);
+      await alignDeckSectionForCapture(page, section, targetIndex, ids.length);
+      await page.evaluate(() => {
+        document.querySelectorAll(".count, section .footer").forEach((element) => element.remove());
+      });
+      await expect(assertDeckChromeState(page, section, targetIndex, ids.length, { timeout: 100 })).rejects.toThrow(/exactly one supported visible slide counter/);
     } finally {
       await stopFixtureServer(server);
     }
