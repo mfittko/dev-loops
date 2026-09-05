@@ -7092,10 +7092,11 @@ test("#1912: findOwnPendingReview fail-closed guard — a pending entry with a n
 test("#1912 (Copilot): a FOREIGN same-head pending review (no dev-loops gate-review header — e.g. a human's manual draft) is NEVER submitted or deleted (data-loss guard); the round falls through to create", async () => {
   await withTempDir(async (tempDir) => {
     const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
-    // A manual review-in-progress on the same token: same head, integer id, but
-    // its body carries NO `### Gate review:` header. findOwnPendingReview must
-    // treat it as absent so the tool never clobbers the human's draft.
-    const foreignPending = { id: 5555, state: "PENDING", commit_id: SINGLE_SURFACE_HEAD, user: { login: "gate-bot" }, body: "WIP: still drafting my own comments" };
+    // A manual review-in-progress on the same token: same head, integer id. Its
+    // body QUOTES the dev-loops header lower down (citing another comment) but
+    // does NOT start with it — the start-anchored guard must treat it as absent
+    // so the tool never clobbers the human's draft (#1912 Copilot round 2).
+    const foreignPending = { id: 5555, state: "PENDING", commit_id: SINGLE_SURFACE_HEAD, user: { login: "gate-bot" }, body: "WIP: still drafting my own comments\n\n> quoting the bot: ### Gate review: `review`\n" };
     const entries = [
       { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify([foreignPending]) + "\n" },
       { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },

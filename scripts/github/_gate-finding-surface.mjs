@@ -1005,13 +1005,16 @@ export async function updateGateReview({ repo, pr, reviewId, body, allowedRefs }
  * create. A pending review missing an integer `id` is treated as absent
  * (nothing to resolve). Returns `{ id, commitId, body, sameHead }` or `null`.
  */
-// A dev-loops review-gate pending draft always renders this exact header
-// (`renderGateReviewCommentBody`). The core GATE_REVIEW_COMMENT_HEADER_RE is
-// scoped to draft_gate/pre_approval_gate only (`review` is deliberately
-// excluded there as non-evidence), so match the review header locally — it is
-// what distinguishes OUR OWN gate draft from a human's manual
-// review-in-progress on the same token (#1912 data-loss guard).
-const REVIEW_GATE_PENDING_HEADER_RE = /^###\s+Gate review:\s*`review`\s*$/m;
+// A dev-loops review-gate pending draft always renders this exact header as the
+// VERY FIRST line of the body (`renderGateReviewCommentBody`). The core
+// GATE_REVIEW_COMMENT_HEADER_RE is scoped to draft_gate/pre_approval_gate only
+// (`review` is deliberately excluded there as non-evidence), so match the review
+// header locally — it is what distinguishes OUR OWN gate draft from a human's
+// manual review-in-progress on the same token (#1912 data-loss guard). Anchored
+// to the START of the body (no `m` flag), so a foreign draft that merely QUOTES
+// the header line lower down (e.g. citing another comment) does NOT match and is
+// never submitted/deleted (#1912 Copilot review round 2).
+const REVIEW_GATE_PENDING_HEADER_RE = /^###[ \t]+Gate review:[ \t]*`review`[ \t]*(?:\r?\n|$)/;
 
 export async function findOwnPendingReview({ repo, pr, headSha }, { env, ghCommand, runChild = defaultRunChild }) {
   const payload = await runGhJson(prReviewsApiArgs(repo, pr), { env, ghCommand, runChild });
