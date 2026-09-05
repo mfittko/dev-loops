@@ -20,7 +20,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 
 import { decideWriteGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV } from "./_hook-decisions.mjs";
-import { isMainCheckout, parseMainWorktreePath, parseAllWorktreePaths, resolveContainingWorktreeRoot } from "./_worktree-guard.mjs";
+import { isMainCheckout, parseMainWorktreePath, parseAllWorktreePaths, resolveContainingWorktreeRoot, realpathNearestExisting, resolveTrackedFromCheckIgnore } from "./_worktree-guard.mjs";
 
 import { readHookInput, emitDeny, emitAllow } from "./_hook-io.mjs";
 
@@ -43,27 +43,30 @@ try {
   const activeWorktreeRoot = resolveContainingWorktreeRoot(cwd, parseAllWorktreePaths(worktreeOutput));
   if (activeWorktreeRoot) {
     const mainWorktreePath = parseMainWorktreePath(worktreeOutput);
-    const isTargetUnderActiveWorktree = isMainCheckout(abs, activeWorktreeRoot);
-    // Tracked main-checkout file? Under the main checkout AND not gitignored.
-    // Fail SAFE (AC4): if the status is unresolvable (check-ignore error), treat
-    // it as tracked so an ambiguous context never silently allows the write.
+    // Realpath-normalize the target against its nearest EXISTING ancestor so a
+    // Write creating a new (nonexistent) file is classified with the same
+    // symlink-resolved prefix the worktree/main roots already carry (#1994) —
+    // otherwise an under-a-symlinked-ancestor new-file write is misclassified.
+    const absReal = realpathNearestExisting(abs);
+    const isTargetUnderActiveWorktree = isMainCheckout(absReal, activeWorktreeRoot);
+    // Guarded main-checkout file? Under the main checkout AND not gitignored.
+    // Fail SAFE (AC4): an unresolvable check-ignore status is treated as guarded
+    // so an ambiguous context never silently allows the write.
     let isMainCheckoutTracked = false;
     let suggestedWorktreePath = null;
-    if (!isTargetUnderActiveWorktree && mainWorktreePath && isMainCheckout(abs, mainWorktreePath)) {
-      let ignored = false;
-      let ignoreResolved = true;
+    if (!isTargetUnderActiveWorktree && mainWorktreePath && isMainCheckout(absReal, mainWorktreePath)) {
+      // `git check-ignore -q` exits 0 when ignored, 1 when not ignored; a throw
+      // carries the exit code on err.status (null when git could not run at all).
+      let checkIgnoreStatus = 0;
       try {
-        // `git check-ignore -q` exits 0 when ignored, 1 when not ignored.
-        execFileSync("git", ["check-ignore", "-q", "--", abs], { cwd: mainWorktreePath, stdio: "ignore" });
-        ignored = true;
+        execFileSync("git", ["check-ignore", "-q", "--", absReal], { cwd: mainWorktreePath, stdio: "ignore" });
+        checkIgnoreStatus = 0;
       } catch (err) {
-        // exit 1 = not ignored (resolved); any other failure = unresolvable.
-        ignoreResolved = err?.status === 1;
-        ignored = false;
+        checkIgnoreStatus = typeof err?.status === "number" ? err.status : null;
       }
-      isMainCheckoutTracked = ignoreResolved ? !ignored : true;
+      isMainCheckoutTracked = resolveTrackedFromCheckIgnore(checkIgnoreStatus);
       if (isMainCheckoutTracked) {
-        suggestedWorktreePath = path.join(activeWorktreeRoot, path.relative(mainWorktreePath, abs));
+        suggestedWorktreePath = path.join(activeWorktreeRoot, path.relative(mainWorktreePath, absReal));
       }
     }
     const allowMainCheckout = process.env[WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV] === "1";

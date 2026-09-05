@@ -738,12 +738,15 @@ test("decideWorktreeCheckoutGuard allows when no worktree is active (main/orches
 });
 
 test("decideWorktreeCheckoutGuard allows a legitimate in-worktree edit (AC2)", () => {
+  // isMainCheckoutTracked:true makes this discriminating — the allow MUST come
+  // from the isTargetUnderActiveWorktree branch, not the later !tracked branch,
+  // so removing the in-worktree branch would flip this to deny.
   assert.equal(
     decideWorktreeCheckoutGuard({
       filePath: `${WCG_WT}/scripts/x.mjs`,
       activeWorktreeRoot: WCG_WT,
       isTargetUnderActiveWorktree: true,
-      isMainCheckoutTracked: false,
+      isMainCheckoutTracked: true,
     }).decision,
     "allow",
   );
