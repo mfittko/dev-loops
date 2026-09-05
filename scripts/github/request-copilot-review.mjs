@@ -29,7 +29,10 @@ const ROUND_CAP_REACHED_STATUS = "round_cap_reached";
 const NO_CHANGES_SINCE_LAST_REVIEW_STATUS = "no_changes_since_last_review";
 const SUPPRESSED_POST_CONVERGENCE_DOCS_ONLY_STATUS = "suppressed_post_convergence_docs_only";
 const SUPPRESSED_DRAFT_STATUS = "suppressed_draft";
-// The requested-reviewer / review-list reads that verify a `gh pr edit` request
+// The app-style Copilot reviewer login. The REST requested_reviewers endpoint
+// only registers the Copilot bot under this exact `[bot]`-suffixed login (#1918).
+const COPILOT_REVIEWER_BOT_LOGIN = "copilot-pull-request-reviewer[bot]";
+// The requested-reviewer / review-list reads that verify a review request
 // landed are eventually consistent: an immediate read can still see stale
 // (empty) state even though the request already succeeded. Re-read on this
 // fixed backoff before declaring failure — bounded, not open-ended, so a
@@ -518,9 +521,26 @@ function classifyRequestFailure(detail) {
   return undefined;
 }
 async function requestCopilotReview({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+  // Request via the REST requested_reviewers endpoint with the app-style
+  // `copilot-pull-request-reviewer[bot]` login (#1918). `gh pr edit
+  // --add-reviewer @copilot` (and the GraphQL requestReviews botIds mutation
+  // once Copilot already reviewed) return success but register no reviewer on
+  // repos whose Copilot reviewer is the bot — a silent no-op that stalled the
+  // loop at waiting_for_copilot. The REST call with the plain
+  // `copilot-pull-request-reviewer` login 422s ("Reviews may only be requested
+  // from collaborators…"); only the `[bot]`-suffixed login actually registers
+  // the request. A genuine 422 (Copilot reviewer truly unavailable) is still
+  // classified `unavailable` below.
   const result = await runChild(
     ghCommand,
-    ["pr", "edit", String(pr), "--repo", repo, "--add-reviewer", "@copilot"],
+    [
+      "api",
+      `repos/${repo}/pulls/${pr}/requested_reviewers`,
+      "-X",
+      "POST",
+      "-f",
+      `reviewers[]=${COPILOT_REVIEWER_BOT_LOGIN}`,
+    ],
     env,
   );
   if (result.code !== 0) {
@@ -868,8 +888,8 @@ export async function performCopilotReviewRequest(
     return withConfigWarning(requestResult);
   }
   // Bounded retry against the read-after-write race documented above: only the
-  // verification READ repeats here, never the `gh pr edit` request itself. A
-  // transient throw from ANY verification read — the initial post-edit read
+  // verification READ repeats here, never the requested_reviewers POST itself. A
+  // transient throw from ANY verification read — the initial post-request read
   // included — consumes the next scheduled delay and re-probes instead of
   // aborting immediately; the error only propagates if the final attempt in
   // the window also throws, in which case that last error is what the caller
@@ -896,7 +916,7 @@ export async function performCopilotReviewRequest(
     if (lastReadError) {
       throw lastReadError;
     }
-    throw new Error("Copilot review request did not appear in requested reviewers or fresh/in-progress Copilot reviews after gh pr edit");
+    throw new Error("Copilot review request did not appear in requested reviewers or fresh/in-progress Copilot reviews after the requested_reviewers POST");
   }
   return withConfigWarning({
     ...requestResult,

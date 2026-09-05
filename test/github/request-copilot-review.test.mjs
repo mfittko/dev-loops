@@ -22,10 +22,21 @@ const EMPTY_REVIEW_STREAM_ENTRY = {
 
 // Full gh argv for owner/repo#17's verification/request calls, reused by the
 // retry-window tests below to pin the exact gh call sequence (not just the
-// delay schedule) — including that `pr edit` is issued exactly once.
+// delay schedule) — including that the requested_reviewers POST is issued
+// exactly once. The request is the REST requested_reviewers endpoint with the
+// app-style `copilot-pull-request-reviewer[bot]` login (#1918), not the
+// silently-no-opping `gh pr edit --add-reviewer @copilot`.
 const REQUESTED_REVIEWERS_ARGS = ["api", "repos/owner/repo/pulls/17/requested_reviewers"];
 const PR_VIEW_ARGS = ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"];
-const PR_EDIT_ARGS = ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"];
+const REQUEST_COPILOT_ARGS = ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"];
+// A recorded gh call is the Copilot review REQUEST when it POSTs to the
+// requested_reviewers endpoint (distinguishing it from the plain GET reads that
+// share the same path).
+const isCopilotRequestCall = (call) =>
+  call.args[0] === "api"
+  && call.args.includes("-X")
+  && call.args.includes("POST")
+  && call.args.some((arg) => typeof arg === "string" && arg.includes("requested_reviewers"));
 
 // In-process run: replay the same gh entries via makeGhMock and call the exported
 // entry fn directly, so the CLI logic runs without a node subprocess per gh call.
@@ -87,7 +98,7 @@ test("request-copilot-review requests Copilot deterministically and verifies via
         stdout: '{"reviews":[]}\n',
       },
       {
-        assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
         stdout: "https://github.com/owner/repo/pull/17\n",
       },
       {
@@ -107,6 +118,27 @@ test("request-copilot-review requests Copilot deterministically and verifies via
       pr: 17,
       reviewer: "Copilot",
     });
+});
+
+test("request-copilot-review issues the REST requested_reviewers POST with the [bot] login and never `pr edit --add-reviewer` (#1918)", async () => {
+  // Root-cause regression: `gh pr edit --add-reviewer @copilot` returns success
+  // but registers no reviewer on a bot-reviewer repo (silent no-op). The request
+  // MUST go through the REST requested_reviewers endpoint with the app-style
+  // `copilot-pull-request-reviewer[bot]` login, issued exactly once.
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
+      { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: PR_VIEW_ARGS, stdout: '{"reviews":[]}\n' },
+      { assertArgs: REQUEST_COPILOT_ARGS, stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
+      { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[{"login":"copilot-pull-request-reviewer[bot]"}],"teams":[]}\n' },
+      { assertArgs: PR_VIEW_ARGS, stdout: '{"reviews":[]}\n' },
+    ]);
+
+  assert.equal(result.status, "requested");
+  // Exactly one request, and it is the REST POST — not `pr edit`.
+  assert.equal(calls.filter(isCopilotRequestCall).length, 1);
+  assert.equal(calls.some((c) => c.args[0] === "pr" && c.args[1] === "edit"), false);
+  const requestCall = calls.find(isCopilotRequestCall);
+  assert.ok(requestCall.args.includes("reviewers[]=copilot-pull-request-reviewer[bot]"));
 });
 
 test("request-copilot-review recognizes Copilot under the requested reviewer login returned by GitHub", async () => {
@@ -236,7 +268,7 @@ test("request-copilot-review accepts --force-rerequest-review as a valid flag", 
         stdout: '{"reviews":[]}\n',
       },
       {
-        assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
         stdout: "https://github.com/owner/repo/pull/17\n",
       },
       {
@@ -263,7 +295,7 @@ test("request-copilot-review accepts an immediate Copilot review as proof the re
         stdout: '{"reviews":[]}\n',
       },
       {
-        assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
         stdout: "https://github.com/owner/repo/pull/17\n",
       },
       {
@@ -302,7 +334,7 @@ test("request-copilot-review accepts review-surface presence (prior submitted Co
       stdout: '{"reviews":[{"id":"r-1","author":{"login":"copilot-pull-request-reviewer[bot]"}}]}\n',
     },
     {
-      assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
       stdout: "https://github.com/owner/repo/pull/17\n",
     },
     {
@@ -344,7 +376,7 @@ test("request-copilot-review retries the post-edit verification read on an empty
       stdout: '{"reviews":[]}\n',
     },
     {
-      assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
       stdout: "https://github.com/owner/repo/pull/17\n",
     },
     {
@@ -382,11 +414,11 @@ test("request-copilot-review retries the post-edit verification read on an empty
   // surplus read past this exact sequence.
   assert.deepEqual(calls.map((call) => call.args), [
     REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
-    PR_EDIT_ARGS,
+    REQUEST_COPILOT_ARGS,
     REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
     REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
   ]);
-  assert.equal(calls.filter((call) => call.args[0] === "pr" && call.args[1] === "edit").length, 1);
+  assert.equal(calls.filter(isCopilotRequestCall).length, 1);
 });
 
 test("request-copilot-review fails closed after the bounded verification retries stay empty", async () => {
@@ -409,7 +441,7 @@ test("request-copilot-review fails closed after the bounded verification retries
     emptyRequestedReviewersEntry,
     emptyReviewsEntry,
     {
-      assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
       stdout: "https://github.com/owner/repo/pull/17\n",
     },
     // Initial post-edit verification read, plus one per bounded retry — all stale.
@@ -431,7 +463,7 @@ test("request-copilot-review fails closed after the bounded verification retries
       // like an appended "after N retries") must fail this assertion.
       assert.equal(
         error.message,
-        "Copilot review request did not appear in requested reviewers or fresh/in-progress Copilot reviews after gh pr edit",
+        "Copilot review request did not appear in requested reviewers or fresh/in-progress Copilot reviews after the requested_reviewers POST",
       );
       // Pin the gh call sequence too: exactly one `pr edit` and exactly the
       // expected number of verification reads (before-state check, plus one
@@ -440,13 +472,13 @@ test("request-copilot-review fails closed after the bounded verification retries
       // past this exact sequence.
       assert.deepEqual(error.calls.map((call) => call.args), [
         REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
-        PR_EDIT_ARGS,
+        REQUEST_COPILOT_ARGS,
         REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
         REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
         REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
         REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
       ]);
-      assert.equal(error.calls.filter((call) => call.args[0] === "pr" && call.args[1] === "edit").length, 1);
+      assert.equal(error.calls.filter(isCopilotRequestCall).length, 1);
       return true;
     },
   );
@@ -473,7 +505,7 @@ test("request-copilot-review retries a throwing verification read inside the bou
       stdout: '{"reviews":[]}\n',
     },
     {
-      assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
       stdout: "https://github.com/owner/repo/pull/17\n",
     },
     {
@@ -513,12 +545,12 @@ test("request-copilot-review retries a throwing verification read inside the bou
   assert.deepEqual(delayCalls, [5000, 10000]);
   assert.deepEqual(calls.map((call) => call.args), [
     REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
-    PR_EDIT_ARGS,
+    REQUEST_COPILOT_ARGS,
     REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
     REQUESTED_REVIEWERS_ARGS,
     REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
   ]);
-  assert.equal(calls.filter((call) => call.args[0] === "pr" && call.args[1] === "edit").length, 1);
+  assert.equal(calls.filter(isCopilotRequestCall).length, 1);
 });
 
 test("request-copilot-review propagates the final attempt's error when every bounded retry read throws", async () => {
@@ -546,7 +578,7 @@ test("request-copilot-review propagates the final attempt's error when every bou
       stdout: '{"reviews":[]}\n',
     },
     {
-      assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
       stdout: "https://github.com/owner/repo/pull/17\n",
     },
     {
@@ -569,13 +601,13 @@ test("request-copilot-review propagates the final attempt's error when every bou
       assert.equal(error.message, "gh command failed: rate limited (attempt 3, final)");
       assert.deepEqual(error.calls.map((call) => call.args), [
         REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
-        PR_EDIT_ARGS,
+        REQUEST_COPILOT_ARGS,
         REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
         REQUESTED_REVIEWERS_ARGS,
         REQUESTED_REVIEWERS_ARGS,
         REQUESTED_REVIEWERS_ARGS,
       ]);
-      assert.equal(error.calls.filter((call) => call.args[0] === "pr" && call.args[1] === "edit").length, 1);
+      assert.equal(error.calls.filter(isCopilotRequestCall).length, 1);
       return true;
     },
   );
@@ -603,7 +635,7 @@ test("request-copilot-review fails closed with the empty-result message when a m
   const entries = [
     ...emptyVerificationPair,
     {
-      assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
       stdout: "https://github.com/owner/repo/pull/17\n",
     },
     // Initial post-edit read: empty.
@@ -622,16 +654,16 @@ test("request-copilot-review fails closed with the empty-result message when a m
   await assert.rejects(
     () => runInProcess(["--repo", "owner/repo", "--pr", "17"], entries, { delayImpl }),
     (error) => {
-      assert.equal(error.message, "Copilot review request did not appear in requested reviewers or fresh/in-progress Copilot reviews after gh pr edit");
+      assert.equal(error.message, "Copilot review request did not appear in requested reviewers or fresh/in-progress Copilot reviews after the requested_reviewers POST");
       assert.deepEqual(error.calls.map((call) => call.args), [
         REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
-        PR_EDIT_ARGS,
+        REQUEST_COPILOT_ARGS,
         REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
         REQUESTED_REVIEWERS_ARGS,
         REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
         REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
       ]);
-      assert.equal(error.calls.filter((call) => call.args[0] === "pr" && call.args[1] === "edit").length, 1);
+      assert.equal(error.calls.filter(isCopilotRequestCall).length, 1);
       return true;
     },
   );
@@ -656,7 +688,7 @@ test("request-copilot-review recovers when the INITIAL post-edit read throws and
       stdout: '{"reviews":[]}\n',
     },
     {
-      assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+      assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
       stdout: "https://github.com/owner/repo/pull/17\n",
     },
     // Initial post-edit read: throws.
@@ -678,7 +710,7 @@ test("request-copilot-review recovers when the INITIAL post-edit read throws and
   const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], entries, { delayImpl });
   assert.equal(result.status, "requested");
   assert.deepEqual(delayCalls, [5000]);
-  assert.equal(calls.filter((call) => call.args[0] === "pr" && call.args[1] === "edit").length, 1);
+  assert.equal(calls.filter(isCopilotRequestCall).length, 1);
 });
 
 test("request-copilot-review normalizes known unrequestable/unavailable failures", async () => {
@@ -692,7 +724,7 @@ test("request-copilot-review normalizes known unrequestable/unavailable failures
         stdout: '{"reviews":[]}\n',
       },
       {
-        assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
         stderr: "gh: Reviews may only be requested from collaborators.\n",
         exitCode: 1,
       },
@@ -736,7 +768,7 @@ test("request-copilot-review returns already-requested when 422 but Copilot is i
       },
       // request: GitHub returns 422
       {
-        assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
         stderr: "gh: Reviews may only be requested from collaborators.\n",
         exitCode: 1,
       },
@@ -778,7 +810,7 @@ test("request-copilot-review returns already-requested when 422 but Copilot has 
       },
       // request: GitHub returns 422
       {
-        assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
         stderr: "gh: Reviews may only be requested from collaborators.\n",
         exitCode: 1,
       },
@@ -809,7 +841,7 @@ test("request-copilot-review does not treat a stale pending Copilot review as al
         stdout: '{"headRefOid":"newsha","reviews":[{"id":"r-1","state":"PENDING","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"oldsha"}}]}\n',
       },
       {
-        assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
         stdout: "https://github.com/owner/repo/pull/17\n",
       },
       {
@@ -842,7 +874,7 @@ test("request-copilot-review ignores a stale pending Copilot review after 422 an
         stdout: '{"headRefOid":"newsha","reviews":[{"id":"r-1","state":"PENDING","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"oldsha"}}]}\n',
       },
       {
-        assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
         stderr: "gh: Reviews may only be requested from collaborators.\n",
         exitCode: 1,
       },
@@ -1058,7 +1090,7 @@ test("request-copilot-review --silent exits 0 only when status is requested", as
         stdout: '{"reviews":[]}\n',
       },
       {
-        assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
         stdout: "https://github.com/owner/repo/pull/17\n",
       },
       {
@@ -1138,7 +1170,7 @@ const SILENT_NON_REQUESTED_CASES = {
         stdout: '{"reviews":[]}\n',
       },
       {
-        assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
         stderr: "gh: Reviews may only be requested from collaborators.\n",
         exitCode: 1,
       },
@@ -1309,7 +1341,7 @@ test("request-copilot-review does not block request when PR is not draft", async
         stdout: '{"isDraft":false,"state":"OPEN","number":17,"reviews":[]}\n',
       },
       {
-        assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
         stdout: "https://github.com/owner/repo/pull/17\n",
       },
       {
@@ -1644,7 +1676,7 @@ test("request-copilot-review --force-rerequest-review allows re-request when cap
         stdout: JSON.stringify({ status: "ahead", files: [{ filename: "src/foo.mjs", status: "modified" }] }) + "\n",
       },
       {
-        assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"],
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
         stdout: "https://github.com/owner/repo/pull/17\n",
       },
       {
@@ -1717,7 +1749,7 @@ test("the draft-gate round reset sees a clean verdict that lives only in the rev
           body: "Gate review: draft_gate\nReviewed head SHA: aaa1111\nVerdict: clean\nFindings summary: no issues found\nNext action: mark ready for review",
         }]]) + "\n",
       },
-      { assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"], stdout: "https://github.com/owner/repo/pull/17\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: "https://github.com/owner/repo/pull/17\n" },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: '{"headRefOid":"bbb2222","reviews":[]}\n' },
     ]);
@@ -1750,8 +1782,8 @@ test("request-copilot-review --force-rerequest-review suppresses a pure doc/pros
   assert.equal(result.status, "suppressed_post_convergence_docs_only");
   assert.equal(result.completedRounds, 5);
   assert.equal(result.maxRounds, 2);
-  // No fresh blocking round was placed: `gh pr edit --add-reviewer` never ran.
-  assert.equal(calls.some((c) => c.args.includes("edit") && c.args.includes("--add-reviewer")), false);
+  // No fresh blocking round was placed: the requested_reviewers POST never ran.
+  assert.equal(calls.some(isCopilotRequestCall), false);
 });
 
 test("request-copilot-review --force-rerequest-review re-opens the round when a doc bump also carries a code file (#1326 preserves the exception)", async () => {
@@ -1765,7 +1797,7 @@ test("request-copilot-review --force-rerequest-review re-opens the round when a 
         assertArgs: ["api", "repos/owner/repo/compare/sha5...newsha"],
         stdout: JSON.stringify({ status: "ahead", files: [{ filename: "docs/guide.md", status: "modified" }, { filename: "src/foo.mjs", status: "modified" }] }) + "\n",
       },
-      { assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"], stdout: "https://github.com/owner/repo/pull/17\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: "https://github.com/owner/repo/pull/17\n" },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
     ]);
@@ -1791,7 +1823,7 @@ test("request-copilot-review --force-rerequest-review fails closed and re-opens 
         assertArgs: ["api", "repos/owner/repo/compare/sha5...newsha"],
         stdout: JSON.stringify({ status: "ahead", files: threeHundredDocs }) + "\n",
       },
-      { assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"], stdout: "https://github.com/owner/repo/pull/17\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: "https://github.com/owner/repo/pull/17\n" },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
     ]);
@@ -1811,7 +1843,7 @@ test("request-copilot-review --force-rerequest-review fails closed and re-opens 
         assertArgs: ["api", "repos/owner/repo/compare/sha5...newsha"],
         stdout: JSON.stringify({ status: "ahead", files: [{ filename: "docs/x.md", status: "renamed" }] }) + "\n",
       },
-      { assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"], stdout: "https://github.com/owner/repo/pull/17\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: "https://github.com/owner/repo/pull/17\n" },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
     ]);
@@ -1832,7 +1864,7 @@ test("request-copilot-review --force-rerequest-review fails closed and re-opens 
         stderr: "gh: Not Found\n",
         exitCode: 1,
       },
-      { assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"], stdout: "https://github.com/owner/repo/pull/17\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: "https://github.com/owner/repo/pull/17\n" },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
     ]);
@@ -1852,7 +1884,7 @@ test("request-copilot-review --force-rerequest-review fails closed and re-opens 
         assertArgs: ["api", "repos/owner/repo/compare/sha5...newsha"],
         stdout: JSON.stringify({ status: "diverged", files: [{ filename: "docs/guide.md", status: "modified" }] }) + "\n",
       },
-      { assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"], stdout: "https://github.com/owner/repo/pull/17\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: "https://github.com/owner/repo/pull/17\n" },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
     ]);
@@ -1898,7 +1930,7 @@ describe("operator-authorized post-convergence suppression marker (#1441)", () =
         { env: { GH_SEQUENCE_PATH: "1" }, ghCommand: "gh", runChild },
       );
       assert.equal(result.status, "suppressed_post_convergence_docs_only");
-      assert.equal(calls.some((c) => c.args.includes("--add-reviewer")), false, "no fresh request should be placed");
+      assert.equal(calls.some(isCopilotRequestCall), false, "no fresh request should be placed");
     });
   });
 
@@ -1914,7 +1946,7 @@ describe("operator-authorized post-convergence suppression marker (#1441)", () =
           assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
           stdout: '{"headRefOid":"newsha","isDraft":false,"state":"OPEN","number":17,"reviews":[{"id":"r-1","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"oldsha"}}]}\n',
         },
-        { assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"], stdout: "https://github.com/owner/repo/pull/17\n" },
+        { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: "https://github.com/owner/repo/pull/17\n" },
         { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
         {
           assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
@@ -1926,7 +1958,7 @@ describe("operator-authorized post-convergence suppression marker (#1441)", () =
         { env: { GH_SEQUENCE_PATH: "1" }, ghCommand: "gh", runChild },
       );
       assert.equal(result.status, "requested");
-      assert.ok(calls.some((c) => c.args.includes("--add-reviewer")), "a real request must still be placed");
+      assert.ok(calls.some(isCopilotRequestCall), "a real request must still be placed");
     });
   });
 
@@ -1948,7 +1980,7 @@ describe("operator-authorized post-convergence suppression marker (#1441)", () =
           assertArgs: ["api", "repos/owner/repo/compare/oldsha...newsha"],
           stdout: JSON.stringify({ status: "ahead", files: [{ filename: "src/foo.mjs", status: "modified" }] }) + "\n",
         },
-        { assertArgs: ["pr", "edit", "17", "--repo", "owner/repo", "--add-reviewer", "@copilot"], stdout: "https://github.com/owner/repo/pull/17\n" },
+        { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: "https://github.com/owner/repo/pull/17\n" },
         { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
         {
           assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
@@ -1960,7 +1992,7 @@ describe("operator-authorized post-convergence suppression marker (#1441)", () =
         { env: { GH_SEQUENCE_PATH: "1" }, ghCommand: "gh", runChild },
       );
       assert.equal(result.status, "requested");
-      assert.ok(calls.some((c) => c.args.includes("--add-reviewer")), "a real request must still be placed");
+      assert.ok(calls.some(isCopilotRequestCall), "a real request must still be placed");
     });
   });
 });
