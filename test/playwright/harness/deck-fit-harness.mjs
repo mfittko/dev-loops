@@ -265,11 +265,9 @@ export async function assertDeckChromeState(page, section, index, total, { timeo
   const footer = section.locator(".footer");
   const countSurfaces = await count.count() + await footer.count();
   expect(countSurfaces, "deck must expose exactly one supported visible slide counter").toBe(1);
-  if (await count.count()) {
-    await expect(count, "visible slide counter must match the section being captured").toHaveText(expectedCount, { timeout });
-  } else {
-    await expect(footer, "visible slide footer must match the section being captured").toHaveText(expectedCount, { timeout });
-  }
+  const counter = await count.count() ? count : footer;
+  await expect(counter, "slide counter must be visible while evidence is captured").toBeVisible({ timeout });
+  await expect(counter, "visible slide counter must match the section being captured").toHaveText(expectedCount, { timeout });
 
   const progress = page.locator(".chrome .bar, #progress");
   await expect(progress, "deck must expose one visible progress indicator").toHaveCount(1);
@@ -599,6 +597,24 @@ export function defineDeckSuite({
         document.querySelectorAll(".count, section .footer").forEach((element) => element.remove());
       });
       await expect(assertDeckChromeState(page, section, targetIndex, ids.length, { timeout: 100 })).rejects.toThrow(/exactly one supported visible slide counter/);
+    } finally {
+      await stopFixtureServer(server);
+    }
+  });
+
+  test(`${sliceId} capture-state assertion fails when the slide counter is hidden`, async ({ page }) => {
+    const { server, url } = await startServer();
+    try {
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.goto(url, { waitUntil: "domcontentloaded" });
+      const targetIndex = Math.min(1, ids.length - 1);
+      const section = page.locator(`#${ids[targetIndex]}`);
+      await alignDeckSectionForCapture(page, section, targetIndex, ids.length);
+      await page.evaluate(() => {
+        const counter = document.querySelector(".count") ?? document.querySelector("section .footer");
+        counter?.style.setProperty("visibility", "hidden", "important");
+      });
+      await expect(assertDeckChromeState(page, section, targetIndex, ids.length, { timeout: 100 })).rejects.toThrow(/counter must be visible/);
     } finally {
       await stopFixtureServer(server);
     }
