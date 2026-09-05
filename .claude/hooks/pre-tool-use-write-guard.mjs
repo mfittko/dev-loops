@@ -20,7 +20,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 
 import { decideWriteGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV } from "./_hook-decisions.mjs";
-import { isMainCheckout, parseMainWorktreePath, parseAllWorktreePaths, resolveContainingWorktreeRoot, realpathNearestExisting, resolveTrackedFromCheckIgnore } from "./_worktree-guard.mjs";
+import { isMainCheckout, isUnderWorktreePath, parseMainWorktreePath, parseAllWorktreePaths, resolveContainingWorktreeRoot, realpathNearestExisting, resolveTrackedFromCheckIgnore } from "./_worktree-guard.mjs";
 
 import { readHookInput, emitDeny, emitAllow } from "./_hook-io.mjs";
 
@@ -66,7 +66,10 @@ try {
       }
       isMainCheckoutTracked = resolveTrackedFromCheckIgnore(checkIgnoreStatus);
       if (isMainCheckoutTracked) {
-        suggestedWorktreePath = path.join(activeWorktreeRoot, path.relative(mainWorktreePath, absReal));
+        // Compute the advisory fix-path from the realpath-normalized main root so
+        // the hint stays correct under a symlinked main root (absReal is already
+        // realpath-normalized; a raw base would skew the relative path).
+        suggestedWorktreePath = path.join(activeWorktreeRoot, path.relative(realpathNearestExisting(mainWorktreePath), absReal));
       }
     }
     const allowMainCheckout = process.env[WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV] === "1";
@@ -83,8 +86,27 @@ try {
     }
   }
 } catch {
-  // `git worktree list` failed (not a git repo, git unavailable): cannot
-  // establish an active worktree context — fall through to boundary 2.
+  // `git worktree list` failed (not a git repo, git unavailable). If cwd is
+  // itself inside a worktree, the active-worktree context is real but
+  // UNRESOLVABLE — fail SAFE (AC4) instead of falling through to boundary 2's
+  // fail-open path: refuse a write that escapes cwd's own subtree (a likely
+  // wrong-checkout target) unless a deliberate main-checkout edit is authorized.
+  // An in-cwd-subtree write still passes. When cwd is NOT under a worktree there
+  // is no active context to protect, so fall through unchanged.
+  if (isUnderWorktreePath(cwd) && process.env[WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV] !== "1") {
+    const absReal = realpathNearestExisting(abs);
+    const cwdReal = realpathNearestExisting(cwd);
+    const underCwd = absReal === cwdReal || absReal.startsWith(cwdReal + "/");
+    if (!underCwd) {
+      emitDeny(
+        `WORKTREE-WRONG-CHECKOUT-GUARD: wrong-checkout mutation blocked — cwd is inside a worktree ` +
+        `("${cwdReal}") but \`git worktree list\` could not resolve the active worktree, and this ` +
+        `Write/Edit targets "${filePath}", outside cwd's subtree. Failing safe on an unresolvable ` +
+        "active-worktree context. Set DEVLOOPS_ALLOW_MAIN=1 only for a deliberate main-checkout edit.",
+      );
+    }
+  }
+  // Otherwise fall through to boundary 2.
 }
 
 // --- Boundary 2: main-agent read-only boundary (#773, opt-in) ----------------
