@@ -96,8 +96,16 @@ describe("revision identities", () => {
   test("buildRevisionIdentity fails closed when specDigest is the head SHA", () => {
     assert.throws(
       () => buildRevisionIdentity({ specDigest: `sha256:${HEAD_A.padEnd(64, "0")}`, headSha: HEAD_A.padEnd(64, "0"), content: "x" }),
-      /must not be derived from headSha/,
+      /must not be derived from|embed headSha/,
     );
+  });
+
+  test("buildRevisionIdentity rejects a specDigest that EMBEDS a normal 40-hex head SHA (guard is not a no-op)", () => {
+    const sha = "a".repeat(40);
+    // A 64-hex body that embeds the 40-hex head SHA — the exact-equality-only
+    // guard would have missed this; the substring guard catches it.
+    const embedding = `sha256:${sha}${"b".repeat(24)}`;
+    assert.throws(() => buildRevisionIdentity({ specDigest: embedding, headSha: sha, content: "x" }), /embed headSha/);
   });
 });
 

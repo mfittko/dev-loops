@@ -830,3 +830,15 @@ test("judgePassCli --carry-forward-proof carries an unaffected criterion at the 
   assert.deepEqual(payload.specAuthority.invalidation.carried, ["ac:0"]);
   assert.ok(payload.specAuthority.invalidation.stale.length >= 1);
 });
+
+test("validateCliArgs: --carry-forward-proof requires --prior-approvals", () => {
+  assert.throws(
+    () => validateCliArgs({
+      repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
+      findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json",
+      specFile: "./spec.json", contentDigest: "sha256:" + "a".repeat(64), specAuthorityVerdict: "./sa.json",
+      carryForwardProof: "./proof.json",
+    }),
+    /--carry-forward-proof requires --prior-approvals/,
+  );
+});

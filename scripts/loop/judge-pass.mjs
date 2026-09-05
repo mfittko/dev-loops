@@ -283,6 +283,13 @@ export function validateCliArgs(options) {
         throw parseError(`${flag} is required when --spec-file is supplied (spec-authority enforcement)`);
       }
     }
+    // --carry-forward-proof only takes effect inside the --prior-approvals
+    // invalidation path; accepting it without --prior-approvals would silently
+    // ignore it (a half-configured re-entry run that appears to supply proof but
+    // does not apply it). Fail closed.
+    if (options.carryForwardProof !== undefined && options.priorApprovals === undefined) {
+      throw parseError("--carry-forward-proof requires --prior-approvals (it is only applied during criterion invalidation)");
+    }
   } else {
     // The spec-authority flags only make sense under an active gate (--spec-file).
     // Guard BOTH directions: supplying --content-digest/--spec-authority-verdict

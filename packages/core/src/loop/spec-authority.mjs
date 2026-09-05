@@ -271,8 +271,15 @@ export function buildRevisionIdentity({ spec, specDigest, headSha, content, cont
   if (resolvedSpecDigest === resolvedContentDigest) {
     throw new Error("SPEC-AUTHORITY-REVISION-IDENTITIES: specDigest and contentDigest must be distinct identities (fail closed)");
   }
-  if (resolvedSpecDigest === `sha256:${sha}`) {
-    throw new Error("SPEC-AUTHORITY-REVISION-IDENTITIES: specDigest must not be derived from headSha (fail closed)");
+  // The domain separator in computeSpecDigest is the structural guarantee that a
+  // specDigest is never derivable from a head SHA. This is the defensive tripwire
+  // for an explicitly-SUPPLIED digest: reject when the digest's hex body equals or
+  // embeds the head SHA (any length), not only the 64-hex exact case — the
+  // exact-equality-only form was a no-op for a normal 40-hex Git SHA. The
+  // false-positive probability of a real spec digest incidentally embedding the
+  // head SHA is negligible, and the fail-closed direction is safe.
+  if (resolvedSpecDigest.slice("sha256:".length).includes(sha)) {
+    throw new Error("SPEC-AUTHORITY-REVISION-IDENTITIES: specDigest must not be derived from or embed headSha (fail closed)");
   }
   return { specDigest: resolvedSpecDigest, headSha: sha, contentDigest: resolvedContentDigest };
 }
