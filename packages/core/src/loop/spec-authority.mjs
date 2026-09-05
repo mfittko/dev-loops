@@ -184,7 +184,13 @@ export function normalizeSpec(spec) {
  * @returns {string[]}
  */
 export function specCriterionIds(spec) {
-  const normalized = isNormalizedSpec(spec) ? spec : normalizeSpec(spec);
+  // ALWAYS normalize — never trust the input to be pre-normalized. normalizeSpec
+  // is idempotent on already-normalized text, and normalizing here is what keeps
+  // the criterion id set byte-aligned with computeSpecDigest's own normalized
+  // view: a raw spec carrying an empty/whitespace-only criterion would otherwise
+  // yield a phantom id (and shift every later index) that the digested set does
+  // not, so the two revision-identity views would disagree on the same input.
+  const normalized = normalizeSpec(spec);
   const ids = [];
   for (const category of SPEC_CATEGORIES) {
     normalized[category].forEach((_item, index) => {
@@ -192,14 +198,6 @@ export function specCriterionIds(spec) {
     });
   }
   return ids;
-}
-
-function isNormalizedSpec(spec) {
-  return (
-    spec &&
-    typeof spec === "object" &&
-    SPEC_CATEGORIES.every((c) => Array.isArray(spec[c]))
-  );
 }
 
 /**

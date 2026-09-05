@@ -28,7 +28,7 @@ Introduce one canonical shared contract surface, `packages/core/src/loop/spec-au
 
 5. Revision-scoped invalidation (`resolveCriterionInvalidation`): a human-approved spec change (new `specDigest`) stales every prior-derived approval; a fixer push (same digest) stales only affected criteria, carries an unaffected criterion forward only with positive proof that both its governing spec text and its covered surface are unchanged, and fails closed to fresh review on unknown/unproven impact.
 
-Enforcement is wired into the judge-pass bridge (`scripts/loop/judge-pass.mjs`) as an opt-in gate via `--spec-file` (plus `--content-digest` and `--spec-authority-verdict`), keeping the existing relevance axis (`act`/`defer`/`reject`) intact and backward compatible.
+Enforcement is wired into the judge-pass bridge (`scripts/loop/judge-pass.mjs`) as an opt-in gate via `--spec-file` (plus `--content-digest` and `--spec-authority-verdict`), keeping the existing relevance axis (`act`/`defer`/`reject`) intact and backward compatible. The bridge does not merely record the outcomes: it derives the revision identities through `buildRevisionIdentity` on the live path (so the collision/derivation checks run for a real gate), drops every `finding_conflicts` finding from the fixer act list, fails closed on `spec_cannot_decide`, and — with `--prior-approvals`/`--approvals-out` — invokes `resolveCriterionInvalidation` and persists a durable, re-entry-safe approval record.
 
 ## Consequences
 

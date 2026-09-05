@@ -67,6 +67,19 @@ describe("revision identities", () => {
     assert.notEqual(contentChanged.contentDigest, contentDigest);
   });
 
+  test("specCriterionIds always normalizes — a raw spec with empty items does not yield phantom ids that diverge from the digest", () => {
+    const raw = {
+      acceptanceCriteria: ["real ac", "   ", "second ac"],
+      definitionOfDone: [""],
+      nonGoals: ["  keep voice  "],
+    };
+    // The empty/whitespace items are dropped, so ids match the normalized shape
+    // (2 AC + 0 DoD + 1 non-goal), NOT the raw array lengths.
+    assert.deepEqual(specCriterionIds(raw), ["ac:0", "ac:1", "ng:0"]);
+    // And the id count matches computeSpecDigest's normalized view of the same input.
+    assert.equal(specCriterionIds(raw).length, specCriterionIds(normalizeSpec(raw)).length);
+  });
+
   test("normalizeSpec fails closed on a spec with no acceptance criteria", () => {
     assert.throws(() => normalizeSpec({ acceptanceCriteria: [], definitionOfDone: ["x"], nonGoals: [] }), /no acceptance criteria/);
   });

@@ -28,6 +28,8 @@ The judge selects exactly one named, machine-readable outcome per finding:
 | `remediation_conflicts` | finding valid, but the proposed remediation conflicts with the spec | keep the finding, reject that remedy autonomously, route to a spec-compliant alternative |
 | `spec_cannot_decide` | the spec is materially ambiguous, internally contradictory, or progress requires changing/reinterpreting AC/DoD/non-goals | escalate to an explicit human-spec-decision state |
 
+The outcomes are ENFORCED on the fixer act list, not merely recorded: the judge-pass bridge drops every `finding_conflicts` finding from the act list (it cannot authorize a fix even if its relevance disposition was `act`), keeps `remediation_conflicts` findings actionable (the finding is valid; only its proposed remedy is rejected, and the fixer routes to a compliant alternative), and fails the pass closed on any `spec_cannot_decide`. Enforcement lives in shared tooling (`judge-pass.mjs`), engaged for a run by supplying `--spec-file`; a harness prompt never has to re-derive it.
+
 <!-- rule: SPEC-AUTHORITY-CONFLICT-EVIDENCE -->
 `SPEC-AUTHORITY-CONFLICT-EVIDENCE`: a `finding_conflicts` or `remediation_conflicts` outcome MUST name a non-empty `conflictingCriteria` set drawn from the spec — autonomous rejection is legitimate only when it names what the finding/remedy conflicts with. A non-conflict outcome MUST NOT carry a conflict list. A `valid_compliant` outcome MUST name an `authorizedRemediation`.
 
@@ -51,6 +53,8 @@ A fixer push records the new `headSha`/`contentDigest` and which previously revi
 - carries an unaffected criterion forward ONLY when deterministic positive proof shows both its governing spec text is unchanged AND the implementation/content surface it covers is unchanged;
 - fails closed to fresh review on unknown, incomplete, or unproven impact.
 
+The judge-pass bridge is the runtime caller: `--prior-approvals` feeds the previous clean round's durable approval record into `resolveCriterionInvalidation`, and `--approvals-out` persists the new record (revision identities + approved criteria + invalidation result). Because no deterministic file→criterion producer exists, `affectedCriteria` defaults empty and an unaffected criterion carries forward only when `--carry-forward-proof` positively proves both its spec text and covered surface unchanged — unknown impact fails closed to fresh review.
+
 This composes with the fixer push/thread-disposition ordering owned by `skills/copilot-pr-followup/SKILL.md` Step 7 (`COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE`, `COPILOT-FOLLOWUP-RESOLVE-AFTER-REPLY`) and the fresh-review-context machinery in `gate-review-sub-loop-contract.md`: after an authorized fixer push, thread reply/resolution and live verification finish before the required fresh review begins. This contract adds authority and invalidation; it does not weaken that ordering, current-head gate evidence, CI, review coverage, approval, or merge-authorization requirements.
 
 ## Severity and batching never bypass authority
@@ -63,4 +67,4 @@ The authority comparison, disposition outcomes, revision identities, invalidatio
 
 ## Durable re-entry
 
-The judge's spec-authority verdict artifact and the resolved invalidation set are durable JSON: a fresh process reconstructs `specDigest`, `headSha`, `contentDigest`, checked/affected criteria, the per-finding outcome, rejected remediations, any pending human decision, and the stale-approval set without prompt memory.
+The judge's spec-authority verdict artifact and the `--approvals-out` record are durable JSON: a fresh process reconstructs `specDigest`, `headSha`, `contentDigest`, checked/affected criteria, the per-finding outcome, rejected remediations, any pending human decision, and the stale-approval set without prompt memory.
