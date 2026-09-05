@@ -370,6 +370,99 @@ export function decideWriteGuard({ filePath, isRepoMutation, enforce = false, en
 }
 
 /**
+ * Env var that authorizes a deliberate main-checkout mutation while a worktree
+ * cycle is active (#1994). Reuses the existing default-branch-guard override
+ * (`DEVLOOPS_ALLOW_MAIN`, GUARD_OVERRIDE_ENV) — both mean "I intend to operate on
+ * the primary checkout on purpose" — so the operator surface stays one flag.
+ */
+export const WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV = "DEVLOOPS_ALLOW_MAIN";
+
+/**
+ * Decide whether a PreToolUse Write/Edit is a WRONG-CHECKOUT mutation: the call
+ * context is operating inside a linked worktree (the active cycle worktree) but
+ * the target resolves to a TRACKED file in the MAIN checkout instead of that
+ * worktree (#1994).
+ *
+ * After `ensure-worktree.mjs` establishes an isolated worktree for a cycle, an
+ * absolute-path `Edit`/`Write` that names the main-checkout copy of a source
+ * file lands the change on the wrong checkout — silently, until a `git status`
+ * in the worktree turns up empty (observed on #1973: six edits hit main before
+ * a self-caught restore). This guard catches that before it reaches a commit.
+ *
+ * The "active worktree" is anchored to the CALL CONTEXT's cwd, not to a durable
+ * marker: this repo accumulates many stale `tmp/worktrees/` worktrees, so "a
+ * worktree exists" cannot mean "a cycle is active". The worktree that CONTAINS
+ * cwd is the one this context is driving; a write escaping it into main is the
+ * wrong-checkout mistake.
+ *
+ * The hook resolves the facts (via the shared `worktree-guard.mjs` primitives)
+ * and passes booleans so this decider stays pure and unit-testable:
+ * - `activeWorktreeRoot`: the listed worktree root containing cwd, or null when
+ *   cwd is not inside any worktree (no active cycle context — AC3).
+ * - `isTargetUnderActiveWorktree`: the target resolves inside that worktree (a
+ *   legitimate in-worktree edit — AC2).
+ * - `isMainCheckoutTracked`: the target resolves under the main checkout AND is
+ *   a tracked (non-gitignored) file. The hook sets this true when the status is
+ *   UNRESOLVABLE (e.g. `git check-ignore` errored) so an ambiguous context fails
+ *   safe rather than silently allowing a wrong-checkout write (AC4).
+ * - `allowMainCheckout`: the deliberate-override signal (`DEVLOOPS_ALLOW_MAIN=1`)
+ *   for an intended main-checkout edit (AC3).
+ *
+ * @param {Object} params
+ * @param {string} params.filePath - Target file path (as supplied to the tool).
+ * @param {string|null} [params.activeWorktreeRoot] - Listed worktree root containing cwd, or null.
+ * @param {boolean} [params.isTargetUnderActiveWorktree] - Target is inside the active worktree.
+ * @param {boolean} [params.isMainCheckoutTracked] - Target is a tracked main-checkout file (or unresolvable).
+ * @param {boolean} [params.allowMainCheckout] - Deliberate override (DEVLOOPS_ALLOW_MAIN=1).
+ * @param {string|null} [params.suggestedWorktreePath] - The worktree-local path the write should target.
+ * @returns {HookDecision}
+ */
+export function decideWorktreeCheckoutGuard({
+  filePath,
+  activeWorktreeRoot = null,
+  isTargetUnderActiveWorktree = false,
+  isMainCheckoutTracked = false,
+  allowMainCheckout = false,
+  suggestedWorktreePath = null,
+}) {
+  // No active worktree context — this is the main checkout / orchestrator / a
+  // consumer repo's own interactive dev. A main-checkout edit is intended here
+  // (AC3). Also the only path that runs for repos never using dev-loop worktrees.
+  if (!activeWorktreeRoot) {
+    return ALLOW;
+  }
+  // Deliberate, operator-authorized main-checkout write during an active cycle (AC3).
+  if (allowMainCheckout) {
+    return ALLOW;
+  }
+  // Legitimate in-worktree edit — no false positive (AC2).
+  if (isTargetUnderActiveWorktree) {
+    return ALLOW;
+  }
+  // Outside the active worktree AND not a tracked main-checkout file: a scratch
+  // path (/tmp), a gitignored path, another worktree's file, or outside the repo
+  // entirely — none is the wrong-checkout mistake this guard exists to catch.
+  if (!isMainCheckoutTracked) {
+    return ALLOW;
+  }
+  // A worktree cycle is active and the target is a tracked main-checkout file
+  // (or an unresolvable/ambiguous context that fails safe — AC4). This is a
+  // wrong-checkout mutation (AC1).
+  const fix = suggestedWorktreePath
+    ? ` Edit the worktree copy instead: "${suggestedWorktreePath}".`
+    : "";
+  return {
+    decision: "deny",
+    reason:
+      `WORKTREE-WRONG-CHECKOUT-GUARD: wrong-checkout mutation blocked — a worktree cycle is active ` +
+      `("${activeWorktreeRoot}") but this Write/Edit targets the MAIN checkout's tracked file ` +
+      `"${filePath}".${fix} A file mutation that lands on the main checkout while a worktree is ` +
+      "active is silently lost from the branch. Set DEVLOOPS_ALLOW_MAIN=1 only for a deliberate " +
+      "main-checkout edit. See skills/docs/worktree-guidance.md.",
+  };
+}
+
+/**
  * Env var that exempts an interactive session awaiting commit authorization from the
  * SubagentStop uncommitted-work guard (#1619).
  *
