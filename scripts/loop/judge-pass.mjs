@@ -7,6 +7,11 @@ import {
   applyJudgeDispositions,
   validateJudgeVerdict,
 } from "@dev-loops/core/loop/gate-fanin";
+import {
+  computeSpecDigest,
+  specCriterionIds,
+  validateSpecAuthorityVerdict,
+} from "@dev-loops/core/loop/spec-authority";
 import { ensureFollowUpIssue, fingerprintFinding } from "../github/_gate-finding-surface.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
 import { resolveFindingsInput } from "../github/_findings-input.mjs";
@@ -57,6 +62,26 @@ Inputs:
                                --judge-verdict / --out / --ledger-out paths
                                (default: process.cwd()).
 
+Immutable spec-authority enforcement (opt-in; enabled by --spec-file):
+  --spec-file <path>           JSON structured spec { acceptanceCriteria,
+                               definitionOfDone, nonGoals } (arrays of strings) —
+                               the canonical tracker AC/DoD/Non-goals. When
+                               supplied, the judge must additionally provide a
+                               whole-spec authority verdict (--spec-authority-verdict)
+                               that pins the run's specDigest, head, and content
+                               digest and disposes every finding with one of the
+                               four named outcomes. specDigest is computed here
+                               from the normalized spec, independently of the head.
+  --content-digest <digest>    The reviewed content identity ("sha256:<hex>").
+                               Required with --spec-file. Distinct from --head-sha.
+  --spec-authority-verdict <p> The judge's whole-spec authority verdict artifact.
+                               Required with --spec-file. Validated against the
+                               computed specDigest, --head-sha, --content-digest,
+                               and the finding count. A spec_cannot_decide outcome
+                               FAILS CLOSED (exit 1) with humanDecisionRequired so
+                               the loop stops at the human-spec-decision state
+                               instead of feeding the fixer.
+
 ${JQ_OUTPUT_USAGE}
 
 Exit codes:
@@ -82,6 +107,9 @@ export function parseJudgePassCliArgs(argv) {
     out: undefined,
     ledgerOut: undefined,
     repoRoot: undefined,
+    specFile: undefined,
+    contentDigest: undefined,
+    specAuthorityVerdict: undefined,
     jq: undefined,
     silent: false,
   };
@@ -97,6 +125,9 @@ export function parseJudgePassCliArgs(argv) {
       out: { type: "string" },
       "ledger-out": { type: "string" },
       "repo-root": { type: "string" },
+      "spec-file": { type: "string" },
+      "content-digest": { type: "string" },
+      "spec-authority-verdict": { type: "string" },
       help: { type: "boolean", short: "h" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -152,6 +183,18 @@ export function parseJudgePassCliArgs(argv) {
       options.repoRoot = token.value;
       continue;
     }
+    if (token.name === "spec-file") {
+      options.specFile = token.value;
+      continue;
+    }
+    if (token.name === "content-digest") {
+      options.contentDigest = token.value;
+      continue;
+    }
+    if (token.name === "spec-authority-verdict") {
+      options.specAuthorityVerdict = token.value;
+      continue;
+    }
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   return validateCliArgs(options);
@@ -195,7 +238,17 @@ export function validateCliArgs(options) {
   // Every configured path flag must be pairwise distinct: inputs must never be
   // clobbered by an output, and --out must never be silently deduped against
   // --ledger-out (which would yield no act list with no warning).
-  const pathFlags = ["findingsFile", "judgeVerdict", "out", "ledgerOut"].filter(
+  // Spec-authority enforcement is opt-in via --spec-file, but once opted in the
+  // content-digest identity and the whole-spec verdict are BOTH mandatory — a
+  // half-configured authority gate must fail closed, not silently skip.
+  if (options.specFile !== undefined) {
+    for (const [key, flag] of [["contentDigest", "--content-digest"], ["specAuthorityVerdict", "--spec-authority-verdict"]]) {
+      if (options[key] === undefined) {
+        throw parseError(`${flag} is required when --spec-file is supplied (spec-authority enforcement)`);
+      }
+    }
+  }
+  const pathFlags = ["findingsFile", "judgeVerdict", "out", "ledgerOut", "specFile", "specAuthorityVerdict"].filter(
     (k) => options[k] !== undefined,
   );
   for (let i = 0; i < pathFlags.length; i += 1) {
@@ -369,6 +422,84 @@ async function applyFollowUpIssues(enriched, { repo, pr, ledgerOutPath }, deps) 
   for (const f of deferred) f.followUpIssueNumber = issueNumber;
 }
 
+/**
+ * Read + parse a JSON artifact from disk, failing closed with an actionable
+ * message. Shared by the spec-file and spec-authority-verdict loads.
+ */
+async function readJsonArtifact(artifactPath, label, parseErr) {
+  let raw;
+  try {
+    raw = await readFile(artifactPath, "utf8");
+  } catch (error) {
+    throw parseErr(`Cannot read ${label} "${artifactPath}": ${error instanceof Error ? error.message : String(error)}`);
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw parseErr(`${label} "${artifactPath}" must contain valid JSON`);
+  }
+}
+
+/**
+ * Enforce the immutable spec-authority gate when --spec-file is supplied.
+ * Computes specDigest + the complete criterion id set from the normalized spec
+ * (independently of the head), then validates the judge's whole-spec authority
+ * verdict against that digest, the current head, the reviewed content digest,
+ * and the finding count. Returns a summary; a spec_cannot_decide outcome sets
+ * humanDecisionRequired so the caller fails closed at the human-spec-decision
+ * state instead of feeding the fixer.
+ *
+ * @returns {{ specDigest: string, headSha: string, contentDigest: string,
+ *   outcomeCounts: Record<string, number>, humanDecisionRequired: boolean,
+ *   humanDecisionIndices: number[] } | null}
+ */
+async function enforceSpecAuthority(options, findings, resolvedRoot) {
+  if (options.specFile === undefined) return null;
+  const spec = await readJsonArtifact(path.resolve(resolvedRoot, options.specFile), "--spec-file", parseError);
+  let specDigest;
+  let criterionIds;
+  try {
+    specDigest = computeSpecDigest(spec);
+    criterionIds = specCriterionIds(spec);
+  } catch (error) {
+    throw parseError(`--spec-file is not a valid spec: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const verdict = await readJsonArtifact(
+    path.resolve(resolvedRoot, options.specAuthorityVerdict),
+    "--spec-authority-verdict",
+    parseError,
+  );
+  let validated;
+  try {
+    validated = validateSpecAuthorityVerdict(verdict, { findingsCount: findings.length, criterionIds });
+  } catch (error) {
+    throw new Error(`spec-authority verdict failed validation: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (validated.specDigest !== specDigest) {
+    throw new Error(
+      `spec-authority verdict.specDigest ${JSON.stringify(validated.specDigest)} does not match the current spec digest ${JSON.stringify(specDigest)} — re-judge against the current spec (fail closed)`,
+    );
+  }
+  if (validated.headSha !== String(options.headSha).trim().toLowerCase()) {
+    throw new Error(
+      `spec-authority verdict.headSha ${JSON.stringify(validated.headSha)} does not match current head ${JSON.stringify(options.headSha)} — re-judge at the current head (fail closed)`,
+    );
+  }
+  if (validated.contentDigest !== options.contentDigest) {
+    throw new Error(
+      `spec-authority verdict.contentDigest ${JSON.stringify(validated.contentDigest)} does not match --content-digest ${JSON.stringify(options.contentDigest)} (fail closed)`,
+    );
+  }
+  return {
+    specDigest,
+    headSha: validated.headSha,
+    contentDigest: validated.contentDigest,
+    outcomeCounts: validated.outcomeCounts,
+    humanDecisionRequired: validated.humanDecisionRequired,
+    humanDecisionIndices: validated.humanDecisionIndices,
+  };
+}
+
 export async function judgePassCli(
   options,
   { repoRoot = process.cwd(), env = process.env, ghCommand = "gh", run, createIssue, commentIssue, listIssues } = {},
@@ -380,6 +511,23 @@ export async function judgePassCli(
     parseError,
   );
   const result = runJudgePass(findings, judgeVerdict, options.headSha);
+
+  // Immutable spec-authority gate (opt-in via --spec-file). A spec_cannot_decide
+  // outcome fails closed here so the loop stops at the human-spec-decision state
+  // and never writes an act list from an undecidable spec.
+  const specAuthority = await enforceSpecAuthority(options, findings, resolvedRoot);
+  if (specAuthority && specAuthority.humanDecisionRequired) {
+    return {
+      ok: false,
+      humanDecisionRequired: true,
+      gate: options.gate,
+      repo: options.repo,
+      pr: Number(options.pr),
+      headSha: result.headSha,
+      specAuthority,
+      reason: `SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT: the pass is blocked and cannot emit an act list — ${specAuthority.humanDecisionIndices.length} finding(s) need a human spec decision (indexes: ${specAuthority.humanDecisionIndices.join(", ")}); stop at the human-spec-decision state`,
+    };
+  }
 
   // #1807: a `defer` disposition always tracks a GitHub issue — never only the
   // ephemeral tmp ledger. One issue per PR, batched; idempotent across re-runs
@@ -420,6 +568,7 @@ export async function judgePassCli(
     act: result.act,
     ledgerOut: options.ledgerOut || undefined,
     out: options.out || undefined,
+    specAuthority: specAuthority || undefined,
   };
   return payload;
 }

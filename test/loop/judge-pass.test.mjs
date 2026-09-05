@@ -424,3 +424,192 @@ test("judgePassCli: a NEW deferral in a later round appends to the PR's already-
   const enriched = JSON.parse(await readFile(outLedgerPath, "utf8"));
   assert.equal(enriched.findings[0].followUpIssueNumber, 7000);
 });
+
+// --- Immutable spec-authority enforcement (opt-in via --spec-file) ---
+
+const SPEC_FIXTURE = {
+  acceptanceCriteria: ["Remove repetitive A/B contrast scaffolding", "Ship a demo"],
+  definitionOfDone: ["npm run verify passes"],
+  nonGoals: ["Do not flatten the decks' voice"],
+};
+
+async function specDigests(content = "reviewed-impl") {
+  const { computeSpecDigest, computeContentDigest, specCriterionIds } = await import(
+    "@dev-loops/core/loop/spec-authority"
+  );
+  return {
+    specDigest: computeSpecDigest(SPEC_FIXTURE),
+    contentDigest: computeContentDigest(content),
+    criterionIds: specCriterionIds(SPEC_FIXTURE),
+  };
+}
+
+async function writeSpecAuthorityCase(tmpDir, { decisions, findings }) {
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings }));
+  await writeFile(
+    path.join(tmpDir, "judge-verdict.json"),
+    JSON.stringify(verdict({ dispositions: findings.map((_f, i) => ({ index: i, disposition: "act", rationale: "in scope" })) })),
+  );
+  await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
+  await writeFile(path.join(tmpDir, "spec-authority.json"), JSON.stringify({ ...decisions.identity, decisions: decisions.list }));
+}
+
+function specAuthorityArgs(tmpDir, contentDigest) {
+  return [
+    {
+      repo: "mfittko/dev-loops",
+      pr: "2000",
+      gate: "pre_approval_gate",
+      headSha: HEAD,
+      findingsFile: "./ledger.json",
+      judgeVerdict: "./judge-verdict.json",
+      specFile: "./spec.json",
+      contentDigest,
+      specAuthorityVerdict: "./spec-authority.json",
+    },
+    { repoRoot: tmpDir },
+  ];
+}
+
+test("judgePassCli passes when the whole-spec authority verdict is valid", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-spec-ok-"));
+  const { specDigest, contentDigest, criterionIds } = await specDigests();
+  await writeSpecAuthorityCase(tmpDir, {
+    findings: [finding()],
+    decisions: {
+      identity: { specDigest, headSha: HEAD, contentDigest },
+      list: [
+        {
+          index: 0,
+          outcome: "valid_compliant",
+          specDigest,
+          headSha: HEAD,
+          contentDigest,
+          checkedCriteria: criterionIds,
+          rationale: "finding valid and remedy compliant with the whole spec",
+          authorizedRemediation: "apply voice-preserving dedup",
+        },
+      ],
+    },
+  });
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  const payload = await judgePassCli(...specAuthorityArgs(tmpDir, contentDigest));
+  assert.equal(payload.ok, true);
+  assert.equal(payload.specAuthority.specDigest, specDigest);
+  assert.equal(payload.specAuthority.outcomeCounts.valid_compliant, 1);
+  assert.equal(payload.specAuthority.humanDecisionRequired, false);
+});
+
+test("judgePassCli fails closed when a finding needs a human spec decision", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-spec-human-"));
+  const { computeSpecDigest, computeContentDigest, specCriterionIds } = await import(
+    "@dev-loops/core/loop/spec-authority"
+  );
+  const specDigest = computeSpecDigest(SPEC_FIXTURE);
+  const contentDigest = computeContentDigest("reviewed-impl");
+  const criterionIds = specCriterionIds(SPEC_FIXTURE);
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding()] }));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict()));
+  await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
+  await writeFile(
+    path.join(tmpDir, "spec-authority.json"),
+    JSON.stringify({
+      specDigest,
+      headSha: HEAD,
+      contentDigest,
+      decisions: [
+        {
+          index: 0,
+          outcome: "spec_cannot_decide",
+          specDigest,
+          headSha: HEAD,
+          contentDigest,
+          checkedCriteria: criterionIds,
+          rationale: "spec is internally contradictory on voice vs dedup",
+        },
+      ],
+    }),
+  );
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  const payload = await judgePassCli(
+    {
+      repo: "mfittko/dev-loops",
+      pr: "2000",
+      gate: "pre_approval_gate",
+      headSha: HEAD,
+      findingsFile: "./ledger.json",
+      judgeVerdict: "./judge-verdict.json",
+      specFile: "./spec.json",
+      contentDigest,
+      specAuthorityVerdict: "./spec-authority.json",
+    },
+    { repoRoot: tmpDir },
+  );
+  assert.equal(payload.ok, false);
+  assert.equal(payload.humanDecisionRequired, true);
+  assert.deepEqual(payload.specAuthority.humanDecisionIndices, [0]);
+});
+
+test("judgePassCli fails closed on a supportive-only (partial) criterion citation", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-spec-partial-"));
+  const { computeSpecDigest, computeContentDigest } = await import("@dev-loops/core/loop/spec-authority");
+  const specDigest = computeSpecDigest(SPEC_FIXTURE);
+  const contentDigest = computeContentDigest("reviewed-impl");
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding()] }));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict()));
+  await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
+  await writeFile(
+    path.join(tmpDir, "spec-authority.json"),
+    JSON.stringify({
+      specDigest,
+      headSha: HEAD,
+      contentDigest,
+      decisions: [
+        {
+          index: 0,
+          outcome: "valid_compliant",
+          specDigest,
+          headSha: HEAD,
+          contentDigest,
+          checkedCriteria: ["ac:0"],
+          rationale: "cited one supportive criterion only",
+          authorizedRemediation: "x",
+        },
+      ],
+    }),
+  );
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  await assert.rejects(
+    judgePassCli(
+      {
+        repo: "mfittko/dev-loops",
+        pr: "2000",
+        gate: "pre_approval_gate",
+        headSha: HEAD,
+        findingsFile: "./ledger.json",
+        judgeVerdict: "./judge-verdict.json",
+        specFile: "./spec.json",
+        contentDigest,
+        specAuthorityVerdict: "./spec-authority.json",
+      },
+      { repoRoot: tmpDir },
+    ),
+    /whole spec|uncovered|failed validation/,
+  );
+});
+
+test("validateCliArgs: --spec-file requires --content-digest and --spec-authority-verdict", () => {
+  assert.throws(
+    () =>
+      validateCliArgs({
+        repo: "mfittko/dev-loops",
+        pr: "2000",
+        gate: "pre_approval_gate",
+        headSha: HEAD,
+        findingsFile: "./ledger.json",
+        judgeVerdict: "./judge-verdict.json",
+        specFile: "./spec.json",
+      }),
+    /--content-digest is required/,
+  );
+});

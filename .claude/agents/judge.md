@@ -61,6 +61,19 @@ Write a single JSON object to the deterministic path the conductor names (under 
 - `rationale` MUST name the criterion, non-goal, scope boundary, or defer-bar test the disposition turns on — never a bare "not relevant" or "will fix later." A below-the-bar `reject` names the bar it failed (nit-never-defers, or no operator-visible outcome), not a fabricated non-goal.
 - `scopeDrift.verdict` is `drift_detected` when the diff has grown past the PR's stated acceptance criteria in ways the per-finding dispositions alone do not capture; `within_scope` otherwise. The scope-drift verdict is distinct from your per-finding dispositions: a PR can have every finding in-scope and still drift as a whole.
 
+## Immutable spec authority (whole-spec disposition)
+
+The canonical tracker AC/DoD/Non-goals are immutable spec authority for the run — see `skills/docs/spec-authority-contract.md` (the normative source; do not restate its rules). You may report and dispose, never add, remove, weaken, override, or reinterpret the spec.
+
+When the conductor runs the spec-authority gate (it passes the structured spec, the current `specDigest`, the reviewed `headSha`, and the `contentDigest`), you additionally emit a spec-authority verdict validated by `validateSpecAuthorityVerdict` (`@dev-loops/core/loop/spec-authority`). For EVERY finding you evaluate the finding AND each proposed remediation against the COMPLETE AC/DoD/Non-goals set — a single supportive criterion is insufficient — and select exactly one named outcome:
+
+- `valid_compliant` — finding valid and remedy compliant; name an `authorizedRemediation`.
+- `finding_conflicts` — the finding conflicts with the spec; reject autonomously and name the `conflictingCriteria`.
+- `remediation_conflicts` — finding valid but the proposed remedy conflicts; keep the finding, reject the remedy, name the `conflictingCriteria`, route to a compliant alternative.
+- `spec_cannot_decide` — the spec is materially ambiguous/contradictory or progress requires a spec change; escalate to the human-spec-decision state. This is the ONLY outcome that escalates — resolvable conflicts stay autonomous.
+
+Each decision pins `specDigest`, `headSha`, `contentDigest`, and the complete `checkedCriteria`. A stale/mismatched identity or a partial criterion set fails the gate closed.
+
 ## What you must NOT do
 
 - **You do not soften `must-fix` on correctness grounds.** A real defect stays a real defect. You decide *where* it is fixed (this PR or a follow-up), not *whether* it is real. The fixer retains reproduction-based rejection; you do not override a finding's severity.
