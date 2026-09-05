@@ -117,7 +117,12 @@ repeat phases those gates run:
    - **Interactive run:** the review was posted `--submit pending` — an
      author-only draft, invisible to other reviewers until submitted. Present
      an `AskUserQuestion` multiple choice (mirroring `/loop-grill`'s
-     interactive pattern, `skills/loop-grill/SKILL.md`):
+     interactive pattern, `skills/loop-grill/SKILL.md`). No-dangling
+     guarantee (#1848): every **Submit as** choice CONSUMES the pending draft
+     in place — it submits the existing pending review via `/events` (same
+     review id), never creating a second review — so the run leaves exactly
+     ONE review and no orphaned pending draft; **Leave pending** keeps exactly
+     the one draft and **Discard** leaves none:
      - **Leave pending (default)** — print the PR review URL and how to
        finish it (open the URL, or re-invoke with `--submit comment`, or
        `--submit approve --interactive-confirm`/`--submit

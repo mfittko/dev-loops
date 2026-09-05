@@ -6873,6 +6873,54 @@ for (const { submit, expectedEvent, needsConfirm } of [
   });
 }
 
+// #1848 — interactive /loop-review Submit leaves NO dangling pending draft. The
+// interactive Phase 4 Submit-as choice re-runs `--gate review --submit <mode>`
+// against the SAME head as the Phase 3 `--submit pending` draft, so it must
+// resolve to submit-in-place (#1912 shared path): the pending draft's own id is
+// SUBMITTED via /events, and NO second review is created — after the run the PR
+// carries exactly one review (the submitted one) and no orphaned author-only
+// draft. This is the AC pin for the Submit path with a stubbed reviews API.
+for (const { submit, needsConfirm } of [
+  { submit: "comment", needsConfirm: false },
+  { submit: "request-changes", needsConfirm: true },
+  { submit: "approve", needsConfirm: true },
+]) {
+  test(`#1848: interactive Submit as ${submit} consumes the same-head pending draft in place (one review, no dangling draft)`, async () => {
+    await withTempDir(async (tempDir) => {
+      const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
+      const entries = [
+        { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify([OWN_PENDING_REVIEW]) + "\n" },
+        {
+          assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews/8001/events", "--input", "-"],
+          stdout: '{"id":8001,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-8001"}\n',
+        },
+      ];
+      const { runChild, calls } = makeGhMock(entries);
+      const result = await upsertCheckpointVerdict({
+        repo: "owner/repo",
+        pr: 17,
+        gate: "review",
+        headSha: SINGLE_SURFACE_HEAD,
+        nextAction: "none — informational review, no re-gate required",
+        findingsLedger: ledgerPath,
+        executionMode: "fanout_fanin",
+        submit,
+        ...(needsConfirm ? { interactiveConfirm: true } : {}),
+      }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+      // The one submitted review reuses the pending draft's id — the draft is
+      // consumed, not left dangling alongside a second review.
+      assert.equal(result.action, "submitted");
+      assert.equal(result.commentId, 8001);
+      // No create-review POST was issued: no second/duplicate review exists.
+      const createCall = calls.find((c) => c.args.includes("POST") && c.args.includes("repos/owner/repo/pulls/17/reviews"));
+      assert.equal(createCall, undefined);
+      // The pending draft was NOT deleted (submit-in-place, not delete-first).
+      const deleteCall = calls.find((c) => c.args.includes("DELETE"));
+      assert.equal(deleteCall, undefined);
+    }, { prefix: "dev-loops-upsert-1848-no-dangling-" });
+  });
+}
+
 test("#1912: submitting an own pending review via /events preserves its inline comments (the draft is submitted as-is — no re-post, no comments key)", async () => {
   await withTempDir(async (tempDir) => {
     const ledgerPath = await writeReviewGateLedger(tempDir, [], { verdict: "clean", overallVerdict: "clean" });
