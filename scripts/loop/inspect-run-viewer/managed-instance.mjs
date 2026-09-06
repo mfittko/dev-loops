@@ -132,7 +132,9 @@ export function buildManagedServerInvocation({ repo, host, port }) {
   if (repo !== null) {
     args.push('--repo', repo);
   }
-  return { command: 'node', args };
+  const command = process.versions.bun ? globalThis.Bun?.which('node') : process.execPath;
+  if (!command) throw new Error('inspect-run viewer lifecycle requires Node on PATH.');
+  return { command, args };
 }
 
 async function defaultLaunchManagedServer({ repoRoot, repo, host, port }) {

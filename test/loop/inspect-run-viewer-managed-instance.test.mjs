@@ -17,10 +17,12 @@ import {
 } from '../../scripts/loop/inspect-run-viewer-ci-changes.mjs';
 
 test('managed viewer launches with the Node product runtime even when its caller is Bun', () => {
+  const node = Bun.which('node');
+  assert.ok(node, 'test environment must provide the supported Node runtime');
   assert.deepEqual(
     buildManagedServerInvocation({ repo: 'mfittko/dev-loops', host: '127.0.0.1', port: 4311 }),
     {
-      command: 'node',
+      command: node,
       args: [
         path.resolve('scripts/loop/inspect-run-viewer.mjs'),
         '--host',
@@ -43,7 +45,6 @@ function createManager(overrides = {}) {
   let nextPid = 4000;
 
   const manager = createInspectRunViewerLifecycleManager({
-  // standard happy-path manager used by the bounded lifecycle tests
     nowImpl: () => '2026-06-01T12:00:00.000Z',
     async listListeningPidsImpl(port) {
       return [...(listenersByPort.get(port) ?? [])];
@@ -659,8 +660,7 @@ test('open fails with a clear error when the launch seam does not return a posit
 test('defaultHealthcheck fetches without AbortSignal (Node v24 compatibility)', async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'inspect-run-viewer-healthcheck-signal-'));
 
-  // Spy on global fetch and short-circuit the response so the contract test
-  // stays deterministic without depending on a real HTTP server lifecycle.
+  // Stub fetch so the healthcheck contract stays deterministic.
   const originalFetch = globalThis.fetch;
   const fetchCalls = [];
   globalThis.fetch = async (url, options) => {
@@ -669,8 +669,7 @@ test('defaultHealthcheck fetches without AbortSignal (Node v24 compatibility)', 
   };
 
   try {
-    // Manager with real defaultHealthcheck (healthcheckUrlImpl defaults)
-    // but stubbed lifecycle seams.
+    // Keep the real default healthcheck with stubbed lifecycle seams.
     const manager = createInspectRunViewerLifecycleManager({
       listListeningPidsImpl: async () => [42],
       isProcessAliveImpl: async () => true,

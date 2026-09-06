@@ -757,7 +757,7 @@ describe("board resolution from .devloops without --project (#1459)", () => {
     await withTempCwd("tracker:\n  board:\n    number: 7\n", async (cwd) => {
       const binDir = nodePath.join(cwd, "stub-bin");
       mkdirSync(binDir, { recursive: true });
-      const shim = `#!${(Bun.which("bun") ?? "bun")}
+      const shim = `#!${(Bun.which("bun") ?? process.execPath)}
 const argv = process.argv.slice(2);
 const q = argv.find((a) => a.startsWith("query=")) ?? "";
 const data = (d) => { process.stdout.write(JSON.stringify({ data: d })); process.exit(0); };
