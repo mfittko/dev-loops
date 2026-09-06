@@ -21,7 +21,6 @@
  * post-convergence head bump is a pure doc/prose bump and so need not force a
  * fresh blocking Copilot round.
  */
-import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -36,15 +35,15 @@ import { baseAngleName } from "@dev-loops/core/loop/gate-fanin";
 
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { captureChangedFilesBetween, runGitCommand } from "../lib/git-delta.mjs";
+export { runGitCommand } from "../lib/git-delta.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import {
-  gitEnvWithoutDirOverrides,
-  hasRenameEntry,
   mapGateToConfigKey,
-  parseChangedFiles,
 } from "./write-gate-context.mjs";
 
 const USAGE = `Usage: resolve-angle-carry-forward.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --prev-head <sha> --head-sha <sha> [--tmp-root <path>]
@@ -59,6 +58,10 @@ Required:
   --head-sha <sha>              Current head SHA (head B); must be the CWD worktree HEAD
 Optional:
   --tmp-root <path>             Root tmp directory (default: tmp/)
+  --spec-authority <path>       JSON { specDigest, headSha, contentDigest, checkedCriteria }
+                                 (issue 2008 / ADR 0061 AC1). When supplied, stamps the plan's
+                                 durable record with the pinned revision identity via the ONE
+                                 shared stamp helper. Pure no-op (byte-identical output) when absent.
 
 ${JQ_OUTPUT_USAGE}
 `.trim();
@@ -81,6 +84,7 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
       "prev-head": { type: "string" },
       "head-sha": { type: "string" },
       "tmp-root": { type: "string" },
+      "spec-authority": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -94,6 +98,7 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
     prevHead: undefined,
     headSha: undefined,
     tmpRoot: "tmp",
+    specAuthority: undefined,
   };
   for (const token of tokens) {
     if (token.kind === "positional") throw parseError(`Unknown argument: ${token.value}`);
@@ -132,6 +137,7 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
       continue;
     }
     if (token.name === "tmp-root") { options.tmpRoot = requireTokenValue(token, parseError).trim(); continue; }
+    if (token.name === "spec-authority") { options.specAuthority = requireTokenValue(token, parseError).trim(); continue; }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -286,32 +292,6 @@ export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [] }) {
   return { prevHead: headSha, carried: carriedProvenance, mustRerun: mustRerunWithReasons };
 }
 
-// git-diff isolation flags (subset of write-gate-context's captureDiffFromBase):
-// pin the name-status output bytes/rename detection so the changed-file SET is
-// reproducible regardless of ambient gitconfig.
-const GIT_ISOLATION = [
-  "-c", "color.ui=false",
-  "-c", "core.pager=cat",
-  "-c", "diff.renames=true",
-  "-c", "core.autocrlf=false",
-];
-
-export function runGitCommand(args, { repoRoot, env = gitEnvWithoutDirOverrides(), spawnImpl = spawn } = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawnImpl("git", args, { cwd: repoRoot, env, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    let spawnError = null;
-    child.stdout?.on("data", (chunk) => { stdout += String(chunk); });
-    child.stderr?.on("data", (chunk) => { stderr += String(chunk); });
-    child.once("error", (error) => { spawnError = error; });
-    child.once("close", (code) => {
-      if (spawnError) return reject(spawnError);
-      resolve({ code: code ?? 1, stdout, stderr });
-    });
-  });
-}
-
 async function assertWorktreeAtHeadAsync(headSha, { repoRoot, runGit = runGitCommand }) {
   const declared = String(headSha).trim().toLowerCase();
   if (!/^[0-9a-f]{7,64}$/.test(declared)) {
@@ -330,20 +310,6 @@ async function assertWorktreeAtHeadAsync(headSha, { repoRoot, runGit = runGitCom
   if (!actualHead.startsWith(declared)) {
     throw new Error(`worktree HEAD ${actualHead} does not match --head-sha ${declared}: the current working directory is the WRONG worktree for this PR, so \`git diff <base>...HEAD\` would resolve the WRONG diff. cd into the worktree checked out at ${declared} and re-run.`);
   }
-}
-
-async function captureDeltaChangedFiles({ base, repoRoot, runGit = runGitCommand }) {
-  // TWO-dot: the direct tree diff between the reviewed head A (base) and HEAD (B).
-  // NOT three-dot (`base...HEAD`), which diffs merge-base(A,B)..B and would OMIT a
-  // file that differs between A and B but happens to equal their merge-base — under
-  // a non-fast-forward advance (rebase/amend/revert) that would carry an angle whose
-  // review surface actually changed since A. Two-dot never omits such a file.
-  const range = `${base}..HEAD`;
-  const result = await runGit([...GIT_ISOLATION, "diff", "--no-ext-diff", "--name-status", range], { repoRoot });
-  if (result.code !== 0) {
-    throw new Error(`git diff ${range} failed: ${result.stderr.trim() || `exit ${result.code}`}`);
-  }
-  return { changedFiles: parseChangedFiles(result.stdout), hasRename: hasRenameEntry(result.stdout) };
 }
 
 export async function main(argv = process.argv.slice(2), { repoRoot = process.cwd(), runGit = runGitCommand } = {}) {
@@ -398,12 +364,24 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // against the WRONG head while claiming to be for --head-sha. Abort before
     // capturing the delta so no mislabeled plan is ever emitted.
     await assertWorktreeAtHeadAsync(options.headSha, { repoRoot, runGit });
-    const { changedFiles, hasRename } = await captureDeltaChangedFiles({ base: options.prevHead, repoRoot, runGit });
+    const { changedFiles, hasRename } = await captureChangedFilesBetween({ base: options.prevHead, repoRoot, runGit });
     // A rename anywhere in the delta forces the RENAME_ONLY-mapped angles to
     // re-run: parseChangedFiles keeps only a rename's destination path, so
     // classifying that path alone misses what the rename itself implicates.
     const alwaysRerun = [...mandatoryAngles, ...(hasRename ? RENAME_ONLY_ANGLES : [])];
-    const plan = buildCarryForwardPlan({ log, changedFiles, alwaysRerun });
+    const rawPlan = buildCarryForwardPlan({ log, changedFiles, alwaysRerun });
+    // AC1 (issue 2008 / ADR 0061): optional --spec-authority stamps the pinned
+    // revision identity onto the plan via the ONE shared helper. Pure no-op
+    // (byte-identical output) when the flag is absent. Resolved against
+    // `repoRoot` (default process.cwd()) — the same root this function
+    // already anchors --prev-head's log path to (issue 2008 draft-gate
+    // review finding F2: --spec-authority path resolution must match every
+    // other writer, not read cwd-relative-only).
+    const specAuthorityIdentity = await readSpecAuthorityIdentity(
+      options.specAuthority !== undefined ? path.resolve(repoRoot, options.specAuthority) : undefined,
+      parseError,
+    );
+    const plan = stampOptionalSpecAuthority(rawPlan, specAuthorityIdentity);
     const copilotConvergence = resolveConvergenceCarryForward({ changedFiles });
     const result = {
       ok: true,
@@ -416,6 +394,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       carried: plan.carried,
       mustRerun: plan.mustRerun,
       copilotConvergence,
+      ...(plan.specAuthority !== undefined ? { specAuthority: plan.specAuthority } : {}),
     };
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
   } catch (error) {

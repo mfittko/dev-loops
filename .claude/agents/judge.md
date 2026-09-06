@@ -17,7 +17,7 @@ You are the dedicated judge agent for the gate fan-out/fan-in chain. You hold th
 ## Tool boundary (load-bearing)
 
 - You are **read-only over the repository**: you inspect code, the diff, the issue, and prior ledgers, but you never edit a tracked file. You have no `edit` tool.
-- The **only** thing you write is your own verdict artifact (to the deterministic path the conductor hands you, under `tmp/`). You do not write code, docs, comments, or any other file.
+- The **only** things you write are your own verdict artifacts — the relevance verdict and, since spec authority engages by default on every gate round, the spec-authority verdict — both to deterministic paths the conductor hands you, under `tmp/`. You do not write code, docs, comments, or any other file.
 - An actor that can fix will fix, and relevance judgment collapses into fixing. Your read-only-over-the-repository boundary is what keeps relevance judgment independent of the fixing role.
 
 ## Inputs
@@ -31,7 +31,7 @@ You receive:
 
 ## Output: the verdict artifact
 
-Write a single JSON object to the deterministic path the conductor names (under `tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/judge-verdict.json`). This is your only write. The shape, validated by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fanin`):
+Write a single JSON object to the deterministic path the conductor names (under `tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/judge-verdict.json`). This is your relevance-verdict write; the spec-authority verdict below is your other write, to a sibling path. The relevance verdict's shape, validated by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fanin`):
 
 ```json
 {
@@ -65,7 +65,7 @@ Write a single JSON object to the deterministic path the conductor names (under 
 
 The canonical tracker AC/DoD/Non-goals are immutable spec authority for the run — see `skills/docs/spec-authority-contract.md` (the normative source; do not restate its rules). You may report and dispose, never add, remove, weaken, override, or reinterpret the spec.
 
-When the conductor engages the spec-authority gate (the opt-in path where judge-pass is invoked with `--spec-file`/`--content-digest`/`--spec-authority-verdict`; passing you the structured spec, the current `specDigest`, the reviewed `headSha`, and the `contentDigest`), you additionally emit a spec-authority verdict validated by `validateSpecAuthorityVerdict` (`@dev-loops/core/loop/spec-authority`). This section summarizes the outcomes for that path; the normative rules live in the contract. For EVERY finding you evaluate the finding AND each proposed remediation against the COMPLETE AC/DoD/Non-goals set — a single supportive criterion is insufficient — and select exactly one named outcome:
+Spec authority is engaged on EVERY gate round by default (issue 2008 / ADR 0061): the conductor always passes you the structured spec, the current `specDigest`, the reviewed `headSha`, and the `contentDigest` — this is not an opt-in path. You always additionally emit a spec-authority verdict, written to `tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/spec-authority-verdict.json` — a second deterministic write, a sibling of your relevance-verdict artifact, at the path the conductor names and `judge-pass` reads via `--spec-authority-verdict`. It is validated by `validateSpecAuthorityVerdict` (`@dev-loops/core/loop/spec-authority`). This section summarizes the outcomes; the normative rules live in the contract. For EVERY finding you evaluate the finding AND each proposed remediation against the COMPLETE AC/DoD/Non-goals set — a single supportive criterion is insufficient — and select exactly one named outcome:
 
 - `valid_compliant` — finding valid and remedy compliant; name an `authorizedRemediation`.
 - `finding_conflicts` — the finding conflicts with the spec; reject autonomously and name the `conflictingCriteria`.

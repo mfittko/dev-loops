@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
@@ -40,6 +41,8 @@ import {
   updateGateReview,
 } from "./_gate-finding-surface.mjs";
 import { fetchAllReviewThreads } from "./list-review-threads.mjs";
+import { stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
+import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // The `review` gate's submit-mode vocabulary (#1840), SCOPED TO --gate review
@@ -309,6 +312,15 @@ Optional:
                                             which the size-budget merge gate
                                             (@dev-loops/core/loop/size-budget-merge-gate)
                                             fails closed on, never as a silent pass.
+  --spec-authority <path>                   JSON { specDigest, headSha, contentDigest,
+                                            checkedCriteria } (issue 2008 / ADR 0061 AC1).
+                                            When supplied, stamps the RETURNED result
+                                            (the durable verdict record this call reports;
+                                            this script posts no file) with the pinned
+                                            revision identity via the ONE shared stamp
+                                            helper. Never changes the rendered comment
+                                            body. Pure no-op (result carries no
+                                            specAuthority field) when absent.
 Output (stdout, JSON):
   {
     "ok": true,
@@ -543,6 +555,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       submit: { type: "string" },
       auto: { type: "boolean" },
       "interactive-confirm": { type: "boolean" },
+      "spec-authority": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -570,6 +583,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     submit: undefined,
     auto: false,
     interactiveConfirm: false,
+    specAuthority: undefined,
     jq: undefined,
     silent: false,
   };
@@ -724,6 +738,10 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       // --confirm: destructives stay gated unless truly asked).
       const confirmValue = token.value === undefined ? undefined : token.value.trim();
       options.interactiveConfirm = confirmValue === undefined || (confirmValue !== "" && !/^(false|0|no)$/iu.test(confirmValue));
+      continue;
+    }
+    if (token.name === "spec-authority") {
+      options.specAuthority = requireTokenValue(token, parseError).trim();
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -2040,6 +2058,20 @@ async function applyGateFullLabel({ repo, pr }, { env, ghCommand, runChild = def
 
 export async function upsertCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild } = {}) {
   const gh = { env, ghCommand, repoRoot, runChild };
+  // AC1 (issue 2008 / ADR 0061): optional --spec-authority stamps the RETURNED
+  // result (this script's durable verdict record — it posts no file of its
+  // own) with the pinned revision identity, via the ONE shared stamp helper.
+  // Read up front so every return path below can spread it in. A pure no-op
+  // (no `specAuthority` field on the result) when the flag is absent.
+  // Resolved against `repoRoot` (default process.cwd()) — the same root this
+  // function already anchors its config load to (issue 2008 draft-gate
+  // review finding F2: --spec-authority path resolution must match every
+  // other writer, not read cwd-relative-only).
+  const specAuthorityIdentity = await readSpecAuthorityIdentity(
+    options.specAuthority !== undefined ? path.resolve(repoRoot, options.specAuthority) : undefined,
+    (message) => new Error(message),
+  );
+  const specAuthority = specAuthorityIdentity ? stampSpecAuthorityIdentity({}, specAuthorityIdentity).specAuthority : undefined;
   // loadDevLoopConfig never throws: on a validation failure it returns the raw
   // merged config alongside its errors. Every other severity consumer
   // (consolidate-fanin, close-gate-findings, detect-checkpoint-evidence) fails
@@ -2859,6 +2891,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       ...(warning ? { warning } : {}),
       ...(findingsLedgerWarning ? { findingsLedgerWarning } : {}),
       ...(escalateGateFullLabel ? { gateFullLabelApplied: true } : {}),
+      ...(specAuthority ? { specAuthority } : {}),
     };
   }
   if (existing) {
@@ -2908,6 +2941,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       ...(findingsLedgerWarning ? { findingsLedgerWarning } : {}),
       ...(updateVerificationWarning ? { verificationWarning: updateVerificationWarning } : {}),
       ...(escalateGateFullLabel ? { gateFullLabelApplied: true } : {}),
+      ...(specAuthority ? { specAuthority } : {}),
     };
   }
   const createdReview = await createGateReview({
@@ -2968,6 +3002,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     ...(findingsLedgerWarning ? { findingsLedgerWarning } : {}),
     ...(verificationWarning ? { verificationWarning } : {}),
     ...(escalateGateFullLabel ? { gateFullLabelApplied: true } : {}),
+    ...(specAuthority ? { specAuthority } : {}),
   };
 }
 export function buildInlineExecutionWarning(executionMode, inlineReason) {
