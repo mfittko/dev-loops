@@ -612,11 +612,14 @@ export function stampSpecAuthorityIdentity(record, { specDigest, headSha, conten
 // AC7 (issue 2008 / ADR 0061): pure affected-criteria producer
 // ---------------------------------------------------------------------------
 
-// ponytail: minimal glob subset (exact path, `dir/**` prefix, single `*`
-// within one path segment) — no `?`, brace expansion, or mid-pattern `**`.
-// No glob/minimatch/picomatch util exists in this repo (checked
-// packages/core/src and analysis/change-classifier.mjs); upgrade to
-// picomatch/minimatch if a coverage map ever needs a richer subset.
+// ponytail: minimal glob subset — exact path, a `dir/**` prefix, or a single
+// `*` (matches any run of non-`/` characters) within one path segment. Every
+// OTHER character, including every other regex metacharacter (`?`, `.`, `+`,
+// `(`, `)`, `[`, `]`, `{`, `}`, `^`, `$`, `|`), is matched LITERALLY — a glob
+// is never handed to RegExp unescaped. No glob/minimatch/picomatch util
+// exists in this repo (checked packages/core/src and
+// analysis/change-classifier.mjs); upgrade to picomatch/minimatch if a
+// coverage map ever needs a richer subset (brace expansion, mid-pattern `**`).
 function matchesCoverageGlob(pattern, filePath) {
   if (pattern === filePath) return true;
   if (pattern.endsWith("/**")) {
@@ -624,7 +627,7 @@ function matchesCoverageGlob(pattern, filePath) {
     return filePath === prefix || filePath.startsWith(`${prefix}/`);
   }
   if (pattern.includes("*")) {
-    const escaped = pattern.replace(/[.+^${}()|[\]\\]/gu, "\\$&").replace(/\*/gu, "[^/]*");
+    const escaped = pattern.replace(/[.+^${}()|[\]\\?]/gu, "\\$&").replace(/\*/gu, "[^/]*");
     return new RegExp(`^${escaped}$`, "u").test(filePath);
   }
   return false;

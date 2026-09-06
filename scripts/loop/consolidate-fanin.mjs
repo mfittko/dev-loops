@@ -1484,8 +1484,15 @@ export async function consolidateGateFanin(options) {
     // ignores it; write-gate-findings-log.mjs threads it into the ledger.
     // AC1 (issue 2008 / ADR 0061): optional --spec-authority stamps the pinned
     // revision identity onto this ledger via the ONE shared helper. Pure no-op
-    // (byte-identical ledger) when the flag is absent.
-    const specAuthorityIdentity = await readSpecAuthorityIdentity(options.specAuthority, parseError);
+    // (byte-identical ledger) when the flag is absent. Resolved against
+    // --repo-root (default process.cwd()) — the same root this function
+    // already anchors its config load / misplaced-findings diagnostic to
+    // (issue 2008 draft-gate review finding F2: --spec-authority path
+    // resolution must match every other writer, not read cwd-relative-only).
+    const specAuthorityIdentity = await readSpecAuthorityIdentity(
+      options.specAuthority !== undefined ? path.resolve(options.repoRoot ?? process.cwd(), options.specAuthority) : undefined,
+      parseError,
+    );
     const ledgerRecord = stampOptionalSpecAuthority({ overallVerdict: consolidated.verdict, findings }, specAuthorityIdentity);
     await writeFile(options.ledgerOut, `${JSON.stringify(ledgerRecord, null, 2)}\n`, "utf8");
   }

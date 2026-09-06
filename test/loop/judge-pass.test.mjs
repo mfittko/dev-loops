@@ -966,6 +966,49 @@ test("judgePassCli AC7: an unmatched changed path is uncertain -> fails closed t
   assert.deepEqual(payload.specAuthority.invalidation.carried, []);
 });
 
+// F4 (issue 2008 draft-gate review): a malformed --changed-paths or
+// --coverage-map artifact must fail closed (thrown error), never silently
+// degrade to an empty/no-op affected-criteria resolution.
+test("judgePassCli AC7: a malformed --changed-paths file fails closed", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-ac7-bad-changed-"));
+  await writeAffectedCriteriaFixture(tmpDir, {
+    affected: ["src/dedup.mjs"],
+    coverage: { "ac:0": ["src/dedup.mjs"] },
+  });
+  await writeFile(path.join(tmpDir, "changed.json"), "not json");
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  const { contentDigest } = await specDigests();
+  await assert.rejects(
+    judgePassCli({
+      repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
+      findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json",
+      specFile: "./spec.json", contentDigest, specAuthorityVerdict: "./spec-authority.json",
+      priorApprovals: "./prior.json", changedPaths: "./changed.json", coverageMap: "./coverage.json",
+    }, { repoRoot: tmpDir }),
+    /--changed-paths ".*" must contain valid JSON/,
+  );
+});
+
+test("judgePassCli AC7: a malformed --coverage-map file fails closed", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-ac7-bad-coverage-"));
+  await writeAffectedCriteriaFixture(tmpDir, {
+    affected: ["src/dedup.mjs"],
+    coverage: { "ac:0": ["src/dedup.mjs"] },
+  });
+  await writeFile(path.join(tmpDir, "coverage.json"), "{ not valid json");
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  const { contentDigest } = await specDigests();
+  await assert.rejects(
+    judgePassCli({
+      repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
+      findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json",
+      specFile: "./spec.json", contentDigest, specAuthorityVerdict: "./spec-authority.json",
+      priorApprovals: "./prior.json", changedPaths: "./changed.json", coverageMap: "./coverage.json",
+    }, { repoRoot: tmpDir }),
+    /--coverage-map ".*" must contain valid JSON/,
+  );
+});
+
 // --- AC6: durable approval-record extensions (issue 2008 / ADR-0061) ---
 
 test("judgePassCli AC6: approvals record persists humanDecision/authorizedRemediations/criterionCoverage", async () => {
@@ -1021,7 +1064,7 @@ test("judgePassCli AC6: humanDecision surfaces required+reason on a spec_cannot_
 
 // --- AC1: spec-authority identity stamped onto --ledger-out / --out ---
 
-test("judgePassCli AC1: --ledger-out and --out carry the specAuthority stamp when engaged, and are a no-op when not", async () => {
+test("judgePassCli AC1: --ledger-out carries the specAuthority stamp when engaged; --out always stays a bare act-list array", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-ac1-stamp-"));
   const { specDigest, contentDigest, criterionIds } = await specDigests();
   await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding()] }));
@@ -1041,8 +1084,12 @@ test("judgePassCli AC1: --ledger-out and --out carry the specAuthority stamp whe
   }, { repoRoot: tmpDir });
   const act = JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8"));
   const enriched = JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8"));
-  assert.deepEqual(act.specAuthority, { specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds });
-  assert.equal(act.act.length, 1);
+  // --out is ALWAYS the bare act-list array the fix pass consumes — never a
+  // wrapped object — even when spec-authority is engaged (issue 2008 draft-
+  // gate review finding F1): the durable revision-identity record lives on
+  // --ledger-out only.
+  assert.ok(Array.isArray(act), "--out is a bare array even when spec-authority is engaged");
+  assert.equal(act.length, 1);
   assert.deepEqual(enriched.specAuthority, { specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds });
   assert.equal(enriched.overallVerdict, "findings_present");
 

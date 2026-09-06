@@ -340,6 +340,36 @@ test("consolidateGateFanin: --spec-authority stamps --ledger-out; absent is a by
   );
 });
 
+// F2 (issue 2008 draft-gate review): --spec-authority must resolve against
+// --repo-root (default process.cwd()), the same root this function anchors
+// its config load / misplaced-findings diagnostic to — not read cwd-relative
+// only, which would silently miss the file whenever the caller's cwd differs
+// from --repo-root.
+test("consolidateGateFanin: a relative --spec-authority path resolves against --repo-root", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "x" }] } },
+    async (dir) => {
+      const identity = {
+        specDigest: `sha256:${"a".repeat(64)}`,
+        headSha: "b".repeat(40),
+        contentDigest: `sha256:${"c".repeat(64)}`,
+        checkedCriteria: ["ac:0"],
+      };
+      await mkdir(path.join(dir, "meta"), { recursive: true });
+      await writeFile(path.join(dir, "meta", "spec-authority.json"), JSON.stringify(identity));
+      const ledgerPath = path.join(dir, "out", "ledger.json");
+      await consolidateGateFanin({
+        findingsDir: dir,
+        ledgerOut: ledgerPath,
+        repoRoot: dir,
+        specAuthority: "meta/spec-authority.json",
+      });
+      const written = JSON.parse(await readFile(ledgerPath, "utf8"));
+      assert.deepEqual(written.specAuthority, identity);
+    },
+  );
+});
+
 // #1922: a reviewer's own incidental `#<digits>` issue/PR reference in a finding
 // summary/recommendation used to trip upsert-checkpoint-verdict.mjs's comment-id
 // guard (fail-closed on a bare auto-link token), forcing the operator to hand-

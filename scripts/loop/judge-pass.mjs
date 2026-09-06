@@ -833,12 +833,13 @@ export async function judgePassCli(
     const outPath = path.resolve(resolvedRoot, options.out);
     if (!written.has(outPath)) {
       await mkdir(path.dirname(outPath), { recursive: true });
-      // Bare array when spec-authority is not engaged (byte-identical to
-      // before); a stamped top-level wrapper only when it is.
-      const actPayload = specAuthorityIdentity
-        ? stampSpecAuthorityIdentity({ act: result.act }, specAuthorityIdentity)
-        : result.act;
-      await writeFile(outPath, JSON.stringify(actPayload, null, 2) + "\n");
+      // ALWAYS a bare act-list array (byte-identical to before spec-authority
+      // was introduced), spec-authority engaged or not: the fix pass consumes
+      // ONLY --out's act list (skills/dev-loop/SKILL.md, gate-review-sub-loop
+      // -contract.md). AC1's durable fixer-facing record of the pinned
+      // revision identity is carried by the STAMPED --ledger-out above, never
+      // by --out.
+      await writeFile(outPath, JSON.stringify(result.act, null, 2) + "\n");
     }
   }
 

@@ -722,6 +722,39 @@ test("CLI: --spec-authority stamps the plan's specAuthority block; absent is a b
   }
 });
 
+// F2 (issue 2008 draft-gate review): --spec-authority must resolve against
+// `repoRoot` (default process.cwd()) — the same root this CLI already
+// anchors --prev-head's log path to — so a relative path behaves the same
+// regardless of the process's actual cwd.
+test("CLI: a relative --spec-authority path resolves against repoRoot", async () => {
+  const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
+    mandatoryAngles: [],
+    perAngle: [{ angle: "correctness", reviewer: "review-a" }],
+    mutate: async (root) => {
+      await writeFile(path.join(root, "src/foo.mjs"), "export function foo() { return 2; }\n", "utf8");
+    },
+  });
+  try {
+    const identity = {
+      specDigest: `sha256:${"d".repeat(64)}`,
+      headSha: "e".repeat(40),
+      contentDigest: `sha256:${"f".repeat(64)}`,
+      checkedCriteria: ["ac:0"],
+    };
+    await mkdir(path.join(repoRoot, "meta"), { recursive: true });
+    await writeFile(path.join(repoRoot, "meta", "spec-authority.json"), JSON.stringify(identity), "utf8");
+
+    const result = await runMain([
+      "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
+      "--spec-authority", "meta/spec-authority.json",
+    ], { repoRoot });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.specAuthority, identity);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("parseResolveAngleCarryForwardCliArgs fails closed on a same-head carry", () => {
   const sha = "c3".repeat(20);
   assert.throws(

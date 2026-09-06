@@ -348,6 +348,20 @@ describe("resolveAffectedCriteria (AC7, issue 2008)", () => {
     assert.deepEqual(out, { affectedCriteria: [], uncertain: false, unmatchedPaths: [] });
   });
 
+  test("F3 (issue 2008 draft-gate review): a `?` in a coverage glob matches a literal `?` path, not a regex quantifier", () => {
+    // "src/a?.mjs*" is not a supported glob token combination on its own —
+    // `?` must match the literal character, never "zero-or-one of the
+    // preceding token". A path containing the literal `?` must match; the
+    // same path with the `?` character dropped must NOT.
+    const out = resolveAffectedCriteria({
+      changedPaths: ["src/a?.mjsONE", "src/a.mjsTWO"],
+      criterionCoverage: { "ac:0": ["src/a?.mjs*"] },
+    });
+    assert.deepEqual(out.affectedCriteria, ["ac:0"]);
+    assert.equal(out.uncertain, true, "the path missing the literal `?` must not match (fails closed as unmatched)");
+    assert.deepEqual(out.unmatchedPaths, ["src/a.mjsTWO"]);
+  });
+
   test("fails closed on malformed input", () => {
     assert.throws(() => resolveAffectedCriteria({ changedPaths: "not-an-array", criterionCoverage: coverage }), /changedPaths must be an array/);
     assert.throws(() => resolveAffectedCriteria({ changedPaths: [""], criterionCoverage: coverage }), /changedPaths\[0\] must be a non-empty string/);

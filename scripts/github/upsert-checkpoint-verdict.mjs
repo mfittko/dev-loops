@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
 import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
@@ -2062,7 +2063,14 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // own) with the pinned revision identity, via the ONE shared stamp helper.
   // Read up front so every return path below can spread it in. A pure no-op
   // (no `specAuthority` field on the result) when the flag is absent.
-  const specAuthorityIdentity = await readSpecAuthorityIdentity(options.specAuthority, (message) => new Error(message));
+  // Resolved against `repoRoot` (default process.cwd()) — the same root this
+  // function already anchors its config load to (issue 2008 draft-gate
+  // review finding F2: --spec-authority path resolution must match every
+  // other writer, not read cwd-relative-only).
+  const specAuthorityIdentity = await readSpecAuthorityIdentity(
+    options.specAuthority !== undefined ? path.resolve(repoRoot, options.specAuthority) : undefined,
+    (message) => new Error(message),
+  );
   const specAuthority = specAuthorityIdentity ? stampSpecAuthorityIdentity({}, specAuthorityIdentity).specAuthority : undefined;
   // loadDevLoopConfig never throws: on a validation failure it returns the raw
   // merged config alongside its errors. Every other severity consumer

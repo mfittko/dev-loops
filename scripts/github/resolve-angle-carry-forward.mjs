@@ -353,8 +353,15 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     const rawPlan = buildCarryForwardPlan({ log, changedFiles, alwaysRerun });
     // AC1 (issue 2008 / ADR 0061): optional --spec-authority stamps the pinned
     // revision identity onto the plan via the ONE shared helper. Pure no-op
-    // (byte-identical output) when the flag is absent.
-    const specAuthorityIdentity = await readSpecAuthorityIdentity(options.specAuthority, parseError);
+    // (byte-identical output) when the flag is absent. Resolved against
+    // `repoRoot` (default process.cwd()) — the same root this function
+    // already anchors --prev-head's log path to (issue 2008 draft-gate
+    // review finding F2: --spec-authority path resolution must match every
+    // other writer, not read cwd-relative-only).
+    const specAuthorityIdentity = await readSpecAuthorityIdentity(
+      options.specAuthority !== undefined ? path.resolve(repoRoot, options.specAuthority) : undefined,
+      parseError,
+    );
     const plan = specAuthorityIdentity ? stampSpecAuthorityIdentity(rawPlan, specAuthorityIdentity) : rawPlan;
     const copilotConvergence = resolveConvergenceCarryForward({ changedFiles });
     const result = {
