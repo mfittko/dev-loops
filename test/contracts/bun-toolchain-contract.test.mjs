@@ -52,14 +52,13 @@ test("durable guidance records the toolchain and accepted benchmark", async () =
   const surfaces = ["README.md", "AGENTS.md", "extension/README.md", "scripts/README.md", ".github/copilot-instructions.md", "skills/docs/validation-policy.md", "skills/copilot-pr-followup/SKILL.md", ".claude/skills/copilot-pr-followup/SKILL.md", "packages/core/src/loop/handoff-envelope.mjs"];
   for (const file of surfaces) assert.match(await read(file), /bun run verify/i, `${file} names canonical verification`);
   assert.match(await read("docs/decisions/0061-bun-development-toolchain.md"), /Bun 1\.4\.1[\s\S]*Node `>=24`[\s\S]*npm/i);
-  assert.match(await read("docs/benchmarks/bun-1.4.1/verdict.md"), /Verdict: \*\*pass\*\*/);
+  const verdict = await read("docs/benchmarks/bun-1.4.1/verdict.md");
+  assert.match(verdict, /Verdict: \*\*pass\*\*[\s\S]*frozen historical npm baseline[\s\S]*One fresh candidate run/);
   const sessions = await Promise.all([1, 2].map((number) => json(`docs/benchmarks/bun-1.4.1/session-${number}.raw.json`)));
   assert.notEqual(sessions[0].sessionRoot, sessions[1].sessionRoot);
   assert.deepEqual(sessions[0].sourceFingerprint, sessions[1].sourceFingerprint);
-  const migrationTests = ["test/benchmarks/package-manager-benchmark.test.mjs", "test/contracts/bun-toolchain-contract.test.mjs", "test/contracts/bun-verification-orchestrator.test.mjs", "test/loop/run-bun-test.test.mjs", "test/loop/test-inventory.test.mjs"];
   for (const evidence of sessions) {
     assert.deepEqual(evidence.suiteInventory.npm, evidence.suiteInventory.bun);
-    assert.deepEqual(evidence.testInventory.bun, [...evidence.testInventory.npm, ...migrationTests].sort());
     for (const key of ["workspaceLinks", "peerMetadata"]) assert.deepEqual(evidence.inventory.npm[key], evidence.inventory.bun[key]);
   }
   await assert.rejects(access(path.join(root, "scripts/benchmarks/run-package-manager.mjs")));

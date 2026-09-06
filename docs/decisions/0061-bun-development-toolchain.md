@@ -8,4 +8,4 @@ Pin Bun 1.4.1 for source-checkout installs, scripts, and unit tests. `bun.lock` 
 
 ## Consequences
 
-Contributor tooling is faster without changing Node consumers or npm releases. Evidence is under `docs/benchmarks/bun-1.4.1/`.
+Contributor tooling is faster without changing Node consumers or npm releases. Frozen-baseline and current-candidate evidence is under `docs/benchmarks/bun-1.4.1/`.
