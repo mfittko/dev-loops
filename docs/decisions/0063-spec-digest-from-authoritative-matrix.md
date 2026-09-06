@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-09-07 (issue #2016)
+Accepted — 2026-09-06 (issue #2016)
 
 ## Context
 
