@@ -43,6 +43,20 @@ test("Bun summaries require a consistent terminal reporter block", () => {
   assert.equal(parseBunSummary(" 2 pass\n 0 fail\nRan 2 tests across 1 file. [1.00ms]\nlate exit-handler output\n 9 pass\n 0 fail\nRan 9 tests across 9 files. [9.00ms]\nspoof trailer\n"), null);
 });
 
+test("a zero exit with reported test failures fails closed", async () => {
+  let stderr = "";
+  await assert.rejects(
+    runBunTest(["example.test.mjs"], {
+      captureFactory: async () => memoryCapture(" 0 pass\n 1 fail\nRan 1 test across 1 file. [4.00ms]\n", []),
+      spawnImpl: fakeChild(() => {}),
+      stdout: { write() {} },
+      stderr: { write: (chunk) => { stderr += chunk; } },
+    }),
+    /reported 1 failed test despite exiting successfully/,
+  );
+  assert.match(stderr, /1 fail/);
+});
+
 function fakeIntervals() {
   const active = new Set();
   return {
@@ -319,6 +333,30 @@ test("failure digest caps multi-megabyte lines while retaining the complete raw 
   }
 });
 
+test("failure digest caps an unbroken sequence of short diagnostic lines", async () => {
+  let capture;
+  let stderr = "";
+  const chatter = Array.from({ length: 20_000 }, (_, index) => `diagnostic ${index}`).join("\n");
+  const content = `test/chatty.test.mjs:\n(fail) chatty assertion\n${chatter}\n0 pass\n1 fail\nRan 1 test across 1 file. [1.00ms]\n`;
+  try {
+    const code = await runBunTest(["example.test.mjs"], {
+      captureFactory: async () => {
+        capture = await createOutputCapture();
+        return capture;
+      },
+      spawnImpl: fakeChild((fd) => writeSync(fd, content), [1, null]),
+      stdout: { write() {} },
+      stderr: { write: (chunk) => { stderr += chunk; } },
+    });
+    assert.equal(code, 1);
+    assert.ok(Buffer.byteLength(stderr) < 140 * 1024);
+    assert.match(stderr, /failure block truncated at 131072 bytes/);
+    assert.equal(await readFile(capture.path, "utf8"), content);
+  } finally {
+    if (capture) await rm(path.dirname(capture.path), { recursive: true, force: true });
+  }
+});
+
 test("nonzero and signaled runs preserve failure", async () => {
   for (const [closeArgs, expected] of [[[7, null], 7], [[null, "SIGTERM"], 1]]) {
     const events = [];
@@ -440,6 +478,18 @@ test("descriptor cleanup attempts spool removal even when close reports failure"
   const capture = await createOutputCapture({ closeHandle: async (handle) => { await handle.close(); throw new Error("close failure"); } });
   writeSync(capture.fd, "diagnostics\n");
   await assert.rejects(capture.cleanup(), /close failure/);
+  await assert.rejects(access(capture.path));
+});
+
+test("descriptor cleanup falls back to fd closure after the removed spool handle rejects", async () => {
+  let fallbackFd;
+  const capture = await createOutputCapture({
+    closeReplayHandle: async () => { throw new Error("handle close failed"); },
+    closeFileDescriptor: (fd) => { fallbackFd = fd; },
+  });
+  writeSync(capture.fd, "diagnostics\n");
+  await capture.cleanup();
+  assert.equal(fallbackFd >= 0, true);
   await assert.rejects(access(capture.path));
 });
 

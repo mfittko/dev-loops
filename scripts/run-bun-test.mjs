@@ -2,7 +2,7 @@
 
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { createReadStream } from "node:fs";
+import { closeSync, createReadStream } from "node:fs";
 import { mkdir, mkdtemp, open, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -17,7 +17,9 @@ const HEARTBEAT_MS = 15_000;
 const TTY_REFRESH_MS = 250;
 const DIGEST_LINE_BYTES = 16 * 1024;
 const DIGEST_CONTEXT_BYTES = 64 * 1024;
+const DIGEST_FAILURE_BYTES = 128 * 1024;
 const TRUNCATED_LINE = `… [line truncated at ${DIGEST_LINE_BYTES} bytes]`;
+const TRUNCATED_FAILURE = `… [failure block truncated at ${DIGEST_FAILURE_BYTES} bytes; complete output is retained]`;
 export const ALL_TEST_PATTERNS = Object.freeze([
   "test/**/*.test.mjs",
   "packages/core/test/*.test.mjs",
@@ -162,6 +164,8 @@ export function createTestProgress({
 
 export async function createOutputCapture({
   closeHandle = (value) => value.close(),
+  closeReplayHandle = (value) => value.close(),
+  closeFileDescriptor = closeSync,
   removeDirectory = (directory) => rm(directory, { recursive: true, force: true }),
 } = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), "dev-loops-bun-test-"));
@@ -238,6 +242,20 @@ export async function createOutputCapture({
       let emitting = false;
       let found = 0;
       let wroteHeader;
+      let emittedBytes = 0;
+      let failureTruncated = false;
+      const writeFailureLine = async (line) => {
+        if (failureTruncated) return;
+        const chunk = `${line}\n`;
+        const remaining = DIGEST_FAILURE_BYTES - emittedBytes;
+        if (Buffer.byteLength(chunk) <= remaining) {
+          await write(stream, chunk);
+          emittedBytes += Buffer.byteLength(chunk);
+          return;
+        }
+        await write(stream, `${TRUNCATED_FAILURE}\n`);
+        failureTruncated = true;
+      };
       const remember = (line) => {
         current.push(line);
         currentBytes += Buffer.byteLength(line) + 1;
@@ -246,11 +264,13 @@ export async function createOutputCapture({
         }
       };
       const beginFailure = async () => {
+        emittedBytes = 0;
+        failureTruncated = false;
         if (header !== wroteHeader) {
           await write(stream, `${header ?? "Bun test failure:"}\n`);
           wroteHeader = header;
         }
-        for (const line of paragraphHasStack ? [...previous, ...current] : current) await write(stream, `${line}\n`);
+        for (const line of paragraphHasStack ? [...previous, ...current] : current) await writeFailureLine(line);
         current = [];
         currentBytes = 0;
         emitting = true;
@@ -275,11 +295,11 @@ export async function createOutputCapture({
         }
         if (/^\s*\(fail\)\s/.test(line)) {
           await beginFailure();
-          await write(stream, `${line}\n`);
+          await writeFailureLine(line);
           continue;
         } else if (/^\s*# Unhandled error\b/.test(line)) {
           await beginFailure();
-          await write(stream, `${line}\n`);
+          await writeFailureLine(line);
           continue;
         }
         if (/^\s*\d+ (?:pass|skip|fail|filtered out)\s*$/.test(line)) {
@@ -288,7 +308,7 @@ export async function createOutputCapture({
         }
         if (emitting) {
           if (line === "") emitting = false;
-          else await write(stream, `${line}\n`);
+          else await writeFailureLine(line);
           continue;
         }
         if (line === "") {
@@ -333,8 +353,15 @@ export async function createOutputCapture({
       }
       if (!removalError) {
         const current = replayHandle;
-        await current.close();
         replayHandle = undefined;
+        try {
+          await closeReplayHandle(current);
+        } catch (error) {
+          try { closeFileDescriptor(current.fd); }
+          catch (fallbackError) {
+            if (fallbackError.code !== "EBADF") throw new AggregateError([error, fallbackError], "Bun test capture descriptor cleanup failed");
+          }
+        }
       }
       if (finishError && removalError) throw new AggregateError([finishError, removalError], "Bun test capture close and removal failed");
       if (finishError) throw finishError;
@@ -429,6 +456,8 @@ export async function runBunTest(args, {
     try {
         summary = parseBunSummary(await capture.readTail());
         if (!summary) throw new Error("Could not parse Bun test summary from captured output");
+        const failedCount = Number(summary.match(/, (\d+) fail across/)?.[1] ?? 0);
+        if (failedCount > 0) throw new Error(`Bun reported ${failedCount} failed ${failedCount === 1 ? "test" : "tests"} despite exiting successfully`);
         returnCode = 0;
     } catch (error) {
       operationError = error;
