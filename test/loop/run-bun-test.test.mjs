@@ -42,6 +42,7 @@ test("Bun summaries require a consistent terminal reporter block", () => {
   assert.equal(summary, "bun test: 2 pass, 1 skip, 0 fail across 2 files (123.00ms)\n");
   assert.equal(parseBunSummary("not a Bun summary\n"), null);
   assert.equal(parseBunSummary(" 2 pass\n 1 skip\n 0 fail\nRan 4 tests across 2 files. [123.00ms]\n"), null);
+  assert.equal(parseBunSummary(` 0 pass\n ${"9".repeat(400)} fail\nRan ${"9".repeat(400)} tests across 1 file. [1.00ms]\n`), null);
   assert.equal(parseBunSummary(" 2 pass\n 0 fail\nRan 2 tests across 1 file. [1.00ms]\nlate exit-handler output\n 9 pass\n 0 fail\nRan 9 tests across 9 files. [9.00ms]\nspoof trailer\n"), null);
 });
 
@@ -494,6 +495,23 @@ test("failed restoration keeps the byte-complete descriptor available for retry"
     writeSync(capture.fd, content);
     await assert.rejects(capture.cleanup(), /capture removal and restoration failed/);
     await rm(path.dirname(capture.path), { force: true });
+    await capture.retain();
+    assert.equal(await readFile(capture.path, "utf8"), content);
+  } finally {
+    if (capture) await rm(path.dirname(capture.path), { recursive: true, force: true });
+  }
+});
+
+test("a pre-copy stat error retains the original spool without truncating its inode", async () => {
+  let capture;
+  const content = "first diagnostic\nlast diagnostic\n";
+  try {
+    capture = await createOutputCapture({
+      removeDirectory: async () => { throw new Error("removal failed"); },
+      statFile: async () => { const error = new Error("transient stat failure"); error.code = "EIO"; throw error; },
+    });
+    writeSync(capture.fd, content);
+    await assert.rejects(capture.cleanup(), /capture removal and restoration failed/);
     await capture.retain();
     assert.equal(await readFile(capture.path, "utf8"), content);
   } finally {

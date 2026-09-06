@@ -101,12 +101,15 @@ export function parseBunSummary(output) {
     const match = lines[index].trim().match(/^(\d+) (pass|skip|fail|filtered out)$/);
     if (!match) break;
     if (counts.has(match[2])) return null;
-    counts.set(match[2], Number(match[1]));
+    const value = Number(match[1]);
+    if (!Number.isSafeInteger(value)) return null;
+    counts.set(match[2], value);
   }
   if (!counts.has("pass") || !counts.has("fail")) return null;
   const executed = (counts.get("pass") ?? 0) + (counts.get("skip") ?? 0) + (counts.get("fail") ?? 0);
-  if (executed !== Number(ran[1])) return null;
+  const tests = Number(ran[1]);
   const files = Number(ran[2]);
+  if (!Number.isSafeInteger(tests) || !Number.isSafeInteger(files) || executed !== tests) return null;
   return `bun test: ${counts.get("pass")} pass, ${counts.get("skip") ?? 0} skip, ${counts.get("fail")} fail across ${files} ${files === 1 ? "file" : "files"} (${ran[3]})\n`;
 }
 
@@ -209,9 +212,13 @@ export async function createOutputCapture({
         await statFile(file);
         return;
       } catch (error) {
-        if (error.code !== "ENOENT") throw error;
+        if (error.code !== "ENOENT") {
+          if (error.code === "ENOTDIR") restorationPending = true;
+          throw error;
+        }
       }
     }
+    restorationPending = true;
     await mkdir(directory, { recursive: true });
     const writer = await openRestoreFile(file);
     try {
@@ -232,6 +239,7 @@ export async function createOutputCapture({
     } finally {
       await writer.close();
     }
+    restorationPending = false;
   };
   return {
     path: file,
@@ -369,12 +377,10 @@ export async function createOutputCapture({
       try { await removeDirectory(directory); }
       catch (error) { removalError = error; }
       if (removalError) {
-        restorationPending = true;
         try { await restoreReplay(); }
         catch (restoreError) {
           removalError = new AggregateError([removalError, restoreError], "Bun test capture removal and restoration failed");
         }
-        if (!(removalError instanceof AggregateError)) restorationPending = false;
       }
       if (!removalError) {
         const current = replayHandle;
