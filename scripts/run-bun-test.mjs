@@ -38,6 +38,11 @@ export function buildBunTestArgs(args, env = process.env) {
   const callerArgs = [];
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
+    if (arg === "--reporter=dots" || (arg === "--reporter" && args[index + 1] === "dots")) {
+      callerArgs.push(DOTS_FLAG);
+      if (arg === "--reporter") index += 1;
+      continue;
+    }
     if (arg === FAILURE_ONLY_FLAG || arg === TMP_IGNORE_FLAG) continue;
     if (arg === "--path-ignore-patterns" && args[index + 1] === "tmp/**") {
       index += 1;
@@ -47,6 +52,10 @@ export function buildBunTestArgs(args, env = process.env) {
   }
   const reporting = callerArgs.includes(DOTS_FLAG) ? [] : [FAILURE_ONLY_FLAG];
   return ["test", ...reporting, TMP_IGNORE_FLAG, `--parallel=${resolveBunTestParallelism(env)}`, "--no-isolate", ...callerArgs];
+}
+
+function hasDotsReporter(args) {
+  return args.some((arg, index) => arg === DOTS_FLAG || arg === "--reporter=dots" || (arg === "--reporter" && args[index + 1] === "dots"));
 }
 
 export async function discoverRepositoryTests(repoRoot = DEFAULT_ROOT) {
@@ -172,6 +181,7 @@ export async function createOutputCapture({
   const file = path.join(directory, "output.log");
   let handle;
   let replayHandle;
+  let restorationPending = false;
   try {
     handle = await open(file, "w+");
   } catch (error) {
@@ -329,9 +339,12 @@ export async function createOutputCapture({
       const errors = [];
       if (replayHandle) {
         const current = replayHandle;
-        replayHandle = undefined;
-        try { await current.close(); }
-        catch (error) { errors.push(error); }
+        try {
+          if (restorationPending) await restoreReplay();
+          restorationPending = false;
+          await current.close();
+          replayHandle = undefined;
+        } catch (error) { errors.push(error); }
       }
       try { await finish(); }
       catch (error) { errors.push(error); }
@@ -346,10 +359,12 @@ export async function createOutputCapture({
       try { await removeDirectory(directory); }
       catch (error) { removalError = error; }
       if (removalError) {
+        restorationPending = true;
         try { await restoreReplay(); }
         catch (restoreError) {
           removalError = new AggregateError([removalError, restoreError], "Bun test capture removal and restoration failed");
         }
+        if (!(removalError instanceof AggregateError)) restorationPending = false;
       }
       if (!removalError) {
         const current = replayHandle;
@@ -384,14 +399,14 @@ async function finalizeCaptureOutcome(capture, { failed, stderr }) {
   try {
     if (capture.writeFailureDigest) await capture.writeFailureDigest(stderr);
     else await capture.replay(stderr);
-    if (capture.path) {
-      stderr.write(`Retained Bun diagnostics:\n${capture.path}\n`);
-      stderr.write("Inspect the retained file with a pager.\n");
-    }
   } catch (digestError) {
     finalError = finalError
       ? new AggregateError([finalError, digestError], `Bun test failure finalization failed: ${digestError.message}`)
       : digestError;
+  }
+  if (capture.path) {
+    stderr.write(`Retained Bun diagnostics:\n${capture.path}\n`);
+    stderr.write("Inspect the retained file with a pager.\n");
   }
   if (capture.retain) {
     try { await capture.retain(); }
@@ -416,7 +431,7 @@ export async function runBunTest(args, {
   let terminationMessage;
   let operationError;
   let summary;
-  const progress = progressFactory({ stream: stderr, dots: args.includes(DOTS_FLAG) });
+  const progress = progressFactory({ stream: stderr, dots: hasDotsReporter(args) });
   progress.start();
   try {
     capture = await captureFactory();

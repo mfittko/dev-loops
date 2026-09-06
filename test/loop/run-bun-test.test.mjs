@@ -29,10 +29,12 @@ test("launcher centrally deduplicates canonical reporting and discovery flags", 
 });
 
 test("explicit dots replaces failure-only reporting while keeping canonical discovery", () => {
-  const args = buildBunTestArgs(["--only-failures", "--dots", "example.test.mjs"], {});
-  assert.ok(args.includes("--dots"));
-  assert.ok(!args.includes("--only-failures"));
-  assert.equal(args.filter((arg) => arg === "--path-ignore-patterns=tmp/**").length, 1);
+  for (const reporter of [["--dots"], ["--reporter=dots"], ["--reporter", "dots"]]) {
+    const args = buildBunTestArgs(["--only-failures", ...reporter, "example.test.mjs"], {});
+    assert.equal(args.filter((arg) => arg === "--dots").length, 1);
+    assert.ok(!args.includes("--only-failures"));
+    assert.equal(args.filter((arg) => arg === "--path-ignore-patterns=tmp/**").length, 1);
+  }
 });
 
 test("Bun summaries require a consistent terminal reporter block", () => {
@@ -182,30 +184,32 @@ test("successful wrapper runs remove their real diagnostic spool", async () => {
 });
 
 test("dots stays observable while passing fixture chatter remains captured", async () => {
-  const events = [];
-  let childArgs;
-  let stdout = "";
-  let stderr = "";
-  const timers = fakeIntervals();
-  const content = "passing fixture chatter\n 1 pass\n 0 fail\nRan 1 test across 1 file. [4.00ms]\n";
-  const code = await runBunTest(["--dots", "example.test.mjs"], {
-    captureFactory: async () => memoryCapture(content, events),
-    spawnImpl: (_command, args) => {
-      childArgs = args;
-      const child = new EventEmitter();
-      queueMicrotask(() => child.emit("close", 0, null));
-      return child;
-    },
-    stdout: { write: (chunk) => { stdout += chunk; } },
-    stderr: { isTTY: false, write: (chunk) => { stderr += chunk; } },
-    progressFactory: (options) => createTestProgress({ ...options, ...timers, now: () => 0 }),
-  });
-  assert.equal(code, 0);
-  assert.ok(childArgs.includes("--dots"));
-  assert.ok(!childArgs.includes("--only-failures"));
-  assert.equal(stderr, "bun test: running (--dots) (0s)\n");
-  assert.doesNotMatch(`${stdout}${stderr}`, /passing fixture chatter/);
-  assert.equal(timers.active.size, 0);
+  for (const reporter of [["--dots"], ["--reporter=dots"], ["--reporter", "dots"]]) {
+    const events = [];
+    let childArgs;
+    let stdout = "";
+    let stderr = "";
+    const timers = fakeIntervals();
+    const content = "passing fixture chatter\n 1 pass\n 0 fail\nRan 1 test across 1 file. [4.00ms]\n";
+    const code = await runBunTest([...reporter, "example.test.mjs"], {
+      captureFactory: async () => memoryCapture(content, events),
+      spawnImpl: (_command, args) => {
+        childArgs = args;
+        const child = new EventEmitter();
+        queueMicrotask(() => child.emit("close", 0, null));
+        return child;
+      },
+      stdout: { write: (chunk) => { stdout += chunk; } },
+      stderr: { isTTY: false, write: (chunk) => { stderr += chunk; } },
+      progressFactory: (options) => createTestProgress({ ...options, ...timers, now: () => 0 }),
+    });
+    assert.equal(code, 0);
+    assert.ok(childArgs.includes("--dots"));
+    assert.ok(!childArgs.includes("--only-failures"));
+    assert.equal(stderr, "bun test: running (--dots) (0s)\n");
+    assert.doesNotMatch(`${stdout}${stderr}`, /passing fixture chatter/);
+    assert.equal(timers.active.size, 0);
+  }
 });
 
 test("progress timers stop across normal, child-failure, signal, spawn, and capture-error outcomes", async () => {
@@ -430,6 +434,7 @@ test("spawn and capture failures stay loud and retain captured failures", async 
       summaryError: failure === "summary" ? new Error("tail read failed") : undefined,
       replayError: failure === "replay" ? new Error("replay failed") : undefined,
     });
+    capture.path = "/tmp/dev-loops-test-retained.log";
     const spawnImpl = failure === "spawn"
       ? () => { const child = new EventEmitter(); queueMicrotask(() => child.emit("error", new Error("spawn denied"))); return child; }
       : fakeChild(() => {}, failure === "replay" ? [3, null] : [0, null]);
@@ -440,6 +445,7 @@ test("spawn and capture failures stay loud and retain captured failures", async 
     assert.ok(events.includes("replay"));
     assert.ok(!events.includes("cleanup"));
     if (["spawn", "summary"].includes(failure)) assert.match(stderr, /complete diagnostics/);
+    assert.match(stderr, /Retained Bun diagnostics:/);
   }
 });
 
@@ -471,6 +477,27 @@ test("cleanup errors retain a complete raw log before and after output unlink", 
     } finally {
       if (capture) await rm(path.dirname(capture.path), { recursive: true, force: true });
     }
+  }
+});
+
+test("failed restoration keeps the byte-complete descriptor available for retry", async () => {
+  let capture;
+  const content = "first diagnostic\nlast diagnostic\n";
+  try {
+    capture = await createOutputCapture({
+      removeDirectory: async (directory) => {
+        await rm(directory, { recursive: true, force: true });
+        await writeFile(directory, "temporarily blocks restoration");
+        throw new Error("partial removal failed");
+      },
+    });
+    writeSync(capture.fd, content);
+    await assert.rejects(capture.cleanup(), /capture removal and restoration failed/);
+    await rm(path.dirname(capture.path), { force: true });
+    await capture.retain();
+    assert.equal(await readFile(capture.path, "utf8"), content);
+  } finally {
+    if (capture) await rm(path.dirname(capture.path), { recursive: true, force: true });
   }
 });
 
