@@ -388,7 +388,7 @@ test("CI runs verify as a parallel suite matrix gated by a fail-closed aggregati
   ].map(([, shard]) => shard);
   assert.deepEqual(allTestShards, ["1/4", "2/4", "3/4", "4/4"]);
   assert.match(verifySuiteSection, /BUN_TEST_PARALLELISM:\s*2/);
-  assert.match(verifySuiteSection, /bun run \$\{\{\s*matrix\.suite\s*\}\} --shard=\$\{\{\s*matrix\.shard\s*\}\}/);
+  assert.match(verifySuiteSection, /bun run \$\{\{\s*matrix\.suite\s*\}\} --timings=\.bun-test-timings\.json --shard=\$\{\{\s*matrix\.shard\s*\}\}/);
 
   // Fail-closed aggregation: the gate must run on `if: always()` (else a failed
   // leg SKIPS the gate under the default `if: success()`), depend on the whole

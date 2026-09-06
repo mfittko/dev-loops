@@ -146,7 +146,7 @@ jobs:
 
       - name: Run ${{ matrix.suite }} shard ${{ matrix.shard }}
         if: matrix.shard != ''
-        run: bun run ${{ matrix.suite }} --shard=${{ matrix.shard }}
+        run: bun run ${{ matrix.suite }} --timings=.bun-test-timings.json --shard=${{ matrix.shard }}
 
   verify:
     needs: [changes, verify-suite, viewer-smoke, deck-smoke, article-smoke]

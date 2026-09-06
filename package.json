@@ -24,7 +24,7 @@
   "scripts": {
     "verify": "bun scripts/verify.mjs",
     "test": "bun run verify",
-    "test:all": "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsync GIT_CONFIG_VALUE_0=none bun scripts/run-bun-test.mjs --timings=.bun-test-timings.json --all",
+    "test:all": "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsync GIT_CONFIG_VALUE_0=none bun scripts/run-bun-test.mjs --all",
     "test:timings:refresh": "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsync GIT_CONFIG_VALUE_0=none bun scripts/refresh-test-timings.mjs",
     "test:assets": "bun scripts/run-bun-test.mjs test/dev-loop-init-phase-smoke.test.mjs test/core-runtime-boundary.test.mjs test/contracts/*.test.mjs test/workflow-handoff-contract.test.mjs",
     "test:doc-guard": "bun scripts/run-bun-test.mjs test/contracts/*.test.mjs test/workflow-handoff-contract.test.mjs",
