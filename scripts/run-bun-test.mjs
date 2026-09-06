@@ -175,6 +175,8 @@ export async function createOutputCapture({
   closeHandle = (value) => value.close(),
   closeReplayHandle = (value) => value.close(),
   closeFileDescriptor = closeSync,
+  openRestoreFile = (file) => open(file, "w"),
+  statFile = stat,
   removeDirectory = (directory) => rm(directory, { recursive: true, force: true }),
 } = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), "dev-loops-bun-test-"));
@@ -200,24 +202,32 @@ export async function createOutputCapture({
   const write = async (stream, chunk) => {
     if (stream.write(chunk) === false) await once(stream, "drain");
   };
-  const restoreReplay = async () => {
+  const restoreReplay = async ({ force = false } = {}) => {
     if (!replayHandle) return;
-    try {
-      await stat(file);
-      return;
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
+    if (!force) {
+      try {
+        await statFile(file);
+        return;
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
     }
     await mkdir(directory, { recursive: true });
-    const writer = await open(file, "w");
+    const writer = await openRestoreFile(file);
     try {
-      for await (const chunk of replayStream()) {
+      const buffer = Buffer.alloc(64 * 1024);
+      let position = 0;
+      for (;;) {
+        const { bytesRead } = await replayHandle.read(buffer, 0, buffer.length, position);
+        if (bytesRead === 0) break;
+        const chunk = buffer.subarray(0, bytesRead);
         let offset = 0;
         while (offset < chunk.length) {
           const { bytesWritten } = await writer.write(chunk, offset, chunk.length - offset);
           if (bytesWritten === 0) throw new Error("Bun test capture restoration made no write progress");
           offset += bytesWritten;
         }
+        position += bytesRead;
       }
     } finally {
       await writer.close();
@@ -340,7 +350,7 @@ export async function createOutputCapture({
       if (replayHandle) {
         const current = replayHandle;
         try {
-          if (restorationPending) await restoreReplay();
+          if (restorationPending) await restoreReplay({ force: true });
           restorationPending = false;
           await current.close();
           replayHandle = undefined;

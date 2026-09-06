@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { writeSync } from "node:fs";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -494,6 +494,40 @@ test("failed restoration keeps the byte-complete descriptor available for retry"
     writeSync(capture.fd, content);
     await assert.rejects(capture.cleanup(), /capture removal and restoration failed/);
     await rm(path.dirname(capture.path), { force: true });
+    await capture.retain();
+    assert.equal(await readFile(capture.path, "utf8"), content);
+  } finally {
+    if (capture) await rm(path.dirname(capture.path), { recursive: true, force: true });
+  }
+});
+
+test("restoration retry replaces a partial output file before closing the replay descriptor", async () => {
+  let capture;
+  let restoreAttempts = 0;
+  const content = "first diagnostic\nlast diagnostic\n";
+  try {
+    capture = await createOutputCapture({
+      removeDirectory: async () => {
+        await rm(capture.path, { force: true });
+        throw new Error("partial removal failed");
+      },
+      statFile: async () => { const error = new Error("missing"); error.code = "ENOENT"; throw error; },
+      openRestoreFile: async (file) => {
+        const writer = await open(file, "w");
+        restoreAttempts += 1;
+        if (restoreAttempts > 1) return writer;
+        return {
+          async write(buffer) {
+            await writer.write(buffer.subarray(0, 5));
+            throw new Error("mid-copy failure");
+          },
+          close: () => writer.close(),
+        };
+      },
+    });
+    writeSync(capture.fd, content);
+    await assert.rejects(capture.cleanup(), /capture removal and restoration failed/);
+    assert.equal(restoreAttempts, 1);
     await capture.retain();
     assert.equal(await readFile(capture.path, "utf8"), content);
   } finally {
