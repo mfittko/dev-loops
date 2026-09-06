@@ -716,8 +716,11 @@ async function writeApprovalsRecord(approvalsPath, specAuthority, roundClean) {
         // without prompt memory.
         humanDecision: specAuthority.humanDecision,
         authorizedRemediations: specAuthority.authorizedRemediations,
-        // The coverage map used THIS round (when the AC7 producer was supplied),
-        // so a later re-entry round reuses it rather than re-deriving/re-passing it.
+        // The coverage map used THIS round (when the AC7 producer was supplied).
+        // This is a durable audit / re-entry-reconstruction record only: judge-pass
+        // does NOT read prior.criterionCoverage back in. A re-entry round MUST still
+        // pass --coverage-map explicitly for changed-paths narrowing to engage;
+        // without it, the round fails closed to the all-stale fallback.
         ...(specAuthority.criterionCoverage !== undefined ? { criterionCoverage: specAuthority.criterionCoverage } : {}),
       },
       null,

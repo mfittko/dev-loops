@@ -3,7 +3,7 @@
 // spec-context.mjs's `changed-paths` mode (issue 2008 / ADR 0061 AC5) reuses
 // the SAME git invocation and isolation flags rather than re-deriving them.
 import { execFileSync } from "node:child_process";
-import { gitEnvWithoutDirOverrides, hasRenameEntry, parseChangedFiles } from "../github/write-gate-context.mjs";
+import { gitEnvWithoutDirOverrides, hasRenameEntry, normalizeBaseRef, parseChangedFiles } from "../github/write-gate-context.mjs";
 
 // git-diff isolation flags: pin the name-status output bytes/rename detection
 // so the changed-file SET is reproducible regardless of ambient gitconfig.
@@ -26,7 +26,17 @@ const GIT_ISOLATION = [
  * @returns {{ changedFiles: string[], hasRename: boolean }}
  */
 export function captureChangedFilesBetween({ base, head = "HEAD", repoRoot }) {
-  const range = `${base}..${head}`;
+  // Same ref-shape guard as write-gate-context.mjs's own normalizeBaseRef path
+  // (reused, not re-derived): reject a leading "-" (flag-injection shape) and
+  // ".." (ambiguous with this function's own "<base>..<head>" construction)
+  // before either ref reaches `git diff`, so a malformed ref fails closed here
+  // rather than being silently misinterpreted by git.
+  const normalizedBase = normalizeBaseRef(base);
+  const normalizedHead = normalizeBaseRef(head);
+  if (!normalizedBase || !normalizedHead) {
+    throw new Error("captureChangedFilesBetween requires plausible git refs for base/head (no leading '-', no '..')");
+  }
+  const range = `${normalizedBase}..${normalizedHead}`;
   const out = execFileSync("git", [...GIT_ISOLATION, "diff", "--no-ext-diff", "--name-status", range], {
     cwd: repoRoot,
     encoding: "utf8",

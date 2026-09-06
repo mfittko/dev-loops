@@ -159,6 +159,30 @@ test("specContextChangedPaths resolves --repo-root relative to the caller's repo
   }
 });
 
+test("specContextChangedPaths fails closed on a leading-'-' --base (ref-shape guard)", async () => {
+  const { repoRoot, head } = await makeChangedPathsRepo();
+  try {
+    assert.throws(
+      () => specContextChangedPaths({ base: "-ohno", head }, { repoRoot }),
+      /plausible git refs/,
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("specContextChangedPaths fails closed on a '..'-embedding --head (ref-shape guard)", async () => {
+  const { repoRoot, base } = await makeChangedPathsRepo();
+  try {
+    assert.throws(
+      () => specContextChangedPaths({ base, head: "HEAD..evil" }, { repoRoot }),
+      /plausible git refs/,
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 // --- CLI arg parsing / mode dispatch ---
 
 test("parseSpecContextCliArgs dispatches to extract mode by default", () => {

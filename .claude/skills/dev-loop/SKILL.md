@@ -196,7 +196,7 @@ durable-approval flags across re-entry:
 dev-loops gate judge-pass --repo <owner/name> --pr <N> --gate <gate> --head-sha <current_head_sha> \
   --findings-file <ledger-path> --judge-verdict <verdict-path> --out <act-list-path> --ledger-out <enriched-ledger-path> \
   --spec-file <spec-path> --content-digest "$content_digest" --spec-authority-verdict <spec-authority-verdict-path> \
-  --prior-approvals <prior-approvals-path> --approvals-out <approvals-out-path> \
+  [--prior-approvals <prior-approvals-path> --approvals-out <approvals-out-path>] \
   [--changed-paths <changed-paths-path> --coverage-map <coverage-map-path>]
 ```
 
