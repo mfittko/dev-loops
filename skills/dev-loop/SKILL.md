@@ -179,21 +179,14 @@ When you need a fact from a dev-loops JSON-emitting script, climb this ladder an
 
 **Bounded async task contract:** Break work into discrete tasks with clear inputs, explicit outputs, bounded scope. No shell polling — use `run-watch-cycle.mjs` or `gh run watch`. Fan-out reviewer waits (gate sub-loops or any Agent-tool fan-out) follow `ANTIPATTERN-FANIN-WAIT` in [Anti-patterns](../docs/anti-patterns.md): await completion via the harness notification or the reviewer's findings artifact at its deterministic path and join via the sanctioned fan-in CLI (`dev-loops gate consolidate-fanin`) — never transcript-tail, `node -e`/`python3`-parse tool JSON, or `sleep`-poll.
 
-**Gate fan-out dispatch (inline imperative — #1637):** When you dispatch the `draft_gate` / `pre_approval_gate` fan-out (parallel fresh-context reviewers seeded from the one neutral context bundle), you MUST join their results through the sanctioned fan-in CLI — not by hand-rolling the wait. Never hand-roll reviewer dispatch via `Promise.all(runs.run)` + transcript-tailing; await each reviewer's findings artifact at its deterministic output path (`tmp/gate-reviews/<repo-slug>/pr-<N>/<gate>-<headSha>/<angle>.json`) and consolidate via ONE call:
-
-```sh
-dev-loops gate consolidate-fanin --findings-dir <dir> --head-sha <current_head_sha> --gate <gate> \
-  --expected-dispatch-units <n> --out <findings-json-path> --ledger-out <ledger-path> --jq '.severityCounts'
-```
-
 **Spec authority is engaged by default on every gate round (issue 2008 / ADR 0061):** before
-dispatching the judge, run the CLI seam that derives the run's spec/digest identities so the skill
+fan-out dispatch, run the CLI seam that derives the run's spec/digest identities so the skill
 never hand-derives them:
 
 ```sh
 content_digest=$(node scripts/loop/spec-context.mjs --repo <owner/name> --issue <linked_issue_number> \
   --content-file <reviewed-content-path> --head-sha <current_head_sha> \
-  --spec-out <spec-path> --jq '.contentDigest')
+  --spec-out <spec-path> --identity-out <identity-path> --jq '.contentDigest')
 ```
 
 On a fixer-push re-entry round (a prior clean round's `--approvals-out` record exists), also derive
@@ -204,8 +197,27 @@ node scripts/loop/spec-context.mjs changed-paths --base <prior_approved_head_sha
   --jq '.changedFiles' > <changed-paths-path>
 ```
 
+**AC1 identity stamp on every durable record (issue 2008 / ADR 0061):** the SAME call also writes
+the round's revision-identity stamp once via `--identity-out <identity-path>`
+(`{ specDigest, headSha, contentDigest, checkedCriteria }`). Pass `--spec-authority <identity-path>`
+to every durable record writer this round invokes — `consolidate-fanin --spec-authority
+<identity-path>`, `write-gate-findings-log.mjs --spec-authority <identity-path>`,
+`upsert-checkpoint-verdict.mjs --spec-authority <identity-path>`, and (on a carry-forward round)
+`resolve-angle-carry-forward.mjs --spec-authority <identity-path>` — so every gate/fixer/
+carry-forward record pins both revision identities and the checked criteria, re-entry-safe from
+any record type. Full per-writer flag detail: Gate Review Sub-Loop Contract Phase 3.5.
+
+**Gate fan-out dispatch (inline imperative — #1637):** When you dispatch the `draft_gate` / `pre_approval_gate` fan-out (parallel fresh-context reviewers seeded from the one neutral context bundle), you MUST join their results through the sanctioned fan-in CLI — not by hand-rolling the wait. Never hand-roll reviewer dispatch via `Promise.all(runs.run)` + transcript-tailing; await each reviewer's findings artifact at its deterministic output path (`tmp/gate-reviews/<repo-slug>/pr-<N>/<gate>-<headSha>/<angle>.json`) and consolidate via ONE call, always with `--spec-authority <identity-path>` from above:
+
+```sh
+dev-loops gate consolidate-fanin --findings-dir <dir> --head-sha <current_head_sha> --gate <gate> \
+  --expected-dispatch-units <n> --out <findings-json-path> --ledger-out <ledger-path> \
+  --spec-authority <identity-path> --jq '.severityCounts'
+```
+
 **Judge between fan-in and the fixer (Phase 3.5 wired, #1658):** after fan-in (and after the
-durable ledger is written with `write-gate-findings-log --judge-verdict <verdict-path>`), dispatch
+durable ledger is written with `write-gate-findings-log --judge-verdict <verdict-path>
+--spec-authority <identity-path>`), dispatch
 the dedicated `judge` agent (`agents/judge.agent.md`) — seeded with the consolidated ledger, the
 linked issue's AC/DoD/non-goals, the PR's declared scope, the prior-round judge ledgers, and the
 spec-context output (the structured spec at `<spec-path>`, `specDigest`, `contentDigest`) — and

@@ -100,7 +100,7 @@ Immutable spec-authority enforcement (opt-in; enabled by --spec-file):
                                --spec-file (used with --prior-approvals).
   --changed-paths <path>       JSON string array of repo-relative paths a fixer
                                push changed. Given together with --coverage-map,
-                               resolveAffectedCriteria (AC7) computes which
+                               resolveAffectedCriteria (#2000 AC7; issue 2008 AC2) computes which
                                criteria the push actually affects, narrowing the
                                all-stale fallback. Requires --spec-file and
                                --prior-approvals (only meaningful during
@@ -319,13 +319,13 @@ export function validateCliArgs(options) {
     if (options.carryForwardProof !== undefined && options.priorApprovals === undefined) {
       throw parseError("--carry-forward-proof requires --prior-approvals (it is only applied during criterion invalidation)");
     }
-    // AC7 (issue 2008 / ADR 0061): --changed-paths and --coverage-map are the
-    // affected-criteria producer's inputs. Both required together — one
-    // without the other would silently drop the producer with no diagnostic —
-    // and, like --carry-forward-proof, only meaningful inside the
-    // --prior-approvals invalidation path.
+    // #2000 AC7 (issue 2008 AC2 / ADR 0061): --changed-paths and --coverage-map
+    // are the affected-criteria producer's inputs. Both required together —
+    // one without the other would silently drop the producer with no
+    // diagnostic — and, like --carry-forward-proof, only meaningful inside
+    // the --prior-approvals invalidation path.
     if ((options.changedPaths !== undefined) !== (options.coverageMap !== undefined)) {
-      throw parseError("--changed-paths and --coverage-map must be supplied together (AC7 affected-criteria producer)");
+      throw parseError("--changed-paths and --coverage-map must be supplied together (affected-criteria producer, #2000 AC7 / issue 2008 AC2)");
     }
     if (options.changedPaths !== undefined && options.priorApprovals === undefined) {
       throw parseError("--changed-paths and --coverage-map require --prior-approvals (they are only applied during criterion invalidation)");
@@ -625,7 +625,7 @@ async function enforceSpecAuthority(options, findings, resolvedRoot) {
     if (options.carryForwardProof !== undefined) {
       carryForwardProof = await readJsonArtifact(path.resolve(resolvedRoot, options.carryForwardProof), "--carry-forward-proof", parseError);
     }
-    // AC7 (issue 2008 / ADR 0061): when the changed-content->criteria producer's
+    // #2000 AC7 (issue 2008 AC2 / ADR 0061): when the changed-content->criteria producer's
     // inputs are BOTH supplied, use it to narrow affectedCriteria instead of the
     // all-stale fallback. An UNCERTAIN result (some changed path matched no
     // criterion's coverage) still fails closed to all-stale, but now against the
@@ -716,7 +716,7 @@ async function writeApprovalsRecord(approvalsPath, specAuthority, roundClean) {
         // without prompt memory.
         humanDecision: specAuthority.humanDecision,
         authorizedRemediations: specAuthority.authorizedRemediations,
-        // The coverage map used THIS round (when the AC7 producer was supplied).
+        // The coverage map used THIS round (when the #2000 AC7 / issue 2008 AC2 producer was supplied).
         // This is a durable audit / re-entry-reconstruction record only: judge-pass
         // does NOT read prior.criterionCoverage back in. A re-entry round MUST still
         // pass --coverage-map explicitly for changed-paths narrowing to engage;

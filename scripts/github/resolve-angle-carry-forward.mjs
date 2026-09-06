@@ -32,14 +32,13 @@ import {
   resolveConvergenceCarryForward,
 } from "@dev-loops/core/loop/gate-carry-forward";
 import { baseAngleName } from "@dev-loops/core/loop/gate-fanin";
-import { stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
 
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { captureChangedFilesBetween } from "../lib/git-delta.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
+import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import {
@@ -362,7 +361,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       options.specAuthority !== undefined ? path.resolve(repoRoot, options.specAuthority) : undefined,
       parseError,
     );
-    const plan = specAuthorityIdentity ? stampSpecAuthorityIdentity(rawPlan, specAuthorityIdentity) : rawPlan;
+    const plan = stampOptionalSpecAuthority(rawPlan, specAuthorityIdentity);
     const copilotConvergence = resolveConvergenceCarryForward({ changedFiles });
     const result = {
       ok: true,

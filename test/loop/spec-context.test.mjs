@@ -11,6 +11,7 @@ import {
   specContextExtract,
 } from "../../scripts/loop/spec-context.mjs";
 import { computeContentDigest, computeSpecDigest, specCriterionIds } from "@dev-loops/core/loop/spec-authority";
+import { readSpecAuthorityIdentity } from "../../scripts/lib/spec-authority-stamp.mjs";
 
 const BODY = [
   "## Acceptance criteria",
@@ -73,6 +74,73 @@ test("specContextExtract writes --spec-out in the shape judge-pass --spec-file e
     assert.ok(Array.isArray(written.acceptanceCriteria));
     assert.ok(Array.isArray(written.definitionOfDone));
     assert.ok(Array.isArray(written.nonGoals));
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("specContextExtract --identity-out emits the four-field identity stamp {specDigest,headSha,contentDigest,checkedCriteria}", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "spec-context-identity-"));
+  try {
+    await writeFile(path.join(tmpDir, "content.txt"), "reviewed implementation content", "utf8");
+    const result = await specContextExtract(
+      {
+        repo: "mfittko/dev-loops",
+        issue: 2008,
+        contentFile: "./content.txt",
+        headSha: "a".repeat(40),
+        identityOut: "./identity.json",
+      },
+      { repoRoot: tmpDir, tracker: stubTracker() },
+    );
+    assert.equal(result.identityOut, "./identity.json");
+    const written = JSON.parse(await readFile(path.join(tmpDir, "identity.json"), "utf8"));
+    assert.deepEqual(Object.keys(written).sort(), ["checkedCriteria", "contentDigest", "headSha", "specDigest"]);
+    assert.equal(written.specDigest, result.specDigest);
+    assert.equal(written.headSha, "a".repeat(40));
+    assert.equal(written.contentDigest, result.contentDigest);
+    assert.deepEqual(written.checkedCriteria, result.criterionIds);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("specContextExtract --identity-out round-trips through a writer's --spec-authority reader", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "spec-context-identity-roundtrip-"));
+  try {
+    await writeFile(path.join(tmpDir, "content.txt"), "reviewed implementation content", "utf8");
+    await specContextExtract(
+      {
+        repo: "mfittko/dev-loops",
+        issue: 2008,
+        contentFile: "./content.txt",
+        headSha: "b".repeat(40),
+        identityOut: "./identity.json",
+      },
+      { repoRoot: tmpDir, tracker: stubTracker() },
+    );
+    const identity = await readSpecAuthorityIdentity(
+      path.join(tmpDir, "identity.json"),
+      (message) => new Error(message),
+    );
+    assert.equal(identity.headSha, "b".repeat(40));
+    assert.ok(Array.isArray(identity.checkedCriteria));
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("specContextExtract fails closed on --identity-out without --head-sha", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "spec-context-identity-nohead-"));
+  try {
+    await writeFile(path.join(tmpDir, "content.txt"), "impl", "utf8");
+    await assert.rejects(
+      specContextExtract(
+        { repo: "mfittko/dev-loops", issue: 1, contentFile: "./content.txt", identityOut: "./identity.json" },
+        { repoRoot: tmpDir, tracker: stubTracker() },
+      ),
+      /--identity-out requires --head-sha/,
+    );
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
@@ -213,6 +281,21 @@ test("parseSpecContextCliArgs dispatches to changed-paths mode on the leading po
 
 test("parseSpecContextCliArgs requires --base/--head in changed-paths mode", () => {
   assert.throws(() => parseSpecContextCliArgs(["changed-paths", "--base", "abc1234"]), /changed-paths mode requires/);
+});
+
+test("parseSpecContextCliArgs accepts --identity-out alongside --head-sha", () => {
+  const opts = parseSpecContextCliArgs([
+    "--repo", "o/n", "--issue", "1", "--content-file", "c.txt",
+    "--head-sha", "a".repeat(40), "--identity-out", "identity.json",
+  ]);
+  assert.equal(opts.identityOut, "identity.json");
+});
+
+test("parseSpecContextCliArgs fails closed on --identity-out without --head-sha", () => {
+  assert.throws(
+    () => parseSpecContextCliArgs(["--repo", "o/n", "--issue", "1", "--content-file", "c.txt", "--identity-out", "identity.json"]),
+    /--identity-out requires --head-sha/,
+  );
 });
 
 test("parseSpecContextCliArgs fails closed on an unknown extract-mode flag", () => {

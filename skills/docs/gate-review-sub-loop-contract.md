@@ -1211,7 +1211,7 @@ sanctioned fan-in CLI:
 ```
 dev-loops gate consolidate-fanin --findings-dir <dir> --head-sha <sha> \
   --gate <draft_gate|pre_approval_gate> --expected-dispatch-units <n> \
-  --out <path> --ledger-out <path> \
+  --out <path> --ledger-out <path> --spec-authority <identity-path> \
   --jq '.severityCounts' \
   [--carried-angles <json> --carry-forward-plan <json>]
 ```
@@ -1410,8 +1410,10 @@ Ledger content and write-before-comment sequencing are owned by
 fix cycle in Phase 4 begins, so they are auditable and Copilot/humans are aware of them.
 Fixes MUST NOT be applied until that trail exists. The trail is the round's own verdict
 review (`GATE-COMMENT-SINGLE-SURFACE`): its inline finding comments plus the body-filed
-findings under the verdict fields, posted by `upsert-checkpoint-verdict.mjs --findings-ledger`
-in one call, so the findings and the verdict land together and no separate post step can be
+findings under the verdict fields, posted by `upsert-checkpoint-verdict.mjs --findings-ledger
+--spec-authority <identity-path>` (the same identity artifact from the Spec-context seam above,
+threaded onto the posted verdict record by default — issue 2008 / ADR 0061 AC1) in one call, so
+the findings and the verdict land together and no separate post step can be
 skipped or reordered. The disposition ledger is written before that post
 (`GATE-EXEC-DISPOSITION-LEDGER`) and regardless of it.
 
@@ -1499,19 +1501,21 @@ by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fanin`):
 dispositions via `applyJudgeDispositions(findings, judgeVerdict)` (`@dev-loops/core/loop/gate-fanin`,
 pure, fail-closed on a malformed verdict, an out-of-range index, or dispositions that do not
 cover every finding), then writes the durable
-ledger via `write-gate-findings-log.mjs --judge-verdict <path>`. The enriched findings carry
+ledger via `write-gate-findings-log.mjs --judge-verdict <path> --spec-authority <identity-path>`
+(the same identity-stamp artifact the Spec-context seam below produces). The enriched findings carry
 `judgeDisposition` / `judgeRationale` / `judgeCriterion` / `followUpDraft` so the disposition
 ledger and the posted findings comment show what was consciously not acted on and why
 (`GATE-EXEC-POST-BEFORE-FIX`'s single-surface verdict review renders the judge suffix).
 
-**Spec-context seam (default-on, issue 2008 / ADR 0061).** Before dispatching the judge, the
+**Spec-context seam (default-on, issue 2008 / ADR 0061).** Before fan-out dispatch (so its output
+is available to every writer for the whole round, including Phase 3's fan-in ledger), the
 conductor always runs `scripts/loop/spec-context.mjs` to derive the run's spec/digest identities
 so nothing hand-derives them:
 
 ```sh
 content_digest=$(node scripts/loop/spec-context.mjs --repo <owner/name> --issue <linked_issue_number> \
   --content-file <reviewed-content-path> --head-sha <current_head_sha> \
-  --spec-out <spec-path> --jq '.contentDigest')
+  --spec-out <spec-path> --identity-out <identity-path> --jq '.contentDigest')
 ```
 
 On a fixer-push re-entry round (a prior clean round's `--approvals-out` record exists), it also
@@ -1521,6 +1525,23 @@ derives the AC7 affected-criteria producer's input:
 node scripts/loop/spec-context.mjs changed-paths --base <prior_approved_head_sha> --head <current_head_sha> \
   --jq '.changedFiles' > <changed-paths-path>
 ```
+
+**AC1 — one identity stamp, every durable record writer (issue 2008 / ADR 0061).** The SAME
+`spec-context.mjs` call above also writes the round's revision-identity stamp once via
+`--identity-out <identity-path>` (`{ specDigest, headSha, contentDigest, checkedCriteria }`,
+`buildRevisionIdentity` + `specCriterionIds` under the hood — see
+`packages/core/src/loop/spec-authority.mjs`). The conductor passes `--spec-authority
+<identity-path>` to every durable record writer this round invokes, by default, on every round:
+`consolidate-fanin --spec-authority <identity-path>` (Phase 3's fan-in ledger),
+`write-gate-findings-log.mjs --spec-authority <identity-path>` (this section, above),
+`upsert-checkpoint-verdict.mjs --spec-authority <identity-path>` (the posted verdict record), and
+— on a carry-forward round — `resolve-angle-carry-forward.mjs --spec-authority <identity-path>`
+(the carry-forward plan). Each writer threads the identity through the ONE shared
+`stampSpecAuthorityIdentity`/`stampOptionalSpecAuthority` helper (`scripts/lib/spec-authority-stamp.mjs`),
+never recomputing it, so every gate/fixer/carry-forward record pins both revision identities and
+the checked criteria — re-entry-safe from any record type, not only the judge/approval records
+(judge-pass's own `--ledger-out`/`--approvals-out` already carry the identities natively via its
+`--spec-file`/`--content-digest`/`--spec-authority-verdict` flags below).
 
 **Dispatch bridge (runtime wiring, #1658).** After the judge agent writes its verdict
 artifacts and the durable ledger is written with `--judge-verdict`, the conductor runs the
@@ -1677,7 +1698,7 @@ the prior log attributes any finding to at any severity, including a finding def
 PR review thread per `GATE-EXEC-THREAD-DISPOSITION` rather than fixed in-gate, is re-reviewed
 at every re-gate that follows; that is this rule's fail-closed cost, accepted deliberately.
 
-The decision is a pure, deterministic, fail-closed seam — `resolveAngleCarryForward` / `resolveCarryForwardAngles` in `@dev-loops/core/loop/gate-carry-forward` — driven by the CLI `scripts/github/resolve-angle-carry-forward.mjs --repo <r> --pr <n> --gate <g> --prev-head <A> --head-sha <B>` (run from the worktree at head B). It reads the prior CLEAN findings-log for head A, computes the delta as the direct two-dot tree diff `git diff A..B` (never three-dot — a two-dot diff never omits a file that differs between the reviewed head A and B, so a non-fast-forward advance cannot carry an angle whose surface changed), and returns per angle `carryForward: true|false` with a reason.
+The decision is a pure, deterministic, fail-closed seam — `resolveAngleCarryForward` / `resolveCarryForwardAngles` in `@dev-loops/core/loop/gate-carry-forward` — driven by the CLI `scripts/github/resolve-angle-carry-forward.mjs --repo <r> --pr <n> --gate <g> --prev-head <A> --head-sha <B> --spec-authority <identity-path>` (run from the worktree at head B; `--spec-authority` stamps the round's identity onto the carry-forward plan by default, issue 2008 / ADR 0061 AC1). It reads the prior CLEAN findings-log for head A, computes the delta as the direct two-dot tree diff `git diff A..B` (never three-dot — a two-dot diff never omits a file that differs between the reviewed head A and B, so a non-fast-forward advance cannot carry an angle whose surface changed), and returns per angle `carryForward: true|false` with a reason.
 
 **Feeding the plan into the Phase 1 dispatch preflight (issue #1635).** After this seam runs, a conductor doing a head-bump re-gate MAY rebuild the Phase 1 context artifact for the new head so its `fanout.preflight` reflects the reduced dispatch: pass the carried angle names (`plan.carried[].angle`) to `write-gate-context.mjs --carried-angles <json>`. Rebuilding is not automatic — Phase 1 runs before Phase 1.2 in the sub-loop's own ordering, so the artifact this seam's result feeds into already exists by Phase 1.2's own point in the sequence, built without this flag; a conductor must explicitly rebuild it afterward to pick up this flag and reflect the carried angles (see Phase 3's `--expected-dispatch-units` note above for what a rebuilt vs. never-rebuilt artifact each mean for that count). That flag's vocabulary mirrors `consolidate-fanin.mjs`'s own same-named `--carried-angles` (a JSON array of angle-name strings), but the two are NOT interchangeable: `consolidate-fanin.mjs`'s flag is PAIR-REQUIRED with `--carry-forward-plan` as independent proof before it upserts a clean entry into the Phase 3 ledger (see Phase 3's `--carried-angles`/`--carry-forward-plan` proof contract above), while `write-gate-context.mjs`'s flag takes no such proof argument — the caller IS this fail-closed seam's own result, never a guess, so there is nothing left to cross-check — and it only narrows the Phase 1/2 dispatch plan (`fanout.preflight.requiredReviewers`/`pendingGroups`), never the ledger. It still refuses (exit 1) a name whose review surface always re-runs — a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE angle — mirroring `consolidate-fanin.mjs`'s own mandatory-angle refusal for the same reason (an unmapped/unknown angle name, unlike at that sibling seam, is not rejected here — this seam has no plan proof to cross-check it against).
 
@@ -1779,6 +1800,7 @@ node scripts/github/write-gate-findings-log.mjs \
   --gate <draft_gate|pre_approval_gate> \
   --head-sha <sha> \
   --verdict <clean|findings_present|blocked> \
+  --spec-authority <identity-path> \
   --findings-file <path>   # or inline: --findings '[{"severity":"high","angle":"scope","summary":"...","files":["path.mjs"],"line":42,"disposition":"accepted-for-fix"}]'
 ```
 

@@ -9,8 +9,8 @@
  *   --spec-file/--content-digest needs, in one deterministic call.
  *
  *   changed-paths: emit the JSON string array of repo-relative paths changed
- *   between two refs — the --changed-paths input for judge-pass's AC7
- *   affected-criteria producer.
+ *   between two refs — the --changed-paths input for judge-pass's #2000 AC7
+ *   (issue 2008 AC2) affected-criteria producer.
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -18,6 +18,7 @@ import { parseArgs } from "node:util";
 
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import {
+  buildRevisionIdentity,
   computeContentDigest,
   computeSpecDigest,
   extractSpecFromBody,
@@ -32,7 +33,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { resolveTrackerLocalSpec } from "../github/resolve-tracker-local-spec.mjs";
 
 const USAGE = `Usage:
-  spec-context.mjs --repo <owner/name> --issue <number> --content-file <path> [--head-sha <sha>] [--spec-out <path>]
+  spec-context.mjs --repo <owner/name> --issue <number> --content-file <path> [--head-sha <sha>] [--spec-out <path>] [--identity-out <path>]
   spec-context.mjs changed-paths --base <ref> --head <ref> [--repo-root <path>]
 
 Default (extract) mode: resolve the canonical tracker issue body, extract the
@@ -46,9 +47,17 @@ Required (extract mode):
   --content-file <path>      Path to the reviewed implementation/prose content;
                               its bytes are hashed into contentDigest
 Optional (extract mode):
-  --head-sha <sha>            Echoed onto the result (not hashed into any digest)
+  --head-sha <sha>            Echoed onto the result (not hashed into any digest);
+                              REQUIRED alongside --identity-out
   --spec-out <path>           Also write the structured spec JSON to this path
                               (the shape judge-pass.mjs --spec-file expects)
+  --identity-out <path>       Also write the revision-identity stamp JSON
+                              { specDigest, headSha, contentDigest, checkedCriteria }
+                              this call's own digests + specCriterionIds() —
+                              the exact shape every writer's --spec-authority
+                              <path> flag reads (issue 2008 / ADR 0061 AC1).
+                              Requires --head-sha (fail-closed: the identity
+                              is incomplete without it).
 
 changed-paths mode: emit the JSON string array of repo-relative paths changed
 between --base and --head (two-dot delta, reusing the same git isolation seam
@@ -86,6 +95,7 @@ function parseExtractCliArgs(argv) {
       "content-file": { type: "string" },
       "head-sha": { type: "string" },
       "spec-out": { type: "string" },
+      "identity-out": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -100,6 +110,7 @@ function parseExtractCliArgs(argv) {
     contentFile: undefined,
     headSha: undefined,
     specOut: undefined,
+    identityOut: undefined,
     jq: undefined,
     silent: false,
   };
@@ -136,6 +147,10 @@ function parseExtractCliArgs(argv) {
       options.specOut = requireTokenValue(token, parseError).trim();
       continue;
     }
+    if (token.name === "identity-out") {
+      options.identityOut = requireTokenValue(token, parseError).trim();
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -147,6 +162,14 @@ function parseExtractCliArgs(argv) {
   }
   if (options.specOut !== undefined && options.specOut.length === 0) {
     throw parseError("--spec-out requires a non-empty path");
+  }
+  if (options.identityOut !== undefined) {
+    if (options.identityOut.length === 0) {
+      throw parseError("--identity-out requires a non-empty path");
+    }
+    if (options.headSha === undefined) {
+      throw parseError("--identity-out requires --head-sha (the revision identity is incomplete without it)");
+    }
   }
   return options;
 }
@@ -193,6 +216,24 @@ export async function specContextExtract(
     await mkdir(path.dirname(specPath), { recursive: true });
     await writeFile(specPath, `${JSON.stringify(spec, null, 2)}\n`, "utf8");
     result.specOut = options.specOut;
+  }
+  if (options.identityOut !== undefined) {
+    if (options.headSha === undefined) {
+      throw new Error("--identity-out requires --head-sha (the revision identity is incomplete without it)");
+    }
+    // AC1 (issue 2008 / ADR 0061): reuse buildRevisionIdentity for its
+    // fail-closed distinctness/embedding checks — never hand-build the
+    // digest trio a second time — and specCriterionIds for the checked-set,
+    // producing the exact shape every writer's --spec-authority <path> reads.
+    const identity = buildRevisionIdentity({ specDigest, headSha: options.headSha, contentDigest });
+    const identityPath = path.resolve(repoRoot, options.identityOut);
+    await mkdir(path.dirname(identityPath), { recursive: true });
+    await writeFile(
+      identityPath,
+      `${JSON.stringify({ ...identity, checkedCriteria: criterionIds }, null, 2)}\n`,
+      "utf8",
+    );
+    result.identityOut = options.identityOut;
   }
   return result;
 }
