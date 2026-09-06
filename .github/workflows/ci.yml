@@ -75,25 +75,20 @@ jobs:
       fail-fast: false
       matrix:
         suite:
-          - test:assets
-          - test:extension
-          - test:core
           - test:docs
-          - test:pack
-          - test:dev-loop
           - test:workflows
         include:
           # Only the test:docs leg needs full history for the decision-record
           # merge-base comparison; every other leg checks out the default (depth 1).
           - suite: test:docs
             fetch_depth: 0
-          - suite: test:scripts
+          - suite: test:all
             shard: 1/4
-          - suite: test:scripts
+          - suite: test:all
             shard: 2/4
-          - suite: test:scripts
+          - suite: test:all
             shard: 3/4
-          - suite: test:scripts
+          - suite: test:all
             shard: 4/4
     steps:
       - name: Check out repository
@@ -154,7 +149,7 @@ jobs:
         run: bun run ${{ matrix.suite }} --shard=${{ matrix.shard }}
 
   verify:
-    needs: [changes, verify-suite, viewer-smoke]
+    needs: [changes, verify-suite, viewer-smoke, deck-smoke, article-smoke]
     if: always()
     runs-on: ubuntu-latest
 
@@ -164,6 +159,8 @@ jobs:
           [ "${{ needs.changes.result }}" = "success" ] || exit 1
           [ "${{ needs.verify-suite.result }}" = "success" ] || exit 1
           [ "${{ needs.viewer-smoke.result }}" = "success" ] || [ "${{ needs.viewer-smoke.result }}" = "skipped" ] || exit 1
+          [ "${{ needs.deck-smoke.result }}" = "success" ] || [ "${{ needs.deck-smoke.result }}" = "skipped" ] || exit 1
+          [ "${{ needs.article-smoke.result }}" = "success" ] || [ "${{ needs.article-smoke.result }}" = "skipped" ] || exit 1
 
   viewer-smoke:
     needs:

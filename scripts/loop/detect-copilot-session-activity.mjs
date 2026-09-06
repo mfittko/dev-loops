@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
-import { parsePositiveInteger, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parsePositiveInteger, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -148,7 +148,10 @@ function isApprovalGatedActionRequired(run) {
   const conclusion = String(run?.runConclusion ?? "").trim().toLowerCase();
   return status === "action_required" || conclusion === "action_required";
 }
-export async function detectCopilotSessionActivity({ repo, branch, limit = DEFAULT_LIMIT }, { env = process.env, ghCommand = "gh" } = {}) {
+export async function detectCopilotSessionActivity(
+  { repo, branch, limit = DEFAULT_LIMIT },
+  { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {},
+) {
   const result = await runChild(
     ghCommand,
     [
@@ -189,14 +192,14 @@ export async function detectCopilotSessionActivity({ repo, branch, limit = DEFAU
 }
 export async function runCli(
   argv = process.argv.slice(2),
-  { stdout = process.stdout, stderr = process.stderr, env = process.env, ghCommand = "gh" } = {},
+  { stdout = process.stdout, stderr = process.stderr, env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {},
 ) {
   const options = parseDetectCopilotSessionActivityCliArgs(argv);
   if (options.help) {
     stdout.write(`${USAGE}\n`);
     return;
   }
-  const result = await detectCopilotSessionActivity(options, { env, ghCommand });
+  const result = await detectCopilotSessionActivity(options, { env, ghCommand, runChild });
   process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }
 if (isDirectCliRun(import.meta.url)) {

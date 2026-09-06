@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { initSizeBudgetFixtureRepo, repeatedLinesContent, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
+import { initSizeBudgetFixtureRepo, makeGhMock, repeatedLinesContent, runIdFreeEnv, runNode as runNodeHelper } from "../_helpers.mjs";
 
 // A stub evaluatePrSizeBudget that always passes — for tests exercising
 // OTHER readyForReview() logic (board sync, etc.) via direct function calls,
@@ -20,22 +19,39 @@ function passingAdrTripwire() {
 import { parseReadyForReviewCliArgs, readyForReview } from "../../scripts/github/ready-for-review.mjs";
 
 const scriptPath = path.resolve("scripts/github/ready-for-review.mjs");
-const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
+const GH_RUNNER = Symbol("ready-for-review-gh-runner");
+const ghCallsByRoot = new Map();
+
+const runNode = async (args = [], options = {}) => {
+  const runner = options.env?.[GH_RUNNER];
+  if (!runner) return runNodeHelper(scriptPath, args, options);
+  try {
+    const parsed = parseReadyForReviewCliArgs(args);
+    const env = runIdFreeEnv(options.env);
+    delete env[GH_RUNNER];
+    const result = await readyForReview(parsed, {
+      env,
+      ghCommand: "gh",
+      repoRoot: options.cwd ?? process.cwd(),
+      runChild: runner,
+      syncBoardStatus: async () => ({ ok: true, skipped: true, reason: "test seam" }),
+    });
+    return { code: 0, stdout: `${JSON.stringify(result)}\n`, stderr: "" };
+  } catch (error) {
+    return { code: 1, stdout: "", stderr: `${error instanceof Error ? error.message : String(error)}\n` };
+  }
+};
 
 async function writeGhStub(tempDir, entries, options = {}) {
-  return writeGhStubHelper(tempDir, entries, {
-    repeatLastOnOverflow: true,
-    logCalls: true,
-    ...options,
-  });
+  const { runChild, calls } = makeGhMock(entries, { repeatLastOnOverflow: true, ...options });
+  ghCallsByRoot.set(tempDir, calls);
+  return { env: { DEVLOOPS_RUN_ID: "", [GH_RUNNER]: runChild }, ghLogPath: tempDir };
 }
 
 async function readGhCalls(logPath) {
-  const lines = (await readFile(logPath, "utf8"))
-    .trim()
-    .split("\n")
-    .filter(Boolean);
-  return lines.map((line) => JSON.parse(line));
+  return (ghCallsByRoot.get(logPath) ?? [])
+    .filter(({ command }) => command === "gh")
+    .map(({ args }) => args);
 }
 // #1585: fetchDraftGateEvidence now also fetches the authenticated login
 // (api user) + review threads (graphql reviewThreads) to assert 0 unresolved
@@ -727,7 +743,7 @@ test("board tail targets the closing issue (not the PR) when closingIssues prese
     };
     const result = await readyForReview(
       { repo: "owner/repo", pr: 17 },
-      { env, repoRoot: tempDir, syncBoardStatus: fakeSync, evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire },
+      { env, repoRoot: tempDir, runChild: env[GH_RUNNER], syncBoardStatus: fakeSync, evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire },
     );
     assert.equal(result.ok, true);
     assert.equal(result.action, "marked_ready");
@@ -750,7 +766,7 @@ test("board tail falls back to the PR number when closingIssues is empty (#1069)
     };
     const result = await readyForReview(
       { repo: "owner/repo", pr: 17 },
-      { env, repoRoot: tempDir, syncBoardStatus: fakeSync, evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire },
+      { env, repoRoot: tempDir, runChild: env[GH_RUNNER], syncBoardStatus: fakeSync, evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire },
     );
     assert.equal(result.action, "marked_ready");
     assert.equal(syncCalls.length, 1);
@@ -767,7 +783,7 @@ test("board tail is NON-FATAL: a throwing syncBoardStatus never fails marking re
     const fakeSync = async () => { throw new Error("board exploded"); };
     const result = await readyForReview(
       { repo: "owner/repo", pr: 17 },
-      { env, repoRoot: tempDir, syncBoardStatus: fakeSync, evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire },
+      { env, repoRoot: tempDir, runChild: env[GH_RUNNER], syncBoardStatus: fakeSync, evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire },
     );
     assert.equal(result.ok, true);
     assert.equal(result.action, "marked_ready");

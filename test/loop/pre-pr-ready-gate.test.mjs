@@ -3,19 +3,37 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { onTestFinished, test } from "bun:test";
-import { initSizeBudgetFixtureRepo, repeatedLinesContent, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
+import { initSizeBudgetFixtureRepo, makeGhMock, repeatedLinesContent, runIdFreeEnv } from "../_helpers.mjs";
 
-import { parsePrePrReadyGateCliArgs } from "../../scripts/loop/pre-pr-ready-gate.mjs";
+import { parsePrePrReadyGateCliArgs, prePrReadyGate } from "../../scripts/loop/pre-pr-ready-gate.mjs";
 
-const scriptPath = path.resolve("scripts/loop/pre-pr-ready-gate.mjs");
-const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
+const GH_RUNNER = Symbol("pre-pr-ready-gate-gh-runner");
+const runNode = async (args = [], options = {}) => {
+  try {
+    const parsed = parsePrePrReadyGateCliArgs(args);
+    const env = runIdFreeEnv(options.env);
+    const runChild = env[GH_RUNNER];
+    delete env[GH_RUNNER];
+    const result = await prePrReadyGate(parsed, {
+      env,
+      ghCommand: "gh",
+      repoRoot: options.cwd ?? process.cwd(),
+      runChild,
+    });
+    const output = `${JSON.stringify(result)}\n`;
+    return result.ok ? { code: 0, stdout: output, stderr: "" } : { code: 1, stdout: "", stderr: output };
+  } catch (error) {
+    return {
+      code: 1,
+      stdout: "",
+      stderr: `${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`,
+    };
+  }
+};
 
 async function writeGhStub(tempDir, entries, options = {}) {
-  return writeGhStubHelper(tempDir, entries, {
-    repeatLastOnOverflow: true,
-    logCalls: true,
-    ...options,
-  });
+  const { runChild } = makeGhMock(entries, { repeatLastOnOverflow: true, ...options });
+  return { env: { DEVLOOPS_RUN_ID: "", [GH_RUNNER]: runChild } };
 }
 // #1585: fetchDraftGateEvidence now also fetches the authenticated login
 // (api user) + review threads (graphql reviewThreads) to assert 0 unresolved

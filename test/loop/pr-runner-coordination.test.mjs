@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { test } from "bun:test";
 
 import { runNode } from "../_helpers.mjs";
@@ -22,6 +23,12 @@ import {
 import { detectStaleRunner, STALE_RUNNER_DEFAULT_MAX_AGE_MS } from "../../scripts/loop/_stale-runner-detection.mjs";
 import { runPrRunnerCoordination } from "../../scripts/loop/pr-runner-coordination.mjs";
 
+const releaseClaimsFromKnownRoot = (options) => releaseRunClaimsOnExit({
+  resolveCoordinationRoot: (root) => root,
+  ...options,
+});
+const execFileAsync = promisify(execFile);
+
 // Builds a throwaway git repo with a linked worktree so cross-CWD coordination
 // path resolution (git-common-dir anchoring) can be exercised for real.
 //
@@ -33,15 +40,15 @@ import { runPrRunnerCoordination } from "../../scripts/loop/pr-runner-coordinati
 // masking a divergence the test helper resolved away.
 async function makeRepoWithWorktree() {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-git-"));
-  const git = (args) => execFileSync("git", args, { cwd: repoRoot, encoding: "utf8" });
-  git(["init", "-q"]);
-  git(["config", "user.email", "test@example.com"]);
-  git(["config", "user.name", "Test User"]);
+  const git = (args) => execFileAsync("git", args, { cwd: repoRoot, encoding: "utf8" });
+  await git(["init", "-q"]);
+  await git(["config", "user.email", "test@example.com"]);
+  await git(["config", "user.name", "Test User"]);
   await writeFile(path.join(repoRoot, "README.md"), "init\n", "utf8");
-  git(["add", "README.md"]);
-  git(["commit", "-q", "-m", "init"]);
+  await git(["add", "README.md"]);
+  await git(["commit", "-q", "-m", "init"]);
   const wtPath = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-wt-"));
-  git(["worktree", "add", "-q", wtPath, "-b", "issue-1245-wt"]);
+  await git(["worktree", "add", "-q", wtPath, "-b", "issue-1245-wt"]);
   return { repoRoot, wtPath };
 }
 
@@ -211,6 +218,7 @@ test("releaseAsyncRunnerOwnership is a no-op when no async run id (Claude Code p
     const result = await releaseAsyncRunnerOwnership({ repo: "owner/repo", pr: 17, env: {}, cwd: tempDir });
     assert.equal(result.ok, true);
     assert.equal(result.status, "skipped_no_async_run_id");
+    assert.equal(result.filePath, null);
     assert.deepEqual(result.exitSignals, []);
 
     const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
@@ -521,7 +529,7 @@ test("releaseRunClaimsOnExit clears all claims owned by a run on process exit", 
     // A competing live run's claim must remain untouched.
     await claimRunnerOwnership({ repo: "owner/repo", pr: 19, runId: "run-other", cwd: tempDir });
 
-    const result = await releaseRunClaimsOnExit({ runId: "run-exit", root: tempDir });
+    const result = await releaseClaimsFromKnownRoot({ runId: "run-exit", root: tempDir });
     assert.equal(result.ok, true);
     assert.equal(result.status, "released");
     assert.equal(result.released.length, 2);
@@ -543,7 +551,7 @@ test("releaseRunClaimsOnExit no-ops when no run id is present", async () => {
 
   try {
     await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-x", cwd: tempDir });
-    const result = await releaseRunClaimsOnExit({ runId: "", root: tempDir });
+    const result = await releaseClaimsFromKnownRoot({ runId: "", root: tempDir });
     assert.equal(result.ok, true);
     assert.equal(result.status, "skipped_no_async_run_id");
     const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
@@ -589,7 +597,7 @@ test("releaseRunClaimsOnExit anchors at the git-common-dir root (linked worktree
 test("releaseRunClaimsOnExit reports no_coordination_dir when the root is absent", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-missing-"));
   try {
-    const result = await releaseRunClaimsOnExit({ runId: "run-x", root: tempDir });
+    const result = await releaseClaimsFromKnownRoot({ runId: "run-x", root: tempDir });
     assert.equal(result.ok, true);
     assert.equal(result.status, "no_coordination_dir");
     assert.deepEqual(result.released, []);
@@ -599,11 +607,31 @@ test("releaseRunClaimsOnExit reports no_coordination_dir when the root is absent
   }
 });
 
+test("releaseRunClaimsOnExit accepts a resolved coordination root without shelling out to Git", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-resolved-root-"));
+  let resolveCalls = 0;
+  try {
+    const result = await releaseClaimsFromKnownRoot({
+      runId: "run-x",
+      root: tempDir,
+      resolveCoordinationRoot: (root) => {
+        resolveCalls += 1;
+        assert.equal(root, tempDir);
+        return tempDir;
+      },
+    });
+    assert.equal(resolveCalls, 1);
+    assert.equal(result.status, "no_coordination_dir");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("releaseRunClaimsOnExit treats a missing-dir (ENOENT) readdir error as no_coordination_dir", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-enoent-"));
   const missingDirError = Object.assign(new Error("missing"), { code: "ENOENT" });
   try {
-    const result = await releaseRunClaimsOnExit({
+    const result = await releaseClaimsFromKnownRoot({
       runId: "run-x",
       root: tempDir,
       readDir: async () => { throw missingDirError; },
@@ -620,7 +648,7 @@ test("releaseRunClaimsOnExit does not mask a non-ENOENT readdir failure as no_co
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-scanfail-"));
   const permissionError = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
   try {
-    const result = await releaseRunClaimsOnExit({
+    const result = await releaseClaimsFromKnownRoot({
       runId: "run-x",
       root: tempDir,
       readDir: async () => { throw permissionError; },
@@ -651,7 +679,7 @@ test("releaseRunClaimsOnExit records parse_failed on a corrupt claim file and co
     );
     await writeFile(corruptPath, "{ not-json", "utf8");
 
-    const result = await releaseRunClaimsOnExit({ runId: "run-a", root: tempDir });
+    const result = await releaseClaimsFromKnownRoot({ runId: "run-a", root: tempDir });
     assert.equal(result.ok, true);
     assert.equal(result.status, "released");
     // The healthy claim is released; the corrupt one is recorded as parse_failed,
@@ -672,7 +700,7 @@ test("releaseRunClaimsOnExit records release_failed when the release fn throws a
     const throwingReleaseFn = async () => {
       throw new Error("release boom");
     };
-    const result = await releaseRunClaimsOnExit({ runId: "run-x", root: tempDir, releaseFn: throwingReleaseFn });
+    const result = await releaseClaimsFromKnownRoot({ runId: "run-x", root: tempDir, releaseFn: throwingReleaseFn });
     assert.equal(result.ok, true);
     assert.equal(result.status, "released");
     assert.equal(result.released.length, 0);
@@ -691,7 +719,7 @@ test("releaseRunClaimsOnExit records read_failed when a claim file is unreadable
     const throwingReadFile = async () => {
       throw new Error("read boom");
     };
-    const result = await releaseRunClaimsOnExit({ runId: "run-x", root: tempDir, readFile: throwingReadFile });
+    const result = await releaseClaimsFromKnownRoot({ runId: "run-x", root: tempDir, readFile: throwingReadFile });
     assert.equal(result.ok, true);
     assert.equal(result.status, "released");
     assert.equal(result.released.length, 0);

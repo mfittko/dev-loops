@@ -350,7 +350,8 @@ test("standalone review route stays structurally decoupled from the single-contr
 test("CI runs verify as a parallel suite matrix gated by a fail-closed aggregation job", async () => {
   const ciWorkflow = await readRepo(".github/workflows/ci.yml");
 
-  // verify runs as a parallel matrix (one leg per suite) gated by an
+  // verify runs as a parallel matrix (four complete-inventory test shards plus
+  // the non-test validators) gated by an
   // aggregation job named `verify` so the required-status-check name is
   // preserved. Assert every suite is a matrix leg and the gate fails closed.
   assert.match(ciWorkflow, /^\s{2}verify-suite:\s*$/m);
@@ -372,13 +373,9 @@ test("CI runs verify as a parallel suite matrix gated by a fail-closed aggregati
       : verifySuiteHeaderIndex + 1 + nextSuiteJobRelative,
   );
   for (const suite of [
-    "test:assets",
-    "test:extension",
-    "test:scripts",
-    "test:core",
+    "test:all",
     "test:docs",
-    "test:pack",
-    "test:dev-loop",
+    "test:workflows",
   ]) {
     assert.match(
       verifySuiteSection,
@@ -386,10 +383,10 @@ test("CI runs verify as a parallel suite matrix gated by a fail-closed aggregati
       `verify-suite matrix must include ${suite}`,
     );
   }
-  const scriptShards = [
-    ...verifySuiteSection.matchAll(/-\s+suite:\s*test:scripts\s*\n\s*shard:\s*(\d+\/\d+)/g),
+  const allTestShards = [
+    ...verifySuiteSection.matchAll(/-\s+suite:\s*test:all\s*\n\s*shard:\s*(\d+\/\d+)/g),
   ].map(([, shard]) => shard);
-  assert.deepEqual(scriptShards, ["1/4", "2/4", "3/4", "4/4"]);
+  assert.deepEqual(allTestShards, ["1/4", "2/4", "3/4", "4/4"]);
   assert.match(verifySuiteSection, /BUN_TEST_PARALLELISM:\s*2/);
   assert.match(verifySuiteSection, /bun run \$\{\{\s*matrix\.suite\s*\}\} --shard=\$\{\{\s*matrix\.shard\s*\}\}/);
 
@@ -407,9 +404,11 @@ test("CI runs verify as a parallel suite matrix gated by a fail-closed aggregati
     verifyHeaderIndex,
     nextJobRelative === -1 ? ciWorkflow.length : verifyHeaderIndex + 1 + nextJobRelative,
   );
-  assert.match(verifySection, /needs:\s*\[changes,\s*verify-suite,\s*viewer-smoke\][\s\S]*needs\.changes\.result[\s\S]*success/i);
+  assert.match(verifySection, /needs:\s*\[changes,\s*verify-suite,\s*viewer-smoke,\s*deck-smoke,\s*article-smoke\][\s\S]*needs\.changes\.result[\s\S]*success/i);
   assert.match(verifySection, /needs\.verify-suite\.result[\s\S]*success/i);
   assert.match(verifySection, /needs\.viewer-smoke\.result[\s\S]*success[\s\S]*skipped/i);
+  assert.match(verifySection, /needs\.deck-smoke\.result[\s\S]*success[\s\S]*skipped/i);
+  assert.match(verifySection, /needs\.article-smoke\.result[\s\S]*success[\s\S]*skipped/i);
   assert.match(verifySection, /if:\s*always\(\)/i);
   assert.match(verifySection, /exit 1/i);
 });

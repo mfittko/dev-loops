@@ -2,6 +2,7 @@
 
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { BUN_TEST_SUITE_NAMES, resolveTestInventory } from "./test-inventory.mjs";
 
 const DEFAULT_PARALLELISM = 8;
 
@@ -21,8 +22,27 @@ export function buildBunTestArgs(args, env = process.env) {
     "test",
     "--only-failures",
     `--parallel=${resolveBunTestParallelism(env)}`,
+    "--no-isolate",
     ...args,
   ];
+}
+
+export async function resolveBunTestFiles(args, { resolveInventory = resolveTestInventory } = {}) {
+  const suites = [];
+  const passthrough = [];
+  for (const arg of args) {
+    if (arg.startsWith("--suite=")) {
+      suites.push(arg.slice("--suite=".length));
+    } else {
+      passthrough.push(arg);
+    }
+  }
+  if (suites.length === 0) return passthrough;
+  if (suites.includes("all") && suites.length !== 1) {
+    throw new Error("--suite=all cannot be combined with another suite");
+  }
+  const selectedSuites = suites[0] === "all" ? BUN_TEST_SUITE_NAMES : suites;
+  return [...passthrough, ...await resolveInventory({ suites: selectedSuites })];
 }
 
 export function runBunTest(args, {
@@ -30,14 +50,23 @@ export function runBunTest(args, {
   command = env.BUN_BIN || process.execPath,
   spawnImpl = spawn,
 } = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawnImpl(command, buildBunTestArgs(args, env), {
+  return resolveBunTestFiles(args).then((resolvedArgs) => new Promise((resolve, reject) => {
+    const child = spawnImpl(command, buildBunTestArgs(resolvedArgs, env), {
       env,
       stdio: "inherit",
     });
-    child.once("error", reject);
-    child.once("close", (code) => resolve(code ?? 1));
-  });
+    let spawnError = null;
+    child.once("error", (error) => {
+      spawnError = error;
+    });
+    child.once("close", (code) => {
+      if (spawnError !== null) {
+        reject(spawnError);
+        return;
+      }
+      resolve(code ?? 1);
+    });
+  }));
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

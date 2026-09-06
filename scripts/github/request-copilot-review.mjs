@@ -630,7 +630,13 @@ export async function checkForCopilotComments({ repo, pr }, { env = process.env,
 }
 export async function performCopilotReviewRequest(
   options,
-  { env = process.env, ghCommand = "gh", runChild = defaultRunChild, delayImpl = delay } = {},
+  {
+    env = process.env,
+    ghCommand = "gh",
+    runChild = defaultRunChild,
+    delayImpl = delay,
+    repoRoot = process.cwd(),
+  } = {},
 ) {
   const runtime = { env, ghCommand, runChild };
   const before = await fetchCopilotReviewState(options, runtime);
@@ -711,7 +717,7 @@ export async function performCopilotReviewRequest(
   const LIGHTWEIGHT_DEFAULT_CAP = 1;
   let configWarning = null;
   try {
-    const { config, errors } = await loadDevLoopConfig();
+    const { config, errors } = await loadDevLoopConfig({ repoRoot });
     if (!errors || errors.length === 0) {
       refinementConfig = resolveRefinement(config);
       // Light-dispatched PRs (#1210) enforce the COMPOSED cap —
@@ -929,6 +935,10 @@ export async function runCli(
     stderr = process.stderr,
     env = process.env,
     ghCommand = "gh",
+    runChild = defaultRunChild,
+    delayImpl = delay,
+    repoRoot = process.cwd(),
+    setExitCode = (code) => { process.exitCode = code; },
   } = {},
 ) {
   const options = parseRequestCliArgs(argv);
@@ -936,7 +946,13 @@ export async function runCli(
     stdout.write(`${USAGE}\n`);
     return;
   }
-  const result = await performCopilotReviewRequest(options, { env, ghCommand });
+  const result = await performCopilotReviewRequest(options, {
+    env,
+    ghCommand,
+    runChild,
+    delayImpl,
+    repoRoot,
+  });
   // Honest status under --silent: `ok: true` reports "the helper ran without
   // error", not "a review was placed" — a caller checking only exit-code
   // truthiness must NOT read a non-`requested` status (blocked_by_copilot_comment,
@@ -946,7 +962,7 @@ export async function runCli(
   // JSON body (with `ok: true`) still prints for every documented status; the
   // caller MUST branch on `.status`, not `.ok`.
   const silentOk = options.silent ? result.status === "requested" : undefined;
-  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, ok: silentOk });
+  setExitCode(emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, ok: silentOk }));
 }
 if (isDirectCliRun(import.meta.url)) {
   runCli().catch((error) => {

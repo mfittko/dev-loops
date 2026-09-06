@@ -80,9 +80,9 @@ export function parseReadyForReviewCliArgs(argv) {
   return opts;
 }
 
-async function fetchPrState({ repo, pr }, { env, ghCommand }) {
+async function fetchPrState({ repo, pr }, { env, ghCommand, runChild: runChildImpl }) {
   const [owner, name] = repo.split("/");
-  const r = await runGhJson(["api", "graphql", "-f", `query=${PR_VIEW_QUERY}`, "-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${pr}`], { env, ghCommand });
+  const r = await runGhJson(["api", "graphql", "-f", `query=${PR_VIEW_QUERY}`, "-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${pr}`], { env, ghCommand, runChild: runChildImpl });
   const d = r?.data?.repository?.pullRequest;
   if (!d) throw new Error(`Could not fetch PR #${pr}`);
   const closingIssues = (d.closingIssuesReferences?.nodes ?? [])
@@ -91,8 +91,8 @@ async function fetchPrState({ repo, pr }, { env, ghCommand }) {
   return { id: d.id, isDraft: d.isDraft === true, headRefOid: typeof d.headRefOid === "string" ? d.headRefOid.trim() : null, baseRefName: typeof d.baseRefName === "string" ? d.baseRefName.trim() : null, state: typeof d.state === "string" ? d.state.trim() : null, mergeStateStatus: typeof d.mergeStateStatus === "string" ? d.mergeStateStatus.trim() : null, title: typeof d.title === "string" ? d.title : null, body: typeof d.body === "string" ? d.body : "", closingIssues };
 }
 
-async function fetchCiStatus({ repo, pr }, { env, ghCommand }) {
-  const result = await runChild(ghCommand, ["pr", "checks", String(pr), "--repo", repo, "--json", "bucket,state,name,workflow"], env);
+async function fetchCiStatus({ repo, pr }, { env, ghCommand, runChild: runChildImpl }) {
+  const result = await runChildImpl(ghCommand, ["pr", "checks", String(pr), "--repo", repo, "--json", "bucket,state,name,workflow"], env);
   if (result.code !== 0 && result.code !== 1 && result.code !== 8) throw new Error(`gh pr checks failed`);
   const stdout = result.stdout.trim();
   if (!stdout) return { status: "none" };
@@ -125,24 +125,24 @@ function renderSizeBudgetWaiverCommentBody({ headSha, sizeBudget, reason, approv
   return lines.join("\n");
 }
 
-async function postSizeBudgetWaiverComment({ repo, pr, headSha, sizeBudget, reason, approvedBy }, { env, ghCommand }) {
+async function postSizeBudgetWaiverComment({ repo, pr, headSha, sizeBudget, reason, approvedBy }, { env, ghCommand, runChild: runChildImpl }) {
   const body = renderSizeBudgetWaiverCommentBody({ headSha, sizeBudget, reason, approvedBy });
-  const result = await runChild(ghCommand, ["pr", "comment", String(pr), "--repo", repo, "--body", body], env);
+  const result = await runChildImpl(ghCommand, ["pr", "comment", String(pr), "--repo", repo, "--body", body], env);
   if (result.code !== 0) throw new Error(`Failed to post size-budget waiver record: ${result.stderr.trim() || `exit code ${result.code}`}`);
 }
 
-export async function readyForReview(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), syncBoardStatus = realSyncBoardStatus, evaluatePrSizeBudget = realEvaluatePrSizeBudget, evaluateAdrTripwire: evaluateAdrTripwireFn = evaluateAdrTripwire } = {}) {
+export async function readyForReview(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild: runChildImpl = runChild, syncBoardStatus = realSyncBoardStatus, evaluatePrSizeBudget = realEvaluatePrSizeBudget, evaluateAdrTripwire: evaluateAdrTripwireFn = evaluateAdrTripwire } = {}) {
   const { config } = await loadDevLoopConfig({ repoRoot });
   const draftGateConfig = resolveGateConfig(config, "draft");
   const requireCi = draftGateConfig?.requireCi !== false;
-  const prState = await fetchPrState({ repo: options.repo, pr: options.pr }, { env, ghCommand });
+  const prState = await fetchPrState({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild: runChildImpl });
   const headSha = prState.headRefOid;
   if (!headSha) throw new Error(`Could not resolve head SHA`);
   if (!prState.isDraft) throw new Error(`PR #${options.pr} is not in draft state`);
   const titleMarkers = findBlockingTitleMarkers(prState.title);
   if (titleMarkers.length > 0) throw new Error(`PR #${options.pr} cannot be marked ready: title contains merge-blocking marker(s): ${titleMarkers.join(", ")}. Remove them from the title first.`);
-  if (requireCi) { const ci = await fetchCiStatus({ repo: options.repo, pr: options.pr }, { env, ghCommand }); if (ci.status === "blocked") throw new Error(`PR #${options.pr} has blocking CI checks`); if (ci.status !== "success") throw new Error(`PR #${options.pr} CI is not green`); }
-  const gate = await fetchDraftGateEvidence({ repo: options.repo, pr: options.pr, headSha }, { env, ghCommand });
+  if (requireCi) { const ci = await fetchCiStatus({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild: runChildImpl }); if (ci.status === "blocked") throw new Error(`PR #${options.pr} has blocking CI checks`); if (ci.status !== "success") throw new Error(`PR #${options.pr} CI is not green`); }
+  const gate = await fetchDraftGateEvidence({ repo: options.repo, pr: options.pr, headSha }, { env, ghCommand, runChild: runChildImpl });
   if (!gate.cleanEvidenceExists && !gate.effectiveHeadClean) throw new Error(`No visible clean draft_gate evidence on ${headSha.slice(0,7)}`);
   if (!gate.effectiveHeadClean) { const mv = gate.draftGateMarker?.visible; const mh = gate.draftGateMarker?.headSha; throw new Error(mv && mh ? `PR #${options.pr} draft_gate marker does not match current head ${headSha.slice(0,7)}. Re-run draft gate.` : `PR #${options.pr} draft_gate marker is missing or incomplete on current head ${headSha.slice(0,7)}. Re-run draft gate.`); }
   // #1585: a clean verdict is not enough — every gate-authored review thread
@@ -185,7 +185,7 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   if (sizeBudget.waiver.t1Valid || sizeBudget.waiver.defaultValid) {
     await postSizeBudgetWaiverComment(
       { repo: options.repo, pr: options.pr, headSha, sizeBudget, reason: options.reason, approvedBy: options.approvedBy },
-      { env, ghCommand },
+      { env, ghCommand, runChild: runChildImpl },
     );
   }
   // Fail-closed PR-description contract for a TRACKER-BACKED PR (issue #1863):
@@ -200,7 +200,7 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   if (prBodySpec && !prBodySpec.ok) {
     throw new Error(`PR #${options.pr} closes ${prState.closingIssues.map((n) => `#${n}`).join(", ")} but its own body fails the PR-description contract (validate-pr-body-spec: ${prBodySpec.errors.map((e) => e.code).join(", ")}); the PR body must independently carry Acceptance criteria + Definition of done checklists, an explicit Non-goals section, and a Closes #N/Fixes #N reference.`);
   }
-  const readyResult = await runChild(ghCommand, ["pr", "ready", String(options.pr), "--repo", options.repo], env);
+  const readyResult = await runChildImpl(ghCommand, ["pr", "ready", String(options.pr), "--repo", options.repo], env);
   if (readyResult.code !== 0) throw new Error(`gh pr ready failed`);
   // #1069: couple the In-Progress board move to the ready transition. Best-effort
   // and NON-FATAL — a board failure must NEVER block or fail marking ready.

@@ -8,7 +8,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll as after, test } from "bun:test";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
-import { resolverTestEnv, runNode as runNodeHelper, withTempDir, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { captureStream, resolverTestEnv, runNode as runNodeHelper, withTempDir, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { createPiAdapter } from "@dev-loops/core/harness";
 
 import {
   buildResolveDevLoopStartupResult,
@@ -19,11 +20,36 @@ import {
   resolveHasNewerMergeSinceCheckpoint,
   STRATEGY_OWNERSHIP_GATE,
   ownershipGateAppliesToStrategy,
+  runCli,
 } from "../../scripts/loop/resolve-dev-loop-startup.mjs";
 
 const scriptPath = path.resolve("scripts/loop/resolve-dev-loop-startup.mjs");
 
-const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
+const runNode = async (args = [], options = {}) => {
+  // Keep one real process boundary for the public CLI surface. Functional
+  // cases exercise runCli directly so hundreds of nested startup assertions
+  // do not each pay for an otherwise identical Bun process.
+  if (args.includes("--help")) return runNodeHelper(scriptPath, args, options);
+  const stdout = captureStream();
+  const stderr = captureStream();
+  const previousExitCode = process.exitCode;
+  process.exitCode = undefined;
+  try {
+    await runCli(args, {
+      stdout,
+      stderr,
+      adapter: createPiAdapter({
+        cwd: options.cwd ?? process.cwd(),
+        env: options.env ?? process.env,
+      }),
+    });
+    return { code: process.exitCode ?? 0, stdout: stdout.get(), stderr: stderr.get() };
+  } catch (error) {
+    return { code: 1, stdout: stdout.get(), stderr: `${stderr.get()}${error instanceof Error ? error.message : String(error)}\n` };
+  } finally {
+    process.exitCode = previousExitCode;
+  }
+};
 
 // Build a throwaway git repo carrying the standard origin remote ONCE, then
 // stamp per-test copies by cloning the .git dir on disk (no git subprocess per

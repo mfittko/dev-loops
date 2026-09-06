@@ -21,7 +21,7 @@
  * post-convergence head bump is a pure doc/prose bump and so need not force a
  * fresh blocking Copilot round.
  */
-import { execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -41,7 +41,6 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import {
-  assertWorktreeAtHead,
   gitEnvWithoutDirOverrides,
   hasRenameEntry,
   mapGateToConfigKey,
@@ -297,26 +296,57 @@ const GIT_ISOLATION = [
   "-c", "core.autocrlf=false",
 ];
 
-function captureDeltaChangedFiles({ base, repoRoot }) {
+export function runGitCommand(args, { repoRoot, env = gitEnvWithoutDirOverrides(), spawnImpl = spawn } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawnImpl("git", args, { cwd: repoRoot, env, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    let spawnError = null;
+    child.stdout?.on("data", (chunk) => { stdout += String(chunk); });
+    child.stderr?.on("data", (chunk) => { stderr += String(chunk); });
+    child.once("error", (error) => { spawnError = error; });
+    child.once("close", (code) => {
+      if (spawnError) return reject(spawnError);
+      resolve({ code: code ?? 1, stdout, stderr });
+    });
+  });
+}
+
+async function assertWorktreeAtHeadAsync(headSha, { repoRoot, runGit = runGitCommand }) {
+  const declared = String(headSha).trim().toLowerCase();
+  if (!/^[0-9a-f]{7,64}$/.test(declared)) {
+    throw new Error(`assertWorktreeAtHead: headSha ${JSON.stringify(headSha)} is not a 7-64 character hex SHA — refusing to prefix-match against the worktree HEAD (an empty/short value would false-accept).`);
+  }
+  let result;
+  try {
+    result = await runGit(["rev-parse", "HEAD"], { repoRoot });
+  } catch (error) {
+    throw new Error(`--base was given but the current working directory (${repoRoot}) is not inside a git worktree (git rev-parse HEAD failed: ${error?.message ?? error}). cd into the PR's worktree — the one checked out at --head-sha ${headSha} — before building its gate context.`);
+  }
+  if (result.code !== 0) {
+    throw new Error(`--base was given but the current working directory (${repoRoot}) is not inside a git worktree (git rev-parse HEAD failed: ${result.stderr.trim() || `exit ${result.code}`}). cd into the PR's worktree — the one checked out at --head-sha ${headSha} — before building its gate context.`);
+  }
+  const actualHead = result.stdout.trim().toLowerCase();
+  if (!actualHead.startsWith(declared)) {
+    throw new Error(`worktree HEAD ${actualHead} does not match --head-sha ${declared}: the current working directory is the WRONG worktree for this PR, so \`git diff <base>...HEAD\` would resolve the WRONG diff. cd into the worktree checked out at ${declared} and re-run.`);
+  }
+}
+
+async function captureDeltaChangedFiles({ base, repoRoot, runGit = runGitCommand }) {
   // TWO-dot: the direct tree diff between the reviewed head A (base) and HEAD (B).
   // NOT three-dot (`base...HEAD`), which diffs merge-base(A,B)..B and would OMIT a
   // file that differs between A and B but happens to equal their merge-base — under
   // a non-fast-forward advance (rebase/amend/revert) that would carry an angle whose
   // review surface actually changed since A. Two-dot never omits such a file.
   const range = `${base}..HEAD`;
-  const out = execFileSync("git", [...GIT_ISOLATION, "diff", "--no-ext-diff", "--name-status", range], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-    // See gitEnvWithoutDirOverrides (write-gate-context.mjs): assertWorktreeAtHead,
-    // called just before this, scrubs the SAME way, so the guard and this delta
-    // always mean the worktree at `cwd`, never a repo an inherited GIT_DIR points at.
-    env: gitEnvWithoutDirOverrides(),
-  });
-  return { changedFiles: parseChangedFiles(out), hasRename: hasRenameEntry(out) };
+  const result = await runGit([...GIT_ISOLATION, "diff", "--no-ext-diff", "--name-status", range], { repoRoot });
+  if (result.code !== 0) {
+    throw new Error(`git diff ${range} failed: ${result.stderr.trim() || `exit ${result.code}`}`);
+  }
+  return { changedFiles: parseChangedFiles(result.stdout), hasRename: hasRenameEntry(result.stdout) };
 }
 
-export async function main(argv = process.argv.slice(2), { repoRoot = process.cwd() } = {}) {
+export async function main(argv = process.argv.slice(2), { repoRoot = process.cwd(), runGit = runGitCommand } = {}) {
   let options;
   try {
     options = parseResolveAngleCarryForwardCliArgs(argv);
@@ -367,8 +397,8 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // different head than --head-sha, every carry-forward decision would be computed
     // against the WRONG head while claiming to be for --head-sha. Abort before
     // capturing the delta so no mislabeled plan is ever emitted.
-    assertWorktreeAtHead(options.headSha, { repoRoot });
-    const { changedFiles, hasRename } = captureDeltaChangedFiles({ base: options.prevHead, repoRoot });
+    await assertWorktreeAtHeadAsync(options.headSha, { repoRoot, runGit });
+    const { changedFiles, hasRename } = await captureDeltaChangedFiles({ base: options.prevHead, repoRoot, runGit });
     // A rename anywhere in the delta forces the RENAME_ONLY-mapped angles to
     // re-run: parseChangedFiles keeps only a rename's destination path, so
     // classifying that path alone misses what the rename itself implicates.

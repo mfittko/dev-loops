@@ -416,6 +416,8 @@ export async function runCli(
     stderr = process.stderr,
     env = process.env,
     ghCommand = "gh",
+    runChild = defaultRunChild,
+    repoRoot = resolveRepoRoot(process.cwd()),
   } = {},
 ) {
   const options = parseDetectCliArgs(argv);
@@ -435,12 +437,12 @@ export async function runCli(
         repo: options.repo,
         pr: options.pr,
       },
-      { env, ghCommand },
+      { env, ghCommand, runChild },
     );
     interpretationInput = snapshot;
   }
   let interpretation;
-  const config = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(process.cwd()) });
+  const config = await loadDevLoopConfig({ repoRoot });
   const refinementConfig = config.errors.length > 0
     ? resolveRefinement({ version: 1 })
     : resolveRefinement(config.config);

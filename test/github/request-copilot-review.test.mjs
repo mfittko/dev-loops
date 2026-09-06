@@ -4,13 +4,40 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { describe, it, test } from "bun:test";
-import { makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
-import { checkForCopilotComments, parseRequestCliArgs, performCopilotReviewRequest } from "../../scripts/github/request-copilot-review.mjs";
+import { captureStream, makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { checkForCopilotComments, parseRequestCliArgs, performCopilotReviewRequest, runCli } from "../../scripts/github/request-copilot-review.mjs";
+import { formatCliError } from "../../scripts/_core-helpers.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
 
 const scriptPath = path.resolve("scripts/github/request-copilot-review.mjs");
 
-const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
+const GH_ENTRIES = Symbol("request-copilot-review gh entries");
+
+async function runNode(args = [], options = {}) {
+  if (args.includes("--help") || args.includes("-h")) {
+    return runNodeHelper(scriptPath, args, options);
+  }
+  const stdout = captureStream();
+  const stderr = captureStream();
+  const env = options.env ?? process.env;
+  const { runChild } = makeGhMock(env[GH_ENTRIES] ?? [], { repeatLastOnOverflow: true });
+  let code = 0;
+  try {
+    await runCli(args, {
+      stdout,
+      stderr,
+      env,
+      runChild,
+      delayImpl: unexpectedDelay,
+      repoRoot: options.cwd ?? process.cwd(),
+      setExitCode: (value) => { code = value; },
+    });
+  } catch (error) {
+    stderr.write(`${formatCliError(error)}\n`);
+    code = 1;
+  }
+  return { code, stdout: stdout.get(), stderr: stderr.get() };
+}
 
 // The draft-gate round reset reads BOTH surfaces a verdict can live on: the
 // issue-comment stream first, then the PR review stream (the round's single
@@ -70,6 +97,7 @@ async function runInProcess(args, entries, { env = { GH_SEQUENCE_PATH: "1" }, de
 
 async function writeGhStub(tempDir, entries) {
   const { env } = await writeGhStubHelper(tempDir, entries, { repeatLastOnOverflow: true });
+  env[GH_ENTRIES] = entries;
   return env;
 }
 
@@ -84,7 +112,9 @@ async function writeGhStubWithCommentCheck(tempDir, entries) {
   const script = await readFile(ghPath, "utf8");
   await writeFile(ghPath, script.replaceAll("process.env.GH_SEQUENCE_PATH", "process.env.TEST_GH_SEQUENCE_PATH"), "utf8");
   const { GH_SEQUENCE_PATH: sequencePath, ...rest } = env;
-  return { ...rest, TEST_GH_SEQUENCE_PATH: sequencePath };
+  const result = { ...rest, TEST_GH_SEQUENCE_PATH: sequencePath };
+  result[GH_ENTRIES] = entries;
+  return result;
 }
 
 test("request-copilot-review requests Copilot deterministically and verifies via requested_reviewers", async () => {

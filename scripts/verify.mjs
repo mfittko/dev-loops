@@ -4,13 +4,8 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 export const VERIFY_SUITES = Object.freeze([
-  "test:assets",
-  "test:extension",
-  "test:scripts",
-  "test:core",
+  "test:all",
   "test:docs",
-  "test:pack",
-  "test:dev-loop",
   "test:workflows",
 ]);
 
@@ -26,16 +21,18 @@ export function runSuite(suite, {
   command = process.env.BUN_BIN || "bun",
   stdout = process.stdout,
   stderr = process.stderr,
+  spawnImpl = spawn,
 } = {}) {
   return new Promise((resolve) => {
-    const child = spawn(command, ["run", suite], { cwd, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawnImpl(command, ["run", suite], { cwd, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
     child.stdout.on("data", (chunk) => writeAttributed(stdout, suite, chunk));
     child.stderr.on("data", (chunk) => writeAttributed(stderr, suite, chunk));
+    let spawnError = null;
     child.on("error", (error) => {
+      spawnError = error;
       writeAttributed(stderr, suite, `${error.message}\n`);
-      resolve(1);
     });
-    child.on("close", (code) => resolve(code ?? 1));
+    child.on("close", (code) => resolve(spawnError === null ? (code ?? 1) : 1));
   });
 }
 

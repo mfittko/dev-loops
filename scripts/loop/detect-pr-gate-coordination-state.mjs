@@ -801,7 +801,10 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   const copilotRequested = await fetchCopilotRequested(options, runtime);
   const threadsPayload = await fetchGithubReviewThreadsPayload(options, runtime);
   const parsedThreads = parseReviewThreads(threadsPayload);
-  const gateEvidence = await detectCheckpointEvidence(options, runtime);
+  const gateEvidence = await detectCheckpointEvidence(options, {
+    ...runtime,
+    cwd: runtime.cwd ?? runtime.repoRoot,
+  });
   // When draft gate was re-passed on a different head, use its timestamp
   // to reset the Copilot round count — only reviews after the re-pass count.
   // Shared with request-copilot-review so both scripts compute the same

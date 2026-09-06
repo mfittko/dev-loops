@@ -10,6 +10,7 @@ import {
   parseDetectCliArgs,
 } from "../../scripts/loop/detect-copilot-loop-state.mjs";
 import {
+  GH_RUNNER,
   makeComment,
   makeThread,
   runNode,
@@ -504,7 +505,7 @@ test("autoDetectSnapshot uses the default ghCommand when deps omit it", async ()
 
     const snapshot = await autoDetectSnapshot(
       { repo: "owner/repo", pr: 17 },
-      { env },
+      { env, runChild: env[GH_RUNNER] },
     );
 
     assert.equal(snapshot.prExists, true);

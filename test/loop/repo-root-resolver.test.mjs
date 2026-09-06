@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, rm, realpath } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, realpath, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -43,6 +43,17 @@ test("resolveRepoRoot falls back to cwd when git is unavailable (exec failure)",
   const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), "dev-loops-nogit-")));
   try {
     assert.equal(resolveRepoRoot(dir, { gitCommand: `definitely-not-git-${Date.now()}` }), dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("repo markers make an explicit root authoritative without Git discovery", async () => {
+  const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), "dev-loops-marked-root-")));
+  try {
+    await writeFile(path.join(dir, ".devloops"), "version: 1\n", "utf8");
+    assert.equal(resolveRepoRoot(dir, { gitCommand: "must-not-run" }), dir);
+    assert.deepEqual(resolveLedgerCheckouts(dir, { gitCommand: "must-not-run" }), [dir]);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

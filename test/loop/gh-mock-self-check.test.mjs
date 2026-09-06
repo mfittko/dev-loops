@@ -46,6 +46,17 @@ test("sequence overflow honors repeatLastOnOverflow", async () => {
   assert.equal(repeated.stdout, "last\n");
 });
 
+test("claims mode matches out-of-order calls exactly once", async () => {
+  const { runChild } = makeGhMock([
+    { assertArgs: ["first"], stdout: "one\n" },
+    { assertArgs: ["second"], stdout: "two\n" },
+  ], { matchMode: "claims" });
+
+  assert.equal((await runChild("gh", ["second"], {}, "")).stdout, "two\n");
+  assert.equal((await runChild("gh", ["first"], {}, "")).stdout, "one\n");
+  assert.equal((await runChild("gh", ["first"], {}, "")).code, 97);
+});
+
 test("git resolves hermetically and any other command throws", async () => {
   const { runChild } = makeGhMock([]);
   const git = await runChild("git", ["status", "--porcelain"], {}, "");
