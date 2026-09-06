@@ -36,11 +36,21 @@ export function resolveBunTestParallelism(env = process.env) {
 
 export function buildBunTestArgs(args, env = process.env) {
   const callerArgs = [];
+  // Coalesce every dots-reporter spelling (literal --dots, --reporter=dots,
+  // --reporter dots) to a single canonical --dots, so mixing spellings can't
+  // emit a duplicate flag (#2013 AC: duplicate caller flags must not produce
+  // duplicate defaults).
+  let dotsSeen = false;
+  const pushDots = () => { if (!dotsSeen) { callerArgs.push(DOTS_FLAG); dotsSeen = true; } };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--reporter=dots" || (arg === "--reporter" && args[index + 1] === "dots")) {
-      callerArgs.push(DOTS_FLAG);
+      pushDots();
       if (arg === "--reporter") index += 1;
+      continue;
+    }
+    if (arg === DOTS_FLAG) {
+      pushDots();
       continue;
     }
     if (arg === FAILURE_ONLY_FLAG || arg === TMP_IGNORE_FLAG) continue;
@@ -50,7 +60,7 @@ export function buildBunTestArgs(args, env = process.env) {
     }
     callerArgs.push(arg);
   }
-  const reporting = callerArgs.includes(DOTS_FLAG) ? [] : [FAILURE_ONLY_FLAG];
+  const reporting = dotsSeen ? [] : [FAILURE_ONLY_FLAG];
   return ["test", ...reporting, TMP_IGNORE_FLAG, `--parallel=${resolveBunTestParallelism(env)}`, "--no-isolate", ...callerArgs];
 }
 

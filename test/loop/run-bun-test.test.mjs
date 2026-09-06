@@ -37,6 +37,20 @@ test("explicit dots replaces failure-only reporting while keeping canonical disc
   }
 });
 
+test("mixed dots-reporter spellings coalesce to a single canonical --dots", () => {
+  for (const spellings of [
+    ["--dots", "--reporter=dots"],
+    ["--reporter=dots", "--dots"],
+    ["--dots", "--reporter", "dots"],
+    ["--dots", "--dots"],
+    ["--reporter=dots", "--reporter", "dots"],
+  ]) {
+    const args = buildBunTestArgs([...spellings, "example.test.mjs"], {});
+    assert.equal(args.filter((arg) => arg === "--dots").length, 1);
+    assert.ok(!args.includes("--only-failures"));
+  }
+});
+
 test("Bun summaries require a consistent terminal reporter block", () => {
   const summary = parseBunSummary("passing child says:\nnpm notice noisy tarball\n{\"heartbeat\":true}\n\n 2 pass\n 1 skip\n 0 fail\nRan 3 tests across 2 files. [123.00ms]\n");
   assert.equal(summary, "bun test: 2 pass, 1 skip, 0 fail across 2 files (123.00ms)\n");
