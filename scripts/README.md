@@ -116,6 +116,8 @@ Contract:
 - verifies the result through `gh api repos/<owner>/<name>/pulls/<pr>/requested_reviewers`
 - the verification read is eventually consistent: an immediate read can still see stale (empty) state right after a genuinely successful request, so the helper retries the read on a fixed backoff (~30s total) before declaring failure; the requested_reviewers POST itself is issued exactly once and never re-issued per probe. A verification read that throws (transient gh failure) also consumes a scheduled retry instead of failing immediately; only a throw on the final attempt propagates, as the raw underlying error
 - does **not** rely on `gh pr view --json reviewRequests`, which can be incomplete for Copilot reviewer state
+- a fail-soft GraphQL cross-check (`gh api graphql`) is additionally consulted once, right after the initial post-request read: it observes an active `reviewRequests` entry for the Copilot bot login and/or a Copilot review node in any state (including PENDING) at the current head — surfaces the two REST reads above can miss (#1980). A GraphQL error is treated as "not observed," never a throw
+- when the POST already returned exit 0 but nothing is observable via REST or GraphQL within the bounded verification window, the helper reports `requested` with an eventually-consistent `detail` instead of throwing (#1980); a genuine 422 is still classified `unavailable`
 - normalizes known repository/tooling limitations into a machine-readable `unavailable` result instead of forcing callers to parse ad hoc stderr
 
 Success output shape:
