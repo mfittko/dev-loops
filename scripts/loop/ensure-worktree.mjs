@@ -28,7 +28,7 @@
  * - Provisioning is invoked via the imported provisionWorktree core (shared
  *   with provision-worktree.mjs's CLI) — not shelled out. It fails soft: a
  *   provision warning never aborts the worktree.
- * - Does NOT run npm install (out of scope).
+ * - Does NOT install dependencies (out of scope).
  *
  * Prints a JSON result to stdout:
  *   { ok, path, created|reused, base?, branchOrigin, diverged?,

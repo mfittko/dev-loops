@@ -14,7 +14,7 @@
  *
  * Also (unconditionally, independent of .devloops): links the workspace
  * package node_modules/@dev-loops/core -> ../../packages/core (relative,
- * pointing at the WORKTREE's own packages/core). Without npm install/ci in a
+ * pointing at the WORKTREE's own packages/core). Without a dependency install in a
  * fresh worktree there is no node_modules at all, so scripts/**'s
  * `@dev-loops/core` imports resolve UP-TREE to the nearest ancestor
  * node_modules (the main checkout's) — silently testing main's core instead

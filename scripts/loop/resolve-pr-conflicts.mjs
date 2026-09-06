@@ -289,7 +289,7 @@ async function abortMerge({ cwd, env }) {
   await run("git", ["merge", "--abort"], { cwd, env });
 }
 
-export async function resolvePrConflicts(options, { env = process.env } = {}) {
+export async function resolvePrConflicts(options, { env = process.env, runVerification = run } = {}) {
   const cwd = options.repoRoot;
 
   // Resolve base branch: explicit flag, else `gh pr view`, else "main".
@@ -321,7 +321,7 @@ export async function resolvePrConflicts(options, { env = process.env } = {}) {
   const merge = await run("git", [...BOT_IDENTITY, "-c", "merge.conflictStyle=diff3", "merge", "--no-edit", `origin/${base}`], { cwd, env });
   if (merge.code === 0) {
     const result = { ok: true, action: "clean_merge", base, resolvedFiles: [], pushed: false };
-    await afterResolve(result, options, { cwd, env });
+    await afterResolve(result, options, { cwd, env, runVerification });
     return result;
   }
 
@@ -371,13 +371,13 @@ export async function resolvePrConflicts(options, { env = process.env } = {}) {
   }
 
   const result = { ok: true, action: "resolved", base, resolvedFiles: [SAFE_RESOLVABLE_PATH], pushed: false };
-  await afterResolve(result, options, { cwd, env });
+  await afterResolve(result, options, { cwd, env, runVerification });
   return result;
 }
 
-async function afterResolve(result, options, { cwd, env }) {
+async function afterResolve(result, options, { cwd, env, runVerification }) {
   if (options.verify) {
-    const verify = await run("bun", ["run", "test:docs"], { cwd, env });
+    const verify = await runVerification("bun", ["run", "test:docs"], { cwd, env });
     if (verify.code !== 0) {
       const err = new Error(`Post-resolve verification (bun run test:docs) failed: ${verify.stderr.trim() || verify.stdout.trim() || `exit ${verify.code}`}`);
       err.verifyFailed = true;

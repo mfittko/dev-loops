@@ -12,15 +12,7 @@ import {
   resolvePrConflicts,
 } from "../../scripts/loop/resolve-pr-conflicts.mjs";
 
-// ── pure unit: CLI arg parsing fails closed ──────────────────────────
-
 describe("parseResolvePrConflictsCliArgs", () => {
-  test("post-resolve docs verification uses the canonical Bun runner", async () => {
-    const source = await readFile(new URL("../../scripts/loop/resolve-pr-conflicts.mjs", import.meta.url), "utf8");
-    assert.match(source, /run\("bun", \["run", "test:docs"\]/);
-    assert.doesNotMatch(source, /npm run test:docs/);
-  });
-
   test("rejects unknown flags (typos like --no-verfy)", () => {
     assert.throws(() => parseResolvePrConflictsCliArgs(["--no-verfy"]), /Unknown argument: --no-verfy/);
     assert.throws(() => parseResolvePrConflictsCliArgs(["--pus"]), /Unknown argument: --pus/);
@@ -36,8 +28,6 @@ describe("parseResolvePrConflictsCliArgs", () => {
     assert.equal(o.json, true);
   });
 });
-
-// ── pure unit: resolveAdditiveChangelog ──────────────────────────────
 
 describe("resolveAdditiveChangelog", () => {
   test("keeps BOTH additive list entries (empty base, true insertion on both sides)", () => {
@@ -202,8 +192,6 @@ describe("mergeKeepBothSubsections", () => {
   });
 });
 
-// ── real-git fixtures ────────────────────────────────────────────────
-
 function git(cwd, args) {
   const r = spawnSync("git", args, { cwd, encoding: "utf8", env: GIT_ENV });
   assert.equal(r.status, 0, `git ${args.join(" ")}: ${r.stderr}`);
@@ -237,7 +225,6 @@ async function setupDivergedRepo({ baseFile, baseContent, oursContent, theirsCon
   git(workDir, ["commit", "-q", "-m", "base"]);
   git(workDir, ["push", "-q", "-u", "origin", "main"]);
 
-  // feature branch from base
   git(workDir, ["checkout", "-q", "-b", "feature"]);
   await writeFile(path.join(workDir, baseFile), oursContent, "utf8");
   git(workDir, ["commit", "-q", "-am", "ours"]);
@@ -429,7 +416,7 @@ describe("resolvePrConflicts (real git)", () => {
     }
   });
 
-  test("clean merge (no conflict) reports clean_merge", async () => {
+  test("clean merge verifies with Bun and fails closed on verification errors", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-pr-conflicts-clean-"));
     const remoteDir = path.join(tempDir, "remote.git");
     const workDir = path.join(tempDir, "work");
@@ -443,7 +430,6 @@ describe("resolvePrConflicts (real git)", () => {
       git(workDir, ["commit", "-q", "-m", "base"]);
       git(workDir, ["push", "-q", "-u", "origin", "main"]);
       git(workDir, ["checkout", "-q", "-b", "feature"]);
-      // advance main on a disjoint file
       git(workDir, ["checkout", "-q", "main"]);
       await writeFile(path.join(workDir, "b.txt"), "b\n", "utf8");
       git(workDir, ["add", "."]);
@@ -451,9 +437,23 @@ describe("resolvePrConflicts (real git)", () => {
       git(workDir, ["push", "-q", "origin", "main"]);
       git(workDir, ["checkout", "-q", "feature"]);
 
-      const result = await resolvePrConflicts({ repoRoot: workDir, base: "main", verify: false, push: false }, { env: GIT_ENV });
+      const calls = [];
+      let verificationCode = 7;
+      const runVerification = async (command, args, options) => {
+        calls.push(`${command} ${args.join(" ")} @ ${options.cwd}`);
+        const result = { code: verificationCode, stdout: "", stderr: verificationCode ? "docs failed" : "" };
+        verificationCode = 0;
+        return result;
+      };
+      await assert.rejects(
+        () => resolvePrConflicts({ repoRoot: workDir, base: "main", verify: true, push: false }, { env: GIT_ENV, runVerification }),
+        (error) => error.verifyFailed === true && /bun run test:docs/.test(error.message),
+      );
+      const result = await resolvePrConflicts({ repoRoot: workDir, base: "main", verify: true, push: false }, { env: GIT_ENV, runVerification });
       assert.equal(result.action, "clean_merge");
       assert.deepEqual(result.resolvedFiles, []);
+      assert.equal(result.verified, true);
+      assert.deepEqual(calls, Array(2).fill(`bun run test:docs @ ${workDir}`));
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
