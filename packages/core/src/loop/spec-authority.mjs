@@ -660,16 +660,17 @@ export function resolveAffectedCriteria({ changedPaths, criterionCoverage } = {}
   if (!criterionCoverage || typeof criterionCoverage !== "object" || Array.isArray(criterionCoverage)) {
     throw new Error("criterionCoverage must be an object mapping criterionId -> glob pattern array");
   }
-  const coverageEntries = Object.entries(criterionCoverage).map(([criterionId, globs]) => {
-    if (criterionId.trim().length === 0) {
+  const coverageEntries = Object.entries(criterionCoverage).map(([rawCriterionId, globs]) => {
+    const criterionId = rawCriterionId.trim();
+    if (criterionId.length === 0) {
       throw new Error("criterionCoverage keys must be non-empty criterion id strings");
     }
     if (!Array.isArray(globs)) {
-      throw new Error(`criterionCoverage[${JSON.stringify(criterionId)}] must be an array of glob strings`);
+      throw new Error(`criterionCoverage[${JSON.stringify(rawCriterionId)}] must be an array of glob strings`);
     }
     const patterns = globs.map((g, i) => {
       if (typeof g !== "string" || g.trim().length === 0) {
-        throw new Error(`criterionCoverage[${JSON.stringify(criterionId)}][${i}] must be a non-empty glob string`);
+        throw new Error(`criterionCoverage[${JSON.stringify(rawCriterionId)}][${i}] must be a non-empty glob string`);
       }
       return g.trim();
     });

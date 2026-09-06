@@ -362,6 +362,15 @@ describe("resolveAffectedCriteria (AC7, issue 2008)", () => {
     assert.deepEqual(out.unmatchedPaths, ["src/a.mjsTWO"]);
   });
 
+  test("a whitespace-padded criterion-map key is trimmed and matched (never under-staled)", () => {
+    const out = resolveAffectedCriteria({
+      changedPaths: ["src/lib/inner/helper.mjs"],
+      criterionCoverage: { " ac:0 ": ["src/lib/**"] },
+    });
+    assert.deepEqual(out.affectedCriteria, ["ac:0"]);
+    assert.equal(out.uncertain, false);
+  });
+
   test("fails closed on malformed input", () => {
     assert.throws(() => resolveAffectedCriteria({ changedPaths: "not-an-array", criterionCoverage: coverage }), /changedPaths must be an array/);
     assert.throws(() => resolveAffectedCriteria({ changedPaths: [""], criterionCoverage: coverage }), /changedPaths\[0\] must be a non-empty string/);

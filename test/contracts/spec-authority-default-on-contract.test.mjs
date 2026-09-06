@@ -26,17 +26,24 @@ const AC1_REQUIRED_TOKENS = [
   "resolve-angle-carry-forward.mjs --spec-authority",
 ];
 
-function extractPhase35(content, endBoundary) {
+// Fails closed on a doc restructure: if `endBoundary` stops matching, this must trip
+// the test (not silently widen the section to the whole document tail), or the
+// guard's section-scoping degrades with no failing test to catch it.
+function extractPhase35(content, endBoundary, docName) {
   const startMatch = content.match(/Spec authority is engaged by default|Spec-context seam \(default-on/);
   assert.ok(startMatch, "Phase 3.5 default-on spec-authority prose not found");
   const start = startMatch.index;
   const endMatch = content.slice(start).match(endBoundary);
-  return endMatch ? content.slice(start, start + endMatch.index) : content.slice(start);
+  assert.ok(
+    endMatch,
+    `${docName}: Phase 3.5 section end boundary ${endBoundary} did not match; update extractPhase35's boundary for the new doc structure`,
+  );
+  return content.slice(start, start + endMatch.index);
 }
 
 test("skills/dev-loop/SKILL.md pins default-on spec-authority wiring in the gate flow (issue 2008)", async () => {
   const skill = await readRepo("skills/dev-loop/SKILL.md");
-  const section = extractPhase35(skill, /\*\*Bounded test runs/);
+  const section = extractPhase35(skill, /\*\*Bounded test runs/, "skills/dev-loop/SKILL.md");
   for (const token of REQUIRED_TOKENS) {
     assert.ok(section.includes(token), `SKILL.md Phase 3.5 section should reference ${token}`);
   }
@@ -44,7 +51,7 @@ test("skills/dev-loop/SKILL.md pins default-on spec-authority wiring in the gate
 
 test("skills/docs/gate-review-sub-loop-contract.md pins default-on spec-authority wiring in the gate flow (issue 2008)", async () => {
   const contract = await readRepo("skills/docs/gate-review-sub-loop-contract.md");
-  const section = extractPhase35(contract, /\n## /);
+  const section = extractPhase35(contract, /\n## /, "skills/docs/gate-review-sub-loop-contract.md");
   for (const token of REQUIRED_TOKENS) {
     assert.ok(section.includes(token), `gate-review-sub-loop-contract.md Phase 3.5 section should reference ${token}`);
   }
@@ -52,7 +59,7 @@ test("skills/docs/gate-review-sub-loop-contract.md pins default-on spec-authorit
 
 test("skills/dev-loop/SKILL.md pins the AC1 identity-out producer + --spec-authority fan-out to every durable record writer (issue 2008)", async () => {
   const skill = await readRepo("skills/dev-loop/SKILL.md");
-  const section = extractPhase35(skill, /\*\*Bounded test runs/);
+  const section = extractPhase35(skill, /\*\*Bounded test runs/, "skills/dev-loop/SKILL.md");
   for (const token of AC1_REQUIRED_TOKENS) {
     assert.ok(section.includes(token), `SKILL.md Phase 3.5 section should reference ${token}`);
   }
@@ -60,7 +67,7 @@ test("skills/dev-loop/SKILL.md pins the AC1 identity-out producer + --spec-autho
 
 test("skills/docs/gate-review-sub-loop-contract.md pins the AC1 identity-out producer + --spec-authority fan-out to every durable record writer (issue 2008)", async () => {
   const contract = await readRepo("skills/docs/gate-review-sub-loop-contract.md");
-  const section = extractPhase35(contract, /\n## /);
+  const section = extractPhase35(contract, /\n## /, "skills/docs/gate-review-sub-loop-contract.md");
   for (const token of AC1_REQUIRED_TOKENS) {
     assert.ok(section.includes(token), `gate-review-sub-loop-contract.md Phase 3.5 section should reference ${token}`);
   }
