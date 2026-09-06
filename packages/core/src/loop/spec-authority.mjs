@@ -570,6 +570,129 @@ export function resolveCriterionInvalidation({
 }
 
 /**
+ * AC1 (issue 2008 / ADR 0061): the ONE shared identity-stamp helper every
+ * gate/fixer record writer threads its revision identity + checked criteria
+ * through, so the writers cannot drift from independently-recomputed fields.
+ * Validates the pinned trio (reusing {@link assertDigestShape} /
+ * {@link normalizeHeadSha}) plus the checked criteria (reusing
+ * {@link normalizeIdSet}, sorted for byte-stable determinism), and returns a
+ * NEW object — never mutates `record` — with the stamp nested under a
+ * `specAuthority` key so it can never collide with a writer's own fields.
+ * Fail-closed: throws on a missing/invalid identity rather than silently
+ * stamping a partial/malformed trio.
+ *
+ * @param {object} record — the record to stamp (spread into the returned copy)
+ * @param {object} identity
+ * @param {string} identity.specDigest
+ * @param {string} identity.headSha
+ * @param {string} identity.contentDigest
+ * @param {string[]} identity.checkedCriteria
+ * @returns {object} `{ ...record, specAuthority: { specDigest, headSha, contentDigest, checkedCriteria } }`
+ */
+export function stampSpecAuthorityIdentity(record, { specDigest, headSha, contentDigest, checkedCriteria } = {}) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    throw new Error("stampSpecAuthorityIdentity: record must be an object");
+  }
+  const stampedSpecDigest = assertDigestShape(specDigest, "specDigest");
+  const stampedHeadSha = normalizeHeadSha(headSha);
+  const stampedContentDigest = assertDigestShape(contentDigest, "contentDigest");
+  const checked = [...normalizeIdSet(checkedCriteria, "checkedCriteria")].sort();
+  return {
+    ...record,
+    specAuthority: {
+      specDigest: stampedSpecDigest,
+      headSha: stampedHeadSha,
+      contentDigest: stampedContentDigest,
+      checkedCriteria: checked,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// AC7 (issue 2008 / ADR 0061): pure affected-criteria producer
+// ---------------------------------------------------------------------------
+
+// ponytail: minimal glob subset (exact path, `dir/**` prefix, single `*`
+// within one path segment) — no `?`, brace expansion, or mid-pattern `**`.
+// No glob/minimatch/picomatch util exists in this repo (checked
+// packages/core/src and analysis/change-classifier.mjs); upgrade to
+// picomatch/minimatch if a coverage map ever needs a richer subset.
+function matchesCoverageGlob(pattern, filePath) {
+  if (pattern === filePath) return true;
+  if (pattern.endsWith("/**")) {
+    const prefix = pattern.slice(0, -3);
+    return filePath === prefix || filePath.startsWith(`${prefix}/`);
+  }
+  if (pattern.includes("*")) {
+    const escaped = pattern.replace(/[.+^${}()|[\]\\]/gu, "\\$&").replace(/\*/gu, "[^/]*");
+    return new RegExp(`^${escaped}$`, "u").test(filePath);
+  }
+  return false;
+}
+
+/**
+ * Pure, fail-closed producer: map a fixer push's changed paths to the
+ * criteria whose declared coverage they touch. A changed path matching >=1
+ * criterion's glob(s) marks those criteria affected. A changed path matching
+ * ZERO criteria fails closed: it is recorded in `unmatchedPaths` and sets
+ * `uncertain: true` so the caller (the judge-pass bridge) treats every
+ * prior-approved criterion as affected (the pre-existing all-stale fallback)
+ * instead of silently under-staling an unmapped change.
+ *
+ * @param {object} input
+ * @param {string[]} input.changedPaths — repo-relative paths a fixer push changed
+ * @param {Record<string, string[]>} input.criterionCoverage — criterionId -> glob pattern array
+ * @returns {{ affectedCriteria: string[], uncertain: boolean, unmatchedPaths: string[] }}
+ */
+export function resolveAffectedCriteria({ changedPaths, criterionCoverage } = {}) {
+  if (!Array.isArray(changedPaths)) {
+    throw new Error("changedPaths must be an array of repo-relative path strings");
+  }
+  const paths = changedPaths.map((p, i) => {
+    if (typeof p !== "string" || p.trim().length === 0) {
+      throw new Error(`changedPaths[${i}] must be a non-empty string`);
+    }
+    return p.trim();
+  });
+  if (!criterionCoverage || typeof criterionCoverage !== "object" || Array.isArray(criterionCoverage)) {
+    throw new Error("criterionCoverage must be an object mapping criterionId -> glob pattern array");
+  }
+  const coverageEntries = Object.entries(criterionCoverage).map(([criterionId, globs]) => {
+    if (criterionId.trim().length === 0) {
+      throw new Error("criterionCoverage keys must be non-empty criterion id strings");
+    }
+    if (!Array.isArray(globs)) {
+      throw new Error(`criterionCoverage[${JSON.stringify(criterionId)}] must be an array of glob strings`);
+    }
+    const patterns = globs.map((g, i) => {
+      if (typeof g !== "string" || g.trim().length === 0) {
+        throw new Error(`criterionCoverage[${JSON.stringify(criterionId)}][${i}] must be a non-empty glob string`);
+      }
+      return g.trim();
+    });
+    return [criterionId, patterns];
+  });
+
+  const affected = new Set();
+  const unmatchedPaths = [];
+  for (const filePath of paths) {
+    let matchedAny = false;
+    for (const [criterionId, patterns] of coverageEntries) {
+      if (patterns.some((pattern) => matchesCoverageGlob(pattern, filePath))) {
+        affected.add(criterionId);
+        matchedAny = true;
+      }
+    }
+    if (!matchedAny) unmatchedPaths.push(filePath);
+  }
+  return {
+    affectedCriteria: [...affected].sort(),
+    uncertain: unmatchedPaths.length > 0,
+    unmatchedPaths,
+  };
+}
+
+/**
  * Convenience: extract a `{ acceptanceCriteria, definitionOfDone, nonGoals }`
  * spec from a canonical tracker issue body, reusing the shared section +
  * checklist parsers so the spec digest is computed from exactly the sections the
