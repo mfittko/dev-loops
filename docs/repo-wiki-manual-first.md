@@ -72,14 +72,14 @@ node scripts/repo-wiki.mjs --source local prepare
 Run a full local bootstrap export from a clean checkout (scan + plan + compile, no LLM key required for the deterministic compile step):
 
 ```bash
-npm run repo-wiki:bootstrap
+bun run repo-wiki:bootstrap
 ```
 
 That bounded sequence covers the full deterministic local path (scan + plan + compile).
-The lint step is intentionally **not** wired into the bootstrap script: `npm run repo-wiki:lint`
+The lint step is intentionally **not** wired into the bootstrap script: `bun run repo-wiki:lint`
 flags a pre-existing `OPENAI_API_KEY` mention in `README.md` as secret-like content, and that
 issue is outside this slice. Run lint separately if you want to inspect wiki page health.
-Lint remains available as an explicit opt-in step via `npm run repo-wiki:lint`.
+Lint remains available as an explicit opt-in step via `bun run repo-wiki:lint`.
 Lint of ingested markdown docs is also available separately via `node scripts/repo-wiki.mjs lint-docs --repo .`.
 
 ```bash
@@ -87,7 +87,7 @@ node scripts/repo-wiki.mjs scan --repo .
 node scripts/repo-wiki.mjs plan --repo .
 node scripts/repo-wiki.mjs lint-docs --repo .
 node scripts/repo-wiki.mjs compile --repo .
-npm run repo-wiki:lint
+bun run repo-wiki:lint
 ```
 
 To run the same stages against the offline fallback source checkout instead of the published npm package, add `--source local` to each stage:
@@ -143,26 +143,6 @@ node scripts/repo-wiki.mjs init --repo .
 2. checks out the pinned commit `d7e772e3d702a75896a6f4eec574a4e4e5bfa6dd`
 3. installs dependencies and builds the checkout via its own package.json build script (skipped on rerun if a build stamp matches the ref)
 4. runs `dist/bin/repo-wiki.js` from that prepared checkout against this repository
-
-## Local verification performed for this slice
-
-The following commands were run from a clean checkout of this repository (see the lint caveat above; lint is intentionally excluded from this verification list because of a pre-existing repo-wiki finding):
-
-```bash
-node scripts/repo-wiki.mjs scan --repo .
-node scripts/repo-wiki.mjs plan --repo .
-node scripts/repo-wiki.mjs compile --repo .
-npm run repo-wiki:lint
-find .llmwiki/wiki -maxdepth 1 -type f | sort
-```
-
-Standard changed-scope repo validation was also run:
-
-```bash
-git diff --check
-bun test test/loop/repo-wiki.test.mjs test/loop/repo-wiki-local.test.mjs
-bun run verify
-```
 
 ## CI automation
 

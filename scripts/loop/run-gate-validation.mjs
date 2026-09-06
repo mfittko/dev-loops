@@ -364,17 +364,10 @@ async function findAncestorPackageManifest(startDir, relativeManifestPath) {
  * are excluded from the comparison to avoid false "stale" stamps on a synced
  * tree.
  *
- * A loop worktree (tmp/worktrees/<repo>/<kind>-<n>) is a linked checkout:
- * ensure-worktree.mjs symlinks only `node_modules/@dev-loops/core` into it
- * and never runs `npm install` there, so the worktree has no local
- * `node_modules/.package-lock.json` of its own — the suites it runs still
- * resolve every other dependency by Node's normal ancestor-directory module
- * resolution, reaching the main checkout's `node_modules` above it. Reading
- * only `<repoRoot>/node_modules/.package-lock.json` therefore stamps every
- * worktree round "stale" unconditionally, regardless of whether the deps the
- * suites actually ran against are fresh. The installed-lock lookup below
- * walks up from `repoRoot` to the nearest ancestor directory that has one,
- * so it reads the dependency root the suites actually ran against.
+ * A linked loop worktree can resolve dependencies from the main checkout's
+ * ancestor `node_modules`. The installed-lock lookup therefore walks upward
+ * to the dependency root the suites actually used; this also preserves the
+ * retained package-lock fallback when validating older branches.
  *
  * @param {string} repoRoot - Absolute path to the repo (main checkout or worktree).
  * @returns {Promise<{status: string, detail: string}>}

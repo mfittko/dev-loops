@@ -3,6 +3,7 @@
 // spec-context.mjs's `changed-paths` mode (issue 2008 / ADR 0061 AC5) reuses
 // the SAME git invocation and isolation flags rather than re-deriving them.
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { gitEnvWithoutDirOverrides, hasRenameEntry, normalizeBaseRef, parseChangedFiles } from "../github/write-gate-context.mjs";
 
 // git-diff isolation flags: pin the name-status output bytes/rename detection
@@ -12,6 +13,7 @@ const GIT_ISOLATION = [
   "-c", "core.pager=cat",
   "-c", "diff.renames=true",
   "-c", "core.autocrlf=false",
+  "-c", "core.quotePath=false",
 ];
 
 /**
@@ -28,13 +30,17 @@ const GIT_ISOLATION = [
 export function runGitCommand(args, { repoRoot, env = gitEnvWithoutDirOverrides(), spawnImpl = spawn } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawnImpl("git", args, { cwd: repoRoot, env, stdio: ["ignore", "pipe", "pipe"] });
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
     let stdout = "";
     let stderr = "";
     let spawnError = null;
-    child.stdout?.on("data", (chunk) => { stdout += String(chunk); });
-    child.stderr?.on("data", (chunk) => { stderr += String(chunk); });
+    child.stdout?.on("data", (chunk) => { stdout += stdoutDecoder.write(chunk); });
+    child.stderr?.on("data", (chunk) => { stderr += stderrDecoder.write(chunk); });
     child.once("error", (error) => { spawnError = error; });
     child.once("close", (code) => {
+      stdout += stdoutDecoder.end();
+      stderr += stderrDecoder.end();
       if (spawnError) return reject(spawnError);
       resolve({ code: code ?? 1, stdout, stderr });
     });

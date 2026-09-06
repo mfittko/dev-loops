@@ -29,7 +29,13 @@ const npmRegistryProbe = spawnSync("npm", ["view", "yaml", "version"], {
   timeout: 15_000,
 });
 const npmRegistryProbeDetail = `${npmRegistryProbe.stderr ?? ""}${npmRegistryProbe.stdout ?? ""}${npmRegistryProbe.error?.message ?? ""}`;
-const NPM_REGISTRY_TRANSIENTLY_UNAVAILABLE = !process.env.CI && npmRegistryProbe.status !== 0 && NETWORK_FAILURE_RE.test(npmRegistryProbeDetail);
+export const shouldSkipForRegistryOutage = ({ ci, status, detail }) => !ci && status !== 0 && NETWORK_FAILURE_RE.test(detail);
+const NPM_REGISTRY_TRANSIENTLY_UNAVAILABLE = shouldSkipForRegistryOutage({ ci: process.env.CI, status: npmRegistryProbe.status, detail: npmRegistryProbeDetail });
+
+test("registry outages skip locally but fail closed in CI", () => {
+  assert.equal(shouldSkipForRegistryOutage({ ci: "true", status: 1, detail: "ETIMEDOUT" }), false);
+  assert.equal(shouldSkipForRegistryOutage({ ci: "", status: 1, detail: "ETIMEDOUT" }), true);
+});
 
 test.skipIf(NPM_REGISTRY_TRANSIENTLY_UNAVAILABLE)("packaged install: every @dev-loops/core export resolves and the queue CLIs run", { timeout: 180000 }, async () => {
   const tmpRoot = mkdtempSync(path.join(tmpdir(), "dev-loops-pack-"));

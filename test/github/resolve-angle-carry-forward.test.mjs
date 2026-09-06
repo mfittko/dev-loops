@@ -48,6 +48,16 @@ test("async Git runner waits for close after a spawn error", async () => {
   await assert.rejects(result, spawnError);
 });
 
+test("async Git runner preserves UTF-8 split across stream chunks", async () => {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+  const result = runGitCommand(["status"], { repoRoot: process.cwd(), spawnImpl: () => child });
+  const bytes = Buffer.from("M\tdocs/café.md\n");
+  child.stdout.emit("data", bytes.subarray(0, 11)); child.stdout.emit("data", bytes.subarray(11));
+  child.emit("close", 0);
+  assert.equal((await result).stdout, "M\tdocs/café.md\n");
+});
+
 // Run the CLI main() against a repoRoot and return the parsed JSON result it
 // writes to stdout (default emitResult mode).
 async function runMain(argv, { repoRoot }) {
