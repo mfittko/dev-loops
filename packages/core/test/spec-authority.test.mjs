@@ -18,6 +18,7 @@ import {
   stampSpecAuthorityIdentity,
   extractSpecFromBody,
 } from "@dev-loops/core/loop/spec-authority";
+import { detectAcDodMatrix } from "../src/loop/issue-refinement-artifact.mjs";
 
 const HEAD_A = "a".repeat(40);
 const HEAD_B = "b".repeat(40);
@@ -380,6 +381,27 @@ describe("extractSpecFromBody matrix-derived spec identity (#2016)", () => {
     );
   });
 
+  // AC2 (matrix source, end-to-end): a matrix-derived specDigest change must
+  // actually re-invalidate prior approvals via resolveCriterionInvalidation,
+  // not just differ under notEqual. This is the composition the digest-only
+  // assertions above never exercise for the matrix source specifically.
+  test("a matrix criterion change stales prior approvals via resolveCriterionInvalidation (AC2, matrix source)", () => {
+    const priorSpec = extractSpecFromBody(matrixBody());
+    const currentSpec = extractSpecFromBody(matrixBody({ criterion1: "Ship a fully working demo end to end" }));
+    const priorSpecDigest = computeSpecDigest(priorSpec);
+    const currentSpecDigest = computeSpecDigest(currentSpec);
+    assert.notEqual(currentSpecDigest, priorSpecDigest);
+
+    const out = resolveCriterionInvalidation({
+      priorSpecDigest,
+      currentSpecDigest,
+      priorApprovedCriteria: specCriterionIds(priorSpec),
+    });
+    assert.equal(out.specChanged, true);
+    assert.deepEqual(out.carried, [], "prior approvals must not be carried across a matrix-derived spec change");
+    assert.deepEqual(out.stale.sort(), specCriterionIds(priorSpec).sort());
+  });
+
   test("changing a completion-evidence cell changes specDigest", () => {
     const original = matrixBody();
     const changed = matrixBody({ evidence1: "Demo recorded, linked, and reviewed live" });
@@ -416,7 +438,7 @@ describe("extractSpecFromBody matrix-derived spec identity (#2016)", () => {
     );
   });
 
-  test("heading/whitespace/checklist-marker normalization with an unchanged matrix leaves specDigest unchanged", () => {
+  test("heading/whitespace normalization with an unchanged matrix leaves specDigest unchanged (checklist-alias marker choice is vacuous here: the valid-matrix path never hashes the checklist)", () => {
     const original = matrixBody({ heading: "AC/DoD matrix" });
     const normalizedVariant = matrixBody({
       heading: "AC → DoD mapping matrix",
@@ -432,6 +454,23 @@ describe("extractSpecFromBody matrix-derived spec identity (#2016)", () => {
       computeSpecDigest(extractSpecFromBody(original)),
       computeSpecDigest(extractSpecFromBody(normalizedVariant)),
     );
+  });
+
+  test("checklist-marker normalization is load-bearing in the FALLBACK (no-matrix) path, where the checklist IS hashed", () => {
+    const dash = [
+      "## Acceptance criteria",
+      "- [ ] Ship a working demo",
+      "- [ ] Verify contrast ratio meets WCAG AA",
+      "## Definition of done",
+      "- [ ] Demo recorded and linked in the PR description",
+      "## Non-goals",
+      "- Do not rewrite the design system",
+    ].join("\n");
+    const star = dash.replace(/^- \[ \]/gmu, "* [ ]");
+    const ordered = dash.replace(/^- \[ \]/gmu, "1) [ ]");
+    const digest = computeSpecDigest(extractSpecFromBody(dash));
+    assert.equal(computeSpecDigest(extractSpecFromBody(star)), digest);
+    assert.equal(computeSpecDigest(extractSpecFromBody(ordered)), digest);
   });
 
   test("a malformed/identifier-only matrix falls back to the checklist projection (fail-closed, not silently narrowed)", () => {
@@ -451,6 +490,29 @@ describe("extractSpecFromBody matrix-derived spec identity (#2016)", () => {
     ].join("\n");
     const spec = extractSpecFromBody(body);
     // Falls back to the checklist read rather than the tautological matrix rows.
+    assert.deepEqual(spec.acceptanceCriteria, ["Ship a working demo"]);
+    assert.deepEqual(spec.definitionOfDone, ["npm run verify passes"]);
+  });
+
+  test("an empty matrix (header/separator only, no data rows — distinct from identifier-only) falls back to the checklist projection (fail-closed, not narrowed)", () => {
+    const body = [
+      "## AC/DoD matrix",
+      "",
+      "| Acceptance criterion | Completion evidence |",
+      "|---|---|",
+      "",
+      "## Acceptance criteria",
+      "- [ ] Ship a working demo",
+      "## Definition of done",
+      "- [ ] npm run verify passes",
+      "## Non-goals",
+      "- Do not rewrite the design system",
+    ].join("\n");
+    const matrix = detectAcDodMatrix(body);
+    assert.equal(matrix.found, true);
+    assert.equal(matrix.valid, false);
+    assert.match(matrix.reason, /header\/separator only/);
+    const spec = extractSpecFromBody(body);
     assert.deepEqual(spec.acceptanceCriteria, ["Ship a working demo"]);
     assert.deepEqual(spec.definitionOfDone, ["npm run verify passes"]);
   });
