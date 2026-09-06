@@ -367,7 +367,11 @@ export async function isCopilotReviewObservableViaGraphql(
       // Only current-head reviews count — a stale review on an old head must
       // not be misread as "the current request/round is already covered"
       // (mirrors the REST hasPendingReviewOnCurrentHead head-scoping above).
-      if (headSha === null) return true;
+      // Fail CLOSED when the head SHA itself is unverifiable (null): an
+      // unverifiable head must never satisfy this check on its own — the
+      // independent reviewRequests branch above still covers an active
+      // Copilot review request regardless of head SHA availability.
+      if (headSha === null) return false;
       return node?.commit?.oid === headSha;
     });
   } catch {
