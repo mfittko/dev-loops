@@ -77,8 +77,8 @@ create; `provision` is the full `provisionWorktree()` result, not just its
 summary; `fetchDegraded: true` means at least one candidate remote's
 best-effort fetch failed, so branch resolution ran against whatever was
 already fetched). Provisioning is fail-soft (a warning never aborts the
-worktree); a `git worktree add` failure is a hard error. It does **not** run
-`npm install` (see dependencies below).
+worktree); a `git worktree add` failure is a hard error. It does **not** install
+dependencies (see below).
 
 `guard` is the default-branch guard's install result for the primary checkout
 (`{ ok, installed, refreshed, skipped, defaultBranches?, droppedExplicitBranches?, reason? }`), always

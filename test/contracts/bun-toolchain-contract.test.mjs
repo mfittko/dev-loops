@@ -51,7 +51,7 @@ test("automation pins Bun 1.4.1 and preserves intentional npm publication", asyn
 test("durable guidance records the toolchain and accepted benchmark", async () => {
   const surfaces = ["README.md", "AGENTS.md", "extension/README.md", "scripts/README.md", ".github/copilot-instructions.md", "skills/docs/validation-policy.md", "skills/copilot-pr-followup/SKILL.md", ".claude/skills/copilot-pr-followup/SKILL.md", "packages/core/src/loop/handoff-envelope.mjs"];
   for (const file of surfaces) assert.match(await read(file), /bun run verify/i, `${file} names canonical verification`);
-  assert.match(await read("docs/decisions/0061-bun-development-toolchain.md"), /Bun 1\.4\.1[\s\S]*Node `>=24`[\s\S]*npm/i);
+  assert.match(await read("docs/decisions/0062-bun-development-toolchain.md"), /Bun 1\.4\.1[\s\S]*Node `>=24`[\s\S]*npm/i);
   const verdict = await read("docs/benchmarks/bun-1.4.1/verdict.md");
   assert.match(verdict, /Verdict: \*\*pass\*\*[\s\S]*frozen historical npm baseline[\s\S]*One fresh candidate run/);
   const sessions = await Promise.all([1, 2].map((number) => json(`docs/benchmarks/bun-1.4.1/session-${number}.raw.json`)));
