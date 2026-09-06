@@ -10,7 +10,7 @@
  * - Every resolved source MUST resolve inside the main checkout (traversal guard).
  * - Fail-soft: a missing source / empty glob logs one warning and continues.
  * - Idempotent: skips a dest that is already correct.
- * - Does NOT run npm install (deps belong to `npm ci`-in-worktree).
+ * - Does NOT install dependencies (they belong to `bun install --frozen-lockfile` in the worktree).
  *
  * Also (unconditionally, independent of .devloops): links the workspace
  * package node_modules/@dev-loops/core -> ../../packages/core (relative,

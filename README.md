@@ -214,7 +214,7 @@ bun install --frozen-lockfile
 bun run verify   # canonical root verification (tests + dev-loop tests)
 ```
 
-CI installs the exactly pinned Bun 1.4.1 and uses `bun install --frozen-lockfile`. It splits verification into a small changed-files gate plus a parallel `verify-suite` matrix (one leg per `test:*` suite) gated by a fail-closed `verify` job, and a conditional `viewer-smoke` job. The Playwright/WebKit viewer smoke remains a Node-run browser test and runs only when the bounded viewer surface or its smoke-path dependencies change.
+CI installs the exactly pinned Bun 1.4.1 and uses `bun install --frozen-lockfile`. It splits the complete Bun test inventory into four parallel, timing-balanced shards, runs docs and workflow validators separately, and joins them through a fail-closed `verify` gate. The conditional Playwright/WebKit viewer smoke remains a Node-run browser test and runs only when its bounded viewer surface or smoke-path dependencies change.
 
 ### Migrating from an earlier release
 

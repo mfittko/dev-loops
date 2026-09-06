@@ -26,12 +26,14 @@ const CORE_DIR = path.join(REPO_ROOT, "packages/core");
 // skip rather than fail so the suite stays green on a bad connection while
 // still catching genuine install breakage (bad tarball, missing dep, etc).
 const NETWORK_FAILURE_RE = /ENOTFOUND|ETIMEDOUT|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|socket hang up|network|ERR_SOCKET|registry\.npmjs\.org.*(unreachable|timeout)/i;
-const NPM_REGISTRY_AVAILABLE = spawnSync("npm", ["view", "yaml", "version"], {
+const npmRegistryProbe = spawnSync("npm", ["view", "yaml", "version"], {
   encoding: "utf8",
   timeout: 15_000,
-}).status === 0;
+});
+const npmRegistryProbeDetail = `${npmRegistryProbe.stderr ?? ""}${npmRegistryProbe.stdout ?? ""}${npmRegistryProbe.error?.message ?? ""}`;
+const NPM_REGISTRY_TRANSIENTLY_UNAVAILABLE = npmRegistryProbe.status !== 0 && NETWORK_FAILURE_RE.test(npmRegistryProbeDetail);
 
-test.skipIf(!NPM_REGISTRY_AVAILABLE)("packaged install: every @dev-loops/core export resolves and the queue CLIs run", { timeout: 180000 }, async () => {
+test.skipIf(NPM_REGISTRY_TRANSIENTLY_UNAVAILABLE)("packaged install: every @dev-loops/core export resolves and the queue CLIs run", { timeout: 180000 }, async () => {
   const tmpRoot = mkdtempSync(path.join(tmpdir(), "dev-loops-pack-"));
   try {
     // 1. Pack both packages into the temp dir. `npm pack` prints the packed

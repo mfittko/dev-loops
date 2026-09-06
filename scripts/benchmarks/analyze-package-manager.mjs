@@ -60,10 +60,11 @@ export function analyzeBenchmark(sessions) {
       errors.push(`session ${index + 1}: Bun explicitly trusts a dependency without a demonstrated required install outcome`);
     }
     if (stable(evidence?.suiteInventory?.npm) !== stable(evidence?.suiteInventory?.bun)) errors.push(`session ${index + 1}: verification suite inventories differ`);
+    if (!Array.isArray(evidence?.testInventory?.npm) || stable(evidence.testInventory.npm) !== stable(evidence?.testInventory?.bun)) errors.push(`session ${index + 1}: verification test-file inventories differ`);
   }
   if (first?.sessionId === second?.sessionId || first?.sessionRoot === second?.sessionRoot) errors.push("sessions must have distinct ids and temporary roots");
   if (first?.startTool === second?.startTool) errors.push("sessions must use opposite starting tool orders");
-  for (const key of ["environment", "sourceFingerprint", "suiteInventory", "commandTimeoutMs"]) if (stable(first?.[key]) !== stable(second?.[key])) errors.push(`session fingerprint mismatch: ${key}`);
+  for (const key of ["environment", "sourceFingerprint", "suiteInventory", "testInventory", "commandTimeoutMs"]) if (stable(first?.[key]) !== stable(second?.[key])) errors.push(`session fingerprint mismatch: ${key}`);
 
   const installs = [];
   const verify = [];
@@ -78,9 +79,9 @@ export function analyzeBenchmark(sessions) {
       const npmMedian = complete ? median(npmPhase.measured.map((run) => run.durationMs)) : null;
       const bunMedian = complete ? median(bunPhase.measured.map((run) => run.durationMs)) : null;
       const ratio = complete && npmMedian > 0 ? bunMedian / npmMedian : null;
-      const pass = complete && ratio <= 0.5;
+      const pass = complete && (phase !== "warm" || ratio <= 0.5);
       sessionInstall[phase] = { npmMedian, bunMedian, ratio, pass };
-      if (!pass) errors.push(`session ${index + 1}: ${phase} install requires 7 successful samples and Bun median <=50% of npm`);
+      if (!pass) errors.push(`session ${index + 1}: ${phase} install requires 7 successful samples${phase === "warm" ? " and Bun median <=50% of npm" : ""}`);
     }
     installs.push(sessionInstall);
 

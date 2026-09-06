@@ -8,7 +8,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-
 const COMMON_EXACT_PATHS = Object.freeze([
   ".github/workflows/ci.yml",
   "package.json",
-  "package-lock.json",
+  "bun.lock",
   "playwright.config.mjs",
   "scripts/loop/rendered-artifact-ci-changes.mjs",
   "scripts/loop/ui-review-capture.mjs",

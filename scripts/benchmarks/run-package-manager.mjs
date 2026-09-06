@@ -9,9 +9,18 @@ import { fileURLToPath } from "node:url";
 export const MEASURED_REPETITIONS = 7;
 export const DEFAULT_COMMAND_TIMEOUT_MS = 15 * 60 * 1_000;
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
+  const allowed = new Set(["npm-source", "bun-source", "session", "start", "power-state", "output", "timeout-ms"]);
   const result = {};
-  for (let index = 0; index < argv.length; index += 2) result[argv[index]?.replace(/^--/, "")] = argv[index + 1];
+  for (let index = 0; index < argv.length; index += 2) {
+    const option = argv[index];
+    const value = argv[index + 1];
+    if (!option?.startsWith("--") || value === undefined || value.startsWith("--")) throw new Error(`invalid benchmark argument: ${option ?? "<missing>"}`);
+    const name = option.slice(2);
+    if (!allowed.has(name)) throw new Error(`unknown benchmark option: ${option}`);
+    if (Object.hasOwn(result, name)) throw new Error(`duplicate benchmark option: ${option}`);
+    result[name] = value;
+  }
   if (!result["npm-source"] || !result["bun-source"] || !result.output || !result.session || !result["power-state"] || !["npm", "bun"].includes(result.start)) throw new Error("usage: run-package-manager.mjs --npm-source <dir> --bun-source <dir> --session <id> --start <npm|bun> --power-state <description> --output <json> [--timeout-ms <positive integer>]");
   const timeout = result["timeout-ms"] ?? String(DEFAULT_COMMAND_TIMEOUT_MS);
   if (!/^[1-9]\d*$/u.test(timeout) || !Number.isSafeInteger(Number(timeout))) throw new Error("--timeout-ms must be a positive integer");
@@ -172,6 +181,20 @@ async function sourceFingerprint(root) {
   return hash.digest("hex");
 }
 
+async function testInventory(root) {
+  const files = [];
+  async function walk(directory) {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (["node_modules", ".git", "tmp"].includes(entry.name)) continue;
+      const target = path.join(directory, entry.name);
+      if (entry.isDirectory()) await walk(target);
+      else if (entry.isFile() && entry.name.endsWith(".test.mjs")) files.push(path.relative(root, target));
+    }
+  }
+  await walk(root);
+  return files.sort();
+}
+
 async function reset(directory) { await rm(directory, { recursive: true, force: true }); await mkdir(directory, { recursive: true }); }
 
 async function main() {
@@ -220,11 +243,15 @@ async function main() {
     const version = (tool) => spawnSync(tool, ["--version"], { encoding: "utf8" }).stdout.trim();
     const manifests = await Promise.all(Object.values(roots).map(async (root) => JSON.parse(await readFile(path.join(root, "package.json"), "utf8"))));
     const evidence = { protocolVersion: 6, sessionId: args.session, sessionRoot: tempRoot, capturedAt: new Date().toISOString(), startTool: args.start, commandTimeoutMs: args.commandTimeoutMs,
-      environment: { platform: os.platform(), arch: os.arch(), cpu: os.cpus()[0]?.model ?? "unknown", node: process.version, bun: version("bun"), npm: version("npm"), powerState: args["power-state"] },
+      environment: {
+        platform: os.platform(), arch: os.arch(), cpu: os.cpus()[0]?.model ?? "unknown", node: process.version, bun: version("bun"), npm: version("npm"), powerState: args["power-state"],
+        behaviorEnvironment: Object.fromEntries(["BUN_TEST_PARALLELISM", "CI", "NODE_OPTIONS", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "npm_config_registry", "LANG", "LC_ALL"].map((name) => [name, process.env[name] ?? null])),
+      },
       sourceFingerprint: { npm: await sourceFingerprint(roots.npm), bun: await sourceFingerprint(roots.bun) }, suiteInventory: {
         npm: Object.keys(manifests[0].scripts).filter((name) => name.startsWith("test:")).sort(),
         bun: Object.keys(manifests[1].scripts).filter((name) => name.startsWith("test:")).sort(),
       },
+      testInventory: { npm: await testInventory(roots.npm), bun: await testInventory(roots.bun) },
       isolatedCaches: caches, inventory, lifecycleOutcomes,
       dependencyLifecycleAudit: {
         explicitlyTrusted: [...(manifests[1].trustedDependencies ?? [])].sort(),

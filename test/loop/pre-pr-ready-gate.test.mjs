@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +9,16 @@ import { initSizeBudgetFixtureRepo, makeGhMock, repeatedLinesContent, runIdFreeE
 import { parsePrePrReadyGateCliArgs, prePrReadyGate } from "../../scripts/loop/pre-pr-ready-gate.mjs";
 
 const GH_RUNNER = Symbol("pre-pr-ready-gate-gh-runner");
+
+test("pre-pr-ready gate CLI has a real subprocess boundary", () => {
+  const result = spawnSync(process.execPath, ["scripts/loop/pre-pr-ready-gate.mjs", "--help"], {
+    cwd: path.resolve(import.meta.dirname, "../.."),
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^Usage:/u);
+});
 const runNode = async (args = [], options = {}) => {
   try {
     const parsed = parsePrePrReadyGateCliArgs(args);

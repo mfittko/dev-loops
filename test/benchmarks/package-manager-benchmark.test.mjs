@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { analyzeBenchmark } from "../../scripts/benchmarks/analyze-package-manager.mjs";
-import { buildPairOrders, DEFAULT_COMMAND_TIMEOUT_MS, dependencyInventory, invokeBenchmarkCommand, materializeGitRepository, MEASURED_REPETITIONS, parseBunUntrustedPackages, writeEvidenceAtomically } from "../../scripts/benchmarks/run-package-manager.mjs";
+import { buildPairOrders, DEFAULT_COMMAND_TIMEOUT_MS, dependencyInventory, invokeBenchmarkCommand, materializeGitRepository, MEASURED_REPETITIONS, parseArgs, parseBunUntrustedPackages, writeEvidenceAtomically } from "../../scripts/benchmarks/run-package-manager.mjs";
 
 const run = (tool, measured, durationMs, exitCode = 0) => ({ tool, measured, durationMs, exitCode, timedOut: false, timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS });
 const phase = (tool, duration) => ({ warmups: [run(tool, false, duration)], measured: Array.from({ length: 7 }, () => run(tool, true, duration)) });
@@ -18,7 +18,7 @@ function session(id, root, startTool) {
   return {
     protocolVersion: 6, sessionId: id, sessionRoot: root, startTool, commandTimeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
     environment: { platform: "linux", arch: "x64", cpu: "fixture", node: "v24", bun: "1.4.1", npm: "11", powerState: "AC power" },
-    sourceFingerprint: { npm: "npm-sha", bun: "bun-sha" }, suiteInventory: { npm: ["a"], bun: ["a"] },
+    sourceFingerprint: { npm: "npm-sha", bun: "bun-sha" }, suiteInventory: { npm: ["test:a"], bun: ["test:a"] }, testInventory: { npm: ["test/a.test.mjs"], bun: ["test/a.test.mjs"] },
     inventory: {
       npm: { packages: ["a@1"], bins: ["a"], workspaceLinks: [], peerMetadata: [], lifecycleScripts: [
         { package: "@google/genai@1.52.0", scripts: [["preinstall", "echo 'preinstall: no-op'"]] },
@@ -42,6 +42,14 @@ test("pair order alternates within one invocation and supports reversed session 
   assert.equal(MEASURED_REPETITIONS, 7);
   assert.deepEqual(buildPairOrders("npm").slice(0, 3), [["npm", "bun"], ["bun", "npm"], ["npm", "bun"]]);
   assert.deepEqual(buildPairOrders("bun").slice(0, 2), [["bun", "npm"], ["npm", "bun"]]);
+});
+
+test("runner rejects unknown, positional, missing, and duplicate arguments", () => {
+  const required = ["--npm-source", "npm", "--bun-source", "bun", "--session", "one", "--start", "npm", "--power-state", "AC", "--output", "out.json"];
+  assert.equal(parseArgs(required).session, "one");
+  for (const args of [[...required, "--timout-ms", "1"], ["positional", ...required], [...required, "--session", "two"], [...required, "--timeout-ms"]]) {
+    assert.throws(() => parseArgs(args));
+  }
 });
 
 test("command timeout is explicit, captured fail-closed, and bracketed by progress heartbeats", () => {
@@ -165,4 +173,7 @@ test("analyzer fails closed on missing, failed, inventory, identity, or fingerpr
   const identity = good(); identity[1].sessionRoot = "/tmp/one"; assert.equal(analyzeBenchmark(identity).pass, false);
   const ordering = good(); ordering[1].startTool = "npm"; assert.equal(analyzeBenchmark(ordering).pass, false);
   const fingerprint = good(); fingerprint[1].sourceFingerprint.bun = "changed"; assert.equal(analyzeBenchmark(fingerprint).pass, false);
+  const files = good(); files[1].testInventory.bun.push("test/extra.test.mjs"); assert.ok(analyzeBenchmark(files).errors.includes("session 2: verification test-file inventories differ"));
+  const environment = good(); environment[1].environment.behaviorEnvironment = { CI: "true" }; assert.equal(analyzeBenchmark(environment).pass, false);
+  const cold = good(); cold[0].installs.bun.cold.measured.forEach((run) => { run.durationMs = 90; }); assert.equal(analyzeBenchmark(cold).pass, true);
 });

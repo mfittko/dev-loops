@@ -25,7 +25,7 @@ test("rendered artifact CI classifier covers every deck spec and shared runtime 
   for (const path of [
     "scripts/loop/ui-review-capture.mjs",
     "package.json",
-    "package-lock.json",
+    "bun.lock",
     ".github/actions/playwright-webkit/action.yml",
     ".github/workflows/ci.yml",
   ]) {
