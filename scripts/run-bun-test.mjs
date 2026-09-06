@@ -3,7 +3,7 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createReadStream } from "node:fs";
-import { mkdtemp, open, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, open, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,9 @@ const TMP_IGNORE_FLAG = "--path-ignore-patterns=tmp/**";
 const SUCCESS_TAIL_BYTES = 64 * 1024;
 const HEARTBEAT_MS = 15_000;
 const TTY_REFRESH_MS = 250;
+const DIGEST_LINE_BYTES = 16 * 1024;
+const DIGEST_CONTEXT_BYTES = 64 * 1024;
+const TRUNCATED_LINE = `… [line truncated at ${DIGEST_LINE_BYTES} bytes]`;
 export const ALL_TEST_PATTERNS = Object.freeze([
   "test/**/*.test.mjs",
   "packages/core/test/*.test.mjs",
@@ -96,6 +99,28 @@ export function parseBunSummary(output) {
   return `bun test: ${counts.get("pass")} pass, ${counts.get("skip") ?? 0} skip, ${counts.get("fail")} fail across ${files} ${files === 1 ? "file" : "files"} (${ran[3]})\n`;
 }
 
+async function* boundedLines(input) {
+  input.setEncoding("utf8");
+  let line = "";
+  let truncated = false;
+  for await (const chunk of input) {
+    let offset = 0;
+    for (;;) {
+      const newline = chunk.indexOf("\n", offset);
+      const fragment = chunk.slice(offset, newline < 0 ? undefined : newline);
+      const remaining = DIGEST_LINE_BYTES - Buffer.byteLength(line);
+      if (remaining > 0) line += Buffer.from(fragment).subarray(0, remaining).toString();
+      if (Buffer.byteLength(fragment) > remaining) truncated = true;
+      if (newline < 0) break;
+      yield truncated ? `${line}${TRUNCATED_LINE}` : line;
+      line = "";
+      truncated = false;
+      offset = newline + 1;
+    }
+  }
+  if (line || truncated) yield truncated ? `${line}${TRUNCATED_LINE}` : line;
+}
+
 export function createTestProgress({
   stream = process.stderr,
   dots = false,
@@ -155,6 +180,35 @@ export async function createOutputCapture({
     await closeHandle(current);
     handle = undefined;
   };
+  const replayStream = () => createReadStream(file, replayHandle
+    ? { fd: replayHandle.fd, autoClose: false, start: 0, highWaterMark: 64 * 1024 }
+    : { highWaterMark: 64 * 1024 });
+  const write = async (stream, chunk) => {
+    if (stream.write(chunk) === false) await once(stream, "drain");
+  };
+  const restoreReplay = async () => {
+    if (!replayHandle) return;
+    try {
+      await stat(file);
+      return;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    await mkdir(directory, { recursive: true });
+    const writer = await open(file, "w");
+    try {
+      for await (const chunk of replayStream()) {
+        let offset = 0;
+        while (offset < chunk.length) {
+          const { bytesWritten } = await writer.write(chunk, offset, chunk.length - offset);
+          if (bytesWritten === 0) throw new Error("Bun test capture restoration made no write progress");
+          offset += bytesWritten;
+        }
+      }
+    } finally {
+      await writer.close();
+    }
+  };
   return {
     path: file,
     fd: handle.fd,
@@ -172,31 +226,86 @@ export async function createOutputCapture({
       }
     },
     async replay(stream) {
-      const options = replayHandle
-        ? { fd: replayHandle.fd, autoClose: false, start: 0, highWaterMark: 64 * 1024 }
-        : { highWaterMark: 64 * 1024 };
-      for await (const chunk of createReadStream(file, options)) {
-        if (stream.write(chunk) === false) await once(stream, "drain");
-      }
+      for await (const chunk of replayStream()) await write(stream, chunk);
     },
-    async cleanup() {
-      let finishError;
-      try { await finish(); }
-      catch (error) { finishError = error; }
-      if (!replayHandle) replayHandle = await open(file, "r");
-      let removalError;
-      try { await removeDirectory(directory); }
-      catch (error) { removalError = error; }
-      if (!removalError) {
-        const current = replayHandle;
-        await current.close();
-        replayHandle = undefined;
+    async writeFailureDigest(stream) {
+      const headerPattern = /^(?:.*\/)?[^:\n]+\.test\.(?:mjs|js|ts|tsx|jsx):\s*$/;
+      let header = null;
+      let current = [];
+      let currentBytes = 0;
+      let previous = [];
+      let paragraphHasStack = false;
+      let emitting = false;
+      let found = 0;
+      let wroteHeader;
+      const remember = (line) => {
+        current.push(line);
+        currentBytes += Buffer.byteLength(line) + 1;
+        while (currentBytes > DIGEST_CONTEXT_BYTES && current.length > 1) {
+          currentBytes -= Buffer.byteLength(current.shift()) + 1;
+        }
+      };
+      const beginFailure = async () => {
+        if (header !== wroteHeader) {
+          await write(stream, `${header ?? "Bun test failure:"}\n`);
+          wroteHeader = header;
+        }
+        for (const line of paragraphHasStack ? [...previous, ...current] : current) await write(stream, `${line}\n`);
+        current = [];
+        currentBytes = 0;
+        emitting = true;
+        found += 1;
+      };
+      for await (const line of boundedLines(replayStream())) {
+        if (headerPattern.test(line)) {
+          header = line;
+          current = [];
+          currentBytes = 0;
+          previous = [];
+          paragraphHasStack = false;
+          emitting = false;
+          continue;
+        }
+        if (emitting && /^\d+ \|/.test(line)) {
+          emitting = false;
+          current = [];
+          currentBytes = 0;
+          previous = [];
+          paragraphHasStack = false;
+        }
+        if (/^\s*\(fail\)\s/.test(line)) {
+          await beginFailure();
+          await write(stream, `${line}\n`);
+          continue;
+        } else if (/^\s*# Unhandled error\b/.test(line)) {
+          await beginFailure();
+          await write(stream, `${line}\n`);
+          continue;
+        }
+        if (/^\s*\d+ (?:pass|skip|fail|filtered out)\s*$/.test(line)) {
+          emitting = false;
+          continue;
+        }
+        if (emitting) {
+          if (line === "") emitting = false;
+          else await write(stream, `${line}\n`);
+          continue;
+        }
+        if (line === "") {
+          previous = current;
+          current = [];
+          currentBytes = 0;
+          paragraphHasStack = false;
+        } else {
+          remember(line);
+          if (/^\s+at\s/.test(line)) paragraphHasStack = true;
+        }
       }
-      if (finishError && removalError) throw new AggregateError([finishError, removalError], "Bun test capture close and removal failed");
-      if (finishError) throw finishError;
-      if (removalError) throw removalError;
+      if (found === 0) await write(stream, "bun test failed before a structured failure block was reported\n");
+      const summary = parseBunSummary(await this.readTail());
+      if (summary) await write(stream, summary);
     },
-    async discard() {
+    async retain() {
       const errors = [];
       if (replayHandle) {
         const current = replayHandle;
@@ -206,11 +315,65 @@ export async function createOutputCapture({
       }
       try { await finish(); }
       catch (error) { errors.push(error); }
-      try { await rm(directory, { recursive: true, force: true }); }
-      catch (error) { errors.push(error); }
-      if (errors.length > 0) throw new AggregateError(errors, "Bun test capture disposal failed");
+      if (errors.length > 0) throw new AggregateError(errors, "Bun test capture retention failed");
+    },
+    async cleanup() {
+      let finishError;
+      try { await finish(); }
+      catch (error) { finishError = error; }
+      if (!replayHandle) replayHandle = await open(file, "r");
+      let removalError;
+      try { await removeDirectory(directory); }
+      catch (error) { removalError = error; }
+      if (removalError) {
+        try { await restoreReplay(); }
+        catch (restoreError) {
+          removalError = new AggregateError([removalError, restoreError], "Bun test capture removal and restoration failed");
+        }
+      }
+      if (!removalError) {
+        const current = replayHandle;
+        await current.close();
+        replayHandle = undefined;
+      }
+      if (finishError && removalError) throw new AggregateError([finishError, removalError], "Bun test capture close and removal failed");
+      if (finishError) throw finishError;
+      if (removalError) throw removalError;
     },
   };
+}
+
+async function finalizeCaptureOutcome(capture, { failed, stderr }) {
+  let finalError;
+  if (!failed) {
+    try {
+      await capture.cleanup();
+      return undefined;
+    } catch (error) {
+      finalError = error;
+    }
+  }
+  try {
+    if (capture.writeFailureDigest) await capture.writeFailureDigest(stderr);
+    else await capture.replay(stderr);
+    if (capture.path) {
+      stderr.write(`Retained Bun diagnostics:\n${capture.path}\n`);
+      stderr.write("Inspect the retained file with a pager.\n");
+    }
+  } catch (digestError) {
+    finalError = finalError
+      ? new AggregateError([finalError, digestError], `Bun test failure finalization failed: ${digestError.message}`)
+      : digestError;
+  }
+  if (capture.retain) {
+    try { await capture.retain(); }
+    catch (retainError) {
+      finalError = finalError
+        ? new AggregateError([finalError, retainError], `Bun test capture retention failed: ${retainError.message}`)
+        : retainError;
+    }
+  }
+  return finalError;
 }
 
 export async function runBunTest(args, {
@@ -220,12 +383,10 @@ export async function runBunTest(args, {
 } = {}) {
   let capture;
   let captureFinished = false;
-  let diagnosticsReplayed = false;
   let result;
   let returnCode;
   let terminationMessage;
   let operationError;
-  let cleanupError;
   let summary;
   const progress = progressFactory({ stream: stderr, dots: args.includes(DOTS_FLAG) });
   progress.start();
@@ -274,38 +435,11 @@ export async function runBunTest(args, {
     }
   }
 
-  if (capture && !diagnosticsReplayed && (operationError || returnCode !== 0)) {
-    try {
-      await capture.replay(stderr);
-      diagnosticsReplayed = true;
-    } catch (replayError) {
-      operationError = operationError
-        ? new AggregateError([operationError, replayError], `Bun test diagnostic replay failed: ${replayError.message}`)
-        : replayError;
-    }
-  }
+  const failed = Boolean(operationError || returnCode !== 0);
   if (terminationMessage) stderr.write(terminationMessage);
-
-  if (capture) {
-    try { await capture.cleanup(); }
-    catch (error) { cleanupError = error; }
-  }
-  if (capture && cleanupError && !diagnosticsReplayed) {
-    try {
-      await capture.replay(stderr);
-      diagnosticsReplayed = true;
-    } catch (replayError) {
-      cleanupError = new AggregateError([cleanupError, replayError], `Bun test capture cleanup and diagnostic replay failed: ${replayError.message}`);
-    }
-  }
-  if (capture && cleanupError && capture.discard) {
-    try { await capture.discard(); }
-    catch (discardError) {
-      cleanupError = new AggregateError([cleanupError, discardError], `Bun test capture cleanup and disposal failed: ${discardError.message}`);
-    }
-  }
-  if (operationError && cleanupError) throw new AggregateError([operationError, cleanupError], `Bun test execution and capture cleanup failed: ${cleanupError.message}`);
-  if (cleanupError) throw cleanupError;
+  const finalizationError = capture ? await finalizeCaptureOutcome(capture, { failed, stderr }) : undefined;
+  if (operationError && finalizationError) throw new AggregateError([operationError, finalizationError], `Bun test execution and capture finalization failed: ${finalizationError.message}`);
+  if (finalizationError) throw finalizationError;
   if (operationError) throw operationError;
   if (summary) stdout.write(summary);
   return returnCode;

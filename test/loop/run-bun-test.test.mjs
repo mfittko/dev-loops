@@ -152,6 +152,21 @@ test("successful runs suppress captured stdout and stderr and emit one compact s
   assert.deepEqual(events, ["finish", "read-tail", "cleanup"]);
 });
 
+test("successful wrapper runs remove their real diagnostic spool", async () => {
+  let capture;
+  const code = await runBunTest(["example.test.mjs"], {
+    captureFactory: async () => {
+      capture = await createOutputCapture();
+      return capture;
+    },
+    spawnImpl: fakeChild((fd) => writeSync(fd, " 1 pass\n 0 fail\nRan 1 test across 1 file. [1.00ms]\n")),
+    stdout: { write() {} },
+    stderr: { write() {} },
+  });
+  assert.equal(code, 0);
+  await assert.rejects(access(capture.path));
+});
+
 test("dots stays observable while passing fixture chatter remains captured", async () => {
   const events = [];
   let childArgs;
@@ -221,7 +236,90 @@ test("descriptor capture reads a bounded tail, replays the file, and removes it"
   await assert.rejects(access(capture.path));
 });
 
-test("nonzero and signaled runs replay complete diagnostics and preserve failure", async () => {
+test("ordinary failures emit a focused digest and retain complete raw diagnostics", async () => {
+  let capture;
+  let stdout = "";
+  let stderr = "";
+  const content = [
+    "bun test v1.4.1",
+    "",
+    "test/passing-fixture.test.mjs:",
+    "UNRELATED PASSING FIXTURE CHATTER",
+    "(pass) expected noisy fixture",
+    "",
+    "packages/core/test/default-branch-guard.test.mjs:",
+    "SAME-FILE PASSING FIXTURE CHATTER",
+    "(pass) another expected noisy fixture",
+    "",
+    "killed 1 dangling process",
+    "41 | await neverSettles();",
+    "              ^",
+    "error: assertion context",
+    "(fail) rejects default branch writes [5000.00ms]",
+    "^ this test timed out after 5000ms.",
+    "# Unhandled error between tests",
+    "error: descendant server failed with EADDRINUSE",
+    "",
+    "1 pass",
+    "1 fail",
+    "Ran 2 tests across 2 files. [5.01s]",
+    "",
+  ].join("\n");
+  try {
+    const code = await runBunTest(["example.test.mjs"], {
+      captureFactory: async () => {
+        capture = await createOutputCapture();
+        return capture;
+      },
+      spawnImpl: fakeChild((fd) => writeSync(fd, content), [7, null]),
+      stdout: { write: (chunk) => { stdout += chunk; } },
+      stderr: { write: (chunk) => { stderr += chunk; } },
+    });
+    assert.equal(code, 7);
+    assert.equal(stdout, "");
+    assert.doesNotMatch(stderr, /PASSING FIXTURE CHATTER|expected noisy fixture/);
+    assert.match(stderr, /packages\/core\/test\/default-branch-guard\.test\.mjs:/);
+    assert.match(stderr, /killed 1 dangling process/);
+    assert.match(stderr, /\(fail\) rejects default branch writes \[5000\.00ms\]/);
+    assert.match(stderr, /test timed out after 5000ms/);
+    assert.match(stderr, /# Unhandled error between tests/);
+    assert.match(stderr, /EADDRINUSE/);
+    assert.match(stderr, /bun test: 1 pass, 0 skip, 1 fail across 2 files \(5\.01s\)/);
+    assert.equal(stderr.match(/bun test: 1 pass, 0 skip, 1 fail/g)?.length, 1);
+    assert.match(stderr, new RegExp(`Retained Bun diagnostics:\n${capture.path.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")}\n`));
+    assert.match(stderr, /Inspect the retained file with a pager\./);
+    assert.equal(await readFile(capture.path, "utf8"), content);
+  } finally {
+    if (capture) await rm(path.dirname(capture.path), { recursive: true, force: true });
+  }
+});
+
+test("failure digest caps multi-megabyte lines while retaining the complete raw line", async () => {
+  let capture;
+  let stderr = "";
+  const giantLine = "x".repeat(2 * 1024 * 1024);
+  const content = `test/giant.test.mjs:\n${giantLine}\n(fail) giant assertion\n0 pass\n1 fail\nRan 1 test across 1 file. [1.00ms]\n`;
+  try {
+    const code = await runBunTest(["example.test.mjs"], {
+      captureFactory: async () => {
+        capture = await createOutputCapture();
+        return capture;
+      },
+      spawnImpl: fakeChild((fd) => writeSync(fd, content), [1, null]),
+      stdout: { write() {} },
+      stderr: { write: (chunk) => { stderr += chunk; } },
+    });
+    assert.equal(code, 1);
+    assert.ok(Buffer.byteLength(stderr) < 40 * 1024);
+    assert.match(stderr, /line truncated at 16384 bytes/);
+    assert.match(stderr, /\(fail\) giant assertion/);
+    assert.equal(await readFile(capture.path, "utf8"), content);
+  } finally {
+    if (capture) await rm(path.dirname(capture.path), { recursive: true, force: true });
+  }
+});
+
+test("nonzero and signaled runs preserve failure", async () => {
   for (const [closeArgs, expected] of [[[7, null], 7], [[null, "SIGTERM"], 1]]) {
     const events = [];
     let stderr = "";
@@ -232,9 +330,9 @@ test("nonzero and signaled runs replay complete diagnostics and preserve failure
       stderr: { write: (chunk) => { stderr += chunk; } },
     });
     assert.equal(code, expected);
-    assert.match(stderr, /^first diagnostic\nlast diagnostic\n/);
+    assert.match(stderr, /first diagnostic\nlast diagnostic\n/);
     if (closeArgs[1]) assert.match(stderr, /SIGTERM/);
-    assert.deepEqual(events, ["finish", "replay", "cleanup"]);
+    assert.deepEqual(events, ["finish", "replay"]);
   }
 });
 
@@ -247,50 +345,52 @@ test("a child that closes without a code or signal replays diagnostics and repor
     stderr: { write: (chunk) => { stderr += chunk; } },
   });
   assert.equal(code, 1);
-  assert.match(stderr, /^child diagnostics\n/);
+  assert.match(stderr, /child diagnostics\n/);
   assert.match(stderr, /closed without an exit code or signal/);
-  assert.deepEqual(events, ["finish", "replay", "cleanup"]);
+  assert.deepEqual(events, ["finish", "replay"]);
 });
 
-test("capture finalization failure replays a real tempfile before cleanup removes it", async () => {
+test("capture finalization failure retains its real tempfile for inspection", async () => {
   const events = [];
   let closeAttempts = 0;
   let capture;
   let stderr = "";
-  await assert.rejects(
-    runBunTest(["example.test.mjs"], {
-      captureFactory: async () => {
-        capture = await createOutputCapture({
-          closeHandle: async (handle) => {
-            closeAttempts += 1;
-            events.push(`close-${closeAttempts}`);
-            if (closeAttempts === 1) throw new Error("close failed");
-            await handle.close();
-          },
-        });
-        return capture;
-      },
-      spawnImpl: fakeChild((fd) => writeSync(fd, "real tempfile diagnostics\n")),
-      stderr: { write: (chunk) => { stderr += chunk; events.push("replay"); } },
-    }),
-    /capture finalization failed/,
-  );
-  assert.match(stderr, /real tempfile diagnostics/);
-  assert.deepEqual(events, ["close-1", "replay", "close-2"]);
-  await assert.rejects(access(capture.path));
+  try {
+    await assert.rejects(
+      runBunTest(["example.test.mjs"], {
+        captureFactory: async () => {
+          capture = await createOutputCapture({
+            closeHandle: async (handle) => {
+              closeAttempts += 1;
+              events.push(`close-${closeAttempts}`);
+              if (closeAttempts === 1) throw new Error("close failed");
+              await handle.close();
+            },
+          });
+          return capture;
+        },
+        spawnImpl: fakeChild((fd) => writeSync(fd, "real tempfile diagnostics\n")),
+        stderr: { write: (chunk) => { stderr += chunk; events.push("digest"); } },
+      }),
+      /capture finalization failed/,
+    );
+    assert.match(stderr, /failed before a structured failure block/);
+    assert.match(stderr, /Retained Bun diagnostics:/);
+    assert.equal(await readFile(capture.path, "utf8"), "real tempfile diagnostics\n");
+    assert.deepEqual(events, ["close-1", "digest", "digest", "digest", "close-2"]);
+  } finally {
+    if (capture) await rm(path.dirname(capture.path), { recursive: true, force: true });
+  }
 });
 
-test("spawn and capture failures are loud, replay what exists, and always clean up", async () => {
-  for (const failure of ["spawn", "summary", "replay", "cleanup"]) {
+test("spawn and capture failures stay loud and retain captured failures", async () => {
+  for (const failure of ["spawn", "summary", "replay"]) {
     const events = [];
     let stderr = "";
-    const content = failure === "cleanup"
-      ? "complete diagnostics\n 1 pass\n 0 fail\nRan 1 test across 1 file. [4.00ms]\n"
-      : "complete diagnostics\n";
+    const content = "complete diagnostics\n";
     const capture = memoryCapture(content, events, {
       summaryError: failure === "summary" ? new Error("tail read failed") : undefined,
       replayError: failure === "replay" ? new Error("replay failed") : undefined,
-      cleanupError: failure === "cleanup" ? new Error("cleanup failed") : undefined,
     });
     const spawnImpl = failure === "spawn"
       ? () => { const child = new EventEmitter(); queueMicrotask(() => child.emit("error", new Error("spawn denied"))); return child; }
@@ -299,53 +399,41 @@ test("spawn and capture failures are loud, replay what exists, and always clean 
       runBunTest(["example.test.mjs"], { captureFactory: async () => capture, spawnImpl, stderr: { write: (chunk) => { stderr += chunk; } } }),
       new RegExp(failure === "spawn" ? "spawn denied" : failure === "summary" ? "tail read failed" : `${failure} failed`),
     );
-    assert.ok(events.includes("cleanup"));
     assert.ok(events.includes("replay"));
-    if (["spawn", "summary", "cleanup"].includes(failure)) assert.match(stderr, /complete diagnostics/);
+    assert.ok(!events.includes("cleanup"));
+    if (["spawn", "summary"].includes(failure)) assert.match(stderr, /complete diagnostics/);
   }
 });
 
-test("cleanup failure replays diagnostics and never emits a misleading success summary", async () => {
-  const events = [];
-  let stdout = "";
-  let stderr = "";
-  const content = "complete diagnostics\n 1 pass\n 0 fail\nRan 1 test across 1 file. [4.00ms]\n";
-  await assert.rejects(runBunTest(["example.test.mjs"], {
-    captureFactory: async () => memoryCapture(content, events, { cleanupError: new Error("cleanup failed") }),
-    spawnImpl: fakeChild(() => {}),
-    stdout: { write: (chunk) => { stdout += chunk; } },
-    stderr: { write: (chunk) => { stderr += chunk; } },
-  }), /cleanup failed/);
-  assert.equal(stdout, "");
-  assert.match(stderr, /complete diagnostics/);
-  assert.deepEqual(events, ["finish", "read-tail", "cleanup", "replay"]);
-});
-
-test("partial spool removal retains real diagnostics until cleanup-error replay completes", async () => {
-  const events = [];
-  let capture;
-  let stdout = "";
-  let stderr = "";
+test("cleanup errors retain a complete raw log before and after output unlink", async () => {
   const content = "first real diagnostic\nlast real diagnostic\n 1 pass\n 0 fail\nRan 1 test across 1 file. [4.00ms]\n";
-  await assert.rejects(runBunTest(["example.test.mjs"], {
-    captureFactory: async () => {
-      capture = await createOutputCapture({
-        removeDirectory: async () => {
-          await rm(capture.path, { force: true });
-          events.push("output-unlinked");
-          throw new Error("partial removal failed");
+  for (const unlinkOutput of [false, true]) {
+    let capture;
+    let stdout = "";
+    let stderr = "";
+    try {
+      await assert.rejects(runBunTest(["example.test.mjs"], {
+        captureFactory: async () => {
+          capture = await createOutputCapture({
+            removeDirectory: async () => {
+              if (unlinkOutput) await rm(capture.path, { force: true });
+              throw new Error("partial removal failed");
+            },
+          });
+          return capture;
         },
-      });
-      return capture;
-    },
-    spawnImpl: fakeChild((fd) => writeSync(fd, content)),
-    stdout: { write: (chunk) => { stdout += chunk; } },
-    stderr: { write: (chunk) => { stderr += chunk; events.push("replay"); } },
-  }), /partial removal failed/);
-  assert.equal(stdout, "");
-  assert.match(stderr, /^first real diagnostic\nlast real diagnostic\n/);
-  assert.deepEqual(events, ["output-unlinked", "replay"]);
-  await assert.rejects(access(capture.path));
+        spawnImpl: fakeChild((fd) => writeSync(fd, content)),
+        stdout: { write: (chunk) => { stdout += chunk; } },
+        stderr: { write: (chunk) => { stderr += chunk; } },
+      }), /partial removal failed/);
+      assert.equal(stdout, "");
+      assert.doesNotMatch(stderr, /first real diagnostic|last real diagnostic/);
+      assert.match(stderr, /Retained Bun diagnostics:/);
+      assert.equal(await readFile(capture.path, "utf8"), content);
+    } finally {
+      if (capture) await rm(path.dirname(capture.path), { recursive: true, force: true });
+    }
+  }
 });
 
 test("descriptor cleanup attempts spool removal even when close reports failure", async () => {
