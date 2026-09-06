@@ -3657,7 +3657,7 @@ test("upsert-checkpoint-verdict fails closed (no unbounded recursion) when the d
   }, { prefix: "dev-loops-upsert-draft-race-" });
 });
 
-test("upsert-checkpoint-verdict CLI posts the draft_gate self-heal verdict instead of hanging on an unsettled top-level await (#1455)", async () => {
+test("upsert-checkpoint-verdict CLI posts the draft_gate self-heal verdict instead of hanging on an unsettled top-level await (#1455)", { timeout: 15000 }, async () => {
   // REGRESSION for #1455: this must run as a REAL CLI subprocess (real spawn,
   // real `import.meta.url` top-level `await main()`), NOT the in-process
   // makeGhMock harness the local `runNode` helper in this file uses for most
