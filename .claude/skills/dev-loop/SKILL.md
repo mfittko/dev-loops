@@ -163,22 +163,52 @@ dev-loops gate consolidate-fanin --findings-dir <dir> --head-sha <current_head_s
   --expected-dispatch-units <n> --out <findings-json-path> --ledger-out <ledger-path> --jq '.severityCounts'
 ```
 
+**Spec authority is engaged by default on every gate round (issue 2008 / ADR 0061):** before
+dispatching the judge, run the CLI seam that derives the run's spec/digest identities so the skill
+never hand-derives them:
+
+```sh
+content_digest=$(node scripts/loop/spec-context.mjs --repo <owner/name> --issue <linked_issue_number> \
+  --content-file <reviewed-content-path> --head-sha <current_head_sha> \
+  --spec-out <spec-path> --jq '.contentDigest')
+```
+
+On a fixer-push re-entry round (a prior clean round's `--approvals-out` record exists), also derive
+the AC7 affected-criteria producer's input:
+
+```sh
+node scripts/loop/spec-context.mjs changed-paths --base <prior_approved_head_sha> --head <current_head_sha> \
+  --jq '.changedFiles' > <changed-paths-path>
+```
+
 **Judge between fan-in and the fixer (Phase 3.5 wired, #1658):** after fan-in (and after the
 durable ledger is written with `write-gate-findings-log --judge-verdict <verdict-path>`), dispatch
 the dedicated `judge` agent (`agents/judge.agent.md`) — seeded with the consolidated ledger, the
-linked issue's AC/DoD/non-goals, the PR's declared scope, and the prior-round judge ledgers — and
-await its verdict artifact at `tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/judge-verdict.json`
-(its only write). Then run the deterministic bridge to derive the fixer's act list for Phase 4:
+linked issue's AC/DoD/non-goals, the PR's declared scope, the prior-round judge ledgers, and the
+spec-context output (the structured spec at `<spec-path>`, `specDigest`, `contentDigest`) — and
+await its two verdict artifacts: the relevance verdict at
+`tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/judge-verdict.json` and the spec-authority
+verdict at the sibling `spec-authority-verdict.json` (its only writes). Then run the deterministic
+bridge to derive the fixer's act list for Phase 4, always with the spec-authority flags, plus the
+durable-approval flags across re-entry:
 
 ```sh
 dev-loops gate judge-pass --repo <owner/name> --pr <N> --gate <gate> --head-sha <current_head_sha> \
-  --findings-file <ledger-path> --judge-verdict <verdict-path> --out <act-list-path> --ledger-out <enriched-ledger-path>
+  --findings-file <ledger-path> --judge-verdict <verdict-path> --out <act-list-path> --ledger-out <enriched-ledger-path> \
+  --spec-file <spec-path> --content-digest "$content_digest" --spec-authority-verdict <spec-authority-verdict-path> \
+  --prior-approvals <prior-approvals-path> --approvals-out <approvals-out-path> \
+  [--changed-paths <changed-paths-path> --coverage-map <coverage-map-path>]
 ```
 
-The fix pass consumes ONLY `--out`'s act list (the judge's `act` findings); a `judge-pass` fail-closed
-(stale verdict head, malformed verdict, out-of-range index, undisposed finding) means re-run the judge at
-the current head, never a silent severity-only fallback on a wired gate. See Gate Review Sub-Loop Contract
-Phase 3.5.
+`--prior-approvals`/`--approvals-out` thread across re-entry rounds (the first round on a fresh
+approval chain has no prior-approvals record to pass yet); `--changed-paths`/`--coverage-map` are
+supplied together only when a coverage map exists for the linked issue and this round is a
+fixer-push re-entry (`resolveAffectedCriteria`, ADR 0061 AC7) — otherwise judge-pass keeps its
+all-stale fallback. The fix pass consumes ONLY `--out`'s act list (the judge's `act` findings); a
+`judge-pass` fail-closed (stale verdict head, malformed verdict, out-of-range index, undisposed
+finding, mismatched spec-authority identity) means re-run the judge at the current head, never a
+silent severity-only fallback or a silent skip of spec authority. See Gate Review Sub-Loop Contract
+Phase 3.5 and `skills/docs/spec-authority-contract.md` for the enforcement rules these flags carry.
 
 The cross-refs (`ANTIPATTERN-FANIN-WAIT` in [Anti-patterns](../docs/anti-patterns.md), [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md) Phase 3) remain authoritative for the full refusal list and fail-closed cases; this inline emphasis exists so the sanctioned path is visible at the point of dispatch without following a link. A subagent that skipped the cross-ref and hand-rolled `Promise.all` + transcript-tailing burned ~189k tokens and had to be interrupted and restarted fresh — do not repeat that.
 

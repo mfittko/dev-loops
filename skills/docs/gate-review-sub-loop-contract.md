@@ -1450,12 +1450,16 @@ to the severity-based disposition `deriveDisposition` owns (accepted-for-fix / d
 needs-answer), which stays intact.
 
 **Inputs:** the consolidated disposition ledger (`consolidate-fanin`'s `{overallVerdict,
-findings}`), the linked issue's AC / DoD / non-goals, the PR's declared scope, and the
-prior-round judge verdict artifacts for this gate.
+findings}`), the linked issue's AC / DoD / non-goals, the PR's declared scope, the
+prior-round judge verdict artifacts for this gate, and — engaged by default on every gate
+round (issue 2008 / ADR 0061) — the structured spec plus `specDigest`/`headSha`/`contentDigest`
+the conductor derives via `scripts/loop/spec-context.mjs` (see the Dispatch bridge below).
 
-**Output:** the judge writes one verdict artifact to a deterministic path
-(`tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/judge-verdict.json`) — its only write.
-The shape is validated by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fanin`):
+**Output:** the judge writes two verdict artifacts to deterministic paths under
+`tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/` — its only writes: the relevance verdict
+(`judge-verdict.json`) and the spec-authority verdict (`spec-authority-verdict.json`, see
+`agents/judge.agent.md` "Immutable spec authority"). The relevance verdict's shape is validated
+by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fanin`):
 
 ```json
 {
@@ -1500,18 +1504,54 @@ ledger via `write-gate-findings-log.mjs --judge-verdict <path>`. The enriched fi
 ledger and the posted findings comment show what was consciously not acted on and why
 (`GATE-EXEC-POST-BEFORE-FIX`'s single-surface verdict review renders the judge suffix).
 
+**Spec-context seam (default-on, issue 2008 / ADR 0061).** Before dispatching the judge, the
+conductor always runs `scripts/loop/spec-context.mjs` to derive the run's spec/digest identities
+so nothing hand-derives them:
+
+```sh
+content_digest=$(node scripts/loop/spec-context.mjs --repo <owner/name> --issue <linked_issue_number> \
+  --content-file <reviewed-content-path> --head-sha <current_head_sha> \
+  --spec-out <spec-path> --jq '.contentDigest')
+```
+
+On a fixer-push re-entry round (a prior clean round's `--approvals-out` record exists), it also
+derives the AC7 affected-criteria producer's input:
+
+```sh
+node scripts/loop/spec-context.mjs changed-paths --base <prior_approved_head_sha> --head <current_head_sha> \
+  --jq '.changedFiles' > <changed-paths-path>
+```
+
 **Dispatch bridge (runtime wiring, #1658).** After the judge agent writes its verdict
-artifact and the durable ledger is written with `--judge-verdict`, the conductor runs the
+artifacts and the durable ledger is written with `--judge-verdict`, the conductor runs the
 deterministic bridge `scripts/loop/judge-pass.mjs` (`dev-loops gate judge-pass`) to derive
 the fixer's **act list** for Phase 4: given `--findings-file` (the consolidated ledger) and
-`--judge-verdict` (the judge's artifact path), `judge-pass` validates the verdict shape,
-fails closed unless the verdict's `headSha` matches the current head (a stale verdict must
-never feed the fixer), applies the dispositions via `applyJudgeDispositions`, and emits
-exactly the findings the judge marked `act` (`--out`) plus the enriched ledger
-(`--ledger-out`). The conductor hands that act list — never the full unfiltered ledger —
+`--judge-verdict` (the judge's relevance-verdict artifact path), `judge-pass` validates the
+verdict shape, fails closed unless the verdict's `headSha` matches the current head (a stale
+verdict must never feed the fixer), applies the dispositions via `applyJudgeDispositions`, and
+emits exactly the findings the judge marked `act` (`--out`) plus the enriched ledger
+(`--ledger-out`). Every invocation ALSO carries the spec-authority flags derived above —
+`--spec-file <spec-path> --content-digest "$content_digest" --spec-authority-verdict
+<spec-authority-verdict-path>` — plus `--prior-approvals`/`--approvals-out` across re-entry
+(the first round on a fresh approval chain has no prior-approvals record to pass yet), and
+`--changed-paths`/`--coverage-map` together only when a coverage map exists and this round is
+a fixer-push re-entry (`resolveAffectedCriteria`, ADR 0061 AC7; otherwise `judge-pass` keeps its
+all-stale fallback):
+
+```sh
+dev-loops gate judge-pass --repo <owner/name> --pr <N> --gate <gate> --head-sha <current_head_sha> \
+  --findings-file <ledger-path> --judge-verdict <verdict-path> --out <act-list-path> --ledger-out <enriched-ledger-path> \
+  --spec-file <spec-path> --content-digest "$content_digest" --spec-authority-verdict <spec-authority-verdict-path> \
+  --prior-approvals <prior-approvals-path> --approvals-out <approvals-out-path> \
+  [--changed-paths <changed-paths-path> --coverage-map <coverage-map-path>]
+```
+
+The conductor hands the act list — never the full unfiltered ledger —
 to the fixer pass (`GATE-EXEC-JUDGE-AUTHORITY-SPLIT`). If `judge-pass` fails closed (stale
-head, malformed verdict, out-of-range index, undisposed finding), the conductor re-runs the judge at the
-current head rather than degrading to severity-only disposition for a wired gate.
+head, malformed verdict, out-of-range index, undisposed finding, mismatched spec-authority
+identity), the conductor re-runs the judge at the current head rather than degrading to
+severity-only disposition or silently skipping spec authority for a wired gate. See
+`skills/docs/spec-authority-contract.md` for the enforcement rules these flags carry.
 
 `judge-pass` is also where a judge `defer` creates its tracked follow-up issue (#1807,
 `GATE-EXEC-DEFERRAL-RECORD`): every `defer`-disposed finding gets a stable `fingerprint`, and the
