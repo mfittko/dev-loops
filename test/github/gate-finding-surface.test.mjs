@@ -484,6 +484,19 @@ test("buildCommentableLineSet / isLocatableFinding: only context/added lines are
   assert.equal(isLocatableFinding({ files: ["src/db.mjs"] }, set), false);
 });
 
+// Regression (#1900): a hand-authored finding carrying a singular `file` string
+// (no `files` array) passes the shared shape floor but must NOT crash the
+// commentable-set lookup, which previously read `finding.files[0]` unguarded
+// (TypeError: Cannot read properties of undefined (reading '0')). It resolves
+// via the same `file`-or-`files[0]` rule and classifies identically to its
+// `files: [path]` twin.
+test("isLocatableFinding: singular `file` shape does not crash and classifies like `files[0]`", () => {
+  const set = buildCommentableLineSet([{ filename: "src/db.mjs", patch: PATCH_DB }]);
+  assert.equal(isLocatableFinding({ file: "src/db.mjs", line: 2 }, set), true);
+  assert.equal(isLocatableFinding({ file: "src/db.mjs", line: 99 }, set), false);
+  assert.equal(isLocatableFinding({ file: "src/other.mjs", line: 1 }, set), false);
+});
+
 // ---------------------------------------------------------------------------
 // Suppression + verdict-head collection
 // ---------------------------------------------------------------------------

@@ -26,6 +26,8 @@ import {
   SEVERITY_ORDER,
   VALID_SEVERITIES,
   NON_DEFECT_SEVERITIES,
+  resolveFindingFile,
+  hasLocatableShape,
 } from "../src/loop/gate-fanin.mjs";
 
 // SEVERITY_ORDER, VALID_SEVERITIES, and NON_DEFECT_SEVERITIES must be frozen
@@ -1338,5 +1340,38 @@ describe("applyJudgeDispositions (#1525)", () => {
     const verdict = judgeVerdict([]);
     const { findings } = applyJudgeDispositions([], verdict);
     assert.deepEqual(findings, []);
+  });
+});
+
+describe("resolveFindingFile (#1900): one shared file resolver for both shapes", () => {
+  test("resolves the singular `file` string", () => {
+    assert.equal(resolveFindingFile({ file: "src/a.mjs", line: 3 }), "src/a.mjs");
+  });
+  test("resolves `files[0]` for the array shape", () => {
+    assert.equal(resolveFindingFile({ files: ["src/a.mjs", "src/b.mjs"], line: 3 }), "src/a.mjs");
+  });
+  test("prefers the singular `file` when both are present", () => {
+    assert.equal(resolveFindingFile({ file: "src/a.mjs", files: ["src/b.mjs"] }), "src/a.mjs");
+  });
+  test("returns undefined when neither shape names a string path", () => {
+    assert.equal(resolveFindingFile({ line: 3 }), undefined);
+    assert.equal(resolveFindingFile({ files: [] }), undefined);
+    assert.equal(resolveFindingFile({ files: [3] }), undefined);
+    assert.equal(resolveFindingFile(null), undefined);
+  });
+  test("trims the resolved path so it matches trimmed lookup keys / is a valid `path`", () => {
+    assert.equal(resolveFindingFile({ file: "src/a.mjs ", line: 2 }), "src/a.mjs");
+    assert.equal(resolveFindingFile({ files: ["  src/a.mjs  "], line: 2 }), "src/a.mjs");
+  });
+  test("a whitespace-only `file` is absent and falls back to `files[0]`, not shadowing it", () => {
+    assert.equal(resolveFindingFile({ file: "   ", files: ["src/a.mjs"], line: 2 }), "src/a.mjs");
+    assert.equal(resolveFindingFile({ file: "   " }), undefined);
+    assert.equal(hasLocatableShape({ file: "   ", files: ["src/a.mjs"], line: 2 }), true);
+  });
+  test("hasLocatableShape accepts a singular-`file` finding via the shared resolver", () => {
+    assert.equal(hasLocatableShape({ file: "src/a.mjs", line: 1 }), true);
+    assert.equal(hasLocatableShape({ files: ["src/a.mjs"], line: 1 }), true);
+    assert.equal(hasLocatableShape({ file: "   ", line: 1 }), false);
+    assert.equal(hasLocatableShape({ file: "src/a.mjs" }), false);
   });
 });
