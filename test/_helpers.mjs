@@ -342,6 +342,9 @@ export function runNode(scriptPath, args = [], options = {}) {
     });
 
     child.on("error", reject);
+    child.stdin.on("error", (error) => {
+      if (error.code !== "EPIPE") reject(error);
+    });
     child.on("close", (code) => {
       resolve({ code, stdout, stderr });
     });
@@ -382,7 +385,7 @@ export function resolverTestEnv(overrides = {}) {
 
 function buildGhStubScript() {
   return [
-    "#!/usr/bin/env node",
+    "#!/usr/bin/env bun",
     'const { appendFileSync, mkdirSync, readFileSync, writeFileSync } = require("node:fs");',
     'const path = require("node:path");',
     'const sequencePath = process.env.GH_SEQUENCE_PATH;',

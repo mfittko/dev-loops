@@ -5,8 +5,7 @@ import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { promisify } from "node:util";
 
-import { resolveBunTestParallelism, runBunTest } from "./run-bun-test.mjs";
-import { resolveTestInventory } from "./test-inventory.mjs";
+import { discoverRepositoryTests, resolveBunTestParallelism, runBunTest } from "./run-bun-test.mjs";
 
 const TIMINGS_PATH = ".bun-test-timings.json";
 const execFileAsync = promisify(execFile);
@@ -18,17 +17,19 @@ export async function refreshTestTimings({
   writeText = writeFile,
   renameFile = rename,
   removeFile = (file) => rm(file, { force: true }),
-  resolveInventory = resolveTestInventory,
+  resolveInventory = discoverRepositoryTests,
   resolveCommit = async () => (await execFileAsync("git", ["rev-parse", "HEAD"], { env })).stdout.trim(),
   tempPath = `${TIMINGS_PATH}.tmp-${process.pid}-${Date.now()}`,
 } = {}) {
-  await writeText(tempPath, await readText(TIMINGS_PATH), "utf8");
+  const inventory = await resolveInventory();
+  const existing = JSON.parse(await readText(TIMINGS_PATH));
+  existing.files = Object.fromEntries(inventory.map((file) => [file, existing.files?.[file] ?? 0]));
+  await writeText(tempPath, `${JSON.stringify(existing)}\n`, "utf8");
   try {
-    const exitCode = await runTests([`--timings=${tempPath}`, "--update-timings", "--suite=all"], { env });
+    const exitCode = await runTests([`--timings=${tempPath}`, "--update-timings", "--all"], { env: { ...env, BUN_TEST_TIMINGS_PATH: tempPath } });
     if (exitCode !== 0) return exitCode;
 
     const profile = JSON.parse(await readText(tempPath));
-    const inventory = await resolveInventory();
     const profiledFiles = Object.keys(profile.files ?? {}).sort();
     if (JSON.stringify(profiledFiles) !== JSON.stringify(inventory)) {
       throw new Error("Refreshed timing profile does not exactly match the canonical test inventory");

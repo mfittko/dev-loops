@@ -26,15 +26,6 @@ still run on Node `>=24`; npm/npx commands in this document are intentional when
 they exercise the consumer CLI, Playwright installer compatibility, or npm
 registry/pack/publish/dist-tag/provenance behavior.
 
-### `scripts/benchmarks/run-package-manager.mjs` and `analyze-package-manager.mjs`
-
-These scripts capture and evaluate the Bun 1.4.1 migration benchmark. The
-runner requires separate npm-baseline and Bun-candidate source trees plus an
-output JSON path; the analyzer consumes that raw JSON and exits non-zero unless
-dependency inventories, install thresholds, and both verification sessions
-pass. The exact protocol, evidence paths, and no-go rules are documented in
-[Bun 1.4.1 benchmark protocol](../docs/benchmarks/bun-1.4.1/).
-
 ### `scripts/docs/validate-links.mjs`
 
 Validate repo-owned markdown relative links for the shipped docs / skills / agent surface.

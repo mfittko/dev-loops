@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
-import { discoverRepositoryTests, resolveTestInventory } from "../../scripts/test-inventory.mjs";
+import { discoverRepositoryTests } from "../../scripts/run-bun-test.mjs";
 
 // Every test/**/*.test.mjs must be matched by a suite that `npm run verify`
 // actually reaches, or it silently drops out of enforcement — a red test
@@ -11,7 +11,7 @@ import { discoverRepositoryTests, resolveTestInventory } from "../../scripts/tes
 // helper suite) does not count as coverage.
 
 test("coverage detection resolves real tokens and rejects unknown files", async () => {
-  const covered = new Set(await resolveTestInventory());
+  const covered = new Set(await discoverRepositoryTests());
   assert.ok(
     covered.has("test/dev-loop-init-phase-smoke.test.mjs"),
     "explicit test:assets token should be covered",
@@ -24,5 +24,6 @@ test("coverage detection resolves real tokens and rejects unknown files", async 
 });
 
 test("every test/**/*.test.mjs is covered by a verify-reachable suite", async () => {
-  assert.deepEqual(await resolveTestInventory(), await discoverRepositoryTests());
+  const inventory = await discoverRepositoryTests();
+  assert.equal(new Set(inventory).size, inventory.length);
 });

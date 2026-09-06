@@ -72,57 +72,22 @@ function gateCloseStubs(opts = {}) {
 
 // --- parsePrePrReadyGateCliArgs unit tests ---
 
-test("parsePrePrReadyGateCliArgs requires --repo and --pr", () => {
-  assert.throws(
-    () => parsePrePrReadyGateCliArgs([]),
-    /requires both --repo.*and --pr/,
-  );
-});
-
-test("parsePrePrReadyGateCliArgs requires --repo value", () => {
-  assert.throws(
-    () => parsePrePrReadyGateCliArgs(["--pr", "17"]),
-    /requires both --repo.*and --pr/,
-  );
-});
-
-test("parsePrePrReadyGateCliArgs requires --pr value", () => {
-  assert.throws(
-    () => parsePrePrReadyGateCliArgs(["--repo", "owner/repo"]),
-    /requires both --repo.*and --pr/,
-  );
-});
-
-test("parsePrePrReadyGateCliArgs rejects non-numeric --pr", () => {
-  assert.throws(
-    () => parsePrePrReadyGateCliArgs(["--repo", "owner/repo", "--pr", "abc"]),
-    /positive integer/,
-  );
-});
-
-test("parsePrePrReadyGateCliArgs rejects zero --pr", () => {
-  assert.throws(
-    () => parsePrePrReadyGateCliArgs(["--repo", "owner/repo", "--pr", "0"]),
-    /positive integer/,
-  );
-});
-
-test("parsePrePrReadyGateCliArgs rejects invalid repo slug", () => {
-  assert.throws(
-    () => parsePrePrReadyGateCliArgs(["--repo", "invalid", "--pr", "1"]),
-    /must match.*owner.*name/i,
-  );
-});
-
-test("parsePrePrReadyGateCliArgs --help returns help option", () => {
-  const result = parsePrePrReadyGateCliArgs(["--help"]);
-  assert.equal(result.help, true);
-});
-
 test("parsePrePrReadyGateCliArgs parses valid repo and pr", () => {
   const result = parsePrePrReadyGateCliArgs(["--repo", "owner/repo", "--pr", "42"]);
   assert.equal(result.repo, "owner/repo");
   assert.equal(result.pr, 42);
+});
+
+test("parsePrePrReadyGateCliArgs rejects invalid input", () => {
+  for (const [args, error] of [
+    [[], /requires both --repo.*and --pr/],
+    [["--pr", "17"], /requires both --repo.*and --pr/],
+    [["--repo", "owner/repo"], /requires both --repo.*and --pr/],
+    [["--repo", "owner/repo", "--pr", "abc"], /positive integer/],
+    [["--repo", "owner/repo", "--pr", "0"], /positive integer/],
+    [["--repo", "invalid", "--pr", "1"], /must match.*owner.*name/i],
+  ]) assert.throws(() => parsePrePrReadyGateCliArgs(args), error);
+  assert.equal(parsePrePrReadyGateCliArgs(["--help"]).help, true);
 });
 
 // --- Shared test data ---

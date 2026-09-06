@@ -27,7 +27,7 @@ Start here for repository documentation.
 - [Slides Content & Storytelling Review Loop](../skills/docs/slides-story-review-loop.md)
 - [A/B Contrast Deslop Step](../skills/docs/ab-contrast-deslop-step.md)
 - [Docs-Grill Step](../skills/docs/docs-grill-step.md) — autonomous in-loop check of a change against its contracts/docs
-- [Bun 1.4.1 benchmark protocol](./benchmarks/bun-1.4.1/README.md) — reproducible performance-gate procedure, evidence status, and no-go rules for the contributor-toolchain migration
+- [Bun 1.4.1 benchmark verdict](./benchmarks/bun-1.4.1/verdict.md) — accepted contributor-toolchain migration evidence
 
 ## Active local phase doc
 

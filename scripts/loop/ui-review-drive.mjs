@@ -353,7 +353,12 @@ export function makeRunStep({ page, outputDir, sliceCapturedEvents }) {
   };
 }
 
-export async function runCli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr, launchBrowser = launchWebkit } = {}) {
+export async function runCli(argv = process.argv.slice(2), {
+  stdout = process.stdout,
+  stderr = process.stderr,
+  importPlaywright,
+  launchBrowser = () => launchWebkit(importPlaywright ? { importPlaywright } : {}),
+} = {}) {
   const options = parseUiReviewDriveCliArgs(argv);
   if (options.help) {
     stdout.write(`${USAGE}\n`);

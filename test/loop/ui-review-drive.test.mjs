@@ -570,10 +570,8 @@ test("runCli: an unavailable browser runner fails closed inside the documented e
 // The test above injects launchBrowser, so it never exercises the DEFAULT that
 // wires the guarded dynamic load into the stage. Deleting that default kept the
 // whole suite green — the stage would then crash on its first real invocation.
-// @playwright/test is a devDependency so it always resolves here; pointing
-// PLAYWRIGHT_BROWSERS_PATH at an empty dir makes the launch fail on the missing
-// binary instead, exercising the real default, the real dynamic import and the
-// missing-binary classifier in one pass.
+// Keep the module and browser boundary deterministic under Bun's shared
+// no-isolate worker while still exercising the real default and classifier.
 test("runCli: the default launchBrowser really wires launchWebkit into the stage", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "drive-defaultlauncher-"));
   after(() => rmSync(dir, { recursive: true, force: true }));
@@ -591,17 +589,17 @@ test("runCli: the default launchBrowser really wires launchWebkit into the stage
   const stdout = { write: (s) => { out += s; return true; } };
   const stderr = { write: () => true };
 
-  const previous = process.env.PLAYWRIGHT_BROWSERS_PATH;
-  process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(dir, "no-browsers");
   try {
     // launchBrowser deliberately OMITTED — that is the point of this test.
     await runCli(
       ["--repo-root", dir, "--app-url", "http://127.0.0.1:4000", "--output-dir", path.join(dir, "out")],
-      { stdout, stderr },
+      {
+        stdout,
+        stderr,
+        importPlaywright: async () => ({ webkit: { launch: async () => { throw new Error("Executable doesn't exist at test path"); } } }),
+      },
     );
   } finally {
-    if (previous === undefined) delete process.env.PLAYWRIGHT_BROWSERS_PATH;
-    else process.env.PLAYWRIGHT_BROWSERS_PATH = previous;
     process.exitCode = 0;
   }
 

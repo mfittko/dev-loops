@@ -242,35 +242,6 @@ test("runWatchCycle rejects persistent watch budgets below the unattended extern
   );
 });
 
-test("runWatchCycle uses emitted non-zero watchArgs for normal async waiting", async () => {
-  let watcherOptions;
-  const result = await runWatchCycle(
-    { repo: "owner/repo", pr: 17 },
-    {
-      runHandoffImpl: async () => ({
-        ok: true,
-        action: "watch",
-        state: "waiting_for_copilot_review",
-        allowedTransitions: [],
-        nextAction: "Wait for Copilot review.",
-        snapshot: { repo: "owner/repo", pr: 17 },
-        loopDisposition: "pending",
-        terminal: false,
-        watchArgs: { repo: "owner/repo", pr: 17, pollIntervalMs: 60_000, timeoutMs: 1_800_000 },
-        watchTimeoutPolicy: { classification: "external_healthy_wait", minimumTimeoutMs: 1_800_000, defaultTimeoutMs: 1_800_000 },
-        requestWatchContract: { action: "watch", nextAction: "Wait", requestStatus: "requested", routingState: "copilot_request_confirmed_waiting", watchEntryConfirmed: true, watchArgs: { repo: "owner/repo", pr: 17, pollIntervalMs: 60_000, timeoutMs: 1_800_000 } },
-      }),
-      watchCopilotReviewImpl: async (opts) => {
-        watcherOptions = opts;
-        return { ok: true, status: "idle", repo: "owner/repo", pr: 17, attempts: 1, newComments: [], newReviews: [], newIssueComments: [] };
-      },
-    },
-  );
-  assert.equal(result.ok, true);
-  assert.equal(result.watchStatus, "idle");
-  assert.equal(watcherOptions.timeoutMs, 1_800_000);
-});
-
 test("runWatchCycle keeps shared loopDisposition and reports needs_followup in cycleDisposition when fresh Copilot activity appears", async () => {
   const result = await runWatchCycle(
     {

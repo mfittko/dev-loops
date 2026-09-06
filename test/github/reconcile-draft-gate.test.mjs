@@ -980,10 +980,7 @@ test("reconcile-draft-gate succeeds for a light-mode under-threshold PR under ac
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 0, result.stderr);
-    // stderr may carry a non-fatal git deprecation warning (e.g.
-    // `core.fsyncObjectFiles is deprecated`) from detectMergeBaseScope's real
-    // `git diff` under parallel load; assert no error payload leaks instead of
-    // asserting strict emptiness.
+    // Allow non-fatal git output, but never an error payload.
     assert.ok(!/"ok"\s*:\s*false/.test(result.stderr), result.stderr);
     assert.deepEqual(JSON.parse(result.stdout), {
       ok: true,
