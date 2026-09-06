@@ -570,6 +570,26 @@
       "enforcement": "doc"
     },
     {
+      "id": "SPEC-AUTHORITY-CONFLICT-EVIDENCE",
+      "enforcement": "runtime"
+    },
+    {
+      "id": "SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT",
+      "enforcement": "runtime"
+    },
+    {
+      "id": "SPEC-AUTHORITY-REVISION-IDENTITIES",
+      "enforcement": "runtime"
+    },
+    {
+      "id": "SPEC-AUTHORITY-STALE-REVISION-FAIL-CLOSED",
+      "enforcement": "runtime"
+    },
+    {
+      "id": "SPEC-AUTHORITY-WHOLE-SPEC-EVAL",
+      "enforcement": "runtime"
+    },
+    {
       "id": "SPIKE-DISCARD-ZERO-MUTATION"
     },
     {
