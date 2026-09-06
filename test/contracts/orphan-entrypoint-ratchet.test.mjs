@@ -78,7 +78,7 @@ const ORPHAN_ALLOWLIST = new Map([
   ["scripts/loop/run-gate-validation.mjs", "standalone — CLI gate-suite runner, agent/operator invoked"],
   ["scripts/loop/resolve-verdict-ledger-source.mjs", "standalone — verdict/ledger tooling source resolver (issue #1661), skill-agent-invoked to prefer worktree-source when installed CLI stale"],
   ["scripts/loop/run-refinement-audit.mjs", "standalone — refinement audit step (documented in scripts/README), agent-invoked"],
-  ["scripts/loop/spec-context.mjs", "standalone — spec/digest resolution CLI seam (ADR 0061 AC5); skill-invoked once the separate skills/dev-loop docs pass wires Phase 3.5 to call it (issue 2008 mechanism-only scope)"],
+  ["scripts/loop/spec-context.mjs", "standalone — spec/digest resolution CLI seam (ADR 0061 AC5); invoked from skills/dev-loop Phase 3.5 + gate-review-sub-loop-contract prose, which is not a code caller, so it stays orphaned by this ratchet's definition (issue 2008)"],
   ["scripts/loop/validate-pr-body-spec.mjs", "delete or wire — CLI superseded by core validatePrBodySpec; its --expected-issue option has no caller (issue #1620 orphan)"],
   ["scripts/refine/refine-plan-file.mjs", "standalone — refine-flow phase-file step, agent-invoked"],
   ["scripts/refine/scaffold-spike-file.mjs", "standalone — refine-flow spike scaffold step, agent-invoked"],
