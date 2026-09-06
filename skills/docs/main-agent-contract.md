@@ -34,7 +34,7 @@ because "the user said yes," not because it is running from a worktree.
 - Write to `/tmp` or other non-repo paths (e.g., issue body drafts)
 - Delegate to the `dev-loop` agent (async, with worktree cwd)
 - Report findings, ask questions, get confirmation
-- `npm test`, `npm run verify` (read-only validation)
+- `bun test`, `bun run verify` (read-only validation under the repository-pinned Bun 1.4.1 toolchain)
 
 ## Main agent must NEVER
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { DEV_LOOP_CONTRACT_TRACE_CLASSIFICATION } from "@dev-loops/core/loop/public-dev-loop-routing";
@@ -66,7 +66,7 @@ function rejectRemovedFlag(token) {
     `${token} has been removed. Copilot re-requests and probe-only mode are managed internally. Omit the flag.`,
   );
 }
-async function fetchPrHeadBranch({ repo, pr }, { env, ghCommand }) {
+async function fetchPrHeadBranch({ repo, pr }, { env, ghCommand, runChild = defaultRunChild }) {
   const result = await runChild(
     ghCommand,
     ["pr", "view", String(pr), "--repo", repo, "--json", "headRefName"],
@@ -87,32 +87,48 @@ async function fetchPrHeadBranch({ repo, pr }, { env, ghCommand }) {
   }
   return payload.headRefName.trim();
 }
-async function watchWorkflowRun({ repo, runId, timeoutMs = null }, { env, ghCommand }) {
+export async function watchWorkflowRun(
+  { repo, runId, timeoutMs = null },
+  {
+    env,
+    ghCommand,
+    spawnImpl = spawn,
+    setTimeoutImpl = setTimeout,
+    clearTimeoutImpl = clearTimeout,
+  },
+) {
   return new Promise((resolve, reject) => {
-    const child = spawn(
+    const child = spawnImpl(
       ghCommand,
       ["run", "watch", String(runId), "--repo", repo],
       { env, stdio: ["ignore", "ignore", "pipe"] },
     );
     let stderr = "";
     let timedOut = false;
+    let spawnError = null;
     let timeoutId = null;
     child.stderr.on("data", (chunk) => {
       stderr += String(chunk);
     });
     if (Number.isInteger(timeoutMs) && timeoutMs >= 0) {
-      timeoutId = setTimeout(() => {
+      timeoutId = setTimeoutImpl(() => {
         timedOut = true;
         child.kill("SIGTERM");
       }, timeoutMs);
     }
-    child.on("error", reject);
+    child.on("error", (error) => {
+      spawnError = error;
+    });
     child.on("close", (code) => {
       if (timeoutId !== null) {
-        clearTimeout(timeoutId);
+        clearTimeoutImpl(timeoutId);
       }
       if (timedOut) {
         resolve({ status: "timed_out" });
+        return;
+      }
+      if (spawnError !== null) {
+        reject(spawnError);
         return;
       }
       if (code !== 0) {
@@ -302,6 +318,7 @@ export async function runWatchCycle(
   {
     env = process.env,
     ghCommand = "gh",
+    runChild = defaultRunChild,
     runHandoffImpl = runHandoff,
     watchCopilotReviewImpl = watchCopilotReview,
     watchCiStatusImpl = watchCiStatus,
@@ -313,7 +330,7 @@ export async function runWatchCycle(
   } = {},
 ) {
   const leaseCwd = resolveRepoRoot(process.cwd());
-  const handoff = await runHandoffImpl(options, { env, ghCommand });
+  const handoff = await runHandoffImpl(options, { env, ghCommand, runChild });
   const result = {
     ok: true,
     handoffAction: handoff.action,
@@ -354,7 +371,7 @@ export async function runWatchCycle(
       pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
       timeoutMs: ciTimeoutMs,
     };
-    const ciWatch = await watchCiStatusImpl(ciWatchArgs, { env, ghCommand });
+    const ciWatch = await watchCiStatusImpl(ciWatchArgs, { env, ghCommand, runChild });
     result.ciWatchArgs = ciWatchArgs;
     result.ciWatch = ciWatch;
     result.watchStatus = ciWatch.status;
@@ -389,13 +406,13 @@ export async function runWatchCycle(
   );
   let workflowRunWatch = null;
   if (detectSessionActivity) {
-    const headBranch = await fetchPrHeadBranchImpl({ repo: options.repo, pr: options.pr }, { env, ghCommand });
+    const headBranch = await fetchPrHeadBranchImpl({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
     const session = await detectCopilotSessionActivityImpl(
       {
         repo: options.repo,
         branch: headBranch,
       },
-      { env, ghCommand },
+      { env, ghCommand, runChild },
     );
     result.sessionActivity = session;
     if (
@@ -425,7 +442,7 @@ export async function runWatchCycle(
     ...handoff.watchArgs,
     timeoutMs: persistentWatchTimeoutMs,
   };
-  const watch = await watchCopilotReviewImpl(watchOptions, { env, ghCommand });
+  const watch = await watchCopilotReviewImpl(watchOptions, { env, ghCommand, runChild });
   result.watchArgs = watchOptions;
   result.watchStatus = watch.status;
   result.watch = watch;
@@ -495,6 +512,7 @@ export async function runCli(
     stdout = process.stdout,
     env = process.env,
     ghCommand = "gh",
+    runChild = defaultRunChild,
     runHandoffImpl = runHandoff,
     watchCopilotReviewImpl = watchCopilotReview,
   } = {},
@@ -507,6 +525,7 @@ export async function runCli(
   const result = await runWatchCycle(options, {
     env,
     ghCommand,
+    runChild,
     runHandoffImpl,
     watchCopilotReviewImpl,
     detectSessionActivity: true,

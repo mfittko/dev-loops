@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -583,7 +583,7 @@ test("CLI: prerelease version passes with no gh invocation at all", () => {
   // PATH keeps node's own dir (spawnSync needs node) but nothing else, so any
   // gh call would fail ENOENT — proving the prerelease pass-through never
   // shells out to gh.
-  const r = runCli(["--version", "1.0.0-rc.1", "--repo", "o/n"], { PATH: path.dirname(process.execPath) });
+  const r = runCli(["--version", "1.0.0-rc.1", "--repo", "o/n"], { PATH: path.dirname((Bun.which("node") ?? "node")) });
   assert.equal(r.status, 0);
   assert.match(r.stdout, /does not apply/);
 });

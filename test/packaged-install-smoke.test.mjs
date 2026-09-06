@@ -9,9 +9,9 @@
 // bug; this test builds the actual packed artifacts with `npm pack`, installs
 // them in a throwaway directory (no monorepo context at all), and exercises
 // every export-map entry + the two affected CLIs against that installed tree.
-import { test } from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -21,13 +21,23 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
 const CORE_DIR = path.join(REPO_ROOT, "packages/core");
 
-// Network failures against the npm registry (offline CI, flaky proxy, DNS
-// hiccup) are an environment condition, not a regression in this package —
-// skip rather than fail so the suite stays green on a bad connection while
-// still catching genuine install breakage (bad tarball, missing dep, etc).
+// Local offline work may skip this boundary; CI fails closed so the required
+// packed-consumer proof cannot silently disappear during a registry outage.
 const NETWORK_FAILURE_RE = /ENOTFOUND|ETIMEDOUT|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|socket hang up|network|ERR_SOCKET|registry\.npmjs\.org.*(unreachable|timeout)/i;
+const npmRegistryProbe = spawnSync("npm", ["view", "yaml", "version"], {
+  encoding: "utf8",
+  timeout: 15_000,
+});
+const npmRegistryProbeDetail = `${npmRegistryProbe.stderr ?? ""}${npmRegistryProbe.stdout ?? ""}${npmRegistryProbe.error?.message ?? ""}`;
+export const shouldSkipForRegistryOutage = ({ ci, status, detail }) => !ci && status !== 0 && NETWORK_FAILURE_RE.test(detail);
+const NPM_REGISTRY_TRANSIENTLY_UNAVAILABLE = shouldSkipForRegistryOutage({ ci: process.env.CI, status: npmRegistryProbe.status, detail: npmRegistryProbeDetail });
 
-test("packaged install: every @dev-loops/core export resolves and the queue CLIs run", { timeout: 180000 }, async (t) => {
+test("registry outages skip locally but fail closed in CI", () => {
+  assert.equal(shouldSkipForRegistryOutage({ ci: "true", status: 1, detail: "ETIMEDOUT" }), false);
+  assert.equal(shouldSkipForRegistryOutage({ ci: "", status: 1, detail: "ETIMEDOUT" }), true);
+});
+
+test.skipIf(NPM_REGISTRY_TRANSIENTLY_UNAVAILABLE)("packaged install: every @dev-loops/core export resolves and the queue CLIs run", { timeout: 180000 }, async () => {
   const tmpRoot = mkdtempSync(path.join(tmpdir(), "dev-loops-pack-"));
   try {
     // 1. Pack both packages into the temp dir. `npm pack` prints the packed
@@ -50,10 +60,7 @@ test("packaged install: every @dev-loops/core export resolves and the queue CLIs
       execFileSync("npm", ["install", "--loglevel=error", "--no-audit", "--no-fund", "--prefer-offline", rootTarball, coreTarball], { cwd: installDir });
     } catch (err) {
       const detail = `${err.stderr?.toString() ?? ""}${err.stdout?.toString() ?? ""}${err.message ?? ""}`;
-      if (NETWORK_FAILURE_RE.test(detail)) {
-        t.skip(`npm registry unreachable — skipping packaged-install smoke: ${detail.split("\n")[0]}`);
-        return;
-      }
+      if (NETWORK_FAILURE_RE.test(detail)) throw new Error(`npm registry became unreachable during packaged-install smoke: ${detail.split("\n")[0]}`);
       throw err;
     }
 

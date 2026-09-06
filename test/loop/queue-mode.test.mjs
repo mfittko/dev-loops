@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 
 // Integration smoke tests for queue mode — mostly imports to verify
 // the modules load and export correctly without runtime side effects.

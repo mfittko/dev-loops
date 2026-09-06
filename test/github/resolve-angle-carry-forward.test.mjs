@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "bun:test";
 
 import {
   buildCarryForwardPlan,
   main,
   parseResolveAngleCarryForwardCliArgs,
+  runGitCommand,
 } from "../../scripts/github/resolve-angle-carry-forward.mjs";
 import { buildLogPath, parseProvenanceJson } from "../../scripts/github/write-gate-findings-log.mjs";
 
@@ -26,6 +28,35 @@ const GIT_FIXTURE_ENV = {
 function git(cwd, args) {
   return execFileSync("git", args, { cwd, encoding: "utf8", env: GIT_FIXTURE_ENV });
 }
+
+test("async Git runner waits for close after a spawn error", async () => {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  let settled = false;
+  const result = runGitCommand(["status"], {
+    repoRoot: process.cwd(),
+    spawnImpl: () => child,
+  });
+  result.finally(() => { settled = true; }).catch(() => {});
+
+  const spawnError = new Error("spawn failed");
+  child.emit("error", spawnError);
+  await Promise.resolve();
+  assert.equal(settled, false);
+  child.emit("close", -1);
+  await assert.rejects(result, spawnError);
+});
+
+test("async Git runner preserves UTF-8 split across stream chunks", async () => {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+  const result = runGitCommand(["status"], { repoRoot: process.cwd(), spawnImpl: () => child });
+  const bytes = Buffer.from("M\tdocs/café.md\n");
+  child.stdout.emit("data", bytes.subarray(0, 11)); child.stdout.emit("data", bytes.subarray(11));
+  child.emit("close", 0);
+  assert.equal((await result).stdout, "M\tdocs/café.md\n");
+});
 
 // Run the CLI main() against a repoRoot and return the parsed JSON result it
 // writes to stdout (default emitResult mode).

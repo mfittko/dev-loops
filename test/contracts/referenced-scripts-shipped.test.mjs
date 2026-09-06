@@ -17,7 +17,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import test from "node:test";
+import { test } from "bun:test";
 import { fileURLToPath } from "node:url";
 
 import { ALWAYS_EXCLUDED_DIR_NAMES, flatDir, walkByExt } from "./_walk-helpers.mjs";

@@ -83,9 +83,9 @@ const RESOLVE_REVIEW_THREAD_MUTATION = [
 ].join("\n");
 export async function captureParsedReviewThreads(
   { repo, pr },
-  { env = process.env, ghCommand = "gh" } = {},
+  { env = process.env, ghCommand = "gh", runChild } = {},
 ) {
-  const payload = await fetchGithubReviewThreadsPayload({ repo, pr }, { env, ghCommand });
+  const payload = await fetchGithubReviewThreadsPayload({ repo, pr }, { env, ghCommand, runChild });
   return parseReviewThreads(payload);
 }
 export function assertReplyTargetFromSnapshot(parsed, { repo, pr, commentId, threadId }) {
@@ -108,9 +108,9 @@ export function assertReplyTargetFromSnapshot(parsed, { repo, pr, commentId, thr
 }
 export async function validateReplyTarget(
   { repo, pr, commentId, threadId },
-  { env = process.env, ghCommand = "gh" } = {},
+  { env = process.env, ghCommand = "gh", runChild } = {},
 ) {
-  const parsed = await captureParsedReviewThreads({ repo, pr }, { env, ghCommand });
+  const parsed = await captureParsedReviewThreads({ repo, pr }, { env, ghCommand, runChild });
   return {
     parsed,
     ...assertReplyTargetFromSnapshot(parsed, { repo, pr, commentId, threadId }),
@@ -118,9 +118,9 @@ export async function validateReplyTarget(
 }
 export async function postReply(
   { repo, pr, commentId, body },
-  { env = process.env, ghCommand = "gh" } = {},
+  { env = process.env, ghCommand = "gh", runChild = runChildWithInput } = {},
 ) {
-  const result = await runChildWithInput(
+  const result = await runChild(
     ghCommand,
     [
       "api",
@@ -139,8 +139,8 @@ export async function postReply(
   }
   return parseJson(result.stdout);
 }
-export async function resolveThread(threadId, { env = process.env, ghCommand = "gh" } = {}) {
-  const result = await runChildWithInput(
+export async function resolveThread(threadId, { env = process.env, ghCommand = "gh", runChild = runChildWithInput } = {}) {
+  const result = await runChild(
     ghCommand,
     [
       "api",
@@ -170,12 +170,12 @@ export async function replyAndMaybeResolve(
     validatedSnapshot = null,
     allowedRefs = [],
   },
-  { env = process.env, ghCommand = "gh" } = {},
+  { env = process.env, ghCommand = "gh", runChild } = {},
 ) {
   if (validatedSnapshot) {
     assertReplyTargetFromSnapshot(validatedSnapshot, { repo, pr, commentId, threadId });
   } else {
-    await validateReplyTarget({ repo, pr, commentId, threadId }, { env, ghCommand });
+    await validateReplyTarget({ repo, pr, commentId, threadId }, { env, ghCommand, runChild });
   }
   // Neutralize any bare @copilot/`/copilot`* tokens the reply text quotes (e.g.
   // a dismissal reason citing the anti-summon rule) so posting this reply can
@@ -192,7 +192,7 @@ export async function replyAndMaybeResolve(
         allowedRefs,
       }),
     },
-    { env, ghCommand },
+    { env, ghCommand, runChild },
   ));
   if (!resolve) {
     return {
@@ -201,7 +201,7 @@ export async function replyAndMaybeResolve(
       resolved: false,
     };
   }
-  const resolvedThread = await resolveThread(threadId, { env, ghCommand });
+  const resolvedThread = await resolveThread(threadId, { env, ghCommand, runChild });
   if (!resolvedThread?.isResolved) {
     throw new Error(`Review thread did not resolve successfully: ${threadId}`);
   }

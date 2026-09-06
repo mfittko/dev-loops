@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test, { after } from "node:test";
+import { afterAll as after, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,8 +19,7 @@ import {
 const PRIOR_GIT_CONFIG = { GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM: process.env.GIT_CONFIG_SYSTEM };
 process.env.GIT_CONFIG_GLOBAL = "/dev/null";
 process.env.GIT_CONFIG_SYSTEM = "/dev/null";
-// Restore after this file's tests: node:test runs files in their own process,
-// but restoring keeps the mutation contained if that ever changes.
+// Restore before Bun reuses this no-isolate worker for another file.
 after(() => {
   for (const [key, value] of Object.entries(PRIOR_GIT_CONFIG)) {
     if (value === undefined) delete process.env[key];
@@ -904,7 +903,7 @@ test("ensure: a real node process resolves @dev-loops/core to the worktree's OWN
       "const mod = await import(resolved);",
       "console.log(JSON.stringify({ resolved, marker: mod.marker }));",
     ].join("\n");
-    const out = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+    const out = execFileSync((Bun.which("node") ?? "node"), ["--input-type=module", "-e", script], {
       cwd: res.path,
       encoding: "utf8",
     });

@@ -30,6 +30,7 @@
  * as JSON on stderr (fed back to the subagent so it continues), allow = exit 0.
  */
 import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 import {
   decideSubagentStopGuard,
@@ -37,40 +38,56 @@ import {
 } from "./_hook-decisions.mjs";
 import { readHookInput } from "./_hook-io.mjs";
 
-const input = readHookInput();
-const cwd = typeof input?.cwd === "string" && input.cwd ? input.cwd : process.cwd();
-// Claude exposes `agent_type` inside a subagent (null in the main agent). A read-only role
-// (judge/review) is exempt (#1925) — see decideSubagentStopGuard / READONLY_SUBAGENT_ROLES.
-const agentType = typeof input?.agent_type === "string" ? input.agent_type : null;
+export function evaluateSubagentStop(input, {
+  env = process.env,
+  cwdFallback = process.cwd(),
+  execFileSyncImpl = execFileSync,
+} = {}) {
+  const cwd = typeof input?.cwd === "string" && input.cwd ? input.cwd : cwdFallback;
+  // Claude exposes `agent_type` inside a subagent (null in the main agent). A read-only role
+  // (judge/review) is exempt (#1925) — see decideSubagentStopGuard / READONLY_SUBAGENT_ROLES.
+  const agentType = typeof input?.agent_type === "string" ? input.agent_type : null;
+  const pendingCommitAuthorization = env[DEVLOOPS_COMMIT_AUTH_PENDING_VAR] === "1";
 
-const pendingCommitAuthorization = process.env[DEVLOOPS_COMMIT_AUTH_PENDING_VAR] === "1";
+  let porcelain = "";
+  try {
+    // Bounded: a stalled `git status` (slow/networked FS, held index lock) must not hang the
+    // subagent stop. On timeout git is killed and execFileSync throws → caught → porcelain=""
+    // → fail-safe allow (better than blocking the exit with no message).
+    // maxBuffer is raised to 10MB: the Node default (1MB) makes execFileSync throw once
+    // `git status --porcelain` output crosses that size, which the catch would turn into a
+    // fail-safe allow — defeating the guard exactly when the most work is at risk.
+    porcelain = execFileSyncImpl("git", ["status", "--porcelain"], {
+      cwd,
+      encoding: "utf8",
+      timeout: 5000,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+  } catch {
+    // Not a git repo / git unavailable / status timed out — nothing to guard, allow the stop.
+    porcelain = "";
+  }
 
-let porcelain = "";
-try {
-  // Bounded: a stalled `git status` (slow/networked FS, held index lock) must not hang the
-  // subagent stop. On timeout git is killed and execFileSync throws → caught → porcelain=""
-  // → fail-safe allow (better than blocking the exit with no message).
-  // maxBuffer is raised to 10MB: the Node default (1MB) makes execFileSync throw once
-  // `git status --porcelain` output crosses that size, which the catch would turn into a
-  // fail-safe allow — defeating the guard exactly when the most work is at risk. The e2e
-  // fixture (test/contracts/claude-hooks-settings.test.mjs) trips the 1MB default at
-  // ~4300+ dirty paths using its long (~245-byte) porcelain lines; real paths are much
-  // shorter, so a real worktree needs far more entries to hit either bound. Beyond 10MB
-  // (~43k+ such long-line paths) the fail-safe allow is the documented ceiling.
-  porcelain = execFileSync("git", ["status", "--porcelain"], { cwd, encoding: "utf8", timeout: 5000, maxBuffer: 10 * 1024 * 1024 });
-} catch {
-  // Not a git repo / git unavailable / status timed out — nothing to guard, allow the stop.
-  porcelain = "";
+  return decideSubagentStopGuard({ cwd, porcelain, pendingCommitAuthorization, agentType });
 }
 
-const decision = decideSubagentStopGuard({ cwd, porcelain, pendingCommitAuthorization, agentType });
-if (decision.decision === "block") {
-  process.stderr.write(JSON.stringify({ decision: "block", reason: decision.reason }) + "\n");
-  process.exit(2);
+export function runSubagentStopHook({
+  input = readHookInput(),
+  env = process.env,
+  stderr = process.stderr,
+} = {}) {
+  const decision = evaluateSubagentStop(input, { env });
+  if (decision.decision === "block") {
+    stderr.write(JSON.stringify({ decision: "block", reason: decision.reason }) + "\n");
+    return 2;
+  }
+  // Surface an advisory reason for an allowed stop without blocking it.
+  if (decision.advisory && typeof decision.reason === "string") {
+    stderr.write(JSON.stringify({ decision: "allow", advisory: true, reason: decision.reason }) + "\n");
+  }
+  return 0;
 }
-// allow the stop; surface an advisory reason (e.g. the read-only-role exemption naming the
-// orchestrator as the owner of the pending edit) to stderr without blocking (exit 0).
-if (decision.advisory && typeof decision.reason === "string") {
-  process.stderr.write(JSON.stringify({ decision: "allow", advisory: true, reason: decision.reason }) + "\n");
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  process.exitCode = runSubagentStopHook();
 }
-process.exit(0);

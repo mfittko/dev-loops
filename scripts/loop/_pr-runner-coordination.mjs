@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -104,17 +103,32 @@ function resolveRepoCoordinationRoot(cwd) {
   }
   if (coordinationRootCache.has(canonicalCwd)) return coordinationRootCache.get(canonicalCwd);
   let root = canonicalCwd;
-  try {
-    const commonDir = execFileSync("git", ["rev-parse", "--git-common-dir"], {
-      cwd: canonicalCwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    if (commonDir) {
-      root = path.dirname(path.resolve(canonicalCwd, commonDir));
+  let cursor = canonicalCwd;
+  while (true) {
+    const marker = path.join(cursor, ".git");
+    try {
+      const stat = fs.statSync(marker);
+      if (stat.isDirectory()) {
+        root = cursor;
+        break;
+      }
+      if (stat.isFile()) {
+        const match = /^gitdir:\s*(.+)\s*$/i.exec(fs.readFileSync(marker, "utf8"));
+        if (match) {
+          const gitDir = path.resolve(cursor, match[1]);
+          const worktreesDir = path.dirname(gitDir);
+          root = path.basename(worktreesDir) === "worktrees"
+            ? path.dirname(path.dirname(worktreesDir))
+            : cursor;
+        }
+        break;
+      }
+    } catch (error) {
+      if (error?.code !== "ENOENT") break;
     }
-  } catch {
-    // not a git checkout / git unavailable — anchor at the canonical (realpath'd) cwd
+    const parent = path.dirname(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
   }
   coordinationRootCache.set(canonicalCwd, root);
   return root;
@@ -693,7 +707,7 @@ export async function ensureAsyncRunnerOwnership({
       runId: null,
       activeRun: null,
       exitSignals: [],
-      filePath: defaultRunnerCoordinationFilePathForTarget({ repo, pr }, cwd),
+      filePath: null,
     };
   }
   const asserted = await assertRunnerOwnership({ repo, pr, runId, cwd, requireExisting });
@@ -747,7 +761,6 @@ export async function releaseAsyncRunnerOwnership({
   env = process.env,
   cwd = process.cwd(),
 } = {}) {
-  const filePath = defaultRunnerCoordinationFilePathForTarget({ repo, pr }, cwd);
   const runId = normalizeRunId(resolveRunId(env));
   if (runId === null) {
     return {
@@ -758,9 +771,10 @@ export async function releaseAsyncRunnerOwnership({
       runId: null,
       activeRun: null,
       exitSignals: [],
-      filePath,
+      filePath: null,
     };
   }
+  const filePath = defaultRunnerCoordinationFilePathForTarget({ repo, pr }, cwd);
   try {
     const released = await releaseRunnerOwnership({ repo, pr, runId, cwd });
     if (released.ok) {
@@ -826,6 +840,7 @@ function isMissingDirError(error) {
 export async function releaseRunClaimsOnExit({
   runId,
   root = process.cwd(),
+  resolveCoordinationRoot = resolveRepoCoordinationRoot,
   readDir = fs.promises.readdir,
   readFile = fs.promises.readFile,
   releaseFn = releaseRunnerOwnership,
@@ -840,7 +855,7 @@ export async function releaseRunClaimsOnExit({
   // path.join(root, ".pi", ...) would scan the wrong location and miss the
   // run's own claims. resolveRepoCoordinationRoot handles the common-dir
   // anchoring and falls back to the canonicalized cwd for non-git dirs.
-  const repoBase = resolveRepoCoordinationRoot(root);
+  const repoBase = resolveCoordinationRoot(root);
   const coordinationRoot = path.join(repoBase, ".pi", "runner-coordination");
   let entries;
   try {

@@ -34,22 +34,22 @@ Definitions:
 
 When a change targets a Claude-Code-specific seam, the following suites are the baseline that MUST stay green, and are the first place to add coverage for a Pi-originated change that MUST NOT regress Claude Code:
 
-- `npm run test:assets` — runs `test/contracts/*.test.mjs`, including `test/contracts/claude-assets-reproducible.test.mjs`, `test/contracts/claude-headless-smoke.test.mjs`, `test/contracts/claude-plugin-manifest.test.mjs`, `test/contracts/claude-plugin-marketplace.test.mjs`, `test/contracts/claude-hooks-settings.test.mjs`, and `test/contracts/cli-harness-agnostic.test.mjs`
-- `npm run smoke:headless` — runs `scripts/claude/headless-info-smoke.mjs`; this is a manual/local-only check, not part of `npm test` or `npm run verify` and not run by CI — run it directly when a change touches Claude Code headless-info behavior
-- `npm run test:core` — runs `packages/core/test/*.test.mjs`, including `packages/core/test/claude-headless-entry.test.mjs`, `packages/core/test/claude-hook-decisions.test.mjs`, `packages/core/test/run-context.test.mjs`, `packages/core/test/async-start-contract.test.mjs`
+- `bun run test:assets` — runs `test/contracts/*.test.mjs`, including `test/contracts/claude-assets-reproducible.test.mjs`, `test/contracts/claude-headless-smoke.test.mjs`, `test/contracts/claude-plugin-manifest.test.mjs`, `test/contracts/claude-plugin-marketplace.test.mjs`, `test/contracts/claude-hooks-settings.test.mjs`, and `test/contracts/cli-harness-agnostic.test.mjs`
+- `bun run smoke:headless` — runs `scripts/claude/headless-info-smoke.mjs` on the supported Node runtime; this is a manual/local-only check, not part of `bun test` or `bun run verify` and not run by CI — run it directly when a change touches Claude Code headless-info behavior
+- `bun run test:core` — runs `packages/core/test/*.test.mjs`, including `packages/core/test/claude-headless-entry.test.mjs`, `packages/core/test/claude-hook-decisions.test.mjs`, `packages/core/test/run-context.test.mjs`, `packages/core/test/async-start-contract.test.mjs`
 
-Symmetrically, for a change targeting the Claude-Code-specific seam that MUST NOT regress Pi, `npm run test:extension` (which runs `test/extension-*.test.mjs`, including `test/extension-pi-adapter.test.mjs`, the Pi-side adapter inventory) is the baseline suite to check and extend.
+Symmetrically, for a change targeting the Claude-Code-specific seam that MUST NOT regress Pi, `bun run test:extension` (which runs `test/extension-*.test.mjs`, including `test/extension-pi-adapter.test.mjs`, the Pi-side adapter inventory) is the baseline suite to check and extend.
 
 ## How to add coverage
 
 1. Identify the harness-specific seam the change touches (see the surface list above).
 2. Locate the existing test file that already covers that seam for the harness being changed, and its counterpart for the other harness (from the inventory above, or the nearest analogous file).
 3. Add or extend a test asserting the other harness's behavior directly — do not rely on an untested assumption that the change is inert there.
-4. Run the relevant suite locally (`npm run test:assets`, `npm run test:core`, `npm run test:extension`, or `npm run smoke:headless` as applicable) before opening the pull request.
+4. Run the relevant suite locally (`bun run test:assets`, `bun run test:core`, `bun run test:extension`, or `bun run smoke:headless` as applicable) before opening the pull request.
 
 ## Non-goals
 
-- No new or expanded CI matrix: `npm run verify` (which CI runs on every pull request) already covers `test:assets`, `test:extension`, `test:scripts`, `test:core`, `test:docs`, and `test:dev-loop` — every suite named above except `npm run smoke:headless`, which is manual/local-only by design (see the test inventory above).
+- No new or expanded CI matrix: `bun run verify` (which CI runs on every pull request) already covers `test:assets`, `test:extension`, `test:scripts`, `test:core`, `test:docs`, and `test:dev-loop` — every suite named above except `bun run smoke:headless`, which is manual/local-only by design (see the test inventory above).
 - No bespoke cross-harness enforcement script: naming the required suites here, combined with CI already running them on every pull request, satisfies the coverage bar.
 - No rewriting of existing harness-specific code as part of adopting this contract.
 

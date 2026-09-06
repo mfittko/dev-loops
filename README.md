@@ -119,6 +119,13 @@ Universal:
 - Node `>=24`
 - `gh` installed and authenticated for GitHub/Copilot workflows
 
+For contributors and CI:
+
+- Bun `1.4.1` exactly — the repository's package manager, workspace installer, script runner, and unit-test runner
+- `bun install --frozen-lockfile` from a clean checkout; `bun.lock` is the only supported dependency lockfile
+
+This split is deliberate: published packages and the public CLI continue to install and execute with Node `>=24` and do not require Bun. npm remains the registry client for packing, publishing, dist-tags, registry queries, and provenance.
+
 Pi-harness only:
 
 - `pi-subagents` for async workflow behavior
@@ -183,7 +190,7 @@ docker run --rm dev-loops dev-loops --version
 docker run --rm dev-loops gh --version
 ```
 
-The Dockerfile pins exact versions for Node.js (base image), the pi CLI, pi extensions, and gh CLI; paired with the committed `package-lock.json`, repeat builds produce functionally identical toolchains.
+The Dockerfile pins exact versions for Node.js (base image), Bun 1.4.1, the pi CLI, pi extensions, and gh CLI; paired with the committed `bun.lock` and a frozen Bun install, repeat builds produce functionally identical toolchains. Node remains present because it is the shipped consumer runtime and runs the Playwright browser suite.
 
 **Runtime patterns:**
 
@@ -203,10 +210,11 @@ docker run -it --rm -e GH_TOKEN="$GH_TOKEN" -v "$HOME/.pi:/home/node/.pi" -v /tm
 ## Development
 
 ```bash
-npm run verify   # canonical root verification (tests + dev-loop tests)
+bun install --frozen-lockfile
+bun run verify   # canonical root verification (tests + dev-loop tests)
 ```
 
-CI splits into a small changed-files gate plus a parallel `verify-suite` matrix (one leg per `test:*` suite) gated by a fail-closed `verify` job, and a conditional `viewer-smoke` job. On every change, `npm ci` runs and the verify suites run as parallel matrix legs; the Playwright/WebKit viewer smoke runs only when the bounded viewer surface or its smoke-path dependencies change.
+CI installs the exactly pinned Bun 1.4.1 and uses `bun install --frozen-lockfile`. It splits the complete Bun test inventory into four parallel, timing-balanced shards, runs docs and workflow validators separately, and joins them through a fail-closed `verify` gate. The conditional Playwright/WebKit viewer smoke remains a Node-run browser test and runs only when its bounded viewer surface or smoke-path dependencies change.
 
 ### Migrating from an earlier release
 

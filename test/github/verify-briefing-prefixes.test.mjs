@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "bun:test";
 
 import { declaredGateOf, evaluateBriefingPrefixes } from "../../scripts/github/verify-briefing-prefixes.mjs";
 

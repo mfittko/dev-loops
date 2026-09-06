@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import test from "node:test";
+import { test } from "bun:test";
 import { fileURLToPath } from "node:url";
 
 import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";

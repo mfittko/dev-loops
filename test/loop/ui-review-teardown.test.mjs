@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { test } from "bun:test";
 
 import { teardown, ROW_STATUS, WORKTREE_STATUS, PROCESS_STATUS, GIST_STATUS } from "@dev-loops/core/loop/ui-review-teardown";
 import { driveUiReview } from "@dev-loops/core/loop/ui-review-drive";
@@ -292,7 +292,7 @@ test("provision without worktreePath => MISSING_PATH (distinct from unconfirmed-
 // prints "ready" AFTER its handlers are installed; the test waits for that line
 // to avoid a startup race where a signal arrives before the child is set up.
 function spawnReadyChild(script) {
-  const child = spawn(process.execPath, ["-e", script], { detached: true });
+  const child = spawn((Bun.which("node") ?? "node"), ["-e", script], { detached: true });
   return new Promise((resolve, reject) => {
     child.once("error", reject);
     child.stdout.on("data", (buf) => {

@@ -322,7 +322,19 @@ export function parseAddedLines(diffText) {
 export function scanDiffText(diffText) {
   const findings = [];
   for (const entry of parseAddedLines(diffText)) {
-    for (const hit of scanLineText(entry.text)) {
+    // Bun's generated text lock ends registry dependency tuples with a public
+    // Subresource Integrity digest. Ignore only that exact generated field in
+    // bun.lock; the same high-entropy value in source, another file, or another
+    // position on the lock line remains visible to every detector.
+    const text = entry.file === "bun.lock"
+      ? entry.text
+        .replace(/, "sha(?:256|384|512)-[A-Za-z0-9+/]+={0,2}"\],?$/u, ", \"<registry-integrity>\"]")
+        // Bun expands this dependency's published platform package family in
+        // both tuple keys and optional-dependency metadata. Several legitimate
+        // names cross the generic entropy threshold despite containing no value.
+        .replace(/@mariozechner\/clipboard-[a-z0-9-]+/gu, "<clipboard-platform-package>")
+      : entry.text;
+    for (const hit of scanLineText(text)) {
       findings.push({ file: entry.file, line: entry.line, ...hit });
     }
   }

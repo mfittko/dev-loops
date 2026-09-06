@@ -869,6 +869,7 @@ export function verifyPromptLeadingAlignment({ promptLeading, prefixBytes, prefi
  */
 export const DEFAULT_DIFF_EXCLUDE_GLOBS = Object.freeze([
   // Lockfiles.
+  "bun.lock", "**/bun.lock",
   "package-lock.json", "**/package-lock.json",
   "npm-shrinkwrap.json", "**/npm-shrinkwrap.json",
   "yarn.lock", "**/yarn.lock",

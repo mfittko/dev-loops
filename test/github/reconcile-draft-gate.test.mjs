@@ -1,14 +1,7 @@
-// Determinism (issue #1405). The root cause of the intermittent failures
-// here was NOT a fixture-vs-clock comparison but shared on-disk state: some
-// `runNode` calls omitted `cwd`, so the spawned CLI inherited the real
-// process cwd and resolved its runner-coordination file via
-// `git rev-parse --git-common-dir` — a path SHARED across every worktree
-// over this one `.git`. A stale leftover coordination file from another
-// run/worktree then flipped stale-runner age assertions. The fix: every
-// `runNode` that can reach coordination passes `cwd: tempDir` (a per-test
-// mkdtemp dir where `--git-common-dir` fails, so the coordination root
-// anchors to the isolated temp dir). Keep that invariant: any new spawn
-// that touches coordination MUST set `cwd: tempDir`.
+// Determinism (issue #1405). Coordination-sensitive functional cases run
+// in-process with an explicit per-test repoRoot, so they cannot resolve the
+// shared common-dir state of the developer's real worktree. The --help case
+// remains the minimal real CLI boundary.
 //
 // Related convention: never read the real wall clock here either — no bare,
 // argument-less Date constructor, and no read of the current epoch millis off the Date global. A production seam
@@ -17,30 +10,58 @@
 // `now`; pass a fixed value through it. Enforced mechanically by
 // test/github/deterministic-fixture-time.test.mjs.
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync, spawn } from "node:child_process";
-import test from "node:test";
-import { DEFAULT_TEST_PR_BODY, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { execFileSync } from "node:child_process";
+import { test } from "bun:test";
+import { DEFAULT_TEST_PR_BODY, makeGhMock, runIdFreeEnv, runNode as runNodeHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
   parseReconcileDraftGateCliArgs,
+  reconcileDraftGate,
 } from "../../scripts/github/reconcile-draft-gate.mjs";
 
 const scriptPath = path.resolve("scripts/github/reconcile-draft-gate.mjs");
 
-const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, {
-  ...options,
-  env: runIdFreeEnv({
-    ...(options.env ?? {}),
-    DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "",
-  }),
-});
+const GH_RUNNER = Symbol("reconcile-draft-gate-gh-runner");
+const ghCallsByRoot = new Map();
+
+const runNode = async (args = [], options = {}) => {
+  const runner = options.env?.[GH_RUNNER];
+  if (!runner) {
+    return runNodeHelper(scriptPath, args, {
+      ...options,
+      env: runIdFreeEnv({
+        ...(options.env ?? {}),
+        DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "",
+      }),
+    });
+  }
+  try {
+    const parsed = parseReconcileDraftGateCliArgs(args);
+    const env = runIdFreeEnv({ ...options.env, DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "" });
+    delete env[GH_RUNNER];
+    const result = await reconcileDraftGate(parsed, {
+      env,
+      ghCommand: "gh",
+      repoRoot: options.cwd ?? process.cwd(),
+      runChild: runner,
+    });
+    return { code: 0, stdout: `${JSON.stringify(result)}\n`, stderr: "" };
+  } catch (error) {
+    return {
+      code: 1,
+      stdout: "",
+      stderr: `${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`,
+    };
+  }
+};
 
 async function writeGhStub(tempDir, entries) {
-  const { env } = await writeGhStubHelper(tempDir, entries, { repeatLastOnOverflow: true });
-  return { ...env, DEVLOOPS_RUN_ID: "" };
+  const { runChild, calls } = makeGhMock(entries, { repeatLastOnOverflow: true });
+  ghCallsByRoot.set(tempDir, calls);
+  return { DEVLOOPS_RUN_ID: "", [GH_RUNNER]: runChild };
 }
 
 // These tests are about the reconcile tool's draft-transition/CI/error
@@ -53,7 +74,7 @@ async function disableFanoutEvidence(tempDir) {
 }
 
 async function readGhCallCount(tempDir) {
-  return Number((await readFile(path.join(tempDir, "gh-counter.txt"), "utf8")).trim() || "0");
+  return ghCallsByRoot.get(tempDir)?.filter(({ command }) => command === "gh").length ?? 0;
 }
 
 function draftGateComment({ verdict = "clean", headSha = "abc1234", findingsSummary = "no issues found", nextAction = "mark ready for review" } = {}) {
@@ -959,10 +980,7 @@ test("reconcile-draft-gate succeeds for a light-mode under-threshold PR under ac
     const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
 
     assert.equal(result.code, 0, result.stderr);
-    // stderr may carry a non-fatal git deprecation warning (e.g.
-    // `core.fsyncObjectFiles is deprecated`) from detectMergeBaseScope's real
-    // `git diff` under parallel load; assert no error payload leaks instead of
-    // asserting strict emptiness.
+    // Allow non-fatal git output, but never an error payload.
     assert.ok(!/"ok"\s*:\s*false/.test(result.stderr), result.stderr);
     assert.deepEqual(JSON.parse(result.stdout), {
       ok: true,

@@ -183,7 +183,7 @@ export function syncProjectAgentsDir(projectRoot: string, sourceRoot: string) {
  */
 export function syncPackagedAgents({
   sourceRoot = fileURLToPath(PACKAGED_AGENTS_ROOT),
-  targetRoot = path.join(os.homedir(), ".agents"),
+  targetRoot = path.join(process.env.HOME || os.homedir(), ".agents"),
   projectRoot,
 }: {
   sourceRoot?: string;

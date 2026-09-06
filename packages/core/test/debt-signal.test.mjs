@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, test } from "node:test";
+import { describe, test } from "bun:test";
 
 import { DebtSignalSchema } from "../src/debt/debt-signal.mjs";
 

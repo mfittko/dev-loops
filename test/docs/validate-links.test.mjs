@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "bun:test";
 
 import { formatBrokenLinkReport, validateMarkdownLinks } from "../../scripts/docs/validate-links.mjs";
 
@@ -291,14 +291,14 @@ test("validate-links CLI exits 1 for broken links and 0 for a clean tree", async
   });
 
   try {
-    const broken = spawnSync(process.execPath, [scriptPath, "--root", brokenRepo], {
+    const broken = spawnSync((Bun.which("node") ?? "node"), [scriptPath, "--root", brokenRepo], {
       encoding: "utf8",
     });
     assert.equal(broken.status, 1);
     assert.match(broken.stderr, /Broken markdown links found:/);
     assert.match(broken.stderr, /README\.md:1 -> \.\/docs\/missing\.md/);
 
-    const clean = spawnSync(process.execPath, [scriptPath, "--root", cleanRepo], {
+    const clean = spawnSync((Bun.which("node") ?? "node"), [scriptPath, "--root", cleanRepo], {
       encoding: "utf8",
     });
     assert.equal(clean.status, 0);

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 
 import { makeGhMock } from "../_helpers.mjs";
 
@@ -44,6 +44,17 @@ test("sequence overflow honors repeatLastOnOverflow", async () => {
   const repeated = await withRepeat.runChild("gh", ["b"], {}, "");
   assert.equal(repeated.code, 0);
   assert.equal(repeated.stdout, "last\n");
+});
+
+test("claims mode matches out-of-order calls exactly once", async () => {
+  const { runChild } = makeGhMock([
+    { assertArgs: ["first"], stdout: "one\n" },
+    { assertArgs: ["second"], stdout: "two\n" },
+  ], { matchMode: "claims" });
+
+  assert.equal((await runChild("gh", ["second"], {}, "")).stdout, "two\n");
+  assert.equal((await runChild("gh", ["first"], {}, "")).stdout, "one\n");
+  assert.equal((await runChild("gh", ["first"], {}, "")).code, 97);
 });
 
 test("git resolves hermetically and any other command throws", async () => {

@@ -13,7 +13,7 @@
 
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import test from "node:test";
+import { test } from "bun:test";
 
 import { assertRuleOwned } from "./_rule-helpers.mjs";
 

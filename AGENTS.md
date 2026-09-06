@@ -12,7 +12,7 @@
 - Always run `git fetch origin` before creating or reusing a worktree — never create from a stale `origin/main`.
 - Canonical guidance lives in `skills/docs/worktree-guidance.md`.
 - Prefer the GitHub-first routed path for branch/PR/CI/review work; use local implementation only when explicitly requested.
-- Use `npm run verify` as the default local validation path.
+- Use `bun run verify` as the default local validation path. Contributors and CI use the exactly pinned Bun 1.4.1 toolchain; published packages continue to run on Node `>=24`, and npm remains the registry/pack/publish client.
 - When creating GitHub issues via `gh issue create`, always include `--assignee @me` so the new artifact is self-assigned.
 - When creating PRs in this repo, use the canonical `dev-loops pr create ...` path (always draft, self-assigned by default; `--assignee @me` is the default) — never raw `gh pr create`.
 - Never start implementation (file mutation, branch creation, PR creation) without explicit instruction. "Queue," "add to list," "track," "note" are NOT implementation triggers. Only proceed when the user says "start," "go," "implement," "do it," "work on," or equivalent imperative. Confirm if unsure.

@@ -77,8 +77,8 @@ create; `provision` is the full `provisionWorktree()` result, not just its
 summary; `fetchDegraded: true` means at least one candidate remote's
 best-effort fetch failed, so branch resolution ran against whatever was
 already fetched). Provisioning is fail-soft (a warning never aborts the
-worktree); a `git worktree add` failure is a hard error. It does **not** run
-`npm install` (see dependencies below).
+worktree); a `git worktree add` failure is a hard error. It does **not** install
+dependencies (see below).
 
 `guard` is the default-branch guard's install result for the primary checkout
 (`{ ok, installed, refreshed, skipped, defaultBranches?, droppedExplicitBranches?, reason? }`), always
@@ -123,8 +123,9 @@ worktree:
   — provisioning never aborts init. Idempotent on worktree reuse.
 - **Opt-in:** empty/absent by default; no baked-in file list.
 - **Not for `node_modules`.** A copied/symlinked `node_modules` goes stale the
-  moment a branch changes a dependency and can break native builds — use the
-  `npm ci`-in-worktree path below. Provisioning does **not** run `npm install`.
+  moment a branch changes a dependency and can break native builds — use
+  `bun install --frozen-lockfile` inside the worktree. Provisioning does **not**
+  install dependencies.
 
 Run manually with:
 
@@ -321,9 +322,10 @@ tracked-remote` exists to avoid.
 
 <!-- rule: WORKTREE-DEPS-ISOLATED -->
 `WORKTREE-DEPS-ISOLATED`: A worktree's dependencies MUST NOT be assumed present
-or valid from the main checkout's `node_modules`; run `npm install` or `npm ci`
-inside the worktree whenever it needs dependencies or its installed state is
-stale or out of date for the branch.
+or valid from the main checkout's `node_modules`; run the repository-pinned
+Bun 1.4.1 command `bun install --frozen-lockfile` inside the worktree whenever
+it needs dependencies. If the frozen install reports manifest/`bun.lock` drift,
+fix and commit the lockfile deliberately rather than weakening the frozen mode.
 
 ## Coordination and collision checks
 
@@ -377,5 +379,5 @@ exception path that MUST NOT become the normal default for mutating local work.
 
 - No Windows symlink support (a `mode: link` entry assumes POSIX).
 - No default provisioning file list — provisioning is opt-in per repo.
-- Not a `node_modules` mirroring mechanism — deps belong to `npm ci`-in-worktree.
+- Not a `node_modules` mirroring mechanism — deps belong to a frozen Bun install in the worktree.
 - No expansion of this guidance into a second backlog or planning system.

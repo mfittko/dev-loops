@@ -18,9 +18,17 @@
  * from the checkout's git-toplevel so config resolves correctly.
  */
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { parseAllWorktreePaths, parseMainWorktreePath } from "@dev-loops/core/loop/worktree-guard";
 
 export function resolveRepoRoot(cwd, { gitCommand = "git" } = {}) {
+  // A checkout root is already authoritative and needs no `git rev-parse`.
+  // `.devloops` also identifies the synthetic repo roots used by hermetic
+  // callers/tests, where spawning Git can only fail and adds avoidable fan-out.
+  if (existsSync(path.join(cwd, ".git")) || existsSync(path.join(cwd, ".devloops"))) {
+    return cwd;
+  }
   try {
     return execFileSync(gitCommand, ["rev-parse", "--show-toplevel"], {
       cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
@@ -35,6 +43,9 @@ export function resolveLedgerCheckouts(cwd, { gitCommand = "git" } = {}) {
   const roots = [];
   const add = (p) => { if (typeof p === "string" && p.length > 0 && !roots.includes(p)) roots.push(p); };
   add(resolveRepoRoot(cwd, { gitCommand }));
+  if (!existsSync(path.join(cwd, ".git")) && existsSync(path.join(cwd, ".devloops"))) {
+    return roots;
+  }
   try {
     const listing = execFileSync(gitCommand, ["worktree", "list"], {
       cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],

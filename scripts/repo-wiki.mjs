@@ -197,11 +197,11 @@ export async function ensureRepoWikiPrepared(projectRoot = PROJECT_ROOT) {
   return resolveRepoWikiPaths(projectRoot);
 }
 
-async function runRepoWikiNpm(passthroughArgs, projectRoot) {
+async function runRepoWikiNpm(passthroughArgs, projectRoot, { runNpx = runNpxInvocation } = {}) {
   assertSupportedNodeVersion();
   assertConsumerConfigPresent({ projectRoot });
   const invocation = buildNpxInvocation({ passthroughArgs });
-  const result = runNpxInvocation({ command: invocation[0], args: invocation.slice(1), cwd: projectRoot });
+  const result = runNpx({ command: invocation[0], args: invocation.slice(1), cwd: projectRoot });
 
   if (result.status !== 0) {
     return { ok: false, status: result.status ?? 1, source: "npm", invocation };
@@ -236,7 +236,7 @@ export async function runRepoWikiLocal(argv, projectRoot = PROJECT_ROOT) {
   return runRepoWiki(args, projectRoot);
 }
 
-export async function runRepoWiki(argv, projectRoot = PROJECT_ROOT) {
+export async function runRepoWiki(argv, projectRoot = PROJECT_ROOT, { runNpx = runNpxInvocation } = {}) {
   const { source, prepareOnly, passthroughArgs } = parseCliArgs(argv);
 
   if (source === "local") {
@@ -249,9 +249,9 @@ export async function runRepoWiki(argv, projectRoot = PROJECT_ROOT) {
 
   if (prepareOnly) {
     // prepare is meaningless for the npm source; treat as help.
-    return runRepoWikiNpm(["--help"], projectRoot);
+    return runRepoWikiNpm(["--help"], projectRoot, { runNpx });
   }
-  return runRepoWikiNpm(passthroughArgs, projectRoot);
+  return runRepoWikiNpm(passthroughArgs, projectRoot, { runNpx });
 }
 
 if (isDirectCliRun(import.meta.url)) {

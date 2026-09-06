@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative, win32 } from 'node:path';
-import test from 'node:test';
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 
 import { assertSafeOutputRelationship, assertUniquePublishTargets, buildSite, injectNav, resolveRepoUrl, ARTICLES, DECKS, LANDING, NAV_LINKS, STATE_ATLAS } from '../../scripts/pages/build-site.mjs';

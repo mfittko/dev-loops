@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "bun:test";
 
 import { GUARD_OVERRIDE_ENV, installDefaultBranchGuard } from "../../packages/core/src/loop/default-branch-guard.mjs";
 

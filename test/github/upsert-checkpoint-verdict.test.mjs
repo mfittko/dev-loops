@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import test, { after, before } from "node:test";
+import { afterAll as after, beforeAll as before, test } from "bun:test";
 import { DEFAULT_TEST_PR_BODY, makeGhMock, runIdFreeEnv, runNode as runNodeHelper, withTempDir, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import {
@@ -1473,6 +1473,7 @@ test("upsert-checkpoint-verdict fails closed when pre-approval gate entry is sti
     assert.match(payload.error, /Cannot enter/);
     assert.match(payload.error, /request Copilot review before any/i);
   }, { prefix: "dev-loops-upsert-gate-review-illegal-preapproval-" });
+});
 
 test("upsert-checkpoint-verdict rejects pre_approval_gate when PR is still draft", async () => {
   await withTempDir(async (tempDir) => {
@@ -1517,7 +1518,6 @@ test("upsert-checkpoint-verdict rejects pre_approval_gate when PR is still draft
     assert.match(payload.error, /Cannot enter/);
     assert.match(payload.error, /draft_gate.*is now the legal gate boundary/i);
   }, { prefix: "dev-loops-upsert-gate-review-draft-preapproval-" });
-});
 });
 
 test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-approval evidence", async () => {
@@ -1781,8 +1781,9 @@ test("upsert-checkpoint-verdict suppresses duplicate repost when the current sam
       inlineReason: "single-agent inline review (test)",
       blockCleanOnFindingSeverities: ["high"],
     });
-    // 8 gh calls: pr facts + requested_reviewers + review threads + headRefOid + issue comments + PR reviews + internal-only file check + light-mode facts (baseRefOid,labels) — the repo config enables lightMode, so an inline verdict triggers the #1174 light-fact fetch.
-    assert.equal(result.ghCallCount(), 8);
+    // Seven gh calls: the explicit fixture repoRoot owns config resolution, so
+    // this bare synthetic root does not inherit the ambient light-mode fetch.
+    assert.equal(result.ghCallCount(), 7);
   }, { prefix: "dev-loops-upsert-gate-review-noop-" });
 });
 
@@ -3600,7 +3601,7 @@ test("upsert-checkpoint-verdict self-heals a ready PR via draft transition, pres
     // the recursive post re-enters and pass 2 sees isDraft:true (posts normally).
     // Each entry has specific assertArgs so claims selection is unambiguous, and the
     // duplicated coordination calls supply isDraft:false first, then isDraft:true.
-    const { env: logEnvRaw, ghLogPath } = await writeGhStubHelper(tempDir, [
+    const ghEntries = [
       // --- coordination pass 1 (isDraft: false → reconcile) ---
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"], stdout: prFacts(false) },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
@@ -3629,8 +3630,9 @@ test("upsert-checkpoint-verdict self-heals a ready PR via draft transition, pres
         stdout: '{"id":900,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-900"}\n',
       },
       { assertArgs: ["pr", "ready", "17", "--repo", "owner/repo"], stdout: "{}\n" },
-    ], { matchMode: "claims", logCalls: true });
-    const env = { ...logEnvRaw, DEVLOOPS_RUN_ID: "" };
+    ];
+    const { runChild, calls } = makeGhMock(ghEntries, { matchMode: "claims" });
+    const env = runIdFreeEnv({ DEVLOOPS_RUN_ID: "" });
 
     // draft_gate configures a mandatory angle (pr-description); a fanout_fanin
     // verdict now requires coverage proof rather than a bare findingsSummary —
@@ -3648,7 +3650,7 @@ test("upsert-checkpoint-verdict self-heals a ready PR via draft transition, pres
       findingsJson: findingsPath,
       nextAction: "mark ready for review",
       executionMode: "fanout_fanin",
-    }, { env, repoRoot: tempDir });
+    }, { env, repoRoot: tempDir, runChild });
 
     // The verdict was posted via the transition, with fanout_fanin preserved.
     assert.equal(result.ok, true);
@@ -3658,7 +3660,7 @@ test("upsert-checkpoint-verdict self-heals a ready PR via draft transition, pres
     assert.equal(result.draftTransition, true);
     assert.equal(result.commentId, 900);
 
-    const ghLog = await readFile(ghLogPath, "utf8");
+    const ghLog = JSON.stringify(calls.map(({ args }) => args));
     // The PR was converted to draft, then re-marked ready (the full transition).
     assert.ok(/convertPullRequestToDraft/.test(ghLog), "expected a convertPullRequestToDraft mutation");
     assert.ok(/\["pr","ready","17"/.test(ghLog.replace(/\s/g, "")), "expected a `pr ready` call to restore the ready state");
@@ -3720,7 +3722,7 @@ test("upsert-checkpoint-verdict fails closed (no unbounded recursion) when the d
     // the WRONG error. The guard must instead throw the clear #1020 self-heal error
     // BEFORE any second conversion. `pr ready` is provided so a best-effort restore in
     // the catch path (conversion.alreadyDraft !== true) is satisfied.
-    const { env: logEnvRaw, ghLogPath } = await writeGhStubHelper(tempDir, [
+    const ghEntries = [
       // --- coordination pass 1 (isDraft: false → reconcile) ---
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"], stdout: prFacts(false) },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
@@ -3740,8 +3742,9 @@ test("upsert-checkpoint-verdict fails closed (no unbounded recursion) when the d
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"], stdout: "src/index.ts\n" },
       // --- best-effort restore to ready after the guarded failure ---
       { assertArgs: ["pr", "ready", "17", "--repo", "owner/repo"], stdout: "{}\n" },
-    ], { matchMode: "claims", logCalls: true });
-    const env = { ...logEnvRaw, DEVLOOPS_RUN_ID: "" };
+    ];
+    const { runChild, calls } = makeGhMock(ghEntries, { matchMode: "claims" });
+    const env = runIdFreeEnv({ DEVLOOPS_RUN_ID: "" });
 
     await assert.rejects(
       () => upsertCheckpointVerdict({
@@ -3754,7 +3757,7 @@ test("upsert-checkpoint-verdict fails closed (no unbounded recursion) when the d
         findingsSummary: "no issues found",
         nextAction: "mark ready for review",
         executionMode: "fanout_fanin",
-      }, { env, repoRoot: tempDir }),
+      }, { env, repoRoot: tempDir, runChild }),
       (error) => {
         // Clear, actionable message — not a swallowed hang.
         assert.match(error.message, /still reports it as non-draft on re-entry/);
@@ -3764,13 +3767,13 @@ test("upsert-checkpoint-verdict fails closed (no unbounded recursion) when the d
     );
 
     // Exactly ONE conversion to draft — proving no unbounded re-conversion loop.
-    const ghLog = await readFile(ghLogPath, "utf8");
+    const ghLog = JSON.stringify(calls.map(({ args }) => args));
     const conversions = (ghLog.match(/convertPullRequestToDraft/g) || []).length;
     assert.equal(conversions, 1, "expected exactly one convertPullRequestToDraft (no recursion loop)");
   }, { prefix: "dev-loops-upsert-draft-race-" });
 });
 
-test("upsert-checkpoint-verdict CLI posts the draft_gate self-heal verdict instead of hanging on an unsettled top-level await (#1455)", async () => {
+test("upsert-checkpoint-verdict CLI posts the draft_gate self-heal verdict instead of hanging on an unsettled top-level await (#1455)", { timeout: 15000 }, async () => {
   // REGRESSION for #1455: this must run as a REAL CLI subprocess (real spawn,
   // real `import.meta.url` top-level `await main()`), NOT the in-process
   // makeGhMock harness the local `runNode` helper in this file uses for most
@@ -4056,9 +4059,8 @@ test("upsert-checkpoint-verdict performs stale-runner takeover before gate coord
   // Root cause 1 fix: when a previous run owns the coordination file but is stale,
   // the new run takes over ownership rather than being rejected.
   await withTempDir(async (tempDir) => {
-    // This test's cwd IS the CLI's repoRoot (real subprocess spawn); disable
-    // fan-out evidence enforcement — this test is about stale-runner takeover,
-    // not fan-out evidence.
+    // This test's repoRoot owns the real coordination file; fan-out evidence is
+    // disabled because the scenario is about stale-runner takeover.
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
     // Pre-claim ownership with an old timestamp so the runner is considered stale
     await claimRunnerOwnership({
@@ -4069,7 +4071,7 @@ test("upsert-checkpoint-verdict performs stale-runner takeover before gate coord
       now: "2020-01-01T00:00:00.000Z",
     });
 
-    const { env: ghEnv } = await writeGhStubHelper(tempDir, [
+    const ghEnv = await writeGhStub(tempDir, [
       // Standard 5 coordination entries: draft PR, no existing gate comments
       ...buildGateCoordinationEntries({
         isDraft: true,
@@ -4092,7 +4094,7 @@ test("upsert-checkpoint-verdict performs stale-runner takeover before gate coord
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
         stdout: '{"id":300,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-300"}\n',
       },
-    ], { repeatLastOnOverflow: true });
+    ]);
 
     // Run with the new run ID — old-run-id owned the file but is stale, so takeover should happen
     const result = await runNode([
@@ -6118,7 +6120,7 @@ async function writeSingleSurfaceLedger(tempDir, findings, overrides = {}) {
 // context + internal-only probe, then the finding-surface reads
 // (login, reviews, issue comments, threads, PR files).
 function singleSurfaceLeadingEntries({ isDraft = true, issueComments = [], reviews = [], threads = [], files = [{ filename: "src/db.mjs", patch: SINGLE_SURFACE_PATCH }], lightFacts = reviews.length > 0 } = {}) {
-  return [
+  const entries = [
     {
       assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
       stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft, headRefOid: SINGLE_SURFACE_HEAD, body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
@@ -6131,8 +6133,8 @@ function singleSurfaceLeadingEntries({ isDraft = true, issueComments = [], revie
     // A visible same-head inline verdict makes detect-checkpoint-evidence fetch
     // the light-mode facts (base ref + labels) before the internal-only probe.
     ...(lightFacts ? [{ assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"], stdout: '{"baseRefOid":"0000000000000000000000000000000000000000","labels":[]}\n' }] : []),
-    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"], stdout: "src/db.mjs\n" },
     { assertArgs: ["api", "user"], stdout: '{"login":"gate-bot"}\n' },
+    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"], stdout: "src/db.mjs\n" },
     { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: JSON.stringify(reviews) + "\n" },
     { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify(issueComments) + "\n" },
     {
@@ -6142,6 +6144,11 @@ function singleSurfaceLeadingEntries({ isDraft = true, issueComments = [], revie
     },
     ...(files === null ? [] : [{ assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/files?per_page=100"], stdout: JSON.stringify(files) + "\n" }]),
   ];
+  // Finding-surface reads are intentionally parallel/order-independent.
+  // Claims mode validates each exact route without coupling the fixture to
+  // promise scheduling order.
+  for (const entry of entries) entry.matchByClaims = true;
+  return entries;
 }
 
 const LOCATABLE_FINDING = { severity: "must-fix", angle: "correctness", summary: "SQL injection in the query builder", files: ["src/db.mjs"], line: 2, recommendation: "parameterize it" };

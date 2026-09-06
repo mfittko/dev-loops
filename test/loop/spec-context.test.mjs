@@ -208,7 +208,7 @@ async function makeChangedPathsRepo() {
 test("specContextChangedPaths emits the JSON string array of changed repo-relative paths", async () => {
   const { repoRoot, base, head } = await makeChangedPathsRepo();
   try {
-    const result = specContextChangedPaths({ base, head }, { repoRoot });
+    const result = await specContextChangedPaths({ base, head }, { repoRoot });
     assert.equal(result.ok, true);
     assert.deepEqual(result.changedFiles.sort(), ["src/a.mjs", "src/b.mjs"]);
   } finally {
@@ -220,7 +220,7 @@ test("specContextChangedPaths resolves --repo-root relative to the caller's repo
   const { repoRoot, base, head } = await makeChangedPathsRepo();
   const parent = path.dirname(repoRoot);
   try {
-    const result = specContextChangedPaths({ base, head, repoRoot: path.basename(repoRoot) }, { repoRoot: parent });
+    const result = await specContextChangedPaths({ base, head, repoRoot: path.basename(repoRoot) }, { repoRoot: parent });
     assert.deepEqual(result.changedFiles.sort(), ["src/a.mjs", "src/b.mjs"]);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
@@ -230,8 +230,8 @@ test("specContextChangedPaths resolves --repo-root relative to the caller's repo
 test("specContextChangedPaths fails closed on a leading-'-' --base (ref-shape guard)", async () => {
   const { repoRoot, head } = await makeChangedPathsRepo();
   try {
-    assert.throws(
-      () => specContextChangedPaths({ base: "-ohno", head }, { repoRoot }),
+    await assert.rejects(
+      specContextChangedPaths({ base: "-ohno", head }, { repoRoot }),
       /plausible git refs/,
     );
   } finally {
@@ -242,8 +242,8 @@ test("specContextChangedPaths fails closed on a leading-'-' --base (ref-shape gu
 test("specContextChangedPaths fails closed on a '..'-embedding --head (ref-shape guard)", async () => {
   const { repoRoot, base } = await makeChangedPathsRepo();
   try {
-    assert.throws(
-      () => specContextChangedPaths({ base, head: "HEAD..evil" }, { repoRoot }),
+    await assert.rejects(
+      specContextChangedPaths({ base, head: "HEAD..evil" }, { repoRoot }),
       /plausible git refs/,
     );
   } finally {

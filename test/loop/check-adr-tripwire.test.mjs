@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 import { execSync } from "node:child_process";
@@ -501,7 +501,7 @@ test("round-3 medium fix: CLI usage error exits 2", () => {
   const { execFileSync } = require("node:child_process");
   let code = null;
   try {
-    execFileSync(process.execPath, [path.resolve("scripts/loop/check-adr-tripwire.mjs"), "--bogus"], { stdio: "ignore", env: { ...process.env } });
+    execFileSync((Bun.which("node") ?? "node"), [path.resolve("scripts/loop/check-adr-tripwire.mjs"), "--bogus"], { stdio: "ignore", env: { ...process.env } });
   } catch (e) {
     code = e.status;
   }

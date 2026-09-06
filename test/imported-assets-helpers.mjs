@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readdir, readFile, stat } from "node:fs/promises";
-import test from "node:test";
+import { test } from "bun:test";
 
 const fromRepoRoot = (relativePath) => new URL(`../${relativePath}`, import.meta.url);
 const readRepo = (relativePath) => readFile(fromRepoRoot(relativePath), "utf8");

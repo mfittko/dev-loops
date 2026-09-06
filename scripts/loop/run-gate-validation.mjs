@@ -15,7 +15,7 @@
  * only ever run what the repo's own package.json already declares runnable.
  */
 import { execFile } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
@@ -24,6 +24,7 @@ import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "../github/_gate-names.mjs";
 import { assertWorktreeAtHead, buildValidationResultsPath } from "../github/write-gate-context.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { parseBunLock } from "../release/assert-core-dependency-version.mjs";
 
 const DEFAULT_SUITES = ["verify"];
 const OUTPUT_TAIL_CHARS = 4000;
@@ -48,7 +49,7 @@ Optional:
 Output (stdout, JSON — the artifact itself):
   { "ok": true, "repo": "...", "pr": 1, "gate": "draft_gate", "headSha": "...",
     "generatedAt": "...", "allPassed": true,
-    "suites": [ { "name": "verify", "command": "npm run verify", "exitCode": 0,
+    "suites": [ { "name": "verify", "command": "bun run verify", "exitCode": 0,
                   "outputTail": "...", "outputPath": "tmp/gate-context/.../...log" } ] }
 Exit codes:
   0   Success (even when a suite fails — allPassed:false is the signal)
@@ -202,7 +203,7 @@ export async function readPackageScripts(repoRoot) {
 }
 
 // ponytail: a minimal CSI-sequence stripper (ESC '[' ... final-byte), covering
-// every color/style code `npm run`/test reporters actually emit. Not a full
+// every color/style code `bun run`/test reporters actually emit. Not a full
 // ANSI-sequence grammar (OSC hyperlinks, DCS strings) — upgrade to a real
 // ansi-regex dependency if a suite ever emits one of those into its tail.
 export function stripAnsi(text) {
@@ -210,7 +211,7 @@ export function stripAnsi(text) {
 }
 
 /**
- * Run one npm script suite via `npm run <name>` and capture stdout+stderr.
+ * Run one package script suite via `bun run <name>` and capture stdout+stderr.
  * Never rejects: a non-zero exit or a spawn failure is reported as a suite
  * result, not thrown, so one suite's failure never aborts the round.
  * @param {string} name
@@ -220,18 +221,18 @@ export function stripAnsi(text) {
 function runSuite(name, { repoRoot }) {
   return new Promise((resolve) => {
     execFile(
-      "npm",
+      "bun",
       ["run", name],
       { cwd: repoRoot, maxBuffer: MAX_BUFFER_BYTES, env: process.env },
       (error, stdout, stderr) => {
         let output = `${stdout ?? ""}${stderr ?? ""}`;
         const exitCode = error ? (typeof error.code === "number" ? error.code : 1) : 0;
         if (error && output.trim().length === 0) {
-          // A spawn-level failure (e.g. npm itself missing) leaves stdout/stderr
+          // A spawn-level failure (e.g. Bun itself missing) leaves stdout/stderr
           // empty — surface the error message instead of an unexplained blank log.
           output = error.message ?? String(error);
         }
-        resolve({ name, command: `npm run ${name}`, exitCode, output });
+        resolve({ name, command: `bun run ${name}`, exitCode, output });
       },
     );
   });
@@ -281,9 +282,9 @@ export async function buildValidationArtifact({ repo, pr, gate, headSha, suites,
     headSha,
     generatedAt: new Date().toISOString(),
     allPassed: suiteResults.every((s) => s.exitCode === 0),
-    // Stamp dependency state relative to package-lock.json (#1627): a worktree
-    // whose installed deps (node_modules/.package-lock.json) do not match the
-    // lockfile is validated against stale deps, so the artifact records the
+    // Stamp dependency state relative to the authoritative lockfile (#1627): a worktree
+    // whose installed deps do not match the lockfile is validated against
+    // stale deps, so the artifact records the
     // delta instead of blessing it. Non-blocking (does not flip allPassed) — it
     // is a trust signal for consumers of the artifact, not a hard gate failure.
     depState: await resolveDepState(repoRoot),
@@ -292,8 +293,8 @@ export async function buildValidationArtifact({ repo, pr, gate, headSha, suites,
 }
 
 /**
- * Whether a package-lock.json `packages[]` entry is installable on the
- * current host, given its optional `os`/`cpu` platform gates.
+ * Whether a lockfile package entry is installable on the current host, given
+ * its optional `os`/`cpu` platform gates.
  * @param {{os?: string[], cpu?: string[]}} pkg
  * @returns {boolean}
  */
@@ -322,9 +323,33 @@ async function findAncestorInstalledLock(startDir) {
   }
 }
 
+async function findAncestorNodeModules(startDir) {
+  let dir = path.resolve(startDir);
+  for (;;) {
+    const info = await stat(path.join(dir, "node_modules")).catch(() => null);
+    if (info?.isDirectory()) return { info, root: dir };
+    const parent = path.dirname(dir);
+    if (parent === dir) return { info: null, root: null };
+    dir = parent;
+  }
+}
+
+async function findAncestorPackageManifest(startDir, relativeManifestPath) {
+  let dir = path.resolve(startDir);
+  for (;;) {
+    const raw = await readFile(path.join(dir, "node_modules", relativeManifestPath), "utf8").catch(() => null);
+    if (raw !== null) return { raw, root: dir };
+    const parent = path.dirname(dir);
+    if (parent === dir) return { raw: null, root: null };
+    dir = parent;
+  }
+}
+
 /**
- * Compare the repo's package-lock.json against the installed lock snapshot
- * (node_modules/.package-lock.json) (#1627). A mismatch means the validation
+ * Compare the authoritative dependency lock against the installed tree
+ * (#1627). Bun lock entries are checked against installed package manifests;
+ * npm's package-lock is checked against its installed hidden lock snapshot.
+ * A mismatch means the validation
  * suites ran against stale deps — stamped, not blocking, so gate consumers can
  * distrust a stale run without a stale run itself failing the gate.
  *
@@ -339,22 +364,75 @@ async function findAncestorInstalledLock(startDir) {
  * are excluded from the comparison to avoid false "stale" stamps on a synced
  * tree.
  *
- * A loop worktree (tmp/worktrees/<repo>/<kind>-<n>) is a linked checkout:
- * ensure-worktree.mjs symlinks only `node_modules/@dev-loops/core` into it
- * and never runs `npm install` there, so the worktree has no local
- * `node_modules/.package-lock.json` of its own — the suites it runs still
- * resolve every other dependency by Node's normal ancestor-directory module
- * resolution, reaching the main checkout's `node_modules` above it. Reading
- * only `<repoRoot>/node_modules/.package-lock.json` therefore stamps every
- * worktree round "stale" unconditionally, regardless of whether the deps the
- * suites actually ran against are fresh. The installed-lock lookup below
- * walks up from `repoRoot` to the nearest ancestor directory that has one,
- * so it reads the dependency root the suites actually ran against.
+ * A linked loop worktree can resolve dependencies from the main checkout's
+ * ancestor `node_modules`. The installed-lock lookup therefore walks upward
+ * to the dependency root the suites actually used; this also preserves the
+ * retained package-lock fallback when validating older branches.
  *
  * @param {string} repoRoot - Absolute path to the repo (main checkout or worktree).
  * @returns {Promise<{status: string, detail: string}>}
  */
 async function resolveDepState(repoRoot) {
+  const bunLockPath = path.join(repoRoot, "bun.lock");
+  const bunLockRaw = await readFile(bunLockPath, "utf8").catch(() => null);
+  if (bunLockRaw !== null) {
+    const { root: nearestDepRoot } = await findAncestorNodeModules(repoRoot);
+    if (!nearestDepRoot) {
+      return { status: "stale", detail: "node_modules absent in repoRoot or any ancestor — installed deps not materialized (bun install --frozen-lockfile not run)" };
+    }
+    let lock;
+    try {
+      lock = parseBunLock(bunLockRaw);
+    } catch {
+      return { status: "stale", detail: "bun.lock unparseable — cannot verify installed deps" };
+    }
+    const missing = [];
+    const mismatched = [];
+    const resolvedRoots = new Set();
+    let checked = 0;
+    for (const [lockKey, entry] of Object.entries(lock.packages ?? {})) {
+      if (!Array.isArray(entry) || typeof entry[0] !== "string") continue;
+      const metadata = typeof entry[2] === "object" && entry[2] !== null ? entry[2] : {};
+      if (!isInstallableOnHost(metadata)) continue;
+      const identity = entry[0];
+      const versionSeparator = identity.lastIndexOf("@");
+      const packageName = identity.slice(0, versionSeparator);
+      let expectedVersion = identity.slice(versionSeparator + 1);
+      if (expectedVersion.startsWith("workspace:")) {
+        expectedVersion = lock.workspaces?.[expectedVersion.slice("workspace:".length)]?.version;
+      }
+      if (!packageName || !expectedVersion) continue;
+      const parentKey = lockKey === packageName ? null : lockKey.slice(0, -(packageName.length + 1));
+      const relativeManifestPath = parentKey
+        ? path.join(parentKey, "node_modules", packageName, "package.json")
+        : path.join(packageName, "package.json");
+      const { raw: installedRaw, root: installedRoot } = await findAncestorPackageManifest(repoRoot, relativeManifestPath);
+      if (installedRaw === null) {
+        missing.push(lockKey);
+        continue;
+      }
+      resolvedRoots.add(installedRoot);
+      checked += 1;
+      let installedVersion;
+      try {
+        installedVersion = JSON.parse(installedRaw).version;
+      } catch {
+        mismatched.push(`${lockKey} (unparseable manifest)`);
+        continue;
+      }
+      if (installedVersion !== expectedVersion) mismatched.push(`${lockKey} (${installedVersion ?? "missing"} != ${expectedVersion})`);
+    }
+    const ancestorRoots = [...resolvedRoots].filter((root) => root !== path.resolve(repoRoot));
+    const depRootNote = ancestorRoots.length === 0 ? "" : ` (including ancestor ${ancestorRoots.join(", ")})`;
+    if (missing.length === 0 && mismatched.length === 0 && checked > 0) {
+      return { status: "synced", detail: `installed deps match bun.lock (${checked} packages)${depRootNote}` };
+    }
+    const parts = [];
+    if (missing.length > 0) parts.push(`${missing.length} missing [${missing.slice(0, 5).join(", ")}${missing.length > 5 ? ", …" : ""}]`);
+    if (mismatched.length > 0) parts.push(`${mismatched.length} version-mismatched [${mismatched.slice(0, 5).join(", ")}${mismatched.length > 5 ? ", …" : ""}]`);
+    if (checked === 0) parts.push("no installed package manifests verified");
+    return { status: "stale", detail: `installed deps diverge from bun.lock${depRootNote}: ${parts.join(", ")}` };
+  }
   const lockRaw = await readFile(path.join(repoRoot, "package-lock.json"), "utf8").catch(() => null);
   if (lockRaw === null) {
     return { status: "n-a", detail: "no package-lock.json at repo root" };

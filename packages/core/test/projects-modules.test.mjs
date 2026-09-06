@@ -3,7 +3,7 @@
 // This is NOT a port of the exhaustive root suites (test/projects/*.test.mjs)
 // — it exists so @dev-loops/core has direct test coverage for modules it now
 // owns, independent of the monorepo-relative root tests.
-import { describe, it } from "node:test";
+import { describe, it } from "bun:test";
 import assert from "node:assert/strict";
 import {
   parseProjectRef,

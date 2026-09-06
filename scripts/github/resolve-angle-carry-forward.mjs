@@ -35,14 +35,14 @@ import { baseAngleName } from "@dev-loops/core/loop/gate-fanin";
 
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { captureChangedFilesBetween } from "../lib/git-delta.mjs";
+import { captureChangedFilesBetween, runGitCommand } from "../lib/git-delta.mjs";
+export { runGitCommand } from "../lib/git-delta.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import {
-  assertWorktreeAtHead,
   mapGateToConfigKey,
 } from "./write-gate-context.mjs";
 
@@ -292,7 +292,27 @@ export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [] }) {
   return { prevHead: headSha, carried: carriedProvenance, mustRerun: mustRerunWithReasons };
 }
 
-export async function main(argv = process.argv.slice(2), { repoRoot = process.cwd() } = {}) {
+async function assertWorktreeAtHeadAsync(headSha, { repoRoot, runGit = runGitCommand }) {
+  const declared = String(headSha).trim().toLowerCase();
+  if (!/^[0-9a-f]{7,64}$/.test(declared)) {
+    throw new Error(`assertWorktreeAtHead: headSha ${JSON.stringify(headSha)} is not a 7-64 character hex SHA — refusing to prefix-match against the worktree HEAD (an empty/short value would false-accept).`);
+  }
+  let result;
+  try {
+    result = await runGit(["rev-parse", "HEAD"], { repoRoot });
+  } catch (error) {
+    throw new Error(`--base was given but the current working directory (${repoRoot}) is not inside a git worktree (git rev-parse HEAD failed: ${error?.message ?? error}). cd into the PR's worktree — the one checked out at --head-sha ${headSha} — before building its gate context.`);
+  }
+  if (result.code !== 0) {
+    throw new Error(`--base was given but the current working directory (${repoRoot}) is not inside a git worktree (git rev-parse HEAD failed: ${result.stderr.trim() || `exit ${result.code}`}). cd into the PR's worktree — the one checked out at --head-sha ${headSha} — before building its gate context.`);
+  }
+  const actualHead = result.stdout.trim().toLowerCase();
+  if (!actualHead.startsWith(declared)) {
+    throw new Error(`worktree HEAD ${actualHead} does not match --head-sha ${declared}: the current working directory is the WRONG worktree for this PR, so \`git diff <base>...HEAD\` would resolve the WRONG diff. cd into the worktree checked out at ${declared} and re-run.`);
+  }
+}
+
+export async function main(argv = process.argv.slice(2), { repoRoot = process.cwd(), runGit = runGitCommand } = {}) {
   let options;
   try {
     options = parseResolveAngleCarryForwardCliArgs(argv);
@@ -343,8 +363,8 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // different head than --head-sha, every carry-forward decision would be computed
     // against the WRONG head while claiming to be for --head-sha. Abort before
     // capturing the delta so no mislabeled plan is ever emitted.
-    assertWorktreeAtHead(options.headSha, { repoRoot });
-    const { changedFiles, hasRename } = captureChangedFilesBetween({ base: options.prevHead, repoRoot });
+    await assertWorktreeAtHeadAsync(options.headSha, { repoRoot, runGit });
+    const { changedFiles, hasRename } = await captureChangedFilesBetween({ base: options.prevHead, repoRoot, runGit });
     // A rename anywhere in the delta forces the RENAME_ONLY-mapped angles to
     // re-run: parseChangedFiles keeps only a rename's destination path, so
     // classifying that path alone misses what the rename itself implicates.

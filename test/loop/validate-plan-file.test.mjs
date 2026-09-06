@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test, { describe } from "node:test";
+import { afterAll, beforeAll, describe, test } from "bun:test";
 
 import { runNode } from "../_helpers.mjs";
 import {
@@ -75,10 +75,10 @@ describe("validatePlanFile (pure)", () => {
 
 describe("validate-plan-file CLI", () => {
   let dir;
-  test.before(async () => {
+  beforeAll(async () => {
     dir = await mkdtemp(path.join(os.tmpdir(), "validate-plan-file-"));
   });
-  test.after(async () => {
+  afterAll(async () => {
     if (dir) await rm(dir, { recursive: true, force: true });
   });
 

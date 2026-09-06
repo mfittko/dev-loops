@@ -270,7 +270,10 @@ test("CI gates the Playwright WebKit smoke behind inspect-run viewer change dete
   assert.match(ciWorkflow, /viewer-smoke:[\s\S]*needs:[\s\S]*- changes/i);
   assert.match(ciWorkflow, /viewer-smoke:[\s\S]*if:\s*needs\.changes\.outputs\.inspect_run_viewer\s*==\s*'true'/i);
   assert.match(ciWorkflow, /viewer-smoke:[\s\S]*uses:\s*\.\/\.github\/actions\/playwright-webkit/i);
-  assert.match(ciWorkflow, /viewer-smoke:[\s\S]*npm run test:playwright:viewer/i);
+  assert.match(ciWorkflow, /viewer-smoke:[\s\S]*bun run test:playwright:viewer/i);
+  const rootPackage = JSON.parse(await readRepo("package.json"));
+  assert.match(rootPackage.scripts["test:playwright:viewer"], /--workers=2$/);
+  assert.match(await readRepo("test/playwright/inspect-run-viewer.spec.mjs"), /test\.describe\.configure\(\{\s*mode:\s*"parallel",\s*timeout:\s*45_000\s*\}\)/);
 
   // All THREE smoke jobs must route through the shared composite action, so a
   // future edit can't silently reintroduce the duplication in any of them
@@ -295,7 +298,7 @@ test("CI gates the Playwright WebKit smoke behind inspect-run viewer change dete
   assert.match(playwrightWebkitAction, /actions\/cache@v5/i);
   assert.match(playwrightWebkitAction, /path:\s*\$\{\{\s*env\.PLAYWRIGHT_BROWSERS_PATH\s*\}\}/i);
   assert.match(playwrightWebkitAction, /PLAYWRIGHT_BROWSERS_PATH=\$\{\{\s*github\.workspace\s*\}\}\/\.cache\/ms-playwright/i);
-  assert.match(playwrightWebkitAction, /key:\s*\$\{\{\s*runner\.os\s*\}\}-playwright-webkit-\$\{\{\s*hashFiles\('package-lock\.json'\)\s*\}\}/i);
+  assert.match(playwrightWebkitAction, /key:\s*\$\{\{\s*runner\.os\s*\}\}-playwright-webkit-\$\{\{\s*hashFiles\('bun\.lock'\)\s*\}\}/i);
 });
 
 test("standalone review route stays structurally decoupled from the single-contributor ownership gate (issue #1850)", async () => {
@@ -347,12 +350,14 @@ test("standalone review route stays structurally decoupled from the single-contr
 test("CI runs verify as a parallel suite matrix gated by a fail-closed aggregation job", async () => {
   const ciWorkflow = await readRepo(".github/workflows/ci.yml");
 
-  // verify runs as a parallel matrix (one leg per suite) gated by an
+  // verify runs as a parallel matrix (four complete-inventory test shards plus
+  // the non-test validators) gated by an
   // aggregation job named `verify` so the required-status-check name is
   // preserved. Assert every suite is a matrix leg and the gate fails closed.
   assert.match(ciWorkflow, /^\s{2}verify-suite:\s*$/m);
+  assert.match(ciWorkflow, /name:\s*verify-suite \(\$\{\{\s*matrix\.suite\s*\}\}\$\{\{\s*matrix\.shard[\s\S]*shard \{0\}[\s\S]*\}\}\)/);
   assert.match(ciWorkflow, /verify-suite:[\s\S]*fail-fast:\s*false/i);
-  assert.match(ciWorkflow, /verify-suite:[\s\S]*npm run \$\{\{\s*matrix\.suite\s*\}\}/i);
+  assert.match(ciWorkflow, /verify-suite:[\s\S]*bun run \$\{\{\s*matrix\.suite\s*\}\}/i);
 
   // Scope leg-membership to the verify-suite job's matrix list (up to the next
   // job header) so a suite name appearing elsewhere can't satisfy the check.
@@ -368,20 +373,22 @@ test("CI runs verify as a parallel suite matrix gated by a fail-closed aggregati
       : verifySuiteHeaderIndex + 1 + nextSuiteJobRelative,
   );
   for (const suite of [
-    "test:assets",
-    "test:extension",
-    "test:scripts",
-    "test:core",
+    "test:all",
     "test:docs",
-    "test:pack",
-    "test:dev-loop",
+    "test:workflows",
   ]) {
     assert.match(
       verifySuiteSection,
-      new RegExp(`^\\s*-\\s*${suite}\\s*$`, "m"),
+      new RegExp(`^\\s*-\\s*(?:suite:\\s*)?${suite}\\s*$`, "m"),
       `verify-suite matrix must include ${suite}`,
     );
   }
+  const allTestShards = [
+    ...verifySuiteSection.matchAll(/-\s+suite:\s*test:all\s*\n\s*shard:\s*(\d+\/\d+)/g),
+  ].map(([, shard]) => shard);
+  assert.deepEqual(allTestShards, ["1/4", "2/4", "3/4", "4/4"]);
+  assert.match(verifySuiteSection, /BUN_TEST_PARALLELISM:\s*2/);
+  assert.match(verifySuiteSection, /bun run \$\{\{\s*matrix\.suite\s*\}\} --timings=\.bun-test-timings\.json --shard=\$\{\{\s*matrix\.shard\s*\}\}/);
 
   // Fail-closed aggregation: the gate must run on `if: always()` (else a failed
   // leg SKIPS the gate under the default `if: success()`), depend on the whole
@@ -397,7 +404,11 @@ test("CI runs verify as a parallel suite matrix gated by a fail-closed aggregati
     verifyHeaderIndex,
     nextJobRelative === -1 ? ciWorkflow.length : verifyHeaderIndex + 1 + nextJobRelative,
   );
-  assert.match(verifySection, /needs:\s*\[verify-suite\][\s\S]*needs\.verify-suite\.result[\s\S]*success/i);
+  assert.match(verifySection, /needs:\s*\[changes,\s*verify-suite,\s*viewer-smoke,\s*deck-smoke,\s*article-smoke\][\s\S]*needs\.changes\.result[\s\S]*success/i);
+  assert.match(verifySection, /needs\.verify-suite\.result[\s\S]*success/i);
+  assert.match(verifySection, /needs\.viewer-smoke\.result[\s\S]*success[\s\S]*skipped/i);
+  assert.match(verifySection, /needs\.deck-smoke\.result[\s\S]*success[\s\S]*skipped/i);
+  assert.match(verifySection, /needs\.article-smoke\.result[\s\S]*success[\s\S]*skipped/i);
   assert.match(verifySection, /if:\s*always\(\)/i);
   assert.match(verifySection, /exit 1/i);
 });

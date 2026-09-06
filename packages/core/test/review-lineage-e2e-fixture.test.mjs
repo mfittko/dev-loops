@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import test, { describe } from "node:test";
+import { describe, test } from "bun:test";
 
 import {
   buildReviewDispatchPlan,

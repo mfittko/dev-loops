@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 
 import { assertRuleOwned, assertRulePresent } from "./_rule-helpers.mjs";
 import { readRepo } from "../imported-assets-helpers.mjs";
@@ -33,7 +33,7 @@ test("dev-loop SKILL enforces bounded-timeout test runs (#1650)", async () => {
   const skill = await readRepo("skills/dev-loop/SKILL.md");
   assert.match(
     skill,
-    /timeout 90 node --test <file>/,
+    /timeout 90 bun test <file>/,
     "the dev-loop SKILL should mandate a hard timeout on test runs",
   );
   assert.match(

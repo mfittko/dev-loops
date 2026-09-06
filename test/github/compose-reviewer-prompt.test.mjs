@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "bun:test";
 
 const composeCliPath = path.resolve("scripts/github/compose-reviewer-prompt.mjs");
 const verifyCliPath = path.resolve("scripts/github/verify-dispatch-prompt-layout.mjs");

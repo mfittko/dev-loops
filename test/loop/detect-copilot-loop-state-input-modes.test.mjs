@@ -3,13 +3,14 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import test from "node:test";
+import { test } from "bun:test";
 
 import {
   autoDetectSnapshot,
   parseDetectCliArgs,
 } from "../../scripts/loop/detect-copilot-loop-state.mjs";
 import {
+  GH_RUNNER,
   makeComment,
   makeThread,
   runNode,
@@ -504,7 +505,7 @@ test("autoDetectSnapshot uses the default ghCommand when deps omit it", async ()
 
     const snapshot = await autoDetectSnapshot(
       { repo: "owner/repo", pr: 17 },
-      { env },
+      { env, runChild: env[GH_RUNNER] },
     );
 
     assert.equal(snapshot.prExists, true);
@@ -1379,7 +1380,7 @@ test.skip("detect-copilot-loop-state: durable reload — steering applied after 
 
   function runSteerNode(args) {
     return new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, [steerScriptPath, ...args], {
+      const child = spawn((Bun.which("node") ?? "node"), [steerScriptPath, ...args], {
         stdio: ["ignore", "pipe", "pipe"],
       });
       let stdout = "";

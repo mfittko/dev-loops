@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
+import { evaluateSubagentStop } from "../../.claude/hooks/subagent-stop-uncommitted-guard.mjs";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 // Hook scripts live under the plugin root (.claude/hooks) so the Claude plugin can bundle them
@@ -418,12 +419,10 @@ function makeWorktree(slug, dirty) {
 test("SubagentStop hook blocks a subagent stop with a dirty worktree under tmp/worktrees/ (#1619)", () => {
   const dir = makeWorktree("dirty", true);
   try {
-    const { code, stderrJson } = runHook("subagent-stop-uncommitted-guard.mjs", { cwd: dir });
-    assert.equal(code, 2, "dirty worktree must be refused (exit 2)");
-    assert.ok(stderrJson, "block reason JSON on stderr");
-    assert.equal(stderrJson.decision, "block");
-    assert.match(stderrJson.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
-    assert.match(stderrJson.reason, /uncommitted\.txt/);
+    const decision = evaluateSubagentStop({ cwd: dir });
+    assert.equal(decision.decision, "block");
+    assert.match(decision.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
+    assert.match(decision.reason, /uncommitted\.txt/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -470,26 +469,21 @@ test("SubagentStop hook exempts an interactive session awaiting commit authoriza
   }
 });
 
-test("SubagentStop hook stays enforced e2e for an editing dispatch — the removed orchestrator-owned-commit env var grants no escape (#1936)", () => {
+test("SubagentStop hook stays enforced for an editing dispatch — the removed orchestrator-owned-commit env var grants no escape (#1936)", () => {
   // #1936: the #1786 DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT exemption was removed. Setting it (as a
   // leaked/stale env var) must NOT exempt a dirty worktree — the "edit here, commit there" split
   // that deadlocked an editing subagent under a task-scoped no-commit instruction is gone. The
   // only resolution is to commit the dispatch's own work. Mutation anchor: reintroducing the
   // env-var allow branch in the hook would flip this exit code back to 0 and re-open the deadlock.
-  const dir = makeWorktree("no-orchestrator-owns-commit-escape", true);
-  try {
-    const { code, stderrJson } = runHook(
-      "subagent-stop-uncommitted-guard.mjs",
-      { cwd: dir },
-      { DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT: "1" },
-    );
-    assert.equal(code, 2, "a dirty worktree must still be refused — the removed env var grants no escape (exit 2)");
-    assert.ok(stderrJson, "block reason JSON on stderr");
-    assert.equal(stderrJson.decision, "block");
-    assert.match(stderrJson.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  const decision = evaluateSubagentStop(
+    { cwd: path.join(repoRoot, "tmp", "worktrees", "editing") },
+    {
+      env: { DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT: "1" },
+      execFileSyncImpl: () => "?? uncommitted.txt\n",
+    },
+  );
+  assert.equal(decision.decision, "block");
+  assert.match(decision.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
 });
 
 test("SubagentStop hook fail-safe-allows a mkdir-only (non-git) dir under tmp/worktrees/ (#1685)", () => {
@@ -527,30 +521,25 @@ test("SubagentStop hook still blocks when porcelain output exceeds the 1MB Node 
   // 245 bytes/line, so ~4600 files (~1.1MB) clears the 1MB bound while real (much shorter)
   // paths need far more to hit the same bound. Beyond 10MB (~43k+ such long-line paths) the
   // fail-safe allow is the documented ceiling.
-  const dir = makeWorktree("maxbuffer", false);
-  try {
-    const name = (i) => `f${String(i).padStart(5, "0")}-${"x".repeat(230)}.txt`;
-    const fileCount = 4600;
-    for (let i = 0; i < fileCount; i++) {
-      fs.writeFileSync(path.join(dir, name(i)), "", "utf8");
-    }
-    const porcelain = spawnSync("git", ["status", "--porcelain"], { cwd: dir, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).stdout;
-    const porcelainBytes = Buffer.byteLength(porcelain, "utf8");
-    assert.ok(porcelainBytes > 1024 * 1024, `fixture must exceed the 1MB default maxBuffer (got ${porcelainBytes} bytes)`);
-    const dirtyLineCount = porcelain.split("\n").filter((l) => l.trim() !== "").length;
-    const { code, stderrJson } = runHook("subagent-stop-uncommitted-guard.mjs", { cwd: dir });
-    assert.equal(code, 2, "a >1MB-porcelain dirty worktree must still be refused (exit 2)");
-    assert.ok(stderrJson, "block reason JSON on stderr");
-    assert.equal(stderrJson.decision, "block");
-    assert.match(stderrJson.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
-    // The reason itself stays bounded (the 50-path cap), not merely parseable off stderr —
-    // pins the cap end to end rather than relying on runHook's own maxBuffer as an incidental
-    // proxy for it. The remainder is derived from the actual porcelain line count so a fixture
-    // change (e.g. a different fileCount) cannot silently desync this assertion.
-    const MAX_LISTED_DIRTY_PATHS = 50;
-    const expectedRemainder = dirtyLineCount - MAX_LISTED_DIRTY_PATHS;
-    assert.match(stderrJson.reason, new RegExp(`… and ${expectedRemainder} more`));
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  const name = (i) => `f${String(i).padStart(5, "0")}-${"x".repeat(230)}.txt`;
+  const porcelain = Array.from({ length: 4600 }, (_, i) => `?? ${name(i)}`).join("\n");
+  const dirtyLineCount = porcelain.split("\n").length;
+  assert.ok(Buffer.byteLength(porcelain, "utf8") > 1024 * 1024);
+  let commandOptions;
+  const decision = evaluateSubagentStop(
+    { cwd: path.join(repoRoot, "tmp", "worktrees", "maxbuffer") },
+    {
+      execFileSyncImpl: (_command, _args, options) => {
+        commandOptions = options;
+        return porcelain;
+      },
+    },
+  );
+  assert.equal(commandOptions.maxBuffer, 10 * 1024 * 1024);
+  assert.equal(decision.decision, "block");
+  assert.match(decision.reason, /LOCAL-COMMIT-BEFORE-EXIT/);
+  // The reason itself stays bounded at 50 paths and reports the actual remainder.
+  const MAX_LISTED_DIRTY_PATHS = 50;
+  const expectedRemainder = dirtyLineCount - MAX_LISTED_DIRTY_PATHS;
+  assert.match(decision.reason, new RegExp(`… and ${expectedRemainder} more`));
 });

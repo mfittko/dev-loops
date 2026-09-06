@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import { test } from "bun:test";
 
 import { resolverTestEnv, writeGhStub } from "../_helpers.mjs";
 import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
@@ -56,7 +56,7 @@ async function withInputFile(input, fn) {
 }
 
 test("resolve-dev-loop-startup help documents accepted flags and JSON contracts", () => {
-  const result = spawnSync(process.execPath, [cliPath, "--help"], {
+  const result = spawnSync((Bun.which("node") ?? "node"), [cliPath, "--help"], {
     cwd: repoRoot,
     encoding: "utf8",
   });
@@ -89,7 +89,7 @@ test("resolve-dev-loop-startup success stdout keeps documented JSON shape", asyn
     loopState: "active",
     retrospectiveCheckpointState: "complete",
   }, async (inputPath, tmpDir) => {
-    const result = spawnSync(process.execPath, [cliPath, "--input", inputPath], {
+    const result = spawnSync((Bun.which("node") ?? "node"), [cliPath, "--input", inputPath], {
       // An isolated, non-repo cwd (no `.devloops`) rather than repoRoot: this
       // repo's own `.devloops` sets `workflow.requireRetrospective: true`
       // (pinned in resolve-dev-loop-startup.test.mjs), which would make the
@@ -164,7 +164,7 @@ test("resolve-dev-loop-startup rejects async-required strategy via stderr contra
     loopState: "unresolved_feedback_present",
     retrospectiveCheckpointState: "complete",
   }, async (inputPath, tmpDir) => {
-    const result = spawnSync(process.execPath, [cliPath, "--input", inputPath], {
+    const result = spawnSync((Bun.which("node") ?? "node"), [cliPath, "--input", inputPath], {
       // Isolated cwd, not repoRoot — see the identical note in the previous
       // test: repoRoot's own `.devloops` opts into the live retrospective
       // query, which this test must not depend on.
@@ -215,7 +215,7 @@ test("resolve-dev-loop-startup honors maintainer-controlled asyncStartMode=allow
       "utf8",
     );
 
-    const result = spawnSync(process.execPath, [cliPath, "--input", inputPath], {
+    const result = spawnSync((Bun.which("node") ?? "node"), [cliPath, "--input", inputPath], {
       cwd: tmpDir,
       encoding: "utf8",
       env: Object.fromEntries(
@@ -257,7 +257,7 @@ test("--plan-file with a valid base plan resolves to a local_phase bundle with n
       repeatLastOnOverflow: true,
     });
 
-    const result = spawnSync(process.execPath, [cliPath, "--plan-file", planPath], {
+    const result = spawnSync((Bun.which("node") ?? "node"), [cliPath, "--plan-file", planPath], {
       // Run from a plain (non-worktree) dir to exercise the worktree-guard exemption.
       cwd: tmpDir,
       encoding: "utf8",
@@ -302,7 +302,7 @@ test("--input cannot inject planFileExempt to bypass the worktree-isolation guar
     loopState: "active",
     retrospectiveCheckpointState: "complete",
   }, async (inputPath, tmpDir) => {
-    const result = spawnSync(process.execPath, [cliPath, "--input", inputPath], {
+    const result = spawnSync((Bun.which("node") ?? "node"), [cliPath, "--input", inputPath], {
       cwd: tmpDir,
       encoding: "utf8",
     });
@@ -320,7 +320,7 @@ test("--input cannot inject planFileExempt to bypass the worktree-isolation guar
 
 test("--plan-file carrying AC + DoD resolves to plan_refined_ready_for_promotion", async () => {
   await withPlanFile(`${BASE_PLAN}\n${REFINEMENT_SECTIONS}`, async (planPath, tmpDir) => {
-    const result = spawnSync(process.execPath, [cliPath, "--plan-file", planPath], {
+    const result = spawnSync((Bun.which("node") ?? "node"), [cliPath, "--plan-file", planPath], {
       cwd: tmpDir,
       encoding: "utf8",
     });
@@ -336,7 +336,7 @@ test("--plan-file with only one refinement section is unsupported intake input",
   // fails closed (ambiguous) rather than guessing refine-vs-promote.
   const partial = `${BASE_PLAN}\n## Acceptance criteria\n\n- it works\n`;
   await withPlanFile(partial, async (planPath, tmpDir) => {
-    const result = spawnSync(process.execPath, [cliPath, "--plan-file", planPath], {
+    const result = spawnSync((Bun.which("node") ?? "node"), [cliPath, "--plan-file", planPath], {
       cwd: tmpDir,
       encoding: "utf8",
     });
@@ -347,7 +347,7 @@ test("--plan-file with only one refinement section is unsupported intake input",
 });
 
 test("--plan-file pointing at a missing file fails closed (exit 1, no bundle)", () => {
-  const result = spawnSync(process.execPath, [cliPath, "--plan-file", "/nonexistent/plan.md"], {
+  const result = spawnSync((Bun.which("node") ?? "node"), [cliPath, "--plan-file", "/nonexistent/plan.md"], {
     cwd: repoRoot,
     encoding: "utf8",
   });
@@ -358,7 +358,7 @@ test("--plan-file pointing at a missing file fails closed (exit 1, no bundle)", 
 
 test("--plan-file failing base validation fails closed (exit 1, no bundle)", async () => {
   await withPlanFile("# incomplete\n\n## Status\n\nopen\n", async (planPath) => {
-    const result = spawnSync(process.execPath, [cliPath, "--plan-file", planPath], {
+    const result = spawnSync((Bun.which("node") ?? "node"), [cliPath, "--plan-file", planPath], {
       cwd: repoRoot,
       encoding: "utf8",
     });
@@ -428,7 +428,7 @@ test("--spike with a complete spike artifact resolves to a local_phase bundle wi
       repeatLastOnOverflow: true,
     });
 
-    const result = spawnSync(process.execPath, [cliPath, "--spike", spikePath], {
+    const result = spawnSync((Bun.which("node") ?? "node"), [cliPath, "--spike", spikePath], {
       // Run from a plain (non-worktree) dir to exercise the worktree-guard exemption.
       cwd: tmpDir,
       encoding: "utf8",
@@ -456,7 +456,7 @@ test("--spike with a complete spike artifact resolves to a local_phase bundle wi
 
 test("--spike with an in-progress spike (no recommendation) resolves to spike_in_progress", async () => {
   await withSpikeFile(SPIKE_IN_PROGRESS, async (spikePath, tmpDir) => {
-    const result = spawnSync(process.execPath, [cliPath, "--spike", spikePath], {
+    const result = spawnSync((Bun.which("node") ?? "node"), [cliPath, "--spike", spikePath], {
       cwd: tmpDir,
       encoding: "utf8",
     });
@@ -468,7 +468,7 @@ test("--spike with an in-progress spike (no recommendation) resolves to spike_in
 });
 
 test("--spike pointing at a missing file fails closed (exit 1, no bundle)", () => {
-  const result = spawnSync(process.execPath, [cliPath, "--spike", "/nonexistent/spike.md"], {
+  const result = spawnSync((Bun.which("node") ?? "node"), [cliPath, "--spike", "/nonexistent/spike.md"], {
     cwd: repoRoot,
     encoding: "utf8",
   });
@@ -479,7 +479,7 @@ test("--spike pointing at a missing file fails closed (exit 1, no bundle)", () =
 
 test("--spike with a malformed spike artifact fails closed (exit 1, no bundle)", async () => {
   await withSpikeFile("# incomplete\n\n## Question\n\nwhat?\n", async (spikePath) => {
-    const result = spawnSync(process.execPath, [cliPath, "--spike", spikePath], {
+    const result = spawnSync((Bun.which("node") ?? "node"), [cliPath, "--spike", spikePath], {
       cwd: repoRoot,
       encoding: "utf8",
     });
@@ -491,14 +491,14 @@ test("--spike with a malformed spike artifact fails closed (exit 1, no bundle)",
 
 test("--spike is mutually exclusive with --issue and --plan-file", async () => {
   await withSpikeFile(BASE_SPIKE, async (spikePath) => {
-    const withIssue = spawnSync(process.execPath, [cliPath, "--spike", spikePath, "--issue", "511"], {
+    const withIssue = spawnSync((Bun.which("node") ?? "node"), [cliPath, "--spike", spikePath, "--issue", "511"], {
       cwd: repoRoot,
       encoding: "utf8",
     });
     assert.equal(withIssue.status, 1);
     assert.match(withIssue.stderr, /mutually exclusive/i);
 
-    const withPlanFile = spawnSync(process.execPath, [cliPath, "--spike", spikePath, "--plan-file", "p.md"], {
+    const withPlanFile = spawnSync((Bun.which("node") ?? "node"), [cliPath, "--spike", spikePath, "--plan-file", "p.md"], {
       cwd: repoRoot,
       encoding: "utf8",
     });
@@ -508,7 +508,7 @@ test("--spike is mutually exclusive with --issue and --plan-file", async () => {
 });
 
 test("resolve-dev-loop-startup malformed args keep documented stderr JSON shape", () => {
-  const result = spawnSync(process.execPath, [cliPath, "--bogus"], {
+  const result = spawnSync((Bun.which("node") ?? "node"), [cliPath, "--bogus"], {
     cwd: repoRoot,
     encoding: "utf8",
   });

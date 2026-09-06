@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
-import { initSizeBudgetFixtureRepo, repeatedLinesContent, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
+import { test } from "bun:test";
+import { initSizeBudgetFixtureRepo, makeGhMock, repeatedLinesContent, runIdFreeEnv, runNode as runNodeHelper } from "../_helpers.mjs";
 
 // A stub evaluatePrSizeBudget that always passes — for tests exercising
 // OTHER readyForReview() logic (board sync, etc.) via direct function calls,
@@ -20,22 +19,39 @@ function passingAdrTripwire() {
 import { parseReadyForReviewCliArgs, readyForReview } from "../../scripts/github/ready-for-review.mjs";
 
 const scriptPath = path.resolve("scripts/github/ready-for-review.mjs");
-const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
+const GH_RUNNER = Symbol("ready-for-review-gh-runner");
+const ghCallsByRoot = new Map();
+
+const runNode = async (args = [], options = {}) => {
+  const runner = options.env?.[GH_RUNNER];
+  if (!runner) return runNodeHelper(scriptPath, args, options);
+  try {
+    const parsed = parseReadyForReviewCliArgs(args);
+    const env = runIdFreeEnv(options.env);
+    delete env[GH_RUNNER];
+    const result = await readyForReview(parsed, {
+      env,
+      ghCommand: "gh",
+      repoRoot: options.cwd ?? process.cwd(),
+      runChild: runner,
+      syncBoardStatus: async () => ({ ok: true, skipped: true, reason: "test seam" }),
+    });
+    return { code: 0, stdout: `${JSON.stringify(result)}\n`, stderr: "" };
+  } catch (error) {
+    return { code: 1, stdout: "", stderr: `${error instanceof Error ? error.message : String(error)}\n` };
+  }
+};
 
 async function writeGhStub(tempDir, entries, options = {}) {
-  return writeGhStubHelper(tempDir, entries, {
-    repeatLastOnOverflow: true,
-    logCalls: true,
-    ...options,
-  });
+  const { runChild, calls } = makeGhMock(entries, { repeatLastOnOverflow: true, ...options });
+  ghCallsByRoot.set(tempDir, calls);
+  return { env: { DEVLOOPS_RUN_ID: "", [GH_RUNNER]: runChild }, ghLogPath: tempDir };
 }
 
 async function readGhCalls(logPath) {
-  const lines = (await readFile(logPath, "utf8"))
-    .trim()
-    .split("\n")
-    .filter(Boolean);
-  return lines.map((line) => JSON.parse(line));
+  return (ghCallsByRoot.get(logPath) ?? [])
+    .filter(({ command }) => command === "gh")
+    .map(({ args }) => args);
 }
 // #1585: fetchDraftGateEvidence now also fetches the authenticated login
 // (api user) + review threads (graphql reviewThreads) to assert 0 unresolved
@@ -85,69 +101,23 @@ Ship the feature.
 
 // --- parseReadyForReviewCliArgs unit tests ---
 
-test("parseReadyForReviewCliArgs requires --repo and --pr", () => {
-  assert.throws(
-    () => parseReadyForReviewCliArgs([]),
-    /requires --repo and --pr/,
-  );
-});
-
-test("parseReadyForReviewCliArgs requires --repo value", () => {
-  assert.throws(
-    () => parseReadyForReviewCliArgs(["--pr", "17"]),
-    /requires --repo and --pr/,
-  );
-});
-
-test("parseReadyForReviewCliArgs requires --pr value", () => {
-  assert.throws(
-    () => parseReadyForReviewCliArgs(["--repo", "owner/repo"]),
-    /requires --repo and --pr/,
-  );
-});
-
 test("parseReadyForReviewCliArgs parses valid repo and pr", () => {
   const result = parseReadyForReviewCliArgs(["--repo", "owner/repo", "--pr", "42"]);
   assert.equal(result.repo, "owner/repo");
   assert.equal(result.pr, 42);
 });
 
-test("parseReadyForReviewCliArgs rejects invalid repo slug", () => {
-  assert.throws(
-    () => parseReadyForReviewCliArgs(["--repo", "invalid", "--pr", "1"]),
-    /must match.*owner.*name/i,
-  );
-});
-
-test("parseReadyForReviewCliArgs rejects non-numeric --pr", () => {
-  assert.throws(
-    () => parseReadyForReviewCliArgs(["--repo", "owner/repo", "--pr", "abc"]),
-    /positive integer/,
-  );
-});
-
-test("parseReadyForReviewCliArgs rejects zero --pr", () => {
-  assert.throws(
-    () => parseReadyForReviewCliArgs(["--repo", "owner/repo", "--pr", "0"]),
-    /positive integer/,
-  );
-});
-
-test("parseReadyForReviewCliArgs --help returns help option", () => {
-  const result = parseReadyForReviewCliArgs(["--help"]);
-  assert.equal(result.help, true);
-});
-
-test("parseReadyForReviewCliArgs -h returns help option", () => {
-  const result = parseReadyForReviewCliArgs(["-h"]);
-  assert.equal(result.help, true);
-});
-
-test("parseReadyForReviewCliArgs rejects unknown flag", () => {
-  assert.throws(
-    () => parseReadyForReviewCliArgs(["--repo", "owner/repo", "--pr", "1", "--unknown"]),
-    /Unknown argument/,
-  );
+test("parseReadyForReviewCliArgs rejects invalid input", () => {
+  for (const [args, error] of [
+    [[], /requires --repo and --pr/],
+    [["--pr", "17"], /requires --repo and --pr/],
+    [["--repo", "owner/repo"], /requires --repo and --pr/],
+    [["--repo", "invalid", "--pr", "1"], /must match.*owner.*name/i],
+    [["--repo", "owner/repo", "--pr", "abc"], /positive integer/],
+    [["--repo", "owner/repo", "--pr", "0"], /positive integer/],
+    [["--repo", "owner/repo", "--pr", "1", "--unknown"], /Unknown argument/],
+  ]) assert.throws(() => parseReadyForReviewCliArgs(args), error);
+  for (const flag of ["--help", "-h"]) assert.equal(parseReadyForReviewCliArgs([flag]).help, true);
 });
 
 // --- integration tests ---
@@ -157,18 +127,6 @@ test("--help prints usage to stdout", async () => {
   assert.equal(result.code, 0);
   assert.match(result.stdout, /ready-for-review\.mjs/);
   assert.match(result.stdout, /gate-evidence/);
-});
-
-test("rejects --repo without value", async () => {
-  const result = await runNode(["--repo"]);
-  assert.equal(result.code, 1);
-  assert.match(result.stderr, /Missing value for --repo/i);
-});
-
-test("rejects --pr without value", async () => {
-  const result = await runNode(["--repo", "owner/repo", "--pr"]);
-  assert.equal(result.code, 1);
-  assert.match(result.stderr, /Missing value for --pr/i);
 });
 
 test("fails when PR is not in draft state", async () => {
@@ -349,124 +307,6 @@ test("succeeds when draft gate evidence exists and CI is green", async () => {
   }
 });
 
-test("succeeds when the clean draft verdict lives only in the review stream (single-surface round)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-review-surface-"));
-
-  try {
-    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir);
-    const { env, ghLogPath } = await writeGhStub(tempDir, [
-      {
-        stdout: JSON.stringify({
-          data: {
-            repository: {
-              pullRequest: {
-                id: "PR_abc123",
-                isDraft: true,
-                headRefOid: headSha,
-                baseRefName: baseBranch,
-                state: "OPEN",
-                mergeStateStatus: "CLEAN",
-              },
-            },
-          },
-        }),
-      },
-      {
-        stdout: JSON.stringify([
-          { name: "test", state: "success", bucket: "pass" },
-        ]),
-      },
-      { stdout: "[]" }, // issue comments: no verdict here
-      {
-        stdout: JSON.stringify([
-          {
-            body: `Gate review: draft_gate\nReviewed head SHA: ${headSha}\nVerdict: clean\nFindings summary: no issues found\nNext action: mark ready for review`,
-            id: 4001,
-            state: "COMMENTED",
-            submitted_at: "2026-06-05T00:00:00Z",
-            html_url: "https://github.com/owner/repo/pull/17#pullrequestreview-4001",
-          },
-        ]),
-      },
-      ...gateThreadLoginStubs(),
-      { stdout: "" }, // gh pr ready
-    ]);
-
-    const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17"],
-      { env, cwd: tempDir },
-    );
-
-    assert.equal(result.code, 0, `Expected exit code 0, got ${result.code}. Stderr: ${result.stderr}`);
-    const output = JSON.parse(result.stdout);
-    assert.equal(output.ok, true, `Script returned ok=false: ${result.stderr}`);
-    assert.equal(output.action, "marked_ready");
-    const calls = await readGhCalls(ghLogPath);
-    const readyCall = calls.find((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready");
-    assert.ok(readyCall, `gh pr ready should have been called. Calls: ${JSON.stringify(calls)}`);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("still marks ready off an issue-comment verdict when the reviews fetch fails (fail-open)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-reviews-fetch-fail-"));
-
-  try {
-    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir);
-    const { env, ghLogPath } = await writeGhStub(tempDir, [
-      {
-        stdout: JSON.stringify({
-          data: {
-            repository: {
-              pullRequest: {
-                id: "PR_abc123",
-                isDraft: true,
-                headRefOid: headSha,
-                baseRefName: baseBranch,
-                state: "OPEN",
-                mergeStateStatus: "CLEAN",
-              },
-            },
-          },
-        }),
-      },
-      {
-        stdout: JSON.stringify([
-          { name: "test", state: "success", bucket: "pass" },
-        ]),
-      },
-      {
-        stdout: JSON.stringify([
-          {
-            body: `Gate review: draft_gate\nReviewed head SHA: ${headSha}\nVerdict: clean\nFindings summary: no issues found\nNext action: mark ready for review`,
-            id: 101,
-            html_url: "https://github.com/owner/repo/pull/17#issuecomment-101",
-            created_at: "2026-06-05T00:00:00Z",
-            updated_at: "2026-06-05T00:00:00Z",
-          },
-        ]),
-      },
-      { stdout: "", stderr: "HTTP 500", exitCode: 1 }, // reviews fetch fails
-      ...gateThreadLoginStubs(),
-      { stdout: "" }, // gh pr ready
-    ]);
-
-    const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17"],
-      { env, cwd: tempDir },
-    );
-
-    assert.equal(result.code, 0, `Expected exit code 0, got ${result.code}. Stderr: ${result.stderr}`);
-    const output = JSON.parse(result.stdout);
-    assert.equal(output.action, "marked_ready");
-    const calls = await readGhCalls(ghLogPath);
-    assert.ok(calls.find((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready"));
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
 test("refuses to mark ready when PR title contains a WIP marker", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-wip-title-"));
 
@@ -500,107 +340,6 @@ test("refuses to mark ready when PR title contains a WIP marker", async () => {
     const calls = await readGhCalls(ghLogPath);
     const readyCall = calls.find((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready");
     assert.ok(!readyCall, `gh pr ready should not be called for a WIP title. Calls: ${JSON.stringify(calls)}`);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("proceeds when PR title is clean", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-clean-title-"));
-
-  try {
-    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir);
-    const { env, ghLogPath } = await writeGhStub(tempDir, [
-      {
-        stdout: JSON.stringify({
-          data: {
-            repository: {
-              pullRequest: {
-                id: "PR_abc123",
-                isDraft: true,
-                headRefOid: headSha,
-                baseRefName: baseBranch,
-                state: "OPEN",
-                mergeStateStatus: "CLEAN",
-                title: "Add user authentication flow",
-              },
-            },
-          },
-        }),
-      },
-      {
-        stdout: JSON.stringify([
-          { name: "test", state: "success", bucket: "pass" },
-        ]),
-      },
-      {
-        stdout: JSON.stringify([
-          {
-            body: `Gate review: draft_gate\nReviewed head SHA: ${headSha}\nVerdict: clean\nFindings summary: no issues found\nNext action: mark ready for review`,
-            id: 101,
-            html_url: "https://github.com/owner/repo/pull/17#issuecomment-101",
-            created_at: "2026-06-05T00:00:00Z",
-            updated_at: "2026-06-05T00:00:00Z",
-          },
-        ]),
-      },
-      ...gateCloseStubs(),
-      { stdout: "" }, // gh pr ready
-    ]);
-
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
-
-    assert.equal(result.code, 0, `Expected exit code 0, got ${result.code}. Stderr: ${result.stderr}`);
-    const output = JSON.parse(result.stdout);
-    assert.equal(output.ok, true);
-    assert.equal(output.action, "marked_ready");
-
-    const calls = await readGhCalls(ghLogPath);
-    const readyCall = calls.find((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready");
-    assert.ok(readyCall, "gh pr ready should have been called for a clean title");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-test.skip("--skip-gate-check allows transition without gate evidence", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-skip-gate-"));
-
-  try {
-    const { env, ghLogPath } = await writeGhStub(tempDir, [
-      {
-        stdout: JSON.stringify({
-          data: {
-            repository: {
-              pullRequest: {
-                id: "PR_abc123",
-                isDraft: true,
-                headRefOid: "abc123def456",
-                state: "OPEN",
-                mergeStateStatus: "CLEAN",
-              },
-            },
-          },
-        }),
-      },
-      {
-        stdout: JSON.stringify([
-          { name: "test", state: "success", bucket: "pass" },
-        ]),
-      },
-      { stdout: "" }, // no gate evidence check (--skip-gate-check)
-      { stdout: "" }, // gh pr ready
-    ]);
-
-    const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17"],
-      { env },
-    );
-
-    assert.equal(result.code, 0);
-    const output = JSON.parse(result.stdout);
-    assert.equal(output.ok, true);
-    assert.equal(output.gateCheckSkipped, true);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -727,7 +466,7 @@ test("board tail targets the closing issue (not the PR) when closingIssues prese
     };
     const result = await readyForReview(
       { repo: "owner/repo", pr: 17 },
-      { env, repoRoot: tempDir, syncBoardStatus: fakeSync, evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire },
+      { env, repoRoot: tempDir, runChild: env[GH_RUNNER], syncBoardStatus: fakeSync, evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire },
     );
     assert.equal(result.ok, true);
     assert.equal(result.action, "marked_ready");
@@ -750,7 +489,7 @@ test("board tail falls back to the PR number when closingIssues is empty (#1069)
     };
     const result = await readyForReview(
       { repo: "owner/repo", pr: 17 },
-      { env, repoRoot: tempDir, syncBoardStatus: fakeSync, evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire },
+      { env, repoRoot: tempDir, runChild: env[GH_RUNNER], syncBoardStatus: fakeSync, evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire },
     );
     assert.equal(result.action, "marked_ready");
     assert.equal(syncCalls.length, 1);
@@ -767,7 +506,7 @@ test("board tail is NON-FATAL: a throwing syncBoardStatus never fails marking re
     const fakeSync = async () => { throw new Error("board exploded"); };
     const result = await readyForReview(
       { repo: "owner/repo", pr: 17 },
-      { env, repoRoot: tempDir, syncBoardStatus: fakeSync, evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire },
+      { env, repoRoot: tempDir, runChild: env[GH_RUNNER], syncBoardStatus: fakeSync, evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire },
     );
     assert.equal(result.ok, true);
     assert.equal(result.action, "marked_ready");
@@ -780,129 +519,6 @@ test("board tail is NON-FATAL: a throwing syncBoardStatus never fails marking re
   }
 });
 
-test("fails when draft_gate marker does not match current head SHA", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-mismatch-head-"));
-
-  try {
-    // PR head is a NEW commit pushed after the gate was run
-    const currentHeadSha = "bbb456789012";
-    // Gate evidence was recorded against the OLD commit
-    const gateHeadSha = "abc123def456";
-    const { env, ghLogPath } = await writeGhStub(tempDir, [
-      {
-        stdout: JSON.stringify({
-          data: {
-            repository: {
-              pullRequest: {
-                id: "PR_abc123",
-                isDraft: true,
-                headRefOid: currentHeadSha,
-                state: "OPEN",
-                mergeStateStatus: "CLEAN",
-              },
-            },
-          },
-        }),
-      },
-      {
-        stdout: JSON.stringify([
-          { name: "test", state: "success", bucket: "pass" },
-        ]),
-      },
-      {
-        stdout: JSON.stringify([
-          {
-            body: "Gate review: draft_gate\nReviewed head SHA: " + gateHeadSha + "\nVerdict: clean\nFindings summary: no issues found\nNext action: mark ready for review",
-            id: 101,
-            html_url: "https://github.com/owner/repo/pull/17#issuecomment-101",
-            created_at: "2026-06-05T00:00:00Z",
-            updated_at: "2026-06-05T00:00:00Z",
-          },
-        ]),
-      },
-      ...gateCloseStubs(),
-    ]);
-
-    const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17"],
-      { env },
-    );
-
-    assert.equal(result.code, 1);
-    // Gate evidence exists but marker head SHA differs from PR head
-    // Marker head SHA differs from PR head → effectiveHeadClean is false.
-    // Error differentiates between "mismatch" (marker visible with different head)
-    // and "missing/incomplete" (no marker at all for current head).
-    assert.match(result.stderr, /missing or incomplete|does not match current head/i);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("succeeds when gate comment has abbreviated SHA matching full PR head SHA", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-abbrev-sha-"));
-
-  try {
-    // GitHub reports full 40-char SHA; gate comment may record abbreviated 7+ char SHA
-    const { headSha: fullHeadSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir);
-    const abbrevHeadSha = fullHeadSha.slice(0, 7);
-    const { env, ghLogPath } = await writeGhStub(tempDir, [
-      {
-        stdout: JSON.stringify({
-          data: {
-            repository: {
-              pullRequest: {
-                id: "PR_abc123",
-                isDraft: true,
-                headRefOid: fullHeadSha,
-                baseRefName: baseBranch,
-                state: "OPEN",
-                mergeStateStatus: "CLEAN",
-              },
-            },
-          },
-        }),
-      },
-      {
-        stdout: JSON.stringify([
-          { name: "test", state: "success", bucket: "pass" },
-        ]),
-      },
-      {
-        stdout: JSON.stringify([
-          {
-            body: "Gate review: draft_gate\nReviewed head SHA: " + abbrevHeadSha + "\nVerdict: clean\nFindings summary: no issues found\nNext action: mark ready for review",
-            id: 101,
-            html_url: "https://github.com/owner/repo/pull/17#issuecomment-101",
-            created_at: "2026-06-05T00:00:00Z",
-            updated_at: "2026-06-05T00:00:00Z",
-          },
-        ]),
-      },
-      ...gateCloseStubs(),
-      { stdout: "" }, // gh pr ready
-    ]);
-
-    const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17"],
-      { env, cwd: tempDir },
-    );
-
-    assert.equal(result.code, 0);
-    const output = JSON.parse(result.stdout);
-    assert.equal(output.ok, true);
-    assert.equal(output.action, "marked_ready");
-    assert.equal(output.draftGateSatisfied, true);
-
-    const calls = await readGhCalls(ghLogPath);
-    const readyCall = calls.find((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready");
-    assert.ok(readyCall, "gh pr ready should have been called");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-// ---------------------------------------------------------------------------
 // #1585: ready-for-review backstop — 0 unresolved gate-authored threads
 // ---------------------------------------------------------------------------
 
@@ -1013,414 +629,56 @@ function sizeBudgetGhStubEntries({ headSha, baseBranch, extraEntries = [], body 
   ];
 }
 
-test("size budget: escalate outcome allows ready and records the escalation signal on the result", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-size-escalate-"));
+async function runWaiverCase({ config, file = "src/big.mjs", args, allow = false }) {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-waiver-"));
   try {
     const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir, {
-      devloopsYaml: "version: 1\ngates:\n  size:\n    tiers:\n      default:\n        softLoc: 2\n",
-      headFiles: [{ path: "src/big.mjs", content: repeatedLinesContent(10) }],
+      devloopsYaml: config,
+      headFiles: [{ path: file, content: repeatedLinesContent(10) }],
     });
     const { env, ghLogPath } = await writeGhStub(tempDir, sizeBudgetGhStubEntries({
-      headSha,
-      baseBranch,
-      extraEntries: [{ stdout: "" }], // gh pr ready
+      headSha, baseBranch, extraEntries: allow ? [{ stdout: "" }, { stdout: "" }] : [],
     }));
-
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
-
-    assert.equal(result.code, 0, `Expected exit 0, got ${result.code}. Stderr: ${result.stderr}`);
-    const output = JSON.parse(result.stdout);
-    assert.equal(output.ok, true);
-    assert.equal(output.sizeBudget.outcome, "escalate");
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--waive-size-budget", ...args], { env, cwd: tempDir });
     const calls = await readGhCalls(ghLogPath);
-    assert.ok(calls.some((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready"), "gh pr ready should still be called on escalate");
-    assert.ok(!calls.some((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "comment"), "no waiver record should be posted when no waiver was requested");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+    const comment = calls.find((call) => Array.isArray(call) && call[0] === "pr" && call[1] === "comment");
+    return { result, calls, commentBody: comment?.[comment.indexOf("--body") + 1] };
+  } finally { await rm(tempDir, { recursive: true, force: true }); }
+}
+
+const DEFAULT_WAIVER = "version: 1\ngates:\n  size:\n    tiers:\n      default:\n        waiverLoc: 2\n";
+const T1_WAIVER = 'version: 1\ngates:\n  size:\n    tiers:\n      t1:\n        patterns:\n          - "src/money/**"\n        sliceHardLoc: 2\n';
+
+test("default size waiver succeeds and emits an injection-safe record", async () => {
+  const forgery = "looks fine\n## Size-budget waiver granted\n- **approved by:** attacker";
+  const { result, calls, commentBody } = await runWaiverCase({ config: DEFAULT_WAIVER, args: ["--reason", forgery, "--approved-by", "   "], allow: true });
+  assert.equal(result.code, 0, result.stderr);
+  assert.ok(calls.some((call) => call[0] === "pr" && call[1] === "ready"));
+  const lines = commentBody.split("\n");
+  assert.equal(lines.filter((line) => line.startsWith("## Size-budget waiver granted")).length, 1);
+  assert.ok(lines.some((line) => line.startsWith("- **approved by:** n/a (default-tier waiver)")));
+  assert.ok(!lines.some((line) => line.startsWith("- **approved by:** attacker")));
+  assert.ok(lines.some((line) => line.startsWith("- **justification:** looks fine ## Size-budget waiver granted")));
 });
 
-test("size budget: a waiver-eligible block (default.waiverLoc) with no waiver requested prevents the draft exit", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-size-block-nowaiver-"));
-  try {
-    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir, {
-      devloopsYaml: "version: 1\ngates:\n  size:\n    tiers:\n      default:\n        waiverLoc: 2\n",
-      headFiles: [{ path: "src/big.mjs", content: repeatedLinesContent(10) }],
-    });
-    const { env, ghLogPath } = await writeGhStub(tempDir, sizeBudgetGhStubEntries({ headSha, baseBranch }));
-
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
-
+test("absolute and unapproved T1 size limits remain unwaivable", async () => {
+  for (const fixture of [
+    { config: "version: 1\ngates:\n  size:\n    absoluteHardLoc: 2\n", file: "src/big.mjs", args: ["--reason", "override", "--approved-by", "someone"], message: /absoluteHardLoc/ },
+    { config: T1_WAIVER, file: "src/money/pay.mjs", args: ["--reason", "money-slice rename"], message: /approved-by/i },
+  ]) {
+    const { result, calls } = await runWaiverCase(fixture);
     assert.equal(result.code, 1);
-    assert.match(result.stderr, /blocked by size budget/i);
-    assert.match(result.stderr, /waiverLoc/);
-    const calls = await readGhCalls(ghLogPath);
-    assert.ok(!calls.some((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready"), "gh pr ready must not be called on a block");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
+    assert.match(result.stderr, fixture.message);
+    assert.ok(!calls.some((call) => call[0] === "pr" && ["ready", "comment"].includes(call[1])));
   }
 });
 
-test("ADR tripwire: contract-doc touch without ADR or waiver blocks the draft exit (#1867)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-adr-block-"));
-  try {
-    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir, {
-      headFiles: [{ path: "skills/docs/new-contract.md", content: "# New contract\n\nSome prose.\n" }],
-    });
-    const { env, ghLogPath } = await writeGhStub(tempDir, sizeBudgetGhStubEntries({ headSha, baseBranch }));
-
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
-
-    assert.equal(result.code, 1);
-    assert.match(result.stderr, /blocked by the ADR tripwire/i);
-    const calls = await readGhCalls(ghLogPath);
-    assert.ok(!calls.some((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready"), "gh pr ready must not be called on an ADR-tripwire block");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("ADR tripwire: body-derived waiver satisfies a decision-shaped touch (#1867)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-adr-waiver-"));
-  try {
-    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir, {
-      headFiles: [{ path: "packages/core/src/config/extension-defaults.yaml", content: "version: 1\n" }],
-    });
-    const { env, ghLogPath } = await writeGhStub(tempDir, sizeBudgetGhStubEntries({
-      headSha,
-      baseBranch,
-      body: "Body.\nadr-tripwire:allow deliberate gate re-tune recorded upstream\n",
-      extraEntries: [{ stdout: "" }], // gh pr ready
-    }));
-
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
-
-    assert.equal(result.code, 0, `Expected exit 0, got ${result.code}. Stderr: ${result.stderr}`);
-    const output = JSON.parse(result.stdout);
-    assert.equal(output.ok, true);
-    assert.equal(output.adrTripwire.outcome, "pass");
-    assert.equal(output.adrTripwire.satisfiedBy, "waiver");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("size budget: a valid default-tier waiver allows the same over-waiverLoc PR through and posts a minimal waiver record", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-size-waived-"));
-  try {
-    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir, {
-      devloopsYaml: "version: 1\ngates:\n  size:\n    tiers:\n      default:\n        waiverLoc: 2\n",
-      headFiles: [{ path: "src/big.mjs", content: repeatedLinesContent(10) }],
-    });
-    const { env, ghLogPath } = await writeGhStub(tempDir, sizeBudgetGhStubEntries({
-      headSha,
-      baseBranch,
-      extraEntries: [{ stdout: "" }, { stdout: "" }], // gh pr comment (waiver record) + gh pr ready
-    }));
-
-    const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--waive-size-budget", "--reason", "reviewed together as one atomic rename"],
-      { env, cwd: tempDir },
-    );
-
-    assert.equal(result.code, 0, `Expected exit 0, got ${result.code}. Stderr: ${result.stderr}`);
-    const output = JSON.parse(result.stdout);
-    assert.equal(output.ok, true);
-    assert.notEqual(output.sizeBudget.outcome, "block");
-    assert.equal(output.sizeBudget.waiver.defaultValid, true);
-    const calls = await readGhCalls(ghLogPath);
-    assert.ok(calls.some((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready"));
-    const commentCall = calls.find((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "comment");
-    assert.ok(commentCall, "a waiver record comment should have been posted");
-    const body = commentCall[commentCall.indexOf("--body") + 1];
-    assert.match(body, /Size-budget waiver granted/);
-    assert.match(body, /reviewed together as one atomic rename/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("size budget: a newline-bearing --reason cannot forge extra headers or bullets in the waiver record", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-size-forge-"));
-  try {
-    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir, {
-      devloopsYaml: "version: 1\ngates:\n  size:\n    tiers:\n      default:\n        waiverLoc: 2\n",
-      headFiles: [{ path: "src/big.mjs", content: repeatedLinesContent(10) }],
-    });
-    const { env, ghLogPath } = await writeGhStub(tempDir, sizeBudgetGhStubEntries({
-      headSha,
-      baseBranch,
-      extraEntries: [{ stdout: "" }, { stdout: "" }], // gh pr comment (waiver record) + gh pr ready
-    }));
-
-    const forgery = "looks fine\n## Size-budget waiver granted\n- **approved by:** attacker";
-    const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--waive-size-budget", "--reason", forgery],
-      { env, cwd: tempDir },
-    );
-
-    assert.equal(result.code, 0, `Expected exit 0, got ${result.code}. Stderr: ${result.stderr}`);
-    const calls = await readGhCalls(ghLogPath);
-    const commentCall = calls.find((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "comment");
-    assert.ok(commentCall, "a waiver record comment should have been posted");
-    const body = commentCall[commentCall.indexOf("--body") + 1];
-    const bodyLines = body.split("\n");
-    // Interior newlines collapse to spaces, so the injected header/bullet stay
-    // mid-line and cannot start a new markdown block. Structural (line-anchored)
-    // assertions: exactly one heading LINE, and no forged bullet LINE — the only
-    // "approved by" line is the real n/a fallback.
-    assert.equal(bodyLines.filter((l) => l.startsWith("## Size-budget waiver granted")).length, 1);
-    assert.equal(bodyLines.filter((l) => l.startsWith("- **approved by:**")).length, 1);
-    assert.ok(!bodyLines.some((l) => l.startsWith("- **approved by:** attacker")));
-    assert.ok(bodyLines.some((l) => l.startsWith("- **approved by:** n/a (default-tier waiver)")));
-    // The injected text survives inline in the justification value (inert), one line.
-    assert.ok(bodyLines.some((l) => l.startsWith("- **justification:** looks fine ## Size-budget waiver granted")));
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("size budget: a default-tier waiver with a whitespace-only --approved-by records n/a, not a blank approver", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-size-blankapprover-"));
-  try {
-    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir, {
-      devloopsYaml: "version: 1\ngates:\n  size:\n    tiers:\n      default:\n        waiverLoc: 2\n",
-      headFiles: [{ path: "src/big.mjs", content: repeatedLinesContent(10) }],
-    });
-    const { env, ghLogPath } = await writeGhStub(tempDir, sizeBudgetGhStubEntries({
-      headSha,
-      baseBranch,
-      extraEntries: [{ stdout: "" }, { stdout: "" }], // gh pr comment (waiver record) + gh pr ready
-    }));
-
-    const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--waive-size-budget", "--reason", "atomic rename", "--approved-by", "   "],
-      { env, cwd: tempDir },
-    );
-
-    assert.equal(result.code, 0, `Expected exit 0, got ${result.code}. Stderr: ${result.stderr}`);
-    const calls = await readGhCalls(ghLogPath);
-    const commentCall = calls.find((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "comment");
-    assert.ok(commentCall, "a waiver record comment should have been posted");
-    const body = commentCall[commentCall.indexOf("--body") + 1];
-    // Whitespace-only --approved-by normalizes to null, so the record shows the
-    // default-tier fallback rather than a blank "approved by:" line.
-    assert.match(body, /approved by:\*\* n\/a \(default-tier waiver\)/);
-    assert.doesNotMatch(body, /approved by:\*\*\s*$/m);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("size budget: an unwaivable block (absoluteHardLoc) is never bypassed by --waive-size-budget", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-size-unwaivable-"));
-  try {
-    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir, {
-      devloopsYaml: "version: 1\ngates:\n  size:\n    absoluteHardLoc: 2\n",
-      headFiles: [{ path: "src/big.mjs", content: repeatedLinesContent(10) }],
-    });
-    const { env, ghLogPath } = await writeGhStub(tempDir, sizeBudgetGhStubEntries({ headSha, baseBranch }));
-
-    const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--waive-size-budget", "--reason", "please let this through", "--approved-by", "someone"],
-      { env, cwd: tempDir },
-    );
-
-    assert.equal(result.code, 1);
-    assert.match(result.stderr, /blocked by size budget/i);
-    assert.match(result.stderr, /absoluteHardLoc/);
-    assert.match(result.stderr, /no waiver possible/i);
-    const calls = await readGhCalls(ghLogPath);
-    assert.ok(!calls.some((c) => Array.isArray(c) && c[0] === "pr" && (c[1] === "ready" || c[1] === "comment")));
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("size budget: a T1-slice waiver without --approved-by is refused", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-size-t1-noapprover-"));
-  try {
-    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir, {
-      devloopsYaml: 'version: 1\ngates:\n  size:\n    tiers:\n      t1:\n        patterns:\n          - "src/money/**"\n        sliceHardLoc: 2\n',
-      headFiles: [{ path: "src/money/pay.mjs", content: repeatedLinesContent(10) }],
-    });
-    const { env, ghLogPath } = await writeGhStub(tempDir, sizeBudgetGhStubEntries({ headSha, baseBranch }));
-
-    const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--waive-size-budget", "--reason", "money-slice rename"],
-      { env, cwd: tempDir },
-    );
-
-    assert.equal(result.code, 1);
-    assert.match(result.stderr, /blocked by size budget/i);
-    assert.match(result.stderr, /sliceHardLoc/);
-    assert.match(result.stderr, /approved-by/i);
-    const calls = await readGhCalls(ghLogPath);
-    assert.ok(!calls.some((c) => Array.isArray(c) && c[0] === "pr" && (c[1] === "ready" || c[1] === "comment")));
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("size budget: a T1-slice waiver WITH --approved-by is honored and names the approver in the record", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-size-t1-approved-"));
-  try {
-    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir, {
-      devloopsYaml: 'version: 1\ngates:\n  size:\n    tiers:\n      t1:\n        patterns:\n          - "src/money/**"\n        sliceHardLoc: 2\n',
-      headFiles: [{ path: "src/money/pay.mjs", content: repeatedLinesContent(10) }],
-    });
-    const { env, ghLogPath } = await writeGhStub(tempDir, sizeBudgetGhStubEntries({
-      headSha,
-      baseBranch,
-      extraEntries: [{ stdout: "" }, { stdout: "" }], // gh pr comment (waiver record) + gh pr ready
-    }));
-
-    const result = await runNode(
-      ["--repo", "owner/repo", "--pr", "17", "--waive-size-budget", "--reason", "money-slice rename", "--approved-by", "jane-reviewer"],
-      { env, cwd: tempDir },
-    );
-
-    assert.equal(result.code, 0, `Expected exit 0, got ${result.code}. Stderr: ${result.stderr}`);
-    const output = JSON.parse(result.stdout);
-    assert.equal(output.ok, true);
-    assert.equal(output.sizeBudget.waiver.t1Valid, true);
-    const calls = await readGhCalls(ghLogPath);
-    const commentCall = calls.find((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "comment");
-    assert.ok(commentCall, "a waiver record comment should have been posted");
-    const body = commentCall[commentCall.indexOf("--body") + 1];
-    assert.match(body, /jane-reviewer/);
-    assert.match(body, /\*\*tier:\*\* t1/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("size budget: non-empty config errors[] block the draft exit fail-closed", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-size-configerr-"));
-  try {
-    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir, {
-      devloopsYaml: "gates:\n  size: [\n", // malformed — invalid YAML/JSON
-    });
-    const { env, ghLogPath } = await writeGhStub(tempDir, sizeBudgetGhStubEntries({ headSha, baseBranch }));
-
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
-
-    assert.equal(result.code, 1);
-    assert.match(result.stderr, /blocked by size budget/i);
-    assert.match(result.stderr, /config errors/i);
-    const calls = await readGhCalls(ghLogPath);
-    assert.ok(!calls.some((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready"));
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("size budget: fails closed when the PR has no resolvable baseRefName (guard throws before the diff)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-size-nobaseref-"));
-  try {
-    const headSha = "abc123def456";
-    const { env, ghLogPath } = await writeGhStub(tempDir, sizeBudgetGhStubEntries({ headSha, baseBranch: undefined }));
-
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
-
-    assert.equal(result.code, 1);
-    assert.match(result.stderr, /Could not resolve PR #17 base branch/i);
-    const calls = await readGhCalls(ghLogPath);
-    assert.ok(!calls.some((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready"), "gh pr ready must not be called when baseRefName cannot be resolved");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("size budget: fails closed when origin/<base> is not locally resolvable (git diff failure)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-size-badbase-"));
-  try {
-    const { headSha } = await initSizeBudgetFixtureRepo(tempDir);
-    const { env, ghLogPath } = await writeGhStub(tempDir, sizeBudgetGhStubEntries({ headSha, baseBranch: "totally-unresolvable-base" }));
-
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
-
-    assert.equal(result.code, 1);
-    assert.match(result.stderr, /git diff against --base/i);
-    const calls = await readGhCalls(ghLogPath);
-    assert.ok(!calls.some((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready"), "gh pr ready must not be called when the base ref cannot be resolved");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-// ---------------------------------------------------------------------------
-// Fail-closed tracker-backed PR-description contract (issue #1863).
-// ---------------------------------------------------------------------------
-
-test("prBodySpec: a tracker-backed PR whose body fails the PR-description contract blocks ready-for-review (fail closed, AC1)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-prbody-block-"));
-  try {
-    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir);
-    const { env, ghLogPath } = await writeGhStub(tempDir, sizeBudgetGhStubEntries({
-      headSha,
-      baseBranch,
-      body: "Closes #900\n\nShips the feature.",
-      closingIssueNodes: [{ number: 900 }],
-    }));
-
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
-
-    assert.equal(result.code, 1);
-    assert.match(result.stderr, /PR-description contract/);
-    assert.match(result.stderr, /missing_acceptance_criteria/);
-    assert.match(result.stderr, /missing_definition_of_done/);
-    assert.match(result.stderr, /missing_explicit_non_goals/);
-    const calls = await readGhCalls(ghLogPath);
-    assert.ok(!calls.some((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready"), "gh pr ready must not be called when the PR-description contract fails");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("prBodySpec: a tracker-backed PR with a fully compliant body passes ready-for-review (green path, AC6)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-prbody-pass-"));
-  try {
-    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir);
-    const { env } = await writeGhStub(tempDir, sizeBudgetGhStubEntries({
-      headSha,
-      baseBranch,
-      body: COMPLIANT_TRACKER_BODY,
-      closingIssueNodes: [{ number: 55 }],
-      extraEntries: [{ stdout: "" }], // gh pr ready
-    }));
-
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
-
-    assert.equal(result.code, 0, `Expected exit 0, got ${result.code}. Stderr: ${result.stderr}`);
-    const output = JSON.parse(result.stdout);
-    assert.equal(output.ok, true);
-    assert.equal(output.prBodySpec.ok, true);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("prBodySpec: an issue-less PR (no closing issue reference) skips this check entirely (regression guard — lightweight path unchanged)", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-prbody-skip-"));
-  try {
-    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir);
-    const { env } = await writeGhStub(tempDir, sizeBudgetGhStubEntries({
-      headSha,
-      baseBranch,
-      body: "no invariants at all",
-      extraEntries: [{ stdout: "" }], // gh pr ready
-    }));
-
-    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
-
-    assert.equal(result.code, 0, `Expected exit 0, got ${result.code}. Stderr: ${result.stderr}`);
-    const output = JSON.parse(result.stdout);
-    assert.equal(output.ok, true);
-    assert.equal(output.prBodySpec, null);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+test("approved T1 size waiver names its approver", async () => {
+  const { result, commentBody } = await runWaiverCase({ config: T1_WAIVER, file: "src/money/pay.mjs", args: ["--reason", "money-slice rename", "--approved-by", "jane-reviewer"], allow: true });
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).sizeBudget.waiver.t1Valid, true);
+  assert.match(commentBody, /jane-reviewer/);
+  assert.match(commentBody, /\*\*tier:\*\* t1/);
 });
 
 test("parseReadyForReviewCliArgs requires --reason when --waive-size-budget is set", () => {

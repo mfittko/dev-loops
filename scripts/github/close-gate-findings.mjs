@@ -295,8 +295,8 @@ function selectDispositionTargets(threads, round, login, mediumFixWindow) {
 // `/disposition=deferred/` body search): a finding whose own summary or
 // recommendation happens to quote that literal token must never be mistaken
 // for an already-stamped marker.
-async function stampDeferredDisposition({ repo, commentId, round, mediumFixWindow, issueNumber }, { env, ghCommand }) {
-  const payload = await runGhJson(["api", `repos/${repo}/pulls/comments/${commentId}`], { env, ghCommand });
+async function stampDeferredDisposition({ repo, commentId, round, mediumFixWindow, issueNumber }, { env, ghCommand, runChild }) {
+  const payload = await runGhJson(["api", `repos/${repo}/pulls/comments/${commentId}`], { env, ghCommand, runChild });
   // Trimmed to match parseReviewThreads' normalizeBody, which is what
   // selectDispositionTargets parsed thread.body through to select this exact
   // comment as a deferral target: two differently normalized copies of one
@@ -339,7 +339,7 @@ async function stampDeferredDisposition({ repo, commentId, round, mediumFixWindo
   const stamped = body.replace(FINDING_MARKER_RE, (m) => m.replace(/\s*-->$/, ` disposition=deferred issue=${issueNumber} -->`));
   await runGhJson(
     ["api", "-X", "PATCH", `repos/${repo}/pulls/comments/${commentId}`, "-f", `body=${stamped}`],
-    { env, ghCommand },
+    { env, ghCommand, runChild },
   );
 }
 
@@ -367,7 +367,7 @@ function findExistingFollowUpIssueNumber(threads, login) {
 // fetched alongside `threads` (fetchThreadsWithFullBodies) — reused here as
 // the reply-target validation snapshot rather than re-fetching it, since it is
 // already fresh (fetched immediately before this pass runs).
-async function runDispositionPass({ repo, pr, round, threads, snapshot, login, mediumFixWindow, allowedRefs = [] }, { env, ghCommand }) {
+async function runDispositionPass({ repo, pr, round, threads, snapshot, login, mediumFixWindow, allowedRefs = [] }, { env, ghCommand, runChild }) {
   // #1672: Before stamping, detect any contract-violating disposition=deferred
   // stamps already present on gate-authored threads (a subagent bypass).
   detectContractViolatingDeferredStamps(threads, login, round, mediumFixWindow);
@@ -447,7 +447,7 @@ async function runDispositionPass({ repo, pr, round, threads, snapshot, login, m
         }));
         ({ issueNumber } = await ensureFollowUpIssue(
           { repo, pr, entries, existingIssueNumber },
-          { env, ghCommand },
+          { env, ghCommand, run: runChild },
         ));
       }
       // A pure retry (every fileable target already stamped) must always
@@ -458,10 +458,10 @@ async function runDispositionPass({ repo, pr, round, threads, snapshot, login, m
       for (const target of buildableFileable) {
         try {
           const message = dispositionMessage({ fp: target.fp, severity: target.severity, angle: target.angle, round, mediumFixWindow, repo, issueNumber, body: target.body, operatorVisible: target.operatorVisible });
-          await stampDeferredDisposition({ repo, commentId: target.commentId, round, mediumFixWindow, issueNumber }, { env, ghCommand });
+          await stampDeferredDisposition({ repo, commentId: target.commentId, round, mediumFixWindow, issueNumber }, { env, ghCommand, runChild });
           await replyAndMaybeResolve(
             { repo, pr, commentId: target.commentId, threadId: target.threadId, body: message, resolve: true, validatedSnapshot: snapshot, allowedRefs },
-            { env, ghCommand },
+            { env, ghCommand, runChild },
           );
           fileableResolved += 1;
         } catch (err) {
@@ -478,7 +478,7 @@ async function runDispositionPass({ repo, pr, round, threads, snapshot, login, m
       const message = unfiledResolutionMessage({ fp: target.fp, severity: target.severity, angle: target.angle, round, body: target.body, operatorVisible: target.operatorVisible, mediumFixWindow });
       await replyAndMaybeResolve(
         { repo, pr, commentId: target.commentId, threadId: target.threadId, body: message, resolve: true, validatedSnapshot: snapshot, allowedRefs },
-        { env, ghCommand },
+        { env, ghCommand, runChild },
       );
       unfiledResolved += 1;
     } catch (err) {
@@ -556,10 +556,10 @@ export function parseCloseGateFindingsCliArgs(argv) {
 // Orchestrator
 // ---------------------------------------------------------------------------
 
-export async function closeGateFindings(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd() } = {}) {
+export async function closeGateFindings(options, { env = process.env, ghCommand = "gh", runChild, repoRoot = process.cwd() } = {}) {
   const { repo, pr, gate, headSha } = await readGateFindingsLedger(options.ledgerPath, { errorFactory: parseError });
   const tmpRoot = options.tmpRoot || "tmp";
-  const gh = { env, ghCommand };
+  const gh = { env, ghCommand, runChild };
 
   // 1. The authenticated login — the trust boundary for the gate-authored
   // provenance decision below, resolved once rather than trusted from rendered

@@ -50,11 +50,11 @@ jobs:
 
       # Root cause of #1033 (+ #1886 prerelease drift): fail the release if the
       # root `dev-loops` manifest's `@dev-loops/core` dependency (full version,
-      # including the prerelease token) or the committed `package-lock.json`
+      # including the prerelease token) or the committed `bun.lock`
       # version fields are out of lockstep with the version being released
       # (e.g. dev-loops@0.6.2 carrying @dev-loops/core@^0.2.6; rc.7 shipping a
       # lockfile still pinned to rc.6). node-builtins-only, so it runs without
-      # `npm ci`.
+      # `bun install --frozen-lockfile`.
       - name: Assert manifest and lockfile are in lockstep with the release
         run: |
           node scripts/release/assert-core-dependency-version.mjs \

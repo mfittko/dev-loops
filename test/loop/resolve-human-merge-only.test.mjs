@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import { test } from "bun:test";
 
 import { loadDevLoopConfig, resolveHumanMergeOnly } from "@dev-loops/core/config";
 
@@ -19,7 +19,7 @@ function pathJoin(...parts) {
 }
 
 test("resolve-human-merge-only prints exactly what the repo config's resolveHumanMergeOnly resolves", async () => {
-  const r = spawnSync(process.execPath, [scriptPath], { cwd: repoRoot, encoding: "utf8" });
+  const r = spawnSync((Bun.which("node") ?? "node"), [scriptPath], { cwd: repoRoot, encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
   // the script must emit a single-line binary contract the hook compares with === "true"
   assert.match(r.stdout.trim(), /^(true|false)$/);

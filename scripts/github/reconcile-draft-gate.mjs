@@ -201,7 +201,7 @@ export async function reconcileDraftGate(options, { env = process.env, ghCommand
   const draftGateConfig = resolveGateConfig(config, "draft");
   const initialEvidence = await detectCheckpointEvidence(
     { repo: options.repo, pr: options.pr },
-    { env, ghCommand, runChild }
+    { env, ghCommand, runChild, cwd: repoRoot }
   );
   const headSha = initialEvidence.currentHeadSha;
   if (!headSha) {

@@ -127,13 +127,20 @@ async function defaultHealthcheck(url) {
   }
 }
 
-async function defaultLaunchManagedServer({ repoRoot, repo, host, port }) {
+export function buildManagedServerInvocation({ repo, host, port }) {
   const args = [VIEWER_SCRIPT_PATH, '--host', host, '--port', String(port)];
   if (repo !== null) {
     args.push('--repo', repo);
   }
+  const command = process.versions.bun ? globalThis.Bun?.which('node') : process.execPath;
+  if (!command) throw new Error('inspect-run viewer lifecycle requires Node on PATH.');
+  return { command, args };
+}
+
+async function defaultLaunchManagedServer({ repoRoot, repo, host, port }) {
+  const { command, args } = buildManagedServerInvocation({ repo, host, port });
   return await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, args, {
+    const child = spawn(command, args, {
       cwd: repoRoot,
       detached: true,
       stdio: 'ignore',

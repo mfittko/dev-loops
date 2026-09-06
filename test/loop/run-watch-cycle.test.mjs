@@ -1,11 +1,18 @@
-import test from "node:test";
-import { runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
+import { test } from "bun:test";
+import { runIdFreeEnv, runNode as runNodeHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { EventEmitter } from "node:events";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 
-import { formatWatchCycleConcise, parseWatchCycleCliArgs, runWatchCycle } from "../../scripts/loop/run-watch-cycle.mjs";
+import {
+  formatWatchCycleConcise,
+  parseWatchCycleCliArgs,
+  runWatchCycle,
+  watchWorkflowRun,
+} from "../../scripts/loop/run-watch-cycle.mjs";
 
 const EMPTY_THREADS = JSON.stringify({
   data: {
@@ -17,10 +24,110 @@ const EMPTY_THREADS = JSON.stringify({
   },
 });
 
-async function writeGhStub(tempDir, entries) {
-  const { env } = await writeGhStubHelper(tempDir, entries);
-  return { ...env, DEVLOOPS_RUN_ID: "" };
+function makeWatchCycleGhRunner({ requested = false, reviews = [], workflowRuns = [] } = {}) {
+  let reviewRequested = requested;
+  return async (_command, args) => {
+    const has = (value) => args.includes(value);
+    const contains = (value) => args.some((arg) => arg.includes(value));
+    const success = (payload = "") => ({
+      code: 0,
+      stdout: typeof payload === "string" ? payload : `${JSON.stringify(payload)}\n`,
+      stderr: "",
+    });
+    if (has("graphql")) return success(JSON.parse(EMPTY_THREADS));
+    if (contains("requested_reviewers")) {
+      if (has("POST")) {
+        reviewRequested = true;
+        return success({ requested_reviewers: [{ login: "copilot-pull-request-reviewer[bot]" }] });
+      }
+      return success({ users: reviewRequested ? [{ login: "Copilot" }] : [], teams: [] });
+    }
+    if (contains("/issues/17/comments") || contains("/pulls/17/reviews")) return success([]);
+    if (contains("/commits/newsha/check-runs")) {
+      return success({ check_runs: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] });
+    }
+    if (contains("/commits/newsha/status")) return success({ statuses: [] });
+    if (args[0] === "pr" && args[1] === "view") {
+      if (args.some((arg) => arg.includes("headRefName"))) {
+        return success({ headRefName: "copilot/session-branch" });
+      }
+      return success({
+        isDraft: false,
+        state: "OPEN",
+        number: 17,
+        headRefOid: "newsha",
+        reviews,
+        statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
+      });
+    }
+    if (args[0] === "run" && args[1] === "list") return success(workflowRuns);
+    if (args[0] === "run" && args[1] === "watch") return success();
+    return { code: 97, stdout: "", stderr: `unexpected gh args: ${args.join(" ")}\n` };
+  };
 }
+
+test("watchWorkflowRun waits for close after a spawn error", async () => {
+  const child = new EventEmitter();
+  child.stderr = new PassThrough();
+  child.kill = () => true;
+  let settled = false;
+
+  const result = watchWorkflowRun(
+    { repo: "owner/repo", runId: 42 },
+    {
+      env: {},
+      ghCommand: "gh",
+      spawnImpl: () => child,
+    },
+  ).finally(() => {
+    settled = true;
+  });
+
+  child.emit("error", new Error("spawn failed"));
+  await Promise.resolve();
+  assert.equal(settled, false);
+
+  child.emit("close", -1);
+  await assert.rejects(result, /spawn failed/);
+  assert.equal(settled, true);
+});
+
+test("watchWorkflowRun terminates a timed-out child and waits for close", async () => {
+  const child = new EventEmitter();
+  child.stderr = new PassThrough();
+  const killSignals = [];
+  child.kill = (signal) => {
+    killSignals.push(signal);
+    return true;
+  };
+  let timeoutCallback;
+  let settled = false;
+
+  const result = watchWorkflowRun(
+    { repo: "owner/repo", runId: 42, timeoutMs: 10 },
+    {
+      env: {},
+      ghCommand: "gh",
+      spawnImpl: () => child,
+      setTimeoutImpl: (callback) => {
+        timeoutCallback = callback;
+        return 7;
+      },
+      clearTimeoutImpl: () => {},
+    },
+  ).finally(() => {
+    settled = true;
+  });
+
+  timeoutCallback();
+  await Promise.resolve();
+  assert.deepEqual(killSignals, ["SIGTERM"]);
+  assert.equal(settled, false);
+
+  child.emit("close", null);
+  assert.deepEqual(await result, { status: "timed_out" });
+  assert.equal(settled, true);
+});
 
 test("parseWatchCycleCliArgs rejects --probe-only as a removed policy flag", () => {
   assert.throws(
@@ -133,35 +240,6 @@ test("runWatchCycle rejects persistent watch budgets below the unattended extern
     ),
     /requires at least 1800000 ms/i,
   );
-});
-
-test("runWatchCycle uses emitted non-zero watchArgs for normal async waiting", async () => {
-  let watcherOptions;
-  const result = await runWatchCycle(
-    { repo: "owner/repo", pr: 17 },
-    {
-      runHandoffImpl: async () => ({
-        ok: true,
-        action: "watch",
-        state: "waiting_for_copilot_review",
-        allowedTransitions: [],
-        nextAction: "Wait for Copilot review.",
-        snapshot: { repo: "owner/repo", pr: 17 },
-        loopDisposition: "pending",
-        terminal: false,
-        watchArgs: { repo: "owner/repo", pr: 17, pollIntervalMs: 60_000, timeoutMs: 1_800_000 },
-        watchTimeoutPolicy: { classification: "external_healthy_wait", minimumTimeoutMs: 1_800_000, defaultTimeoutMs: 1_800_000 },
-        requestWatchContract: { action: "watch", nextAction: "Wait", requestStatus: "requested", routingState: "copilot_request_confirmed_waiting", watchEntryConfirmed: true, watchArgs: { repo: "owner/repo", pr: 17, pollIntervalMs: 60_000, timeoutMs: 1_800_000 } },
-      }),
-      watchCopilotReviewImpl: async (opts) => {
-        watcherOptions = opts;
-        return { ok: true, status: "idle", repo: "owner/repo", pr: 17, attempts: 1, newComments: [], newReviews: [], newIssueComments: [] };
-      },
-    },
-  );
-  assert.equal(result.ok, true);
-  assert.equal(result.watchStatus, "idle");
-  assert.equal(watcherOptions.timeoutMs, 1_800_000);
 });
 
 test("runWatchCycle keeps shared loopDisposition and reports needs_followup in cycleDisposition when fresh Copilot activity appears", async () => {
@@ -395,55 +473,8 @@ test("runWatchCycle integration keeps initial request-review -> waiting_for_copi
   let watcherOptions;
 
   try {
-    const env = await writeGhStub(tempDir, [
-      {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo"],
-        stdout: JSON.stringify({
-          isDraft: false,
-          state: "OPEN",
-          number: 17,
-          headRefOid: "newsha",
-          reviews: [],
-          statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
-        }) + "\n",
-      },
-      {
-        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
-        stdout: '{"users":[],"teams":[]}\n',
-      },
-      {
-        assertArgs: ["api", "graphql"],
-        stdout: `${EMPTY_THREADS}\n`,
-      },
-      {
-        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
-        stdout: '{"users":[],"teams":[]}\n',
-      },
-      {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
-        stdout: '{"headRefOid":"newsha","reviews":[]}\n',
-      },
-      {
-        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
-        stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
-      },
-      {
-        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
-        stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n',
-      },
-      {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
-        stdout: '{"headRefOid":"newsha","reviews":[]}\n',
-      },
-      {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefName"],
-        stdout: '{"headRefName":"copilot/session-branch"}\n',
-      },
-      {
-        assertArgs: ["run", "list", "--repo", "owner/repo", "--branch", "copilot/session-branch"],
-        stdout: "[]\n",
-      },
-    ]);
+    const runChild = makeWatchCycleGhRunner();
+    const env = runIdFreeEnv({ DEVLOOPS_RUN_ID: "" });
 
     const result = await runWatchCycle(
       {
@@ -454,6 +485,7 @@ test("runWatchCycle integration keeps initial request-review -> waiting_for_copi
       },
       {
         env,
+        runChild,
         detectSessionActivity: false,
         watchCopilotReviewImpl: async (options) => {
           watcherOptions = options;
@@ -488,103 +520,15 @@ test("runWatchCycle integration keeps re-requested newer-head wait state non-ter
   let watcherOptions;
 
   try {
-    const ghPath = path.join(tempDir, "gh");
-    await writeFile(
-      ghPath,
-      `#!/usr/bin/env node
-import { existsSync, writeFileSync } from "node:fs";
-const args = process.argv.slice(2);
-const write = (value) => process.stdout.write(typeof value === "string" ? value : JSON.stringify(value) + "\\n");
-const requestedStatePath = process.env.GH_REREQUEST_STATE_PATH;
-
-if (args[0] === "pr" && args[1] === "view" && !args.includes("--json")) {
-  write({
-    isDraft: false,
-    state: "OPEN",
-    number: 17,
-    headRefOid: "newsha",
-    reviews: [
-      {
+    const runChild = makeWatchCycleGhRunner({
+      reviews: [{
         id: "r-1",
         author: { login: "copilot-pull-request-reviewer[bot]" },
         state: "COMMENTED",
-        commit: { oid: "oldsha" }
-      }
-    ],
-    statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }]
-  });
-  process.exit(0);
-}
-
-if (args[0] === "api" && args[1] === "repos/owner/repo/pulls/17/requested_reviewers" && !args.includes("-X")) {
-  const requested = existsSync(requestedStatePath);
-  write(requested ? { users: [{ login: "Copilot" }], teams: [] } : { users: [], teams: [] });
-  process.exit(0);
-}
-
-if (args[0] === "api" && args[1] === "graphql") {
-  write(${JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } })});
-  process.exit(0);
-}
-
-if (args[0] === "api" && args[1] === "repos/owner/repo/commits/newsha/check-runs?per_page=100") {
-  write({ check_runs: [{ status: "COMPLETED", conclusion: "SUCCESS" }] });
-  process.exit(0);
-}
-
-if (args[0] === "api" && args[1] === "repos/owner/repo/commits/newsha/status?per_page=100") {
-  write({ statuses: [] });
-  process.exit(0);
-}
-
-if (args[0] === "pr" && args[1] === "view" && args.includes("--json") && args.includes("headRefOid,isDraft,state,number,reviews,statusCheckRollup")) {
-  write({
-    headRefOid: "newsha",
-    isDraft: false,
-    state: "OPEN",
-    number: 17,
-    reviews: [
-      {
-        id: "r-1",
-        state: "COMMENTED",
-        author: { login: "copilot-pull-request-reviewer[bot]" },
-        commit: { oid: "oldsha" }
-      }
-    ],
-    statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }]
-  });
-  process.exit(0);
-}
-
-if (args[0] === "api" && args.includes("-X") && args.includes("POST") && args.some((a) => a.includes("requested_reviewers"))) {
-  writeFileSync(requestedStatePath, "requested\\n");
-  write({ requested_reviewers: [{ login: "copilot-pull-request-reviewer[bot]" }] });
-  process.exit(0);
-}
-
-if (args[0] === "pr" && args[1] === "view" && args.includes("--json") && args.includes("headRefName")) {
-  write({ headRefName: "copilot/session-branch" });
-  process.exit(0);
-}
-
-if (args[0] === "run" && args[1] === "list" && args.includes("--branch") && args.includes("copilot/session-branch")) {
-  write([]);
-  process.exit(0);
-}
-
-process.stderr.write("unexpected gh args: " + args.join(" ") + "\\n");
-process.exit(97);
-`,
-      "utf8",
-    );
-    await chmod(ghPath, 0o755);
-
-    const env = runIdFreeEnv({
-      PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}`,
-      GH_REREQUEST_STATE_PATH: path.join(tempDir, "requested-state.txt"),
-      GH_SEQUENCE_PATH: path.join(tempDir, "gh-sequence.json"),
-      DEVLOOPS_RUN_ID: "",
+        commit: { oid: "oldsha" },
+      }],
     });
+    const env = runIdFreeEnv({ DEVLOOPS_RUN_ID: "" });
 
     const result = await runWatchCycle(
       {
@@ -595,6 +539,7 @@ process.exit(97);
       },
       {
         env,
+        runChild,
         detectSessionActivity: false,
         watchCopilotReviewImpl: async (options) => {
           watcherOptions = options;
@@ -629,53 +574,25 @@ test("runWatchCycle integration keeps checks non-blocking with active Copilot wo
   let watcherOptions;
 
   try {
-    const env = await writeGhStub(tempDir, [
-      {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo"],
-        stdout: JSON.stringify({
-          isDraft: false,
-          state: "OPEN",
-          number: 17,
-          headRefOid: "newsha",
-          reviews: [],
-          statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
-        }) + "\n",
-      },
-      {
-        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
-        stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n',
-      },
-      {
-        assertArgs: ["api", "graphql"],
-        stdout: `${EMPTY_THREADS}\n`,
-      },
-      {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefName"],
-        stdout: '{"headRefName":"copilot/session-branch"}\n',
-      },
-      {
-        assertArgs: ["run", "list", "--repo", "owner/repo", "--branch", "copilot/session-branch"],
-        stdout: `${JSON.stringify([
-          {
-            databaseId: 444,
-            name: "Addressing comment on PR owner/repo#17",
-            status: "in_progress",
-            conclusion: "",
-            createdAt: "2026-05-27T13:08:48Z",
-          },
-        ])}\n`,
-      },
-      {
-        assertArgs: ["run", "watch", "444", "--repo", "owner/repo"],
-        stdout: "",
-      },
-    ]);
+    const env = runIdFreeEnv({ DEVLOOPS_RUN_ID: "" });
+    const runChild = makeWatchCycleGhRunner({
+      requested: true,
+      workflowRuns: [{
+        databaseId: 444,
+        name: "Addressing comment on PR owner/repo#17",
+        status: "in_progress",
+        conclusion: "",
+        createdAt: "2026-05-27T13:08:48Z",
+      }],
+    });
 
     const result = await runWatchCycle(
       { repo: "owner/repo", pr: 17 },
       {
         env,
+        runChild,
         detectSessionActivity: true,
+        watchWorkflowRunImpl: async () => ({ status: "completed" }),
         watchCopilotReviewImpl: async (options) => {
           watcherOptions = options;
           return {
@@ -774,47 +691,17 @@ test("runWatchCycle integration keeps the full persistent watch timeout after ac
   let watcherOptions;
 
   try {
-    const env = await writeGhStub(tempDir, [
-      {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo"],
-        stdout: JSON.stringify({
-          isDraft: false,
-          state: "OPEN",
-          number: 17,
-          headRefOid: "newsha",
-          reviews: [],
-          statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
-        }) + "\n",
-      },
-      {
-        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
-        stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n',
-      },
-      {
-        assertArgs: ["api", "graphql"],
-        stdout: `${EMPTY_THREADS}\n`,
-      },
-      {
-        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefName"],
-        stdout: '{"headRefName":"copilot/session-branch"}\n',
-      },
-      {
-        assertArgs: ["run", "list", "--repo", "owner/repo", "--branch", "copilot/session-branch"],
-        stdout: `${JSON.stringify([
-          {
-            databaseId: 444,
-            name: "Addressing comment on PR owner/repo#17",
-            status: "in_progress",
-            conclusion: "",
-            createdAt: "2026-05-27T13:08:48Z",
-          },
-        ])}\n`,
-      },
-      {
-        assertArgs: ["run", "watch", "444", "--repo", "owner/repo"],
-        stdout: "",
-      },
-    ]);
+    const env = runIdFreeEnv({ DEVLOOPS_RUN_ID: "" });
+    const runChild = makeWatchCycleGhRunner({
+      requested: true,
+      workflowRuns: [{
+        databaseId: 444,
+        name: "Addressing comment on PR owner/repo#17",
+        status: "in_progress",
+        conclusion: "",
+        createdAt: "2026-05-27T13:08:48Z",
+      }],
+    });
 
     const result = await runWatchCycle(
       {
@@ -825,7 +712,9 @@ test("runWatchCycle integration keeps the full persistent watch timeout after ac
       },
       {
         env,
+        runChild,
         detectSessionActivity: true,
+        watchWorkflowRunImpl: async () => ({ status: "completed" }),
         watchCopilotReviewImpl: async (options) => {
           watcherOptions = options;
           return {

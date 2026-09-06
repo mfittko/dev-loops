@@ -25,8 +25,13 @@ jobs:
         with:
           node-version: 24
 
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.1
+
       - name: Install workspace dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       - name: Determine whether inspect-run viewer smoke is required
         id: inspect-run-viewer-scope
@@ -62,25 +67,29 @@ jobs:
           GITHUB_OUTPUT="$GITHUB_OUTPUT" node scripts/loop/rendered-artifact-ci-changes.mjs .rendered-artifact-changed-files.txt
 
   verify-suite:
+    name: verify-suite (${{ matrix.suite }}${{ matrix.shard && format(', shard {0}', matrix.shard) || '' }})
     runs-on: ubuntu-latest
+    env:
+      BUN_TEST_PARALLELISM: 2
     strategy:
       fail-fast: false
       matrix:
         suite:
-          - test:assets
-          - test:extension
-          - test:scripts
-          - test:core
           - test:docs
-          - test:pack
-          - test:dev-loop
           - test:workflows
         include:
           # Only the test:docs leg needs full history for the decision-record
           # merge-base comparison; every other leg checks out the default (depth 1).
           - suite: test:docs
             fetch_depth: 0
-
+          - suite: test:all
+            shard: 1/4
+          - suite: test:all
+            shard: 2/4
+          - suite: test:all
+            shard: 3/4
+          - suite: test:all
+            shard: 4/4
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
@@ -92,8 +101,13 @@ jobs:
         with:
           node-version: 24
 
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.1
+
       - name: Install workspace dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       # Pinned version + sha256 must match scripts/github/lint-workflows.mjs's
       # ACTIONLINT_VERSION / ACTIONLINT_LINUX_AMD64_SHA256 (a test asserts it).
@@ -127,16 +141,26 @@ jobs:
           git fetch origin "+refs/heads/${GITHUB_BASE_REF:-main}:refs/remotes/origin/${GITHUB_BASE_REF:-main}"
 
       - name: Run ${{ matrix.suite }}
-        run: npm run ${{ matrix.suite }}
+        if: matrix.shard == ''
+        run: bun run ${{ matrix.suite }}
+
+      - name: Run ${{ matrix.suite }} shard ${{ matrix.shard }}
+        if: matrix.shard != ''
+        run: bun run ${{ matrix.suite }} --timings=.bun-test-timings.json --shard=${{ matrix.shard }}
 
   verify:
-    needs: [verify-suite]
+    needs: [changes, verify-suite, viewer-smoke, deck-smoke, article-smoke]
     if: always()
     runs-on: ubuntu-latest
 
     steps:
       - name: Require all verify-suite legs to pass
-        run: '[ "${{ needs.verify-suite.result }}" = "success" ] || exit 1'
+        run: |
+          [ "${{ needs.changes.result }}" = "success" ] || exit 1
+          [ "${{ needs.verify-suite.result }}" = "success" ] || exit 1
+          [ "${{ needs.viewer-smoke.result }}" = "success" ] || [ "${{ needs.viewer-smoke.result }}" = "skipped" ] || exit 1
+          [ "${{ needs.deck-smoke.result }}" = "success" ] || [ "${{ needs.deck-smoke.result }}" = "skipped" ] || exit 1
+          [ "${{ needs.article-smoke.result }}" = "success" ] || [ "${{ needs.article-smoke.result }}" = "skipped" ] || exit 1
 
   viewer-smoke:
     needs:
@@ -152,7 +176,7 @@ jobs:
         uses: ./.github/actions/playwright-webkit
 
       - name: Run inspect-run viewer WebKit smoke
-        run: npm run test:playwright:viewer
+        run: bun run test:playwright:viewer
 
   deck-smoke:
     needs:
@@ -169,10 +193,10 @@ jobs:
 
       - name: Run presentation deck fit smoke (WebKit)
         run: |
-          npm run test:playwright:intro-deck
-          npm run test:playwright:deep-dive
-          npm run test:playwright:how-decided-deck
-          npm run test:playwright:state-graph-surface-deck
+          bun run test:playwright:intro-deck
+          bun run test:playwright:deep-dive
+          bun run test:playwright:how-decided-deck
+          bun run test:playwright:state-graph-surface-deck
 
   article-smoke:
     needs:
@@ -189,6 +213,6 @@ jobs:
 
       - name: Run article fit smoke (WebKit)
         run: |
-          npm run test:playwright:intro-article
-          npm run test:playwright:deep-dive-article
-          npm run test:playwright:how-decided-article
+          bun run test:playwright:intro-article
+          bun run test:playwright:deep-dive-article
+          bun run test:playwright:how-decided-article

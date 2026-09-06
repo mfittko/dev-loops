@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { onTestFinished, test } from "bun:test";
 import { runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 import { buildFindingMarker } from "../../scripts/github/_gate-finding-surface.mjs";
 import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
@@ -27,9 +27,9 @@ function cleanGateBody(gate, headSha) {
 // gate-authored thread invariant. detect-checkpoint-evidence reuses its existing
 // review-thread payload (marker-only count, no extra gh round-trip) so a clean
 // verdict with a dangling gate-authored thread fails the pre-merge evidence check.
-test("#1585: an unresolved gate-authored thread carrying a finding marker fails the pre-merge evidence check (the count is exercised)", async (t) => {
+test("#1585: an unresolved gate-authored thread carrying a finding marker fails the pre-merge evidence check (the count is exercised)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-1585-fold-"));
-  t.after(() => rm(tempDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tempDir, { recursive: true, force: true }));
   await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
 
   const marker = buildFindingMarker({ fp: "a".repeat(16), severity: "nice-to-have", angle: "naming", round: 1 });
@@ -62,9 +62,9 @@ test("#1585: an unresolved gate-authored thread carrying a finding marker fails 
   assert.match(parsed.preMergeGateCheck.failures.join("; "), /unresolved review threads/i);
 });
 
-test("#1585: draftGateSatisfied stays true when the gate-authored thread is resolved (positive counterpart)", async (t) => {
+test("#1585: draftGateSatisfied stays true when the gate-authored thread is resolved (positive counterpart)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-1585-fold-pos-"));
-  t.after(() => rm(tempDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tempDir, { recursive: true, force: true }));
   // Disable fan-out evidence enforcement so the inline-style clean verdict
   // (no executionMode marker) is accepted — the fold under test is the
   // draftGateSatisfied thread invariant, not fan-out provenance.
@@ -99,9 +99,9 @@ test("#1585: draftGateSatisfied stays true when the gate-authored thread is reso
   assert.equal(parsed.preMergeGateCheck.ok, true);
 });
 
-test("#1585: an unreadable thread-fetch state (-1) folds draftGateSatisfied to false and fails the pre-merge evidence check (fail-closed)", async (t) => {
+test("#1585: an unreadable thread-fetch state (-1) folds draftGateSatisfied to false and fails the pre-merge evidence check (fail-closed)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-1585-unreadable-"));
-  t.after(() => rm(tempDir, { recursive: true, force: true }));
+  onTestFinished(() => rm(tempDir, { recursive: true, force: true }));
   await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
 
   const { env } = await writeGhStubHelper(tempDir, [

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "bun:test";
 
 import { retireGateRound, parseRetireGateRoundArgs } from "../../scripts/github/retire-gate-round.mjs";
 
@@ -123,14 +123,14 @@ test("retired sentinels are invisible to the real verify-briefing-prefixes scan"
     // the mixed-hash round before retirement.
     await writeFile(path.join(tmpRoot, sentinelName("draft-gate-scope", HEAD_A)), JSON.stringify({ prefixHash: "a".repeat(64) }), "utf8");
     await writeFile(path.join(tmpRoot, sentinelName("draft-gate-coverage", HEAD_A)), JSON.stringify({ prefixHash: "b".repeat(64) }), "utf8");
-    const before = spawnSync(process.execPath, [verifierPath, "--head-sha", HEAD_A], { cwd: base, encoding: "utf8" });
+    const before = spawnSync((Bun.which("node") ?? "node"), [verifierPath, "--head-sha", HEAD_A], { cwd: base, encoding: "utf8" });
     assert.notEqual(before.status, 0);
     const result = await retireGateRound({ gate: "draft_gate", headSha: HEAD_A, reason: "rebuilt", noFindingsArtifacts: true, tmpRoot });
     assert.equal(result.retired, 2);
     // After retirement the same verifier invocation sees ZERO sentinels for
     // the round and PASSES (zero sentinels evaluate to verified: true) — the
     // retired prefixes can never mix into a new consolidation.
-    const after = spawnSync(process.execPath, [verifierPath, "--head-sha", HEAD_A], { cwd: base, encoding: "utf8" });
+    const after = spawnSync((Bun.which("node") ?? "node"), [verifierPath, "--head-sha", HEAD_A], { cwd: base, encoding: "utf8" });
     assert.equal(after.status, 0);
   } finally {
     await rm(base, { recursive: true, force: true }).catch(() => {});
@@ -173,7 +173,7 @@ test("the retirement sequence is max-based: a deleted earlier round never causes
 test("CLI entry point: help, arg errors, success, and invalid --jq map to the documented exit codes", async () => {
   const { spawnSync } = await import("node:child_process");
   const scriptPath = path.resolve("scripts/github/retire-gate-round.mjs");
-  const run = (args, cwd) => spawnSync(process.execPath, [scriptPath, ...args], { cwd, encoding: "utf8" });
+  const run = (args, cwd) => spawnSync((Bun.which("node") ?? "node"), [scriptPath, ...args], { cwd, encoding: "utf8" });
   await withTmpRoot(async (tmpRoot) => {
     const help = run(["--help"], tmpRoot);
     assert.equal(help.status, 0);

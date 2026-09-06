@@ -751,7 +751,7 @@ fence. Every fence delimiter (`pickFence`) is sized one backtick longer than the
 backtick run already inside the text it wraps, so the wrapped content can never close the
 fence early and leak into a later section. The diff is FILTERED before inlining (issue
 #1853, `filterDiffForInline` in `@dev-loops/core/loop/review-dispatch-plan`): lockfiles
-(`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `Cargo.lock`, `Gemfile.lock`,
+(`bun.lock`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `Cargo.lock`, `Gemfile.lock`,
 `composer.lock`, and `*-lock.y[a]ml` generally), generated/vendored trees (`dist/`, `lib/`,
 `coverage/`, `node_modules/`, `.claude/`), and any caller-configured `excludeGlobs` are
 dropped whole-file (`DEFAULT_DIFF_EXCLUDE_GLOBS`, always applied — a caller's own globs

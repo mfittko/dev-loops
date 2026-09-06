@@ -2,13 +2,14 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "bun:test";
 import { runNode as runNodeHelper } from "../_helpers.mjs";
 
 import { parseCiWatchCliArgs, watchCiStatus, watchCommitCiStatus } from "../../scripts/github/probe-ci-status.mjs";
 
 const scriptPath = path.resolve("scripts/github/probe-ci-status.mjs");
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
+const RUN_CHILD = Symbol("probe-ci-status-run-child");
 
 function prView(headSha, checkNames = []) {
   return JSON.stringify({
@@ -27,77 +28,45 @@ function statuses(items) {
 // stdout. Repeatable (steady-state polling) by default; `routesBySha` lets a
 // later poll observe an advanced head SHA. Avoids real sleeping/network.
 async function withGhStub({ routes = [], shaSequence = null }, fn) {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-ci-"));
-  try {
-    const ghPath = path.join(tempDir, "gh");
-    const counterPath = path.join(tempDir, "prview-counter.txt");
-    await writeFile(counterPath, "0", "utf8");
-    const script = [
-      "#!/usr/bin/env node",
-      'const { readFileSync, writeFileSync } = require("node:fs");',
-      `const routes = ${JSON.stringify(routes)};`,
-      `const shaSequence = ${JSON.stringify(shaSequence)};`,
-      `const counterPath = ${JSON.stringify(counterPath)};`,
-      'const argv = process.argv.slice(2).join(" ");',
-      'function match(needles) { return needles.every((n) => argv.includes(n)); }',
-      'if (shaSequence && match(["pr", "view"])) {',
-      '  const i = Number(readFileSync(counterPath, "utf8").trim() || "0");',
-      '  writeFileSync(counterPath, String(i + 1));',
-      '  const sha = shaSequence[Math.min(i, shaSequence.length - 1)];',
-      `  process.stdout.write(JSON.stringify({ headRefOid: sha, statusCheckRollup: [{ name: "build" }] }));`,
-      '  process.exit(0);',
-      '}',
-      'for (const r of routes) {',
-      '  if (match(r.match)) { process.stdout.write(r.stdout); process.exit(r.exitCode ?? 0); }',
-      '}',
-      'process.stderr.write(`unexpected gh args: ${argv}\\n`); process.exit(97);',
-      "",
-    ].join("\n");
-    await writeFile(ghPath, script, "utf8");
-    await chmod(ghPath, 0o755);
-    const env = { ...process.env, PATH: [tempDir, process.env.PATH ?? ""].filter(Boolean).join(path.delimiter) };
-    return await fn(env);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  let prViewCount = 0;
+  const runChild = async (_command, args) => {
+    const argv = args.join(" ");
+    const matches = (needles) => needles.every((needle) => argv.includes(needle));
+    if (shaSequence && matches(["pr", "view"])) {
+      const sha = shaSequence[Math.min(prViewCount, shaSequence.length - 1)];
+      prViewCount += 1;
+      return { code: 0, stdout: JSON.stringify({ headRefOid: sha, statusCheckRollup: [{ name: "build" }] }), stderr: "" };
+    }
+    const route = routes.find((candidate) => matches(candidate.match));
+    if (route) {
+      const stdout = typeof route.stdout === "function" ? route.stdout({ args, argv }) : route.stdout;
+      return { code: route.exitCode ?? 0, stdout, stderr: route.stderr ?? "" };
+    }
+    return { code: 97, stdout: "", stderr: `unexpected gh args: ${argv}\n` };
+  };
+  return fn({ ...process.env, [RUN_CHILD]: runChild });
 }
 
 // check-runs route that reports in_progress on the first poll and success
-// afterwards (counter-file backed), so a pending->success transition is testable.
+// afterwards, so a pending->success transition is testable without a child CLI.
 async function withGhStubFlip(fn) {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-ci-flip-"));
-  try {
-    const ghPath = path.join(tempDir, "gh");
-    const counterPath = path.join(tempDir, "checkruns-counter.txt");
-    await writeFile(counterPath, "0", "utf8");
-    const script = [
-      "#!/usr/bin/env node",
-      'const { readFileSync, writeFileSync } = require("node:fs");',
-      `const counterPath = ${JSON.stringify(counterPath)};`,
-      'const argv = process.argv.slice(2).join(" ");',
-      'const has = (n) => argv.includes(n);',
-      `if (has("pr") && has("view")) { process.stdout.write(${JSON.stringify(prView("sha-a", ["build"]))}); process.exit(0); }`,
-      'if (has("check-runs")) {',
-      '  const i = Number(readFileSync(counterPath, "utf8").trim() || "0");',
-      '  writeFileSync(counterPath, String(i + 1));',
-      `  const run = i === 0 ? { status: "in_progress", conclusion: null, name: "build" } : { status: "completed", conclusion: "success", name: "build" };`,
-      '  process.stdout.write(JSON.stringify({ check_runs: [run] })); process.exit(0);',
-      '}',
-      `if (has("/status")) { process.stdout.write(${JSON.stringify(statuses([]))}); process.exit(0); }`,
-      'process.stderr.write(`unexpected gh args: ${argv}\\n`); process.exit(97);',
-      "",
-    ].join("\n");
-    await writeFile(ghPath, script, "utf8");
-    await chmod(ghPath, 0o755);
-    const env = { ...process.env, PATH: [tempDir, process.env.PATH ?? ""].filter(Boolean).join(path.delimiter) };
-    return await fn(env);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+  let checkRunsCount = 0;
+  return withGhStub({
+    routes: [
+      { match: ["pr", "view"], stdout: prView("sha-a", ["build"]) },
+      {
+        match: ["check-runs"],
+        stdout: () => checkRuns([checkRunsCount++ === 0
+          ? { status: "in_progress", conclusion: null, name: "build" }
+          : { status: "completed", conclusion: "success", name: "build" }]),
+      },
+      { match: ["/status"], stdout: statuses([]) },
+    ],
+  }, fn);
 }
 
 // No real sleeping: inject a no-op delay + frozen clock.
-const fastDeps = (env) => ({ env, ghCommand: "gh", delayImpl: async () => {}, now: () => 1_000 });
+const fastDeps = (env) => ({ env, ghCommand: "gh", runChild: env[RUN_CHILD], delayImpl: async () => {}, now: () => 1_000 });
 
 test("watch-ci returns terminal success when all checks pass", async () => {
   await withGhStub(
@@ -343,42 +312,28 @@ test("watch-ci uses per-poll rollup names: empty then populated for the SAME sha
   // With the (buggy) baseline rollup names this would settle none->success at the
   // grace floor; with per-poll currentNames the expected check suppresses the
   // no-checks settle, so it waits out the budget -> timeout. Never success.
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-ci-perpoll-"));
-  try {
-    const ghPath = path.join(tempDir, "gh");
-    const counterPath = path.join(tempDir, "prview-counter.txt");
-    await writeFile(counterPath, "0", "utf8");
-    const script = [
-      "#!/usr/bin/env node",
-      'const { readFileSync, writeFileSync } = require("node:fs");',
-      `const counterPath = ${JSON.stringify(counterPath)};`,
-      'const argv = process.argv.slice(2).join(" ");',
-      'const has = (n) => argv.includes(n);',
-      'if (has("pr") && has("view")) {',
-      '  const i = Number(readFileSync(counterPath, "utf8").trim() || "0");',
-      '  writeFileSync(counterPath, String(i + 1));',
-      '  const rollup = i === 0 ? [] : [{ name: "build" }];',
-      '  process.stdout.write(JSON.stringify({ headRefOid: "sha-a", statusCheckRollup: rollup }));',
-      '  process.exit(0);',
-      '}',
-      `if (has("check-runs")) { process.stdout.write(${JSON.stringify(checkRuns([]))}); process.exit(0); }`,
-      `if (has("/status")) { process.stdout.write(${JSON.stringify(statuses([]))}); process.exit(0); }`,
-      'process.stderr.write(`unexpected gh args: ${argv}\\n`); process.exit(97);',
-      "",
-    ].join("\n");
-    await writeFile(ghPath, script, "utf8");
-    await chmod(ghPath, 0o755);
-    const env = { ...process.env, PATH: [tempDir, process.env.PATH ?? ""].filter(Boolean).join(path.delimiter) };
-    const result = await watchCiStatus({ repo: "owner/repo", pr: 7, pollIntervalMs: 10, timeoutMs: 30 }, fastDeps(env));
+  let prViewCount = 0;
+  await withGhStub(
+    {
+      routes: [
+        {
+          match: ["pr", "view"],
+          stdout: () => prView("sha-a", prViewCount++ === 0 ? [] : ["build"]),
+        },
+        { match: ["check-runs"], stdout: checkRuns([]) },
+        { match: ["/status"], stdout: statuses([]) },
+      ],
+    },
+    async (env) => {
+      const result = await watchCiStatus({ repo: "owner/repo", pr: 7, pollIntervalMs: 10, timeoutMs: 30 }, fastDeps(env));
     // The expected-but-unreported check (from the per-poll populated rollup)
     // suppresses the no-checks settle: with stale baseline names this would have
     // settled success at the grace floor instead of waiting out the budget.
-    assert.equal(result.status, "timeout");
-    assert.equal(result.settled, false);
-    assert.notEqual(result.status, "success");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
+      assert.equal(result.status, "timeout");
+      assert.equal(result.settled, false);
+      assert.notEqual(result.status, "success");
+    },
+  );
 });
 
 test("watch-ci surfaces a commit-status failure with NO check-runs (CircleCI)", async () => {
@@ -421,6 +376,7 @@ test("watch-ci polls at t=0: an already-green head settles in one attempt with z
         {
           env,
           ghCommand: "gh",
+          runChild: env[RUN_CHILD],
           delayImpl: async () => { delayCalls += 1; },
           now: () => 1_000,
         },
@@ -838,6 +794,7 @@ function advancingDeps(env) {
   return {
     env,
     ghCommand: "gh",
+    runChild: env[RUN_CHILD],
     delayImpl: async (ms) => { clock += ms; },
     now: () => clock,
   };

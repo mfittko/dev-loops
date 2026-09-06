@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 
 import {
   buildDevLoopHandoffEnvelope,
@@ -294,6 +294,7 @@ test("combo: local_implementation (branch)", () => {
   assert.equal(env.currentGate, "default");
   assert.ok(env.acceptance.criteria.some((c) => c.id === "phase-ac"));
   assert.ok(env.acceptance.criteria.some((c) => c.id === "verify-green"));
+  assert.ok(env.acceptance.criteria.some((c) => c.id === "verify-green" && c.must.includes("bun run verify")));
   assert.equal(env.acceptance.maxFinalizationTurns, 6);
   assert.ok(env.acceptance.evidence.includes("changed-files"));
 });
@@ -848,8 +849,8 @@ test("backward-compat: envelope is frozen (top-level)", () => {
     defaultOptions
   );
 
-  assert.throws(() => { env.acceptance = null; }, /Cannot assign to read only property/);
-  assert.throws(() => { env.stopRules = []; }, /Cannot assign to read only property/);
+  assert.throws(() => { env.acceptance = null; }, /Cannot assign to read only property|Attempted to assign to readonly property/);
+  assert.throws(() => { env.stopRules = []; }, /Cannot assign to read only property|Attempted to assign to readonly property/);
 });
 
 // ===========================================================================

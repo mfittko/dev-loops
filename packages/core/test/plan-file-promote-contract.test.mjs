@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test, { describe } from "node:test";
+import { describe, test } from "bun:test";
 
 import {
   PLAN_FILE_PROMOTE_ACTION,

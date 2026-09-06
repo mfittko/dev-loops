@@ -250,14 +250,15 @@ Current Phase 3+ contract:
 - this phase does not require a separate compiled build or `dist/` pipeline
 
 Root verification and test commands are intentionally explicit:
-- `npm run verify` is the canonical root verification path; it runs every suite in parallel via `run-p` as a single aggregated command, and any suite failing fails verify
-- `npm test` runs the current root test suite (`test:assets`, `test:extension`, `test:scripts`, `test:core`, and `test:docs`)
-- `npm run test:extension`
-- `npm run test:extension` currently expands to one `node --import tsx --test ...` invocation in `package.json`; prefer the script entrypoint over copying the file list into downstream docs or runbooks
-- `npm run test:scripts`
-- `npm run test:assets`
-- `npm run test:dev-loop`
-- `npm run test:playwright:viewer` remains an explicit viewer/browser smoke, not part of the default root verify path
+- Bun 1.4.1 is pinned exactly in `package.json` and is the contributor/CI installer, script runner, and unit-test runner; begin with `bun install --frozen-lockfile`
+- `bun run verify` is the canonical root verification path; it attempts every suite with attributable output, and any suite failing fails verify
+- `bun run test` aliases the current root verification command
+- `bun run test:extension`
+- `bun run test:scripts`
+- `bun run test:assets`
+- `bun run test:dev-loop`
+- `bun run test:playwright:viewer` remains an explicit Node-run viewer/browser smoke, not part of the default root verify path
+- published extension/CLI consumers require only Node `>=24`; npm remains intentional for package install, pack, registry, dist-tag, provenance, and publish workflows
 
 ## Design rule
 

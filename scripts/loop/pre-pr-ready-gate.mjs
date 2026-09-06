@@ -4,7 +4,7 @@ import {
   formatCliError,
   isDirectCliRun,
 } from "../_core-helpers.mjs";
-import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { fetchDraftGateEvidence } from "../github/_gate-finding-surface.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson as runGhJson } from "@dev-loops/core/github/gh";
@@ -96,11 +96,11 @@ export function parsePrePrReadyGateCliArgs(argv) {
   return options;
 }
 
-async function fetchPrState({ repo, pr }, { env, ghCommand }) {
+async function fetchPrState({ repo, pr }, { env, ghCommand, runChild }) {
   const [owner, name] = repo.split("/");
   const r = await runGhJson(
     ["api", "graphql", "-f", `query=${PR_VIEW_QUERY}`, "-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${pr}`],
-    { env, ghCommand },
+    { env, ghCommand, runChild },
   );
   const d = r?.data?.repository?.pullRequest;
   if (!d) throw new Error(`Could not fetch PR #${pr}`);
@@ -118,12 +118,12 @@ async function fetchPrState({ repo, pr }, { env, ghCommand }) {
   };
 }
 
-export async function prePrReadyGate(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), evaluatePrSizeBudget = realEvaluatePrSizeBudget, evaluateAdrTripwire = realEvaluateAdrTripwire } = {}) {
-  const prState = await fetchPrState({ repo: options.repo, pr: options.pr }, { env, ghCommand });
+export async function prePrReadyGate(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget, evaluateAdrTripwire = realEvaluateAdrTripwire } = {}) {
+  const prState = await fetchPrState({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
   const headSha = prState.headRefOid;
   if (!headSha) throw new Error(`Could not resolve PR head SHA`);
 
-  const gate = await fetchDraftGateEvidence({ repo: options.repo, pr: options.pr, headSha }, { env, ghCommand });
+  const gate = await fetchDraftGateEvidence({ repo: options.repo, pr: options.pr, headSha }, { env, ghCommand, runChild });
 
   // When the PR is no longer draft, a visible clean draft_gate comment that
   // exists at all (one-time transition record) satisfies the VERDICT check

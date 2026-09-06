@@ -8,6 +8,7 @@ ARG PI_VERSION=0.79.0
 ARG PI_SUBAGENTS_VERSION=0.28.0
 ARG PI_TELEGRAM_VERSION=0.3.5
 ARG PI_INTERCOM_VERSION=0.6.0
+ARG BUN_VERSION=1.4.1
 ARG GH_CLI_VERSION=2.63.2
 ARG GIT_VERSION=1:2.39.5-0+deb12u2
 
@@ -30,6 +31,9 @@ RUN npm install -g --ignore-scripts \
     "pi-telegram@${PI_TELEGRAM_VERSION}" \
     "pi-intercom@${PI_INTERCOM_VERSION}"
 
+# Bun is the pinned dependency/test toolchain; Node 24 remains the runtime.
+RUN npm install -g "bun@${BUN_VERSION}"
+
 # Install GitHub CLI (pinned version, architecture-aware, checksum-verified)
 # Only x86_64/amd64 and aarch64/arm64 are supported.
 RUN ARCH=$(uname -m) \
@@ -50,8 +54,8 @@ WORKDIR /workspace
 # Copy workspace files
 COPY . .
 
-# Install workspace dependencies (postinstall creates dev-loops symlink)
-RUN npm ci
+# Install workspace dependencies
+RUN bun install --frozen-lockfile
 
 # Append workspace node_modules/.bin last so global tools take precedence
 ENV PATH="${PATH}:/workspace/node_modules/.bin"
@@ -63,7 +67,7 @@ USER node
 # Dual-harness smoke (#775):
 # - Pi: the default `dev-loops` CMD below (Pi CLI installed above).
 # - Claude (Pi-free, read-only, offline — no interactive session, API key, or GitHub token):
-#     npm run smoke:headless            # exercises the offline `dev-loops status` info path
+#     bun run smoke:headless            # exercises the offline `dev-loops status` info path
 #   Add `-- --loop-info --issue <n>` to also exercise `dev-loops loop info` (needs GitHub read access).
 #   The headless Claude Agent SDK run is `node scripts/claude/headless-dev-loop.mjs --issue <n>`
 #   (needs `claude` on PATH + an API key; use `--dry-run` to inspect the invocation).

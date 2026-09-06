@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { readFile, stat } from "node:fs/promises";
 
@@ -14,11 +14,8 @@ test("package metadata exposes the extension entrypoint and root extension test 
   assert.equal(typeof packageJson.peerDependencies["@earendil-works/pi-coding-agent"], "string");
   assert.equal(typeof packageJson.peerDependencies["@earendil-works/pi-tui"], "string");
   assert.equal(typeof packageJson.scripts["test:extension"], "string");
-  assert.match(packageJson.scripts["test:extension"], /--import tsx/);
-  assert.match(packageJson.scripts["test:extension"], /extension-checks/);
-  assert.match(packageJson.scripts["test:extension"], /extension-post-merge-update/);
-  assert.match(packageJson.scripts["test:extension"], /extension-command-contract/);
-  assert.match(packageJson.scripts["test:extension"], /extension-package-contract/);
+  assert.match(packageJson.scripts["test:extension"], /^bun scripts\/run-bun-test\.mjs /);
+  assert.match(packageJson.scripts["test:extension"], /test\/extension-checks\.test\.mjs/);
   assert.equal(typeof packageJson.dependencies, "object");
   assert.ok(!("mermaid" in packageJson.dependencies), "mermaid is vendored (#1089); must not be a runtime dependency");
   assert.deepEqual(packageJson.pi.skills, ["skills"]);
@@ -51,10 +48,10 @@ test("extension README documents the supported command, install, and verificatio
     /agents\/\*\.agent\.md/i,
     /~\/\.agents/i,
     /single public workflow entry/i,
-    /npm run verify/i,
-    /npm run test:extension/i,
-    /npm run test:dev-loop/i,
-    /npm run test:playwright:viewer/i,
+    /bun run verify/i,
+    /bun run test:extension/i,
+    /bun run test:dev-loop/i,
+    /bun run test:playwright:viewer/i,
   ]) {
     assert.match(readme, runtimePattern);
   }

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "bun:test";
 import { main, enqueueBoardItem, enqueueIssuelessLightweightPr } from "../../scripts/github/create-pr.mjs";
 import { runNode as runNodeHelper, writeGhStub } from "../_helpers.mjs";
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";

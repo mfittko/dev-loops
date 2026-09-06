@@ -65,9 +65,11 @@ export function makeGhMock(entries = [], {
   command = "gh",
   repeatLastOnOverflow = false,
   defaultStdout = "{}\n",
+  matchMode = entries.some((entry) => entry.matchByClaims === true) ? "claims" : "sequential",
 } = {}) {
   const calls = [];
   let counter = 0;
+  const claimed = new Set();
   const runChild = async (cmd, args = [], _env, stdinText = "") => {
     calls.push({ command: cmd, args: [...args], stdinText: stdinText ?? "" });
     if (cmd !== command) {
@@ -82,11 +84,26 @@ export function makeGhMock(entries = [], {
       throw new Error(`makeGhMock: unexpected command through runChild: ${cmd} ${args.join(" ")}`);
     }
     const current = counter;
-    if (current >= entries.length && !repeatLastOnOverflow) {
+    const matchesEntry = (entry) =>
+      (entry.assertArgs ?? []).every((expected) => args.includes(expected))
+      && (entry.assertArgContains ?? []).every((expected) => args.some((arg) => arg.includes(expected)))
+      && (entry.assertArgNotContains ?? []).every((forbidden) => args.every((arg) => !arg.includes(forbidden)))
+      && (entry.assertStdinIncludes ?? []).every((expected) => String(stdinText).includes(expected))
+      && (entry.assertStdinNotIncludes ?? []).every((forbidden) => !String(stdinText).includes(forbidden));
+    const claimedIndex = matchMode === "claims"
+      ? entries.findIndex((entry, index) => !claimed.has(index) && matchesEntry(entry))
+      : -1;
+    if (matchMode === "claims" && claimedIndex === -1) {
+      return { code: 97, stdout: "", stderr: `no unclaimed gh fixture matched: ${args.join(" ")}\n` };
+    }
+    if (matchMode !== "claims" && current >= entries.length && !repeatLastOnOverflow) {
       return { code: 97, stdout: "", stderr: `unexpected extra gh call #${current + 1}: ${args.join(" ")}\n` };
     }
-    const index = entries.length === 0 ? -1 : Math.min(current, entries.length - 1);
+    const index = matchMode === "claims"
+      ? claimedIndex
+      : entries.length === 0 ? -1 : Math.min(current, entries.length - 1);
     const entry = index >= 0 ? (entries[index] ?? { stdout: defaultStdout }) : { stdout: defaultStdout };
+    if (matchMode === "claims") claimed.add(index);
     counter = current + 1;
     if (entry.assertArgs) {
       for (const expected of entry.assertArgs) {
@@ -325,6 +342,9 @@ export function runNode(scriptPath, args = [], options = {}) {
     });
 
     child.on("error", reject);
+    child.stdin.on("error", (error) => {
+      if (error.code !== "EPIPE") reject(error);
+    });
     child.on("close", (code) => {
       resolve({ code, stdout, stderr });
     });
@@ -365,7 +385,7 @@ export function resolverTestEnv(overrides = {}) {
 
 function buildGhStubScript() {
   return [
-    "#!/usr/bin/env node",
+    "#!/usr/bin/env bun",
     'const { appendFileSync, mkdirSync, readFileSync, writeFileSync } = require("node:fs");',
     'const path = require("node:path");',
     'const sequencePath = process.env.GH_SEQUENCE_PATH;',

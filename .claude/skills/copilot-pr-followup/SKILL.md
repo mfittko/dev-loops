@@ -199,7 +199,7 @@ that was never requested until the budget expires. The green-posture preconditio
 (`COPILOT-FOLLOWUP-ROUND-CAP`) still decide WHETHER the request is made; when either blocks
 it, or the result is a suppression, stop and report instead of entering a watch.
 
-Practical rules: do not poll manually. `waiting_for_copilot_review` → `run-watch-cycle.mjs` or report-and-resume. `waiting_for_ci` with pending/none CI → `dev-loops loop watch-ci --repo <owner/name> --pr <number>` (provider-agnostic; covers CircleCI / Actions / external commit-status) or report-and-resume; `gh run watch <run-id>` is an Actions-only fallback. `dev-loops loop watch-cycle` also auto-routes a `waiting_for_ci` boundary to this CI watcher. Bounded CI exception: zero current-head suites + previous-head green + local `npm run verify` passed → rerun detector with `--local-validation-head-sha` for `crediblyGreen` promotion. `ciStatus=failure` → stop/fix, never wait.
+Practical rules: do not poll manually. `waiting_for_copilot_review` → `run-watch-cycle.mjs` or report-and-resume. `waiting_for_ci` with pending/none CI → `dev-loops loop watch-ci --repo <owner/name> --pr <number>` (provider-agnostic; covers CircleCI / Actions / external commit-status) or report-and-resume; `gh run watch <run-id>` is an Actions-only fallback. `dev-loops loop watch-cycle` also auto-routes a `waiting_for_ci` boundary to this CI watcher. Bounded CI exception: zero current-head suites + previous-head green + local `bun run verify` passed → rerun detector with `--local-validation-head-sha` for `crediblyGreen` promotion. `ciStatus=failure` → stop/fix, never wait.
 
 Preferred approach:
 - route decisions through `copilot-pr-handoff.mjs` output; enter watcher only on `action: "watch"` with `watchEntryConfirmed=true`; prefer `dev-loops loop watch-cycle` for deterministic handoff → watch
@@ -514,7 +514,7 @@ The post-merge hook also fast-forwards the main checkout's local `main` to `orig
 
 ## Validation policy
 
-Follow [Validation Policy](../docs/validation-policy.md). Default: `npm run verify` before PR creation, gate entry, and merge. For repo-local examples: `npm run test:dev-loop` for skill scripts, contract tests for templates, `git diff --check` for docs. When CI runs exist, use `gh run watch` or `detect-copilot-loop-state.mjs` instead of `sleep`-based polling. Distinguish: locally validated, full PR-equivalent checks, awaiting CI.
+Follow [Validation Policy](../docs/validation-policy.md). Default: `bun run verify` before PR creation, gate entry, and merge. For repo-local examples: `bun run test:dev-loop` for skill scripts, contract tests for templates, `git diff --check` for docs. When CI runs exist, use `gh run watch` or `detect-copilot-loop-state.mjs` instead of `sleep`-based polling. Distinguish: locally validated, full PR-equivalent checks, awaiting CI.
 
 ## Confirmation checkpoints
 

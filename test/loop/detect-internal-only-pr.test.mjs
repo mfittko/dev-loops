@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import test from "node:test";
+import { test } from "bun:test";
 import { writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 import { parseCliArgs, findRepoRoot, loadInternalPathPatterns, buildPatternMatchers, tryLoadFromFile, SHIPPED_DEFAULT_PATTERNS } from "../../scripts/loop/detect-internal-only-pr.mjs";
 
@@ -11,7 +11,7 @@ const scriptPath = path.resolve("scripts/loop/detect-internal-only-pr.mjs");
 
 async function runNode(args = [], options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [scriptPath, ...args], {
+    const child = spawn((Bun.which("node") ?? "node"), [scriptPath, ...args], {
       cwd: options.cwd,
       env: options.env ?? process.env,
       stdio: ["pipe", "pipe", "pipe"],

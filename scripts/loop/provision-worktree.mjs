@@ -10,11 +10,11 @@
  * - Every resolved source MUST resolve inside the main checkout (traversal guard).
  * - Fail-soft: a missing source / empty glob logs one warning and continues.
  * - Idempotent: skips a dest that is already correct.
- * - Does NOT run npm install (deps belong to `npm ci`-in-worktree).
+ * - Does NOT install dependencies (they belong to `bun install --frozen-lockfile` in the worktree).
  *
  * Also (unconditionally, independent of .devloops): links the workspace
  * package node_modules/@dev-loops/core -> ../../packages/core (relative,
- * pointing at the WORKTREE's own packages/core). Without npm install/ci in a
+ * pointing at the WORKTREE's own packages/core). Without a dependency install in a
  * fresh worktree there is no node_modules at all, so scripts/**'s
  * `@dev-loops/core` imports resolve UP-TREE to the nearest ancestor
  * node_modules (the main checkout's) — silently testing main's core instead

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 
 import { analyzeTranscript } from "../../scripts/loop/check-retro-tooling.mjs";
 

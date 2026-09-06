@@ -1,5 +1,6 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { mkdtemp, mkdir, writeFile, readFile, readdir, symlink, lstat, access } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -269,27 +270,16 @@ test("syncPackagedAgents preserves every mappable source tool in the canonical s
   }
 });
 
-
-// #1604 — source-level cleanup of the dev-loop entrypoint template + dispatch
-// source finding. The dev-loop subagent dispatch resolves role agents from the
-// project `.pi/agents/` dir (which symlinks to `../agents` in this repo), so the
-// SOURCE templates must be Pi-valid-neutral. `agent` (redundant with `subagent`)
-// and `todo` (no Pi builtin) are dropped from the dev-loop source; `edit`/`write`
-// are added so the conductor can edit directly under Pi instead of bash/sed.
-// Role agents keep `search`/`execute` (neutral; dropping them regresses Claude —
-// #1086 — which maps `search` -> Grep+Glob).
+// The source entrypoint stays Pi-valid while role templates remain harness-neutral.
 test("#1604 dev-loop.agent.md source drops agent/todo and declares edit/write", async () => {
   const raw = await readFile(fileURLToPath(new URL("../agents/dev-loop.agent.md", import.meta.url)), "utf8");
   const toolsLine = raw.match(/^tools:\s*(.*)$/m);
   assert.ok(toolsLine, "dev-loop.agent.md must declare a tools: line");
   const tools = toolsLine[1].split(/[\s,]+/).filter(Boolean);
-  // agent + todo removed from the dev-loop source
   assert.equal(tools.includes("agent"), false, "dev-loop source must not declare redundant `agent` (subagent covers it)");
   assert.equal(tools.includes("todo"), false, "dev-loop source must not declare `todo` (no Pi builtin)");
-  // edit + write present so the conductor can mutate under Pi without bash/sed
   assert.ok(tools.includes("edit"), "dev-loop source must declare `edit` (conductor mutates under Pi)");
   assert.ok(tools.includes("write"), "dev-loop source must declare `write` (conductor mutates under Pi)");
-  // neutral search/execute kept (both harnesses map them)
   assert.ok(tools.includes("search"), "dev-loop source keeps neutral `search`");
   assert.ok(tools.includes("execute"), "dev-loop source keeps neutral `execute`");
   assert.ok(tools.includes("subagent"), "dev-loop source keeps `subagent`");
@@ -363,14 +353,7 @@ test("#1659 review agent source is Pi-safe (no search/execute) and keeps bash/re
   }
 });
 
-
-// #1606 — syncPackagedAgents must ALSO sync the project-local `.pi/agents/`
-// directory (not just `~/.agents/`), with symlink-safety: when `.pi/agents` is a
-// symlink to the package source (the dev-loops repo dogfooding convention), the
-// dispatch reads the raw neutral templates and Pi strict-rejects `search`/
-// `execute`. The sync replaces the symlink with a REAL directory of Pi-valid
-// copies — it must NOT write through the symlink (that would overwrite the
-// neutral source and break Claude asset generation).
+// Project-local sync replaces source symlinks without mutating neutral templates.
 
 test("#1606 syncPackagedAgents replaces a .pi/agents symlink with a real dir of Pi-valid copies (source untouched)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pi-project-symlink-"));
@@ -382,7 +365,6 @@ test("#1606 syncPackagedAgents replaces a .pi/agents symlink with a real dir of 
   await mkdir(sourceRoot, { recursive: true });
   await mkdir(projectRoot, { recursive: true });
   await mkdir(path.join(projectRoot, ".pi"), { recursive: true });
-  // Neutral source: role agents keep search/execute (#1086).
   const neutralSource = `---
 name: "fixer"
 tools: read, search, execute, bash, edit, write
@@ -391,17 +373,14 @@ tools: read, search, execute, bash, edit, write
 fixer body
 `;
   await writeFile(path.join(sourceRoot, "fixer.agent.md"), neutralSource);
-  // .pi/agents -> ../source  (the symlink that bypasses the global sync)
   await symlink(path.resolve(tempDir, "source"), projectAgentsDir, "dir");
 
   await syncPackagedAgents({ sourceRoot, targetRoot, projectRoot });
 
-  // The symlink was replaced by a real directory.
   const stat = await lstat(projectAgentsDir);
   assert.equal(stat.isSymbolicLink(), false, ".pi/agents must no longer be a symlink after sync");
   assert.ok(stat.isDirectory(), ".pi/agents must be a real directory after sync");
 
-  // The rendered project-local copy declares only Pi-valid tool names.
   const rendered = await readFile(path.join(projectAgentsDir, "fixer.agent.md"), "utf8");
   const toolsLine = rendered.match(/^tools:\s*(.*)$/m);
   assert.ok(toolsLine, "rendered fixer must have a tools: line");
@@ -415,8 +394,6 @@ fixer body
     );
   }
 
-  // The neutral SOURCE is untouched (writing through the symlink would have
-  // overwritten it — the cross-harness regression this PR prevents).
   const sourceAfter = await readFile(path.join(sourceRoot, "fixer.agent.md"), "utf8");
   assert.equal(sourceAfter, neutralSource, "neutral source must remain untouched (no write-through)");
   assert.ok(sourceAfter.includes("search"), "source must keep neutral `search`");
@@ -442,7 +419,6 @@ tools: read, search, execute, bash, edit, write
 fixer body
 `,
   );
-  // A stale neutral copy already sitting in the real dir.
   await writeFile(
     path.join(projectAgentsDir, "fixer.agent.md"),
     `---
@@ -465,9 +441,6 @@ stale
 });
 
 test("#1606 syncPackagedAgents is a no-op for project-local when .pi/agents is absent (consumer repos unaffected)", async () => {
-  // A consumer repo with no project `.pi/agents` entry must NOT get one created —
-  // it resolves from the global `~/.agents/` (already Pi-valid), so the
-  // project-local sync stays a no-op to avoid surprising untracked files.
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pi-project-absent-"));
   const sourceRoot = path.join(tempDir, "source");
   const targetRoot = path.join(tempDir, "global-agents");
@@ -488,9 +461,7 @@ fixer body
 
   await syncPackagedAgents({ sourceRoot, targetRoot, projectRoot });
 
-  // Global sync still happened.
   await access(path.join(targetRoot, "fixer.agent.md"));
-  // Project-local dir was NOT created.
   await assert.rejects(
     lstat(path.join(projectRoot, ".pi", "agents")),
     "project-local .pi/agents must not be created when absent",
@@ -498,28 +469,39 @@ fixer body
 });
 
 test("#1607 Copilot: a write failure leaves the .pi/agents symlink intact (atomic swap, no unlink-before-prepare)", async () => {
-  // The symlink replacement must prepare the replacement content BEFORE unlinking
-  // the symlink. A read/render failure must never leave the project without
-  // `.pi/agents` (the original #1607 Copilot review concern).
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pi-project-robustness-"));
   const projectRoot = path.join(tempDir, "project");
   const projectAgentsDir = path.join(projectRoot, ".pi", "agents");
   await mkdir(path.join(projectRoot, ".pi"), { recursive: true });
-  // source is a FILE so writeSyncedAgents's readdirSync throws (simulates a
-  // read/render failure inside the temp-directory preparation).
   const sourceRoot = path.join(tempDir, "source-file");
   await writeFile(sourceRoot, "not a directory\n");
-  // .pi/agents -> a dummy target (the symlink under test)
   await symlink(path.join(tempDir, "dummy"), projectAgentsDir, "dir");
 
-  // The sync throws (read failure) but must leave the symlink intact.
   assert.throws(() => syncProjectAgentsDir(projectRoot, sourceRoot));
 
-  // The symlink is untouched (no unlink-before-prepare).
   const stat = await lstat(projectAgentsDir);
   assert.equal(stat.isSymbolicLink(), true, ".pi/agents symlink must remain after a write failure");
-  // No temp-directory leak.
   const piDir = path.join(projectRoot, ".pi");
   const leftovers = (await readdir(piDir)).filter((f) => f.startsWith(".pi-agents.tmp-"));
   assert.deepEqual(leftovers, [], "no temp directory must leak after a write failure");
+});
+
+test("project-agent sync tolerates the symlink disappearing before replacement", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pi-project-race-"));
+  const sourceRoot = path.join(tempDir, "source");
+  const projectRoot = path.join(tempDir, "project");
+  const agentsDir = path.join(projectRoot, ".pi", "agents");
+  await mkdir(sourceRoot, { recursive: true });
+  await mkdir(path.dirname(agentsDir), { recursive: true });
+  await writeFile(path.join(sourceRoot, "fixer.agent.md"), "fixer\n");
+  await symlink(sourceRoot, agentsDir, "dir");
+  const lstatSync = fs.lstatSync;
+  fs.lstatSync = (target) => {
+    const stat = lstatSync(target);
+    if (target === agentsDir) fs.unlinkSync(target);
+    return stat;
+  };
+  try { syncProjectAgentsDir(projectRoot, sourceRoot); }
+  finally { fs.lstatSync = lstatSync; }
+  assert.equal((await lstat(agentsDir)).isDirectory(), true);
 });

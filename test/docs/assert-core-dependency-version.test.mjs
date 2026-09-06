@@ -3,17 +3,22 @@ import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import { test } from "bun:test";
 
 import {
   assertCoreDependencyInLockstep,
-  assertPackageLockInLockstep,
+  assertBunLockInLockstep,
   extractFullVersion,
   extractMajorMinor,
+  parseBunLock,
 } from "../../scripts/release/assert-core-dependency-version.mjs";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const scriptPath = path.join(repoRoot, "scripts/release/assert-core-dependency-version.mjs");
+
+test("Bun lock parsing preserves trailing-comma text inside strings", () => {
+  assert.deepEqual(parseBunLock('{"url":"https://example.test/a,]",}'), { url: "https://example.test/a,]" });
+});
 
 test("rejects a #1033-shaped manifest (dev-loops@0.6.2 shipping @dev-loops/core@^0.2.6)", () => {
   assert.throws(
@@ -103,13 +108,10 @@ test("extractFullVersion fails closed on non-semver specs that merely contain a 
 
 function lockfileAtVersion(version) {
   return {
-    name: "dev-loops",
-    version,
-    lockfileVersion: 3,
-    packages: {
+    lockfileVersion: 2,
+    workspaces: {
       "": {
         name: "dev-loops",
-        version,
         dependencies: { "@dev-loops/core": `^${version}` },
       },
       "packages/core": { name: "@dev-loops/core", version },
@@ -117,24 +119,24 @@ function lockfileAtVersion(version) {
   };
 }
 
-test("assertPackageLockInLockstep accepts a fully lockstep lockfile", () => {
+test("assertBunLockInLockstep accepts a fully lockstep lockfile", () => {
   assert.doesNotThrow(() =>
-    assertPackageLockInLockstep({ releaseVersion: "1.0.0-rc.7", lockfile: lockfileAtVersion("1.0.0-rc.7") }),
+    assertBunLockInLockstep({ releaseVersion: "1.0.0-rc.7", lockfile: lockfileAtVersion("1.0.0-rc.7") }),
   );
 });
 
-test("assertPackageLockInLockstep rejects a stale lockfile (rc.6 fields vs rc.7 release)", () => {
+test("assertBunLockInLockstep rejects a stale lockfile (rc.6 fields vs rc.7 release)", () => {
   assert.throws(
-    () => assertPackageLockInLockstep({ releaseVersion: "1.0.0-rc.7", lockfile: lockfileAtVersion("1.0.0-rc.6") }),
+    () => assertBunLockInLockstep({ releaseVersion: "1.0.0-rc.7", lockfile: lockfileAtVersion("1.0.0-rc.6") }),
     /out of lockstep/,
   );
 });
 
-test("assertPackageLockInLockstep rejects a missing workspace entry", () => {
+test("assertBunLockInLockstep rejects a missing workspace entry", () => {
   const lockfile = lockfileAtVersion("1.0.0-rc.7");
-  delete lockfile.packages["packages/core"];
+  delete lockfile.workspaces["packages/core"];
   assert.throws(
-    () => assertPackageLockInLockstep({ releaseVersion: "1.0.0-rc.7", lockfile }),
+    () => assertBunLockInLockstep({ releaseVersion: "1.0.0-rc.7", lockfile }),
     /workspace entry version/,
   );
 });
@@ -149,11 +151,11 @@ test("the real root package.json is in lockstep (guards against real drift at CI
   );
 });
 
-test("the real package-lock.json is in full lockstep with the real manifest", async () => {
+test("the real bun.lock is in full lockstep with the real manifest", async () => {
   const pkg = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
-  const lockfile = JSON.parse(await readFile(path.join(repoRoot, "package-lock.json"), "utf8"));
+  const lockfile = parseBunLock(await readFile(path.join(repoRoot, "bun.lock"), "utf8"));
   assert.doesNotThrow(() =>
-    assertPackageLockInLockstep({ releaseVersion: pkg.version, lockfile }),
+    assertBunLockInLockstep({ releaseVersion: pkg.version, lockfile }),
   );
 });
 
@@ -165,7 +167,7 @@ test("CLI exits 0 on the real in-lockstep manifest", () => {
   );
   assert.equal(res.status, 0, res.stderr);
   assert.match(res.stdout, /in lockstep with release/);
-  assert.match(res.stdout, /package-lock\.json version fields are in lockstep/);
+  assert.match(res.stdout, /bun\.lock version fields are in lockstep/);
 });
 
 test("CLI exits 2 on an unreadable or invalid-JSON manifest (usage/parse error)", async () => {
@@ -222,7 +224,7 @@ test("CLI fails closed (exit 1) on a synthetic stale lockfile (rc.6 vs rc.7)", a
   const os = await import("node:os");
   const dir = await mkdtemp(path.join(os.tmpdir(), "lockfile-drift-"));
   const manifest = path.join(dir, "package.json");
-  const lockfile = path.join(dir, "package-lock.json");
+  const lockfile = path.join(dir, "bun.lock");
   await writeFile(
     manifest,
     JSON.stringify({ version: "1.0.0-rc.7", dependencies: { "@dev-loops/core": "^1.0.0-rc.7" } }),
@@ -236,7 +238,7 @@ test("CLI fails closed (exit 1) on a synthetic stale lockfile (rc.6 vs rc.7)", a
     );
     assert.equal(res.status, 1, res.stderr);
     assert.match(res.stderr, /::error::/);
-    assert.match(res.stderr, /package-lock\.json is out of lockstep/);
+    assert.match(res.stderr, /bun\.lock is out of lockstep/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -247,13 +249,13 @@ test("CLI output cannot be forged by crafted manifest/lockfile values (annotatio
   const os = await import("node:os");
   const dir = await mkdtemp(path.join(os.tmpdir(), "lockfile-forge-"));
   const manifest = path.join(dir, "package.json");
-  const lockfile = path.join(dir, "package-lock.json");
+  const lockfile = path.join(dir, "bun.lock");
   await writeFile(
     manifest,
     JSON.stringify({ version: "1.0.0-rc.7", dependencies: { "@dev-loops/core": "^1.0.0-rc.7" } }),
   );
   const forged = lockfileAtVersion("1.0.0-rc.6");
-  forged.version = `1.0.0-rc.6\n::warning::lockfile check passed, publishing`;
+  forged.workspaces["packages/core"].version = `1.0.0-rc.6\n::warning::lockfile check passed, publishing`;
   await writeFile(lockfile, JSON.stringify(forged));
   try {
     const res = spawnSync(

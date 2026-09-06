@@ -294,10 +294,11 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
 // startup indefinitely — it fails (and callers treat that as a normal `gh`
 // failure) after this timeout instead of hanging forever.
 const GH_CALL_TIMEOUT_MS = 10000;
-function ghJson(args, cwd) {
+function ghJson(args, cwd, env = process.env) {
   try {
     const stdout = execFileSync("gh", args, {
       cwd,
+      env,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: GH_CALL_TIMEOUT_MS,
@@ -373,11 +374,11 @@ function mapGhState(ghState) {
 // cannot verify OR claim ownership at all, so it fails closed with its own
 // distinct reason rather than falling back to a default.
 let viewerLoginCache = null;
-function resolveViewerLogin(cwd) {
+function resolveViewerLogin(cwd, env) {
   if (viewerLoginCache !== null) return viewerLoginCache;
   let login;
   try {
-    login = ghJson(["api", "user"], cwd)?.login;
+    login = ghJson(["api", "user"], cwd, env)?.login;
   } catch (err) {
     throw new Error(
       `Unable to resolve the current GitHub viewer login (gh api user failed: ${err instanceof Error ? err.message : String(err)}); cannot verify or claim single-contributor ownership — fail closed, do not start. Check \`gh auth status\` and retry.`,
@@ -394,8 +395,8 @@ function resolveViewerLogin(cwd) {
 // Classify assignees against the viewer, resolving the viewer login only when
 // a non-copilot assignee is present (keeps the copilot flow and the genuinely
 // empty-assignees case immune to viewer-login resolution failures).
-function resolveOwnershipState(assignees, cwd) {
-  const viewerLogin = ownershipNeedsViewerLogin(assignees) ? resolveViewerLogin(cwd) : null;
+function resolveOwnershipState(assignees, cwd, env) {
+  const viewerLogin = ownershipNeedsViewerLogin(assignees) ? resolveViewerLogin(cwd, env) : null;
   return classifyOwnership(assignees, viewerLogin);
 }
 // Unassigned work is impossible by construction (#1377): the startup resolver
@@ -523,7 +524,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       const linkageJson = execFileSync(process.execPath, [
         path.join(repoRoot, "scripts/github/detect-linked-issue-pr.mjs"),
         "--repo", repo, "--issue", String(issue),
-      ], { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      ], { cwd: repoRoot, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
       linkagePayload = JSON.parse(linkageJson);
     } catch (err) {
       // Fail closed (#1626): a transient gh failure must NOT fabricate
@@ -538,7 +539,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       issueLinkageResolution = "resolved_linked_pr";
       linkedPr = linkagePayload.prNumber;
       try {
-        const prJson = ghJson(["pr", "view", String(linkedPr), "--repo", repo, "--json", "author,state"], repoRoot);
+        const prJson = ghJson(["pr", "view", String(linkedPr), "--repo", repo, "--json", "author,state"], repoRoot, env);
         ownership = isCopilotLogin(prJson?.author?.login) ? "copilot" : "external_human";
         artifactState = mapGhState(prJson?.state ?? "OPEN");
       } catch {
@@ -549,7 +550,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     }
     let issueReadiness;
     try {
-      const issueJson = ghJson(["issue", "view", String(issue), "--repo", repo, "--json", "body"], repoRoot);
+      const issueJson = ghJson(["issue", "view", String(issue), "--repo", repo, "--json", "body"], repoRoot, env);
       issueReadiness = hasAcSection(issueJson.body) ? "ready" : "needs_clarification";
     } catch {
       issueReadiness = "needs_clarification";
@@ -568,7 +569,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     // would select for this canonical state.
     let assignees = [];
     try {
-      const assigneesJson = ghJson(["issue", "view", String(issue), "--repo", repo, "--json", "assignees"], repoRoot);
+      const assigneesJson = ghJson(["issue", "view", String(issue), "--repo", repo, "--json", "assignees"], repoRoot, env);
       assignees = assigneesJson.assignees || [];
     } catch {
       warnings.push('issueAssignmentState: using default "unassigned" — gh issue view failed');
@@ -620,7 +621,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     if (!ownershipGateBypassed(env)) {
       const peekedStrategy = resolveAuthoritativeStartupResumeBundle(result).selectedStrategy ?? "none";
       if (ownershipGateAppliesToStrategy(peekedStrategy)) {
-        enforceOwnershipGate(resolveOwnershipState(assignees, repoRoot), {
+        enforceOwnershipGate(resolveOwnershipState(assignees, repoRoot, env), {
           describeArtifact: `Issue #${issue}`,
           claimCommand: `node scripts/github/edit-issue.mjs --repo ${repo} --issue ${issue} --add-assignee @me`,
         });
@@ -635,6 +636,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     const prJson = ghJson(
       ["pr", "view", String(pr), "--repo", repo, "--json", "state,mergedAt,assignees,closingIssuesReferences,body"],
       repoRoot,
+      env,
     );
     artifactState = prJson.mergedAt ? "merged" : mapGhState(prJson.state);
     prAssignees = prJson.assignees || [];
@@ -676,7 +678,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
   if (!ownershipGateBypassed(env)) {
     const peekedStrategy = resolveAuthoritativeStartupResumeBundle(result).selectedStrategy ?? "none";
     if (ownershipGateAppliesToStrategy(peekedStrategy)) {
-      const prOwnership = resolveOwnershipState(prAssignees, repoRoot);
+      const prOwnership = resolveOwnershipState(prAssignees, repoRoot, env);
       enforceOwnershipGate(prOwnership, {
         describeArtifact: `PR #${pr}`,
         claimCommand: `node scripts/github/edit-pr.mjs --repo ${repo} --pr ${pr} --add-assignee @me`,
@@ -691,14 +693,14 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       for (const linkedIssueNumber of prOwnership.state === OWNERSHIP_STATE.ASSIGNED_TO_COPILOT ? [] : linkedIssueNumbers) {
         let linkedIssueAssignees;
         try {
-          const linkedIssueJson = ghJson(["issue", "view", String(linkedIssueNumber), "--repo", repo, "--json", "assignees"], repoRoot);
+          const linkedIssueJson = ghJson(["issue", "view", String(linkedIssueNumber), "--repo", repo, "--json", "assignees"], repoRoot, env);
           linkedIssueAssignees = linkedIssueJson.assignees || [];
         } catch {
           // Warn-on-failure posture, same as other reads: an unreadable linked
           // issue cannot block continuation on its own.
           continue;
         }
-        const linkedIssueOwnership = resolveOwnershipState(linkedIssueAssignees, repoRoot);
+        const linkedIssueOwnership = resolveOwnershipState(linkedIssueAssignees, repoRoot, env);
         if (linkedIssueOwnership.state === OWNERSHIP_STATE.ASSIGNED_TO_OTHER) {
           throw new Error(
             `PR #${pr}'s linked issue #${linkedIssueNumber} is assigned to ${linkedIssueOwnership.foreignLogins.join(", ")}, not the current viewer; the issue owner owns the whole loop — fail closed, do not continue. Have the owner unassign it, or pick a different item.`,
@@ -1210,7 +1212,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   } else if (options.planFile !== undefined) {
     input = buildPlanFileInput({ planFilePath: options.planFile });
   } else if (options.inputPath !== undefined) {
-    const text = await readFile(path.resolve(options.inputPath), "utf8");
+    const text = await readFile(path.resolve(sessionCwd, options.inputPath), "utf8");
     const parsed = parseJsonText(text);
     // `--input` is untrusted external JSON. Strip the resolver-only intake fields
     // so it cannot inject them — `planFileExempt` would otherwise waive the

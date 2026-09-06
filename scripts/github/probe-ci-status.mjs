@@ -2,7 +2,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseArgs } from "node:util";
-import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -198,10 +198,10 @@ function extractFailedStatusContexts(statuses) {
     }));
 }
 
-async function fetchPrHeadSha({ repo, pr }, { env, ghCommand }) {
+async function fetchPrHeadSha({ repo, pr }, { env, ghCommand, runChild }) {
   const payload = await ghJson(
     ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,statusCheckRollup"],
-    { env, ghCommand },
+    { env, ghCommand, runChild },
   );
   const headSha = typeof payload.headRefOid === "string" ? payload.headRefOid.trim() : "";
   if (headSha.length === 0) {
@@ -223,7 +223,10 @@ async function fetchPrHeadSha({ repo, pr }, { env, ghCommand }) {
  *
  * @returns {{ ciStatus: "success"|"failure"|"pending"|"none", noChecks: boolean, fetchError: boolean, failedChecks: Array<{ name: string, conclusion?: string }>, excludedFailureDetails: Array<string> }}
  */
-async function fetchHeadCiState({ repo, headSha, prVisibleCheckNames }, { env, ghCommand }) {
+async function fetchHeadCiState(
+  { repo, headSha, prVisibleCheckNames },
+  { env, ghCommand, runChild = defaultRunChild },
+) {
   const [checkRunsResult, statusesResult] = await Promise.all([
     runChild(ghCommand, ["api", `repos/${repo}/commits/${headSha}/check-runs?per_page=100`], env),
     runChild(ghCommand, ["api", `repos/${repo}/commits/${headSha}/status?per_page=100`], env),
@@ -464,12 +467,13 @@ export async function watchCiStatus(
     delayImpl = delay,
     now = Date.now,
     ensureOwnershipImpl = ensureAsyncRunnerOwnership,
+    runChild = defaultRunChild,
   } = {},
 ) {
   const leaseCwd = resolveRepoRoot(process.cwd());
   const { headSha: baselineSha, prVisibleCheckNames } = await fetchPrHeadSha(
     { repo: options.repo, pr: options.pr },
-    { env, ghCommand },
+    { env, ghCommand, runChild },
   );
   const attemptBudget = buildAttemptBudget(options.timeoutMs, options.pollIntervalMs);
   const watchStartedAtMs = now();
@@ -524,12 +528,12 @@ export async function watchCiStatus(
     // "changed" so the caller re-baselines instead of waiting on a stale head.
     const { headSha: currentSha, prVisibleCheckNames: currentNames } = await fetchPrHeadSha(
       { repo: options.repo, pr: options.pr },
-      { env, ghCommand },
+      { env, ghCommand, runChild },
     );
     if (currentSha !== baselineSha) {
       const changedState = await fetchHeadCiState(
         { repo: options.repo, headSha: currentSha, prVisibleCheckNames: currentNames },
-        { env, ghCommand },
+        { env, ghCommand, runChild },
       );
       return settledResult({ ...changedState, headSha: currentSha, attempts: attempt }, {
         settled: false,
@@ -542,7 +546,7 @@ export async function watchCiStatus(
     // none->success; currentNames keeps it pending until the checks report.
     const state = await fetchHeadCiState(
       { repo: options.repo, headSha: currentSha, prVisibleCheckNames: currentNames },
-      { env, ghCommand },
+      { env, ghCommand, runChild },
     );
     consecutiveNoChecks = state.noChecks ? consecutiveNoChecks + 1 : 0;
     const terminal = terminalStatusFor(state, consecutiveNoChecks, graceFloor);
@@ -572,12 +576,12 @@ export async function watchCiStatus(
   // budget reports "timeout".
   const { headSha: finalSha, prVisibleCheckNames: finalNames } = await fetchPrHeadSha(
     { repo: options.repo, pr: options.pr },
-    { env, ghCommand },
+    { env, ghCommand, runChild },
   );
   if (finalSha !== baselineSha) {
     const changedState = await fetchHeadCiState(
       { repo: options.repo, headSha: finalSha, prVisibleCheckNames: finalNames },
-      { env, ghCommand },
+      { env, ghCommand, runChild },
     );
     return settledResult({ ...changedState, headSha: finalSha, attempts: attemptBudget }, {
       settled: false,
@@ -586,7 +590,7 @@ export async function watchCiStatus(
   }
   const finalState = await fetchHeadCiState(
     { repo: options.repo, headSha: finalSha, prVisibleCheckNames: finalNames },
-    { env, ghCommand },
+    { env, ghCommand, runChild },
   );
   return settledResult({ ...finalState, headSha: finalSha, attempts: attemptBudget }, {
     settled: false,

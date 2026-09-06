@@ -9,14 +9,15 @@ Everything after the tag is hands-off.
 ## Procedure
 
 1. On `main` (merged, green), bump the version, run
-   `node scripts/claude/generate-claude-assets.mjs` (stamps the bumped version
+   `bun scripts/claude/generate-claude-assets.mjs` (stamps the bumped version
    into the generated `npx dev-loops@<version>` pins and the plugin manifest;
    a stale manifest fails `verify` at publish), and add the matching
    `## <version> - <date>` section to `CHANGELOG.md` (the empty `## Unreleased`
-   heading stays above the latest version). Regenerate `package-lock.json` so
-   its root/workspace version fields and the `@dev-loops/core` dependency spec
-   track the full new version including the prerelease token
-   (`npm install --package-lock-only`) and stage it with the release files —
+   heading stays above the latest version). Regenerate `bun.lock` so its
+   root/workspace version fields and the `@dev-loops/core` dependency spec track
+   the full new version including the prerelease token (`bun install
+   --lockfile-only`), then prove it with `bun install --frozen-lockfile` and
+   stage it with the release files —
    `release.yml`'s lockstep guard
    (`scripts/release/assert-core-dependency-version.mjs`) now fails the release
    workflow before the GitHub Release is created if the lockfile is out of
@@ -33,7 +34,7 @@ Everything after the tag is hands-off.
    ```
 
    **Staging the release commit.** Stage the exact release files explicitly
-   (the version bump, `CHANGELOG.md`, `package-lock.json`, and any regenerated
+   (the version bump, `CHANGELOG.md`, `bun.lock`, and any regenerated
    assets) — never
    `git add -A` or `git add .`. The release commit runs with
    `DEVLOOPS_ALLOW_MAIN=1`, which intentionally turns the default-branch guard
@@ -75,6 +76,11 @@ generic "continue" instructions never satisfy this gate.
   repo owner (operator) on a repo issue (typically the release tracking issue)
   stating `approve release v<version>` — or the operator running the publish
   commands themselves.
+
+npm is intentionally retained at this boundary: the publish workflow uses npm
+for package packing, registry queries, dist-tag selection, and
+`npm publish --provenance`. Bun remains the installer/script/test tool and does
+not replace the provenance-capable registry client.
 
 **Deterministic enforcement (fail closed).** Both release workflows run
 `scripts/release/verify-release-approval.mjs` before anything is published:
@@ -142,7 +148,7 @@ NOT satisfy this gate.
 **Operator path for a stable cut:** post the approval comment on the release
 tracking issue (then the automated flow proceeds), or run the publish steps
 manually. Local pre-flight (optional but recommended before pushing the tag):
-`node scripts/release/verify-release-approval.mjs --version <X.Y.Z> --repo
+`bun scripts/release/verify-release-approval.mjs --version <X.Y.Z> --repo
 <owner/name>`.
 
 ## What happens automatically

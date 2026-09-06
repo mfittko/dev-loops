@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import test, { describe } from "node:test";
+import { describe, test } from "bun:test";
 
 import {
   DevLoopConfigSchema,

@@ -295,9 +295,9 @@ function parseChangedPathsCliArgs(argv) {
   return options;
 }
 
-export function specContextChangedPaths(options, { repoRoot = process.cwd() } = {}) {
+export async function specContextChangedPaths(options, { repoRoot = process.cwd() } = {}) {
   const resolvedRoot = options.repoRoot ? path.resolve(repoRoot, options.repoRoot) : repoRoot;
-  const { changedFiles } = captureChangedFilesBetween({ base: options.base, head: options.head, repoRoot: resolvedRoot });
+  const { changedFiles } = await captureChangedFilesBetween({ base: options.base, head: options.head, repoRoot: resolvedRoot });
   return { ok: true, base: options.base, head: options.head, changedFiles };
 }
 
@@ -327,7 +327,7 @@ async function main() {
   }
   try {
     const result = options.mode === "changed-paths"
-      ? specContextChangedPaths(options)
+      ? await specContextChangedPaths(options)
       : await specContextExtract(options);
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
   } catch (error) {

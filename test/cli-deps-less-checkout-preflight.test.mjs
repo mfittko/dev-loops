@@ -12,7 +12,7 @@
 // (its one local, always-resolvable dependency) — no `node_modules`, no
 // `packages/`, no `scripts/`. `@dev-loops/core` is therefore genuinely
 // unresolvable from that tree, the same as in the real marketplace checkout.
-import { test } from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, copyFileSync, readFileSync } from "node:fs";

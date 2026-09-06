@@ -3,7 +3,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import test from "node:test";
+import { test } from "bun:test";
 import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import { parseReplyResolveThreadsCliArgs } from "../../scripts/github/reply-resolve-review-threads.mjs";
@@ -801,7 +801,7 @@ test("reply-resolve-review-threads terminates on an idle open stdin pipe with no
     // the old unbounded read hung forever. With no data, the probe times out,
     // the tool proceeds with --message, and it must terminate cleanly.
     const result = await new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, [
+      const child = spawn((Bun.which("node") ?? "node"), [
         scriptPath,
         "--repo", "owner/repo", "--pr", "17",
         "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract.",
@@ -841,7 +841,7 @@ test("reply-resolve-review-threads detects a conflicting stdin source promptly o
     // EOF — and the tool must terminate (fail closed) rather than hang. Here the
     // pipe is never ended, so only prompt (chunk-triggered) detection can pass.
     const result = await new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, [
+      const child = spawn((Bun.which("node") ?? "node"), [
         scriptPath,
         "--repo", "owner/repo", "--pr", "17",
         "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract.",
@@ -883,7 +883,7 @@ test("reply-resolve-review-threads detects a conflict when a whitespace-only chu
     // It must keep buffering until non-whitespace arrives, detect the conflict,
     // and terminate — all without waiting for EOF (pipe never ends).
     const result = await new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, [
+      const child = spawn((Bun.which("node") ?? "node"), [
         scriptPath,
         "--repo", "owner/repo", "--pr", "17",
         "--message", "Fixed in 93cd7f8 with enough detail to satisfy the resolution contract.",

@@ -102,7 +102,7 @@
     "bin/**/*.mjs"
   ],
   "scripts": {
-    "test": "node --test ./test/*.test.mjs"
+    "test": "bun ../../scripts/run-bun-test.mjs ./test/*.test.mjs"
   },
   "publishConfig": {
     "access": "public",
