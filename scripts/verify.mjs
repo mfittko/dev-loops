@@ -2,7 +2,6 @@
 
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
-import { childResult } from "./run-bun-test.mjs";
 
 export const VERIFY_SUITES = Object.freeze(["test:all", "test:docs", "test:workflows"]);
 
@@ -27,11 +26,18 @@ export function runSuite(suite, {
   const child = spawnImpl(command, ["run", suite], { cwd, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
   const out = createAttributedWriter(stdout, suite);
   const err = createAttributedWriter(stderr, suite);
-  child.stdout.on("data", (chunk) => out.write(chunk));
-  child.stderr.on("data", (chunk) => err.write(chunk));
-  child.on("error", (error) => err.write(`${error.message}\n`));
-  child.on("close", () => { out.end(); err.end(); });
-  return childResult(child).then(({ code, error }) => error ? 1 : code);
+  child.stdout?.on("data", (chunk) => out.write(chunk));
+  child.stderr?.on("data", (chunk) => err.write(chunk));
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (code) => {
+      if (settled) return;
+      settled = true;
+      out.end(); err.end(); resolve(code ?? 1);
+    };
+    child.once("error", (error) => { err.write(`${error.message}\n`); finish(1); });
+    child.once("close", finish);
+  });
 }
 
 export async function runVerification({ suites = VERIFY_SUITES, execute = runSuite } = {}) {
