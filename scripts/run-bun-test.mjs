@@ -293,7 +293,7 @@ export async function createOutputCapture({
       };
       const beginFailure = async () => {
         if (header !== wroteHeader) {
-          await write(stream, `${header ?? "Bun test failure:"}\n`);
+          await writeFailureLine(header ?? "Bun test failure:");
           wroteHeader = header;
         }
         for (const line of paragraphHasStack ? [...previous, ...current] : current) await writeFailureLine(line);

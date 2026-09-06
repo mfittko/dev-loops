@@ -362,12 +362,12 @@ test("failure digest caps an unbroken sequence of short diagnostic lines", async
   }
 });
 
-test("failure digest applies one byte budget across separate failing tests", async () => {
+test("failure digest applies one byte budget across separate failing tests and headers", async () => {
   let capture;
   let stderr = "";
   const block = "diagnostic".repeat(1_000);
-  const content = `${Array.from({ length: 30 }, (_, index) =>
-    `test/failure-${index}.test.mjs:\n(fail) assertion ${index}\n${block}\n`).join("")}0 pass\n30 fail\nRan 30 tests across 30 files. [1.00ms]\n`;
+  const content = `${Array.from({ length: 100 }, (_, index) =>
+    `test/${"long-path-".repeat(200)}failure-${index}.test.mjs:\n(fail) assertion ${index}\n${block}\n`).join("")}0 pass\n100 fail\nRan 100 tests across 100 files. [1.00ms]\n`;
   try {
     const code = await runBunTest(["example.test.mjs"], {
       captureFactory: async () => {
