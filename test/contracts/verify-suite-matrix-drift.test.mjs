@@ -1,16 +1,15 @@
 import { assert, readRepo, test } from "../imported-assets-helpers.mjs";
 import { VERIFY_SUITES } from "../../scripts/verify.mjs";
 
-// Guards against the CI verify-suite matrix drifting from the test:* scripts
-// that compose `npm run verify`. Adding a gating suite to package.json without
+// Guards against the CI verify-suite matrix drifting from the test:* suites
+// that compose the canonical verifier. Adding a gating suite without
 // wiring the matrix (or vice-versa) is fail-open: the aggregate verify gate
 // stays green while the new suite never runs. This asserts the two sets match.
 
-test("verify-suite matrix suites equal the test:* suites composing npm run verify", async () => {
+test("verify-suite matrix suites equal the test:* suites composing the canonical verifier", async () => {
   const ciWorkflow = await readRepo(".github/workflows/ci.yml");
 
-  // Source of truth: the run-p args of the `verify` script (the aggregate CI
-  // gate). run-p flags never start with `test:`, so token-matching is exact.
+  // Source of truth: the verifier's exported suite inventory.
   const verifySuites = new Set(VERIFY_SUITES);
 
   // Scope to the verify-suite job's own section (header to the next top-level
@@ -32,11 +31,11 @@ test("verify-suite matrix suites equal the test:* suites composing npm run verif
   assert.deepEqual(
     missingFromMatrix,
     [],
-    `test:* suites in \`npm run verify\` but missing from the ci.yml verify-suite matrix: ${missingFromMatrix.join(", ")}`,
+    `test:* suites in the canonical verifier but missing from the ci.yml verify-suite matrix: ${missingFromMatrix.join(", ")}`,
   );
   assert.deepEqual(
     extraInMatrix,
     [],
-    `suites in the ci.yml verify-suite matrix but not in \`npm run verify\`: ${extraInMatrix.join(", ")}`,
+    `suites in the ci.yml verify-suite matrix but not in the canonical verifier: ${extraInMatrix.join(", ")}`,
   );
 });
