@@ -137,21 +137,25 @@ Optional:
                                  be re-read as an artifact.
   --pr-checklist clean    When no pr-checklist angle artifact was found, upsert
                                  { angle: "pr-checklist", verdict: "clean", findings: [] }
-  --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean
-                                 head (the "angle" field of each entry in resolve-angle-carry-forward.mjs's
-                                 plan.carried) rather than freshly reviewed this round — Phase 2 dispatches
-                                 no artifact for them, so without this flag they are invisible to
-                                 findingsJson/checkFanoutAngleCoverage and the posted verdict comment reads
-                                 as a truncated fan-out instead of a full one. REQUIRES --gate and
-                                 --carry-forward-plan (below) — this CLI never mints a carried entry from a
-                                 bare name alone. For any named angle with no real per-angle artifact,
-                                 upserts { angle, verdict: "clean", findings: [], carriedFromHead } (a real
+  --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean OR
+                                 findings_present head (the "angle" field of each entry in
+                                 resolve-angle-carry-forward.mjs's plan.carried) rather than freshly reviewed
+                                 this round — Phase 2 dispatches no artifact for them, so without this flag
+                                 they are invisible to findingsJson/checkFanoutAngleCoverage and the posted
+                                 verdict comment reads as a truncated fan-out instead of a full one. REQUIRES
+                                 --gate and --carry-forward-plan (below) — this CLI never mints a carried
+                                 entry from a bare name alone. For any named angle with no real per-angle
+                                 artifact, upserts { angle, verdict, findings, carriedFromHead } (a real
                                  artifact for that angle, if present — matched by base name and
                                  case-insensitively, same rule resolve-angle-carry-forward.mjs uses — always
-                                 wins; this never overrides one). Same upsert semantics as
-                                 --pr-checklist, generalized, plus the two guards below. FAILS CLOSED
-                                 (exit 1) on any named angle whose angleReviewSurface(...).kind !== "kinds"
-                                 (@dev-loops/core/loop/gate-carry-forward) — the SAME predicate
+                                 wins; this never overrides one). "verdict"/"findings" are the plan entry's own
+                                 "prevVerdict"/"findings" (issue #2017: a findings_present carry preserves its
+                                 real prior open findings unchanged, so the gate still blocks on them exactly
+                                 as if freshly reviewed) — a plan entry with no "prevVerdict" (a shape that
+                                 predates #2017) upserts { verdict: "clean", findings: [] } as before. Same
+                                 upsert semantics as --pr-checklist, generalized, plus the two guards below.
+                                 FAILS CLOSED (exit 1) on any named angle whose angleReviewSurface(...).kind
+                                 !== "kinds" (@dev-loops/core/loop/gate-carry-forward) — the SAME predicate
                                  resolve-angle-carry-forward.mjs's own producer uses for plan.carried
                                  membership, fed --gate's configured mandatoryAngles as alwaysRerun: this
                                  refuses a configured MANDATORY angle, a hardcoded ALWAYS_INCLUDE angle
@@ -162,8 +166,15 @@ Optional:
                                  actually proved was carried.
   --carry-forward-plan <json>    resolve-angle-carry-forward.mjs's own JSON result, any object with its
                                  "carried" field, or a bare JSON array of carried entries:
-                                 [{ angle, carriedFromHead, reason?, reviewer?, dispatchId?, model? }] — the
-                                 proof --carried-angles is checked against. Each entry's carriedFromHead must
+                                 [{ angle, carriedFromHead, reason?, reviewer?, dispatchId?, model?,
+                                 prevVerdict?, findings? }] — the proof --carried-angles is checked against.
+                                 prevVerdict ("clean"|"findings_present") and findings are OPTIONAL (backward
+                                 compatible with a pre-#2017 plan shape); when prevVerdict is
+                                 "findings_present", findings must be a non-empty array of well-formed
+                                 { severity, summary, ... } objects — a findings_present entry with no
+                                 findings, or a "clean" entry carrying non-empty findings, FAILS CLOSED at
+                                 parse time (both directions would either drop or fabricate findings). Each
+                                 entry's carriedFromHead must
                                  be a 7-64 char hex SHA (write-gate-findings-log.mjs's own provenance bound;
                                  normalized trim+lowercase). Required together with --carried-angles (given
                                  without it, or vice versa, fails closed at parse time).
@@ -310,7 +321,10 @@ Exit codes:
      ALWAYS_INCLUDE angle, or an unmapped/unknown angle) or is absent from
      --carry-forward-plan's "carried" list, --carried-angles given without
      --carry-forward-plan/--gate (or vice versa), a --carry-forward-plan entry with a
-     malformed "carriedFromHead" (not a 7-64 char hex SHA), a round still over the
+     malformed "carriedFromHead" (not a 7-64 char hex SHA), a malformed "prevVerdict"
+     (not "clean"/"findings_present"), a "findings_present" entry with no non-empty
+     well-formed "findings" array, or a "clean" entry carrying non-empty "findings"
+     (issue #2017), a round still over the
      render budget at minimum summary length with --ledger-out not given, or a
      GATE-EXEC-BRIEFING-PREFIX verification failure when --head-sha is given
      (a sentinel records a divergent/missing prefix hash, the sentinel count
@@ -462,6 +476,41 @@ function validateCarryForwardPlanEntries(carried) {
       throw new Error(`--carry-forward-plan carried[${i}].carriedFromHead must be a 7-64 char hex SHA (write-gate-findings-log.mjs's own provenance bound), got ${JSON.stringify(entry.carriedFromHead)}`);
     }
     entry.carriedFromHead = normalized;
+    // Optional (issue #2017): a carried entry may declare the PRIOR verdict it
+    // is carrying (resolve-angle-carry-forward.mjs's own buildCarryForwardPlan
+    // stamps this on every entry it produces) — "clean" or "findings_present".
+    // Absent entirely, this CLI's upsert below keeps the pre-#2017 default
+    // (clean, no findings) for backward compatibility with a plan shape that
+    // predates this field.
+    if (entry.prevVerdict !== undefined) {
+      if (entry.prevVerdict !== "clean" && entry.prevVerdict !== "findings_present") {
+        throw new Error(`--carry-forward-plan carried[${i}].prevVerdict must be "clean" or "findings_present", got ${JSON.stringify(entry.prevVerdict)}`);
+      }
+      // FAIL-CLOSED, both directions: a "findings_present" carry with no
+      // findings would upsert an entry that either can never validate
+      // (gate-fanin's validateAngleResult requires findings_present to carry
+      // at least one finding) or, worse, silently degrades to an empty-findings
+      // entry that consolidateFanin's own blocking computation cannot see —
+      // exactly the "carried finding silently dropped" outcome this issue
+      // exists to prevent. A "clean" carry smuggling a non-empty findings
+      // array is the mirror defect (an approval hiding real findings) — reject
+      // both here, at the one place every carried entry passes through,
+      // rather than downstream where the cause is harder to trace.
+      if (entry.prevVerdict === "findings_present") {
+        if (!Array.isArray(entry.findings) || entry.findings.length === 0) {
+          throw new Error(`--carry-forward-plan carried[${i}] declares prevVerdict "findings_present" but has no non-empty "findings" array to carry — refusing to mint a findings_present carried entry with no findings (fail-closed: this would drop the very findings carry-forward exists to preserve)`);
+        }
+        entry.findings.forEach((f, j) => {
+          if (!f || typeof f !== "object" || Array.isArray(f)
+              || typeof f.severity !== "string" || !VALID_SEVERITIES.has(normalizeSeverity(f.severity.trim()))
+              || typeof f.summary !== "string" || f.summary.trim().length === 0) {
+            throw new Error(`--carry-forward-plan carried[${i}].findings[${j}] must be an object with a valid "severity" (${SEVERITY_ORDER.join("|")}) and a non-empty "summary"`);
+          }
+        });
+      } else if (Array.isArray(entry.findings) && entry.findings.length > 0) {
+        throw new Error(`--carry-forward-plan carried[${i}] declares prevVerdict "clean" but carries a non-empty "findings" array — a clean carry must never smuggle findings through (fail-closed)`);
+      }
+    }
   });
   return carried;
 }
@@ -1297,7 +1346,7 @@ export async function consolidateGateFanin(options) {
   // fail-closed on its own:
   //   1. angleReviewSurface(...).kind !== "kinds" — the SAME predicate
   //      resolve-angle-carry-forward.mjs's own producer (buildCarryForwardPlan
-  //      -> resolveCarryForwardAngles) uses to decide plan.carried membership,
+  //      -> resolveAngleCarryForward) uses to decide plan.carried membership,
   //      fed --gate's configured mandatoryAngles as alwaysRerun. This refuses a
   //      configured mandatory angle ("kind: always" via alwaysRerun), a
   //      hardcoded ALWAYS_INCLUDE angle — gate-evidence/renderer-security/
@@ -1360,7 +1409,19 @@ export async function consolidateGateFanin(options) {
       }
       if (realAngleKeys.has(key) || seenCarriedNames.has(trimmedAngle)) continue;
       seenCarriedNames.add(trimmedAngle);
-      rawArtifacts.push({ angle: trimmedAngle, verdict: "clean", findings: [], carriedFromHead: planEntry.carriedFromHead });
+      // issue #2017: a carried angle is no longer unconditionally upserted
+      // clean — when the plan proves it was carrying an OPEN findings_present
+      // verdict (validateCarryForwardPlanEntries above already required a
+      // non-empty, well-formed "findings" array for that case), upsert the
+      // REAL prior verdict and its REAL prior findings, so the angle stays
+      // findings_present here too and consolidateFanin's own blocking
+      // computation still sees — and still blocks on — those findings exactly
+      // as if the angle had been freshly reviewed. Absent prevVerdict entirely
+      // (a plan shape that predates this field) keeps the pre-#2017 default:
+      // upsert clean with no findings.
+      const carriedVerdict = planEntry.prevVerdict === "findings_present" ? "findings_present" : "clean";
+      const carriedFindings = carriedVerdict === "findings_present" ? planEntry.findings : [];
+      rawArtifacts.push({ angle: trimmedAngle, verdict: carriedVerdict, findings: carriedFindings, carriedFromHead: planEntry.carriedFromHead });
     }
   }
 
@@ -1510,8 +1571,9 @@ export async function consolidateGateFanin(options) {
         if (f.recommendation) entry.recommendation = f.recommendation;
         return entry;
       }),
-      // Marks a --carried-angles upsert (a prior clean verdict, not a fresh
-      // review at this head) so a reader of --out/the emitted result — not
+      // Marks a --carried-angles upsert (a prior verdict — clean or, since
+      // issue #2017, findings_present with its findings preserved — not a
+      // fresh review at this head) so a reader of --out/the emitted result — not
       // just the ledger's provenance.perAngle — can tell carried from fresh.
       // upsert-checkpoint-verdict.mjs's buildAngleSectionFromNested only reads
       // angle/verdict/findings/unparseable, so this extra field never affects the

@@ -1041,6 +1041,13 @@ function carryForwardPlanJson(angles, { carriedFromHead = "a".repeat(40) } = {})
   return JSON.stringify({ carried: angles.map((angle) => ({ angle, carriedFromHead, reason: "test fixture" })) });
 }
 
+// issue #2017: a carry-forward plan entry for an angle carried forward WITH
+// its prior open findings preserved (resolve-angle-carry-forward.mjs's own
+// buildCarryForwardPlan stamps this shape on every findings_present carry).
+function findingsPresentCarryForwardPlanJson(angle, findings, { carriedFromHead = "a".repeat(40) } = {}) {
+  return JSON.stringify({ carried: [{ angle, carriedFromHead, prevVerdict: "findings_present", findings, reason: "test fixture" }] });
+}
+
 test("parseConsolidateFaninCliArgs parses --carried-angles + --carry-forward-plan together", () => {
   const result = parseConsolidateFaninCliArgs([
     "--findings-dir", "/tmp/x",
@@ -1246,6 +1253,155 @@ test("consolidateGateFanin upserts a carriedFromHead-marked clean entry for ever
       },
     );
   });
+});
+
+// ---------------------------------------------------------------------------
+// issue #2017: a --carry-forward-plan carried entry can now declare
+// prevVerdict "findings_present" + its real prior findings — this CLI must
+// upsert THAT verdict/findings (not the pre-#2017 hardcoded clean/[]), so the
+// carried angle stays findings_present and the round still blocks on it.
+// ---------------------------------------------------------------------------
+
+test("consolidateGateFanin upserts a findings_present carried entry with its prior findings preserved, and the round still blocks", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      { "docs.json": { angle: "docs", verdict: "clean", findings: [] } },
+      async (dir) => {
+        const priorFindings = [{ angle: "coverage", severity: "must-fix", summary: "still open from a prior round" }];
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["coverage"],
+          carryForwardPlan: JSON.parse(findingsPresentCarryForwardPlanJson("coverage", priorFindings, { carriedFromHead: "b".repeat(40) })).carried,
+        });
+        const coverage = result.angles.find((a) => a.angle === "coverage");
+        assert.equal(coverage.findingCount, 1, "the carried finding must be visible, not silently dropped");
+        assert.equal(coverage.carriedFromHead, "b".repeat(40));
+        // The gate still blocks on the carried-forward finding, exactly as if
+        // the angle had been freshly reviewed with the same finding.
+        assert.equal(result.overallVerdict, "findings_present");
+        const coverageJson = result.findingsJson.find((a) => a.angle === "coverage");
+        assert.equal(coverageJson.verdict, "findings_present");
+        assert.equal(coverageJson.findings.length, 1);
+        assert.equal(coverageJson.findings[0].summary, "still open from a prior round");
+        assert.equal(coverageJson.carriedFromHead, "b".repeat(40));
+        // The flat ledger ("findings"/--ledger-out shape) also carries it, so
+        // write-gate-findings-log.mjs's --findings sees the same finding.
+        const flatCoverage = result.findings.find((f) => f.angle === "coverage");
+        assert.ok(flatCoverage, "the carried finding must reach the flat ledger shape too");
+        assert.equal(flatCoverage.severity, "high");
+      },
+    );
+  });
+});
+
+test("consolidateGateFanin's carried findings_present entry never gets converted into a clean/approved entry", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir(
+      { "docs.json": { angle: "docs", verdict: "clean", findings: [] } },
+      async (dir) => {
+        const priorFindings = [{ angle: "correctness", severity: "nice-to-have", summary: "a low-severity carried finding" }];
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["correctness"],
+          carryForwardPlan: JSON.parse(findingsPresentCarryForwardPlanJson("correctness", priorFindings)).carried,
+        });
+        const correctness = result.angles.find((a) => a.angle === "correctness");
+        // A non-blocking severity does not flip the ROUND verdict, but the
+        // finding itself must still be present — never silently discarded
+        // because it happens not to block.
+        assert.equal(correctness.findingCount, 1);
+        assert.equal(result.findingsJson.find((a) => a.angle === "correctness").verdict, "findings_present");
+      },
+    );
+  });
+});
+
+// Fail-closed: a "findings_present" carry with no findings would either fail
+// gate-fanin's own validateAngleResult downstream, or — worse — silently
+// present as an empty-findings entry the blocking computation never sees.
+// Refuse it at the plan-validation seam instead.
+test("consolidateGateFanin refuses a --carry-forward-plan entry declaring findings_present with no findings", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir({}, async (dir) => {
+      await assert.rejects(
+        () => consolidateGateFanin({
+          findingsDir: dir,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["correctness"],
+          carryForwardPlan: [{ angle: "correctness", carriedFromHead: "a".repeat(40), prevVerdict: "findings_present", findings: [] }],
+        }),
+        /declares prevVerdict "findings_present" but has no non-empty "findings" array/,
+      );
+    });
+  });
+});
+
+test("consolidateGateFanin refuses a --carry-forward-plan entry declaring findings_present with a malformed finding", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir({}, async (dir) => {
+      await assert.rejects(
+        () => consolidateGateFanin({
+          findingsDir: dir,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["correctness"],
+          carryForwardPlan: [{ angle: "correctness", carriedFromHead: "a".repeat(40), prevVerdict: "findings_present", findings: [{ severity: "not-a-real-severity", summary: "x" }] }],
+        }),
+        /findings\[0\] must be an object with a valid "severity"/,
+      );
+    });
+  });
+});
+
+// Fail-closed, the mirror defect: a "clean" carry must never smuggle findings
+// through — that would hide a real finding behind an approval-looking entry.
+test("consolidateGateFanin refuses a --carry-forward-plan entry declaring clean with non-empty findings", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir({}, async (dir) => {
+      await assert.rejects(
+        () => consolidateGateFanin({
+          findingsDir: dir,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["correctness"],
+          carryForwardPlan: [{ angle: "correctness", carriedFromHead: "a".repeat(40), prevVerdict: "clean", findings: [{ severity: "must-fix", summary: "smuggled" }] }],
+        }),
+        /declares prevVerdict "clean" but carries a non-empty "findings" array/,
+      );
+    });
+  });
+});
+
+test("consolidateGateFanin refuses a --carry-forward-plan entry with a malformed prevVerdict", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir({}, async (dir) => {
+      await assert.rejects(
+        () => consolidateGateFanin({
+          findingsDir: dir,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["correctness"],
+          carryForwardPlan: [{ angle: "correctness", carriedFromHead: "a".repeat(40), prevVerdict: "somehow-clean" }],
+        }),
+        /prevVerdict must be "clean" or "findings_present"/,
+      );
+    });
+  });
+});
+
+test("parseConsolidateFaninCliArgs rejects a malformed prevVerdict/findings on --carry-forward-plan", () => {
+  assert.throws(
+    () => parseConsolidateFaninCliArgs([
+      "--findings-dir", "/tmp/x",
+      "--carry-forward-plan", JSON.stringify({ carried: [{ angle: "docs", carriedFromHead: "a".repeat(40), prevVerdict: "findings_present", findings: [] }] }),
+    ]),
+    /declares prevVerdict "findings_present" but has no non-empty "findings" array/,
+  );
 });
 
 test("consolidateGateFanin never overrides a REAL artifact with a --carried-angles upsert for the same angle", async () => {
