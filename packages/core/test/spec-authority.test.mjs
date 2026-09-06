@@ -290,7 +290,7 @@ describe("revision-scoped invalidation", () => {
 });
 
 describe("spec extraction from a tracker body", () => {
-  test("extractSpecFromBody pulls AC/DoD/Non-goals checklist items", () => {
+  test("extractSpecFromBody pulls AC/DoD/Non-goals checklist items (no matrix: fallback)", () => {
     const body = [
       "## Acceptance criteria",
       "- [ ] Remove repetitive A/B contrast scaffolding",
@@ -306,6 +306,167 @@ describe("spec extraction from a tracker body", () => {
     assert.equal(spec.nonGoals.length, 1);
     // Digest of the extracted spec matches the structured spec.
     assert.equal(computeSpecDigest(spec), computeSpecDigest(SPEC));
+  });
+});
+
+// #2016 regression: the spec identity must be derived from the authoritative
+// AC→DoD matrix, not the redundant list-form checklist projection of it. See
+// extractSpecFromBody's ponytail comment for the equivalence boundary.
+describe("extractSpecFromBody matrix-derived spec identity (#2016)", () => {
+  function matrixBody({
+    heading = "AC/DoD matrix",
+    criterion1 = "Ship a working demo",
+    evidence1 = "Demo recorded and linked in the PR description",
+    criterion2 = "Verify contrast ratio meets WCAG AA",
+    evidence2 = "Automated contrast check passes in CI",
+    extraRow = null,
+    nonGoal = "Do not rewrite the design system",
+    checklistAlias = null,
+  } = {}) {
+    const rows = [
+      `| ${criterion1} | ${evidence1} |`,
+      `| ${criterion2} | ${evidence2} |`,
+    ];
+    if (extraRow) rows.push(extraRow);
+    const lines = [
+      `## ${heading}`,
+      "",
+      "| Acceptance criterion | Completion evidence |",
+      "|---|---|",
+      ...rows,
+      "",
+      "## Non-goals",
+      `- ${nonGoal}`,
+    ];
+    if (checklistAlias) {
+      lines.push("", ...checklistAlias);
+    }
+    return lines.join("\n");
+  }
+
+  test("adding a redundant checklist alias that projects an unchanged matrix leaves specDigest unchanged", () => {
+    const withoutAlias = matrixBody();
+    const withAlias = matrixBody({
+      checklistAlias: [
+        "## Acceptance criteria",
+        "- [ ] Ship a working demo",
+        "- [ ] Verify contrast ratio meets WCAG AA",
+      ],
+    });
+    assert.equal(
+      computeSpecDigest(extractSpecFromBody(withAlias)),
+      computeSpecDigest(extractSpecFromBody(withoutAlias)),
+      "a checklist alias projecting the same matrix must not change specDigest",
+    );
+  });
+
+  test("removing a redundant checklist alias that projects an unchanged matrix leaves specDigest unchanged", () => {
+    const withAlias = matrixBody({
+      checklistAlias: ["## Definition of done", "- [ ] Demo recorded and linked in the PR description"],
+    });
+    const withoutAlias = matrixBody();
+    assert.equal(
+      computeSpecDigest(extractSpecFromBody(withAlias)),
+      computeSpecDigest(extractSpecFromBody(withoutAlias)),
+    );
+  });
+
+  test("changing a matrix criterion's text changes specDigest", () => {
+    const original = matrixBody();
+    const reworded = matrixBody({ criterion1: "Ship a fully working demo end to end" });
+    assert.notEqual(
+      computeSpecDigest(extractSpecFromBody(original)),
+      computeSpecDigest(extractSpecFromBody(reworded)),
+    );
+  });
+
+  test("changing a completion-evidence cell changes specDigest", () => {
+    const original = matrixBody();
+    const changed = matrixBody({ evidence1: "Demo recorded, linked, and reviewed live" });
+    assert.notEqual(
+      computeSpecDigest(extractSpecFromBody(original)),
+      computeSpecDigest(extractSpecFromBody(changed)),
+    );
+  });
+
+  test("adding a matrix row changes specDigest", () => {
+    const original = matrixBody();
+    const withExtraRow = matrixBody({ extraRow: "| Ship documentation updates | Docs page merged and linked |" });
+    assert.notEqual(
+      computeSpecDigest(extractSpecFromBody(original)),
+      computeSpecDigest(extractSpecFromBody(withExtraRow)),
+    );
+  });
+
+  test("removing a matrix row changes specDigest", () => {
+    const withExtraRow = matrixBody({ extraRow: "| Ship documentation updates | Docs page merged and linked |" });
+    const original = matrixBody();
+    assert.notEqual(
+      computeSpecDigest(extractSpecFromBody(withExtraRow)),
+      computeSpecDigest(extractSpecFromBody(original)),
+    );
+  });
+
+  test("changing a Non-goal changes specDigest", () => {
+    const original = matrixBody();
+    const changedNonGoal = matrixBody({ nonGoal: "Do not change the release cadence" });
+    assert.notEqual(
+      computeSpecDigest(extractSpecFromBody(original)),
+      computeSpecDigest(extractSpecFromBody(changedNonGoal)),
+    );
+  });
+
+  test("heading/whitespace/checklist-marker normalization with an unchanged matrix leaves specDigest unchanged", () => {
+    const original = matrixBody({ heading: "AC/DoD matrix" });
+    const normalizedVariant = matrixBody({
+      heading: "AC → DoD mapping matrix",
+      criterion1: "  Ship   a working   demo  ",
+      evidence1: "  Demo recorded and linked in the PR description  ",
+      checklistAlias: [
+        "## Acceptance criteria",
+        "* [ ] Ship a working demo",
+        "1) [ ] Verify contrast ratio meets WCAG AA",
+      ],
+    });
+    assert.equal(
+      computeSpecDigest(extractSpecFromBody(original)),
+      computeSpecDigest(extractSpecFromBody(normalizedVariant)),
+    );
+  });
+
+  test("a malformed/identifier-only matrix falls back to the checklist projection (fail-closed, not silently narrowed)", () => {
+    const body = [
+      "## AC/DoD matrix",
+      "",
+      "| AC | DoD |",
+      "|---|---|",
+      "| AC1 | D1 |",
+      "",
+      "## Acceptance criteria",
+      "- [ ] Ship a working demo",
+      "## Definition of done",
+      "- [ ] npm run verify passes",
+      "## Non-goals",
+      "- Do not rewrite the design system",
+    ].join("\n");
+    const spec = extractSpecFromBody(body);
+    // Falls back to the checklist read rather than the tautological matrix rows.
+    assert.deepEqual(spec.acceptanceCriteria, ["Ship a working demo"]);
+    assert.deepEqual(spec.definitionOfDone, ["npm run verify passes"]);
+  });
+
+  test("a body with no parseable matrix at all falls back to the checklist projection", () => {
+    const body = [
+      "## Acceptance criteria",
+      "- [ ] Ship a working demo",
+      "## Definition of done",
+      "- [ ] npm run verify passes",
+      "## Non-goals",
+      "- Do not rewrite the design system",
+    ].join("\n");
+    const spec = extractSpecFromBody(body);
+    assert.deepEqual(spec.acceptanceCriteria, ["Ship a working demo"]);
+    assert.deepEqual(spec.definitionOfDone, ["npm run verify passes"]);
   });
 });
 
