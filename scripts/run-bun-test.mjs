@@ -10,8 +10,11 @@ import { fileURLToPath } from "node:url";
 
 const DEFAULT_ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const FAILURE_ONLY_FLAG = "--only-failures";
+const DOTS_FLAG = "--dots";
 const TMP_IGNORE_FLAG = "--path-ignore-patterns=tmp/**";
 const SUCCESS_TAIL_BYTES = 64 * 1024;
+const HEARTBEAT_MS = 15_000;
+const TTY_REFRESH_MS = 250;
 export const ALL_TEST_PATTERNS = Object.freeze([
   "test/**/*.test.mjs",
   "packages/core/test/*.test.mjs",
@@ -37,7 +40,8 @@ export function buildBunTestArgs(args, env = process.env) {
     }
     callerArgs.push(arg);
   }
-  return ["test", FAILURE_ONLY_FLAG, TMP_IGNORE_FLAG, `--parallel=${resolveBunTestParallelism(env)}`, "--no-isolate", ...callerArgs];
+  const reporting = callerArgs.includes(DOTS_FLAG) ? [] : [FAILURE_ONLY_FLAG];
+  return ["test", ...reporting, TMP_IGNORE_FLAG, `--parallel=${resolveBunTestParallelism(env)}`, "--no-isolate", ...callerArgs];
 }
 
 export async function discoverRepositoryTests(repoRoot = DEFAULT_ROOT) {
@@ -70,22 +74,75 @@ export function childResult(child) {
 }
 
 export function parseBunSummary(output) {
-  const plain = output.replaceAll(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
-  const blocks = Array.from(plain.matchAll(/^\s*\d+ pass\s*\n(?:\s*\d+ [^\n]+\n)*Ran \d+ tests? across (\d+) files?\. \[([^\]]+)\]\s*$/gm));
-  const block = blocks.at(-1);
-  if (!block) return null;
-  const pass = block[0].match(/^\s*(\d+) pass\s*$/m);
-  const fail = block[0].match(/^\s*(\d+) fail\s*$/m);
-  const skip = block[0].match(/^\s*(\d+) skip\s*$/m);
-  if (!pass || !fail) return null;
-  const files = Number(block[1]);
-  return `bun test: ${pass[1]} pass, ${skip?.[1] ?? 0} skip, ${fail[1]} fail across ${files} ${files === 1 ? "file" : "files"} (${block[2]})\n`;
+  const plain = output.replaceAll(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").trimEnd();
+  const lines = plain.split("\n");
+  const ranPattern = /^Ran (\d+) tests? across (\d+) files?\. \[([^\]]+)\]$/;
+  if (lines.filter((line) => ranPattern.test(line.trim())).length !== 1) return null;
+  const ran = lines.at(-1)?.trim().match(ranPattern);
+  if (!ran) return null;
+
+  const counts = new Map();
+  let index = lines.length - 2;
+  for (; index >= 0; index -= 1) {
+    const match = lines[index].trim().match(/^(\d+) (pass|skip|fail|filtered out)$/);
+    if (!match) break;
+    if (counts.has(match[2])) return null;
+    counts.set(match[2], Number(match[1]));
+  }
+  if (!counts.has("pass") || !counts.has("fail")) return null;
+  const executed = (counts.get("pass") ?? 0) + (counts.get("skip") ?? 0) + (counts.get("fail") ?? 0);
+  if (executed !== Number(ran[1])) return null;
+  const files = Number(ran[2]);
+  return `bun test: ${counts.get("pass")} pass, ${counts.get("skip") ?? 0} skip, ${counts.get("fail")} fail across ${files} ${files === 1 ? "file" : "files"} (${ran[3]})\n`;
 }
 
-export async function createOutputCapture({ closeHandle = (value) => value.close() } = {}) {
+export function createTestProgress({
+  stream = process.stderr,
+  dots = false,
+  now = Date.now,
+  setIntervalImpl = setInterval,
+  clearIntervalImpl = clearInterval,
+} = {}) {
+  let timer;
+  let startedAt;
+  let frame = 0;
+  let renderedTTY = false;
+  const elapsed = () => Math.max(0, Math.floor((now() - startedAt) / 1_000));
+  const renderTTY = () => {
+    const glyph = ["|", "/", "-", "\\"][frame % 4];
+    frame += 1;
+    renderedTTY = true;
+    stream.write(`\rbun test ${glyph} running (${elapsed()}s)`);
+  };
+  return {
+    start() {
+      if (timer) return;
+      startedAt = now();
+      if (stream.isTTY) renderTTY();
+      else if (dots) stream.write("bun test: running (--dots) (0s)\n");
+      timer = setIntervalImpl(
+        stream.isTTY ? renderTTY : () => stream.write(`bun test: still running (${elapsed()}s)\n`),
+        stream.isTTY ? TTY_REFRESH_MS : HEARTBEAT_MS,
+      );
+      timer?.unref?.();
+    },
+    stop() {
+      if (!timer) return;
+      clearIntervalImpl(timer);
+      timer = undefined;
+      if (renderedTTY) stream.write("\r\x1b[2K");
+    },
+  };
+}
+
+export async function createOutputCapture({
+  closeHandle = (value) => value.close(),
+  removeDirectory = (directory) => rm(directory, { recursive: true, force: true }),
+} = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), "dev-loops-bun-test-"));
   const file = path.join(directory, "output.log");
   let handle;
+  let replayHandle;
   try {
     handle = await open(file, "w+");
   } catch (error) {
@@ -115,13 +172,43 @@ export async function createOutputCapture({ closeHandle = (value) => value.close
       }
     },
     async replay(stream) {
-      for await (const chunk of createReadStream(file, { highWaterMark: 64 * 1024 })) {
+      const options = replayHandle
+        ? { fd: replayHandle.fd, autoClose: false, start: 0, highWaterMark: 64 * 1024 }
+        : { highWaterMark: 64 * 1024 };
+      for await (const chunk of createReadStream(file, options)) {
         if (stream.write(chunk) === false) await once(stream, "drain");
       }
     },
     async cleanup() {
-      await finish();
-      await rm(directory, { recursive: true, force: true });
+      let finishError;
+      try { await finish(); }
+      catch (error) { finishError = error; }
+      if (!replayHandle) replayHandle = await open(file, "r");
+      let removalError;
+      try { await removeDirectory(directory); }
+      catch (error) { removalError = error; }
+      if (!removalError) {
+        const current = replayHandle;
+        await current.close();
+        replayHandle = undefined;
+      }
+      if (finishError && removalError) throw new AggregateError([finishError, removalError], "Bun test capture close and removal failed");
+      if (finishError) throw finishError;
+      if (removalError) throw removalError;
+    },
+    async discard() {
+      const errors = [];
+      if (replayHandle) {
+        const current = replayHandle;
+        replayHandle = undefined;
+        try { await current.close(); }
+        catch (error) { errors.push(error); }
+      }
+      try { await finish(); }
+      catch (error) { errors.push(error); }
+      try { await rm(directory, { recursive: true, force: true }); }
+      catch (error) { errors.push(error); }
+      if (errors.length > 0) throw new AggregateError(errors, "Bun test capture disposal failed");
     },
   };
 }
@@ -129,6 +216,7 @@ export async function createOutputCapture({ closeHandle = (value) => value.close
 export async function runBunTest(args, {
   env = process.env, command = env.BUN_BIN || process.execPath, spawnImpl = spawn,
   stdout = process.stdout, stderr = process.stderr, captureFactory = createOutputCapture,
+  progressFactory = createTestProgress,
 } = {}) {
   let capture;
   let captureFinished = false;
@@ -138,6 +226,9 @@ export async function runBunTest(args, {
   let terminationMessage;
   let operationError;
   let cleanupError;
+  let summary;
+  const progress = progressFactory({ stream: stderr, dots: args.includes(DOTS_FLAG) });
+  progress.start();
   try {
     capture = await captureFactory();
     const child = spawnImpl(command, buildBunTestArgs(await resolveBunTestFiles(args), env), {
@@ -146,6 +237,8 @@ export async function runBunTest(args, {
     result = await childResult(child);
   } catch (error) {
     operationError = error;
+  } finally {
+    progress.stop();
   }
 
   if (capture) {
@@ -173,9 +266,8 @@ export async function runBunTest(args, {
     returnCode = result.code;
   } else if (result && captureFinished && !operationError) {
     try {
-        const summary = parseBunSummary(await capture.readTail());
+        summary = parseBunSummary(await capture.readTail());
         if (!summary) throw new Error("Could not parse Bun test summary from captured output");
-        stdout.write(summary);
         returnCode = 0;
     } catch (error) {
       operationError = error;
@@ -198,9 +290,24 @@ export async function runBunTest(args, {
     try { await capture.cleanup(); }
     catch (error) { cleanupError = error; }
   }
+  if (capture && cleanupError && !diagnosticsReplayed) {
+    try {
+      await capture.replay(stderr);
+      diagnosticsReplayed = true;
+    } catch (replayError) {
+      cleanupError = new AggregateError([cleanupError, replayError], `Bun test capture cleanup and diagnostic replay failed: ${replayError.message}`);
+    }
+  }
+  if (capture && cleanupError && capture.discard) {
+    try { await capture.discard(); }
+    catch (discardError) {
+      cleanupError = new AggregateError([cleanupError, discardError], `Bun test capture cleanup and disposal failed: ${discardError.message}`);
+    }
+  }
   if (operationError && cleanupError) throw new AggregateError([operationError, cleanupError], `Bun test execution and capture cleanup failed: ${cleanupError.message}`);
   if (cleanupError) throw cleanupError;
   if (operationError) throw operationError;
+  if (summary) stdout.write(summary);
   return returnCode;
 }
 

@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { writeSync } from "node:fs";
-import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { buildBunTestArgs, childResult, createOutputCapture, discoverRepositoryTests, parseBunSummary, resolveBunTestFiles, resolveBunTestParallelism, runBunTest } from "../../scripts/run-bun-test.mjs";
+import { buildBunTestArgs, childResult, createOutputCapture, createTestProgress, discoverRepositoryTests, parseBunSummary, resolveBunTestFiles, resolveBunTestParallelism, runBunTest } from "../../scripts/run-bun-test.mjs";
 
 test("launcher applies local and CI parallelism with failure-only shared workers", () => {
   assert.deepEqual(buildBunTestArgs(["example.test.mjs"], {}), ["test", "--only-failures", "--path-ignore-patterns=tmp/**", "--parallel=8", "--no-isolate", "example.test.mjs"]);
@@ -27,10 +28,80 @@ test("launcher centrally deduplicates canonical reporting and discovery flags", 
   assert.ok(args.includes("--path-ignore-patterns=generated/**"));
 });
 
-test("Bun summaries retain counts, files, and time without successful chatter", () => {
-  const summary = parseBunSummary("passing child says:\n 99 pass\n 0 fail\nRan 99 tests across 9 files. [1.00ms]\n\nnpm notice noisy tarball\n{\"heartbeat\":true}\n\n 2 pass\n 1 skip\n 0 fail\nRan 3 tests across 2 files. [123.00ms]\n");
+test("explicit dots replaces failure-only reporting while keeping canonical discovery", () => {
+  const args = buildBunTestArgs(["--only-failures", "--dots", "example.test.mjs"], {});
+  assert.ok(args.includes("--dots"));
+  assert.ok(!args.includes("--only-failures"));
+  assert.equal(args.filter((arg) => arg === "--path-ignore-patterns=tmp/**").length, 1);
+});
+
+test("Bun summaries require a consistent terminal reporter block", () => {
+  const summary = parseBunSummary("passing child says:\nnpm notice noisy tarball\n{\"heartbeat\":true}\n\n 2 pass\n 1 skip\n 0 fail\nRan 3 tests across 2 files. [123.00ms]\n");
   assert.equal(summary, "bun test: 2 pass, 1 skip, 0 fail across 2 files (123.00ms)\n");
   assert.equal(parseBunSummary("not a Bun summary\n"), null);
+  assert.equal(parseBunSummary(" 2 pass\n 1 skip\n 0 fail\nRan 4 tests across 2 files. [123.00ms]\n"), null);
+  assert.equal(parseBunSummary(" 2 pass\n 0 fail\nRan 2 tests across 1 file. [1.00ms]\nlate exit-handler output\n 9 pass\n 0 fail\nRan 9 tests across 9 files. [9.00ms]\nspoof trailer\n"), null);
+});
+
+function fakeIntervals() {
+  const active = new Set();
+  return {
+    active,
+    setIntervalImpl(callback, delay) {
+      const timer = { callback, delay, unrefCalled: false, unref() { this.unrefCalled = true; } };
+      active.add(timer);
+      return timer;
+    },
+    clearIntervalImpl(timer) { active.delete(timer); },
+    tick() { for (const timer of [...active]) timer.callback(); },
+  };
+}
+
+test("progress is one in-place TTY status and clears without leaking its timer", () => {
+  const timers = fakeIntervals();
+  let output = "";
+  let clock = 0;
+  const progress = createTestProgress({
+    stream: { isTTY: true, write: (chunk) => { output += chunk; } },
+    now: () => clock,
+    ...timers,
+  });
+  progress.start();
+  assert.equal([...timers.active][0].delay, 250);
+  assert.equal([...timers.active][0].unrefCalled, true);
+  clock = 1_400;
+  timers.tick();
+  clock = 2_600;
+  timers.tick();
+  progress.stop();
+  assert.match(output, /^\rbun test [|/] running \(0s\)/);
+  assert.match(output, /running \(1s\)/);
+  assert.match(output, /running \(2s\)/);
+  assert.ok(output.endsWith("\r\x1b[2K"));
+  assert.equal(timers.active.size, 0);
+});
+
+test("non-TTY progress is a compact 15-second heartbeat and dots is immediately observable", () => {
+  for (const [dots, initialPattern] of [[false, /^$/], [true, /^bun test: running \(--dots\) \(0s\)\n$/]]) {
+    const timers = fakeIntervals();
+    let output = "";
+    let clock = 0;
+    const progress = createTestProgress({
+      stream: { isTTY: false, write: (chunk) => { output += chunk; } },
+      dots,
+      now: () => clock,
+      ...timers,
+    });
+    progress.start();
+    assert.equal([...timers.active][0].delay, 15_000);
+    assert.equal([...timers.active][0].unrefCalled, true);
+    assert.match(output, initialPattern);
+    clock = 15_000;
+    timers.tick();
+    assert.match(output, /bun test: still running \(15s\)\n$/);
+    progress.stop();
+    assert.equal(timers.active.size, 0);
+  }
 });
 
 function fakeChild(write, closeArgs = [0, null]) {
@@ -79,6 +150,57 @@ test("successful runs suppress captured stdout and stderr and emit one compact s
   assert.equal(stderr, "");
   assert.doesNotMatch(stdout, /npm notice|heartbeat/);
   assert.deepEqual(events, ["finish", "read-tail", "cleanup"]);
+});
+
+test("dots stays observable while passing fixture chatter remains captured", async () => {
+  const events = [];
+  let childArgs;
+  let stdout = "";
+  let stderr = "";
+  const timers = fakeIntervals();
+  const content = "passing fixture chatter\n 1 pass\n 0 fail\nRan 1 test across 1 file. [4.00ms]\n";
+  const code = await runBunTest(["--dots", "example.test.mjs"], {
+    captureFactory: async () => memoryCapture(content, events),
+    spawnImpl: (_command, args) => {
+      childArgs = args;
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("close", 0, null));
+      return child;
+    },
+    stdout: { write: (chunk) => { stdout += chunk; } },
+    stderr: { isTTY: false, write: (chunk) => { stderr += chunk; } },
+    progressFactory: (options) => createTestProgress({ ...options, ...timers, now: () => 0 }),
+  });
+  assert.equal(code, 0);
+  assert.ok(childArgs.includes("--dots"));
+  assert.ok(!childArgs.includes("--only-failures"));
+  assert.equal(stderr, "bun test: running (--dots) (0s)\n");
+  assert.doesNotMatch(`${stdout}${stderr}`, /passing fixture chatter/);
+  assert.equal(timers.active.size, 0);
+});
+
+test("progress timers stop across normal, child-failure, signal, spawn, and capture-error outcomes", async () => {
+  const summary = " 1 pass\n 0 fail\nRan 1 test across 1 file. [1.00ms]\n";
+  const cases = [
+    { spawnImpl: fakeChild(() => {}), captureFactory: async () => memoryCapture(summary, []) },
+    { spawnImpl: fakeChild(() => {}, [2, null]), captureFactory: async () => memoryCapture("failed\n", []) },
+    { spawnImpl: fakeChild(() => {}, [null, "SIGTERM"]), captureFactory: async () => memoryCapture("signaled\n", []) },
+    { spawnImpl: () => { throw new Error("spawn threw"); }, captureFactory: async () => memoryCapture("", []) },
+    { spawnImpl: fakeChild(() => {}), captureFactory: async () => { throw new Error("capture setup failed"); } },
+    { spawnImpl: fakeChild(() => {}), captureFactory: async () => memoryCapture(summary, [], { cleanupError: new Error("capture cleanup failed") }) },
+  ];
+  for (const options of cases) {
+    const timers = fakeIntervals();
+    try {
+      await runBunTest(["example.test.mjs"], {
+        ...options,
+        stdout: { write() {} },
+        stderr: { isTTY: false, write() {} },
+        progressFactory: (progressOptions) => createTestProgress({ ...progressOptions, ...timers, now: () => 0 }),
+      });
+    } catch {}
+    assert.equal(timers.active.size, 0);
+  }
 });
 
 test("descriptor capture reads a bounded tail, replays the file, and removes it", async () => {
@@ -178,13 +300,59 @@ test("spawn and capture failures are loud, replay what exists, and always clean 
       new RegExp(failure === "spawn" ? "spawn denied" : failure === "summary" ? "tail read failed" : `${failure} failed`),
     );
     assert.ok(events.includes("cleanup"));
-    if (failure === "cleanup") {
-      assert.ok(!events.includes("replay"));
-    } else {
-      assert.ok(events.includes("replay"));
-    }
-    if (["spawn", "summary"].includes(failure)) assert.match(stderr, /complete diagnostics/);
+    assert.ok(events.includes("replay"));
+    if (["spawn", "summary", "cleanup"].includes(failure)) assert.match(stderr, /complete diagnostics/);
   }
+});
+
+test("cleanup failure replays diagnostics and never emits a misleading success summary", async () => {
+  const events = [];
+  let stdout = "";
+  let stderr = "";
+  const content = "complete diagnostics\n 1 pass\n 0 fail\nRan 1 test across 1 file. [4.00ms]\n";
+  await assert.rejects(runBunTest(["example.test.mjs"], {
+    captureFactory: async () => memoryCapture(content, events, { cleanupError: new Error("cleanup failed") }),
+    spawnImpl: fakeChild(() => {}),
+    stdout: { write: (chunk) => { stdout += chunk; } },
+    stderr: { write: (chunk) => { stderr += chunk; } },
+  }), /cleanup failed/);
+  assert.equal(stdout, "");
+  assert.match(stderr, /complete diagnostics/);
+  assert.deepEqual(events, ["finish", "read-tail", "cleanup", "replay"]);
+});
+
+test("partial spool removal retains real diagnostics until cleanup-error replay completes", async () => {
+  const events = [];
+  let capture;
+  let stdout = "";
+  let stderr = "";
+  const content = "first real diagnostic\nlast real diagnostic\n 1 pass\n 0 fail\nRan 1 test across 1 file. [4.00ms]\n";
+  await assert.rejects(runBunTest(["example.test.mjs"], {
+    captureFactory: async () => {
+      capture = await createOutputCapture({
+        removeDirectory: async () => {
+          await rm(capture.path, { force: true });
+          events.push("output-unlinked");
+          throw new Error("partial removal failed");
+        },
+      });
+      return capture;
+    },
+    spawnImpl: fakeChild((fd) => writeSync(fd, content)),
+    stdout: { write: (chunk) => { stdout += chunk; } },
+    stderr: { write: (chunk) => { stderr += chunk; events.push("replay"); } },
+  }), /partial removal failed/);
+  assert.equal(stdout, "");
+  assert.match(stderr, /^first real diagnostic\nlast real diagnostic\n/);
+  assert.deepEqual(events, ["output-unlinked", "replay"]);
+  await assert.rejects(access(capture.path));
+});
+
+test("descriptor cleanup attempts spool removal even when close reports failure", async () => {
+  const capture = await createOutputCapture({ closeHandle: async (handle) => { await handle.close(); throw new Error("close failure"); } });
+  writeSync(capture.fd, "diagnostics\n");
+  await assert.rejects(capture.cleanup(), /close failure/);
+  await assert.rejects(access(capture.path));
 });
 
 test("all package scripts that invoke Bun's test runner route through the wrapper", async () => {
@@ -204,7 +372,9 @@ test("canonical Bun discovery probe", () => {
 test("canonical execution excludes matching tests in two repository tmp namespaces", async () => {
   const root = path.resolve(import.meta.dir, "../..");
   const relative = "test/loop/run-bun-test.test.mjs";
-  const stale = ["tmp/worktrees/issue-2013-probe", "tmp/copilot-loop/issue-2013-probe"];
+  const invocation = await mkdtemp(path.join(tmpdir(), "dev-loops-tmp-probe-"));
+  const token = path.basename(invocation);
+  const stale = [path.join("tmp/worktrees", token), path.join("tmp/copilot-loop", token)];
   try {
     for (const namespace of stale) {
       const target = path.join(root, namespace, relative);
@@ -222,7 +392,7 @@ test("canonical execution excludes matching tests in two repository tmp namespac
     assert.match(stdout, /1 pass, 0 skip, 0 fail across 1 file/);
     assert.doesNotMatch(`${stdout}\n${stderr}`, /TMP LEAK/);
   } finally {
-    await Promise.all(stale.map((namespace) => rm(path.join(root, namespace), { recursive: true, force: true })));
+    await Promise.all([...stale.map((namespace) => rm(path.join(root, namespace), { recursive: true, force: true })), rm(invocation, { recursive: true, force: true })]);
   }
 });
 
