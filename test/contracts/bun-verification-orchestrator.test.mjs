@@ -14,7 +14,8 @@ test("verification attempts every suite and aggregates failures", async () => {
 test("attributed output preserves lines split across stream chunks", () => {
   let output = "";
   const writer = createAttributedWriter({ write: (chunk) => { output += chunk; } }, "test:all");
-  for (const chunk of ["fatal:", " details\nnext"]) writer.write(chunk);
+  const encoded = Buffer.from("fatal: → details\nnext");
+  for (const chunk of [encoded.subarray(0, 8), encoded.subarray(8, 9), encoded.subarray(9)]) writer.write(chunk);
   writer.end();
-  assert.equal(output, "[test:all] fatal: details\n[test:all] next\n");
+  assert.equal(output, "[test:all] fatal: → details\n[test:all] next\n");
 });

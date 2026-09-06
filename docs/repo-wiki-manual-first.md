@@ -160,8 +160,8 @@ Standard changed-scope repo validation was also run:
 
 ```bash
 git diff --check
-node --test test/loop/repo-wiki.test.mjs test/loop/repo-wiki-local.test.mjs
-npm run verify
+bun test test/loop/repo-wiki.test.mjs test/loop/repo-wiki-local.test.mjs
+bun run verify
 ```
 
 ## CI automation
@@ -171,7 +171,7 @@ A GitHub Actions workflow at `.github/workflows/wiki.yml` compiles the repositor
 ### Triggers
 
 - `push` to `main` — runs the single `compile-wiki` job, which compiles and, because it is on `main`, also publishes.
-- `workflow_dispatch` — the `compile-wiki` job always runs `npm run repo-wiki:bootstrap` (scan + plan + compile); the publish step runs only when you opt in to `publish_wiki`.
+- `workflow_dispatch` — the `compile-wiki` job always runs `bun run repo-wiki:bootstrap` (scan + plan + compile); the publish step runs only when you opt in to `publish_wiki`.
 
 ### Required operator setup
 

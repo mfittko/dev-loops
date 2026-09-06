@@ -1,20 +1,22 @@
 #!/usr/bin/env bun
 
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { childResult } from "./run-bun-test.mjs";
 
 export const VERIFY_SUITES = Object.freeze(["test:all", "test:docs", "test:workflows"]);
 
 export function createAttributedWriter(stream, suite) {
+  const decoder = new StringDecoder("utf8");
   let pending = "";
   return {
     write(chunk) {
-      pending += chunk;
+      pending += typeof chunk === "string" ? chunk : decoder.write(chunk);
       const lines = pending.split("\n");
       pending = lines.pop();
       for (const line of lines) stream.write(`[${suite}] ${line}\n`);
     },
-    end() { if (pending) stream.write(`[${suite}] ${pending}\n`); },
+    end() { pending += decoder.end(); if (pending) stream.write(`[${suite}] ${pending}\n`); },
   };
 }
 

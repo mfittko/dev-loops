@@ -21,17 +21,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
 const CORE_DIR = path.join(REPO_ROOT, "packages/core");
 
-// Network failures against the npm registry (offline CI, flaky proxy, DNS
-// hiccup) are an environment condition, not a regression in this package —
-// skip rather than fail so the suite stays green on a bad connection while
-// still catching genuine install breakage (bad tarball, missing dep, etc).
+// Local offline work may skip this boundary; CI fails closed so the required
+// packed-consumer proof cannot silently disappear during a registry outage.
 const NETWORK_FAILURE_RE = /ENOTFOUND|ETIMEDOUT|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|socket hang up|network|ERR_SOCKET|registry\.npmjs\.org.*(unreachable|timeout)/i;
 const npmRegistryProbe = spawnSync("npm", ["view", "yaml", "version"], {
   encoding: "utf8",
   timeout: 15_000,
 });
 const npmRegistryProbeDetail = `${npmRegistryProbe.stderr ?? ""}${npmRegistryProbe.stdout ?? ""}${npmRegistryProbe.error?.message ?? ""}`;
-const NPM_REGISTRY_TRANSIENTLY_UNAVAILABLE = npmRegistryProbe.status !== 0 && NETWORK_FAILURE_RE.test(npmRegistryProbeDetail);
+const NPM_REGISTRY_TRANSIENTLY_UNAVAILABLE = !process.env.CI && npmRegistryProbe.status !== 0 && NETWORK_FAILURE_RE.test(npmRegistryProbeDetail);
 
 test.skipIf(NPM_REGISTRY_TRANSIENTLY_UNAVAILABLE)("packaged install: every @dev-loops/core export resolves and the queue CLIs run", { timeout: 180000 }, async () => {
   const tmpRoot = mkdtempSync(path.join(tmpdir(), "dev-loops-pack-"));
