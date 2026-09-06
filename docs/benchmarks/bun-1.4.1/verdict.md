@@ -19,3 +19,7 @@ The declared graph, workspace links, peer metadata, shared versions, and shared
 lifecycle declarations matched. Expected installed-tree differences were
 obsolete npm-only tooling and incompatible-platform optional binaries. Both sessions passed the 50%
 warm-install and 5/7 verification gates; raw observations accompany this file.
+
+Final unified-queue sampling recorded three green verifies at 56.46/55.92/60.30s
+(median 56.46s), 25.3–25.9 average and 35 peak descendants, and conservative
+aggregate RSS of 1.21–1.24 GiB average / 2.10–2.32 GiB peak (shared pages included).
