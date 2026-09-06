@@ -484,7 +484,7 @@ test("descriptor cleanup attempts spool removal even when close reports failure"
 test("descriptor cleanup falls back to fd closure after the removed spool handle rejects", async () => {
   let fallbackFd;
   const capture = await createOutputCapture({
-    closeReplayHandle: async () => { throw new Error("handle close failed"); },
+    closeReplayHandle: async (handle) => { await handle.close(); throw new Error("handle close failed"); },
     closeFileDescriptor: (fd) => { fallbackFd = fd; },
   });
   writeSync(capture.fd, "diagnostics\n");

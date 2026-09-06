@@ -353,11 +353,12 @@ export async function createOutputCapture({
       }
       if (!removalError) {
         const current = replayHandle;
+        const descriptor = current.fd;
         replayHandle = undefined;
         try {
           await closeReplayHandle(current);
         } catch (error) {
-          try { closeFileDescriptor(current.fd); }
+          try { closeFileDescriptor(descriptor); }
           catch (fallbackError) {
             if (fallbackError.code !== "EBADF") throw new AggregateError([error, fallbackError], "Bun test capture descriptor cleanup failed");
           }
