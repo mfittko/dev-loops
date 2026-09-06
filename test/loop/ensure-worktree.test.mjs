@@ -19,8 +19,7 @@ import {
 const PRIOR_GIT_CONFIG = { GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM: process.env.GIT_CONFIG_SYSTEM };
 process.env.GIT_CONFIG_GLOBAL = "/dev/null";
 process.env.GIT_CONFIG_SYSTEM = "/dev/null";
-// Restore after this file's tests: node:test runs files in their own process,
-// but restoring keeps the mutation contained if that ever changes.
+// Restore before Bun reuses this no-isolate worker for another file.
 after(() => {
   for (const [key, value] of Object.entries(PRIOR_GIT_CONFIG)) {
     if (value === undefined) delete process.env[key];

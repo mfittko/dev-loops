@@ -200,21 +200,13 @@ A GitHub Actions workflow at `.github/workflows/wiki.yml` compiles the repositor
 
 ### Workflow job
 
-- `compile-wiki` — checks out the repo, installs Node.js 24 dependencies, runs `npm run repo-wiki:bootstrap` (chained scan + plan + compile) and `npm run repo-wiki:lint`, and uploads `.llmwiki/wiki` as the `compiled-wiki` artifact. On pushes to `main` (or a `workflow_dispatch` opt-in) the same job's publish step pushes the compiled pages to `${{ github.repository }}.wiki.git` using `secrets.GITHUB_TOKEN` via `npm run repo-wiki -- publish --target github-wiki`.
-
-### Local commands still work
-
-The CI workflow does not replace the local command surface. The existing npm scripts remain the recommended local path:
+- `compile-wiki` — checks out the repo, installs Bun dependencies, runs `bun run repo-wiki:bootstrap` and `bun run repo-wiki:lint`, and uploads `.llmwiki/wiki` as the `compiled-wiki` artifact. On pushes to `main` (or a `workflow_dispatch` opt-in) it publishes via `bun run repo-wiki -- publish --target github-wiki`.
 
 ```bash
-npm run repo-wiki:bootstrap
-npm run repo-wiki:lint
+bun run repo-wiki:bootstrap
+bun run repo-wiki:lint
 ```
 
 ## Deferred work
 
-Still deferred from this slice:
-
-- scheduled sync
-
-GitHub Wiki publishing and CI automation are now wired via `.github/workflows/wiki.yml`. Further enhancements (scheduled sync, additional modes, Pages publishing) should come back as separate follow-up work.
+Scheduled sync, additional modes, and Pages publishing remain deferred.

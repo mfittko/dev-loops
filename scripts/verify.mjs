@@ -5,8 +5,17 @@ import { childResult } from "./run-bun-test.mjs";
 
 export const VERIFY_SUITES = Object.freeze(["test:all", "test:docs", "test:workflows"]);
 
-function writeAttributed(stream, suite, chunk) {
-  for (const line of chunk.toString().split(/(?<=\n)/)) if (line) stream.write(`[${suite}] ${line}`);
+export function createAttributedWriter(stream, suite) {
+  let pending = "";
+  return {
+    write(chunk) {
+      pending += chunk;
+      const lines = pending.split("\n");
+      pending = lines.pop();
+      for (const line of lines) stream.write(`[${suite}] ${line}\n`);
+    },
+    end() { if (pending) stream.write(`[${suite}] ${pending}\n`); },
+  };
 }
 
 export function runSuite(suite, {
@@ -14,9 +23,12 @@ export function runSuite(suite, {
   stdout = process.stdout, stderr = process.stderr, spawnImpl = spawn,
 } = {}) {
   const child = spawnImpl(command, ["run", suite], { cwd, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
-  child.stdout.on("data", (chunk) => writeAttributed(stdout, suite, chunk));
-  child.stderr.on("data", (chunk) => writeAttributed(stderr, suite, chunk));
-  child.on("error", (error) => writeAttributed(stderr, suite, `${error.message}\n`));
+  const out = createAttributedWriter(stdout, suite);
+  const err = createAttributedWriter(stderr, suite);
+  child.stdout.on("data", (chunk) => out.write(chunk));
+  child.stderr.on("data", (chunk) => err.write(chunk));
+  child.on("error", (error) => err.write(`${error.message}\n`));
+  child.on("close", () => { out.end(); err.end(); });
   return childResult(child).then(({ code, error }) => error ? 1 : code);
 }
 

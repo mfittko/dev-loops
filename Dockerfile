@@ -54,7 +54,7 @@ WORKDIR /workspace
 # Copy workspace files
 COPY . .
 
-# Install workspace dependencies (postinstall creates dev-loops symlink)
+# Install workspace dependencies
 RUN bun install --frozen-lockfile
 
 # Append workspace node_modules/.bin last so global tools take precedence

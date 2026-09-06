@@ -16,6 +16,10 @@ import {
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const scriptPath = path.join(repoRoot, "scripts/release/assert-core-dependency-version.mjs");
 
+test("Bun lock parsing preserves trailing-comma text inside strings", () => {
+  assert.deepEqual(parseBunLock('{"url":"https://example.test/a,]",}'), { url: "https://example.test/a,]" });
+});
+
 test("rejects a #1033-shaped manifest (dev-loops@0.6.2 shipping @dev-loops/core@^0.2.6)", () => {
   assert.throws(
     () => assertCoreDependencyInLockstep({ releaseVersion: "0.6.2", coreRange: "^0.2.6" }),

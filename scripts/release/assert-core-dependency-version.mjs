@@ -168,7 +168,7 @@ export function assertBunLockInLockstep({ releaseVersion, lockfile } = {}) {
 
 /** Parse Bun's text lockfile (JSONC with trailing commas) without dependencies. */
 export function parseBunLock(raw) {
-  return JSON.parse(String(raw).replace(/,\s*([}\]])/gu, "$1"));
+  return JSON.parse(String(raw).replace(/"(?:\\.|[^"\\])*"|,\s*([}\]])/gu, (match, close) => close ?? match));
 }
 
 /**
