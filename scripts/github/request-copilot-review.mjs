@@ -57,7 +57,14 @@ Verification:
   read is retried on a fixed backoff (~30s total) before declaring failure,
   because that read is eventually consistent and can briefly still show stale
   (empty) state right after a genuinely successful request. The request
-  itself is issued exactly once and never re-issued per probe.
+  itself is issued exactly once and never re-issued per probe. A GraphQL
+  cross-check (reviewRequests + review nodes, any state incl. PENDING) is
+  additionally consulted, since it observes an active request/in-progress
+  Copilot review that the REST reads above can miss (#1980). If the POST
+  succeeded (exit 0) but nothing is observable via either surface within the
+  window, this reports "requested" with an eventually-consistent detail
+  instead of failing — a genuine 422 (Copilot truly unavailable) still fails
+  as "unavailable".
 Debug:
   DEVLOOPS_DEBUG=1      Emit stderr traces when best-effort same-head clean
                             convergence detection falls back to unsuppressed behavior
@@ -290,6 +297,86 @@ function isReviewNowObservablyInProgress(before, after) {
 async function checkReviewObservablyInProgress(options, runtime, before) {
   const after = await fetchCopilotReviewState(options, runtime);
   return isReviewNowObservablyInProgress(before, after);
+}
+
+// GraphQL verification surface (#1980): the two REST reads above go blind
+// once a request transitions into an in-progress review — GET
+// requested_reviewers empties out, and `gh pr view --json reviews` never
+// returns another actor's PENDING review. GraphQL's `reviewRequests`
+// connection and raw review nodes (any state, including PENDING) DO observe
+// both — the same state the GitHub UI renders. VERIFICATION only: never an
+// alternative request-mutation path (the REST POST above stays the only
+// mutation). Fail-soft — any gh/parse error here means "not observed on this
+// surface", never a throw, since this signal only ever ADDS a success path.
+const COPILOT_REVIEW_GRAPHQL_QUERY = [
+  "query($owner: String!, $name: String!, $pr: Int!) {",
+  "  repository(owner: $owner, name: $name) {",
+  "    pullRequest(number: $pr) {",
+  "      reviewRequests(first: 20) {",
+  "        nodes {",
+  "          requestedReviewer {",
+  "            __typename",
+  "            ... on Bot { login }",
+  "            ... on User { login }",
+  "          }",
+  "        }",
+  "      }",
+  "      reviews(last: 20) {",
+  "        nodes {",
+  "          state",
+  "          author { login }",
+  "          commit { oid }",
+  "        }",
+  "      }",
+  "    }",
+  "  }",
+  "}",
+].join("\n");
+export async function isCopilotReviewObservableViaGraphql(
+  { repo, pr, headSha = null },
+  { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {},
+) {
+  try {
+    const { owner, name } = parseRepoSlug(repo);
+    const result = await runChild(
+      ghCommand,
+      [
+        "api",
+        "graphql",
+        "--field",
+        `owner=${owner}`,
+        "--field",
+        `name=${name}`,
+        "--field",
+        `pr=${pr}`,
+        "--field",
+        `query=${COPILOT_REVIEW_GRAPHQL_QUERY}`,
+      ],
+      env,
+    );
+    if (result.code !== 0) return false;
+    const payload = JSON.parse(result.stdout);
+    const pullRequest = payload?.data?.repository?.pullRequest;
+    const requestNodes = Array.isArray(pullRequest?.reviewRequests?.nodes) ? pullRequest.reviewRequests.nodes : [];
+    if (requestNodes.some((node) => isCopilotLogin(node?.requestedReviewer?.login))) {
+      return true;
+    }
+    const reviewNodes = Array.isArray(pullRequest?.reviews?.nodes) ? pullRequest.reviews.nodes : [];
+    return reviewNodes.some((node) => {
+      if (!isCopilotLogin(node?.author?.login)) return false;
+      // Only current-head reviews count — a stale review on an old head must
+      // not be misread as "the current request/round is already covered"
+      // (mirrors the REST hasPendingReviewOnCurrentHead head-scoping above).
+      // Fail CLOSED when the head SHA itself is unverifiable (null): an
+      // unverifiable head must never satisfy this check on its own — the
+      // independent reviewRequests branch above still covers an active
+      // Copilot review request regardless of head SHA availability.
+      if (headSha === null) return false;
+      return node?.commit?.oid === headSha;
+    });
+  } catch {
+    return false;
+  }
 }
 
 async function fetchCopilotReviewState(options, runtime) {
@@ -908,6 +995,22 @@ export async function performCopilotReviewRequest(
   } catch (error) {
     lastReadError = error;
   }
+  // ponytail: GraphQL cross-check queried once here, not re-queried per retry
+  // attempt below — GraphQL's reviewRequests/reviews state doesn't flicker
+  // the way the REST eventual-consistency race the retry loop exists for
+  // does, so one cross-check is enough; add per-retry querying only if that
+  // assumption proves wrong in practice. Skipped when the REST read itself
+  // threw (a real error, not a benign "not yet observable" gap) so the
+  // existing error-propagation branch below stays untouched.
+  if (!reviewNowObservablyInProgress && !lastReadError) {
+    const currentHeadSha = typeof before.prData?.headRefOid === "string" && before.prData.headRefOid.trim().length > 0
+      ? before.prData.headRefOid.trim()
+      : null;
+    reviewNowObservablyInProgress = await isCopilotReviewObservableViaGraphql(
+      { repo: options.repo, pr: options.pr, headSha: currentHeadSha },
+      runtime,
+    );
+  }
   for (let attempt = 0; !reviewNowObservablyInProgress && attempt < VERIFICATION_RETRY_DELAYS_MS.length; attempt += 1) {
     await delayImpl(VERIFICATION_RETRY_DELAYS_MS[attempt]);
     try {
@@ -922,7 +1025,16 @@ export async function performCopilotReviewRequest(
     if (lastReadError) {
       throw lastReadError;
     }
-    throw new Error("Copilot review request did not appear in requested reviewers or fresh/in-progress Copilot reviews after the requested_reviewers POST");
+    // Fallback (#1980): the requested_reviewers POST already returned exit 0
+    // — the request is genuinely real — but neither REST nor the GraphQL
+    // cross-check above observed it within the bounded verification window.
+    // Treat this as eventually consistent instead of a hard failure; a truly
+    // unavailable Copilot reviewer is already classified `unavailable` above
+    // via the 422 path and never reaches here.
+    return withConfigWarning({
+      ...requestResult,
+      detail: "Copilot review request POST succeeded but was not yet observable via requested_reviewers/reviews or GraphQL within the verification window; treating as eventually consistent rather than failing.",
+    });
   }
   return withConfigWarning({
     ...requestResult,

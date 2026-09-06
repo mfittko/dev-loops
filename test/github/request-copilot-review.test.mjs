@@ -56,6 +56,20 @@ const EMPTY_REVIEW_STREAM_ENTRY = {
 const REQUESTED_REVIEWERS_ARGS = ["api", "repos/owner/repo/pulls/17/requested_reviewers"];
 const PR_VIEW_ARGS = ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"];
 const REQUEST_COPILOT_ARGS = ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"];
+// The GraphQL cross-check queried once (#1980) whenever the first post-request
+// verification read succeeds but observes nothing (never on a throwing read —
+// see request-copilot-review.mjs). Matched by prefix, like the other
+// `["api", "graphql"]` stubs already used in this suite.
+const GRAPHQL_ARGS = ["api", "graphql"];
+const GRAPHQL_NOT_OBSERVED_ENTRY = {
+  assertArgs: GRAPHQL_ARGS,
+  stdout: '{"data":{"repository":{"pullRequest":{"reviewRequests":{"nodes":[]},"reviews":{"nodes":[]}}}}}\n',
+};
+// Normalizes a full GraphQL call's args down to the short GRAPHQL_ARGS marker
+// for calls.map(...) call-sequence assertions — the query field is a large
+// constant not worth duplicating verbatim in every test; every other call's
+// args pass through unchanged.
+const asGraphqlMarker = (args) => (args[0] === "api" && args[1] === "graphql" ? GRAPHQL_ARGS : args);
 // A recorded gh call is the Copilot review REQUEST when it POSTs to the
 // requested_reviewers endpoint (distinguishing it from the plain GET reads that
 // share the same path).
@@ -418,6 +432,8 @@ test("request-copilot-review retries the post-request verification read on an em
       assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
       stdout: '{"reviews":[]}\n',
     },
+    // GraphQL cross-check (#1980): also blind here, so the retry loop below runs as before.
+    GRAPHQL_NOT_OBSERVED_ENTRY,
     {
       // Retry read: the request has now landed.
       assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -439,22 +455,25 @@ test("request-copilot-review retries the post-request verification read on an em
   assert.deepEqual(delayCalls, [5000]);
   // Pin the gh call sequence itself, not just the delay schedule: exactly one
   // the requested_reviewers POST (never re-issued per probe) and exactly the expected number of
-  // verification reads (before-state check, stale post-request read, landed
-  // retry read) — `repeatLastOnOverflow` would otherwise silently mask a
-  // surplus read past this exact sequence.
-  assert.deepEqual(calls.map((call) => call.args), [
+  // verification reads (before-state check, stale post-request read, the
+  // GraphQL cross-check, landed retry read) — `repeatLastOnOverflow` would
+  // otherwise silently mask a surplus read past this exact sequence.
+  assert.deepEqual(calls.map((call) => asGraphqlMarker(call.args)), [
     REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
     REQUEST_COPILOT_ARGS,
     REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+    GRAPHQL_ARGS,
     REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
   ]);
   assert.equal(calls.filter(isCopilotRequestCall).length, 1);
 });
 
-test("request-copilot-review fails closed after the bounded verification retries stay empty", async () => {
-  // Genuine failure: every verification read (initial + all bounded retries)
-  // stays empty, so the helper must still throw the existing error after
-  // exhausting the fixed retry schedule instead of retrying forever.
+test("request-copilot-review reports the eventually-consistent requested fallback after the bounded verification retries stay empty on every surface (#1980)", async () => {
+  // A genuinely successful code-0 POST whose verification (REST AND the
+  // GraphQL cross-check) stays empty on every read must no longer throw the
+  // "did not appear" error — it reports the requested fallback instead (#1980
+  // item 3), since the request itself is real and a truly unavailable
+  // reviewer is already classified `unavailable` via the 422 path above.
   const delayCalls = [];
   const delayImpl = async (ms) => {
     delayCalls.push(ms);
@@ -474,9 +493,12 @@ test("request-copilot-review fails closed after the bounded verification retries
       assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
       stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
     },
-    // Initial post-request verification read, plus one per bounded retry — all stale.
+    // Initial post-request verification read: stale.
     emptyRequestedReviewersEntry,
     emptyReviewsEntry,
+    // GraphQL cross-check: also blind.
+    GRAPHQL_NOT_OBSERVED_ENTRY,
+    // One read per bounded retry — all stale.
     emptyRequestedReviewersEntry,
     emptyReviewsEntry,
     emptyRequestedReviewersEntry,
@@ -485,33 +507,31 @@ test("request-copilot-review fails closed after the bounded verification retries
     emptyReviewsEntry,
   ];
 
-  await assert.rejects(
-    () => runInProcess(["--repo", "owner/repo", "--pr", "17"], entries, { delayImpl }),
-    (error) => {
-      // Exact match, not a substring: the message is a claimed byte-identical
-      // contract with pre-retry-loop behavior, so any drift (a prefix/suffix
-      // like an appended "after N retries") must fail this assertion.
-      assert.equal(
-        error.message,
-        "Copilot review request did not appear in requested reviewers or fresh/in-progress Copilot reviews after the requested_reviewers POST",
-      );
-      // Pin the gh call sequence too: exactly one requested_reviewers POST and exactly the
-      // expected number of verification reads (before-state check, plus one
-      // initial post-request read and one per bounded retry, all stale) —
-      // `repeatLastOnOverflow` would otherwise silently mask a surplus read
-      // past this exact sequence.
-      assert.deepEqual(error.calls.map((call) => call.args), [
-        REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
-        REQUEST_COPILOT_ARGS,
-        REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
-        REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
-        REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
-        REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
-      ]);
-      assert.equal(error.calls.filter(isCopilotRequestCall).length, 1);
-      return true;
-    },
-  );
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], entries, { delayImpl });
+
+  assert.deepEqual(result, {
+    ok: true,
+    status: "requested",
+    repo: "owner/repo",
+    pr: 17,
+    reviewer: "Copilot",
+    detail: "Copilot review request POST succeeded but was not yet observable via requested_reviewers/reviews or GraphQL within the verification window; treating as eventually consistent rather than failing.",
+  });
+  // Pin the gh call sequence too: exactly one requested_reviewers POST and exactly the
+  // expected number of verification reads (before-state check, plus one
+  // initial post-request read, the GraphQL cross-check, and one per bounded
+  // retry, all stale) — `repeatLastOnOverflow` would otherwise silently mask
+  // a surplus read past this exact sequence.
+  assert.deepEqual(calls.map((call) => asGraphqlMarker(call.args)), [
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+    REQUEST_COPILOT_ARGS,
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+    GRAPHQL_ARGS,
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+  ]);
+  assert.equal(calls.filter(isCopilotRequestCall).length, 1);
   assert.deepEqual(delayCalls, [5000, 10000, 15000]);
 });
 
@@ -547,6 +567,8 @@ test("request-copilot-review retries a throwing verification read inside the bou
       assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
       stdout: '{"reviews":[]}\n',
     },
+    // GraphQL cross-check (#1980): also blind here, so the retry loop below runs as before.
+    GRAPHQL_NOT_OBSERVED_ENTRY,
     {
       // Loop attempt 0: the read itself throws (transient gh failure). The
       // second call inside fetchCopilotReviewState (pr view) is never reached.
@@ -573,10 +595,11 @@ test("request-copilot-review retries a throwing verification read inside the bou
     reviewer: "Copilot",
   });
   assert.deepEqual(delayCalls, [5000, 10000]);
-  assert.deepEqual(calls.map((call) => call.args), [
+  assert.deepEqual(calls.map((call) => asGraphqlMarker(call.args)), [
     REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
     REQUEST_COPILOT_ARGS,
     REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+    GRAPHQL_ARGS,
     REQUESTED_REVIEWERS_ARGS,
     REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
   ]);
@@ -620,6 +643,8 @@ test("request-copilot-review propagates the final attempt's error when every bou
       assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
       stdout: '{"reviews":[]}\n',
     },
+    // GraphQL cross-check (#1980): also blind here, so the retry loop below runs as before.
+    GRAPHQL_NOT_OBSERVED_ENTRY,
     throwingRequestedReviewersEntry("attempt 1"),
     throwingRequestedReviewersEntry("attempt 2"),
     throwingRequestedReviewersEntry("attempt 3, final"),
@@ -629,10 +654,11 @@ test("request-copilot-review propagates the final attempt's error when every bou
     () => runInProcess(["--repo", "owner/repo", "--pr", "17"], entries, { delayImpl }),
     (error) => {
       assert.equal(error.message, "gh command failed: rate limited (attempt 3, final)");
-      assert.deepEqual(error.calls.map((call) => call.args), [
+      assert.deepEqual(error.calls.map((call) => asGraphqlMarker(call.args)), [
         REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
         REQUEST_COPILOT_ARGS,
         REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+        GRAPHQL_ARGS,
         REQUESTED_REVIEWERS_ARGS,
         REQUESTED_REVIEWERS_ARGS,
         REQUESTED_REVIEWERS_ARGS,
@@ -644,10 +670,11 @@ test("request-copilot-review propagates the final attempt's error when every bou
   assert.deepEqual(delayCalls, [5000, 10000, 15000]);
 });
 
-test("request-copilot-review fails closed with the empty-result message when a mid-window throw recovers into empty reads", async () => {
+test("request-copilot-review reports the eventually-consistent requested fallback when a mid-window throw recovers into empty reads (#1980)", async () => {
   // Mixed window: a non-final attempt throws, later attempts succeed but stay
   // empty. The recovery clears the recorded read error, so exhaustion yields
-  // the generic empty-result message, never the stale mid-window error.
+  // the eventually-consistent requested fallback (#1980 item 3), never a
+  // throw — the stale mid-window error is not the last word.
   const delayCalls = [];
   const delayImpl = async (ms) => {
     delayCalls.push(ms);
@@ -670,6 +697,8 @@ test("request-copilot-review fails closed with the empty-result message when a m
     },
     // Initial post-request read: empty.
     ...emptyVerificationPair,
+    // GraphQL cross-check: also blind.
+    GRAPHQL_NOT_OBSERVED_ENTRY,
     // Attempt 1: throws mid-window.
     {
       assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -681,22 +710,26 @@ test("request-copilot-review fails closed with the empty-result message when a m
     ...emptyVerificationPair,
   ];
 
-  await assert.rejects(
-    () => runInProcess(["--repo", "owner/repo", "--pr", "17"], entries, { delayImpl }),
-    (error) => {
-      assert.equal(error.message, "Copilot review request did not appear in requested reviewers or fresh/in-progress Copilot reviews after the requested_reviewers POST");
-      assert.deepEqual(error.calls.map((call) => call.args), [
-        REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
-        REQUEST_COPILOT_ARGS,
-        REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
-        REQUESTED_REVIEWERS_ARGS,
-        REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
-        REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
-      ]);
-      assert.equal(error.calls.filter(isCopilotRequestCall).length, 1);
-      return true;
-    },
-  );
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], entries, { delayImpl });
+
+  assert.deepEqual(result, {
+    ok: true,
+    status: "requested",
+    repo: "owner/repo",
+    pr: 17,
+    reviewer: "Copilot",
+    detail: "Copilot review request POST succeeded but was not yet observable via requested_reviewers/reviews or GraphQL within the verification window; treating as eventually consistent rather than failing.",
+  });
+  assert.deepEqual(calls.map((call) => asGraphqlMarker(call.args)), [
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+    REQUEST_COPILOT_ARGS,
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+    GRAPHQL_ARGS,
+    REQUESTED_REVIEWERS_ARGS,
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+  ]);
+  assert.equal(calls.filter(isCopilotRequestCall).length, 1);
   assert.deepEqual(delayCalls, [5000, 10000, 15000]);
 });
 
@@ -741,6 +774,272 @@ test("request-copilot-review recovers when the INITIAL post-request read throws 
   assert.equal(result.status, "requested");
   assert.deepEqual(delayCalls, [5000]);
   assert.equal(calls.filter(isCopilotRequestCall).length, 1);
+});
+
+test("request-copilot-review observes an active Copilot review request via GraphQL when REST verification is blind (#1980)", async () => {
+  // Root-cause regression for #1980: the requested_reviewers GET and `gh pr
+  // view --json reviews` both stay empty right after a genuinely successful
+  // POST (GitHub's own eventual-consistency gap on this repo), but GraphQL's
+  // reviewRequests connection DOES observe the active Copilot bot request —
+  // the same state the GitHub UI renders. This must resolve on the FIRST
+  // post-request check, with zero retries (delayImpl never invoked).
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
+    { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[],"teams":[]}\n' },
+    { assertArgs: PR_VIEW_ARGS, stdout: '{"reviews":[]}\n' },
+    { assertArgs: REQUEST_COPILOT_ARGS, stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
+    { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[],"teams":[]}\n' },
+    { assertArgs: PR_VIEW_ARGS, stdout: '{"reviews":[]}\n' },
+    {
+      assertArgs: GRAPHQL_ARGS,
+      stdout: JSON.stringify({
+        data: {
+          repository: {
+            pullRequest: {
+              reviewRequests: { nodes: [{ requestedReviewer: { __typename: "Bot", login: "copilot-pull-request-reviewer[bot]" } }] },
+              reviews: { nodes: [] },
+            },
+          },
+        },
+      }) + "\n",
+    },
+  ]);
+
+  assert.deepEqual(result, {
+    ok: true,
+    status: "requested",
+    repo: "owner/repo",
+    pr: 17,
+    reviewer: "Copilot",
+  });
+  // No retries entered — the GraphQL cross-check resolves the first check.
+  assert.deepEqual(calls.map((call) => asGraphqlMarker(call.args)), [
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+    REQUEST_COPILOT_ARGS,
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+    GRAPHQL_ARGS,
+  ]);
+});
+
+test("request-copilot-review observes a PENDING Copilot review on the current head via GraphQL when REST verification is blind (#1980)", async () => {
+  // Same REST-blind race, but Copilot has already transitioned the request
+  // into an in-progress PENDING review, which `gh pr view --json reviews`
+  // does not surface for another actor (#1980 root cause item 2). GraphQL's
+  // raw review nodes DO observe it — resolved via the current-head SHA match.
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
+    { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[],"teams":[]}\n' },
+    { assertArgs: PR_VIEW_ARGS, stdout: '{"headRefOid":"headsha1","reviews":[]}\n' },
+    { assertArgs: REQUEST_COPILOT_ARGS, stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
+    { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[],"teams":[]}\n' },
+    { assertArgs: PR_VIEW_ARGS, stdout: '{"headRefOid":"headsha1","reviews":[]}\n' },
+    {
+      assertArgs: GRAPHQL_ARGS,
+      stdout: JSON.stringify({
+        data: {
+          repository: {
+            pullRequest: {
+              reviewRequests: { nodes: [] },
+              reviews: { nodes: [{ state: "PENDING", author: { login: "copilot-pull-request-reviewer[bot]" }, commit: { oid: "headsha1" } }] },
+            },
+          },
+        },
+      }) + "\n",
+    },
+  ]);
+
+  assert.deepEqual(result, {
+    ok: true,
+    status: "requested",
+    repo: "owner/repo",
+    pr: 17,
+    reviewer: "Copilot",
+  });
+  assert.deepEqual(calls.map((call) => asGraphqlMarker(call.args)), [
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+    REQUEST_COPILOT_ARGS,
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+    GRAPHQL_ARGS,
+  ]);
+});
+
+test("request-copilot-review ignores a stale Copilot review on an old head via GraphQL and continues to the retry window (#1980)", async () => {
+  // A GraphQL review node on a STALE head (not the current headRefOid) must
+  // not be misread as "the current request is already covered" — mirrors the
+  // existing REST hasPendingReviewOnCurrentHead head-scoping. The retry loop
+  // runs as if GraphQL had observed nothing.
+  const delayCalls = [];
+  const delayImpl = async (ms) => {
+    delayCalls.push(ms);
+  };
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
+    { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[],"teams":[]}\n' },
+    { assertArgs: PR_VIEW_ARGS, stdout: '{"headRefOid":"headsha2","reviews":[]}\n' },
+    { assertArgs: REQUEST_COPILOT_ARGS, stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
+    { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[],"teams":[]}\n' },
+    { assertArgs: PR_VIEW_ARGS, stdout: '{"headRefOid":"headsha2","reviews":[]}\n' },
+    {
+      assertArgs: GRAPHQL_ARGS,
+      stdout: JSON.stringify({
+        data: {
+          repository: {
+            pullRequest: {
+              reviewRequests: { nodes: [] },
+              reviews: { nodes: [{ state: "PENDING", author: { login: "copilot-pull-request-reviewer[bot]" }, commit: { oid: "oldheadsha" } }] },
+            },
+          },
+        },
+      }) + "\n",
+    },
+    { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+    { assertArgs: PR_VIEW_ARGS, stdout: '{"headRefOid":"headsha2","reviews":[]}\n' },
+  ], { delayImpl });
+
+  assert.deepEqual(result, {
+    ok: true,
+    status: "requested",
+    repo: "owner/repo",
+    pr: 17,
+    reviewer: "Copilot",
+  });
+  assert.deepEqual(delayCalls, [5000]);
+  assert.deepEqual(calls.map((call) => asGraphqlMarker(call.args)), [
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+    REQUEST_COPILOT_ARGS,
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+    GRAPHQL_ARGS,
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+  ]);
+});
+
+test("request-copilot-review fails closed on a GraphQL review node when the head SHA is unverifiable (no active request) and continues to the retry window (Copilot review thread on #1980)", async () => {
+  // Fail-closed regression: when the current head SHA cannot be resolved
+  // (headRefOid missing from the `before` read), a bare GraphQL review node
+  // must NOT be read as "covers the current head" — only an active
+  // reviewRequests entry may still resolve unconditionally. Pins the fix for
+  // the head-scoping bug where `headSha === null` used to short-circuit to
+  // `true` (fail-open) instead of `false` (fail-closed).
+  const delayCalls = [];
+  const delayImpl = async (ms) => {
+    delayCalls.push(ms);
+  };
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
+    { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[],"teams":[]}\n' },
+    { assertArgs: PR_VIEW_ARGS, stdout: '{"reviews":[]}\n' },
+    { assertArgs: REQUEST_COPILOT_ARGS, stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
+    { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[],"teams":[]}\n' },
+    { assertArgs: PR_VIEW_ARGS, stdout: '{"reviews":[]}\n' },
+    {
+      assertArgs: GRAPHQL_ARGS,
+      stdout: JSON.stringify({
+        data: {
+          repository: {
+            pullRequest: {
+              reviewRequests: { nodes: [] },
+              reviews: { nodes: [{ state: "PENDING", author: { login: "copilot-pull-request-reviewer[bot]" }, commit: { oid: "somesha" } }] },
+            },
+          },
+        },
+      }) + "\n",
+    },
+    { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+    { assertArgs: PR_VIEW_ARGS, stdout: '{"reviews":[]}\n' },
+  ], { delayImpl });
+
+  assert.deepEqual(result, {
+    ok: true,
+    status: "requested",
+    repo: "owner/repo",
+    pr: 17,
+    reviewer: "Copilot",
+  });
+  // The GraphQL check must NOT resolve on the review node alone — the retry
+  // window still runs (delayCalls non-empty) and the REST fallback resolves it.
+  assert.deepEqual(delayCalls, [5000]);
+  assert.deepEqual(calls.map((call) => asGraphqlMarker(call.args)), [
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+    REQUEST_COPILOT_ARGS,
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+    GRAPHQL_ARGS,
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+  ]);
+});
+
+test("request-copilot-review treats an active Copilot review REQUEST via GraphQL as observed regardless of head SHA verifiability", async () => {
+  // The reviewRequests branch must stay unconditional: an active Copilot
+  // review request independently satisfies the observable-in-progress check
+  // even when the head SHA is unverifiable — only the review-node branch
+  // fails closed on a null head SHA.
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
+    { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[],"teams":[]}\n' },
+    { assertArgs: PR_VIEW_ARGS, stdout: '{"reviews":[]}\n' },
+    { assertArgs: REQUEST_COPILOT_ARGS, stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
+    { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[],"teams":[]}\n' },
+    { assertArgs: PR_VIEW_ARGS, stdout: '{"reviews":[]}\n' },
+    {
+      assertArgs: GRAPHQL_ARGS,
+      stdout: JSON.stringify({
+        data: {
+          repository: {
+            pullRequest: {
+              reviewRequests: { nodes: [{ requestedReviewer: { __typename: "Bot", login: "copilot-pull-request-reviewer[bot]" } }] },
+              reviews: { nodes: [] },
+            },
+          },
+        },
+      }) + "\n",
+    },
+  ]);
+
+  assert.deepEqual(result, {
+    ok: true,
+    status: "requested",
+    repo: "owner/repo",
+    pr: 17,
+    reviewer: "Copilot",
+  });
+  // No retries entered — the reviewRequests branch resolves the first check
+  // unconditionally, even with an unverifiable (null) head SHA.
+  assert.deepEqual(calls.map((call) => asGraphqlMarker(call.args)), [
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+    REQUEST_COPILOT_ARGS,
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+    GRAPHQL_ARGS,
+  ]);
+});
+
+test("request-copilot-review treats a GraphQL error as not-observed and continues to the retry window (#1980)", async () => {
+  // Fail-soft contract: a GraphQL surface error (bad JSON, non-zero exit) is
+  // treated as "not observed here" and never propagates as a throw — the
+  // retry loop proceeds exactly as if GraphQL had observed nothing.
+  const delayCalls = [];
+  const delayImpl = async (ms) => {
+    delayCalls.push(ms);
+  };
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
+    { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[],"teams":[]}\n' },
+    { assertArgs: PR_VIEW_ARGS, stdout: '{"reviews":[]}\n' },
+    { assertArgs: REQUEST_COPILOT_ARGS, stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
+    { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[],"teams":[]}\n' },
+    { assertArgs: PR_VIEW_ARGS, stdout: '{"reviews":[]}\n' },
+    { assertArgs: GRAPHQL_ARGS, exitCode: 1, stderr: "GraphQL: rate limited\n" },
+    { assertArgs: REQUESTED_REVIEWERS_ARGS, stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+    { assertArgs: PR_VIEW_ARGS, stdout: '{"reviews":[]}\n' },
+  ], { delayImpl });
+
+  assert.deepEqual(result, {
+    ok: true,
+    status: "requested",
+    repo: "owner/repo",
+    pr: 17,
+    reviewer: "Copilot",
+  });
+  assert.deepEqual(delayCalls, [5000]);
+  assert.deepEqual(calls.map((call) => asGraphqlMarker(call.args)), [
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+    REQUEST_COPILOT_ARGS,
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+    GRAPHQL_ARGS,
+    REQUESTED_REVIEWERS_ARGS, PR_VIEW_ARGS,
+  ]);
 });
 
 test("request-copilot-review normalizes known unrequestable/unavailable failures", async () => {
