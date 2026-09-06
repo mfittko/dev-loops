@@ -10,8 +10,10 @@ import {
 import {
   SPEC_AUTHORITY_OUTCOMES,
   buildRevisionIdentity,
+  resolveAffectedCriteria,
   resolveCriterionInvalidation,
   specCriterionIds,
+  stampSpecAuthorityIdentity,
   validateSpecAuthorityVerdict,
 } from "@dev-loops/core/loop/spec-authority";
 import { ensureFollowUpIssue, fingerprintFinding } from "../github/_gate-finding-surface.mjs";
@@ -96,9 +98,24 @@ Immutable spec-authority enforcement (opt-in; enabled by --spec-file):
                                coveredSurfaceUnchanged }; an unaffected criterion
                                carries forward only when both are true. Requires
                                --spec-file (used with --prior-approvals).
+  --changed-paths <path>       JSON string array of repo-relative paths a fixer
+                               push changed. Given together with --coverage-map,
+                               resolveAffectedCriteria (#2000 AC7; issue 2008 AC2) computes which
+                               criteria the push actually affects, narrowing the
+                               all-stale fallback. Requires --spec-file and
+                               --prior-approvals (only meaningful during
+                               invalidation).
+  --coverage-map <path>        JSON object mapping criterionId -> glob pattern
+                               array (the declared coverage for that criterion).
+                               Required together with --changed-paths. When the
+                               producer is UNCERTAIN (a changed path matches no
+                               criterion's coverage), affectedCriteria falls back
+                               to the full prior-approved set (fail closed).
   --approvals-out <path>       Persist the durable, re-entry-safe approval record
                                (revision identities + approved criteria +
-                               invalidation result). Requires --spec-file.
+                               invalidation result + humanDecision +
+                               authorizedRemediations + criterionCoverage when
+                               supplied). Requires --spec-file.
 
 ${JQ_OUTPUT_USAGE}
 
@@ -131,6 +148,8 @@ export function parseJudgePassCliArgs(argv) {
     priorApprovals: undefined,
     approvalsOut: undefined,
     carryForwardProof: undefined,
+    changedPaths: undefined,
+    coverageMap: undefined,
     jq: undefined,
     silent: false,
   };
@@ -152,6 +171,8 @@ export function parseJudgePassCliArgs(argv) {
       "prior-approvals": { type: "string" },
       "approvals-out": { type: "string" },
       "carry-forward-proof": { type: "string" },
+      "changed-paths": { type: "string" },
+      "coverage-map": { type: "string" },
       help: { type: "boolean", short: "h" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -231,6 +252,14 @@ export function parseJudgePassCliArgs(argv) {
       options.carryForwardProof = token.value;
       continue;
     }
+    if (token.name === "changed-paths") {
+      options.changedPaths = token.value;
+      continue;
+    }
+    if (token.name === "coverage-map") {
+      options.coverageMap = token.value;
+      continue;
+    }
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
   return validateCliArgs(options);
@@ -290,6 +319,17 @@ export function validateCliArgs(options) {
     if (options.carryForwardProof !== undefined && options.priorApprovals === undefined) {
       throw parseError("--carry-forward-proof requires --prior-approvals (it is only applied during criterion invalidation)");
     }
+    // #2000 AC7 (issue 2008 AC2 / ADR 0061): --changed-paths and --coverage-map
+    // are the affected-criteria producer's inputs. Both required together —
+    // one without the other would silently drop the producer with no
+    // diagnostic — and, like --carry-forward-proof, only meaningful inside
+    // the --prior-approvals invalidation path.
+    if ((options.changedPaths !== undefined) !== (options.coverageMap !== undefined)) {
+      throw parseError("--changed-paths and --coverage-map must be supplied together (affected-criteria producer, #2000 AC7 / issue 2008 AC2)");
+    }
+    if (options.changedPaths !== undefined && options.priorApprovals === undefined) {
+      throw parseError("--changed-paths and --coverage-map require --prior-approvals (they are only applied during criterion invalidation)");
+    }
   } else {
     // The spec-authority flags only make sense under an active gate (--spec-file).
     // Guard BOTH directions: supplying --content-digest/--spec-authority-verdict
@@ -302,13 +342,15 @@ export function validateCliArgs(options) {
       ["priorApprovals", "--prior-approvals"],
       ["approvalsOut", "--approvals-out"],
       ["carryForwardProof", "--carry-forward-proof"],
+      ["changedPaths", "--changed-paths"],
+      ["coverageMap", "--coverage-map"],
     ]) {
       if (options[key] !== undefined) {
         throw parseError(`${flag} requires --spec-file (spec-authority enforcement)`);
       }
     }
   }
-  const pathFlags = ["findingsFile", "judgeVerdict", "out", "ledgerOut", "specFile", "specAuthorityVerdict", "priorApprovals", "approvalsOut", "carryForwardProof"].filter(
+  const pathFlags = ["findingsFile", "judgeVerdict", "out", "ledgerOut", "specFile", "specAuthorityVerdict", "priorApprovals", "approvalsOut", "carryForwardProof", "changedPaths", "coverageMap"].filter(
     (k) => options[k] !== undefined,
   );
   for (let i = 0; i < pathFlags.length; i += 1) {
@@ -571,6 +613,7 @@ async function enforceSpecAuthority(options, findings, resolvedRoot) {
   // Criterion-scoped invalidation across re-entry: when a prior clean round's
   // approval record is supplied, resolve which approvals survive this revision.
   let invalidation = null;
+  let criterionCoverageUsed;
   if (options.priorApprovals !== undefined) {
     const prior = await readJsonArtifact(path.resolve(resolvedRoot, options.priorApprovals), "--prior-approvals", parseError);
     // Fail closed on a malformed durable record — a non-array approvedCriteria
@@ -582,21 +625,53 @@ async function enforceSpecAuthority(options, findings, resolvedRoot) {
     if (options.carryForwardProof !== undefined) {
       carryForwardProof = await readJsonArtifact(path.resolve(resolvedRoot, options.carryForwardProof), "--carry-forward-proof", parseError);
     }
+    // #2000 AC7 (issue 2008 AC2 / ADR 0061): when the changed-content->criteria producer's
+    // inputs are BOTH supplied, use it to narrow affectedCriteria instead of the
+    // all-stale fallback. An UNCERTAIN result (some changed path matched no
+    // criterion's coverage) still fails closed to all-stale, but now against the
+    // FULL prior-approved set rather than an unconditional empty array — a
+    // strict improvement, never a loosening (ADR 0061 decision 4).
+    let affectedCriteria = [];
+    if (options.changedPaths !== undefined && options.coverageMap !== undefined) {
+      const changedPaths = await readJsonArtifact(path.resolve(resolvedRoot, options.changedPaths), "--changed-paths", parseError);
+      const coverageMap = await readJsonArtifact(path.resolve(resolvedRoot, options.coverageMap), "--coverage-map", parseError);
+      let resolved;
+      try {
+        resolved = resolveAffectedCriteria({ changedPaths, criterionCoverage: coverageMap });
+      } catch (error) {
+        throw new Error(`spec-authority affected-criteria resolution failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      affectedCriteria = resolved.uncertain ? [...prior.approvedCriteria] : resolved.affectedCriteria;
+      criterionCoverageUsed = coverageMap;
+    }
     try {
       invalidation = resolveCriterionInvalidation({
         priorSpecDigest: prior.specDigest,
         currentSpecDigest: specDigest,
         priorApprovedCriteria: prior.approvedCriteria,
-        // No deterministic file->criterion producer exists, so affectedCriteria
-        // defaults to empty and unaffected criteria carry ONLY with positive
-        // proof — unknown impact fails closed to fresh review (stale).
-        affectedCriteria: [],
+        affectedCriteria,
         carryForwardProof,
       });
     } catch (error) {
       throw new Error(`spec-authority criterion invalidation failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+
+  // AC6 (issue 2008 / ADR 0061): durable provenance the approval record must
+  // ALSO persist — the human-decision requirement in its own named shape, and
+  // the chosen (authorized) remedy for every valid_compliant decision — derived
+  // straight from the validated whole-spec verdict so writeApprovalsRecord
+  // never re-derives it independently.
+  const humanDecision = {
+    required: validated.humanDecisionRequired,
+    indices: validated.humanDecisionIndices,
+    reason: validated.humanDecisionRequired
+      ? validated.decisions.filter((d) => d.requiresHumanDecision).map((d) => d.rationale).join("; ")
+      : null,
+  };
+  const authorizedRemediations = validated.decisions
+    .filter((d) => d.outcome === SPEC_AUTHORITY_OUTCOMES.VALID_COMPLIANT)
+    .map((d) => ({ index: d.index, checkedCriteria: d.checkedCriteria, authorizedRemediation: d.authorizedRemediation }));
 
   return {
     specDigest,
@@ -609,6 +684,9 @@ async function enforceSpecAuthority(options, findings, resolvedRoot) {
     findingConflictIndices,
     remediationConflictIndices,
     invalidation,
+    humanDecision,
+    authorizedRemediations,
+    ...(criterionCoverageUsed !== undefined ? { criterionCoverage: criterionCoverageUsed } : {}),
   };
 }
 
@@ -632,6 +710,18 @@ async function writeApprovalsRecord(approvalsPath, specAuthority, roundClean) {
         contentDigest: specAuthority.contentDigest,
         approvedCriteria,
         invalidation: specAuthority.invalidation,
+        // AC6 (issue 2008 / ADR 0061): provenance + the chosen compliant remedy,
+        // so a fresh process reconstructs why the round did/did not need a human
+        // spec decision and what remedy each valid_compliant finding authorized,
+        // without prompt memory.
+        humanDecision: specAuthority.humanDecision,
+        authorizedRemediations: specAuthority.authorizedRemediations,
+        // The coverage map used THIS round (when the #2000 AC7 / issue 2008 AC2 producer was supplied).
+        // This is a durable audit / re-entry-reconstruction record only: judge-pass
+        // does NOT read prior.criterionCoverage back in. A re-entry round MUST still
+        // pass --coverage-map explicitly for changed-paths narrowing to engage;
+        // without it, the round fails closed to the all-stale fallback.
+        ...(specAuthority.criterionCoverage !== undefined ? { criterionCoverage: specAuthority.criterionCoverage } : {}),
       },
       null,
       2,
@@ -713,13 +803,32 @@ export async function judgePassCli(
     { env, ghCommand, run, createIssue, commentIssue, listIssues },
   );
 
+  // AC1 (issue 2008 / ADR 0061): when spec-authority is engaged, both the
+  // enriched ledger and the fixer act list carry the pinned revision identity +
+  // the whole checked criterion set, via the ONE shared stamp helper — never
+  // recomputed per writer. A no-op (byte-identical to before) when
+  // spec-authority is not engaged (no --spec-file).
+  const specAuthorityIdentity = specAuthority
+    ? {
+        specDigest: specAuthority.specDigest,
+        headSha: specAuthority.headSha,
+        contentDigest: specAuthority.contentDigest,
+        checkedCriteria: specAuthority.criterionIds,
+      }
+    : undefined;
+
   const written = new Set();
   if (options.ledgerOut) {
     const ledgerPath = path.resolve(resolvedRoot, options.ledgerOut);
     await mkdir(path.dirname(ledgerPath), { recursive: true });
+    const ledgerRecord = { overallVerdict, findings: result.enriched, scopeDrift: result.scopeDrift };
     await writeFile(
       ledgerPath,
-      JSON.stringify({ overallVerdict, findings: result.enriched, scopeDrift: result.scopeDrift }, null, 2) + "\n",
+      JSON.stringify(
+        specAuthorityIdentity ? stampSpecAuthorityIdentity(ledgerRecord, specAuthorityIdentity) : ledgerRecord,
+        null,
+        2,
+      ) + "\n",
     );
     written.add(ledgerPath);
   }
@@ -727,6 +836,12 @@ export async function judgePassCli(
     const outPath = path.resolve(resolvedRoot, options.out);
     if (!written.has(outPath)) {
       await mkdir(path.dirname(outPath), { recursive: true });
+      // ALWAYS a bare act-list array (byte-identical to before spec-authority
+      // was introduced), spec-authority engaged or not: the fix pass consumes
+      // ONLY --out's act list (skills/dev-loop/SKILL.md, gate-review-sub-loop
+      // -contract.md). AC1's durable fixer-facing record of the pinned
+      // revision identity is carried by the STAMPED --ledger-out above, never
+      // by --out.
       await writeFile(outPath, JSON.stringify(result.act, null, 2) + "\n");
     }
   }

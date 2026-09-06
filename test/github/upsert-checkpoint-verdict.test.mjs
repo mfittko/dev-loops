@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -1843,6 +1843,122 @@ test("upsert-checkpoint-verdict renders an idempotent body: the same inputs re-p
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+// AC1 (issue 2008 / ADR-0061): optional --spec-authority stamps the RETURNED
+// result on the created/noop paths; absent it is a pure no-op.
+test("upsert-checkpoint-verdict: --spec-authority stamps the returned created/noop result; absent is a no-op", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-gate-review-spec-authority-"));
+  const headSha = "abc1234000000000000000000000000000000000";
+  const identity = {
+    specDigest: `sha256:${"a".repeat(64)}`,
+    headSha: "b".repeat(40),
+    contentDigest: `sha256:${"c".repeat(64)}`,
+    checkedCriteria: ["ac:1", "ac:0"],
+  };
+  const identityPath = path.join(tempDir, "spec-authority.json");
+  await writeFile(identityPath, JSON.stringify(identity));
+  const inputs = {
+    repo: "owner/repo",
+    pr: 17,
+    gate: "draft_gate",
+    headSha,
+    verdict: "clean",
+    findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "nice-to-have": 0 },
+    findingsSummary: "no issues found",
+    nextAction: "mark ready for review",
+    executionMode: "inline_single_agent",
+    inlineReason: "single-agent inline review (test)",
+  };
+
+  try {
+    const { runChild: runChild1, calls: calls1 } = makeGhMock([
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":103,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-103"}\n',
+      },
+    ], { repeatLastOnOverflow: true });
+    const created = await upsertCheckpointVerdict(
+      { ...inputs, specAuthority: identityPath },
+      { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild: runChild1, repoRoot: fanoutDisabledRepoRoot },
+    );
+    assert.equal(created.action, "created");
+    assert.deepEqual(created.specAuthority, { ...identity, checkedCriteria: ["ac:0", "ac:1"] });
+    const postedBody = JSON.parse(calls1.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews")).stdinText).body;
+
+    // Absent --spec-authority: no specAuthority field at all (pure no-op).
+    const { runChild: runChild2 } = makeGhMock([
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":104,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-104"}\n',
+      },
+    ], { repeatLastOnOverflow: true });
+    const createdNoStamp = await upsertCheckpointVerdict(
+      inputs,
+      { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild: runChild2, repoRoot: fanoutDisabledRepoRoot },
+    );
+    assert.equal("specAuthority" in createdNoStamp, false);
+
+    // Same-head noop: the stamp still carries through.
+    const { runChild: runChild3 } = makeGhMock([
+      ...buildGateCoordinationEntries({
+        isDraft: true,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        issueComments: [{ id: 103, body: postedBody, html_url: "https://github.com/owner/repo/pull/17#issuecomment-103", updated_at: "2026-08-03T00:00:00Z" }],
+      }),
+    ], { repeatLastOnOverflow: true });
+    const noop = await upsertCheckpointVerdict(
+      { ...inputs, specAuthority: identityPath },
+      { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild: runChild3, repoRoot: fanoutDisabledRepoRoot },
+    );
+    assert.equal(noop.action, "noop");
+    assert.deepEqual(noop.specAuthority, { ...identity, checkedCriteria: ["ac:0", "ac:1"] });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// F2 (issue 2008 draft-gate review): --spec-authority must resolve against
+// `repoRoot` (default process.cwd()) — the same root this function already
+// anchors its config load to — so a relative path behaves the same
+// regardless of the process's actual cwd.
+test("upsert-checkpoint-verdict: a relative --spec-authority path resolves against repoRoot", async () => {
+  const identity = {
+    specDigest: `sha256:${"d".repeat(64)}`,
+    headSha: "e".repeat(40),
+    contentDigest: `sha256:${"f".repeat(64)}`,
+    checkedCriteria: ["ac:0"],
+  };
+  await mkdir(path.join(fanoutDisabledRepoRoot, "meta"), { recursive: true });
+  await writeFile(path.join(fanoutDisabledRepoRoot, "meta", "spec-authority-relative.json"), JSON.stringify(identity));
+  const headSha = "abc1234000000000000000000000000000000001";
+  const inputs = {
+    repo: "owner/repo",
+    pr: 17,
+    gate: "draft_gate",
+    headSha,
+    verdict: "clean",
+    findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "nice-to-have": 0 },
+    findingsSummary: "no issues found",
+    nextAction: "mark ready for review",
+    executionMode: "inline_single_agent",
+    inlineReason: "single-agent inline review (test)",
+    specAuthority: "meta/spec-authority-relative.json",
+  };
+  const { runChild } = makeGhMock([
+    ...buildGateCoordinationEntries({ headSha, isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+    {
+      assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+      stdout: '{"id":105,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-105"}\n',
+    },
+  ], { repeatLastOnOverflow: true });
+  const created = await upsertCheckpointVerdict(
+    inputs,
+    { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: fanoutDisabledRepoRoot },
+  );
+  assert.deepEqual(created.specAuthority, identity);
 });
 
 test("upsert-checkpoint-verdict updates (not noop) when only the inline reason changed on the same head", async () => {

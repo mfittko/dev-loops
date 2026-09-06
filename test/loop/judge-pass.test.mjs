@@ -842,3 +842,268 @@ test("validateCliArgs: --carry-forward-proof requires --prior-approvals", () => 
     /--carry-forward-proof requires --prior-approvals/,
   );
 });
+
+// --- AC7: resolveAffectedCriteria wiring (issue 2008 / ADR-0061) ---
+
+test("validateCliArgs: --changed-paths and --coverage-map must be supplied together", () => {
+  const base = {
+    repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
+    findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json",
+    specFile: "./spec.json", contentDigest: "sha256:" + "a".repeat(64), specAuthorityVerdict: "./sa.json",
+    priorApprovals: "./prior.json",
+  };
+  assert.throws(
+    () => validateCliArgs({ ...base, changedPaths: "./changed.json" }),
+    /--changed-paths and --coverage-map must be supplied together/,
+  );
+  assert.throws(
+    () => validateCliArgs({ ...base, coverageMap: "./coverage.json" }),
+    /--changed-paths and --coverage-map must be supplied together/,
+  );
+});
+
+test("validateCliArgs: --changed-paths/--coverage-map require --prior-approvals", () => {
+  assert.throws(
+    () => validateCliArgs({
+      repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
+      findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json",
+      specFile: "./spec.json", contentDigest: "sha256:" + "a".repeat(64), specAuthorityVerdict: "./sa.json",
+      changedPaths: "./changed.json", coverageMap: "./coverage.json",
+    }),
+    /require --prior-approvals/,
+  );
+});
+
+test("validateCliArgs: --changed-paths/--coverage-map each require --spec-file", () => {
+  const base = { repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD, findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json" };
+  assert.throws(() => validateCliArgs({ ...base, changedPaths: "./changed.json" }), /--changed-paths requires --spec-file/);
+  assert.throws(() => validateCliArgs({ ...base, coverageMap: "./coverage.json" }), /--coverage-map requires --spec-file/);
+});
+
+async function writeAffectedCriteriaFixture(tmpDir, { affected, coverage }) {
+  const { specDigest, contentDigest, criterionIds } = await specDigests();
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding()] }));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "reject", rationale: "out" }] })));
+  await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
+  await writeFile(path.join(tmpDir, "spec-authority.json"), JSON.stringify({ specDigest, headSha: HEAD, contentDigest, decisions: [
+    { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" },
+  ] }));
+  await writeFile(path.join(tmpDir, "prior.json"), JSON.stringify({ specDigest, headSha: "f".repeat(40), contentDigest, approvedCriteria: criterionIds }));
+  await writeFile(path.join(tmpDir, "changed.json"), JSON.stringify(affected));
+  await writeFile(path.join(tmpDir, "coverage.json"), JSON.stringify(coverage));
+  return { specDigest, contentDigest, criterionIds };
+}
+
+test("judgePassCli AC7: changed-paths + coverage-map narrows affectedCriteria to only the touched criterion", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-ac7-narrow-"));
+  const { contentDigest, criterionIds } = await writeAffectedCriteriaFixture(tmpDir, {
+    affected: ["src/dedup.mjs"],
+    coverage: { "ac:0": ["src/dedup.mjs"], "ac:1": ["src/demo.mjs"], "dod:0": ["package.json"], "ng:0": ["src/voice.mjs"] },
+  });
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  const payload = await judgePassCli({
+    repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
+    findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json",
+    specFile: "./spec.json", contentDigest, specAuthorityVerdict: "./spec-authority.json",
+    priorApprovals: "./prior.json", changedPaths: "./changed.json", coverageMap: "./coverage.json",
+  }, { repoRoot: tmpDir });
+  assert.equal(payload.ok, true);
+  // Only ac:0 is affected/stale; the rest of the criterion set is unaffected —
+  // but resolveCriterionInvalidation still requires positive carry-forward
+  // proof to CARRY (none supplied here), so those stay stale too, just for a
+  // DIFFERENT (unproven, not "affected") reason.
+  assert.deepEqual(payload.specAuthority.invalidation.stale.sort(), [...criterionIds].sort());
+  assert.equal(payload.specAuthority.invalidation.reasons["ac:0"], "fixer push changed content covered by this criterion — approval stale, fresh review required");
+  assert.match(payload.specAuthority.invalidation.reasons["ac:1"], /unaffected but carry-forward not positively proven/);
+});
+
+test("judgePassCli AC7: narrowed affectedCriteria + carry-forward-proof carries an unaffected criterion forward", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-ac7-carry-"));
+  const { contentDigest } = await writeAffectedCriteriaFixture(tmpDir, {
+    affected: ["src/dedup.mjs"],
+    coverage: { "ac:0": ["src/dedup.mjs"], "ac:1": ["src/demo.mjs"], "dod:0": ["package.json"], "ng:0": ["src/voice.mjs"] },
+  });
+  await writeFile(path.join(tmpDir, "proof.json"), JSON.stringify({
+    "ac:1": { specTextUnchanged: true, coveredSurfaceUnchanged: true },
+    "dod:0": { specTextUnchanged: true, coveredSurfaceUnchanged: true },
+    "ng:0": { specTextUnchanged: true, coveredSurfaceUnchanged: true },
+  }));
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  const payload = await judgePassCli({
+    repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
+    findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json",
+    specFile: "./spec.json", contentDigest, specAuthorityVerdict: "./spec-authority.json",
+    priorApprovals: "./prior.json", changedPaths: "./changed.json", coverageMap: "./coverage.json",
+    carryForwardProof: "./proof.json",
+  }, { repoRoot: tmpDir });
+  assert.deepEqual(payload.specAuthority.invalidation.stale, ["ac:0"]);
+  assert.deepEqual(payload.specAuthority.invalidation.carried.sort(), ["ac:1", "dod:0", "ng:0"]);
+  assert.deepEqual(payload.specAuthority.criterionCoverage, { "ac:0": ["src/dedup.mjs"], "ac:1": ["src/demo.mjs"], "dod:0": ["package.json"], "ng:0": ["src/voice.mjs"] });
+});
+
+test("judgePassCli AC7: an unmatched changed path is uncertain -> fails closed to all-stale over the full prior-approved set", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-ac7-uncertain-"));
+  const { contentDigest, criterionIds } = await writeAffectedCriteriaFixture(tmpDir, {
+    affected: ["src/dedup.mjs", "docs/unrelated.md"],
+    coverage: { "ac:0": ["src/dedup.mjs"] },
+  });
+  // Even with proof for every OTHER criterion, uncertainty forces every
+  // prior-approved criterion into affectedCriteria, so none can carry.
+  await writeFile(path.join(tmpDir, "proof.json"), JSON.stringify({
+    "ac:1": { specTextUnchanged: true, coveredSurfaceUnchanged: true },
+    "dod:0": { specTextUnchanged: true, coveredSurfaceUnchanged: true },
+    "ng:0": { specTextUnchanged: true, coveredSurfaceUnchanged: true },
+  }));
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  const payload = await judgePassCli({
+    repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
+    findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json",
+    specFile: "./spec.json", contentDigest, specAuthorityVerdict: "./spec-authority.json",
+    priorApprovals: "./prior.json", changedPaths: "./changed.json", coverageMap: "./coverage.json",
+    carryForwardProof: "./proof.json",
+  }, { repoRoot: tmpDir });
+  assert.deepEqual(payload.specAuthority.invalidation.stale.sort(), [...criterionIds].sort());
+  assert.deepEqual(payload.specAuthority.invalidation.carried, []);
+});
+
+// F4 (issue 2008 draft-gate review): a malformed --changed-paths or
+// --coverage-map artifact must fail closed (thrown error), never silently
+// degrade to an empty/no-op affected-criteria resolution.
+test("judgePassCli AC7: a malformed --changed-paths file fails closed", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-ac7-bad-changed-"));
+  await writeAffectedCriteriaFixture(tmpDir, {
+    affected: ["src/dedup.mjs"],
+    coverage: { "ac:0": ["src/dedup.mjs"] },
+  });
+  await writeFile(path.join(tmpDir, "changed.json"), "not json");
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  const { contentDigest } = await specDigests();
+  await assert.rejects(
+    judgePassCli({
+      repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
+      findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json",
+      specFile: "./spec.json", contentDigest, specAuthorityVerdict: "./spec-authority.json",
+      priorApprovals: "./prior.json", changedPaths: "./changed.json", coverageMap: "./coverage.json",
+    }, { repoRoot: tmpDir }),
+    /--changed-paths ".*" must contain valid JSON/,
+  );
+});
+
+test("judgePassCli AC7: a malformed --coverage-map file fails closed", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-ac7-bad-coverage-"));
+  await writeAffectedCriteriaFixture(tmpDir, {
+    affected: ["src/dedup.mjs"],
+    coverage: { "ac:0": ["src/dedup.mjs"] },
+  });
+  await writeFile(path.join(tmpDir, "coverage.json"), "{ not valid json");
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  const { contentDigest } = await specDigests();
+  await assert.rejects(
+    judgePassCli({
+      repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
+      findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json",
+      specFile: "./spec.json", contentDigest, specAuthorityVerdict: "./spec-authority.json",
+      priorApprovals: "./prior.json", changedPaths: "./changed.json", coverageMap: "./coverage.json",
+    }, { repoRoot: tmpDir }),
+    /--coverage-map ".*" must contain valid JSON/,
+  );
+});
+
+// --- AC6: durable approval-record extensions (issue 2008 / ADR-0061) ---
+
+test("judgePassCli AC6: approvals record persists humanDecision/authorizedRemediations/criterionCoverage", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-ac6-"));
+  const { specDigest, contentDigest, criterionIds } = await writeAffectedCriteriaFixture(tmpDir, {
+    affected: ["src/dedup.mjs"],
+    coverage: { "ac:0": ["src/dedup.mjs"] },
+  });
+  // Round is clean (relevance-rejected the only finding) so approvedCriteria
+  // is the full set, exercising the "clean round" persistence path.
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  const payload = await judgePassCli({
+    repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
+    findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json",
+    specFile: "./spec.json", contentDigest, specAuthorityVerdict: "./spec-authority.json",
+    priorApprovals: "./prior.json", changedPaths: "./changed.json", coverageMap: "./coverage.json",
+    approvalsOut: "./approvals.json",
+  }, { repoRoot: tmpDir });
+  assert.equal(payload.ok, true);
+  const persisted = JSON.parse(await readFile(path.join(tmpDir, "approvals.json"), "utf8"));
+  assert.deepEqual(persisted.humanDecision, { required: false, indices: [], reason: null });
+  assert.deepEqual(persisted.authorizedRemediations, [
+    { index: 0, checkedCriteria: criterionIds, authorizedRemediation: "x" },
+  ]);
+  assert.deepEqual(persisted.criterionCoverage, { "ac:0": ["src/dedup.mjs"] });
+  assert.equal(persisted.specDigest, specDigest);
+});
+
+test("judgePassCli AC6: humanDecision surfaces required+reason on a spec_cannot_decide round", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-ac6-human-"));
+  const { specDigest, contentDigest, criterionIds } = await specDigests();
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding()] }));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict()));
+  await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
+  await writeFile(path.join(tmpDir, "spec-authority.json"), JSON.stringify({
+    specDigest, headSha: HEAD, contentDigest, decisions: [
+      { index: 0, outcome: "spec_cannot_decide", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "spec is internally contradictory" },
+    ],
+  }));
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  const payload = await judgePassCli({
+    repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
+    findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json",
+    specFile: "./spec.json", contentDigest, specAuthorityVerdict: "./spec-authority.json",
+  }, { repoRoot: tmpDir });
+  assert.equal(payload.ok, false);
+  assert.deepEqual(payload.specAuthority.humanDecision, {
+    required: true,
+    indices: [0],
+    reason: "spec is internally contradictory",
+  });
+});
+
+// --- AC1: spec-authority identity stamped onto --ledger-out / --out ---
+
+test("judgePassCli AC1: --ledger-out carries the specAuthority stamp when engaged; --out always stays a bare act-list array", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-ac1-stamp-"));
+  const { specDigest, contentDigest, criterionIds } = await specDigests();
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding()] }));
+  await writeFile(path.join(tmpDir, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", rationale: "in scope" }] })));
+  await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
+  await writeFile(path.join(tmpDir, "spec-authority.json"), JSON.stringify({
+    specDigest, headSha: HEAD, contentDigest, decisions: [
+      { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" },
+    ],
+  }));
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  await judgePassCli({
+    repo: "mfittko/dev-loops", pr: "2000", gate: "pre_approval_gate", headSha: HEAD,
+    findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json",
+    specFile: "./spec.json", contentDigest, specAuthorityVerdict: "./spec-authority.json",
+    out: "./act.json", ledgerOut: "./enriched.json",
+  }, { repoRoot: tmpDir });
+  const act = JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8"));
+  const enriched = JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8"));
+  // --out is ALWAYS the bare act-list array the fix pass consumes — never a
+  // wrapped object — even when spec-authority is engaged (issue 2008 draft-
+  // gate review finding F1): the durable revision-identity record lives on
+  // --ledger-out only.
+  assert.ok(Array.isArray(act), "--out is a bare array even when spec-authority is engaged");
+  assert.equal(act.length, 1);
+  assert.deepEqual(enriched.specAuthority, { specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds });
+  assert.equal(enriched.overallVerdict, "findings_present");
+
+  // No --spec-file: byte-identical to the pre-existing (bare array / unstamped) shape.
+  const tmpDir2 = await mkdtemp(path.join(os.tmpdir(), "judge-pass-ac1-noop-"));
+  await writeFile(path.join(tmpDir2, "ledger.json"), JSON.stringify({ overallVerdict: "findings_present", findings: [finding()] }));
+  await writeFile(path.join(tmpDir2, "judge-verdict.json"), JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", rationale: "in scope" }] })));
+  await judgePassCli({
+    repo: "mfittko/dev-loops", pr: "2000", gate: "draft_gate", headSha: HEAD,
+    findingsFile: "./ledger.json", judgeVerdict: "./judge-verdict.json",
+    out: "./act.json", ledgerOut: "./enriched.json",
+  }, { repoRoot: tmpDir2 });
+  const actNoop = JSON.parse(await readFile(path.join(tmpDir2, "act.json"), "utf8"));
+  const enrichedNoop = JSON.parse(await readFile(path.join(tmpDir2, "enriched.json"), "utf8"));
+  assert.ok(Array.isArray(actNoop), "--out stays a bare array when spec-authority is not engaged");
+  assert.equal("specAuthority" in enrichedNoop, false);
+});

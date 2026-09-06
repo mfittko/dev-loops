@@ -71,6 +71,7 @@ import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkResolvedAngleEvidence, consolidateFanin, normalizeSeverity, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 import { enforceCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
 import { enforcePrimerEvidence } from "@dev-loops/core/loop/primer-evidence";
+import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 
 const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate|review>] [--out <path>] [--ledger-out <path>] [--pr-checklist clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>] [--expected-dispatch-units <n>] [--tmp-root <path>]
 Consolidate the per-angle *.json findings artifacts a gate-review fan-out wrote into
@@ -245,6 +246,11 @@ Optional:
                                  records read by the briefing-prefix verification (default:
                                  process.cwd()/tmp). Sentinels are read directly from this directory
                                  (not a tmp/ subdirectory of it); per-gate records from <tmpRoot>/gate-context/**.
+  --spec-authority <path>        JSON { specDigest, headSha, contentDigest, checkedCriteria }
+                                 (issue 2008 / ADR 0061 AC1). When supplied, stamps the
+                                 --ledger-out { overallVerdict, findings } object with the pinned
+                                 revision identity via the ONE shared stamp helper. Pure no-op
+                                 (byte-identical --ledger-out) when absent.
 Output (stdout, JSON):
   { "ok": true, "gate"?: "...", "angles": [{ "angle", "verdict", "findingCount", "carriedFromHead"? }],
     "findingsJson": [{ "angle", "verdict", "findings": [...], "carriedFromHead"? }], "findings": [...],
@@ -506,6 +512,7 @@ export function parseConsolidateFaninCliArgs(argv) {
     cacheTelemetry: undefined,
     primerPlan: undefined,
     tmpRoot: undefined,
+    specAuthority: undefined,
   };
   const { tokens } = parseArgs({
     args: [...argv],
@@ -525,6 +532,7 @@ export function parseConsolidateFaninCliArgs(argv) {
       "primer-evidence": { type: "string" },
       "primer-plan": { type: "string" },
       "tmp-root": { type: "string" },
+      "spec-authority": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -644,6 +652,14 @@ export function parseConsolidateFaninCliArgs(argv) {
         throw parseError("--tmp-root requires a non-empty path");
       }
       options.tmpRoot = tmpRoot;
+      continue;
+    }
+    if (token.name === "spec-authority") {
+      const p = requireTokenValue(token, parseError).trim();
+      if (p.length === 0) {
+        throw parseError("--spec-authority requires a non-empty path");
+      }
+      options.specAuthority = p;
       continue;
     }
     if (token.name === "primer-evidence") {
@@ -1466,7 +1482,19 @@ export async function consolidateGateFanin(options) {
     // upsert-checkpoint-verdict.mjs automatically, with no new flag and no
     // recompute. A bare-array consumer (post-gate-findings.mjs) unwraps and
     // ignores it; write-gate-findings-log.mjs threads it into the ledger.
-    await writeFile(options.ledgerOut, `${JSON.stringify({ overallVerdict: consolidated.verdict, findings }, null, 2)}\n`, "utf8");
+    // AC1 (issue 2008 / ADR 0061): optional --spec-authority stamps the pinned
+    // revision identity onto this ledger via the ONE shared helper. Pure no-op
+    // (byte-identical ledger) when the flag is absent. Resolved against
+    // --repo-root (default process.cwd()) — the same root this function
+    // already anchors its config load / misplaced-findings diagnostic to
+    // (issue 2008 draft-gate review finding F2: --spec-authority path
+    // resolution must match every other writer, not read cwd-relative-only).
+    const specAuthorityIdentity = await readSpecAuthorityIdentity(
+      options.specAuthority !== undefined ? path.resolve(options.repoRoot ?? process.cwd(), options.specAuthority) : undefined,
+      parseError,
+    );
+    const ledgerRecord = stampOptionalSpecAuthority({ overallVerdict: consolidated.verdict, findings }, specAuthorityIdentity);
+    await writeFile(options.ledgerOut, `${JSON.stringify(ledgerRecord, null, 2)}\n`, "utf8");
   }
 
   const findingsJson = rawArtifacts.map((a) => {

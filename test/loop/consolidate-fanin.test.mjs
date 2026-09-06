@@ -309,6 +309,67 @@ test("consolidateGateFanin writes --ledger-out as the { overallVerdict, findings
   );
 });
 
+// AC1 (issue 2008 / ADR-0061): optional --spec-authority stamping of --ledger-out.
+test("consolidateGateFanin: --spec-authority stamps --ledger-out; absent is a byte-identical no-op", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "x" }] } },
+    async (dir) => {
+      const identity = {
+        specDigest: `sha256:${"a".repeat(64)}`,
+        headSha: "b".repeat(40),
+        contentDigest: `sha256:${"c".repeat(64)}`,
+        checkedCriteria: ["ac:1", "ac:0"],
+      };
+      // A subdirectory of --findings-dir, not a direct sibling: artifact
+      // discovery there is top-level-only, so this never gets misread as a
+      // per-angle findings artifact.
+      const identityPath = path.join(dir, "meta", "spec-authority.json");
+      await mkdir(path.dirname(identityPath), { recursive: true });
+      await writeFile(identityPath, JSON.stringify(identity));
+      const stampedLedgerPath = path.join(dir, "out", "ledger-stamped.json");
+      const unstampedLedgerPath = path.join(dir, "out", "ledger-unstamped.json");
+      await consolidateGateFanin({ findingsDir: dir, ledgerOut: stampedLedgerPath, specAuthority: identityPath });
+      await consolidateGateFanin({ findingsDir: dir, ledgerOut: unstampedLedgerPath });
+      const stamped = JSON.parse(await readFile(stampedLedgerPath, "utf8"));
+      const unstamped = JSON.parse(await readFile(unstampedLedgerPath, "utf8"));
+      assert.deepEqual(stamped.specAuthority, { ...identity, checkedCriteria: ["ac:0", "ac:1"] });
+      assert.equal("specAuthority" in unstamped, false, "absent --spec-authority must be a pure no-op");
+      const { specAuthority: _drop, ...stampedRest } = stamped;
+      assert.deepEqual(stampedRest, unstamped, "everything besides specAuthority must be byte-identical");
+    },
+  );
+});
+
+// F2 (issue 2008 draft-gate review): --spec-authority must resolve against
+// --repo-root (default process.cwd()), the same root this function anchors
+// its config load / misplaced-findings diagnostic to — not read cwd-relative
+// only, which would silently miss the file whenever the caller's cwd differs
+// from --repo-root.
+test("consolidateGateFanin: a relative --spec-authority path resolves against --repo-root", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "findings_present", findings: [{ severity: "must-fix", summary: "x" }] } },
+    async (dir) => {
+      const identity = {
+        specDigest: `sha256:${"a".repeat(64)}`,
+        headSha: "b".repeat(40),
+        contentDigest: `sha256:${"c".repeat(64)}`,
+        checkedCriteria: ["ac:0"],
+      };
+      await mkdir(path.join(dir, "meta"), { recursive: true });
+      await writeFile(path.join(dir, "meta", "spec-authority.json"), JSON.stringify(identity));
+      const ledgerPath = path.join(dir, "out", "ledger.json");
+      await consolidateGateFanin({
+        findingsDir: dir,
+        ledgerOut: ledgerPath,
+        repoRoot: dir,
+        specAuthority: "meta/spec-authority.json",
+      });
+      const written = JSON.parse(await readFile(ledgerPath, "utf8"));
+      assert.deepEqual(written.specAuthority, identity);
+    },
+  );
+});
+
 // #1922: a reviewer's own incidental `#<digits>` issue/PR reference in a finding
 // summary/recommendation used to trip upsert-checkpoint-verdict.mjs's comment-id
 // guard (fail-closed on a bare auto-link token), forcing the operator to hand-

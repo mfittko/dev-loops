@@ -14,6 +14,8 @@ import {
   validateSpecAuthorityDecision,
   validateSpecAuthorityVerdict,
   resolveCriterionInvalidation,
+  resolveAffectedCriteria,
+  stampSpecAuthorityIdentity,
   extractSpecFromBody,
 } from "@dev-loops/core/loop/spec-authority";
 
@@ -304,6 +306,104 @@ describe("spec extraction from a tracker body", () => {
     assert.equal(spec.nonGoals.length, 1);
     // Digest of the extracted spec matches the structured spec.
     assert.equal(computeSpecDigest(spec), computeSpecDigest(SPEC));
+  });
+});
+
+describe("resolveAffectedCriteria (AC7, issue 2008)", () => {
+  const coverage = {
+    "ac:0": ["src/dedup.mjs", "src/lib/**"],
+    "ac:1": ["src/demo/*.mjs"],
+  };
+
+  test("a changed path stales only the criteria whose coverage it matches", () => {
+    const out = resolveAffectedCriteria({
+      changedPaths: ["src/dedup.mjs", "src/lib/inner/helper.mjs", "src/demo/run.mjs"],
+      criterionCoverage: coverage,
+    });
+    assert.deepEqual(out.affectedCriteria, ["ac:0", "ac:1"]);
+    assert.equal(out.uncertain, false);
+    assert.deepEqual(out.unmatchedPaths, []);
+  });
+
+  test("affectedCriteria is sorted+deduped even with overlapping coverage and repeated paths", () => {
+    const out = resolveAffectedCriteria({
+      changedPaths: ["src/lib/inner/helper.mjs", "src/lib/inner/helper.mjs"],
+      criterionCoverage: { "ng:0": ["src/lib/**"], "ac:0": ["src/lib/**"] },
+    });
+    assert.deepEqual(out.affectedCriteria, ["ac:0", "ng:0"]);
+  });
+
+  test("a changed path matching zero criteria is fail-closed (uncertain, unmatched recorded)", () => {
+    const out = resolveAffectedCriteria({
+      changedPaths: ["src/dedup.mjs", "docs/unrelated.md"],
+      criterionCoverage: coverage,
+    });
+    assert.deepEqual(out.affectedCriteria, ["ac:0"]);
+    assert.equal(out.uncertain, true);
+    assert.deepEqual(out.unmatchedPaths, ["docs/unrelated.md"]);
+  });
+
+  test("no changed paths is not uncertain (nothing to fail closed over)", () => {
+    const out = resolveAffectedCriteria({ changedPaths: [], criterionCoverage: coverage });
+    assert.deepEqual(out, { affectedCriteria: [], uncertain: false, unmatchedPaths: [] });
+  });
+
+  test("F3 (issue 2008 draft-gate review): a `?` in a coverage glob matches a literal `?` path, not a regex quantifier", () => {
+    // "src/a?.mjs*" is not a supported glob token combination on its own —
+    // `?` must match the literal character, never "zero-or-one of the
+    // preceding token". A path containing the literal `?` must match; the
+    // same path with the `?` character dropped must NOT.
+    const out = resolveAffectedCriteria({
+      changedPaths: ["src/a?.mjsONE", "src/a.mjsTWO"],
+      criterionCoverage: { "ac:0": ["src/a?.mjs*"] },
+    });
+    assert.deepEqual(out.affectedCriteria, ["ac:0"]);
+    assert.equal(out.uncertain, true, "the path missing the literal `?` must not match (fails closed as unmatched)");
+    assert.deepEqual(out.unmatchedPaths, ["src/a.mjsTWO"]);
+  });
+
+  test("a whitespace-padded criterion-map key is trimmed and matched (never under-staled)", () => {
+    const out = resolveAffectedCriteria({
+      changedPaths: ["src/lib/inner/helper.mjs"],
+      criterionCoverage: { " ac:0 ": ["src/lib/**"] },
+    });
+    assert.deepEqual(out.affectedCriteria, ["ac:0"]);
+    assert.equal(out.uncertain, false);
+  });
+
+  test("fails closed on malformed input", () => {
+    assert.throws(() => resolveAffectedCriteria({ changedPaths: "not-an-array", criterionCoverage: coverage }), /changedPaths must be an array/);
+    assert.throws(() => resolveAffectedCriteria({ changedPaths: [""], criterionCoverage: coverage }), /changedPaths\[0\] must be a non-empty string/);
+    assert.throws(() => resolveAffectedCriteria({ changedPaths: ["a"], criterionCoverage: null }), /criterionCoverage must be an object/);
+    assert.throws(() => resolveAffectedCriteria({ changedPaths: ["a"], criterionCoverage: { "ac:0": "not-an-array" } }), /criterionCoverage\["ac:0"\] must be an array/);
+    assert.throws(() => resolveAffectedCriteria({ changedPaths: ["a"], criterionCoverage: { "ac:0": [""] } }), /must be a non-empty glob string/);
+  });
+});
+
+describe("stampSpecAuthorityIdentity (AC1, issue 2008)", () => {
+  const id = identities();
+  const checkedCriteria = specCriterionIds(SPEC);
+
+  test("stamps the identity trio + sorted checked criteria under a specAuthority key without mutating the input", () => {
+    const record = { foo: "bar" };
+    const stamped = stampSpecAuthorityIdentity(record, { ...id, checkedCriteria: [...checkedCriteria].reverse() });
+    assert.deepEqual(record, { foo: "bar" }, "input record must not be mutated");
+    assert.deepEqual(stamped, {
+      foo: "bar",
+      specAuthority: { ...id, checkedCriteria: [...checkedCriteria].sort() },
+    });
+  });
+
+  test("fails closed on a missing/invalid identity", () => {
+    assert.throws(() => stampSpecAuthorityIdentity({}, { ...id, specDigest: "not-a-digest" }), /specDigest/);
+    assert.throws(() => stampSpecAuthorityIdentity({}, { ...id, headSha: "zz" }), /hex git SHA/);
+    assert.throws(() => stampSpecAuthorityIdentity({}, { ...id, contentDigest: undefined }), /contentDigest/);
+    assert.throws(() => stampSpecAuthorityIdentity({}, { ...id, checkedCriteria: "nope" }), /checkedCriteria must be an array/);
+  });
+
+  test("fails closed on a non-object record", () => {
+    assert.throws(() => stampSpecAuthorityIdentity(null, { ...id, checkedCriteria }), /record must be an object/);
+    assert.throws(() => stampSpecAuthorityIdentity([1, 2], { ...id, checkedCriteria }), /record must be an object/);
   });
 });
 

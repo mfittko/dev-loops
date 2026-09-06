@@ -52,8 +52,12 @@ test("consolidate-fanin emits overallVerdict (the value the enforcement reads) i
   // The consolidator computes overallVerdict...
   assert.match(src, /overallVerdict: consolidated\.verdict/);
   // ...and embeds it in the --ledger-out wrapper that write-gate-findings-log
-  // threads into the durable ledger upsert-checkpoint-verdict enforces against.
-  assert.match(src, /JSON\.stringify\(\{ overallVerdict: consolidated\.verdict, findings \}/);
+  // threads into the durable ledger upsert-checkpoint-verdict enforces against
+  // (issue 2008 / ADR 0061 AC1 wraps this object in an optional spec-authority
+  // stamp before it is written, so the literal is no longer JSON.stringify's
+  // direct argument).
+  assert.match(src, /\{ overallVerdict: consolidated\.verdict, findings \}/);
+  assert.match(src, /JSON\.stringify\(ledgerRecord/);
 });
 
 test("write-gate-findings-log rejects a --verdict contradicting the wrapper overallVerdict and cites GATE-COMMENT-VERDICT-VALUES", async () => {
