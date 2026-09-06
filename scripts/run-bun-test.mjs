@@ -63,7 +63,9 @@ export function childResult(child) {
       resolve(result);
     };
     child.once("error", (error) => finish({ code: 1, error, signal: undefined }));
-    child.once("close", (code, signal) => finish({ code: code ?? 1, error: undefined, signal: signal ?? undefined }));
+    child.once("close", (code, signal) => finish(code === null && signal === null
+      ? { code: 1, error: undefined, signal: undefined, abnormalTermination: true }
+      : { code: code ?? 1, error: undefined, signal: signal ?? undefined }));
   });
 }
 
@@ -80,7 +82,7 @@ export function parseBunSummary(output) {
   return `bun test: ${pass[1]} pass, ${skip?.[1] ?? 0} skip, ${fail[1]} fail across ${files} ${files === 1 ? "file" : "files"} (${block[2]})\n`;
 }
 
-export async function createOutputCapture() {
+export async function createOutputCapture({ closeHandle = (value) => value.close() } = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), "dev-loops-bun-test-"));
   const file = path.join(directory, "output.log");
   let handle;
@@ -90,15 +92,16 @@ export async function createOutputCapture() {
     await rm(directory, { recursive: true, force: true });
     throw error;
   }
+  const finish = async () => {
+    if (!handle) return;
+    const current = handle;
+    await closeHandle(current);
+    handle = undefined;
+  };
   return {
     path: file,
     fd: handle.fd,
-    async finish() {
-      if (!handle) return;
-      const current = handle;
-      handle = undefined;
-      await current.close();
-    },
+    finish,
     async readTail() {
       const { size } = await stat(file);
       const length = Math.min(size, SUCCESS_TAIL_BYTES);
@@ -117,14 +120,8 @@ export async function createOutputCapture() {
       }
     },
     async cleanup() {
-      let closeError;
-      if (handle) {
-        try { await handle.close(); }
-        catch (error) { closeError = error; }
-        handle = undefined;
-      }
+      await finish();
       await rm(directory, { recursive: true, force: true });
-      if (closeError) throw closeError;
     },
   };
 }
@@ -134,68 +131,72 @@ export async function runBunTest(args, {
   stdout = process.stdout, stderr = process.stderr, captureFactory = createOutputCapture,
 } = {}) {
   let capture;
-  let finished = false;
-  let replayed = false;
+  let captureFinished = false;
+  let diagnosticsReplayed = false;
+  let result;
   let returnCode;
+  let terminationMessage;
   let operationError;
   let cleanupError;
   try {
+    capture = await captureFactory();
+    const child = spawnImpl(command, buildBunTestArgs(await resolveBunTestFiles(args), env), {
+      env, stdio: ["ignore", capture.fd, capture.fd],
+    });
+    result = await childResult(child);
+  } catch (error) {
+    operationError = error;
+  }
+
+  if (capture) {
     try {
-      capture = await captureFactory();
-      const child = spawnImpl(command, buildBunTestArgs(await resolveBunTestFiles(args), env), {
-        env, stdio: ["ignore", capture.fd, capture.fd],
-      });
-      const result = await childResult(child);
       await capture.finish();
-      finished = true;
-      if (result.error) throw result.error;
-      if (result.signal) {
-        await capture.replay(stderr);
-        replayed = true;
-        stderr.write(`bun test terminated by ${result.signal}\n`);
-        returnCode = 1;
-      } else if (result.code !== 0) {
-        await capture.replay(stderr);
-        replayed = true;
-        returnCode = result.code;
-      } else {
+      captureFinished = true;
+    } catch (finishError) {
+      operationError = operationError
+        ? new AggregateError([operationError, finishError], "Bun test execution and capture finalization failed")
+        : new AggregateError([finishError], "Bun test capture finalization failed");
+    }
+  }
+
+  if (result?.error) {
+    operationError = operationError
+      ? new AggregateError([operationError, result.error], "Bun test execution failed during capture finalization")
+      : result.error;
+  } else if (result?.abnormalTermination) {
+    returnCode = 1;
+    terminationMessage = "bun test closed without an exit code or signal\n";
+  } else if (result?.signal) {
+    returnCode = 1;
+    terminationMessage = `bun test terminated by ${result.signal}\n`;
+  } else if (result && result.code !== 0) {
+    returnCode = result.code;
+  } else if (result && captureFinished && !operationError) {
+    try {
         const summary = parseBunSummary(await capture.readTail());
         if (!summary) throw new Error("Could not parse Bun test summary from captured output");
         stdout.write(summary);
         returnCode = 0;
-      }
     } catch (error) {
       operationError = error;
-      if (capture && !finished) {
-        try {
-          await capture.finish();
-          finished = true;
-        } catch (finishError) {
-          operationError = new AggregateError([operationError, finishError], "Bun test capture finalization failed");
-        }
-      }
-      if (capture && !replayed) {
-        try {
-          await capture.replay(stderr);
-          replayed = true;
-        } catch (replayError) {
-          operationError = new AggregateError([operationError, replayError], `Bun test diagnostic replay failed: ${replayError.message}`);
-        }
-      }
     }
-  } finally {
-    if (capture) {
-      try { await capture.cleanup(); }
-      catch (error) { cleanupError = error; }
+  }
+
+  if (capture && !diagnosticsReplayed && (operationError || returnCode !== 0)) {
+    try {
+      await capture.replay(stderr);
+      diagnosticsReplayed = true;
+    } catch (replayError) {
+      operationError = operationError
+        ? new AggregateError([operationError, replayError], `Bun test diagnostic replay failed: ${replayError.message}`)
+        : replayError;
     }
-    if (cleanupError && capture && !replayed) {
-      try {
-        await capture.replay(stderr);
-        replayed = true;
-      } catch (replayError) {
-        cleanupError = new AggregateError([cleanupError, replayError], `Bun test capture cleanup and diagnostic replay failed: ${cleanupError.message}; ${replayError.message}`);
-      }
-    }
+  }
+  if (terminationMessage) stderr.write(terminationMessage);
+
+  if (capture) {
+    try { await capture.cleanup(); }
+    catch (error) { cleanupError = error; }
   }
   if (operationError && cleanupError) throw new AggregateError([operationError, cleanupError], `Bun test execution and capture cleanup failed: ${cleanupError.message}`);
   if (cleanupError) throw cleanupError;

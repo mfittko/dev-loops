@@ -116,6 +116,48 @@ test("nonzero and signaled runs replay complete diagnostics and preserve failure
   }
 });
 
+test("a child that closes without a code or signal replays diagnostics and reports abnormal termination", async () => {
+  const events = [];
+  let stderr = "";
+  const code = await runBunTest(["example.test.mjs"], {
+    captureFactory: async () => memoryCapture("child diagnostics\n", events),
+    spawnImpl: fakeChild(() => {}, [null, null]),
+    stderr: { write: (chunk) => { stderr += chunk; } },
+  });
+  assert.equal(code, 1);
+  assert.match(stderr, /^child diagnostics\n/);
+  assert.match(stderr, /closed without an exit code or signal/);
+  assert.deepEqual(events, ["finish", "replay", "cleanup"]);
+});
+
+test("capture finalization failure replays a real tempfile before cleanup removes it", async () => {
+  const events = [];
+  let closeAttempts = 0;
+  let capture;
+  let stderr = "";
+  await assert.rejects(
+    runBunTest(["example.test.mjs"], {
+      captureFactory: async () => {
+        capture = await createOutputCapture({
+          closeHandle: async (handle) => {
+            closeAttempts += 1;
+            events.push(`close-${closeAttempts}`);
+            if (closeAttempts === 1) throw new Error("close failed");
+            await handle.close();
+          },
+        });
+        return capture;
+      },
+      spawnImpl: fakeChild((fd) => writeSync(fd, "real tempfile diagnostics\n")),
+      stderr: { write: (chunk) => { stderr += chunk; events.push("replay"); } },
+    }),
+    /capture finalization failed/,
+  );
+  assert.match(stderr, /real tempfile diagnostics/);
+  assert.deepEqual(events, ["close-1", "replay", "close-2"]);
+  await assert.rejects(access(capture.path));
+});
+
 test("spawn and capture failures are loud, replay what exists, and always clean up", async () => {
   for (const failure of ["spawn", "summary", "replay", "cleanup"]) {
     const events = [];
@@ -136,9 +178,12 @@ test("spawn and capture failures are loud, replay what exists, and always clean 
       new RegExp(failure === "spawn" ? "spawn denied" : failure === "summary" ? "tail read failed" : `${failure} failed`),
     );
     assert.ok(events.includes("cleanup"));
-    assert.ok(events.includes("replay"));
-    if (failure === "cleanup") assert.ok(events.indexOf("cleanup") < events.lastIndexOf("replay"));
-    if (["spawn", "summary", "cleanup"].includes(failure)) assert.match(stderr, /complete diagnostics/);
+    if (failure === "cleanup") {
+      assert.ok(!events.includes("replay"));
+    } else {
+      assert.ok(events.includes("replay"));
+    }
+    if (["spawn", "summary"].includes(failure)) assert.match(stderr, /complete diagnostics/);
   }
 });
 
