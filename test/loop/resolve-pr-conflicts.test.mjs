@@ -15,6 +15,12 @@ import {
 // ── pure unit: CLI arg parsing fails closed ──────────────────────────
 
 describe("parseResolvePrConflictsCliArgs", () => {
+  test("post-resolve docs verification uses the canonical Bun runner", async () => {
+    const source = await readFile(new URL("../../scripts/loop/resolve-pr-conflicts.mjs", import.meta.url), "utf8");
+    assert.match(source, /run\("bun", \["run", "test:docs"\]/);
+    assert.doesNotMatch(source, /npm run test:docs/);
+  });
+
   test("rejects unknown flags (typos like --no-verfy)", () => {
     assert.throws(() => parseResolvePrConflictsCliArgs(["--no-verfy"]), /Unknown argument: --no-verfy/);
     assert.throws(() => parseResolvePrConflictsCliArgs(["--pus"]), /Unknown argument: --pus/);

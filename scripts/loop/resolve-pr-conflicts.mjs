@@ -16,14 +16,14 @@ safe additive case: a CHANGELOG.md conflict where both sides only ADD list/secti
 entries (keep BOTH sides, in order). ANY other conflicted path — or a non-additive
 CHANGELOG edit — FAILS CLOSED, naming the conflicted paths. Never guesses.
 
-After a clean merge (or an auto-resolved additive CHANGELOG) it runs \`npm run test:docs\`
+After a clean merge (or an auto-resolved additive CHANGELOG) it runs \`bun run test:docs\`
 (unless --no-verify) and, with --push, pushes the branch.
 
 Options:
   --base <branch>     Base branch to merge from (default: derived from \`gh pr view\`
                       base, falling back to "main").
   --repo-root <dir>   Repo working tree to operate in (default: cwd).
-  --no-verify         Skip \`npm run test:docs\` after resolving.
+  --no-verify         Skip \`bun run test:docs\` after resolving.
   --push              Push the resolved branch to origin after verify.
   --json              Emit machine-readable JSON on stdout.
 
@@ -377,9 +377,9 @@ export async function resolvePrConflicts(options, { env = process.env } = {}) {
 
 async function afterResolve(result, options, { cwd, env }) {
   if (options.verify) {
-    const verify = await run("npm", ["run", "test:docs"], { cwd, env });
+    const verify = await run("bun", ["run", "test:docs"], { cwd, env });
     if (verify.code !== 0) {
-      const err = new Error(`Post-resolve verification (npm run test:docs) failed: ${verify.stderr.trim() || verify.stdout.trim() || `exit ${verify.code}`}`);
+      const err = new Error(`Post-resolve verification (bun run test:docs) failed: ${verify.stderr.trim() || verify.stdout.trim() || `exit ${verify.code}`}`);
       err.verifyFailed = true;
       throw err;
     }
