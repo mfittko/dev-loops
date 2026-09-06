@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { test } from "bun:test";
-import { buildBunTestArgs, childResult, resolveBunTestFiles, resolveBunTestParallelism } from "../../scripts/run-bun-test.mjs";
+import { buildBunTestArgs, childResult, discoverRepositoryTests, resolveBunTestFiles, resolveBunTestParallelism } from "../../scripts/run-bun-test.mjs";
 
 test("launcher applies local and CI parallelism with failure-only shared workers", () => {
   assert.deepEqual(buildBunTestArgs(["example.test.mjs"], {}), ["test", "--only-failures", "--parallel=8", "--no-isolate", "example.test.mjs"]);
@@ -14,8 +14,8 @@ test("launcher applies local and CI parallelism with failure-only shared workers
 
 test("launcher expands the complete inventory without consuming Bun flags", async () => {
   const args = await resolveBunTestFiles(["--shard=2/4", "--all"]);
-  assert.equal(args.length, 346);
   assert.equal(args[0], "--shard=2/4");
+  assert.deepEqual(args.slice(1), await discoverRepositoryTests());
   for (const file of ["test/loop/test-inventory.test.mjs", "packages/core/test/config.test.mjs", "skills/dev-loop/scripts/render-template.test.mjs"]) assert.ok(args.includes(file));
 });
 

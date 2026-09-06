@@ -12,9 +12,10 @@ temporary directories, 15-second settling, and stable source fingerprints.
 | 2 | 2.135/1.234s | 1.656/0.329s (19.8%) | 87.196/55.755s | 7/7 |
 
 All commands passed without timeout. Bun ran 8,117 tests across 346 files
-(8,081 pass, 36 skip); npm's 341 files exclude five migration tests.
+(8,081 pass, 36 skip). Its inventory is the complete npm baseline plus exactly
+five Bun-migration contract files, so no baseline test is omitted.
 
-Workspace links, peer metadata, shared versions, and lifecycle declarations
-matched. Expected tree differences were removed obsolete tooling and
-incompatible-platform optional binaries. Both sessions passed the 50%
+The declared graph, workspace links, peer metadata, shared versions, and shared
+lifecycle declarations matched. Expected installed-tree differences were
+obsolete npm-only tooling and incompatible-platform optional binaries. Both sessions passed the 50%
 warm-install and 5/7 verification gates; raw observations accompany this file.

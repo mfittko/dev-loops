@@ -19,7 +19,7 @@ export const fixturePath = path.resolve(
 export const GH_RUNNER = Symbol("detect-copilot-loop-state-gh-runner");
 
 export const runNode = async (args = [], options = {}) => {
-  if (args.includes("--help")) return runNodeHelper(scriptPath, args, options);
+  if (args.some((arg) => arg === "--help" || arg === "-h")) return runNodeHelper(scriptPath, args, options);
   const stdout = captureStream();
   const stderr = captureStream();
   const env = runIdFreeEnv(options.env);
