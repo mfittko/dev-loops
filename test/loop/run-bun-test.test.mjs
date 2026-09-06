@@ -572,6 +572,30 @@ test("descriptor cleanup falls back to fd closure after the removed spool handle
   await assert.rejects(access(capture.path));
 });
 
+test("dual descriptor-close failure restores the removed spool before retention", async () => {
+  let capture;
+  let stderr = "";
+  const content = "diagnostics before dual close failure\n 1 pass\n 0 fail\nRan 1 test across 1 file. [1.00ms]\n";
+  try {
+    await assert.rejects(runBunTest(["example.test.mjs"], {
+      captureFactory: async () => {
+        capture = await createOutputCapture({
+          closeReplayHandle: async () => { throw new Error("handle close failed"); },
+          closeFileDescriptor: () => { throw new Error("fd close failed"); },
+        });
+        return capture;
+      },
+      spawnImpl: fakeChild((fd) => writeSync(fd, content)),
+      stdout: { write() {} },
+      stderr: { write: (chunk) => { stderr += chunk; } },
+    }), /failure finalization failed/);
+    assert.match(stderr, /Retained Bun diagnostics:/);
+    assert.equal(await readFile(capture.path, "utf8"), content);
+  } finally {
+    if (capture) await rm(path.dirname(capture.path), { recursive: true, force: true });
+  }
+});
+
 test("all package scripts that invoke Bun's test runner route through the wrapper", async () => {
   const pkg = JSON.parse(await readFile(path.resolve(import.meta.dir, "../../package.json"), "utf8"));
   for (const [name, script] of Object.entries(pkg.scripts)) {
