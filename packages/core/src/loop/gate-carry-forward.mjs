@@ -1,22 +1,30 @@
 /**
- * Gate carry-forward: a pure, fail-closed seam that decides whether a clean gate
- * angle verdict recorded at head A may be CARRIED FORWARD to head B without
- * re-running that angle's reviewer.
+ * Gate carry-forward: a pure, fail-closed seam that decides whether an angle's
+ * verdict recorded at head A (clean OR findings-present) may be CARRIED FORWARD
+ * to head B without re-running that angle's reviewer.
  *
  * Motivation: fresh-context-per-head re-fans ALL gate angles on every head bump,
  * even when the delta between the two heads provably cannot affect most angles
  * (e.g. a doc-only follow-up commit cannot change what a code-correctness angle
- * would find). Carry-forward lets the gate reuse the prior clean verdict for such
- * angles — but ONLY when it is provably safe.
+ * would find). Carry-forward lets the gate reuse the prior verdict for such
+ * angles — but ONLY when it is provably safe. This holds for a findings-present
+ * prior verdict too (issue #2017): a fixer push that never touches an angle's
+ * surface must not force that angle's OPEN findings to be re-litigated from
+ * scratch — the caller carries the prior findings forward unchanged, still
+ * open, still blocking. Carry-forward NEVER converts a finding into an
+ * approval; it only ever skips re-running a reviewer whose surface the delta
+ * provably did not touch.
  *
- * FAIL-CLOSED is paramount. An angle carries forward ONLY when EVERY changed file
- * in the delta A..B is provably OUTSIDE that angle's declared review surface. The
- * default in every uncertain case (non-clean prior verdict, empty/unavailable
- * delta, an unclassifiable file, an angle with no declared surface, a mandatory /
- * always-run angle) is MUST-RE-RUN. Carry-forward never fabricates a verdict: the
- * caller records the carried verdict with provenance pointing at the PRIOR head's
- * reviewer (that reviewer genuinely reviewed this angle's surface, which the delta
- * did not touch), clearly marked as carried — see
+ * FAIL-CLOSED is paramount. An angle carries forward ONLY when its prior verdict
+ * is carry-forward-eligible (clean or findings_present) AND EVERY changed file in
+ * the delta A..B is provably OUTSIDE that angle's declared review surface. The
+ * default in every uncertain case (an ineligible prior verdict — e.g. "blocked"
+ * or missing, empty/unavailable delta, an unclassifiable file, an angle with no
+ * declared surface, a mandatory / always-run angle) is MUST-RE-RUN. Carry-forward
+ * never fabricates a verdict: the caller records the carried verdict (and, for a
+ * findings-present carry, the carried findings) with provenance pointing at the
+ * PRIOR head's reviewer (that reviewer genuinely reviewed this angle's surface,
+ * which the delta did not touch), clearly marked as carried — see
  * skills/docs/gate-review-sub-loop-contract.md and write-gate-findings-log.mjs's
  * `carriedFromHead` provenance field.
  *
@@ -153,10 +161,16 @@ export function angleReviewSurface(angle, { alwaysRerun } = {}) {
 /**
  * Pure, deterministic, FAIL-CLOSED carry-forward decision for a single angle.
  *
- * Given a prior CLEAN verdict recorded at head A, the changed files of the delta
- * A..B, and the angle's declared review surface, decide whether the clean verdict
- * may be carried forward to head B (carryForward: true) or the angle MUST re-run
- * (carryForward: false). Defaults to must-re-run in every uncertain case.
+ * Given a prior carry-forward-eligible verdict recorded at head A (clean OR
+ * findings_present), the changed files of the delta A..B, and the angle's
+ * declared review surface, decide whether that verdict (and, for a
+ * findings-present angle, its open findings) may be carried forward to head B
+ * (carryForward: true) or the angle MUST re-run (carryForward: false).
+ * Defaults to must-re-run in every uncertain case. This function never
+ * inspects or mutates findings content — it only decides whether the delta
+ * proves the angle's surface untouched; the caller is responsible for
+ * carrying the actual prior findings through unchanged (never converting an
+ * open finding into an approval) when it honors `carryForward: true`.
  *
  * @param {object} input
  * @param {string} input.angle
@@ -164,10 +178,17 @@ export function angleReviewSurface(angle, { alwaysRerun } = {}) {
  *   derived from {@link angleReviewSurface} when omitted.
  * @param {string[]} input.changedFiles — repo-relative paths changed between head
  *   A and head B (the delta, NOT the full PR diff against base).
- * @param {string} input.prevVerdict — the angle's verdict at head A. Only "clean"
- *   is carry-forward-eligible.
+ * @param {string} input.prevVerdict — the angle's verdict at head A. "clean" and
+ *   "findings_present" are carry-forward-eligible; anything else (e.g.
+ *   "blocked", missing) is not.
  * @returns {{ carryForward: boolean, reason: string }}
  */
+
+// The only per-angle prior verdicts eligible to carry forward — matches the
+// two verdict values gate-fanin's VALID_VERDICTS actually produces per angle
+// (packages/core/src/loop/gate-fanin.mjs). Any other value (e.g. "blocked",
+// undefined, a typo) fails closed to must-re-run.
+const CARRY_FORWARD_ELIGIBLE_VERDICTS = new Set(["clean", "findings_present"]);
 
 // A path whose change rewrites the dev-loop review system itself — the angle
 // pool, mandatory floor, and reviewer personas/prompts — rather than a
@@ -187,8 +208,11 @@ export function isDevLoopConfigSourcePath(filePath) {
 }
 
 export function resolveAngleCarryForward({ angle, angleSurface, changedFiles, prevVerdict }) {
-  if (prevVerdict !== "clean") {
-    return { carryForward: false, reason: `prior verdict is ${JSON.stringify(prevVerdict ?? null)}, not "clean"` };
+  if (!CARRY_FORWARD_ELIGIBLE_VERDICTS.has(prevVerdict)) {
+    return {
+      carryForward: false,
+      reason: `prior verdict is ${JSON.stringify(prevVerdict ?? null)}, not carry-forward-eligible (clean or findings_present)`,
+    };
   }
   const surface = angleSurface ?? angleReviewSurface(angle);
   if (surface.kind === "always") {

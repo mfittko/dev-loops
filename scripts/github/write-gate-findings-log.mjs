@@ -32,8 +32,10 @@ Required:
   --findings-file <path>         Read the --findings JSON array from a file instead of an inline argument
                                  (mutually exclusive with --findings; identical validation)
 Optional:
-  --provenance <json>            Fan-out provenance object: { distinctReviewers: <int>, perAngle: [{ angle, reviewer?, dispatchId?, model?, carriedFromHead?, group? }] }
-                                 carriedFromHead (7-64 hex) marks an angle whose clean verdict was carried forward from that prior head (reviewer stays the prior reviewer)
+  --provenance <json>            Fan-out provenance object: { distinctReviewers: <int>, perAngle: [{ angle, reviewer?, dispatchId?, model?, carriedFromHead?, carriedVerdict?, group? }] }
+                                 carriedFromHead (7-64 hex) marks an angle whose verdict was carried forward from that prior head (reviewer stays the prior reviewer)
+                                 carriedVerdict ("clean"|"findings_present", requires carriedFromHead) records WHICH verdict was carried (issue #2017): "findings_present"
+                                 distinguishes a carry that preserved open findings from an ordinary clean carry — the findings themselves are recorded separately in --findings, not here
                                  distinctReviewers must be <= the distinct reviewers recorded in perAngle (perAngle non-empty when distinctReviewers > 0)
                                  no two fresh (non-carried) angles may share one reviewer identity, and every fresh angle must record one (reviewer or dispatchId) — one scoped reviewer per angle (use inline_single_agent + --inline-reason for a sanctioned single-reviewer run)
                                  EXCEPTION: fresh angles sharing a reviewer may all declare the same "group" name (grouped fan-out dispatch); differing or missing group names still fail closed
@@ -283,10 +285,11 @@ export function parseProvenanceJson(raw, resolvedGroups = null) {
         entry[key] = a[key].trim();
       }
     }
-    // carriedFromHead marks an angle whose CLEAN verdict was CARRIED FORWARD from
-    // a prior head (the delta since that head provably did not touch this angle's
-    // review surface — see @dev-loops/core/loop/gate-carry-forward). It records
-    // the prior head SHA the verdict came from; the `reviewer` on this entry is
+    // carriedFromHead marks an angle whose verdict (clean OR, since issue
+    // #2017, findings_present) was CARRIED FORWARD from a prior head (the
+    // delta since that head provably did not touch this angle's review
+    // surface — see @dev-loops/core/loop/gate-carry-forward). It records the
+    // prior head SHA the verdict came from; the `reviewer` on this entry is
     // that prior head's reviewer (honest attribution, NOT a fabricated fresh
     // review). It does not relax the distinctReviewers consistency check below —
     // a carried angle still names the real reviewer identity that reviewed it.
@@ -295,6 +298,25 @@ export function parseProvenanceJson(raw, resolvedGroups = null) {
         throw parseError(`--provenance.perAngle[${i}].carriedFromHead must be a 7-64 char hex SHA`);
       }
       entry.carriedFromHead = a.carriedFromHead.trim().toLowerCase();
+    }
+    // carriedVerdict (issue #2017) distinguishes WHICH verdict this carried
+    // angle preserved: "findings_present" records that its prior OPEN
+    // findings were carried forward unchanged (still open, still recorded in
+    // --findings, still blocking) rather than an ordinary clean carry. It is
+    // metadata alongside carriedFromHead only — it records provenance, it
+    // never itself supplies or substitutes for the findings content (those
+    // always come from --findings/--findings-file) — so a malformed or
+    // missing carriedVerdict never hides or fabricates a finding, only its
+    // provenance label. Requires carriedFromHead (it only has meaning for a
+    // carried angle; a fresh angle's verdict is never "carried").
+    if ("carriedVerdict" in a) {
+      if (!("carriedFromHead" in a)) {
+        throw parseError(`--provenance.perAngle[${i}].carriedVerdict requires carriedFromHead (it only distinguishes a carried entry's prior verdict)`);
+      }
+      if (a.carriedVerdict !== "clean" && a.carriedVerdict !== "findings_present") {
+        throw parseError(`--provenance.perAngle[${i}].carriedVerdict must be "clean" or "findings_present"`);
+      }
+      entry.carriedVerdict = a.carriedVerdict;
     }
     return entry;
   });

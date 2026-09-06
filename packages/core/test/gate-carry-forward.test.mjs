@@ -183,14 +183,93 @@ describe("resolveAngleCarryForward — fail-closed decision", () => {
     assert.match(decision.reason, /always re-runs/);
   });
 
-  test("non-clean prior verdict -> false", () => {
+  test("ineligible prior verdict (e.g. blocked) -> false", () => {
+    const decision = resolveAngleCarryForward({
+      angle: "correctness",
+      changedFiles: ["docs/guide.md"],
+      prevVerdict: "blocked",
+    });
+    assert.equal(decision.carryForward, false);
+    assert.match(decision.reason, /not carry-forward-eligible/);
+  });
+
+  test("missing / undefined prior verdict -> false (fail-closed)", () => {
+    const decision = resolveAngleCarryForward({
+      angle: "correctness",
+      changedFiles: ["docs/guide.md"],
+      prevVerdict: undefined,
+    });
+    assert.equal(decision.carryForward, false);
+    assert.match(decision.reason, /not carry-forward-eligible/);
+  });
+
+  // Issue #2017: a findings-present angle carries forward too, when the delta
+  // provably never touches its declared surface. Carry-forward never inspects
+  // findings content — it is the CALLER's job to carry the prior open
+  // findings through unchanged (never converting a finding into an approval)
+  // when this returns carryForward: true.
+  test("findings-present angle carried forward when its surface is untouched", () => {
     const decision = resolveAngleCarryForward({
       angle: "correctness",
       changedFiles: ["docs/guide.md"],
       prevVerdict: "findings_present",
     });
+    assert.equal(decision.carryForward, true);
+    assert.match(decision.reason, /provably outside the angle's review surface/);
+  });
+
+  test("findings-present angle re-runs when its surface is touched", () => {
+    const decision = resolveAngleCarryForward({
+      angle: "correctness",
+      changedFiles: ["src/foo.mjs"],
+      prevVerdict: "findings_present",
+    });
     assert.equal(decision.carryForward, false);
-    assert.match(decision.reason, /not "clean"/);
+    assert.match(decision.reason, /review surface \(code\)/);
+  });
+
+  // Every existing fail-closed guard applies identically to a findings-present
+  // prior verdict, not just clean — pin each one so relaxing the clean-only
+  // gate cannot silently also relax these.
+  test("findings-present angle: unclassifiable file in delta -> false (fail-closed)", () => {
+    const decision = resolveAngleCarryForward({
+      angle: "correctness",
+      changedFiles: ["assets/logo.png"],
+      prevVerdict: "findings_present",
+    });
+    assert.equal(decision.carryForward, false);
+    assert.match(decision.reason, /unclassifiable file/);
+  });
+
+  test("findings-present angle: empty / unavailable delta -> false (fail-closed)", () => {
+    assert.equal(
+      resolveAngleCarryForward({ angle: "correctness", changedFiles: [], prevVerdict: "findings_present" }).carryForward,
+      false,
+    );
+    assert.equal(
+      resolveAngleCarryForward({ angle: "correctness", changedFiles: undefined, prevVerdict: "findings_present" }).carryForward,
+      false,
+    );
+  });
+
+  test("findings-present angle: dev-loop-config-source edit -> false (fail-closed)", () => {
+    const decision = resolveAngleCarryForward({
+      angle: "coverage",
+      changedFiles: [".devloops"],
+      prevVerdict: "findings_present",
+    });
+    assert.equal(decision.carryForward, false);
+    assert.match(decision.reason, /dev-loop config source/);
+  });
+
+  test("findings-present angle: mandatory / always-include angle -> always re-run (never carried)", () => {
+    const decision = resolveAngleCarryForward({
+      angle: "pr-description",
+      changedFiles: ["docs/guide.md"],
+      prevVerdict: "findings_present",
+    });
+    assert.equal(decision.carryForward, false);
+    assert.match(decision.reason, /always re-runs/);
   });
 
   test("empty / unavailable delta -> false (fail-closed)", () => {

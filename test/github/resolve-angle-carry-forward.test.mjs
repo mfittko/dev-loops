@@ -192,16 +192,28 @@ test("buildCarryForwardPlan re-runs code angles but carries the docs angle on a 
   assert.deepEqual(plan.carried.map((c) => c.angle), ["docs"]);
 });
 
-test("buildCarryForwardPlan fails closed on a non-clean or missing prior log", () => {
+test("buildCarryForwardPlan fails closed on a non-carry-forward-eligible or missing prior log", () => {
   assert.throws(() => buildCarryForwardPlan({ log: null, changedFiles: ["docs/x.md"] }), /not found or unreadable/);
   assert.throws(
-    () => buildCarryForwardPlan({ log: { ...cleanLog, verdict: "findings_present" }, changedFiles: ["docs/x.md"] }),
-    /not "clean"/,
+    () => buildCarryForwardPlan({ log: { ...cleanLog, verdict: "blocked" }, changedFiles: ["docs/x.md"] }),
+    /not carry-forward-eligible \(clean or findings_present\)/,
   );
   assert.throws(
     () => buildCarryForwardPlan({ log: { headSha: "aaaaaaa", verdict: "clean", provenance: { distinctReviewers: 0, perAngle: [] } }, changedFiles: ["docs/x.md"] }),
     /no provenance\.perAngle reviewers/,
   );
+});
+
+// #2017: a prior findings_present ROUND (not just a clean one) is now
+// carry-forward-eligible at the overall-verdict guard — it no longer throws
+// outright. Per-angle eligibility still depends on each angle's own findings
+// and surface (covered by the dedicated tests below).
+test("buildCarryForwardPlan accepts a findings_present prior log (issue #2017)", () => {
+  const plan = buildCarryForwardPlan({ log: { ...cleanLog, verdict: "findings_present" }, changedFiles: ["docs/guide.md"] });
+  assert.equal(plan.prevHead, "aaaaaaa");
+  // cleanLog itself carries no `findings` array, so every angle is still
+  // individually clean — only the ROUND's overall verdict is findings_present.
+  assert.deepEqual(plan.carried.map((c) => c.angle).sort(), ["correctness", "coverage"]);
 });
 
 test("buildCarryForwardPlan fails closed on a malformed prior-log headSha (no bad carriedFromHead stamp)", () => {
@@ -464,13 +476,16 @@ test("carrying exempts the CARRIED entry from the reviewer-pairing floor, and no
   );
 });
 
-test("an angle named by a prior finding never carries, even from a clean log", () => {
-  // A log is `clean` when nothing reached a BLOCKING severity — a `defer` finding
-  // still means that angle reported a problem, so it must be re-reviewed.
+// issue #2017: an angle with an UNAMBIGUOUSLY-attributed prior finding is no
+// longer forced to always re-run — when the delta provably does not touch its
+// declared review surface, it CARRIES FORWARD with its finding(s) preserved,
+// still open, still findings_present. "coverage" maps to the test/code
+// surface (CATEGORY_ANGLE_MAP), so a docs-only delta never touches it.
+test("buildCarryForwardPlan carries a findings-present angle forward, preserving its finding, when the delta does not touch its surface (issue #2017)", () => {
   const plan = buildCarryForwardPlan({
     log: {
       headSha: "aaaaaaa",
-      verdict: "clean",
+      verdict: "findings_present",
       findings: [{ angle: "coverage", severity: "nice-to-have", summary: "open nit" }],
       provenance: {
         distinctReviewers: 2,
@@ -482,21 +497,54 @@ test("an angle named by a prior finding never carries, even from a clean log", (
     },
     changedFiles: ["docs/guide.md"],
   });
-  assert.deepEqual(plan.carried.map((c) => c.angle), ["correctness"]);
-  assert.ok(plan.mustRerun.some((m) => m.angle === "coverage"), "an angle with a prior finding must re-run");
-  // The reason is attributed to the actual cause, not the generic
-  // mandatory/always-include phrasing resolveCarryForwardAngles uses for that surface.
-  const coverageRerun = plan.mustRerun.find((m) => m.angle === "coverage");
-  assert.match(coverageRerun.reason, /returned a finding at the prior head/);
+  assert.deepEqual(plan.carried.map((c) => c.angle).sort(), ["correctness", "coverage"]);
+  const coverage = plan.carried.find((c) => c.angle === "coverage");
+  assert.equal(coverage.prevVerdict, "findings_present");
+  // The carried finding is preserved VERBATIM — never dropped, never stripped
+  // down to an approval.
+  assert.deepEqual(coverage.findings, [{ angle: "coverage", severity: "nice-to-have", summary: "open nit" }]);
+  assert.equal(coverage.carriedFromHead, "aaaaaaa");
+  assert.equal(coverage.reviewer, "review-b");
+  // A carried CLEAN angle explicitly records prevVerdict "clean" and no findings.
+  const correctness = plan.carried.find((c) => c.angle === "correctness");
+  assert.equal(correctness.prevVerdict, "clean");
+  assert.deepEqual(correctness.findings, []);
 });
 
-test("a prior finding on a delta-suffixed re-review entry still forces its BASE angle to re-run", () => {
-  // gate-fanin's baseAngleName strips `-delta-at-...`; a finding recorded under
-  // that suffixed name must still attribute to the base angle's provenance row.
+// The mirror case: the SAME findings-present angle re-runs (never carries)
+// once the delta touches its declared surface — the finding is never silently
+// carried across a delta that could have changed what caused it.
+test("buildCarryForwardPlan re-runs a findings-present angle when the delta touches its surface (issue #2017)", () => {
   const plan = buildCarryForwardPlan({
     log: {
       headSha: "aaaaaaa",
-      verdict: "clean",
+      verdict: "findings_present",
+      findings: [{ angle: "coverage", severity: "nice-to-have", summary: "open nit" }],
+      provenance: {
+        distinctReviewers: 2,
+        perAngle: [
+          { angle: "correctness", reviewer: "review-a" },
+          { angle: "coverage", reviewer: "review-b" },
+        ],
+      },
+    },
+    changedFiles: ["src/foo.mjs"],
+  });
+  assert.ok(!plan.carried.some((c) => c.angle === "coverage"), "coverage must NOT carry — its surface (test/code) was touched");
+  const coverageRerun = plan.mustRerun.find((m) => m.angle === "coverage");
+  assert.ok(coverageRerun, "coverage must re-run");
+  assert.match(coverageRerun.reason, /delta touches the angle's review surface/);
+});
+
+// gate-fanin's baseAngleName strips `-delta-at-...`; a finding recorded under
+// that suffixed name still attributes to the base angle's provenance row
+// (unambiguously here — the log's own provenance never lists the suffixed
+// sibling itself) and so still carries forward with it, preserved.
+test("a prior finding on a delta-suffixed re-review entry attributes to, and carries forward with, its BASE angle", () => {
+  const plan = buildCarryForwardPlan({
+    log: {
+      headSha: "aaaaaaa",
+      verdict: "findings_present",
       findings: [{ angle: "coverage-delta-at-deadbeef", severity: "nice-to-have", summary: "still open" }],
       provenance: {
         distinctReviewers: 2,
@@ -508,15 +556,17 @@ test("a prior finding on a delta-suffixed re-review entry still forces its BASE 
     },
     changedFiles: ["docs/guide.md"],
   });
-  assert.deepEqual(plan.carried.map((c) => c.angle), ["correctness"]);
-  assert.ok(plan.mustRerun.some((m) => m.angle === "coverage"), "the base angle must re-run, not just the suffixed name");
+  assert.deepEqual(plan.carried.map((c) => c.angle).sort(), ["correctness", "coverage"]);
+  const coverage = plan.carried.find((c) => c.angle === "coverage");
+  assert.equal(coverage.prevVerdict, "findings_present");
+  assert.deepEqual(coverage.findings, [{ angle: "coverage-delta-at-deadbeef", severity: "nice-to-have", summary: "still open" }]);
 });
 
-test("a prior finding attributes to its angle case-insensitively", () => {
+test("a prior finding attributes to its angle case-insensitively and carries forward with it", () => {
   const plan = buildCarryForwardPlan({
     log: {
       headSha: "aaaaaaa",
-      verdict: "clean",
+      verdict: "findings_present",
       findings: [{ angle: "Coverage", severity: "nice-to-have", summary: "still open" }],
       provenance: {
         distinctReviewers: 2,
@@ -528,7 +578,10 @@ test("a prior finding attributes to its angle case-insensitively", () => {
     },
     changedFiles: ["docs/guide.md"],
   });
-  assert.ok(plan.mustRerun.some((m) => m.angle === "coverage"), "case drift between the two authored lists must still attribute");
+  const coverage = plan.carried.find((c) => c.angle === "coverage");
+  assert.ok(coverage, "case drift between the two authored lists must still attribute, and carry");
+  assert.equal(coverage.prevVerdict, "findings_present");
+  assert.deepEqual(coverage.findings, [{ angle: "Coverage", severity: "nice-to-have", summary: "still open" }]);
 });
 
 // A base+lowercase key can legitimately collect MORE THAN ONE provenance.perAngle

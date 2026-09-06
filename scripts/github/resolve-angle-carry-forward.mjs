@@ -2,19 +2,28 @@
 /**
  * resolve-angle-carry-forward.mjs — the gate carry-forward decision CLI.
  *
- * Given a PRIOR CLEAN gate findings-log (recorded at head A) and the delta A..B
- * (the changed files between that head and the current worktree HEAD), decide,
- * per angle, whether the clean verdict may be CARRIED FORWARD to head B or the
- * angle MUST re-run. The decision itself is the pure, fail-closed seam
- * `resolveCarryForwardAngles` from @dev-loops/core/loop/gate-carry-forward; this
- * CLI only supplies its inputs (prior log + delta) and shapes the output so the
- * fan-out orchestrator can (a) skip re-fanning carried angles and (b) write the
- * new head's findings-log recording each carried verdict with provenance pointing
- * at the PRIOR head's reviewer (write-gate-findings-log's `carriedFromHead`).
+ * Given a PRIOR gate findings-log (recorded at head A, verdict `clean` OR
+ * `findings_present`) and the delta A..B (the changed files between that head
+ * and the current worktree HEAD), decide, per angle, whether its prior verdict
+ * may be CARRIED FORWARD to head B or the angle MUST re-run. For a
+ * `findings_present` angle whose surface the delta provably did not touch
+ * (issue #2017), the carried verdict is accompanied by that angle's PRIOR OPEN
+ * FINDINGS, unchanged — carry-forward never converts an open finding into an
+ * approval, it only ever skips re-running a reviewer whose surface the delta
+ * provably did not touch. The decision itself is the pure, fail-closed seam
+ * `resolveAngleCarryForward`/`angleReviewSurface` from
+ * @dev-loops/core/loop/gate-carry-forward; this CLI only supplies its inputs
+ * (prior log + delta) and shapes the output so the fan-out orchestrator can
+ * (a) skip re-fanning carried angles and (b) write the new head's
+ * findings-log recording each carried verdict with provenance pointing at the
+ * PRIOR head's reviewer (write-gate-findings-log's `carriedFromHead`).
  *
- * FAIL-CLOSED: only a prior log whose overall verdict is `clean` can carry
- * forward anything; any uncertainty (non-clean prior log, empty/unclassifiable
- * delta, unmapped angle, always-run angle) resolves to must-re-run. See
+ * FAIL-CLOSED: only a prior log whose overall verdict is `clean` or
+ * `findings_present` can carry forward anything; any uncertainty (any other
+ * prior verdict, empty/unclassifiable delta, unmapped angle, always-run
+ * angle, or a finding whose angle attribution is AMBIGUOUS — matches more than
+ * one provenance.perAngle row, e.g. a base angle plus its `-delta-at-...`
+ * re-review sibling or a case-drifted duplicate) resolves to must-re-run. See
  * skills/docs/gate-review-sub-loop-contract.md.
  *
  * Also emits a Copilot convergence-carry-forward decision (AC2): whether a
@@ -27,8 +36,9 @@ import { parseArgs } from "node:util";
 
 import { loadDevLoopConfig, resolveGateAngleContract } from "@dev-loops/core/config";
 import {
+  angleReviewSurface,
   RENAME_ONLY_ANGLES,
-  resolveCarryForwardAngles,
+  resolveAngleCarryForward,
   resolveConvergenceCarryForward,
 } from "@dev-loops/core/loop/gate-carry-forward";
 import { baseAngleName } from "@dev-loops/core/loop/gate-fanin";
@@ -47,14 +57,17 @@ import {
 } from "./write-gate-context.mjs";
 
 const USAGE = `Usage: resolve-angle-carry-forward.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --prev-head <sha> --head-sha <sha> [--tmp-root <path>]
-Decide, per angle, whether a prior CLEAN gate verdict (recorded at --prev-head) may
-be carried forward to the current head, using the fail-closed delta<->review-surface rule.
+Decide, per angle, whether a prior gate verdict (clean OR findings_present, recorded
+at --prev-head) may be carried forward to the current head, using the fail-closed
+delta<->review-surface rule. A carried findings_present angle also carries its prior
+open findings, unchanged (issue #2017) — the gate still blocks on them.
 Required:
   --repo <owner/name>
   --pr <number>
   --gate <draft_gate|pre_approval_gate>
-  --prev-head <sha>              FULL head SHA the prior CLEAN findings-log was recorded on (head A);
-                                 the log path is keyed by the full SHA, so a prefix refuses "not found"
+  --prev-head <sha>              FULL head SHA the prior findings-log (clean or findings_present) was
+                                 recorded on (head A); the log path is keyed by the full SHA, so a
+                                 prefix refuses "not found"
   --head-sha <sha>              Current head SHA (head B); must be the CWD worktree HEAD
 Optional:
   --tmp-root <path>             Root tmp directory (default: tmp/)
@@ -158,27 +171,34 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
 
 /**
  * Pure carry-forward plan from a prior gate findings-log + the delta A..B.
- * FAIL-CLOSED: throws when the prior log is missing or not a clean verdict —
- * carry-forward has no clean verdict to reuse. Carried angles are annotated with
- * the prior head's reviewer identity (every recorded reviewer/dispatchId/model
- * field from the log's provenance) and `carriedFromHead` so the caller can write
- * honest, non-fabricated carried provenance.
+ * FAIL-CLOSED: throws when the prior log is missing or its verdict is not
+ * carry-forward-eligible (clean or findings_present) — carry-forward has no
+ * prior verdict to reuse. Carried angles are annotated with the prior head's
+ * reviewer identity (every recorded reviewer/dispatchId/model field from the
+ * log's provenance) and `carriedFromHead` so the caller can write honest,
+ * non-fabricated carried provenance. A carried angle whose prior verdict was
+ * findings_present ALSO carries `prevVerdict: "findings_present"` and its
+ * prior open `findings` (issue #2017) — the caller must write these findings
+ * through unchanged, never dropped and never converted into a pass, so the
+ * gate still blocks on them exactly as if freshly reviewed. A carried clean
+ * angle carries `prevVerdict: "clean"` and an empty `findings` array.
  *
  * @param {object} input
- * @param {object|null} input.log — the prior findings-log JSON (verdict must be "clean")
+ * @param {object|null} input.log — the prior findings-log JSON (verdict must be
+ *   "clean" or "findings_present")
  * @param {string[]} input.changedFiles — delta A..B changed files
  * @param {Iterable<string>} [input.alwaysRerun] — angles that must NEVER carry
  *   forward regardless of the delta (the gate's configured mandatory angles, plus
  *   the RENAME_ONLY-mapped angles when the delta contains any rename). Each
  *   resolves to an always-rerun surface so it lands in `mustRerun`, not `carried`.
- * @returns {{ prevHead: string, carried: Array<{angle: string, carriedFromHead: string, reviewer?: string, dispatchId?: string, model?: string, reason: string}>, mustRerun: Array<{angle: string, reason: string}> }}
+ * @returns {{ prevHead: string, carried: Array<{angle: string, carriedFromHead: string, reviewer?: string, dispatchId?: string, model?: string, prevVerdict: "clean"|"findings_present", findings: Array<object>, reason: string}>, mustRerun: Array<{angle: string, reason: string}> }}
  */
 export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [] }) {
   if (!log || typeof log !== "object") {
     throw new Error("prior gate findings-log not found or unreadable — cannot carry forward (fail-closed)");
   }
-  if (log.verdict !== "clean") {
-    throw new Error(`prior gate findings-log verdict is ${JSON.stringify(log.verdict ?? null)}, not "clean" — nothing to carry forward (fail-closed)`);
+  if (log.verdict !== "clean" && log.verdict !== "findings_present") {
+    throw new Error(`prior gate findings-log verdict is ${JSON.stringify(log.verdict ?? null)}, not carry-forward-eligible (clean or findings_present) — nothing to carry forward (fail-closed)`);
   }
   // FAIL-CLOSED: a carried entry stamps `carriedFromHead`/`prevHead` with the prior
   // log's headSha; downstream write-gate-findings-log requires a 7-64 hex SHA there.
@@ -219,12 +239,15 @@ export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [] }) {
     identityByAngle.set(entry.angle, identity);
   }
   const prevAngles = perAngle.map((a) => a.angle).filter((a) => typeof a === "string" && a.length > 0);
-  // FAIL-CLOSED, per-angle: a log's overall verdict is `clean` when no finding
-  // reaches a BLOCKING severity — an angle can therefore sit in a clean log with
-  // an open `low` (or, under a narrower blockCleanOnFindingSeverities, a
-  // `medium`) finding against it. The carry-forward rule is that an
-  // angle which previously returned findings never carries; the log's overall
-  // verdict cannot express that, so derive it from the findings themselves.
+  // FAIL-CLOSED, per-angle: an angle's PRIOR verdict is derived from the
+  // findings themselves, never from the log's overall verdict — a clean OR
+  // findings_present overall log can still have a per-angle non-blocking
+  // finding (a "low"/"nit" against an otherwise-clean round). ANY recorded
+  // finding against an angle — regardless of severity — makes that angle
+  // "findings_present" for carry-forward purposes: it reported a problem, and
+  // that problem must never silently vanish because a later delta happened to
+  // leave its surface untouched. Carrying it forward is exactly how it stays
+  // visible (see the per-angle loop below), never how it gets dropped.
   //
   // FAIL-CLOSED attribution: `log.findings` must be an array (a malformed/
   // truncated log cannot prove no angle has an open finding), and every finding
@@ -254,7 +277,18 @@ export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [] }) {
     if (bucket) bucket.push(angle);
     else prevAnglesByLowerBase.set(key, [angle]);
   }
-  const anglesWithPriorFindings = [];
+  // A finding's angle attribution is UNAMBIGUOUS only when it matches EXACTLY
+  // ONE provenance.perAngle row. When it matches more than one (a base angle
+  // plus its `-delta-at-...` re-review sibling, or a case-drifted duplicate —
+  // see the bucket comment above), it is impossible to say WHICH of those rows
+  // actually owns the finding's content, so — issue #2017 — carrying that
+  // finding forward onto only one of them risks either dropping it off the
+  // other or double-counting it onto both. FAIL-CLOSED: every row in an
+  // ambiguous bucket keeps today's behavior (always re-run), exactly as before
+  // this issue; only an unambiguous single-row match is eligible for the new
+  // carry-with-findings path below.
+  const ambiguousAngles = new Set();
+  const priorFindingsByAngle = new Map();
   for (const finding of Array.isArray(log.findings) ? log.findings : []) {
     const rawAngle = finding && typeof finding.angle === "string" ? finding.angle.trim() : "";
     if (rawAngle.length === 0) {
@@ -264,32 +298,41 @@ export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [] }) {
     if (!matches || matches.length === 0) {
       throw new Error(`prior gate findings-log has a finding for angle ${JSON.stringify(rawAngle)}, which matches no provenance.perAngle entry — cannot prove that angle is clean (fail-closed)`);
     }
-    anglesWithPriorFindings.push(...matches);
+    if (matches.length > 1) {
+      for (const angle of matches) ambiguousAngles.add(angle);
+      continue;
+    }
+    const [angle] = matches;
+    if (!priorFindingsByAngle.has(angle)) priorFindingsByAngle.set(angle, []);
+    priorFindingsByAngle.get(angle).push(finding);
   }
-  const { carried, mustRerun } = resolveCarryForwardAngles({
-    prevAngles,
-    changedFiles,
-    options: { alwaysRerun: [...alwaysRerun, ...anglesWithPriorFindings] },
-  });
-  const carriedProvenance = carried.map(({ angle, reason }) => ({
-    angle,
-    carriedFromHead: headSha,
-    ...(identityByAngle.get(angle) ?? {}),
-    reason,
-  }));
-  // resolveCarryForwardAngles forces both mandatory/always-include angles AND
-  // prior-finding angles the same way (surface kind "always"), so it stamps both
-  // with the generic "mandatory / always-include surface" reason. That
-  // misattributes the prior-finding case — give it its own reason so a plan
-  // reader can tell "this angle is always re-run by config" apart from "this
-  // angle had an open finding last round".
-  const priorFindingAngles = new Set(anglesWithPriorFindings);
-  const mustRerunWithReasons = mustRerun.map((entry) => (
-    priorFindingAngles.has(entry.angle)
-      ? { ...entry, reason: "angle returned a finding at the prior head — an angle with an open finding never carries forward regardless of the delta" }
-      : entry
-  ));
-  return { prevHead: headSha, carried: carriedProvenance, mustRerun: mustRerunWithReasons };
+
+  const carried = [];
+  const mustRerun = [];
+  const AMBIGUOUS_FINDING_REASON = "angle returned a finding at the prior head that matches more than one provenance.perAngle entry — attribution is ambiguous, so it never carries forward regardless of the delta (fail-closed)";
+  for (const angle of prevAngles) {
+    if (ambiguousAngles.has(angle)) {
+      mustRerun.push({ angle, reason: AMBIGUOUS_FINDING_REASON });
+      continue;
+    }
+    const priorFindings = priorFindingsByAngle.get(angle);
+    const prevVerdict = priorFindings ? "findings_present" : "clean";
+    const angleSurface = angleReviewSurface(angle, { alwaysRerun });
+    const decision = resolveAngleCarryForward({ angle, angleSurface, changedFiles, prevVerdict });
+    if (decision.carryForward) {
+      carried.push({
+        angle,
+        carriedFromHead: headSha,
+        ...(identityByAngle.get(angle) ?? {}),
+        prevVerdict,
+        findings: priorFindings ?? [],
+        reason: decision.reason,
+      });
+    } else {
+      mustRerun.push({ angle, reason: decision.reason });
+    }
+  }
+  return { prevHead: headSha, carried, mustRerun };
 }
 
 async function assertWorktreeAtHeadAsync(headSha, { repoRoot, runGit = runGitCommand }) {
