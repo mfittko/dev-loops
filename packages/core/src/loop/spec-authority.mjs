@@ -39,7 +39,7 @@
 
 import { sha256Hex } from "./review-dispatch-plan.mjs";
 import { extractSection } from "./markdown-sections.mjs";
-import { extractChecklistItems } from "./issue-refinement-artifact.mjs";
+import { extractChecklistItems, detectAcDodMatrix } from "./issue-refinement-artifact.mjs";
 
 /**
  * Canonical spec category keys, in the fixed order the digest serializes them.
@@ -699,24 +699,61 @@ export function resolveAffectedCriteria({ changedPaths, criterionCoverage } = {}
 /**
  * Convenience: extract a `{ acceptanceCriteria, definitionOfDone, nonGoals }`
  * spec from a canonical tracker issue body, reusing the shared section +
- * checklist parsers so the spec digest is computed from exactly the sections the
- * refinement gate already recognizes. Heading aliases mirror the refinement
- * artifact's own recognized set (Definition of done / DoD). Returns the raw
- * (un-normalized) lists; pass the result to {@link computeSpecDigest} /
+ * checklist/matrix parsers so the spec digest is computed from exactly the
+ * content the refinement gate already recognizes as AUTHORITATIVE. Returns the
+ * raw (un-normalized) lists; pass the result to {@link computeSpecDigest} /
  * {@link normalizeSpec}.
+ *
+ * ponytail (#2016 root cause fix): the AC/DoD source is the authoritative
+ * AC→DoD mapping MATRIX (`detectAcDodMatrix`, reused byte-identical from
+ * `issue-refinement-artifact.mjs` — no second matrix parser) when the body
+ * carries one that parses as valid; the list-form AC/DoD checklists
+ * (`extractChecklistItems`) are a REDUNDANT presentation projection of that
+ * same matrix (`derivePrChecklistsFromIssueMatrix` derives the PR-side
+ * checklist from it) and are read only as the fail-closed fallback for older
+ * issue bodies that carry no matrix at all. This is the fix for the reported
+ * bug: adding/removing/re-heading a checklist alias that projects an
+ * UNCHANGED matrix no longer touches `specDigest`, because the checklist is
+ * no longer part of the hashed input once a valid matrix exists. Any edit
+ * that changes the matrix itself — a criterion's text, its completion-
+ * evidence cell, or the row set (add/remove) — changes `matrix.rows` and
+ * therefore still changes the digest (fail-closed: no genuine spec change is
+ * exempted). Non-goals are unaffected by this change: they were never part of
+ * the redundant-checklist problem (the matrix does not carry Non-goals), so
+ * they stay sourced from the `## Non-goals` section exactly as before.
+ *
+ * Fail-closed fallback: when `detectAcDodMatrix` reports `found: false` (no
+ * matrix at all) or `valid: false` (empty/malformed/identifier-only table —
+ * i.e. it cannot be positively parsed as a real semantic mapping), this falls
+ * back to the PRE-#2016 behavior of hashing the extracted checklist text
+ * verbatim. A body this function cannot prove carries an equivalent matrix
+ * must never silently narrow what gets digested.
  *
  * @param {string} body — the tracker issue markdown body
  * @returns {{ acceptanceCriteria: string[], definitionOfDone: string[], nonGoals: string[] }}
  */
 export function extractSpecFromBody(body) {
+  const nonGoalsSection =
+    extractSection(body, "Non-goals") ?? extractSection(body, "Non goals");
+  const nonGoals = nonGoalsSection ? extractChecklistItems(nonGoalsSection) : [];
+
+  const matrix = detectAcDodMatrix(body);
+  if (matrix.found && matrix.valid && matrix.rows.length > 0) {
+    return {
+      acceptanceCriteria: matrix.rows.map((row) => row.criterion),
+      definitionOfDone: matrix.rows.map((row) => row.evidence),
+      nonGoals,
+    };
+  }
+
+  // Fallback: no positively-parseable matrix — hash the checklist projection
+  // (pre-#2016 behavior) rather than an empty/weaker AC/DoD surface.
   const acSection = extractSection(body, "Acceptance criteria");
   const dodSection =
     extractSection(body, "Definition of done") ?? extractSection(body, "DoD");
-  const nonGoalsSection =
-    extractSection(body, "Non-goals") ?? extractSection(body, "Non goals");
   return {
     acceptanceCriteria: acSection ? extractChecklistItems(acSection) : [],
     definitionOfDone: dodSection ? extractChecklistItems(dodSection) : [],
-    nonGoals: nonGoalsSection ? extractChecklistItems(nonGoalsSection) : [],
+    nonGoals,
   };
 }
