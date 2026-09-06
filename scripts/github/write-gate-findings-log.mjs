@@ -13,6 +13,7 @@ import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositio
 import { JUDGE_DISPOSITIONS as _JUDGE_DISPOSITIONS_ARRAY } from "@dev-loops/core/loop/gate-fanin";
 const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
 import { loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
+import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
@@ -45,6 +46,10 @@ Optional:
                                  (one disposition per 0-based ledger position) or the run FAILS CLOSED and writes no
                                  ledger. Optional; when absent the ledger writes byte-identically to before.
   --tmp-root <path>              Root tmp directory (default: tmp/)
+  --spec-authority <path>        JSON { specDigest, headSha, contentDigest, checkedCriteria }
+                                  (issue 2008 / ADR 0061 AC1). When supplied, stamps the log
+                                  with the pinned revision identity via the ONE shared stamp
+                                  helper. Pure no-op (byte-identical log) when absent.
 
 ${JQ_OUTPUT_USAGE}
 `.trim();
@@ -367,6 +372,7 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
       "full-label": { type: "boolean" },
       "judge-verdict": { type: "string" },
       "tmp-root": { type: "string" },
+      "spec-authority": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -383,6 +389,7 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
     findingsFile: undefined,
     fullLabel: false,
     tmpRoot: "tmp",
+    specAuthority: undefined,
   };
   for (const token of tokens) {
     if (token.kind === "positional") {
@@ -450,6 +457,10 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
     }
     if (token.name === "tmp-root") {
       options.tmpRoot = requireTokenValue(token, parseError).trim();
+      continue;
+    }
+    if (token.name === "spec-authority") {
+      options.specAuthority = requireTokenValue(token, parseError).trim();
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -625,11 +636,19 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   if (scopeDrift !== undefined) {
     log.scopeDrift = scopeDrift;
   }
+  // AC1 (issue 2008 / ADR 0061): optional --spec-authority stamps the pinned
+  // revision identity + checked criteria onto the log via the ONE shared
+  // helper. Pure no-op (byte-identical log) when the flag is absent.
+  const specAuthorityIdentity = await readSpecAuthorityIdentity(
+    options.specAuthority !== undefined ? path.resolve(repoRoot, options.specAuthority) : undefined,
+    parseError,
+  );
+  const stampedLog = stampOptionalSpecAuthority(log, specAuthorityIdentity);
   await mkdir(path.dirname(fullPath), { recursive: true });
-  await writeFile(fullPath, JSON.stringify(log, null, 2) + "\n", "utf8");
+  await writeFile(fullPath, JSON.stringify(stampedLog, null, 2) + "\n", "utf8");
   return angleCoverage.warning
-    ? { ok: true, path: logPath, log, warning: angleCoverage.warning }
-    : { ok: true, path: logPath, log };
+    ? { ok: true, path: logPath, log: stampedLog, warning: angleCoverage.warning }
+    : { ok: true, path: logPath, log: stampedLog };
 }
 async function main() {
   let options;

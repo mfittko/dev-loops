@@ -73,6 +73,7 @@ test("parseWriteGateFindingsLogCliArgs parses all required args", () => {
     findingsFile: undefined,
     fullLabel: false,
     tmpRoot: "tmp",
+    specAuthority: undefined,
   });
 });
 
@@ -2191,5 +2192,65 @@ test("#1745: writeGateFindingsLog with wrapper overallVerdict + --judge-verdict:
     );
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// --- AC1 (issue 2008 / ADR-0061): optional --spec-authority stamping ---
+
+test("writeGateFindingsLog: --spec-authority stamps the log; absent is a byte-identical no-op", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-spec-authority-"));
+  try {
+    const identity = {
+      specDigest: `sha256:${"a".repeat(64)}`,
+      headSha: "b".repeat(40),
+      contentDigest: `sha256:${"c".repeat(64)}`,
+      checkedCriteria: ["ac:1", "ac:0"],
+    };
+    const identityPath = path.join(dir, "spec-authority.json");
+    await writeFile(identityPath, JSON.stringify(identity), "utf8");
+    const base = {
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "low", angle: "scope", summary: "x" }]),
+      tmpRoot: dir,
+    };
+    const stampedResult = await writeGateFindingsLog({ ...base, specAuthority: identityPath });
+    const stamped = JSON.parse(await readFile(stampedResult.path, "utf8"));
+    assert.deepEqual(stamped.specAuthority, { ...identity, checkedCriteria: ["ac:0", "ac:1"] });
+
+    const unstampedResult = await writeGateFindingsLog(base);
+    const unstamped = JSON.parse(await readFile(unstampedResult.path, "utf8"));
+    assert.equal("specAuthority" in unstamped, false, "absent --spec-authority must be a pure no-op");
+    const { specAuthority: _drop, loggedAt: _dropLoggedAt, ...stampedRest } = stamped;
+    const { loggedAt: _dropLoggedAt2, ...unstampedRest } = unstamped;
+    assert.deepEqual(stampedRest, unstampedRest, "everything besides specAuthority/loggedAt must be byte-identical");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("writeGateFindingsLog: --spec-authority fails closed on malformed JSON", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-spec-authority-bad-"));
+  try {
+    const identityPath = path.join(dir, "spec-authority.json");
+    await writeFile(identityPath, "not json", "utf8");
+    await assert.rejects(
+      () => writeGateFindingsLog({
+        repo: "a/b",
+        pr: 1,
+        gate: "draft_gate",
+        headSha: "abc1234500000000000000000000000000000000",
+        verdict: "findings_present",
+        findings: JSON.stringify([{ severity: "low", angle: "scope", summary: "x" }]),
+        tmpRoot: dir,
+        specAuthority: identityPath,
+      }),
+      /--spec-authority ".*" must contain valid JSON/,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });

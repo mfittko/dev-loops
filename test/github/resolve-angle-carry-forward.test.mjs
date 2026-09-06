@@ -684,6 +684,44 @@ test("CLI's worktree guard and delta are pinned to repoRoot, not an inherited GI
   }
 });
 
+// --- AC1 (issue 2008 / ADR-0061): optional --spec-authority stamping ---
+
+test("CLI: --spec-authority stamps the plan's specAuthority block; absent is a byte-identical no-op", async () => {
+  const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
+    mandatoryAngles: [],
+    perAngle: [{ angle: "correctness", reviewer: "review-a" }],
+    mutate: async (root) => {
+      await writeFile(path.join(root, "src/foo.mjs"), "export function foo() { return 2; }\n", "utf8");
+    },
+  });
+  try {
+    const identity = {
+      specDigest: `sha256:${"a".repeat(64)}`,
+      headSha: "b".repeat(40),
+      contentDigest: `sha256:${"c".repeat(64)}`,
+      checkedCriteria: ["ac:1", "ac:0"],
+    };
+    const identityPath = path.join(repoRoot, "spec-authority.json");
+    await writeFile(identityPath, JSON.stringify(identity), "utf8");
+
+    const stamped = await runMain([
+      "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
+      "--spec-authority", identityPath,
+    ], { repoRoot });
+    assert.equal(stamped.ok, true);
+    assert.deepEqual(stamped.specAuthority, { ...identity, checkedCriteria: ["ac:0", "ac:1"] });
+
+    const unstamped = await runMain([
+      "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
+    ], { repoRoot });
+    assert.equal("specAuthority" in unstamped, false, "absent --spec-authority must be a pure no-op");
+    const { specAuthority: _drop, ...stampedWithoutSpecAuthority } = stamped;
+    assert.deepEqual(stampedWithoutSpecAuthority, unstamped, "everything besides specAuthority must be byte-identical");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("parseResolveAngleCarryForwardCliArgs fails closed on a same-head carry", () => {
   const sha = "c3".repeat(20);
   assert.throws(

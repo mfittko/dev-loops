@@ -21,7 +21,6 @@
  * post-convergence head bump is a pure doc/prose bump and so need not force a
  * fresh blocking Copilot round.
  */
-import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -33,19 +32,19 @@ import {
   resolveConvergenceCarryForward,
 } from "@dev-loops/core/loop/gate-carry-forward";
 import { baseAngleName } from "@dev-loops/core/loop/gate-fanin";
+import { stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
 
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { captureChangedFilesBetween } from "../lib/git-delta.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import {
   assertWorktreeAtHead,
-  gitEnvWithoutDirOverrides,
-  hasRenameEntry,
   mapGateToConfigKey,
-  parseChangedFiles,
 } from "./write-gate-context.mjs";
 
 const USAGE = `Usage: resolve-angle-carry-forward.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate> --prev-head <sha> --head-sha <sha> [--tmp-root <path>]
@@ -60,6 +59,10 @@ Required:
   --head-sha <sha>              Current head SHA (head B); must be the CWD worktree HEAD
 Optional:
   --tmp-root <path>             Root tmp directory (default: tmp/)
+  --spec-authority <path>       JSON { specDigest, headSha, contentDigest, checkedCriteria }
+                                 (issue 2008 / ADR 0061 AC1). When supplied, stamps the plan's
+                                 durable record with the pinned revision identity via the ONE
+                                 shared stamp helper. Pure no-op (byte-identical output) when absent.
 
 ${JQ_OUTPUT_USAGE}
 `.trim();
@@ -82,6 +85,7 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
       "prev-head": { type: "string" },
       "head-sha": { type: "string" },
       "tmp-root": { type: "string" },
+      "spec-authority": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -95,6 +99,7 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
     prevHead: undefined,
     headSha: undefined,
     tmpRoot: "tmp",
+    specAuthority: undefined,
   };
   for (const token of tokens) {
     if (token.kind === "positional") throw parseError(`Unknown argument: ${token.value}`);
@@ -133,6 +138,7 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
       continue;
     }
     if (token.name === "tmp-root") { options.tmpRoot = requireTokenValue(token, parseError).trim(); continue; }
+    if (token.name === "spec-authority") { options.specAuthority = requireTokenValue(token, parseError).trim(); continue; }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -287,35 +293,6 @@ export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [] }) {
   return { prevHead: headSha, carried: carriedProvenance, mustRerun: mustRerunWithReasons };
 }
 
-// git-diff isolation flags (subset of write-gate-context's captureDiffFromBase):
-// pin the name-status output bytes/rename detection so the changed-file SET is
-// reproducible regardless of ambient gitconfig.
-const GIT_ISOLATION = [
-  "-c", "color.ui=false",
-  "-c", "core.pager=cat",
-  "-c", "diff.renames=true",
-  "-c", "core.autocrlf=false",
-];
-
-function captureDeltaChangedFiles({ base, repoRoot }) {
-  // TWO-dot: the direct tree diff between the reviewed head A (base) and HEAD (B).
-  // NOT three-dot (`base...HEAD`), which diffs merge-base(A,B)..B and would OMIT a
-  // file that differs between A and B but happens to equal their merge-base — under
-  // a non-fast-forward advance (rebase/amend/revert) that would carry an angle whose
-  // review surface actually changed since A. Two-dot never omits such a file.
-  const range = `${base}..HEAD`;
-  const out = execFileSync("git", [...GIT_ISOLATION, "diff", "--no-ext-diff", "--name-status", range], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-    // See gitEnvWithoutDirOverrides (write-gate-context.mjs): assertWorktreeAtHead,
-    // called just before this, scrubs the SAME way, so the guard and this delta
-    // always mean the worktree at `cwd`, never a repo an inherited GIT_DIR points at.
-    env: gitEnvWithoutDirOverrides(),
-  });
-  return { changedFiles: parseChangedFiles(out), hasRename: hasRenameEntry(out) };
-}
-
 export async function main(argv = process.argv.slice(2), { repoRoot = process.cwd() } = {}) {
   let options;
   try {
@@ -368,12 +345,17 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // against the WRONG head while claiming to be for --head-sha. Abort before
     // capturing the delta so no mislabeled plan is ever emitted.
     assertWorktreeAtHead(options.headSha, { repoRoot });
-    const { changedFiles, hasRename } = captureDeltaChangedFiles({ base: options.prevHead, repoRoot });
+    const { changedFiles, hasRename } = captureChangedFilesBetween({ base: options.prevHead, repoRoot });
     // A rename anywhere in the delta forces the RENAME_ONLY-mapped angles to
     // re-run: parseChangedFiles keeps only a rename's destination path, so
     // classifying that path alone misses what the rename itself implicates.
     const alwaysRerun = [...mandatoryAngles, ...(hasRename ? RENAME_ONLY_ANGLES : [])];
-    const plan = buildCarryForwardPlan({ log, changedFiles, alwaysRerun });
+    const rawPlan = buildCarryForwardPlan({ log, changedFiles, alwaysRerun });
+    // AC1 (issue 2008 / ADR 0061): optional --spec-authority stamps the pinned
+    // revision identity onto the plan via the ONE shared helper. Pure no-op
+    // (byte-identical output) when the flag is absent.
+    const specAuthorityIdentity = await readSpecAuthorityIdentity(options.specAuthority, parseError);
+    const plan = specAuthorityIdentity ? stampSpecAuthorityIdentity(rawPlan, specAuthorityIdentity) : rawPlan;
     const copilotConvergence = resolveConvergenceCarryForward({ changedFiles });
     const result = {
       ok: true,
@@ -386,6 +368,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       carried: plan.carried,
       mustRerun: plan.mustRerun,
       copilotConvergence,
+      ...(plan.specAuthority !== undefined ? { specAuthority: plan.specAuthority } : {}),
     };
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
   } catch (error) {
