@@ -355,7 +355,32 @@ test("failure digest caps an unbroken sequence of short diagnostic lines", async
     });
     assert.equal(code, 1);
     assert.ok(Buffer.byteLength(stderr) < 140 * 1024);
-    assert.match(stderr, /failure block truncated at 131072 bytes/);
+    assert.match(stderr, /failure digest truncated at 131072 bytes/);
+    assert.equal(await readFile(capture.path, "utf8"), content);
+  } finally {
+    if (capture) await rm(path.dirname(capture.path), { recursive: true, force: true });
+  }
+});
+
+test("failure digest applies one byte budget across separate failing tests", async () => {
+  let capture;
+  let stderr = "";
+  const block = "diagnostic".repeat(1_000);
+  const content = `${Array.from({ length: 30 }, (_, index) =>
+    `test/failure-${index}.test.mjs:\n(fail) assertion ${index}\n${block}\n`).join("")}0 pass\n30 fail\nRan 30 tests across 30 files. [1.00ms]\n`;
+  try {
+    const code = await runBunTest(["example.test.mjs"], {
+      captureFactory: async () => {
+        capture = await createOutputCapture();
+        return capture;
+      },
+      spawnImpl: fakeChild((fd) => writeSync(fd, content), [1, null]),
+      stdout: { write() {} },
+      stderr: { write: (chunk) => { stderr += chunk; } },
+    });
+    assert.equal(code, 1);
+    assert.ok(Buffer.byteLength(stderr) < 140 * 1024);
+    assert.equal(stderr.match(/failure digest truncated/g)?.length, 1);
     assert.equal(await readFile(capture.path, "utf8"), content);
   } finally {
     if (capture) await rm(path.dirname(capture.path), { recursive: true, force: true });

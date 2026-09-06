@@ -19,7 +19,7 @@ const DIGEST_LINE_BYTES = 16 * 1024;
 const DIGEST_CONTEXT_BYTES = 64 * 1024;
 const DIGEST_FAILURE_BYTES = 128 * 1024;
 const TRUNCATED_LINE = `… [line truncated at ${DIGEST_LINE_BYTES} bytes]`;
-const TRUNCATED_FAILURE = `… [failure block truncated at ${DIGEST_FAILURE_BYTES} bytes; complete output is retained]`;
+const TRUNCATED_FAILURE = `… [failure digest truncated at ${DIGEST_FAILURE_BYTES} bytes; complete output is retained]`;
 export const ALL_TEST_PATTERNS = Object.freeze([
   "test/**/*.test.mjs",
   "packages/core/test/*.test.mjs",
@@ -292,8 +292,6 @@ export async function createOutputCapture({
         }
       };
       const beginFailure = async () => {
-        emittedBytes = 0;
-        failureTruncated = false;
         if (header !== wroteHeader) {
           await write(stream, `${header ?? "Bun test failure:"}\n`);
           wroteHeader = header;
