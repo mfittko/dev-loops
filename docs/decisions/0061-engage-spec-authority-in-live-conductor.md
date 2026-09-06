@@ -1,0 +1,38 @@
+# 0061. Engage immutable spec authority in the live dev-loop conductor by default
+
+## Status
+
+Accepted — 2026-09-06 (issue #2008)
+
+## Context
+
+[ADR-0060](./0060-immutable-spec-authority.md) delivered the immutable spec-authority mechanism (`packages/core/src/loop/spec-authority.mjs`) and its tooling seam in `scripts/loop/judge-pass.mjs` as an OPT-IN gate engaged only when a caller passes `--spec-file`/`--content-digest`/`--spec-authority-verdict`. It deliberately deferred turning the gate on for every live gate round because that is a behavior change to every run. This issue ([#2008](https://github.com/mfittko/dev-loops/issues/2008)) is that deferred adoption step, plus three obligations re-scoped from #2000 by the operator spec decision on 2026-09-06:
+
+- AC1 — every live-loop review/judge/fixer/gate/carry-forward/re-entry RECORD must pin both revision identities (`specDigest` + `headSha`/`contentDigest`) plus the exact checked criteria, not only the judge-verdict/approval records the mechanism slice already pinned.
+- AC7 — a fixer push must MAP changed content to affected criteria via a live producer, replacing the fail-closed all-stale fallback (`affectedCriteria: []`) the mechanism slice shipped.
+- AC11 — explicit per-harness Pi/Claude Code/Codex regression fixtures proving identical authority/rejection/routing/escalation/invalidation/re-entry behavior.
+
+Turning enforcement on by default, changing every gate record's shape, and adding a changed-content→criteria producer are all decision-shaped and touch `skills/docs/spec-authority-contract.md`, so the ADR tripwire ([0052](./0052-adr-tripwire-fail-closed.md)) fires; this record satisfies it.
+
+## Decision
+
+Engage spec authority on every gate round by default, through four seams:
+
+1. **Default-on via a CLI seam, not an opt-in flag.** A new CLI seam (`scripts/loop/spec-context.mjs`) derives the structured spec from the canonical tracker artifact (`extractSpecFromBody`) and computes the reviewed `contentDigest` from the diff, so the skill never hand-derives them. The dev-loop gate flow (`skills/dev-loop/SKILL.md` Phase 3.5, `gate-review-sub-loop-contract.md`) always runs that seam and always invokes judge-pass with `--spec-file`/`--content-digest`/`--spec-authority-verdict` (and `--prior-approvals`/`--approvals-out` across re-entry). This supersedes ADR-0060's adoption-boundary deferral: engagement is the prescribed default, not a caller opt-in. Rejected alternative: making judge-pass auto-resolve the spec from GitHub itself — it would couple the pure bridge to a network call and hide the identities from the skill.
+
+2. **Fail-closed partial config stays.** The judge-pass coupling checks from #2000 are unchanged: a half-configured authority invocation (spec-file without content-digest/verdict, or the invalidation flags without spec-file) fails closed. Default-on adds no silent-skip path.
+
+3. **AC1 — one shared identity stamp.** The revision-identity trio is already computed centrally by `buildRevisionIdentity`. A single shared record-shape helper stamps `specDigest` + `headSha` + `contentDigest` + `checkedCriteria` onto each record writer's output (findings-log ledger, consolidated fan-in ledger, gate verdict, carry-forward plan, the fixer act list, the defer/follow-up entries). Records are threaded from one computed identity object, never recomputed per writer, so the writers cannot drift. Rejected alternative: per-writer bespoke identity fields — it would let the writers drift.
+
+4. **AC7 — a pure, fail-closed affected-criteria producer.** `resolveAffectedCriteria({ changedPaths, criterionCoverage })` (pure, in `spec-authority.mjs`) intersects a fixer push's changed paths with a declared per-criterion coverage map and returns the affected criterion ids. It is fail-closed: a changed path that matches no criterion's coverage marks the result `uncertain`, and the caller (judge-pass) then treats every prior-approved criterion as affected (the old all-stale behavior). Only criteria whose coverage does not intersect the change, and that `resolveCriterionInvalidation` can positively prove unaffected, carry forward. The coverage map is an explicit producer input; this change deliberately does NOT invent a coverage-authoring UI or infer coverage from criterion prose. When no coverage map is supplied, judge-pass keeps the #2000 all-stale fallback, so the producer is a strict fail-closed improvement, never a loosening. Changed paths are computed from `git diff --name-status` via the existing `captureDeltaChangedFiles` seam.
+
+5. **AC11 — explicit per-harness fixtures.** A cross-harness fixture set drives the shared core through each harness adapter (`packages/core/src/harness/`) and asserts byte-identical authority/rejection/routing/escalation/invalidation/re-entry outcomes, making the shared-core-by-construction parity explicit and regression-pinned rather than implicit.
+
+## Consequences
+
+- Every normal auto-loop gate round now engages spec authority; the running loop enforces the canonical AC/DoD/Non-goals as immutable authority without an explicit opt-in.
+- Every gate record becomes durably re-entry-safe: a fresh process reconstructs the pinned revision identities and checked criteria from any record type, not only the judge/approval records.
+- A fixer push now stales only the criteria its change actually touches (when a coverage map is present), so a proven-unaffected criterion's prior approval carries forward instead of forcing a full re-review — while an unmapped change still fails closed to all-stale.
+- The `contentDigest` and coverage map are new inputs the conductor must produce each round; the CLI seam owns that so the skill prose stays thin.
+- Live-runtime engagement on every real gate round is provable only in a live loop; the deterministic seams (CLI, judge-pass default, record shapes, producer, fixtures) are CI-testable and are what this change pins. Any purely live-runtime obligation is surfaced at the approval gate, not silently ticked.
+- Follow-up: authoring a richer per-criterion coverage map (beyond an explicit input) is intentionally out of scope and left for later work if the fail-closed default proves too coarse in practice.
