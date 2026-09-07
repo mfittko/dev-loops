@@ -736,6 +736,11 @@
       "id": "TRACKER-PROJECTION-REQUIRED-METADATA"
     },
     {
+      "id": "VALIDATE-COVERAGE-ADMISSION",
+      "enforcement": "agent",
+      "enforcementNote": "Judge/reviewer agents apply the admission rule; a failing coverage finding is dispositioned reject and dropped by the existing act-list filter."
+    },
+    {
       "id": "VALIDATE-COVERAGE-THRESHOLD"
     },
     {
