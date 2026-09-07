@@ -16,6 +16,19 @@ Every review, judge, fixer, gate, carry-forward, and re-entry record pins two in
 <!-- rule: SPEC-AUTHORITY-REVISION-IDENTITIES -->
 `SPEC-AUTHORITY-REVISION-IDENTITIES`: `specDigest`, `contentDigest`, and `headSha` are distinct identities. `specDigest` MUST NOT be derived from `headSha`, and a new `headSha`/`contentDigest` MUST NOT masquerade as a spec change. `buildRevisionIdentity` fails closed when the identities collide or when a spec digest embeds the head SHA.
 
+### `specDigest` is derived from the authoritative matrix, not a redundant checklist projection (#2016)
+
+`extractSpecFromBody` — the canonical `computeSpecDigest` input for a tracker-backed body — sources acceptance-criteria and definition-of-done text from the AUTHORITATIVE AC→DoD mapping matrix (`detectAcDodMatrix`; the same #1951 refinement artifact "matrix on the issue" mapping table) whenever the body carries one that parses as valid. The issue-side Acceptance criteria / Definition of done list-form CHECKLISTS are a redundant re-aliasable presentation projection of that matrix (`derivePrChecklistsFromIssueMatrix` derives the PR-side checklist from the same rows) and are NOT part of the hashed identity when a valid matrix exists.
+
+Provably semantics-preserving edit classes that leave `specDigest` unchanged, because they never touch the matrix that is actually hashed:
+
+- adding, removing, or reformatting a list-form checklist alias (Acceptance criteria / Definition of done checkboxes) that projects an unchanged matrix;
+- canonical heading normalization and checklist marker/whitespace normalization of any such alias, or of the matrix heading/cell whitespace itself.
+
+Any change to the authoritative matrix content — a criterion's text, its completion-evidence cell, or the row set (a row added or removed) — changes `matrix.rows` and therefore produces a new `specDigest`, re-invalidating through the existing `resolveCriterionInvalidation` path exactly as any other spec change does. A changed Non-goal (read independently from the `## Non-goals` section, unaffected by this matrix/checklist boundary) likewise changes the digest. No genuine acceptance-criterion, completion-evidence, or Non-goal change is ever exempted from review by this equivalence.
+
+Fail-closed default: whenever the body carries no matrix at all, or the matrix is present but empty/malformed/identifier-only (`detectAcDodMatrix` reports `found: false` or `valid: false` — i.e. it cannot be positively proven a valid semantic mapping), `extractSpecFromBody` falls back to the pre-#2016 behavior of hashing the extracted checklist text directly. An edit not positively proven equivalent is never silently narrowed into a weaker or empty digested surface.
+
 ## Whole-spec disposition and the four named outcomes
 
 <!-- rule: SPEC-AUTHORITY-WHOLE-SPEC-EVAL -->
