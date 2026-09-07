@@ -5,7 +5,9 @@ strategy: local-first
 inputSource: tracker
 
 refinement:
-  maxCopilotRounds: 2
+  # One Copilot round then converge; fan-out reviewers + judge + verify remain
+  # the enforcing gate. Slim epic throughput tradeoff; shipped default is 5.
+  maxCopilotRounds: 1
 
 gates:
   # Fail-closed enforcement that gate verdicts were produced by the
