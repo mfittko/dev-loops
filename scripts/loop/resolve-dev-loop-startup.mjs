@@ -344,6 +344,9 @@ function resolveCommitPullRequestsFromGitHub({ repo, commitSha, cwd, env }) {
     ];
     if (after !== null) args.push("-f", `after=${after}`);
     const response = ghJson(args, cwd, env);
+    if (Array.isArray(response?.errors) && response.errors.length > 0) {
+      throw new Error("GraphQL commit-to-PR association response contains errors");
+    }
     const connection = response?.data?.repository?.object?.associatedPullRequests;
     if (!connection || !Array.isArray(connection.nodes) || typeof connection.pageInfo?.hasNextPage !== "boolean") {
       throw new Error("GraphQL commit-to-PR association response is malformed");

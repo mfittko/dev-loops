@@ -2712,6 +2712,34 @@ test("resolveHasNewerMergeSinceCheckpoint: a squash-merged PR on the configured 
   }
 });
 
+test("resolveHasNewerMergeSinceCheckpoint: a qualifying merged PR after a direct commit makes the checkpoint stale", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "retro-mixed-history-stale-"));
+  try {
+    const { initialSha } = await initLocalOriginRepo(tempDir);
+    const directSha = pushAnotherCommit(tempDir, "chore(release): direct base commit");
+    const mergedSha = pushAnotherCommit(tempDir, "fix: squash merged PR (#43)");
+    const lookedUp = [];
+    assert.equal(
+      resolveHasNewerMergeSinceCheckpoint({
+        mergeCommit: initialSha,
+        baseBranch: "main",
+        cwd: tempDir,
+        resolveCommitPullRequests: ({ commitSha }) => {
+          lookedUp.push(commitSha);
+          return commitSha === mergedSha
+            ? [{ number: 43, state: "MERGED", merged_at: "2026-09-07T10:01:00Z", base: { ref: "main" }, merge_commit_sha: mergedSha }]
+            : [];
+        },
+      }),
+      true,
+    );
+    assert.deepEqual(lookedUp, [directSha, mergedSha]);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+    rmSync(`${tempDir}-remote`, { recursive: true, force: true });
+  }
+});
+
 test("resolveHasNewerMergeSinceCheckpoint: an unmerged or wrong-base association does not qualify", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "retro-pr-association-nonqualifying-"));
   try {
@@ -2904,6 +2932,19 @@ test("resolve-dev-loop-startup.mjs --pr end-to-end: a squash-merged PR associati
 
 test("resolve-dev-loop-startup.mjs --pr: incomplete GraphQL association pagination fails closed", async () => {
   const cases = [
+    {
+      name: "partial response with GraphQL errors",
+      graphResponses: [JSON.stringify({
+        errors: [{ message: "association lookup was only partially resolved" }],
+        data: {
+          repository: {
+            object: {
+              associatedPullRequests: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+            },
+          },
+        },
+      })],
+    },
     {
       name: "malformed pageInfo",
       graphResponses: [JSON.stringify({ data: { repository: { object: { associatedPullRequests: { nodes: [] } } } } })],
