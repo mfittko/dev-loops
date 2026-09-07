@@ -101,6 +101,7 @@ function localPhaseBundle(phase, opts = {}) {
 
 function nullStrategyBundle() {
   return {
+    bundleKind: "needs_reconcile",
     bundle: {
       selectedStrategy: INTERNAL_DEV_LOOP_STRATEGY.NONE,
       routeKind: "needs_reconcile",
@@ -420,6 +421,15 @@ test("needs_reconcile: null strategy produces a terminal actionable envelope", (
   assert.equal(validateHandoffEnvelope(envelope).ok, true);
 });
 
+test("fail-closed: terminal reconciliation requires the outer needs_reconcile bundle kind", () => {
+  const input = nullStrategyBundle();
+  input.bundleKind = "resolved";
+  assert.throws(
+    () => buildDevLoopHandoffEnvelope(input, defaultSettings, {}, defaultOptions),
+    /bundleKind needs_reconcile/i,
+  );
+});
+
 test("fail-closed: null strategy remains invalid for a routed result", () => {
   const input = nullStrategyBundle();
   input.bundle.routeKind = "route";
@@ -434,14 +444,14 @@ test("fail-closed: needs_reconcile requires the canonical gate and null strategy
   wrongGate.bundle.selectedGate = "issue_intake";
   assert.throws(
     () => buildDevLoopHandoffEnvelope(wrongGate, defaultSettings, {}, defaultOptions),
-    /needs_reconcile requires selectedGate fail_closed_reconcile and selectedStrategy null/,
+    /needs_reconcile requires .*selectedGate fail_closed_reconcile.*selectedStrategy null/,
   );
 
   const conflictingStrategy = nullStrategyBundle();
   conflictingStrategy.bundle.selectedStrategy = INTERNAL_DEV_LOOP_STRATEGY.ISSUE_INTAKE;
   assert.throws(
     () => buildDevLoopHandoffEnvelope(conflictingStrategy, defaultSettings, {}, defaultOptions),
-    /needs_reconcile requires selectedGate fail_closed_reconcile and selectedStrategy null/,
+    /needs_reconcile requires .*selectedGate fail_closed_reconcile.*selectedStrategy null/,
   );
 });
 

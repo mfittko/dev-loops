@@ -602,11 +602,13 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
     ? requireString(bundle.routeKind, "resolverOutput.routeKind")
     : (trimmedOrNull(bundle.routeKind) ?? "route");
   const selectedGate = trimmedOrNull(bundle.selectedGate);
+  const bundleKind = trimmedOrNull(resolverOutput.bundle ? resolverOutput.bundleKind : bundle.bundleKind);
   const isReconciliation = routeKind === "needs_reconcile"
     && strategy === null
-    && selectedGate === "fail_closed_reconcile";
+    && selectedGate === "fail_closed_reconcile"
+    && bundleKind === "needs_reconcile";
   if (routeKind === "needs_reconcile" && !isReconciliation) {
-    throw new Error("handoff-envelope: routeKind needs_reconcile requires selectedGate fail_closed_reconcile and selectedStrategy null");
+    throw new Error("handoff-envelope: routeKind needs_reconcile requires outer bundleKind needs_reconcile, selectedGate fail_closed_reconcile, and selectedStrategy null");
   }
   if (strategy === null && !isReconciliation) {
     throw new Error("handoff-envelope: a null resolverOutput.selectedStrategy is allowed only for the canonical needs_reconcile/fail_closed_reconcile tuple");

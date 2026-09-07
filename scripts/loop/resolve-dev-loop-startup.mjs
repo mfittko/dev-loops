@@ -315,16 +315,18 @@ function resolveCommitPullRequestsFromGitHub({ repo, commitSha, cwd, env }) {
   if (typeof repo !== "string" || repo.trim().length === 0) {
     throw new Error("repository identity is required for commit-to-PR association");
   }
-  const associations = ghJson([
+  const pages = ghJson([
     "api",
+    "--paginate",
+    "--slurp",
     `repos/${repo}/commits/${commitSha}/pulls?per_page=100`,
     "--method", "GET",
     "-H", "Accept: application/vnd.github+json",
   ], cwd, env);
-  if (!Array.isArray(associations)) {
-    throw new Error("commit-to-PR association response must be an array");
+  if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page))) {
+    throw new Error("commit-to-PR association response must be a slurped array of pages");
   }
-  return associations;
+  return pages.flat();
 }
 
 function isStrictGitHubRfc3339Timestamp(value) {
@@ -1162,14 +1164,23 @@ export function buildResolveDevLoopStartupResult(input, {
       if (identity === null) {
         hasNewerMergeSinceCheckpoint = true;
       } else {
-        const baseBranch = resolveBaseBranch(config, { cwd: effectiveCwd });
-        hasNewerMergeSinceCheckpoint = resolveHasNewerMerge({
-          mergeCommit: identity.mergeCommit,
-          baseBranch,
-          cwd: effectiveCwd,
-          repo: identity.repo,
-          env: effectiveEnv,
-        });
+        const checkpointRepoRoot = resolveCheckpointRepoRoot(effectiveCwd);
+        const currentRepo = detectRepoSlug(checkpointRepoRoot);
+        if (currentRepo === null || identity.repo !== currentRepo) {
+          // The local base history belongs to `currentRepo`; a checkpoint for
+          // any other repository cannot authorize GitHub association lookups
+          // or discharge a cycle here. Fail closed before inspecting ancestry.
+          hasNewerMergeSinceCheckpoint = true;
+        } else {
+          const baseBranch = resolveBaseBranch(config, { cwd: effectiveCwd });
+          hasNewerMergeSinceCheckpoint = resolveHasNewerMerge({
+            mergeCommit: identity.mergeCommit,
+            baseBranch,
+            cwd: effectiveCwd,
+            repo: currentRepo,
+            env: effectiveEnv,
+          });
+        }
       }
     }
     input = {

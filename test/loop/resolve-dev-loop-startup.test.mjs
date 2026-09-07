@@ -2359,6 +2359,28 @@ test("buildResolveDevLoopStartupResult: a complete checkpoint with nothing merge
   }
 });
 
+test("buildResolveDevLoopStartupResult: a checkpoint for another syntactically valid repo fails closed before inspecting associations", () => {
+  const tempDir = stampRepoWithOrigin();
+  try {
+    writeCheckpoint(tempDir, {
+      state: "complete",
+      completedAt: "2026-08-08T01:00:00.000Z",
+      notes: "belongs to another repository",
+      identity: { repo: "other-owner/other-repo", prNumber: 9002, mergeCommit: "cafef00d" },
+      provenance: VALID_PROVENANCE,
+    });
+    const result = buildResolveDevLoopStartupResult(unrelatedLocalInput(), {
+      env: resolverTestEnv(),
+      cwd: tempDir,
+      config: RETROSPECTIVE_CONFIG,
+      resolveHasNewerMerge: unreachableHasNewerMerge(),
+    });
+    assert.equal(result.bundleKind, "needs_reconcile");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("buildResolveDevLoopStartupResult: a skipped checkpoint remains satisfied across direct-only history", () => {
   const tempDir = stampRepoWithOrigin();
   try {
@@ -2610,7 +2632,9 @@ test("buildResolveDevLoopStartupResult: a checkpoint written only at the main ch
 // ---------------------------------------------------------------------------
 
 async function initLocalOriginRepo(tempDir) {
-  const remoteDir = `${tempDir}-remote.git`;
+  const remoteRoot = `${tempDir}-remote`;
+  const remoteDir = path.join(remoteRoot, "mfittko", "dev-loops.git");
+  mkdirSync(path.dirname(remoteDir), { recursive: true });
   execFileSync("git", ["init", "--bare", "--quiet", remoteDir], { stdio: "ignore" });
   execFileSync("git", ["init", "--quiet"], { cwd: tempDir, stdio: "ignore" });
   execFileSync("git", ["checkout", "-b", "main", "--quiet"], { cwd: tempDir, stdio: "ignore" });
@@ -2643,7 +2667,7 @@ test("resolveHasNewerMergeSinceCheckpoint: false when nothing has merged since t
     );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
-    rmSync(`${tempDir}-remote.git`, { recursive: true, force: true });
+    rmSync(`${tempDir}-remote`, { recursive: true, force: true });
   }
 });
 
@@ -2661,7 +2685,7 @@ test("resolveHasNewerMergeSinceCheckpoint: a direct commit after a checkpoint st
     );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
-    rmSync(`${tempDir}-remote.git`, { recursive: true, force: true });
+    rmSync(`${tempDir}-remote`, { recursive: true, force: true });
   }
 });
 
@@ -2683,7 +2707,7 @@ test("resolveHasNewerMergeSinceCheckpoint: a squash-merged PR on the configured 
     );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
-    rmSync(`${tempDir}-remote.git`, { recursive: true, force: true });
+    rmSync(`${tempDir}-remote`, { recursive: true, force: true });
   }
 });
 
@@ -2711,7 +2735,7 @@ test("resolveHasNewerMergeSinceCheckpoint: mixed direct and PR history becomes s
     assert.deepEqual(observed, [directSha, mergedSha]);
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
-    rmSync(`${tempDir}-remote.git`, { recursive: true, force: true });
+    rmSync(`${tempDir}-remote`, { recursive: true, force: true });
   }
 });
 
@@ -2734,7 +2758,7 @@ test("resolveHasNewerMergeSinceCheckpoint: open, closed-unmerged, and wrong-base
     );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
-    rmSync(`${tempDir}-remote.git`, { recursive: true, force: true });
+    rmSync(`${tempDir}-remote`, { recursive: true, force: true });
   }
 });
 
@@ -2754,7 +2778,7 @@ test("resolveHasNewerMergeSinceCheckpoint: association lookup failures fail clos
     );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
-    rmSync(`${tempDir}-remote.git`, { recursive: true, force: true });
+    rmSync(`${tempDir}-remote`, { recursive: true, force: true });
   }
 });
 
@@ -2783,7 +2807,7 @@ test("resolveHasNewerMergeSinceCheckpoint: malformed association facts fail clos
     }
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
-    rmSync(`${tempDir}-remote.git`, { recursive: true, force: true });
+    rmSync(`${tempDir}-remote`, { recursive: true, force: true });
   }
 });
 
@@ -2805,7 +2829,7 @@ test("resolveHasNewerMergeSinceCheckpoint: a resolvable non-ancestor checkpoint 
     assert.equal(associationLookups, 0, "non-ancestor checkpoints must fail before association classification");
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
-    rmSync(`${tempDir}-remote.git`, { recursive: true, force: true });
+    rmSync(`${tempDir}-remote`, { recursive: true, force: true });
   }
 });
 
@@ -2821,7 +2845,7 @@ test("resolveHasNewerMergeSinceCheckpoint: fails closed (true) when the recorded
     );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
-    rmSync(`${tempDir}-remote.git`, { recursive: true, force: true });
+    rmSync(`${tempDir}-remote`, { recursive: true, force: true });
   }
 });
 
@@ -2868,7 +2892,7 @@ test("resolve-dev-loop-startup.mjs --pr end-to-end: a squash-merged PR associati
       {
         assertArgContains: [`commits/${mergedSha}/pulls`],
         stdout: JSON.stringify([
-          { number: 9005, merged_at: "2026-09-07T10:00:00Z", base: { ref: "main" } },
+          [{ number: 9005, merged_at: "2026-09-07T10:00:00Z", base: { ref: "main" } }],
         ]),
       },
     ], { matchMode: "claims", logCalls: true });
@@ -2908,7 +2932,7 @@ test("resolve-dev-loop-startup.mjs --pr end-to-end: a squash-merged PR associati
     );
   } finally {
     await rm(tempDir, { recursive: true, force: true });
-    rmSync(`${tempDir}-remote.git`, { recursive: true, force: true });
+    rmSync(`${tempDir}-remote`, { recursive: true, force: true });
   }
 });
 
@@ -2946,7 +2970,7 @@ test("resolve-dev-loop-startup.mjs --pr end-to-end: a skipped checkpoint stays s
     assert.notEqual(JSON.parse(result.stdout.trim()).bundleKind, "needs_reconcile");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
-    rmSync(`${tempDir}-remote.git`, { recursive: true, force: true });
+    rmSync(`${tempDir}-remote`, { recursive: true, force: true });
   }
 });
 
@@ -2991,7 +3015,99 @@ test("resolve-dev-loop-startup.mjs --pr end-to-end: association API failure reta
     assert.match(parsed.nextAction ?? JSON.stringify(parsed), /retrospective/i);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
-    rmSync(`${tempDir}-remote.git`, { recursive: true, force: true });
+    rmSync(`${tempDir}-remote`, { recursive: true, force: true });
+  }
+});
+
+test("resolve-dev-loop-startup.mjs --pr end-to-end: commit association pagination completely classifies more than 100 non-qualifying results", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-association-pagination-e2e-"));
+  try {
+    const { initialSha } = await initLocalOriginRepo(tempDir);
+    const newerSha = pushAnotherCommit(tempDir, "newer commit with many associations");
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\nworkflow:\n  requireRetrospective: true\n", "utf8");
+    await mkdir(path.join(tempDir, ".pi"), { recursive: true });
+    await writeFile(
+      path.join(tempDir, ".pi", "dev-loop-retrospective-checkpoint.json"),
+      `${JSON.stringify({
+        state: "complete",
+        completedAt: "2026-08-08T01:00:00.000Z",
+        notes: "completed prior cycle",
+        identity: { repo: "mfittko/dev-loops", prNumber: 9002, mergeCommit: initialSha },
+        provenance: VALID_PROVENANCE,
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      number: index + 1,
+      merged_at: null,
+      base: { ref: "main" },
+    }));
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "9012"],
+        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, mergeCommit: null, assignees: [], closingIssuesReferences: [], body: "" }),
+      },
+      {
+        assertArgs: [
+          "api", "--paginate", "--slurp",
+          `repos/mfittko/dev-loops/commits/${newerSha}/pulls?per_page=100`,
+          "--method", "GET", "-H", "Accept: application/vnd.github+json",
+        ],
+        stdout: JSON.stringify([
+          firstPage,
+          [{ number: 101, merged_at: null, base: { ref: "main" } }],
+        ]),
+      },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--pr", "9012"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, ...resolverTestEnv() },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout.trim()).bundleKind, "resolved");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+    rmSync(`${tempDir}-remote`, { recursive: true, force: true });
+  }
+});
+
+test("resolve-dev-loop-startup.mjs --pr end-to-end: a non-slurped full association page fails closed as possibly truncated", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-association-truncated-e2e-"));
+  try {
+    const { initialSha } = await initLocalOriginRepo(tempDir);
+    const newerSha = pushAnotherCommit(tempDir, "newer commit with truncated associations");
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\nworkflow:\n  requireRetrospective: true\n", "utf8");
+    await mkdir(path.join(tempDir, ".pi"), { recursive: true });
+    await writeFile(path.join(tempDir, ".pi", "dev-loop-retrospective-checkpoint.json"), `${JSON.stringify({
+      state: "complete",
+      completedAt: "2026-08-08T01:00:00.000Z",
+      notes: "completed prior cycle",
+      identity: { repo: "mfittko/dev-loops", prNumber: 9002, mergeCommit: initialSha },
+      provenance: VALID_PROVENANCE,
+    }, null, 2)}\n`, "utf8");
+    const ghStub = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "9013"],
+        stdout: JSON.stringify({ state: "OPEN", mergedAt: null, mergeCommit: null, assignees: [], closingIssuesReferences: [], body: "" }),
+      },
+      {
+        assertArgContains: [`commits/${newerSha}/pulls`],
+        stdout: JSON.stringify(Array.from({ length: 100 }, (_, index) => ({
+          number: index + 1,
+          merged_at: null,
+          base: { ref: "main" },
+        }))),
+      },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--pr", "9013"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, ...resolverTestEnv() },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout.trim()).bundleKind, "needs_reconcile");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+    rmSync(`${tempDir}-remote`, { recursive: true, force: true });
   }
 });
 
@@ -3056,7 +3172,7 @@ test("startup → build-envelope CLI end-to-end: a direct-only newer commit does
     assert.equal(envelope.selectedStrategy, undefined);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
-    rmSync(`${tempDir}-remote.git`, { recursive: true, force: true });
+    rmSync(`${tempDir}-remote`, { recursive: true, force: true });
   }
 });
 
@@ -3100,7 +3216,7 @@ test("loop startup CLI: direct-only checkpoint history routes identically throug
     }
   } finally {
     await rm(tempDir, { recursive: true, force: true });
-    rmSync(`${tempDir}-remote.git`, { recursive: true, force: true });
+    rmSync(`${tempDir}-remote`, { recursive: true, force: true });
   }
 });
 

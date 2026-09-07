@@ -465,6 +465,10 @@
       "id": "OPS-DRAFT-FIRST-PR"
     },
     {
+      "id": "OPS-PR-VALIDATION-STABLE-EVIDENCE",
+      "enforcement": "doc"
+    },
+    {
       "id": "OPS-NO-INLINE-INTERPRETER"
     },
     {
