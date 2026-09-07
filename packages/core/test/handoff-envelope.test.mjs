@@ -421,12 +421,37 @@ test("needs_reconcile: null strategy produces a terminal actionable envelope", (
   assert.equal(validateHandoffEnvelope(envelope).ok, true);
 });
 
+test("validate: accepts the canonical retrospective completion-or-skip action", () => {
+  const input = nullStrategyBundle();
+  input.bundle.nextAction = "Complete or explicitly skip the required post-run behavioral retrospective before starting or resuming the next dev-loop run.";
+  const envelope = buildDevLoopHandoffEnvelope(input, defaultSettings, {}, defaultOptions);
+  assert.equal(validateHandoffEnvelope(envelope).ok, true);
+});
+
 test("fail-closed: terminal reconciliation requires the outer needs_reconcile bundle kind", () => {
   const input = nullStrategyBundle();
   input.bundleKind = "resolved";
   assert.throws(
     () => buildDevLoopHandoffEnvelope(input, defaultSettings, {}, defaultOptions),
     /bundleKind needs_reconcile/i,
+  );
+});
+
+test("fail-closed: an outer reconciliation stop cannot wrap a routed inner bundle", () => {
+  const input = issueBundle(42);
+  input.bundleKind = "needs_reconcile";
+  assert.throws(
+    () => buildDevLoopHandoffEnvelope(input, defaultSettings, {}, defaultOptions),
+    /outer.*bundleKind.*inner.*route|bundleKind.*agree/i,
+  );
+});
+
+test("fail-closed: outer and nested bundle kinds must agree in both directions", () => {
+  const input = nullStrategyBundle();
+  input.bundle.bundleKind = "resolved";
+  assert.throws(
+    () => buildDevLoopHandoffEnvelope(input, defaultSettings, {}, defaultOptions),
+    /bundleKind.*agree/i,
   );
 });
 

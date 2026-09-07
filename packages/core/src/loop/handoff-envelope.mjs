@@ -602,11 +602,22 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
     ? requireString(bundle.routeKind, "resolverOutput.routeKind")
     : (trimmedOrNull(bundle.routeKind) ?? "route");
   const selectedGate = trimmedOrNull(bundle.selectedGate);
-  const bundleKind = trimmedOrNull(resolverOutput.bundle ? resolverOutput.bundleKind : bundle.bundleKind);
+  const outerBundleKind = resolverOutput.bundle ? trimmedOrNull(resolverOutput.bundleKind) : null;
+  const nestedBundleKind = trimmedOrNull(bundle.bundleKind);
+  if (outerBundleKind && nestedBundleKind && outerBundleKind !== nestedBundleKind) {
+    throw new Error(`handoff-envelope: outer bundleKind (${outerBundleKind}) and inner bundleKind (${nestedBundleKind}) must agree`);
+  }
+  const bundleKind = outerBundleKind ?? nestedBundleKind;
   const isReconciliation = routeKind === "needs_reconcile"
     && strategy === null
     && selectedGate === "fail_closed_reconcile"
     && bundleKind === "needs_reconcile";
+  if (strategy === null && routeKind !== "needs_reconcile") {
+    throw new Error("handoff-envelope: a null resolverOutput.selectedStrategy is allowed only for the canonical needs_reconcile/fail_closed_reconcile tuple");
+  }
+  if (bundleKind === "needs_reconcile" && !isReconciliation) {
+    throw new Error("handoff-envelope: outer/inner bundleKind needs_reconcile requires inner routeKind needs_reconcile, selectedGate fail_closed_reconcile, and selectedStrategy null");
+  }
   if (routeKind === "needs_reconcile" && !isReconciliation) {
     throw new Error("handoff-envelope: routeKind needs_reconcile requires outer bundleKind needs_reconcile, selectedGate fail_closed_reconcile, and selectedStrategy null");
   }
@@ -889,8 +900,12 @@ export function validateHandoffEnvelope(envelope) {
       && envelope.acceptance.evidence.length === RECONCILIATION_ACCEPTANCE_TEMPLATE.evidence.length
       && envelope.acceptance.evidence.every((value, index) => value === RECONCILIATION_ACCEPTANCE_TEMPLATE.evidence[index])
       && envelope.acceptance?.maxFinalizationTurns === RECONCILIATION_ACCEPTANCE_TEMPLATE.maxFinalizationTurns;
-    const reconciliationNextActionIsActionable = typeof envelope.nextAction === "string"
-      && /reconcil/i.test(envelope.nextAction);
+    const normalizedNextAction = typeof envelope.nextAction === "string" ? envelope.nextAction.trim() : "";
+    const reconciliationNextActionIsActionable = [
+      "Reconcile ",
+      "Complete or explicitly skip ",
+      "Local implementation requires worktree isolation",
+    ].some((canonicalDirective) => normalizedNextAction.startsWith(canonicalDirective));
     if (
       envelope.routeKind !== "needs_reconcile"
       || envelope.selectedStrategy !== null

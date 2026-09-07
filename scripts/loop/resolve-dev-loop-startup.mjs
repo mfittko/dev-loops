@@ -311,6 +311,19 @@ function ghJson(args, cwd, env = process.env) {
 // Bounds the best-effort `git fetch` below so a slow/offline remote can never
 // delay startup indefinitely.
 const RETROSPECTIVE_FETCH_TIMEOUT_MS = 10000;
+const COMMIT_ASSOCIATION_MAX_PAGES = 10;
+const COMMIT_ASSOCIATION_QUERY = `query($owner:String!,$name:String!,$oid:String!,$after:String) {
+  repository(owner:$owner,name:$name) {
+    object(expression:$oid) {
+      ... on Commit {
+        associatedPullRequests(first:100,after:$after) {
+          nodes { number state mergedAt baseRefName mergeCommit { oid } }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }
+  }
+}`;
 function resolveCommitPullRequestsFromGitHub({ repo, commitSha, cwd, env }) {
   if (typeof repo !== "string" || repo.trim().length === 0) {
     throw new Error("repository identity is required for commit-to-PR association");
@@ -323,10 +336,49 @@ function resolveCommitPullRequestsFromGitHub({ repo, commitSha, cwd, env }) {
     "--method", "GET",
     "-H", "Accept: application/vnd.github+json",
   ], cwd, env);
-  if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page))) {
+  if (!Array.isArray(pages) || pages.length === 0 || pages.some((page) => !Array.isArray(page))) {
     throw new Error("commit-to-PR association response must be a slurped array of pages");
   }
-  return pages.flat();
+  // Keep the REST association read as an independently paginated, validated
+  // discovery signal, but never use its contents as merge authority: its
+  // merged-PR coverage is limited to the repository default branch. The
+  // GraphQL Commit.associatedPullRequests connection below is the
+  // configured-base-capable authority.
+  const [owner, name] = repo.split("/");
+  const graphAssociations = [];
+  let after = null;
+  for (let pageNumber = 0; pageNumber < COMMIT_ASSOCIATION_MAX_PAGES; pageNumber += 1) {
+    const args = [
+      "api", "graphql",
+      "-f", `query=${COMMIT_ASSOCIATION_QUERY}`,
+      "-f", `owner=${owner}`,
+      "-f", `name=${name}`,
+      "-f", `oid=${commitSha}`,
+    ];
+    if (after !== null) args.push("-f", `after=${after}`);
+    const response = ghJson(args, cwd, env);
+    const connection = response?.data?.repository?.object?.associatedPullRequests;
+    if (!connection || !Array.isArray(connection.nodes) || !connection.pageInfo || typeof connection.pageInfo.hasNextPage !== "boolean") {
+      throw new Error("GraphQL commit-to-PR association response is malformed");
+    }
+    for (const node of connection.nodes) {
+      graphAssociations.push({
+        number: node?.number,
+        state: node?.state,
+        merged_at: node?.mergedAt,
+        base: { ref: node?.baseRefName },
+        merge_commit_sha: node?.mergeCommit?.oid,
+      });
+    }
+    if (!connection.pageInfo.hasNextPage) {
+      return graphAssociations;
+    }
+    after = connection.pageInfo.endCursor;
+    if (typeof after !== "string" || after.length === 0) {
+      throw new Error("GraphQL commit-to-PR association pagination cursor is missing");
+    }
+  }
+  throw new Error(`GraphQL commit-to-PR association exceeded ${COMMIT_ASSOCIATION_MAX_PAGES} pages`);
 }
 
 function isStrictGitHubRfc3339Timestamp(value) {
@@ -433,6 +485,8 @@ export function resolveHasNewerMergeSinceCheckpoint({
       if (!association || typeof association !== "object" || !("merged_at" in association)) {
         return true;
       }
+      const associationState = association.state;
+      if (!["OPEN", "CLOSED", "MERGED"].includes(associationState)) return true;
       const mergedAt = association.merged_at;
       if (mergedAt !== null && !isStrictGitHubRfc3339Timestamp(mergedAt)) {
         return true;
@@ -445,7 +499,13 @@ export function resolveHasNewerMergeSinceCheckpoint({
       ) {
         return true;
       }
-      if (mergedAt && associationBase === baseBranch) return true;
+      const mergeCommitSha = association.merge_commit_sha;
+      if (associationState === "MERGED") {
+        if (!mergedAt || typeof mergeCommitSha !== "string" || mergeCommitSha !== commitSha) return true;
+        if (associationBase === baseBranch) return true;
+      } else if (mergedAt !== null || (mergeCommitSha !== null && mergeCommitSha !== undefined)) {
+        return true;
+      }
     }
   }
   return false;
@@ -456,6 +516,26 @@ function mapGhState(ghState) {
   if (s === "CLOSED") return "closed";
   if (s === "MERGED") return "merged";
   throw new Error(`Unknown GitHub state: "${ghState}"`);
+}
+
+function buildNeedsReconcileStartupResult(bundle, nextAction) {
+  const reconciliationBundle = {
+    ...bundle,
+    bundleKind: "needs_reconcile",
+    routeKind: "needs_reconcile",
+    selectedGate: "fail_closed_reconcile",
+    selectedStrategy: null,
+    nextAction,
+  };
+  return {
+    ok: true,
+    bundleKind: "needs_reconcile",
+    selectedStrategy: "none",
+    requiredReads: STRATEGY_REQUIRED_READS.none,
+    nextAction,
+    canonicalStateSummary: summarizeCanonicalState(reconciliationBundle),
+    bundle: reconciliationBundle,
+  };
 }
 // Single-contributor ownership gate (issue #1377): resolved once per CLI run
 // and memoized, since both the --issue and --pr paths (and, within the --pr
@@ -1229,50 +1309,21 @@ export function buildResolveDevLoopStartupResult(input, {
         const reason = mainPath !== null && isMainCheckout(effectiveCwd, mainPath)
           ? `Local implementation requires worktree isolation. Current directory is the main git checkout (${mainPath}). Run \`node scripts/loop/ensure-worktree.mjs --repo-root ${mainPath} --issue <n>${worktreeHintBaseFlag}\` to create+provision the worktree under tmp/worktrees/dev-loops/<kind>-<n>, then re-run from there.`
           : `Local implementation requires worktree isolation. Current directory is not under tmp/worktrees/. Run \`node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>${worktreeHintBaseFlag}\` to create+provision a worktree under tmp/worktrees/dev-loops/<kind>-<n>, then re-run from there.`;
-        return {
-          ok: true,
-          bundleKind: "needs_reconcile",
-          selectedStrategy: "none",
-          requiredReads: STRATEGY_REQUIRED_READS["none"],
-          nextAction: reason,
-          canonicalStateSummary: summarizeCanonicalState(bundle),
-          bundle,
-        };
+        return buildNeedsReconcileStartupResult(bundle, reason);
       }
       if (!isListedWorktree(effectiveCwd, allPaths)) {
         const reason = `Local implementation requires worktree isolation. Current directory is under tmp/worktrees/ but is not listed as a git worktree by \`git worktree list\`. Create a proper worktree with \`node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>${worktreeHintBaseFlag}\` and re-run.`;
-        return {
-          ok: true,
-          bundleKind: "needs_reconcile",
-          selectedStrategy: "none",
-          requiredReads: STRATEGY_REQUIRED_READS["none"],
-          nextAction: reason,
-          canonicalStateSummary: summarizeCanonicalState(bundle),
-          bundle,
-        };
+        return buildNeedsReconcileStartupResult(bundle, reason);
       }
       if (!isWorktreeCoreIsolated(effectiveCwd, allPaths)) {
         const reason = `Local implementation requires worktree isolation. node_modules/@dev-loops/core in this worktree resolves OUTSIDE its own packages/core (WORKTREE-DEPS-ISOLATED / WORKTREE-CREATE-PROVISION), so it would test the main checkout's core instead of this branch's. Re-provision the worktree with \`node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>${worktreeHintBaseFlag}\` and re-run from there.`;
-        return {
-          ok: true,
-          bundleKind: "needs_reconcile",
-          selectedStrategy: "none",
-          requiredReads: STRATEGY_REQUIRED_READS["none"],
-          nextAction: reason,
-          canonicalStateSummary: summarizeCanonicalState(bundle),
-          bundle,
-        };
+        return buildNeedsReconcileStartupResult(bundle, reason);
       }
     } catch {
-      return {
-        ok: true,
-        bundleKind: "needs_reconcile",
-        selectedStrategy: "none",
-        requiredReads: STRATEGY_REQUIRED_READS["none"],
-        nextAction: "Local implementation requires worktree isolation but git worktree list failed. Verify the repository and re-run from a worktree under tmp/worktrees/.",
-        canonicalStateSummary: summarizeCanonicalState(bundle),
+      return buildNeedsReconcileStartupResult(
         bundle,
-      };
+        "Local implementation requires worktree isolation but git worktree list failed. Verify the repository and re-run from a worktree under tmp/worktrees/.",
+      );
     }
   }
   return {

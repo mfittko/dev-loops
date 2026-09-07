@@ -22,6 +22,7 @@ import {
   ownershipGateAppliesToStrategy,
   runCli,
 } from "../../scripts/loop/resolve-dev-loop-startup.mjs";
+import { buildDevLoopHandoffEnvelope, validateHandoffEnvelope } from "@dev-loops/core/loop/handoff-envelope";
 
 const scriptPath = path.resolve("scripts/loop/resolve-dev-loop-startup.mjs");
 
@@ -76,6 +77,18 @@ async function writeTempJson(tempDir, name, value) {
   const filePath = path.join(tempDir, name);
   await writeFile(filePath, `${JSON.stringify(value)}\n`, "utf8");
   return filePath;
+}
+
+function graphCommitAssociations(nodes = [], pageInfo = { hasNextPage: false, endCursor: null }) {
+  return JSON.stringify({
+    data: {
+      repository: {
+        object: {
+          associatedPullRequests: { nodes, pageInfo },
+        },
+      },
+    },
+  });
 }
 
 test("parseResolveDevLoopStartupCliArgs rejects missing --input", () => {
@@ -821,6 +834,16 @@ test("resolver returns needs_reconcile for local_implementation from main checko
     assert.equal(result.ok, true);
     assert.equal(result.bundleKind, "needs_reconcile");
     assert.equal(result.selectedStrategy, "none");
+    assert.equal(result.bundle.bundleKind, "needs_reconcile");
+    assert.equal(result.bundle.routeKind, "needs_reconcile");
+    assert.equal(result.bundle.selectedStrategy, null);
+    const envelope = buildDevLoopHandoffEnvelope(result, loadDevLoopConfig(tempDir), {}, {
+      repoSlug: "mfittko/dev-loops",
+      repoRoot: tempDir,
+    });
+    assert.equal(envelope.routeKind, "needs_reconcile");
+    assert.equal(envelope.nextAction, result.nextAction);
+    assert.equal(validateHandoffEnvelope(envelope).ok, true);
     assert.ok(
       result.nextAction.includes("worktree isolation"),
       `nextAction should mention worktree isolation, got: ${result.nextAction}`,
@@ -2700,7 +2723,7 @@ test("resolveHasNewerMergeSinceCheckpoint: a squash-merged PR on the configured 
         baseBranch: "main",
         cwd: tempDir,
         resolveCommitPullRequests: ({ commitSha }) => commitSha === mergedSha
-          ? [{ number: 42, merged_at: "2026-09-07T10:00:00Z", base: { ref: "main" } }]
+          ? [{ number: 42, state: "MERGED", merged_at: "2026-09-07T10:00:00Z", base: { ref: "main" }, merge_commit_sha: mergedSha }]
           : [],
       }),
       true,
@@ -2726,7 +2749,7 @@ test("resolveHasNewerMergeSinceCheckpoint: mixed direct and PR history becomes s
         resolveCommitPullRequests: ({ commitSha }) => {
           observed.push(commitSha);
           return commitSha === mergedSha
-            ? [{ number: 43, merged_at: "2026-09-07T10:01:00Z", base: { ref: "main" } }]
+            ? [{ number: 43, state: "MERGED", merged_at: "2026-09-07T10:01:00Z", base: { ref: "main" }, merge_commit_sha: mergedSha }]
             : [];
         },
       }),
@@ -2739,19 +2762,62 @@ test("resolveHasNewerMergeSinceCheckpoint: mixed direct and PR history becomes s
   }
 });
 
-test("resolveHasNewerMergeSinceCheckpoint: open, closed-unmerged, and wrong-base associations do not qualify", async () => {
+test("resolveHasNewerMergeSinceCheckpoint: an open association does not qualify", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "retro-pr-association-nonqualifying-"));
   try {
     const { initialSha } = await initLocalOriginRepo(tempDir);
-    pushAnotherCommit(tempDir, "direct commit with non-qualifying associations");
+    pushAnotherCommit(tempDir, "direct commit with open association");
     assert.equal(
       resolveHasNewerMergeSinceCheckpoint({
         mergeCommit: initialSha,
         baseBranch: "main",
         cwd: tempDir,
         resolveCommitPullRequests: () => [
-          { number: 44, merged_at: null, base: { ref: "main" } },
-          { number: 45, merged_at: "2026-09-07T10:02:00Z", base: { ref: "release" } },
+          { number: 44, state: "OPEN", merged_at: null, base: { ref: "main" }, merge_commit_sha: null },
+        ],
+      }),
+      false,
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+    rmSync(`${tempDir}-remote`, { recursive: true, force: true });
+  }
+});
+
+test("resolveHasNewerMergeSinceCheckpoint: a closed-unmerged association does not qualify", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "retro-pr-association-closed-unmerged-"));
+  try {
+    const { initialSha } = await initLocalOriginRepo(tempDir);
+    pushAnotherCommit(tempDir, "direct commit with closed-unmerged association");
+    assert.equal(
+      resolveHasNewerMergeSinceCheckpoint({
+        mergeCommit: initialSha,
+        baseBranch: "main",
+        cwd: tempDir,
+        resolveCommitPullRequests: () => [
+          { number: 45, state: "CLOSED", merged_at: null, base: { ref: "main" }, merge_commit_sha: null },
+        ],
+      }),
+      false,
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+    rmSync(`${tempDir}-remote`, { recursive: true, force: true });
+  }
+});
+
+test("resolveHasNewerMergeSinceCheckpoint: a merged association into another base does not qualify", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "retro-pr-association-wrong-base-"));
+  try {
+    const { initialSha } = await initLocalOriginRepo(tempDir);
+    const associatedSha = pushAnotherCommit(tempDir, "commit associated with another base");
+    assert.equal(
+      resolveHasNewerMergeSinceCheckpoint({
+        mergeCommit: initialSha,
+        baseBranch: "main",
+        cwd: tempDir,
+        resolveCommitPullRequests: () => [
+          { number: 46, state: "MERGED", merged_at: "2026-09-07T10:02:00Z", base: { ref: "release" }, merge_commit_sha: associatedSha },
         ],
       }),
       false,
@@ -2895,6 +2961,16 @@ test("resolve-dev-loop-startup.mjs --pr end-to-end: a squash-merged PR associati
           [{ number: 9005, merged_at: "2026-09-07T10:00:00Z", base: { ref: "main" } }],
         ]),
       },
+      {
+        assertArgs: ["api", "graphql", `oid=${mergedSha}`],
+        stdout: graphCommitAssociations([{
+          number: 9005,
+          state: "MERGED",
+          mergedAt: "2026-09-07T10:00:00Z",
+          baseRefName: "main",
+          mergeCommit: { oid: mergedSha },
+        }]),
+      },
     ], { matchMode: "claims", logCalls: true });
     const result = await runNode(["--pr", "9006"], {
       cwd: tempDir,
@@ -2936,6 +3012,50 @@ test("resolve-dev-loop-startup.mjs --pr end-to-end: a squash-merged PR associati
   }
 });
 
+test("resolve-dev-loop-startup.mjs --pr end-to-end: GraphQL proves a squash merge into a configured non-default base", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-nondefault-base-e2e-"));
+  try {
+    const { initialSha } = await initLocalOriginRepo(tempDir);
+    execFileSync("git", ["checkout", "-b", "release"], { cwd: tempDir, stdio: "ignore" });
+    execFileSync("git", ["push", "-u", "origin", "release"], { cwd: tempDir, stdio: "ignore" });
+    writeFileSync(path.join(tempDir, "CHANGES.md"), "fix: squash merged into release (#77)\n", "utf8");
+    execFileSync("git", ["add", "-A"], { cwd: tempDir, stdio: "ignore" });
+    execFileSync("git", ["commit", "--quiet", "-m", "fix: squash merged into release (#77)"], { cwd: tempDir, stdio: "ignore" });
+    execFileSync("git", ["push", "origin", "HEAD:release"], { cwd: tempDir, stdio: "ignore" });
+    const mergedSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: tempDir, encoding: "utf8" }).trim();
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\nworkflow:\n  requireRetrospective: true\n  baseBranch: release\n", "utf8");
+    await mkdir(path.join(tempDir, ".pi"), { recursive: true });
+    await writeFile(path.join(tempDir, ".pi", "dev-loop-retrospective-checkpoint.json"), `${JSON.stringify({
+      state: "complete",
+      completedAt: "2026-08-06T01:00:38.000Z",
+      notes: "old cycle",
+      identity: { repo: "mfittko/dev-loops", prNumber: 1577, mergeCommit: initialSha },
+      provenance: VALID_PROVENANCE,
+    }, null, 2)}\n`, "utf8");
+    const ghStub = await writeGhStubHelper(tempDir, [
+      { assertArgs: ["pr", "view", "9077"], stdout: JSON.stringify({ state: "OPEN", mergedAt: null, mergeCommit: null, assignees: [], closingIssuesReferences: [], body: "" }) },
+      { assertArgContains: [`commits/${mergedSha}/pulls`], stdout: "[[]]" },
+      {
+        assertArgs: ["api", "graphql", `oid=${mergedSha}`],
+        stdout: graphCommitAssociations([{
+          number: 77,
+          state: "MERGED",
+          mergedAt: "2026-09-07T10:00:00Z",
+          baseRefName: "release",
+          mergeCommit: { oid: mergedSha },
+        }]),
+      },
+    ], { matchMode: "claims", logCalls: true });
+    const result = await runNode(["--pr", "9077"], { cwd: tempDir, env: { ...ghStub.env, ...resolverTestEnv() } });
+    assert.equal(result.code, 0, result.stderr);
+    const calls = await readFile(ghStub.ghLogPath, "utf8");
+    assert.equal(JSON.parse(result.stdout.trim()).bundleKind, "needs_reconcile", calls);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+    rmSync(`${tempDir}-remote`, { recursive: true, force: true });
+  }
+});
+
 test("resolve-dev-loop-startup.mjs --pr end-to-end: a skipped checkpoint stays satisfied across direct-only history", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-skipped-direct-e2e-"));
   try {
@@ -2960,7 +3080,8 @@ test("resolve-dev-loop-startup.mjs --pr end-to-end: a skipped checkpoint stays s
           state: "OPEN", mergedAt: null, mergeCommit: null, assignees: [], closingIssuesReferences: [], body: "",
         }),
       },
-      { assertArgContains: [`commits/${directSha}/pulls`], stdout: "[]" },
+      { assertArgContains: [`commits/${directSha}/pulls`], stdout: "[[]]" },
+      { assertArgs: ["api", "graphql", `oid=${directSha}`], stdout: graphCommitAssociations() },
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "9009"], {
       cwd: tempDir,
@@ -3058,6 +3179,14 @@ test("resolve-dev-loop-startup.mjs --pr end-to-end: commit association paginatio
           [{ number: 101, merged_at: null, base: { ref: "main" } }],
         ]),
       },
+      {
+        assertArgs: ["api", "graphql", `oid=${newerSha}`],
+        stdout: graphCommitAssociations([], { hasNextPage: true, endCursor: "cursor-1" }),
+      },
+      {
+        assertArgs: ["api", "graphql", `oid=${newerSha}`, "after=cursor-1"],
+        stdout: graphCommitAssociations(),
+      },
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "9012"], {
       cwd: tempDir,
@@ -3071,7 +3200,7 @@ test("resolve-dev-loop-startup.mjs --pr end-to-end: commit association paginatio
   }
 });
 
-test("resolve-dev-loop-startup.mjs --pr end-to-end: a non-slurped full association page fails closed as possibly truncated", async () => {
+test("resolve-dev-loop-startup.mjs --pr end-to-end: a bare [] association response fails closed while [[]] is valid", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-association-truncated-e2e-"));
   try {
     const { initialSha } = await initLocalOriginRepo(tempDir);
@@ -3092,11 +3221,7 @@ test("resolve-dev-loop-startup.mjs --pr end-to-end: a non-slurped full associati
       },
       {
         assertArgContains: [`commits/${newerSha}/pulls`],
-        stdout: JSON.stringify(Array.from({ length: 100 }, (_, index) => ({
-          number: index + 1,
-          merged_at: null,
-          base: { ref: "main" },
-        }))),
+        stdout: "[]",
       },
     ], { matchMode: "claims" });
     const result = await runNode(["--pr", "9013"], {
@@ -3143,8 +3268,9 @@ test("startup → build-envelope CLI end-to-end: a direct-only newer commit does
       },
       {
         assertArgContains: [`commits/${directSha}/pulls`],
-        stdout: "[]",
+        stdout: "[[]]",
       },
+      { assertArgs: ["api", "graphql", `oid=${directSha}`], stdout: graphCommitAssociations() },
     ], { matchMode: "claims" });
     const cliPath = path.resolve("cli/index.mjs");
     const result = await runNodeHelper(cliPath, ["loop", "startup", "--pr", "9007"], {
@@ -3192,9 +3318,11 @@ test("loop startup CLI: direct-only checkpoint history routes identically throug
     }, null, 2)}\n`, "utf8");
     const ghStub = await writeGhStubHelper(tempDir, [
       { assertArgs: ["pr", "view", "9011"], stdout: JSON.stringify({ state: "OPEN", mergedAt: null, mergeCommit: null, assignees: [], closingIssuesReferences: [], body: "" }) },
-      { assertArgContains: [`commits/${directSha}/pulls`], stdout: "[]" },
+      { assertArgContains: [`commits/${directSha}/pulls`], stdout: "[[]]" },
+      { assertArgs: ["api", "graphql", `oid=${directSha}`], stdout: graphCommitAssociations() },
       { assertArgs: ["pr", "view", "9011"], stdout: JSON.stringify({ state: "OPEN", mergedAt: null, mergeCommit: null, assignees: [], closingIssuesReferences: [], body: "" }) },
-      { assertArgContains: [`commits/${directSha}/pulls`], stdout: "[]" },
+      { assertArgContains: [`commits/${directSha}/pulls`], stdout: "[[]]" },
+      { assertArgs: ["api", "graphql", `oid=${directSha}`], stdout: graphCommitAssociations() },
     ]);
     const cliPath = path.resolve("cli/index.mjs");
     const piResult = await runNodeHelper(cliPath, ["loop", "startup", "--pr", "9011"], {
@@ -3288,6 +3416,18 @@ test("resolver returns needs_reconcile for local_implementation when the worktre
     assert.equal(result.ok, true);
     assert.equal(result.bundleKind, "needs_reconcile");
     assert.equal(result.selectedStrategy, "none");
+    assert.equal(result.bundle.bundleKind, "needs_reconcile");
+    assert.equal(result.bundle.routeKind, "needs_reconcile");
+    assert.equal(result.bundle.selectedGate, "fail_closed_reconcile");
+    assert.equal(result.bundle.selectedStrategy, null);
+    assert.equal(result.bundle.nextAction, result.nextAction);
+    const envelope = buildDevLoopHandoffEnvelope(result, loadDevLoopConfig(worktreeDir), {}, {
+      repoSlug: "mfittko/dev-loops",
+      repoRoot: tempDir,
+    });
+    assert.equal(envelope.routeKind, "needs_reconcile");
+    assert.equal(envelope.nextAction, result.nextAction);
+    assert.equal(validateHandoffEnvelope(envelope).ok, true);
     assert.ok(
       result.nextAction.includes("node_modules/@dev-loops/core"),
       `nextAction should mention the core link, got: ${result.nextAction}`,

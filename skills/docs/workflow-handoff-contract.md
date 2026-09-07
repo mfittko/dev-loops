@@ -16,7 +16,7 @@ template.
 | Caller options (`repoRoot`, `worktreeCwd`) | `cwd` |
 | Gate state (detectors) + strategy defaults | `currentGate`; `worktreeRequired` except for terminal reconciliation |
 | Settings (`.devloops` at repo root + `defaults.yaml`) | `gateConfig`, `stopRules` except for terminal reconciliation, `asyncStartMode`, `requireDraftFirst`, `maxCopilotRounds` |
-| Terminal reconciliation invariant (`needs_reconcile` / `fail_closed_reconcile` / `null`) | reconciliation `nextAction`, `worktreeRequired=false`, canonical reconcile acceptance (criterion, evidence, and finalization limit), `stopRules=["reconcile"]` plus `"merge"` only when `humanMergeOnly` requires it |
+| Terminal reconciliation invariant (`needs_reconcile` / `fail_closed_reconcile` / `null`) | `worktreeRequired=false`, canonical reconcile acceptance (criterion, evidence, and finalization limit), `stopRules=["reconcile"]` plus `"merge"` only when `humanMergeOnly` requires it |
 | Gate state (detectors) | `gateState.{currentHeadSha, ciStatus, unresolvedThreadCount, copilotRoundCount}` (the volatile tail — see below) |
 | Envelope builder (timestamp) | `gateState.derivedAt` (build time, not detector-derived) |
 | Canonical sanctioned-command map (`scripts/loop/sanctioned-commands.mjs`) | `sanctionedCommands` |
@@ -69,7 +69,7 @@ and `control.*` are derived from a static strategy+gate mapping table:
 
 Unknown strategy and gate combinations throw an explicit error listing known combos. A resolver result with `routeKind: "needs_reconcile"`, `selectedGate: "fail_closed_reconcile"`, and `selectedStrategy: null` is intentionally accepted as a terminal, actionable envelope; null remains invalid for routed work.
 
-For that terminal reconciliation tuple, the builder and serialized-envelope validator enforce the full actionable shape: `nextAction` instructs reconciliation, no worktree is required, acceptance exactly matches the table's reconcile criterion/evidence/finalization limit, and the stop rules are exactly `["reconcile"]` with an optional trailing `"merge"` when human-only merge policy applies. Configured `autonomy.stopAt` and ordinary strategy defaults do not override this terminal behavior.
+For that terminal reconciliation tuple, the resolver remains the authority for the actual `nextAction`; the builder copies it unchanged. The validator recognizes canonical resolver directives (reconcile, complete-or-explicitly-skip, and worktree-isolation repair) by their complete directive prefix rather than a loose substring. The builder also requires outer and nested `bundleKind` plus the nested route tuple to agree bidirectionally, so an outer stop can never be discarded into a routed envelope. No worktree is required, acceptance exactly matches the table's reconcile criterion/evidence/finalization limit, and the stop rules are exactly `["reconcile"]` with an optional trailing `"merge"` when human-only merge policy applies. Configured `autonomy.stopAt` and ordinary strategy defaults do not override this terminal behavior.
 
 ## Stop rules
 
