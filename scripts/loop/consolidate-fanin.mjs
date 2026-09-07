@@ -510,6 +510,14 @@ function validateCarryForwardPlanEntries(carried) {
       } else if (Array.isArray(entry.findings) && entry.findings.length > 0) {
         throw new Error(`--carry-forward-plan carried[${i}] declares prevVerdict "clean" but carries a non-empty "findings" array — a clean carry must never smuggle findings through (fail-closed)`);
       }
+    } else if (Array.isArray(entry.findings) && entry.findings.length > 0) {
+      // FAIL-CLOSED, the symmetric case: an entry with NO prevVerdict at all
+      // otherwise falls straight through this whole block and the upsert below
+      // defaults it to clean/[] — silently converting a real open finding into
+      // an approval, the exact defect the "clean" branch above already guards
+      // against when prevVerdict IS present. An omitted field must not be a
+      // backdoor around the same check.
+      throw new Error(`--carry-forward-plan carried[${i}] carries a non-empty "findings" array but no "prevVerdict": "findings_present" — refusing to upsert it as a clean carry (fail-closed)`);
     }
   });
   return carried;

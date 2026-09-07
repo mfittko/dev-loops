@@ -1377,6 +1377,28 @@ test("consolidateGateFanin refuses a --carry-forward-plan entry declaring clean 
   });
 });
 
+// Fail-closed, the same defect from the omitted-field side: a plan entry
+// carrying real findings but NO prevVerdict at all must not fall through the
+// `entry.prevVerdict !== undefined` gate and get upserted as a clean/[] entry
+// — that would silently convert an open finding into a pass, the exact class
+// this whole contract exists to forbid.
+test("consolidateGateFanin refuses a --carry-forward-plan entry with findings but no prevVerdict", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir({}, async (dir) => {
+      await assert.rejects(
+        () => consolidateGateFanin({
+          findingsDir: dir,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["correctness"],
+          carryForwardPlan: [{ angle: "correctness", carriedFromHead: "a".repeat(40), findings: [{ severity: "must-fix", summary: "smuggled" }] }],
+        }),
+        /carries a non-empty "findings" array but no "prevVerdict": "findings_present"/,
+      );
+    });
+  });
+});
+
 test("consolidateGateFanin refuses a --carry-forward-plan entry with a malformed prevVerdict", async () => {
   await withMinimalConfigRepoRoot(async (repoRoot) => {
     await withFindingsDir({}, async (dir) => {

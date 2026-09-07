@@ -93,7 +93,7 @@ async function runMainRaw(argv, { repoRoot }) {
   }
 }
 
-async function makeCarryForwardRepo({ mandatoryAngles = [], perAngle, mutate }) {
+async function makeCarryForwardRepo({ mandatoryAngles = [], perAngle, mutate, verdict = "clean", findings = [] }) {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "carry-forward-cli-"));
   git(repoRoot, ["init", "-q"]);
   git(repoRoot, ["config", "user.email", "test@example.com"]);
@@ -124,13 +124,16 @@ async function makeCarryForwardRepo({ mandatoryAngles = [], perAngle, mutate }) 
   git(repoRoot, ["commit", "-q", "-m", "delta"]);
   const headSha = git(repoRoot, ["rev-parse", "HEAD"]).trim().toLowerCase();
 
-  // Prior CLEAN findings-log recorded at prevHead.
+  // Prior findings-log recorded at prevHead (clean by default; a caller may
+  // pass verdict: "findings_present" + matching findings to pin the same
+  // fail-closed guard against a findings_present prior verdict, issue #2017).
   const logPath = path.join(repoRoot, buildLogPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" }));
   await mkdir(path.dirname(logPath), { recursive: true });
   await writeFile(logPath, JSON.stringify({
     headSha: prevHead,
-    verdict: "clean",
+    verdict,
     provenance: { distinctReviewers: perAngle.length, perAngle },
+    findings,
   }), "utf8");
 
   return { repoRoot, prevHead, headSha };
@@ -289,6 +292,47 @@ test("CLI forces the RENAME_ONLY angles to re-run when the delta contains a rena
     assert.ok(rerun.includes("correctness"), "rename forces correctness");
     // coverage is not RENAME_ONLY-mapped and its surface (test/code) is untouched → carries.
     assert.ok(carried.includes("coverage"), "coverage carries (not a rename angle, surface untouched)");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI forces the RENAME_ONLY angles to re-run when the delta contains a rename (findings_present prior verdict)", async () => {
+  // Same rename fail-closed guard as above, pinned against a findings_present
+  // prior verdict (issue #2017): the rename guard must force RENAME_ONLY
+  // angles to re-run regardless of whether the prior round was clean or
+  // findings_present, and an unrelated angle's carried open finding must
+  // survive the carry unchanged.
+  const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
+    mandatoryAngles: [],
+    perAngle: [
+      { angle: "scope", reviewer: "review-a" },
+      { angle: "correctness", reviewer: "review-b" },
+      { angle: "coverage", reviewer: "review-c" },
+    ],
+    verdict: "findings_present",
+    findings: [{ angle: "coverage", severity: "nice-to-have", summary: "still open" }],
+    mutate: async (root) => {
+      git(root, ["mv", "docs/guide.md", "docs/handbook.md"]);
+    },
+  });
+  try {
+    const result = await runMain([
+      "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
+    ], { repoRoot });
+    assert.equal(result.ok, true);
+    const rerun = result.mustRerun.map((m) => m.angle);
+    const carried = result.carried.map((c) => c.angle);
+    // RENAME_ONLY-mapped angles present in the prior log must re-run even
+    // though the prior round was findings_present, not clean.
+    assert.ok(rerun.includes("scope"), "rename forces scope");
+    assert.ok(rerun.includes("correctness"), "rename forces correctness");
+    // coverage is not RENAME_ONLY-mapped and its surface (test/code) is untouched → carries,
+    // bringing its open finding forward unchanged (never dropped, never converted to clean).
+    const carriedCoverage = result.carried.find((c) => c.angle === "coverage");
+    assert.ok(carriedCoverage, "coverage carries (not a rename angle, surface untouched)");
+    assert.equal(carriedCoverage.prevVerdict, "findings_present");
+    assert.deepEqual(carriedCoverage.findings, [{ angle: "coverage", severity: "nice-to-have", summary: "still open" }]);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
