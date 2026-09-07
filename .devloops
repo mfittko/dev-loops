@@ -150,6 +150,10 @@ workflow:
   requireRetrospective: true
   requireDraftFirst: true
   devModeDefault: true
+  # TEMPORARY (epic #2034 slim line): every dev-loop PR targets the 1.0.2-slim
+  # integration branch instead of the auto-detected default. Revert (delete this
+  # key) after the slim line is promoted or abandoned per #2047.
+  baseBranch: 1.0.2-slim
 
 localImplementation:
   lightMode:
