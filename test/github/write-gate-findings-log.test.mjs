@@ -1030,6 +1030,88 @@ test("parseProvenanceJson rejects a malformed carriedFromHead (not a hex SHA)", 
   );
 });
 
+// issue #2017: carriedVerdict distinguishes a findings-present carry (its
+// prior open findings preserved — recorded separately in --findings) from an
+// ordinary clean carry, directly on the provenance row.
+test("parseProvenanceJson accepts and normalizes a findings_present carried angle (carriedVerdict)", () => {
+  const prov = parseProvenanceJson(JSON.stringify({
+    distinctReviewers: 1,
+    perAngle: [
+      { angle: "coverage", reviewer: "review-b", carriedFromHead: "ABC1234", carriedVerdict: "findings_present" },
+    ],
+  }));
+  assert.deepEqual(prov.perAngle[0], { angle: "coverage", reviewer: "review-b", carriedFromHead: "abc1234", carriedVerdict: "findings_present" });
+});
+
+test("parseProvenanceJson accepts a clean carriedVerdict, distinct from a findings_present carry", () => {
+  const prov = parseProvenanceJson(JSON.stringify({
+    distinctReviewers: 1,
+    perAngle: [
+      { angle: "correctness", reviewer: "review-a", carriedFromHead: "abc1234", carriedVerdict: "clean" },
+    ],
+  }));
+  assert.equal(prov.perAngle[0].carriedVerdict, "clean");
+});
+
+test("parseProvenanceJson rejects a malformed carriedVerdict", () => {
+  assert.throws(
+    () => parseProvenanceJson(JSON.stringify({
+      distinctReviewers: 1,
+      perAngle: [{ angle: "correctness", reviewer: "review-a", carriedFromHead: "abc1234", carriedVerdict: "somehow-clean" }],
+    })),
+    /carriedVerdict must be "clean" or "findings_present"/,
+  );
+});
+
+test("parseProvenanceJson rejects carriedVerdict on a FRESH (non-carried) angle", () => {
+  assert.throws(
+    () => parseProvenanceJson(JSON.stringify({
+      distinctReviewers: 1,
+      perAngle: [{ angle: "correctness", reviewer: "review-a", carriedVerdict: "findings_present" }],
+    })),
+    /carriedVerdict requires carriedFromHead/,
+  );
+});
+
+// End-to-end (issue #2017): the durable ledger records a carried
+// findings_present angle's provenance distinctly from a clean carry, AND its
+// prior open findings (via --findings, unchanged from a fresh round's shape)
+// — so the gate still blocks on them exactly as if the angle were freshly
+// reviewed.
+test("writeGateFindingsLog records a findings_present carried angle's provenance distinctly, with its findings intact", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "wgfl-carried-findings-present-"));
+  try {
+    const result = await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "findings_present",
+      findings: JSON.stringify([{ severity: "high", angle: "coverage", summary: "still open from a prior round" }]),
+      provenance: JSON.stringify({
+        distinctReviewers: 2,
+        perAngle: [
+          { angle: "coverage", reviewer: "review-b", carriedFromHead: "b".repeat(40), carriedVerdict: "findings_present" },
+          { angle: "pr-description", reviewer: "review-c" },
+        ],
+      }),
+      tmpRoot: dir,
+    });
+    const written = JSON.parse(await readFile(result.path, "utf8"));
+    assert.equal(written.verdict, "findings_present");
+    assert.equal(written.provenance.perAngle[0].carriedFromHead, "b".repeat(40));
+    assert.equal(written.provenance.perAngle[0].carriedVerdict, "findings_present");
+    // The carried finding itself is recorded, unchanged, in the flat ledger —
+    // never dropped and never replaced by an approval.
+    assert.equal(written.findings.length, 1);
+    assert.equal(written.findings[0].angle, "coverage");
+    assert.equal(written.findings[0].severity, "high");
+    assert.equal(written.findings[0].summary, "still open from a prior round");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("parseProvenanceJson rejects malformed provenance (invalid JSON, non-object, bad shape)", () => {
   assert.throws(() => parseProvenanceJson("{not json"), /must be valid JSON/);
   assert.throws(() => parseProvenanceJson("[]"), /must be a JSON object/);
