@@ -1393,7 +1393,30 @@ test("consolidateGateFanin refuses a --carry-forward-plan entry with findings bu
           carriedAngles: ["correctness"],
           carryForwardPlan: [{ angle: "correctness", carriedFromHead: "a".repeat(40), findings: [{ severity: "must-fix", summary: "smuggled" }] }],
         }),
-        /carries a non-empty "findings" array but no "prevVerdict": "findings_present"/,
+        /carries a "findings" payload \(non-empty array\) but no "prevVerdict": "findings_present"/,
+      );
+    });
+  });
+});
+
+// Fail-closed, the malformed-payload variant of the same omitted-field gap:
+// a plan entry with NO prevVerdict whose "findings" is present but not a
+// well-formed non-empty array (a string/object payload, not an array at all)
+// must not fall through to the clean/[] default either — only the exact
+// non-empty-array shape is caught by the check above, so a malformed
+// findings payload without prevVerdict would otherwise slip past silently.
+test("consolidateGateFanin refuses a --carry-forward-plan entry with malformed (non-array) findings and no prevVerdict", async () => {
+  await withMinimalConfigRepoRoot(async (repoRoot) => {
+    await withFindingsDir({}, async (dir) => {
+      await assert.rejects(
+        () => consolidateGateFanin({
+          findingsDir: dir,
+          gate: "draft_gate",
+          repoRoot,
+          carriedAngles: ["correctness"],
+          carryForwardPlan: [{ angle: "correctness", carriedFromHead: "a".repeat(40), findings: "not-an-array" }],
+        }),
+        /carried\[0\] carries a "findings" payload .* but no "prevVerdict": "findings_present"/,
       );
     });
   });

@@ -200,6 +200,21 @@ export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [] }) {
   if (log.verdict !== "clean" && log.verdict !== "findings_present") {
     throw new Error(`prior gate findings-log verdict is ${JSON.stringify(log.verdict ?? null)}, not carry-forward-eligible (clean or findings_present) — nothing to carry forward (fail-closed)`);
   }
+  // FAIL-CLOSED (Copilot review, PR #2019): "findings_present" as the ROUND's
+  // overall verdict is only meaningful if the round actually recorded at least
+  // one finding — that is what the fan-in verdict contract means by
+  // findings_present (see gate-fanin). A log claiming findings_present but
+  // carrying a missing, empty, or non-array `findings` field is indistinguishable
+  // from a truncated/corrupt log: there is no way to know which angle(s) it
+  // should still be blocking on. Accepting it would fall through to the
+  // per-angle loop below with `priorFindingsByAngle` empty, marking every angle
+  // "clean" and carrying it forward as a pass — silently dropping whatever the
+  // round actually raised. Refuse the whole plan here (matching the other
+  // whole-log refusals in this function) so the round takes a full re-fan
+  // instead.
+  if (log.verdict === "findings_present" && !(Array.isArray(log.findings) && log.findings.length > 0)) {
+    throw new Error(`prior gate findings-log verdict is "findings_present" but its findings field is ${JSON.stringify(log.findings ?? null)} (missing/empty/non-array) — a findings_present round implies at least one finding; cannot carry forward without proof of which angle(s) are still open (fail-closed)`);
+  }
   // FAIL-CLOSED: a carried entry stamps `carriedFromHead`/`prevHead` with the prior
   // log's headSha; downstream write-gate-findings-log requires a 7-64 hex SHA there.
   // A malformed prior log (missing/non-string/non-hex headSha) must NOT yield a plan

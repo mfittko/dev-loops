@@ -207,16 +207,30 @@ test("buildCarryForwardPlan fails closed on a non-carry-forward-eligible or miss
   );
 });
 
-// #2017: a prior findings_present ROUND (not just a clean one) is now
-// carry-forward-eligible at the overall-verdict guard — it no longer throws
-// outright. Per-angle eligibility still depends on each angle's own findings
-// and surface (covered by the dedicated tests below).
-test("buildCarryForwardPlan accepts a findings_present prior log (issue #2017)", () => {
-  const plan = buildCarryForwardPlan({ log: { ...cleanLog, verdict: "findings_present" }, changedFiles: ["docs/guide.md"] });
-  assert.equal(plan.prevHead, "aaaaaaa");
-  // cleanLog itself carries no `findings` array, so every angle is still
-  // individually clean — only the ROUND's overall verdict is findings_present.
-  assert.deepEqual(plan.carried.map((c) => c.angle).sort(), ["correctness", "coverage"]);
+// #2017: a prior findings_present ROUND (not just a clean one) is
+// carry-forward-eligible at the overall-verdict guard when it carries proof —
+// a non-empty `findings` array — of which angle(s) it is still blocking on
+// (covered by the dedicated carry-with-findings tests below).
+//
+// Copilot review (PR #2019): a "findings_present" round with NO findings array
+// (or an empty one) is inconsistent with fan-in semantics — findings_present
+// implies at least one recorded finding — and is indistinguishable from a
+// truncated/corrupt log. Accepting it would silently carry every angle forward
+// as individually clean, dropping whatever finding the round actually raised.
+// Refuse the whole plan instead (fail-closed, matching the other whole-log
+// refusals in this file) so the round takes a full re-fan.
+test("buildCarryForwardPlan fails closed on a findings_present prior log with no findings array (issue #2019 Copilot)", () => {
+  assert.throws(
+    () => buildCarryForwardPlan({ log: { ...cleanLog, verdict: "findings_present" }, changedFiles: ["docs/guide.md"] }),
+    /verdict is "findings_present" but its findings field is/,
+  );
+});
+
+test("buildCarryForwardPlan fails closed on a findings_present prior log with an empty findings array (issue #2019 Copilot)", () => {
+  assert.throws(
+    () => buildCarryForwardPlan({ log: { ...cleanLog, verdict: "findings_present", findings: [] }, changedFiles: ["docs/guide.md"] }),
+    /verdict is "findings_present" but its findings field is/,
+  );
 });
 
 test("buildCarryForwardPlan fails closed on a malformed prior-log headSha (no bad carriedFromHead stamp)", () => {

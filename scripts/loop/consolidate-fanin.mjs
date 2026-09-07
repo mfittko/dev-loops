@@ -510,14 +510,23 @@ function validateCarryForwardPlanEntries(carried) {
       } else if (Array.isArray(entry.findings) && entry.findings.length > 0) {
         throw new Error(`--carry-forward-plan carried[${i}] declares prevVerdict "clean" but carries a non-empty "findings" array — a clean carry must never smuggle findings through (fail-closed)`);
       }
-    } else if (Array.isArray(entry.findings) && entry.findings.length > 0) {
+    } else if (entry.findings !== undefined && entry.findings !== null
+        && (!Array.isArray(entry.findings) || entry.findings.length > 0)) {
       // FAIL-CLOSED, the symmetric case: an entry with NO prevVerdict at all
       // otherwise falls straight through this whole block and the upsert below
       // defaults it to clean/[] — silently converting a real open finding into
       // an approval, the exact defect the "clean" branch above already guards
       // against when prevVerdict IS present. An omitted field must not be a
       // backdoor around the same check.
-      throw new Error(`--carry-forward-plan carried[${i}] carries a non-empty "findings" array but no "prevVerdict": "findings_present" — refusing to upsert it as a clean carry (fail-closed)`);
+      //
+      // Copilot review (PR #2019): the ARRAY-shape check alone still fails
+      // OPEN when `findings` is present but malformed (a string/object, not an
+      // array at all) — that payload silently fell through to the same
+      // clean/[] default. Any PRESENT findings payload (not undefined/null)
+      // that is not a well-formed non-empty array must throw here too; only
+      // an explicit `prevVerdict: "findings_present"` with a well-formed
+      // non-empty findings array is eligible to carry findings through.
+      throw new Error(`--carry-forward-plan carried[${i}] carries a "findings" payload (${Array.isArray(entry.findings) ? "non-empty array" : typeof entry.findings}) but no "prevVerdict": "findings_present" — refusing to upsert it as a clean carry (fail-closed)`);
     }
   });
   return carried;
