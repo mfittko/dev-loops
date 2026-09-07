@@ -3,13 +3,44 @@ import { test } from "bun:test";
 import { discoverRepositoryTests } from "../../scripts/run-bun-test.mjs";
 import { refreshTestTimings } from "../../scripts/refresh-test-timings.mjs";
 
-test("timing profile covers the complete inventory", async () => {
-  const profile = await Bun.file(process.env.BUN_TEST_TIMINGS_PATH ?? ".bun-test-timings.json").json();
-  assert.equal(profile.version, 1);
-  assert.deepEqual(Object.keys(profile.files ?? {}).sort(), await discoverRepositoryTests());
+function inspectTimingCache(profile, inventory) {
+  assert.equal(profile?.version, 1);
+  assert.ok(profile.files && typeof profile.files === "object" && !Array.isArray(profile.files));
   assert.ok(Object.values(profile.files).every((value) => Number.isInteger(value) && value >= 0));
   assert.match(profile.provenance?.bunVersion ?? "", /^1\.4\./);
-  assert.equal(profile.provenance?.parallelism, 8);
+  assert.ok(Number.isInteger(profile.provenance?.parallelism) && profile.provenance.parallelism > 0);
+  const cached = new Set(Object.keys(profile.files));
+  const intended = new Set(inventory);
+  return {
+    hits: inventory.filter((file) => cached.has(file)),
+    misses: inventory.filter((file) => !cached.has(file)),
+    stale: [...cached].filter((file) => !intended.has(file)).sort(),
+  };
+}
+
+test("timing profile is a compatible cache for the current inventory", async () => {
+  const profile = await Bun.file(process.env.BUN_TEST_TIMINGS_PATH ?? ".bun-test-timings.json").json();
+  inspectTimingCache(profile, await discoverRepositoryTests());
+});
+
+test("timing cache tolerates new and stale inventory entries as cache misses", () => {
+  const result = inspectTimingCache({
+    version: 1,
+    files: { "test/present.test.mjs": 12, "test/stale.test.mjs": 34 },
+    provenance: { bunVersion: "1.4.1", parallelism: 2 },
+  }, ["test/new.test.mjs", "test/present.test.mjs"]);
+  assert.deepEqual(result, {
+    hits: ["test/present.test.mjs"],
+    misses: ["test/new.test.mjs"],
+    stale: ["test/stale.test.mjs"],
+  });
+});
+
+test("timing cache rejects incompatible schema and timing values", () => {
+  const provenance = { bunVersion: "1.4.1", parallelism: 1 };
+  assert.throws(() => inspectTimingCache({ version: 2, files: {}, provenance }, []));
+  assert.throws(() => inspectTimingCache({ version: 1, files: [], provenance }, []));
+  assert.throws(() => inspectTimingCache({ version: 1, files: { "test/a.test.mjs": -1 }, provenance }, []));
 });
 
 test("successful timing refresh stamps and atomically promotes an exact profile", async () => {

@@ -5,11 +5,16 @@ import { VERIFY_SUITES, createAttributedWriter, runSuite, runVerification } from
 
 test("verification attempts every suite and aggregates failures", async () => {
   const attempted = [];
-  const result = await runVerification({ execute: async (suite) => { attempted.push(suite); return suite === "test:docs" ? 7 : 0; } });
+  let clock = 100;
+  const result = await runVerification({
+    execute: async (suite) => { attempted.push(suite); clock += 5; return suite === "test:docs" ? 7 : 0; },
+    now: () => clock,
+  });
   assert.deepEqual(VERIFY_SUITES, ["test:all", "test:docs", "test:workflows"]);
   assert.deepEqual(attempted, VERIFY_SUITES);
   assert.equal(result.ok, false);
-  assert.deepEqual(result.results.find(({ exitCode }) => exitCode), { suite: "test:docs", exitCode: 7 });
+  assert.deepEqual(result.results.find(({ exitCode }) => exitCode), { suite: "test:docs", exitCode: 7, durationMs: 10 });
+  assert.equal(result.wallMs, 15);
 });
 
 test("attributed output preserves lines split across stream chunks", () => {

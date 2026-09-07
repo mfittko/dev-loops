@@ -40,13 +40,23 @@ export function runSuite(suite, {
   });
 }
 
-export async function runVerification({ suites = VERIFY_SUITES, execute = runSuite } = {}) {
-  const results = await Promise.all(suites.map(async (suite) => ({ suite, exitCode: await execute(suite) })));
-  return { ok: results.every(({ exitCode }) => exitCode === 0), results };
+export async function runVerification({ suites = VERIFY_SUITES, execute = runSuite, now = () => performance.now() } = {}) {
+  const wallStarted = now();
+  const results = await Promise.all(suites.map(async (suite) => {
+    const started = now();
+    const exitCode = await execute(suite);
+    return { suite, exitCode, durationMs: now() - started };
+  }));
+  return { ok: results.every(({ exitCode }) => exitCode === 0), results, wallMs: now() - wallStarted };
+}
+
+export function formatDuration(milliseconds) {
+  return milliseconds < 1000 ? `${Math.round(milliseconds)}ms` : `${(milliseconds / 1000).toFixed(2)}s`;
 }
 
 if (import.meta.main) {
   const result = await runVerification();
-  for (const { suite, exitCode } of result.results) process.stderr.write(`[verify] ${suite}: ${exitCode ? `fail (exit ${exitCode})` : "pass"}\n`);
+  for (const { suite, exitCode, durationMs } of result.results) process.stderr.write(`[verify] ${suite}: ${exitCode ? `fail (exit ${exitCode})` : "pass"} (${formatDuration(durationMs)})\n`);
+  process.stderr.write(`[verify] total: ${result.ok ? "pass" : "fail"} (${formatDuration(result.wallMs)} wall)\n`);
   process.exitCode = result.ok ? 0 : 1;
 }
