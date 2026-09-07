@@ -363,14 +363,14 @@ test("judgePassCli reject records a fingerprint audit entry and creates no issue
   assert.equal(entry.followUpIssueNumber, undefined);
 });
 
-// #2032 VALIDATE-COVERAGE-ADMISSION rehearsal: when the judge applies the
+// VALIDATE-COVERAGE-ADMISSION rehearsal: when the judge applies the
 // coverage-admission rule, an already-covered coverage permutation is `reject`
 // (dropped from the act list before fixer dispatch), a missing public-boundary
 // behavior is `act`, and a demonstrated fail-open uncertainty defect is retained
 // as `act`. This exercises the existing disposition pipeline — no new dispatch
 // code — and mirrors the review-side accept/reject/retain outcome for the same
 // three coverage findings.
-test("runJudgePass coverage-admission rehearsal: reject an already-covered permutation, accept a missing public-boundary behavior, retain a fail-open defect (#2032)", () => {
+test("runJudgePass coverage-admission rehearsal: reject an already-covered permutation, accept a missing public-boundary behavior, retain a fail-open defect", () => {
   const findings = ledger(
     finding({ angle: "coverage", summary: "add a permutation of an already-covered helper path" }),
     finding({ angle: "coverage", summary: "no test for the CLI argument-parsing boundary (public seam)" }),
@@ -393,11 +393,11 @@ test("runJudgePass coverage-admission rehearsal: reject an already-covered permu
   assert.deepEqual(result.counts, { act: 2, defer: 0, reject: 1 });
 });
 
-// #2032 AC4: a repeated coverage demand stays `reject` across rounds absent new
-// evidence, and the comparison rides the EXISTING finding fingerprint (the
-// prior-round ledger), not a new durable rejection registry. Genuinely new
-// evidence naming a distinct boundary is reconsidered and acted on.
-test("runJudgePass two-round rehearsal: an unchanged coverage demand stays reject while new distinct-boundary evidence is acted on (#2032)", () => {
+// A repeated coverage demand stays `reject` across rounds absent new evidence,
+// and the comparison rides the EXISTING finding fingerprint (the prior-round
+// ledger), not a new durable rejection registry. Genuinely new evidence naming
+// a distinct boundary is reconsidered and acted on.
+test("runJudgePass two-round rehearsal: an unchanged coverage demand stays reject while new distinct-boundary evidence is acted on", () => {
   const coverageDemand = finding({ angle: "coverage", summary: "coverage is only 88%, add more tests" });
 
   // Round 1: the demand is rejected (percentage-only, non-actionable).
