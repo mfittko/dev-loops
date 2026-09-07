@@ -328,26 +328,13 @@ function resolveCommitPullRequestsFromGitHub({ repo, commitSha, cwd, env }) {
   if (typeof repo !== "string" || repo.trim().length === 0) {
     throw new Error("repository identity is required for commit-to-PR association");
   }
-  const pages = ghJson([
-    "api",
-    "--paginate",
-    "--slurp",
-    `repos/${repo}/commits/${commitSha}/pulls?per_page=100`,
-    "--method", "GET",
-    "-H", "Accept: application/vnd.github+json",
-  ], cwd, env);
-  if (!Array.isArray(pages) || pages.length === 0 || pages.some((page) => !Array.isArray(page))) {
-    throw new Error("commit-to-PR association response must be a slurped array of pages");
-  }
-  // Keep the REST association read as an independently paginated, validated
-  // discovery signal, but never use its contents as merge authority: its
-  // merged-PR coverage is limited to the repository default branch. The
-  // GraphQL Commit.associatedPullRequests connection below is the
-  // configured-base-capable authority.
+  // GraphQL is the sole merge authority: unlike the REST commit-PR endpoint it
+  // reports associations against any base branch. Bound pagination and fail
+  // closed when the complete connection cannot be verified.
   const [owner, name] = repo.split("/");
-  const graphAssociations = [];
+  const associations = [];
   let after = null;
-  for (let pageNumber = 0; pageNumber < COMMIT_ASSOCIATION_MAX_PAGES; pageNumber += 1) {
+  for (let page = 0; page < COMMIT_ASSOCIATION_MAX_PAGES; page += 1) {
     const args = [
       "api", "graphql",
       "-f", `query=${COMMIT_ASSOCIATION_QUERY}`,
@@ -358,21 +345,17 @@ function resolveCommitPullRequestsFromGitHub({ repo, commitSha, cwd, env }) {
     if (after !== null) args.push("-f", `after=${after}`);
     const response = ghJson(args, cwd, env);
     const connection = response?.data?.repository?.object?.associatedPullRequests;
-    if (!connection || !Array.isArray(connection.nodes) || !connection.pageInfo || typeof connection.pageInfo.hasNextPage !== "boolean") {
+    if (!connection || !Array.isArray(connection.nodes) || typeof connection.pageInfo?.hasNextPage !== "boolean") {
       throw new Error("GraphQL commit-to-PR association response is malformed");
     }
-    for (const node of connection.nodes) {
-      graphAssociations.push({
-        number: node?.number,
-        state: node?.state,
-        merged_at: node?.mergedAt,
-        base: { ref: node?.baseRefName },
-        merge_commit_sha: node?.mergeCommit?.oid,
-      });
-    }
-    if (!connection.pageInfo.hasNextPage) {
-      return graphAssociations;
-    }
+    associations.push(...connection.nodes.map((node) => ({
+      number: node?.number,
+      state: node?.state,
+      merged_at: node?.mergedAt,
+      base: { ref: node?.baseRefName },
+      merge_commit_sha: node?.mergeCommit?.oid,
+    })));
+    if (!connection.pageInfo.hasNextPage) return associations;
     after = connection.pageInfo.endCursor;
     if (typeof after !== "string" || after.length === 0) {
       throw new Error("GraphQL commit-to-PR association pagination cursor is missing");
@@ -389,22 +372,12 @@ function isStrictGitHubRfc3339Timestamp(value) {
   const year = Number(yearText);
   const month = Number(monthText);
   const day = Number(dayText);
-  const hour = Number(hourText);
-  const minute = Number(minuteText);
-  const second = Number(secondText);
-  const offsetHour = offsetHourText === undefined ? 0 : Number(offsetHourText);
-  const offsetMinute = offsetMinuteText === undefined ? 0 : Number(offsetMinuteText);
   const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
   const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  return month >= 1
-    && month <= 12
-    && day >= 1
-    && day <= daysInMonth[month - 1]
-    && hour <= 23
-    && minute <= 59
-    && second <= 59
-    && offsetHour <= 23
-    && offsetMinute <= 59
+  return month >= 1 && month <= 12
+    && day >= 1 && day <= daysInMonth[month - 1]
+    && Number(hourText) <= 23 && Number(minuteText) <= 59 && Number(secondText) <= 59
+    && Number(offsetHourText ?? 0) <= 23 && Number(offsetMinuteText ?? 0) <= 59
     && Number.isFinite(Date.parse(value));
 }
 
@@ -501,8 +474,13 @@ export function resolveHasNewerMergeSinceCheckpoint({
       }
       const mergeCommitSha = association.merge_commit_sha;
       if (associationState === "MERGED") {
-        if (!mergedAt || typeof mergeCommitSha !== "string" || mergeCommitSha !== commitSha) return true;
-        if (associationBase === baseBranch) return true;
+        if (
+          !mergedAt
+          || typeof mergeCommitSha !== "string"
+          || mergeCommitSha.trim() !== mergeCommitSha
+          || mergeCommitSha.length === 0
+        ) return true;
+        if (associationBase === baseBranch && mergeCommitSha === commitSha) return true;
       } else if (mergedAt !== null || (mergeCommitSha !== null && mergeCommitSha !== undefined)) {
         return true;
       }

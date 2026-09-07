@@ -169,7 +169,7 @@ Resolved bundle output shape:
   "loopState": "...",
   "routeKind": "route | wait | stop | inspect | needs_reconcile",
   "selectedGate": "...",
-  "selectedStrategy": "...",
+  "selectedStrategy": "... | null",
   "executionMode": "bounded_handoff | durable_auto",
   "waitSemantics": "default | auto_healthy_wait",
   "asyncRun": {
@@ -184,7 +184,7 @@ Resolved bundle output shape:
     "decision": {
       "selectedGate": "...",
       "routeKind": "...",
-      "selectedStrategy": "...",
+      "selectedStrategy": "... | null",
       "executionMode": "...",
       "watchRequested": true,
       "contractClassification": "routed_followup | healthy_wait | terminal | blocked | authorization_gated | reconcile | inspect",
