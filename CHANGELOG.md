@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- **Scope retrospective recency to PRs merged into the configured base branch (#2027).** Direct and release commits after a valid checkpoint no longer make it stale, while squash-merged PRs still do; uncertain commit-to-PR association remains fail-closed. Canonical startup can now turn a legitimate `needs_reconcile` result with a null strategy into an actionable reconciliation envelope instead of failing schema validation.
+
 ## 1.0.2-pre.0 - 2026-09-07
 
 ### Added
