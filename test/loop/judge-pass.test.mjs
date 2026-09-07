@@ -384,11 +384,12 @@ test("runJudgePass coverage-admission rehearsal: reject an already-covered permu
     ],
   });
   const result = runJudgePass(findings, v, HEAD);
+  // The rejected already-covered permutation is absent from the act list; the
+  // missing-public-boundary behavior and the fail-open defect are retained.
   assert.deepEqual(result.act.map((f) => f.summary), [
     "no test for the CLI argument-parsing boundary (public seam)",
     "resolver accepts unverifiable input (fail-open)",
   ]);
-  assert.ok(!result.act.some((f) => f.judgeDisposition === "reject"), "a rejected coverage permutation never enters the act list");
   assert.equal(result.enriched[0].judgeDisposition, "reject");
   assert.deepEqual(result.counts, { act: 2, defer: 0, reject: 1 });
 });
@@ -420,10 +421,16 @@ test("runJudgePass two-round rehearsal: an unchanged coverage demand stays rejec
     }),
     HEAD,
   );
+  // Round 2 re-rejects the unchanged demand (no new evidence) and acts only on
+  // the genuinely new distinct-boundary finding.
+  assert.equal(round2.enriched[0].judgeDisposition, "reject");
   assert.deepEqual(round2.act.map((f) => f.summary), ["serialization boundary emits malformed JSON on NaN — uncovered"]);
-  // The unchanged demand is identified by the existing fingerprint mechanism —
-  // no new rejection registry is introduced.
-  assert.equal(fingerprintFinding(coverageDemand), fingerprintFinding({ ...coverageDemand }));
+  // The recurring demand is matched across rounds by its EXISTING finding
+  // fingerprint (files[0] + normalized summary), not a new rejection registry:
+  // the round-1 rejected entry and the round-2 recurrence share one fingerprint,
+  // and judge enrichment (adding judgeDisposition) does not perturb it — so the
+  // prior-round ledger alone lets the judge recognize the repeat.
+  assert.equal(fingerprintFinding(round1.enriched[0]), fingerprintFinding(round2.enriched[0]));
 });
 
 // #1809: cross-path convergence — close-gate-findings.mjs's severity/round
