@@ -64,8 +64,9 @@ and `control.*` are derived from a static strategy+gate mapping table:
 | `external_pr_followup` | `default` | Contract compliance | commands-run, validation-output | 4 | 300000 |
 | `reviewer_fixer` | `default` | Contract compliance | commands-run, validation-output | 4 | 300000 |
 | `wait_watch` | `default` | Contract compliance | commands-run, validation-output | 4 | 1800000 |
+| `null` | `fail_closed_reconcile` | Reconcile authoritative state before routing | commands-run, validation-output | 1 | 300000 |
 
-Unknown strategy+gate combinations throw an explicit error listing known combos.
+Unknown strategy and gate combinations throw an explicit error listing known combos. A resolver result with `routeKind: "needs_reconcile"`, `selectedGate: "fail_closed_reconcile"`, and `selectedStrategy: null` is intentionally accepted as a terminal, actionable envelope; null remains invalid for routed work.
 
 ## Stop rules
 
@@ -101,6 +102,8 @@ interface HandoffEnvelope {
   currentGate: string;
   maxCopilotRounds: number;
   executionMode: "bounded_handoff" | "durable_auto";
+  routeKind?: "needs_reconcile"; // present on terminal reconciliation envelopes
+  selectedStrategy?: null;       // present only with routeKind=needs_reconcile
 
   nextAction: string;
   requiredReads: string[];

@@ -103,6 +103,8 @@ function nullStrategyBundle() {
   return {
     bundle: {
       selectedStrategy: INTERNAL_DEV_LOOP_STRATEGY.NONE,
+      routeKind: "needs_reconcile",
+      selectedGate: "fail_closed_reconcile",
       executionMode: DEV_LOOP_EXECUTION_MODE.BOUNDED_HANDOFF,
       nextAction: "No action.",
       requiredReads: [],
@@ -401,6 +403,67 @@ test("fail-closed: missing selectedStrategy throws", () => {
       defaultOptions
     );
   }, /selectedStrategy/);
+});
+
+test("needs_reconcile: null strategy produces a terminal actionable envelope", () => {
+  const envelope = buildDevLoopHandoffEnvelope(
+    nullStrategyBundle(),
+    defaultSettings,
+    {},
+    defaultOptions,
+  );
+  assert.equal(envelope.currentGate, "fail_closed_reconcile");
+  assert.equal(envelope.routeKind, "needs_reconcile");
+  assert.equal(envelope.selectedStrategy, null);
+  assert.equal(envelope.worktreeRequired, false);
+  assert.ok(envelope.stopRules.includes("reconcile"));
+  assert.equal(validateHandoffEnvelope(envelope).ok, true);
+});
+
+test("fail-closed: null strategy remains invalid for a routed result", () => {
+  const input = nullStrategyBundle();
+  input.bundle.routeKind = "route";
+  assert.throws(
+    () => buildDevLoopHandoffEnvelope(input, defaultSettings, {}, defaultOptions),
+    /null.*selectedStrategy.*only.*needs_reconcile/i,
+  );
+});
+
+test("fail-closed: needs_reconcile requires the canonical gate and null strategy", () => {
+  const wrongGate = nullStrategyBundle();
+  wrongGate.bundle.selectedGate = "issue_intake";
+  assert.throws(
+    () => buildDevLoopHandoffEnvelope(wrongGate, defaultSettings, {}, defaultOptions),
+    /needs_reconcile requires selectedGate fail_closed_reconcile and selectedStrategy null/,
+  );
+
+  const conflictingStrategy = nullStrategyBundle();
+  conflictingStrategy.bundle.selectedStrategy = INTERNAL_DEV_LOOP_STRATEGY.ISSUE_INTAKE;
+  assert.throws(
+    () => buildDevLoopHandoffEnvelope(conflictingStrategy, defaultSettings, {}, defaultOptions),
+    /needs_reconcile requires selectedGate fail_closed_reconcile and selectedStrategy null/,
+  );
+});
+
+test("validate: serialized terminal routing fields require the exact reconciliation tuple", () => {
+  const valid = buildDevLoopHandoffEnvelope(
+    nullStrategyBundle(), defaultSettings, {}, defaultOptions,
+  );
+  assert.equal(validateHandoffEnvelope(valid).ok, true);
+
+  const wrongGate = { ...valid, currentGate: "draft" };
+  assert.equal(validateHandoffEnvelope(wrongGate).ok, false);
+
+  const missingTerminalFields = { ...valid };
+  delete missingTerminalFields.routeKind;
+  delete missingTerminalFields.selectedStrategy;
+  assert.equal(validateHandoffEnvelope(missingTerminalFields).ok, false);
+
+  const routed = buildDevLoopHandoffEnvelope(
+    issueBundle(42), defaultSettings, {}, defaultOptions,
+  );
+  const conflicting = { ...routed, routeKind: "route", selectedStrategy: "issue_intake" };
+  assert.equal(validateHandoffEnvelope(conflicting).ok, false);
 });
 
 test("fail-closed: missing executionMode throws", () => {

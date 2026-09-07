@@ -220,9 +220,10 @@ Fail-closed semantics:
 - incomplete/invalid/conflicting startup inputs return:
   - `bundleKind = needs_reconcile`
   - `routeKind = needs_reconcile`
-  - `selectedStrategy = none`
+  - `selectedStrategy = null` in the canonical bundle (`none` is permitted only as the startup wrapper's display key)
   - `loopState = unknown`
   - `nextAction` must instruct reconciliation before routing/status answers
+- `loop build-envelope` MUST accept that intentional null strategy and emit an actionable terminal reconciliation envelope; it MUST NOT coerce the result into a routed strategy
 - `executionMode=durable_auto` must fail closed unless a visible Pi-managed async run is already registered
 - a detached watcher/background pid is never acceptable evidence of async `dev-loop` startup success
 - invalid explicit `intent` also fails closed

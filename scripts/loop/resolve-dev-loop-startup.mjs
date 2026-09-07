@@ -311,13 +311,27 @@ function ghJson(args, cwd, env = process.env) {
 // Bounds the best-effort `git fetch` below so a slow/offline remote can never
 // delay startup indefinitely.
 const RETROSPECTIVE_FETCH_TIMEOUT_MS = 10000;
+function resolveCommitPullRequestsFromGitHub({ repo, commitSha, cwd, env }) {
+  if (typeof repo !== "string" || repo.trim().length === 0) {
+    throw new Error("repository identity is required for commit-to-PR association");
+  }
+  const associations = ghJson([
+    "api",
+    `repos/${repo}/commits/${commitSha}/pulls?per_page=100`,
+    "--method", "GET",
+    "-H", "Accept: application/vnd.github+json",
+  ], cwd, env);
+  if (!Array.isArray(associations)) {
+    throw new Error("commit-to-PR association response must be an array");
+  }
+  return associations;
+}
+
 /**
- * True when the base branch (as tracked at `origin/<baseBranch>`) carries any
- * commit after `mergeCommit` — i.e. something has merged since the
- * checkpoint's recorded discharge point. This is a purely local git ancestry
- * check (`git log <mergeCommit>..origin/<baseBranch>`), not a GitHub query:
- * recency is a fact of this repo's own commit graph, so it never depends on
- * `gh`, an API rate limit, or a Copilot-assignee proxy that may match nothing.
+ * True when a commit after `mergeCommit` on `origin/<baseBranch>` is
+ * authoritatively associated with a PR merged into that configured base.
+ * Local ancestry bounds the candidate commits; GitHub association facts
+ * distinguish squash-merged PR commits from direct/release commits.
  *
  * A best-effort `git fetch origin <baseBranch>` runs first so the ordinary
  * case (a commit merged after this checkout last fetched) resolves correctly;
@@ -330,15 +344,21 @@ const RETROSPECTIVE_FETCH_TIMEOUT_MS = 10000;
  * trusted, so "cannot tell" collapses to the same outcome as "yes, something
  * newer exists" rather than a separate "unknown" state.
  *
- * This repo (and any repo using this check) squash-merges: the recorded
- * `mergeCommit` is the single squash commit that lands on the base branch, so
- * plain first-parent-agnostic `git log` ancestry is correct — filtering on
- * `--merges` would match nothing.
+ * This repo squash-merges, so filtering local history with `--merges` would
+ * miss the qualifying one-parent commits. A failed/malformed association
+ * lookup is unverifiable and therefore fails closed.
  *
- * @param {{mergeCommit: string, baseBranch: string, cwd: string}} params
+ * @param {{mergeCommit: string, baseBranch: string, cwd: string, repo?: string, env?: NodeJS.ProcessEnv, resolveCommitPullRequests?: Function}} params
  * @returns {boolean}
  */
-export function resolveHasNewerMergeSinceCheckpoint({ mergeCommit, baseBranch, cwd }) {
+export function resolveHasNewerMergeSinceCheckpoint({
+  mergeCommit,
+  baseBranch,
+  cwd,
+  repo = null,
+  env = process.env,
+  resolveCommitPullRequests = resolveCommitPullRequestsFromGitHub,
+}) {
   try {
     execFileSync("git", ["fetch", "origin", baseBranch], {
       cwd,
@@ -348,9 +368,9 @@ export function resolveHasNewerMergeSinceCheckpoint({ mergeCommit, baseBranch, c
   } catch {
     // Best-effort — an already-current local origin/<baseBranch> still works.
   }
-  let log;
+  let revisionList;
   try {
-    log = execFileSync("git", ["log", `${mergeCommit}..origin/${baseBranch}`, "--oneline"], {
+    revisionList = execFileSync("git", ["rev-list", "--reverse", `${mergeCommit}..origin/${baseBranch}`], {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
@@ -359,7 +379,40 @@ export function resolveHasNewerMergeSinceCheckpoint({ mergeCommit, baseBranch, c
     // mergeCommit is unresolvable locally — fail closed.
     return true;
   }
-  return log.trim().length > 0;
+  const candidateCommits = revisionList.trim().split("\n").filter(Boolean);
+  for (const commitSha of candidateCommits) {
+    let associations;
+    try {
+      associations = resolveCommitPullRequests({ repo, commitSha, cwd, env });
+      if (!Array.isArray(associations)) return true;
+    } catch {
+      return true;
+    }
+    for (const association of associations) {
+      if (!association || typeof association !== "object" || !("merged_at" in association)) {
+        return true;
+      }
+      const mergedAt = association.merged_at;
+      if (mergedAt !== null && (
+        typeof mergedAt !== "string"
+        || mergedAt.trim() !== mergedAt
+        || mergedAt.length === 0
+        || !Number.isFinite(Date.parse(mergedAt))
+      )) {
+        return true;
+      }
+      const associationBase = association.base?.ref;
+      if (
+        typeof associationBase !== "string"
+        || associationBase.trim() !== associationBase
+        || associationBase.length === 0
+      ) {
+        return true;
+      }
+      if (mergedAt && associationBase === baseBranch) return true;
+    }
+  }
+  return false;
 }
 function mapGhState(ghState) {
   const s = String(ghState).toUpperCase();
@@ -1020,9 +1073,10 @@ export function buildResolveDevLoopStartupResult(input, {
   // is always honored — unchanged from before cycle-scoping existed. Cycle
   // scoping itself (a stale `complete`/`skipped` must not satisfy every later
   // cycle forever) is derived entirely at READ time, on every evaluation, via
-  // a local git ancestry check — no write-time "arming" seam to miss (never
+  // local ancestry plus authoritative GitHub commit-to-PR association — no
+  // write-time "arming" seam to miss (never
   // re-resolved after merge, never cwd-relative, never a read-only preview's
-  // side effect, never racy) and no GitHub query at all. Gated on
+  // side effect, never racy). Gated on
   // workflow.requireRetrospective so a repo that never opts into cycle
   // scoping never pays for the extra git calls — the plain checkpoint file
   // read below is unaffected either way (RETRO-ENFORCEMENT-CONFIG-GATED,
@@ -1076,7 +1130,11 @@ export function buildResolveDevLoopStartupResult(input, {
       } else {
         const baseBranch = resolveBaseBranch(config, { cwd: effectiveCwd });
         hasNewerMergeSinceCheckpoint = resolveHasNewerMerge({
-          mergeCommit: identity.mergeCommit, baseBranch, cwd: effectiveCwd,
+          mergeCommit: identity.mergeCommit,
+          baseBranch,
+          cwd: effectiveCwd,
+          repo: identity.repo,
+          env: effectiveEnv,
         });
       }
     }
