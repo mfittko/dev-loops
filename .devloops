@@ -20,8 +20,8 @@ gates:
   # See skills/docs/gate-review-sub-loop-contract.md.
   requireFanoutProvenance: true
   # Bounded-parallel fan-out concurrency (#1907, supersedes the #1726 serial
-  # workaround): dispatch up to 3 dispatch units concurrently per wave via
-  # blocking joins (aligned with queue.maxParallel below), retrying a
+  # workaround): dispatch up to 5 dispatch units concurrently per wave via
+  # blocking joins, retrying a
   # transient (429/5xx) dispatch on the same unit with backoff before ever
   # reducing concurrency (skills/docs/gate-review-sub-loop-contract.md
   # GATE-EXEC-DISPATCH-RETRY-BACKOFF). This is bounded parallelism, not
@@ -33,7 +33,7 @@ gates:
   # false) is unchanged for other repos/harnesses (cross-harness
   # non-regression #1086).
   fanout:
-    maxConcurrent: 3
+    maxConcurrent: 5
   draft:
     dynamic:
       subtractive: true
