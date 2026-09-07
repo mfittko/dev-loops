@@ -14,8 +14,9 @@ template.
 |---|---|
 | Resolver output (`resolve-dev-loop-startup.mjs` bundle) | `target`, `nextAction`, `requiredReads`, `executionMode` |
 | Caller options (`repoRoot`, `worktreeCwd`) | `cwd` |
-| Gate state (detectors) + strategy defaults | `currentGate`, `worktreeRequired` |
-| Settings (`.devloops` at repo root + `defaults.yaml`) | `gateConfig`, `stopRules`, `asyncStartMode`, `requireDraftFirst`, `maxCopilotRounds` |
+| Gate state (detectors) + strategy defaults | `currentGate`; `worktreeRequired` except for terminal reconciliation |
+| Settings (`.devloops` at repo root + `defaults.yaml`) | `gateConfig`, `stopRules` except for terminal reconciliation, `asyncStartMode`, `requireDraftFirst`, `maxCopilotRounds` |
+| Terminal reconciliation invariant (`needs_reconcile` / `fail_closed_reconcile` / `null`) | reconciliation `nextAction`, `worktreeRequired=false`, canonical reconcile acceptance (criterion, evidence, and finalization limit), `stopRules=["reconcile"]` plus `"merge"` only when `humanMergeOnly` requires it |
 | Gate state (detectors) | `gateState.{currentHeadSha, ciStatus, unresolvedThreadCount, copilotRoundCount}` (the volatile tail — see below) |
 | Envelope builder (timestamp) | `gateState.derivedAt` (build time, not detector-derived) |
 | Canonical sanctioned-command map (`scripts/loop/sanctioned-commands.mjs`) | `sanctionedCommands` |
@@ -68,10 +69,14 @@ and `control.*` are derived from a static strategy+gate mapping table:
 
 Unknown strategy and gate combinations throw an explicit error listing known combos. A resolver result with `routeKind: "needs_reconcile"`, `selectedGate: "fail_closed_reconcile"`, and `selectedStrategy: null` is intentionally accepted as a terminal, actionable envelope; null remains invalid for routed work.
 
+For that terminal reconciliation tuple, the builder and serialized-envelope validator enforce the full actionable shape: `nextAction` instructs reconciliation, no worktree is required, acceptance exactly matches the table's reconcile criterion/evidence/finalization limit, and the stop rules are exactly `["reconcile"]` with an optional trailing `"merge"` when human-only merge policy applies. Configured `autonomy.stopAt` and ordinary strategy defaults do not override this terminal behavior.
+
 ## Stop rules
 
 Stop rules are derived from `settings.autonomy.stopAt` when present.
 When absent, strategy defaults apply:
+
+The terminal reconciliation tuple is the exception: it always uses `["reconcile"]`, plus `"merge"` only when required by `humanMergeOnly`, and ignores configured `autonomy.stopAt` because no strategy may execute until reconciliation succeeds.
 
 | Strategy | Default stop rules |
 |---|---|

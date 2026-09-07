@@ -343,7 +343,7 @@ The shared machine-checkable gate contract is exported from `packages/core/src/l
 | `reviewer_fixer` | `route` | `reviewer_fixer` | reviewer-owned or reviewer-next PR state routes to reviewer/fixer |
 | `copilot_pr_followup` | `route` | `copilot_pr_followup` | Copilot-owned PR state routes to Copilot PR follow-up |
 | `ui_review` | `route` | `ui_review` | an explicit UI-review request on a PR target routes to the ui_review running-app review strategy |
-| `fail_closed_reconcile` | `needs_reconcile` | none | ambiguous, conflicting, or unsupported canonical state fails closed to reconcile |
+| `fail_closed_reconcile` | `needs_reconcile` | `null` | ambiguous, conflicting, or unsupported canonical state fails closed to reconcile; `none` is only the startup wrapper's display key |
 
 For issue targets, authoritative issue↔PR linkage resolution remains part of state resolution before claiming there is no open linked PR:
 

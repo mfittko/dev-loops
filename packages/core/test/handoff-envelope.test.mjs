@@ -106,7 +106,7 @@ function nullStrategyBundle() {
       routeKind: "needs_reconcile",
       selectedGate: "fail_closed_reconcile",
       executionMode: DEV_LOOP_EXECUTION_MODE.BOUNDED_HANDOFF,
-      nextAction: "No action.",
+      nextAction: "Reconcile the canonical state before routing.",
       requiredReads: [],
       activeArtifact: {
         kind: DEV_LOOP_TARGET_KIND.ISSUE,
@@ -464,6 +464,30 @@ test("validate: serialized terminal routing fields require the exact reconciliat
   );
   const conflicting = { ...routed, routeKind: "route", selectedStrategy: "issue_intake" };
   assert.equal(validateHandoffEnvelope(conflicting).ok, false);
+
+  const worktreeRequired = { ...valid, worktreeRequired: true };
+  assert.equal(validateHandoffEnvelope(worktreeRequired).ok, false);
+
+  const missingReconcileStop = { ...valid, stopRules: ["merge"] };
+  assert.equal(validateHandoffEnvelope(missingReconcileStop).ok, false);
+
+  const unrelatedAcceptance = {
+    ...valid,
+    acceptance: {
+      ...valid.acceptance,
+      criteria: [{ id: "scope", must: "Review scope.", severity: "required" }],
+    },
+  };
+  assert.equal(validateHandoffEnvelope(unrelatedAcceptance).ok, false);
+
+  const incompleteAcceptance = {
+    ...valid,
+    acceptance: { ...valid.acceptance, evidence: ["commands-run"], maxFinalizationTurns: 2 },
+  };
+  assert.equal(validateHandoffEnvelope(incompleteAcceptance).ok, false);
+
+  const unrelatedNextAction = { ...valid, nextAction: "Continue with the selected strategy." };
+  assert.equal(validateHandoffEnvelope(unrelatedNextAction).ok, false);
 });
 
 test("fail-closed: missing executionMode throws", () => {

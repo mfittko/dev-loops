@@ -327,6 +327,33 @@ function resolveCommitPullRequestsFromGitHub({ repo, commitSha, cwd, env }) {
   return associations;
 }
 
+function isStrictGitHubRfc3339Timestamp(value) {
+  if (typeof value !== "string" || value.trim() !== value || value.length === 0) return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|([+-])(\d{2}):(\d{2}))$/.exec(value);
+  if (!match) return false;
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, , offsetHourText, offsetMinuteText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  const offsetHour = offsetHourText === undefined ? 0 : Number(offsetHourText);
+  const offsetMinute = offsetMinuteText === undefined ? 0 : Number(offsetMinuteText);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return month >= 1
+    && month <= 12
+    && day >= 1
+    && day <= daysInMonth[month - 1]
+    && hour <= 23
+    && minute <= 59
+    && second <= 59
+    && offsetHour <= 23
+    && offsetMinute <= 59
+    && Number.isFinite(Date.parse(value));
+}
+
 /**
  * True when a commit after `mergeCommit` on `origin/<baseBranch>` is
  * authoritatively associated with a PR merged into that configured base.
@@ -368,6 +395,18 @@ export function resolveHasNewerMergeSinceCheckpoint({
   } catch {
     // Best-effort — an already-current local origin/<baseBranch> still works.
   }
+  try {
+    // `rev-list A..B` also succeeds when A and B belong to unrelated
+    // histories. Prove the checkpoint is actually on the configured base
+    // before using it as the lower bound; otherwise its discharge claim is
+    // unverifiable and must fail closed.
+    execFileSync("git", ["merge-base", "--is-ancestor", mergeCommit, `origin/${baseBranch}`], {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch {
+    return true;
+  }
   let revisionList;
   try {
     revisionList = execFileSync("git", ["rev-list", "--reverse", `${mergeCommit}..origin/${baseBranch}`], {
@@ -393,12 +432,7 @@ export function resolveHasNewerMergeSinceCheckpoint({
         return true;
       }
       const mergedAt = association.merged_at;
-      if (mergedAt !== null && (
-        typeof mergedAt !== "string"
-        || mergedAt.trim() !== mergedAt
-        || mergedAt.length === 0
-        || !Number.isFinite(Date.parse(mergedAt))
-      )) {
+      if (mergedAt !== null && !isStrictGitHubRfc3339Timestamp(mergedAt)) {
         return true;
       }
       const associationBase = association.base?.ref;

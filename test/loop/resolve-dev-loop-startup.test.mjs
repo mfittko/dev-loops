@@ -2766,6 +2766,9 @@ test("resolveHasNewerMergeSinceCheckpoint: malformed association facts fail clos
     for (const association of [
       { merged_at: "   ", base: { ref: "main" } },
       { merged_at: "not-a-date", base: { ref: "main" } },
+      { merged_at: "2026-09-07", base: { ref: "release" } },
+      { merged_at: "2026-02-30T10:00:00Z", base: { ref: "release" } },
+      { merged_at: "2026-09-07T10:00:00+24:00", base: { ref: "release" } },
       { merged_at: null, base: { ref: "   " } },
     ]) {
       assert.equal(
@@ -2784,21 +2787,22 @@ test("resolveHasNewerMergeSinceCheckpoint: malformed association facts fail clos
   }
 });
 
-test("resolveHasNewerMergeSinceCheckpoint: PR-only classification is harness-agnostic", async () => {
+test("resolveHasNewerMergeSinceCheckpoint: a resolvable non-ancestor checkpoint fails closed", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "retro-pr-association-harness-"));
   try {
-    const { initialSha } = await initLocalOriginRepo(tempDir);
-    pushAnotherCommit(tempDir, "chore(release): direct");
-    const classify = (env) => resolveHasNewerMergeSinceCheckpoint({
-      mergeCommit: initialSha,
+    await initLocalOriginRepo(tempDir);
+    execFileSync("git", ["checkout", "--orphan", "disconnected", "--quiet"], { cwd: tempDir, stdio: "ignore" });
+    execFileSync("git", ["commit", "--allow-empty", "--quiet", "-m", "disconnected checkpoint"], { cwd: tempDir, stdio: "ignore" });
+    const disconnectedSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: tempDir, encoding: "utf8" }).trim();
+    execFileSync("git", ["checkout", "main", "--quiet"], { cwd: tempDir, stdio: "ignore" });
+    let associationLookups = 0;
+    assert.equal(resolveHasNewerMergeSinceCheckpoint({
+      mergeCommit: disconnectedSha,
       baseBranch: "main",
       cwd: tempDir,
-      env,
-      resolveCommitPullRequests: () => [],
-    });
-    assert.equal(classify({}), false);
-    assert.equal(classify({ CLAUDECODE: "1" }), false);
-    assert.equal(classify({ DEVLOOPS_RUN_ID: "codex-run" }), false);
+      resolveCommitPullRequests: () => { associationLookups += 1; return []; },
+    }), true);
+    assert.equal(associationLookups, 0, "non-ancestor checkpoints must fail before association classification");
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
     rmSync(`${tempDir}-remote.git`, { recursive: true, force: true });
@@ -3033,7 +3037,12 @@ test("startup → build-envelope CLI end-to-end: a direct-only newer commit does
     });
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout.trim());
-    assert.notEqual(parsed.bundleKind, "needs_reconcile");
+    assert.equal(parsed.bundleKind, "resolved");
+    assert.equal(parsed.selectedStrategy, "copilot_pr_followup");
+    assert.equal(parsed.bundle.routeKind, "route");
+    assert.equal(parsed.bundle.selectedGate, "copilot_pr_followup");
+    assert.equal(parsed.bundle.selectedStrategy, "copilot_pr_followup");
+    assert.equal(parsed.canonicalStateSummary.loopState, "pr_followup_start");
 
     const resolverPath = await writeTempJson(tempDir, "resolver-output.json", parsed);
     const envelopeResult = await runNodeHelper(cliPath, [
@@ -3042,7 +3051,53 @@ test("startup → build-envelope CLI end-to-end: a direct-only newer commit does
     assert.equal(envelopeResult.code, 0, envelopeResult.stderr);
     const envelope = JSON.parse(envelopeResult.stdout.trim());
     assert.equal(envelope.nextAction, parsed.bundle.nextAction);
-    assert.notEqual(envelope.currentGate, "fail_closed_reconcile");
+    assert.equal(envelope.currentGate, "draft");
+    assert.equal(envelope.routeKind, undefined);
+    assert.equal(envelope.selectedStrategy, undefined);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+    rmSync(`${tempDir}-remote.git`, { recursive: true, force: true });
+  }
+});
+
+test("loop startup CLI: direct-only checkpoint history routes identically through Pi and Claude harness seams", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "resolve-dev-loop-cross-harness-e2e-"));
+  try {
+    const { initialSha } = await initLocalOriginRepo(tempDir);
+    const directSha = pushAnotherCommit(tempDir, "chore(release): direct cross-harness commit");
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\nworkflow:\n  requireRetrospective: true\n", "utf8");
+    await mkdir(path.join(tempDir, ".pi"), { recursive: true });
+    await writeFile(path.join(tempDir, ".pi", "dev-loop-retrospective-checkpoint.json"), `${JSON.stringify({
+      state: "complete",
+      completedAt: "2026-08-08T01:00:00.000Z",
+      notes: "ok",
+      identity: { repo: "mfittko/dev-loops", prNumber: 9002, mergeCommit: initialSha },
+      provenance: VALID_PROVENANCE,
+    }, null, 2)}\n`, "utf8");
+    const ghStub = await writeGhStubHelper(tempDir, [
+      { assertArgs: ["pr", "view", "9011"], stdout: JSON.stringify({ state: "OPEN", mergedAt: null, mergeCommit: null, assignees: [], closingIssuesReferences: [], body: "" }) },
+      { assertArgContains: [`commits/${directSha}/pulls`], stdout: "[]" },
+      { assertArgs: ["pr", "view", "9011"], stdout: JSON.stringify({ state: "OPEN", mergedAt: null, mergeCommit: null, assignees: [], closingIssuesReferences: [], body: "" }) },
+      { assertArgContains: [`commits/${directSha}/pulls`], stdout: "[]" },
+    ]);
+    const cliPath = path.resolve("cli/index.mjs");
+    const piResult = await runNodeHelper(cliPath, ["loop", "startup", "--pr", "9011"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_RUN_ID: "pi-visible-run", CLAUDECODE: undefined }) },
+    });
+    const claudeResult = await runNodeHelper(cliPath, ["loop", "startup", "--pr", "9011"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_RUN_ID: undefined, CLAUDECODE: "1" }) },
+    });
+    assert.equal(piResult.code, 0, piResult.stderr);
+    assert.equal(claudeResult.code, 0, claudeResult.stderr);
+    for (const parsed of [JSON.parse(piResult.stdout.trim()), JSON.parse(claudeResult.stdout.trim())]) {
+      assert.equal(parsed.bundleKind, "resolved");
+      assert.equal(parsed.selectedStrategy, "copilot_pr_followup");
+      assert.equal(parsed.bundle.routeKind, "route");
+      assert.equal(parsed.bundle.selectedGate, "copilot_pr_followup");
+      assert.equal(parsed.bundle.selectedStrategy, "copilot_pr_followup");
+    }
   } finally {
     await rm(tempDir, { recursive: true, force: true });
     rmSync(`${tempDir}-remote.git`, { recursive: true, force: true });

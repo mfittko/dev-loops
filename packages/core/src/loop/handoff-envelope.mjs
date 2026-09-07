@@ -873,18 +873,44 @@ export function validateHandoffEnvelope(envelope) {
   const hasRouteKind = Object.hasOwn(envelope, "routeKind");
   const hasSelectedStrategy = Object.hasOwn(envelope, "selectedStrategy");
   if (hasRouteKind || hasSelectedStrategy || envelope.currentGate === "fail_closed_reconcile") {
+    const reconciliationStopRulesAreCanonical = Array.isArray(envelope.stopRules)
+      && envelope.stopRules[0] === "reconcile"
+      && (envelope.stopRules.length === 1
+        || (envelope.stopRules.length === 2 && envelope.stopRules[1] === "merge"));
+    const reconciliationCriterion = envelope.acceptance?.criteria;
+    const reconciliationAcceptanceIsCanonical = Array.isArray(reconciliationCriterion)
+      && reconciliationCriterion.length === 1
+      && reconciliationCriterion[0]?.id === RECONCILIATION_ACCEPTANCE_TEMPLATE.criteria[0].id
+      && reconciliationCriterion[0]?.must === RECONCILIATION_ACCEPTANCE_TEMPLATE.criteria[0].must
+      && reconciliationCriterion[0]?.severity === RECONCILIATION_ACCEPTANCE_TEMPLATE.criteria[0].severity
+      && Array.isArray(envelope.acceptance?.evidence)
+      && envelope.acceptance.evidence.length === RECONCILIATION_ACCEPTANCE_TEMPLATE.evidence.length
+      && envelope.acceptance.evidence.every((value, index) => value === RECONCILIATION_ACCEPTANCE_TEMPLATE.evidence[index])
+      && envelope.acceptance?.maxFinalizationTurns === RECONCILIATION_ACCEPTANCE_TEMPLATE.maxFinalizationTurns;
+    const reconciliationNextActionIsActionable = typeof envelope.nextAction === "string"
+      && /reconcil/i.test(envelope.nextAction);
     if (
       envelope.routeKind !== "needs_reconcile"
       || envelope.selectedStrategy !== null
       || envelope.currentGate !== "fail_closed_reconcile"
+      || envelope.worktreeRequired !== false
+      || !reconciliationStopRulesAreCanonical
+      || !reconciliationAcceptanceIsCanonical
+      || !reconciliationNextActionIsActionable
     ) {
       errors.push({
-        field: "routeKind/selectedStrategy/currentGate",
-        reason: "must be the exact needs_reconcile / null / fail_closed_reconcile tuple when terminal routing fields are present",
+        field: "routeKind/selectedStrategy/currentGate/worktreeRequired/stopRules/acceptance.criteria",
+        reason: "terminal reconciliation must use the exact needs_reconcile / null / fail_closed_reconcile tuple, require no worktree, instruct reconciliation, stop at reconcile (plus optional merge), and carry the canonical reconcile acceptance contract",
         got: {
           routeKind: envelope.routeKind,
           selectedStrategy: envelope.selectedStrategy,
           currentGate: envelope.currentGate,
+          worktreeRequired: envelope.worktreeRequired,
+          stopRules: envelope.stopRules,
+          nextAction: envelope.nextAction,
+          acceptanceCriteria: envelope.acceptance?.criteria,
+          acceptanceEvidence: envelope.acceptance?.evidence,
+          maxFinalizationTurns: envelope.acceptance?.maxFinalizationTurns,
         },
       });
     }
