@@ -852,14 +852,9 @@ for (const disposition of RESOLVED_DISPOSITIONS) {
 }
 // Thin aliases onto the canonical code-span/prose sanitizer pair
 // (post-gate-findings.mjs's sanitizeCodeSpan/sanitizeInline) — one shared
-// implementation so the two files can never drift out of parity.
-// sanitizeStructuredCodeSpan renders enum labels/paths/refs inside a backtick
-// code span (angle, file, severity/verdict/disposition): backtick-stripped
-// and whitespace-collapsed so a stray backtick can never prematurely close
-// the span. sanitizeStructuredInline renders bare prose (the finding
-// summary) on the same code-span-safe base plus HTML-comment/tag/link/image
-// neutralization via HTML entities (never backslash escapes, which a value's
-// own literal character can un-escape).
+// implementation so the two files can never drift out of parity. Behavior is
+// documented at that owner; sanitizeStructuredCodeSpan renders enum
+// labels/paths/refs, sanitizeStructuredInline renders the finding summary.
 const sanitizeStructuredCodeSpan = sanitizeCodeSpan;
 const sanitizeStructuredInline = sanitizeInline;
 // Normalize a single finding object into a deterministic render entry, or null

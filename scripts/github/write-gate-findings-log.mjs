@@ -285,7 +285,7 @@ export function parseProvenanceJson(raw, resolvedGroups = null) {
   if (consistencyError) {
     throw parseError(`--${consistencyError}`);
   }
-  // One-scoped-reviewer-per-fresh-angle floor (GATE-EXEC-FANOUT-DISPATCH-KEY): no two fresh
+  // One-scoped-reviewer-per-fresh-angle floor (ADR 0039): no two fresh
   // (non-carried) angles may share a reviewer identity, except fresh angles
   // sharing one under the SAME declared `group` (grouped fan-out dispatch —
   // see fanoutReviewerPairingError). `resolvedGroups` additionally rejects a
