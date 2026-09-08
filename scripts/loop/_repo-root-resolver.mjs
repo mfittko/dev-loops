@@ -1,18 +1,17 @@
 /**
- * Shared worktree-relative repo-root / ledger-checkout resolver (issue #1052,
- * folds #1019 and #1050). ONE shared resolver: derive repo root from the
- * checkout under operation (git-toplevel, not ambient cwd) for config reads,
- * and enumerate ALL checkouts (main + every worktree) for ledger reads so a
- * ledger written in any worktree is visible regardless of which checkout runs
- * the check.
+ * Shared worktree-relative repo-root / ledger-checkout resolver. ONE shared
+ * resolver: derive repo root from the checkout under operation (git-toplevel,
+ * not ambient cwd) for config reads, and enumerate ALL checkouts (main +
+ * every worktree) for ledger reads so a ledger written in any worktree is
+ * visible regardless of which checkout runs the check.
  *
- * #1050: the pre-PR-worktree flow means the session cwd is a DIFFERENT checkout
+ * The pre-PR-worktree flow means the session cwd can be a DIFFERENT checkout
  * than the PR worktree. Ledgers get written cwd-relative in the PR worktree but
  * read cwd-relative from the session checkout, so they diverge and clean gates
  * false-block on "missing pre-merge gate evidence". resolveLedgerCheckouts
  * enumerates every checkout so a ledger written in one is found from any.
  *
- * #1019: .devloops is read at EXACTLY <repoRoot>/.devloops with no upward walk.
+ * .devloops is read at EXACTLY <repoRoot>/.devloops with no upward walk.
  * Reading it from process.cwd() (a subdir or sibling checkout) silently falls
  * back to defaults (maxCopilotRounds -> 5). resolveRepoRoot derives the root
  * from the checkout's git-toplevel so config resolves correctly.

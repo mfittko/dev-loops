@@ -174,18 +174,13 @@ test("review workflow resolves pre-approval gate angles from config with explici
     assert.match(content, gatePhraseWithLenses, `${label} should keep the gate phrasing and lens names aligned`);
   }
 
-  for (const [label, content] of [
-    ["skills/local-implementation/SKILL.md", localImplementationSkill],
-    ["skills/copilot-pr-followup/SKILL.md", copilotFollowupSkill],
-    ["agents/review.agent.md", reviewAgent],
-    ["skills/docs/reviewer-loop-state-graph.md", reviewerGraph],
-  ]) {
-    assert.match(
-      content,
-      /review-complete, approval-ready, merge-ready, or ready for final handoff/i,
-      `${label} should keep the gate boundary wording aligned`,
-    );
-  }
+  // The gate boundary wording ("review-complete, approval-ready, merge-ready, or
+  // ready for final handoff") is not re-scanned across the non-owner surfaces
+  // here: its normative meaning is owned by GATE-EXEC-BUILD-ONCE-SEED /
+  // GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK and REVIEWER-STATE-GATE-ANGLE-MAPPING,
+  // asserted via assertRuleOwned below, and validate-rule-ownership's
+  // duplicate-imperative-sentence scan blocks copied restatements. Non-owners may
+  // summarize the owner without a pinned copied sentence.
 
   assert.match(reviewTemplate, /resolveGateAngles/i);
   assert.match(copilotFollowupSkill, /resolveGateAngles/i);

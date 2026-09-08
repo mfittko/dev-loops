@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, it, test } from "bun:test";
+import { afterAll, beforeAll, describe, it, test } from "bun:test";
 import { makeGhMock, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 
@@ -16,6 +16,20 @@ import { evaluateUiDesignerReviewScoping, DESIGNER_REVIEW_SATISFIED_OUTCOME } fr
 import { buildPlanFilePromotionMarker, buildPromotionPrBody } from "@dev-loops/core/loop/plan-file-promote-contract";
 
 const scriptPath = path.resolve("scripts/loop/detect-pr-gate-coordination-state.mjs");
+
+// Config-hermeticity (issue #2055): resolve the Copilot round cap from a fixture
+// repoRoot mirroring the real .devloops with maxCopilotRounds pinned to 2, not
+// the ambient .devloops (the repo pins maxCopilotRounds to 2 for test
+// isolation). Assertions are unchanged.
+let capFixtureRepoRoot = null;
+beforeAll(async () => {
+  capFixtureRepoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-cap-fixture-"));
+  const realDevloops = await readFile(path.resolve(".devloops"), "utf8");
+  await writeFile(path.join(capFixtureRepoRoot, ".devloops"), realDevloops.replace(/maxCopilotRounds: *\d+/, "maxCopilotRounds: 2"), "utf8");
+});
+afterAll(async () => {
+  if (capFixtureRepoRoot) await rm(capFixtureRepoRoot, { recursive: true, force: true });
+});
 
 // Marker keys: the local writeGhStub/writeGitStub stash their gh `entries` and
 // git response on the returned env so runNode replays them IN-PROCESS (no gh/git/CLI
@@ -84,7 +98,7 @@ const runNode = async (args = [], options = {}) => {
   }
   if (opts.help) return fallback();
 
-  const runtime = buildMockRuntime(options.env, { repoRoot: options.cwd ?? process.cwd() });
+  const runtime = buildMockRuntime(options.env, { repoRoot: options.cwd ?? capFixtureRepoRoot });
   let out = "";
   let err = "";
   const stdout = { write: (chunk) => { out += String(chunk); return true; } };
@@ -1050,93 +1064,6 @@ test("detect-pr-gate-coordination-state surfaces conflict_resolution for conflic
     assert(parsed.forbiddenActions.includes("await_final_human_approval"));
     assert(parsed.forbiddenActions.includes("declare_merge_ready"));
     assert.match(parsed.reason, /config\.test\.mjs/);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-});
-
-test.skip("detect-pr-gate-coordination-state with --review-mode internal_only skips Copilot review", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-local-"));
-
-  try {
-    const env = await writeGhStub(tempDir, [
-      {
-        assertArgs: ["pr", "view", "267", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
-        stdout: jsonLine({
-          number: 267,
-          state: "OPEN",
-          isDraft: false,
-          headRefOid: "ccc1234567890",
-          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
-          reviews: [],
-        }),
-      },
-      {
-        assertArgs: ["api", "repos/owner/repo/pulls/267/requested_reviewers"],
-        stdout: jsonLine({ users: [], teams: [] }),
-      },
-      {
-        assertArgs: ["api", "graphql", "pr=267"],
-        stdout: jsonLine({
-          data: {
-            repository: {
-              pullRequest: {
-                reviewThreads: {
-                  nodes: [],
-                },
-              },
-            },
-          },
-        }),
-      },
-      {
-        assertArgs: ["pr", "view", "267", "--repo", "owner/repo", "--json", "headRefOid"],
-        stdout: jsonLine({ headRefOid: "ccc1234567890" }),
-      },
-      {
-        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/267/comments?per_page=100"],
-        stdout: jsonLine([[
-          {
-            id: 12,
-            body: [
-              "Gate review: draft_gate",
-              "Reviewed head SHA: ccc1234567890",
-              "Verdict: clean",
-              "Findings summary: no issues found",
-              "Next action: mark ready for review",
-            ].join("\n"),
-            html_url: "https://example.test/comment/12",
-            updated_at: "2026-05-31T20:00:00Z",
-          },
-          {
-            id: 13,
-            body: [
-              "Gate review: pre_approval_gate",
-              "Reviewed head SHA: ccc1234567890",
-              "Verdict: findings_present",
-              "Findings summary: lint warnings in 3 files",
-              "Next action: fix findings and rerun gate",
-            ].join("\n"),
-            html_url: "https://example.test/comment/13",
-            updated_at: "2026-05-31T20:01:00Z",
-          },
-        ]]),
-      },
-      {
-        assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],
-        stdout: "\n",
-      },
-    ]);
-
-    const result = await runNode(["--repo", "owner/repo", "--pr", "267", "--review-mode", "internal_only"], { env });
-
-    assert.equal(result.code, 0);
-    assert.equal(result.stderr, "");
-    const parsed = JSON.parse(result.stdout);
-    assert.equal(parsed.gateBoundary, "pre_approval_gate_window");
-    assert.equal(parsed.nextAction, "run_pre_approval_gate");
-    assert(parsed.forbiddenActions.includes("request_copilot_review"));
-    assert(parsed.allowedNextActions.includes("run_pre_approval_gate"));
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

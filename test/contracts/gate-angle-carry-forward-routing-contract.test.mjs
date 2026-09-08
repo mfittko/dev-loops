@@ -25,21 +25,18 @@ import {
 // ---------------------------------------------------------------------------
 
 const SKILL = "skills/copilot-pr-followup/SKILL.md";
-const GENERATED_SKILL = ".claude/skills/copilot-pr-followup/SKILL.md";
 const SUB_LOOP_CONTRACT = "skills/docs/gate-review-sub-loop-contract.md";
-const GENERATED_SUB_LOOP_CONTRACT = ".claude/skills/docs/gate-review-sub-loop-contract.md";
 
-// Every skill that drives a gate retry, source and generated mirror alike. The
-// bare "only the angles that had findings" rule must survive in none of them.
-// The sub-loop contract owns GATE-EXEC-ANGLE-CARRY-FORWARD itself, and every
-// AC4 sentence lands there, so it is in scope for this guard too.
+// Every source skill that drives a gate retry. The bare "only the angles that
+// had findings" rule must survive in none of them. The sub-loop contract owns
+// GATE-EXEC-ANGLE-CARRY-FORWARD itself, and every AC4 sentence lands there, so
+// it is in scope for this guard too. Generated .claude mirrors are not listed:
+// claude-assets-reproducible.test.mjs proves the mirror is byte-reproducible
+// from these sources, so a rule absent from the source is absent from the mirror.
 const GATE_DRIVING_SKILLS = [
   SKILL,
-  GENERATED_SKILL,
   "skills/local-implementation/SKILL.md",
-  ".claude/skills/local-implementation/SKILL.md",
   SUB_LOOP_CONTRACT,
-  GENERATED_SUB_LOOP_CONTRACT,
 ];
 
 // Each numbered procedure step in the fan-out/fan-in section is one long line
@@ -173,37 +170,13 @@ test("local-implementation SKILL defers retry scoping to GATE-EXEC-ANGLE-CARRY-F
   );
 });
 
-test("generated .claude mirrors carry the same routing (when present)", async () => {
-  for (const [file, heading, patterns] of [
-    [GENERATED_SKILL, "**Carry-forward (Phase 1.2):**", PHASE_1_2_ROUTING],
-    [GENERATED_SKILL, "**Fan-out (Phase 2):**", PHASE_2_ROUTING],
-    [GENERATED_SKILL, "**Fan-in (Phase 3):**", PHASE_3_ROUTING],
-  ]) {
-    let generated;
-    try {
-      generated = await readRepo(file);
-    } catch (error) {
-      if (error?.code === "ENOENT") continue;
-      throw error;
-    }
-    const line = extractStepLine(generated, heading, file);
-    assertMatchesAll(line, patterns, `${file} ${heading}`);
-    if (patterns === PHASE_3_ROUTING) {
-      assert.doesNotMatch(
-        line,
-        PHASE_3_PROVENANCE_NOT_ON_COMMENT_POST,
-        `${file} Phase 3 step must not attach --provenance to the post-gate-findings.mjs comment post`,
-      );
-    }
-  }
-});
-
 test("the sub-loop contract's carry-forward rule states carry-forward as the default posture, not just a MAY", async () => {
   // Pins the AC4 posture flip so it cannot silently revert to the old MAY
   // wording: carry-forward must be stated as the default decision procedure,
-  // with full re-dispatch named as the exception, in both the source doc and
-  // its generated mirror.
-  for (const file of [SUB_LOOP_CONTRACT, GENERATED_SUB_LOOP_CONTRACT]) {
+  // with full re-dispatch named as the exception. Pinned on the source doc only;
+  // claude-assets-reproducible.test.mjs proves the generated mirror matches it.
+  {
+    const file = SUB_LOOP_CONTRACT;
     const content = await readRepo(file);
     assert.match(
       content,
@@ -222,8 +195,11 @@ test("copilot-pr-followup SKILL's Phase 2 step injects the known-findings block 
   // AC4's briefing half: the known-findings block is appended AFTER the
   // angle-specific prompt, not folded into GATE-EXEC-BRIEFING-PREFIX's
   // byte-identical prefix — folding it in would recompute the prefix hash on
-  // every gate close and break the sanctioned same-head-retry sentinel.
-  for (const file of [SKILL, GENERATED_SKILL]) {
+  // every gate close and break the sanctioned same-head-retry sentinel. Pinned
+  // on the source SKILL only; the generated mirror is covered by
+  // claude-assets-reproducible.test.mjs byte-reproducibility.
+  {
+    const file = SKILL;
     const content = await readRepo(file);
     assertMatchesAll(
       content,

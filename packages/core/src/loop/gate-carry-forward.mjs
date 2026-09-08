@@ -8,7 +8,7 @@
  * (e.g. a doc-only follow-up commit cannot change what a code-correctness angle
  * would find). Carry-forward lets the gate reuse the prior verdict for such
  * angles — but ONLY when it is provably safe. This holds for a findings-present
- * prior verdict too (issue #2017): a fixer push that never touches an angle's
+ * prior verdict too: a fixer push that never touches an angle's
  * surface must not force that angle's OPEN findings to be re-litigated from
  * scratch — the caller carries the prior findings forward unchanged, still
  * open, still blocking. Carry-forward NEVER converts a finding into an
@@ -65,7 +65,7 @@ import { ALWAYS_INCLUDE, CATEGORY_ANGLE_MAP } from "../analysis/change-classifie
  * @type {Record<string, string[]>}
  */
 const KIND_TO_CATEGORIES = {
-  // #1442: a docs file is PROSE_PRESENT when it lands on the prose surface, so
+  // A docs file is PROSE_PRESENT when it lands on the prose surface, so
   // deslop's carry-forward surface is the `docs` kind (a non-docs delta never
   // re-runs a clean deslop verdict).
   docs: ["DOCS_ONLY", "PROSE_PRESENT"],

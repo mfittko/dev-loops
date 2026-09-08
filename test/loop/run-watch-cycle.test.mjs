@@ -1,8 +1,8 @@
-import { test } from "bun:test";
+import { afterAll, beforeAll, test } from "bun:test";
 import { runIdFreeEnv, runNode as runNodeHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -13,6 +13,24 @@ import {
   runWatchCycle,
   watchWorkflowRun,
 } from "../../scripts/loop/run-watch-cycle.mjs";
+import { runHandoff } from "../../scripts/loop/copilot-pr-handoff.mjs";
+
+// Config-hermeticity (issue #2055): the integration tests that exercise the real
+// runHandoff resolve the Copilot round cap from a fixture repoRoot mirroring the
+// real .devloops with maxCopilotRounds pinned to 2, not the ambient .devloops
+// (the repo pins maxCopilotRounds to 2 for test isolation). Assertions are
+// unchanged. runWatchCycle does not
+// forward a repoRoot to runHandoff, so inject it through a runHandoffImpl wrapper.
+let capFixtureRepoRoot = null;
+beforeAll(async () => {
+  capFixtureRepoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-cycle-cap-fixture-"));
+  const realDevloops = await readFile(path.resolve(".devloops"), "utf8");
+  await writeFile(path.join(capFixtureRepoRoot, ".devloops"), realDevloops.replace(/maxCopilotRounds: *\d+/, "maxCopilotRounds: 2"), "utf8");
+});
+afterAll(async () => {
+  if (capFixtureRepoRoot) await rm(capFixtureRepoRoot, { recursive: true, force: true });
+});
+const capPinnedHandoff = (opts, ctx) => runHandoff(opts, { ...ctx, repoRoot: capFixtureRepoRoot });
 
 const EMPTY_THREADS = JSON.stringify({
   data: {
@@ -486,6 +504,7 @@ test("runWatchCycle integration keeps initial request-review -> waiting_for_copi
       {
         env,
         runChild,
+        runHandoffImpl: capPinnedHandoff,
         detectSessionActivity: false,
         watchCopilotReviewImpl: async (options) => {
           watcherOptions = options;
@@ -540,6 +559,7 @@ test("runWatchCycle integration keeps re-requested newer-head wait state non-ter
       {
         env,
         runChild,
+        runHandoffImpl: capPinnedHandoff,
         detectSessionActivity: false,
         watchCopilotReviewImpl: async (options) => {
           watcherOptions = options;
@@ -591,6 +611,7 @@ test("runWatchCycle integration keeps checks non-blocking with active Copilot wo
       {
         env,
         runChild,
+        runHandoffImpl: capPinnedHandoff,
         detectSessionActivity: true,
         watchWorkflowRunImpl: async () => ({ status: "completed" }),
         watchCopilotReviewImpl: async (options) => {
@@ -713,6 +734,7 @@ test("runWatchCycle integration keeps the full persistent watch timeout after ac
       {
         env,
         runChild,
+        runHandoffImpl: capPinnedHandoff,
         detectSessionActivity: true,
         watchWorkflowRunImpl: async () => ({ status: "completed" }),
         watchCopilotReviewImpl: async (options) => {

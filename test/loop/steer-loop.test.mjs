@@ -348,7 +348,7 @@ test("runSubmit applies stop_at_next_safe_gate at a safe point", async () => {
   });
 });
 
-test.skip("runSubmit operator mode returns an applied-now acknowledgement envelope from an authoritative inspection", async () => {
+test("runSubmit operator mode returns an applied-now acknowledgement envelope from an authoritative inspection", async () => {
   await withTempDir(async (dir) => {
     const stateFile = path.join(dir, "state.json");
     const { stream, read } = makeStdout();
@@ -382,6 +382,13 @@ test.skip("runSubmit operator mode returns an applied-now acknowledgement envelo
           number: 55,
           headRefOid: "abc123",
         }) + "\n",
+      },
+      // Reviewer auto-detect resolves reviewer scope from PR requested
+      // reviewers, then re-reads requested_reviewers inside
+      // fetchReviewRequested: two identical calls, not one.
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/55/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/55/requested_reviewers"],
@@ -682,7 +689,7 @@ test("runSubmit operator mode rejects --apply-mode overrides in the first extern
   });
 });
 
-test.skip("runSubmit operator mode queues stop_at_next_safe_gate for the next safe point from authoritative inspection", async () => {
+test("runSubmit operator mode queues stop_at_next_safe_gate for the next safe point from authoritative inspection", async () => {
   await withTempDir(async (dir) => {
     const stateFile = path.join(dir, "state.json");
     const { stream, read } = makeStdout();
@@ -716,6 +723,13 @@ test.skip("runSubmit operator mode queues stop_at_next_safe_gate for the next sa
           number: 55,
           headRefOid: "abc123",
         }) + "\n",
+      },
+      // Reviewer auto-detect resolves reviewer scope from PR requested
+      // reviewers, then re-reads requested_reviewers inside
+      // fetchReviewRequested: two identical calls, not one.
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/55/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/55/requested_reviewers"],

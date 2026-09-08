@@ -1,4 +1,4 @@
-// Shared request-settled reconciliation for Copilot review request status (#1588).
+// Shared request-settled reconciliation for Copilot review request status.
 //
 // Two detectors previously derived `copilotReviewRequestStatus` from the same
 // GitHub facts and disagreed: `detect-copilot-loop-state.mjs` reconciled a
@@ -6,7 +6,7 @@
 // review (a request older than the latest review is stale → status `none`),
 // while `detect-pr-gate-coordination-state.mjs` mapped `requested → "requested"`
 // unconditionally. The unreconciled status caused the gate-coordination
-// evaluator's `applyUnsettledCopilotReviewEntryGuard` (#1190) to discard a
+// evaluator's `applyUnsettledCopilotReviewEntryGuard` to discard a
 // `RUN_PRE_APPROVAL_GATE` grant and dead-end the loop into `stop` even though
 // all pre-approval preconditions were met (clean review + 0 threads + green CI).
 //
@@ -69,7 +69,7 @@ export async function fetchLatestCopilotReviewRequestAt({ repo, pr }, { env = pr
 
 // Resolve the reconciled Copilot review request status.
 //
-// Reconciliation rule (#1588): a submitted clean review on the current head
+// Reconciliation rule: a submitted clean review on the current head
 // satisfies an outstanding formal request when the request is not newer than
 // the latest submitted review timestamp. A request newer than the latest
 // review is genuinely outstanding (re-requested after convergence). An
@@ -107,7 +107,7 @@ export async function resolveCopilotReviewRequestStatus(
   if (!reviewSummary?.hasSubmittedReviewOnCurrentHead) {
     return "requested";
   }
-  // Convergence reconciliation (#1588): a submitted clean review on the
+  // Convergence reconciliation: a submitted clean review on the
   // current head satisfies an outstanding formal request when the request is
   // not newer than the latest submitted review. A request newer than the
   // latest review is genuinely outstanding (re-requested after convergence).

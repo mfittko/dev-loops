@@ -141,9 +141,10 @@ disposition on account of the internal-tooling raw-call record.
    allowedWriteOps }`), not prose. The conductor reads that field. This is a hard
    contract; see [Workflow Handoff Contract](./workflow-handoff-contract.md).
 2. **Durability — advisory PR comment.** The conductor posts a single advisory PR
-   comment carrying the findings (`rawCallViolations`, `internalToolingOnly`,
-   `allowedWriteOps`). Durable and on-GitHub, but **not a gate**. No disk artifact
-   is written for retrospective *findings*.
+   comment carrying the same findings from step 1. Durable and on-GitHub, but **not a
+   gate**. No disk artifact is written for retrospective *findings* — they stay
+   distinct from the persisted checkpoint state record (see [After retrospective is
+   done](#after-retrospective-is-done-written-by-operator-or-skill)).
 3. **No config.** There is nothing to configure: the retrospective always runs and
    always returns findings. `requireRetrospectiveGate` and
    `requireRetrospectiveInternalTooling` no longer exist.

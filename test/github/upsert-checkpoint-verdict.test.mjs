@@ -65,8 +65,15 @@ before(async () => {
 
   fanoutDisabledRepoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-fanout-disabled-"));
   const realDevloops = await readFile(path.resolve(".devloops"), "utf8");
-  const patched = realDevloops.replace("requireFanoutEvidence: true", "requireFanoutEvidence: false");
-  assert.notEqual(patched, realDevloops, "expected to find gates.requireFanoutEvidence: true in the repo's own .devloops to patch for test isolation");
+  const fanoutOff = realDevloops.replace("requireFanoutEvidence: true", "requireFanoutEvidence: false");
+  assert.notEqual(fanoutOff, realDevloops, "expected to find gates.requireFanoutEvidence: true in the repo's own .devloops to patch for test isolation");
+  // Config-hermeticity (issue #2055): pin the round cap to 2 so these tests own
+  // their cap instead of inheriting the ambient .devloops refinement.maxCopilotRounds
+  // (the repo pins refinement.maxCopilotRounds to 2 for test isolation).
+  // Assertions are unchanged; the replace is a
+  // no-op when the ambient value is already 2 (e.g. main).
+  const patched = fanoutOff.replace(/maxCopilotRounds: *\d+/, "maxCopilotRounds: 2");
+  assert.match(patched, /maxCopilotRounds: 2/, "expected refinement.maxCopilotRounds in the repo's own .devloops to pin for test isolation");
   await writeFile(path.join(fanoutDisabledRepoRoot, ".devloops"), patched, "utf8");
 });
 after(async () => {
@@ -401,23 +408,30 @@ test("parseUpsertCheckpointVerdictCliArgs rejects malformed arguments determinis
   );
 });
 
-test("parseUpsertCheckpointVerdictCliArgs accepts --findings-file without --findings-summary", () => {
+test("parseUpsertCheckpointVerdictCliArgs accepts --findings-file without --findings-summary", async () => {
+  // ponytail: pure arg-parse; the path only round-trips, so a per-test mkdtemp
+  // path (issue #2055, no fixed shared /tmp fixture) needs no file on disk.
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-file-"));
+  const findingsFile = path.join(tempDir, "findings.md");
   const parsed = parseUpsertCheckpointVerdictCliArgs([
     "--repo", "owner/repo",
     "--pr", "17",
     "--gate", "draft_gate",
     "--head-sha", "abc1234000000000000000000000000000000000",
     "--verdict", "findings_present",
-    "--findings-file", "/tmp/findings.md",
+    "--findings-file", findingsFile,
     "--next-action", "stay draft and fix",
     "--inline-reason", "tiny docs change",
   ]);
-  assert.equal(parsed.findingsFile, "/tmp/findings.md");
+  assert.equal(parsed.findingsFile, findingsFile);
   assert.equal(parsed.findingsSummary, undefined);
   assert.equal(parsed.verdict, "findings_present");
+  await rm(tempDir, { recursive: true, force: true });
 });
 
-test("parseUpsertCheckpointVerdictCliArgs accepts --findings-file with --findings-summary", () => {
+test("parseUpsertCheckpointVerdictCliArgs accepts --findings-file with --findings-summary", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-upsert-findings-file-"));
+  const findingsFile = path.join(tempDir, "findings.md");
   const parsed = parseUpsertCheckpointVerdictCliArgs([
     "--repo", "owner/repo",
     "--pr", "17",
@@ -425,12 +439,13 @@ test("parseUpsertCheckpointVerdictCliArgs accepts --findings-file with --finding
     "--head-sha", "abc1234000000000000000000000000000000000",
     "--verdict", "findings_present",
     "--findings-summary", "fallback text",
-    "--findings-file", "/tmp/findings.md",
+    "--findings-file", findingsFile,
     "--next-action", "stay draft and fix",
     "--inline-reason", "tiny docs change",
   ]);
-  assert.equal(parsed.findingsFile, "/tmp/findings.md");
+  assert.equal(parsed.findingsFile, findingsFile);
   assert.equal(parsed.findingsSummary, "fallback text");
+  await rm(tempDir, { recursive: true, force: true });
 });
 
 test("parseUpsertCheckpointVerdictCliArgs rejects --force as a removed policy flag", () => {

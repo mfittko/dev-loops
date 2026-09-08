@@ -195,8 +195,8 @@ function parseCliArgs(argv) {
   }
 
   // Fresh-context provenance validation for `complete` — runs after the
-  // identity block above so identity errors take precedence (issue #1870,
-  // RETRO-FRESH-CONTEXT-MANDATORY: an inline self-authored retro is rejected
+  // identity block above so identity errors take precedence
+  // (RETRO-FRESH-CONTEXT-MANDATORY: an inline self-authored retro is rejected
   // outright, and so is a complete record with no provenance at all — the
   // reader fails closed on both).
   let provenance = null;

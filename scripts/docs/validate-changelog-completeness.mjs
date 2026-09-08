@@ -1,11 +1,10 @@
 #!/usr/bin/env node
-import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
 import { isDirectCliRun } from "../_core-helpers.mjs";
+import { createGitClient, resolveBaseRef } from "./_doc-git-client.mjs";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 
 const CHANGELOG_PATH = "CHANGELOG.md";
@@ -41,7 +40,7 @@ const CONVENTIONAL_SUBJECT_RE = /^([a-z]+)(?:\([^()\n]+\))?!?:\s+\S/u;
 /**
  * Parse the conventional-commit type from a commit subject line.
  * Returns null for non-conventional subjects (same type vocabulary as the
- * commit-msg guard, issue #1864: reuse the existing detection, no new heuristic;
+ * commit-msg guard, reusing its existing detection rather than a new heuristic;
  * the subject shape here is looser than the guard's — scope-less subjects and
  * a breaking-change `!` suffix are accepted).
  *
@@ -133,66 +132,10 @@ export function validateChangelogCompleteness({
   return { notable, addedItems, errors };
 }
 
-export function createGitClient(root, exec = promisify(execFile)) {
-  const run = (args) => exec("git", args, { cwd: root });
-  return {
-    async symbolicRef(ref) {
-      const { stdout } = await run(["symbolic-ref", ref]);
-      return stdout.trim();
-    },
-    async mergeBase(a, b) {
-      const { stdout } = await run(["merge-base", a, b]);
-      return stdout.trim();
-    },
-    async diffNameOnly(a, b) {
-      // -z (NUL-delimited names) so a C-quoted path containing a newline cannot
-      // smuggle a suffix line past classifyFile() as a separate "file".
-      const { stdout } = await run(["diff", "--no-renames", "--name-only", "-z", a, b]);
-      return stdout.split("\0").filter(Boolean);
-    },
-    async logSubjects(a, b) {
-      const { stdout } = await run(["log", "--format=%s", `${a}..${b}`]);
-      return stdout.split(/\r?\n/).filter(Boolean);
-    },
-    async show(spec) {
-      const { stdout } = await run(["show", spec]);
-      return stdout;
-    },
-    async pathExistsIn(rev, rel) {
-      const { stdout } = await run(["ls-tree", "-z", rev, "--", rel]);
-      return stdout.length > 0;
-    },
-  };
-}
-
-/**
- * Resolve the merge-base comparison point against the default branch.
- * Same resolution order as scripts/docs/validate-decision-records.mjs so the
- * two base-ref-dependent validators cannot drift: origin/HEAD first, then
- * GITHUB_BASE_REF (CI fetches it into origin/<base>), then main/master.
- */
-async function resolveBaseRef(git, env = process.env) {
-  let defaultBranch = null;
-  try {
-    defaultBranch = (await git.symbolicRef("refs/remotes/origin/HEAD")).replace(/^refs\/remotes\/origin\//, "");
-  } catch {
-    defaultBranch = null;
-  }
-  if (defaultBranch) return git.mergeBase(`origin/${defaultBranch}`, "HEAD");
-  const candidates = [
-    ...(env.GITHUB_BASE_REF ? [`origin/${env.GITHUB_BASE_REF}`] : []),
-    ...["main", "master"].map((b) => `origin/${b}`),
-  ];
-  for (const branch of candidates) {
-    try {
-      const base = await git.mergeBase(branch, "HEAD");
-      if (base) return base;
-    } catch {
-      // try next candidate
-    }
-  }
-  return null;
-}
+// createGitClient + resolveBaseRef are shared with validate-decision-records.mjs
+// via ./_doc-git-client.mjs so the two base-ref-dependent validators cannot
+// drift. Re-exported here for the injected-git test suite.
+export { createGitClient };
 
 /**
  * Run the validator end to end, returning the process exit code. Injectable
@@ -212,7 +155,7 @@ export async function main({ root, env = process.env, log = console, git = creat
 
   const [commitSubjects, files, headChangelog, baseExists] = await Promise.all([
     git.logSubjects(base, "HEAD"),
-    git.diffNameOnly(base, "HEAD"),
+    git.diffNameOnly(base, "HEAD", { nulDelimited: true }),
     readFile(path.join(root, CHANGELOG_PATH), "utf8").catch(() => ""),
     git.pathExistsIn(base, CHANGELOG_PATH),
   ]);

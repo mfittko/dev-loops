@@ -2,7 +2,8 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { main as moveQueueItemMain } from "../projects/move-queue-item.mjs";
-import { ghGraphql, resolveOwner } from "../github/gh.mjs";
+import { resolveOwner } from "../github/gh.mjs";
+import { discoverProjects } from "../projects/projects-access.mjs";
 
 const DEFAULT_NON_SUCCESS_COLUMN = "Backlog";
 
@@ -40,7 +41,7 @@ export const DEFAULT_STATE_COLUMN_NAMES = Object.freeze({
 /**
  * Default loop-state → logical-column map. Covers both the lifecycle states
  * (lifecycle-state.mjs) and the inner Copilot loop states (copilot-loop-state.mjs),
- * plus the conceptual names used by issue #793. Unknown states fall back to
+ * plus the conceptual state names. Unknown states fall back to
  * IN_PROGRESS (a safe, visible "work is happening" column) rather than throwing.
  */
 export const DEFAULT_STATE_LOGICAL_MAP = Object.freeze({
@@ -53,7 +54,7 @@ export const DEFAULT_STATE_LOGICAL_MAP = Object.freeze({
 
   // In Progress — active implementation / review / feedback resolution
   implementation: LOGICAL_COLUMN.IN_PROGRESS,
-  // Tolerated alias for `implementation` (conceptual name from issue #793);
+  // Tolerated alias for `implementation` (conceptual name);
   // the queue driver passes the real `implementation` lifecycle state.
   local_implementation_active: LOGICAL_COLUMN.IN_PROGRESS,
   draft_gate: LOGICAL_COLUMN.IN_PROGRESS,
@@ -80,7 +81,7 @@ export const DEFAULT_STATE_LOGICAL_MAP = Object.freeze({
   // Done — terminal (lifecycle MERGE = "merge", queue terminal = "done")
   merge: LOGICAL_COLUMN.DONE,
   done: LOGICAL_COLUMN.DONE,
-  // Tolerated aliases (conceptual names from issue #793).
+  // Tolerated aliases (conceptual names).
   merged: LOGICAL_COLUMN.DONE,
   issue_closed: LOGICAL_COLUMN.DONE,
 });
@@ -109,7 +110,7 @@ export function boardColumnForLoopState(loopState, mapping = {}) {
 
 /**
  * Derive the board's target LOGICAL column for a queue item from live GitHub
- * facts (#1069). Returns LOGICAL_COLUMN.DONE, LOGICAL_COLUMN.IN_PROGRESS, or
+ * facts. Returns LOGICAL_COLUMN.DONE, LOGICAL_COLUMN.IN_PROGRESS, or
  * null when the item should be left where it is (Backlog/Next Up untouched).
  *
  * facts: {
@@ -131,7 +132,7 @@ export function deriveReconcileColumn(facts = {}) {
 }
 
 /**
- * Pure reconcile planner (#1069). Given listed board items, a map of live facts
+ * Pure reconcile planner. Given listed board items, a map of live facts
  * keyed by the item's stable GraphQL node id (`item.itemId`), and the resolved
  * column display names, return the set of moves needed to converge the board and
  * a count of items left unchanged. Idempotent: when every item already sits in
@@ -139,7 +140,7 @@ export function deriveReconcileColumn(facts = {}) {
  *
  * Keying by the stable `itemId` (not the bare issue/PR number) keeps reconcile
  * deterministic on a multi-repo GitHub Projects board, where two items can share
- * a number (repo-A PR #5 vs repo-B issue #5) — number-keying would collide and
+ * a number (repo-A PR 5 vs repo-B issue 5) — number-keying would collide and
  * make moves order-dependent.
  *
  * items: [{ itemId, issueNumber, prNumber, status, ... }]  (from list-queue-items)
@@ -172,7 +173,7 @@ function readDevloopsSettings(repoRoot) {
     try {
       const raw = readFileSync(base + ext, "utf8");
       const settings = ext === ".json" ? JSON.parse(raw) : parseYaml(raw);
-      // `tracker` (issue #1408, the tracker-agnostic seam) is surfaced so
+      // `tracker` (the tracker-agnostic seam) is surfaced so
       // loadBoardConfig can read tracker.board directly.
       return { settings: settings?.queue ?? null, tracker: settings?.tracker ?? null };
     } catch (err) {
@@ -207,7 +208,7 @@ export function loadBoardConfig(repoRoot) {
   if (error) {
     return { enabled: false, reason: `config read/parse error: ${error}` };
   }
-  // tracker.board (canonical board key, issue #1408) — see resolveTrackerBoard
+  // tracker.board (canonical board key) — see resolveTrackerBoard
   // in ../config/config.mjs for the equivalent resolution against the
   // validated, loaded config.
   const trackerBoard = boardSelector(tracker?.board);
@@ -270,59 +271,19 @@ export function loadStateColumnMap(repoRoot) {
 
   // Surface a non-ENOENT read/parse error (mirrors loadBoardConfig). Callers on
   // the fail-closed next_up pickup path MUST honor it rather than silently
-  // querying the default literal column against a stale/renamed board (#1098).
+  // querying the default literal column against a stale/renamed board.
   // Existing `.columnNames`-only callers ignore this field and behave unchanged.
   return { columnNames, stateColumnMap, error: error ?? null };
 }
 
 // ── Minimal project lookup (read-only, no create/repair) ────────────────
 
-const LIST_USER_PROJECTS = [
-  "query($login:String!, $after:String) {",
-  "  user(login:$login) {",
-  "    projectsV2(first:50, after:$after) {",
-  "      pageInfo { hasNextPage endCursor }",
-  "      nodes { id number title url }",
-  "    }",
-  "  }",
-  "}"
-].join("\n");
-
-const LIST_ORG_PROJECTS = [
-  "query($login:String!, $after:String) {",
-  "  organization(login:$login) {",
-  "    projectsV2(first:50, after:$after) {",
-  "      pageInfo { hasNextPage endCursor }",
-  "      nodes { id number title url }",
-  "    }",
-  "  }",
-  "}"
-].join("\n");
-
+// Board-sync tolerates null project nodes (defensive against a partial page);
+// the shared discovery returns raw nodes, so this caller keeps its own null
+// filter at the call site rather than in the shared traversal.
 async function listAllProjects(login, kind, env, runChild) {
-  const query = kind === "org" ? LIST_ORG_PROJECTS : LIST_USER_PROJECTS;
-  const projects = [];
-  let after = null;
-  while (true) {
-    const vars = { login };
-    if (after) vars.after = after;
-    const payload = await ghGraphql(query, vars, env, runChild);
-    const connection = kind === "org"
-      ? payload?.data?.organization?.projectsV2
-      : payload?.data?.user?.projectsV2;
-    const nodes = connection?.nodes ?? [];
-    projects.push(...nodes.filter((n) => n != null));
-    const pageInfo = connection?.pageInfo ?? {};
-    if (!pageInfo.hasNextPage) break;
-    if (!pageInfo.endCursor) {
-      throw Object.assign(
-        new Error("Invalid projects list payload: hasNextPage is true but endCursor is missing"),
-        { code: "GH_API_ERROR" },
-      );
-    }
-    after = pageInfo.endCursor;
-  }
-  return projects;
+  const projects = await discoverProjects(login, kind, env, runChild);
+  return projects.filter((n) => n != null);
 }
 
 const projectNumberCache = new Map();

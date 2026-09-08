@@ -316,10 +316,10 @@ export async function detectRecentHumanComments({ repo, pr, claimedAtMs }, { env
   }
 }
 
-// Facts needed by the round-cap escape-hatch significant-change detector
-// (#1103, #1126): the current head, the Copilot reviews (to find the last
-// reviewed head), and the PR's changed files. Fetched only when the interpreter
-// already resolved ROUND_CAP_CLEAN_FALLBACK, so this extra call is off the hot path.
+// Facts needed by the round-cap escape-hatch significant-change detector: the
+// current head, the Copilot reviews (to find the last reviewed head), and the
+// PR's changed files. Fetched only when the interpreter already resolved
+// ROUND_CAP_CLEAN_FALLBACK, so this extra call is off the hot path.
 async function fetchReopenCycleFacts({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const result = await runChild(
     ghCommand,
@@ -347,8 +347,8 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
     env,
     cwd: resolvedRepoRoot,
     claimIfMissing: true,
-    // #1706: a confirmed-dead or stale competing claim (recorded exit signal or
-    // past the stale-max-age window) is taken over so pre-flight handoff proceeds
+    // A confirmed-dead or stale competing claim (recorded exit signal or past
+    // the stale-max-age window) is taken over so pre-flight handoff proceeds
     // instead of returning a blocking stop against a leaked lock. Genuinely live
     // owners still stand this handoff down (one-runner-per-PR preserved).
     supersedeStale: true,
@@ -390,7 +390,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
     ? resolveRefinement({ version: 1 })
     : resolveRefinement(config.config);
   if (options.lightweight) {
-    // Compose (not replace) the round cap for light-dispatched PRs (#1210):
+    // Compose (not replace) the round cap for light-dispatched PRs:
     // min(lightMode.maxCopilotRounds ?? 1, refinement.maxCopilotRounds), so
     // maxCopilotRounds: 0 still disables Copilot rounds everywhere.
     refinementConfig.maxCopilotRounds = resolveEffectiveCopilotRoundCap(
@@ -458,7 +458,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
   // Detect internal tooling PRs — suppress Copilot review request step entirely.
   // Internal-only PRs (scripts/docs/tests/config) skip the request, not just the wait.
   let internalOnlySkipCopilot = false;
-  // Config opt-out (#832): maxCopilotRounds: 0 disables the external Copilot review
+  // Config opt-out: maxCopilotRounds: 0 disables the external Copilot review
   // gate for the repo (local-harness-only review). Treat it like an internal-only PR
   // — skip the request, not just the wait — regardless of stub/sequence mode. This
   // mirrors the gate-coordination side, which routes maxCopilotRounds: 0 to internal_only.
@@ -499,7 +499,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
     }
   }
 
-  // In-flight-rerequest race (#1165): the interpreter routes to
+  // In-flight-rerequest race: the interpreter routes to
   // ROUND_CAP_CLEAN_FALLBACK even when a Copilot review is REQUESTED and pending
   // on the current head, because at the cap it treats any assignment as a stale
   // leftover (copilot-loop-state.mjs). An in-flight request is usually a fresh
@@ -507,8 +507,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
   // post-convergence change) — but it can also be a stale at-cap assignment
   // mislabeled as requested, as detect-copilot-loop-state.mjs's own fallback
   // notes. Proceeding to pre_approval_gate on a real in-flight review would skip
-  // it — the exact gate-integrity gap #1126 closes — and
-  // detect-pr-gate-coordination-state gates pre-approval here. The reopen escape
+  // it, and detect-pr-gate-coordination-state gates pre-approval here. The reopen escape
   // hatch below can only recover the wait verdict via a SECOND, fail-silent gh
   // fetch (fetchReopenCycleFacts) whose failure/compare-miss silently drops back
   // to "proceed", diverging from detect (which reused already-validated facts).
@@ -531,7 +530,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
     };
   }
 
-  // Round-cap escape hatch (#1103, #1126): the interpreter resolves
+  // Round-cap escape hatch: the interpreter resolves
   // ROUND_CAP_CLEAN_FALLBACK (stop, no re-request) at the cap. But when a
   // SIGNIFICANT post-convergence change (new product/test-logic since the last
   // Copilot review — not doc/comment-only) has landed, a new Copilot cycle is
@@ -586,11 +585,15 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
         // (its hasNewCommits guard), so this cannot force an over-cap same-head request.
         forceRerequestReview: reopenedCapCycle,
         // Thread the light-dispatch signal so the requester enforces the same
-        // composed round cap this handoff resolved (#1210) — the enforcement
+        // composed round cap this handoff resolved — the enforcement
         // backstop must never permit rounds the interpreter already forbids.
         lightweight: options.lightweight,
       },
-      { env, ghCommand, runChild },
+      // Thread runHandoff's already-resolved repoRoot into the review sub-call so
+      // its round-cap resolves from the same config source. No-op
+      // from the repo root (resolvedRepoRoot === resolveRepoRoot(process.cwd()));
+      // more correct from a subdir.
+      { env, ghCommand, runChild, repoRoot: resolvedRepoRoot },
     );
     reviewRequestStatus = requestResult.status;
     snapshot = applyConfirmedReviewRequest(snapshot, reviewRequestStatus);

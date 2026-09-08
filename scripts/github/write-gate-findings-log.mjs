@@ -60,13 +60,11 @@ function parseError(message) {
 }
 const normalizeGate = normalizeGateShared;
 const normalizeVerdict = normalizeVerdictShared;
-// Exported so other tools (e.g. upsert-checkpoint-verdict.mjs's
-// RESOLVED_DISPOSITIONS) derive their own subset from this single copy of the
-// disposition vocabulary instead of hand-copying it out of sync.
-// "needs-answer" is the disposition a "question" severity finding gets
-// (@dev-loops/core/loop/gate-fanin's consolidateFanin): a question is
-// answered, never deferred or fixed, so it needs its own disposition rather
-// than being forced into "deferred" like every other non-blocking finding.
+// Exported so other tools (e.g. upsert-checkpoint-verdict.mjs) derive their
+// own subset from this one copy instead of hand-copying it out of sync.
+// "needs-answer" is the disposition a "question" finding gets (see
+// consolidateFanin, @dev-loops/core/loop/gate-fanin): a question is
+// answered, never deferred or fixed, so it needs its own disposition.
 export const VALID_DISPOSITIONS = new Set(["accepted-for-fix", "deferred", "needs-answer", "disputed", "operator_acknowledged"]);
 // Validate + normalize a parsed --findings / --findings-file JSON array. Shared
 // by both flags so they carry identical validation — flagLabel only changes the
@@ -96,15 +94,12 @@ function validateFindingsArray(parsed, flagLabel) {
       summary: f.summary.trim(),
     };
     if (Array.isArray(f.files)) {
-      // Trimmed, not just filtered: an untrimmed files[0] (e.g. " src/a.mjs ")
-      // would still count as locatable-SHAPED (hasLocatableShape only checks
-      // non-empty, not exact form) while every downstream consumer that keys
-      // on the raw value (the diff's commentable-line set lookup, the posted
+      // Trimmed, not just filtered: hasLocatableShape only checks non-empty,
+      // but every downstream consumer (diff commentable-line lookup, posted
       // review `path`, renderNonLocatableBlock's Location line) compares
       // against the TRIMMED form — an untrimmed entry would derive
-      // "needs-answer"/locatable here yet never actually match a real
-      // in-diff position later, silently downgrading it back to
-      // non-locatable at a different layer instead of agreeing everywhere.
+      // "needs-answer"/locatable here yet never match a real in-diff position
+      // later, silently downgrading it at a different layer.
       entry.files = f.files.filter(x => typeof x === "string" && x.trim().length > 0).map(x => x.trim());
     }
     if ("line" in f) {
@@ -124,31 +119,23 @@ function validateFindingsArray(parsed, flagLabel) {
       entry.disposition = disp;
     } else if (isDefaultDeferrableSeverity(f.severity)) {
       // A non-blocking low/nit finding with no explicit disposition defaults
-      // to "deferred" so a hand-authored (or consolidate-fanin.mjs-produced)
-      // array need not repeat the obvious disposition for every lowest-tier
-      // entry. A question routes through the SAME shared rule
-      // (deriveDisposition, @dev-loops/core/loop/gate-fanin) every other
-      // producer uses: LOCATABLE (hasLocatableShape) defaults to
-      // "needs-answer", non-locatable to "deferred" — see that function's
-      // own doc for the full rule. Explicit dispositions (including an
-      // explicit "deferred") always keep the validation above unchanged.
-      // isDefaultDeferrableSeverity (gate-fanin) is the shared guard this
-      // producer and post-gate-findings.mjs's own validator both route
-      // through, so the two can never restate it out of sync.
+      // to "deferred", so callers need not repeat the obvious per entry. A
+      // question defaults to "needs-answer" instead (LOCATABLE) via the SAME
+      // shared rule every producer uses (deriveDisposition, @dev-loops/core/
+      // loop/gate-fanin) — this producer and post-gate-findings.mjs's own
+      // validator both route through it so the two can never drift.
       entry.disposition = deriveDisposition(f.severity, { locatable: hasLocatableShape(entry) });
     }
-    // #1846: the explicit operator-visibility signal for a "low" finding —
+    // net-reduction disposition policy: the explicit operator-visibility signal for a "low" finding —
     // see buildFindingMarker's doc (_gate-finding-surface.mjs) for the full
     // contract. Boolean-only; absent/false is the conservative default.
     if ("operatorVisible" in f) {
       if (typeof f.operatorVisible !== "boolean") {
         throw parseError(`${flagLabel}[${i}].operatorVisible must be a boolean`);
       }
-      // Fail closed rather than accept-and-ignore: operatorVisible only has
-      // meaning for a "low" finding (the net-reduction disposition policy's
-      // signal close-gate-findings.mjs requires before filing a low) — setting
-      // it on any other severity is a caller error the ledger must not
-      // silently swallow.
+      // Fail closed: operatorVisible only means something for a "low" finding
+      // (the net-reduction disposition policy's filing signal) — any other
+      // severity is a caller error the ledger must not silently swallow.
       if (f.severity !== "low") {
         throw parseError(`${flagLabel}[${i}].operatorVisible is only meaningful for a "low" finding (got severity ${JSON.stringify(f.severity)})`);
       }
@@ -164,10 +151,8 @@ function validateFindingsArray(parsed, flagLabel) {
       }
       entry.resolvedIn = sha;
     }
-    // Judge relevance-based dispositions (#1525) — carried through so the
-    // durable ledger and posted findings comment show what was consciously
-    // not acted on and why. Optional and additive: when absent (a round with
-    // no judge verdict) the finding writes exactly as before.
+    // Judge relevance-based dispositions (GATE-EXEC-JUDGE-PHASE): optional and additive —
+    // absent when no judge verdict ran, the finding writes exactly as before.
     if (typeof f.judgeDisposition === "string" && f.judgeDisposition.trim().length > 0) {
       const jd = f.judgeDisposition.trim();
       if (!JUDGE_DISPOSITIONS.has(jd)) {
@@ -181,14 +166,10 @@ function validateFindingsArray(parsed, flagLabel) {
     if (typeof f.judgeCriterion === "string" && f.judgeCriterion.trim().length > 0) {
       entry.judgeCriterion = f.judgeCriterion.trim();
     }
-    // #1807: a judge-pass-enriched finding carries a stable `fingerprint`
-    // (act/defer/reject — the reject audit entry keys on it too) and a
-    // `defer` finding additionally carries `followUpIssueNumber` — the PR's
-    // ONE tracked follow-up GitHub issue. Both come from the sanctioned
-    // judge-pass bridge; absent/empty is tolerated (skipped), but a present
-    // fingerprint is shape-validated against the marker's own `[0-9a-f]{16}`
-    // contract so a malformed / hand-edited ledger fails closed here rather
-    // than silently producing a marker the finding-marker regex never matches.
+    // GATE-EXEC-DEFERRAL-RECORD: a judge-pass-enriched finding may carry a stable `fingerprint`
+    // ([0-9a-f]{16}, matching the finding-marker regex) and a `defer` finding
+    // additionally carries `followUpIssueNumber` (the PR's one tracked
+    // follow-up issue). Both optional; a malformed fingerprint fails closed.
     if (typeof f.fingerprint === "string" && f.fingerprint.trim().length > 0) {
       const fp = f.fingerprint.trim();
       if (!/^[0-9a-f]{16}$/.test(fp)) {
@@ -201,13 +182,10 @@ function validateFindingsArray(parsed, flagLabel) {
     }
     if (f.followUpDraft !== undefined && f.followUpDraft !== null) {
       // Mirrors validateJudgeVerdict's followUpDraft shape rule
-      // (packages/core/src/loop/gate-fanin.mjs): gate on presence, carving
-      // out only nullish (undefined/null) as absent, so a present-but-falsy
-      // draft ("", 0, false) is rejected as a non-object rather than silently
-      // dropped like every other malformed draft, then require a non-empty
-      // title string and a body string, so this trust boundary never passes
-      // through, or loses without a diagnostic, a malformed draft that would
-      // surface later as a broken follow-up file.
+      // (packages/core/src/loop/gate-fanin.mjs): only undefined/null counts
+      // as absent, so a present-but-falsy draft ("", 0, false) is rejected
+      // rather than silently dropped, and a present draft must have a
+      // non-empty title plus a body string.
       if (typeof f.followUpDraft !== "object" || Array.isArray(f.followUpDraft)) {
         throw parseError(`${flagLabel}[${i}].followUpDraft must be an object`);
       }
@@ -215,20 +193,14 @@ function validateFindingsArray(parsed, flagLabel) {
       if (typeof draft.title !== "string" || draft.title.trim().length === 0 || typeof draft.body !== "string") {
         throw parseError(`${flagLabel}[${i}].followUpDraft must have a non-empty title and a body string`);
       }
-      // Validated against the trimmed title but stored raw (untrimmed): this
-      // mirrors validateJudgeVerdict's own raw pass-through, so a
-      // well-formed draft passes through unchanged rather than being
-      // silently renormalized.
+      // Validated against the trimmed title but stored raw, mirroring
+      // validateJudgeVerdict's own untrimmed pass-through.
       entry.followUpDraft = f.followUpDraft;
     }
-    // Mirrors validateJudgeVerdict's own defer rule (packages/core/src/loop/
-    // gate-fanin.mjs): followUpDraft is mandatory on a defer judgeDisposition
-    // (soft-cap contract — a deferred finding always carries a fileable
-    // follow-up draft). validateJudgeVerdict enforces this on the judge's own
-    // artifact before applyJudgeDispositions ever merges it in, but a
-    // hand-authored --findings/--findings-file array bypasses that path
-    // entirely, so this durable-ledger validator needs its own copy of the
-    // same rule rather than trusting an upstream check it never runs through.
+    // Mirrors validateJudgeVerdict's defer rule (packages/core/src/loop/
+    // gate-fanin.mjs): followUpDraft is mandatory when judgeDisposition is
+    // "defer" (soft-cap contract). A hand-authored --findings array bypasses
+    // that upstream check, so this validator re-enforces it independently.
     if (entry.judgeDisposition === "defer" && entry.followUpDraft === undefined) {
       throw parseError(`${flagLabel}[${i}].followUpDraft is required when judgeDisposition is "defer"`);
     }
@@ -236,22 +208,16 @@ function validateFindingsArray(parsed, flagLabel) {
   });
 }
 // Resolve the findings array from either --findings (inline JSON) or
-// --findings-file (a path to a file containing the same JSON array) —
-// mutually exclusive, identical validation either way. Shared plumbing lives
-// in _findings-input.mjs; this file's own validateFindingsArray is the
-// injected element validator.
+// --findings-file (a path), with identical validation either way. Shared
+// plumbing lives in _findings-input.mjs.
 function resolveFindings(options) {
   return resolveFindingsInput(options, { parseError, validate: validateFindingsArray });
 }
 /**
- * Validate + normalize the fan-out provenance object. Records how many distinct
- * reviewer agents were dispatched (distinctReviewers) and per-angle dispatch
- * provenance (perAngle). Rejects MALFORMED or self-INCONSISTENT provenance (bad
- * shape, or a distinctReviewers claim not backed by recorded dispatch entries).
- * This raises the bar; it does NOT make provenance un-forgeable — a determined
- * single agent can still write an internally-consistent blob. Un-forgeable
- * recording is the Pi-harness bridge (subagent tool at child depth). Returns the
- * normalized object.
+ * Validate + normalize the fan-out provenance object (distinctReviewers +
+ * perAngle). Rejects malformed or self-inconsistent provenance; this raises
+ * the bar but does not make provenance unforgeable (see the Pi-harness
+ * subagent-tool bridge for that).
  */
 export function parseProvenanceJson(raw, resolvedGroups = null) {
   let parsed;
@@ -285,30 +251,22 @@ export function parseProvenanceJson(raw, resolvedGroups = null) {
         entry[key] = a[key].trim();
       }
     }
-    // carriedFromHead marks an angle whose verdict (clean OR, since issue
-    // #2017, findings_present) was CARRIED FORWARD from a prior head (the
-    // delta since that head provably did not touch this angle's review
-    // surface — see @dev-loops/core/loop/gate-carry-forward). It records the
-    // prior head SHA the verdict came from; the `reviewer` on this entry is
-    // that prior head's reviewer (honest attribution, NOT a fabricated fresh
-    // review). It does not relax the distinctReviewers consistency check below —
-    // a carried angle still names the real reviewer identity that reviewed it.
+    // carriedFromHead marks an angle whose verdict was carried forward from a
+    // prior head whose delta provably did not touch this angle's surface
+    // (GATE-EXEC-ANGLE-CARRY-FORWARD; @dev-loops/core/loop/gate-carry-forward). `reviewer` stays that
+    // prior head's reviewer (honest attribution) and still counts toward the
+    // distinctReviewers consistency check below.
     if ("carriedFromHead" in a) {
       if (typeof a.carriedFromHead !== "string" || !/^[0-9a-f]{7,64}$/i.test(a.carriedFromHead.trim())) {
         throw parseError(`--provenance.perAngle[${i}].carriedFromHead must be a 7-64 char hex SHA`);
       }
       entry.carriedFromHead = a.carriedFromHead.trim().toLowerCase();
     }
-    // carriedVerdict (issue #2017) distinguishes WHICH verdict this carried
-    // angle preserved: "findings_present" records that its prior OPEN
-    // findings were carried forward unchanged (still open, still recorded in
-    // --findings, still blocking) rather than an ordinary clean carry. It is
-    // metadata alongside carriedFromHead only — it records provenance, it
-    // never itself supplies or substitutes for the findings content (those
-    // always come from --findings/--findings-file) — so a malformed or
-    // missing carriedVerdict never hides or fabricates a finding, only its
-    // provenance label. Requires carriedFromHead (it only has meaning for a
-    // carried angle; a fresh angle's verdict is never "carried").
+    // carriedVerdict (GATE-EXEC-ANGLE-CARRY-FORWARD) records which verdict a carried angle preserved:
+    // "findings_present" means its prior open findings carried forward
+    // unchanged (still recorded in --findings, never substituted here).
+    // Requires carriedFromHead — it only labels provenance, it never itself
+    // supplies findings content.
     if ("carriedVerdict" in a) {
       if (!("carriedFromHead" in a)) {
         throw parseError(`--provenance.perAngle[${i}].carriedVerdict requires carriedFromHead (it only distinguishes a carried entry's prior verdict)`);
@@ -327,15 +285,11 @@ export function parseProvenanceJson(raw, resolvedGroups = null) {
   if (consistencyError) {
     throw parseError(`--${consistencyError}`);
   }
-  // One-scoped-reviewer-per-fresh-angle floor (always-on, #1431): no two fresh
-  // (non-carried) angles may share one reviewer identity — closes the gap
-  // where an internally-consistent distinctReviewers count still let one
-  // reviewer cover multiple angles. Carried angles are exempt, and fresh
-  // angles sharing a reviewer under the SAME declared `group` are exempt too
-  // (grouped fan-out dispatch — see fanoutReviewerPairingError). `resolvedGroups`
-  // (this round's resolveFanoutGroups output, computed by the caller — it
-  // already loads config) additionally rejects a claimed group that the
-  // configured table does not actually place these angles into together.
+  // One-scoped-reviewer-per-fresh-angle floor (ADR 0039): no two fresh
+  // (non-carried) angles may share a reviewer identity, except fresh angles
+  // sharing one under the SAME declared `group` (grouped fan-out dispatch —
+  // see fanoutReviewerPairingError). `resolvedGroups` additionally rejects a
+  // claimed group the configured table does not actually place together.
   const pairingError = fanoutReviewerPairingError(normalized.perAngle, resolvedGroups);
   if (pairingError) {
     throw parseError(`--provenance.perAngle ${pairingError}`);
@@ -344,12 +298,9 @@ export function parseProvenanceJson(raw, resolvedGroups = null) {
 }
 /**
  * Validate recorded provenance.perAngle against the gate's configured angle
- * contract (mandatoryAngles + pool, resolved from .devloops/defaults). A
- * missing mandatory angle always fails the write. A foreign (out-of-pool)
- * angle fails the write unless `gates.rejectForeignAngles: false`, in which
- * case it is returned as a warning instead. Throws a `parseError`-shaped Error
- * (matching this module's other validation failures) on a fail-closed
- * rejection.
+ * contract (mandatoryAngles + pool). A missing mandatory angle always fails
+ * the write; a foreign angle fails unless `gates.rejectForeignAngles: false`,
+ * in which case it returns as a warning instead.
  *
  * @param {{ perAngle: Array<{ angle: string }> }} provenance
  * @param {"draft_gate"|"pre_approval_gate"} gate
@@ -517,11 +468,9 @@ export function buildLogPath({ repo, pr, gate, headSha, tmpRoot }) {
 export async function writeGateFindingsLog(options, { repoRoot = process.cwd() } = {}) {
   const { findings: rawFindings, overallVerdict } = await resolveFindings(options);
   // When a judge verdict artifact is supplied, enrich the findings with the
-  // judge's relevance-based dispositions (act/defer/reject + rationale +
-  // follow-up drafts) before writing the ledger (#1525). The judge runs after
-  // fan-in and before the fix pass; applyJudgeDispositions is the pure merge
-  // seam that fails closed on a malformed verdict, an out-of-range index, or
-  // dispositions that do not cover every finding.
+  // judge's relevance-based dispositions (GATE-EXEC-JUDGE-PHASE) before writing the ledger:
+  // applyJudgeDispositions fails closed on a malformed verdict, an
+  // out-of-range index, or dispositions that do not cover every finding.
   let findings = rawFindings;
   let scopeDrift;
   if (options.judgeVerdict) {
@@ -537,38 +486,30 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     findings = enriched.findings;
     scopeDrift = enriched.scopeDrift;
   }
-  // The consolidator's computed verdict (consolidate-fanin.mjs's
-  // `overallVerdict`) threads through `--ledger-out`'s `{overallVerdict,
-  // findings}` wrapper into here, recording the verdict fan-in actually
-  // computed rather than whatever a caller hand-passed to `--verdict`. A
-  // bare-array input (legacy `--findings-file`, hand-authored `--findings`)
-  // has no wrapper, so `overallVerdict` stays undefined and the ledger gains
-  // no `overallVerdict` key — but the persisted `verdict` below is still the
-  // canonical (normalized) caller verdict on both paths (#1616).
+  // The consolidator's own computed verdict (consolidate-fanin.mjs's
+  // `overallVerdict`) threads through `--ledger-out`'s wrapper into here — a
+  // bare-array input (legacy --findings-file, hand-authored --findings) has
+  // no wrapper, so `overallVerdict` stays undefined, but the persisted
+  // `verdict` is always the canonical normalized caller verdict either way
+  // (GATE-COMMENT-VERDICT-VALUES).
 
-  // Validate the caller's own --verdict domain up front, before any wrapper
-  // comparison: a bare-array input never persists a null/undefined/
-  // non-string/out-of-domain verdict un-normalized, and a wrapper input
-  // compares against an already-normalized caller verdict so a domain failure
-  // is never misattributed as a contradiction. The shared normalizeVerdict
-  // (scripts/github/_gate-names.mjs) already guards non-strings internally
-  // (typeof check, never String() coercion), so this outer typeof check is
-  // redundant defense-in-depth, not load-bearing.
+  // Validate --verdict domain up front: the shared normalizeVerdict
+  // (scripts/github/_gate-names.mjs) already guards non-strings internally,
+  // so this outer typeof check is redundant defense-in-depth, not
+  // load-bearing — it ensures a bare-array input never persists a
+  // null/undefined/out-of-domain verdict un-normalized.
   const callerVerdict = typeof options.verdict === "string" ? normalizeVerdict(options.verdict) : null;
   if (!callerVerdict) {
     throw parseError("--verdict must be clean, findings_present, or blocked");
   }
   let normalizedOverallVerdict;
-  // Persist the canonical (normalized) verdict, not the raw caller value, on
-  // BOTH input paths, so the durable ledger never records a differently-cased/
-  // whitespaced verdict. Kept in a local instead of mutating the
-  // caller-provided options object, which programmatic callers may reuse
-  // across calls.
+  // Persist the canonical (normalized) verdict on both input paths, in a
+  // local rather than mutating `options` (which programmatic callers may
+  // reuse across calls).
   let persistedVerdict = callerVerdict;
   if (overallVerdict !== undefined) {
-    // The wrapper's overallVerdict must itself be a string; the shared
-    // normalizeVerdict already rejects any non-string internally, so this
-    // outer typeof check is redundant defense-in-depth, not load-bearing.
+    // Same redundant defense-in-depth as above: normalizeVerdict already
+    // rejects non-strings.
     const verdict = typeof overallVerdict === "string" ? normalizeVerdict(overallVerdict) : null;
     if (!verdict) {
       throw parseError(
@@ -577,18 +518,12 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     }
     normalizedOverallVerdict = verdict;
     // Fail closed on a caller-passed --verdict that contradicts the
-    // consolidator's computed verdict, mirroring the consumer-side refusal in
-    // upsert-checkpoint-verdict.mjs (#1616, GATE-COMMENT-VERDICT-VALUES). This
-    // comparison runs unconditionally against the wrapper's overallVerdict —
-    // whether or not --judge-verdict was supplied above. The judge only
-    // enriches findings with act/defer/reject dispositions; it never revises
-    // the consolidator's round verdict, so this comparison itself never
-    // changes based on the judge artifact's content (#1745). A --judge-verdict
-    // run can still surface a different, earlier error first: the judge
-    // artifact is read, parsed, and applied before this point runs, so an
-    // unreadable, malformed, out-of-range-index, or incomplete-coverage judge
-    // artifact throws its own parse error ahead of this contradiction check,
-    // not instead of it.
+    // consolidator's computed verdict (GATE-COMMENT-VERDICT-VALUES).
+    // The judge only enriches findings with act/defer/reject dispositions —
+    // it never revises the round verdict — so this comparison runs the same
+    // with or without --judge-verdict. A --judge-verdict run can still fail
+    // earlier: an unreadable, malformed, or incomplete-coverage judge
+    // artifact throws its own error before this contradiction check runs.
     if (callerVerdict !== normalizedOverallVerdict) {
       throw parseError(
         `--verdict ${JSON.stringify(callerVerdict)} contradicts the wrapper's "overallVerdict" ${JSON.stringify(normalizedOverallVerdict)} (GATE-COMMENT-VERDICT-VALUES; skills/docs/gate-review-comment-contract.md) — the consolidator's computed round verdict, which judge dispositions from --judge-verdict never alter`,
@@ -599,12 +534,11 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   if (options.provenance === undefined) {
     provenance = undefined;
   } else {
-    // Resolve this round's dispatch groups BEFORE validating pairing, so a
-    // claimed `group` is cross-checked against the gate's actual configured
-    // grouping table (see fanoutReviewerPairingError) — not just accepted as
-    // an internally-consistent self-attested label. Best-effort: a raw-JSON
-    // parse failure here is swallowed and re-surfaces as the real, specific
-    // error inside parseProvenanceJson below.
+    // Resolve this round's dispatch groups before validating pairing, so a
+    // claimed `group` is cross-checked against the gate's configured
+    // grouping table (see fanoutReviewerPairingError), not just self-attested.
+    // A raw-JSON parse failure here is swallowed; the real error resurfaces
+    // inside parseProvenanceJson below.
     let resolvedGroups = null;
     try {
       const rawPerAngle = JSON.parse(options.provenance)?.perAngle;
@@ -638,23 +572,19 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     loggedAt: new Date().toISOString(),
     findings,
   };
-  // `overallVerdict` is optional and additive: absent on a bare-array input
-  // (no wrapper) or an older producer, so the ledger gains no `overallVerdict`
-  // key — but `verdict` above is always the canonical, normalized caller
-  // value regardless (#1616).
+  // `overallVerdict` is optional and additive (absent on a bare-array input);
+  // `verdict` above is always the canonical normalized caller value (GATE-COMMENT-VERDICT-VALUES).
   if (normalizedOverallVerdict !== undefined) {
     log.overallVerdict = normalizedOverallVerdict;
   }
-  // Provenance is optional and additive: when absent the ledger writes exactly
-  // as before (no provenance key), preserving byte-identical output for the
-  // default / Claude-Code path. When present it records fan-out provenance for
+  // Provenance is optional and additive: absent keeps the ledger byte-
+  // identical to before; present records fan-out provenance for
   // gates.requireFanoutProvenance enforcement.
   if (provenance !== undefined) {
     log.provenance = provenance;
   }
-  // The judge's scope-drift verdict on the PR as a whole (#1525). Optional
-  // and additive: when no judge verdict was supplied, the ledger writes
-  // byte-identically to before.
+  // The judge's scope-drift verdict on the PR as a whole (GATE-EXEC-JUDGE-PHASE); optional
+  // and additive.
   if (scopeDrift !== undefined) {
     log.scopeDrift = scopeDrift;
   }

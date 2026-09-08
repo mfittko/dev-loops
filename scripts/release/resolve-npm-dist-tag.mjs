@@ -16,28 +16,12 @@
  * than silently guessing. Prints the dist-tag to stdout. Exit 0 on success,
  * 2 on usage/parse error.
  */
-import fs from "node:fs";
-import { fileURLToPath } from "node:url";
+// Shared node:-builtins-only predicate: import-safe in npm-publish.yml (no `npm
+// ci`). realpath-based so a relative `node scripts/release/resolve-npm-dist-tag.mjs`
+// invocation still detects direct-run (a brittle string compare could miss and
+// skip main(), yielding an empty `npm publish --tag ""`).
+import { isDirectCliRun } from "../lib/direct-run.mjs";
 
-// Inlined (node: builtins only): this script runs in npm-publish.yml as a CLI; a
-// workspace import would be fragile in the release environment. realpath-based so
-// a relative `node scripts/release/resolve-npm-dist-tag.mjs` invocation (as the
-// workflow uses) still detects direct-run — a brittle `file://${argv[1]}` string
-// compare could miss and skip main(), yielding an empty `npm publish --tag ""`.
-// Mirrors scripts/release/extract-changelog-section.mjs.
-function isDirectCliRun(importMetaUrl, argv1 = process.argv[1]) {
-  if (typeof argv1 !== "string" || argv1.length === 0) return false;
-  try {
-    return fs.realpathSync(argv1) === fs.realpathSync(fileURLToPath(importMetaUrl));
-  } catch {
-    return false;
-  }
-}
-
-/**
- * @param {string} version — a SemVer version string
- * @returns {string} the npm dist-tag
- */
 // A release-safety helper must fail closed: a non-SemVer input (e.g. "foo", a
 // truncated tag, or one with a leading-zero component like "01.2.3") must NOT
 // slip through as a stable release and publish under the default `latest`

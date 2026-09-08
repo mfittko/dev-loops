@@ -355,7 +355,7 @@ export async function runWatchCycle(
   if (handoff.watchTimeoutPolicy !== undefined) {
     result.watchTimeoutPolicy = handoff.watchTimeoutPolicy;
   }
-  // Provider-agnostic CI wait (#917): a waiting_for_ci boundary would otherwise
+  // Provider-agnostic CI wait: a waiting_for_ci boundary would otherwise
   // dead-end at action:"stop". Route it to the helper-owned CI watcher
   // (CircleCI / GH Actions / external commit-status), not gh run watch.
   if (handoff.action !== "watch" && handoff.state === STATE.WAITING_FOR_CI) {
@@ -470,7 +470,7 @@ export async function runWatchCycle(
 // unresolved/actionable thread counts, round-cap-clean eligibility, CI status,
 // next action, AND the current round's new Copilot comment bodies (from the
 // embedded watch probe result). This is the field set the loop needs to read
-// without parsing the full JSON blob (issue #981).
+// without parsing the full JSON blob.
 export function formatWatchCycleConcise(result) {
   const snapshot = result.snapshot ?? {};
   const lines = [

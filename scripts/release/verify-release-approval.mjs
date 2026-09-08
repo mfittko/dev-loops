@@ -2,12 +2,6 @@
 /**
  * Verify explicit operator release approval for a STABLE release (fail closed).
  *
- * Root cause (#1901): the release runbook gated the release *mechanics* but left
- * the publish/tag decision to agent judgment once "gates are clean" — a general
- * "continue" plus a blanket merge authorization was read as transferable release
- * authority, and the first v1.0.0 cut was tagged and published by a dev-loop
- * subagent. The operator had to roll it back.
- *
  * This check is the fail-closed gate at the release boundary: a STABLE version
  * (npm dist-tag `latest`) may only proceed when an explicit, per-release
  * operator approval record exists — an issue comment authored by the operator
@@ -32,10 +26,9 @@
  * jq-output.mjs).
  */
 import { execFileSync } from "node:child_process";
-import fs from "node:fs";
-import { fileURLToPath } from "node:url";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { resolveNpmDistTag } from "./resolve-npm-dist-tag.mjs";
+import { isDirectCliRun } from "../lib/direct-run.mjs";
 
 const USAGE = `Usage: verify-release-approval.mjs --version <semver> --repo <owner/name> [--operator <login>] [--release-commit-date <iso>] [--jq <filter>] [--silent]
 Fail-closed operator-approval gate for STABLE releases (#1901, #1941). A stable
@@ -45,15 +38,6 @@ posted AFTER the release commit being tagged (default: git HEAD committer date;
 override with --release-commit-date). Prereleases pass through unchanged. Exit 0
 pass, 1 refusal/gh failure, 2 usage.
 ${JQ_OUTPUT_USAGE}`;
-
-function isDirectCliRun(importMetaUrl, argv1 = process.argv[1]) {
-  if (typeof argv1 !== "string" || argv1.length === 0) return false;
-  try {
-    return fs.realpathSync(argv1) === fs.realpathSync(fileURLToPath(importMetaUrl));
-  } catch {
-    return false;
-  }
-}
 
 function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -90,7 +74,7 @@ const HARD_SENTENCE_END = /[.!?]\s+/;
 
 /**
  * Instructional/handoff verbs that make an occurrence of the phrase a REFERENCE
- * to the approval act rather than the act itself (#1941): "post approve release
+ * to the approval act rather than the act itself: "post approve release
  * v…", "requires a comment stating approve release v…", "the runbook instructs
  * approve release v…". Scoped to the clause BEFORE the phrase (see
  * instructsApproval), same mechanism as the negation scan. The real-world
@@ -103,7 +87,7 @@ const INSTRUCTIONAL_MARKER = /\b(?:posts?|posted|posting|stating|states|requires
 
 /**
  * Remove the markdown contexts where the approval phrase is being QUOTED or
- * referenced rather than asserted (#1941, root-cause fix for the fail-open).
+ * referenced rather than asserted.
  * Removes, in order: fenced code blocks (backtick/tilde, incl. an unterminated
  * fence to end-of-text), inline code spans (any backtick form, coarsely — see
  * the inline-strip note in the body), indented code blocks (4+ spaces / tab
@@ -120,7 +104,7 @@ export function stripNonAssertionMarkdown(body) {
   // end-of-text — an unterminated fence still means "everything after is code".
   s = s.replace(/^[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?^[ \t]*\1[ \t]*$/gm, " ");
   s = s.replace(/^[ \t]*(?:`{3,}|~{3,})[\s\S]*$/m, " ");
-  // Inline code spans (#1941 review, Copilot): strip everything from the FIRST
+  // Inline code spans: strip everything from the FIRST
   // to the LAST backtick on each line, then blank any lone leftover backtick.
   // This is deliberately coarser than a precise `(`+)…\1` code-span matcher and
   // strictly more fail-closed: a phrase quoted in ANY backtick form — including
@@ -134,7 +118,7 @@ export function stripNonAssertionMarkdown(body) {
   // survives.
   s = s.replace(/`[^\n]*`/g, " ");
   s = s.replace(/`/g, " ");
-  // Indented code blocks (#1941 review): a line led by 4+ spaces or a tab
+  // Indented code blocks: a line led by 4+ spaces or a tab
   // renders as a code block on GitHub, so a phrase quoted that way is code, not
   // a top-level assertion. Blanking such a line is fail-closed-safe: a genuine
   // one-line "approve release v<version>" is never indented, so this can only
@@ -183,7 +167,7 @@ function instructsApproval(body, pattern) {
  * A genuine top-level approval assertion: the phrase appears in prose (after
  * stripping code spans / fenced blocks / block quotes), is not negated in its
  * clause, and is not governed by an instructional/handoff verb. This is the
- * single text-genuineness gate the approval decision uses (#1941).
+ * single text-genuineness gate the approval decision uses.
  */
 function isGenuineApprovalAssertion(body, pattern) {
   const prose = stripNonAssertionMarkdown(body);
@@ -210,7 +194,7 @@ function approvalPattern(version) {
 /**
  * Pure gate decision over already-fetched comments.
  *
- * A comment satisfies the gate only when ALL hold (fail closed on each, #1941):
+ * A comment satisfies the gate only when ALL hold (fail closed on each):
  *  - authored by the operator (case-insensitive login compare)
  *  - a genuine top-level approval assertion — the phrase is in prose, not
  *    inside a code span / fenced block / block quote, not negated, and not
@@ -256,7 +240,7 @@ export function resolveApprovalState({ version, operator, comments, releaseRef }
   );
   // Post-date: a genuine assertion counts only when its createdAt is parseable
   // AND strictly after the release commit. Partition the non-approving remainder
-  // so the refusal is accurate (#1941 review, Copilot): a parseable-but-earlier
+  // so the refusal is accurate: a parseable-but-earlier
   // timestamp is STALE; an absent/unparseable timestamp is UNVERIFIABLE — both
   // fail closed, but they are distinct operator-facing situations.
   const stale = [];
@@ -335,8 +319,8 @@ function fetchApprovalCandidates({ repo, operator, ghCommand, runChild }) {
         const author = c?.user?.login;
         const commentBody = c?.body;
         if (typeof author === "string" && typeof commentBody === "string") {
-          // created_at is required to enforce the post-date/staleness check
-          // (#1941); a comment without it can never verify as fresh downstream.
+          // created_at is required to enforce the post-date/staleness check;
+          // a comment without it can never verify as fresh downstream.
           comments.push({ author, body: commentBody, createdAt: c?.created_at });
         }
       };
@@ -357,7 +341,7 @@ function fetchApprovalCandidates({ repo, operator, ghCommand, runChild }) {
 
 /**
  * Resolve the release commit's committer date (ISO) — the reference the
- * post-date/staleness check compares approval comments against (#1941). Both
+ * post-date/staleness check compares approval comments against. Both
  * release workflows check out the tag commit at HEAD (`fetch-depth: 0`), so
  * HEAD is the release commit being approved. `--release-commit-date` overrides
  * it (tests, or a caller that already resolved the tag date). Fail closed: an

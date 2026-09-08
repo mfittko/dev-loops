@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * spec-context.mjs — the CLI seam the skill runs so it never hand-derives the
- * spec/digests (issue 2008 / ADR 0061 AC5). Two modes:
+ * spec/digests (ADR 0061 AC5). Two modes:
  *
  *   extract (default): resolve the canonical tracker issue body, extract the
  *   structured spec, and compute both revision-identity digests (specDigest,
@@ -9,8 +9,8 @@
  *   --spec-file/--content-digest needs, in one deterministic call.
  *
  *   changed-paths: emit the JSON string array of repo-relative paths changed
- *   between two refs — the --changed-paths input for judge-pass's #2000 AC7
- *   (issue 2008 AC2) affected-criteria producer.
+ *   between two refs — the --changed-paths input for judge-pass's ADR 0061
+ *   AC7 affected-criteria producer.
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";

@@ -152,22 +152,9 @@ test("wait-pr-checks --jq extracts a field and exits per the standard jq-output 
   );
 });
 
-test("wait-pr-checks --silent suppresses stdout and maps success -> 0", async () => {
-  await withGhStub(
-    [
-      { match: ["pr", "view"], stdout: prView("sha-a", ["build"]) },
-      { match: ["check-runs"], stdout: checkRuns([{ status: "completed", conclusion: "success", name: "build" }]) },
-      { match: ["/status"], stdout: statuses([]) },
-    ],
-    async (env) => {
-      const stdout = makeStream();
-      const stderr = makeStream();
-      const code = await runCli(["--repo", "owner/repo", "--pr", "7", "--poll", "1", "--timeout", "5", "--silent"], { stdout, stderr, ...fastDeps(env) });
-      assert.equal(code, 0);
-      assert.equal(stdout.text(), "");
-    },
-  );
-});
+// Generic --silent success mapping is owned by emitResult
+// (test/loop/jq-output.test.mjs); the positive --jq wiring case above plus the
+// command-specific status->exit mapping below are what remain distinct here.
 
 test("exitCodeForWaitResult maps status to the documented exit codes", () => {
   assert.equal(exitCodeForWaitResult({ status: "success" }), 0);

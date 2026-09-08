@@ -16,6 +16,10 @@ function passingAdrTripwire() {
   return { ok: true, outcome: "pass", satisfiedBy: null, triggers: [], adrFiles: [], waiver: { requested: false, valid: false, reason: null }, reasons: [] };
 }
 
+function passingCommentDiscipline() {
+  return { ok: true, outcome: "pass", findings: [], reasons: [] };
+}
+
 import { parseReadyForReviewCliArgs, readyForReview } from "../../scripts/github/ready-for-review.mjs";
 
 const scriptPath = path.resolve("scripts/github/ready-for-review.mjs");
@@ -466,7 +470,7 @@ test("board tail targets the closing issue (not the PR) when closingIssues prese
     };
     const result = await readyForReview(
       { repo: "owner/repo", pr: 17 },
-      { env, repoRoot: tempDir, runChild: env[GH_RUNNER], syncBoardStatus: fakeSync, evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire },
+      { env, repoRoot: tempDir, runChild: env[GH_RUNNER], syncBoardStatus: fakeSync, evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire, evaluateCommentDiscipline: passingCommentDiscipline },
     );
     assert.equal(result.ok, true);
     assert.equal(result.action, "marked_ready");
@@ -489,7 +493,7 @@ test("board tail falls back to the PR number when closingIssues is empty (#1069)
     };
     const result = await readyForReview(
       { repo: "owner/repo", pr: 17 },
-      { env, repoRoot: tempDir, runChild: env[GH_RUNNER], syncBoardStatus: fakeSync, evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire },
+      { env, repoRoot: tempDir, runChild: env[GH_RUNNER], syncBoardStatus: fakeSync, evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire, evaluateCommentDiscipline: passingCommentDiscipline },
     );
     assert.equal(result.action, "marked_ready");
     assert.equal(syncCalls.length, 1);
@@ -506,7 +510,7 @@ test("board tail is NON-FATAL: a throwing syncBoardStatus never fails marking re
     const fakeSync = async () => { throw new Error("board exploded"); };
     const result = await readyForReview(
       { repo: "owner/repo", pr: 17 },
-      { env, repoRoot: tempDir, runChild: env[GH_RUNNER], syncBoardStatus: fakeSync, evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire },
+      { env, repoRoot: tempDir, runChild: env[GH_RUNNER], syncBoardStatus: fakeSync, evaluatePrSizeBudget: passingSizeBudget, evaluateAdrTripwire: passingAdrTripwire, evaluateCommentDiscipline: passingCommentDiscipline },
     );
     assert.equal(result.ok, true);
     assert.equal(result.action, "marked_ready");

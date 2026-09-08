@@ -83,6 +83,7 @@
     "./security/secret-scan": "./src/security/secret-scan.mjs",
     "./projects/list-queue-items": "./src/projects/list-queue-items.mjs",
     "./projects/move-queue-item": "./src/projects/move-queue-item.mjs",
+    "./projects/projects-access": "./src/projects/projects-access.mjs",
     "./projects/resolve-project": "./src/projects/resolve-project.mjs",
     "./harness": "./src/harness/index.mjs",
     "./tracker": "./src/tracker/index.mjs",

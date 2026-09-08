@@ -8,12 +8,16 @@
  * file→tier mapping from `gates.size` config, and emits an outcome
  * (`pass` | `escalate` | `block`) plus the reasons that produced it.
  *
- * `logicLoc = code + testDiscount * test`, summed from the existing diff
- * classifier's per-file category (@dev-loops/core/analysis/diff-analyzer):
- * only files that classify as `code` or `test` contribute — a file
- * classifying as `config`/`docs`/`ci`/`unknown` (which already covers
- * lockfiles and other generated/non-review-worthy content) contributes 0,
- * reusing the classifier's own signal rather than re-deriving one.
+ * `logicLoc = (code - commentOnly) + testDiscount * test`, summed from the
+ * existing diff classifier's per-file category
+ * (@dev-loops/core/analysis/diff-analyzer): only files that classify as `code`
+ * or `test` contribute — a file classifying as `config`/`docs`/`ci`/`unknown`
+ * (which already covers lockfiles and other generated/non-review-worthy
+ * content) contributes 0, reusing the classifier's own signal rather than
+ * re-deriving one. `commentOnly` is the count of a code file's changed lines
+ * the comment-discipline guard's shared `isCommentLine` detector recognizes as
+ * comments (the comment analogue of `testDiscount`); fail-closed, an
+ * ambiguous/unparseable changed line is never a comment and stays logic.
  *
  * The T1-slice LOC is the same computation restricted to files whose path
  * resolves to the `t1` tier (via configured glob patterns) — computed
@@ -33,9 +37,10 @@ import { parseArgs } from "node:util";
 import { analyzeDiff, classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 
+import { isCommentLine } from "./check-comment-discipline.mjs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
-import { gitEnvWithoutDirOverrides } from "../github/write-gate-context.mjs";
+import { DIFF_ISOLATION_FLAGS, gitEnvWithoutDirOverrides } from "../github/write-gate-context.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: check-size-budget.mjs --base <ref> [--head <ref>] [--waived] [--approved-by <name>]
@@ -43,10 +48,11 @@ const USAGE = `Usage: check-size-budget.mjs --base <ref> [--head <ref>] [--waive
 Fail-closed PR size/tier budget: PURE COMPUTATION only (no enforcement —
 this script does not block \`gh pr ready\`; a later phase wires it into
 readyForReview()/pre-pr-ready-gate.mjs). Reads gates.size config, computes
-logicLoc = code + testDiscount * test from the existing diff classifier
-(generated/lockfile content excluded via the classifier's own category
-signal), resolves each changed file's tier from configured path patterns,
-and emits pass | escalate | block.
+logicLoc = (code - commentOnly) + testDiscount * test from the existing diff
+classifier (generated/lockfile content excluded via the classifier's own
+category signal; a code file's comment-only changed lines are not counted as
+logic), resolves each changed file's tier from configured path patterns, and
+emits pass | escalate | block.
 
 Required:
   --base <ref>          Git ref to diff against (git diff <ref>...<head>)
@@ -204,6 +210,69 @@ export function parseNumstatZ(output) {
 }
 
 // ---------------------------------------------------------------------------
+// Comment-aware logic-LOC discount (comment analogue of testDiscount).
+//
+// numstat gives only per-file added/deleted COUNTS, not content, so a
+// comment-only churn of a code file scores its full line count as logic. This
+// walks the unified diff body (already captured for the ambiguity classifier)
+// and counts, per file, the CHANGED lines (`+` added and `-` removed) that the
+// comment-discipline guard's own lexical `isCommentLine` recognizes as
+// comments. computeSizeBudget subtracts that count from a code file's logic
+// contribution, so a comments-only diff scores ~0 logic and a diff with real
+// code lines is counted exactly as today.
+//
+// Fail-closed by construction: `isCommentLine` returns false for anything not
+// confidently a comment (blank lines, code, ambiguous/unparseable content), so
+// an undetected line stays counted as logic and is never discounted. The one
+// bounded exception is inherited from the shared detector, not introduced here:
+// a JS line whose trimmed text starts with `*` reads as a JSDoc continuation, so
+// a rare `*`-led binary-operator continuation is discounted. That is the
+// operator-approved lexical rule the comment-discipline guard already applies;
+// reusing the same detector keeps one source of truth rather than a divergent,
+// stricter copy that would flag the guard's own comments differently.
+// ---------------------------------------------------------------------------
+
+export function countCommentChangedLinesByFile(diffOutput) {
+  const counts = new Map();
+  if (typeof diffOutput !== "string" || diffOutput.length === 0) return counts;
+  // Track the `--- a/` (removed) and `+++ b/` (added) targets separately so a
+  // `-` line attributes to the removed-file path and a `+` line to the
+  // added-file path. For a whole-file DELETION the added target is `/dev/null`
+  // but the removed target still names the file, so its removed comment lines
+  // are still discounted (a comment-only file deletion is a comment-only diff).
+  let removedFile = null;
+  let addedFile = null;
+  const bump = (file, text) => {
+    if (file && isCommentLine(text, file)) counts.set(file, (counts.get(file) ?? 0) + 1);
+  };
+  for (const line of diffOutput.split("\n")) {
+    // `+++ ` / `--- ` are file headers only when they resolve to a real diff
+    // target (`/dev/null` or an `a/`|`b/`-prefixed path); an added/removed
+    // source line whose content itself begins with `++`/`--` also matches and
+    // must fall through to the changed-line branch, not be read as a header.
+    if (line.startsWith("+++ ")) {
+      const p = line.slice(4).trim();
+      if (p === "/dev/null" || p.startsWith("b/")) {
+        addedFile = p === "/dev/null" ? null : p.replace(/^b\//u, "");
+        continue;
+      }
+    } else if (line.startsWith("--- ")) {
+      const p = line.slice(4).trim();
+      if (p === "/dev/null" || p.startsWith("a/")) {
+        removedFile = p === "/dev/null" ? null : p.replace(/^a\//u, "");
+        continue;
+      }
+    }
+    if (line.startsWith("diff ") || line.startsWith("@@")) continue;
+    // A `+`/`-` content line: attribute it to the added/removed file target and
+    // count it only when it is a comment line.
+    if (line.startsWith("+")) bump(addedFile, line.slice(1));
+    else if (line.startsWith("-")) bump(removedFile, line.slice(1));
+  }
+  return counts;
+}
+
+// ---------------------------------------------------------------------------
 // Pure computation
 // ---------------------------------------------------------------------------
 
@@ -254,6 +323,7 @@ export function computeSizeBudget({
 
   const diffAnalysis = analyzeDiff({ nameStatusOutput, diffOutput });
   const files = parseNumstatZ(numstatOutput);
+  const commentChangedLines = countCommentChangedLinesByFile(diffOutput);
 
   const tierLoc = { default: 0, t1: 0, t3: 0 };
   // Denominator for the unclassified-ratio fail-closed check: source-like
@@ -281,8 +351,15 @@ export function computeSizeBudget({
       sourceChangedLines += changedLines;
     }
     let logic = 0;
-    if (category === "code") logic = changedLines;
-    else if (category === "test") logic = testDiscount * changedLines;
+    if (category === "code") {
+      // Comment-aware: discount changed lines the comment-discipline detector
+      // recognizes as comments, clamped to [0, changedLines] so a diff-body vs
+      // numstat count skew can never produce negative logic or discount more
+      // than the file changed. A file with no detected comment lines keeps its
+      // full count, so a real-code change is scored exactly as before.
+      const commentLines = Math.min(commentChangedLines.get(file.path) ?? 0, changedLines);
+      logic = changedLines - commentLines;
+    } else if (category === "test") logic = testDiscount * changedLines;
     else {
       if (changedLines > 0 && matchesAnyPattern(file.path, tierPatterns)) tierPatternDroppedToZero = true;
       continue; // docs/config/ci/unknown excluded — covers generated/lockfile content
@@ -413,18 +490,10 @@ export function computeSizeBudget({
  */
 function captureSizeBudgetDiff({ base, head = "HEAD", repoRoot = process.cwd(), maxBuffer = 64 * 1024 * 1024 }) {
   const range = `${base}...${head}`;
-  const isolation = [
-    "-c", "color.ui=false",
-    "-c", "color.diff=false",
-    "-c", "core.pager=cat",
-    "-c", "diff.noprefix=false",
-    "-c", "diff.mnemonicPrefix=false",
-    "-c", "diff.renames=true",
-    "-c", "diff.algorithm=myers",
-    "-c", "diff.context=3",
-    "-c", "core.abbrev=12",
-    "-c", "core.autocrlf=false",
-  ];
+  // Shared byte-identical flag set (see captureDiffFromBase in
+  // scripts/github/write-gate-context.mjs); this path keeps its own runGit stdio
+  // and three captured views below.
+  const isolation = DIFF_ISOLATION_FLAGS;
   const runGit = (args) => execFileSync("git", [...isolation, ...args], {
     cwd: repoRoot,
     encoding: "utf8",

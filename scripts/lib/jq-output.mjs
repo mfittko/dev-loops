@@ -1,6 +1,6 @@
-// Shared --jq / --silent output helper for the JSON-emitting dev-loops scripts
-// (issue #981, subsumes #963). One helper applied uniformly so the loop never
-// falls back to `gh api | python3` or inline `node -e` to read tool JSON.
+// Shared --jq / --silent output helper for the JSON-emitting dev-loops scripts.
+// One helper applied uniformly so the loop never falls back to
+// `gh api | python3` or inline `node -e` to read tool JSON.
 // BASE-JQ-OUTPUT-GUARANTEE: emitResult is the single shared emit path every
 // JSON-emitting command routes through (enforced by the jq-output-base-guarantee
 // contract test).
@@ -25,6 +25,8 @@
 //   predicates inside select: .x == <lit>, !=, <, <=, >, >=, and a bare path
 //                  (truthy test). <lit> is a JSON string/number/true/false/null.
 // Anything else -> JqFilterError (fail closed).
+
+import { formatCliError } from "../_core-helpers.mjs";
 
 export class JqFilterError extends Error {
   constructor(message) {
@@ -420,4 +422,44 @@ export function emitResult(
   }
   stdout.write(`${JSON.stringify(result)}\n`);
   return ok ? 0 : 1;
+}
+
+// Shared execution shell for the identical GitHub read-command CLIs
+// (view-issue, view-pr, list-issues). Those three commands had a
+// byte-identical runCli that differs only in its parser, domain operation, and
+// usage text — this hosts that one shell in the existing output-helper seam so
+// each command keeps its own parser/operation/usage and passes them in, rather
+// than re-copying the parse -> help -> operate -> emit boilerplate three times.
+//
+// The two catch arms are kept deliberately distinct: a parse error routes
+// through the canonical `formatCliError` (which carries the usage/retry hint the
+// buildParseError seam attaches), while a runtime/operation error emits the
+// plain `{ ok:false, error }` envelope. Collapsing them would let the top-level
+// launcher treat a runtime failure as a retryable parse error. `run` is threaded
+// through when injected (tests) and otherwise left undefined so each operation's
+// own `runChild` default applies — unchanged from the per-command shells.
+export async function runReadCommandCli(
+  { parse, operate, usage },
+  argv,
+  { stdout = process.stdout, stderr = process.stderr, env = process.env, ghCommand = "gh", run } = {},
+) {
+  let options;
+  try {
+    options = parse(argv);
+  } catch (error) {
+    stderr.write(`${formatCliError(error)}\n`);
+    return 1;
+  }
+  if (options.help) {
+    stdout.write(`${usage}\n`);
+    return 0;
+  }
+  let result;
+  try {
+    result = await operate(options, { env, ghCommand, run });
+  } catch (error) {
+    stderr.write(`${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`);
+    return 1;
+  }
+  return emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
 }

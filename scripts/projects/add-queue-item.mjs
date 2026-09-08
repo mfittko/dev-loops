@@ -7,6 +7,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { loadStateColumnMap, LOGICAL_COLUMN, nonSuccessBoardColumn } from "@dev-loops/core/loop/queue-board-sync";
 import { runPickupRefinementGate } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { ghGraphql, resolveOwner } from "@dev-loops/core/github/gh";
+import { validateProjectsRepo, discoverProjects, listProjectFields, extractStatus } from "@dev-loops/core/projects/projects-access";
 
 const USAGE = `Usage: dev-loops queue add --repo <owner/name> [--project <number|id>] --item <number>
        dev-loops project add … (back-compat alias for "queue add")
@@ -122,7 +123,7 @@ function parseCliArgs(argv) {
         args.column = requireValue(token, "--column requires a value");
         break;
       case "status":
-        // Back-compat alias for --column (issue #912). Kept separate so a
+        // Back-compat alias for --column. Kept separate so a
         // conflicting `--column X --status Y` is rejected rather than silently
         // resolved by argv order.
         args.status = requireValue(token, "--status requires a value");
@@ -150,73 +151,9 @@ function parseCliArgs(argv) {
 
 // ── Validation ───────────────────────────────────────────────────────────
 
-const OWNER_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
-const REPO_NAME_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9_.-]*[a-zA-Z0-9])?$/;
-
-function validateRepo(repo) {
-  if (!repo || typeof repo !== "string") {
-    throw Object.assign(new Error("--repo is required"), { code: "INVALID_REPO" });
-  }
-  const trimmed = repo.trim();
-  if (trimmed !== repo) {
-    throw Object.assign(
-      new Error(`--repo must not have leading/trailing whitespace, got "${repo}"`),
-      { code: "INVALID_REPO" },
-    );
-  }
-  const slashIdx = repo.indexOf("/");
-  if (slashIdx === -1) {
-    throw Object.assign(new Error(`--repo must be exactly owner/name, got "${repo}"`), { code: "INVALID_REPO" });
-  }
-  const owner = repo.slice(0, slashIdx);
-  const name = repo.slice(slashIdx + 1);
-  if (!owner || !name || !OWNER_RE.test(owner) || !REPO_NAME_RE.test(name)) {
-    throw Object.assign(new Error(`--repo must be exactly owner/name, got "${repo}"`), { code: "INVALID_REPO" });
-  }
-  return repo;
-}
+const validateRepo = validateProjectsRepo;
 
 // ── GraphQL fragments ────────────────────────────────────────────────────
-
-const LIST_USER_PROJECTS = [
-  "query($login:String!, $after:String) {",
-  "  user(login:$login) {",
-  "    projectsV2(first:50, after:$after) {",
-  "      pageInfo { hasNextPage endCursor }",
-  "      nodes { id number title url }",
-  "    }",
-  "  }",
-  "}"
-].join("\n");
-
-const LIST_ORG_PROJECTS = [
-  "query($login:String!, $after:String) {",
-  "  organization(login:$login) {",
-  "    projectsV2(first:50, after:$after) {",
-  "      pageInfo { hasNextPage endCursor }",
-  "      nodes { id number title url }",
-  "    }",
-  "  }",
-  "}"
-].join("\n");
-
-const GET_PROJECT_FIELDS = [
-  "query($projectId:ID!, $after:String) {",
-  "  node(id:$projectId) {",
-  "    ... on ProjectV2 {",
-  "      fields(first:50, after:$after) {",
-  "        pageInfo { hasNextPage endCursor }",
-  "        nodes {",
-  "          ... on ProjectV2SingleSelectField {",
-  "            id name",
-  "            options { id name }",
-  "          }",
-  "        }",
-  "      }",
-  "    }",
-  "  }",
-  "}"
-].join("\n");
 
 // Resolve an issue or PR's GraphQL node ID by number
 const RESOLVE_CONTENT_NODE_ID = [
@@ -278,58 +215,10 @@ const GET_PROJECT_ITEMS_BY_CONTENT = [
   "}"
 ].join("\n");
 
-// ── Paginated project listing ────────────────────────────────────────────
+// ── Paginated project + field listing (shared via projects-access) ────────
 
-async function listAllProjects(login, kind, env, runChild) {
-  const query = kind === "org" ? LIST_ORG_PROJECTS : LIST_USER_PROJECTS;
-  const projects = [];
-  let after = null;
-  while (true) {
-    const vars = { login };
-    if (after) vars.after = after;
-    const payload = await ghGraphql(query, vars, env, runChild);
-    const connection = kind === "org"
-      ? payload?.data?.organization?.projectsV2
-      : payload?.data?.user?.projectsV2;
-    const nodes = connection?.nodes ?? [];
-    projects.push(...nodes);
-    const pageInfo = connection?.pageInfo ?? {};
-    if (!pageInfo.hasNextPage) break;
-    if (!pageInfo.endCursor) {
-      throw Object.assign(
-        new Error("Invalid projects list payload: hasNextPage is true but endCursor is missing"),
-        { code: "GH_API_ERROR" },
-      );
-    }
-    after = pageInfo.endCursor;
-  }
-  return projects;
-}
-
-// ── Paginated field listing ──────────────────────────────────────────────
-
-async function listAllFields(projectId, env, runChild) {
-  const fields = [];
-  let after = null;
-  while (true) {
-    const vars = { projectId };
-    if (after) vars.after = after;
-    const payload = await ghGraphql(GET_PROJECT_FIELDS, vars, env, runChild);
-    const connection = payload?.data?.node?.fields;
-    const nodes = connection?.nodes ?? [];
-    fields.push(...nodes);
-    const pageInfo = connection?.pageInfo ?? {};
-    if (!pageInfo.hasNextPage) break;
-    if (!pageInfo.endCursor) {
-      throw Object.assign(
-        new Error("Invalid fields payload: hasNextPage is true but endCursor is missing"),
-        { code: "GH_API_ERROR" },
-      );
-    }
-    after = pageInfo.endCursor;
-  }
-  return fields;
-}
+const listAllProjects = discoverProjects;
+const listAllFields = listProjectFields;
 
 // ── Exit code classification ────────────────────────────────────────────
 
@@ -360,12 +249,12 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd() } =
     );
   }
   // --next-up is sugar for --column <resolved next_up display name> (the
-  // normative pickup queue, #1091), resolved through the SAME statusColumns
-  // mapping board-sync uses (#1098) so a renamed Next Up column agrees with
+  // normative pickup queue), resolved through the SAME statusColumns
+  // mapping board-sync uses so a renamed Next Up column agrees with
   // an explicit --column of the same configured name.
   const { columnNames, error: configError } = loadStateColumnMap(cwd);
   // Fail CLOSED on a malformed `.devloops` when --next-up drives the target:
-  // silently using the literal "Next Up" could land in the wrong column (#1098).
+  // silently using the literal "Next Up" could land in the wrong column.
   // A plain `--column X` add never consults statusColumns, so it is unaffected.
   if (args.nextUp && configError) {
     throw Object.assign(
@@ -429,14 +318,7 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd() } =
 
   if (alreadyPresent.length > 0) {
     const existing = alreadyPresent[0];
-    let existingStatus = null;
-    const fvs = existing.fieldValues?.nodes ?? [];
-    for (const fv of fvs) {
-      if (fv && fv.field && fv.field.name === "Status") {
-        existingStatus = fv.name;
-        break;
-      }
-    }
+    const existingStatus = extractStatus(existing);
     let issueNumber = null;
     let prNumber = null;
     if (existing.content) {
@@ -446,7 +328,7 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd() } =
     // Stay an idempotent no-op (never move an already-present item — that is
     // `queue move`'s job), but when the requested column differs from where the
     // item actually sits, surface an explicit moved:false signal so callers
-    // detect the ignored request instead of silently assuming placement (#1306).
+    // detect the ignored request instead of silently assuming placement.
     const differentColumn = existingStatus !== null && existingStatus !== targetStatus;
     return {
       ok: true,

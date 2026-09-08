@@ -725,7 +725,7 @@ export async function ensureAsyncRunnerOwnership({
     // confirmed-dead owner — its run has a recorded exit signal, or its claim
     // has gone stale past the max-age window — is taken over so the next
     // legitimately-dispatched run proceeds instead of standing down on a
-    // leaked lock (#1706). A genuinely live owner stays fail-closed: the
+    // leaked lock. A genuinely live owner stays fail-closed: the
     // one-runner-per-PR invariant for active work is preserved.
     if (supersedeStale) {
       const stale = await detectStaleRunner({ repo, pr, cwd });
@@ -738,7 +738,7 @@ export async function ensureAsyncRunnerOwnership({
   return claimRunnerOwnership({ repo, pr, runId, cwd, mode: "claim" });
 }
 /**
- * Env-aware, best-effort release for the run-completion/stop path (issue #1109).
+ * Env-aware, best-effort release for the run-completion/stop path.
  *
  * Mirrors {@link ensureAsyncRunnerOwnership}: a no-op when no async run id is
  * present, so it is harness-agnostic — Claude Code with no DEVLOOPS_RUN_ID yields
@@ -809,7 +809,7 @@ export async function releaseAsyncRunnerOwnership({
 }
 
 /**
- * Deterministic release-on-process-exit (#1706): best-effort clear of every
+ * Deterministic release-on-process-exit: best-effort clear of every
  * runner-coordination claim owned by a run across all PRs under a coordination
  * root.
  *
@@ -849,9 +849,9 @@ export async function releaseRunClaimsOnExit({
   if (normalizedRunId === null) {
     return { ok: true, status: "skipped_no_async_run_id", released: [], failed: [] };
   }
-  // Anchor at the same git-common-dir root the claims are stored under
-  // (#1706): in a linked worktree the coordination dir lives in the MAIN
-  // repo's .pi (git common dir), not under the worktree cwd, so a naive
+  // Anchor at the same git-common-dir root the claims are stored under: in a
+  // linked worktree the coordination dir lives in the MAIN repo's .pi (git
+  // common dir), not under the worktree cwd, so a naive
   // path.join(root, ".pi", ...) would scan the wrong location and miss the
   // run's own claims. resolveRepoCoordinationRoot handles the common-dir
   // anchoring and falls back to the canonicalized cwd for non-git dirs.
@@ -861,7 +861,7 @@ export async function releaseRunClaimsOnExit({
   try {
     entries = await readDir(coordinationRoot, { recursive: true });
   } catch (error) {
-    // #1706/review: a missing coordination root (ENOENT/ENOTDIR) is the normal
+    // A missing coordination root (ENOENT/ENOTDIR) is the normal
     // nothing-to-sweep case; ANY other readdir failure (permissions, IO,
     // unsupported options) must not masquerade as that or the sweep looks
     // successful while doing nothing. Surface it as a distinct scan_failed

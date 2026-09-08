@@ -32,7 +32,7 @@ export function runRefinementCompletenessChecker(tree) {
 
   for (const issue of tree.issues) {
     const nonGoals = extractSection(issue.body, "Non-goals");
-    // #1951: the AC→DoD mapping matrix is the authoritative issue artifact for
+    // The AC→DoD mapping matrix is the authoritative issue artifact for
     // AC and DoD; interactive issue-side `## Acceptance criteria` /
     // `## Definition of done` checklists are NOT required (they duplicate the
     // matrix). loop-grill synthesizes a matrix-only body, so requiring the
@@ -43,7 +43,7 @@ export function runRefinementCompletenessChecker(tree) {
     // (same detector the enqueue/draft gate uses), not a literal `## AC / DoD
     // matrix` heading match — so a valid matrix authored under an alternate
     // recognized heading (`## AC → DoD mapping`) or a criterion/evidence-headed
-    // table is not false-rejected (#1951/Copilot review): `!found` → missing,
+    // table is not false-rejected: `!found` → missing,
     // `found && !valid` → invalid.
     const matrix = detectAcDodMatrix(issue.body);
 

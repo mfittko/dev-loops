@@ -1361,12 +1361,12 @@ test("fingerprintFinding is stable across the ledger's trimmed/untrimmed file sp
 // --jq / --silent base guarantee (real subprocess, minimal round)
 // ---------------------------------------------------------------------------
 
-test("close-gate-findings.mjs: --help documents the shared --jq/--silent flags", async () => {
-  const { code, stdout } = await runNode(SCRIPT_PATH, ["--help"]);
-  assert.equal(code, 0);
-  assert.match(stdout, /--jq <filter>/);
-  assert.match(stdout, /--silent, -s/);
-});
+// Generic --help flag documentation, --silent success mapping, and
+// invalid-filter refusal are owned by emitResult and the base-guarantee
+// contract (test/loop/jq-output.test.mjs,
+// test/contracts/jq-output-base-guarantee-contract.test.mjs). This command
+// keeps one positive --jq wiring case below to prove it composes its result
+// through the shared emit path end to end.
 
 test("close-gate-findings.mjs: --jq filters the result and exits 0", async () => {
   const ledger = makeLedger({ gate: "draft_gate", findings: [] });
@@ -1378,25 +1378,6 @@ test("close-gate-findings.mjs: --jq filters the result and exits 0", async () =>
     });
     assert.equal(code, 0, stderr);
     assert.equal(stdout.trim(), "1");
-  }));
-});
-
-test("close-gate-findings.mjs: --silent suppresses stdout and maps to exit code only", async () => {
-  const ledger = makeLedger({ gate: "draft_gate", findings: [] });
-  await withLedgerFile(ledger, (ledgerPath) => withCliGhStub(roundEntries(), async ({ env, repoRoot }) => {
-    const { code, stdout } = await runNode(SCRIPT_PATH, ["--ledger", ledgerPath, "--silent"], { env, cwd: repoRoot });
-    assert.equal(code, 0);
-    assert.equal(stdout, "");
-  }));
-});
-
-test("close-gate-findings.mjs: an invalid --jq filter fails closed: stderr + exit 2", async () => {
-  const ledger = makeLedger({ gate: "draft_gate", findings: [] });
-  await withLedgerFile(ledger, (ledgerPath) => withCliGhStub(roundEntries(), async ({ env, repoRoot }) => {
-    const { code, stdout, stderr } = await runNode(SCRIPT_PATH, ["--ledger", ledgerPath, "--jq", "bogus!!"], { env, cwd: repoRoot });
-    assert.equal(code, 2);
-    assert.equal(stdout, "");
-    assert.match(stderr, /--jq/);
   }));
 });
 

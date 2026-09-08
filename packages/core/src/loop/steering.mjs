@@ -1,24 +1,10 @@
 /**
  * Deterministic mid-flight operator steering contract for active dev loops.
  *
- * This module provides:
- * - STEERING_KIND: stable steering kind constants
- * - STEERING_RESULT: acknowledgement/result constants
- * - SAFE_POINT_CATEGORY: safe-point classification constants
- * - normalizeSteeringEvent: validate and canonicalize a raw steering event
- * - normalizeSteeringState: load and validate persisted steering state
- * - createSteeringState: create a fresh steering state for a new run
- * - classifySafePoint: map a copilot loop state to a safe-point category
- * - submitSteering: process a steering event against current run state
- * - promoteQueuedSteering: apply queued steering when the loop reaches a safe point
- * - getEffectiveConstraints: get the current effective steering constraints
- * - resolveEffectiveLoopState: get loop interpretation augmented with active steering
- * - getSteeringStatus: get full inspection output for a run's steering state
- *
  * The proving target for this first implementation slice is the async Copilot
- * review/fix loop (copilot-loop-state.mjs). Safe-point rules are defined for
- * that loop's state set and the resolveEffectiveLoopState integration changes
- * loop behavior when stop_at_next_safe_gate steering is active.
+ * review/fix loop (copilot-loop-state.mjs): safe-point rules are defined for
+ * that loop's state set, and resolveEffectiveLoopState changes loop behavior
+ * when stop_at_next_safe_gate steering is active.
  */
 
 import { normalizeRepoSlug } from "../github/repo-slug.mjs";
@@ -74,46 +60,30 @@ const VALID_APPLY_MODES = new Set(["immediate", "next_safe_point"]);
 // ---------------------------------------------------------------------------
 
 /**
- * Map a copilot loop state to a safe-point category.
- *
- * Safe-point rules for the async Copilot review/fix loop:
- *
- * IMMEDIATE — between steps / idle / waiting on external state.
- *   Steering can be applied right now without risk of splitting a mutation.
- *   States: pr_ready_no_feedback, waiting_for_copilot_review,
- *           waiting_for_ci, ready_to_rerequest_review
- *
- * NEXT_POINT — actively computing or in a non-interruptible mutation.
- *   Applying steering now could produce a half-applied or inconsistent state.
- *   Queue the event and promote it when the loop next reaches an IMMEDIATE state.
- *   States: pr_draft, unresolved_feedback_present, already_fixed_needs_reply_resolve
- *
- * TERMINAL — run is done, irreversibly failed, or has no active run.
- *   Steering is rejected; it would have no effect or could mask a real error.
- *   States: no_pr, done, review_request_unavailable, blocked_needs_user_decision
+ * Map a copilot loop state to a safe-point category (async Copilot
+ * review/fix loop): IMMEDIATE states can apply steering right now; NEXT_POINT
+ * states are mid-mutation and queue the event for the next IMMEDIATE state;
+ * TERMINAL states reject steering (no active/recoverable run).
  *
  * @param {string} loopState - a copilot loop STATE value
  * @returns {"immediate"|"next_point"|"terminal"}
  */
 export function classifySafePoint(loopState) {
   switch (loopState) {
-    // Between steps / idle
+    // Idle / waiting on external state.
     case STATE.PR_READY_NO_FEEDBACK:
     case STATE.READY_TO_REREQUEST_REVIEW:
-    // Waiting on external state
     case STATE.WAITING_FOR_COPILOT_REVIEW:
     case STATE.WAITING_FOR_CI:
       return SAFE_POINT_CATEGORY.IMMEDIATE;
 
-    // In a pre-ready state (not yet at a mutation gate)
+    // Actively computing / non-interruptible mutation.
     case STATE.PR_DRAFT:
-    // Actively computing — about to apply fixes to resolve feedback
     case STATE.UNRESOLVED_FEEDBACK_PRESENT:
-    // In the middle of a non-interruptible mutation (reply/resolve review threads)
     case STATE.ALREADY_FIXED_NEEDS_REPLY_RESOLVE:
       return SAFE_POINT_CATEGORY.NEXT_POINT;
 
-    // Terminal states: run is done, error, or has no active run
+    // Terminal: run done, errored, or no active run.
     case STATE.NO_PR:
     case STATE.DONE:
     case STATE.REVIEW_REQUEST_UNAVAILABLE:
@@ -418,20 +388,9 @@ function hasStopAtNextSafeGate(events) {
 
 /**
  * Process a steering event against current run state and produce an
- * acknowledgement/result plus updated steering state.
- *
- * This is the main entry point for operators submitting mid-flight corrections.
- *
- * Result semantics:
- * - applied_now: event is immediately effective; effectiveStack is updated.
- * - queued_for_safe_point: loop is in a non-safe state; event is queued and
- *   will be promoted by promoteQueuedSteering when the loop reaches a safe point.
- * - rejected_unsafe_now: terminal loop state (done/unavailable/no_pr); steering
- *   would have no effect or could mask a real issue.
- * - rejected_invalid_or_conflicting: event is malformed, has an out-of-order seq,
- *   or exactly duplicates an existing hard_constraint.
- * - needs_human_decision: loop is in blocked_needs_user_decision; human must act
- *   before automated steering can be safely applied.
+ * acknowledgement/result plus updated steering state. Main entry point for
+ * operators submitting mid-flight corrections; see {@link STEERING_RESULT}
+ * for the possible outcomes.
  *
  * @param {object} event - normalized steering event (from normalizeSteeringEvent)
  * @param {object} steeringState - current steering state (from normalizeSteeringState)
@@ -719,7 +678,7 @@ export function getEffectiveConstraints(steeringState) {
  * @param {object} snapshot - raw or normalized loop snapshot
  * @param {object} steeringState - current steering state for this run
  * @param {object} [refinementConfig] - interpreter refinement config; pass a config-derived
- *   `resolveRefinement(config)` so the base interpretation honors gates.preApproval.requireCi:false (#1337).
+ *   `resolveRefinement(config)` so the base interpretation honors gates.preApproval.requireCi:false.
  * @returns {{ state: string, allowedTransitions: string[], nextAction: string, steeringApplied: boolean, pendingStopAtNextSafeGate: boolean, terminalStopAtNextSafeGate: boolean, effectiveConstraints: object }}
  */
 export function resolveEffectiveLoopState(snapshot, steeringState, refinementConfig) {
@@ -760,19 +719,8 @@ export function resolveEffectiveLoopState(snapshot, steeringState, refinementCon
 // ---------------------------------------------------------------------------
 
 /**
- * Get full inspection output for a run's steering state.
- *
- * Returns:
- * - runId: the target run
- * - schemaVersion: for migration awareness
- * - eventCount: total events submitted
- * - queuedCount: events waiting for the next safe point
- * - effectiveStackCount: events currently in effect
- * - effectiveConstraints: structured view over the effective stack
- * - latestResult: most recent acknowledgement/result
- * - resultHistory: all historical acknowledgements
- * - history: all submitted events
- * - nextSeq: next expected sequence number
+ * Get full inspection output for a run's steering state (event counts,
+ * effective constraints, result history, and next expected seq).
  *
  * @param {object} steeringState
  * @returns {object}

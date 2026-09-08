@@ -4,22 +4,16 @@
  *
  * The gate-review context-builder (Phase 1 of the gate-review sub-loop) resolves
  * the dynamic review-angle set and writes a deterministic JSON handoff artifact
- * that the downstream fork fan-out reviewers consume. This module owns that
- * artifact: a deterministic path builder, a writer, and a reader for round-trip
- * use, plus a thin context-builder entrypoint (`buildGateContext`) that derives
- * the angle set + rationale directly from the canonical resolver.
+ * that the downstream fork fan-out reviewers consume: a deterministic path
+ * builder, a writer, a reader for round-trip use, and a thin context-builder
+ * entrypoint (`buildGateContext`).
  *
  * Angle resolution is NOT re-implemented here. The single source of truth is
  * `resolveGateAnglesDynamic(config, gate, { diff })` from @dev-loops/core/config:
- * it honors the mandatory-angle floor (mandatory angles are always merged back
- * after dynamic selection, filtered by excludeAngles) and falls back to the
- * static configured pool when dynamic angle resolution is off or no diff is available.
- * This module maps that resolver's output into the persisted artifact:
- *   resolvedAngles  = resolver.recommendedAngles
- *   rationale       = resolver.skippedAngles (action 'dropped', reason from
- *                     resolver.reasons) + the rest as action 'kept', except
- *                     entries present in resolver.addedAngles are recorded as
- *                     action 'added' (reason from resolver.addedReasons) — see #1048
+ * it honors the mandatory-angle floor and falls back to the static configured
+ * pool when dynamic angle resolution is off or no diff is available. This
+ * module only maps that resolver's output into the persisted artifact fields
+ * (see `rationaleFromResolver`).
  *
  * The artifact records the resolved angle set + rationale + change scope
  * (branch, head SHA, touched files, acceptance-criteria pointer, validation
@@ -53,12 +47,8 @@ import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_c
 import { resolveLinkedIssuesFromPr } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
-/**
- * Map the artifact gate name (draft_gate | pre_approval_gate) to the config
- * gate key understood by resolveGateAnglesDynamic (draft | preApproval).
- * @param {string} gate
- * @returns {"draft"|"preApproval"}
- */
+// Map the artifact gate name (draft_gate | pre_approval_gate) to the config
+// gate key understood by resolveGateAnglesDynamic (draft | preApproval).
 export function mapGateToConfigKey(gate) {
   if (gate === "draft_gate") return "draft";
   if (gate === "pre_approval_gate") return "preApproval";
@@ -66,22 +56,19 @@ export function mapGateToConfigKey(gate) {
 }
 
 /**
- * `review` (#1808) angle resolution — a standalone gate with no config key of
- * its own (it is not "draft" or "preApproval"): its resolved angle set is the
- * UNION of both gates' configured angle sets (resolveGateAngles, the STATIC
- * pool — dynamic/tiered subtractive resolution is deliberately not applied to
- * review; it always sees the full union), never resolveGateAnglesDynamic.
+ * `review` angle resolution — a standalone gate with no config key of
+ * its own: its resolved angle set is the UNION of both gates' configured
+ * angle sets (resolveGateAngles, the STATIC pool — dynamic/tiered subtractive
+ * resolution is deliberately not applied to review), never resolveGateAnglesDynamic.
  *
- * `acceptance-criteria` is dropped from that union (with a rationale entry,
- * reason "no spec-of-record") only when both facts are DEFINITIVELY known
- * false — it closes no issue AND its own body carries no AC checklist. It is
- * kept when either is true: a linked issue is presumed to carry the real spec
- * even when its body could not be classified, and a PR that inlines its own
- * AC checklist is its own spec-of-record. `hasClosingIssue` is `undefined`
- * (not `false`) when the caller never queried GitHub — e.g. `--prefix-file`
- * mode, which never touches GitHub — and an unknown fact must never be
- * coerced to "false": we cannot prove there is no spec-of-record, so this
- * fails CLOSED and keeps acceptance-criteria.
+ * `acceptance-criteria` is dropped from that union only when both facts are
+ * DEFINITIVELY known false — the PR closes no issue AND its own body carries
+ * no AC checklist; it is kept when either is true (a linked issue is presumed
+ * to carry the real spec even unclassified; a PR with its own AC checklist is
+ * its own spec-of-record). `hasClosingIssue` is `undefined` (not `false`)
+ * when the caller never queried GitHub (e.g. `--prefix-file` mode) — an
+ * unknown fact must never be coerced to "false", so this fails CLOSED and
+ * keeps acceptance-criteria.
  *
  * @param {import("@dev-loops/core/config").DevLoopConfig} config
  * @param {{ hasClosingIssue: boolean|undefined, hasAcChecklist: boolean|undefined }} facts
@@ -92,8 +79,6 @@ export function resolveReviewGateAngles(config, { hasClosingIssue, hasAcChecklis
     ...(resolveGateAngles(config, "draft") ?? []),
     ...(resolveGateAngles(config, "preApproval") ?? []),
   ])];
-  // Definitively-false, not merely falsy: `undefined` (unknown) must not
-  // collapse into the same branch as a real "no" answer from GitHub.
   const provablyNoSpecOfRecord = hasClosingIssue === false && hasAcChecklist === false;
   const dropAcceptanceCriteria = provablyNoSpecOfRecord && union.includes("acceptance-criteria");
   return {
@@ -112,11 +97,9 @@ export function resolveReviewGateAngles(config, { hasClosingIssue, hasAcChecklis
  * resolve-angle-carry-forward.mjs, which shares assertWorktreeAtHead) must run
  * with: process.env minus GIT_DIR/GIT_WORK_TREE. An exported GIT_DIR overrides
  * repo discovery outright — `git -C <cwd> rev-parse HEAD` with GIT_DIR set
- * elsewhere resolves the OTHER repo's HEAD regardless of cwd. Every caller here
- * means "the worktree at `cwd`"; route every git spawn through this one helper
- * so the worktree guard and the diff/delta it gates can never disagree about
- * which repo they mean.
- * @returns {NodeJS.ProcessEnv}
+ * elsewhere resolves the OTHER repo's HEAD regardless of cwd. Route every git
+ * spawn through this one helper so the worktree guard and the diff/delta it
+ * gates can never disagree about which repo they mean.
  */
 export function gitEnvWithoutDirOverrides() {
   return { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };
@@ -126,7 +109,7 @@ export function gitEnvWithoutDirOverrides() {
  * Map a resolveGateAnglesDynamic result into the persisted artifact fields.
  * Does NOT re-derive angles — it only reshapes the resolver's output.
  *
- * Angles present in `resolverResult.addedAngles` (additive selection, #1048)
+ * Angles present in `resolverResult.addedAngles` (additive selection)
  * are recorded with action 'added' (reason from `resolverResult.addedReasons`)
  * instead of 'kept'.
  *
@@ -518,15 +501,8 @@ export function parseWriteGateContextCliArgs(argv) {
  * "gate-reviews" per-angle findings directory; `suffix` (empty for the
  * directory case) distinguishes the file extension within a family.
  *
- * @param {object} input
- * @param {string} input.repo — owner/name
- * @param {number|string} input.pr
- * @param {string} input.gate — draft_gate | pre_approval_gate
- * @param {string} input.headSha
- * @param {string} [input.tmpRoot] — default "tmp"
  * @param {string} [input.dir] — top-level artifact-family directory, default "gate-context"
  * @param {string} [input.suffix] — filename suffix (extension), default ""
- * @returns {string} relative path
  */
 function buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot = "tmp", dir = "gate-context", suffix = "" }) {
   const repoSlug = repoSlugFor(repo);
@@ -551,7 +527,7 @@ export function buildGateReviewsDir({ repo, pr, gate, headSha, tmpRoot = "tmp" }
 }
 
 /**
- * #1507 AC3 — same-head skip-completed resume. Scan the per-angle findings
+ * AC3 — same-head skip-completed resume. Scan the per-angle findings
  * directory for this head and return the angle names that already have a CLEAN
  * artifact stamped for this head. The preflight excludes groups whose angles are
  * all in this set, so a later session re-running the fan-out at the same head
@@ -570,13 +546,6 @@ export function buildGateReviewsDir({ repo, pr, gate, headSha, tmpRoot = "tmp" }
  * `tmpRoot`, which would make the scan's result depend on the process's
  * working directory instead of the worktree being built for.
  *
- * @param {object} input
- * @param {string} input.repo — owner/name
- * @param {number|string} input.pr
- * @param {string} input.gate — draft_gate | pre_approval_gate
- * @param {string} input.headSha
- * @param {string} [input.tmpRoot] — default "tmp"
- * @param {{ repoRoot?: string }} [runtime]
  * @returns {Promise<string[]>} angle names with a clean artifact at this head
  */
 export async function readCompletedAnglesForHead({ repo, pr, gate, headSha, tmpRoot = "tmp" }, { repoRoot = process.cwd() } = {}) {
@@ -644,13 +613,9 @@ function validatePathSegments({ pr, gate, headSha }) {
   return { pr: prNum, gate, headSha: sha };
 }
 
-/**
- * Validate the repo string and return its `owner-name` slug, applying the same
- * safety checks (no `.`/`..` segments, no whitespace/backslashes) shared by the
- * artifact and diff path builders.
- * @param {string} repo — owner/name
- * @returns {string} repo slug
- */
+// Validate the repo string and return its `owner-name` slug, applying the same
+// safety checks (no `.`/`..` segments, no whitespace/backslashes) shared by the
+// artifact and diff path builders.
 function repoSlugFor(repo) {
   const parts = String(repo).split("/");
   if (parts.length !== 2 || parts.some((p) => p.length === 0)) {
@@ -681,7 +646,7 @@ export function buildGateBriefingPrefixPath({ repo, pr, gate, headSha, tmpRoot =
   return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".briefing-prefix.txt" });
 }
 
-// Deterministic path for a per-scope briefing companion file (AC3, #1572): a
+// Deterministic path for a per-scope briefing companion file (AC3): a
 // narrower slice of the same bundle for angles whose configured `scope` is
 // not "full" (see GATE_ANGLE_SCOPES). `scope` must be a non-"full"
 // GATE_ANGLE_SCOPES value (e.g. "changed-files" | "docs-only") — validated
@@ -706,17 +671,10 @@ export function buildValidationResultsPath({ repo, pr, gate, headSha, tmpRoot = 
 /**
  * Build the deterministic path for the materialized VOLATILE tail block
  * (round-level values that sit AFTER the cache boundary the briefing prefix
- * establishes — see #1474/#1468-B): a physically separate file sibling to the
+ * establishes): a physically separate file sibling to the
  * briefing prefix, so the stable/volatile split is a real file boundary
- * rather than only a documented convention. Mirrors buildGateBriefingPrefixPath.
- *
- * @param {object} input
- * @param {string} input.repo — owner/name
- * @param {number|string} input.pr
- * @param {string} input.gate — draft_gate | pre_approval_gate
- * @param {string} input.headSha
- * @param {string} [input.tmpRoot] — default "tmp"
- * @returns {string} relative briefing-volatile path
+ * rather than only a documented convention. Mirrors buildGateBriefingPrefixPath
+ * (same path-segment params).
  */
 export function buildGateBriefingVolatilePath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
   const repoSlug = repoSlugFor(repo);
@@ -729,15 +687,8 @@ export function buildGateBriefingVolatilePath({ repo, pr, gate, headSha, tmpRoot
  * `buildReviewDispatchPlan` output from `@dev-loops/core/loop/review-dispatch-plan`,
  * fed `requestGroups` built by that module's `buildAngleRequestGroups` — the
  * per-round fingerprint of the complete observable request prefix, sibling to
- * the briefing prefix. Mirrors buildGateBriefingPrefixPath.
- *
- * @param {object} input
- * @param {string} input.repo — owner/name
- * @param {number|string} input.pr
- * @param {string} input.gate — draft_gate | pre_approval_gate
- * @param {string} input.headSha
- * @param {string} [input.tmpRoot] — default "tmp"
- * @returns {string} relative dispatch-plan path
+ * the briefing prefix. Mirrors buildGateBriefingPrefixPath (same path-segment
+ * params).
  */
 export function buildGateRequestPlanPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
   const repoSlug = repoSlugFor(repo);
@@ -773,15 +724,11 @@ export const PR_BODY_ABSENT_SENTINEL = "(no PR description is shown)";
 
 /**
  * Rendered in place of an individual linked issue's body when that issue's
- * body text is absent. Deliberately SOURCE-NEUTRAL like PR_BODY_ABSENT_SENTINEL:
- * it asserts only that no issue body is shown, never a GitHub-specific fact
- * ("empty on GitHub") — because it is also rendered by the exported
- * renderBriefingPrefix / writeGateContext programmatic path, which never
- * contacts GitHub and therefore cannot truthfully claim anything about the
- * live issue state. A resolved-but-empty body must read as a truthful,
- * distinguishable statement rather than silently collapsing the `## Linked
- * issue` section (which would then read identically to "the PR closes no
- * issue" — the exact indistinguishability #1511 targets).
+ * body text is absent. Deliberately SOURCE-NEUTRAL, mirroring
+ * PR_BODY_ABSENT_SENTINEL's rationale above. A resolved-but-empty body must
+ * read as a truthful, distinguishable statement rather than silently
+ * collapsing the `## Linked issue` section (which would then read identically
+ * to "the PR closes no issue" — the exact indistinguishability targets).
  */
 export const ISSUE_BODY_ABSENT_SENTINEL = "(no issue body is shown)";
 
@@ -1160,19 +1107,16 @@ function extractDocsOnlyDiff(diffOutput) {
 }
 
 /**
- * Render the "## Reviewer source-read invariant" section (GATE-EXEC-SOURCE-READ-WORKTREE,
- * #1603): the rule that a reviewer citing a skill/doc/source file must read it
+ * Render the "## Reviewer source-read invariant" section (GATE-EXEC-SOURCE-READ-WORKTREE):
+ * the rule that a reviewer citing a skill/doc/source file must read it
  * from the WORKTREE SOURCE under review, not from an installed skill layout
  * (`.pi/skills/`, `~/.pi/agent/`). Installed copies lag a PR that modifies those
- * source files, so reading them produces false high-severity findings against text
- * the PR already fixed. Extracted into one function so the full prefix and every
- * scoped variant render this passage byte-identically — every caller of this
- * round passes the same `worktreeRoot`, so threading it in does not break that
- * byte-identity. The worktree path is already stamped on the `worktree:` header
- * line by `renderBriefingPrefix`; this section restates it inline so a scoped
- * variant (which carries no header `worktree:` line of its own) is self-contained.
- * @param {string} worktreeRoot — absolute path of the worktree at the reviewed head
- * @returns {string}
+ * source files, so reading them produces false high-severity findings against
+ * text the PR already fixed. Extracted into one function so the full prefix
+ * and every scoped variant render this passage byte-identically (every caller
+ * passes the same `worktreeRoot`). Restates the worktree path inline (already
+ * stamped on `renderBriefingPrefix`'s `worktree:` header line) so a scoped
+ * variant, which carries no header line of its own, is self-contained.
  */
 function renderSourceReadInvariantSection(worktreeRoot) {
   return [
@@ -1186,12 +1130,8 @@ function renderSourceReadInvariantSection(worktreeRoot) {
  * Render the "## Reviewer token discipline" section: the per-reviewer
  * token-waste rules that no structural briefing lever (grouping, scoping,
  * hunk-collapse) can remove because they happen inside the reviewer's own
- * tool use. Extracted into one function so the full prefix and every scoped
- * variant render this passage byte-identically — every caller of this round
- * passes the same `contextPath`, so threading it in does not break that
- * byte-identity.
- * @param {string|null} contextPath — the round's gate-context JSON artifact path
- * @returns {string}
+ * tool use. Extracted so the full prefix and every scoped variant render this
+ * passage byte-identically (see {@link renderSourceReadInvariantSection}).
  */
 function renderTokenDisciplineSection(contextPath) {
   const contextPathDisplay = contextPath ?? "<gate-context artifact path>";
@@ -1236,15 +1176,13 @@ function renderValidationResultsSection(validationResultsPath, headSha) {
  * header (repo/PR/head/gate/worktree + the mandatory verify-fresh-review-context.mjs
  * instruction), reviewer token discipline, PR body, linked-issue body (when
  * present), the full diff at the reviewed head (inlined up to `capBytes`, else
- * a pointer to `diffPath`), and a changed-files/adjacent-code summary — in that
- * fixed order. Pure and
- * deterministic: identical input always renders identical bytes — the pure
- * function's guarantee. The CLI path resolves the live PR body and linked-issue
- * bodies from GitHub and passes them in as input, so a same-head rebuild after
- * a live description edit resolves DIFFERENT input and yields DIFFERENT prefix
- * bytes; a conductor MUST NOT rebuild the context while reviewers for that head
- * are still running (GATE-EXEC-BRIEFING-PREFIX in the gate-review sub-loop
- * contract). Only byte-identity for identical input holds unconditionally.
+ * a pointer to `diffPath`), and a changed-files/adjacent-code summary, in that
+ * fixed order. Pure and deterministic: identical input always renders
+ * identical bytes. The CLI resolves live PR/issue bodies from GitHub before
+ * calling this, so a same-head rebuild after a live description edit yields
+ * DIFFERENT prefix bytes — a conductor MUST NOT rebuild the context while reviewers
+ * for that head are still running (GATE-EXEC-BRIEFING-PREFIX in the
+ * gate-review sub-loop contract).
  *
  * prBody/issueBody/issueSections/diffOutput are untrusted GitHub text (PR
  * author or linked-issue author controlled) and are each wrapped in their own
@@ -1262,15 +1200,11 @@ function renderValidationResultsSection(validationResultsPath, headSha) {
  * untrusted region).
  *
  * @param {object} input
- * @param {string} input.repo
- * @param {number|string} input.pr
- * @param {string} input.gate
- * @param {string} input.headSha
  * @param {string} input.worktreeRoot — absolute path reviewers run in
  * @param {string} input.contextPath — the sibling JSON artifact path
  * @param {string} input.briefingPrefixPath — this rendered file's own path
  * @param {string|null} [input.prBody]
- * @param {string|null} [input.issueRef] — label for the linked-issue section heading (e.g. "#877" or "#1496, #1511")
+ * @param {string|null} [input.issueRef] — label for the linked-issue section heading (e.g. a single issue-reference label, or a comma-joined multi-issue list)
  * @param {string|null} [input.issueBody] — single-issue body, rendered under `issueRef` with no `### <label>` sub-heading. Ignored when `issueSections` is given.
  * @param {{label: string, body: string}[]|null} [input.issueSections] — per-issue bodies for a multi-issue PR (structured, never pre-joined): each renders as a renderer-emitted `### <label>` line OUTSIDE any fence, followed by that issue's OWN pickFence-sized fenced block. Takes precedence over `issueBody` when non-empty.
  * @param {string|null} [input.diffOutput] — full diff text, when captured
@@ -1436,10 +1370,6 @@ export function renderBriefingPrefix({
  *
  * @param {"changed-files"|"docs-only"} scope
  * @param {object} input
- * @param {string} input.repo
- * @param {number|string} input.pr
- * @param {string} input.gate
- * @param {string} input.headSha
  * @param {string} input.briefingPrefixPath — the full prefix's own path, for the widen-back pointer
  * @param {string|null} [input.contextPath] — the sibling JSON context-artifact path, for the widen-back pointer
  * @param {string|null} [input.worktreeRoot] — absolute path of the worktree at the reviewed head, stamped into the source-read invariant section (mirrors the full prefix's `worktree:` line so a scoped reviewer need not widen just to learn the tree)
@@ -1588,50 +1518,34 @@ export const REQUEST_PLAN_BLOCK_BOUNDARIES = Object.freeze(["shared_prefix", "ca
 
 /**
  * Render the materialized VOLATILE tail block (GATE-EXEC-BRIEFING-PREFIX's
- * counterpart): the round-level values that sit AFTER the cache boundary the
+ * counterpart): round-level values that sit AFTER the cache boundary the
  * briefing prefix establishes, physically separated into their own file so
  * the stable/volatile split the request plan's `cacheBoundary` claims is a
- * real boundary rather than only a common substring.
+ * real file boundary, not just a common substring.
  *
- * The rule for what belongs here: a value is volatile-tail material ONLY IF
+ * Rule for what belongs here: a value is volatile-tail material ONLY IF
  * {@link renderBriefingPrefix} never consumes it. `acceptanceCriteria` fails
- * that test — `writeGateContext` passes it as `renderBriefingPrefix`'s
- * `issueRef`, which appears in the stable prefix's `## Linked issue <ref>`
- * heading whenever an issue body/sections are present — so it is NOT
- * accepted by this function; it belongs to the stable prefix (and to the
- * separate JSON context artifact's `scope.acceptanceCriteria`), never to this
- * file. `validationPosture` passes the test (only `validationResultsPath`
- * reaches the prefix, as a pointer to a separate artifact — the posture
- * string itself never does) and stays here. `loggedAt` is a genuine per-write
- * timestamp with no prefix counterpart at all.
- *
- * `gate`/`head` are the one deliberate exception to the ONLY-IF rule above:
- * {@link renderBriefingPrefix} also states both values (as `gate`/`headSha`
- * inputs surfaced in its own identifying header), so this file's `gate:`/
- * `head:` lines are NOT volatile-tail material by the rule — they are an
- * identifying header repeated on this file too, so a reader who only has the
- * volatile tail open can still tell which round/head it belongs to without
+ * that test (it reaches the stable prefix via `issueRef`'s `## Linked issue`
+ * heading) and is NOT accepted here — it belongs to the stable prefix and to
+ * the JSON artifact's `scope.acceptanceCriteria`. `validationPosture` passes
+ * (only `validationResultsPath`, a pointer, reaches the prefix) and stays
+ * here. `loggedAt` is a genuine per-write timestamp with no prefix
+ * counterpart. `gate`/`head` are the one deliberate exception to the rule:
+ * they ARE also stated by the prefix's own header, but are repeated here too
+ * so a reader with only this file open can still identify the round without
  * cross-referencing the prefix.
  *
- * This file is NOT itself deterministic (`loggedAt` changes on every write —
- * only the sibling `dispatch-plan.json` carries the "byte-identical for
- * identical inputs" guarantee). Writing or changing this file never touches
- * the stable briefing-prefix bytes.
+ * NOT itself deterministic (`loggedAt` changes on every write — only the
+ * sibling `dispatch-plan.json` carries the byte-identical-for-identical-input
+ * guarantee). Writing this file never touches the stable prefix bytes.
  *
- * `validationPosture` is free text from an untrusted caller (the CLI's
- * `--validation-posture <text>` only `.trim()`s it — leading/trailing
- * whitespace, not interior newlines). Because this file is line-structured
- * (`key: value` per line), an embedded newline would forge additional lines
- * that read as this renderer's own output (a second `loggedAt:`, a fake `#`
- * heading, ...). Fails closed on a newline rather than escaping it — an
- * escape character is itself forgeable text.
+ * `validationPosture` is free text from an untrusted caller (only
+ * `.trim()`ed). Because this file is line-structured (`key: value` per
+ * line), an embedded newline could forge additional lines (a second
+ * `loggedAt:`, a fake `#` heading). Fails closed on a newline rather than
+ * escaping it — an escape character is itself forgeable text.
  *
- * @param {object} input
- * @param {string} input.gate
- * @param {string} input.headSha
- * @param {string} input.loggedAt
  * @param {string|null} [input.validationPosture] — must not contain a newline
- * @returns {string}
  */
 export function renderBriefingVolatile({ gate, headSha, loggedAt, validationPosture = null }) {
   if (validationPosture != null && /[\r\n]/.test(validationPosture)) {
@@ -1733,7 +1647,7 @@ function normalizeCarriedAnglesArg(carriedAngles) {
 }
 
 /**
- * Resolve the fan-out dispatch plan for a gate round (issue #1601): the
+ * Resolve the fan-out dispatch plan for a gate round: the
  * dispatch units (`resolveFanoutGroups`), the bounded-concurrency wave plan
  * (`scheduleFanoutWaves` via `scheduleParallelWaves`), and the two knobs
  * (`maxAnglesPerGroup`, `maxConcurrent`). The conductor dispatches
@@ -1754,7 +1668,7 @@ function normalizeCarriedAnglesArg(carriedAngles) {
 export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false, availableReviewers = null, completedAngles = null, carriedAngles = null } = {}) {
   const groups = resolveFanoutGroups(config, configGate, resolvedAngles, { fullLabel });
   const maxAnglesPerGroup = resolveMaxAnglesPerGroup(config);
-  // #1726: serial (one-at-a-time) dispatch of heavy reviewers when
+  // Serial (one-at-a-time) dispatch of heavy reviewers when
   // `gates.fanout.sequential` is set — effective concurrency is 1 unit per wave
   // regardless of maxConcurrent, so each heavy reviewer completes and writes its
   // evidence artifact before the next starts. Kept as a distinct emitted field so
@@ -1789,7 +1703,7 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
       }
     }
   }
-  // #1507: reviewer-budget preflight. The conductor reads `preflight.dispatch`
+  // Reviewer-budget preflight. The conductor reads `preflight.dispatch`
   // before spawning any reviewer; on `false` it records the shortfall (this
   // artifact is the resumable record) and stops without dispatching. `null`
   // budget (harness does not expose one) → proceed, no shortfall proven.
@@ -1842,7 +1756,7 @@ export function buildGateContextArtifact(options) {
       validationResultsPath: options.validationResultsPath ?? null,
     },
   };
-  // AC3 (#1572): each resolved angle's declared surface scope (fail-open
+  // AC3: each resolved angle's declared surface scope (fail-open
   // default "full" — resolveGateAngleScope). Only present when the caller
   // actually computed it (buildGateContext/CLI main do, for a non-empty
   // angle set); a bare buildGateContextArtifact call that never resolved
@@ -1866,14 +1780,14 @@ export function buildGateContextArtifact(options) {
   // DoD checklist + explicit Non-goals, or a linked refinement doc, per
   // detectIssueRefinementArtifact); "linked-issue-unrefined" (resolved, but
   // no linked issue carries the full refinement matrix — a distinguishable
-  // "linked, unrefined or matrix-incomplete" marker, AC4 of #1496); or "none"
+  // "linked, unrefined or matrix-incomplete" marker); or "none"
   // (the PR closes no issue). Only the CLI path sets it, so a null
   // acceptanceCriteria WITH this field means "genuinely absent" and one
-  // WITHOUT it means "never resolved" (#1496).
+  // WITHOUT it means "never resolved".
   if (typeof options.acceptanceCriteriaSource === "string") {
     artifact.scope.acceptanceCriteriaSource = options.acceptanceCriteriaSource;
   }
-  // ADD (#1140): an explicit posture marker distinguishing a full build-once
+  // An explicit posture marker distinguishing a full build-once
   // bundle from a thin briefing. Only set by the CLI (`--base` present → "base";
   // absent → "none"); programmatic `buildGateContext`/`writeGateContext` callers
   // that never pass `diffSource` leave the field out entirely, so this stays
@@ -1881,7 +1795,7 @@ export function buildGateContextArtifact(options) {
   if (typeof options.diffSource === "string" && options.diffSource.length > 0) {
     artifact.scope.diffSource = options.diffSource;
   }
-  // ADD (#895): the deterministic, neutral adjacent-code bundle. Only present
+  // The deterministic, neutral adjacent-code bundle. Only present
   // when the context-builder computed it — keeps the artifact shape backward
   // compatible for callers that build the artifact without an adjacency pass.
   if (options.adjacentCode && typeof options.adjacentCode === "object") {
@@ -1895,7 +1809,7 @@ export function buildGateContextArtifact(options) {
   if (typeof options.prefixMode === "string" && options.prefixMode.length > 0) {
     artifact.prefixMode = options.prefixMode;
   }
-  // Issue #1601: the fan-out dispatch plan — dispatch units (groups), the
+  // The fan-out dispatch plan — dispatch units (groups), the
   // bounded-concurrency wave plan, and the two knobs (maxAnglesPerGroup,
   // maxConcurrent). The conductor dispatches wave-by-wave from this plan
   // (see skills/docs/gate-review-sub-loop-contract.md). Only present when the
@@ -1910,7 +1824,7 @@ export function buildGateContextArtifact(options) {
 
 /**
  * Resolve the diff-derived scope fields shared by `buildGateContext` (the
- * programmatic `{ diff }` path) and the CLI `--base` path (#1140): the FULL
+ * programmatic `{ diff }` path) and the CLI `--base` path: the FULL
  * diff persisted to a deterministic `.diff` file, the parsed `changedFiles`,
  * and the neutral `adjacentCode` bundle built once from those changed files.
  * Extracted to a single function so both callers stay in sync — see the
@@ -1946,7 +1860,7 @@ async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFil
     }
   }
 
-  // Build the deterministic, neutral adjacent-code bundle ONCE (#895): for each
+  // Build the deterministic, neutral adjacent-code bundle ONCE: for each
   // changed source file, include its 1-hop import out-edges (files it imports)
   // and in-edges (files that import it), with size guards (skip
   // lockfiles/generated/binary/minified; cap per-file bytes; truncate the long
@@ -1993,41 +1907,34 @@ async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFil
  * @param {{ repoRoot: string, maxBuffer?: number }} opts — maxBuffer overridable for tests
  * @returns {{ nameStatusOutput: string, diffOutput: string }}
  */
+// Isolate diff BYTES from ambient global/system gitconfig so every reviewer is
+// seeded with an IDENTICAL neutral bundle (build-once). Shared verbatim with
+// check-size-budget.mjs so the two capture paths cannot drift; each caller keeps
+// its own runGit stdio and captured views. Why each flag:
+// color.ui=false + color.diff=false strip ANSI; core.pager=cat neutralizes a
+// configured pager; diff.noprefix=false + diff.mnemonicPrefix=false pin the a/ b/
+// prefixes (the --no-ext-diff flag is passed per-call below, NOT here, since
+// `-c diff.external=` would make git exec the empty string and die).
+// Cross-environment reproducibility: diff.algorithm=myers + diff.context=3
+// + core.abbrev=12 + core.autocrlf=false pin the diff body / hunk headers /
+// blob-id length / line endings; diff.renames=true additionally pins rename
+// DETECTION so a moved-and-edited file stays an R### pair in --name-status
+// instead of a D+A pair, keeping the SET of changed names stable across boxes.
+export const DIFF_ISOLATION_FLAGS = [
+  "-c", "color.ui=false",
+  "-c", "color.diff=false",
+  "-c", "core.pager=cat",
+  "-c", "diff.noprefix=false",
+  "-c", "diff.mnemonicPrefix=false",
+  "-c", "diff.renames=true",
+  "-c", "diff.algorithm=myers",
+  "-c", "diff.context=3",
+  "-c", "core.abbrev=12",
+  "-c", "core.autocrlf=false",
+];
 export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 1024 }) {
   const range = `${base}...HEAD`;
-  // Isolate the persisted .diff BYTES from ambient global/system gitconfig so
-  // every reviewer is seeded with an IDENTICAL neutral bundle (the whole point
-  // of build-once). Without this isolation, an operator/CI with
-  // color.diff=always, a configured diff.external/difftool, or non-default
-  // prefix settings would make scope.diffPath environment-dependent.
-  // color.ui=false + color.diff=false strip ANSI; core.pager=cat neutralizes a
-  // configured pager; diff.noprefix=false + diff.mnemonicPrefix=false pin the
-  // a/ b/ prefixes; the --no-ext-diff flag (below) disables any external diff
-  // driver (NOT `-c diff.external=`, which makes git try to exec the empty
-  // string and die).
-  // CROSS-environment reproducibility (#1168): the overrides above only pin
-  // bytes WITHIN a single run/machine — an operator/CI box with a contrary
-  // local diff.renames/diff.algorithm/diff.context/core.abbrev/core.autocrlf
-  // would still produce different bytes than another box on the SAME base and
-  // HEAD. diff.algorithm=myers + diff.context=3 + core.abbrev=12 +
-  // core.autocrlf=false pin the diff body/hunk headers/blob-id length/line
-  // endings. diff.renames=true additionally pins rename DETECTION itself: with
-  // it off, a moved-and-edited file shows as a straight D+A pair in
-  // `--name-status` instead of an R### pair, which changes the SET of names in
-  // scope.changedFiles (and therefore adjacentCode's membership) across
-  // environments, not just the diff body's bytes.
-  const isolation = [
-    "-c", "color.ui=false",
-    "-c", "color.diff=false",
-    "-c", "core.pager=cat",
-    "-c", "diff.noprefix=false",
-    "-c", "diff.mnemonicPrefix=false",
-    "-c", "diff.renames=true",
-    "-c", "diff.algorithm=myers",
-    "-c", "diff.context=3",
-    "-c", "core.abbrev=12",
-    "-c", "core.autocrlf=false",
-  ];
+  const isolation = DIFF_ISOLATION_FLAGS;
   const runGit = (args) => execFileSync("git", [...isolation, ...args], {
     cwd: repoRoot,
     encoding: "utf8",
@@ -2175,7 +2082,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // before.
   let prefixBytes;
   let prefixMode;
-  // AC3 (#1572): scope.<name> -> emitted companion-file path. Only built in
+  // AC3: scope.<name> -> emitted companion-file path. Only built in
   // self-rendered mode — under --prefix-file the CLI never resolves
   // prBody/issueBody, so a variant rendered here would carry the
   // absent-body sentinels even when the orchestrator's OWN recorded prefix
@@ -2206,7 +2113,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     }
     prefixMode = "file";
   } else {
-    // Issue #1853: the diff INLINED into the invariant prefix (and its
+    // The diff INLINED into the invariant prefix (and its
     // scoped "changed-files" variant below) is FILTERED — lockfiles,
     // generated/vendored trees, and any --diff-exclude-glob configured here
     // are dropped whole-file, so a lockfile-heavy diff no longer dominates
@@ -2288,52 +2195,35 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     ...buildGateContextArtifact({ ...options, angleScopes, prefixMode, briefingVariants }),
     loggedAt: new Date().toISOString(),
   };
-  // Write ORDER matters: the sibling briefing prefix goes first, then the
-  // volatile-tail and dispatch-plan artifacts, and the JSON completion marker
-  // LAST, so the marker's existence is the completion marker for the whole
-  // set. Downstream consumers (readGateContext, the reviewers' --context-path
-  // guard) key on the JSON — a prior write failure must not leave a
-  // complete-looking artifact pointing at a missing/stale sibling file: at an
-  // existing head, a partial re-write failure (volatile or plan write throws
-  // after the prefix already overwrote) would otherwise leave the PRIOR
-  // run's plan/volatile — describing the prior prefix bytes — surviving
-  // beside the freshly-overwritten prefix, with a sharedPrefixHash that no
-  // longer matches what's on disk. Only the JSON marker is unlinked up front
-  // (below), and only when the prefix bytes are actually changing — writeFile
-  // already truncates each sibling file in place, so a separate unlink buys
-  // nothing there: whenever the prefix bytes change, any partial failure
-  // below leaves the marker absent, which is all readGateContext needs to
-  // treat the set as incomplete. On the byte-identical rerun branch the
-  // marker is deliberately kept — a sibling failure there leaves a set whose
-  // surviving marker still describes the same prefix bytes, so no
-  // hash-vs-disk contradiction can arise.
+  // Write ORDER matters: prefix, then volatile-tail + dispatch-plan, then the
+  // JSON completion marker LAST — downstream consumers (readGateContext, the
+  // --context-path guard) key on the JSON marker's existence to tell a
+  // complete artifact set from a partial one (a re-write whose volatile/plan
+  // write throws after the prefix already overwrote must not leave a
+  // complete-looking set with a sharedPrefixHash that no longer matches disk).
+  // The marker is unlinked up front (below) only when the prefix bytes are
+  // actually changing — writeFile already truncates siblings in place, so any
+  // partial failure after that leaves the marker absent, exactly what
+  // readGateContext treats as incomplete. On a byte-identical rerun the marker
+  // is deliberately kept, since nothing about the prefix is changing.
   const fullPrefixPath = path.resolve(repoRoot, briefingPrefixPath);
   const fullVolatilePath = path.resolve(repoRoot, volatilePath);
   const fullRequestPlanPath = path.resolve(repoRoot, requestPlanPath);
   await mkdir(path.dirname(fullPrefixPath), { recursive: true });
-  // No-rebuild-mid-fan-out enforcement (#1537). The contract has always
-  // stated in prose that a conductor MUST NOT rebuild the context while
-  // reviewers for that head are still running: a same-head rebuild after a
-  // live PR/issue description edit yields DIFFERENT prefix bytes and splits one
-  // fan-out across two prefix hashes (every existing sentinel's recorded hash
-  // can never match the new bytes), stranding the round after the reviewer
-  // spend. #1626 made the detection ADVISORY (warn, never refuse) because the
-  // rebuild was treated as the sanctioned first step of rebuild-and-retire.
-  // #1537 ENFORCES the rule instead of relying on conductor discipline: a
-  // rebuild that would CHANGE the recorded prefix bytes while a fan-out for
-  // that head is IN FLIGHT (this gate's reviewer sentinels still live) is
-  // REFUSED, not warned. The refusal throws BEFORE any bytes are written, so
-  // the existing prefix and its in-flight reviewers are left intact.
+  // No-rebuild-mid-fan-out enforcement: a rebuild that would CHANGE the
+  // recorded prefix bytes while a fan-out for this head is IN FLIGHT (this
+  // gate's reviewer sentinels still live) is REFUSED, not warned — a same-head
+  // rebuild after a live PR/issue description edit yields DIFFERENT bytes and
+  // would strand every existing sentinel's hash mismatch after the reviewer
+  // spend. The refusal throws BEFORE any bytes are written, so the existing
+  // prefix and its in-flight reviewers are left intact.
   //
-  // The sanctioned rebuild path is retire-THEN-rebuild (retire-gate-round moves
-  // this gate's sentinels out of the live namespace first), so a rebuild after
-  // the round has retired — no live sentinels — proceeds unchanged (AC3: the
-  // frozen artifact of a finished pass is not the case being protected). An
-  // idempotent same-bytes rerun never reaches the byte-differ branch at all.
-  // The readError case (existing prefix exists but is unreadable, so the bytes
-  // cannot be compared) stays ADVISORY: #1537 refuses only the DETECTED
-  // mid-flight byte change, and an unreadable existing prefix cannot be proven
-  // to differ, so it is surfaced as a warning rather than a refusal.
+  // The sanctioned rebuild path is retire-THEN-rebuild (retire-gate-round
+  // moves sentinels out of the live namespace first): a rebuild after the
+  // round has retired — no live sentinels — proceeds unchanged, and an
+  // idempotent same-bytes rerun never reaches the byte-differ branch. An
+  // unreadable existing prefix (bytes cannot be compared) stays ADVISORY
+  // (warn) rather than refused, since it cannot be proven to differ.
   const retireCommand = `node scripts/github/retire-gate-round.mjs --gate ${options.gate} --head-sha <full sha> --reason "<why>" [--findings-dir <round artifacts dir>] [--repo <owner/name> --pr <N> | --no-findings-artifacts]`;
   let existingBytes = null;
   let readError = null;
@@ -2368,7 +2258,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     const priorPrefixHash = createHash("sha256").update(existingBytes).digest("hex");
     const newPrefixHash = createHash("sha256").update(prefixBytes).digest("hex");
     // Only a missing tmp/ dir means "no sentinels". Any other scan failure
-    // (EACCES, ENOTDIR, ...) could hide live sentinels, and #1537's
+    // (EACCES, ENOTDIR, ...) could hide live sentinels, and this
     // enforcement must not be bypassable by a broken scan — fail closed by
     // refusing the rebuild (the operator can fix the scan or retire first).
     if (scanError !== null) {
@@ -2384,37 +2274,26 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   }
   const prefixHash = createHash("sha256").update(prefixBytes).digest("hex");
 
-  // Request plan (#1474): angles partition by concrete resolved model via
+  // Request plan: angles partition by concrete resolved model via
   // resolveRoleModel(config, { role: angle, harness, kind: "angle" }) — the
   // SAME dispatch-time resolution a fan-out actually dispatches on (config
-  // override → per-angle tier → built-in tier → null=inherit), harness- and
-  // tier-aware, unlike resolveReviewerRole's `.model` (which reads only a
-  // bare per-angle override and ignores `tier`, so it can merge two angles
-  // that dispatch on different tiers into one "inherit" bucket, or split two
-  // angles that dispatch on the same tier into two groups). The harness
-  // defaults to "claude"; pass options.harness to report the plan for a
-  // different dispatch harness. Without a config, every angle honestly
-  // resolves to inherit (never guessed) — a plan written this way is not
-  // evidence of dispatch grouping, only of "no config was consulted."
+  // override → per-angle tier → built-in tier → null=inherit), unlike
+  // resolveReviewerRole's `.model`, which ignores `tier` and can merge/split
+  // groups wrongly. Harness defaults to "claude" (override via
+  // options.harness). Without a config every angle resolves to inherit
+  // (never guessed), so such a plan is evidence only of "no config consulted."
   //
-  // The angle universe is restricted to the PENDING set: options.fanoutDispatch
-  // (set by both the CLI main() and buildGateContext, from the same
-  // completedAngles/carriedAngles resolveFanoutDispatch already excludes from
-  // requiredReviewers/pendingGroups) when present, else the full resolved
-  // angle set — a bare programmatic writeGateContext call with no
-  // fanoutDispatch has no pending/completed distinction to restrict by.
-  // Names on both sides of the intersection are trimmed the same way
-  // (validateAngleList already trimmed options.angles above): a caller that
-  // built fanoutDispatch.pendingGroups from an untrimmed angle list must still
-  // match the trimmed universe here, or a whitespace-padded angle silently
-  // drops out of the plan while the round still dispatches it.
+  // The angle universe is restricted to the PENDING set (options.fanoutDispatch,
+  // when present, else the full resolved angle set — a bare writeGateContext
+  // call with no fanoutDispatch has no pending/completed distinction to
+  // restrict by). Both sides of the intersection are trimmed the same way, or
+  // a whitespace-padded angle would silently drop out of the plan while the
+  // round still dispatches it.
   //
-  // Built — and validated, buildAngleRequestGroups/buildReviewDispatchPlan
-  // throw on a bad angle/model/capability shape — BEFORE any destructive
-  // write below: prefixHash only needs prefixBytes, already in hand, so a
-  // config-reachable bad model spelling (e.g. the reserved "inherit" literal)
-  // fails closed here, before the stale-sibling unlink or any file touches
-  // disk.
+  // Built — and validated (buildAngleRequestGroups/buildReviewDispatchPlan
+  // throw on a bad angle/model/capability shape) — BEFORE any destructive
+  // write below, so a config-reachable bad model spelling fails closed here
+  // rather than after the stale-sibling unlink.
   const harness = options.harness ?? "claude";
   const pendingAngleNames = options.fanoutDispatch?.pendingGroups
     ? new Set(options.fanoutDispatch.pendingGroups.flatMap((g) => g.angles).map((a) => String(a).trim()))
@@ -2443,8 +2322,8 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     angleModels,
     // sha256:-prefixed, matching requestPrefixFingerprint's own format (one
     // format for both hash fields in this artifact) — distinct from the
-    // bare-hex `prefixHash` this function returns/uses for the #1537
-    // sentinel-hash comparisons above, which is an independent, older
+    // bare-hex `prefixHash` this function returns/uses for the
+    // no-rebuild-mid-fan-out enforcement's sentinel-hash comparisons above, which is an independent, older
     // contract this artifact does not own.
     sharedPrefixHash: `sha256:${prefixHash}`,
     blockBoundaries: REQUEST_PLAN_BLOCK_BOUNDARIES,
@@ -2459,40 +2338,22 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     capabilities,
   });
 
-  // Delete the stale JSON completion marker BEFORE overwriting the prefix. A
-  // re-write at an existing head must never leave it surviving beside
-  // freshly-overwritten prefix bytes (with a stale volatile/plan sibling
-  // still describing the PRIOR prefix bytes) if a write further down this
-  // function throws. Unlinking the marker first means any partial failure
-  // leaves the artifact set incomplete (the JSON marker absent, exactly what
-  // readGateContext already treats as "no artifact") rather than complete-looking with a
-  // sharedPrefixHash that contradicts the prefix actually on disk. Force-mode
-  // rm is a no-op when the marker never existed (first-ever write).
-  //
-  // Skipped entirely when this rebuild is a byte-identical rerun (existingBytes
-  // already proven equal to prefixBytes above) — the mid-fan-out enforcement
-  // above deliberately permits that rerun to proceed, and deleting the marker
-  // here would open a fail-closed window for a concurrent reviewer's
-  // --context-path check even though nothing about the prefix is actually
-  // changing.
+  // Delete the stale JSON marker before overwriting the prefix (see the
+  // write-order note above): first-ever write is a no-op (force rm). Skipped
+  // on a byte-identical rerun — deleting it there would open a fail-closed
+  // window for a concurrent reviewer's --context-path check for no reason,
+  // since nothing about the prefix is actually changing.
   const markerUnchanged = existingBytes !== null && existingBytes.equals(prefixBytes);
   if (!markerUnchanged) {
     await rm(fullPath, { force: true });
   }
   await writeFile(fullPrefixPath, prefixBytes);
 
-  // Volatile tail (#1474/#1468-B): physically separate from the stable prefix
-  // above — writing it never touches the prefix's already-written bytes.
+  // Volatile tail: physically separate from the stable prefix above.
   // acceptanceCriteria is deliberately NOT threaded here — see
-  // {@link renderBriefingVolatile}'s doc comment for the rule (it reaches the
-  // stable prefix via issueRef, so it is not volatile-tail material).
-  //
-  // No separate unlink: writeFile truncates and overwrites this file in
-  // place, so a failure here happens only after the prefix write above has
-  // already landed. When the prefix bytes were changing, the JSON marker is
-  // already gone (or not yet written), signalling the set as incomplete; on
-  // the byte-identical rerun branch the kept marker still describes the same
-  // prefix bytes, so a failure here cannot create a contradiction.
+  // {@link renderBriefingVolatile} for the rule. No separate unlink: writeFile
+  // overwrites in place, so a failure here happens only after the prefix
+  // write above already landed, consistent with the marker-absence rule above.
   const volatileText = renderBriefingVolatile({
     gate: options.gate,
     headSha: options.headSha,
@@ -2548,7 +2409,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  * @param {string|null} [input.prBody] — PR description text, inlined into the rendered briefing prefix
  * @param {string|null} [input.issueBody] — linked-issue body text, inlined under `acceptanceCriteria`'s label; omitted when absent
  * @param {number} [input.maxFileBytes] — per-file cap for the adjacent-code bundle (default DEFAULT_MAX_FILE_BYTES)
- * @param {number|null} [input.availableReviewers] — harness remaining reviewer budget for the #1507 preflight; null/omitted = unexposed (proceed, no shortfall proven)
+ * @param {number|null} [input.availableReviewers] — harness remaining reviewer budget for the preflight; null/omitted = unexposed (proceed, no shortfall proven)
  * @param {string[]|null} [input.carriedAngles] — angle names the fail-closed Phase 1.2 carry-forward seam (resolve-angle-carry-forward.mjs) has proven carried from a prior clean head; excluded from the preflight's `requiredReviewers`/`pendingGroups` alongside `completedAngles`; null/omitted = no carried angles known
  * @param {string} [input.tmpRoot]
  * @param {{ repoRoot?: string }} [opts]
@@ -2558,22 +2419,18 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  *   "file" mode is CLI-only (main()'s `--prefix-file` flag).
  *
  * The artifact additionally carries a deterministic, neutral `adjacentCode`
- * bundle (#895) when changed files are present: 1-hop import in/out-edges of the
+ * bundle when changed files are present: 1-hop import in/out-edges of the
  * changed files with size guards + a stripped/truncated manifest. Reviewers are
  * seeded with this verbatim instead of re-deriving the diff + adjacent code.
  */
-// #1866 review-gate coverage guard: hasAcChecklist must reflect "an AC
-// checklist exists", independent of the Non-goals floor the predicate also
-// enforces, so a PR body with a real AC checklist but no Non-goals still keeps
-// the acceptance-criteria angle. #1951: this runs on the PR body, which carries
-// list-form AC/DoD checklists (never a matrix), so read `acItems` directly
-// rather than the artifact source — the matrix floor is an issue-side concern.
+// Review-gate coverage guard: hasAcChecklist reflects "an AC checklist
+// exists" (acItems.length > 0), independent of the Non-goals floor the
+// refinement predicate also enforces — a PR body with a real AC checklist but
+// no Non-goals still keeps the acceptance-criteria angle. Reads `acItems`
+// directly since the PR body carries only list-form AC/DoD checklists, never
+// a matrix; the matrix floor is an issue-side concern.
 function detectRefinementHasAcChecklist(prBody) {
   const artifact = detectIssueRefinementArtifact({ body: prBody });
-  // An AC checklist exists when the body carries acceptance-criteria checklist
-  // items (`acItems`). A missing_explicit_non_goals finding does NOT clear
-  // acItems, so a PR body with a real AC checklist but no Non-goals still
-  // reports true.
   return artifact.acItems.length > 0;
 }
 
@@ -2597,13 +2454,10 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
         // not be coerced to false, so it fails closed (keeps
         // acceptance-criteria) rather than fail-open (drops it).
         hasClosingIssue: input.hasClosingIssue,
-        // #1866 review-gate coverage guard: hasAcChecklist must reflect "an AC
-        // checklist exists", not "the full refinement predicate passes". Since
-        // #1866 the predicate ALSO requires an explicit Non-goals section, so a
-        // bare .hasACs read would drop the acceptance-criteria review angle for
-        // an issue-less PR whose body has a real AC checklist but no Non-goals
-        // (fail-open regression). An artifact body whose ONLY miss is the
-        // missing_explicit_non_goals finding still carries its AC checklist.
+        // hasAcChecklist reflects "AC checklist exists" (see
+        // detectRefinementHasAcChecklist above) — not "review predicate
+        // passes" — so an issue-less PR with a real checklist but no
+        // Non-goals still keeps the acceptance-criteria angle.
         hasAcChecklist: detectRefinementHasAcChecklist(input.prBody ?? ""),
       })
     : await resolveGateAnglesDynamic(input.config, configKey, {
@@ -2612,7 +2466,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
       });
   const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
 
-  // AC3 (#1572): each resolved angle's declared surface scope, straight from
+  // AC3: each resolved angle's declared surface scope, straight from
   // config (resolveGateAngleScope fails open to "full" for an angle with no
   // entry/scope/enabled entry).
   const angleScopes = Object.fromEntries(
@@ -2623,16 +2477,16 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
 
   // Diff-derived scope: persisted FULL diff (scope.diffPath), parsed
   // scope.changedFiles, and the neutral adjacentCode bundle, all built ONCE by
-  // the shared resolveDiffScope helper (also used by the CLI --base path, #1140).
+  // the shared resolveDiffScope helper (also used by the CLI --base path).
   const { diffPath, changedFiles, adjacentCode, diffOutput } = await resolveDiffScope(
     { diff: input.diff, repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot, maxFileBytes: input.maxFileBytes },
     { repoRoot },
   );
 
-  // Issue #1601: resolve the fan-out dispatch plan (groups + wave plan +
+  // Resolve the fan-out dispatch plan (groups + wave plan +
   // knobs) so the artifact carries it for the conductor to dispatch
   // wave-by-wave. Computed from the same config + resolved angles.
-  // #1507 AC3: same-head skip-completed resume — angles with a clean artifact
+  // AC3: same-head skip-completed resume — angles with a clean artifact
   // already stamped at this head are excluded from `preflight.requiredReviewers`
   // and from `pendingGroups`, so a later session dispatches only the shortfall.
   const completedAngles = input.completedAngles ?? await readCompletedAnglesForHead({ repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot }, { repoRoot });
@@ -2755,7 +2609,7 @@ export function assertWorktreeAtHead(headSha, { repoRoot }) {
  * description, every issue the PR closes, and each issue's body — from
  * GitHub, so a caller that simply omits the flags can never seed every
  * fan-out reviewer with the claim that the PR has no description and no
- * acceptance criteria (#1496/#1511). Explicit flags win: only fields still
+ * acceptance criteria. Explicit flags win: only fields still
  * unset are fetched, and a caller that passes all three never touches the
  * network.
  *
@@ -2777,7 +2631,7 @@ export function assertWorktreeAtHead(headSha, { repoRoot }) {
  * references are real) and classified via `detectIssueRefinementArtifact`
  * (the same detector the enqueue gate uses) so `acceptanceCriteriaSource`
  * distinguishes "linked issue carries a real refinement artifact" from
- * "linked issue is prose-only" (AC4 of #1496) — the latter stamped
+ * "linked issue is prose-only" (AC4) — the latter stamped
  * `"linked-issue-unrefined"`.
  *
  * Fails closed with a named error when the PR read fails. An unresolvable body
@@ -2823,8 +2677,8 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
   if (needsBody) options.prBody = typeof pr.body === "string" ? pr.body : "";
 
   // Recorded whenever `pr` was actually fetched (regardless of the acProvided
-  // short-circuit below), for the `review` gate's own angle resolution (#1808
-  // AC2): whether this PR closes an issue at all, independent of whether the
+  // short-circuit below), for the `review` gate's own angle resolution
+  // (AC2): whether this PR closes an issue at all, independent of whether the
   // caller also supplied an --acceptance-criteria pointer.
   const closingNumbers = resolveLinkedIssuesFromPr(pr);
   options.hasClosingIssue = closingNumbers.length > 0;
@@ -2859,7 +2713,7 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
     const key = `${repo.toLowerCase()}#${entry.number}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    // Same-repo refs render bare (`#42`). The comparison is case-insensitive
+    // Same-repo refs render bare (e.g. `#N`). The comparison is case-insensitive
     // because `--repo Owner/Repo` and the API's `owner/repo` name one repo.
     const sameRepo = repo.toLowerCase() === options.repo.toLowerCase();
     targets.push({ repo, number: entry.number, label: sameRepo ? `#${entry.number}` : `${repo}#${entry.number}` });
@@ -2882,15 +2736,14 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
         );
       }
       const body = typeof issue.body === "string" ? issue.body : "";
-      // "gives a reviewer real criteria to read" — true when the linked issue is
-      // refined (`hasACs`: a valid AC→DoD matrix + Non-goals, or a resolvable
-      // linked refinement doc + Non-goals) OR simply carries AC content
-      // (`acItems`, e.g. a pre-#1951 AC-checklist issue). #1951/Copilot review:
-      // include `hasACs` so a linked-doc-refined issue — which intentionally
-      // returns `acItems: []` (its criteria live in the doc) — is not
-      // misclassified as unrefined; keep `acItems` so a checklist-bearing issue
-      // still counts. This is "provides criteria", NOT the refinement floor the
-      // draft gate enforces separately.
+      // "gives a reviewer real criteria to read" — true when the linked issue
+      // is refined (`hasACs`: a valid AC→DoD matrix + Non-goals, or a
+      // resolvable linked refinement doc + Non-goals) OR simply carries AC
+      // content (`acItems`). Both are checked: a linked-doc-refined
+      // issue intentionally returns `acItems: []` (criteria live in the doc),
+      // so `acItems` alone would misclassify it as unrefined. This is
+      // "provides criteria", NOT the refinement floor the draft gate enforces
+      // separately.
       const artifact = detectIssueRefinementArtifact({ body, issueNumber: number });
       if (artifact.hasACs || artifact.acItems.length > 0) anyRefined = true;
       bodies.push({ label, body });
@@ -2911,9 +2764,9 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
   } else {
     // Caller supplied the issue body text directly (without also supplying
     // --acceptance-criteria) — classify it as given rather than making a
-    // network call whose result would be discarded. #1951/Copilot review: use
-    // `hasACs || acItems.length` (same predicate as the multi-issue loop above)
-    // so a linked-doc-refined body — `hasACs` true, `acItems: []` — is not
+    // network call whose result would be discarded. Uses `hasACs ||
+    // acItems.length` (same predicate as the multi-issue loop above) so
+    // a linked-doc-refined body (`hasACs` true, `acItems: []`) is not
     // misclassified as linked-issue-unrefined.
     const suppliedArtifact = detectIssueRefinementArtifact({ body: options.issueBody });
     options.acceptanceCriteriaSource = suppliedArtifact.hasACs || suppliedArtifact.acItems.length > 0
@@ -2947,7 +2800,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
   try {
     // Resolve the spec-of-record (PR body, linked issue(s) + their bodies)
     // BEFORE any diff work: a bundle that cannot state the spec truthfully must
-    // not be written at all, and failing here costs nothing (#1496/#1511).
+    // not be written at all, and failing here costs nothing.
     // Skipped under --prefix-file: the recorded prefix bytes are the supplied
     // file's EXACT bytes (writeGateContext never renders prBody/issueBody into
     // them in that mode), so a GitHub read here would be spent resolving text
@@ -2956,7 +2809,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     if (!options.prefixFile) {
       await resolvePrSpecContext(options, { run });
     }
-    // AC3 (#1140): the CLI only produces the full build-once bundle
+    // AC3: the CLI only produces the full build-once bundle
     // (scope.diffPath + scope.changedFiles + adjacentCode) when it has a
     // resolvable diff source. --base is OPTIONAL rather than required — making
     // it required would break any existing caller that only ever passed
@@ -3096,12 +2949,12 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       options.angleScopes = Object.fromEntries(
         options.angles.map((name) => [name, resolveGateAngleScope(scopeConfig, scopeConfigKey, name)]),
       );
-      // Issue #1601: resolve the fan-out dispatch plan (groups + wave plan +
+      // Resolve the fan-out dispatch plan (groups + wave plan +
       // knobs) from the same loaded config + resolved angles + gate:full label,
       // so the artifact carries the wave plan the conductor dispatches
       // wave-by-wave. Independent of --angles vs dynamic resolution and of
       // --prefix-file (config is a local file read).
-      // #1507 AC3: same-head skip-completed resume (angles with a clean artifact
+      // AC3: same-head skip-completed resume (angles with a clean artifact
       // at this head are excluded from the required count + pending plan).
       const completedAngles = await readCompletedAnglesForHead({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" }, { repoRoot });
       options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles, carriedAngles: options.carriedAngles });

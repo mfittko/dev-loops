@@ -2,32 +2,24 @@
 /**
  * build-adjacent-bundle.mjs — deterministic, neutral adjacent-code bundle builder.
  *
- * Part of issue #895 (build-once neutral context bundle for the gate fan-out).
- * The gate context-builder runs ONCE and emits a generous, NEUTRAL bundle that
- * every independent reviewer is seeded with verbatim — instead of every reviewer
- * re-deriving the diff + adjacent code from scratch (the actual N× waste this
- * fixes). The primary win is WORK-DEDUP (build once vs. N× re-derivation);
- * prompt-cache of the shared prefix is an opportunistic bonus.
+ * Runs ONCE and emits a NEUTRAL bundle every independent gate reviewer
+ * is seeded with verbatim, instead of each reviewer re-deriving the diff +
+ * adjacent code from scratch. Deterministic because it's a script, not an
+ * agent: identical (head + changed files) input always produces an identical
+ * bundle (sorted file list, stable JSON shape) with no editorializing.
  *
- * Neutrality + determinism are guaranteed because this is a SCRIPT, not an
- * agent: it cannot editorialize, and identical (head + changed files) input
- * always produces an identical bundle (sorted file list, stable JSON shape).
+ * Bundle contents: for each changed JS/.mjs/.cjs file, the files it imports
+ * (1-hop out-edges) and the files that import it (1-hop in-edges, via a
+ * repo-wide import scan).
  *
- * Bundle contents: for each changed JS/.mjs/.cjs file we include
- *   - the files it imports (1-hop out-edges), and
- *   - the files that import it (1-hop in-edges, via a repo-wide import scan)
- * resolved against the repo (deterministic 1-hop import/require graph).
+ * Size guards (record, never silently drop): lockfiles/generated trees/binary/
+ * minified files are recorded in `stripped` with a reason; over-cap files
+ * (default ~48KB) are truncated and recorded in `truncated` with byte counts.
  *
- * Size guards (record, do not silently drop):
- *   - skip lockfiles (bun.lock / package-lock.json / *-lock.yaml), generated trees
- *     (.claude/, dist/, lib/, node_modules/, coverage/), binary, and minified
- *     files (*.min.*) — recorded in `stripped` with a reason.
- *   - cap per-file bytes (default ~48KB) and truncate the long tail —
- *     recorded in `truncated` with original/included byte counts.
- *
- * The output is purely structural adjacency; it does NOT carry any opinion,
- * verdict, or main-agent state, so seeding a reviewer with it is the INTENDED
- * neutral seed (RFC-2), not contamination.
+ * Output is purely structural adjacency — no opinion, verdict, or main-agent
+ * state — so seeding a reviewer with it is the intended neutral seed (RFC-2),
+ * not contamination. Output shape and role/relatedTo semantics are documented
+ * on {@link buildAdjacentBundle} below.
  */
 import { open, readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";

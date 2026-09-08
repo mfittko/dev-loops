@@ -1,4 +1,6 @@
 import path from "node:path";
+import os from "node:os";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 
 import {
   captureStream,
@@ -11,6 +13,20 @@ import { runCli } from "../../scripts/loop/detect-copilot-loop-state.mjs";
 import { formatCliError } from "../../scripts/_core-helpers.mjs";
 
 const scriptPath = path.resolve("scripts/loop/detect-copilot-loop-state.mjs");
+
+// Config-hermeticity (issue #2055): resolve the Copilot round cap from a fixture
+// repoRoot that mirrors the real .devloops with maxCopilotRounds pinned to 2,
+// instead of the ambient .devloops (the repo pins maxCopilotRounds to 2 for
+// test isolation). Assertions are
+// unchanged; the suites own their cap instead of inheriting the shipped one.
+// ponytail: one small tmp dir per test run, no teardown hook here — the OS reaps
+// os.tmpdir(); add cleanup if this helper ever grows a lifecycle.
+const capFixtureRepoRoot = mkdtempSync(path.join(os.tmpdir(), "dev-loops-detect-cap-fixture-"));
+writeFileSync(
+  path.join(capFixtureRepoRoot, ".devloops"),
+  readFileSync(path.resolve(".devloops"), "utf8").replace(/maxCopilotRounds: *\d+/, "maxCopilotRounds: 2"),
+  "utf8",
+);
 
 export const fixturePath = path.resolve(
   "packages/core/test/fixtures/github/review-threads/mixed-threads.json",
@@ -34,7 +50,7 @@ export const runNode = async (args = [], options = {}) => {
       env,
       ghCommand: "gh",
       runChild,
-      repoRoot: options.cwd ?? process.cwd(),
+      repoRoot: options.cwd ?? capFixtureRepoRoot,
     });
     return { code: process.exitCode ?? 0, stdout: stdout.get(), stderr: stderr.get() };
   } catch (error) {

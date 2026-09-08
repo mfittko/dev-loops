@@ -65,10 +65,9 @@ const KNOWN_GATES = new Set(GATE_NAMES);
 const normalizeGate = normalizeGateShared;
 const normalizeHeadSha = normalizeHeadShaShared;
 
-// Validate via the centralized repo-slug validator shared by sibling GitHub
-// scripts (parseRepoSlug). It enforces owner/name structure and rejects unsafe
-// segments (".", "..", slashes, whitespace); we re-throw as a parseError so the
-// CLI usage banner is preserved.
+// parseRepoSlug enforces owner/name structure and rejects unsafe segments
+// (".", "..", slashes, whitespace); re-thrown as parseError to keep the CLI
+// usage banner.
 function validateRepo(repo) {
   try {
     parseRepoSlug(repo);
@@ -78,8 +77,7 @@ function validateRepo(repo) {
   return repo;
 }
 
-// Validate + normalize a parsed --findings / --findings-file JSON array. Shared
-// by both flags so they carry identical validation.
+// Shared by --findings and --findings-file so both get identical validation.
 function validateFindingsArray(parsed, flagLabel) {
   if (!Array.isArray(parsed)) {
     throw parseError(`${flagLabel} must be a JSON array`);
@@ -109,21 +107,13 @@ function validateFindingsArray(parsed, flagLabel) {
     if ("disposition" in f && typeof f.disposition === "string" && f.disposition.trim().length > 0) {
       entry.disposition = f.disposition.trim();
     } else if (isDefaultDeferrableSeverity(f.severity)) {
-      // Routes through the SAME shared rule (deriveDisposition,
-      // @dev-loops/core/loop/gate-fanin) every producer uses: a LOCATABLE
-      // question (hasLocatableShape) defaults to "needs-answer", non-locatable
-      // to "deferred" — see that function's own doc for the full rule. This
-      // shape carries no `line` field at all (see USAGE above), so a question
-      // here can never be proven locatable and always resolves to "deferred".
-      // isDefaultDeferrableSeverity (gate-fanin) is the shared guard this
-      // producer and write-gate-findings-log.mjs's own validator both route
-      // through, so the two can never restate it out of sync.
+      // Routes through the shared deriveDisposition rule (gate-fanin) also used
+      // by write-gate-findings-log.mjs. This shape has no `line` field, so it
+      // can never be proven locatable and always resolves to "deferred".
       entry.disposition = deriveDisposition(f.severity, { locatable: hasLocatableShape(entry) });
     }
-    // Preserve the judge's relevance-based dispositions (#1525) so the
-    // rendered findings comment shows what was consciously not acted on and
-    // why — without this the judge suffix in renderFindingsCommentBody is
-    // unreachable dead code.
+    // Preserve the judge's relevance-based dispositions: without this,
+    // the judge suffix in renderFindingsCommentBody is unreachable dead code.
     if (typeof f.judgeDisposition === "string" && f.judgeDisposition.trim().length > 0) {
       entry.judgeDisposition = f.judgeDisposition.trim();
     }
@@ -144,11 +134,8 @@ export function parseFindings(raw) {
   return validateFindingsArray(parsed, "--findings");
 }
 
-// Resolve the findings array from either --findings (inline JSON) or
-// --findings-file (a path to a file containing the same JSON array) —
-// mutually exclusive, identical validation either way. Shared plumbing lives
-// in _findings-input.mjs; this file's own validateFindingsArray is the
-// injected element validator.
+// Shared plumbing lives in _findings-input.mjs; validateFindingsArray above is
+// the injected element validator.
 function resolveFindings(options) {
   return resolveFindingsInput(options, { parseError, validate: validateFindingsArray });
 }
@@ -239,35 +226,25 @@ export function parsePostGateFindingsCliArgs(argv) {
   return options;
 }
 
-// Hidden marker keyed by GATE ONLY. There is exactly one findings comment per
-// gate, updated in place each run. The marker deliberately does NOT include the
-// head SHA: --head-sha accepts any 7-64 hex prefix, so keying on its literal
-// value would let a different prefix length (or the full SHA) for the same head
-// miss the marker and post a duplicate. The reviewed head is still shown in the
-// comment body for context. The HTML comment is not rendered by GitHub but is
-// matched on the comment body.
+// Hidden marker keyed by GATE ONLY, not head SHA: --head-sha accepts any 7-64
+// hex prefix, so keying on its literal value would let a different prefix
+// length for the same head miss the marker and post a duplicate. There is
+// exactly one findings comment per gate, updated in place each run; the
+// reviewed head is still shown in the body for context. The HTML comment is
+// not rendered by GitHub but is matched on the raw comment body.
 export function buildFindingsMarker({ gate }) {
   return `<!-- dev-loops:gate-findings gate=${gate} -->`;
 }
 
 // Sanitize free text rendered INSIDE an inline backtick code span (`angle`,
-// file refs). A code span's content is inert: CommonMark parses a code span
-// BEFORE link/image/HTML syntax, so entity-encoding those constructs here
-// would render the entity's own characters as visible text instead of the
-// value's literal ones (`app/[id]/page.tsx` would render as
-// `app/&#91;id]/page.tsx` rather than the legible original) — the code span
-// already neutralizes the markup on its own, with no help needed. Only two
-// transforms are still required: strip any literal backtick (it would
-// prematurely close the code span, breaking out into raw Markdown for the
-// remainder of the list item — backticks are never meaningful in an angle
-// label or a file path) and collapse embedded whitespace/newlines
-// (LLM-generated free text often carries them, which would otherwise split a
-// single Markdown list item across lines). This repo's own machine-artifact
-// marker delimiters (`<!--` / `-->`, see buildFindingsMarker) are still
-// entity-encoded despite the code span's inertness to markdown:
-// findMarkedComment matches the RAW comment body for a line starting with the
-// marker BEFORE any markdown rendering happens, so a code-span value that
-// lands as the first token on its own line must never be able to forge one.
+// file refs). A code span's content is inert to markdown/HTML (CommonMark
+// parses it before link/image/HTML syntax), so only two transforms are still
+// needed: strip a literal backtick (would prematurely close the span) and
+// collapse embedded whitespace/newlines (would split the Markdown list item).
+// The marker delimiters (`<!--`/`-->`) are still entity-encoded despite that
+// inertness: findMarkedComment matches the RAW comment body for a line
+// starting with the marker BEFORE markdown rendering, so a code-span value
+// landing as the first token on its own line must never be able to forge one.
 export function sanitizeCodeSpan(value) {
   return String(value)
     .replace(/`/g, "")
@@ -277,30 +254,20 @@ export function sanitizeCodeSpan(value) {
     .trim();
 }
 
-// Sanitize free text rendered as bare prose (`summary`, `disposition`): NOT
-// wrapped in a code span, so — unlike sanitizeCodeSpan — it is not already
-// inert to markdown/HTML. Composes the code-span-safe base (backtick strip, so
-// a stray backtick here can never shift CommonMark's left-to-right backtick
-// pairing and unwrap a LATER field's own code span on the same rendered line;
-// whitespace collapse; marker-delimiter encoding) PLUS the neutralization bare
-// prose still needs: any other raw `<` (a markdown-to-HTML renderer would
-// otherwise pass a raw tag through live) and the markdown link/image bracket
-// forms `[text](url)` / `![alt](url)` (a live clickable link, or an
-// auto-loaded remote image and its read-receipt/IP-leak risk, that a finding
-// field never asked for). Free text comes from scoped-review agents or
-// arbitrary --findings/--findings-json producer input, so every one of these
-// is untrusted. Every neutralization here is an HTML ENTITY, never a
-// backslash-escape: an entity has no failure mode where a value's own literal
-// character absorbs the escape and turns it into something live again.
-// upsert-checkpoint-verdict.mjs's sanitizeStructuredInline now imports this
-// exact function instead of keeping its own copy.
+// Sanitize free text rendered as bare prose (`summary`, `disposition`): unlike
+// sanitizeCodeSpan, it is not already inert to markdown/HTML. Composes the
+// code-span-safe base plus the neutralization bare prose still needs: raw `<`
+// (would pass a live tag through) and markdown link/image brackets
+// `[text](url)` / `![alt](url)` (a live link, or an auto-loaded remote image
+// and its read-receipt/IP-leak risk). Free text is untrusted producer input.
+// Every neutralization is an HTML entity, never a backslash-escape, so a
+// value's own literal character can never absorb the escape and turn live
+// again. upsert-checkpoint-verdict.mjs imports this exact function.
 export function sanitizeInline(value) {
   return sanitizeCodeSpan(value)
     .replace(/</g, "&lt;")
-    // Neutralize a plain link's opening bracket (any `[` NOT already part of an
-    // image's `![`, handled next) before the image-form pass below, so an
-    // image's `[` (still preceded by a literal `!` here) is told apart from a
-    // plain link's `[`.
+    // Handle plain `[` (not part of `![`) before the image-form pass below,
+    // so an image's `[` is told apart from a plain link's `[`.
     .replace(/(?<!!)\[/g, "&#91;")
     .replace(/!\[/g, "!&#91;");
 }
@@ -310,11 +277,10 @@ export function sanitizeInline(value) {
 // number rather than a second hand-copied literal.
 export const GITHUB_COMMENT_MAX_CHARS = 65536;
 
-// This is the module's ONLY render entry point (renderBoundedFindingsCommentBody
-// below composes it rather than duplicating a render path), and it runs the
-// SAME validateAndSanitizeRenderInputs seam every caller — bounded or direct —
-// goes through: a value newly added to what gets rendered can never bypass
-// validation by calling this export directly instead of the bounded one.
+// This module's ONLY render entry point; renderBoundedFindingsCommentBody
+// composes it rather than duplicating a render path. Both run the same
+// validateAndSanitizeRenderInputs seam, so a new renderable value can never
+// bypass validation via either entry point.
 export function renderFindingsCommentBody({ gate, headSha, findings, omittedCounts = [], maxChars = GITHUB_COMMENT_MAX_CHARS }) {
   ({ gate, headSha } = validateAndSanitizeRenderInputs({
     gate, headSha, findings, omittedCounts, maxChars, entryPoint: "renderFindingsCommentBody",
@@ -333,10 +299,9 @@ export function renderFindingsCommentBody({ gate, headSha, findings, omittedCoun
   if (omittedCounts.length > 0) {
     const omittedTotal = omittedCounts.reduce((sum, { count }) => sum + count, 0);
     const breakdown = omittedCounts.map(({ severity, count }) => `${count} ${SEVERITY_LABELS[severity]}`).join(", ");
-    // Names the bound actually applied (maxChars), not the GitHub default
-    // constant — a caller that passes a non-default maxChars (e.g. a test, or
-    // a future stricter bound) must never post an explanation that disagrees
-    // with the limit it was actually rendered against.
+    // Names the bound actually applied (maxChars), never the GitHub default
+    // constant, so the posted explanation can never disagree with the limit
+    // it was actually rendered against.
     lines.push(
       `**Note:** ${omittedTotal} finding(s) omitted from this comment (${breakdown}) — the full round exceeded this comment's ${maxChars}-character limit. This gate round's disposition ledger (written by write-gate-findings-log.mjs) always carries the complete, unbounded record.`,
       "",
@@ -355,17 +320,14 @@ export function renderFindingsCommentBody({ gate, headSha, findings, omittedCoun
     grouped.set(sev, []);
   }
   for (const finding of findings) {
-    // Normalize defensively: this function's real caller (resolveFindings /
-    // validateFindingsArray, above) always normalizes first, but a legacy
-    // severity spelling reaching this grouping loop unnormalized must still
-    // render under its canonical group rather than throw.
+    // Normalize defensively: a legacy severity spelling reaching this loop
+    // unnormalized must still render under its canonical group, not throw.
     grouped.get(normalizeSeverity(finding.severity)).push(finding);
   }
   for (const sev of SEVERITY_ORDER) {
     const group = grouped.get(sev);
-    // Skip an empty severity group entirely: without this, every severity
-    // that has zero findings for this round would still render its own
-    // "#### <Label> (0)" heading with nothing under it.
+    // Skip empty groups: otherwise a zero-finding severity would still
+    // render its own "#### <Label> (0)" heading with nothing under it.
     if (group.length === 0) continue;
     lines.push(`#### ${SEVERITY_LABELS[sev]} (${group.length})`);
     for (const finding of group) {
@@ -373,23 +335,19 @@ export function renderFindingsCommentBody({ gate, headSha, findings, omittedCoun
       // the single-line Markdown list item.
       const summary = sanitizeInline(finding.summary);
       const dispositionSuffix = finding.disposition ? ` — _${sanitizeInline(finding.disposition)}_` : "";
-      // Judge relevance-based disposition (#1525) — shows what was consciously
-      // not acted on and why, alongside the severity-derived disposition.
+      // Judge relevance-based disposition, alongside the
+      // severity-derived one.
       const judgeSuffix = finding.judgeDisposition
         ? ` — judge: _${sanitizeInline(finding.judgeDisposition)}_`
         : "";
-      // angle is a code/label literal → backticks; summary is prose. angle is
-      // free text from a scoped-review agent and is rendered inside an inline
-      // code span, so it must be sanitized too: an embedded backtick or newline
-      // would otherwise break the code span (markdown injection) or split the
-      // list item. Use sanitizeCodeSpan (backtick-stripping) since it lives
-      // inside backticks, consistent with the file refs below.
+      // angle renders inside a code span (backticks); summary is prose. Sanitize
+      // angle with sanitizeCodeSpan too: an embedded backtick/newline would
+      // otherwise break the span (markdown injection) or split the list item.
       const angle = sanitizeCodeSpan(finding.angle);
       lines.push(`- \`${angle}\`: ${summary}${dispositionSuffix}${judgeSuffix}`);
       if (Array.isArray(finding.files) && finding.files.length > 0) {
-        // File refs go inside backticks; sanitize each so embedded whitespace,
-        // newlines, or backticks can't break the single Markdown list item /
-        // code span, and drop any that sanitize to empty.
+        // File refs go inside backticks; sanitize each so whitespace/newlines/
+        // backticks can't break the list item, and drop any that sanitize empty.
         const refs = finding.files
           .map(f => sanitizeCodeSpan(f))
           .filter(f => f.length > 0)
@@ -402,7 +360,6 @@ export function renderFindingsCommentBody({ gate, headSha, findings, omittedCoun
     }
     lines.push("");
   }
-  // Drop trailing blank line.
   while (lines.length > 0 && lines[lines.length - 1] === "") {
     lines.pop();
   }
@@ -412,10 +369,9 @@ export function renderFindingsCommentBody({ gate, headSha, findings, omittedCoun
   return sanitizeCopilotSummonTokens(lines.join("\n"));
 }
 
-// Least-urgent-first: the order individual findings are dropped when a
-// round's rendered comment would exceed GitHub's comment limit — every
-// finding in a less-urgent severity group is dropped before any finding in a
-// more-urgent one. The reverse of SEVERITY_ORDER (most-urgent-first).
+// Least-urgent-first drop order when a round's comment exceeds GitHub's
+// limit: every less-urgent group drops before any more-urgent one. Reverse
+// of SEVERITY_ORDER (most-urgent-first).
 const DROP_LEAST_URGENT_FIRST = [...SEVERITY_ORDER].reverse();
 
 // Groups an ordered list of dropped findings into the `omittedCounts` shape
@@ -433,10 +389,8 @@ function summarizeDroppedBySeverity(dropped) {
 }
 
 // Reports an arbitrary invalid value in an error message. Never JSON.stringify:
-// it throws a TypeError on a BigInt and silently renders a Symbol as the
-// string "undefined" (JSON.stringify(Symbol()) === undefined), both worse
-// than the value an error message exists to name. `null` is reported as
-// "null", matching the per-element guards that already special-case it,
+// it throws on a BigInt and silently renders a Symbol as "undefined", both
+// worse than the value the message exists to name. `null` reports as "null"
 // rather than the "object" typeof would give.
 function describeInvalidValue(value) {
   if (value === null) return "null";
@@ -448,38 +402,23 @@ function describeInvalidValue(value) {
   return String(value); // number, boolean, undefined, symbol
 }
 
-// Validates and sanitizes every caller-supplied value that
-// renderFindingsCommentBody renders (including omittedCounts, its own
-// caller-supplied parameter — see summarizeDroppedBySeverity above), in ONE
-// place — called from renderFindingsCommentBody itself, and again from
-// renderBoundedFindingsCommentBody before it composes renderFindingsCommentBody,
-// so its own later use of the SAME gate/headSha (the fail-closed throw
-// further down) sees the normalized/sanitized values, never the caller's raw
-// input — so a value newly added to what gets rendered can never bypass
-// validation by omission on EITHER render entry point — four consecutive
-// review rounds each added one more one-off guard here before this
-// consolidation. `entryPoint` names the export that actually ran this call
-// (never hand-copied per throw site), so a rejection is always attributed to
-// the function the caller actually invoked, not a hardcoded stand-in.
-// Returns the comment's identity-key fields ready to render: gate NORMALIZED
-// (trim + lowercase, constrained to KNOWN_GATES — never sanitized, since it
-// is a closed two-value vocabulary, not free text) and headSha SANITIZED
-// (see sanitizeInline above; it is not a closed set); findings are validated
-// only here, since their own free-text fields (summary/angle/files/disposition)
-// are sanitized later, at render time, by renderFindingsCommentBody itself.
+// Validates and sanitizes every caller-supplied value renderFindingsCommentBody
+// renders, in ONE place called from both renderFindingsCommentBody and
+// renderBoundedFindingsCommentBody, so a value newly added to the render can
+// never bypass validation by omission on either entry point. `entryPoint`
+// names the export that actually ran this call, so a rejection is always
+// attributed to the function the caller invoked. Returns the identity-key
+// fields ready to render: gate NORMALIZED (trim + lowercase, constrained to
+// KNOWN_GATES) and headSha SANITIZED (sanitizeInline); findings' own free-text
+// fields are sanitized later, at render time, by renderFindingsCommentBody.
 function validateAndSanitizeRenderInputs({ gate, headSha, findings, omittedCounts, maxChars, entryPoint }) {
   // gate is the comment's IDENTITY key (buildFindingsMarker): an unvalidated
-  // undefined/blank value would render `gate=undefined` and thereafter match
-  // (and keep updating) that bogus marker on every later run. headSha is
-  // rendered directly into the body ("Reviewed head: ...") with the same
-  // failure mode. headSha is SANITIZED (not just checked for non-emptiness):
-  // an unsanitized newline-bearing headSha can forge a line-start marker for
-  // a DIFFERENT gate (findMarkedComment matches on line-start text, breaking
-  // that gate's comment). gate is instead normalized (trim + lowercase, the
-  // same transform normalizeGate applies to the CLI's own --gate) and
-  // required to be one of KNOWN_GATES: with only two possible values there is
-  // no collision surface between them left to sanitize away, so gate never
-  // needs sanitizeInline at render time the way headSha does.
+  // blank value would render `gate=undefined` and keep matching that bogus
+  // marker on every later run. headSha is SANITIZED, not just non-empty
+  // checked: an unsanitized newline-bearing headSha could forge a line-start
+  // marker for a DIFFERENT gate. gate is instead normalized (trim + lowercase)
+  // and constrained to KNOWN_GATES, a closed vocabulary with no collision
+  // surface left to sanitize away.
   if (typeof gate !== "string") {
     throw new Error(`${entryPoint}: gate must be a non-empty string, got ${describeInvalidValue(gate)}`);
   }
@@ -490,23 +429,19 @@ function validateAndSanitizeRenderInputs({ gate, headSha, findings, omittedCount
   if (typeof headSha !== "string" || headSha.trim().length === 0) {
     throw new Error(`${entryPoint}: headSha must be a non-empty string, got ${describeInvalidValue(headSha)}`);
   }
-  // The render uses the SANITIZED headSha (sanitizeInline), never the raw
-  // one, so a non-blank string that sanitizes to nothing (e.g. a bare
-  // "```") must be rejected here too — matching angle/summary/disposition/
-  // judgeDisposition/files above — otherwise the identity line renders as
-  // the silently-empty "Reviewed head: " with the value gone.
+  // The render uses the SANITIZED headSha, so a non-blank string that
+  // sanitizes to nothing (e.g. a bare "```") must be rejected too, or the
+  // identity line renders as the silently-empty "Reviewed head: ".
   if (sanitizeInline(headSha).length === 0) {
     throw new Error(`${entryPoint}: headSha sanitizes to an empty string, got ${describeInvalidValue(headSha)}`);
   }
   if (!Array.isArray(findings)) {
     throw new Error(`${entryPoint}: findings must be an array, got ${describeInvalidValue(findings)}`);
   }
-  // for...of (never .forEach, which SKIPS array holes) so a sparse findings
-  // array produces the same named, index-bearing error as any other bad
-  // element — matching how renderFindingsCommentBody itself consumes the
-  // array (`for (const finding of findings)`, which yields `undefined` for a
-  // hole). forEach silently skipping the hole here would let it reach the
-  // render unchecked and crash there with an unnamed TypeError instead.
+  // for...of, never .forEach (which SKIPS array holes): a sparse findings
+  // array must produce the same named, index-bearing error as any other bad
+  // element, not reach the render unchecked and crash with an unnamed
+  // TypeError.
   let i = 0;
   for (const finding of findings) {
     if (!finding || typeof finding !== "object" || Array.isArray(finding)) {
@@ -515,14 +450,10 @@ function validateAndSanitizeRenderInputs({ gate, headSha, findings, omittedCount
     if (!SEVERITY_ORDER.includes(normalizeSeverity(finding.severity))) {
       throw new Error(`${entryPoint}: findings[${i}].severity must be one of: ${SEVERITY_ORDER.join(", ")}, got ${describeInvalidValue(finding.severity)}`);
     }
-    // angle/summary are rendered directly into the comment (as a code span /
-    // bare prose respectively); an unvalidated caller passing neither would
-    // otherwise post the literal string "undefined" into a PR comment. The
-    // render uses the SANITIZED value (sanitizeCodeSpan/sanitizeInline below),
-    // never the raw one, so a raw value that is non-empty but sanitizes to
-    // nothing (e.g. a bare "```") must be rejected here too — checking only
-    // the raw string would let it through and render an empty code span /
-    // empty prose run.
+    // angle/summary render directly into the comment; unvalidated, they'd post
+    // the literal "undefined". The render uses the SANITIZED value, so a raw
+    // value that is non-empty but sanitizes to nothing (e.g. a bare "```")
+    // must be rejected too, or it renders an empty code span / prose run.
     if (typeof finding.angle !== "string" || finding.angle.trim().length === 0) {
       throw new Error(`${entryPoint}: findings[${i}].angle must be a non-empty string, got ${describeInvalidValue(finding.angle)}`);
     }
@@ -535,23 +466,18 @@ function validateAndSanitizeRenderInputs({ gate, headSha, findings, omittedCount
     if (sanitizeInline(finding.summary).length === 0) {
       throw new Error(`${entryPoint}: findings[${i}].summary sanitizes to an empty string, got ${describeInvalidValue(finding.summary)}`);
     }
-    // disposition is rendered directly into the comment (bare prose, for any
-    // truthy value, when present — see renderFindingsCommentBody's own `?:`
-    // truthiness check). Only undefined/null/"" are exempted by name below;
-    // every OTHER non-string-or-blank value (0, false, NaN included — they
-    // are just as falsy at render time as null/"", but are not exempted
-    // here) falls through to the typeof-string check and is rejected, since
-    // it would otherwise post junk ("[object Object]"/"42"/"true") into the
-    // comment.
+    // disposition renders directly into the comment for any truthy value.
+    // Only undefined/null/"" are exempted below; every other non-string value
+    // (0, false, NaN included) falls through to the typeof-string check and
+    // is rejected, or it would post junk ("[object Object]"/"42") instead.
     if (
       finding.disposition !== undefined && finding.disposition !== null && finding.disposition !== ""
       && (typeof finding.disposition !== "string" || finding.disposition.trim().length === 0)
     ) {
       throw new Error(`${entryPoint}: findings[${i}].disposition must be a non-empty string when present, got ${describeInvalidValue(finding.disposition)}`);
     }
-    // The render uses the SANITIZED disposition (sanitizeInline), never the
-    // raw one, so a non-blank string that sanitizes to nothing (e.g. a bare
-    // "```") must be rejected too — otherwise it would render the empty
+    // The render uses the SANITIZED disposition, so a non-blank string that
+    // sanitizes to nothing must be rejected too, or it renders the empty
     // italic run " — __".
     if (
       typeof finding.disposition === "string" && finding.disposition.trim().length > 0
@@ -559,11 +485,8 @@ function validateAndSanitizeRenderInputs({ gate, headSha, findings, omittedCount
     ) {
       throw new Error(`${entryPoint}: findings[${i}].disposition sanitizes to an empty string, got ${describeInvalidValue(finding.disposition)}`);
     }
-    // judgeDisposition is rendered directly into the comment (bare prose, for
-    // any truthy value, when present — see renderFindingsCommentBody's own
-    // judgeSuffix truthiness check), the exact same failure mode as
-    // disposition just above: an unvalidated truthy non-string is
-    // String-coerced by sanitizeInline and posted as junk, and a
+    // judgeDisposition has the exact same failure mode as disposition above:
+    // an unvalidated truthy non-string is coerced and posted as junk, and a
     // whitespace-only string collapses to an empty italic run.
     if (
       finding.judgeDisposition !== undefined && finding.judgeDisposition !== null && finding.judgeDisposition !== ""
@@ -577,27 +500,23 @@ function validateAndSanitizeRenderInputs({ gate, headSha, findings, omittedCount
     ) {
       throw new Error(`${entryPoint}: findings[${i}].judgeDisposition sanitizes to an empty string, got ${describeInvalidValue(finding.judgeDisposition)}`);
     }
-    // files entries are rendered directly as code-span file refs (see
-    // renderFindingsCommentBody); an unvalidated element would otherwise post
-    // the literal string "undefined"/"null"/"[object Object]" into the comment.
+    // files entries render as code-span file refs; unvalidated, an element
+    // would post "undefined"/"null"/"[object Object]" into the comment.
     if (finding.files !== undefined) {
       if (!Array.isArray(finding.files)) {
         throw new Error(`${entryPoint}: findings[${i}].files must be an array, got ${describeInvalidValue(finding.files)}`);
       }
-      // for...of (never .forEach, which SKIPS array holes) — same rationale
-      // as the outer findings loop above: a sparse files array must produce
-      // the same named, index-bearing error as any other bad element.
+      // for...of (never .forEach, which skips holes) — same rationale as the
+      // outer findings loop above.
       let j = 0;
       for (const file of finding.files) {
         if (typeof file !== "string" || file.trim().length === 0) {
           throw new Error(`${entryPoint}: findings[${i}].files[${j}] must be a non-empty string, got ${describeInvalidValue(file)}`);
         }
-        // The render uses the SANITIZED file ref (sanitizeCodeSpan), never
-        // the raw one, and silently DROPS a ref that sanitizes to empty
-        // (renderFindingsCommentBody's own files.filter) — so a raw ref that
-        // is non-blank but sanitizes to nothing (e.g. a bare "`") must be
-        // rejected here, matching angle/summary/disposition above, rather
-        // than vanishing from the rendered comment with no trace.
+        // The render silently DROPS a file ref that sanitizes to empty
+        // (files.filter), so a raw ref that is non-blank but sanitizes to
+        // nothing (e.g. a bare "`") must be rejected here rather than
+        // vanish from the rendered comment with no trace.
         if (sanitizeCodeSpan(file).length === 0) {
           throw new Error(`${entryPoint}: findings[${i}].files[${j}] sanitizes to an empty code span, got ${describeInvalidValue(file)}`);
         }
@@ -606,15 +525,10 @@ function validateAndSanitizeRenderInputs({ gate, headSha, findings, omittedCount
     }
     i += 1;
   }
-  // omittedCounts is a caller-supplied parameter of renderFindingsCommentBody
-  // (built internally by summarizeDroppedBySeverity for the production
-  // bounded path, but any direct caller can pass its own), rendered straight
-  // into the omission note's breakdown (`${count} ${SEVERITY_LABELS[severity]}`)
-  // with NO SEVERITY_LABELS fallback — an unknown severity would render the
-  // literal text "undefined" there, and a non-array truthy value would reach
-  // the note's own `.reduce` as an unnamed TypeError. Both are exactly the
-  // bypass-by-omission class this seam exists to close, so they are rejected
-  // here, by name, before that render is ever reached.
+  // omittedCounts renders straight into the omission note's breakdown with
+  // no SEVERITY_LABELS fallback: an unknown severity would render "undefined",
+  // and a non-array value would reach the note's own `.reduce` as an unnamed
+  // TypeError. Both are rejected here, by name, before that render is reached.
   if (!Array.isArray(omittedCounts)) {
     throw new Error(`${entryPoint}: omittedCounts must be an array, got ${describeInvalidValue(omittedCounts)}`);
   }
@@ -638,31 +552,20 @@ function validateAndSanitizeRenderInputs({ gate, headSha, findings, omittedCount
 }
 
 // Renders the findings comment body, degrading ONE FINDING AT A TIME (never a
-// whole group at once, and never a silently truncated field) when the full
-// render would exceed GitHub's comment length limit — least-urgent finding
-// first, across every less-urgent severity group before touching a
-// more-urgent one. Dropping proportionately (rather than whole groups) means
-// a round only slightly over the limit loses close to (though, per the
-// search's own comment below, not always exactly) as few low-priority
-// findings as it takes to fit, instead of every finding in whichever group is
-// dropped first — the most urgent findings always survive as long as ANY
-// finding would fit. Every omission is named in the posted comment itself,
-// with a pointer to the disposition ledger — the one surface that is never
-// length-bounded. Throws (fails closed) when BOTH the emptiest render (every
-// finding dropped) and the render with only its single most-urgent finding
-// kept still cannot fit, so a round that truly cannot be posted is
-// never reported as a success.
+// whole group, never a silently truncated field) when the full render exceeds
+// GitHub's comment length limit — least-urgent finding first, across every
+// less-urgent severity group before touching a more-urgent one, so the most
+// urgent findings always survive as long as ANY finding would fit. Every
+// omission is named in the comment, pointing back at the disposition ledger
+// (never length-bounded). Throws (fails closed) when both the emptiest render
+// and the render with only its single most-urgent finding kept still cannot
+// fit, so a round that cannot be posted is never reported as a success.
 export function renderBoundedFindingsCommentBody({ gate, headSha, findings, maxChars = GITHUB_COMMENT_MAX_CHARS }) {
-  // renderFindingsCommentBody runs validateAndSanitizeRenderInputs itself
-  // (see its own doc comment) on every call below, so that alone would be
-  // enough to keep the RENDERED body safe. But this function's OWN gate/headSha
-  // bindings must also be normalized/sanitized here, in this scope, before
-  // anything else reads them — the fail-closed throw further down interpolates
-  // them directly, and dropOrder/renderWithDropped below close over them too —
-  // so a caller-shaped (unnormalized/unsanitized) value never leaks into this
-  // function's own output. This call is idempotent against renderFindingsCommentBody's
-  // own re-validation below: gate/headSha are already normalized/sanitized by
-  // the time they reach it, so that second call can never reject them.
+  // This function's OWN gate/headSha bindings must also be normalized/
+  // sanitized here, before anything else reads them: the fail-closed throw
+  // below interpolates them directly, and dropOrder/renderWithDropped close
+  // over them too. Idempotent against renderFindingsCommentBody's own
+  // re-validation, since gate/headSha are already normalized by then.
   ({ gate, headSha } = validateAndSanitizeRenderInputs({
     gate, headSha, findings, omittedCounts: [], maxChars, entryPoint: "renderBoundedFindingsCommentBody",
   }));
@@ -670,13 +573,11 @@ export function renderBoundedFindingsCommentBody({ gate, headSha, findings, maxC
   if (body.length <= maxChars) {
     return { body, omittedCounts: [] };
   }
-  // Least-urgent-first candidate order for individual removal, preserving
-  // each finding's original relative order within its own severity group.
-  // Indices, not the finding objects themselves: an identity-keyed Set would
-  // collapse every slot holding the SAME object reference into a single
-  // drop no matter how many of those slots `k` asks to remove, under-dropping
-  // (and under-counting the omission note) whenever a findings array repeats
-  // a reference.
+  // Least-urgent-first candidate order for individual removal, by INDEX not
+  // object identity: an identity-keyed Set would collapse every slot holding
+  // the SAME object reference into one drop, under-dropping (and
+  // under-counting the omission note) when a findings array repeats a
+  // reference.
   const dropOrder = DROP_LEAST_URGENT_FIRST.flatMap(
     (severity) => findings
       .map((_, i) => i)
@@ -693,33 +594,25 @@ export function renderBoundedFindingsCommentBody({ gate, headSha, findings, maxC
   }
   const n = dropOrder.length;
   const fullyDropped = renderWithDropped(n);
-  // Dropping the very LAST remaining finding is the one step whose render can
-  // grow instead of shrink: the zero-findings branch of
-  // renderFindingsCommentBody adds its own "none survived" sentence, which
-  // can outweigh the few characters that single finding's own line would
-  // have cost. So `fits(n)` alone is not a reliable "nothing fits" probe —
-  // the genuinely minimal fitting render can be `n - 1` (one finding
-  // surviving) even when `n` (zero survive) does not fit.
+  // Dropping the very LAST finding is the one step whose render can grow
+  // instead of shrink: the zero-findings branch adds its own "none survived"
+  // sentence, which can outweigh that finding's own line. So `fits(n)` alone
+  // is not a reliable "nothing fits" probe — `n - 1` can fit even when `n`
+  // does not.
   const almostFullyDropped = n > 0 ? renderWithDropped(n - 1) : fullyDropped;
   if (fullyDropped.body.length > maxChars && almostFullyDropped.body.length > maxChars) {
     throw new Error(
       `Gate findings comment for gate "${gate}" at head ${headSha} cannot be rendered within GitHub's ${maxChars}-character comment limit even with every finding dropped, nor with only its single most-urgent finding kept; refusing to post a truncated or partial record.`,
     );
   }
-  // Binary-search a drop count that fits, rather than dropping one finding at
-  // a time and re-rendering after each — O(log n) renders instead of O(n),
-  // each still O(n) work, so O(n log n) instead of O(n^2) for a large round.
-  // The rendered length is NOT strictly non-increasing as more findings are
-  // dropped: dropping the first finding of a severity group also adds that
-  // group to the omission note (", <count> <Label>"), which can add more
-  // characters than the dropped finding's own line removed, so the curve can
-  // bump upward mid-range, not just at the last step. The search stays SAFE
-  // despite that: `hi` starts at `hiBound`, already confirmed to fit above,
-  // and is only ever narrowed to a `mid` whose render was itself just
-  // verified to fit — so the returned render is always confirmed to fit
-  // `maxChars`, never assumed. A bump can only cost optimality (the search
-  // may settle on dropping a few more findings than the true minimum when it
-  // steps past a dip on the non-fitting side), never correctness.
+  // Binary-search a drop count that fits: O(n log n) instead of O(n^2) for a
+  // large round. The rendered length is NOT strictly non-increasing (dropping
+  // a group's first finding also adds that group to the omission note, which
+  // can add more characters than the dropped line removed), but the search
+  // stays SAFE: `hi` starts at `hiBound`, already confirmed to fit, and is
+  // only narrowed to a `mid` whose render was itself just verified to fit — so
+  // the returned render is always confirmed, never assumed, to fit `maxChars`.
+  // A non-monotonic bump can only cost optimality, never correctness.
   const hiBound = fullyDropped.body.length <= maxChars ? n : n - 1;
   let lo = 1;
   let hi = hiBound;
@@ -760,28 +653,22 @@ export async function listIssueComments({ repo, pr }, { env, ghCommand, runChild
   return flattenPaginatedSlurp(payload);
 }
 
-// Line-start anchored: every marker this module's own producers render is
-// always the FIRST character of its own line — never rendered mid-line. Matching on
-// `body.includes(marker)` alone would also honor a marker merely QUOTED
-// inside a comment's free text (a reply that pastes a prior comment's marker
-// as an example, or a hostile comment crafted to forge one), and this
-// function's result is PATCHed in place by the caller — so a quoted marker
-// must never be treated as the genuine, idempotency-keying one.
+// Line-start anchored: every marker this module renders is always the FIRST
+// character of its own line. Matching `body.includes(marker)` alone would
+// also honor a marker merely QUOTED inside a comment's free text, and this
+// result is PATCHed in place by the caller, so a quoted marker must never be
+// treated as the genuine, idempotency-keying one.
 //
 // `author` is the second, orthogonal trust boundary: the caller's own
-// authenticated `gh` login. A comment is only considered a match if it was
-// authored by that login — a foreign comment forging the exact marker shape
-// must never be mistaken for this tool's own idempotent comment (and then
-// PATCHed as if it were). Comments here are the raw GitHub REST shape
-// (`user.login`), not the normalized `author` field this repo's other
-// GraphQL-derived thread/review objects carry.
+// authenticated `gh` login. A comment only matches if authored by that login,
+// so a foreign comment forging the exact marker shape can never be mistaken
+// for this tool's own idempotent comment and PATCHed as if it were. Comments
+// here use the raw GitHub REST shape (`user.login`).
 //
-// `author` is REQUIRED, not optional: an omitted author used to fail OPEN
-// (every comment matched regardless of who authored it), which is exactly the
-// forgery this trust boundary exists to close. Every caller has an
-// authenticated login available (resolveAuthenticatedLogin) by the time it
-// needs to find its own marked comment, so there is no legitimate call site
-// that cannot supply one.
+// `author` is REQUIRED: an omitted author used to fail OPEN (every comment
+// matched regardless of author), exactly the forgery this boundary closes.
+// Every caller has an authenticated login (resolveAuthenticatedLogin) by the
+// time it needs this.
 export function findMarkedComment(comments, marker, { author } = {}) {
   if (typeof author !== "string" || author.trim().length === 0) {
     throw new Error("findMarkedComment requires a non-empty author (the authenticated gh viewer's own login); omitting it would fail open and let a foreign comment forging the marker be mistaken for this tool's own idempotent comment.");
@@ -797,12 +684,9 @@ export function findMarkedComment(comments, marker, { author } = {}) {
 }
 
 // The authenticated `gh` viewer's own login: the trust boundary every
-// gate-authored-provenance decision in this repo's gate tooling is anchored
-// to (never rendered marker text alone, which a foreign comment could forge
-// just as easily as this repo's own producers render it). Shared by every
-// caller that needs to scope a marker read/write to its own comments —
-// currently this module's own idempotent upsert, the gate verdict poster's
-// finding-surface suppression, and close-gate-findings.mjs's disposition pass.
+// gate-authored-provenance decision is anchored to, never rendered marker
+// text alone (which a foreign comment could forge just as easily). Shared by
+// every caller scoping a marker read/write to its own comments.
 export async function resolveAuthenticatedLogin({ env, ghCommand, runChild: run }) {
   const payload = await runGhJson(["api", "user"], { env, ghCommand, runChild: run });
   const login = typeof payload?.login === "string" ? payload.login.trim() : "";
@@ -824,7 +708,7 @@ function parseCommentMutationResponse(payload) {
 }
 
 async function createComment({ repo, pr, body }, { env, ghCommand }) {
-  // ISSUE/PR-ID GUARD (#1731): refuse a generated comment body that emits a
+  // ISSUE/PR-ID GUARD: refuse a generated comment body that emits a
   // raw issue/PR id (fail-closed) unless explicitly allowlisted.
   guardCommentBodyNoIssuePrIds(body, { ref: "gate findings comment body" });
   const payload = await runGhJson(
@@ -835,7 +719,7 @@ async function createComment({ repo, pr, body }, { env, ghCommand }) {
 }
 
 async function updateComment({ repo, commentId, body }, { env, ghCommand }) {
-  // ISSUE/PR-ID GUARD (#1731) — see createComment.
+  // ISSUE/PR-ID GUARD — see createComment.
   guardCommentBodyNoIssuePrIds(body, { ref: "gate findings comment body" });
   const payload = await runGhJson(
     ["api", "-X", "PATCH", `repos/${repo}/issues/comments/${commentId}`, "-f", `body=${body}`],
@@ -845,18 +729,13 @@ async function updateComment({ repo, commentId, body }, { env, ghCommand }) {
 }
 
 export async function postGateFindings(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd() } = {}) {
-  // resolveFindings now returns `{ findings, overallVerdict }` (the
-  // consolidator's computed verdict threads through `--ledger-out`'s wrapper);
-  // post-gate-findings posts the visible comment and does not record a durable
-  // verdict, so it drops `overallVerdict` here — only write-gate-findings-log.mjs
-  // persists it into the ledger that upsert-checkpoint-verdict.mjs enforces.
+  // resolveFindings returns `{ findings, overallVerdict }`; this script only
+  // posts the visible comment and drops `overallVerdict` here — only
+  // write-gate-findings-log.mjs persists it to the ledger.
   const { findings } = await resolveFindings(options);
-  // loadDevLoopConfig never throws: it returns { config, warnings, errors }.
-  // A non-empty errors array means the config could not be loaded/validated, so
-  // log it (stderr) and fall back to default behavior (config-unavailable →
-  // null → resolveGatePostFindingsComments defaults on → proceed to post),
-  // rather than trusting a malformed/partial config object. Mirrors how
-  // detect-checkpoint-evidence treats config-unavailable.
+  // loadDevLoopConfig never throws; a non-empty errors array means the config
+  // could not be loaded/validated, so log it (stderr) and fall back to
+  // default behavior rather than trust a malformed/partial config object.
   const { config: loadedConfig, errors: configErrors } = await loadDevLoopConfig({ repoRoot });
   let config = loadedConfig;
   if (Array.isArray(configErrors) && configErrors.length > 0) {
@@ -877,12 +756,9 @@ export async function postGateFindings(options, { env = process.env, ghCommand =
       findingsCount: findings.length,
     };
   }
-  // Normalized the same way renderBoundedFindingsCommentBody normalizes gate
-  // (trim + lowercase, then required to be a KNOWN_GATES member) before
-  // embedding it in the body's own marker, so this comment-search marker and
-  // the one actually rendered into desiredBody always agree — true only
-  // because gate is constrained to that closed, two-value vocabulary; a
-  // free-text field would need its own sanitizeInline call here instead.
+  // Normalized the same way renderBoundedFindingsCommentBody normalizes gate,
+  // so this comment-search marker always agrees with the one rendered into
+  // desiredBody — true only because gate is a closed, two-value vocabulary.
   const marker = buildFindingsMarker({ gate: normalizeGate(options.gate) });
   // Fails closed (throws) when the round cannot be rendered within GitHub's
   // comment limit even with every finding dropped, nor with only its single

@@ -1,5 +1,5 @@
 /**
- * Shared worktree-path helpers (issue #909). Extracted so create/cleanup agree
+ * Shared worktree-path helpers. Extracted so create/cleanup agree
  * on how a path is canonicalized for comparison/safety checks.
  */
 import { realpathSync } from "node:fs";

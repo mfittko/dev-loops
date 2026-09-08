@@ -277,30 +277,10 @@ async function withTempChangelog(fn, changelog = BASE_CHANGELOG) {
 }
 
 describe("main()", () => {
-  it("resolves the base via origin/HEAD's default branch first", async () => {
-    await withTempChangelog(async (root) => {
-      const git = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" });
-      const log = capturingLog();
-      const code = await main({ root, git, env: {}, log });
-      assert.equal(code, 0);
-      assert.deepEqual(git.mergeBaseCalls, [["origin/main", "HEAD"]]);
-    });
-  });
-
-  it("falls back to GITHUB_BASE_REF before main/master when origin/HEAD is unavailable", async () => {
-    await withTempChangelog(async (root) => {
-      const git = makeFakeGit({
-        mergeBase(a) {
-          return a === "origin/feature-base" ? "def456" : "";
-        },
-      });
-      const log = capturingLog();
-      const code = await main({ root, git, env: { GITHUB_BASE_REF: "feature-base" }, log });
-      assert.equal(code, 0);
-      assert.deepEqual(git.mergeBaseCalls, [["origin/feature-base", "HEAD"]]);
-    });
-  });
-
+  // base-ref candidate order (origin/HEAD -> GITHUB_BASE_REF -> main -> master)
+  // is now owned by the shared resolveBaseRef test in
+  // test/docs/_doc-git-client.test.mjs; these caller tests keep only the
+  // validator's own policy (degrade notice, exit codes) and diffNameOnly behavior.
   it("degrades with a notice and exits 0 when no base ref resolves", async () => {
     const git = makeFakeGit({}); // symbolicRef + mergeBase both throw
     const log = capturingLog();
@@ -343,7 +323,7 @@ test("diffNameOnly parses NUL-delimited names (one path per classifyFile() entry
     return { stdout: "packages/core/src/a.mjs\0packages/core/src/b.mjs\0" };
   };
   const git = createGitClient("/tmp", exec);
-  const out = await git.diffNameOnly("base-sha", "HEAD");
+  const out = await git.diffNameOnly("base-sha", "HEAD", { nulDelimited: true });
   assert.deepEqual(out, ["packages/core/src/a.mjs", "packages/core/src/b.mjs"]);
   const diffCall = calls.find((a) => a.includes("--name-only"));
   assert.ok(diffCall.includes("-z"), "--name-only must use -z so newline-quoted paths cannot hide a code suffix");

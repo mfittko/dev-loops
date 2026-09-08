@@ -148,7 +148,7 @@ const STATUS_CHECK_TIMEOUT_MS = 5_000;
 /** Cheap GitHub-health pre-flight for `--auto-resume`. Curls the GitHub status
  *  API and bails BEFORE any `gh` API call or dev-loop dispatch when GitHub is
  *  degraded, so an auto-resume schedule firing during a GitHub Actions outage
- *  costs near-zero (one HTTP GET) instead of burning a dev-loop startup (#1633).
+ *  costs near-zero (one HTTP GET) instead of burning a dev-loop startup.
  *  Fail-open on fetch error (the status endpoint itself being unreachable is
  *  ambiguous; the normal `listOpenPrs` flow is the backstop there). */
 export async function fetchGithubStatus({
@@ -179,7 +179,7 @@ export async function fetchGithubStatus({
 }
 
 /** Near-zero-cost bail result when GitHub is degraded: no PRs listed, no resume
- *  plans, so the auto-resume schedule never dispatches a dev-loop run (#1633). */
+ *  plans, so the auto-resume schedule never dispatches a dev-loop run. */
 function buildGithubDegradedResult(repo, statusCheck) {
   return {
     ok: true,
@@ -1008,8 +1008,8 @@ export async function listRepoAsyncRuns(
       await scanAsyncResultRoot(resultsRoot, records);
     }
   }
-  // Decouple merge-success routing from post-merge local-verify exit (#1638).
-  // The meta mapping in scanSessionArtifactRoot (`exitCode !== 0 -> FAILED`) is
+  // Decouple merge-success routing from post-merge local-verify exit. The
+  // meta mapping in scanSessionArtifactRoot (`exitCode !== 0 -> FAILED`) is
   // correct for a gate or merge failure, but a dev-loop run that lands a clean
   // merge then runs a post-merge local `npm run verify` can exit non-zero on
   // environmental (non-code) suites (missing gh/run-id context in a worktree).
