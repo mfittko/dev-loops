@@ -840,26 +840,6 @@ test("parseInspectRunCliArgs: parses all optional flags", () => {
   assert.equal(opts.reviewerInputPath, "/tmp/reviewer.json");
 });
 
-test.skip("parseInspectRunCliArgs: parses reviewer-login for live reviewer detection", () => {
-  const opts = parseInspectRunCliArgs([
-    "--repo", "owner/repo",
-    "--pr", "55",
-    "--reviewer-login", "pi-reviewer",
-  ]);
-  assert.equal(opts.reviewerLogin, "pi-reviewer");
-});
-
-test.skip("parseInspectRunCliArgs: rejects blank reviewer-login", () => {
-  assert.throws(
-    () => parseInspectRunCliArgs([
-      "--repo", "owner/repo",
-      "--pr", "55",
-      "--reviewer-login", "   ",
-    ]),
-    (err) => err.message.includes("--reviewer-login") && err.message.includes("empty"),
-  );
-});
-
 test("parseInspectRunCliArgs: --help returns help flag", () => {
   const opts = parseInspectRunCliArgs(["--help"]);
   assert.equal(opts.help, true);
@@ -897,18 +877,6 @@ test("parseInspectRunCliArgs: unknown flag throws", () => {
   assert.throws(
     () => parseInspectRunCliArgs(["--repo", "owner/repo", "--pr", "55", "--unknown-flag"]),
     (err) => err.message.includes("Unknown argument"),
-  );
-});
-
-test.skip("parseInspectRunCliArgs: rejects reviewer-input combined with reviewer-login", () => {
-  assert.throws(
-    () => parseInspectRunCliArgs([
-      "--repo", "owner/repo",
-      "--pr", "55",
-      "--reviewer-input", "/tmp/reviewer.json",
-      "--reviewer-login", "pi-reviewer",
-    ]),
-    (err) => err.message.includes("--reviewer-input") && err.message.includes("--reviewer-login"),
   );
 });
 

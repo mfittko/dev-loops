@@ -92,18 +92,6 @@ function draftGateComment({ verdict = "clean", headSha = "abc1234", findingsSumm
 
 // ─── CLI argument parsing ────────────────────────────────────────────
 
-test.skip("parseReconcileDraftGateCliArgs accepts required --repo and --pr arguments", () => {
-  const r = parseReconcileDraftGateCliArgs(["--repo", "owner/repo", "--pr", "17"]);
-  assert.equal(r.repo, "owner/repo");
-  assert.equal(r.pr, 17);
-  assert.equal(r.skipChecks, false);
-});
-
-test.skip("parseReconcileDraftGateCliArgs accepts --skip-checks flag", () => {
-  const r = parseReconcileDraftGateCliArgs(["--repo", "owner/repo", "--pr", "17", "--skip-checks"]);
-  assert.equal(r.skipChecks, true);
-});
-
 test("parseReconcileDraftGateCliArgs rejects missing --repo", () => {
   assert.throws(() => parseReconcileDraftGateCliArgs(["--pr", "17"]), /requires --repo and --pr/);
 });
