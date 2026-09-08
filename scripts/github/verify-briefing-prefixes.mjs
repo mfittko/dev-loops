@@ -234,13 +234,11 @@ export function declaredGateOf(scope, gateNames = GATE_NAMES) {
  * back to the conservative flat check: all sentinels must share one hash.
  * A missing/hashless sentinel always fails closed (never grandfathered).
  *
- * When `expectedDispatchUnits` is > 0 (derived by the caller from the round's
- * persisted request-plan artifact, #1868 — the pending-angle floor), a round
- * with ZERO sentinels FAILS CLOSED (the GATE-EXEC-BRIEFING-PREFIX
- * records-floor): a coordinator round whose plan recorded pending angles must
- * record evidence — zero sentinels can no longer
- * pass vacuously. With `expectedDispatchUnits === 0` (no plan, or a plan
- * expecting no units) the zero-sentinel case stays a trivial pass.
+ * When `expectedDispatchUnits` is > 0 (the caller's plan-derived pending-angle
+ * floor, #1868), a round with ZERO sentinels FAILS CLOSED (records-floor): a
+ * coordinator round whose plan recorded pending angles must record evidence,
+ * so it can no longer pass vacuously. With `expectedDispatchUnits === 0` the
+ * zero-sentinel case stays a trivial pass.
  *
  * @param {Array<{ scope: string, prefixHash: string|null }>} sentinels
  * @param {Map<string, Set<string>>|null} [gateRecords] — sha256 -> set of gates
@@ -352,20 +350,13 @@ export function evaluateBriefingPrefixes(sentinels, gateRecords = null, expected
 }
 
 /**
- * Programmatic entry: read this round's reviewer sentinels and per-gate
- * briefing-prefix records for the given head SHA and return the verdict
- * `evaluateBriefingPrefixes` produces, WITHOUT any CLI/exit-code/emit
- * concerns. Used by `consolidate-fanin.mjs` (Phase 3 fan-in) so the rule's
- * own cited proof is mechanically invoked at consolidation time (#1618) —
- * the verifier had zero callers before this. Returns:
- *   { verified: boolean, reviewerCount: number, headSha, reason?, missing?, mismatched?, prefixHash?, gates? }
- * A head with no sentinels at all returns `{ verified: true, reviewerCount: 0, ... }`
- * (AC4: offline/inline/test paths where the fresh-context guard was never
- * invoked stay byte-identical — the count reconciliation in consolidate-fanin
- * treats `reviewerCount === 0` as "skip", never a failure) — UNLESS the caller
- * derives a positive expected dispatch-unit count from the round's persisted
- * request-plan artifact (#1868 records-floor), in which case zero sentinels
- * returns `verified: false` with a records-floor reason.
+ * Programmatic entry: read this round's sentinels and per-gate records for
+ * the head SHA and return `evaluateBriefingPrefixes`'s verdict, with no CLI/
+ * exit-code/emit concerns. Used by `consolidate-fanin.mjs` so the rule's own
+ * proof is mechanically invoked at consolidation time (#1618).
+ * `reviewerCount === 0` reads as "skip" downstream (AC4) unless
+ * `expectedDispatchUnits` applies the records-floor (see
+ * `evaluateBriefingPrefixes` above).
  * @param {string} tmpRoot
  * @param {string} headSha — already lowercased/trimmed by the caller
  * @param {number} [expectedDispatchUnits] — plan-derived floor count the caller passes (pending angles for the records-floor caller; 0 = no floor)

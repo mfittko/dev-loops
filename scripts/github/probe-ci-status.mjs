@@ -236,12 +236,10 @@ async function fetchHeadCiState(
   let checkRunsCount = 0;
   let checkRunsError = checkRunsResult.code !== 0;
   // Loop-derived gate-evidence exclusion (#1531): partition out
-  // LOOP_DERIVED_CI_CHECK_NAMES (the gate-evidence status and the workflow's
-  // own gate-evidence-runner check run) before computing the status, the same
-  // way detect-copilot-loop-state.mjs does. The wait must not block on the
-  // very derived signal the loop itself posts. A genuinely failing check
-  // beside a red gate-evidence still blocks; the excluded entry stays visible
-  // via excludedFailureDetails.
+  // LOOP_DERIVED_CI_CHECK_NAMES before computing status — the wait must not
+  // block on the derived signal the loop itself posts. A genuinely failing
+  // check beside a red gate-evidence still blocks; the excluded entry stays
+  // visible via excludedFailureDetails.
   let checkRunsExcludedFailureDetails = [];
   if (checkRunsResult.code === 0) {
     try {
@@ -283,9 +281,8 @@ async function fetchHeadCiState(
     try {
       const payload = JSON.parse(statusesResult.stdout);
       if (Array.isArray(payload?.statuses)) {
-        // Same gate-evidence exclusion mirrored for the commit-status API: the
-        // gate-evidence StatusContext is the loop's own derived signal, so its
-        // failure must not leak into commitStatus or failedChecks (#1531).
+        // Same gate-evidence exclusion mirrored for the commit-status API (#1531):
+        // its failure must not leak into commitStatus or failedChecks.
         const { matched: loopDerivedStatuses, rest: nonLoopDerivedStatuses } =
           partitionEntriesByCheckName(payload.statuses, LOOP_DERIVED_CI_CHECK_NAME);
         commitStatusExcludedFailureDetails =
@@ -325,14 +322,11 @@ async function fetchHeadCiState(
   const excludedFailureDetails = fetchError
     ? []
     : [...new Set([...checkRunsExcludedFailureDetails, ...commitStatusExcludedFailureDetails])];
-  // No-checks: zero check-runs AND zero commit-statuses, observed cleanly (no
-  // fetchError) AND with no PR-visible expected checks. If statusCheckRollup
-  // lists expected checks the providers haven't reported yet, that is pending
-  // (checks expected but not yet posted), not a genuinely check-less head.
-  // The no-checks settle logic must also exclude loop-derived entries: a head
-  // whose only checks are gate-evidence has no REAL CI to wait on, so it should
-  // settle (after the grace window) rather than hang to timeout. prVisibleCheckNames
-  // from the rollup includes gate-evidence, so filter it out here too (#1531).
+  // No-checks: zero check-runs AND zero commit-statuses, observed cleanly, AND
+  // no PR-visible expected checks. An expected-but-unreported statusCheckRollup
+  // entry is pending, not check-less. Also exclude loop-derived entries here
+  // (#1531): a head whose only checks are gate-evidence has no REAL CI to wait
+  // on, so it settles (after the grace window) rather than hanging to timeout.
   const nonLoopDerivedPrVisibleNames = prVisibleCheckNames?.filter(
     (name) => !LOOP_DERIVED_CI_CHECK_NAMES.includes(name),
   );
@@ -341,15 +335,12 @@ async function fetchHeadCiState(
     checkRunsCount === 0 &&
     statusesCount === 0 &&
     !(nonLoopDerivedPrVisibleNames?.length > 0);
-  // Zero-allocation stall (#1631): at least one real check-run, ALL of them
-  // still `queued` (no runner allocated / no job picked up), and no other
-  // provider actively progressing — the stall qualifies only when the
-  // commit-status is absent or already terminal (never pending). A commit-status
-  // that already reached a terminal state (success/failure) or is absent means
-  // nobody is making progress while GitHub Actions sits unallocated, so the
-  // watcher bails after ZERO_ALLOCATION_STALL_BAIL_MS of observing this
-  // instead of burning its full budget on a stuck queue. A run with any job
-  // in_progress/completed, or another provider still pending, never qualifies.
+  // Zero-allocation stall (#1631): at least one real check-run, ALL still
+  // `queued` (no runner allocated), and no other provider actively progressing
+  // (commit-status absent or already terminal, never pending) — the watcher
+  // bails after ZERO_ALLOCATION_STALL_BAIL_MS instead of burning its full
+  // budget on a stuck queue. Any job in_progress/completed, or another
+  // provider still pending, never qualifies.
   const allCheckRunsQueued =
     !fetchError &&
     checkRunsCount > 0 &&
@@ -482,11 +473,9 @@ export async function watchCiStatus(
   // immediately (preserves single-check semantics). A real watch awaits the grace.
   const graceFloor = options.timeoutMs === 0 ? 1 : NO_CHECKS_GRACE_POLLS;
   let consecutiveNoChecks = 0;
-  // Zero-allocation stall bail (#1631): track the first poll that observed a
-  // zero-allocation stall (all check-runs queued, no provider actively
-  // progressing — commit-status absent or already terminal). The watcher
-  // bails once the stall has persisted for stallBailMs instead of
-  // burning the full watch budget on a stuck GitHub Actions queue.
+  // Zero-allocation stall bail (see ZERO_ALLOCATION_STALL_BAIL_MS above):
+  // track when the stall was first observed so the watcher can bail once it
+  // has persisted for stallBailMs.
   const stallBailMs = options.stallBailMs ?? ZERO_ALLOCATION_STALL_BAIL_MS;
   let stallStartedAtMs = null;
   for (let attempt = 1; attempt <= attemptBudget; attempt += 1) {
