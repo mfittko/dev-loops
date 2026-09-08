@@ -8,18 +8,33 @@ Everything after the tag is hands-off.
 
 ## Procedure
 
-1. On `main` (merged, green), bump the version, run
-   `bun scripts/claude/generate-claude-assets.mjs` (stamps the bumped version
-   into the generated `npx dev-loops@<version>` pins and the plugin manifest;
-   a stale manifest fails `verify` at publish), and add the matching
-   `## <version> - <date>` section to `CHANGELOG.md` (the empty `## Unreleased`
-   heading stays above the latest version). Regenerate `bun.lock` so its
-   root/workspace version fields and the `@dev-loops/core` dependency spec track
-   the full new version including the prerelease token (`bun install
-   --lockfile-only`), then prove it with `bun install --frozen-lockfile` and
-   stage it with the release files —
-   `release.yml`'s lockstep guard
-   (`scripts/release/assert-core-dependency-version.mjs`) now fails the release
+1. On `main` (merged, green), bump every release surface with the sanctioned,
+   atomic bump script — the **only supported bump path**:
+
+   ```bash
+   node scripts/release/bump-version.mjs <version>
+   ```
+
+   `<version>` is a bare full semver token including any prerelease suffix
+   (`1.0.2`, `1.0.2-slim.0`, `1.0.0-rc.7`). One invocation sets all five
+   surfaces in lockstep — root `package.json` `version`,
+   `packages/core/package.json` `version`, the root `@dev-loops/core` range
+   (`^<version>`), `bun.lock` (`bun install --lockfile-only`, proven with
+   `bun install --frozen-lockfile`), and the generated `.claude` tree (the
+   plugin manifest `version` plus every pinned `npx dev-loops@<version>`
+   call-site, via `generate-claude-assets.mjs`). It then runs the drift guards
+   (`assert-core-dependency-version.mjs` and `generate-claude-assets.mjs
+   --check`), fails closed on any residual drift, and stages exactly those
+   release files (never `git add -A`). It is idempotent and bump-only — it
+   never commits, tags, pushes, or publishes. This removes the class of drift
+   where the root manifest was bumped while the committed `.claude` tree or
+   lockfile stayed on the prior prerelease (`1.0.2-slim.0` did).
+
+   Then add the matching `## <version> - <date>` section to `CHANGELOG.md` (the
+   empty `## Unreleased` heading stays above the latest version; the bump script
+   deliberately does not touch `CHANGELOG.md`) and stage it with the release
+   files. `release.yml`'s lockstep guard
+   (`scripts/release/assert-core-dependency-version.mjs`) also fails the release
    workflow before the GitHub Release is created if the lockfile is out of
    lockstep, so the documented tag-push path can never ship a stale lockfile
    green (rc.7 did: #1886). Committing and pushing this release
