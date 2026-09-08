@@ -1,20 +1,7 @@
-import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 
-// Inlined (was scripts/_core-helpers.mjs -> @dev-loops/core): this script runs
-// in release.yml with no `npm ci`, so it must import only node: builtins.
-// A workspace import here ERR_MODULE_NOT_FOUNDs and the Release never gets made.
-function isDirectCliRun(importMetaUrl, argv1 = process.argv[1]) {
-  if (typeof argv1 !== "string" || argv1.length === 0) {
-    return false;
-  }
-  try {
-    return realpathSync(argv1) === realpathSync(fileURLToPath(importMetaUrl));
-  } catch {
-    return false;
-  }
-}
+// Shared node:-builtins-only predicate: import-safe in release.yml (no `npm ci`).
+import { isDirectCliRun } from "../lib/direct-run.mjs";
 
 const USAGE = `Usage: extract-changelog-section.mjs --version <v> [--changelog <path>]
 

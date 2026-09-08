@@ -66,7 +66,7 @@ function makeGit(baseFiles = {}) {
     async mergeBase() {
       return "base-sha";
     },
-    async diffNameOnly(_base, _head, dir) {
+    async diffNameOnly(_base, _head, { dir } = {}) {
       return Object.keys(baseFiles).filter((f) => f.startsWith(dir));
     },
     async show(spec) {
@@ -325,7 +325,7 @@ test("rename-protection is mutation-anchored: diffNameOnly passes --no-renames",
     return { stdout: "docs/decisions/0047-something.md\n" };
   };
   const git = createGitClient("/tmp", exec);
-  const out = await git.diffNameOnly("base-sha", "HEAD", "docs/decisions");
+  const out = await git.diffNameOnly("base-sha", "HEAD", { dir: "docs/decisions" });
   assert.deepEqual(out, ["docs/decisions/0047-something.md"]);
   const diffCall = calls.find((a) => a.includes("--name-only"));
   assert.ok(diffCall, "expected a git diff invocation");

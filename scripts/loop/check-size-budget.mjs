@@ -35,7 +35,7 @@ import { loadDevLoopConfig } from "@dev-loops/core/config";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
-import { gitEnvWithoutDirOverrides } from "../github/write-gate-context.mjs";
+import { DIFF_ISOLATION_FLAGS, gitEnvWithoutDirOverrides } from "../github/write-gate-context.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: check-size-budget.mjs --base <ref> [--head <ref>] [--waived] [--approved-by <name>]
@@ -413,18 +413,10 @@ export function computeSizeBudget({
  */
 function captureSizeBudgetDiff({ base, head = "HEAD", repoRoot = process.cwd(), maxBuffer = 64 * 1024 * 1024 }) {
   const range = `${base}...${head}`;
-  const isolation = [
-    "-c", "color.ui=false",
-    "-c", "color.diff=false",
-    "-c", "core.pager=cat",
-    "-c", "diff.noprefix=false",
-    "-c", "diff.mnemonicPrefix=false",
-    "-c", "diff.renames=true",
-    "-c", "diff.algorithm=myers",
-    "-c", "diff.context=3",
-    "-c", "core.abbrev=12",
-    "-c", "core.autocrlf=false",
-  ];
+  // Shared byte-identical flag set (see captureDiffFromBase in
+  // scripts/github/write-gate-context.mjs); this path keeps its own runGit stdio
+  // and three captured views below.
+  const isolation = DIFF_ISOLATION_FLAGS;
   const runGit = (args) => execFileSync("git", [...isolation, ...args], {
     cwd: repoRoot,
     encoding: "utf8",

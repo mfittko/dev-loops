@@ -14,9 +14,9 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { transformAgent, transformSkill, transformCommand, stripPiOnlyBlocks } from "@dev-loops/core/claude/asset-generation";
+import { isDirectCliRun } from "../lib/direct-run.mjs";
 
 /**
  * Collect the generated assets as { target, content } pairs (target is repo-relative).
@@ -276,6 +276,6 @@ function main(argv) {
   process.stdout.write(JSON.stringify({ ok: true, written }, null, 2) + "\n");
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isDirectCliRun(import.meta.url)) {
   main(process.argv.slice(2));
 }
