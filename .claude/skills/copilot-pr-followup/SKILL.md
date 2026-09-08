@@ -434,7 +434,7 @@ Before any merge-ready or final-approval claim, run `detect-pr-gate-coordination
 8. wait for current-head CI again before retrying merge evaluation
 9. if the chosen reconciliation rewrote branch history (rebase only — merge commits push as a normal fast-forward), ask for explicit authorization before `git push --force-with-lease` (`--force-with-lease` only, never bare `--force`), then continue the loop on the updated head
 
-`mergeStateStatus: CLEAN` alone is not enough to resume approval or merge claims. The existing merge-ready preconditions still apply: zero unresolved review threads, a clean current-head `pre_approval_gate`, and green current-head CI.
+`mergeStateStatus: CLEAN` alone is not enough to resume approval or merge claims. Every [merge-ready precondition](../docs/merge-preconditions.md#required-before-merge) still applies.
 
 ### Merge-ready preconditions
 
