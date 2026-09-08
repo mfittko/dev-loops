@@ -11,32 +11,21 @@ import { trimmedOrNull } from "../loop/normalize.mjs";
 
 // ============================================================================
 // Sub-schemas
-//
-// BUILT_IN_DEFAULTS remains the canonical shipped default surface for loader
-// fallbacks. Select field-level defaults may still exist where merged-schema
-// callers need a stable value even when they construct config objects directly.
 // ============================================================================
 
-// `strategy` and `inputSource` are single-value families (their only child was
-// a `default` wrapper) — flattened to a bare enum at the family key itself.
+// `strategy` and `inputSource` are bare single-value enums.
 //
-// `tracker-first` renames the former `github-first` (issue #1408, the
-// tracker-agnostic seam: provider-neutral naming now that GitHub is one
-// tracker provider among a stable seam, not the only one). `github-first` is
-// still ACCEPTED as a deprecated alias — normalized to `tracker-first` with a
-// load-time warning in `loadDevLoopConfig` (see the alias-normalization pass
-// below `mergeConfigLayers`) — but this schema only validates the canonical
-// value, so the alias must be normalized on the raw merged object BEFORE it
-// reaches this parse.
+// `github-first` is a deprecated accepted alias for the canonical
+// `tracker-first`, normalized before this parse (the schema only validates the
+// canonical value), with a load-time warning in loadDevLoopConfig.
 const StrategyConfig = z.enum(["local-first", "tracker-first"]).describe("Work-intake strategy: local-first starts from a repo plan file, tracker-first from a tracked issue (\"github-first\" is a deprecated accepted alias).");
 
 const InputSourceConfig = z.enum(["tracker", "phase-docs"]).describe("Where local-first work reads its spec: the tracker issue body, or repo phase docs.");
 
-// Built-in tier aliases shipped with zero config. A tier alias maps a
-// harness-neutral name (low/high) to a concrete per-harness model id; `null`
-// means "inherit" (pass no model override → genuine no-op on that harness).
-// Pi ships null on every built-in tier, so zero-config resolution is a no-op on
-// Pi until an operator sets concrete Pi ids.
+// Built-in tier aliases: a harness-neutral name (low/high) → a concrete
+// per-harness model id; `null` means "inherit" (no model override, a genuine
+// no-op on that harness). Pi ships null on every built-in tier, so zero-config
+// resolution is a no-op on Pi until an operator sets concrete Pi ids.
 export const BUILTIN_TIER_ALIASES = Object.freeze(["low", "high"]);
 
 const BUILTIN_TIERS = Object.freeze({
@@ -96,18 +85,12 @@ function refineRoleTiers(models, ctx) {
 const ModelsConfigBase = z.strictObject({
   conductor: z.string().trim().min(1).describe("Model override for the conductor (dev-loop) session; absent = inherit the session model.").optional(),
   roles: z.record(z.string(), z.string().trim().min(1)).describe("Concrete per-role/angle model overrides (highest precedence, above tiers).").optional(),
-  // Tier alias → per-harness concrete model (null = inherit / no-op).
   tiers: z.record(z.string().min(1), ModelTierMapping).describe("Tier alias → per-harness concrete model; null on a harness means inherit (no override).").optional(),
-  // Role / angle → tier alias (a built-in/custom alias or "inherit").
   roleTiers: z.record(z.string().min(1), z.string().trim().min(1)).describe("Role or gate angle → tier alias: a built-in alias (low, high), a custom models.tiers alias, or \"inherit\".").optional(),
 });
 
 const ModelsConfig = ModelsConfigBase.superRefine(refineRoleTiers);
 
-// A round with at most this many comments (after this many rounds) counts as
-// low-signal and stops further Copilot rounds early — folded from the three
-// flat `stopOnLowSignal`/`lowSignalRoundThreshold`/`lowSignalMaxComments` keys
-// into one sub-object (they are one feature).
 const LowSignalConfig = z.strictObject({
   enabled: z.boolean().default(false).describe("Stop Copilot rounds early once they stop producing signal."),
   roundThreshold: z.number().int().nonnegative().default(3).describe("Rounds counted toward the low-signal stop decision."),
@@ -122,34 +105,20 @@ const RefinementConfig = z.strictObject({
   roles: z.array(z.string().trim().min(1)).describe("Review lenses the refinement fan-out dispatches.").optional(),
 });
 
-// Per-angle surface scope: how much of the gate-context bundle an angle
-// actually needs. "full" (default) is today's omniscient briefing;
-// "changed-files" drops the adjacent-code bundle AND the invariant prefix's
-// "Changed files + adjacent-code summary" section (the diff itself still
-// carries every changed file); "docs-only" narrows further to doc-file
-// hunks only. Resolution (resolveGateAngleScope) fails open to "full" for an
-// unknown/missing value — a narrow scope is an opt-in cost saving, never a
-// silently-enforced information cut.
+// Per-angle surface scope: how much of the gate-context bundle an angle needs
+// (see the `scope` describe on GateAngleEntry). resolveGateAngleScope fails
+// open to "full" for an unknown/missing value — a narrow scope is an opt-in
+// cost saving, never a silently-enforced information cut.
 export const GATE_ANGLE_SCOPES = Object.freeze(["full", "changed-files", "docs-only"]);
 
-// One review angle: a bare string is sugar for `{ name }`. An object may also
-// set `mandatory` (always runs, survives dynamic pruning — was
-// gates.<gate>.mandatoryAngles), `enabled: false` (drops it from the resolved
-// list — was gates.<gate>.excludeAngles, D3), `persona`/`prompt`/`model`/
-// `tier` (was the top-level `personas` map + angle-keyed
-// `models.roles`/`models.roleTiers`, D4: model > tier > built-in precedence),
-// and `scope` (AC3: the surface briefing variant this angle needs — see
-// GATE_ANGLE_SCOPES).
-// This is the ONE identity for a gate-review angle (was five separate places
-// — see the config-schema RFC). `mergeConfigLayers` merges these arrays BY
-// `name` across config layers (D3), so a later layer can add or disable a
-// single angle without restating the whole list.
-// A bare string is sugar for { name }; preprocessing the string→object wrap
-// BEFORE validation (rather than a z.union of the two shapes) means every
-// malformed angle entry validates against this ONE object schema, so a bad
-// field (e.g. `mandatory: "yes"`) reports its own actionable path/message
-// (`gates.draft.angles.1.mandatory: ...`) instead of zod's opaque
-// invalid_union "Invalid input" that swallows which branch failed why.
+// One review angle: a bare string is sugar for `{ name }`; the fields are
+// documented on the schema below. mergeConfigLayers merges these arrays BY
+// `name` across config layers, so a later layer can add or disable a single
+// angle without restating the whole list. Preprocessing the string→object wrap
+// BEFORE validation (rather than a z.union) means every malformed entry
+// validates against this ONE object schema, so a bad field reports its own
+// actionable path/message (`gates.draft.angles.1.mandatory: ...`) instead of
+// zod's opaque invalid_union "Invalid input".
 const GateAngleEntry = z.preprocess(
   (v) => (typeof v === "string" ? { name: v } : v),
   z.strictObject({
@@ -197,50 +166,34 @@ const GateTier = z.strictObject({
 });
 
 const GateDynamicConfig = z.strictObject({
-  // Diff-driven dynamic angle selection is ON by default (#1579): a fresh
-  // install narrows the angle pool to what the diff-classifier recommends.
-  // mandatory:true angles stay a hard always-run floor; fallbackToAll fires
-  // when classification is ambiguous, degrading to the full static pool. Set
-  // subtractive:false to restore the full static angle pool (the gate:full label
-  // only forces per-angle dispatch of the still-pruned set, not the full pool —
-  // combine both for the original full static fan-out).
+  // Diff-driven dynamic angle PRUNING, ON by default. mandatory:true
+  // angles stay a hard always-run floor; fallbackToAll degrades to the full
+  // static pool when classification is ambiguous.
   subtractive: z.boolean().default(true).describe("Enable diff-driven dynamic angle PRUNING for this gate (ON by default; set false to restore the full static angle pool). Was gates.<gate>.dynamicAngles."),
-  // Additive counterpart to the subtractive path (#1048): when true, the
-  // context-builder may also ADD catalog angles — from resolveAnglePool()
-  // (gates.anglePool, or else the union of the persona registry and this
-  // config's own configured angles) — that change-category heuristics
-  // recommend but that are not already in this gate's configured pool.
-  // Default false preserves the subtractive-only behavior exactly.
+  // Additive counterpart to the subtractive path: when true, the
+  // context-builder may also ADD catalog angles (from resolveAnglePool) that
+  // change-category heuristics recommend. Default false preserves the
+  // subtractive-only behavior.
   additive: z.boolean().default(false).describe("Allow diff-driven addition of catalog angles beyond this gate's configured pool (was gates.<gate>.additiveAngles)."),
 });
 
-// One unified gate schema for draft/preApproval/spike (D2): the spike gate
-// profile ships `required: false, requireCi: false` and a small docs-first
-// angle set; `blockCleanOnFindingSeverities` and `dynamic.additive` are
-// accepted but INERT for spike (a findings-doc deliverable has no "clean
-// verdict" escalation path and no additive dynamic pool) rather than being
-// split into a second schema.
+// One unified gate schema for draft/preApproval/spike: for spike,
+// blockCleanOnFindingSeverities and dynamic.additive are accepted but INERT
+// (a findings-doc deliverable has no clean-verdict escalation or additive pool).
 // Single source for the blockCleanOnFindingSeverities vocabulary: the schema
-// enum below consumes these spellings verbatim, and resolveGateConfig's
-// fail-closed guard exact-matches raw entries against the same list, so the
-// guard's accept set is byte-identical to the schema's (no trim/normalize
-// superset) and widening the enum can never leave the runtime guard behind.
-// Exported (not just module-internal) so the vocabulary contract test
-// (test/contracts/gate-severity-vocabulary-contract.test.mjs) can pin this
-// list against SEVERITY_ORDER + LEGACY_SEVERITY_ALIASES
-// (@dev-loops/core/loop/gate-fanin) — a DEFECT severity added to
-// SEVERITY_ORDER (one not also added to NON_DEFECT_SEVERITIES) without
-// updating this canonical defect trio plus its legacy alias spellings (or a
-// new defect-targeting legacy alias added without a matching entry here)
-// must fail that test rather than leaving this enum silently stale.
+// enum consumes these spellings verbatim and resolveGateConfig's fail-closed
+// guard exact-matches raw entries against the same list, so the guard's accept
+// set is byte-identical to the schema's. Exported so the vocabulary contract
+// test (test/contracts/gate-severity-vocabulary-contract.test.mjs) pins this
+// list against SEVERITY_ORDER + LEGACY_SEVERITY_ALIASES (@dev-loops/core/loop/
+// gate-fanin): a new defect severity or legacy alias that skips this trio must
+// fail that test rather than leave the enum silently stale.
 export const BLOCKING_SEVERITY_SPELLINGS = Object.freeze(["high", "medium", "low", "must-fix", "worth-fixing-now", "nice-to-have", "defer"]);
 const BLOCKING_SEVERITY_SPELLING_SET = new Set(BLOCKING_SEVERITY_SPELLINGS);
 
 // Render an offending config value for a refusal message without letting the
-// renderer itself throw: JSON.stringify raises on BigInt and circular
-// structures and returns undefined for undefined/symbol/function (those fall
-// back to String()), and String() itself can throw for exotic values (a
-// null-prototype cycle, a throwing Symbol.toPrimitive) — those get a literal
+// renderer itself throw (JSON.stringify raises on BigInt/circular; String()
+// can throw on exotic values) — an unrenderable value gets a literal
 // placeholder so the refusal always surfaces as the refusal.
 function formatConfigValue(value) {
   try {
@@ -255,10 +208,9 @@ function formatConfigValue(value) {
   }
 }
 
-// The three GatesConfig keys whose value is a GateConfig (i.e. carries its
-// own blockCleanOnFindingSeverities) — kept in sync with the `gates:
-// { draft, preApproval, spike }` keys below by construction (both list the
-// same three names; a fourth GateConfig-typed gate would need both updated).
+// The three GatesConfig keys whose value is a GateConfig (carries its own
+// blockCleanOnFindingSeverities); a fourth would need both this and the gates
+// object below updated.
 const GATE_KEYS_WITH_BLOCKING_SEVERITIES = /** @type {const} */ (["draft", "preApproval", "spike"]);
 
 const GateConfig = z.strictObject({
@@ -266,64 +218,42 @@ const GateConfig = z.strictObject({
   dynamic: GateDynamicConfig.optional().describe("Diff-driven dynamic angle selection policy for this gate."),
   required: z.boolean().default(true).describe("Whether this gate must run."),
   requireCi: z.boolean().default(true).describe("Per-gate CI prerequisite (default true): the gate requires green CI on the current head; false opts this gate out of the CI precondition entirely, including a real failure."),
-  // Defect severities only (high/medium/low, plus their pre-rename spellings)
-  // — "question"/"nit" are non-defect categories that never block a clean
-  // verdict by severity: a question's own answered/never-deferred contract
-  // and a nit's immediate-defer disposition already decide its fate, so
-  // admitting either here would let a config block on a severity the
-  // disposition pass simultaneously auto-resolves.
+  // Defect severities only — "question"/"nit" are non-defect categories that
+  // never block a clean verdict by severity (their own answered/defer
+  // dispositions decide their fate).
   blockCleanOnFindingSeverities: z
     .array(z.enum(/** @type {[string, ...string[]]} */ (BLOCKING_SEVERITY_SPELLINGS)))
     .min(1)
     .default(["high"])
     .describe("Defect finding severities that block a clean gate verdict (high/medium/low only — \"question\"/\"nit\" are non-defect categories and never block by severity). \"must-fix\" is the deprecated legacy spelling of \"high\", \"worth-fixing-now\" of \"medium\", and \"nice-to-have\"/\"defer\" of \"low\"; consumers normalize them."),
-  // Per-gate medium fix window (#1581): an open medium finding stays in the
-  // in-gate fix loop through this many rounds of THIS gate's chain and is
-  // deferred (replied-to + resolved) from the next round on. Defaults to 3
-  // (the built-in MEDIUM_FIX_WINDOW fallback in
-  // scripts/github/_gate-finding-surface.mjs). high is exempt: it never
-  // defers and forces per-gate continuation until the gate round cap escalates.
-  // No schema-level `.default()`: resolveGateConfig applies the built-in
-  // fallback (3) only after checking BOTH this key and the deprecated
-  // `worthFixingNowFixWindow` alias. A schema-level default would fill this
-  // key on every config LAYER independently (each layer is parsed through
-  // this schema on its own before merging), permanently shadowing a layer
-  // that sets only the deprecated alias.
+  // No schema-level `.default()`: a default would fill this key on every config
+  // LAYER independently (each is parsed before merging), permanently shadowing
+  // a layer that sets only the deprecated `worthFixingNowFixWindow` alias.
+  // resolveGateConfig applies the built-in fallback (3) after checking both.
   mediumFixWindow: z.number().int().nonnegative().optional().describe("Per-gate medium fix window: an open medium finding stays in the in-gate fix loop through this many rounds of this gate's chain before deferral. high is exempt (never defers). Default 3."),
-  // Deprecated alias for `mediumFixWindow` (pre-rename key); accepted on read
-  // and normalized in resolveGateConfig so an unmigrated config still behaves
-  // identically. `mediumFixWindow` wins when both are set.
   worthFixingNowFixWindow: z.number().int().nonnegative().optional().describe("Deprecated alias for mediumFixWindow (pre-rename key name); mediumFixWindow wins when both are set."),
   // Ordered, first-match-wins diff-class angle tiers (see resolveGateTier).
-  // Absent/empty = tiers never apply, so a gate that never sets this key keeps
-  // today's dynamic-subtractive/additive/full-pool resolution unchanged.
+  // Absent/empty = tiers never apply.
   tiers: z.array(GateTier).min(1).describe("Ordered, first-match-wins diff-class angle tiers for this gate. When the first-matching tier's angle set is inside the gate's angle pool, it replaces dynamic angle reduction for that diff class.").optional(),
 });
 
 // One named group of angles dispatched together onto a single reviewer under
-// grouped fan-out (AC6). `name` is recorded as the shared reviewer's
+// grouped fan-out. `name` is recorded as the shared reviewer's
 // provenance `group` (see resolveFanoutGroups / fanoutReviewerPairingError).
 const FanoutGroup = z.strictObject({
   name: z.string().trim().min(1).describe("Group name; recorded as the shared reviewer's provenance `group` when this group dispatches."),
   angles: z.array(z.string().trim().min(1)).min(1).describe("Angle names batched onto one reviewer when this group resolves."),
 });
 
-// Angle-dispatch fan-out policy (AC6 + #1601 two-knob dispatch bounds). The
-// grouped default batches related angles from a static table onto one
-// reviewer per group, cutting the fixed per-reviewer briefing cost when
-// several angles read the same surface; `per-angle` keeps the original
-// one-reviewer-per-angle fan-out (bypasses configured groups). `gate:full` no
-// longer restores per-angle dispatch (ADR 0047 superseded by 0048): it forces
-// the full angle set upstream (resolveGateTier) and dispatches GROUPED here.
-// Two orthogonal bounds (issue #1601):
-//   maxAnglesPerGroup (N, default 3, min 1) — after configured-groups
-//     matching, leftover ungrouped angles auto-chunk into dispatch units of
-//     ≤N instead of singletons. mode: per-angle bypasses the table entirely
-//   maxConcurrent (M, default 4, min 1) — the conductor dispatches at most M
-//     dispatch units per wave (scheduleFanoutWaves via scheduleParallelWaves).
-// An angle resolved for a round but not named in any configured group joins
-// the auto-chunked leftover pool — `groups` need only list the angles worth
-// batching explicitly.
+// Angle-dispatch fan-out policy (two-knob dispatch bounds). grouped
+// (default) batches related angles onto one reviewer per group; per-angle emits
+// one reviewer per angle (bypasses configured groups). gate:full forces the full
+// angle set upstream (resolveGateTier) and dispatches GROUPED here (ADR 0048).
+//   maxAnglesPerGroup (N, default 3, min 1) — leftover ungrouped angles
+//     auto-chunk into units of ≤N after configured groups match.
+//   maxConcurrent (M, default 4, min 1) — at most M dispatch units per wave
+//     (scheduleFanoutWaves).
+// An angle in no configured group joins the auto-chunked leftover pool.
 const FanoutConfig = z.strictObject({
   mode: z.enum(["grouped", "per-angle"]).default("grouped").describe("Angle dispatch mode: grouped batches related angles onto one reviewer each (default); per-angle bypasses the configured-groups table and emits one singleton unit per angle (the original full-scrutiny shape). per-angle is equivalent to maxAnglesPerGroup: 1 in dispatch unit size ONLY when no configured multi-angle group matches a resolved angle; otherwise per-angle bypasses configured groups while maxAnglesPerGroup: 1 honors them (matched first, never split)."),
   groups: z.array(FanoutGroup).optional().describe("Static named angle groups consulted in grouped mode. An angle absent from every group joins the auto-chunked leftover pool (chunked into units of ≤maxAnglesPerGroup)."),
@@ -357,20 +287,14 @@ function rejectDuplicateFanoutGroupNames(val, ctx) {
   }
 }
 
-// Fail-closed PR size budget (Phase 1 of the escalate-don't-chop size gate:
-// this schema plus check-size-budget.mjs's pure computation only — no
-// enforcement wiring yet). `patterns` classifies a changed file into t1/t3
-// by path glob; the default tier is implicit for every file matching
-// neither, so it carries no `patterns` field of its own. `sliceHardLoc`
-// (t1 only) caps the T1-slice LOC, not the whole-PR LOC.
-//
-// Per-tier `softLoc`/`waiverLoc` on t1/t3, and `sliceHardLoc` on t3, are a
-// later phase's escalation surface (e.g. a t3 "relaxed" tier with its own
-// softLoc, or a t1 slice with its own waiver ceiling) — not honored by
-// computeSizeBudget yet, so they are parked out of the schema for Phase 1
-// rather than shipped as inert accepted-but-ignored knobs. Only the
-// default tier's softLoc/waiverLoc and t1's sliceHardLoc drive Phase 1's
-// outcome; see check-size-budget.mjs.
+// Fail-closed PR size budget (see check-size-budget.mjs's pure computation).
+// `patterns` classifies a changed file into t1/t3 by path glob; the default
+// tier is implicit (no `patterns`). `sliceHardLoc` (t1 only) caps the T1-slice
+// LOC, not the whole-PR LOC. Per-tier softLoc/waiverLoc on t1/t3 and
+// sliceHardLoc on t3 are not honored by computeSizeBudget yet, so they are
+// parked OUT of the schema rather than shipped as inert accepted-but-ignored
+// knobs; only the default tier's softLoc/waiverLoc and t1's sliceHardLoc drive
+// the outcome.
 const SizeTierConfig = z.strictObject({
   patterns: z.array(z.string().trim().min(1)).optional().describe("Glob-style path patterns; a changed file matching one resolves to this tier."),
   softLoc: z.number().int().positive().nullable().optional().describe("Escalate above this many logic LOC; null disables the soft threshold for this tier."),
@@ -392,21 +316,14 @@ const SizeConfig = z.strictObject({
 
 const GatesConfig = z.strictObject({
   draft: GateConfig.optional(),
-  // Fail-closed PR size/tier budget (active by default). Computation lives in
-  // scripts/loop/check-size-budget.mjs; this config carries only the
-  // thresholds and tier patterns it reads.
+  // Fail-closed PR size/tier budget (active by default); computation lives in
+  // scripts/loop/check-size-budget.mjs.
   size: SizeConfig.optional(),
-  // `requireCi` is honored on both gates: default true keeps CI a precondition,
-  // false is an opt-out escape hatch so a repo with no CI is not held at the
-  // gate. The pre-approval gate mirrors the draft gate's `requireCi` semantics —
-  // when false the CI verdict is ignored entirely at that boundary, including a
-  // real failure (not merely "green optional").
+  // requireCi mirrors the draft gate: false ignores the CI verdict entirely at
+  // this boundary, including a real failure (not merely "green optional").
   preApproval: GateConfig.optional(),
-  // Relaxed spike gate profile (#965). A spike's deliverable is a findings doc,
-  // not production code, so it should not carry the full draft → pre-approval →
-  // Copilot production set. Resolved through the same config-merge layering and
-  // the same resolveGateConfig path as draft/preApproval — no new strategy→knob
-  // resolver. Absent for non-spike work, so production gates are unaffected.
+  // Relaxed spike gate profile: a findings-doc deliverable, resolved
+  // through the same layering/resolveGateConfig path as draft/preApproval.
   spike: GateConfig.optional(),
   // Fail-closed enforcement that a gate verdict was produced by the
   // fan-out/fan-in review sub-loop (executionMode === "fanout_fanin" plus a
@@ -414,78 +331,56 @@ const GatesConfig = z.strictObject({
   // true (opt-out): a clean gate verdict requires fan-out/fan-in evidence
   // unless explicitly disabled. See skills/docs/gate-review-sub-loop-contract.md.
   requireFanoutEvidence: z.boolean().default(true),
-  // Fail-closed enforcement that a fanout_fanin gate verdict carries recorded,
-  // internally-consistent fan-out *provenance* (distinct reviewer count +
-  // per-angle dispatch). This RAISES THE BAR against a single agent self-producing
-  // every artifact but does NOT prove independence — provenance is self-reported,
-  // so it remains forgeable; un-forgeable recording is the Pi-harness bridge (see
-  // the honest caveat in skills/docs/gate-review-sub-loop-contract.md). Layered ON TOP of
-  // requireFanoutEvidence — only takes effect when fan-out evidence enforcement
-  // is active. Default false (opt-in): closing this loophole is additive and
-  // does not change behavior for existing ledgers that carry no provenance.
+  // Fail-closed enforcement that a fanout_fanin verdict carries recorded,
+  // internally-consistent fan-out provenance (distinct reviewer count +
+  // per-angle dispatch). RAISES THE BAR against one agent self-producing every
+  // artifact but does NOT prove independence — provenance is self-reported and
+  // forgeable (honest caveat in skills/docs/gate-review-sub-loop-contract.md).
+  // Layered on top of requireFanoutEvidence. Default false (opt-in).
   requireFanoutProvenance: z.boolean().default(false),
-  // SUPERSEDED by gates.fanout.maxConcurrent (#1601, ADR 0048): the conductor
-  // now dispatches wave-by-wave at most M dispatch units per wave via
-  // scheduleFanoutWaves (the wave plan emitted by write-gate-context.mjs), so
-  // maxFanoutReviewers no longer governs fan-out dispatch. Kept for back-compat
-  // (zero non-test callers in the dispatch path); a consumer setting it gets
-  // no dispatch effect. See gates.fanout.maxConcurrent for the active cap.
+  // Accepted but inert: setting it has no dispatch effect. The active
+  // concurrency cap is gates.fanout.maxConcurrent (ADR 0048).
   maxFanoutReviewers: z.number().int().min(1).max(64).default(8).describe("SUPERSEDED by gates.fanout.maxConcurrent (#1601, ADR 0048): no longer governs fan-out dispatch — the conductor dispatches wave-by-wave at most gates.fanout.maxConcurrent (M) dispatch units per wave via scheduleFanoutWaves (the wave plan emitted by write-gate-context.mjs). Kept for back-compat; setting it has no dispatch effect."),
-  // #1462 GATE-EXEC-PRIME is MANDATORY (not a flag): every gate fan-out primes the
-  // byte-identical briefing prefix before the reviewers read it — see
-  // skills/docs/gate-review-sub-loop-contract.md.
-  // Post the consolidated gate fan-out findings as a SECOND visible,
-  // marker-tagged PR comment. Default false (opt-in): the round's verdict
-  // review already carries every finding (GATE-COMMENT-SINGLE-SURFACE), so this
-  // comment renders each finding's text a second time. The disposition ledger
-  // is written regardless. See skills/docs/gate-review-sub-loop-contract.md.
+  // GATE-EXEC-PRIME is MANDATORY: every gate fan-out primes the byte-identical
+  // briefing prefix before reviewers read it.
+  // postFindingsComments: opt-in duplicate findings surface; the disposition
+  // ledger is written regardless.
   postFindingsComments: z.boolean().default(false),
-  // Explicit global lens catalog override for additive angle selection
-  // (gates.<gate>.dynamic.additive, #1048). GLOBAL, not per-gate (D1): one
-  // repo-wide catalog for additive selection. When absent, resolveAnglePool()
-  // falls back to the union of the built-in persona registry's angle names
-  // and every angle configured across this config's own draft/preApproval/
-  // spike gates.
+  // Explicit GLOBAL (not per-gate) lens catalog override for additive angle
+  // selection; resolveAnglePool falls back to persona registry ∪
+  // configured angles when absent.
   anglePool: z.array(z.string().trim().min(1)).optional(),
-  // Fail-closed enforcement that a fanout_fanin gate's recorded per-angle
-  // provenance names only angles in the gate's configured pool — ad-hoc/foreign
-  // angle labels are rejected rather than silently accepted. Default true
-  // (reject); set false to warn instead of fail. See resolveRejectForeignAngles
-  // / skills/docs/gate-review-sub-loop-contract.md.
+  // Fail-closed: a fanout_fanin gate's per-angle provenance may name only
+  // angles in the gate's configured pool; foreign labels are rejected. Default
+  // true (reject); false warns instead. See resolveRejectForeignAngles.
   rejectForeignAngles: z.boolean().default(true),
-  // Grouped vs per-angle fan-out dispatch policy + static grouping table
-  // (AC6). GLOBAL, not per-gate — see resolveFanoutGroups.
+  // Grouped vs per-angle fan-out dispatch policy + static grouping table.
+  // GLOBAL, not per-gate — see resolveFanoutGroups.
   fanout: FanoutConfig.superRefine(rejectDuplicateFanoutGroupNames).optional(),
 });
 
 const AutonomyConfig = z.strictObject({
-  // ponytail: secondary cleanup #6 (stopAt kebab values vs camelCase gate
-  // keys) is DEFERRED — "draft-pr"/"pre-approval" are checkpoint/state-machine
-  // vocabulary shared far beyond config (lifecycle-state.mjs, hook-decisions.mjs,
-  // the handoff-envelope contract, skills/docs/reviewer-loop-state-graph.md, and ~20
-  // more files), not a config-local spelling. Renaming here would mean
-  // renaming that shared vocabulary, a materially larger change than this
-  // config-schema RFC's scope.
+  // ponytail: stopAt kebab values ("draft-pr"/"pre-approval") vs camelCase gate
+  // keys is DEFERRED — these are checkpoint/state-machine vocabulary shared far
+  // beyond config (lifecycle-state, hook-decisions, the handoff-envelope
+  // contract, ~20 more files); renaming here means renaming that shared
+  // vocabulary, out of scope.
   stopAt: z.array(
     z.enum(["refinement", "draft-pr", "pre-approval", "merge"])
   ).describe("Checkpoints that require operator confirmation before the loop proceeds (default: [\"merge\"])."),
-  // When true, merge is a fixed, non-overridable human action: the agent never
-  // runs `gh pr merge`, `resolveAutonomyStopAt` always includes "merge", and
-  // any per-run merge authorization (envelope flag / explicit instruction) is
-  // ignored — it fails closed. See resolveHumanMergeOnly / resolveEffectiveMergeAuthorized.
+  // When true, merge is a fixed human-only action: the agent never runs
+  // `gh pr merge`, resolveAutonomyStopAt always includes "merge", and any
+  // per-run merge authorization is ignored (fails closed). See
+  // resolveEffectiveMergeAuthorized.
   humanMergeOnly: z.boolean().describe("Merge stays a fixed human-only action: the agent never merges and any per-run merge authorization is ignored (fails closed).").optional(),
 });
 
 /**
- * Human-handoff config (#920, Request B of #910): at the pre-approval /
- * merge-handoff boundary, OFFER to assign the PR to a contributor
- * reviewer/assignee. Opt-in (default off). Pairs with autonomy.humanMergeOnly.
- * `candidatesFrom` selects which sources the resolver queries; `assignees` is a
- * static highest-priority candidate list. Absent/empty = disabled no-op.
- *
- * Lifted directly onto `approval` (its only child) rather than nested under
- * `approval.humanHandoff` — `approval` had exactly one sub-key, so the wrapper
- * added a level without adding meaning.
+ * Human-handoff config: at the pre-approval / merge-handoff boundary,
+ * OFFER to assign the PR to a contributor reviewer/assignee. Opt-in (default
+ * off). Pairs with autonomy.humanMergeOnly. `candidatesFrom` selects which
+ * sources the resolver queries; `assignees` is a static highest-priority
+ * candidate list. Absent/empty = disabled no-op.
  */
 const ApprovalConfig = z.strictObject({
   enabled: z.boolean().default(false),
@@ -497,21 +392,16 @@ const ApprovalConfig = z.strictObject({
 
 const WorkflowConfig = z.strictObject({
   asyncStartMode: z.enum(["required", "allowed"]).default("required").describe("Whether the async start contract is required or merely allowed."),
-  // ponytail: workflow.asyncStartMode -> asyncStartRequired (secondary cleanup
-  // #5) is DEFERRED — that string is echoed verbatim into the persisted
-  // handoff-envelope contract field (validated, rendered, and cross-checked by
-  // workflow-handoff-contract.test.mjs / the inspect-run viewer), so renaming
-  // it here would also mean renaming a shipped artifact contract, not just a
-  // config key. Out of scope for this config-shape RFC; revisit as its own
-  // change against skills/docs/gate-review-comment-contract.md + the envelope schema.
+  // ponytail: workflow.asyncStartMode -> asyncStartRequired is DEFERRED — the
+  // string is echoed verbatim into the persisted handoff-envelope contract
+  // field (workflow-handoff-contract.test.mjs / inspect-run viewer), so
+  // renaming it means renaming a shipped artifact contract. Out of scope.
   requireRetrospective: z.boolean().describe("Require a retrospective checkpoint for the previous qualifying async completion before the next dev-loop start/resume."),
   requireDraftFirst: z.boolean().describe("Open pull requests as drafts and promote via the draft gate."),
   devModeDefault: z.boolean().describe("Default new loops to dev mode."),
-  // Agent-level stall detection (#1669): when a dev-loop child shows no turn
-  // progress for `thresholdMinutes` with no pending request, the parent bails
-  // to a fresh-context recovery dispatch instead of waiting through a manual
-  // interrupt+resume. `enabled: false` disables the auto-bail and restores
-  // the old wait behavior.
+  // Agent-level stall detection: a child with no turn progress for
+  // thresholdMinutes and no pending request triggers a fresh-context recovery
+  // dispatch. enabled:false restores the old wait behavior.
   stallDetection: z
     .strictObject({
       enabled: z.boolean().default(true).describe("Enable agent-level stall -> auto-fresh-dispatch."),
@@ -532,26 +422,20 @@ const LocalImplementationConfig = z.strictObject({
     enabled: z.boolean().describe("Opt small scoped changes into the lightweight dispatch path."),
     maxFiles: z.number().int().min(1).describe("Light mode applies only when the change touches at most this many files."),
     maxLines: z.number().int().min(1).describe("Light mode applies only when the change stays within this many lines."),
-    // Copilot review round cap for light-dispatched PRs (#1210). Composes with
-    // (does not replace) refinement.maxCopilotRounds — see
+    // Composes with (does not replace) refinement.maxCopilotRounds — see
     // resolveEffectiveCopilotRoundCap.
     maxCopilotRounds: z.number().int().nonnegative().default(1).describe("Copilot round cap for light-dispatched PRs; composes as min(this, refinement.maxCopilotRounds)."),
   }).optional(),
   /**
-   * Opt into issue-less PR-first (`--lightweight` with no --issue) at ANY
-   * change scope. Decoupled from lightMode: gate dispatch still resolves
-   * inline vs full_fanout from scope on its own, so over-threshold issue-less
-   * PRs get the full fan-out and the full-PR Copilot round cap.
-   *
-   * Flattened to a bare boolean — `enabled` was its only child key.
+   * Opt into issue-less PR-first at ANY change scope. Decoupled from lightMode:
+   * gate dispatch still resolves inline vs full_fanout from scope on its own.
    */
   issueless: z.boolean().describe("Opt into issue-less PR-first dispatch at any change scope; gate dispatch still resolves inline vs full fan-out from scope on its own.").optional(),
 });
 
-// GitHub Projects board identifier: exactly one of number/title (two parallel
-// keys folded into one selector object). `ownerKey` names the config key in
-// the refine failure message — each usage site gets its own accurate
-// message rather than a shared one that could name the wrong key.
+// GitHub Projects board identifier: exactly one of number/title. `ownerKey`
+// names the config key in the refine failure message so each usage site gets
+// an accurate message.
 function boardRefConfig(ownerKey) {
   return z
     .strictObject({
@@ -572,22 +456,13 @@ const QueueConfig = z.strictObject({
 });
 
 /**
- * Tracker config (issue #1408, the tracker-agnostic seam). `provider` is a
- * free-form registry key (not a zod enum): an unknown provider fails closed
- * at `resolveTrackerAdapter` call time, not at config-parse time — the
- * seam/resolver must not preclude a consumer registering an external
- * provider post-1.0 (`plugin`, reserved, not implemented in this pass).
- * `board` is the canonical GitHub Projects board identifier (see resolveTrackerBoard).
- *
- * No generic `fieldMappings` (logical-column -> provider-status) key here:
- * the github provider's logical-column -> Status mapping IS the existing,
- * already-load-bearing `queue.statusColumns` (read by `loadStateColumnMap` in
- * `../loop/queue-board-sync.mjs`; `next_up` is the fail-closed pickup column
- * `resolve-active-board-item.mjs` reads). Adding a second, inert mapping key
- * here would collide with that live one rather than replace it. A future
- * external provider defines its OWN logical -> status mapping (its shape is
- * provider-specific) when one is actually implemented — YAGNI to generalize
- * this now for a provider that does not exist yet.
+ * Tracker config (the tracker-agnostic seam). `provider` is a free-form
+ * registry key (not a zod enum): an unknown provider fails closed at
+ * `resolveTrackerAdapter` call time, not at parse time, so a consumer can
+ * register an external provider post-1.0. No generic `fieldMappings` key: the
+ * github provider's logical-column -> Status mapping IS the existing
+ * `queue.statusColumns` (a second key would collide with it); a future external
+ * provider defines its own mapping when implemented (YAGNI now).
  */
 const TrackerConfig = z.strictObject({
   provider: z.string().trim().min(1).describe("Tracker provider registry key. Built-in: \"github\" (default).").optional(),
@@ -596,12 +471,9 @@ const TrackerConfig = z.strictObject({
 });
 
 /**
- * Worktree lifecycle config (#909): which gitignored files/dirs to provision
- * into a fresh worktree from the main checkout. Entries are repo-relative
- * literal paths OR glob patterns, each tagged with its mode (was two parallel
- * `copyOnInit`/`linkOnInit` arrays encoding the mode via which array it lived
- * in). `copy` → `fs.cp` (isolated per worktree); `link` → absolute symlink
- * into the main checkout (read-only data). Empty/absent is a valid no-op.
+ * Worktree lifecycle config: gitignored files/dirs provisioned into a
+ * fresh worktree from the main checkout. Entries are repo-relative literal
+ * paths or globs, each tagged copy or link. Empty/absent is a valid no-op.
  */
 const WorktreeEntry = z.strictObject({
   path: z.string().trim().min(1).describe("Repo-relative path or glob."),
@@ -614,18 +486,14 @@ const WorktreeConfig = z.strictObject({
 
 /**
  * Dev-DB migration sub-recipe for the ui-review run recipe. `statusCommand`
- * lists pending migrations (one per line); `applyCommand` applies them.
+ * lists pending migrations; `applyCommand` applies them.
  *
  * Destructive detection is EXPLICIT and status-format-dependent: the
- * `destructivePattern` regex is matched (case-insensitive, per line) against the
- * STATUS OUTPUT — not against the migration files. The shipped default
- * (DEFAULT_DESTRUCTIVE_MIGRATION_PATTERN) assumes SQL-bearing status output
- * (DROP/TRUNCATE/DELETE FROM ...); against a status command that emits migration
- * identifiers or filenames instead, it matches nothing and the destructive guard
- * is inert. A project whose status output is NOT SQL therefore MUST set a
- * `destructivePattern` that matches its own status format (e.g. a `destructive`/
- * `down` marker), or make `statusCommand` emit the destructive SQL/marker — the
- * default cannot detect what its status output never prints.
+ * `destructivePattern` regex matches (case-insensitive, per line) against the
+ * STATUS OUTPUT, not the migration files. The shipped default assumes
+ * SQL-bearing status output; against non-SQL status output it matches nothing
+ * and the guard is inert, so such a project MUST set a `destructivePattern`
+ * matching its own status format (or make statusCommand emit the SQL/marker).
  */
 const UiReviewMigrateConfig = z.strictObject({
   statusCommand: z.string().trim().min(1),
@@ -650,11 +518,10 @@ const UiReviewMigrateConfig = z.strictObject({
 
 /**
  * Per-project dev-DB row-teardown recipe (Stage 5). The drive stamps each
- * mutating step it drives with a drive-session id (advertised to the app on the
- * DRIVE_SESSION_HEADER request header); this `deleteCommand` deletes exactly the
- * rows the app tagged with that session — the id is passed in the
- * UI_REVIEW_DRIVE_SESSION env var and the command runs in the provisioned
- * worktree (dev DB only). Teardown runs it only on explicit confirmation.
+ * mutating step with a drive-session id; this `deleteCommand` deletes exactly
+ * the rows the app tagged with that session (id in the UI_REVIEW_DRIVE_SESSION
+ * env var; runs in the provisioned worktree, dev DB only). Runs only on
+ * explicit confirmation.
  */
 const UiReviewRowTeardownConfig = z.strictObject({
   deleteCommand: z.string().trim().min(1),
@@ -732,10 +599,8 @@ const UiReviewFlowStepConfig = z.strictObject({
   path: z.string().trim().min(1).optional(),
   value: z.string().optional(),
   event: z.string().trim().min(1).optional(),
-  // Responsive/stateful captures: a declared viewport resizes the page before the
-  // step and bakes into the named-state slug, so the mobile vs desktop (or
-  // default vs error) render lands in a distinct reviewable directory. The route
-  // NAMES its interaction states — the drive never enumerates them itself.
+  // A declared viewport resizes the page before the step and bakes into the
+  // named-state slug, so distinct renders land in distinct reviewable dirs.
   viewport: z.strictObject({ width: z.number().int().positive(), height: z.number().int().positive() }).optional(),
   interactionState: z.enum(["none", "focus", "hover", "error"]).optional(),
 }).superRefine((step, ctx) => {
@@ -804,7 +669,7 @@ const UiReviewConfig = z.strictObject({
     .optional(),
 });
 
-// Default/ceiling bounds for a post-merge action's run/verify timing (#1457).
+// Default/ceiling bounds for a post-merge action's run/verify timing.
 // The default keeps a config-declared action from hanging a harness hook
 // forever when the author leaves timeoutMs unset; the ceiling caps how far a
 // config CAN push it — a config can only tighten these, never loosen past the
@@ -870,13 +735,6 @@ const FileGatesConfig = z.strictObject({
 
 // ============================================================================
 // Full schema — families are optional (BUILT_IN_DEFAULTS provides fallback)
-//
-// The `tracker:` config block is intentionally reserved here; a future
-// tracker-seam change adds it on top of this restructured schema. Not added
-// in this pass — this is the config-shape redesign only — but resolvers in
-// this module take the effective config as a plain parameter (no
-// global/singleton reads), so a later tracker adapter (and any multi-tracker
-// layer on top of it) stays additive.
 // ============================================================================
 
 /**
@@ -974,23 +832,14 @@ export const FileConfigSchema = z.strictObject({
   worktree: WorktreeConfig.partial().describe("Worktree provisioning: gitignored files/dirs copied or symlinked into fresh worktrees.").optional(),
   uiReview: UiReviewConfig.partial().describe("UI-review route recipes: per-project run/boot, dev-login, driven flows, and caps.").optional(),
   postMerge: PostMergeConfig.partial().describe("Post-merge local hook actions (postMerge.actions): consumer-declared commands run sequentially, in order, after a merge succeeds — optionally scoped to changed-file substrings (onlyIfChanged) and polled for readiness (verify).").optional(),
-  // 1.0 hard break (no dual-form): the deprecated `localPlanning` key (removed
-  // behavior in #1088, tolerated-but-unread since) is dropped from the 1.0
-  // schema entirely — an unknown key now fails closed like any other typo,
-  // rather than silently parsing and doing nothing.
+  // Unknown keys fail closed like any typo (strictObject).
 });
 
 // ============================================================================
 // Built-in persona registry — fallback for gate-review angle → reviewer
-// persona resolution.
-//
-// Maps gate-review angle names to reviewer personas. Only the persona name is
-// defined here; prompts and per-angle model overrides live on the angle's own
-// config entry (gates.<gate>.angles[].persona/.prompt/.model/.tier) when a
-// consumer wants to override this registry — see resolveReviewerRole.
-//
-// Angle names come from the gate-angle config (gates.draft.angles /
-// gates.preApproval.angles in extension-defaults.yaml).
+// persona resolution. Only the persona name is defined here; prompts and
+// per-angle model overrides live on the angle's own config entry (see
+// resolveReviewerRole).
 // ============================================================================
 
 const BUILTIN_PERSONAS = Object.freeze({
@@ -1084,25 +933,12 @@ function normalizeAngleEntries(raw) {
 
 /**
  * Find a named angle's configured entry, searching this config's own gates in
- * a fixed priority order (draft, preApproval, spike). Angle persona/prompt/
- * model/tier now live on the gate's own angle entry (D3/D4 — folded from the
- * removed top-level `personas` map and angle-keyed `models.roles`/
- * `models.roleTiers`), so a lookup by name alone (no gate context, matching
- * `resolveReviewerRole`/`resolveRoleModel`'s existing signatures) checks each
- * gate in turn and returns the first match. The shipped default config never
- * gives the same angle name divergent overrides across gates, so this is
- * unambiguous in practice.
- *
- * A DISABLED entry (`enabled: false`) is skipped, never returned: the same
- * angle name can be a real, enabled angle with its own persona/prompt on one
- * gate while merely disabled (a bare `enabled:false` placeholder, no override
- * fields) on another — e.g. a gate that inherited the name via merge-by-name
- * (D3) and dropped it. Returning that placeholder would shadow the other
- * gate's real override. Both callers of this function (resolveReviewerRole,
- * resolveRoleModel's angle path) only ever look up a name already present in
- * SOME gate's enabled, resolved angle list (`resolveGateAngles`), so a name
- * disabled everywhere and enabled nowhere is never actually queried — there
- * is no "return the disabled entry as a last resort" case to serve.
+ * a fixed priority order (draft, preApproval, spike) and returning the first
+ * match. A DISABLED entry (`enabled: false`) is SKIPPED, never returned:
+ * returning a bare `enabled:false` placeholder would shadow another gate's real
+ * override of the same angle name. Both callers only ever look up a name
+ * already present in some gate's enabled resolved list, so a name disabled
+ * everywhere is never queried.
  * @param {DevLoopConfig} config
  * @param {string} name
  * @returns {{name: string, mandatory?: boolean, enabled?: boolean, persona?: string, prompt?: string, model?: string, tier?: string}|null}
@@ -1117,14 +953,10 @@ function findAngleEntry(config, name) {
 }
 
 /**
- * Resolve a gate angle's declared surface scope (AC3, #1572): "full"
- * (default), "changed-files", or "docs-only" — see GATE_ANGLE_SCOPES. Unlike
- * {@link findAngleEntry} (which searches every gate in a fixed priority
- * order because persona/prompt resolution has no gate context), this looks up
- * the entry within the ONE named gate — an angle's scope is meaningful only
- * for the specific gate pass building its briefing. Fails open to "full" for
- * an angle with no configured entry, a disabled entry, or an
- * unknown/malformed `scope` value: a narrow scope is an opt-in cost saving,
+ * Resolve a gate angle's declared surface scope: see GATE_ANGLE_SCOPES.
+ * Looks up the entry within the ONE named gate (scope is meaningful only for
+ * that gate's briefing pass). Fails open to "full" for a missing/disabled entry
+ * or an unknown/malformed `scope` — a narrow scope is an opt-in cost saving,
  * never a silently-enforced information cut.
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"|"spike"} gate
@@ -1158,23 +990,15 @@ function resolveTierMapping(config, tierAlias, harness) {
 }
 
 /**
- * Resolve a gate angle name to a reviewer persona and model.
- *
- * Resolution order:
- * 1. Look up the angle's own configured entry across this config's gates
- *    (`gates.<gate>.angles[].persona`/`.prompt`/`.model` — consumer overrides,
- *    see {@link findAngleEntry})
- * 2. If not found in config, look up in BUILTIN_PERSONAS
- * 3. If found in either, apply the entry's `model` override if present
- * 4. If not found anywhere, fall back to default reviewer with angle as focus lens,
- *    still applying any `model` override from the entry
- *
+ * Resolve a gate angle name to a reviewer persona and model. Resolution:
+ * the angle's own configured entry (findAngleEntry), else BUILTIN_PERSONAS,
+ * applying any entry `model` override; an unknown angle falls back to the
+ * default reviewer (still honoring a `model` override).
  * @param {object} config - DevLoopConfig (or a partial with gates)
  * @param {string|null|undefined} angle - Gate angle / lens name
  * @returns {RoleResolutionResult}
  */
 export function resolveReviewerRole(config, angle) {
-  // Null/undefined/empty angle → fallback
   if (angle == null || angle === "") {
     return {
       persona: DEFAULT_REVIEWER_PERSONA,
@@ -1212,28 +1036,17 @@ export function resolveReviewerRole(config, angle) {
  * `null` (inherit → pass no model override).
  *
  * Precedence:
- *   1. `kind: "angle"` (gate review dispatch): the angle's own configured
- *      `model` (concrete, found via {@link findAngleEntry}), else its `tier`,
- *      else the built-in `review` tier — a gate review runs at review quality
- *      even when the angle's name collides with a routine role, e.g. the
- *      `docs` angle resolves via the `review` tier (high), not the `docs`
- *      writer role's low tier. (Its persona/agent still comes from
- *      `resolveReviewerRole`; only the tier is forced to review.)
- *   2. `kind: "role"`/absent (routine subagent): `models.roles[role]`
- *      (concrete, highest precedence), else `models.roleTiers[role]` (or the
- *      built-in role tier) mapped through `models.tiers[tier][harness]` (or
- *      built-in tiers); `inherit`/absent/null → `null`. When the name is not a
- *      named role, falls back to the tier for its review persona (so a
- *      non-colliding gate angle passed without `kind` still resolves high via
- *      `review`).
+ *   1. `kind: "angle"` (gate review dispatch): the angle's own `model`, else its
+ *      `tier`, else the built-in `review` tier — so a gate review runs at review
+ *      quality even when the angle name collides with a routine role (e.g. the
+ *      `docs` angle resolves high via `review`, not the `docs` writer's low tier).
+ *   2. `kind: "role"`/absent (routine subagent): `models.roles[role]`, else
+ *      `models.roleTiers[role]` (or the built-in role tier) mapped through
+ *      `models.tiers`; `inherit`/absent/null → null. A non-role name falls back
+ *      to its review persona's tier.
  *
- * Callers dispatching a gate review angle whose name may collide with a routine
- * role (only `docs` today) MUST pass `kind: "angle"` to avoid the silent
- * downgrade; role dispatch leaves `kind` unset.
- *
- * Zero-config is a genuine no-op on Pi (built-in tiers are null for pi) and
- * reproduces the standing policy on Claude (routine=low, refiner/review=high,
- * dev-loop=inherit).
+ * Callers dispatching a gate angle whose name may collide with a routine role
+ * (only `docs` today) MUST pass `kind: "angle"` to avoid the silent downgrade.
  *
  * @param {DevLoopConfig} config
  * @param {{ role: string, harness: "claude"|"pi", kind?: "role"|"angle" }} params
@@ -1249,9 +1062,7 @@ export function resolveRoleModel(config, { role, harness, kind } = {}) {
     return resolveTierMapping(config, tierAlias, harness);
   }
 
-  // 1. Concrete per-role override wins outright (over any tier). Role-keyed
-  // only — angle-keyed concrete overrides moved to the gate's angle entry
-  // (kind: "angle", above).
+  // Concrete per-role override wins outright over any tier (role-keyed only).
   const concrete = config?.models?.roles?.[role];
   if (typeof concrete === "string" && concrete.trim().length > 0) {
     return concrete.trim();
@@ -1347,7 +1158,7 @@ function mergeGatesFamily(target, source) {
 
 /**
  * Merge one gate object (draft/preApproval/spike) across config layers.
- * `angles` merges BY NAME (D3): a later layer can add a new angle, or override
+ * `angles` merges BY NAME: a later layer can add a new angle, or override
  * an existing angle's flags (including `enabled: false` to drop it), without
  * restating the whole array. `dynamic` merges shallowly (its two booleans).
  * Every other key (`required`, `requireCi`, `blockCleanOnFindingSeverities`)
@@ -1368,7 +1179,7 @@ function mergeGateObject(target, source) {
 }
 
 /**
- * Merge two `gates.<gate>.angles` arrays BY `name` (D3): entries in `target`
+ * Merge two `gates.<gate>.angles` arrays BY `name`: entries in `target`
  * keep their position; a `source` entry with a name already in `target`
  * overrides that entry's fields (shallow — e.g. `{ enabled: false }` drops it
  * without touching its `persona`/`prompt`); a `source` entry with a new name
@@ -1451,12 +1262,9 @@ async function findConfigFile(basePaths) {
   const candidates = Array.isArray(basePaths) ? basePaths : [basePaths];
 
   for (const basePath of candidates) {
-    // Try bare path first (e.g., .devloops without extension).
-    // Success returns immediately.
-    // ENOENT: file genuinely absent — try extension variants.
-    // Other errors (EISDIR, EACCES): file exists but is unreadable —
-    // try extension variants as fallback, but surface the original
-    // error if no extension variant exists.
+    // Try bare path first. ENOENT: try extension variants. Other errors
+    // (EISDIR/EACCES) mean the bare file exists but is unreadable — try
+    // extension variants, but surface the original error if none exists.
     let bareData = null;
     let bareError = null;
     try {
@@ -1525,10 +1333,9 @@ async function applyLayer(merged, basePaths, layer, warnings, errors, options = 
     return merged;
   }
 
-  // Deprecated `strategy: "github-first"` alias (issue #1408, the
-  // tracker-agnostic seam): normalized to "tracker-first" BEFORE this layer's
-  // own FileConfigSchema validation, since the schema enum only accepts the
-  // canonical value and would otherwise drop the whole layer as invalid.
+  // Deprecated `strategy: "github-first"` alias: normalized to
+  // "tracker-first" BEFORE this layer's FileConfigSchema validation (the enum
+  // only accepts the canonical value, else the whole layer drops as invalid).
   if (data.strategy === "github-first") {
     warnings.push(
       `strategy: "github-first" is a deprecated alias for "tracker-first" (issue #1408). ` +
@@ -1537,11 +1344,9 @@ async function applyLayer(merged, basePaths, layer, warnings, errors, options = 
     data = { ...data, strategy: "tracker-first" };
   }
 
-  // Removed `gates.primeSharedPrefix` (#1462): GATE-EXEC-PRIME cache priming is
-  // now mandatory, not a knob. The schema is strictObject, so a stale key would
-  // otherwise drop the WHOLE gates layer as invalid. Strip it before validation
-  // with a deprecation warning — old configs keep loading; priming happens
-  // unconditionally regardless of the removed value.
+  // gates.primeSharedPrefix is not a knob (priming is always on). The schema is
+  // strictObject, so strip this stale key before validation (with a deprecation
+  // warning) rather than let it drop the whole gates layer.
   if (data?.gates && Object.prototype.hasOwnProperty.call(data.gates, "primeSharedPrefix")) {
     warnings.push(
       `gates.primeSharedPrefix is removed (#1462): cache priming is now mandatory, not configurable. ` +
@@ -1551,24 +1356,15 @@ async function applyLayer(merged, basePaths, layer, warnings, errors, options = 
     data = { ...data, gates: gatesRest };
   }
 
-  // Validate the file's structure before merging. Pre-existing behavior
-  // (unrelated to the #1404 angle-entry redesign): a schema violation ANYWHERE
-  // in this layer's file drops the WHOLE layer (errors is populated, `merged`
-  // is returned unchanged) rather than merging the rest of the file's valid
-  // keys — a single typo'd angle field is exactly as disruptive as a
-  // completely broken file. `errors[].message` now names the offending
-  // path/field (see GateAngleEntry's preprocess-not-union shape), so the
-  // failure is at least actionable; the whole-layer-skip granularity itself
-  // is an existing, separate concern.
+  // Validate the file's structure before merging: a schema violation ANYWHERE
+  // in this layer drops the WHOLE layer (errors populated, `merged` returned
+  // unchanged) rather than merging the file's other valid keys. errors[].message
+  // names the offending path/field so the failure is actionable.
   const validation = FileConfigSchema.safeParse(data);
   if (!validation.success) {
     // Surface a visible WARNING (not just the structured error) so the
-    // whole-layer drop is never silent (#1578): many consumers destructure
-    // only `config` (or `config` + `warnings`) and never read `errors`, so a
-    // schema-rejected layer would vanish without a trace. Naming the
-    // offending keys here lets a stale raw-key config (e.g.
-    // gates.<gate>.mandatoryAngles/excludeAngles) point at the canonical
-    // angle-entry migration path.
+    // whole-layer drop is never silent: many consumers never read
+    // `errors`, so a schema-rejected layer would vanish without a trace.
     const offendingKeys = validation.error.issues
       .flatMap((i) => {
         if (i.code === "unrecognized_keys" && Array.isArray(i.keys) && i.keys.length) {
@@ -1577,10 +1373,9 @@ async function applyLayer(merged, basePaths, layer, warnings, errors, options = 
         }
         return i.path.length ? [i.path.join(".")] : [];
       });
-    // Gate the raw-key migration hint: only append it when the offending
-    // keys actually include the pre-redesign mandatoryAngles/excludeAngles
-    // names, so an unrelated schema failure (e.g. a type error) does not get
-    // misleading raw-key migration guidance. (#1578)
+    // Only append the raw-key migration hint when the offending keys actually
+    // include the raw mandatoryAngles/excludeAngles names, so an unrelated
+    // failure does not get misleading guidance.
     const hasRawGateKey = offendingKeys.some((k) => /mandatoryAngles|excludeAngles/.test(k));
     const migrationHint = hasRawGateKey
       ? ` Migrate raw gates.<gate>.mandatoryAngles/excludeAngles to the canonical angle-entry shape ` +
@@ -1648,11 +1443,9 @@ export async function loadDevLoopConfig(options = {}) {
     warnOnMissing: true,
   });
 
-  // Check if .devloops exists (primary consumer override)
-  // Only ENOENT means the file is genuinely absent; any other error
-  // (EACCES, EISDIR, etc.) means the file exists but is unreadable,
-  // so we must select the .devloops path so applyLayer can record the
-  // structured error.
+  // .devloops (primary override) existence: only ENOENT means genuinely absent.
+  // Any other error (EACCES/EISDIR) means it exists but is unreadable, so
+  // select the .devloops path and let applyLayer record the structured error.
   let primaryExists = false;
   for (const ext of ["", ".yaml", ".yml", ".json"]) {
     try {
@@ -1669,7 +1462,6 @@ export async function loadDevLoopConfig(options = {}) {
   }
 
   if (primaryExists) {
-    // .devloops is the primary override — apply it
     merged = await applyLayer(merged, devloopsPath, "devloops", warnings, errors);
   }
 
@@ -1689,14 +1481,8 @@ export async function loadDevLoopConfig(options = {}) {
 }
 
 /**
- * Resolve the conductor model from the merged dev-loop config.
- *
- * Returns the configured model string if present, or null when the config
- * does not specify a conductor model override (caller falls back to its
- * own built-in default).
- *
- * Accepts the validated DevLoopConfig from {@link loadDevLoopConfig}.
- *
+ * Resolve the conductor model override from the merged config, or null when
+ * unset (caller falls back to its own default).
  * @param {DevLoopConfig} config
  * @returns {string|null}
  */
@@ -1709,17 +1495,8 @@ export function resolveConductorModel(config) {
 }
 
 /**
- * Resolve the autonomy stop-at list from the merged dev-loop config.
- *
- * Returns the set of gates that require operator confirmation. Gates not in
- * the returned list may proceed automatically once their review conditions
- * are satisfied.
- *
- * Defaults to `["merge"]` when the config does not specify `autonomy.stopAt`
- * (the conservative built-in posture: everything auto-continues until merge).
- *
- * Accepts the validated DevLoopConfig from {@link loadDevLoopConfig}.
- *
+ * Resolve the autonomy stop-at list (gates that require operator confirmation)
+ * from the merged config. Defaults to `["merge"]` when unset.
  * @param {DevLoopConfig} config
  * @returns {string[]}
  */
@@ -1736,12 +1513,8 @@ export function resolveAutonomyStopAt(config) {
 }
 
 /**
- * Resolve the fixed human-merge-only invariant from the merged dev-loop config.
- *
- * When true, the agent must never perform the merge itself: `gh pr merge` is a
- * human-only action and any per-run merge authorization is ignored. Defaults to
- * false (the agent may merge once authorized).
- *
+ * True when `autonomy.humanMergeOnly` forces merge to be a human-only action
+ * (the agent never merges; per-run authorization is ignored). Defaults false.
  * @param {DevLoopConfig} config
  * @returns {boolean}
  */
@@ -1790,11 +1563,7 @@ const DEFAULT_REFINEMENT_CONFIG = BUILT_IN_DEFAULTS.refinement;
 const DEFAULT_WORKFLOW_CONFIG = BUILT_IN_DEFAULTS.workflow;
 
 /**
- * Resolve one refinement configuration value from the merged dev-loop config.
- *
- * Returns the configured value when present, or the built-in default for the
- * requested key.
- *
+ * Resolve one refinement config value, or its built-in default.
  * @param {DevLoopConfig} config
  * @param {"fanOut"|"mode"|"roles"|"maxCopilotRounds"|"stopOnLowSignal"|"lowSignalRoundThreshold"|"lowSignalMaxComments"} key
  * @returns {number|"parallel"|"sequential"|string[]|boolean|null}
@@ -1834,15 +1603,9 @@ export function resolveRefinementConfig(config, key) {
 }
 
 /**
- * Resolve the refinement configuration from the merged dev-loop config.
- *
- * Returns `{ fanOut, mode, roles, maxCopilotRounds, stopOnLowSignal, lowSignalRoundThreshold, lowSignalMaxComments }` with sensible built-in
- * defaults (`fanOut: 3`, `mode: "parallel"`, `roles: null`,
- * `maxCopilotRounds: 5`, `stopOnLowSignal: false`, `lowSignalRoundThreshold: 3`,
- * `lowSignalMaxComments: 2`).
- *
- * Accepts the validated DevLoopConfig from {@link loadDevLoopConfig}.
- *
+ * Resolve the full refinement config with built-in defaults (fanOut 3, mode
+ * parallel, roles null, maxCopilotRounds 5, low-signal off/3/2), plus the
+ * resolved preApproval requireCi.
  * @param {DevLoopConfig} config
  * @returns {{ fanOut: number, mode: "parallel"|"sequential", roles: string[]|null, maxCopilotRounds: number, stopOnLowSignal: boolean, lowSignalRoundThreshold: number, lowSignalMaxComments: number }}
  */
@@ -1854,11 +1617,9 @@ export function resolveRefinement(config) {
   const stopOnLowSignal = /** @type {boolean} */ (resolveRefinementConfig(config, "stopOnLowSignal"));
   const lowSignalRoundThreshold = /** @type {number} */ (resolveRefinementConfig(config, "lowSignalRoundThreshold"));
   const lowSignalMaxComments = /** @type {number} */ (resolveRefinementConfig(config, "lowSignalMaxComments"));
-  // #1337: centralize the pre-approval CI opt-out here so every caller that
-  // builds its interpreter refinement config from `resolveRefinement(config)`
-  // (detect-copilot-loop-state, copilot-pr-handoff, gate coordination, etc.)
-  // reliably honors `gates.preApproval.requireCi: false` — otherwise a CI-less
-  // repo would still be interpreted as waiting_for_ci / blocked in those tools.
+  // Centralize the pre-approval CI opt-out here so every caller building
+  // its refinement config from resolveRefinement honors
+  // gates.preApproval.requireCi: false.
   const preApprovalRequireCi = resolveGateConfig(config, "preApproval").requireCi;
   return { fanOut, mode, roles, maxCopilotRounds, stopOnLowSignal, lowSignalRoundThreshold, lowSignalMaxComments, preApprovalRequireCi };
 }
@@ -1909,65 +1670,40 @@ function resolveBlockingSeverities(config, gate) {
 }
 
 /**
- * Resolve one gate configuration object from the merged dev-loop config.
- *
- * Returns the configured gate angles when present, or null for angles when the
- * config omits them (caller falls back to skill-defined defaults). Boolean gate
- * flags always resolve to stable defaults.
+ * Resolve one gate configuration object from the merged config.
  *
  * The returned shape is the STABLE, resolved view every other angle resolver
- * and consumer builds on — `mandatoryAngles`/`excludeAngles`/`dynamicAngles`/
- * `additiveAngles` are derived here from the unified `gates.<gate>.angles`
- * array (`mandatory: true` / `enabled: false` per-entry, D3) and the
- * `gates.<gate>.dynamic` sub-object, so downstream consumers keep reading the
- * same field names the pre-1.0 flat config keys used. (`extraAngles` no
- * longer exists as a concept: D3's merge-by-name lets a later config layer add
- * a plain, non-mandatory angle to `angles` directly, without restating the
- * list — the exact ergonomic `extraAngles` used to provide.)
+ * builds on: `mandatoryAngles`/`excludeAngles`/`dynamicAngles`/`additiveAngles`
+ * are derived here from the unified `gates.<gate>.angles` array (`mandatory` /
+ * `enabled: false` per entry) and `gates.<gate>.dynamic`, so downstream
+ * consumers keep reading the flat field names. `angles: null` means the
+ * key was absent (fall back to skill defaults); an empty array is a real
+ * configured "no angles".
  *
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"|"spike"} gate
  * @returns {{ angles: string[]|null, excludeAngles: string[], mandatoryAngles: string[], required: boolean, requireCi: boolean, blockCleanOnFindingSeverities: string[], dynamicAngles: boolean, additiveAngles: boolean, mediumFixWindow: number, tiers: Array<{name: string, match: object, angles: string[]}> }}
- * @throws {Error} when ANY gate's (draft, preApproval, or spike — not only
- *   the requested `gate`'s) PRESENT `blockCleanOnFindingSeverities` key is
- *   any schema-invalid shape: a non-array value, an empty array, or an entry
- *   that is not one of the schema enum's exact spellings. Every such shape
- *   can only arrive through a config that failed schema validation (the
- *   schema requires a min-1 array of the enum spellings; the guard
- *   exact-matches raw entries against the same spelling list, so its accept
- *   set is byte-identical to the schema's), and passing it through would make
- *   the affected gate block on the wrong severities or on nothing at all.
- *   Validated EAGERLY across all three gates on every call — not lazily,
- *   only for the requested `gate` — so that a single-gate consumer (e.g. a
- *   draft-only fan-in consolidation) can never proceed and produce a
- *   side-effect (write a ledger artifact, flip ready-for-review) while a
- *   DIFFERENT gate's severity list is invalid; that invalid gate would only
- *   have surfaced later, lazily, at a dual-gate call site (e.g. verdict
- *   posting), after the single-gate side effect already happened. This is
- *   the stated boundary with the module's degrade-quietly convention for
- *   dispatch-ergonomics keys (resolveMaxAnglesPerGroup substitutes its
- *   default, resolveFanoutGroups drops malformed entries): those keys only
- *   shape dispatch, so they degrade; the key that decides what blocks a
- *   clean verdict refuses, fail-closed, before any gate proceeds. An ABSENT
- *   key still falls back to the default unchanged.
+ * @throws {Error} when ANY gate's (not only the requested one's) PRESENT
+ *   `blockCleanOnFindingSeverities` is schema-invalid (non-array, empty, or an
+ *   out-of-vocabulary entry). Validated EAGERLY across all three gates on every
+ *   call so a single-gate consumer can never produce a side effect while a
+ *   DIFFERENT gate's severity list is invalid. Dispatch-ergonomics keys degrade
+ *   quietly instead (resolveMaxAnglesPerGroup/resolveFanoutGroups); the key that
+ *   decides what blocks a clean verdict refuses, fail-closed. An ABSENT key
+ *   falls back to the default.
  */
 export function resolveGateConfig(config, gate) {
   const gateConfig = config?.gates?.[gate];
-  // Eagerly validate every gate's blockCleanOnFindingSeverities together
-  // (not just the requested `gate`'s) so an invalid list on ANY gate refuses
-  // up front, before this call's single-gate result can be used for a
-  // side effect that a later, different-gate call would otherwise still be
-  // able to reach lazily. See the @throws doc above for the reachability
-  // this closes.
+  // Eagerly validate every gate's blockCleanOnFindingSeverities (not just the
+  // requested one) so an invalid list on ANY gate refuses up front. See @throws.
   let blockCleanOnFindingSeverities = ["high"];
   for (const g of GATE_KEYS_WITH_BLOCKING_SEVERITIES) {
     const resolved = resolveBlockingSeverities(config, g);
     if (g === gate) blockCleanOnFindingSeverities = resolved;
   }
   const entries = normalizeAngleEntries(gateConfig?.angles);
-  // An explicitly-empty (or all-garbage/malformed) array is a real configured
-  // "no angles" — distinct from the key being absent entirely, which callers
-  // read as "fall back to skill-defined defaults" (angles: null).
+  // An explicitly-empty array is a real configured "no angles" — distinct from
+  // the key being absent (angles: null → fall back to skill defaults).
   const hasAngles = Array.isArray(gateConfig?.angles);
   return {
     angles: hasAngles ? entries.filter((e) => e.enabled !== false).map((e) => e.name) : null,
@@ -1977,30 +1713,22 @@ export function resolveGateConfig(config, gate) {
     requireCi: gateConfig?.requireCi ?? true,
     dynamicAngles: gateConfig?.dynamic?.subtractive ?? true,
     additiveAngles: gateConfig?.dynamic?.additive ?? false,
-    // Normalized + deduped at the resolve boundary (above) so every consumer
-    // (envelope, verdict poster, fan-in, viewer) sees canonical spellings
-    // only; a half-migrated ["must-fix","low","defer"] collapses to two
-    // entries, and anything outside the vocabulary has already thrown.
+    // Normalized + deduped at the resolve boundary so every consumer sees
+    // canonical spellings only (anything outside the vocabulary already threw).
     blockCleanOnFindingSeverities,
-    // `mediumFixWindow` wins; `worthFixingNowFixWindow` is the deprecated
-    // pre-rename key, still honored so an unmigrated config keeps its
-    // configured window rather than silently reverting to the default.
+    // mediumFixWindow wins; worthFixingNowFixWindow is the deprecated alias,
+    // still honored so an unmigrated config keeps its window.
     mediumFixWindow: gateConfig?.mediumFixWindow ?? gateConfig?.worthFixingNowFixWindow ?? 3,
     tiers: gateConfig?.tiers ?? [],
   };
 }
 
 /**
- * Resolve whether fan-out/fan-in review evidence is required for a gate verdict.
- *
- * Default-on (opt-out): enforcement is ON unless `gates.requireFanoutEvidence`
- * is explicitly set to false. When ON, the pre-merge evidence check fails
- * closed unless a required gate's recorded executionMode is "fanout_fanin" and
- * a durable findings-log ledger exists for that gate + head SHA. Using a
- * `!== false` test (rather than `=== true`) keeps the opt-out semantics robust
- * for programmatically-built config objects that bypass schema defaulting. See
+ * Resolve whether fan-out/fan-in evidence is required for a gate verdict.
+ * Default-on (opt-out): ON unless `gates.requireFanoutEvidence` is false. The
+ * `!== false` test (not `=== true`) keeps the opt-out robust for
+ * programmatically-built configs that bypass schema defaulting. See
  * skills/docs/gate-review-sub-loop-contract.md.
- *
  * @param {DevLoopConfig} config
  * @returns {boolean}
  */
@@ -2019,15 +1747,10 @@ export function resolveRequireFanoutEvidence(config) {
 export const FANOUT_PROVENANCE_MIN_REVIEWERS = 2;
 
 /**
- * Resolve whether fan-out *provenance* is required for a fanout_fanin gate
- * verdict (distinct reviewer count + per-angle dispatch recorded in the ledger).
- *
- * Default-OFF (opt-in): unlike resolveRequireFanoutEvidence, this uses a strict
- * `=== true` test so behavior is byte-identical to today unless a repo
- * explicitly opts in via `gates.requireFanoutProvenance: true`. Layered on top
- * of fan-out evidence enforcement (see buildFanoutEnforcement). See
- * skills/docs/gate-review-sub-loop-contract.md.
- *
+ * Resolve whether fan-out provenance is required for a fanout_fanin verdict.
+ * Default-OFF (opt-in): a strict `=== true` test keeps behavior byte-identical
+ * unless a repo sets `gates.requireFanoutProvenance: true`. Layered on top of
+ * fan-out evidence enforcement. See skills/docs/gate-review-sub-loop-contract.md.
  * @param {DevLoopConfig} config
  * @returns {boolean}
  */
@@ -2047,16 +1770,10 @@ export function resolveRejectForeignAngles(config) {
 }
 
 /**
- * Resolve whether the consolidated gate fan-out findings should ALSO be posted
- * as a second visible, marker-tagged PR comment.
- *
- * Returns false unless `gates.postFindingsComments` is explicitly set to true.
- * The round's verdict review is already the findings surface
- * (`GATE-COMMENT-SINGLE-SURFACE`), so this comment is opt-in duplication; the
- * `=== true` test keeps that opt-in semantics for programmatically-built config
- * objects that bypass schema defaulting. The disposition ledger is written
- * regardless. See skills/docs/gate-review-sub-loop-contract.md.
- *
+ * Resolve whether the consolidated gate findings should ALSO post as a second
+ * marker-tagged PR comment. False unless `gates.postFindingsComments === true`
+ * (opt-in duplication; the verdict review is already the findings surface). The
+ * disposition ledger is written regardless.
  * @param {DevLoopConfig} config
  * @returns {boolean}
  */
@@ -2065,11 +1782,8 @@ export function resolveGatePostFindingsComments(config) {
 }
 
 /**
- * Resolve local implementation light mode config.
- *
- * Returns null when light mode is disabled (config absent or enabled=false).
- * Returns { maxFiles, maxLines } when enabled.
- *
+ * Resolve local implementation light mode: null when disabled (absent or
+ * enabled=false), else { maxFiles, maxLines }.
  * @param {DevLoopConfig} config
  * @returns {{ maxFiles: number, maxLines: number } | null}
  */
@@ -2087,11 +1801,9 @@ export function resolveLightMode(config) {
 }
 
 /**
- * Resolve the issue-less PR-first any-scope opt-in (#1349).
- *
- * True only when `localImplementation.issueless` is exactly `true`; absent,
- * false, or malformed values resolve to false (fail closed).
- *
+ * Resolve the issue-less PR-first any-scope opt-in. True only when
+ * `localImplementation.issueless` is exactly `true`; absent/false/malformed
+ * resolve to false (fail closed).
  * @param {DevLoopConfig} config
  * @returns {boolean}
  */
@@ -2100,15 +1812,10 @@ export function resolveIssuelessEnabled(config) {
 }
 
 /**
- * Resolve the effective Copilot review round cap for a PR (#1210).
- *
- * Full PRs (lightweight=false) use `refinement.maxCopilotRounds` unchanged
- * (default 5). Light-dispatched PRs compose with it rather than replacing it:
- * `effective = min(localImplementation.lightMode.maxCopilotRounds ?? 1,
- * refinement.maxCopilotRounds)` — so setting `refinement.maxCopilotRounds: 0`
- * disables Copilot rounds everywhere, including lightweight, with that one
- * setting.
- *
+ * Resolve the effective Copilot review round cap for a PR. Full PRs use
+ * `refinement.maxCopilotRounds` (default 5); light-dispatched PRs compose as
+ * min(lightMode.maxCopilotRounds ?? 1, refinement.maxCopilotRounds), so
+ * `refinement.maxCopilotRounds: 0` disables Copilot rounds everywhere.
  * @param {DevLoopConfig} config
  * @param {{ lightweight?: boolean }} [options]
  * @returns {number}
@@ -2130,25 +1837,20 @@ export function resolveEffectiveCopilotRoundCap(config, { lightweight = false } 
 export const GATE_FULL_LABEL = "gate:full";
 
 /**
- * Decide whether a gate should run as a single-agent inline check or the full
- * fan-out, from light-mode config + authoritative PR facts.
+ * Decide whether a gate runs as a single-agent inline check or full fan-out,
+ * from light-mode config + authoritative PR facts.
  *
  * Precedence (first match wins):
- *   1. `gate:full` label present            → full_fanout (label override)
- *   2. light mode disabled / no threshold    → full_fanout (light mode off)
- *   3. scope over threshold (files OR lines) → full_fanout (over threshold)
- *   4. inline check produced a finding whose severity is in the gate's
- *      blockCleanOnFindingSeverities set     → full_fanout (escalated)
+ *   1. `gate:full` label present            → full_fanout
+ *   2. light mode disabled / no threshold    → full_fanout
+ *   3. scope over threshold (files OR lines) → full_fanout
+ *   4. inline finding severity in the gate's blockCleanOnFindingSeverities set
+ *                                            → full_fanout (escalated)
  *   5. otherwise                             → inline
  *
- * Two call phases share this one function:
- *   - pre-check: omit `inlineFindingSeverities` (undefined) → decides whether to
- *     run the inline pass at all.
- *   - escalation: pass the inline pass's finding severities → auto-escalates when
- *     the inline check surfaced anything worth fixing.
- *
- * Absent or partial `facts.scope` fails safe to full_fanout (missing
- * filesChanged/linesChanged are treated as `Infinity` → over threshold).
+ * Pre-check omits `inlineFindingSeverities` (decides whether to run the inline
+ * pass at all); escalation passes the inline pass's severities. Absent/partial
+ * `facts.scope` fails safe to full_fanout (missing counts → Infinity).
  *
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"} gate
@@ -2183,13 +1885,13 @@ export function resolveGateDispatchMode(config, gate, { scope, hasFullLabel = fa
 }
 
 /**
- * Default auto-chunk size for ungrouped angles (issue #1601). Mirrors the
+ * Default auto-chunk size for ungrouped angles. Mirrors the
  * zod default on `gates.fanout.maxAnglesPerGroup`.
  */
 export const DEFAULT_MAX_ANGLES_PER_GROUP = 3;
 
 /**
- * Default concurrent-dispatch-unit cap per wave (issue #1601). Mirrors the
+ * Default concurrent-dispatch-unit cap per wave. Mirrors the
  * zod default on `gates.fanout.maxConcurrent`; consumed by
  * `scheduleFanoutWaves` (@dev-loops/core/loop/gate-fanin).
  */
@@ -2197,13 +1899,10 @@ export const DEFAULT_FANOUT_MAX_CONCURRENT = 4;
 export const DEFAULT_FANOUT_SEQUENTIAL = false;
 
 /**
- * Resolve `gates.fanout.sequential` (issue #1726, default false). Serial
- * (one-at-a-time) dispatch of heavy reviewers so each completes and writes its
- * evidence before the next starts — the concurrency bound that keeps genuine
- * fan-out from SIGTERMing under child-safe parallel overload. Separate from
- * `maxConcurrent` so a repo may choose either serial (sequential: true) or a
- * small parallel cap (maxConcurrent: 1-2, sequential: false); the shipped
- * default stays false for cross-harness non-regression (#1086).
+ * Resolve `gates.fanout.sequential` (default false). Serial one-at-a-time
+ * dispatch of heavy reviewers so each writes its evidence before the next
+ * starts. Separate from `maxConcurrent`. The shipped default stays false for
+ * cross-harness non-regression.
  * @param {DevLoopConfig} config
  * @returns {boolean}
  */
@@ -2213,10 +1912,8 @@ export function resolveFanoutSequential(config) {
 }
 
 /**
- * Resolve the effective fan-out concurrency (dispatch units per wave) for a
- * round: 1 when `gates.fanout.sequential` is set (serial dispatch forces one
- * unit per wave), else `resolveFanoutMaxConcurrent`. The conductor builds the
- * wave plan from this effective value (issue #1726).
+ * Resolve the effective fan-out concurrency (dispatch units per wave): 1 when
+ * `gates.fanout.sequential` is set, else `resolveFanoutMaxConcurrent`.
  * @param {DevLoopConfig} config
  * @returns {number}
  */
@@ -2226,11 +1923,10 @@ export function resolveFanoutEffectiveConcurrency(config) {
 }
 
 /**
- * Resolve `gates.fanout.maxAnglesPerGroup` (issue #1601, default 3, min 1).
- * The number of ungrouped angles auto-chunked into one dispatch unit.
- * Defensive, independent of zod: a non-integer or sub-1 value falls back to
- * the built-in default so a malformed raw merged config (which zod may have
- * rejected at load time while still returning it) never crashes Phase 2.
+ * Resolve `gates.fanout.maxAnglesPerGroup` (default 3, min 1). Defensive,
+ * independent of zod: a non-integer or sub-1 value falls back to the default so
+ * a malformed raw merged config (which loadDevLoopConfig still returns) never
+ * crashes Phase 2.
  * @param {DevLoopConfig} config
  * @returns {number}
  */
@@ -2241,7 +1937,7 @@ export function resolveMaxAnglesPerGroup(config) {
 }
 
 /**
- * Resolve `gates.fanout.maxConcurrent` (issue #1601, default 4, min 1). The
+ * Resolve `gates.fanout.maxConcurrent` (default 4, min 1). The
  * max dispatch units (groups) the conductor dispatches concurrently per wave.
  * Defensive, independent of zod (same rationale as resolveMaxAnglesPerGroup).
  * @param {DevLoopConfig} config
@@ -2254,61 +1950,33 @@ export function resolveFanoutMaxConcurrent(config) {
 }
 
 /**
- * Resolve grouped fan-out dispatch (AC6 + #1601 two-knob dispatch bounds):
- * map a round's resolved review angles onto the dispatch units it actually
- * dispatches.
+ * Resolve grouped fan-out dispatch: map a round's resolved angles onto the
+ * dispatch units it dispatches.
  *
- * Dispatch shape precedence (first match wins):
+ * Precedence (first match wins):
  *   1. `gates.fanout.mode === "per-angle"` → bypasses configured groups; one
- *      singleton unit per angle (the original one-reviewer-per-angle fan-out;
- *      NOT equivalent to maxAnglesPerGroup: 1 when configured groups match)
- *   2. otherwise (default `grouped`) → configured `gates.fanout.groups` are
- *      matched first (unchanged), then the leftover ungrouped angles are
- *      auto-chunked into dispatch units of ≤ `maxAnglesPerGroup` (default 3)
- *      instead of singletons.
+ *      singleton unit per angle (NOT equivalent to maxAnglesPerGroup: 1 when
+ *      configured groups match)
+ *   2. default `grouped` → configured `gates.fanout.groups` match first, then
+ *      leftover ungrouped angles auto-chunk into units of ≤ `maxAnglesPerGroup`
  *
- * `gate:full` (`options.fullLabel`) NO LONGER restores per-angle dispatch
- * (ADR 0047 superseded by 0048): `gate:full` keeps forcing the full angle set
- * UPSTREAM (resolveGateTier returns `gate_full_label`, so resolveGateAnglesDynamic
- * skips diff-class tier reduction) and dispatches GROUPED here. The `fullLabel`
- * parameter is retained on the signature (callers thread it) but no longer
- * changes the dispatch shape — it is a no-op here, kept only to avoid a breaking
- * API change to the exported resolver; its angle-set effect lives upstream.
+ * `gate:full` (`options.fullLabel`) does NOT restore per-angle dispatch: it
+ * forces the full angle set upstream (resolveGateTier) and dispatches GROUPED
+ * here (ADR 0048); `fullLabel` is a no-op, accepted for API stability.
+ * Configured groups are NEVER split by `maxAnglesPerGroup` (only the leftover
+ * pool is chunked). An unmatched group is dropped, never emitted empty.
  *
- * A configured group is included only when at least one of its angles is in
- * `resolvedAngles` this round — an unmatched group is dropped, never emitted
- * empty. Configured groups are NEVER split by `maxAnglesPerGroup` (the knob
- * chunks only the leftover ungrouped pool). Each reviewer still writes ONE
- * artifact per angle at the existing per-angle paths; grouping only changes how
- * many reviewers are dispatched, not the artifact shape (see
- * skills/docs/gate-review-sub-loop-contract.md).
- *
- * Auto-chunk unit names are deterministic and stable (issue #1601): a
- * single-angle leftover chunk is named by its angle (collisions with an emitted
- * group name disambiguated to `angle:<name>`, preserving the pre-#1601
- * singleton convention); a multi-angle chunk is named `group:<a>+<b>+<c>` from
- * its deterministically-ordered members. Unit names key reviewer-sentinel
- * scopes and provenance `group`, so they must be unique — a chunk whose base
- * name still collides gets a `#2`/`#3`/… suffix.
- *
- * Defensive, independent of zod: `loadDevLoopConfig` returns the raw merged
- * config even when schema validation fails (on ANY layer, not necessarily
- * `gates.fanout` itself), so a malformed `gates.fanout.groups` entry can
- * reach here. A non-object entry, a non-array/blank `angles`, or a
- * blank/duplicate `name` is dropped (its angles fall through to the leftover
- * auto-chunk pool) rather than thrown — mirroring the sibling
- * `normalizeAngleEntries` convention: this resolver degrades to a smaller
- * grouping table, never crashes the conductor's Phase 2 planning.
- * `resolvedAngles` is deduplicated up front so a duplicated entry (e.g. a
- * hand-built `--angles` list) never mints two dispatch units sharing one name.
+ * Defensive, independent of zod: a malformed `gates.fanout.groups` entry (from
+ * a raw merged config that failed validation on any layer) is dropped (its
+ * angles fall to the leftover pool), never thrown — this resolver degrades to a
+ * smaller grouping table rather than crash Phase 2. `resolvedAngles` is
+ * deduplicated up front so a duplicate never mints two units sharing one name.
  *
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"|"spike"} gate unused today — fan-out grouping
- *   is a global policy (`gates.fanout`), not per-gate; accepted for symmetry
- *   with the other `resolveGate*(config, gate, ...)` resolvers.
+ *   is a global policy, accepted for symmetry with the other resolvers.
  * @param {string[]} resolvedAngles this round's resolved angle names
- * @param {{ fullLabel?: boolean }} [options] — retained for API stability;
- *   no longer changes the dispatch shape (see `gate:full` note above).
+ * @param {{ fullLabel?: boolean }} [options] — retained no-op (see above).
  * @returns {{ name: string, angles: string[] }[]}
  */
 export function resolveFanoutGroups(config, gate, resolvedAngles, { fullLabel = false } = {}) {
@@ -2316,9 +1984,8 @@ export function resolveFanoutGroups(config, gate, resolvedAngles, { fullLabel = 
     ? [...new Set(resolvedAngles.filter((a) => typeof a === "string" && a.trim().length > 0).map((a) => a.trim()))]
     : [];
   const perAngleGroups = () => angles.map((name) => ({ name, angles: [name] }));
-  // per-angle: bypass configured groups and emit one singleton unit per
-  // angle (the original one-reviewer-per-angle fan-out). gate:full no longer
-  // takes this branch (ADR 0047 superseded by 0048): fullLabel is a no-op here.
+  // per-angle: bypass configured groups, one singleton unit per angle. gate:full
+  // does not take this branch (ADR 0048): fullLabel is a no-op here.
   const fanout = config?.gates?.fanout ?? {};
   if (fanout.mode === "per-angle") return perAngleGroups();
   const angleSet = new Set(angles);
@@ -2344,10 +2011,9 @@ export function resolveFanoutGroups(config, gate, resolvedAngles, { fullLabel = 
     for (const a of members) grouped.add(a);
     result.push({ name: group.name, angles: members });
   }
-  // Issue #1601: leftover ungrouped angles auto-chunk into dispatch units of
-  // ≤ maxAnglesPerGroup (default 3) instead of singletons. Configured groups
-  // are matched first and never split by this knob (only the leftover pool is
-  // chunked). Deterministic order (input order) + stable unit names.
+  // Leftover ungrouped angles auto-chunk into units of ≤ maxAnglesPerGroup;
+  // configured groups (matched above) are never split by this knob.
+  // Deterministic input order + stable unit names.
   const usedNames = new Set(result.map((g) => g.name));
   const leftover = angles.filter((name) => !grouped.has(name));
   const maxAnglesPerGroup = resolveMaxAnglesPerGroup(config);
@@ -2361,12 +2027,11 @@ export function resolveFanoutGroups(config, gate, resolvedAngles, { fullLabel = 
 }
 
 /**
- * Deterministic, stable dispatch-unit name for an auto-chunked leftover
- * unit (issue #1601). A single-angle chunk keeps the pre-#1601 singleton
- * convention (the angle name, disambiguated to `angle:<name>` on collision
- * with an emitted group name); a multi-angle chunk is named
- * `group:<a>+<b>+<c>` from its deterministically-ordered members, with a
- * `#N` suffix when even that base collides. Pure.
+ * Deterministic, stable dispatch-unit name for an auto-chunked leftover unit.
+ * A single-angle chunk uses the angle name (disambiguated to `angle:<name>` on
+ * collision); a multi-angle chunk is `group:<a>+<b>+<c>` from its ordered
+ * members (with a `#N` suffix on collision). Names key reviewer-sentinel scopes
+ * and provenance, so they must be unique. Pure.
  * @param {string[]} chunk — non-empty, deterministically ordered
  * @param {Set<string>} usedNames — already-emitted unit names (mutated by caller)
  * @returns {string}
@@ -2384,16 +2049,10 @@ function stableAutoChunkUnitName(chunk, usedNames) {
 }
 
 /**
- * Resolve review angles for a specific gate from the merged dev-loop config.
- *
- * Unions the mandatory angle names (entries with `mandatory: true`) with the
- * gate's full configured angle list, then removes disabled entries
- * (`enabled: false`): `mandatoryAngles ∪ angles − disabled`, deduplicated (a
- * mandatory angle also present in `angles` is a no-op — it appears exactly
- * once and keeps its mandatory status). Returns null only when the gate has
- * no configured `angles` at all (caller falls back to skill-defined
- * defaults); an explicitly-empty `angles: []` returns `[]`.
- *
+ * Resolve review angles for a gate: `mandatoryAngles ∪ angles − disabled`,
+ * deduplicated. Returns null when the gate has no configured `angles` at all
+ * (caller falls back to skill defaults); an explicitly-empty `angles: []`
+ * returns `[]`.
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"} gate
  * @returns {string[]|null}
@@ -2401,27 +2060,20 @@ function stableAutoChunkUnitName(chunk, usedNames) {
 export function resolveGateAngles(config, gate) {
   const gateConfig = resolveGateConfig(config, gate);
   if (gateConfig.angles === null && gateConfig.mandatoryAngles.length === 0) return null;
-  // gateConfig.angles is already exclude-filtered (resolveGateConfig drops
-  // enabled:false entries); the excludeAngles filter below is a defensive
-  // no-op that keeps this correct even for a hand-built config object that
-  // sets excludeAngles/angles independently rather than through the
-  // gates.<gate>.angles[].enabled shape.
+  // gateConfig.angles is already exclude-filtered; the excludeAngles filter
+  // below is a defensive no-op for hand-built config objects that set
+  // excludeAngles/angles independently.
   const excluded = new Set(gateConfig.excludeAngles);
   const merged = [...new Set([...gateConfig.mandatoryAngles, ...(gateConfig.angles ?? [])])];
   return merged.filter(a => !excluded.has(a));
 }
 
 /**
- * Resolve the global lens catalog available for additive angle selection.
- *
- * Returns the explicit `gates.anglePool` override when configured (non-empty
- * array of trimmed strings). Otherwise falls back to the union of all known
- * review angles: the built-in persona registry's angle names, plus every
- * angle actually configured across this config's own draft/preApproval/spike
- * gates (angles + mandatoryAngles). The persona registry alone omits angles
- * that ship in extension-defaults.yaml gate pools but have no dedicated
- * persona (e.g. ci-guard, link-check) — see #1048.
- *
+ * Resolve the global lens catalog for additive angle selection: the explicit
+ * `gates.anglePool` override when configured, else the union of the persona
+ * registry's angle names and every angle configured across this config's own
+ * gates. The persona registry alone omits pool angles with no dedicated
+ * persona (e.g. ci-guard, link-check).
  * @param {DevLoopConfig} config
  * @returns {string[]}
  */
@@ -2440,18 +2092,13 @@ export function resolveAnglePool(config) {
 /**
  * Resolve a gate's ANGLE ENFORCEMENT CONTRACT: the mandatory angles a
  * fanout_fanin verdict must cover and the pool its recorded angles must stay
- * within. Single source of truth for all angle-coverage enforcement consumers
- * (ledger write, verdict-comment write, merge-evidence read) so they agree.
+ * within. Single source of truth for every angle-coverage consumer.
  *
- * - `mandatoryAngles` is filtered through `excludeAngles`: a config that
- *   excludes a mandatory angle must not deadlock every fanout write (the
- *   angle would be missing-mandatory if omitted yet foreign if recorded).
- * - `pool` is `resolveGateAngles` (configured angles ∪ mandatoryAngles, minus
- *   excludeAngles); when `additiveAngles` is enabled it widens to the global
- *   lens catalog (`resolveAnglePool`) too — dynamic resolution may
- *   legitimately dispatch catalog angles then — with `excludeAngles` still a
- *   hard ceiling. A null pool skips the foreign-angle check entirely.
- *
+ * `mandatoryAngles` is filtered through `excludeAngles` so excluding a
+ * mandatory angle cannot deadlock every fanout write (missing-mandatory if
+ * omitted, foreign if recorded). `pool` is resolveGateAngles, widened to the
+ * global catalog (resolveAnglePool) when `additiveAngles` is on, with
+ * excludeAngles still a hard ceiling; a null pool skips the foreign check.
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"|"spike"} gate
  * @returns {{ mandatoryAngles: string[], pool: string[]|null }}
@@ -2468,21 +2115,17 @@ export function resolveGateAngleContract(config, gate) {
 }
 
 /**
- * Resolve the diff-class angle tier for a gate from its configured, ordered
- * `gates.<gate>.tiers` list (first-match-wins). Pure and synchronous — the
- * single source of truth for tier selection, consulted at the top of
- * `resolveGateAnglesDynamic` before any dynamic subtractive/additive
- * reduction runs.
+ * Resolve the diff-class angle tier for a gate from its ordered
+ * `gates.<gate>.tiers` (first-match-wins). Pure; the single source of truth for
+ * tier selection, consulted at the top of resolveGateAnglesDynamic before any
+ * dynamic reduction.
  *
- * FAIL CLOSED at every uncertain step: the `gate:full` label, no tiers
- * configured, an unavailable/malformed scope, a changed dev-loop
- * config-source file (`isDevLoopConfigSourcePath`), or an unclassifiable
- * changed file (`classifyFile` returns "unknown") all resolve to `tier: null`
- * rather than a guess. A matched tier's angle set is additionally validated
- * against the gate's angle pool (`resolveGateAngleContract`) — ANY tier angle
- * outside a non-null pool voids the whole match (no partial intersection): a
- * typo'd tier angle is caught here, not by silently dropping reviewers at
- * gate time.
+ * FAIL CLOSED at every uncertain step: `gate:full`, no tiers, an
+ * unavailable/malformed scope, a changed dev-loop config-source file, or an
+ * unclassifiable file all resolve to `tier: null`. A matched tier's angle set
+ * is validated against the gate's pool — ANY tier angle outside a non-null pool
+ * voids the WHOLE match (a typo'd tier angle is caught here, not by silently
+ * dropping reviewers at gate time).
  *
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"|"spike"} gate
@@ -2532,28 +2175,17 @@ export function resolveGateTier(config, gate, { changedFiles, filesChanged, line
 }
 
 /**
- * Resolve gate angles dynamically when `dynamicAngles` is enabled in config.
+ * Resolve gate angles dynamically when `dynamicAngles` is enabled.
  *
- * Uses diff analysis helpers (from ../analysis/*) to filter the
- * configured angle list down to only angles relevant to the change set.
+ * Diff analysis (../analysis/*) filters the configured angle list to angles
+ * relevant to the change set. When `dynamic.subtractive: false` or no
+ * diff is given, returns the full configured list. When `additiveAngles` is on,
+ * catalog angles from resolveAnglePool may also be added, with
+ * `excludeAngles` a hard ceiling.
  *
- * When `dynamicAngles` is disabled (opt-out via `dynamic.subtractive: false`,
- * see #1579), returns the full configured angle list (same as
- * `resolveGateAngles`); no diff also falls back to the full static pool.
- *
- * When `additiveAngles` is also enabled (default off, see #1048), catalog
- * angles from `resolveAnglePool()` (`gates.anglePool`, or else the union of
- * the persona registry and this config's own configured angles) recommended
- * by change-category heuristics but absent from the gate's configured pool
- * may also be added; `excludeAngles` remains a hard ceiling on additions.
- *
- * Diff-class angle tiers (`gates.<gate>.tiers`, see `resolveGateTier`) are
- * consulted FIRST, ahead of any subtractive/additive reduction below: when the
- * diff's changed-file scope matches a configured tier, that tier's angle set
- * (unioned with mandatory angles) is returned directly and the
- * subtractive/additive machinery below is skipped entirely. No tier match
- * (including "no tiers configured") falls through to the existing behavior
- * unchanged.
+ * Diff-class tiers (resolveGateTier) are consulted FIRST: a tier match returns
+ * that tier's angle set (unioned with mandatory) directly and skips the
+ * subtractive/additive machinery.
  *
  * @param {import("./types.js").DevLoopConfig} config
  * @param {"draft"|"preApproval"} gate
@@ -2563,10 +2195,9 @@ export function resolveGateTier(config, gate, { changedFiles, filesChanged, line
  * @returns {{ recommendedAngles: string[] | null, skippedAngles: string[], reasons: Record<string,string>, fallbackToAll: boolean, dynamicAnglesActive: boolean, addedAngles: string[], addedReasons: Record<string,string> }}
  */
 export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabel = false } = {}) {
-  // Tier scope facts: changedFiles/filesChanged from T0 (file-level), linesChanged
-  // from T1 (hunk-level) reused for its real added+deleted line count rather than
-  // T0's/analyzeDiff's own inferred-category path, which reports a fake 0 line
-  // count for an unambiguous (e.g. docs-only) diff — see analyzeT1/analyzeDiff.
+  // Tier scope facts: changedFiles/filesChanged from T0, linesChanged from T1's
+  // real added+deleted count (analyzeDiff's inferred-category path reports a
+  // fake 0 for an unambiguous docs-only diff — see analyzeT1/analyzeDiff).
   let changedFiles;
   let filesChanged;
   let linesChanged;
@@ -2576,7 +2207,7 @@ export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabe
     const t0 = analyzeT0(diff.nameStatusOutput);
     changedFiles = t0.files;
     filesChanged = changedFiles.length;
-    prosePresent = t0.prosePresent; // #1442: gate deslop on the prose surface
+    prosePresent = t0.prosePresent; // gate deslop on the prose surface
     if (diff.diffOutput) {
       const lineStats = analyzeT1(diff.diffOutput, t0).lineStats;
       linesChanged = lineStats.added + lineStats.deleted;
@@ -2586,11 +2217,9 @@ export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabe
   if (tierResult.tier) {
     const configuredAngles = resolveGateAngles(config, gate) ?? [];
     let recommendedAngles = tierResult.angles;
-    // #1442 (ADR 0041 prose half): deslop is a prose-only angle. A docs-kind
-    // tier (e.g. this repo's docs-only/small-non-code) names it so prose diffs
-    // keep it, but that same kind matches exempt normative contracts
-    // (skills/docs/**). Strip deslop when the diff touches no prose surface so
-    // exemption holds even through the tier path.
+    // deslop is a prose-only angle. A docs-kind tier keeps it for prose
+    // diffs, but that kind also matches exempt normative contracts
+    // (skills/docs/**), so strip deslop when the diff touches no prose surface.
     if (recommendedAngles.includes("deslop") && prosePresent === false) {
       recommendedAngles = recommendedAngles.filter((a) => a !== "deslop");
     }
@@ -2654,13 +2283,12 @@ export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabe
   });
 
   // Merge: mandatory always included (filtered by excludeAngles) + dynamically-selected
-  // candidates + additively-selected catalog angles (#1048)
+  // candidates + additively-selected catalog angles
   const filteredMandatory = gateConfig.mandatoryAngles.filter(a => !excluded.has(a));
 
-  // An angle that is both mandatory AND additively recommended must stay
-  // attributed to the mandatory floor, not be reported as "added" — the
-  // resolver has no concept of "mandatory", so the caller (this function,
-  // which already owns the mandatory Set) filters its output.
+  // An angle both mandatory AND additively recommended stays attributed to the
+  // mandatory floor, not reported as "added" (the resolver has no concept of
+  // mandatory, so this caller filters its output).
   const addedAngles = (dynamicResult.addedAngles ?? []).filter(a => !mandatory.has(a));
   const addedReasons = Object.fromEntries(
     Object.entries(dynamicResult.addedReasons ?? {}).filter(([a]) => !mandatory.has(a))
@@ -2680,11 +2308,7 @@ export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabe
 }
 
 /**
- * Resolve one workflow configuration value from the merged dev-loop config.
- *
- * Returns the configured workflow value when present, or the built-in default
- * for the requested key.
- *
+ * Resolve one workflow config value, or its built-in default.
  * @param {DevLoopConfig} config
  * @param {"asyncStartMode"|"requireRetrospective"|"requireDraftFirst"|"devModeDefault"} key
  * @returns {string|boolean}
@@ -2728,9 +2352,8 @@ function tryGit(args, cwd) {
   }
 }
 
-// Last-resort literal when git auto-detection cannot resolve anything (e.g. no
-// git repo at cwd) — matches the branch name every prior hardcoded "main"/
-// "origin/main" call site already assumed.
+// Last-resort literal when git auto-detection resolves nothing (e.g. no git
+// repo at cwd).
 const AUTO_DETECT_BASE_BRANCH_FALLBACK = "main";
 
 /**
@@ -2755,18 +2378,12 @@ function autoDetectDefaultBranch(cwd) {
 }
 
 /**
- * Resolve the effective base/integration branch (bare name — never
- * `origin/`-prefixed) for worktree creation, PR targeting, and merge-base
- * scope measurement (#1368).
- *
- * `workflow.baseBranch` (a non-empty trimmed string) is the authoritative
- * override; unset, malformed, or empty is treated identically to unset and
- * falls back to the existing auto-detect: the remote's advertised default
- * branch (`origin/HEAD`), else `main`/`master`, else the literal "main".
- * Never throws.
- *
- * Callers own the `origin/` prefix: worktree creation prepends it (a remote
- * ref), gh/PR base flags pass the bare name straight through.
+ * Resolve the effective base/integration branch (bare name, never
+ * `origin/`-prefixed) for worktree creation, PR targeting, and merge-base scope
+ * `workflow.baseBranch` is the authoritative override; unset/malformed/
+ * empty falls back to auto-detect (origin/HEAD, else main/master, else "main").
+ * Never throws. Callers own the `origin/` prefix (worktree creation prepends it;
+ * gh/PR base passes the bare name through).
  *
  * @param {DevLoopConfig|null|undefined} config
  * @param {{ cwd?: string }} [options]
@@ -2798,14 +2415,10 @@ export function normalizeToBareBranch(value) {
 }
 
 /**
- * Resolve the worktree lifecycle config from the merged dev-loop config.
- *
- * Returns `{ copyOnInit, linkOnInit }` (split by each entry's `mode`) with
- * empty-array defaults when the config omits `worktree.entries` or it is
- * empty. Entries are trimmed, repo-relative literal paths or glob patterns
- * expanded against the main checkout at provision time. See
- * scripts/loop/provision-worktree.mjs.
- *
+ * Resolve the worktree lifecycle config into `{ copyOnInit, linkOnInit }` (split
+ * by each entry's `mode`), empty-array defaults when `worktree.entries` is
+ * absent/empty. Paths are trimmed, repo-relative literals or globs expanded
+ * against the main checkout at provision time (scripts/loop/provision-worktree.mjs).
  * @param {DevLoopConfig} config
  * @returns {{ copyOnInit: string[], linkOnInit: string[] }}
  */
@@ -2820,27 +2433,21 @@ export function resolveWorktreeConfig(config) {
 }
 
 /**
- * Default destructive-migration signal: SQL statements that drop or wipe data.
- * Matched (case-insensitive, per line) against the migration STATUS OUTPUT. This
- * default only detects destructive intent when the status output is itself
- * SQL-bearing; against status output that lists migration identifiers/filenames
- * it matches nothing and the guard is inert (no false positives, but also no
- * protection). Such a project MUST override via
- * `uiReview.run.migrate.destructivePattern` to match its own status format (or
- * emit the destructive SQL/marker from `statusCommand`).
+ * Default destructive-migration signal: SQL that drops or wipes data, matched
+ * (case-insensitive, per line) against the migration STATUS OUTPUT. Only detects
+ * destructive intent when the status output is itself SQL-bearing; against a
+ * status output of migration ids/filenames it matches nothing and the guard is
+ * inert, so such a project MUST override `uiReview.run.migrate.destructivePattern`
+ * (or emit the SQL/marker from `statusCommand`).
  */
 export const DEFAULT_DESTRUCTIVE_MIGRATION_PATTERN =
   "\\b(DROP\\s+(TABLE|COLUMN|DATABASE|SCHEMA)|TRUNCATE|DELETE\\s+FROM|ALTER\\s+TABLE\\s+.*\\bDROP\\b)";
 
 /**
- * Resolve the ui-review provision+boot run recipe from the merged config.
- *
- * Returns null when no `uiReview.run.command` is declared — the provision+boot
- * stage treats that as a stated stop reason (no app is ever guessed). Numeric
- * probe bounds fall back to sane defaults defensively: zod `.partial()` is
- * shallow (it does not drop nested numeric defaults), so a schema-validated
- * config already carries them — the fallback covers programmatically-built
- * config objects that bypass schema defaulting, not the `.partial()` path.
+ * Resolve the ui-review provision+boot run recipe. Returns null when no
+ * `uiReview.run.command` is declared — a stated stop reason (no app is ever
+ * guessed). Numeric probe bounds fall back to defaults defensively for
+ * programmatically-built config objects that bypass schema defaulting.
  *
  * @param {DevLoopConfig} config
  * @returns {null | { command: string, readyUrl: string, readyTimeoutMs: number,
@@ -2915,12 +2522,10 @@ export const DEFAULT_SERVER_LOG_EXCEPTION_PATTERN =
   "\\b(5\\d{2}\\b|Internal Server Error|Unhandled|Uncaught|Traceback|Exception|FATAL|\\bERROR\\b)";
 
 /**
- * Resolve the ui-review drive recipe (Stage 2) from the merged config.
- *
- * Returns null when no `uiReview.login` is declared — the drive stage treats
- * that as a stated stop reason (it cannot authenticate, so it drives nothing).
- * The server-log exception pattern falls back to the shipped heuristic default
- * when a `serverLogPath` is set without an explicit pattern.
+ * Resolve the ui-review drive recipe (Stage 2). Returns null when no
+ * `uiReview.login` is declared — a stated stop reason (it cannot authenticate,
+ * so it drives nothing). The server-log exception pattern falls back to the
+ * shipped heuristic default when a `serverLogPath` is set without one.
  *
  * @param {DevLoopConfig} config
  * @returns {null | { login: object, interstitials: object[], flows: object[],
@@ -2957,14 +2562,10 @@ export function resolveUiReviewDriveRecipe(config) {
 }
 
 /**
- * Resolve the human-handoff config from the merged dev-loop config (#920).
- *
- * Returns a normalized `{ enabled, candidatesFrom, assignees }`. Defaults to
- * disabled with empty arrays when the `approval` section is absent. When
- * disabled (default), this is a no-op: callers must not source candidates or
- * assign anyone. Pairs with `autonomy.humanMergeOnly`: when human-merge is
- * enforced, this names who should take the merge.
- *
+ * Resolve the human-handoff config into a normalized
+ * `{ enabled, candidatesFrom, assignees }`. Disabled with empty arrays when
+ * `approval` is absent; when disabled (default) callers must not source or
+ * assign anyone. Pairs with `autonomy.humanMergeOnly`.
  * @param {DevLoopConfig} config
  * @returns {{ enabled: boolean, candidatesFrom: ("codeowners"|"recent-committers")[], assignees: string[] }}
  */
@@ -2992,7 +2593,7 @@ export function resolveHumanHandoffConfig(config) {
 }
 
 /**
- * Resolve the tracker provider registry key (issue #1408). Defaults to
+ * Resolve the tracker provider registry key. Defaults to
  * `"github"` — the only built-in provider in v1 — when unset. Callers pass
  * this to `resolveTrackerAdapter` (`@dev-loops/core/tracker`).
  *
