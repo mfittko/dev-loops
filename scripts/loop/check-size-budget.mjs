@@ -235,7 +235,16 @@ export function parseNumstatZ(output) {
 export function countCommentChangedLinesByFile(diffOutput) {
   const counts = new Map();
   if (typeof diffOutput !== "string" || diffOutput.length === 0) return counts;
-  let currentFile = null;
+  // Track the `--- a/` (removed) and `+++ b/` (added) targets separately so a
+  // `-` line attributes to the removed-file path and a `+` line to the
+  // added-file path. For a whole-file DELETION the added target is `/dev/null`
+  // but the removed target still names the file, so its removed comment lines
+  // are still discounted (a comment-only file deletion is a comment-only diff).
+  let removedFile = null;
+  let addedFile = null;
+  const bump = (file, text) => {
+    if (file && isCommentLine(text, file)) counts.set(file, (counts.get(file) ?? 0) + 1);
+  };
   for (const line of diffOutput.split("\n")) {
     // `+++ ` / `--- ` are file headers only when they resolve to a real diff
     // target (`/dev/null` or an `a/`|`b/`-prefixed path); an added/removed
@@ -244,21 +253,21 @@ export function countCommentChangedLinesByFile(diffOutput) {
     if (line.startsWith("+++ ")) {
       const p = line.slice(4).trim();
       if (p === "/dev/null" || p.startsWith("b/")) {
-        currentFile = p === "/dev/null" ? null : p.replace(/^b\//u, "");
+        addedFile = p === "/dev/null" ? null : p.replace(/^b\//u, "");
         continue;
       }
     } else if (line.startsWith("--- ")) {
       const p = line.slice(4).trim();
-      if (p === "/dev/null" || p.startsWith("a/")) continue;
-    }
-    if (line.startsWith("diff ") || line.startsWith("@@")) continue;
-    // A `+`/`-` content line: attribute it to the current file (set by the
-    // preceding `+++ b/` header) and count it only when it is a comment line.
-    if ((line.startsWith("+") || line.startsWith("-")) && currentFile) {
-      if (isCommentLine(line.slice(1), currentFile)) {
-        counts.set(currentFile, (counts.get(currentFile) ?? 0) + 1);
+      if (p === "/dev/null" || p.startsWith("a/")) {
+        removedFile = p === "/dev/null" ? null : p.replace(/^a\//u, "");
+        continue;
       }
     }
+    if (line.startsWith("diff ") || line.startsWith("@@")) continue;
+    // A `+`/`-` content line: attribute it to the added/removed file target and
+    // count it only when it is a comment line.
+    if (line.startsWith("+")) bump(addedFile, line.slice(1));
+    else if (line.startsWith("-")) bump(removedFile, line.slice(1));
   }
   return counts;
 }

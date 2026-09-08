@@ -615,12 +615,17 @@ test("parseCheckSizeBudgetCliArgs: a plain valid --base (and --head) is accepted
 // Comment-aware logic-LOC discount (comment analogue of testDiscount).
 // A code file's changed lines that classify as comments are not counted as
 // logic; real code, ambiguous, and non-comment lines are counted exactly as
-// before. `changedLine('+'|'-', text)` builds a single diff content line so a
-// fixture can mix added/removed comment and code lines under one file header.
+// before. `codeFileDiff(path, lines)` frames pre-built `+`/`-` diff content
+// lines under one file header; `repeatLine(sign, text, n)` builds n of them.
 // ---------------------------------------------------------------------------
 
 function codeFileDiff(path, contentLines) {
   const header = `diff --git a/${path} b/${path}\nindex aaa..bbb 100644\n--- a/${path}\n+++ b/${path}\n@@ -1,1 +1,1 @@`;
+  return `${header}\n${contentLines.join("\n")}\n`;
+}
+
+function deletedFileDiff(path, contentLines) {
+  const header = `diff --git a/${path} b/${path}\ndeleted file mode 100644\nindex aaa..0000000\n--- a/${path}\n+++ /dev/null\n@@ -1,${contentLines.length} +0,0 @@`;
   return `${header}\n${contentLines.join("\n")}\n`;
 }
 
@@ -655,6 +660,28 @@ test("countCommentChangedLinesByFile: a content line rendered as `++ `/`-- ` is 
   const counts = countCommentChangedLinesByFile(diff);
   // Only the genuine comment counts; the two `++ `/`-- ` content lines are code.
   assert.equal(counts.get("src/foo.mjs"), 1);
+});
+
+test("countCommentChangedLinesByFile: attributes removed comment lines of a DELETED code file (--- a/path + +++ /dev/null)", () => {
+  // A whole-file deletion sends `+++` to /dev/null, but the `--- a/path` target
+  // still names the file, so removed comment lines are attributed to it — a
+  // comment-only file deletion is a comment-only diff and must discount.
+  const path = "src/legacy.mjs";
+  const diff = deletedFileDiff(path, [...repeatLine("-", "// old note", 3), "- doWork();"]);
+  const counts = countCommentChangedLinesByFile(diff);
+  assert.equal(counts.get(path), 3);
+});
+
+test("comment-only DELETION of a code file scores ~0 logic and passes", () => {
+  const path = "src/legacy.mjs";
+  const result = computeSizeBudget({
+    nameStatusOutput: `D\t${path}\n`,
+    diffOutput: deletedFileDiff(path, repeatLine("-", "// removed invariant note", 2500)),
+    numstatOutput: numstatZ([[0, 2500, path]]),
+    sizeConfig: SIZE_CONFIG,
+  });
+  assert.equal(result.wholeLogicLoc, 0);
+  assert.equal(result.outcome, "pass");
 });
 
 test("comments-only multi-thousand-line code diff scores ~0 logic and passes", () => {
