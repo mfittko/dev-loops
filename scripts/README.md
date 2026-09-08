@@ -825,18 +825,15 @@ Two modes:
 
 - **Auto-detect**: `--repo <owner/name> --pr <number>`
   Fetches PR/open-head state, review-request status, and pending/submitted review surfaces from
-  GitHub and interprets them into deterministic reviewer-loop state. When `--reviewer-login` is
-  omitted, this uses aggregate all-reviewer scope for the PR.
+  GitHub and interprets them into deterministic reviewer-loop state. Reviewer scope is auto-resolved
+  from the PR's requested reviewers. Success output snapshots include `reviewerScope`
+  (`"all_reviewers"` or `"single_reviewer"`) plus `reviewerLogin` (`string|null`) so callers can tell
+  whether the detector used aggregate or single-reviewer scope.
 
 - **Snapshot interpretation**: `--input <path>`
   Reads a pre-built snapshot JSON and interprets it without any `gh` calls.
 
 Optional (auto-detect mode only):
-- `--reviewer-login <login>`
-  Scope review-request and review-surface detection to a single reviewer identity. Success output
-  snapshots include `reviewerScope` (`"all_reviewers"` or `"single_reviewer"`) plus
-  `reviewerLogin` (`string|null`) so callers can tell whether the detector used aggregate or
-  single-reviewer scope.
 - `--review-requested <true|false>`
   Override review-request detection with a known prior result.
 - `--local-state <path>`
@@ -864,15 +861,13 @@ Required:
 - `--pr <number>`
 
 Optional:
-- `--reviewer-login <login>`
 - `--checkpoint-dir <path>`
 - `--copilot-input <path>`
 - `--reviewer-input <path>`
 
 Reviewer-scope contract:
-- omitting `--reviewer-login` means aggregate all-reviewer scope for the PR
-- providing `--reviewer-login` means single-reviewer scope for that login
-- `--reviewer-input` cannot be combined with `--reviewer-login`
+- reviewer scope is auto-resolved from the PR's requested reviewers (aggregate all-reviewer scope
+  when no single reviewer is resolved, single-reviewer scope otherwise)
 
 Contract:
 - auto-detect mode calls both inner detectors, interprets their current states, and emits one
@@ -914,9 +909,8 @@ Required:
 
 Optional:
 - `--steering-state-file <path>`
-- `--reviewer-login <login>` — narrows live reviewer detection to one reviewer identity; when omitted, inspection uses aggregate all-reviewer scope for the PR
 - `--copilot-input <path>`
-- `--reviewer-input <path>` — cannot be combined with `--reviewer-login`
+- `--reviewer-input <path>` — pre-built reviewer snapshot JSON; skips live reviewer detection
 
 Contract:
 - is strictly read-only: it does not write checkpoints, mutate GitHub state, or create local artifacts
@@ -972,9 +966,8 @@ Optional:
 - `--allow-non-localhost` (explicit opt-in for non-loopback binds such as `0.0.0.0` or LAN IPs)
 - `--restart` (manual/debug convenience only; requires `lsof` / POSIX support and sends `SIGTERM` to every listener already bound to that port)
 - `--steering-state-file <path>` (pass-through to `inspect-run`)
-- `--reviewer-login <login>` (pass-through to `inspect-run`)
 - `--copilot-input <path>` (pass-through to `inspect-run`)
-- `--reviewer-input <path>` (pass-through to `inspect-run`; cannot be combined with `--reviewer-login`)
+- `--reviewer-input <path>` (pass-through to `inspect-run`)
 
 Contract:
 - current-slice posture: kept/promoted as an explicitly owned local/operator inspection dashboard (not a second public workflow entrypoint)

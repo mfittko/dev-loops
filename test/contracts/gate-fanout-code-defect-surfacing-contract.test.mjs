@@ -20,9 +20,11 @@ import {
 //   (c) the contextWidened scope-widening affordance for read-only reviewers.
 //
 // We assert against both the source agent (agents/review.agent.md) and the skill
-// that drives the fan-out (skills/copilot-pr-followup/SKILL.md), and — when the
-// generated mirror exists — the generated .claude/agents/review.md too, so the
-// generated asset cannot drift from the source.
+// that drives the fan-out (skills/copilot-pr-followup/SKILL.md). The generated
+// .claude/agents/review.md mirror is not re-scanned here: the asset
+// reproducibility contract (claude-assets-reproducible.test.mjs) already proves
+// the committed .claude tree is byte-reproducible from these sources, so the
+// mirror cannot carry different directives.
 // ---------------------------------------------------------------------------
 
 const FULL_DIFF_DIRECTIVE = [
@@ -54,23 +56,6 @@ test("AC#5: copilot-pr-followup SKILL briefs scoped reviewers to read the full d
   assertMatchesAll(skill, FULL_DIFF_DIRECTIVE, "skills/copilot-pr-followup/SKILL.md");
   assertMatchesAll(skill, ADVERSARIAL_DIRECTIVE, "skills/copilot-pr-followup/SKILL.md");
   assertMatchesAll(skill, CONTEXT_WIDENED_AFFORDANCE, "skills/copilot-pr-followup/SKILL.md");
-});
-
-test("AC#5: generated .claude/agents/review.md mirrors the source enabling directives (when present)", async () => {
-  let generated;
-  try {
-    generated = await readRepo(".claude/agents/review.md");
-  } catch (err) {
-    if (err && err.code === "ENOENT") {
-      // Generated mirror is optional in this tree; the source agent test above
-      // is the load-bearing guard. Skip rather than fail when it is absent.
-      return;
-    }
-    throw err;
-  }
-  assertMatchesAll(generated, FULL_DIFF_DIRECTIVE, ".claude/agents/review.md");
-  assertMatchesAll(generated, ADVERSARIAL_DIRECTIVE, ".claude/agents/review.md");
-  assertMatchesAll(generated, CONTEXT_WIDENED_AFFORDANCE, ".claude/agents/review.md");
 });
 
 test("AC#5: full-diff directive ties the reviewer to scope.diffPath with a git diff fallback (no hunk-only review)", async () => {
