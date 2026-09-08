@@ -212,10 +212,11 @@ by failure class:
 
 - **Domain error** (any error thrown from the command's `main` — board/field/item
   resolution, GitHub API, and argument *validation* such as `INVALID_REPO`): a
-  top-level `code` key rides alongside `ok`/`error`, and `classifyExitCode` maps the
-  `code` to the exit status (`INVALID_*` → 1, GitHub API → 2, not-found → 3). This is
-  the canonical envelope owned by [Error format](#error-format) below
-  (`{ ok, error, code }`):
+  top-level `code` key rides alongside `ok`/`error`, and each helper's
+  `classifyExitCode` maps the `code` to the exit status (`INVALID_*` → 1, not-found →
+  3, the enqueue refinement gate → 4, else → 2). See [Error format](#error-format)
+  below for the complete `code`-to-exit mapping. This is the canonical envelope owned
+  by that section (`{ ok, error, code }`):
 
   ```json
   {"ok": false, "error": "Project 'Dev Loop Queue' not found for owner 'mfittko'.", "code": "PROJECT_NOT_FOUND"}
@@ -228,8 +229,6 @@ by failure class:
   `formatCliError` parse-path shape carries no `code`. (Exit 1 alone does not imply a
   missing `code`: an `INVALID_*` validation error from `main` also exits 1 but rides
   the domain `{ ok, error, code }` envelope above.)
-
-See [Error format](#error-format) for the domain-error `code`-to-exit mapping.
 
 ## Column auto-repair
 
@@ -890,10 +889,12 @@ On failure, helpers emit structured JSON on stderr:
 {"ok": false, "error": "Item #999 not found in project for repo \"owner/name\"", "code": "ITEM_NOT_FOUND"}
 ```
 
-Exit codes:
-- `1` — usage or argument error
-- `2` — GitHub API error
-- `3` — project, field, column, or item not found
+Exit codes (from each helper's `classifyExitCode`):
+- `1` — usage or argument error (`INVALID_*`)
+- `2` — GitHub API error (the default for an unmapped `code`)
+- `3` — project, field, column, or item not found (`*_NOT_FOUND`)
+- `4` — refinement gate: an enqueue into the pickup column with no AC/DoD matrix
+  (`MISSING_REFINEMENT_ARTIFACT`, `add`/`move` only — see [QUEUE-ENQUEUE-REFINEMENT-GATE](#queue-pickup-ordering))
 
 #### Idempotent bootstrap exception
 
