@@ -54,9 +54,9 @@ function isRuntimeSourceFile(p) {
 // lines starting with a comment sigil, shell lines starting with `#` (a
 // shebang has no digit after `#` so it never reads as an issue reference).
 // ponytail: anchored at line start on purpose. A trailing inline comment
-// (`code // #1 then #2`) is not scanned; detecting it safely means excluding
-// string/URL `//` contexts, and agent narration lands in own-line comment
-// blocks/JSDoc, so the escape marker + reviewer cover the rare trailing case.
+// (issue references after code on the same line) is not scanned; detecting it
+// safely means excluding string/URL slash contexts, and agent narration lands
+// in own-line comment blocks/JSDoc, so the escape marker + reviewer cover it.
 function isCommentLine(text, filePath) {
   const t = text.trim();
   if (t.length === 0) return false;
