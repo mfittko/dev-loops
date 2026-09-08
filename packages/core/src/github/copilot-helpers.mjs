@@ -1,44 +1,34 @@
 /**
  * Shared deterministic helpers for Copilot-related GitHub data.
- *
- * These are pure functions with no filesystem or network dependencies.
- * Owner: packages/core — reusable deterministic logic consumed by both
- * scripts and other packages/core modules.
+ * Pure functions with no filesystem or network dependencies.
  */
 
 import { GATE_REVIEW_VERDICT_SET } from "../loop/policy-constants.mjs";
 import { trimmedOrNull } from "../loop/normalize.mjs";
 
-// Exported so anything deciding "is there a real prior review" uses the same
-// whitelist as the loop-state reader — two copies could drift, and a guard
+// Same whitelist as the loop-state reader: two copies could drift, and a guard
 // acting on the gate's behalf must agree with the gate about what a submitted
 // review is.
 export const SUBMITTED_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"]);
 const GATE_REVIEW_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
-// `review` (the standalone review entrypoint, upsert-checkpoint-verdict.mjs's
-// `--gate review`) is a RECOGNIZED gate header — it is identified, not
-// absent — but carries no draft/pre-approval evidence by design (#1808 AC3).
-// Recognizing it (rather than leaving it unrecognized) is what lets
-// parseGateReviewCommentFields below short-circuit to null the instant a
-// `review` header is seen, instead of falling through to the lenient
-// draft_gate/pre_approval_gate token scan — the fallthrough that previously
-// let a `review` verdict whose findings text merely MENTIONED "draft_gate"
-// get recorded as real draft-gate evidence (a draft-gate bypass).
+// `review` is a RECOGNIZED gate header that carries no draft/pre-approval
+// evidence by design. Recognizing it lets
+// parseGateReviewCommentFields short-circuit to null on a `review` header
+// instead of falling through to the lenient draft_gate/pre_approval_gate token
+// scan — the fallthrough that would otherwise record a `review` verdict whose
+// findings merely mention "draft_gate" as real draft-gate evidence (a
+// draft-gate bypass).
 const NON_EVIDENCE_GATE_NAMES = new Set(["review"]);
 const RECOGNIZED_GATE_NAMES = new Set([...GATE_REVIEW_NAMES, ...NON_EVIDENCE_GATE_NAMES]);
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
-// Size-budget outcome vocabulary — mirrors
-// check-size-budget.mjs's computeSizeBudget outcome enum exactly; this file
-// never recomputes the outcome, only round-trips it through the verdict
-// comment.
+// Size-budget outcome vocabulary; mirrors check-size-budget.mjs's
+// computeSizeBudget outcome enum exactly. This file only round-trips it.
 const GATE_SIZE_OUTCOMES = new Set(["pass", "escalate", "block"]);
 
-// The literal header line the gate review body always emits first
-// (upsert-checkpoint-verdict.mjs's renderGateReviewCommentBody, re-exported
-// from there). Owned here so the machine-artifact filter below and every
-// consumer that needs to recognize "is this a real gate verdict surface" read
-// the same producer-owned literal instead of restating it. Line-start anchored
-// (`m`) so a quoted header in a reply/blockquote can't match.
+// The literal header line the gate review body emits first (producer:
+// upsert-checkpoint-verdict.mjs's renderGateReviewCommentBody). Owned here so
+// every consumer reads the same literal instead of restating it. Line-start
+// anchored (`m`) so a quoted header in a reply/blockquote can't match.
 export const GATE_REVIEW_COMMENT_HEADER_RE = /^###\s+Gate review:\s*`(draft_gate|pre_approval_gate)`\s*$/m;
 
 /** Returns the matched gate name when `body` carries a genuine gate verdict header, else null. */
@@ -49,48 +39,31 @@ export function matchGateReviewCommentHeader(body) {
 }
 
 // Machine-authored gate artifacts that must never win the newest-gate-marker
-// tie-break in summarizeGateReviewComments/summarizeGateReviewCommentMarkers:
-// a historical standalone findings review always embedded this gate's name in
-// its header line and could quote the current head sha inside a finding's own
-// free text (the lenient gate-name+hex-token fallback in
-// parseGateReviewCommentFields would otherwise happily match that), and the
-// historical deferred-summary PR comment quoted a gate name plus a sha-shaped
-// id in its table rows the same way. Both are excluded HERE, inside the two
-// shared summarizers, because this module is the true merge point: every
-// consumer (detect-checkpoint-evidence.mjs, pre-pr-ready-gate.mjs,
-// ready-for-review.mjs, request-copilot-review.mjs) calls
-// summarizeGateReviewComments/summarizeGateReviewCommentMarkers to turn a raw
-// comment/review list into a gate verdict, so filtering here — rather than
-// per-caller — covers all of them by construction.
+// tie-break in the two summarizers below: a historical standalone findings
+// review or deferred-summary comment embeds a gate name and a sha-shaped id
+// that the lenient parseGateReviewCommentFields fallback would otherwise match.
+// Excluded here because this module is the merge point every consumer routes
+// through.
 //
-// Anchored to the start of a line (`^` with `m`) so only a marker rendered as
-// the first character of its own line is excluded — a genuine verdict
-// comment whose findings summary merely QUOTES the marker text mid-line (for
-// example, describing this very mechanism) still counts as evidence. Both
-// producers render their marker at column 0, so the anchor costs nothing
-// against genuine artifacts.
-// The set covers exactly three marker tokens: the per-round review round
-// marker (gate-findings-review), post-gate-findings.mjs's opt-in findings
-// COMMENT marker (gate-findings gate=...), and the historical
-// deferred-summary comment. Without the findings-comment marker, that comment
-// parses as a verdict marker candidate (its "Gate fan-out findings:"/
-// "Reviewed head:" lines yield gate+headSha) and the verdict upsert claims
-// and overwrites it in place, silently destroying the round's visible
-// findings record. Every branch is delimiter-anchored — the token must be
-// followed by whitespace or the closing `-->` — so no suffixed `<token>-<x>`
-// variant ever matches.
+// Line-anchored (`^` with `m`) so only a marker at column 0 is excluded; a
+// genuine verdict whose findings merely QUOTE the marker mid-line still counts.
+// The set covers exactly three tokens: the per-round review marker
+// (gate-findings-review), post-gate-findings.mjs's findings-COMMENT marker
+// (gate-findings), and the deferred-summary comment. Without the
+// findings-comment marker, that comment parses as a verdict candidate and the
+// verdict upsert overwrites it in place, silently destroying the round's
+// findings record. Every branch is delimiter-anchored (token followed by
+// whitespace or `-->`) so no suffixed `<token>-<x>` variant matches.
 const GATE_MACHINE_ARTIFACT_MARKER_RE = /^<!--\s*dev-loops:(?:gate-findings-review|gate-findings|deferred-summary)(?=\s|-->)/mu;
 
 export function isGateMachineArtifactBody(body) {
   if (typeof body !== "string" || !GATE_MACHINE_ARTIFACT_MARKER_RE.test(body)) {
     return false;
   }
-  // A gate round now posts ONE PR review carrying BOTH the verdict header and
-  // the gate-findings-review marker (the findings it files live on that same
-  // surface). Such a body IS the verdict, not a separate machine artifact, so
-  // the producer-owned verdict header wins over the artifact marker. Only a
-  // marker-bearing body with NO genuine verdict header (a historical standalone
-  // findings review or deferred-summary comment) stays excluded.
+  // A gate round posts ONE PR review carrying BOTH the verdict header and the
+  // gate-findings-review marker. Such a body IS the verdict, so the
+  // producer-owned header wins over the artifact marker. Only a marker-bearing
+  // body with NO verdict header stays excluded.
   return matchGateReviewCommentHeader(body) === null;
 }
 
@@ -101,16 +74,10 @@ export function isCopilotLogin(login) {
 /**
  * Resolve whether Copilot is present as a reviewer on a PR from the REVIEW
  * surface only — requested reviewers plus submitted reviews — never from
- * assignees (#1670).
- *
- * Copilot review is configured in two ways: Copilot is either formally listed
- * in the PR's `requested_reviewers`, or it is a configured auto-reviewer
- * (`copilot-pull-request-reviewer[bot]`) that submits an actual review without
- * ever appearing in `requested_reviewers`. Both are review-surface facts.
- * Assignment is a disjoint surface and must never decide presence: on a
- * reviewer-configured repo Copilot is never an assignee, so an assignee-based
- * proxy would falsely report a fully-configured Copilot reviewer as absent and
- * could let the gate skip the Copilot-convergence requirement on a false premise.
+ * assignees. Assignment is a disjoint surface: on a reviewer-configured
+ * repo Copilot is never an assignee, so an assignee-based proxy would falsely
+ * report a configured Copilot reviewer as absent and let the gate skip the
+ * Copilot-convergence requirement on a false premise.
  *
  * @param {object} params
  * @param {boolean} [params.requested] - Copilot is listed in the PR's requested_reviewers
@@ -129,12 +96,12 @@ export function resolveCopilotReviewPresence({ requested = false, reviews = [] }
   return { present: sources.length > 0, sources };
 }
 
-// Anti-summon literal: bare-text `@copilot` or a `/copilot*` slash command. Both
-// the write-side sanitizer and the read-side guard scan key off this shape so a
-// gate-evidence comment can quote the rule (inside a code span/fenced block)
-// without arming the request-copilot-review.mjs anti-summon guard. The token
-// regex carries the same left word-boundary as the guard regex so the sanitizer
-// never mangles text the guard would not arm on (e.g. user@copilot.example).
+// Anti-summon literal: bare-text `@copilot` or a `/copilot*` slash command.
+// Both the write-side sanitizer and the read-side guard key off this shape so a
+// gate-evidence comment can quote the rule (in a code span/fence) without arming
+// the request-copilot-review.mjs anti-summon guard. The token regex carries the
+// same left word-boundary as the guard regex so the sanitizer never mangles text
+// the guard would not arm on (e.g. user@copilot.example).
 const COPILOT_SUMMON_TOKEN_RE = /(?<=^|\W)(@copilot|\/copilot[a-z0-9_-]*)/gi;
 const COPILOT_SUMMON_WORD_BOUNDARY_RE = /(?:^|\W)(@copilot|\/copilot)(?:$|\W)/i;
 // GFM inline code span: an N-backtick run, lazy content, closed by a same-length
@@ -145,8 +112,6 @@ const ZERO_WIDTH_JOINER = "\u200D";
 
 // Apply `transformLine` to every markdown line OUTSIDE a fenced code block
 // (```/~~~), leaving fence-delimiter lines and fenced content untouched.
-// Mirrors the fenced-block tracking scripts/docs/validate-rule-ownership.mjs
-// uses for its own lexical scan.
 function transformNonFencedLines(text, transformLine) {
   const lines = String(text).split(/\r?\n/);
   let inFencedBlock = false;
@@ -207,19 +172,15 @@ function lineArmsSummonGuard(line) {
 const ZWJ_FALLBACK_RE = /(?<=^|\W)([@/])(copilot)/gi;
 
 // Sanitize one line, verifying against the guard scan. Backtick-wrapping is the
-// primary neutralization (visible, greppable), but pre-existing backticks on the
-// line can destabilize it two ways: an UNBALANCED stray backtick pairs with an
-// inserted one and re-exposes the token to the guard's span-stripping, and
-// adjacent spans (e.g. a span ending right before the token's new wrap) can make
-// the wrapped line re-tokenize differently on the next pass, re-wrapping the
-// token and growing the comment by one backtick per rewrite. The wrapped result
-// is therefore accepted only when it is BOTH guard-inert AND a fixed point of
-// the wrapper (re-wrapping it changes nothing); otherwise fall back to inserting
-// a zero-width joiner into the residual tokens still outside the wrapped line's
-// spans — invisible, guard-inert, and idempotent (the joined token no longer
-// matches the summon shape). Working on the wrapped line (not the original)
-// preserves every stable backtick wrap and keeps the joiner out of legitimate
-// pre-existing code spans.
+// primary neutralization (visible, greppable), but pre-existing backticks can
+// destabilize it: an unbalanced stray backtick re-exposes the token to the
+// guard's span-stripping, and adjacent spans can make the wrapped line
+// re-tokenize on the next pass and grow by a backtick per rewrite. So the
+// wrapped result is accepted only when it is BOTH guard-inert AND a fixed point
+// of the wrapper; otherwise fall back to a zero-width joiner in the residual
+// tokens outside the wrapped line's spans — invisible, guard-inert, and
+// idempotent. Working on the wrapped line preserves stable wraps and keeps the
+// joiner out of legitimate pre-existing code spans.
 function sanitizeSummonLine(line) {
   const wrapped = wrapBareSummonTokensInLine(line);
   if (!lineArmsSummonGuard(wrapped) && wrapBareSummonTokensInLine(wrapped) === wrapped) {
@@ -232,12 +193,10 @@ export function sanitizeCopilotSummonTokens(text) {
   return transformNonFencedLines(String(text), sanitizeSummonLine);
 }
 
-// Drop all markdown code content (fenced blocks entirely, inline code spans
-// per line) from `text`, leaving only the bare-text markdown to scan. Unlike
-// transformNonFencedLines (which leaves fenced lines verbatim — correct for
-// sanitizing, where code content must not be rewritten), fenced content here
-// must be REMOVED rather than kept: leaving it in place would let bare text
-// inside a fence still match the anti-summon scan.
+// Drop all markdown code content (fenced blocks entirely, inline spans per
+// line) from `text`, leaving only bare-text markdown to scan. Unlike
+// transformNonFencedLines, fenced content here must be REMOVED, not kept:
+// leaving it would let bare text inside a fence still match the summon scan.
 function stripMarkdownCodeForScan(text) {
   const lines = String(text).split(/\r?\n/);
   let inFencedBlock = false;
@@ -306,11 +265,10 @@ function stripGateCommentMarkdown(rawLine) {
   return line.trim();
 }
 
-// Recognizes BOTH evidence gates (draft_gate/pre_approval_gate) and the
-// non-evidence `review` gate — parseGateReviewCommentFields below relies on
-// `review` coming back as an identified value (not null) so it can
-// short-circuit to non-evidence explicitly, rather than leaving the field
-// null and falling through to the lenient token-scan fallback.
+// Recognizes BOTH evidence gates and the non-evidence `review` gate:
+// parseGateReviewCommentFields relies on `review` coming back identified (not
+// null) so it can short-circuit rather than fall through to the lenient
+// token-scan fallback.
 function normalizeGateReviewName(value) {
   const normalized = stripOptionalCodeTicks(value).toLowerCase();
   return RECOGNIZED_GATE_NAMES.has(normalized) ? normalized : null;
@@ -383,21 +341,13 @@ function parseGateReviewCommentFields(body) {
     }
     const line = stripped;
 
-    // First-NON-EMPTY-wins per field: a genuine comment renders its structured
-    // block first, so the first column-0 match for each field is normally the
-    // real one. A free-text field (findings summary, next action) rendered
-    // later in the SAME comment can embed a newline plus a spoofed
-    // "Verdict: clean" (or any other field label) at column 0; capturing only
-    // the first match (rather than the last) stops that later line from
-    // winning and flipping/nulling the field. But the label regex's
-    // `\s*(.+)$` also matches a label followed by nothing but whitespace,
-    // capturing an empty string — for the enum fields (gate/headSha/verdict/
-    // executionMode) an empty capture normalizes to null already, so the
-    // `=== null` guard below naturally stays open for a later, genuine line.
-    // The two free-text fields (findingsSummary, nextAction) do NOT normalize
-    // through an enum, so an empty capture must be checked for explicitly:
-    // treat it as no-capture (leave the field open) rather than locking it to
-    // "" and hiding a real line that renders after it.
+    // First-NON-EMPTY-wins per field: the first column-0 match is the genuine
+    // structured block. A later free-text field (findings, next action) can
+    // embed a spoofed "Verdict: clean" at column 0; capturing only the first
+    // match stops that from flipping the field. Enum fields normalize an empty
+    // capture (label + whitespace only) to null, so their `=== null` guard
+    // stays open for a later genuine line; the two free-text fields do NOT, so
+    // an empty capture is checked explicitly and treated as no-capture.
     let match = line.match(/^(?:[-*]\s*)?(?:gate(?:\s+name)?|gate\s+review)\s*:\s*(.+)$/iu);
     if (match) {
       if (fields.gate === null) {
@@ -426,9 +376,7 @@ function parseGateReviewCommentFields(body) {
     if (match) {
       if (fields.findingsSummary === null) {
         const candidate = match[1].trim();
-        // An empty capture (label followed only by whitespace) is treated as
-        // no-capture: leave the field open so a later, genuine line can still
-        // win instead of first-wins locking it to "".
+        // Empty capture treated as no-capture (see first-non-empty-wins above).
         if (candidate.length > 0) {
           fields.findingsSummary = candidate;
         }
@@ -457,9 +405,8 @@ function parseGateReviewCommentFields(body) {
         const modeToken = sepMatch ? sepMatch[1].trim() : rest;
         const reasonToken = sepMatch ? sepMatch[2].trim() : "";
         fields.executionMode = normalizeGateExecutionMode(modeToken);
-        // Only record an inline reason for inline_single_agent. A trailing
-        // "— text" on a fanout_fanin (or invalid) mode line must not surface an
-        // inconsistent mode/reason pair, so leave inlineReason null otherwise.
+        // Only record an inline reason for inline_single_agent; a trailing
+        // "— text" on any other mode must not surface an inconsistent pair.
         if (reasonToken.length > 0 && fields.executionMode === "inline_single_agent") {
           fields.inlineReason = reasonToken;
         }
@@ -496,18 +443,11 @@ function parseGateReviewCommentFields(body) {
     }
   }
 
-  // An explicit, RECOGNIZED `review` gate field is authoritative and returns
-  // null here — before the lenient token-scan fallback below ever runs. A
-  // `review` verdict comment carries no draft/pre-approval evidence by
-  // design (#1808 AC3); without this short circuit, `fields.gate` would stay
-  // "review" (not one of the two evidence gates) but the lenient fallback
-  // below only fires when `!fields.gate` — so a *recognized* `review` gate
-  // would otherwise skip the fallback yet still return non-null fields keyed
-  // to "review", which is harmless for the two summarizers here (they only
-  // read `.draft_gate`/`.pre_approval_gate`) but leaves the non-evidence
-  // contract implicit rather than explicit. Stated plainly: an identified
-  // non-evidence gate must never be treated as an unidentified body, and an
-  // unidentified body is the ONLY case the token-scan fallback exists for.
+  // A recognized `review` gate is authoritative and returns null before the
+  // lenient token-scan fallback runs: a `review` verdict carries no
+  // draft/pre-approval evidence by design. An identified
+  // non-evidence gate must never be treated as an unidentified body, which is
+  // the only case the token-scan fallback exists for.
   if (NON_EVIDENCE_GATE_NAMES.has(fields.gate)) {
     return null;
   }
@@ -528,9 +468,8 @@ function parseGateReviewCommentFields(body) {
     }
 
     if (!fields.headSha) {
-      // Prefer SHA following a "head" context marker to avoid false
-      // matches on plain-text numeric IDs (issue/comment IDs, etc.)
-      // Example: "pre_approval_gate for head e284c2e341" or "commit abc1234def"
+      // Prefer SHA following a "head" context marker to avoid false matches on
+      // plain-text numeric IDs (issue/comment IDs, etc.).
       const ctxShaMatch = flatBody.match(
         /\b(?:head|sha|commit)\b\s*(?:sha)?\s*[:=]?\s*`?\b([0-9a-f]{7,64})\b`?/iu
       );
@@ -586,14 +525,12 @@ export function parseGateReviewCommentMarkerBody(body) {
   };
 }
 
-// Which GitHub surface carries a gate verdict. The poster needs it to pick the
-// right in-place correction endpoint on a same-head rerun (a PR review is PUT
-// to pulls/{pr}/reviews/{id}; a legacy verdict issue comment is PATCHed to
-// issues/comments/{id}). Anything that is not the review surface — including a
-// raw issue-comment payload with no `surface` field — is issue_comment, so the
-// historical shape survives untouched. SINGLE definition: a restatement that
-// misses a future third surface would silently route its body to the
-// issue-comment endpoint, where it does not live.
+// Which GitHub surface carries a gate verdict; the poster uses it to pick the
+// in-place correction endpoint on a same-head rerun (review → PUT
+// pulls/{pr}/reviews/{id}; issue comment → PATCH issues/comments/{id}).
+// Anything not the review surface (including a payload with no `surface` field)
+// is issue_comment. SINGLE definition: a restatement missing a future third
+// surface would misroute its body to the issue-comment endpoint.
 export function normalizeVerdictSurface(value) {
   return value === "review" ? "review" : "issue_comment";
 }
@@ -711,18 +648,13 @@ export function summarizeGateReviewCommentMarkers(comments, { headSha } = {}) {
 }
 
 /**
- * Resolve the draft-gate round-reset timestamp (ms) used to suppress stale Copilot
- * review rounds from the count (#896 consistency).
- *
- * When the draft gate was re-passed clean on a DIFFERENT head than the current one,
- * only Copilot reviews submitted after that re-pass should count toward the round
- * cap. Returning the re-pass `updatedAt` (ms) lets {@link summarizeCopilotReviews}
- * drop earlier rounds. Returns null when no reset applies (no clean draft gate, or
- * the clean draft gate is already on the current head).
- *
- * Both detect-pr-gate-coordination-state and request-copilot-review must derive the
- * reset identically, or the two scripts disagree on the completed round count and
- * the cap (the inconsistency reported in #896). This is the single shared source.
+ * Resolve the draft-gate round-reset timestamp (ms) used to suppress stale
+ * Copilot review rounds from the count. When the draft gate re-passed
+ * clean on a DIFFERENT head, only Copilot reviews after that re-pass count
+ * toward the round cap; returning the re-pass `updatedAt` (ms) lets
+ * summarizeCopilotReviews drop earlier rounds. Null when no reset applies.
+ * Single shared source: detect-pr-gate-coordination-state and
+ * request-copilot-review must derive the reset identically.
  *
  * @param {object} params
  * @param {{ verdict?: string|null, headSha?: string|null, updatedAt?: string|null }|null} params.draftGate

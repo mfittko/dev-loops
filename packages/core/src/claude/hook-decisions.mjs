@@ -1,5 +1,5 @@
 /**
- * Pure decision logic for the Claude Code dev-loop hooks (#773).
+ * Pure decision logic for the Claude Code dev-loop hooks.
  *
  * The hook *scripts* are thin: they read the PreToolUse/PostToolUse stdin payload, gather facts
  * (git tracked/ignored status, gate-evidence result), and call these pure deciders. Keeping the
@@ -46,7 +46,7 @@ const ALLOW = Object.freeze({ decision: "allow" });
 
 /**
  * Whether the command string also invokes an evidence-writing script (findings-log ledger or
- * checkpoint-verdict upsert). Used only to enrich the merge-block message (#1172) — a compound
+ * checkpoint-verdict upsert). Used only to enrich the merge-block message — a compound
  * command combining an evidence write with `gh pr merge` is blocked pre-execution, so the write
  * never runs; this substring check has no false-negative cost (worst case: the plain message).
  */
@@ -64,22 +64,15 @@ export const DEV_LOOP_AGENT_TYPE = "dev-loop";
 /**
  * Decide whether a PreToolUse Bash command must be blocked by a dev-loop gate boundary.
  *
- * Three gated commands on the target repo:
+ * Gated commands on the target repo (each rationale sits inline at its check):
  *   - `gh pr create` — blocked outright; PR creation must flow through the canonical wrapper
- *     (`scripts/github/create-pr.mjs` / `dev-loops pr create`), which always drafts and
- *     self-assigns. Closes the hole where raw `gh pr create` opens a ready PR, bypassing draft-first.
- *   - `gh pr ready` — blocked without clean draft_gate evidence (`pre-pr-ready-gate`).
- *   - `gh pr merge` — blocked without the full pre-merge gate evidence (`detect-checkpoint-evidence`:
- *     clean current-head draft_gate + pre_approval_gate). The loop runs this check before merging;
- *     gating it here closes the hole where a hand-run `gh pr merge` skips the pre-approval gate
- *     entirely. Everything else passes through.
- *   - raw `gh issue create` / `gh issue comment` / `gh issue edit` / `gh pr comment` — blocked ONLY when the call
- *     originates from a SUBAGENT context (`agentType` is a non-null string) and targets the repo.
- *     Sanctioned external writes flow through node wrappers (gate-verdict comments via
- *     `upsert-checkpoint-verdict.mjs`, review replies via `reply-resolve*.mjs`, board sync,
- *     `comment-issue.mjs`), whose Bash command string is `node scripts/…` and never matches these
- *     raw-`gh` matchers. The MAIN AGENT / operator (agentType null) retains direct `gh issue
- *     create` — that path is authorized (#1051).
+ *     (`scripts/github/create-pr.mjs` / `dev-loops pr create`), which always drafts and self-assigns.
+ *   - `gh pr ready` — blocked without clean draft_gate evidence.
+ *   - `gh pr merge` — blocked without full pre-merge gate evidence (clean current-head draft_gate +
+ *     pre_approval_gate).
+ *   - raw `gh issue create` / `gh issue comment` / `gh issue edit` / `gh pr comment` — blocked ONLY
+ *     from a SUBAGENT context (`agentType` non-null) on the target repo. Sanctioned external writes
+ *     flow through node wrappers; the MAIN AGENT / operator (agentType null) retains direct access.
  *
  * The hook computes `gatePassed`/`gateError` from the gate script appropriate to the command kind.
  *
@@ -101,10 +94,10 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
     return ALLOW;
   }
   // Normalize (trim + case-fold) so a divergent slug (surrounding whitespace, casing) does not
-  // silently fail OPEN and disable every guard that depends on inTargetRepo (#1622).
+  // silently fail OPEN and disable every guard that depends on inTargetRepo.
   const inTargetRepo = (repoSlug ?? "").trim().toLowerCase() === TARGET_REPO_SLUG.trim().toLowerCase();
 
-  // OPS-NO-INLINE-INTERPRETER (#1622): inline interpreters (`node -e`/`--eval`/`-p`, `python3 -c`,
+  // OPS-NO-INLINE-INTERPRETER: inline interpreters (`node -e`/`--eval`/`-p`, `python3 -c`,
   // heredocs fed to node/python) are barred actor-independently on the target repo — the rule bars
   // "Coordinator and agent flows"; sanctioned output parsing uses `--jq`/`--silent`, never an
   // inline interpreter.
@@ -118,10 +111,10 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
     };
   }
 
-  // SUBISSUE-NO-ADHOC-BYPASS (#1622): ad-hoc `gh api` writes to the target repo's sub-issue endpoints.
+  // SUBISSUE-NO-ADHOC-BYPASS: ad-hoc `gh api` writes to the target repo's sub-issue endpoints.
   // Actor-independent (no reserved direct path). Gated on the target repo: the absolute slug-embedded
   // form identifies the target repo; the bare relative form (`gh api issues/5/sub_issues`) resolves
-  // against the cwd repo, so it is in scope only when running in the target repo (mirrors the #1047
+  // against the cwd repo, so it is in scope only when running in the target repo (mirrors the
   // explicit-`--repo`/cwd-target posture).
   if (inTargetRepo && commandContainsSubIssueAdHocBypass(command)) {
     return {
@@ -132,7 +125,7 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
     };
   }
 
-  // COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER (#1622): ad-hoc thread-resolution writes — raw `gh api` POST
+  // COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER: ad-hoc thread-resolution writes — raw `gh api` POST
   // to pulls/<n>/comments/<m>/replies, or a `gh api graphql` resolveReviewThread mutation (the Rest
   // path names the target repo; the graphql form has no path-host repo, so it is scoped to the cwd
   // repo). Actor-independent: reply through reply-resolve-review-thread(s).mjs.
@@ -146,7 +139,7 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
     };
   }
 
-  // COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY (#1622): ad-hoc Copilot review requests — raw `gh api` writes
+  // COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY: ad-hoc Copilot review requests — raw `gh api` writes
   // to pulls/<n>/requested_reviewers, or a bare `/copilot` / `/copilot re-review` comment summon on the
   // target repo. Actor-independent: request Copilot via scripts/github/request-copilot-review.mjs.
   if (inTargetRepo && (commandContainsCopilotRequestBypass(command) || commandContainsCopilotSummonComment(command))) {
@@ -174,7 +167,7 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   }
   // Subagent-scoped external-write guard: block ad-hoc `gh issue create`/`gh issue comment`/
   // `gh issue edit`/`gh pr comment` on the target repo from a subagent, so external writes flow through the
-  // sanctioned node wrappers. The main-agent/operator path (agentType null) is unaffected (#1051).
+  // sanctioned node wrappers. The main-agent/operator path (agentType null) is unaffected.
   if (typeof agentType === "string" && commandContainsRawExternalWrite(command)) {
     const cwdTargets = (repoSlug ?? "").toLowerCase() === TARGET_REPO_SLUG.toLowerCase();
     // Scope PER segment, mirroring the `gh pr create` block: in scope when no explicit --repo and
@@ -205,7 +198,7 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   const isMerge = commandContainsGhPrMerge(command);
   const isCreate = commandContainsGhPrCreate(command);
 
-  // STOP-HUMAN-MERGE-001 (#1622): when the repo resolves `autonomy.humanMergeOnly`, `gh pr merge` is
+  // STOP-HUMAN-MERGE-001: when the repo resolves `autonomy.humanMergeOnly`, `gh pr merge` is
   // refused actor-independently — the main agent is the actor that performs GitHub writes, so only an
   // actor-independent deny enforces the human-merge invariant (an agent-scoped deny would enforce
   // nothing on the main-agent write path).
@@ -220,7 +213,7 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   }
 
   if (!isReady && !isMerge && !isCreate) {
-    // COPILOT-FOLLOWUP-WAIT-TOOLS (#1622): banned detached/polling wait wrappers. Subagent-only — the
+    // COPILOT-FOLLOWUP-WAIT-TOOLS: banned detached/polling wait wrappers. Subagent-only — the
     // rule is classified `agent` (behavioral guidance for the dev-loop driving agent); the main
     // agent/operator retains manual wait tooling. The main agent's own sanctioned wait path is still
     // the deterministic tools.
@@ -244,7 +237,7 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
     const cwdTargets = (repoSlug ?? "").toLowerCase() === TARGET_REPO_SLUG.toLowerCase();
     // Evaluate scope PER create segment, not just the first: a create is in scope when it
     // explicitly targets the repo, or (with no explicit --repo) the cwd is the repo. An explicit
-    // `--repo <target>` is denied regardless of cwd (#1047). DENY if ANY create segment is in
+    // `--repo <target>` is denied regardless of cwd. DENY if ANY create segment is in
     // scope — otherwise a leading out-of-scope create (`gh pr create --repo other/repo`) would
     // short-circuit and shield a later in-scope raw create (`&& gh pr create --fill`).
     const anyCreateInScope = extractRepoFlagsFromGhPrCreateSegments(command).some((seg) =>
@@ -307,7 +300,7 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
       // This hook evaluates PreToolUse — BEFORE the Bash tool call runs. A compound command that
       // writes gate evidence (findings-log ledger, checkpoint verdict) and merges in the same call
       // is blocked here with the write never having executed, which looks like the evidence
-      // "vanished" (#1172). Hint the split when the command carries an evidence-writing invocation
+      // "vanished". Hint the split when the command carries an evidence-writing invocation
       // alongside the merge, so the failure is self-explaining instead of looking like data loss.
       const alsoWritesEvidence = commandContainsEvidenceWrite(command);
       return {
@@ -464,7 +457,7 @@ export function decideWorktreeCheckoutGuard({
 
 /**
  * Env var that exempts an interactive session awaiting commit authorization from the
- * SubagentStop uncommitted-work guard (#1619).
+ * SubagentStop uncommitted-work guard.
  *
  * An opt-in signal set by the operator or the interactive coordination path
  * (`DEVLOOPS_COMMIT_AUTH_PENDING=1`) when intentionally holding uncommitted work pending
@@ -477,7 +470,7 @@ export function decideWorktreeCheckoutGuard({
 export const DEVLOOPS_COMMIT_AUTH_PENDING_VAR = "DEVLOOPS_COMMIT_AUTH_PENDING";
 
 /**
- * Subagent roles whose contract forbids committing to the repository (#1925).
+ * Subagent roles whose contract forbids committing to the repository.
  *
  * The `judge` and `review` agents are read-only over the repository: the judge writes only its
  * own verdict artifact (under `tmp/`, gitignored) and the gate reviewer writes only its findings
@@ -489,7 +482,7 @@ export const DEVLOOPS_COMMIT_AUTH_PENDING_VAR = "DEVLOOPS_COMMIT_AUTH_PENDING";
  * contract (`agents/judge.agent.md`: "The only thing you write is your own verdict artifact").
  * The data-loss protection is enforced against the OWNER of the edit (the orchestrator) on its own
  * stop instead. This is intentionally scoped to read-only roles: editing roles (`developer`,
- * `fixer`, `docs`, `quality`) and the orchestrator stay enforced (#1925 non-goal).
+ * `fixer`, `docs`, `quality`) and the orchestrator stay enforced.
  */
 export const READONLY_SUBAGENT_ROLES = Object.freeze(["judge", "review"]);
 
@@ -500,7 +493,7 @@ export function isReadOnlySubagentRole(agentType) {
 
 /**
  * Decide whether a SubagentStop must be blocked because the subagent's worktree has
- * uncommitted changes (#1619).
+ * uncommitted changes.
  *
  * `scripts/loop/cleanup-worktree.mjs` runs `git worktree remove --force` after a merge, so
  * uncommitted changes in a worktree are destroyed with no warning. `LOCAL-COMMIT-BEFORE-EXIT`
@@ -512,10 +505,10 @@ export function isReadOnlySubagentRole(agentType) {
  * Editing roles (`developer`/`fixer`/`docs`/`quality`) stay fully enforced: an editing
  * sub-delegate commits its own work before exit (`LOCAL-COMMIT-BEFORE-EXIT`), so a dirty exit is
  * always a real defect, never a sanctioned "orchestrator owns the commit" split. The removed
- * `DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT` env-var exemption (#1786) deadlocked such a role under a
+ * `DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT` env-var exemption deadlocked such a role under a
  * task-scoped no-commit instruction whenever the orchestrator could not set a per-dispatch env
  * var (the Claude harness): the hook demanded a commit the session then denied, then re-blocked
- * the exit (#1936). Disallowing the edit-here/commit-there split at the contract level makes the
+ * the exit. Disallowing the edit-here/commit-there split at the contract level makes the
  * guard the enforcer and the deadlock structurally impossible while preserving data-loss
  * protection. An orchestrator that wants one consolidated commit performs the edits itself.
  *
@@ -532,7 +525,7 @@ export function isReadOnlySubagentRole(agentType) {
  *   awaiting commit authorization (exempt) — derived by the hook script from the
  *   `DEVLOOPS_COMMIT_AUTH_PENDING=1` opt-in env signal.
  * @param {string|null} [params.agentType] - Claude `agent_type` from the SubagentStop payload;
- *   a read-only role (`judge`/`review`, per `READONLY_SUBAGENT_ROLES`) is exempt (#1925) — its
+ *   a read-only role (`judge`/`review`, per `READONLY_SUBAGENT_ROLES`) is exempt — its
  *   contract forbids commits, so any dirty tracked edit in its worktree is foreign
  *   (orchestrator-owned) and must not be pinned on it.
  * @returns {HookDecision}
@@ -547,7 +540,7 @@ export function decideSubagentStopGuard({ cwd, porcelain, pendingCommitAuthoriza
   if (typeof porcelain !== "string" || porcelain.trim() === "") {
     return ALLOW;
   }
-  // Read-only role exemption (#1925): the worktree is dirty, but a `judge`/`review` subagent's
+  // Read-only role exemption: the worktree is dirty, but a `judge`/`review` subagent's
   // contract forbids commits, so this pending tracked edit is foreign — it belongs to the
   // orchestrator that dispatched this pass. Do not force a verdict-only role to commit it; allow
   // the stop with an advisory naming the orchestrator as the actor responsible for the edit. The

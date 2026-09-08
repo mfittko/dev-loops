@@ -210,7 +210,7 @@ export function parseDetectCheckpointEvidenceCliArgs(argv) {
 // restFallback, when provided, is invoked ONLY when spawning the `gh` binary
 // itself fails (ENOENT — the binary is not on PATH); a `gh` invocation that runs
 // and fails for any other reason (auth, rate limit, a real 404) is a genuine
-// error and is never silently retried through the REST fallback (#1358).
+// error and is never silently retried through the REST fallback.
 async function runGhJson(args, { env, ghCommand, runChild = defaultRunChild, restFallback = null }) {
   try {
     return await ghJson(args, { env, ghCommand, runChild });
@@ -316,29 +316,18 @@ function normalizeGateMarkerSummary(summary) {
   };
 }
 /**
- * Decide whether a gate's recorded (or candidate, not-yet-posted) execution
- * mode satisfies fan-out evidence enforcement, independent of the ledger/
- * provenance/angle-coverage layer below it. Returns null when the mode
- * qualifies (fanout_fanin, or a light-mode-accepted inline verdict) and an
- * error message — identical wording wherever this runs — otherwise.
+ * Decide whether a gate's execution mode satisfies fan-out evidence
+ * enforcement (fanout_fanin, or a light-mode-accepted inline verdict),
+ * independent of the ledger/provenance/angle-coverage layer below it. Returns
+ * null when it qualifies, else an error message.
  *
- * This is the ONE place mode qualification is decided. buildPreMergeGateCheck
+ * The ONE place mode qualification is decided: buildPreMergeGateCheck
  * (merge-time) and upsert-checkpoint-verdict.mjs (post-time) both call this
- * against the same buildFanoutEnforcement-produced `gate` descriptor
- * so the two boundaries can never drift apart on what counts as an accepted
- * inline verdict.
+ * against the same `gate` descriptor so the two can never drift apart.
  */
 export function evaluateInlineFanoutMode(gate, fanoutEnforcement) {
-  // Light-mode acceptance (#1174): a genuinely under-threshold micro-PR
-  // collapses the gate fan-out to a single inline check (#1043). Accept that
-  // inline verdict ONLY when ALL hold, fail CLOSED otherwise:
-  //   - lightMode is enabled in config, AND
-  //   - the reviewed head's merge-base scope was RE-DERIVED under threshold
-  //     (scopeUnderThreshold; false whenever scope could not be derived), AND
-  //   - the PR carries no gate:full label (which always forces fan-out), AND
-  //   - the verdict records a non-empty inline reason.
-  // Any non-light inline verdict (over threshold / label / lightMode off /
-  // scope underivable) falls through to the byte-identical rejection below.
+  // Light-mode acceptance: fail CLOSED unless every condition below
+  // holds. Any non-light inline verdict falls through to the rejection below.
   const lightAccepted =
     gate.executionMode === "inline_single_agent"
     && fanoutEnforcement.lightMode === true
@@ -399,7 +388,7 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
       // fanout_fanin ledger must record INTERNALLY-CONSISTENT provenance (checked
       // the same way the write path validates it — a hand-edited or shadow ledger
       // is re-validated here, not trusted) with distinctReviewers >= the floor.
-      // Provenance is enforced ONLY for fanout_fanin verdicts (#1174): a
+      // Provenance is enforced ONLY for fanout_fanin verdicts: a
       // light-accepted inline verdict is already scope-bounded and has no
       // multi-reviewer provenance to record, so requiring it would make the
       // light path unmergeable — the inverse of this issue's fix.
@@ -414,7 +403,7 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
         } else {
           // The floor scales with the fresh DISPATCH UNITS actually recorded
           // (one reviewer per fresh angle, but one reviewer per declared
-          // GROUP of fresh angles — #1431/AC7), at minimum
+          // GROUP of fresh angles), at minimum
           // FANOUT_PROVENANCE_MIN_REVIEWERS — a ledger recording more fresh
           // dispatch units than distinct reviewers could only have paired one
           // reviewer across units.
@@ -516,20 +505,15 @@ function gateVerdictState({ visible, verdict, contractComplete = true }) {
 }
 
 /**
- * Classify WHY the checkpoint-evidence pre-merge check is (un)satisfied, for the
- * gate-evidence commit-status mapping: `not_established` (evidence for the
- * current head simply doesn't exist yet — draft, mid-Copilot-loop, or right
- * after a fix commit before pre_approval_gate re-runs) reads as `pending`, not
- * `failure`; `violation` (a visible current-head comment carries a bad verdict —
- * blocked/findings_present — or another pre-merge check failed, e.g. unresolved
- * threads or a stale runner) reads as `failure`; `satisfied` reads as `success`.
- * Both gates clean is a precondition for `satisfied`, not the definition of it —
- * a clean-gates PR can still fail on an unrelated pre-merge failure, which is a
- * real problem (violation), not "waiting".
- *
- * @param {{ draftGate: object, preApprovalGateMarker: object }} evidence
- * @param {{ ok: boolean }} preMergeGateCheck
- * @returns {"satisfied"|"not_established"|"violation"}
+ * Classify WHY the checkpoint-evidence pre-merge check is (un)satisfied, for
+ * the gate-evidence commit-status mapping: `not_established` (evidence for
+ * the current head doesn't exist yet — draft, mid-Copilot-loop, or right
+ * after a fix commit before pre_approval_gate re-runs) reads as `pending`;
+ * `violation` (a visible current-head comment carries a bad verdict, or
+ * another pre-merge check failed) reads as `failure`; `satisfied` reads as
+ * `success`. Both gates clean is a precondition for `satisfied`, not its
+ * definition — a clean-gates PR can still fail on an unrelated pre-merge
+ * check, which is a real problem (violation), not "waiting".
  */
 export function deriveEvidenceState(evidence, preMergeGateCheck) {
   const draftState = gateVerdictState({ visible: evidence.draftGate.visible, verdict: evidence.draftGate.verdict });
@@ -557,7 +541,7 @@ async function ledgerExists(fullPath) {
 }
 /**
  * True if the ledger (relative path) exists under ANY enumerated checkout
- * (main + every worktree). Fixes #1050: a ledger written in the PR worktree is
+ * (main + every worktree). A ledger written in the PR worktree is
  * found even when the check runs from a different checkout's git-toplevel.
  */
 async function ledgerExistsInAny(checkouts, ledgerPath) {
@@ -623,16 +607,16 @@ async function readLedgerProvenanceInAny(checkouts, ledgerPath, criteria = {}) {
  * Build the fan-out evidence enforcement descriptor.
  *
  * Enforcement is ON by default (opt-out via gates.requireFanoutEvidence: false).
- * Returns { required: false } when enforcement is disabled OR when config is
- * unavailable (config == null — null or undefined — after a failed load) — config-unavailable must
- * fail open and never enable enforcement. When enabled, returns
+ * Returns { required: false } when disabled OR config is unavailable
+ * (config == null after a failed load) — config-unavailable must fail open
+ * and never enable enforcement. When enabled, returns
  * { required: true, requireProvenance, lightMode, hasFullLabel, gates } where
  * each per-required-gate entry records executionMode, inlineReason,
  * scopeUnderThreshold, and whether the deterministic findings-log ledger exists
  * for the reviewed head SHA, so the pre-merge check can fail closed on inline
  * verdicts or missing ledgers.
  *
- * Light mode (#1174): when gates.lightMode is configured, `hasFullLabel`
+ * Light mode: when gates.lightMode is configured, `hasFullLabel`
  * (gate:full PR label) and `baseRef` feed a fail-closed merge-base scope
  * re-derivation for inline verdicts. A gate's scopeUnderThreshold is true only
  * when light mode is on, the PR has no gate:full label, a base ref is known,
@@ -657,7 +641,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   // independently of requireProvenance: it re-validates whatever provenance a
   // fanout_fanin ledger actually recorded, regardless of that opt-in flag.
   const rejectForeignAngles = resolveRejectForeignAngles(config);
-  // Light-mode facts (#1174): the threshold that a re-derived merge-base scope
+  // Light-mode facts: the threshold that a re-derived merge-base scope
   // must fall under for an inline verdict to be accepted. null when lightMode is
   // disabled → no inline verdict can ever be accepted (scopeUnderThreshold stays
   // false), preserving today's rejection.
@@ -799,7 +783,7 @@ export async function detectCheckpointEvidence(options, { env = process.env, ghC
   let config = null;
   const { config: loadedConfig, errors: configErrors } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(cwd) });
   config = Array.isArray(configErrors) && configErrors.length > 0 ? null : loadedConfig;
-  // Light-mode pre-merge facts (#1174): the base commit for the merge-base scope
+  // Light-mode pre-merge facts: the base commit for the merge-base scope
   // re-derivation and whether the PR forces full fan-out via the gate:full label.
   // Fetched LAZILY — only when fan-out enforcement is active AND lightMode is on
   // AND a gate actually recorded an inline verdict — so the common fan-out path
@@ -879,7 +863,7 @@ async function main() {
       const threadsPayload = await fetchGithubReviewThreadsPayload(options, { env: process.env });
       const parsedThreads = parseReviewThreads(threadsPayload);
       unresolvedThreadCount = parsedThreads?.summary?.unresolvedThreads ?? 0;
-      // #1585: the draftGateSatisfied field must assert 0 unresolved
+      // The draftGateSatisfied field must assert 0 unresolved
       // gate-authored threads (high, medium, low, question, AND nit),
       // not just a clean verdict. Reuse the same raw thread payload already
       // fetched for the total count (marker-only, fail-closed proxy — no extra
@@ -891,7 +875,7 @@ async function main() {
       unresolvedThreadCount = -1;
       unresolvedGateThreadCount = -1;
     }
-    // #1585: fold the gate-authored thread invariant into draftGateSatisfied.
+    // Fold the gate-authored thread invariant into draftGateSatisfied.
     result.draftGateSatisfied = result.draftGateSatisfied && unresolvedGateThreadCount === 0;
     const staleRunnerCheck = {
       ok: result.staleRunner.status === "fresh_runner" || result.staleRunner.status === "no_owner_record",
