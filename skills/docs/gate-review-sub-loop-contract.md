@@ -525,7 +525,39 @@ instead of singletons. `mode: per-angle` bypasses configured groups (one singlet
 restores per-angle dispatch (ADR 0048 supersedes 0047): it forces the full angle set upstream
 (`resolveGateTier` returns `gate_full_label`, so `resolveGateAnglesDynamic` skips diff-class
 tier reduction) and dispatches **grouped** — configured groups first, then the leftover pool
-auto-chunked into units of ≤ N. The reviewer is the scoped `review` agent ([review agent
+auto-chunked into units of ≤ N.
+
+`gates.fanout.groups` is a **global** reviewer-identity table (not per-gate); a configured
+group is emitted only for a gate that resolves at least one of its angles, so one table
+serves every gate without per-gate duplication. The shipped table groups **both** boundaries
+symmetrically: the `docs-surface` / `process` / `correctness-input` / `determinism-state`
+groups name draft-gate surfaces, and the `design-simplicity` / `design-solid` / `finalization`
+groups name the pre-approval gate's design-quality (`dry`/`kiss`/`yagni`/`deep` and
+`srp`/`soc`/`ocp`/`lsp`/`isp`/`dip`) and finalization (`contradiction-lens`/`correctness-final`/
+`ui-validation`) angles. Without the pre-approval groups those angles would have no configured
+reviewer-identity unit and would scatter across arbitrary auto-chunked leftover units, so a
+grouped pre-approval reviewer covering a semantic group would be rejected by
+`fanoutReviewerPairingError` even though the round was compliant. The draft-gate `docs` and
+`pr-checklist` angles the pre-approval set also resolves are already covered by the
+`docs-surface` and `process` groups, so they need no pre-approval-specific entry. Grouping only
+changes how many reviewers are dispatched; the resolved angle SET, the distinct-reviewer floor
+(`countFreshDispatchUnits`, one distinct reviewer per resolved unit), and
+`requireFanoutProvenance` are unchanged for full-scope rounds.
+
+Two different "group" vocabularies exist and MUST NOT be conflated. A **request group**
+(`buildAngleRequestGroups`, [Request-plan artifact and harness capability](#request-plan-artifact-and-harness-capability))
+buckets angles by concrete resolved model for prompt-prefix / cache batching — it is a
+cache-fingerprint concern with no bearing on reviewer identity. A **reviewer group**
+(`resolveFanoutGroups`) names reviewer IDENTITY: which angles one fresh-context reviewer
+legitimately covers as one dispatch unit. Fan-out **provenance is validated against
+`resolveFanoutGroups` output, never against `requestGroups`**: `fanoutReviewerPairingError`
+receives the resolved reviewer groups and honors a shared reviewer identity only when every
+fresh angle it covers is a member of the same `resolveFanoutGroups` unit. A plan that batches
+N angles into one model/cache request group is therefore still rejected unless those angles
+also map to one reviewer group — so a compliant grouped round must be grouped by
+`resolveFanoutGroups`, not merely batched by model.
+
+The reviewer is the scoped `review` agent ([review agent
 scoped angle-review mode](../../agents/review.md)), spawned once per dispatch unit via the
 plain Agent tool. Reviewers are **independent and seeded with the identical neutral context
 bundle verbatim** (Phase 1's diff + `adjacentCode`); they do NOT fork from, or inherit the

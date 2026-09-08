@@ -4113,6 +4113,48 @@ test("resolveFanoutGroups is defensive against a malformed gates.fanout.groups e
   );
 });
 
+test("resolveFanoutGroups: the shipped default groups the preApproval design-quality + finalization angles so a grouped round yields fewer dispatch units than angles", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-preapproval-groups-"));
+  try {
+    const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+    const { config } = await loadDevLoopConfig({ repoRoot: tmpDir });
+    // Validate under the SHIPPED default (mode: grouped, maxAnglesPerGroup: 3), not a hand-built config.
+    assert.equal(config.gates.fanout.mode, "grouped");
+    assert.equal(config.gates.fanout.maxAnglesPerGroup, 3);
+
+    const preApprovalAngles = config.gates.preApproval.angles.map((a) => (typeof a === "string" ? a : a.name));
+    const units = resolveFanoutGroups(config, "preApproval", preApprovalAngles);
+
+    // The design-quality set collapses to configured reviewer-identity groups
+    // instead of scattering across arbitrary auto-chunked leftover units.
+    const designSet = ["dry", "kiss", "yagni", "srp", "soc", "deep", "ocp", "lsp", "isp", "dip"];
+    const designUnits = units.filter((u) => u.angles.some((a) => designSet.includes(a)));
+    const designAngleCount = designSet.filter((a) => preApprovalAngles.includes(a)).length;
+    assert.ok(
+      designUnits.length < designAngleCount,
+      `expected fewer dispatch units (${designUnits.length}) than design angles (${designAngleCount})`,
+    );
+    // Every design angle is claimed by a named configured group, none left to auto-chunk.
+    assert.ok(designUnits.every((u) => u.name === "design-simplicity" || u.name === "design-solid"));
+    assert.deepEqual(
+      units.find((u) => u.name === "design-simplicity")?.angles,
+      ["dry", "kiss", "yagni", "deep"],
+    );
+    assert.deepEqual(
+      units.find((u) => u.name === "design-solid")?.angles,
+      ["srp", "soc", "ocp", "lsp", "isp", "dip"],
+    );
+    assert.deepEqual(
+      units.find((u) => u.name === "finalization")?.angles,
+      ["contradiction-lens", "correctness-final", "ui-validation"],
+    );
+    // Whole round: fewer dispatch units than resolved angles.
+    assert.ok(units.length < preApprovalAngles.length);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("resolveMaxAnglesPerGroup / resolveFanoutMaxConcurrent: defaults + config override + defensive fallback (#1601)", () => {
   assert.equal(resolveMaxAnglesPerGroup({ version: 1 }), 3);
   assert.equal(resolveFanoutMaxConcurrent({ version: 1 }), 4);

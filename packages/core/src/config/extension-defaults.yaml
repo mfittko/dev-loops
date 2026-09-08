@@ -195,6 +195,14 @@ gates:
   fanout:
     maxAnglesPerGroup: 3
     maxConcurrent: 4
+    # The table is global; a group is only emitted for a gate that actually
+    # resolves at least one of its angles, so a group naming preApproval-only
+    # angles is inert for the draft/spike gates (their angle sets never include
+    # these), and vice versa. The first four groups name draft-gate surfaces;
+    # the design-* and finalization groups name the preApproval design-quality
+    # and finalization angles so a grouped preApproval round collapses to one
+    # reviewer per group instead of scattering those angles across arbitrary
+    # auto-chunked leftover units.
     groups:
       - name: docs-surface
         angles: [docs, link-check, config-drift, contract-surface]
@@ -204,6 +212,12 @@ gates:
         angles: [correctness, input-validation]
       - name: determinism-state
         angles: [determinism, state-concurrency]
+      - name: design-simplicity
+        angles: [dry, kiss, yagni, deep]
+      - name: design-solid
+        angles: [srp, soc, ocp, lsp, isp, dip]
+      - name: finalization
+        angles: [contradiction-lens, correctness-final, ui-validation]
   preApproval:
     angles:
       - name: dry
