@@ -378,7 +378,7 @@ async function runDispositionPass({ repo, pr, round, threads, snapshot, login, m
       // follow-up issue — appending again would duplicate the "additional
       // finding(s)" comment. Only not-yet-stamped targets still need to reach
       // the follow-up issue; an already-stamped one still needs its
-      // reply+resolve below (GATE-EXEC-DISPOSITION-LEDGER).
+      // reply+resolve below (GATE-EXEC-THREAD-DISPOSITION).
       const unstampedFileable = buildableFileable.filter((target) => !target.alreadyStamped);
       issueNumber = existingIssueNumber;
       if (unstampedFileable.length > 0) {

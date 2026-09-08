@@ -235,7 +235,8 @@ export function declaredGateOf(scope, gateNames = GATE_NAMES) {
  * A missing/hashless sentinel always fails closed (never grandfathered).
  *
  * When `expectedDispatchUnits` is > 0 (the caller's plan-derived pending-angle
- * floor), a round with ZERO sentinels FAILS CLOSED (records-floor): a
+ * floor), a round with ZERO sentinels FAILS CLOSED (GATE-EXEC-BRIEFING-PREFIX
+ * records-floor): a
  * coordinator round whose plan recorded pending angles must record evidence,
  * so it can no longer pass vacuously. With `expectedDispatchUnits === 0` the
  * zero-sentinel case stays a trivial pass.
