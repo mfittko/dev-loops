@@ -590,7 +590,11 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
         // backstop must never permit rounds the interpreter already forbids.
         lightweight: options.lightweight,
       },
-      { env, ghCommand, runChild },
+      // Thread runHandoff's already-resolved repoRoot into the review sub-call so
+      // its round-cap resolves from the same config source (issue #2055). No-op
+      // from the repo root (resolvedRepoRoot === resolveRepoRoot(process.cwd()));
+      // more correct from a subdir.
+      { env, ghCommand, runChild, repoRoot: resolvedRepoRoot },
     );
     reviewRequestStatus = requestResult.status;
     snapshot = applyConfirmedReviewRequest(snapshot, reviewRequestStatus);

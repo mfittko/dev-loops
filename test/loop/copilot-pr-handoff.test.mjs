@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 
 import os from "node:os";
 import path from "node:path";
@@ -21,14 +21,22 @@ const scriptPath = path.resolve("scripts/loop/copilot-pr-handoff.mjs");
 // per in-process call — NOT installed globally — because some tests do a real
 // `git init` and rely on real git; a global shadow would break those.
 let gitStubDir = null;
+// Config-hermeticity (issue #2055): resolve the Copilot round cap from a fixture
+// repoRoot mirroring the real .devloops with maxCopilotRounds pinned to 2, not
+// the ambient .devloops (the slim line sets it to 1). Assertions are unchanged.
+let capFixtureRepoRoot = null;
 before(async () => {
   gitStubDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-gitstub-"));
   const gitStubPath = path.join(gitStubDir, "git");
   await writeFile(gitStubPath, "#!/bin/sh\nexit 0\n", "utf8");
   await chmod(gitStubPath, 0o755);
+  capFixtureRepoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-cap-fixture-"));
+  const realDevloops = await readFile(path.resolve(".devloops"), "utf8");
+  await writeFile(path.join(capFixtureRepoRoot, ".devloops"), realDevloops.replace(/maxCopilotRounds: *\d+/, "maxCopilotRounds: 2"), "utf8");
 });
 after(async () => {
   if (gitStubDir) await rm(gitStubDir, { recursive: true, force: true });
+  if (capFixtureRepoRoot) await rm(capFixtureRepoRoot, { recursive: true, force: true });
 });
 
 // Marker key: the local writeGhStub stashes its gh `entries` on the returned env
@@ -47,6 +55,10 @@ const runNode = async (args = [], options = {}) => {
   if (!entries) {
     return runNodeHelper(scriptPath, args, {
       ...options,
+      // Config-hermeticity (issue #2055): the spawned CLI resolves its round cap
+      // from cwd's .devloops; default it to the cap fixture (cap=2) rather than
+      // the ambient worktree (the slim line sets 1). Assertions are unchanged.
+      cwd: options.cwd ?? capFixtureRepoRoot,
       env: runIdFreeEnv({
         ...(options.env ?? {}),
         DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "",
@@ -65,7 +77,7 @@ const runNode = async (args = [], options = {}) => {
   }
   const env = runIdFreeEnv({ ...options.env, DEVLOOPS_RUN_ID: options.env?.DEVLOOPS_RUN_ID ?? "" });
   delete env[GH_MOCK_ENTRIES];
-  const repoRoot = options.cwd ?? process.cwd();
+  const repoRoot = options.cwd ?? capFixtureRepoRoot;
   const stderrChunks = [];
   const originalWrite = process.stderr.write.bind(process.stderr);
   process.stderr.write = (chunk, encoding, cb) => {

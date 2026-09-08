@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, it, test } from "bun:test";
+import { afterAll, beforeAll, describe, it, test } from "bun:test";
 import { makeGhMock, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 
@@ -16,6 +16,19 @@ import { evaluateUiDesignerReviewScoping, DESIGNER_REVIEW_SATISFIED_OUTCOME } fr
 import { buildPlanFilePromotionMarker, buildPromotionPrBody } from "@dev-loops/core/loop/plan-file-promote-contract";
 
 const scriptPath = path.resolve("scripts/loop/detect-pr-gate-coordination-state.mjs");
+
+// Config-hermeticity (issue #2055): resolve the Copilot round cap from a fixture
+// repoRoot mirroring the real .devloops with maxCopilotRounds pinned to 2, not
+// the ambient .devloops (the slim line sets it to 1). Assertions are unchanged.
+let capFixtureRepoRoot = null;
+beforeAll(async () => {
+  capFixtureRepoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-cap-fixture-"));
+  const realDevloops = await readFile(path.resolve(".devloops"), "utf8");
+  await writeFile(path.join(capFixtureRepoRoot, ".devloops"), realDevloops.replace(/maxCopilotRounds: *\d+/, "maxCopilotRounds: 2"), "utf8");
+});
+afterAll(async () => {
+  if (capFixtureRepoRoot) await rm(capFixtureRepoRoot, { recursive: true, force: true });
+});
 
 // Marker keys: the local writeGhStub/writeGitStub stash their gh `entries` and
 // git response on the returned env so runNode replays them IN-PROCESS (no gh/git/CLI
@@ -84,7 +97,7 @@ const runNode = async (args = [], options = {}) => {
   }
   if (opts.help) return fallback();
 
-  const runtime = buildMockRuntime(options.env, { repoRoot: options.cwd ?? process.cwd() });
+  const runtime = buildMockRuntime(options.env, { repoRoot: options.cwd ?? capFixtureRepoRoot });
   let out = "";
   let err = "";
   const stdout = { write: (chunk) => { out += String(chunk); return true; } };
