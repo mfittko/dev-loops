@@ -80,6 +80,13 @@ test("inspectSurfaces confirms all five surfaces when in lockstep and flags each
     const drifted = inspectSurfaces(dir, PRERELEASE);
     const failed = drifted.filter((s) => !s.ok).map((s) => s.name);
     assert.deepEqual(failed, ["plugin.json version"]);
+
+    // The pinned-npx-call-site surface is the exact drift class this PR targets:
+    // confirm a stale pin is caught too.
+    writeJson(path.join(dir, ".claude/.claude-plugin/plugin.json"), { name: "dev-loops", version: PRERELEASE });
+    writeFileSync(path.join(dir, ".claude/agents/x.md"), `Run \`npx dev-loops@1.0.0-pre.0 loop startup\`.\n`);
+    const pinDrift = inspectSurfaces(dir, PRERELEASE);
+    assert.deepEqual(pinDrift.filter((s) => !s.ok).map((s) => s.name), ["pinned npx call-sites"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -145,6 +152,13 @@ test("bumpVersion drives surfaces → guards → staging in order and stages onl
     for (const p of ["package.json", "packages/core/package.json", "bun.lock", ".claude"]) {
       assert.ok(stageCall.includes(path.join(dir, p)), `missing staged path ${p}`);
     }
+
+    // Idempotent: a same-target re-run over the already-bumped tree is a no-op —
+    // surfaces stay in lockstep, no residual-drift throw, same staged set.
+    const rerun = makeRegenRunner(dir, PRERELEASE);
+    const again = bumpVersion({ repoRoot: dir, version: PRERELEASE, run: rerun.run });
+    assert.ok(again.ok && again.surfaces.every((s) => s.ok), "same-target re-run must be a clean no-op");
+    assert.deepEqual(again.staged, result.staged);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

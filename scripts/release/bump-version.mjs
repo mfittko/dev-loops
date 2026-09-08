@@ -28,7 +28,7 @@
  * release-time lockstep guard.
  *
  * Usage:
- *   node scripts/release/bump-version.mjs <target-version> [--repo-root <path>]
+ *   node scripts/release/bump-version.mjs <target-version> [--repo-root <path>] [--jq <filter>] [--silent]
  * Exits 0 on full lockstep, 1 on drift/failure, 2 on usage/parse error.
  */
 import { spawnSync } from "node:child_process";
@@ -106,7 +106,9 @@ export function inspectSurfaces(repoRoot, version) {
 
   // Every pinned npx call-site in the generated tree must carry the target.
   const claudeDir = path.join(repoRoot, ".claude");
-  const grep = spawnSync("grep", ["-rho", "dev-loops@[0-9][^ `\"']*", claudeDir], { encoding: "utf8" });
+  // Positive version charset (digits, dots, hyphen, prerelease/build alnum) so a
+  // call-site with trailing punctuation (`)`, `,`) does not capture it into the pin.
+  const grep = spawnSync("grep", ["-rhoE", "dev-loops@[0-9][0-9A-Za-z.+-]*", claudeDir], { encoding: "utf8" });
   const pins = (grep.stdout || "").split("\n").filter(Boolean);
   const pinsOk = pins.length > 0 && pins.every((p) => p === `dev-loops@${version}`);
 
