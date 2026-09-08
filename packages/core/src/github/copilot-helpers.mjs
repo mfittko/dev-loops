@@ -12,7 +12,7 @@ import { trimmedOrNull } from "../loop/normalize.mjs";
 export const SUBMITTED_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"]);
 const GATE_REVIEW_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
 // `review` is a RECOGNIZED gate header that carries no draft/pre-approval
-// evidence by design (#1808 AC3). Recognizing it lets
+// evidence by design. Recognizing it lets
 // parseGateReviewCommentFields short-circuit to null on a `review` header
 // instead of falling through to the lenient draft_gate/pre_approval_gate token
 // scan — the fallthrough that would otherwise record a `review` verdict whose
@@ -74,7 +74,7 @@ export function isCopilotLogin(login) {
 /**
  * Resolve whether Copilot is present as a reviewer on a PR from the REVIEW
  * surface only — requested reviewers plus submitted reviews — never from
- * assignees (#1670). Assignment is a disjoint surface: on a reviewer-configured
+ * assignees. Assignment is a disjoint surface: on a reviewer-configured
  * repo Copilot is never an assignee, so an assignee-based proxy would falsely
  * report a configured Copilot reviewer as absent and let the gate skip the
  * Copilot-convergence requirement on a false premise.
@@ -445,7 +445,7 @@ function parseGateReviewCommentFields(body) {
 
   // A recognized `review` gate is authoritative and returns null before the
   // lenient token-scan fallback runs: a `review` verdict carries no
-  // draft/pre-approval evidence by design (#1808 AC3). An identified
+  // draft/pre-approval evidence by design. An identified
   // non-evidence gate must never be treated as an unidentified body, which is
   // the only case the token-scan fallback exists for.
   if (NON_EVIDENCE_GATE_NAMES.has(fields.gate)) {
@@ -649,7 +649,7 @@ export function summarizeGateReviewCommentMarkers(comments, { headSha } = {}) {
 
 /**
  * Resolve the draft-gate round-reset timestamp (ms) used to suppress stale
- * Copilot review rounds from the count (#896). When the draft gate re-passed
+ * Copilot review rounds from the count. When the draft gate re-passed
  * clean on a DIFFERENT head, only Copilot reviews after that re-pass count
  * toward the round cap; returning the re-pass `updatedAt` (ms) lets
  * summarizeCopilotReviews drop earlier rounds. Null when no reset applies.

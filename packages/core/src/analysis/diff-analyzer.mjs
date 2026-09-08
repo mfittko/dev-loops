@@ -16,7 +16,7 @@
 // closed to a full re-review.
 const DOTFILE_CONFIG_BASENAMES = new Set([".devloops"]);
 
-// Prose surface that arms the required `deslop` gate angle (#1442).
+// Prose surface that arms the required `deslop` gate angle.
 // skills/docs/** is excluded via SKILLS_DOCS_EXEMPT_RE: those are normative
 // contracts, not prose.
 const PROSE_PATH_RE = /^docs\/(articles|presentations)\//;
@@ -191,7 +191,7 @@ function isNonLogicLine(content) {
   return false;
 }
 
-// Security-sensitive seams (#1336): touching these primitives on caller-/plan-
+// Security-sensitive seams: touching these primitives on caller-/plan-
 // influenced input is where trust-boundary bugs concentrate. A changed line
 // matching any triggers the SECURITY_SENSITIVE_SEAM category, adding an up-front
 // adversarial threat-model angle. Fail-safe: over-selection just adds one lens.
@@ -340,7 +340,7 @@ export function analyzeT1(diffOutput, t0) {
   // Build categories from T0 (shared with inferCategoriesFromT0) + hunk analysis.
   for (const c of t0FileCategories(t0)) categories.add(c);
   if (hasLogicChange) categories.add("LOGIC_CHANGE");
-  // #1336: a diff touching a security-sensitive seam gets an up-front adversarial
+  // a diff touching a security-sensitive seam gets an up-front adversarial
   // threat-model angle, batched at draft time instead of drip-fed via Copilot.
   if (diffHasSecuritySeam(diffOutput)) categories.add("SECURITY_SENSITIVE_SEAM");
   // Mixed diffs never satisfy the exclusive `_ONLY` checks (some files are code),

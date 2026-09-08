@@ -34,7 +34,7 @@ import { trimmedOrNull } from "./normalize.mjs";
  * Schedule fan-out dispatch units into bounded-concurrency waves: each wave
  * holds at most `maxConcurrent` units, dispatched wave-by-wave (await a free
  * slot before the next) instead of fire-all-then-retry. Replaces the unbounded
- * concurrent fan-out that 429-stormed multi-angle gate rounds (issue #1601).
+ * concurrent fan-out that 429-stormed multi-angle gate rounds.
  *
  * Pure and deterministic: same input yields the same wave plan (stable order),
  * so a reviewer's recorded wave plan is byte-stable across fresh spawns for the
@@ -69,7 +69,7 @@ export function backoffMaxConcurrent(maxConcurrent) {
 }
 
 /**
- * Reviewer-budget preflight for a gate fan-out (issue #1507).
+ * Reviewer-budget preflight for a gate fan-out.
  *
  * Derives how many reviewers the round needs (one per dispatch unit) and
  * compares against the harness's remaining budget. On a PROVEN shortfall it
@@ -485,7 +485,7 @@ export function countFreshDispatchUnits(perAngle) {
 }
 
 /**
- * Validate the one-scoped-reviewer-per-fresh-angle contract (#1431): no two
+ * Validate the one-scoped-reviewer-per-fresh-angle contract: no two
  * FRESH angles (see {@link freshEntries}) may share one reviewer identity
  * (matching {@link countDistinctReviewers}'s rule), UNLESS every entry sharing
  * that identity declares the SAME `group` name (grouped fan-out dispatch). Two
@@ -822,7 +822,7 @@ export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities }
  * *where* a finding is acted on (this PR or a follow-up), never *whether* it is
  * real: a `reject` is a relevance verdict (out-of-scope), not a reproduction
  * verdict. The fixer retains reproduction-based rejection; the judge owns
- * relevance (#1525).
+ * relevance.
  */
 export const JUDGE_DISPOSITIONS = Object.freeze(["act", "defer", "reject"]);
 
@@ -909,7 +909,7 @@ export function validateJudgeVerdict(verdict) {
 
 /**
  * Merge the judge's relevance-based dispositions into the flat consolidated
- * findings array. The judge runs AFTER fan-in and BEFORE the fix pass (#1525):
+ * findings array. The judge runs AFTER fan-in and BEFORE the fix pass:
  * it emits a per-finding disposition (`act`/`defer`/`reject`) plus a scope-drift
  * verdict on the PR as a whole.
  *

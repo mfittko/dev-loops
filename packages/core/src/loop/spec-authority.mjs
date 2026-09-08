@@ -554,7 +554,7 @@ export function resolveCriterionInvalidation({
 }
 
 /**
- * AC1 (issue 2008 / ADR 0061): the ONE shared identity-stamp helper every
+ * AC1 (ADR 0061): the ONE shared identity-stamp helper every
  * gate/fixer record writer threads its revision identity + checked criteria
  * through, so the writers cannot drift from independently-recomputed fields.
  * Validates the pinned trio (reusing {@link assertDigestShape} /
@@ -593,7 +593,7 @@ export function stampSpecAuthorityIdentity(record, { specDigest, headSha, conten
 }
 
 // ---------------------------------------------------------------------------
-// AC7 (issue 2008 / ADR 0061): pure affected-criteria producer
+// AC7 (ADR 0061): pure affected-criteria producer
 // ---------------------------------------------------------------------------
 
 // ponytail: minimal glob subset — exact path, a `dir/**` prefix, or a single
@@ -693,7 +693,7 @@ export function resolveAffectedCriteria({ changedPaths, criterionCoverage } = {}
  * `issue-refinement-artifact.mjs`) when the body carries one that parses as
  * valid; the list-form checklists (`extractChecklistItems`) are a redundant
  * presentation projection of that same matrix and are read only as the
- * fail-closed fallback for older issue bodies with no matrix at all (#2016).
+ * fail-closed fallback for older issue bodies with no matrix at all.
  * A checklist-only edit that projects an unchanged matrix therefore never
  * touches `specDigest`; any edit that changes the matrix itself still does.
  * Non-goals always come from the `## Non-goals` section — the matrix does not
@@ -717,7 +717,7 @@ export function extractSpecFromBody(body) {
   }
 
   // Fallback: no positively-parseable matrix — hash the checklist projection
-  // (pre-#2016 behavior) rather than an empty/weaker AC/DoD surface.
+  // (prior behavior) rather than an empty/weaker AC/DoD surface.
   const acSection = extractSection(body, "Acceptance criteria");
   const dodSection =
     extractSection(body, "Definition of done") ?? extractSection(body, "DoD");

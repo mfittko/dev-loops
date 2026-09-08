@@ -27,7 +27,7 @@ const SHELL_SEGMENT_SEPARATOR = /\s*(?:&&|\|\||;|\||\n|\r)\s*/;
 /**
  * Strip a single balanced surrounding quote pair (`'…'` or `"…"`) from a shell arg value.
  * A repo flag value may reach us quoted (`--repo 'owner/name'`); the scope check compares against
- * the bare slug, so quotes must be normalized or a quoted on-target repo evades the guard (#1074).
+ * the bare slug, so quotes must be normalized or a quoted on-target repo evades the guard.
  * ponytail: single balanced pair only — no full shell tokenization (mismatched/partial quotes stay).
  * @param {string|null} value @returns {string|null}
  */
@@ -44,7 +44,7 @@ function stripSurroundingQuotes(value) {
  * Read an inline `GH_REPO=<value>` env-assignment prefix on a single command segment.
  * `gh` resolves its target repo from the `GH_REPO` env var, and a segment may set it inline
  * (`GH_REPO=owner/name gh issue create …`) — same targeting intent as `--repo owner/name`, so the
- * scope check must treat it the same or an off-cwd redirect evades the guard (#1074). Only the
+ * scope check must treat it the same or an off-cwd redirect evades the guard. Only the
  * FIRST leading env assignment matching `GH_REPO=` is read (env assignments precede the executable);
  * the value is quote-normalized. Ambient `process.env.GH_REPO` is out of scope — this is a static
  * command-string classifier, so only the inline assignment in the string is considered.
@@ -237,7 +237,7 @@ function extractRepoFlagFromSubcmdSegment(segment, subcmd, verb) {
     if (repoEqMatch) return stripSurroundingQuotes(repoEqMatch[1]);
   }
   // No explicit --repo/-R flag: fall back to an inline GH_REPO= env assignment (flag wins,
-  // mirroring gh's own precedence). This closes the GH_REPO repo-targeting bypass (#1074).
+  // mirroring gh's own precedence). This closes the GH_REPO repo-targeting bypass.
   return extractGhRepoEnvAssignment(segment);
 }
 
@@ -379,7 +379,7 @@ function extractRepoFlagFromSegment(segment, verb) {
   }
   // No explicit --repo/-R flag: fall back to an inline GH_REPO= env assignment (flag wins,
   // mirroring gh's own precedence). Applied here too so gh pr ready/merge/create scope checks get
-  // consistent GH_REPO handling — the root-cause fix, not just the external-write path (#1074).
+  // consistent GH_REPO handling — the root-cause fix, not just the external-write path.
   return extractGhRepoEnvAssignment(segment);
 }
 
@@ -498,7 +498,7 @@ export function extractRepoFlagFromGhPrMerge(command) {
 }
 
 // ---------------------------------------------------------------------------
-// gh api URL-path matchers + the six guard-rule classifiers (#1622).
+// gh api URL-path matchers + the six guard-rule classifiers.
 // These make the six rules that describe operations the Bash gate could refuse
 // enforceable at one seam (decideBashGate in hook-decisions.mjs), where raw
 // `gh api` shapes were previously unclassified (anything expressed as a raw API
@@ -510,7 +510,7 @@ export function extractRepoFlagFromGhPrMerge(command) {
  * its value and the real endpoint is still read: -X/--method, -m/--method, -f/--field, -F/--raw-field
  * (both case-fold to -f), -q/--jq, -p/--preview, -t/--template, -r/--repo. `-h` (help) is EXCLUDED —
  * it takes no value, and folding it with `-H` (header) would let a mid-command `-h` swallow the real
- * endpoint and bypass the write-path deny (#1622). `-H` stays an exact-token value-taking flag
+ * endpoint and bypass the write-path deny. `-H` stays an exact-token value-taking flag
  * despite the case-fold. */
 const GH_API_VALUE_FLAGS = new Set(["-x", "-m", "-f", "-r", "-q", "-p", "-t"]);
 /** gh api value-taking flags (long forms). Each consumes the following token. */
@@ -587,7 +587,7 @@ function targetGhApiPathRegex(suffix) {
 /** Strip a `scheme://host` prefix from an absolute gh api URL endpoint (`https://api.github.com/...`),
  * yielding the bare `/repos/<slug>/…` path that the write-path anchors match. gh api accepts both a
  * bare `repos/<slug>/…`/`issues/…` path and an absolute https:// URL, so both must reach the same
- * anchors or an absolute-URL write bypasses the deny (#1622). */
+ * anchors or an absolute-URL write bypasses the deny. */
 function normalizeGhApiEndpoint(endpoint) {
   if (!endpoint) return endpoint;
   return endpoint.replace(/^https?:\/\/[^/]+/, "").replace(/^\//, "").replace(/\/+$/, "");
@@ -681,7 +681,7 @@ export function commandContainsCopilotSummonComment(command) {
   // A summon is `/copilot`/`/copilot re-review` anchored at the START of the quoted body — a
   // trailing prose mention (`--body "see /copilot"`) or in-prose `/copilot re-review` never
   // matches. The `re-review` form allows trailing modifiers (`/copilot re-review now`) so
-  // appending a word cannot defeat the deny (#1622). Only `gh pr comment` segments reach here.
+  // appending a word cannot defeat the deny. Only `gh pr comment` segments reach here.
   return /(["'])\s*\/copilot(?:\s+re-review\b(?:\s+[^\s"']+)*|\s*(?:["']|$))/i.test(command);
 }
 
@@ -734,7 +734,7 @@ export function commandContainsInlineInterpreter(command) {
       const tokens = code.split(/\s+/).filter(Boolean);
       // Node value-taking flags (short + long) each consume the following token. Consuming them lets
       // a value-taking flag BEFORE the interpreter flag (`node --require ./setup.js -e "..."`) route
-      // on to `-e`/`--eval`/`-p` instead of breaking the scan at the flag's value (#1622).
+      // on to `-e`/`--eval`/`-p` instead of breaking the scan at the flag's value.
       const NODE_VALUE_FLAGS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C", "--cwd"]);
       for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];

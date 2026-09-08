@@ -1,7 +1,7 @@
 /**
  * review-dispatch-plan.mjs — cache-aware review dispatch: harness capability
  * model, request-prefix fingerprinting, stable/volatile request separation,
- * and the deterministic per-gate-round dispatch-plan builder (#1468).
+ * and the deterministic per-gate-round dispatch-plan builder.
  *
  * Pure and offline: no GitHub, no harness, no clock; runtime execution
  * adapters consume it, it never executes a reviewer itself. A capability a
@@ -682,11 +682,11 @@ export function partitionPrimerGroups(requestGroups, capabilities = {}) {
 }
 
 /* ------------------------------------------------------------------ *
- * 6. Dispatch-prompt layout alignment (#1841)
+ * 6. Dispatch-prompt layout alignment
  * ------------------------------------------------------------------ */
 
-// Leading-bytes capture cap for a dispatched reviewer prompt (issue #1841's
-// record-dispatch-prompt-layout.mjs). Sized comfortably above
+// Leading-bytes capture cap for a dispatched reviewer prompt (the
+// record-dispatch-prompt-layout.mjs cap). Sized comfortably above
 // write-gate-context.mjs's BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES (200 KiB) so
 // a full byte-for-byte alignment check never runs out of captured bytes for
 // an inline-mode round.
@@ -717,8 +717,8 @@ export function renderBriefingPointerLine(prefixPath) {
 /**
  * Deterministically compose a full reviewer prompt: the round's
  * byte-identical invariant prefix INLINED as the leading bytes, followed by
- * the round-invariant volatile tail, followed by the per-group angle suffix
- * (#1852). This is the ONE function every reviewer prompt on the canonical
+ * the round-invariant volatile tail, followed by the per-group angle suffix.
+ * This is the ONE function every reviewer prompt on the canonical
  * fan-out path is built from — never a hand-assembled per-group preamble that
  * leads with dynamic prose ahead of the prefix (the "angle-first" failure
  * mode `verifyPromptLeadingAlignment` exists to catch).
@@ -752,7 +752,7 @@ export function composeReviewerPromptText({ prefixBytes, volatileBytes, angleSuf
 
 /**
  * Decide whether a dispatched reviewer prompt's LEADING bytes are
- * cache-aligned (GATE-EXEC-BRIEFING-PREFIX layout, #1841): either the
+ * cache-aligned (GATE-EXEC-BRIEFING-PREFIX layout): either the
  * prompt's leading bytes are byte-identical to the round's invariant prefix
  * (inline mode), or the prompt leads with the byte-identical pointer line
  * naming the round's invariant-prefix path (pointer-seeding mode), with any
@@ -786,7 +786,7 @@ export function verifyPromptLeadingAlignment({ promptLeading, prefixBytes, prefi
 }
 
 /* ------------------------------------------------------------------ *
- * 7. Diff filtering for the shared per-head block (issue #1853)
+ * 7. Diff filtering for the shared per-head block
  * ------------------------------------------------------------------ */
 
 /**
@@ -921,7 +921,7 @@ function extractDiffBlockPath(blockLines) {
 
 /**
  * Filter a unified diff (`git diff` output) down to the files that should be
- * INLINED into a reviewer prompt's shared per-head block (issue #1853):
+ * INLINED into a reviewer prompt's shared per-head block:
  * lockfiles, generated/vendored trees, and any caller-configured
  * `excludeGlobs` are dropped whole-file (header + all hunks), every other
  * file's block passes through byte-for-byte unchanged. Excluding a file here
