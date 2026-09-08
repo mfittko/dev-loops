@@ -5,6 +5,7 @@ import { resolveProjectSelector, findProject, applyDevloopsBoard, parseItemRef }
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { ghGraphql, resolveOwner } from "@dev-loops/core/github/gh";
+import { validateProjectsRepo, discoverProjects, paginateNodes, extractStatus } from "@dev-loops/core/projects/projects-access";
 
 const USAGE = `Usage:
   dev-loops queue reorder --repo <owner/name> --project <number|id|board-uri> --item <number|node-id> [--after <number|node-id>]
@@ -128,55 +129,9 @@ function parseCliArgs(argv) {
 }
 // ── Validation ───────────────────────────────────────────────────────────
 
-const OWNER_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
-const REPO_NAME_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9_.-]*[a-zA-Z0-9])?$/;
-
-function validateRepo(repo) {
-  if (!repo || typeof repo !== "string") {
-    throw Object.assign(new Error("--repo is required"), { code: "INVALID_REPO" });
-  }
-  const trimmed = repo.trim();
-  if (trimmed !== repo) {
-    throw Object.assign(
-      new Error(`--repo must not have leading/trailing whitespace, got "${repo}"`),
-      { code: "INVALID_REPO" },
-    );
-  }
-  const slashIdx = repo.indexOf("/");
-  if (slashIdx === -1) {
-    throw Object.assign(new Error(`--repo must be exactly owner/name, got "${repo}"`), { code: "INVALID_REPO" });
-  }
-  const owner = repo.slice(0, slashIdx);
-  const name = repo.slice(slashIdx + 1);
-  if (!owner || !name || !OWNER_RE.test(owner) || !REPO_NAME_RE.test(name)) {
-    throw Object.assign(new Error(`--repo must be exactly owner/name, got "${repo}"`), { code: "INVALID_REPO" });
-  }
-  return repo;
-}
+const validateRepo = validateProjectsRepo;
 
 // ── GraphQL fragments ────────────────────────────────────────────────────
-
-const LIST_USER_PROJECTS = [
-  "query($login:String!, $after:String) {",
-  "  user(login:$login) {",
-  "    projectsV2(first:50, after:$after) {",
-  "      pageInfo { hasNextPage endCursor }",
-  "      nodes { id number title url }",
-  "    }",
-  "  }",
-  "}"
-].join("\n");
-
-const LIST_ORG_PROJECTS = [
-  "query($login:String!, $after:String) {",
-  "  organization(login:$login) {",
-  "    projectsV2(first:50, after:$after) {",
-  "      pageInfo { hasNextPage endCursor }",
-  "      nodes { id number title url }",
-  "    }",
-  "  }",
-  "}"
-].join("\n");
 
 const GET_PROJECT_ITEMS_BY_CONTENT = [
   "query($projectId:ID!, $after:String) {",
@@ -216,64 +171,22 @@ const UPDATE_ITEM_POSITION = [
 
 // ── Paginated project listing ────────────────────────────────────────────
 
-async function listAllProjects(login, kind, env, runChild) {
-  const query = kind === "org" ? LIST_ORG_PROJECTS : LIST_USER_PROJECTS;
-  const projects = [];
-  let after = null;
-  while (true) {
-    const vars = { login };
-    if (after) vars.after = after;
-    const payload = await ghGraphql(query, vars, env, runChild);
-    const connection = kind === "org"
-      ? payload?.data?.organization?.projectsV2
-      : payload?.data?.user?.projectsV2;
-    const nodes = connection?.nodes ?? [];
-    projects.push(...nodes);
-    const pageInfo = connection?.pageInfo ?? {};
-    if (!pageInfo.hasNextPage) break;
-    if (!pageInfo.endCursor) {
-      throw Object.assign(
-        new Error("Invalid projects list payload: hasNextPage is true but endCursor is missing"),
-        { code: "GH_API_ERROR" },
-      );
-    }
-    after = pageInfo.endCursor;
-  }
-  return projects;
-}
+const listAllProjects = discoverProjects;
 
 // ── Fetch all project items (paginated, position order) ────────────────
 
-async function fetchAllItems(projectId, env, runChild) {
-  const allItems = [];
-  let after = null;
-  while (true) {
-    const vars = { projectId };
-    if (after) vars.after = after;
-    const itemsPayload = await ghGraphql(GET_PROJECT_ITEMS_BY_CONTENT, vars, env, runChild);
-    const connection = itemsPayload?.data?.node?.items;
-    const nodes = connection?.nodes ?? [];
-    allItems.push(...nodes);
-    const pageInfo = connection?.pageInfo ?? {};
-    if (!pageInfo.hasNextPage) break;
-    if (!pageInfo.endCursor) {
-      throw Object.assign(
-        new Error("Invalid items payload: hasNextPage is true but endCursor is missing"),
-        { code: "GH_API_ERROR" },
-      );
-    }
-    after = pageInfo.endCursor;
-  }
-  return allItems;
+function fetchAllItems(projectId, env, runChild) {
+  return paginateNodes({
+    query: GET_PROJECT_ITEMS_BY_CONTENT,
+    variables: { projectId },
+    selectConnection: (payload) => payload?.data?.node?.items,
+    env,
+    runChild,
+    entity: "items",
+  });
 }
 
-function statusOf(node) {
-  const fvs = node?.fieldValues?.nodes ?? [];
-  for (const fv of fvs) {
-    if (fv && fv.field && fv.field.name === "Status") return fv.name;
-  }
-  return null;
-}
+const statusOf = extractStatus;
 
 function describeItem(node) {
   return {
