@@ -27,7 +27,7 @@ end-to-end workflow snapshot is introduced.
 
 | Surface | Authoritative owner(s) on the combined line |
 |---|---|
-| Tracker | `packages/core/test/tracker.test.mjs`, `test/loop/tracker-first-loop-state.test.mjs`, `test/loop/detect-tracker-pr-state.test.mjs`, `test/loop/pr-body-spec-tracker-backed.test.mjs` |
+| Tracker | `packages/core/test/tracker.test.mjs`, `packages/core/test/tracker-first-loop-state.test.mjs`, `test/loop/detect-tracker-pr-state.test.mjs`, `packages/core/test/pr-body-spec-tracker-backed.test.mjs` |
 | Local implementation | `skills/local-implementation/SKILL.md` (rule owner), `test/contracts/local-implementation-delegation-contract.test.mjs`, `test/contracts/local-implementation-failure-triage-contract.test.mjs` |
 | Gate (draft / pre-approval fan-out/fan-in) | `packages/core/test/gate-fanin.test.mjs`, `test/loop/run-gate-validation.test.mjs`, `test/loop/consolidate-fanin.test.mjs`, `test/loop/resolve-gate-dispatch.test.mjs`, `test/contracts/gate-fanout-dispatch-key-contract.test.mjs`, `test/contracts/gate-verdict-consistency-contract.test.mjs` |
 | Review follow-up (Copilot) | `test/loop/copilot-pr-handoff.test.mjs`, `packages/core/test/copilot-loop-state.test.mjs`, `test/loop/detect-copilot-loop-state-auto-detect.test.mjs`, `test/contracts/copilot-review-doc-contracts.test.mjs` |
@@ -80,7 +80,8 @@ Aggregate change over the whole line (`0649cd1e..HEAD`): 187 files,
 Observations:
 
 - Production runtime source drops on net; the increases are the two admission
-  guards and the comment-aware size-budget discount, not new product mechanism.
+  guards and the comment-aware size-budget discount, and add no new product
+  mechanism.
 - Test machinery drops on net by collapsing duplicated wrapper/prose/mirror/
   permutation evidence onto the single authoritative owner per behavior; no
   distinct input-class-to-outcome mapping was lost.
@@ -106,10 +107,11 @@ intentional, tracked additions that only constrain future expansion:
 - Comment-aware size budget: excludes comment-only changed lines from the
   logic-LOC score; a real code change is counted exactly as before.
 
-None of the three changes an existing observable workflow outcome; each raises
-the bar on what future changes may add. No child blesses or silently repairs an
-adjacent defect: known audit-named defects (for example the queue single-page
-presence probe) are named-not-fixed and remain outside the equivalence claim.
+The three guards raise the bar on what future changes may add. They leave
+existing observable workflow outcomes unchanged. No child blesses or silently
+repairs an adjacent defect: known audit-named defects (for example the queue
+single-page presence probe) are named and left unfixed, and remain outside the
+equivalence claim.
 Retained intentional differences (Pi-only prose stripping, tool/model mapping,
 relative-link handling between the source checkout and the installed layouts)
 are unchanged by the epic.
@@ -120,8 +122,8 @@ Paused work: retrospective-recency + reconciliation-envelope fix (open draft PR
 against `main`, head branch `issue-2027`). Fresh lean-scope reconciliation
 against the combined `1.0.2-slim` line:
 
-- Functional core still required, not superseded. The combined line's
-  `resolveHasNewerMergeSinceCheckpoint` in `scripts/loop/resolve-dev-loop-startup.mjs`
+- Functional core still required; absent from the combined line. The combined
+  line's `resolveHasNewerMergeSinceCheckpoint` in `scripts/loop/resolve-dev-loop-startup.mjs`
   still classifies staleness by "any newer commit on `origin/<baseBranch>`"
   (`git log <mergeCommit>..origin/<baseBranch>`), which is exactly the
   over-broad classification the paused fix replaces with PR-merge association.
@@ -134,16 +136,17 @@ against the combined `1.0.2-slim` line:
   `packages/core/src/loop/*` (comment-slim streams), the public-dev-loop /
   retrospective-checkpoint / workflow-handoff contracts (contract-consolidation
   streams), and the routing / handoff / CLI-wrapper tests (test-economy
-  streams). A straight rebase produces large comment/prose/test conflicts that
-  are duplication, not logic. On resume, keep only the behavioral delta (the
-  recency classifier and the envelope null-strategy acceptance plus their
-  focused regression cases) and re-derive everything else from the post-slim
-  owners rather than carrying the paused branch's prose.
+  streams). A straight rebase produces large comment/prose/test conflicts;
+  these are duplication, and the behavioral logic is unchanged. On resume, keep
+  only the behavioral delta (the recency classifier and the envelope
+  null-strategy acceptance plus their focused regression cases). Re-derive
+  everything else from the post-slim owners; do not carry the paused branch's
+  prose.
 - Regenerate projections from owners. The paused branch's `.claude/` mirror
   edits must be discarded and regenerated via the sanctioned generator against
   the post-slim source owners; its contract-prose edits must be re-expressed as
-  single-owner references, not restatements, to satisfy rule-ownership on the
-  combined line.
+  single-owner references that point to the owner with no inline restatement, to
+  satisfy rule-ownership on the combined line.
 
 ## Base / promotion decision inputs (operator decision)
 
@@ -164,6 +167,6 @@ This record does not make the promotion decision. Inputs for the operator:
     behavioral delta.
   - Fall back: ship 1.0.2 as-is and re-do the authorized 1.0.3 smoke-test
     issues on `main`. The paused recency fix then lands on `main` instead.
-- The paused fix's rebase target depends on this decision; its need does not.
-  The recency/envelope bug exists on both candidate lines and must land wherever
-  startup runs.
+- The paused fix's rebase target depends on this decision. Its need is
+  independent of the decision: the recency/envelope bug exists on both candidate
+  lines and must land wherever startup runs.
