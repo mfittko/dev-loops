@@ -4,6 +4,15 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
 import { main, parseCliArgs, runCli } from "../../scripts/projects/add-queue-item.mjs";
+import {
+  userPayload,
+  noUserPayload,
+  orgPayload,
+  statusField,
+  existingProject,
+  fieldsResponse as getFieldsResponse,
+  itemsByContentResponse as getItemsByContentResponse,
+} from "./_fixtures.mjs";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -22,18 +31,9 @@ function mockRunChild(responses) {
 }
 
 // ── Fixtures ────────────────────────────────────────────────────────────
-
-function userPayload() {
-  return { data: { user: { id: "U_kgDOABC123" } } };
-}
-
-function noUserPayload() {
-  return { data: { user: null } };
-}
-
-function orgPayload() {
-  return { data: { organization: { id: "O_kgDOXYZ789" } } };
-}
+// userPayload/noUserPayload/orgPayload/statusField/existingProject/fieldsResponse/
+// itemsByContentResponse are shared from ./_fixtures.mjs. Fixtures whose shape is
+// specific to this suite stay local below.
 
 function listUserProjectsResponse(projects) {
   return {
@@ -45,33 +45,9 @@ function listUserProjectsResponse(projects) {
   };
 }
 
-function getFieldsResponse(fields) {
-  return { data: { node: { fields: { nodes: fields, pageInfo: { hasNextPage: false } } } } };
-}
+const STATUS_FIELD = statusField();
 
-const STATUS_FIELD = {
-  id: "PVTSSF_status",
-  name: "Status",
-  options: [
-    { id: "opt1", name: "Backlog" },
-    { id: "opt2", name: "Next Up" },
-    { id: "opt3", name: "In Progress" },
-    { id: "opt4", name: "Done" },
-  ],
-};
-
-const EXISTING_PROJECT = {
-  id: "PVT_proj1",
-  number: 1,
-  title: "Dev Loop Queue",
-  url: "https://github.com/users/mfittko/projects/1",
-};
-
-function getItemsByContentResponse(items) {
-  return {
-    data: { node: { items: { nodes: items, pageInfo: { hasNextPage: false, endCursor: null } } } },
-  };
-}
+const EXISTING_PROJECT = existingProject();
 
 function emptyItemsResponse() {
   return getItemsByContentResponse([]);

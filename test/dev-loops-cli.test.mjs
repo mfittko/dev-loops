@@ -451,28 +451,11 @@ test("createCliRuntime honors PATHEXT lookups when simulating Windows PATH resol
   }
 });
 
-test("CLI rejects removed update command", async () => {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-cli-update-"));
-  const stdout = createBufferStream();
-  const stderr = createBufferStream();
-
-  try {
-    const exitCode = await runCli({
-      argv: ["update", "system"],
-      runtime: createRuntime(),
-      stdout: stdout.stream,
-      stderr: stderr.stream,
-    });
-
-    assert.equal(exitCode, 1);
-    assert.equal(stdout.read(), "");
-    assert.match(stderr.read(), /Unrecognized command: update\./);
-    assert.match(stderr.read(), /dev-loops help/);
-  } finally {
-    await rm(tempRoot, { recursive: true, force: true });
-  }
-});
-
+// The removed `update` command's parse result is owned by
+// test/dev-loops-core.test.mjs ("shared executor ... rejects removed install
+// and update commands"), and the exit-1 + stderr-channel + "dev-loops help"
+// renderer mapping is owned by the `install moon` branch of the renderer test
+// above. A separate spawned `update system` case only re-proved that pair.
 
 test("project wrappers pass through helper stdout and exit codes", async () => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-project-cli-"));

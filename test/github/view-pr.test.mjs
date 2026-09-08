@@ -2,11 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "bun:test";
 
 import { parseViewPrCliArgs, viewPr, runCli } from "../../scripts/github/view-pr.mjs";
-import { captureStream, makeGhStub } from "../_helpers.mjs";
-
-function stubGh(payload, { code = 0, stderr = "" } = {}) {
-  return makeGhStub([{ code, stdout: code === 0 ? JSON.stringify(payload) : "", stderr }], { repeatLastOnOverflow: true });
-}
+import { captureStream, makeJsonGhStub as stubGh } from "../_helpers.mjs";
 
 const PR = {
   number: 88,

@@ -151,20 +151,9 @@ test("runCli: --jq extracts the comment URL", async () => {
   assert.equal(stdout.get().trim(), COMMENT_URL);
 });
 
-test("runCli: invalid --jq filter fails closed with exit 2", async () => {
-  const { run } = stubGh([{ stdout: JSON.stringify({ html_url: COMMENT_URL }) }]);
-  const stderr = captureStream();
-  const code = await runCli(["--repo", "o/n", "--comment-id", "7", "--body", "x", "--jq", "not!valid"], { run, stderr, stdout: captureStream() });
-  assert.equal(code, 2);
-});
-
-test("runCli: --silent maps success to exit 0 with no stdout", async () => {
-  const { run } = stubGh([{ stdout: JSON.stringify({ html_url: COMMENT_URL }) }]);
-  const stdout = captureStream();
-  const code = await runCli(["--repo", "o/n", "--comment-id", "7", "--body", "x", "--silent"], { run, stdout });
-  assert.equal(code, 0);
-  assert.equal(stdout.get(), "");
-});
+// Generic invalid-filter refusal and --silent success mapping are owned by
+// emitResult (test/loop/jq-output.test.mjs); this wrapper keeps its positive
+// --jq wiring case plus the distinct gh-failure and missing-id exit paths.
 
 test("runCli: gh failure returns exit 1", async () => {
   const { run } = stubGh([{ code: 1, stderr: "boom" }]);
