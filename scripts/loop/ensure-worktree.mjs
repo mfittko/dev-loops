@@ -19,7 +19,9 @@
  *   already has a matching REMOTE branch is tracked at its tip (never forked
  *   off base — that would silently drop the remote branch's commits); only
  *   when NO candidate has it is a genuinely new branch created off the
- *   resolved base. See `branchOrigin` below.
+ *   resolved base. See `branchOrigin` below. A --single-branch clone may
+ *   still fall through to created-from-base for a never-fetched remote
+ *   branch — a restricted refspec is not widened by fetch.
  * - Provisioning is invoked via the imported provisionWorktree core (shared
  *   with provision-worktree.mjs's CLI) — not shelled out. It fails soft: a
  *   provision warning never aborts the worktree. Does NOT install

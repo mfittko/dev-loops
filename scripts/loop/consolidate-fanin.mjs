@@ -5,8 +5,9 @@
  * produced and consolidates them into the JSON shapes write-gate-findings-log.mjs,
  * post-gate-findings.mjs, and upsert-checkpoint-verdict.mjs accept directly.
  * "findingsJson"/--out is the NESTED per-angle shape (one section per source
- * artifact, clean angles included with an empty findings array); the flat
- * "findings"/--ledger-out shape is a { overallVerdict, findings } wrapper.
+ * artifact, clean angles included with an empty findings array); the stdout
+ * "findings" result is the FLAT per-finding bare array, and --ledger-out
+ * writes that same flat array wrapped as { overallVerdict, findings }.
  *
  * Per-angle findings artifact shape (one *.json file per angle in --findings-dir):
  *   {
