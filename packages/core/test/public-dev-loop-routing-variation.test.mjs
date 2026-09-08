@@ -200,6 +200,26 @@ test("unrecognized mode value fails closed", () => {
   assert.match(result.reason, /unrecognized `mode` parameter/i);
 });
 
+// Sole representative of the auto_continue_current execution-mode metadata
+// class: only an auto_continue_current intent with NO explicit mode exercises
+// the `requestedExecutionMode` ternary's durable_auto branch, and only an
+// invalid-parameter input reaches the early fail-closed reconcile that carries
+// it. That ternary is a distinct derivation from the later effectiveMode
+// assignment (which the missing-canonical-state reconciles use), so this branch
+// has no other witness. The non-boolean-watch and invalid-targetPreference
+// permutations of the same class collapse into this one case.
+test("auto_continue_current invalid parameter preserves the derived durable_auto execution mode", () => {
+  const result = evaluatePublicDevLoopRouting({
+    intent: DEV_LOOP_PUBLIC_INTENT.AUTO_CONTINUE_CURRENT,
+    mode: "some_unknown_mode",
+  });
+
+  assert.equal(result.selectedGate, DEV_LOOP_GATE.FAIL_CLOSED_RECONCILE);
+  assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.NEEDS_RECONCILE);
+  assert.equal(result.executionMode, DEV_LOOP_EXECUTION_MODE.DURABLE_AUTO);
+  assert.match(result.reason, /unrecognized `mode` parameter/i);
+});
+
 test("non-boolean watch value fails closed", () => {
   const result = evaluatePublicDevLoopRouting({
     intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_CURRENT,
