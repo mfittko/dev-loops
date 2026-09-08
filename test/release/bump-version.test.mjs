@@ -22,7 +22,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { bumpVersion, inspectSurfaces, writeManifestSurfaces } from "../../scripts/release/bump-version.mjs";
+import { bumpVersion, inspectSurfaces, stampChangelog, writeManifestSurfaces } from "../../scripts/release/bump-version.mjs";
+import { extractChangelogSection } from "../../scripts/release/extract-changelog-section.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CORE_DEP = "@dev-loops/core";
@@ -51,6 +52,10 @@ function makeFixture(from) {
   writeJson(path.join(dir, ".claude/.claude-plugin/plugin.json"), { name: "dev-loops", version: from });
   writeFileSync(path.join(dir, ".claude/agents/x.md"), `Run \`npx dev-loops@${from} loop startup\`.\n`);
   writeFileSync(path.join(dir, "bun.lock"), lockfile(from));
+  writeFileSync(
+    path.join(dir, "CHANGELOG.md"),
+    `# Changelog\n\n## Unreleased\n\n### Added\n\n- A documented change awaiting release.\n\n## ${from} - 2026-01-01\n\n- Prior release.\n`,
+  );
   return dir;
 }
 
@@ -149,9 +154,15 @@ test("bumpVersion drives surfaces → guards → staging in order and stages onl
     const stageCall = calls.find((c) => c.startsWith("git add"));
     assert.ok(stageCall.startsWith("git add -- "), stageCall);
     assert.ok(!/git add (-A|\.)/.test(stageCall), `broad add used: ${stageCall}`);
-    for (const p of ["package.json", "packages/core/package.json", "bun.lock", ".claude"]) {
+    for (const p of ["package.json", "packages/core/package.json", "CHANGELOG.md", "bun.lock", ".claude"]) {
       assert.ok(stageCall.includes(path.join(dir, p)), `missing staged path ${p}`);
     }
+
+    // Sixth surface: the CHANGELOG's Unreleased heading is now stamped and the
+    // release section is extractable end-to-end (the release-time guard's input).
+    const changelog = readFileSync(path.join(dir, "CHANGELOG.md"), "utf8");
+    assert.ok(!/^##\s+Unreleased\b/im.test(changelog), "Unreleased heading must be stamped away");
+    assert.match(extractChangelogSection(changelog, PRERELEASE), /documented change awaiting release/);
 
     // Idempotent: a same-target re-run over the already-bumped tree is a no-op —
     // surfaces stay in lockstep, no residual-drift throw, same staged set.
@@ -206,4 +217,34 @@ test("the real lockstep guard accepts a prerelease-token bump and fails closed o
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("stampChangelog rewrites the Unreleased heading to the version and extract-changelog-section then finds it", () => {
+  const changelog = "# Changelog\n\n## Unreleased\n\n### Added\n\n- New thing.\n\n## 1.0.0 - 2026-01-01\n\n- Old.\n";
+  const { changelog: stamped, changed } = stampChangelog(changelog, PRERELEASE);
+  assert.equal(changed, true);
+  assert.ok(!/^##\s+Unreleased\b/im.test(stamped), "Unreleased heading must be gone");
+  assert.match(stamped, new RegExp(`^## ${PRERELEASE.replace(/[.]/g, "\\.")}$`, "m"));
+  // Entries are left intact and the section is extractable end-to-end.
+  assert.equal(extractChangelogSection(stamped, PRERELEASE), "### Added\n\n- New thing.");
+});
+
+test("stampChangelog fails closed when there is no Unreleased content to stamp", () => {
+  // Missing Unreleased section entirely, version not yet stamped.
+  assert.throws(
+    () => stampChangelog("# Changelog\n\n## 1.0.0 - 2026-01-01\n\n- Old.\n", PRERELEASE),
+    /no "## Unreleased" section to stamp/,
+  );
+  // Present-but-empty Unreleased section.
+  assert.throws(
+    () => stampChangelog("# Changelog\n\n## Unreleased\n\n## 1.0.0 - 2026-01-01\n\n- Old.\n", PRERELEASE),
+    /"## Unreleased" section is empty/,
+  );
+});
+
+test("stampChangelog is an idempotent no-op on an already-stamped changelog", () => {
+  const stamped = `# Changelog\n\n## ${PRERELEASE}\n\n### Added\n\n- New thing.\n\n## 1.0.0 - 2026-01-01\n\n- Old.\n`;
+  const result = stampChangelog(stamped, PRERELEASE);
+  assert.equal(result.changed, false);
+  assert.equal(result.changelog, stamped);
 });

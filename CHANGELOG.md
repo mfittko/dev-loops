@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Changed
+
+- **`bump-version.mjs` stamps the CHANGELOG as a sixth release surface.** The
+  sanctioned bump now rewrites the `## Unreleased` heading to `## <version>`
+  (leaving its entries intact) so `extract-changelog-section.mjs` finds the
+  release section, closing the gap that broke the manual `v1.0.2-slim.0` release
+  at the extract-changelog guard. It fails closed when there is no Unreleased
+  content to stamp (an undocumented release cannot proceed), stays bump-only and
+  idempotent (a re-run over an already-stamped CHANGELOG is a no-op), and stages
+  `CHANGELOG.md` among the enumerated release files.
+
 ## 1.0.2-slim.0
 
 ### Added
