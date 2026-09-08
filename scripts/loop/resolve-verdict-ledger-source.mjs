@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Resolve where the gate verdict/ledger tooling should run from (issue #1661).
+ * Resolve where the gate verdict/ledger tooling should run from.
  *
  * A stale installed dev-loops CLI (e.g. rc.1) lacks the gate-evidence CI
  * exclusion that newer source (rc.4+) has, so posting a pre_approval_gate
@@ -18,7 +18,7 @@
  * write-gate-findings-log.mjs, detect-checkpoint-evidence.mjs) MUST resolve via
  * this helper and run from the worktree-source layout when stale === true
  * (installed version older than source); otherwise keep the canonical installed
- * layout. Non-goal (#1661): this does NOT change the gate-evidence CI exclusion
+ * layout. Non-goal: this does NOT change the gate-evidence CI exclusion
  * logic in upsert-checkpoint-verdict.mjs itself.
  *
  * Output (stdout, JSON):

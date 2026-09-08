@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Namespace-scoped post-merge worktree cleanup (issue #909).
+ * Namespace-scoped post-merge worktree cleanup.
  *
  * Resolves the canonical worktree path via the shared resolver, then runs
  * `git worktree remove --force <path>` + `git worktree prune` from the main

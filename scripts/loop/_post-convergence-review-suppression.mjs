@@ -1,4 +1,4 @@
-// Durable, auditable record of an EXPLICIT operator decision (issue #1441):
+// Durable, auditable record of an EXPLICIT operator decision:
 // `withdraw-copilot-review-request.mjs` writes this marker only when it withdrew
 // a stranded Copilot review request on a head that has ADVANCED past Copilot's
 // last submitted review, because the delta since that review is provably a pure
@@ -21,12 +21,12 @@
 // directory convention (buildDefaultCheckpointDir) rather than inventing a new
 // on-disk location.
 //
-// #1441 follow-up (fail-closed default was cwd-relative): the writer
-// (a human-run operator tool) and the readers (the loop, running in a PR
-// worktree) routinely execute from DIFFERENT checkouts of this repo. A plain
-// cwd-relative default silently lands the marker where no reader looks — the
-// exact #1050 failure class this repo already solved for cross-process
-// evidence. The default DIRECTORY is now anchored, mirroring that fix:
+// Fail-closed default anchoring: the writer (a human-run operator tool) and
+// the readers (the loop, running in a PR worktree) routinely execute from
+// DIFFERENT checkouts of this repo. A plain cwd-relative default would
+// silently land the marker where no reader looks — the same cross-process
+// evidence-location failure class this repo already solved elsewhere. The
+// default DIRECTORY is anchored accordingly:
 //   - writer: resolveRepoRoot(process.cwd()) — the writer's own checkout root,
 //     not whatever subdirectory the operator happened to be in.
 //   - reader: every checkout resolveLedgerCheckouts(process.cwd()) enumerates

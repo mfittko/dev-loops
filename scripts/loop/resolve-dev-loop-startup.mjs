@@ -166,14 +166,13 @@ const STRATEGY_ASYNC_DISPATCH = {
   ui_review: false,
   none: false,
 };
-// Single-contributor ownership gate scope (issue #1444 / ADR 0042, refining
-// ADR 0033's universal gate): only code-changing or merge-authoritative
-// sub-loops require ownership. Pure read/observe strategies (a running-app
-// review, or waiting/watching an in-flight external run) never claim or
-// write anything, so a reviewer must be able to run them against work they
-// do not own. Unknown/unlisted strategies resolve to gated via the `?? true`
-// fallback below — fail closed, matching every other unknown-key posture in
-// this file (see the STRATEGY_REQUIRED_READS unknown-strategy-key throw).
+// Single-contributor ownership gate scope (ADR 0042, refining ADR 0033's
+// universal gate): only code-changing or merge-authoritative sub-loops
+// require ownership. Pure read/observe strategies (a running-app review, or
+// waiting/watching an in-flight external run) never claim or write anything,
+// so a reviewer must be able to run them against work they do not own.
+// Unknown/unlisted strategies resolve to gated via the `?? true` fallback
+// below — fail closed, matching every other unknown-key posture in this file.
 export const STRATEGY_OWNERSHIP_GATE = {
   local_implementation: true,
   issue_intake: true,
@@ -270,8 +269,8 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
     throw parseError("--ui-review is only valid with --pr <n> (rejected with --issue, --input, --plan-file, --spike, or with no --pr).");
   }
   // --lightweight is normally a MODIFIER (not a 6th mode): it makes the PR body
-  // the spec-of-record for the --issue local path. Used ALONE (modeCount === 0,
-  // issue #1210) it is instead the issue-less PR-first trigger — no tracker
+  // the spec-of-record for the --issue local path. Used ALONE (modeCount === 0)
+  // it is instead the issue-less PR-first trigger — no tracker
   // binding at all — so the "no mode selected" error is skipped in that case.
   if (modeCount === 0 && !options.lightweight) {
     throw parseError("--input <path>, --issue <n>, --pr <n>, --plan-file <path>, --spike <path>, or --lightweight (issue-less PR-first) is required");
@@ -312,31 +311,19 @@ function ghJson(args, cwd, env = process.env) {
 // delay startup indefinitely.
 const RETROSPECTIVE_FETCH_TIMEOUT_MS = 10000;
 /**
- * True when the base branch (as tracked at `origin/<baseBranch>`) carries any
- * commit after `mergeCommit` — i.e. something has merged since the
- * checkpoint's recorded discharge point. This is a purely local git ancestry
- * check (`git log <mergeCommit>..origin/<baseBranch>`), not a GitHub query:
- * recency is a fact of this repo's own commit graph, so it never depends on
- * `gh`, an API rate limit, or a Copilot-assignee proxy that may match nothing.
- *
- * A best-effort `git fetch origin <baseBranch>` runs first so the ordinary
- * case (a commit merged after this checkout last fetched) resolves correctly;
- * the fetch failing is not fatal on its own — an already-current local
- * `origin/<baseBranch>` still answers correctly without it.
+ * True when the base branch (`origin/<baseBranch>`) carries any commit after
+ * `mergeCommit` — a purely local git ancestry check
+ * (`git log <mergeCommit>..origin/<baseBranch>`), not a GitHub query, so it
+ * never depends on `gh` or an API rate limit. A best-effort
+ * `git fetch origin <baseBranch>` runs first; failing is not fatal on its
+ * own since an already-current local ref still answers correctly.
  *
  * Returns `true` (fail closed) when `mergeCommit` cannot be resolved against
- * `origin/<baseBranch>` at all — unfetched, a shallow clone missing the
- * history, or a garbage value. An unverifiable discharge claim must not be
- * trusted, so "cannot tell" collapses to the same outcome as "yes, something
- * newer exists" rather than a separate "unknown" state.
+ * `origin/<baseBranch>` at all (unfetched, shallow clone, garbage value): an
+ * unverifiable discharge claim must not be trusted.
  *
- * This repo (and any repo using this check) squash-merges: the recorded
- * `mergeCommit` is the single squash commit that lands on the base branch, so
- * plain first-parent-agnostic `git log` ancestry is correct — filtering on
- * `--merges` would match nothing.
- *
- * @param {{mergeCommit: string, baseBranch: string, cwd: string}} params
- * @returns {boolean}
+ * This repo squash-merges, so plain first-parent-agnostic `git log` ancestry
+ * is correct — filtering on `--merges` would match nothing.
  */
 export function resolveHasNewerMergeSinceCheckpoint({ mergeCommit, baseBranch, cwd }) {
   try {
@@ -368,11 +355,11 @@ function mapGhState(ghState) {
   if (s === "MERGED") return "merged";
   throw new Error(`Unknown GitHub state: "${ghState}"`);
 }
-// Single-contributor ownership gate (issue #1377): resolved once per CLI run
-// and memoized, since both the --issue and --pr paths (and, within the --pr
-// path, the linked-issue check) may need it. `gh api user` failing means we
-// cannot verify OR claim ownership at all, so it fails closed with its own
-// distinct reason rather than falling back to a default.
+// Single-contributor ownership gate: resolved once per CLI run and memoized,
+// since both the --issue and --pr paths (and, within the --pr path, the
+// linked-issue check) may need it. `gh api user` failing means we cannot
+// verify OR claim ownership at all, so it fails closed with its own distinct
+// reason rather than falling back to a default.
 let viewerLoginCache = null;
 function resolveViewerLogin(cwd, env) {
   if (viewerLoginCache !== null) return viewerLoginCache;
@@ -399,7 +386,7 @@ function resolveOwnershipState(assignees, cwd, env) {
   const viewerLogin = ownershipNeedsViewerLogin(assignees) ? resolveViewerLogin(cwd, env) : null;
   return classifyOwnership(assignees, viewerLogin);
 }
-// Unassigned work is impossible by construction (#1377): the startup resolver
+// Unassigned work is impossible by construction: the startup resolver
 // requires assigned_to_me and fails closed on anything else. assigned_to_other
 // names the foreign assignee(s); unassigned names the exact claim command so
 // the caller can self-heal (claim, then re-run) instead of guessing.
@@ -459,10 +446,10 @@ function resolveTargetPreference(cwd) {
         }
       }
       if (val === "local-first") return "prefer_local";
-      // "tracker-first" is the canonical value (#1408, the tracker-agnostic
-      // seam); "github-first" is still accepted here as the deprecated alias
-      // (this scraper reads the raw file directly, bypassing config.mjs's
-      // own alias normalization, so it must recognize both literals itself).
+      // "tracker-first" is the canonical value (the tracker-agnostic seam);
+      // "github-first" is still accepted here as the deprecated alias (this
+      // scraper reads the raw file directly, bypassing config.mjs's own
+      // alias normalization, so it must recognize both literals itself).
       if (val === "tracker-first" || val === "github-first") return "prefer_github_first";
     } catch {
     }
@@ -527,7 +514,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       ], { cwd: repoRoot, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
       linkagePayload = JSON.parse(linkageJson);
     } catch (err) {
-      // Fail closed (#1626): a transient gh failure must NOT fabricate
+      // Fail closed: a transient gh failure must NOT fabricate
       // `resolved_no_open_pr` — that self-consistent default would route an
       // issue that HAS an open linked PR to `issue_intake`, which the router
       // cannot catch. Refuse rather than guess.
@@ -556,17 +543,17 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       issueReadiness = "needs_clarification";
       warnings.push(`issueReadiness: using default "${issueReadiness}" — gh issue view failed`);
     }
-    // Single-contributor ownership gate (#1377, scoped by #1444): a failed
-    // read defaults to an empty assignee list (today's warn+default posture
-    // for the READ). Classification here uses `classifyOwnership(assignees,
-    // null)` — never the viewer login — because the copilot check
-    // short-circuits before any viewer comparison, so this is always safe
-    // regardless of gate/bypass state and is enough to derive
-    // issueAssignmentState (which only distinguishes copilot vs not-copilot;
-    // see the comment below). The real ownership-gate ENFORCEMENT (which does
-    // need the viewer login to tell assigned_to_me from assigned_to_other) is
-    // deferred below, after peeking the strategy the pure routing evaluator
-    // would select for this canonical state.
+    // Single-contributor ownership gate: a failed read defaults to an empty
+    // assignee list (today's warn+default posture for the READ).
+    // Classification here uses `classifyOwnership(assignees, null)` — never
+    // the viewer login — because the copilot check short-circuits before any
+    // viewer comparison, so this is always safe regardless of gate/bypass
+    // state and is enough to derive issueAssignmentState (which only
+    // distinguishes copilot vs not-copilot; see the comment below). The real
+    // ownership-gate enforcement (which does need the viewer login to tell
+    // assigned_to_me from assigned_to_other) is deferred below, after peeking
+    // the strategy the pure routing evaluator would select for this
+    // canonical state.
     let assignees = [];
     try {
       const assigneesJson = ghJson(["issue", "view", String(issue), "--repo", repo, "--json", "assignees"], repoRoot, env);
@@ -607,12 +594,11 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
         authorization: "authorized",
       },
     };
-    // Scoped single-contributor ownership gate (#1444, ADR 0042): peek the
-    // strategy the pure routing evaluator would select for this exact
-    // canonical state, then enforce ownership only when that strategy is
-    // gated (STRATEGY_OWNERSHIP_GATE). Every strategy reachable from the
-    // --issue path today (local_implementation, issue_intake) is gated, so
-    // this peek is defensive/future-proofing rather than a live branch — but
+    // Scoped single-contributor ownership gate (ADR 0042): peek the strategy
+    // the pure routing evaluator would select for this exact canonical
+    // state, then enforce ownership only when that strategy is gated
+    // (STRATEGY_OWNERSHIP_GATE). Every strategy reachable from the --issue
+    // path today is gated, so this peek is defensive/future-proofing — but
     // it is the one mechanism, shared with the --pr path below, so a future
     // issue-reachable exempt strategy is covered for free. Bypassed
     // (read-only inspection, e.g. info.mjs) skips enforcement entirely,
@@ -645,11 +631,11 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     artifactState = "open";
   }
   const resolvedTargetPreference = targetPreference ?? resolveTargetPreference(repoRoot);
-  // `--ui-review` (issue #1362) routes the PR to the ui_review strategy
-  // instead of the default continue_on_pr/copilot_pr_followup path; every
-  // other field (ownership/nextActor/artifactState/etc.) stays identical —
-  // only intent + loopState change, and only when the flag is set, so the
-  // plain --pr path is byte-unchanged.
+  // `--ui-review` routes the PR to the ui_review strategy instead of the
+  // default continue_on_pr/copilot_pr_followup path; every other field
+  // (ownership/nextActor/artifactState/etc.) stays identical — only intent +
+  // loopState change, and only when the flag is set, so the plain --pr path
+  // is byte-unchanged.
   const result = {
     intent: uiReview ? "review_pr_ui" : "continue_on_pr",
     mode: "bounded_handoff",
@@ -665,16 +651,14 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
       authorization: "authorized",
     },
   };
-  // Scoped single-contributor ownership gate (#1377, scoped by #1444 / ADR
-  // 0042): peek the strategy the pure routing evaluator would select for this
-  // canonical state (ui_review for --ui-review, one of the
-  // copilot/external/reviewer-fixer follow-up strategies otherwise), then
-  // enforce ownership — including the linked-issue foreign check — only when
-  // that strategy is gated. A ui_review peek is exempt, so a reviewer can run
-  // `/dev-loops:loop-review-ui` (or `/loop-review-ui` in the dev-loops repo itself)
-  // against a PR (and its linked issue) they do not own.
-  // Bypassed (read-only inspection): skip enforcement entirely, mirroring the
-  // --issue path above.
+  // Scoped single-contributor ownership gate (ADR 0042): peek the strategy
+  // the pure routing evaluator would select for this canonical state
+  // (ui_review for --ui-review, one of the copilot/external/reviewer-fixer
+  // follow-up strategies otherwise), then enforce ownership — including the
+  // linked-issue foreign check — only when that strategy is gated. A
+  // ui_review peek is exempt, so a reviewer can run `/dev-loops:loop-review-ui`
+  // against a PR (and its linked issue) they do not own. Bypassed (read-only
+  // inspection): skip enforcement entirely, mirroring the --issue path above.
   if (!ownershipGateBypassed(env)) {
     const peekedStrategy = resolveAuthoritativeStartupResumeBundle(result).selectedStrategy ?? "none";
     if (ownershipGateAppliesToStrategy(peekedStrategy)) {
@@ -857,37 +841,29 @@ function configuredBaseBranch(config) {
 
 /**
  * Decide whether the live change scope is eligible for issue-less lightweight
- * PR-first (#1210): reuses the same localImplementation.lightMode threshold
- * that gates inline vs full-fanout gate dispatch, so "genuinely small" means
- * the same thing everywhere in the repo.
+ * PR-first: reuses the same localImplementation.lightMode threshold that
+ * gates inline vs full-fanout gate dispatch, so "genuinely small" means the
+ * same thing everywhere in the repo.
  *
- * Scope is measured from the merge-base with the default branch to the WORKING
- * TREE (`git diff --stat <merge-base>`), so multi-commit branches and
- * uncommitted changes are both counted — a HEAD~1-only measure would fail OPEN
- * on a branch whose earlier commits already exceed the threshold. Fails CLOSED
- * on every negative path (disabled / no resolvable base / undetectable diff /
- * over threshold) with a distinct reason so the caller can report why --issue
- * is required instead of silently defaulting one way or the other.
+ * Scope is measured from the merge-base with the default branch to the
+ * working tree (`git diff --stat <merge-base>`), so multi-commit branches and
+ * uncommitted changes are both counted — a HEAD~1-only measure would fail
+ * open on a branch whose earlier commits already exceed the threshold. Fails
+ * closed on every negative path (disabled / no resolvable base / undetectable
+ * diff / over threshold) with a distinct reason.
  *
- * Every git invocation is bound to `cwd` (the adapter-resolved repoRoot),
- * matching the rest of this file's git calls — process.cwd() is never relied
- * on implicitly so this stays correct when invoked from a subdirectory or
- * with a harness cwd that differs from the OS process cwd.
- *
- * @param {import("@dev-loops/core/config").DevLoopConfig} config
- * @param {string} [cwd] - Repo root to run git commands in (defaults to process.cwd() when omitted).
- * @returns {{ eligible: true, scope: object, threshold: {maxFiles:number,maxLines:number} } | { eligible: false, reason: "light_mode_disabled"|"scope_detection_failed"|"over_threshold", scope?: object, threshold?: object, detail?: string }}
+ * Every git invocation is bound to `cwd` (the adapter-resolved repoRoot) —
+ * process.cwd() is never relied on implicitly.
  */
 export function resolveIssuelessLightweightEligibility(config, cwd) {
   const threshold = resolveLightMode(config);
   if (!threshold) {
     return { eligible: false, reason: "light_mode_disabled" };
   }
-  // A configured workflow.baseBranch (#1368) takes priority over the generic
+  // A configured workflow.baseBranch takes priority over the generic
   // candidate list — the whole point of the config knob is that the default
   // branch is NOT the right merge-base (e.g. a spike branch that must never
-  // measure scope against main). Unset stays the exact prior candidate list
-  // and order (byte-for-byte no-regression).
+  // measure scope against main). Unset stays the plain candidate list.
   const configuredBase = configuredBaseBranch(config);
   const candidates = configuredBase
     ? [`origin/${configuredBase}`, configuredBase]
@@ -914,28 +890,23 @@ export function resolveIssuelessLightweightEligibility(config, cwd) {
 
 /**
  * Build a `--lightweight` startup input with NO tracker binding at all
- * (issue-less PR-first, #1210): `--lightweight` used alone, no --issue.
+ * (issue-less PR-first): `--lightweight` used alone, no --issue.
  *
  * Read-only: no tracker mutation, no GitHub calls, no issue/PR number. Gated
  * by {@link resolveIssuelessLightweightEligibility} — unless
- * `localImplementation.issueless` (#1349) sanctions any-scope
- * issue-less PR-first, in which case the eligibility gate is skipped entirely.
- * Otherwise an ineligible change
- * throws so the CLI fails closed (exit 1, no readiness bundle) with a message
- * naming the distinct reason, mirroring buildPlanFileInput/buildSpikeInput's
- * fail-closed-on-invalid-input convention. Exempt from the worktree-isolation
- * guard like the plan-file/spike paths: there is no issue number to key a
- * worktree on.
- *
- * @param {{ config: import("@dev-loops/core/config").DevLoopConfig, cwd?: string }} params
- * @returns {object} startup input with canonicalSpecSource: "pr_body"
+ * `localImplementation.issueless` sanctions any-scope issue-less PR-first, in
+ * which case the eligibility gate is skipped entirely. Otherwise an
+ * ineligible change throws so the CLI fails closed (exit 1, no readiness
+ * bundle) with a message naming the distinct reason. Exempt from the
+ * worktree-isolation guard like the plan-file/spike paths: there is no issue
+ * number to key a worktree on.
  */
 export function buildLightweightIssuelessInput({ config, cwd }) {
-  // localImplementation.issueless (#1349) sanctions issue-less
-  // PR-first at ANY change scope — for consumers whose spec of record lives
-  // in an external tracker and who cannot mint a GitHub issue for big work.
-  // Review depth is unaffected: gate dispatch re-measures scope itself and
-  // fails safe to full_fanout over threshold.
+  // localImplementation.issueless sanctions issue-less PR-first at ANY
+  // change scope — for consumers whose spec of record lives in an external
+  // tracker and who cannot mint a GitHub issue for big work. Review depth is
+  // unaffected: gate dispatch re-measures scope itself and fails safe to
+  // full_fanout over threshold.
   if (!resolveIssuelessEnabled(config)) {
     const eligibility = resolveIssuelessLightweightEligibility(config, cwd);
     if (!eligibility.eligible) {
@@ -997,57 +968,40 @@ export function buildResolveDevLoopStartupResult(input, {
 } = {}) {
   const effectiveEnv = env ?? adapter.getEnv();
   const effectiveCwd = cwd ?? adapter.getCwd();
-  // A configured workflow.baseBranch (#1368) is surfaced in the worktree
-  // nextAction hint below as an explicit `--base origin/<baseBranch>` — unset
-  // is omitted entirely since ensure-worktree.mjs already auto-detects the
-  // same default itself (see resolveBaseBranch).
+  // A configured workflow.baseBranch is surfaced in the worktree nextAction
+  // hint below as an explicit `--base origin/<baseBranch>` — unset is
+  // omitted entirely since ensure-worktree.mjs already auto-detects the same
+  // default itself (see resolveBaseBranch).
   const configuredBase = configuredBaseBranch(config);
   const worktreeHintBaseFlag = configuredBase ? ` --base origin/${resolveBaseBranch(config, { cwd: effectiveCwd })}` : "";
   // Normalize a non-object input (e.g. `--input null`, which parses to a legal
   // JSON null) to {} so the destructure below cannot throw before routing can
   // fail closed with a structured reconcile bundle.
   if (input === null || typeof input !== "object") input = {};
-  // Plan-file intake carries two resolver-only fields that the pure routing
-  // evaluator does not model. Strip them before evaluation and re-apply them to
-  // the result; `planFileExempt` waives the worktree-isolation guard because a
+  // Plan-file intake carries resolver-only fields the pure routing evaluator
+  // does not model (`planFileIntakeState`/`spikeIntakeState`/
+  // `canonicalSpecSource`). Strip them before evaluation and re-attach to the
+  // result; `planFileExempt` waives the worktree-isolation guard because a
   // pre-promotion plan has no issue to key a worktree on.
-  // `canonicalSpecSource` (issue #1025) is a resolver-only field the pure routing
-  // evaluator does not model — strip it before evaluation and re-attach to the
-  // result, mirroring planFileIntakeState/spikeIntakeState.
   const { planFileExempt = false, planFileIntakeState = null, spikeIntakeState = null, canonicalSpecSource = null, ...routingInput } = input;
   input = routingInput;
-  // Retrospective checkpoint gate. The durable checkpoint file (if present)
-  // is always honored — unchanged from before cycle-scoping existed. Cycle
-  // scoping itself (a stale `complete`/`skipped` must not satisfy every later
-  // cycle forever) is derived entirely at READ time, on every evaluation, via
-  // a local git ancestry check — no write-time "arming" seam to miss (never
-  // re-resolved after merge, never cwd-relative, never a read-only preview's
-  // side effect, never racy) and no GitHub query at all. Gated on
-  // workflow.requireRetrospective so a repo that never opts into cycle
-  // scoping never pays for the extra git calls — the plain checkpoint file
-  // read below is unaffected either way (RETRO-ENFORCEMENT-CONFIG-GATED,
-  // #1628: the READ and INJECT are gated on the same flag, so a repo that
-  // never opts in is never blocked by a stale/missing/pending checkpoint
-  // either). `durableCheckpoint` stays `undefined` when the file is genuinely
-  // absent (ENOENT) so resolveCheckpointStateFromArtifact can tell that apart
-  // from a file present but containing the JSON literal `null`.
+  // Retrospective checkpoint gate (RETRO-ENFORCEMENT-CONFIG-GATED). The
+  // durable checkpoint file, when present, is always honored. Cycle scoping
+  // (a stale `complete`/`skipped` must not satisfy every later cycle
+  // forever) is derived entirely at read time, via a local git ancestry
+  // check — no write-time "arming" seam to miss, no GitHub query. Gated on
+  // workflow.requireRetrospective: the read and the inject share the same
+  // flag, so a repo that never opts in never pays for the extra git calls
+  // and is never blocked by a stale/missing/pending checkpoint.
+  // `durableCheckpoint` stays `undefined` when the file is genuinely absent
+  // (ENOENT) so resolveCheckpointStateFromArtifact can tell that apart from a
+  // file present but containing the JSON literal `null`.
   //
-  // When `workflow.requireRetrospective` is not true the enforcement is
-  // entirely inert: the file is not read and `retrospectiveCheckpointState`
-  // is not injected, so `retrospectiveCheckpointStateProvided` stays false
-  // downstream and `applyRetrospectiveCheckpointGate` passes the routing
-  // through unchanged (no over-blocking for non-opted-in repos). The only
-  // gating flag read below is `requireRetrospective`; the whole block is
-  // skipped when it is unset/false.
-  //
-  // The path is resolved from the REPO ROOT (the main checkout), not
-  // cwd-relative: the checkpoint is gitignored and lives ONCE per repo, not
+  // The path is resolved from the repo root (the main checkout), not
+  // cwd-relative: the checkpoint is gitignored and lives once per repo, not
   // once per worktree. `checkpoint-contract.mjs`'s write path resolves the
   // exact same root via `resolveCheckpointRepoRoot`, so a worktree, a
-  // subdirectory, and the main checkout all address one file — a worktree
-  // write is not silently discarded the moment that worktree is removed, and
-  // the main checkout and a worktree of the same repo never disagree about
-  // the checkpoint state depending on which one last wrote it.
+  // subdirectory, and the main checkout all address one file.
   const retrospectiveEnforced = resolveWorkflowConfig(config, "requireRetrospective") === true;
   if (retrospectiveEnforced) {
     const checkpointPath = path.join(resolveCheckpointRepoRoot(effectiveCwd), CHECKPOINT_FILE);
@@ -1234,14 +1188,14 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
       inputSource,
       env: adapter.getEnv(),
     });
-    // --lightweight modifier (issue #1025): the PR body becomes the
-    // spec-of-record for this local session — no phase/plan doc minted.
+    // --lightweight modifier: the PR body becomes the spec-of-record for
+    // this local session — no phase/plan doc minted.
     if (options.lightweight) {
       input = { ...input, canonicalSpecSource: "pr_body" };
     }
   } else if (options.lightweight) {
-    // --lightweight used ALONE (no other mode flag): issue-less PR-first (#1210).
-    // A broken config must surface as ITS OWN failure, not decay to the
+    // --lightweight used ALONE (no other mode flag): issue-less PR-first. A
+    // broken config must surface as ITS OWN failure, not decay to the
     // misleading light_mode_disabled reason a bare {version:1} would produce.
     if (configErrors.length > 0) {
       throw new Error(`--lightweight without --issue (issue-less PR-first) requires a loadable dev-loop config, but config loading failed: ${configErrors.map((e) => e?.message ?? String(e)).join("; ")}. Fix the config or provide --issue <n>.`);
@@ -1268,7 +1222,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   // Emit the deterministic bundle FIRST, before the best-effort self-heal below,
   // so a slow or hung gh reconcile can never delay the startup result.
   process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
-  // #1069: best-effort startup self-heal — converge the board from live GitHub
+  // Best-effort startup self-heal — converge the board from live GitHub
   // state so merged→Done / ready→In Progress land deterministically. Gated on a
   // configured board so it never shells out to gh in the no-.devloops unit tests;
   // never writes stdout, never changes exit code, never throws. Skips

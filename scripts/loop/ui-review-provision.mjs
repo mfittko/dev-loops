@@ -260,7 +260,7 @@ export function assertNotPrimary({ worktreePath, repoRoot }) {
   // reject. Exempt it — but only when it is a GENUINELY LISTED linked worktree
   // (ensureWorktree runs before this guard, so it is registered by now). A plain
   // directory that merely contains `tmp/worktrees/` in its path is NOT exempted,
-  // keeping the fail-closed property. (#1456 + review hardening)
+  // keeping the fail-closed property.
   if (isListedWorktree(worktreePath, parseAllWorktreePaths(listOutput))) {
     return { ok: true, mainWorktreePath };
   }
