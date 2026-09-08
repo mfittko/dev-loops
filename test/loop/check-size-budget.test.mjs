@@ -3,6 +3,7 @@ import { test } from "bun:test";
 
 import {
   computeSizeBudget,
+  countCommentChangedLinesByFile,
   matchesGlob,
   parseCheckSizeBudgetCliArgs,
   parseNumstatZ,
@@ -608,4 +609,138 @@ test("parseCheckSizeBudgetCliArgs: a plain valid --base (and --head) is accepted
   const options = parseCheckSizeBudgetCliArgs(["--base", "main", "--head", "feature/x"]);
   assert.equal(options.base, "main");
   assert.equal(options.head, "feature/x");
+});
+
+// ---------------------------------------------------------------------------
+// Comment-aware logic-LOC discount (comment analogue of testDiscount).
+// A code file's changed lines that classify as comments are not counted as
+// logic; real code, ambiguous, and non-comment lines are counted exactly as
+// before. `codeFileDiff(path, lines)` frames pre-built `+`/`-` diff content
+// lines under one file header; `repeatLine(sign, text, n)` builds n of them.
+// ---------------------------------------------------------------------------
+
+function codeFileDiff(path, contentLines) {
+  const header = `diff --git a/${path} b/${path}\nindex aaa..bbb 100644\n--- a/${path}\n+++ b/${path}\n@@ -1,1 +1,1 @@`;
+  return `${header}\n${contentLines.join("\n")}\n`;
+}
+
+function deletedFileDiff(path, contentLines) {
+  const header = `diff --git a/${path} b/${path}\ndeleted file mode 100644\nindex aaa..0000000\n--- a/${path}\n+++ /dev/null\n@@ -1,${contentLines.length} +0,0 @@`;
+  return `${header}\n${contentLines.join("\n")}\n`;
+}
+
+function repeatLine(sign, text, n) {
+  return Array.from({ length: n }, () => `${sign}${text}`);
+}
+
+test("countCommentChangedLinesByFile: counts added AND removed comment lines per file, ignores code and headers", () => {
+  const diff = codeFileDiff("src/foo.mjs", [
+    "+// added comment",
+    "+  doWork();",
+    "-// removed comment",
+    "- return old;",
+    "+/* block open */",
+    "+ * jsdoc continuation",
+  ]);
+  const counts = countCommentChangedLinesByFile(diff);
+  // 4 comment lines (added //, removed //, block open, jsdoc *); 2 code lines ignored.
+  assert.equal(counts.get("src/foo.mjs"), 4);
+});
+
+test("countCommentChangedLinesByFile: a content line rendered as `++ `/`-- ` is not read as a file header", () => {
+  // A source line whose own content begins with `+ `/`- ` renders as `++ `/`-- `
+  // in the diff body; the `+++ `/`--- ` header guard requires a /dev/null or
+  // a/|b/ target, so these fall through to the changed-line branch and keep the
+  // current file rather than resetting it.
+  const diff = codeFileDiff("src/foo.mjs", [
+    "+// real comment",
+    "++ not a header, added code content",
+    "-- not a header, removed code content",
+  ]);
+  const counts = countCommentChangedLinesByFile(diff);
+  // Only the genuine comment counts; the two `++ `/`-- ` content lines are code.
+  assert.equal(counts.get("src/foo.mjs"), 1);
+});
+
+test("countCommentChangedLinesByFile: attributes removed comment lines of a DELETED code file (--- a/path + +++ /dev/null)", () => {
+  // A whole-file deletion sends `+++` to /dev/null, but the `--- a/path` target
+  // still names the file, so removed comment lines are attributed to it — a
+  // comment-only file deletion is a comment-only diff and must discount.
+  const path = "src/legacy.mjs";
+  const diff = deletedFileDiff(path, [...repeatLine("-", "// old note", 3), "- doWork();"]);
+  const counts = countCommentChangedLinesByFile(diff);
+  assert.equal(counts.get(path), 3);
+});
+
+test("comment-only DELETION of a code file scores ~0 logic and passes", () => {
+  const path = "src/legacy.mjs";
+  const result = computeSizeBudget({
+    nameStatusOutput: `D\t${path}\n`,
+    diffOutput: deletedFileDiff(path, repeatLine("-", "// removed invariant note", 2500)),
+    numstatOutput: numstatZ([[0, 2500, path]]),
+    sizeConfig: SIZE_CONFIG,
+  });
+  assert.equal(result.wholeLogicLoc, 0);
+  assert.equal(result.outcome, "pass");
+});
+
+test("comments-only multi-thousand-line code diff scores ~0 logic and passes", () => {
+  const path = "src/foo.mjs";
+  const commentLines = repeatLine("+", "// filler invariant note", 2500);
+  const result = computeSizeBudget({
+    nameStatusOutput: `M\t${path}\n`,
+    diffOutput: codeFileDiff(path, commentLines),
+    numstatOutput: numstatZ([[2500, 0, path]]),
+    sizeConfig: SIZE_CONFIG,
+  });
+  // Without the discount, 2500 code LOC would exceed absoluteHardLoc (2000)
+  // and hard-block with no waiver possible; comment-awareness drops it to 0.
+  assert.equal(result.wholeLogicLoc, 0);
+  assert.equal(result.outcome, "pass");
+  assert.equal(result.ok, true);
+});
+
+test("mixed comment+code diff discounts ONLY the comment lines", () => {
+  const path = "src/foo.mjs";
+  const lines = [...repeatLine("+", "doWork();", 10), ...repeatLine("+", "// note", 20)];
+  const result = computeSizeBudget({
+    nameStatusOutput: `M\t${path}\n`,
+    diffOutput: codeFileDiff(path, lines),
+    numstatOutput: numstatZ([[30, 0, path]]),
+    sizeConfig: SIZE_CONFIG,
+  });
+  // 30 changed lines, 20 comments discounted -> 10 real code lines counted.
+  assert.equal(result.wholeLogicLoc, 10);
+  assert.equal(result.outcome, "pass");
+});
+
+test("pure-code diff is unchanged: no comment lines, every changed line counts as logic", () => {
+  const path = "src/foo.mjs";
+  const result = computeSizeBudget({
+    nameStatusOutput: `M\t${path}\n`,
+    diffOutput: codeFileDiff(path, repeatLine("+", "doWork();", 450)),
+    numstatOutput: numstatZ([[450, 0, path]]),
+    sizeConfig: SIZE_CONFIG,
+  });
+  assert.equal(result.wholeLogicLoc, 450);
+  // 450 > softLoc (400): escalates exactly as it would today.
+  assert.equal(result.outcome, "escalate");
+});
+
+test("fail-closed: an ambiguous/unparseable changed line is counted as logic, never discounted", () => {
+  const path = "src/foo.mjs";
+  // A block-comment inner line without a leading `*` sigil is NOT confidently a
+  // comment, so isCommentLine rejects it and it stays counted as logic.
+  const lines = ["+/* open */", "+free-form text inside the block", "+*/"];
+  const counts = countCommentChangedLinesByFile(codeFileDiff(path, lines));
+  // Only the two sigil-anchored lines ("/* open */", "*/") are discounted; the
+  // free-form middle line is counted.
+  assert.equal(counts.get(path), 2);
+  const result = computeSizeBudget({
+    nameStatusOutput: `M\t${path}\n`,
+    diffOutput: codeFileDiff(path, lines),
+    numstatOutput: numstatZ([[3, 0, path]]),
+    sizeConfig: SIZE_CONFIG,
+  });
+  assert.equal(result.wholeLogicLoc, 1);
 });
