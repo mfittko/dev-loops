@@ -160,8 +160,8 @@ workflow:
 localImplementation:
   lightMode:
     enabled: true
-    maxFiles: 2
-    maxLines: 20 # micro-PR ceiling (#1043)
+    maxFiles: 10
+    maxLines: 100 # light-track ceiling (widened for the slim epic)
 
 tracker:
   board:
