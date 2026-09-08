@@ -1,6 +1,6 @@
 # 1.0.2-slim line verification and reconciliation closeout
 
-Closer record for the streamline epic. This documents the combined `1.0.2-slim`
+Closeout record for the streamline epic. This documents the combined `1.0.2-slim`
 integration line: it maps each representative surface to its existing
 authoritative owner, records the combined-line verification result, proves the
 packed consumer boundary outside the checkout, aggregates the epic's before/after
@@ -10,8 +10,8 @@ does not promote or merge the line elsewhere.
 
 ## Base provenance and merge inventory
 
-- Integration base: the exact `v1.0.2-pre.0` release baseline (`0649cd1e`); the
-  main line stays frozen for the epic's duration.
+- Integration base: the exact v1.0.2 release baseline, tagged `v1.0.2-pre.0` at
+  commit `0649cd1e`; the main line stays frozen for the epic's duration.
 - Every included child PR targeted `1.0.2-slim`, enforced by
   `workflow.baseBranch: 1.0.2-slim` committed in `.devloops` on that branch.
 - The merge inventory over `0649cd1e..HEAD` contains only approved epic children
@@ -159,8 +159,9 @@ This record does not make the promotion decision. Inputs for the operator:
 - Net machinery reduction: 187 files, net -2692 lines; runtime source net
   -2191; tests net -563; generated mirrors net ~0; mandatory read-closure
   reduced beyond raw line counts.
-- Base isolation holds: cut from the exact `v1.0.2-pre.0` baseline, only
-  approved epic children merged, every child targeted `1.0.2-slim`.
+- Base isolation holds: cut from the exact v1.0.2 release baseline (tagged
+  `v1.0.2-pre.0`), only approved epic children merged, every child targeted
+  `1.0.2-slim`.
 - Two documented outcomes:
   - Promote: ship 1.0.2 as the `-slim` line and continue 1.0.3 on it. The
     paused recency fix then rebases onto the promoted line, keeping only its
