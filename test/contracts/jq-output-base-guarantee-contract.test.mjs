@@ -262,6 +262,7 @@ const HELP_DOCUMENTS_JQ_FLAGS_SCRIPTS = [
   "loop/cleanup-worktree.mjs",
   "loop/inspect-run-viewer-ci-changes.mjs",
   "refine/validate-plan-file.mjs",
+  "github/close-gate-findings.mjs",
 ];
 
 for (const scriptRelPath of HELP_DOCUMENTS_JQ_FLAGS_SCRIPTS) {
