@@ -22,10 +22,6 @@
 // skip main(), yielding an empty `npm publish --tag ""`).
 import { isDirectCliRun } from "../lib/direct-run.mjs";
 
-/**
- * @param {string} version — a SemVer version string
- * @returns {string} the npm dist-tag
- */
 // A release-safety helper must fail closed: a non-SemVer input (e.g. "foo", a
 // truncated tag, or one with a leading-zero component like "01.2.3") must NOT
 // slip through as a stable release and publish under the default `latest`

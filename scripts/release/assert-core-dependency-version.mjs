@@ -7,13 +7,13 @@
  *
  * Two checks:
  * 1. The `@dev-loops/core` dependency range in the root manifest must resolve
- *    to the same full version (including prerelease token) as the release.
- *    The old major.minor-only comparison let rc.6 vs rc.7 pass (`1.0 == 1.0`),
- *    the root cause of #1033's original shape and the #1886 prerelease drift.
+ *    to the same full version (including prerelease token) as the release. A
+ *    major.minor-only comparison would let two different prereleases of the
+ *    same major.minor pass (`1.0 == 1.0`), so the comparison uses the full token.
  * 2. `bun.lock` must be in full lockstep: the `packages/core` workspace entry
  *    version and the root `@dev-loops/core` dependency spec must both resolve
- *    to the same full version as the release. rc.7 shipped a lockfile still pinned to rc.6
- *    through every green gate because no guard read the lockfile at all.
+ *    to the same full version as the release — a lockfile pinned to a stale
+ *    version must not pass every other green gate unnoticed.
  *
  * Runs in release.yml BEFORE the GitHub Release is created, so a mismatched
  * manifest or stale lockfile never becomes a release (and never fires
@@ -58,7 +58,7 @@ export function extractMajorMinor(spec) {
  * range operators (^, ~, >=, <, =) and whitespace plus a `v`/`V` shorthand may
  * precede the version, so a spec that merely CONTAINS a version substring
  * (e.g. `workspace:^1.0.0-rc.7`, `file:core-1.0.0-rc.7.tgz`) fails closed
- * instead of false-passing (Copilot round-2 finding on #1886). Takes the first
+ * instead of false-passing. Takes the first
  * version token in a compound range; build metadata (`+build`) is dropped
  * because it does not affect version precedence.
  * @param {string} spec
@@ -168,8 +168,7 @@ export function parseBunLock(raw) {
  * the toolkit does: percent-encode `%`, then escape carriage returns and
  * newlines (`%0D`/`%0A`). A crafted manifest/lockfile value containing a
  * newline can otherwise forge `::error::`/`::warning::` annotation lines into
- * the release workflow log and obscure or fake the guard's verdict (Copilot
- * round-2 / pre-approval round-1 finding on #1886).
+ * the release workflow log and obscure or fake the guard's verdict.
  * @param {string} text
  * @returns {string}
  */
@@ -226,7 +225,7 @@ async function main(argv) {
     ) + "\n",
   );
 
-  // #1886: the lockfile version fields are also part of the release contract.
+  // The lockfile version fields are also part of the release contract.
   // Same exit discipline as the manifest: unreadable/invalid = exit 2,
   // out-of-lockstep = exit 1.
   let lockfile;

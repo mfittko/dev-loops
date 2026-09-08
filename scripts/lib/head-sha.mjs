@@ -31,8 +31,8 @@ export const FULL_HEAD_SHA_ERROR =
  *
  * Shared by gate-evidence tooling that needs the current head to stamp a
  * verdict or audit which surface carries it. Centralizing the head-oid read
- * avoids hand-rolled copies drifting on case-normalization / error handling
- * (issue #1729 pre-approval dry finding). Returns the lowercased full oid.
+ * avoids hand-rolled copies drifting on case-normalization / error handling.
+ * Returns the lowercased full oid.
  */
 export async function fetchPrHeadRefOid({ repo, pr }, { env = process.env, ghCommand = "gh", runChild }) {
   if (typeof runChild !== "function") {

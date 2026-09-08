@@ -123,7 +123,7 @@ function parseCliArgs(argv) {
         args.column = requireValue(token, "--column requires a value");
         break;
       case "status":
-        // Back-compat alias for --column (issue #912). Kept separate so a
+        // Back-compat alias for --column. Kept separate so a
         // conflicting `--column X --status Y` is rejected rather than silently
         // resolved by argv order.
         args.status = requireValue(token, "--status requires a value");
@@ -249,12 +249,12 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd() } =
     );
   }
   // --next-up is sugar for --column <resolved next_up display name> (the
-  // normative pickup queue, #1091), resolved through the SAME statusColumns
-  // mapping board-sync uses (#1098) so a renamed Next Up column agrees with
+  // normative pickup queue), resolved through the SAME statusColumns
+  // mapping board-sync uses so a renamed Next Up column agrees with
   // an explicit --column of the same configured name.
   const { columnNames, error: configError } = loadStateColumnMap(cwd);
   // Fail CLOSED on a malformed `.devloops` when --next-up drives the target:
-  // silently using the literal "Next Up" could land in the wrong column (#1098).
+  // silently using the literal "Next Up" could land in the wrong column.
   // A plain `--column X` add never consults statusColumns, so it is unaffected.
   if (args.nextUp && configError) {
     throw Object.assign(
@@ -328,7 +328,7 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd() } =
     // Stay an idempotent no-op (never move an already-present item — that is
     // `queue move`'s job), but when the requested column differs from where the
     // item actually sits, surface an explicit moved:false signal so callers
-    // detect the ignored request instead of silently assuming placement (#1306).
+    // detect the ignored request instead of silently assuming placement.
     const differentColumn = existingStatus !== null && existingStatus !== targetStatus;
     return {
       ok: true,

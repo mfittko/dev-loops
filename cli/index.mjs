@@ -585,7 +585,7 @@ function parseTopLevelCommand(argv) {
   // Bare --help / -h
   if (cmd === "--help" || cmd === "-h") return { kind: "help" };
 
-  // Version flag (#1897): stable single-line output, no @dev-loops/core
+  // Version flag: stable single-line output, no @dev-loops/core
   // import, so it works in a deps-less marketplace checkout too.
   if (cmd === "--version" || cmd === "-v") {
     if (args.length > 1) {
@@ -729,7 +729,7 @@ export async function runCli({
       const result = spawnSync("node", [fromTop.scriptPath, ...scriptArgs], {
         cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
       });
-      // Retry on usage/flag errors: parse usage for valid flags, retry once (#483).
+      // Retry on usage/flag errors: parse usage for valid flags, retry once.
       // Reached only once core is confirmed resolvable above, so this dynamic
       // import (not a top-level one) never throws ERR_MODULE_NOT_FOUND itself.
       const { isUsageError, buildCorrectedArgs, extractUsageText } = result.status !== 0

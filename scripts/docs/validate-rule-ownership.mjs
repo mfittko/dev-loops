@@ -50,7 +50,7 @@ const RUNTIME_FILE_RE = /\.(mjs|cjs|js|ts|sh|json)$/;
 const RULE_ID_SHAPE_RE = /\b[A-Z][A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b/g;
 
 // Refusal/error emission construct carried by the same line as an enforcement
-// citation. Enforcement credit is refusal-path-based (#1617): a runtime rule is
+// citation. Enforcement credit is refusal-path-based: a runtime rule is
 // only counted as enforced when its ID appears in an *enforcement error/refusal
 // string* — a string literal emitted because the rule forbids an operation —
 // not mere presence in source. An ID in a docstring, usage text, data/log
@@ -113,7 +113,7 @@ export function indexInsideStringLiteral(line, index) {
 export function isRefusalPathCitation(line, tokenIndex) {
   // A string literal that is simply the right-hand side of a data assignment
   // (`x = "..."`) is data, not an enforcement message, whatever keyword the
-  // string happens to contain (#1617 finding 2): `const isActive =
+  // string happens to contain: `const isActive =
   // "TEST-RULE-001 cannot be nil"` must not grant credit. Refusal/error
   // strings live inline in emission/refusal constructs (throw / errors.push /
   // stderr.write / refusal echo / reason/message fields), which do not sit on
@@ -683,7 +683,7 @@ export async function validateRuleOwnership(repoRoot = REPO_ROOT) {
   const citedRuntimeIds = new Set();
   for (const token of runtimeCitations) {
     if (byId.has(token.id)) {
-      // Enforcement credit is refusal-path-based (#1617): only a citation in an
+      // Enforcement credit is refusal-path-based: only a citation in an
       // enforcement error/refusal string marks the rule as enforced, not mere
       // presence in source. Phantom detection below still scans all presence.
       if (requiredSet.has(token.id) && token.refusalPath) citedRuntimeIds.add(token.id);
