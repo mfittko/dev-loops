@@ -175,7 +175,7 @@ async function fetchCurrentHeadCiEvidence({ repo, headSha, prVisibleCheckNames }
   // Project the raw check-runs signals into the detector's shape. Unlike the CI
   // watcher, a failed read (checkRuns.ok === false) reads as a MISSING signal
   // (null), not a hard pending: the detector may still classify from the one
-  // surviving provider. It surfaces hidden (#740) and loop-derived (#1358)
+  // surviving provider. It surfaces both hidden and loop-derived (gate-evidence)
   // failures via excludedFailureDetails, and uses the RAW check-run count so a
   // head whose only checks are hidden/loop-derived is not seen as check-less.
   const checkRunsSignal = checkRuns.ok

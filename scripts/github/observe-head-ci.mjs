@@ -46,7 +46,7 @@ function invalidStatuses() {
 }
 
 // Parse one `commits/{sha}/check-runs` payload into raw, lossless signals.
-// Loop-derived (gate-evidence) entries are partitioned out (#1358/#1531) so the
+// Loop-derived (gate-evidence) entries are partitioned out so the caller's
 // wait never blocks on the loop's own derived signal; PR-visible filtering,
 // full-set, and hidden ("excluded") signals are computed so each caller can
 // retain its own projection. Non-zero exit, unparseable JSON, or a missing
@@ -85,8 +85,8 @@ function parseHeadCheckRuns(result, prVisibleCheckNames) {
   };
 }
 
-// Parse one `commits/{sha}/status` payload into raw, lossless signals. Same
-// gate-evidence exclusion mirrored for the commit-status API (#1385/#1531).
+// Parse one `commits/{sha}/status` payload into raw, lossless signals. The same
+// gate-evidence loop-derived exclusion is mirrored for the commit-status API.
 function parseHeadCommitStatuses(result) {
   if (result.code !== 0) return invalidStatuses();
   let payload;
