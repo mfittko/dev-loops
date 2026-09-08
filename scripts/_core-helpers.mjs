@@ -1,7 +1,11 @@
 // Re-exports from shared library (Phase 2, issue #548)
 
+// formatCliError is re-exported from the node:-pure copy (single source of
+// truth), so its importers here are unaffected while the release-script closure
+// (jq-output.mjs) can import it without pulling in @dev-loops/core.
+export { formatCliError } from "./lib/format-cli-error.mjs";
+
 export {
-  formatCliError,
   parseJsonText,
   classifyReviewThreadsSignal,
   parseReviewThreads,
