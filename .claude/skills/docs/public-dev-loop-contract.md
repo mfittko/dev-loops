@@ -169,7 +169,7 @@ Resolved bundle output shape:
   "loopState": "...",
   "routeKind": "route | wait | stop | inspect | needs_reconcile",
   "selectedGate": "...",
-  "selectedStrategy": "...",
+  "selectedStrategy": "... | null",
   "executionMode": "bounded_handoff | durable_auto",
   "waitSemantics": "default | auto_healthy_wait",
   "asyncRun": {
@@ -184,7 +184,7 @@ Resolved bundle output shape:
     "decision": {
       "selectedGate": "...",
       "routeKind": "...",
-      "selectedStrategy": "...",
+      "selectedStrategy": "... | null",
       "executionMode": "...",
       "watchRequested": true,
       "contractClassification": "routed_followup | healthy_wait | terminal | blocked | authorization_gated | reconcile | inspect",
@@ -220,9 +220,10 @@ Fail-closed semantics:
 - incomplete/invalid/conflicting startup inputs return:
   - `bundleKind = needs_reconcile`
   - `routeKind = needs_reconcile`
-  - `selectedStrategy = none`
+  - `selectedStrategy = null` in the canonical bundle (`none` is permitted only as the startup wrapper's display key)
   - `loopState = unknown`
   - `nextAction` must instruct reconciliation before routing/status answers
+- `loop build-envelope` MUST accept that intentional null strategy and emit an actionable terminal reconciliation envelope; it MUST NOT coerce the result into a routed strategy
 - `executionMode=durable_auto` must fail closed unless a visible Pi-managed async run is already registered
 - a detached watcher/background pid is never acceptable evidence of async `dev-loop` startup success
 - invalid explicit `intent` also fails closed
@@ -342,7 +343,7 @@ The shared machine-checkable gate contract is exported from `packages/core/src/l
 | `reviewer_fixer` | `route` | `reviewer_fixer` | reviewer-owned or reviewer-next PR state routes to reviewer/fixer |
 | `copilot_pr_followup` | `route` | `copilot_pr_followup` | Copilot-owned PR state routes to Copilot PR follow-up |
 | `ui_review` | `route` | `ui_review` | an explicit UI-review request on a PR target routes to the ui_review running-app review strategy |
-| `fail_closed_reconcile` | `needs_reconcile` | none | ambiguous, conflicting, or unsupported canonical state fails closed to reconcile |
+| `fail_closed_reconcile` | `needs_reconcile` | `null` | ambiguous, conflicting, or unsupported canonical state fails closed to reconcile; `none` is only the startup wrapper's display key |
 
 For issue targets, authoritative issue↔PR linkage resolution remains part of state resolution before claiming there is no open linked PR:
 

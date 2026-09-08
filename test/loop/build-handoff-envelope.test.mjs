@@ -177,6 +177,38 @@ test("build-handoff-envelope builds envelope from resolver output", async () => 
   }
 });
 
+test("build-handoff-envelope accepts a needs_reconcile result with no selected strategy", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "build-handoff-envelope-reconcile-"));
+  try {
+    const resolverOutput = makeResolverOutput({
+      bundleKind: "needs_reconcile",
+      selectedStrategy: "none",
+      nextAction: "Complete the required retrospective before routing.",
+      bundle: {
+        ...makeResolverOutput().bundle,
+        bundleKind: "needs_reconcile",
+        routeKind: "needs_reconcile",
+        selectedGate: "fail_closed_reconcile",
+        selectedStrategy: null,
+        loopState: "unknown",
+        nextAction: "Complete the required retrospective before routing.",
+      },
+    });
+    const inputPath = await writeTempJson(tempDir, "resolver.json", resolverOutput);
+
+    const result = await runNode(["--input", inputPath, "--repo", "owner/test-repo"]);
+    assert.equal(result.code, 0, `expected exit 0, got stderr: ${result.stderr}`);
+    const envelope = JSON.parse(result.stdout.trim());
+    assert.equal(envelope.currentGate, "fail_closed_reconcile");
+    assert.equal(envelope.routeKind, "needs_reconcile");
+    assert.equal(envelope.selectedStrategy, null);
+    assert.equal(envelope.nextAction, "Complete the required retrospective before routing.");
+    assert.ok(envelope.stopRules.includes("reconcile"));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("build-handoff-envelope accepts gate state via --gate-state", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "build-handoff-envelope-"));
   try {

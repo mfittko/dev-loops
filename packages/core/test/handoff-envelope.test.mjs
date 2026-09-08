@@ -26,6 +26,7 @@ import {
   INTERNAL_DEV_LOOP_STRATEGY,
   DEV_LOOP_EXECUTION_MODE,
 } from "../src/loop/public-dev-loop-routing-contract.mjs";
+import { resolveAuthoritativeStartupResumeBundle } from "../src/loop/public-dev-loop-routing.mjs";
 
 // ---------------------------------------------------------------------------
 // Helpers to build fixture inputs
@@ -101,10 +102,15 @@ function localPhaseBundle(phase, opts = {}) {
 
 function nullStrategyBundle() {
   return {
+    bundleKind: "needs_reconcile",
+    selectedStrategy: "none",
     bundle: {
+      bundleKind: "needs_reconcile",
       selectedStrategy: INTERNAL_DEV_LOOP_STRATEGY.NONE,
+      routeKind: "needs_reconcile",
+      selectedGate: "fail_closed_reconcile",
       executionMode: DEV_LOOP_EXECUTION_MODE.BOUNDED_HANDOFF,
-      nextAction: "No action.",
+      nextAction: "Reconcile the canonical state before routing.",
       requiredReads: [],
       activeArtifact: {
         kind: DEV_LOOP_TARGET_KIND.ISSUE,
@@ -401,6 +407,95 @@ test("fail-closed: missing selectedStrategy throws", () => {
       defaultOptions
     );
   }, /selectedStrategy/);
+});
+
+test("needs_reconcile: wrapped and unwrapped canonical results build and validate", () => {
+  const envelope = buildDevLoopHandoffEnvelope(nullStrategyBundle(), defaultSettings, {}, defaultOptions);
+  assert.equal(envelope.currentGate, "fail_closed_reconcile");
+  assert.equal(envelope.routeKind, "needs_reconcile");
+  assert.equal(envelope.selectedStrategy, null);
+  assert.equal(envelope.worktreeRequired, false);
+  assert.ok(envelope.stopRules.includes("reconcile"));
+  assert.equal(validateHandoffEnvelope(envelope).ok, true);
+
+  const retrospective = nullStrategyBundle();
+  retrospective.bundle.nextAction = "Complete or explicitly skip the required post-run behavioral retrospective before starting or resuming the next dev-loop run.";
+  assert.equal(validateHandoffEnvelope(
+    buildDevLoopHandoffEnvelope(retrospective, defaultSettings, {}, defaultOptions),
+  ).ok, true);
+
+  const resolverOutput = resolveAuthoritativeStartupResumeBundle({
+    currentState: {
+      target: { kind: "issue", issue: 93 },
+      ownership: "copilot",
+      nextActor: "user",
+      status: "active",
+      authorization: "needs_confirmation",
+    },
+    artifactState: "not_applicable",
+    loopState: "active",
+  });
+  assert.match(resolverOutput.nextAction, /^Stop and reconcile /);
+  const unwrapped = buildDevLoopHandoffEnvelope(resolverOutput, defaultSettings, {}, defaultOptions);
+  assert.equal(unwrapped.selectedStrategy, null);
+  assert.equal(validateHandoffEnvelope(unwrapped).ok, true);
+});
+
+test("fail-closed: reconciliation builder rejects incomplete or conflicting tuples", () => {
+  const mutations = [
+    (input) => { input.bundleKind = "resolved"; },
+    (input) => { delete input.bundleKind; },
+    (input) => { input.bundle.bundleKind = "resolved"; },
+    (input) => { delete input.bundle.bundleKind; },
+    (input) => { delete input.selectedStrategy; },
+    (input) => { input.selectedStrategy = ""; },
+    (input) => { input.selectedStrategy = INTERNAL_DEV_LOOP_STRATEGY.LOCAL_IMPLEMENTATION; },
+    (input) => { input.bundle.routeKind = "route"; },
+    (input) => { input.bundle.selectedGate = "issue_intake"; },
+    (input) => { input.bundle.selectedStrategy = INTERNAL_DEV_LOOP_STRATEGY.ISSUE_INTAKE; },
+  ];
+  for (const mutate of mutations) {
+    const input = nullStrategyBundle();
+    mutate(input);
+    assert.throws(
+      () => buildDevLoopHandoffEnvelope(input, defaultSettings, {}, defaultOptions),
+      /needs_reconcile|bundleKind|selectedStrategy/i,
+    );
+  }
+
+  const routed = issueBundle(42);
+  routed.bundleKind = "needs_reconcile";
+  assert.throws(
+    () => buildDevLoopHandoffEnvelope(routed, defaultSettings, {}, defaultOptions),
+    /needs_reconcile|bundleKind/i,
+  );
+});
+
+test("validate: serialized terminal routing fields require the reconciliation routing invariants", () => {
+  const valid = buildDevLoopHandoffEnvelope(
+    nullStrategyBundle(), defaultSettings, {}, defaultOptions,
+  );
+  assert.equal(validateHandoffEnvelope(valid).ok, true);
+
+  const missingTerminalFields = { ...valid };
+  delete missingTerminalFields.routeKind;
+  delete missingTerminalFields.selectedStrategy;
+  const routed = buildDevLoopHandoffEnvelope(
+    issueBundle(42), defaultSettings, {}, defaultOptions,
+  );
+  const invalid = [
+    { ...valid, currentGate: "draft" },
+    missingTerminalFields,
+    { ...routed, routeKind: "route", selectedStrategy: "issue_intake" },
+    { ...valid, worktreeRequired: true },
+    { ...valid, stopRules: ["merge"] },
+    { ...valid, acceptance: { ...valid.acceptance, criteria: [{ id: "scope", must: "Review scope.", severity: "required" }] } },
+    { ...valid, nextAction: "   " },
+    { ...valid, nextAction: "Continue with the selected strategy." },
+  ];
+  for (const candidate of invalid) {
+    assert.equal(validateHandoffEnvelope(candidate).ok, false);
+  }
 });
 
 test("fail-closed: missing executionMode throws", () => {

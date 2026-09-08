@@ -14,8 +14,9 @@ template.
 |---|---|
 | Resolver output (`resolve-dev-loop-startup.mjs` bundle) | `target`, `nextAction`, `requiredReads`, `executionMode` |
 | Caller options (`repoRoot`, `worktreeCwd`) | `cwd` |
-| Gate state (detectors) + strategy defaults | `currentGate`, `worktreeRequired` |
-| Settings (`.devloops` at repo root + `defaults.yaml`) | `gateConfig`, `stopRules`, `asyncStartMode`, `requireDraftFirst`, `maxCopilotRounds` |
+| Gate state (detectors) + strategy defaults | `currentGate`; `worktreeRequired` except for terminal reconciliation |
+| Settings (`.devloops` at repo root + `defaults.yaml`) | `gateConfig`, `stopRules` except for terminal reconciliation, `asyncStartMode`, `requireDraftFirst`, `maxCopilotRounds` |
+| Terminal reconciliation invariant (`needs_reconcile` / `fail_closed_reconcile` / `null`) | `worktreeRequired=false`, canonical reconcile acceptance (criterion, evidence, and finalization limit), `stopRules=["reconcile"]` plus `"merge"` only when `humanMergeOnly` requires it |
 | Gate state (detectors) | `gateState.{currentHeadSha, ciStatus, unresolvedThreadCount, copilotRoundCount}` (the volatile tail — see below) |
 | Envelope builder (timestamp) | `gateState.derivedAt` (build time, not detector-derived) |
 | Canonical sanctioned-command map (`scripts/loop/sanctioned-commands.mjs`) | `sanctionedCommands` |
@@ -64,13 +65,18 @@ and `control.*` are derived from a static strategy+gate mapping table:
 | `external_pr_followup` | `default` | Contract compliance | commands-run, validation-output | 4 | 300000 |
 | `reviewer_fixer` | `default` | Contract compliance | commands-run, validation-output | 4 | 300000 |
 | `wait_watch` | `default` | Contract compliance | commands-run, validation-output | 4 | 1800000 |
+| `null` | `fail_closed_reconcile` | Reconcile authoritative state before routing | commands-run, validation-output | 1 | 300000 |
 
-Unknown strategy+gate combinations throw an explicit error listing known combos.
+Unknown strategy and gate combinations throw an explicit error listing known combos. A resolver result with `routeKind: "needs_reconcile"`, `selectedGate: "fail_closed_reconcile"`, and `selectedStrategy: null` is intentionally accepted as a terminal, actionable envelope; null remains invalid for routed work.
+
+For that terminal reconciliation tuple, the resolver remains the authority for the actual `nextAction`; the builder copies it unchanged. The validator checks the tuple, no-worktree boundary, canonical reconcile stop rules, a required `reconcile` acceptance criterion, and a recognized fail-closed directive prefix (including the router's canonical `Stop and reconcile ...` action). A wrapped startup result must carry `bundleKind: needs_reconcile` at both levels, the outer display key `selectedStrategy: none`, and nested `selectedStrategy: null`; an unwrapped canonical bundle remains supported. No worktree is required, and the stop rules are exactly `["reconcile"]` with an optional trailing `"merge"` when human-only merge policy applies. Configured `autonomy.stopAt` and ordinary strategy defaults do not override this terminal behavior.
 
 ## Stop rules
 
 Stop rules are derived from `settings.autonomy.stopAt` when present.
 When absent, strategy defaults apply:
+
+The terminal reconciliation tuple is the exception: it always uses `["reconcile"]`, plus `"merge"` only when required by `humanMergeOnly`, and ignores configured `autonomy.stopAt` because no strategy may execute until reconciliation succeeds.
 
 | Strategy | Default stop rules |
 |---|---|
@@ -101,6 +107,8 @@ interface HandoffEnvelope {
   currentGate: string;
   maxCopilotRounds: number;
   executionMode: "bounded_handoff" | "durable_auto";
+  routeKind?: "needs_reconcile"; // present on terminal reconciliation envelopes
+  selectedStrategy?: null;       // present only with routeKind=needs_reconcile
 
   nextAction: string;
   requiredReads: string[];

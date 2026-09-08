@@ -310,22 +310,111 @@ function ghJson(args, cwd, env = process.env) {
 // Bounds the best-effort `git fetch` below so a slow/offline remote can never
 // delay startup indefinitely.
 const RETROSPECTIVE_FETCH_TIMEOUT_MS = 10000;
+const COMMIT_ASSOCIATION_MAX_PAGES = 10;
+const COMMIT_ASSOCIATION_QUERY = `query($owner:String!,$name:String!,$oid:String!,$after:String) {
+  repository(owner:$owner,name:$name) {
+    object(expression:$oid) {
+      ... on Commit {
+        associatedPullRequests(first:100,after:$after) {
+          nodes { number state mergedAt baseRefName mergeCommit { oid } }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }
+  }
+}`;
+function resolveCommitPullRequestsFromGitHub({ repo, commitSha, cwd, env }) {
+  if (typeof repo !== "string" || repo.trim().length === 0) {
+    throw new Error("repository identity is required for commit-to-PR association");
+  }
+  // GraphQL is the sole merge authority: unlike the REST commit-PR endpoint it
+  // reports associations against any base branch. Bound pagination and fail
+  // closed when the complete connection cannot be verified.
+  const [owner, name] = repo.split("/");
+  const associations = [];
+  let after = null;
+  for (let page = 0; page < COMMIT_ASSOCIATION_MAX_PAGES; page += 1) {
+    const args = [
+      "api", "graphql",
+      "-f", `query=${COMMIT_ASSOCIATION_QUERY}`,
+      "-f", `owner=${owner}`,
+      "-f", `name=${name}`,
+      "-f", `oid=${commitSha}`,
+    ];
+    if (after !== null) args.push("-f", `after=${after}`);
+    const response = ghJson(args, cwd, env);
+    if (Array.isArray(response?.errors) && response.errors.length > 0) {
+      throw new Error("GraphQL commit-to-PR association response contains errors");
+    }
+    const connection = response?.data?.repository?.object?.associatedPullRequests;
+    if (!connection || !Array.isArray(connection.nodes) || typeof connection.pageInfo?.hasNextPage !== "boolean") {
+      throw new Error("GraphQL commit-to-PR association response is malformed");
+    }
+    associations.push(...connection.nodes.map((node) => ({
+      number: node?.number,
+      state: node?.state,
+      merged_at: node?.mergedAt,
+      base: { ref: node?.baseRefName },
+      merge_commit_sha: node?.mergeCommit?.oid,
+    })));
+    if (!connection.pageInfo.hasNextPage) return associations;
+    after = connection.pageInfo.endCursor;
+    if (typeof after !== "string" || after.length === 0) {
+      throw new Error("GraphQL commit-to-PR association pagination cursor is missing");
+    }
+  }
+  throw new Error(`GraphQL commit-to-PR association exceeded ${COMMIT_ASSOCIATION_MAX_PAGES} pages`);
+}
+
+function isStrictGitHubRfc3339Timestamp(value) {
+  if (typeof value !== "string" || value.trim() !== value || value.length === 0) return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|([+-])(\d{2}):(\d{2}))$/.exec(value);
+  if (!match) return false;
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, , offsetHourText, offsetMinuteText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return month >= 1 && month <= 12
+    && day >= 1 && day <= daysInMonth[month - 1]
+    && Number(hourText) <= 23 && Number(minuteText) <= 59 && Number(secondText) <= 59
+    && Number(offsetHourText ?? 0) <= 23 && Number(offsetMinuteText ?? 0) <= 59
+    && Number.isFinite(Date.parse(value));
+}
+
 /**
- * True when the base branch (`origin/<baseBranch>`) carries any commit after
- * `mergeCommit` — a purely local git ancestry check
- * (`git log <mergeCommit>..origin/<baseBranch>`), not a GitHub query, so it
- * never depends on `gh` or an API rate limit. A best-effort
- * `git fetch origin <baseBranch>` runs first; failing is not fatal on its
- * own since an already-current local ref still answers correctly.
+ * True when a commit after `mergeCommit` on `origin/<baseBranch>` is
+ * authoritatively associated with a PR merged into that configured base.
+ * Local ancestry bounds the candidate commits; GitHub association facts
+ * distinguish squash-merged PR commits from direct/release commits.
+ *
+ * A best-effort `git fetch origin <baseBranch>` runs first so the ordinary
+ * case (a commit merged after this checkout last fetched) resolves correctly;
+ * the fetch failing is not fatal on its own — an already-current local
+ * `origin/<baseBranch>` still answers correctly without it.
  *
  * Returns `true` (fail closed) when `mergeCommit` cannot be resolved against
- * `origin/<baseBranch>` at all (unfetched, shallow clone, garbage value): an
- * unverifiable discharge claim must not be trusted.
+ * `origin/<baseBranch>` at all — unfetched, a shallow clone missing the
+ * history, or a garbage value. An unverifiable discharge claim must not be
+ * trusted, so "cannot tell" collapses to the same outcome as "yes, something
+ * newer exists" rather than a separate "unknown" state.
  *
- * This repo squash-merges, so plain first-parent-agnostic `git log` ancestry
- * is correct — filtering on `--merges` would match nothing.
+ * This repo squash-merges, so filtering local history with `--merges` would
+ * miss the qualifying one-parent commits. A failed/malformed association
+ * lookup is unverifiable and therefore fails closed.
+ *
+ * @param {{mergeCommit: string, baseBranch: string, cwd: string, repo?: string, env?: NodeJS.ProcessEnv, resolveCommitPullRequests?: Function}} params
+ * @returns {boolean}
  */
-export function resolveHasNewerMergeSinceCheckpoint({ mergeCommit, baseBranch, cwd }) {
+export function resolveHasNewerMergeSinceCheckpoint({
+  mergeCommit,
+  baseBranch,
+  cwd,
+  repo = null,
+  env = process.env,
+  resolveCommitPullRequests = resolveCommitPullRequestsFromGitHub,
+}) {
   try {
     execFileSync("git", ["fetch", "origin", baseBranch], {
       cwd,
@@ -335,9 +424,21 @@ export function resolveHasNewerMergeSinceCheckpoint({ mergeCommit, baseBranch, c
   } catch {
     // Best-effort — an already-current local origin/<baseBranch> still works.
   }
-  let log;
   try {
-    log = execFileSync("git", ["log", `${mergeCommit}..origin/${baseBranch}`, "--oneline"], {
+    // `rev-list A..B` also succeeds when A and B belong to unrelated
+    // histories. Prove the checkpoint is actually on the configured base
+    // before using it as the lower bound; otherwise its discharge claim is
+    // unverifiable and must fail closed.
+    execFileSync("git", ["merge-base", "--is-ancestor", mergeCommit, `origin/${baseBranch}`], {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch {
+    return true;
+  }
+  let revisionList;
+  try {
+    revisionList = execFileSync("git", ["rev-list", "--reverse", `${mergeCommit}..origin/${baseBranch}`], {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
@@ -346,7 +447,48 @@ export function resolveHasNewerMergeSinceCheckpoint({ mergeCommit, baseBranch, c
     // mergeCommit is unresolvable locally — fail closed.
     return true;
   }
-  return log.trim().length > 0;
+  const candidateCommits = revisionList.trim().split("\n").filter(Boolean);
+  for (const commitSha of candidateCommits) {
+    let associations;
+    try {
+      associations = resolveCommitPullRequests({ repo, commitSha, cwd, env });
+      if (!Array.isArray(associations)) return true;
+    } catch {
+      return true;
+    }
+    for (const association of associations) {
+      if (!association || typeof association !== "object" || !("merged_at" in association)) {
+        return true;
+      }
+      const associationState = association.state;
+      if (!["OPEN", "CLOSED", "MERGED"].includes(associationState)) return true;
+      const mergedAt = association.merged_at;
+      if (mergedAt !== null && !isStrictGitHubRfc3339Timestamp(mergedAt)) {
+        return true;
+      }
+      const associationBase = association.base?.ref;
+      if (
+        typeof associationBase !== "string"
+        || associationBase.trim() !== associationBase
+        || associationBase.length === 0
+      ) {
+        return true;
+      }
+      const mergeCommitSha = association.merge_commit_sha;
+      if (associationState === "MERGED") {
+        if (
+          !mergedAt
+          || typeof mergeCommitSha !== "string"
+          || mergeCommitSha.trim() !== mergeCommitSha
+          || mergeCommitSha.length === 0
+        ) return true;
+        if (associationBase === baseBranch && mergeCommitSha === commitSha) return true;
+      } else if (mergedAt !== null || (mergeCommitSha !== null && mergeCommitSha !== undefined)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 function mapGhState(ghState) {
   const s = String(ghState).toUpperCase();
@@ -354,6 +496,25 @@ function mapGhState(ghState) {
   if (s === "CLOSED") return "closed";
   if (s === "MERGED") return "merged";
   throw new Error(`Unknown GitHub state: "${ghState}"`);
+}
+function buildNeedsReconcileStartupResult(bundle, nextAction) {
+  const reconciliationBundle = {
+    ...bundle,
+    bundleKind: "needs_reconcile",
+    routeKind: "needs_reconcile",
+    selectedGate: "fail_closed_reconcile",
+    selectedStrategy: null,
+    nextAction,
+  };
+  return {
+    ok: true,
+    bundleKind: "needs_reconcile",
+    selectedStrategy: "none",
+    requiredReads: STRATEGY_REQUIRED_READS.none,
+    nextAction,
+    canonicalStateSummary: summarizeCanonicalState(reconciliationBundle),
+    bundle: reconciliationBundle,
+  };
 }
 // Single-contributor ownership gate: resolved once per CLI run and memoized,
 // since both the --issue and --pr paths (and, within the --pr path, the
@@ -988,14 +1149,15 @@ export function buildResolveDevLoopStartupResult(input, {
   // Retrospective checkpoint gate (RETRO-ENFORCEMENT-CONFIG-GATED). The
   // durable checkpoint file, when present, is always honored. Cycle scoping
   // (a stale `complete`/`skipped` must not satisfy every later cycle
-  // forever) is derived entirely at read time, via a local git ancestry
-  // check — no write-time "arming" seam to miss, no GitHub query. Gated on
-  // workflow.requireRetrospective: the read and the inject share the same
-  // flag, so a repo that never opts in never pays for the extra git calls
-  // and is never blocked by a stale/missing/pending checkpoint.
-  // `durableCheckpoint` stays `undefined` when the file is genuinely absent
-  // (ENOENT) so resolveCheckpointStateFromArtifact can tell that apart from a
-  // file present but containing the JSON literal `null`.
+  // forever) is derived entirely at read time, via local git ancestry plus
+  // authoritative GitHub commit-to-PR association — no write-time "arming"
+  // seam to miss. Gated on workflow.requireRetrospective: the read and the
+  // inject share the same flag, so a repo that never opts in never pays for
+  // the extra git/GitHub calls and is never blocked by a
+  // stale/missing/pending checkpoint. `durableCheckpoint` stays `undefined`
+  // when the file is genuinely absent (ENOENT) so
+  // resolveCheckpointStateFromArtifact can tell that apart from a file
+  // present but containing the JSON literal `null`.
   //
   // The path is resolved from the repo root (the main checkout), not
   // cwd-relative: the checkpoint is gitignored and lives once per repo, not
@@ -1028,10 +1190,23 @@ export function buildResolveDevLoopStartupResult(input, {
       if (identity === null) {
         hasNewerMergeSinceCheckpoint = true;
       } else {
-        const baseBranch = resolveBaseBranch(config, { cwd: effectiveCwd });
-        hasNewerMergeSinceCheckpoint = resolveHasNewerMerge({
-          mergeCommit: identity.mergeCommit, baseBranch, cwd: effectiveCwd,
-        });
+        const checkpointRepoRoot = resolveCheckpointRepoRoot(effectiveCwd);
+        const currentRepo = detectRepoSlug(checkpointRepoRoot);
+        if (currentRepo === null || identity.repo !== currentRepo) {
+          // The local base history belongs to `currentRepo`; a checkpoint for
+          // any other repository cannot authorize GitHub association lookups
+          // or discharge a cycle here. Fail closed before inspecting ancestry.
+          hasNewerMergeSinceCheckpoint = true;
+        } else {
+          const baseBranch = resolveBaseBranch(config, { cwd: effectiveCwd });
+          hasNewerMergeSinceCheckpoint = resolveHasNewerMerge({
+            mergeCommit: identity.mergeCommit,
+            baseBranch,
+            cwd: effectiveCwd,
+            repo: currentRepo,
+            env: effectiveEnv,
+          });
+        }
       }
     }
     input = {
@@ -1080,50 +1255,21 @@ export function buildResolveDevLoopStartupResult(input, {
         const reason = mainPath !== null && isMainCheckout(effectiveCwd, mainPath)
           ? `Local implementation requires worktree isolation. Current directory is the main git checkout (${mainPath}). Run \`node scripts/loop/ensure-worktree.mjs --repo-root ${mainPath} --issue <n>${worktreeHintBaseFlag}\` to create+provision the worktree under tmp/worktrees/dev-loops/<kind>-<n>, then re-run from there.`
           : `Local implementation requires worktree isolation. Current directory is not under tmp/worktrees/. Run \`node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>${worktreeHintBaseFlag}\` to create+provision a worktree under tmp/worktrees/dev-loops/<kind>-<n>, then re-run from there.`;
-        return {
-          ok: true,
-          bundleKind: "needs_reconcile",
-          selectedStrategy: "none",
-          requiredReads: STRATEGY_REQUIRED_READS["none"],
-          nextAction: reason,
-          canonicalStateSummary: summarizeCanonicalState(bundle),
-          bundle,
-        };
+        return buildNeedsReconcileStartupResult(bundle, reason);
       }
       if (!isListedWorktree(effectiveCwd, allPaths)) {
         const reason = `Local implementation requires worktree isolation. Current directory is under tmp/worktrees/ but is not listed as a git worktree by \`git worktree list\`. Create a proper worktree with \`node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>${worktreeHintBaseFlag}\` and re-run.`;
-        return {
-          ok: true,
-          bundleKind: "needs_reconcile",
-          selectedStrategy: "none",
-          requiredReads: STRATEGY_REQUIRED_READS["none"],
-          nextAction: reason,
-          canonicalStateSummary: summarizeCanonicalState(bundle),
-          bundle,
-        };
+        return buildNeedsReconcileStartupResult(bundle, reason);
       }
       if (!isWorktreeCoreIsolated(effectiveCwd, allPaths)) {
         const reason = `Local implementation requires worktree isolation. node_modules/@dev-loops/core in this worktree resolves OUTSIDE its own packages/core (WORKTREE-DEPS-ISOLATED / WORKTREE-CREATE-PROVISION), so it would test the main checkout's core instead of this branch's. Re-provision the worktree with \`node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>${worktreeHintBaseFlag}\` and re-run from there.`;
-        return {
-          ok: true,
-          bundleKind: "needs_reconcile",
-          selectedStrategy: "none",
-          requiredReads: STRATEGY_REQUIRED_READS["none"],
-          nextAction: reason,
-          canonicalStateSummary: summarizeCanonicalState(bundle),
-          bundle,
-        };
+        return buildNeedsReconcileStartupResult(bundle, reason);
       }
     } catch {
-      return {
-        ok: true,
-        bundleKind: "needs_reconcile",
-        selectedStrategy: "none",
-        requiredReads: STRATEGY_REQUIRED_READS["none"],
-        nextAction: "Local implementation requires worktree isolation but git worktree list failed. Verify the repository and re-run from a worktree under tmp/worktrees/.",
-        canonicalStateSummary: summarizeCanonicalState(bundle),
+      return buildNeedsReconcileStartupResult(
         bundle,
-      };
+        "Local implementation requires worktree isolation but git worktree list failed. Verify the repository and re-run from a worktree under tmp/worktrees/.",
+      );
     }
   }
   return {
