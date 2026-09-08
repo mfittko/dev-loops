@@ -57,24 +57,14 @@ test("viewPr: throws when gh returns a non-object", async () => {
   await assert.rejects(() => viewPr({ repo: "o/n", pr: 88, fields: "state" }, { run }), /did not return a JSON object/);
 });
 
-test("runCli: --jq extracts mergeStateStatus", async () => {
+// Wiring: this command's parser + viewPr operation compose through the shared
+// runReadCommandCli shell to produce the `.pr.*` result shape. The generic shell
+// matrix (--silent, invalid-filter refusal, parse-vs-runtime errors) is covered
+// once in test/lib/run-read-command-cli.test.mjs (#2037).
+test("runCli: parser + viewPr wire through the shared shell (--jq extracts mergeStateStatus)", async () => {
   const { run } = stubGh(PR);
   const stdout = captureStream();
   const code = await runCli(["--repo", "o/n", "--pr", "88", "--jq", ".pr.mergeStateStatus"], { run, stdout });
   assert.equal(code, 0);
   assert.equal(stdout.get().trim(), "CLEAN");
-});
-
-test("runCli: --silent + --jq predicate maps to exit code only", async () => {
-  const { run } = stubGh(PR);
-  const stdout = captureStream();
-  const code = await runCli(["--repo", "o/n", "--pr", "88", "--jq", ".pr.isDraft", "--silent"], { run, stdout });
-  assert.equal(code, 0);
-  assert.equal(stdout.get(), "");
-});
-
-test("runCli: invalid --jq fails closed with exit 2", async () => {
-  const { run } = stubGh(PR);
-  const code = await runCli(["--repo", "o/n", "--pr", "88", "--jq", "bogus!!"], { run, stdout: captureStream(), stderr: captureStream() });
-  assert.equal(code, 2);
 });
