@@ -57,7 +57,10 @@ function isRuntimeSourceFile(p) {
 // (issue references after code on the same line) is not scanned; detecting it
 // safely means excluding string/URL slash contexts, and agent narration lands
 // in own-line comment blocks/JSDoc, so the escape marker + reviewer cover it.
-function isCommentLine(text, filePath) {
+// Exported so the size budget's comment-aware logic-LOC discount classifies a
+// changed line with the exact same fail-closed lexical rule this guard uses:
+// anything not confidently a comment stays non-comment (counted as logic).
+export function isCommentLine(text, filePath) {
   const t = text.trim();
   if (t.length === 0) return false;
   if (SHELL_RE.test(filePath)) return t.startsWith("#");
