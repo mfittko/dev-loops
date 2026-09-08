@@ -5,7 +5,7 @@
     "": {
       "name": "dev-loops",
       "dependencies": {
-        "@dev-loops/core": "^1.0.2-slim.0",
+        "@dev-loops/core": "^1.0.2-pre.0",
         "yaml": "^2.9.0",
         "zod": "^4.4.3",
       },
@@ -26,7 +26,7 @@
     },
     "packages/core": {
       "name": "@dev-loops/core",
-      "version": "1.0.2-slim.0",
+      "version": "1.0.2-pre.0",
       "bin": {
         "dev-loops-ensure-phase-files": "bin/ensure-phase-files.mjs",
         "dev-loops-log-bash-exit-1": "bin/log-bash-exit-1.mjs",
