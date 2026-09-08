@@ -4,6 +4,15 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
 import { main, parseCliArgs, renderItemsTable, runCli } from "../../scripts/projects/list-queue-items.mjs";
+import {
+  userPayload,
+  orgPayload,
+  noUserPayload,
+  statusField,
+  existingProject,
+  fieldsResponse as getFieldsResponse,
+  itemsByContentResponse as getItemsResponse,
+} from "./_fixtures.mjs";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -22,18 +31,7 @@ function mockRunChild(responses) {
 }
 
 // ── Fixtures ────────────────────────────────────────────────────────────
-
-function userPayload() {
-  return { data: { user: { id: "U_kgDOABC123" } } };
-}
-
-function orgPayload() {
-  return { data: { organization: { id: "O_kgDOXYZ789" } } };
-}
-
-function noUserPayload() {
-  return { data: { user: null } };
-}
+// Shared shapes come from ./_fixtures.mjs; suite-specific fixtures stay local.
 
 function noOrgPayload() {
   return { data: { organization: null } };
@@ -65,35 +63,9 @@ function listOrgProjectsResponse(projects) {
   };
 }
 
-function getFieldsResponse(fields) {
-  return {
-    data: { node: { fields: { nodes: fields, pageInfo: { hasNextPage: false } } } },
-  };
-}
+const STATUS_FIELD = statusField();
 
-function getItemsResponse(items) {
-  return {
-    data: { node: { items: { nodes: items, pageInfo: { hasNextPage: false, endCursor: null } } } },
-  };
-}
-
-const STATUS_FIELD = {
-  id: "PVTSSF_status",
-  name: "Status",
-  options: [
-    { id: "opt1", name: "Backlog" },
-    { id: "opt2", name: "Next Up" },
-    { id: "opt3", name: "In Progress" },
-    { id: "opt4", name: "Done" },
-  ],
-};
-
-const EXISTING_PROJECT = {
-  id: "PVT_proj1",
-  number: 1,
-  title: "Dev Loop Queue",
-  url: "https://github.com/users/mfittko/projects/1",
-};
+const EXISTING_PROJECT = existingProject();
 
 function makeItem(itemId, contentId, type, number, title, url, status) {
   const __typename = type === "PullRequest" ? "PullRequest" : "Issue";

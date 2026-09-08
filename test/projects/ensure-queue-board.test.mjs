@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { main, autoRepairColumns, resolveSettings, STANDARD_COLUMNS, STANDARD_COLUMN_NAMES } from "../../scripts/projects/ensure-queue-board.mjs";
+import { userPayload, orgPayload, noUserPayload, statusField, existingProject } from "./_fixtures.mjs";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -21,18 +22,10 @@ function mockRunChild(responses) {
 }
 
 // ── Fixtures ────────────────────────────────────────────────────────────
-
-function userPayload() {
-  return { data: { user: { id: "U_kgDOABC123" } } };
-}
-
-function orgPayload() {
-  return { data: { organization: { id: "O_kgDOXYZ789" } } };
-}
-
-function noUserPayload() {
-  return { data: { user: null } };
-}
+// userPayload/orgPayload/noUserPayload plus the statusField/existingProject
+// builders are shared from ./_fixtures.mjs. This suite passes realistic node
+// ids explicitly and keeps its own getFieldsResponse (its projection omits
+// pageInfo), so the create/repair path's shape stays visible here.
 
 function noOrgPayload() {
   return { data: { organization: null } };
@@ -111,23 +104,11 @@ function updateFieldResponse(options) {
   };
 }
 
-const STATUS_FIELD = {
-  id: "PVTSSF_lADO...",
-  name: "Status",
-  options: [
-    { id: "opt1", name: "Backlog" },
-    { id: "opt2", name: "Next Up" },
-    { id: "opt3", name: "In Progress" },
-    { id: "opt4", name: "Done" },
-  ],
-};
+// Realistic GraphQL node ids passed explicitly; option set/number/title/url are
+// the shared shape.
+const STATUS_FIELD = statusField("PVTSSF_lADO...");
 
-const EXISTING_PROJECT = {
-  id: "PVT_kwDO...",
-  number: 1,
-  title: "Dev Loop Queue",
-  url: "https://github.com/users/mfittko/projects/1",
-};
+const EXISTING_PROJECT = existingProject("PVT_kwDO...");
 
 // ── Tests ───────────────────────────────────────────────────────────────
 

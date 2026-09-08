@@ -1,6 +1,11 @@
 import { describe, it } from "bun:test";
 import assert from "node:assert/strict";
 import { main } from "../../scripts/projects/reorder-queue-item.mjs";
+import {
+  userPayload,
+  existingProject,
+  itemsByContentResponse as getItemsByContentResponse,
+} from "./_fixtures.mjs";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -37,10 +42,7 @@ function extractGraphqlInput(args) {
 }
 
 // ── Fixtures ────────────────────────────────────────────────────────────
-
-function userPayload() {
-  return { data: { user: { id: "U_kgDOABC123" } } };
-}
+// Shared shapes come from ./_fixtures.mjs; suite-specific fixtures stay local.
 
 function listUserProjectsResponse(projects) {
   return {
@@ -55,25 +57,7 @@ function listUserProjectsResponse(projects) {
   };
 }
 
-const EXISTING_PROJECT = {
-  id: "PVT_proj1",
-  number: 1,
-  title: "Dev Loop Queue",
-  url: "https://github.com/users/mfittko/projects/1",
-};
-
-function getItemsByContentResponse(items) {
-  return {
-    data: {
-      node: {
-        items: {
-          nodes: items,
-          pageInfo: { hasNextPage: false, endCursor: null },
-        },
-      },
-    },
-  };
-}
+const EXISTING_PROJECT = existingProject();
 
 function emptyItemsResponse() {
   return getItemsByContentResponse([]);

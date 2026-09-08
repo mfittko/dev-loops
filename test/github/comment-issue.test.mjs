@@ -144,13 +144,9 @@ test("runCli: invalid --jq filter fails closed with exit 2 BEFORE posting (no mu
   assert.deepEqual(calls, [], "the comment must never post when --jq is syntactically invalid");
 });
 
-test("runCli: --silent maps success to exit 0 with no stdout", async () => {
-  const { run } = stubGh([{ stdout: `${COMMENT_URL}\n` }]);
-  const stdout = captureStream();
-  const code = await runCli(["--repo", "o/n", "--issue", "7", "--body", "x", "--silent"], { run, stdout });
-  assert.equal(code, 0);
-  assert.equal(stdout.get(), "");
-});
+// Generic --silent success mapping is owned by emitResult (test/loop/jq-output.test.mjs);
+// this wrapper keeps its positive --jq wiring case and the distinct
+// invalid-filter-before-post guard above.
 
 test("runCli: gh failure returns exit 1", async () => {
   const { run } = stubGh([{ code: 1, stderr: "boom" }]);

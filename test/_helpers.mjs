@@ -192,6 +192,16 @@ export function makeGhStub(entries = [], { repeatLastOnOverflow = false } = {}) 
   return { run, calls };
 }
 
+// Shared JSON-response gh stub for read-command wrappers (view-issue/view-pr/
+// list-issues): a success code serializes `payload` to stdout; a non-zero code
+// emits empty stdout plus `stderr`, and the single entry repeats so a wrapper
+// that calls gh more than once still resolves. Wrappers whose setup differs
+// (a fixed non-JSON URL, a per-call stdout override, matcher entries) keep
+// their own explicit stub instead of this helper.
+export function makeJsonGhStub(payload, { code = 0, stderr = "" } = {}) {
+  return makeGhStub([{ code, stdout: code === 0 ? JSON.stringify(payload) : "", stderr }], { repeatLastOnOverflow: true });
+}
+
 // Shared fixture body: minimal issue-less PR-body-as-spec content (no linked
 // issue) that satisfies the refinement check, matching an ordinary sanctioned
 // draft PR. Tests exercising draft/ready or gate-posting logic downstream of

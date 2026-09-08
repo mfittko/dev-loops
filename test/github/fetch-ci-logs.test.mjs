@@ -117,25 +117,9 @@ test("runCli: --jq extracts a failing run's name", async () => {
   assert.equal(stdout.get().trim(), "ci");
 });
 
-test("runCli: invalid --jq filter fails closed with exit 2", async () => {
-  const { run } = stubGh([
-    { match: isPrView, resp: { stdout: JSON.stringify({ headRefOid: "abc" }) } },
-    { match: isRunList, resp: { stdout: JSON.stringify([]) } },
-  ]);
-  const code = await runCli(["--repo", "o/n", "--pr", "5", "--jq", "bad!!"], { run, stdout: captureStream(), stderr: captureStream() });
-  assert.equal(code, 2);
-});
-
-test("runCli: --silent maps success to exit 0 with no stdout", async () => {
-  const { run } = stubGh([
-    { match: isPrView, resp: { stdout: JSON.stringify({ headRefOid: "abc" }) } },
-    { match: isRunList, resp: { stdout: JSON.stringify([]) } },
-  ]);
-  const stdout = captureStream();
-  const code = await runCli(["--repo", "o/n", "--pr", "5", "--silent"], { run, stdout });
-  assert.equal(code, 0);
-  assert.equal(stdout.get(), "");
-});
+// Generic invalid-filter refusal and --silent success mapping are owned by
+// emitResult (test/loop/jq-output.test.mjs); this read wrapper keeps its
+// positive --jq wiring case and the distinct gh-failure exit path.
 
 test("runCli: gh failure returns exit 1", async () => {
   const { run } = stubGh([{ match: isPrView, resp: { code: 1, stderr: "nope" } }]);

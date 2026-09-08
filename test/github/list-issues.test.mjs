@@ -6,11 +6,7 @@ import {
   listIssues,
   runCli,
 } from "../../scripts/github/list-issues.mjs";
-import { captureStream, makeGhStub } from "../_helpers.mjs";
-
-function stubGh(payload, { code = 0, stderr = "" } = {}) {
-  return makeGhStub([{ code, stdout: code === 0 ? JSON.stringify(payload) : "", stderr }], { repeatLastOnOverflow: true });
-}
+import { captureStream, makeJsonGhStub as stubGh } from "../_helpers.mjs";
 
 const ISSUES = [
   { number: 10, title: "Fix bug", state: "OPEN", labels: [{ name: "bug" }, { name: "p1" }] },
