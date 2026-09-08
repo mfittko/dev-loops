@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseIssueNumber, resolveBodyOrFile, runChild as _runChild } from "../_cli-primitives.mjs";
 import { resolveSettings, applyDevloopsBoard } from "../projects/_resolve-project.mjs";
+import { loadDevLoopConfig, resolveBaseBranch } from "@dev-loops/core/config";
 import { main as addQueueItemMain } from "../projects/add-queue-item.mjs";
 import { loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
 import { detectLinkedIssuePr } from "./detect-linked-issue-pr.mjs";
@@ -11,6 +12,12 @@ Canonical PR-creation wrapper around \`gh pr create\`. Every PR opened through t
 tool is ALWAYS a draft and is self-assigned by default. Never call raw \`gh pr create\`.
 Behavior:
   - injects exactly one \`--draft\` when absent (draft is the only mode)
+  - defaults \`--base\` (when neither \`--base\`/\`--base=\` nor \`-B\` is given) to
+    \`resolveBaseBranch(config)\` so a repo that configures \`workflow.baseBranch\` in
+    \`.devloops\` targets that branch instead of \`gh\`'s repository-default fallback;
+    an unset \`workflow.baseBranch\` resolves to the auto-detected default branch
+    (unchanged targeting). An explicit \`--base\`/\`-B\` always wins and is forwarded
+    unchanged. Resolution never throws (a missing/malformed config auto-detects).
   - defaults \`--assignee @me\` when no assignee is given (self-assigned by default)
   - honors an explicit \`--assignee <login>\` / \`-a <login>\` when supplied (no default injected)
   - rejects \`--ready\` before invoking \`gh\`
@@ -67,6 +74,11 @@ const ISSUE_FLAG_PATTERN = /^--issue(?:=(.*))?$/u;
 const ALLOW_REPLACEMENT_FLAG_PATTERN = /^--allow-replacement-pr(?:=(.*))?$/u;
 // Both `--repo owner/name` and `--repo=owner/name` — gh accepts either form.
 const REPO_FLAG_PATTERN = /^--repo(?:$|=)/u;
+// An explicit base in any form `gh pr create` accepts: `--base <b>`,
+// `--base=<b>`, or the `-B` short flag. Any match suppresses the injected
+// resolveBaseBranch default so the caller value always wins (and no second
+// `--base` is added).
+const BASE_FLAG_PATTERN = /^(?:--base(?:$|=)|-B$)/u;
 const PR_URL_NUMBER_PATTERN = /\/pull\/(\d+)(?:\D|$)/u;
 const DRAFT_FLAG_PATTERN = /^--draft(?:=(.*))?$/iu;
 // Shared inline-boolean truthiness for --draft= and --lightweight= values.
@@ -199,7 +211,7 @@ export async function resolveLinkedPrGuard({ repo, issue, allowReplacementPr, ru
   return { refusal: `FACADE-LINKED-PR-SINGLE-ARTIFACT: issue #${issue} already has an open linked PR #${linked.prNumber} (${linked.prUrl}) — refusing to open a duplicate. Pass --allow-replacement-pr ${linked.prNumber} to record a deliberate replacement.` };
 }
 
-export function buildCreatePrArgs(argv) {
+export function buildCreatePrArgs(argv, { baseDefault = null } = {}) {
   const args = [...argv];
   if (args.includes("--help") || args.includes("-h")) {
     return {
@@ -214,16 +226,38 @@ export function buildCreatePrArgs(argv) {
   const lastDraftToken = draftTokens.length > 0 ? draftTokens.at(-1) : null;
   const lastDraftSuppliesDraft = lastDraftToken === "--draft" || (typeof lastDraftToken === "string" && TRUE_FLAG_VALUE_PATTERN.test(lastDraftToken.slice("--draft=".length)));
   const hasAssignee = args.some((token) => ASSIGNEE_FLAG_PATTERN.test(token));
+  // Inject the resolved base default only when the caller gave no explicit
+  // `--base`/`-B` — an explicit base always wins and is forwarded unchanged, so
+  // exactly one `--base` ever reaches gh. A null/empty baseDefault injects
+  // nothing (main only resolves one when base is absent; a caller passing base
+  // resolves none).
+  const hasBase = args.some((token) => BASE_FLAG_PATTERN.test(token));
+  const injectBase = !hasBase && typeof baseDefault === "string" && baseDefault.trim().length > 0;
   return {
     help: false,
     ghArgs: [
       "pr",
       "create",
       ...args,
+      ...(injectBase ? ["--base", baseDefault] : []),
       ...(hasAssignee ? [] : ["--assignee", DEFAULT_ASSIGNEE]),
       ...(lastDraftSuppliesDraft ? [] : ["--draft"]),
     ],
   };
+}
+
+// Resolve the base branch to inject when the caller gave no explicit
+// `--base`/`-B`: `workflow.baseBranch` from `.devloops` (normalized to a bare
+// name), else the auto-detected default branch. Never throws — a missing or
+// malformed config degrades to auto-detect via resolveBaseBranch.
+export async function resolveBaseDefault(cwd, { loadConfig = loadDevLoopConfig } = {}) {
+  let config = null;
+  try {
+    ({ config } = await loadConfig({ repoRoot: cwd }));
+  } catch {
+    config = null;
+  }
+  return resolveBaseBranch(config, { cwd });
 }
 // captureStdout tees gh's stdout to a buffer (still writing it straight through to
 // process.stdout, unbuffered) so the PR URL can be parsed once gh exits, without
@@ -317,7 +351,14 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     }
     forwardedArgv.push(token);
   }
-  const { help, ghArgs } = buildCreatePrArgs(forwardedArgv);
+  // When the caller gave no explicit --base/-B, resolve the default base from
+  // workflow.baseBranch (or the auto-detected default branch) so a configured
+  // non-default base is honored instead of gh's repository-default fallback.
+  const hasBase = forwardedArgv.some((token) => BASE_FLAG_PATTERN.test(token));
+  const baseDefault = hasBase
+    ? null
+    : await resolveBaseDefault(runtime.cwd ?? process.cwd(), runtime);
+  const { help, ghArgs } = buildCreatePrArgs(forwardedArgv, { baseDefault });
   if (help) {
     process.stdout.write(`${USAGE}\n`);
     return 0;

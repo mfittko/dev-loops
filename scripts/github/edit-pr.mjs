@@ -6,7 +6,7 @@ import { detectGrillEmbedHeading } from "@dev-loops/core/loop/issue-refinement-a
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
-const USAGE = `Usage: edit-pr.mjs --repo <owner/name> --pr <number> [--title <t>] [--body <b> | --body-file <path>] [--add-assignee <u>] [--remove-assignee <u>] [--milestone <m>]
+const USAGE = `Usage: edit-pr.mjs --repo <owner/name> --pr <number> [--title <t>] [--body <b> | --body-file <path>] [--add-assignee <u>] [--remove-assignee <u>] [--milestone <m>] [--base <branch>]
 Edit PR title/body/assignees/milestone. Thin wrapper over \`gh pr edit\` — use this
 instead of an agent-level raw \`gh pr edit\` so the loop's internal-tooling record
 stays clean (siblings: view-pr.mjs, comment-issue.mjs; #1057).
@@ -23,6 +23,10 @@ At least one edit:
                                 (--title/--body/--body-file reject empty or
                                 whitespace-only values; use --milestone "" only
                                 to clear the milestone)
+  --base <branch>               Retarget the PR's base branch (forwarded to
+                                \`gh pr edit --base\`); the sanctioned wrapper for
+                                base retarget (never a raw \`gh pr edit --base\`).
+                                Refuses an empty or whitespace-only value.
   --enforce-grill               Opt-in GRILL-SUBLOOP-NO-EMBED-SYNTHESIS (#1628):
                                 refuse a body that embeds grill
                                 transcript/synthesis/Q&A headings.
@@ -50,6 +54,7 @@ export function parseEditPrCliArgs(argv) {
       "add-assignee": { type: "string", multiple: true },
       "remove-assignee": { type: "string", multiple: true },
       milestone: { type: "string" },
+      base: { type: "string" },
       "enforce-grill": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -67,6 +72,7 @@ export function parseEditPrCliArgs(argv) {
     addAssignees: [],
     removeAssignees: [],
     milestone: undefined,
+    base: undefined,
     enforceGrill: false,
     jq: undefined,
     silent: false,
@@ -142,6 +148,16 @@ export function parseEditPrCliArgs(argv) {
       options.milestone = token.value;
       continue;
     }
+    if (token.name === "base") {
+      // Read the raw value (not requireTokenValue, which reports a bare/empty
+      // flag as "Missing value"): a missing, empty, or whitespace-only base is
+      // all one refusal — a base retarget must name a real branch.
+      if (typeof token.value !== "string" || token.value.trim().length === 0) {
+        throw parseError("--base must not be empty or whitespace-only");
+      }
+      options.base = token.value.trim();
+      continue;
+    }
     if (token.name === "enforce-grill") {
       options.enforceGrill = true;
       continue;
@@ -161,9 +177,10 @@ export function parseEditPrCliArgs(argv) {
     options.bodyFile !== undefined ||
     options.addAssignees.length > 0 ||
     options.removeAssignees.length > 0 ||
-    options.milestone !== undefined;
+    options.milestone !== undefined ||
+    options.base !== undefined;
   if (!hasEdit) {
-    throw parseError("Editing a PR requires at least one of --title/--body/--body-file/--add-assignee/--remove-assignee/--milestone");
+    throw parseError("Editing a PR requires at least one of --title/--body/--body-file/--add-assignee/--remove-assignee/--milestone/--base");
   }
   try {
     parseRepoSlug(options.repo);
@@ -215,6 +232,10 @@ async function buildEditArgs(options) {
   if (options.milestone !== undefined) {
     args.push("--milestone", options.milestone);
     edited.push("milestone");
+  }
+  if (options.base !== undefined) {
+    args.push("--base", options.base);
+    edited.push("base");
   }
   return { args, edited };
 }

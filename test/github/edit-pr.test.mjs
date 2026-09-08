@@ -182,6 +182,41 @@ test("parseEditPrCliArgs: --enforce-grill flag is wired", () => {
   assert.equal(opts.enforceGrill, true);
 });
 
+test("editPr: --base retargets the PR (gh pr edit ... --base <branch>) and reports base in the edited set (#2062)", async () => {
+  const { run, calls } = stubGh();
+  const result = await editPr(
+    { repo: "o/n", pr: 17, base: "1.0.2-slim", addAssignees: [], removeAssignees: [] },
+    { run },
+  );
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.edited, ["base"]);
+  assert.deepEqual(calls[0], ["pr", "edit", "17", "--repo", "o/n", "--base", "1.0.2-slim"]);
+});
+
+test("parseEditPrCliArgs: --base alone satisfies the at-least-one-edit requirement and parses the branch (#2062)", () => {
+  const out = parseEditPrCliArgs(["--repo", "o/n", "--pr", "1", "--base", "main"]);
+  assert.equal(out.base, "main");
+});
+
+test("parseEditPrCliArgs: --base refuses an empty or whitespace-only value (#2062)", () => {
+  assert.throws(() => parseEditPrCliArgs(["--repo", "o/n", "--pr", "1", "--base", ""]), /--base must not be empty or whitespace/);
+  assert.throws(() => parseEditPrCliArgs(["--repo", "o/n", "--pr", "1", "--base", "   "]), /--base must not be empty or whitespace/);
+});
+
+test("parseEditPrCliArgs: bare --base with no value is rejected (#2062)", () => {
+  assert.throws(() => parseEditPrCliArgs(["--repo", "o/n", "--pr", "1", "--base"]), /--base/);
+});
+
+test("editPr: --base combines with other edits and appears once in the forwarded argv (#2062)", async () => {
+  const { run, calls } = stubGh();
+  const result = await editPr(
+    { repo: "o/n", pr: 5, title: "T", base: "main", addAssignees: [], removeAssignees: [] },
+    { run },
+  );
+  assert.deepEqual(result.edited, ["title", "base"]);
+  assert.deepEqual(calls[0], ["pr", "edit", "5", "--repo", "o/n", "--title", "T", "--base", "main"]);
+});
+
 test("editPr: --enforce-grill with --body-file - forwards stdin inline (no fd 0 double-read), not --body-file -", () => {
   // Under --enforce-grill the grill check reads std IN first; the fix forwards
   // the resolved text inline so the gh call never re-reads the exhausted fd 0.

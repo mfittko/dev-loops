@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **`create-pr.mjs` defaults `--base` to `resolveBaseBranch(config)` (issue [2062](https://github.com/mfittko/dev-loops/issues/2062)).** When the caller gives no explicit `--base`/`-B`, the wrapper now injects `--base <resolveBaseBranch(config, { cwd })>` so a repo that configures `workflow.baseBranch` in `.devloops` opens its PR against that branch instead of `gh`'s repository-default fallback — closing the silent wrong-base gap where a worktree cut from a non-default base still opened its PR against `main`. An unset `workflow.baseBranch` resolves to the auto-detected default branch (unchanged targeting), a prefixed configured value normalizes to a bare branch name, and resolution never throws (a missing/malformed config auto-detects). An explicit `--base`/`-B` always wins and is forwarded unchanged (exactly one `--base`). `edit-pr.mjs` gains a `--base <branch>` option forwarded to `gh pr edit --base` (reported in the `edited` set), giving base retarget a sanctioned wrapper; an empty or whitespace-only value is refused. `resolveBaseBranch` and the gate/merge base-resolution are unchanged. Proven by `test/github/create-pr.test.mjs` and `test/github/edit-pr.test.mjs`.
 - **`bump-version.mjs` stamps the CHANGELOG as a sixth release surface.** The
   sanctioned bump now rewrites the `## Unreleased` heading to `## <version>`
   (leaving its entries intact) so `extract-changelog-section.mjs` finds the

@@ -5,10 +5,18 @@ import path from "node:path";
 import { test } from "bun:test";
 import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 
-import { buildCreatePrArgs, detectClosingKeyword, extractClosingIssueNumber } from "../../scripts/github/create-pr.mjs";
+import { buildCreatePrArgs, detectClosingKeyword, extractClosingIssueNumber, resolveBaseDefault } from "../../scripts/github/create-pr.mjs";
+import { resolveBaseBranch } from "@dev-loops/core/config";
 
 const scriptPath = path.resolve("scripts/github/create-pr.mjs");
 const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, options);
+
+// #2062: create-pr now injects `--base <resolveBaseBranch(config)>` whenever the
+// caller gives no explicit --base/-B. For CLI runs that omit --base and do not
+// set a cwd, the child inherits this process's cwd, so the injected base is what
+// resolveBaseDefault resolves here — compute it once and assert against it
+// instead of hard-coding a branch name (robust across checkouts).
+const INHERITED_BASE_DEFAULT = await resolveBaseDefault(process.cwd());
 
 async function writeGhStub(tempDir, entries, options = {}) {
   return writeGhStubHelper(tempDir, entries, {
@@ -499,6 +507,174 @@ test("buildCreatePrArgs treats --draft=true as already supplied", () => {
   );
 });
 
+// --- #2062: base default from workflow.baseBranch ---
+
+test("buildCreatePrArgs injects --base <baseDefault> when the caller gives no explicit base (#2062)", () => {
+  assert.deepEqual(
+    buildCreatePrArgs(["--repo", "owner/repo", "--assignee", "@me"], { baseDefault: "release-x" }),
+    {
+      help: false,
+      ghArgs: ["pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--base", "release-x", "--draft"],
+    },
+  );
+});
+
+test("buildCreatePrArgs honors an explicit --base and does not inject a second one (#2062)", () => {
+  const { ghArgs } = buildCreatePrArgs(["--repo", "owner/repo", "--base", "caller-branch", "--assignee", "@me"], { baseDefault: "release-x" });
+  // The caller value is preserved and --base appears exactly once.
+  assert.equal(ghArgs.filter((t) => t === "--base").length, 1);
+  assert.ok(ghArgs.includes("caller-branch"));
+  assert.ok(!ghArgs.includes("release-x"));
+});
+
+test("buildCreatePrArgs honors an explicit --base=<b> inline form and does not inject a default (#2062)", () => {
+  const { ghArgs } = buildCreatePrArgs(["--repo", "owner/repo", "--base=caller-branch", "--assignee", "@me"], { baseDefault: "release-x" });
+  assert.equal(ghArgs.filter((t) => t.startsWith("--base")).length, 1);
+  assert.ok(ghArgs.includes("--base=caller-branch"));
+  assert.ok(!ghArgs.includes("release-x"));
+});
+
+test("buildCreatePrArgs honors the -B short base flag and does not inject a default (#2062)", () => {
+  const { ghArgs } = buildCreatePrArgs(["--repo", "owner/repo", "-B", "caller-branch", "--assignee", "@me"], { baseDefault: "release-x" });
+  assert.ok(!ghArgs.includes("--base"));
+  assert.ok(!ghArgs.includes("release-x"));
+  assert.ok(ghArgs.includes("-B"));
+});
+
+test("buildCreatePrArgs injects nothing when baseDefault is null / empty / whitespace (#2062)", () => {
+  for (const baseDefault of [null, undefined, "", "   "]) {
+    const { ghArgs } = buildCreatePrArgs(["--repo", "owner/repo", "--assignee", "@me"], { baseDefault });
+    assert.ok(!ghArgs.includes("--base"), `no --base for baseDefault=${JSON.stringify(baseDefault)}`);
+  }
+});
+
+async function writeDevloops(dir, yaml) {
+  await writeFile(path.join(dir, ".devloops"), yaml, "utf8");
+}
+
+test("create-pr injects the configured workflow.baseBranch when --base is omitted, never defaulting to main (#2062)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-base-configured-"));
+  try {
+    await writeDevloops(tempDir, "version: 1\nworkflow:\n  baseBranch: release-x\n");
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: "https://github.com/owner/repo/pull/1\n" },
+    ]);
+    // No --issue and no closing keyword -> the linked-PR probe never runs, so
+    // the only gh call is the create itself.
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--head", "feature",
+      "--title", "Add feature",
+      "--body", "no closing keyword here",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    const ghCalls = await readGhCalls(ghLogPath);
+    assert.equal(ghCalls.length, 1);
+    assert.deepEqual(ghCalls[0].slice(ghCalls[0].indexOf("--base"), ghCalls[0].indexOf("--base") + 2), ["--base", "release-x"]);
+    // The PR is NOT opened against the auto-detected default (main).
+    assert.ok(!ghCalls[0].includes("main"));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr with an explicit --base is forwarded unchanged and appears exactly once even with a configured baseBranch (#2062)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-base-explicit-"));
+  try {
+    await writeDevloops(tempDir, "version: 1\nworkflow:\n  baseBranch: release-x\n");
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: "https://github.com/owner/repo/pull/1\n" },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--base", "caller-branch",
+      "--head", "feature",
+      "--title", "Add feature",
+      "--body", "no closing keyword here",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    const ghCall = (await readGhCalls(ghLogPath))[0];
+    assert.equal(ghCall.filter((t) => t === "--base").length, 1);
+    assert.ok(ghCall.includes("caller-branch"));
+    assert.ok(!ghCall.includes("release-x"));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr with no configured baseBranch defaults to the resolveBaseBranch auto-detect fallback (#2062)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-base-unset-"));
+  try {
+    await writeDevloops(tempDir, "version: 1\n");
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: "https://github.com/owner/repo/pull/1\n" },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--head", "feature",
+      "--title", "Add feature",
+      "--body", "no closing keyword here",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    const expected = await resolveBaseDefault(tempDir);
+    assert.ok(expected.length > 0);
+    const ghCall = (await readGhCalls(ghLogPath))[0];
+    const baseIdx = ghCall.indexOf("--base");
+    assert.notEqual(baseIdx, -1);
+    assert.equal(ghCall[baseIdx + 1], expected);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr normalizes a prefixed configured baseBranch to a bare branch name (#2062)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-base-prefixed-"));
+  try {
+    await writeDevloops(tempDir, "version: 1\nworkflow:\n  baseBranch: origin/release-x\n");
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: "https://github.com/owner/repo/pull/1\n" },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--head", "feature",
+      "--title", "Add feature",
+      "--body", "no closing keyword here",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    const ghCall = (await readGhCalls(ghLogPath))[0];
+    const baseIdx = ghCall.indexOf("--base");
+    assert.equal(ghCall[baseIdx + 1], "release-x");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("resolveBaseDefault resolves a bare branch without throwing for a missing or malformed config (#2062)", async () => {
+  // Missing config (bare temp dir) -> auto-detect fallback, non-empty bare name.
+  const missingDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-base-missing-"));
+  // Malformed .devloops -> loader records errors, resolveBaseDefault swallows and
+  // still returns a bare non-empty branch (never throws).
+  const malformedDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-base-malformed-"));
+  try {
+    await writeDevloops(malformedDir, "version: 1\nworkflow:\n  baseBranch: [not, a, string]\n:::garbage");
+    const missing = await resolveBaseDefault(missingDir);
+    const malformed = await resolveBaseDefault(malformedDir);
+    assert.equal(typeof missing, "string");
+    assert.ok(missing.length > 0);
+    assert.equal(typeof malformed, "string");
+    assert.ok(malformed.length > 0);
+    // resolveBaseBranch normalizes prefixes; a bare resolved value never carries origin/.
+    assert.ok(!malformed.startsWith("origin/"));
+  } finally {
+    await rm(missingDir, { recursive: true, force: true });
+    await rm(malformedDir, { recursive: true, force: true });
+  }
+});
+
 test("create-pr --help short-circuits before --issue validation (#1626)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-help-shortcircuit-"));
   try {
@@ -635,7 +811,7 @@ test("create-pr preserves an existing --draft without adding another copy", asyn
     assert.equal(result.stderr, "");
     assert.equal(result.stdout, "https://github.com/owner/repo/pull/17\n");
     assert.deepEqual(await readGhCalls(ghLogPath), [[
-      "pr", "create", "--draft", "--repo", "owner/repo", "--assignee", "@me",
+      "pr", "create", "--draft", "--repo", "owner/repo", "--assignee", "@me", "--base", INHERITED_BASE_DEFAULT,
     ]]);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -658,7 +834,7 @@ test("create-pr appends --draft after --draft=false so draft-first still wins", 
     assert.equal(result.stderr, "");
     assert.equal(result.stdout, "https://github.com/owner/repo/pull/17\n");
     assert.deepEqual(await readGhCalls(ghLogPath), [[
-      "pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--draft=false", "--draft",
+      "pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--draft=false", "--base", INHERITED_BASE_DEFAULT, "--draft",
     ]]);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -681,7 +857,7 @@ test("create-pr re-appends --draft when a later token disables it", async () => 
     assert.equal(result.stderr, "");
     assert.equal(result.stdout, "https://github.com/owner/repo/pull/17\n");
     assert.deepEqual(await readGhCalls(ghLogPath), [[
-      "pr", "create", "--draft", "--repo", "owner/repo", "--assignee", "@me", "--draft=false", "--draft",
+      "pr", "create", "--draft", "--repo", "owner/repo", "--assignee", "@me", "--draft=false", "--base", INHERITED_BASE_DEFAULT, "--draft",
     ]]);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -704,7 +880,7 @@ test("create-pr treats --draft=true as already supplied and avoids a duplicate",
     assert.equal(result.stderr, "");
     assert.equal(result.stdout, "https://github.com/owner/repo/pull/17\n");
     assert.deepEqual(await readGhCalls(ghLogPath), [[
-      "pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--draft=true",
+      "pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--draft=true", "--base", INHERITED_BASE_DEFAULT,
     ]]);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -748,7 +924,7 @@ test("create-pr preserves gh stdout, stderr, and exit code on failure", async ()
     assert.equal(result.stdout, "partial gh stdout\n");
     assert.equal(result.stderr, "gh create failed\n");
     assert.deepEqual(await readGhCalls(ghLogPath), [[
-      "pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--draft",
+      "pr", "create", "--repo", "owner/repo", "--assignee", "@me", "--base", INHERITED_BASE_DEFAULT, "--draft",
     ]]);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
