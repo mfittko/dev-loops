@@ -1,40 +1,26 @@
 /**
- * spec-authority.mjs — the canonical shared contract surface for IMMUTABLE SPEC
- * AUTHORITY across the review / judge / fixer / gate / re-entry pipeline.
+ * spec-authority.mjs — canonical shared contract for IMMUTABLE SPEC AUTHORITY
+ * across the review / judge / fixer / gate / re-entry pipeline. Pure and
+ * side-effect free; persistence is the caller's job.
  *
- * This module is PURE and side-effect free. It owns, in one place (so no harness
- * prompt has to re-state normative rules that could drift):
- *
- *   1. The two INDEPENDENT revision identities every decision must pin:
- *      - `specDigest`     — a deterministic digest of the normalized canonical
- *        tracker AC / DoD / Non-goals. It identifies what the work is REQUIRED
- *        and FORBIDDEN to do. It is NEVER derived from a head SHA.
- *      - reviewed implementation revision — `headSha` plus a `contentDigest`.
- *        It identifies what the reviewer actually evaluated. A new head/content
- *        digest NEVER masquerades as a spec change.
- *
- *   2. The four named, machine-readable judge disposition outcomes. For every
- *      finding the judge evaluates the finding AND each proposed remediation
- *      against the COMPLETE spec (not one supportive criterion) and selects
- *      exactly one outcome.
- *
- *   3. Autonomous vs last-resort escalation: only a `spec_cannot_decide` outcome
- *      routes to a human-spec-decision state. A finding/remediation conflict
- *      resolves autonomously (reject the finding, or reject the remedy and route
- *      to a compliant alternative).
- *
- *   4. Human-only spec change: a material spec change/reinterpretation produces a
- *      NEW `specDigest`; every approval/disposition/gate result derived from the
- *      prior digest is stale and must be re-established.
- *
- *   5. Criterion-scoped invalidation: a fixer push stales only the approvals for
- *      the criteria whose covered content it changed; unaffected criteria carry
- *      forward ONLY with positive deterministic proof that both their governing
- *      spec text and their covered surface are unchanged. Unknown impact fails
- *      closed to fresh review.
- *
- * Persistence is the caller's job; this module validates and decides, it never
- * reads or writes files.
+ * Owns, in one place so no harness prompt re-states rules that could drift:
+ *  1. Two INDEPENDENT revision identities every decision must pin: `specDigest`
+ *     (what the work is REQUIRED/FORBIDDEN to do — never derived from a head
+ *     SHA) and the reviewed revision (`headSha` + `contentDigest`, what was
+ *     actually evaluated — never masquerades as a spec change).
+ *  2. The four named judge disposition outcomes; the judge evaluates every
+ *     finding AND its proposed remediation against the COMPLETE spec (not one
+ *     supportive criterion) and selects exactly one.
+ *  3. Autonomous vs last-resort escalation: only `spec_cannot_decide` routes to
+ *     a human-spec-decision state; a finding/remediation conflict resolves
+ *     autonomously.
+ *  4. Human-only spec change: a material spec change produces a NEW
+ *     `specDigest`, staling every prior-derived approval/disposition/gate
+ *     result.
+ *  5. Criterion-scoped invalidation: a fixer push stales only the approvals for
+ *     criteria whose covered content it changed; an unaffected criterion
+ *     carries forward only with positive proof both its spec text and covered
+ *     surface are unchanged — unknown impact fails closed.
  */
 
 import { sha256Hex } from "./review-dispatch-plan.mjs";
@@ -271,13 +257,11 @@ export function buildRevisionIdentity({ spec, specDigest, headSha, content, cont
   if (resolvedSpecDigest === resolvedContentDigest) {
     throw new Error("SPEC-AUTHORITY-REVISION-IDENTITIES: specDigest and contentDigest must be distinct identities (fail closed)");
   }
-  // The domain separator in computeSpecDigest is the structural guarantee that a
-  // specDigest is never derivable from a head SHA. This is the defensive tripwire
-  // for an explicitly-SUPPLIED digest: reject when the digest's hex body equals or
-  // embeds the head SHA (any length), not only the 64-hex exact case — the
-  // exact-equality-only form was a no-op for a normal 40-hex Git SHA. The
-  // false-positive probability of a real spec digest incidentally embedding the
-  // head SHA is negligible, and the fail-closed direction is safe.
+  // Defensive tripwire for an explicitly-SUPPLIED digest: the domain separator
+  // in computeSpecDigest already guarantees specDigest is never DERIVED from a
+  // headSha, but reject here too when the digest's hex body equals or embeds
+  // the head SHA (any length) — fail-closed, since a real spec digest
+  // incidentally embedding a head SHA is negligible.
   if (resolvedSpecDigest.slice("sha256:".length).includes(sha)) {
     throw new Error("SPEC-AUTHORITY-REVISION-IDENTITIES: specDigest must not be derived from or embed headSha (fail closed)");
   }
@@ -704,30 +688,16 @@ export function resolveAffectedCriteria({ changedPaths, criterionCoverage } = {}
  * raw (un-normalized) lists; pass the result to {@link computeSpecDigest} /
  * {@link normalizeSpec}.
  *
- * ponytail (#2016 root cause fix): the AC/DoD source is the authoritative
- * AC→DoD mapping MATRIX (`detectAcDodMatrix`, reused byte-identical from
- * `issue-refinement-artifact.mjs` — no second matrix parser) when the body
- * carries one that parses as valid; the list-form AC/DoD checklists
- * (`extractChecklistItems`) are a REDUNDANT presentation projection of that
- * same matrix (`derivePrChecklistsFromIssueMatrix` derives the PR-side
- * checklist from it) and are read only as the fail-closed fallback for older
- * issue bodies that carry no matrix at all. This is the fix for the reported
- * bug: adding/removing/re-heading a checklist alias that projects an
- * UNCHANGED matrix no longer touches `specDigest`, because the checklist is
- * no longer part of the hashed input once a valid matrix exists. Any edit
- * that changes the matrix itself — a criterion's text, its completion-
- * evidence cell, or the row set (add/remove) — changes `matrix.rows` and
- * therefore still changes the digest (fail-closed: no genuine spec change is
- * exempted). Non-goals are unaffected by this change: they were never part of
- * the redundant-checklist problem (the matrix does not carry Non-goals), so
- * they stay sourced from the `## Non-goals` section exactly as before.
- *
- * Fail-closed fallback: when `detectAcDodMatrix` reports `found: false` (no
- * matrix at all) or `valid: false` (empty/malformed/identifier-only table —
- * i.e. it cannot be positively parsed as a real semantic mapping), this falls
- * back to the PRE-#2016 behavior of hashing the extracted checklist text
- * verbatim. A body this function cannot prove carries an equivalent matrix
- * must never silently narrow what gets digested.
+ * The AC/DoD source is the authoritative AC→DoD mapping MATRIX
+ * (`detectAcDodMatrix`, reused byte-identical from
+ * `issue-refinement-artifact.mjs`) when the body carries one that parses as
+ * valid; the list-form checklists (`extractChecklistItems`) are a redundant
+ * presentation projection of that same matrix and are read only as the
+ * fail-closed fallback for older issue bodies with no matrix at all (#2016).
+ * A checklist-only edit that projects an unchanged matrix therefore never
+ * touches `specDigest`; any edit that changes the matrix itself still does.
+ * Non-goals always come from the `## Non-goals` section — the matrix does not
+ * carry them.
  *
  * @param {string} body — the tracker issue markdown body
  * @returns {{ acceptanceCriteria: string[], definitionOfDone: string[], nonGoals: string[] }}

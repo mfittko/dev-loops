@@ -178,16 +178,15 @@ const GIT_GLOBAL_OPTION_RUN =
   "(?:(?:-C|-c)\\s+\\S+\\s+|--(?:git-dir|work-tree)=\\S+\\s+|--?[A-Za-z][\\w-]*\\s+)*";
 
 /**
- * Whether `command` contains a `git stash` invocation (any subcommand: bare, `push`, `pop`,
- * `apply`, `save`, `list`, ...) in ANY shell segment — including behind the same env-assignment /
- * `command`/`env`/`exec` wrapper / binary-path prefix (`GIT_DIR=.git git stash`, `command git
- * stash`, `/usr/bin/git stash`) and git global options between `git` and `stash` (`git -C /tmp
- * stash`, `git -c name=value stash pop`) that the sibling `gh` classifiers in this file already
- * tolerate. Anchored per-segment, so `git stashed`, `git commit -m "git stash"`, or a path literal
- * containing "git stash" never match. `refs/stash` is a single ref shared by every worktree over
- * this repo's one `.git` directory, so a stash from one worktree can pop into another's — the
- * PreToolUse gate blocks it outright on the target repo (see
- * `skills/docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout`).
+ * Whether `command` contains a `git stash` invocation (any subcommand: bare,
+ * `push`, `pop`, `apply`, `save`, `list`, ...) in ANY shell segment —
+ * including behind an env-assignment/wrapper/path prefix and git global
+ * options between `git` and `stash` (mirrors the `gh` classifiers' tolerance
+ * in this file). Anchored per-segment, so `git stashed` or a path literal
+ * containing "git stash" never match. `refs/stash` is shared by every
+ * worktree over this repo's one `.git` directory, so a stash from one
+ * worktree can pop into another's — the PreToolUse gate blocks it outright
+ * (see `skills/docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout`).
  * @param {string} command @returns {boolean}
  */
 export function commandContainsGitStash(command) {
@@ -506,14 +505,13 @@ export function extractRepoFlagFromGhPrMerge(command) {
 // call was invisible to the gate).
 // ---------------------------------------------------------------------------
 
-/** gh api value-taking flags (short forms). Each consumes the following token. Lowercase (compared
- * against token.toLowerCase()) — covers every value-taking short flag gh api accepts so a flag
- * placed BEFORE the endpoint skips its value and the real endpoint is still read (#1622):
- * -X/--method, -m/--method, -f/--field, -F/--raw-field (both case-fold to -f), -q/--jq, -p/--preview,
- * -t/--template, -r/--repo. `-h` (help) is intentionally EXCLUDED: it is a boolean help flag that
- * consumes no value, and case-folding it together with `-H` (header) made a mid-command `-h`
- * swallow the real endpoint and bypass the write-path deny (#1622). `-H` is matched as an exact
- * token in the scanner so it stays a value-taking flag despite the case-fold. */
+/** gh api value-taking flags (short forms); each consumes the following token. Lowercase-compared,
+ * covering every value-taking short flag gh api accepts so a flag placed BEFORE the endpoint skips
+ * its value and the real endpoint is still read: -X/--method, -m/--method, -f/--field, -F/--raw-field
+ * (both case-fold to -f), -q/--jq, -p/--preview, -t/--template, -r/--repo. `-h` (help) is EXCLUDED —
+ * it takes no value, and folding it with `-H` (header) would let a mid-command `-h` swallow the real
+ * endpoint and bypass the write-path deny (#1622). `-H` stays an exact-token value-taking flag
+ * despite the case-fold. */
 const GH_API_VALUE_FLAGS = new Set(["-x", "-m", "-f", "-r", "-q", "-p", "-t"]);
 /** gh api value-taking flags (long forms). Each consumes the following token. */
 const GH_API_VALUE_LONG_FLAGS = new Set([
@@ -680,14 +678,10 @@ export function commandContainsCopilotRequestBypass(command) {
  */
 export function commandContainsCopilotSummonComment(command) {
   if (!findGhSubcmdVerbSegment(command, "pr", "comment")) return false;
-  // A bare summon is `/copilot` or `/copilot re-review` on its own (optionally quoted) — never a
-  // prose mention like `see /copilot for more` / `see /copilot docs`. A bare `/copilot` must run to
-  // the end of the (quoted) body; the explicit `re-review` form allows trailing modifiers
-  // (`/copilot re-review now`) so appending a word cannot defeat the summon deny (#1622).
-  // A summon is `/copilot`/`/copilot re-review` at the START of the quoted body — anchored on the
-  // opening quote so a trailing prose mention (`--body "see /copilot"` / `"thanks /copilot"`) is
-  // NOT misread as a bare summon, and an in-prose `/copilot re-review` (`"see ... re-review in
-  // docs"`) is likewise not a summon. Only `gh pr comment` segments reach here (guard above).
+  // A summon is `/copilot`/`/copilot re-review` anchored at the START of the quoted body — a
+  // trailing prose mention (`--body "see /copilot"`) or in-prose `/copilot re-review` never
+  // matches. The `re-review` form allows trailing modifiers (`/copilot re-review now`) so
+  // appending a word cannot defeat the deny (#1622). Only `gh pr comment` segments reach here.
   return /(["'])\s*\/copilot(?:\s+re-review\b(?:\s+[^\s"']+)*|\s*(?:["']|$))/i.test(command);
 }
 
@@ -700,17 +694,10 @@ export function commandContainsCopilotSummonComment(command) {
  */
 export function commandContainsDetachedWaitTool(command) {
   const whole = command.trim();
-  // while/until/seq polling loop with both a sleep and a gh or loop-state call. The loop body is
-  // `;`-delimited, so this is checked against the whole command (a per-segment split would
-  // separate the `while` head from the `sleep`/`gh` body calls and miss the pattern).
-  // A polling loop is detected wherever the `while`/`until`/`seq` head appears (a leading expression
-  // like `gh pr view 1 && while ...` must not silence the deny) as long as the body carries both a
-  // `sleep` and a gh/loop-state call. `gh` must be a standalone token (followed by whitespace/end) —
-  // a bare mention of `gh` inside another word (`grep gh-notes`) is not a GitHub call.
-  // while/until/for loop heads (a bare `seq` sequence generator is not a loop head on its own —
-  // `seq | while read` is caught by the `while` head), with `sleep` and a gh/loop-state *call*.
-  // loop-state must sit at a command-head position (`; lo`, `&& lo`, start), not be a substring of
-  // a grep/echo target (no false-deny on `grep loop-state x`).
+  // Checked on the WHOLE command (not per-segment): the `while`/`until`/`for` loop body is
+  // `;`-delimited, so a per-segment split would separate the loop head from its `sleep`/`gh`
+  // body calls and miss the pattern. `gh` must be a standalone token (not `grep gh-notes`), and
+  // `loop-state` must sit at a command-head position (not a substring inside `grep loop-state x`).
   if (/(?:while|until|for)\b/i.test(whole) && /\bsleep\b/.test(whole) && /\bgh(?=\s|$)|(?:^|[;&|(])\s*loop-state(?=\s|$)/.test(whole)) {
     return true;
   }
@@ -731,11 +718,9 @@ function interpreterRegex(bin) {
 
 /**
  * OPS-NO-INLINE-INTERPRETER: an inline interpreter — `node -e`/`--eval`/`-p`, `python3 -c`, or a
- * heredoc fed to node/python (`node - <<EOF`, `python3 - <<EOF`). Ported from the long-orphaned
- * inline-interpreter classifier in the retrospective-tooling check (zero production callers). Sanctioned
- * output parsing uses `--jq`/`--silent`, never an inline interpreter. Actor-independent: the rule bars
- * "Coordinator and agent flows" (both actors). Script-path invocations (running a `.mjs` file,
- * `python3 script.py`) never match.
+ * heredoc fed to node/python (`node - <<EOF`, `python3 - <<EOF`). Sanctioned output parsing uses
+ * `--jq`/`--silent`, never an inline interpreter. Actor-independent (bars both coordinator and
+ * agent flows). Script-path invocations (running a `.mjs` file, `python3 script.py`) never match.
  * @param {string} command @returns {boolean}
  */
 export function commandContainsInlineInterpreter(command) {

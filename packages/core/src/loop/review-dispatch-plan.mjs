@@ -1,39 +1,13 @@
 /**
- * review-dispatch-plan.mjs — cache-aware review dispatch plan + request-prefix
- * fingerprinting + stable/volatile request separation (issue #1468 slices 1-2).
+ * review-dispatch-plan.mjs — cache-aware review dispatch: harness capability
+ * model, request-prefix fingerprinting, stable/volatile request separation,
+ * and the deterministic per-gate-round dispatch-plan builder (#1468).
  *
- * This module is the mechanically-checkable foundation for the cache-efficient
- * review dispatch design (Section A/B/C/D of the #1468 spec). It owns:
- *
- *  1. Harness capability model — explicit representation of what a harness can
- *     observe/control about provider prompt caching
- *     (breakpointControl / barrierSignal / cacheTtlControl / usageTelemetry).
- *     Opaque capabilities are represented as such and are NEVER described as
- *     verified cache hits.
- *  2. Request-prefix fingerprinting — a deterministic sha256 over every
- *     cache-relevant value the dev-loops layer observes or controls (concrete
- *     model, tool definitions/order, system/project/agent instructions,
- *     thinking/tool-choice settings, content-block boundaries, shared artifact
- *     bytes, and breakpoint/TTL intent). Values owned opaquely by a harness are
- *     represented as a placeholder, never assumed identical.
- *  3. Stable/volatile request separation — physically separates stable handoff
- *     content from volatile `gateState` at the request/artifact boundary, so a
- *     provider-visible cache boundary sits after the stable materialized
- *     briefing block and before the late volatile tail + angle suffix.
- *  4. Dispatch-plan builder — one deterministic per-gate-round artifact that
- *     records the complete cache-relevant request shape without duplicating
- *     briefing content (Section A). `buildAngleRequestGroups` partitions a
- *     caller's angle -> concrete-model resolutions into that plan's
- *     `requestGroups` shape, bucketing angles with no override into an
- *     explicit "inherit" key rather than merging them into a concrete group.
- *  5. Primer-form default — deterministic default by harness capability
- *     (Section C/D): first-output-observable harnesses may let a lead reviewer
- *     prime; completion-only harnesses default to a short dedicated primer
- *     unless an adequate TTL is explicit; multiple concrete models partition
- *     into one primer group per model/request-prefix.
- *
- * This module is pure and offline: no GitHub, no harness, no clock. All runtime
- * execution adapters consume it; it never executes a reviewer itself.
+ * Pure and offline: no GitHub, no harness, no clock; runtime execution
+ * adapters consume it, it never executes a reviewer itself. A capability a
+ * harness owns opaquely (breakpoints/TTL/telemetry it cannot observe) is
+ * always represented as opaque/unavailable rather than assumed identical —
+ * this module never claims a verified cache hit it cannot prove.
  */
 import { createHash } from "node:crypto";
 
@@ -198,20 +172,16 @@ function isPlainObject(value) {
 }
 
 /**
- * Recursively sort object keys for a byte-deterministic serialization (arrays
- * keep their order — order is itself cache-relevant for tool definitions and
- * content-block boundaries).
+ * Recursively sort object keys for byte-deterministic serialization (array
+ * order is preserved — order is itself cache-relevant).
  *
- * Trust-boundary validation, refusing loudly rather than silently colliding
- * two distinct inputs onto one fingerprint: a non-finite number (NaN/
- * Infinity) is rejected rather than let `JSON.stringify` collapse it to
- * `null`, a non-plain object (Date/Map/Set/...) is rejected rather than let
- * `Object.keys` see it as keyless (and therefore indistinguishable from
- * `{}`), and undefined/function/symbol/bigint are rejected rather than
- * silently dropped or crash-serialized by `JSON.stringify` itself. The
- * accumulator is null-prototype so an own `__proto__` key (a realistic shape
- * for JSON.parse'd input) is kept as a plain data property instead of
- * vanishing into the prototype chain.
+ * Fails closed rather than silently colliding distinct inputs onto one
+ * fingerprint: a non-finite number is rejected rather than collapsed to
+ * `null`, a non-plain object (Date/Map/Set/...) is rejected rather than
+ * treated as keyless, and undefined/function/symbol/bigint are rejected
+ * rather than dropped or crash-serialized. The accumulator is null-prototype
+ * so an own `__proto__` key stays a plain data property instead of vanishing
+ * into the prototype chain.
  * @param {*} value
  * @param {string} [keyPath] — dotted path to `value`, for the error message
  * @returns {*}
@@ -241,24 +211,16 @@ function stableStringify(value, keyPath = "$") {
 }
 
 /**
- * Fingerprint the complete observable request prefix (Section A). Every
- * cache-relevant value the dev-loops layer observes or controls is folded into
- * the hash: concrete model, tool definitions/order, system/project/agent
- * instructions, thinking/tool-choice settings, content-block boundaries, shared
- * artifact bytes, and breakpoint/TTL intent. Values owned opaquely by a harness
- * should be passed as `null`-free opaque markers (see `opaqueMarker`).
+ * Fingerprint the complete observable request prefix (Section A): concrete
+ * model, tool definitions/order, system/project/agent instructions,
+ * thinking/tool-choice settings, content-block boundaries, shared artifact
+ * bytes, and breakpoint/TTL intent. Values owned opaquely by a harness should
+ * be passed as `null`-free opaque markers (see `opaqueMarker`).
  *
  * @param {object} input
- * @param {string} input.model - concrete model id for this request group.
- * @param {string[]|object[]} [input.tools] - tool definitions/order.
- * @param {string|string[]} [input.systemInstructions] - system/project/agent instructions.
- * @param {object|string} [input.settings] - thinking/tool-choice settings.
- * @param {object[]} [input.contentBlocks] - content-block boundaries + shared bytes.
- * @param {string} [input.sharedArtifact] - shared artifact reference (path) or bytes.
- * @param {string} [input.cacheBoundary] - e.g. `after_shared_prefix`.
- * @param {string} [input.ttlIntent] - one of TTL_INTENT_VALUES.
- * @param {string[]} [input.angleSuffix] - angle-specific suffix (excluded from the
- *   STABLE prefix fingerprint; included here only when invasive).
+ * @param {string} input.model - non-empty concrete model id.
+ * @param {string[]} [input.angleSuffix] - excluded from the STABLE prefix
+ *   fingerprint elsewhere, but folded in here when present.
  * @returns {{ fingerprint: string, canonical: object }}
  */
 export function fingerprintRequestPrefix(input) {
@@ -543,30 +505,20 @@ export const INHERIT_MODEL_KEY = "inherit";
  * input. Angles resolving to the same concrete model id share one group;
  * angles with no override (`model: null`/`undefined`) form their own explicit
  * {@link INHERIT_MODEL_KEY} bucket, never merged with a concrete id. An angle
- * listed twice with two DIFFERENT models is a caller bug and throws (an angle
- * cannot honestly belong to two request groups). A concrete model literally
- * named {@link INHERIT_MODEL_KEY} also throws — it would otherwise silently
- * collide with the reserved bucket key and become indistinguishable from
- * genuine no-override.
+ * listed twice with two DIFFERENT models throws (it cannot belong to two
+ * request groups); a concrete model literally named {@link INHERIT_MODEL_KEY}
+ * also throws, since it would otherwise collide with the reserved bucket key.
  *
  * Each group's `requestPrefixFingerprint` is computed via
  * {@link fingerprintRequestPrefix} over every cache-relevant input this layer
- * observes for that group (the bucket's model, tool set/order, instructions,
- * settings, content-block boundaries, the shared-prefix bytes, and the
- * declared cache boundary/TTL intent) — changing only the angle set within a
- * bucket never changes its fingerprint.
+ * observes for that group — changing only the angle set within a bucket never
+ * changes its fingerprint.
  *
  * @param {object} input
  * @param {Array<{angle: string, model: string|null}>} input.angleModels
- * @param {string} [input.sharedPrefixHash] — folded in as the fingerprint's shared-artifact reference.
- * @param {Array<string|object>} [input.toolDefinitions] — tool names/definitions in dispatch order
- * @param {string|string[]} [input.instructions] — system/project/agent instruction bytes (or a digest)
- * @param {object} [input.settings] — thinking/tool-choice settings
- * @param {string[]} [input.blockBoundaries] — content-block boundary markers, in order
- * @param {string} [input.cacheBoundary]
- * @param {string} [input.ttlIntent] — one of TTL_INTENT_VALUES
- * @returns {RequestGroup[]} sorted by model (code-unit order, never localeCompare — ICU-dependent
- *   sorting could order the same two model ids differently across runtimes); angles sorted within a group.
+ * @returns {RequestGroup[]} sorted by model (code-unit order, never
+ *   localeCompare — ICU-dependent sorting could order the same two model ids
+ *   differently across runtimes); angles sorted within a group.
  */
 export function buildAngleRequestGroups({
   angleModels,
@@ -730,7 +682,7 @@ export function partitionPrimerGroups(requestGroups, capabilities = {}) {
 }
 
 /* ------------------------------------------------------------------ *
- * 6. Dispatch-prompt layout alignment (issue #1841, completes #1468)
+ * 6. Dispatch-prompt layout alignment (#1841)
  * ------------------------------------------------------------------ */
 
 // Leading-bytes capture cap for a dispatched reviewer prompt (issue #1841's
@@ -765,33 +717,26 @@ export function renderBriefingPointerLine(prefixPath) {
 /**
  * Deterministically compose a full reviewer prompt: the round's
  * byte-identical invariant prefix INLINED as the leading bytes, followed by
- * the (also round-invariant) volatile tail, followed by the per-group angle
- * suffix (issue #1852). This is the ONE function every reviewer prompt on the
- * canonical fan-out path is built from — never a hand-assembled per-group
- * preamble that leads with dynamic prose ahead of the prefix (the
- * "angle-first" / pointer-seeding failure mode `verifyPromptLeadingAlignment`
- * exists to catch).
+ * the round-invariant volatile tail, followed by the per-group angle suffix
+ * (#1852). This is the ONE function every reviewer prompt on the canonical
+ * fan-out path is built from — never a hand-assembled per-group preamble that
+ * leads with dynamic prose ahead of the prefix (the "angle-first" failure
+ * mode `verifyPromptLeadingAlignment` exists to catch).
  *
- * Byte-identical-prefix-across-groups falls out of the arguments alone: any
- * two calls sharing the same `prefixBytes`/`volatileBytes` (true for every
- * dispatch unit of one round, since both are round-scoped, not group-scoped)
- * produce prompts whose leading span is identical regardless of
- * `angleSuffix` — the property AC1 requires, provable by construction rather
- * than by review.
+ * Byte-identical-prefix-across-groups follows from the arguments alone: any
+ * two calls sharing `prefixBytes`/`volatileBytes` (true for every dispatch
+ * unit of one round) produce prompts whose leading span is identical
+ * regardless of `angleSuffix` — provable by construction, not by review.
  *
  * Pure and offline: takes already-read bytes, never reads a file itself (the
- * CLI wrapper, `compose-reviewer-prompt.mjs`, owns I/O and the
- * record-dispatch-prompt-layout.mjs capture that makes the composed prompt's
- * layout binding on `verify-dispatch-prompt-layout.mjs`).
+ * CLI wrapper, `compose-reviewer-prompt.mjs`, owns I/O and the capture that
+ * makes the composed prompt's layout binding on
+ * `verify-dispatch-prompt-layout.mjs`).
  *
  * @param {object} input
- * @param {string} input.prefixBytes — the round's invariant-prefix bytes
- *   (`<gate>-<headSha>.briefing-prefix.txt`), non-empty.
- * @param {string} [input.volatileBytes] — the round's volatile-tail bytes
- *   (`<gate>-<headSha>.briefing-volatile.txt`); absent/non-string treated as
- *   "" (best-effort — a round that never wrote one still composes).
- * @param {string} input.angleSuffix — the per-group/angle-specific prompt
- *   text, non-empty (an empty suffix would compose a prompt naming no work).
+ * @param {string} input.prefixBytes — non-empty, the round's invariant-prefix bytes.
+ * @param {string} [input.volatileBytes] — round's volatile-tail bytes; absent treated as "".
+ * @param {string} input.angleSuffix — non-empty per-group angle-specific prompt text.
  * @returns {string} the exact full reviewer prompt text.
  */
 export function composeReviewerPromptText({ prefixBytes, volatileBytes, angleSuffix } = {}) {
@@ -807,26 +752,19 @@ export function composeReviewerPromptText({ prefixBytes, volatileBytes, angleSuf
 
 /**
  * Decide whether a dispatched reviewer prompt's LEADING bytes are
- * cache-aligned (GATE-EXEC-BRIEFING-PREFIX layout, issue #1841): either the
+ * cache-aligned (GATE-EXEC-BRIEFING-PREFIX layout, #1841): either the
  * prompt's leading bytes are byte-identical to the round's invariant prefix
  * (inline mode), or the prompt leads with the byte-identical pointer line
  * naming the round's invariant-prefix path (pointer-seeding mode), with any
- * angle-specific text strictly AFTER it. An angle-first prompt (dynamic
- * per-unit prose ahead of the prefix/pointer) matches neither and is
- * REJECTED — this is the mechanical proof the prose-only rule lacked.
+ * angle-specific text strictly AFTER it. An angle-first prompt matches
+ * neither and is REJECTED.
  *
- * Pure and offline: takes the already-captured leading bytes and the already-
- * read prefix bytes/path, never reads a file itself (the CLI wrapper owns
- * I/O), so this is directly unit-testable with in-memory strings.
+ * Pure and offline: takes already-captured bytes, never reads a file itself.
  *
  * @param {object} input
- * @param {string} input.promptLeading — the captured leading bytes of the
- *   ACTUAL reviewer prompt (record-dispatch-prompt-layout.mjs's capture).
- * @param {string} input.prefixBytes — the round's recorded byte-identical
- *   invariant-prefix content (the `<gate>-<headSha>.briefing-prefix.txt`
- *   bytes).
- * @param {string} input.prefixPath — the path used to render this round's
- *   pointer line (must be the SAME path every reviewer was pointed at).
+ * @param {string} input.promptLeading — captured leading bytes of the actual reviewer prompt.
+ * @param {string} input.prefixBytes — the round's recorded invariant-prefix bytes.
+ * @param {string} input.prefixPath — the path used to render this round's pointer line.
  * @returns {{ aligned: boolean, mode: "inline"|"pointer"|null, reason: string|null }}
  */
 export function verifyPromptLeadingAlignment({ promptLeading, prefixBytes, prefixPath } = {}) {
