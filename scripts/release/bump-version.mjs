@@ -128,7 +128,10 @@ export function inspectSurfaces(repoRoot, version) {
   ];
 }
 
-export function bumpVersion({ repoRoot, version, stage = true }) {
+// `run` is injectable so the orchestration (surface writes → regen → guards →
+// staging → drift-throw) is testable without a resolvable @dev-loops/core or a
+// real bun install; production passes the default module `run`.
+export function bumpVersion({ repoRoot, version, stage = true, run: runChild = run }) {
   const full = extractFullVersion(version);
   if (full !== version) {
     // extractFullVersion tolerates leading range operators / `v`; the target
@@ -140,20 +143,20 @@ export function bumpVersion({ repoRoot, version, stage = true }) {
   const manifestPaths = writeManifestSurfaces(repoRoot, version);
 
   // Surface 4: regenerate the lockfile from the bumped manifests.
-  run("bun", ["install", "--lockfile-only"], repoRoot);
+  runChild("bun", ["install", "--lockfile-only"], repoRoot);
 
   // Surface 5: regenerate the .claude tree (stamps plugin.json version + npx pins
   // from the now-bumped root package.json version).
-  run("node", [path.join(repoRoot, "scripts/claude/generate-claude-assets.mjs")], repoRoot);
+  runChild("node", [path.join(repoRoot, "scripts/claude/generate-claude-assets.mjs")], repoRoot);
 
   // Fail-closed drift guards over the regenerated surfaces.
-  run("bun", ["install", "--frozen-lockfile"], repoRoot); // proves bun.lock is in lockstep
-  run("node", [
+  runChild("bun", ["install", "--frozen-lockfile"], repoRoot); // proves bun.lock is in lockstep
+  runChild("node", [
     path.join(repoRoot, "scripts/release/assert-core-dependency-version.mjs"),
     "--release-version",
     version,
   ], repoRoot);
-  run("node", [path.join(repoRoot, "scripts/claude/generate-claude-assets.mjs"), "--check"], repoRoot);
+  runChild("node", [path.join(repoRoot, "scripts/claude/generate-claude-assets.mjs"), "--check"], repoRoot);
 
   // Direct surface inspection: a clear per-surface drift report on top of the guards.
   const surfaces = inspectSurfaces(repoRoot, version);
@@ -167,7 +170,7 @@ export function bumpVersion({ repoRoot, version, stage = true }) {
 
   // Stage only the enumerated release paths — never `git add -A` / `git add .`.
   const stagedPaths = [...manifestPaths, path.join(repoRoot, "bun.lock"), path.join(repoRoot, ".claude")];
-  if (stage) run("git", ["add", "--", ...stagedPaths], repoRoot);
+  if (stage) runChild("git", ["add", "--", ...stagedPaths], repoRoot);
 
   return { ok: true, version, surfaces, staged: stagedPaths };
 }
