@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- **Decouple the Copilot-round-cap tests from the ambient `.devloops` config (#2055).** Seven suites (`request-copilot-review`, `upsert-checkpoint-verdict`, `detect-copilot-loop-state-auto-detect`, `detect-copilot-loop-state-input-modes`, `copilot-pr-handoff`, `detect-pr-gate-coordination-state`, `run-watch-cycle`) read `refinement.maxCopilotRounds` from the ambient `.devloops` and asserted cap=2 behavior, so the `1.0.2-slim` line's `maxCopilotRounds: 1` (config-only chore `f1059cf8`) reddened them in isolation. Each suite now pins the round cap in its own fixture `repoRoot` (mirroring the existing `fanoutDisabledRepoRoot` pattern), so the tests own their config; every assertion is unchanged and each passes at both `maxCopilotRounds: 1` and `2`. The hardcoded `/tmp/findings.md` fixture path is replaced by a per-test `mkdtemp`. Six suites are fixed test-side; the seventh (`run-watch-cycle` integration) needed `runHandoff` to thread its already-resolved `repoRoot` into the `performCopilotReviewRequest` sub-call (`scripts/loop/copilot-pr-handoff.mjs`) — a single behavior-preserving line (a no-op from the repo root, more correct from a subdir). The originally-hypothesized git-stub `PATH` shard race is inert; the retained in-process git-stub and a `detectMergeBaseScope` injectable runner remain out-of-scope follow-ups.
+
 ## 1.0.2-pre.0 - 2026-09-07
 
 ### Added
