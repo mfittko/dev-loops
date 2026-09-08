@@ -101,7 +101,7 @@ this graph, not by this reviewer-loop machine itself.
 
 `reviewerScope` is explicit machine-readable contract, not an inferred side note:
 - `single_reviewer` means detection was scoped to one reviewer identity and `reviewerLogin` is that normalized login
-- `all_reviewers` means `--reviewer-login` was omitted and the detector intentionally aggregated reviewer state across the PR
+- `all_reviewers` means no single requested reviewer was resolved and the detector intentionally aggregated reviewer state across the PR
 
 The contract separates observable current state (`submittedReviewPresent`, `submittedReviewCommitSha`, `submittedReviewState`, `draftReviewPosted`, `reviewRequested`) from prior action-result state (`reviewSubmissionStatus`) to avoid overloading one field.
 
@@ -164,13 +164,11 @@ review artifact/verdict.
 
 - `--input <path>` (snapshot interpretation only)
 - `--repo <owner/name> --pr <number>` (auto-detect)
-- optional: `--reviewer-login <login>`
 - optional: `--review-requested <true|false>` (inject known request result)
 - optional: `--local-state <path>` (inject local planning/run/merge metadata)
 
 Reviewer-scope contract:
-- with `--reviewer-login`, detection is for that single reviewer identity
-- without `--reviewer-login`, detection intentionally aggregates across all reviewers on the PR
+- reviewer scope is auto-resolved from the PR's requested reviewers: a single resolved requested reviewer scopes detection to that identity, otherwise detection intentionally aggregates across all reviewers on the PR
 - success output snapshots always expose that choice through `snapshot.reviewerScope` and `snapshot.reviewerLogin`
 
 Success output:
