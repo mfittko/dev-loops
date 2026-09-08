@@ -27,7 +27,7 @@ export function collectGeneratedAssets({ repoRoot = process.cwd() } = {}) {
   const assets = [];
 
   // The dev-loops package version pins the Claude `npx dev-loops@<version>` CLI invocation so the
-  // generated plugin tree cannot drift against the published version (#833). Read it once here.
+  // generated plugin tree cannot drift against the published version. Read it once here.
   // Falls back to `latest` when no repo-root package.json is present (e.g. a consumer/fixture tree
   // that mirrors only agents/skills).
   let version = "latest";
@@ -60,7 +60,7 @@ export function collectGeneratedAssets({ repoRoot = process.cwd() } = {}) {
     }
   }
 
-  // Direct slash commands (#972): thin generated wrappers over the public dev-loop contract,
+  // Direct slash commands: thin generated wrappers over the public dev-loop contract,
   // one `.claude/commands/<name>.md` per `commands/<name>.command.md` source. No routing logic.
   const commandsDir = path.join(repoRoot, "commands");
   if (fs.existsSync(commandsDir)) {
@@ -86,7 +86,7 @@ export function collectGeneratedAssets({ repoRoot = process.cwd() } = {}) {
   }
 
   // Bundle the shared markdown the generated skills reference via relative links so they resolve
-  // inside the .claude/ tree (#816). The skills live at .claude/skills/<name>/, so:
+  // inside the .claude/ tree. The skills live at .claude/skills/<name>/, so:
   //   `../docs/<contract>.md`        → .claude/skills/docs/<contract>.md      (skills/docs/*.md)
   //   `../dev-loop/templates/<t>.md` → .claude/skills/dev-loop/templates/<t>.md (skills/dev-loop/templates/*.md)
   // Copied verbatim; the no-drift test keeps them in sync with source. (Repo-root `../../` refs —
@@ -98,7 +98,7 @@ export function collectGeneratedAssets({ repoRoot = process.cwd() } = {}) {
     assets.push(...collectBundle(repoRoot, srcRel, targetRel));
   }
 
-  // Self-contained hook bundle (#843). The PreToolUse/PostToolUse hook scripts under
+  // Self-contained hook bundle. The PreToolUse/PostToolUse hook scripts under
   // .claude/hooks/ ship inside the Claude plugin, which has no node_modules — so they cannot
   // import `@dev-loops/core` (it is unresolvable from the plugin cache and crashes the hook on
   // load). Vendor the pure deciders/classifiers they need as self-contained relative `_*.mjs`
@@ -110,7 +110,7 @@ export function collectGeneratedAssets({ repoRoot = process.cwd() } = {}) {
 }
 
 /**
- * The core modules vendored into `.claude/hooks/` for the self-contained hook bundle (#843).
+ * The core modules vendored into `.claude/hooks/` for the self-contained hook bundle.
  * `rewrites` rewrites cross-module import specifiers to the sibling vendored copies; node:
  * builtins are left untouched.
  */
@@ -126,7 +126,7 @@ const HOOK_BUNDLE = [
       ['"../loop/worktree-guard.mjs"', '"./_worktree-guard.mjs"'],
     ],
   },
-  // #1596: main-checkout fast-forward support shared by the Pi and Claude post-merge hooks.
+  // main-checkout fast-forward support shared by the Pi and Claude post-merge hooks.
   { source: "packages/core/src/loop/worktree-guard.mjs", target: ".claude/hooks/_worktree-guard.mjs", rewrites: [] },
   { source: "packages/core/src/loop/main-checkout-ff.mjs", target: ".claude/hooks/_main-checkout-ff.mjs", rewrites: [] },
 ];
@@ -136,7 +136,7 @@ const HOOK_BUNDLE = [
  * stamp generated bundle modules and to scope orphan detection to them within `.claude/hooks/`. */
 const HOOK_BUNDLE_BANNER_PREFIX = "// GENERATED from ";
 
-/** Collect the vendored self-contained hook bundle modules (#843). */
+/** Collect the vendored self-contained hook bundle modules. */
 function collectHookBundle(repoRoot) {
   const out = [];
   for (const { source, target, rewrites } of HOOK_BUNDLE) {
@@ -207,7 +207,7 @@ function listExistingAssetFiles(repoRoot) {
     ...listFilesRecursive(repoRoot, ".claude/skills"),
   ];
   // `.claude/hooks/` mixes hand-authored scripts (hooks.json, _hook-io.mjs, the three hook
-  // scripts) with generated bundle modules (#843). Only the generated ones — identified by the
+  // scripts) with generated bundle modules. Only the generated ones — identified by the
   // generator banner — participate in orphan detection, so a dropped/renamed HOOK_BUNDLE entry
   // is caught without false-flagging the hand-authored files.
   for (const rel of listFilesRecursive(repoRoot, ".claude/hooks")) {

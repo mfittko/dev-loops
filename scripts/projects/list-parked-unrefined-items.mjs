@@ -163,8 +163,8 @@ async function main(args, { env = process.env, runChild = _runChild, cwd = proce
     );
     const artifact = detectIssueRefinementArtifact({ body, issueNumber: item.issueNumber });
     // finding !== null is the explicit "fails the refinement floor" signal:
-    // no refinement artifact, or an incomplete matrix arm (#1877 — an
-    // AC-only or DoD-only body carries a partial artifact but still fails).
+    // no refinement artifact, or an incomplete matrix arm — an
+    // AC-only or DoD-only body carries a partial artifact but still fails.
     if (artifact.finding === null) return null;
     return {
       issueNumber: item.issueNumber,

@@ -116,7 +116,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   // pure refine contract. The contract owns the state-machine gate and the
   // in-place rewrite; this script owns I/O only.
   // The docs-grill runs as a step of refinement. Classify each finding here (this
-  // script owns the scripts/ boundary) with #948's classifier and pass the
+  // script owns the scripts/ boundary) with classifyDocsGrillFinding and pass the
   // dispositions to the pure core contract; an invalid finding yields a null
   // disposition, which the contract fails closed on (docs_grill_failed).
   const rawFindings = Array.isArray(payload?.grillFindings) ? payload.grillFindings : [];
@@ -129,8 +129,8 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
     };
   });
 
-  // Same threshold the actual post-hoc PR size budget escalates on (Phase 1 of
-  // #1480): a repo-configured gates.size.tiers.default.softLoc wins, else the
+  // Same threshold the actual post-hoc PR size budget escalates on: a
+  // repo-configured gates.size.tiers.default.softLoc wins, else the
   // check-size-budget.mjs fallback — the plan-time estimate and the real diff
   // measurement are checked against the same number.
   const { config, errors: configErrors } = await loadDevLoopConfig({ repoRoot });

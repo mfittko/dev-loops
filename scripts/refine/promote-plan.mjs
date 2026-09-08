@@ -221,7 +221,7 @@ export async function runCli(argv = process.argv.slice(2), {
     .join("/");
   const acceptanceCriteria = extractSection(markdownText, acHeading);
   const definitionOfDone = extractSection(markdownText, dodHeading);
-  // Optional: a plan refined under phase 4 of #1480 carries a `## Size estimate`
+  // Optional: a refined plan carries a `## Size estimate`
   // section (see plan-file-refine-contract.mjs); carrying it into the PR body
   // flows an `oversize: justified` note through to the PR the post-hoc size
   // budget later escalates. A plan without the section (older/hand-authored)
