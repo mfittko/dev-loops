@@ -131,7 +131,7 @@ register(INTERNAL_DEV_LOOP_STRATEGY.LOCAL_IMPLEMENTATION, "default", {
   activeNoticeAfterMs: DEFAULT_ACTIVE_NOTICE_MS,
 });
 
-// local_implementation · spike run (SPIKE-RELAXED-GATE-PROFILE, #1628): a
+// local_implementation · spike run (SPIKE-RELAXED-GATE-PROFILE): a
 // spike-mode spin resolves the relaxed `spike` gate profile instead of the
 // default local-implementation gate. Kept as its own acceptance key so the
 // generic default can stay approach-agnostic.
@@ -305,7 +305,7 @@ function deriveRequiredReads(bundle, resolverOutput) {
 }
 
 // ---------------------------------------------------------------------------
-// specSource derivation (issue #1025 — lightweight PR-body-as-spec)
+// specSource derivation — lightweight PR-body-as-spec
 // ---------------------------------------------------------------------------
 
 /**
@@ -440,7 +440,7 @@ function deriveCwd(bundle, options = {}) {
 }
 
 /** Repo-relative root for loop-owned worktrees. The `dev-loops/` namespace */
-/** marks them so cleanup can only ever remove its own (issue #909). */
+/** marks them so cleanup can only ever remove its own. */
 export const WORKTREE_NAMESPACE = "tmp/worktrees/dev-loops";
 
 /**
@@ -470,7 +470,7 @@ function flattenSlugSegment(s) {
 }
 
 function buildWorktreeSlug(artifact, kind) {
-  // Canonical naming is namespaced + no branch suffix (issue #909) so the path
+  // Canonical naming is namespaced + no branch suffix so the path
   // is recomputable from the issue/PR number alone (cleanup can find it).
   if (kind === DEV_LOOP_TARGET_KIND.ISSUE && Number.isInteger(artifact.issue) && artifact.issue > 0) {
     return `issue-${artifact.issue}`;
@@ -511,7 +511,7 @@ function normalizeGateState(gateState) {
 
 
 /**
- * Normalize the structured retrospective findings (issue #1077, Reading B).
+ * Normalize the structured retrospective findings.
  *
  * The retrospective is advisory: it never blocks merge or any lifecycle
  * transition. Its findings travel in the handoff envelope (the conductor's
@@ -553,7 +553,7 @@ function resolveSubGate(strategy, gateState) {
   return "default";
 }
 
-/** True when the resolver output identifies a spike-mode run (#1628). */
+/** True when the resolver output identifies a spike-mode run. */
 function isSpikeRun(resolverOutput) {
   return Boolean(resolverOutput && resolverOutput.spikeIntakeState);
 }
@@ -593,7 +593,7 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
   if (!repo) throw new Error("handoff-envelope: repo slug is required (owner/name)");
 
   const gs = normalizeGateState(gateState);
-  // SPIKE-RELAXED-GATE-PROFILE (#1628): a spike-mode spin (startup resolver
+  // SPIKE-RELAXED-GATE-PROFILE: a spike-mode spin (startup resolver
   // result carrying `spikeIntakeState`) resolves the relaxed `spike` gate
   // profile instead of the default local-implementation gate. The spike
   // marker lives at the TOP level of the resolver output (the bundle does not
@@ -603,7 +603,7 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
     : resolveSubGate(strategy, gs);
   // Normalize each source independently, then fall back on the normalized result
   // (not the raw value): a present-but-invalid gateState value must NOT shadow a
-  // valid options.retrospectiveFindings fallback (issue #1077 review finding).
+  // valid options.retrospectiveFindings fallback.
   const retrospectiveFindings = normalizeRetrospectiveFindings(gateState?.retrospectiveFindings)
     ?? normalizeRetrospectiveFindings(options.retrospectiveFindings);
 
@@ -613,7 +613,7 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
   const gateConfig = deriveGateConfig(settings, subGate);
   const derivedCwd = deriveCwd(bundle, { repoRoot: options.repoRoot, worktreeCwd: options.worktreeCwd });
   const template = lookupAcceptanceTemplate(strategy, subGate);
-  // Lightweight PR-body-as-spec (issue #1025): retarget the phase-doc criterion
+  // Lightweight PR-body-as-spec: retarget the phase-doc criterion
   // text to the PR description. Null/phase_doc leaves the criteria untouched, so
   // the non-lightweight path stays byte-identical.
   const specSource = deriveSpecSource(bundle, resolverOutput);
@@ -623,7 +623,7 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
     ? { ...options.overrides }
     : undefined;
 
-  // Sanctioned operation → wrapper command map (issue #1081). Core is
+  // Sanctioned operation → wrapper command map. Core is
   // consumer-agnostic: it carries whatever map the consumer supplies (the
   // `loop build-envelope` CLI injects this repo's scripts/... paths) so every
   // spawned subagent receives it by DEFAULT. Core defines the SHAPE only —
@@ -632,7 +632,7 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
     ? options.sanctionedCommands
     : undefined;
 
-  // Surface the *effective* async-start posture alongside the *configured* one (#834). The
+  // Surface the *effective* async-start posture alongside the *configured* one. The
   // configured `asyncStartMode` is echoed verbatim from settings (back-compat), but the contract
   // is relaxed at validation time under the Claude harness (resolveEffectiveAsyncStartMode →
   // "allowed" when CLAUDECODE=1). Without surfacing the effective value, a `required` envelope
@@ -686,21 +686,21 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
     envelope.sanctionedCommands = sanctionedCommands;
   }
 
-  // Advisory retrospective findings (issue #1077, Reading B). Optional structured
+  // Advisory retrospective findings. Optional structured
   // field carrying the check-retro-tooling.mjs JSON output to the conductor. Never a
   // gate — the conductor surfaces these as an advisory PR comment, not a block.
   if (retrospectiveFindings) {
     envelope.retrospectiveFindings = retrospectiveFindings;
   }
 
-  // Canonical spec source (issue #1025). Optional: only set when the resolver
+  // Canonical spec source. Optional: only set when the resolver
   // marks a lightweight PR-body-as-spec session, so the default (phase-doc) path
   // carries no specSource field and its envelope stays byte-identical.
   if (specSource) {
     envelope.specSource = specSource;
   }
 
-  // #1462: the ONLY per-round-varying block, kept LAST. Every field here changes
+  // The ONLY per-round-varying block, kept LAST. Every field here changes
   // between builds/rounds (the timestamp, the head SHA, CI status, thread/round
   // counts); isolating them as the envelope's tail keeps everything above a
   // byte-stable prefix that a fresh reviewer spawn can cache-READ instead of
@@ -931,7 +931,7 @@ export function validateHandoffEnvelope(envelope) {
     });
   }
 
-  // ----- asyncStartEffective (required field; the harness-resolved posture, #834) -----
+  // ----- asyncStartEffective (required field; the harness-resolved posture) -----
   if (envelope.asyncStartEffective === undefined || envelope.asyncStartEffective === null) {
     errors.push({
       field: "asyncStartEffective",
@@ -946,7 +946,7 @@ export function validateHandoffEnvelope(envelope) {
     });
   }
 
-  // ----- retrospectiveFindings (optional, advisory — issue #1077) -----
+  // ----- retrospectiveFindings (optional, advisory) -----
   if (envelope.retrospectiveFindings !== undefined && envelope.retrospectiveFindings !== null) {
     const rf = envelope.retrospectiveFindings;
     if (typeof rf !== "object" || Array.isArray(rf)) {
@@ -968,7 +968,7 @@ export function validateHandoffEnvelope(envelope) {
     }
   }
 
-  // ----- specSource (optional — issue #1025, lightweight PR-body-as-spec) -----
+  // ----- specSource (optional — lightweight PR-body-as-spec) -----
   if (envelope.specSource !== undefined && envelope.specSource !== null) {
     const validSources = [CANONICAL_SPEC_SOURCE.PHASE_DOC, CANONICAL_SPEC_SOURCE.PR_BODY];
     if (typeof envelope.specSource !== "string" || !validSources.includes(envelope.specSource)) {
@@ -980,8 +980,8 @@ export function validateHandoffEnvelope(envelope) {
     }
   }
 
-  // ----- gateState.derivedAt (informational, warn on missing) — #1462 moved the
-  // volatile timestamp into the gateState tail so the rest stays byte-stable -----
+  // ----- gateState.derivedAt (informational, warn on missing) — the
+  // volatile timestamp lives in the gateState tail so the rest stays byte-stable -----
   if (typeof envelope.gateState?.derivedAt !== "string" || !envelope.gateState.derivedAt.trim()) {
     warnings.push({ field: "gateState.derivedAt", reason: "should be an ISO 8601 timestamp" });
   }

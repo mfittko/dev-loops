@@ -26,7 +26,7 @@ export const PR_CHECKPOINT = Object.freeze({
 
 
 /**
- * Refinement-artifact gate check (issue #532).
+ * Refinement-artifact gate check.
  *
  * The draft gate must verify the linked issue has an explicit refinement
  * artifact (Acceptance criteria / DoD / linked refinement doc) before it
@@ -246,7 +246,7 @@ function normalizeRefinementArtifactStatus(value) {
 // their own validation-failure reason from the detector; that reason must
 // replace the "linked issue" wording, which does not apply when the PR is the
 // spec-of-record and no linked issue was ever expected.
-// #1951 matrix-floor vocabulary for the draft-gate blocked reason: which piece
+// Matrix-floor vocabulary for the draft-gate blocked reason: which piece
 // of the refinement floor is missing per finding — the SAME finding taxonomy
 // the enqueue gate's guidance (decideEnqueueRefinementGate) and the detector
 // (detectIssueRefinementArtifact) use, so the draft gate (the unconditional
@@ -277,7 +277,7 @@ function formatRefinementBlockedReason(linkedIssue, status, refinementArtifact) 
   return `The draft gate cannot complete: the linked issue has no detectable refinement artifact (no AC→DoD mapping matrix, or a resolvable linked refinement doc). finding=${REFINEMENT_ARTIFACT_FINDING}`;
 }
 
-// #1472: describes the CI state a round-cap-reached fallback branch actually
+// Describes the CI state a round-cap-reached fallback branch actually
 // granted on, for human-read reason text. preApprovalRequireCi:false plus a
 // non-success/non-crediblyGreen ciStatus is not "green CI" — claiming it is
 // would be the same false-CI-claim buildRoundExhaustionGateEvidenceNote below
@@ -301,7 +301,7 @@ function buildRoundExhaustionGateEvidenceNote({ copilotReviewRoundCount, maxCopi
 
 /**
  * Blocked result for a PR that would otherwise reach final_approval_ready but
- * still carries a merge-blocking marker in its title (issue #842). The title is
+ * still carries a merge-blocking marker in its title. The title is
  * the most visible contract surface, so a WIP/DRAFT/DO NOT MERGE title must
  * block the final-approval boundary just like the mark-ready transition does.
  */
@@ -445,7 +445,7 @@ function buildResult({
  * caller must run request-copilot-review.mjs first.
  *
  * Exception: round-cap clean fallback (rounds exhausted + clean converged)
- * does not require a formal re-request (#613).
+ * does not require a formal re-request.
  *
  * @param {object} params
  * @param {string} params.copilotReviewRequestStatus - "none"|"requested"|"already-requested"|"unavailable"|"failed"
@@ -454,10 +454,10 @@ function buildResult({
  * @param {number|null} params.maxCopilotRounds
  * @param {boolean} params.sameHeadCleanConverged
  * @param {boolean} [params.roundCapCleanFallback=false] - interpreter resolved the
- *   round-cap clean fallback (#896): rounds exhausted + clean threads + green CI on
+ *   round-cap clean fallback: rounds exhausted + clean threads + green CI on
  *   the current head, including a post-cap head Copilot has not (and will not)
  *   re-review. No further Copilot round is permitted, so the formal-request guard
- *   must not fire — the pre_approval_gate reviews the post-cap head (per #848).
+ *   must not fire — the pre_approval_gate reviews the post-cap head.
  * @param {boolean} [params.postConvergenceSignificantChange=false] - significant
  *   post-convergence changes on a newer head start a new review cycle and must
  *   not be treated as round-cap clean-fallback suppression.
@@ -493,17 +493,17 @@ export function shouldGuardCopilotReviewRequest({
   }
   // Durable signal: if Copilot was ever formally requested as a reviewer,
   // the current "none" status is from a fulfilled request (normal cycle),
-  // not from a missing request. Do not guard the happy path (#613, round 2).
+  // not from a missing request. Do not guard the happy path.
   if (copilotReviewEverFormallyRequested) {
     return false;
   }
   // Round-cap clean fallback: exhausted rounds + clean converged does not require
   // a formal re-request. This covers two shapes of "clean at the cap":
   //  - sameHeadCleanConverged: the current head itself carries a clean Copilot review;
-  //  - roundCapCleanFallback (#896): the head is clean (zero unresolved threads + green
+  //  - roundCapCleanFallback: the head is clean (zero unresolved threads + green
   //    CI) but Copilot has NOT reviewed THIS head (e.g. a post-cap commit). No further
   //    Copilot round is permitted, so forcing a formal request would dead-end the loop;
-  //    the pre_approval_gate reviews the post-cap head instead (per #848).
+  //    the pre_approval_gate reviews the post-cap head instead.
   const roundCapReached = isCopilotRoundCapReached({ copilotReviewRoundCount, maxCopilotRounds });
   if (
     roundCapReached
@@ -517,7 +517,7 @@ export function shouldGuardCopilotReviewRequest({
 
 /**
  * Boundaries at which a non-draft PR must NOT carry a merge-blocking title
- * marker (issue #842 / AC2). A WIP/DRAFT/DO NOT MERGE/🚧 title is acceptable
+ * marker. A WIP/DRAFT/DO NOT MERGE/🚧 title is acceptable
  * while the PR is still in draft, but the moment the PR leaves draft and reaches
  * the pre-approval gate boundary (entry) or the final-approval boundary, the
  * title is a live merge-contract surface and must be clean. The guard is applied
@@ -532,7 +532,7 @@ const TITLE_MARKER_GUARDED_BOUNDARIES = Object.freeze([
 ]);
 
 /**
- * Independent gate-ENTRY re-check (issue #1190): even when the caller's
+ * Independent gate-ENTRY re-check: even when the caller's
  * lifecycleState/sameHeadCleanConverged claims a settled Copilot convergence,
  * an outstanding (`requested`/`already-requested`) Copilot review request on
  * the CURRENT head is a second, independent "unsettled" signal — not derived
@@ -547,8 +547,8 @@ const TITLE_MARKER_GUARDED_BOUNDARIES = Object.freeze([
  * already been spent.
  *
  * Skipped when Copilot review is not required at all — `reviewMode:
- * "internal_only"` or `maxCopilotRounds: 0` — preserving the existing #613 /
- * #1210 exemptions (internal-only and light-dispatched-with-disabled-review
+ * "internal_only"` or `maxCopilotRounds: 0` — preserving the existing
+ * exemptions (internal-only and light-dispatched-with-disabled-review
  * PRs never need a Copilot round in the first place).
  */
 const PRE_APPROVAL_ENTRY_BOUNDARIES = Object.freeze([
@@ -589,7 +589,7 @@ function applyUnsettledCopilotReviewEntryGuard(input, result) {
   if (copilotReviewRequestStatus !== "requested" && copilotReviewRequestStatus !== "already-requested") {
     return null;
   }
-  // Round-cap exemption (mirrors shouldGuardCopilotReviewRequest, #896/#848):
+  // Round-cap exemption (mirrors shouldGuardCopilotReviewRequest):
   // past the cap a lingering requested/already-requested status is for a review
   // that can never come (no further round is permitted), so treating it as
   // "unsettled" here would re-introduce the infinite-wait dead-end the
@@ -602,7 +602,7 @@ function applyUnsettledCopilotReviewEntryGuard(input, result) {
     maxCopilotRounds: input.maxCopilotRounds,
   });
   const lifecycleState = typeof input.lifecycleState === "string" ? input.lifecycleState.trim().toLowerCase() : "";
-  // Also exempt the evaluator's own ROUND_CAP_REACHED grant shape (#1472):
+  // Also exempt the evaluator's own ROUND_CAP_REACHED grant shape:
   // without this, this guard would rewrite that grant back to
   // waiting_for_copilot_review the instant it is produced, re-introducing the
   // never-arriving-review dead-end the round-cap exemption exists to prevent.
@@ -657,7 +657,7 @@ function applyUnsettledCopilotReviewEntryGuard(input, result) {
 
 /**
  * Evaluates PR gate coordination, then re-asserts the merge-blocking title guard
- * (issue #842) at the pre-approval / final-approval boundary for non-draft PRs.
+ * at the pre-approval / final-approval boundary for non-draft PRs.
  *
  * The title check is also performed inline at the three FINAL_APPROVAL_READY
  * sites (defense in depth); this wrapper additionally covers the pre-approval
@@ -708,7 +708,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
   const prClosed = input.prClosed === true;
   const prMerged = input.prMerged === true;
   const sameHeadCleanConverged = input.sameHeadCleanConverged === true;
-  // Operator-authorized post-convergence suppression (#1441): set only when the
+  // Operator-authorized post-convergence suppression: set only when the
   // caller has verified an explicit prior withdrawal (withdraw-copilot-review-
   // request.mjs) recorded a suppression marker for this EXACT head, proving the
   // delta since Copilot's last submitted review is a pure doc/prose bump. Never
@@ -737,7 +737,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
   const copilotReviewRoundCount = normalizeNonNegativeInteger(input.copilotReviewRoundCount);
   const maxCopilotRounds = normalizePositiveInteger(input.maxCopilotRounds);
   const roundCapReached = isCopilotRoundCapReached({ copilotReviewRoundCount, maxCopilotRounds });
-  // #1472: explicit current-head unresolved-thread signal for the round-cap
+  // Explicit current-head unresolved-thread signal for the round-cap
   // fallback check below (STATE.ROUND_CAP_REACHED). Unlike copilotReviewRoundCount
   // (which safely defaults to 0 when absent), an absent/invalid count here must
   // NOT be coerced to 0 — that would silently treat an unknown thread count as
@@ -749,11 +749,11 @@ function evaluatePrGateCoordinationCore(input = {}) {
   const postConvergenceSignificantChange = input.postConvergenceSignificantChange === true;
   const roundCapNewCycleRequired = roundCapReached && copilotReviewRoundCount > 0 && postConvergenceSignificantChange;
   const prTitle = typeof input.prTitle === "string" ? input.prTitle : "";
-  // UI e2e auto-scoping (#976): the PR changed-file set + whether the shared UI
+  // UI e2e auto-scoping: the PR changed-file set + whether the shared UI
   // e2e suite passed for this head. Inclusion is path-triggered, never annotated.
   const changedFiles = Array.isArray(input.changedFiles) ? input.changedFiles : [];
   const uiE2ePassed = input.uiE2ePassed === true ? true : (input.uiE2ePassed === false ? false : null);
-  // Designer/vision recorded-evidence scoping (#1443, ADR 0041 UI half). See
+  // Designer/vision recorded-evidence scoping (ADR 0041 UI half). See
   // the designer-review scoping block below. Evidence reuses the loop's
   // existing outcome + artifact-bundle record; exempt when a light/spike
   // relaxed-gate carve-out applies.
@@ -834,7 +834,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
     });
   }
 
-  // Mergeability is a required precondition at every gate (issue #980). GitHub
+  // Mergeability is a required precondition at every gate. GitHub
   // computes `mergeable` asynchronously, so an unsettled UNKNOWN must fail closed
   // to a recheck — never a pass. The detect layer already re-polls a bounded
   // number of times; if it still reads UNKNOWN here, hold gate progression and
@@ -908,13 +908,13 @@ function evaluatePrGateCoordinationCore(input = {}) {
     });
   }
 
-  // UI e2e auto-scoping precondition (#976). Path-triggered + fail-closed:
+  // UI e2e auto-scoping precondition. Path-triggered + fail-closed:
   // if the PR's changed files touch a rendered artifact (a deck under
   // docs/articles|presentations, or the inspect-run viewer source), it MUST be
   // registered in the shared UI e2e suite AND that suite must have passed for
   // this head. A rendered-artifact change with no registered/passing coverage
   // blocks here with a reason naming the artifact. Distinct seam from the
-  // mergeability (#980) preconditions to minimize
+  // mergeability preconditions to minimize
   // merge-time conflict. Non-UI changes pass through untouched (required=false).
   const uiE2eScoping = evaluateUiE2eScoping(changedFiles, { uiE2ePassed });
   if (uiE2eScoping.required && !uiE2eScoping.satisfied) {
@@ -947,7 +947,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
     });
   }
 
-  // Designer/vision recorded-evidence precondition (#1443, ADR 0041 UI half).
+  // Designer/vision recorded-evidence precondition (ADR 0041 UI half).
   // Path-triggered + fail-closed, modeled on the UI e2e scoping block above: if
   // the PR's changed files touch a rendered artifact (docs/articles|presentations
   // HTML), it MUST carry recorded designer/vision review evidence (the loop's
@@ -1389,7 +1389,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
     // straight to pre_approval_gate, so this branch must not force a re-request
     // for a missing Copilot convergence point that will never exist. The
     // sibling PR_READY_NO_FEEDBACK branch already honors internal_only; this
-    // reconciles READY_TO_REREQUEST_REVIEW with it (issue 1771). Non-suppressed
+    // reconciles READY_TO_REREQUEST_REVIEW with it. Non-suppressed
     // external-review PRs keep reviewMode null and hit the guard unchanged.
     if (!sameHeadCleanConverged && !postConvergenceReviewSuppressed && reviewMode !== "internal_only" && (!roundCapReached || roundCapNewCycleRequired)) {
       pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW]);
@@ -1511,17 +1511,17 @@ function evaluatePrGateCoordinationCore(input = {}) {
     });
   }
 
-  // Round-cap clean fallback (#896, #848): the Copilot review round cap is
+  // Round-cap clean fallback: the Copilot review round cap is
   // exhausted and the current head is clean (zero unresolved threads + green CI)
   // — including a POST-CAP head Copilot has not (and will not) re-review, since
   // no further Copilot round is permitted. Re-requesting review is illegal here,
   // so this MUST NOT dead-end at READY_TO_REREQUEST_REVIEW — nor at a forced
-  // rerequest for a post-convergence significant change (#1387): the cap makes
+  // rerequest for a post-convergence significant change: the cap makes
   // that rerequest impossible (request-copilot-review suppresses it), so a
   // significant change discovered here is reviewed by the pre_approval_gate
   // fan-out itself, on the post-cap head, same as any other clean fallback. It
   // routes to the pre_approval_gate, which reviews the post-cap head itself
-  // (per #848). The CI guards below still hold (failing / credibly-green CI
+  // itself. The CI guards below still hold (failing / credibly-green CI
   // blocks), and conflicts / blocked states are handled earlier, so
   // genuinely-blocked states still forbid pre_approval. Mirrors
   // LOW_SIGNAL_CONVERGED routing with round-cap reasoning.
@@ -1587,10 +1587,10 @@ function evaluatePrGateCoordinationCore(input = {}) {
           refinementArtifact,
         });
       }
-      // Mirror LOW_SIGNAL_CONVERGED (#579): a clean current head with no clean
+      // Mirror LOW_SIGNAL_CONVERGED: a clean current head with no clean
       // draft_gate evidence must reconcile the draft gate rather than jump to
       // final approval. This keeps the core handler consistent with the
-      // detect-pr-gate-coordination-state #579 post-pass, which unconditionally
+      // detect-pr-gate-coordination-state post-pass, which unconditionally
       // downgrades FINAL_APPROVAL_READY → DRAFT_GATE_NEEDED when
       // draftGate.cleanEvidenceExists is false (no ROUND_CAP_CLEAN_FALLBACK
       // exemption). Without this guard the final-approval-without-draft-gate
@@ -1668,23 +1668,23 @@ function evaluatePrGateCoordinationCore(input = {}) {
     });
   }
 
-  // Defensive gate-entry re-check for ROUND_CAP_REACHED (#1472): the compound
+  // Defensive gate-entry re-check for ROUND_CAP_REACHED: the compound
   // "unresolved threads OR non-clean CI" hard stop that copilot-loop-state.mjs
   // emits has no dedicated boundary of its own, so without this branch the
   // generic fallback below always names `report_blocked`. Both shipped
   // callers read lifecycleState and the CI/thread facts from ONE snapshot, and
   // the interpreter's own CI predicate is strictly wider than this branch's
-  // (it also accepts `crediblyGreen`, #1371): whenever this branch's narrower
+  // (it also accepts `crediblyGreen`): whenever this branch's narrower
   // predicate and zero unresolved threads hold, the interpreter has already
   // classified the snapshot ROUND_CAP_CLEAN_FALLBACK, never ROUND_CAP_REACHED
   // (see the equivalence test in pr-gate-coordination.test.mjs). This branch
   // is therefore unreachable through the shipped callers — it is pure
-  // defense-in-depth, demanded by issue 1472's corrected AC so the three
+  // defense-in-depth, demanded by the corrected AC so the three
   // fields can never disagree if a future caller hands the evaluator a
   // round_cap_reached label alongside facts that satisfy the grant. The
   // predicate intentionally mirrors every other pre-approval CI boundary in
   // this file (success, or CI not required) — `crediblyGreen` is unconfirmed
-  // CI and stays blocked here exactly as it does everywhere else (#1371). Any
+  // CI and stays blocked here exactly as it does everywhere else. Any
   // other combination (threads still unresolved, an unknown thread count, or
   // CI not confirmed green) falls through unchanged to the generic default
   // below, preserving today's blocked behavior exactly.
@@ -1694,7 +1694,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
     // OR CI is not required by config — never for an unconfirmed/failing/absent
     // status gated in only because requireCi is false. Naming it "green" in
     // human-read reason/evidence text for the latter case would be a false CI
-    // claim (#1472 defer), so describe the actual grant basis instead.
+    // claim, so describe the actual grant basis instead.
     const ciClause = ciStatus === "success" ? "green CI" : "CI not required by config";
     if (unresolvedThreadCount === 0 && ciConfirmedGreen) {
       if (preApprovalGate.currentHeadClean) {
@@ -1717,7 +1717,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
             refinementArtifact,
           });
         }
-        // Mirror ROUND_CAP_CLEAN_FALLBACK/#579: a clean current head with no clean
+        // Mirror ROUND_CAP_CLEAN_FALLBACK: a clean current head with no clean
         // draft_gate evidence must reconcile the draft gate rather than jump to
         // final approval.
         if (!draftGate.cleanEvidenceExists) {
