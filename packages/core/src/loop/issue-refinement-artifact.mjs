@@ -1,36 +1,22 @@
 /**
- * Deterministic issue refinement-artifact detection.
+ * Deterministic issue refinement-artifact detection (#1951).
  *
- * Implements the bounded refinement check required by the draft gate per
- * issue #532, reshaped by #1951 to honor "matrix on the issue, checklist on
- * the PR" WITHOUT duplicate issue-side checklists: a draft PR cannot leave
- * draft unless the linked issue carries the authoritative semantic AC→DoD
- * mapping MATRIX (a real two-column table mapping each acceptance-criterion
- * outcome to its required completion evidence) plus an explicit Non-goals
- * section — or a linked refinement doc that is a complete artifact on its own
- * (the doc carries the matrix). Interactive issue-side Acceptance criteria /
- * Definition of done CHECKLISTS are NO LONGER required merely to satisfy
- * detection (#1951 AC1): the matrix is the authoritative issue artifact, and
- * the PR carries the derived self-contained list-form AC/DoD checklists
- * (`derivePrChecklistsFromIssueMatrix`; the PR body is validated by
+ * The authoritative refined-issue artifact is the semantic AC→DoD mapping
+ * MATRIX (a two-column table mapping each acceptance-criterion outcome to its
+ * required completion evidence) plus an explicit Non-goals section — or a
+ * linked refinement doc that is a complete artifact on its own (the doc carries
+ * the matrix). Interactive issue-side AC/DoD checklists are NOT a substitute
+ * for the matrix; the PR carries the derived self-contained list-form
+ * checklists (`derivePrChecklistsFromIssueMatrix`; the PR body is validated by
  * `validateTrackerBackedPrBodySpec`, never this predicate).
  *
  * Detection validates the structural PRESENCE and SHAPE of the mapping table,
- * not its semantic truthfulness (that stays a reviewer responsibility). An
- * issue whose AC content, DoD content, and Non-goals are present but whose
- * mapping table is absent, empty, malformed, or identifier-only fails closed
- * (#1951 AC2) with the matching finding (`missing_ac_dod_matrix`,
- * `malformed_ac_dod_matrix`, `missing_explicit_non_goals`, or
- * `missing_refinement_artifact`); prose-only issues (Problem / Root Cause /
- * Fix) cause the draft gate to post `verdict=blocked` with the
- * `missing_refinement_artifact` finding.
- *
- * Migration (#1951 AC7/D7): existing checklist-bearing issues stay readable —
- * the parser still extracts their AC/DoD checklist content — but a body that
- * carries only checklists and no mapping matrix now fails closed with
- * `missing_ac_dod_matrix` and is re-grilled (loop-grill synthesizes the
- * matrix) rather than being silently grandfathered. No compatibility alias is
- * retained.
+ * not its semantic truthfulness (a reviewer responsibility). A matrix that is
+ * absent, empty, malformed, or identifier-only fails closed with the matching
+ * finding (`missing_ac_dod_matrix`, `malformed_ac_dod_matrix`,
+ * `missing_explicit_non_goals`, or `missing_refinement_artifact`). A body
+ * carrying only checklists and no matrix fails closed and is re-grilled; no
+ * compatibility alias is retained.
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -57,11 +43,9 @@ export const REFINEMENT_SOURCE = Object.freeze({
 
 const REFINEMENT_ARTIFACT_FINDING = "missing_refinement_artifact";
 
-// REFINEMENT_ARTIFACT_SOURCES: the refinement floor vocabulary (#1951). The
-// floor is the authoritative AC→DoD mapping MATRIX plus an explicit Non-goals
-// section (a linked refinement doc remains a complete artifact on its own) —
-// this list is the shape of a COMPLETE artifact, not a menu where any one
-// entry suffices.
+// REFINEMENT_ARTIFACT_SOURCES: the shape of a COMPLETE refinement artifact,
+// not a menu where any one entry suffices (#1951). A linked refinement doc
+// remains a complete artifact on its own.
 export const REFINEMENT_ARTIFACT_SOURCES = Object.freeze([
   "AC→DoD mapping matrix (a two-column table)",
   "explicit Non-goals section",
@@ -69,30 +53,25 @@ export const REFINEMENT_ARTIFACT_SOURCES = Object.freeze([
 ]);
 
 /**
- * #1866: finding reported when the issue body carries a refinement artifact
- * (AC/DoD checklist or a resolvable linked doc) but no explicit Non-goals
- * section. Mirrors the PR-path narrative-invariant code
- * (`PR_BODY_SPEC_NARRATIVE_SECTIONS.non_goals.code`) so both spec surfaces
- * name the missing invariant identically.
+ * Finding: refinement artifact present but no explicit Non-goals section.
+ * Mirrors the PR-path code (`PR_BODY_SPEC_NARRATIVE_SECTIONS.non_goals.code`)
+ * so both spec surfaces name the missing invariant identically (#1866).
  */
 export const MISSING_EXPLICIT_NON_GOALS_FINDING = "missing_explicit_non_goals";
 
 /**
- * #1951: finding reported when the issue body carries refinement content (AC
- * content, DoD content, and/or a Non-goals section) but NO authoritative
- * AC→DoD mapping matrix table. Under "matrix on the issue, checklist on the
- * PR" the mapping table is the authoritative issue artifact; interactive
- * issue-side AC/DoD checklists are not a substitute for it. Fails closed so
- * the issue is re-grilled to add the matrix.
+ * Finding: refinement content present but NO authoritative AC→DoD mapping
+ * matrix table. The mapping table is the authoritative issue artifact;
+ * issue-side checklists are not a substitute. Fails closed so the issue is
+ * re-grilled to add the matrix (#1951).
  */
 export const MISSING_AC_DOD_MATRIX_FINDING = "missing_ac_dod_matrix";
 
 /**
- * #1951: finding reported when the issue body carries an AC→DoD mapping table
- * but it is empty (header/separator only, no data rows) or identifier-only /
- * tautological (cells such as `AC1 → D1` with no concrete criterion or
- * completion-evidence prose). Structural shape validation only — semantic
- * truthfulness of the mapping stays a reviewer responsibility.
+ * Finding: an AC→DoD mapping table is present but empty (header/separator only)
+ * or identifier-only/tautological (cells such as `AC1 → D1` with no concrete
+ * criterion or evidence prose). Structural shape validation only — semantic
+ * truthfulness stays a reviewer responsibility (#1951).
  */
 export const MALFORMED_AC_DOD_MATRIX_FINDING = "malformed_ac_dod_matrix";
 
@@ -104,47 +83,35 @@ export const MALFORMED_AC_DOD_MATRIX_FINDING = "malformed_ac_dod_matrix";
  *   - one DoD-style section (DoD or Definition of Done)
  */
 const ACCEPTANCE_SECTION_PATTERNS = Object.freeze([
-  // #1877 round-6: index 0 is the exact-canonical ANCHOR family —
-  // `^acceptance criteria\b` — so a decorated-variant canonical heading
-  // (`## Acceptance criteria (v2)`, `## Definition of done — core`) still lands
-  // in the exact bucket rather than matching NO pattern at all (the alias
-  // families anchor on the `AC`/`DoD` abbreviations and never fire for the
-  // spelled-out phrase). The anchor stays distinct from the alias family below
-  // (`/^ac\b/`), so the precedence contract is unchanged: a spelled-out
-  // canonical heading always outranks an abbreviation-shaped alias heading.
+  // Index 0 is the exact-canonical ANCHOR (`^acceptance criteria\b`); the rest
+  // are aliases. A decorated-variant canonical heading (`## Acceptance criteria
+  // (v2)`) still lands in the exact bucket rather than matching no pattern. The
+  // anchor stays distinct from the `/^ac\b/` alias, so a spelled-out canonical
+  // heading always outranks an abbreviation-shaped alias heading (#1877).
   /^acceptance criteria\b.*$/i,
   /^ac\b.*$/i,
 ]);
 
 const DOD_SECTION_PATTERNS = Object.freeze([
-  // Same anchor-family widening as the AC family (see above). #1877 round-7:
-  // the ALIAS arms are widened symmetrically with the AC family too — a
-  // decorated-variant alias heading (`## DoD (v2)`, `## Done — core`) must land
-  // in the alias bucket, not in NO bucket (a `$`-anchored alias silently
-  // disarms the PR-side DoD read and false-blocks the issue side).
+  // Same anchor-family widening as the AC family. A decorated-variant alias
+  // heading (`## DoD (v2)`) must land in the alias bucket, not in no bucket: a
+  // `$`-anchored alias silently disarms the PR-side DoD read and false-blocks
+  // the issue side (#1877).
   /^definition of done\b.*$/i,
   /^done\b.*$/i,
   /^dod\b.*$/i,
 ]);
 
 /**
- * Normalize a heading name before section-pattern matching (#1877 round-6
- * parser hardening): GitHub authors legitimately write decorated canonical
- * headings — `## **Acceptance criteria**`, `## Acceptance criteria:`,
- * `## Acceptance criteria ##` — and the raw ATX capture (`match[2]`)
- * fails every pattern family on them, silently disarming the deterministic
- * AC/DoD reads (PR-side extractor fail-open; issue-side false
- * missing_refinement_artifact). Strip the harmless decoration once, at the
- * parse boundary, so exact-vs-alias precedence stays intact: a normalized
- * `Acceptance criteria` still matches the exact pattern, a decorated alias
- * still matches its alias family. Strips: surrounding emphasis runs of any
- * of `*`/`_` (bold `**`/`__` and single-char italic `*`/`_` alike, #1877
- * round-7), surrounding backtick runs, trailing `:` and surrounding
- * whitespace.
- * Deliberately NOT touched: interior text (a real `AC (v2) - final` name keeps
- * its interior), leading `#` (ATX markers never reach `match[2]`), and any
- * decoration a section pattern itself could rely on (none does — every family
- * anchors at the name's start).
+ * Normalize a heading name before section-pattern matching (#1877). Strip
+ * harmless decoration once, at the parse boundary, so decorated canonical
+ * headings (`## **Acceptance criteria**`, `## Acceptance criteria:`) still
+ * match their pattern family instead of silently disarming the AC/DoD reads.
+ * Exact-vs-alias precedence stays intact: a normalized `Acceptance criteria`
+ * still matches the exact pattern, a decorated alias still matches its alias
+ * family. Strips surrounding emphasis/backtick runs (bold and single-char
+ * italic), trailing `:`, closing ATX `#`, and surrounding whitespace.
+ * NOT touched: interior text, and leading `#` (never reaches `match[2]`).
  */
 function normalizeHeadingName(name) {
   if (typeof name !== "string") return name;
@@ -152,30 +119,23 @@ function normalizeHeadingName(name) {
     // trailing decoration first: closing `##` ATX-style, colons, whitespace
     .replace(/\s*:*\s*$/u, "")
     .replace(/\s*#+\s*$/u, "")
-    // surrounding emphasis/backtick runs (any length, must pair; #1877
-    // round-7: a run may be single-char italic `*`/`_` as well as bold
-    // `**`/`__`, so `## *Acceptance criteria*` and `## _Definition of done_`
-    // normalize exactly like their bold forms)
+    // surrounding emphasis/backtick runs (any length, must pair; a run may be
+    // single-char italic `*`/`_` as well as bold `**`/`__`)
     .replace(/^[*_`]+/u, "")
     .replace(/[*_`]+$/u, "")
     .trim();
 }
 
-// #1877 alias-precedence: exact canonical headings (the first pattern in each
-// family) must outrank loose aliases (`/^ac\b/`, `/^dod\b/`) so a matrix-shaped
-// heading the refined-issue contract itself produces (`## AC/DoD matrix`,
-// `## AC → DoD mapping`) can never hijack the canonical section read. Split
-// each pattern family into [exact, aliases] by convention: pattern index 0
-// is the exact canonical match, the rest are aliases.
+// Exact canonical headings (pattern index 0 in each family) must outrank loose
+// aliases (`/^ac\b/`, `/^dod\b/`) so a matrix-shaped heading (`## AC/DoD
+// matrix`) can never hijack the canonical section read. Index 0 is the exact
+// canonical match, the rest are aliases (#1877).
 const EXACT_PATTERN_INDEX = 0;
 
 /**
- * Resolve the sections matching a heading-pattern family with exact-first
- * precedence (#1877): the first section matching the EXACT canonical pattern
- * (index 0) wins over any earlier section that only matched a loose alias
- * (e.g. `## AC/DoD matrix` before `## Acceptance criteria`). When no exact
- * match exists, the first alias match is returned (alias-only bodies keep
- * working). Returns null when no section matches at all.
+ * Resolve the section matching a heading-pattern family with exact-first
+ * precedence (#1877): the first EXACT canonical match (index 0) wins over any
+ * earlier alias-only match. Falls back to the first alias match, else null.
  */
 function findSectionByPatterns(sections, patterns) {
   const exact = patterns[EXACT_PATTERN_INDEX];
@@ -195,10 +155,9 @@ function findSectionByPatterns(sections, patterns) {
 }
 
 /**
- * Collect ALL sections matching a heading-pattern family, exact-first ordered
- * (exact canonical matches before alias-only matches). Shared with
- * `findSectionByPatterns`'s precedence semantics so single-section consumers
- * and union consumers (#1877 PR-body unchecked-box extraction) cannot drift.
+ * Collect ALL sections matching a heading-pattern family, exact-first ordered.
+ * Shares `findSectionByPatterns`'s precedence semantics so single-section and
+ * union consumers (PR-body unchecked-box extraction) cannot drift (#1877).
  */
 function findAllSectionsByPatterns(sections, patterns) {
   const exact = patterns[EXACT_PATTERN_INDEX];
@@ -220,28 +179,19 @@ function findAllSectionsByPatterns(sections, patterns) {
 }
 
 /**
- * Flatten a section (heading record) into a body string that extends past
- * `###` sub-headings (#1877): a section's checklist may nest items under
- * deeper sub-headings (`### edge cases` inside `## Acceptance criteria`), so
- * join the section and every following section of a DEEPER heading level up
- * to the next same-or-shallower heading. `parseMarkdownSections` terminates a
- * section's `bodyLines` at ANY heading, which is correct for heading
- * matching but hides unchecked boxes from consumers that must see ALL of a
- * canonical section's boxes.
+ * Flatten a section into a body string that extends past `###` sub-headings
+ * (#1877): join the section and every following DEEPER-level section up to the
+ * next same-or-shallower heading, so nested checklist items stay visible to
+ * consumers that must see ALL of a canonical section's boxes.
  */
 function flattenSectionDeep(sections, startIndex) {
   const start = sections[startIndex];
-  // #1877 round-6 heading-name re-injection fix: the raw sub-heading NAME is
-  // NEVER re-injected into the text the checklist parser re-parses. A name is
-  // a different input class from checklist body text: a fence-opening name
-  // (`### ``` `) used to corrupt the parser's fence state and eat every real
-  // box after it (fail-open), and a checkbox-shaped name (`### - [ ] fake`)
-  // used to be counted as a phantom unchecked item (spurious fail-closed).
-  // Only already-classified bodyLines are joined — a heading can never match
-  // any line-level grammar, and real boxes under sub-headings stay visible
-  // because their bodyLines still join normally. (Keeping a marker line is
-  // unnecessary: parseChecklistItems never needed the heading boundary to
-  // track fence state — body lines carry their own fences.)
+  // Anti-spoof: the raw sub-heading NAME is NEVER re-injected into the text the
+  // checklist parser re-parses. A fence-opening name (`### ``` `) would corrupt
+  // fence state and eat real boxes (fail-open); a checkbox-shaped name
+  // (`### - [ ] fake`) would count as a phantom unchecked item (fail-closed).
+  // Only already-classified bodyLines are joined; real boxes under sub-headings
+  // stay visible because their bodyLines still join normally.
   const parts = [start.bodyLines.join("\n")];
   for (let i = startIndex + 1; i < sections.length; i += 1) {
     if (sections[i].level <= start.level) break;
@@ -313,11 +263,9 @@ export function parseMarkdownSections(body) {
       }
       current = {
         level: match[1].length,
-        // #1877 round-6: normalize the captured name so decorated canonical
-        // headings (`## **Acceptance criteria**`) match the section patterns.
-        // The RAW name is never re-parsed as body text (flattenSectionDeep no
-        // longer re-injects it), so normalization is the only consumer of the
-        // capture — the raw form is not retained (no consumer reads it).
+        // Normalize the captured name so decorated canonical headings
+        // (`## **Acceptance criteria**`) match the section patterns. The raw
+        // form is never re-parsed as body text, so it is not retained (#1877).
         name: normalizeHeadingName(match[2]),
         bodyLines: [],
       };
@@ -337,27 +285,21 @@ export function parseMarkdownSections(body) {
 
 
 /**
- * Parse bullet/checkbox items from a section body into item states. Each
- * checkbox item — any GFM/CommonMark task-list marker: `-`/`*`/`+` bullets,
- * ordered `N.`/`N)`, and blockquote-nested `> - [ ]` (#1877 round-6 grammar
- * widening; parity with tick-verified-checkboxes.mjs's `[-*+]`) — becomes
- * `{ text, checked }` (`checked` true only for a ticked `[x]`/`[X]` marker,
- * read from the captured marker group, never a whole-line re-test); a
- * top-level plain bullet (`- text`, dash at column 0 so nested/indented
- * sub-bullets are not counted)
- * becomes `{ text, checked: null }` — it has no checkbox to tick. Empty
- * checkbox placeholders (`- [ ]` / `- [x]` with no trailing text) are skipped,
- * not counted, so a section of only unfilled placeholders reports as unrefined.
- * Code-fenced lines are skipped (same fence logic as parseMarkdownSections,
- * issue #1025) so a body cannot spoof the AC/DoD gate with code-fenced
- * checkboxes.
+ * Parse bullet/checkbox items from a section body into item states. A checkbox
+ * item — any GFM/CommonMark task-list marker (`-`/`*`/`+` bullets, ordered
+ * `N.`/`N)`, blockquote-nested `> - [ ]`; parity with
+ * tick-verified-checkboxes.mjs) — becomes `{ text, checked }`, where `checked`
+ * is true only for a ticked `[x]`/`[X]` marker read from the captured marker
+ * group, never a whole-line re-test. A top-level plain bullet (`- text`, dash
+ * at column 0) becomes `{ text, checked: null }` — it has no checkbox. Empty
+ * placeholders (`- [ ]` with no text) are skipped. Code-fenced lines are
+ * skipped (same fence logic as parseMarkdownSections) so a body cannot spoof
+ * the AC/DoD gate with code-fenced checkboxes (#1025).
  *
- * Shared by `extractChecklistItems` (text-only) and the unticked-AC check
- * (`extractUncheckedChecklistItems`) so the two never drift on what counts as
- * a checklist item or on the checkbox-state read (#1621). Only ever called on
- * the body of an already-recognized AC/DoD section (see
- * `detectIssueRefinementArtifact`), so counting plain bullets is scoped to
- * those sections and never affects prose sections.
+ * Shared by `extractChecklistItems` and `extractUncheckedChecklistItems` so the
+ * two never drift on what counts as an item or on the checkbox-state read
+ * (#1621). Only called on an already-recognized AC/DoD section, so counting
+ * plain bullets never affects prose sections.
  */
 function parseChecklistItems(sectionBody) {
   if (typeof sectionBody !== "string" || sectionBody.length === 0) {
@@ -374,20 +316,15 @@ function parseChecklistItems(sectionBody) {
     if (step.insideFence) {
       continue;
     }
-    // Checklist item: GFM/CommonMark task-list markers (#1877 round-6 parser
-    // hardening): `-`/`*`/`+` bullets, ordered `N.`/`N)`, and blockquote-nested
-    // `> - [ ]` — the forms GitHub itself renders as interactive checkboxes.
-    // Grammar parity with tick-verified-checkboxes.mjs's CHECKBOX_RE (same
-    // #1877 round-1 widening): both accept bullets, ordered markers, and
-    // blockquote-nested forms, so every form this extractor surfaces as
-    // unchecked is flippable by the tick tool. Consume ANY checkbox-marker line
-    // here; push only when it carries text, so empty placeholders (`- [ ]`) are
-    // skipped rather than counted. #1877 round-7: the tick state comes from the
-    // CAPTURED marker group of this single match — never a second whole-line
-    // re-test. An unanchored `/\[(?:[xX])\]/u.test(line)` reads an UNCHECKED box
-    // whose label text merely mentions `[x]` (e.g. `- [ ] verify [x] flags`) as
-    // checked, silently disarming the deterministic block — the exact
-    // fail-open class the marker-anchored pre-#1877 read could not produce.
+    // Checklist item: GFM/CommonMark task-list markers (`-`/`*`/`+` bullets,
+    // ordered `N.`/`N)`, blockquote-nested `> - [ ]`) — grammar parity with
+    // tick-verified-checkboxes.mjs so every form surfaced as unchecked is
+    // flippable by the tick tool. Push only when the line carries text, so
+    // empty placeholders are skipped. The tick state comes from the CAPTURED
+    // marker group, never a second whole-line re-test: an unanchored
+    // `/\[[xX]\]/.test(line)` would read an unchecked box whose label merely
+    // mentions `[x]` (`- [ ] verify [x] flags`) as checked, a fail-open the
+    // marker-anchored read cannot produce (#1877).
     const checkboxMatch =
       /^\s*(?:>|\s)*(?:[-*+]|\d+[.)])\s+\[([ xX])\](?:\s+(.+?))?\s*$/u.exec(line);
     if (checkboxMatch) {
@@ -461,14 +398,12 @@ const MATRIX_SECTION_PATTERNS = Object.freeze([
 ]);
 
 // Header column families: col0 names the criterion side, col1 the evidence
-// side. Used to recognize an unheaded (not under a matrix heading) but clearly
-// criterion→evidence table anywhere in the body. Kept STRONG on purpose (#1951
-// draft_gate correctness review): a generic status table like `| Outcome |
-// Done |` must NOT be mistaken for the refinement matrix — only headers that
-// explicitly name acceptance criteria AND completion evidence / DoD qualify
+// side. Recognizes an unheaded but clearly criterion→evidence table anywhere in
+// the body. Kept STRONG on purpose (#1951): a generic status table like
+// `| Outcome | Done |` must NOT be mistaken for the refinement matrix — only
+// headers naming acceptance criteria AND completion evidence / DoD qualify
 // without a matrix heading. A matrix under a weaker header still qualifies via
-// its `## AC / DoD matrix` heading (MATRIX_SECTION_PATTERNS), which is what the
-// loop-grill synthesis and the epic procedure both write.
+// its `## AC / DoD matrix` heading (MATRIX_SECTION_PATTERNS).
 const MATRIX_CRITERION_HEADER = /\b(criteri\w*|acceptance|ac)\b/i;
 const MATRIX_EVIDENCE_HEADER = /\b(evidence|dod|definition of done)\b/i;
 
@@ -498,13 +433,11 @@ function cellProseWordCount(cell) {
 }
 
 // A matrix data row is semantic when BOTH mapped cells carry at least one real
-// prose word (a letter-run of >=3 chars, excluding the `dod` token). This
-// rejects the identifier-only/tautological rows the contract names — `AC1 | D1`,
-// `AC1 → D1`, `DoD`, and empty cells (all 0 prose words) — WITHOUT false-
-// rejecting a legitimately terse-but-real mapping (e.g. `Feature works |
-// Regression test added`). The threshold is deliberately >=1, not >=2: the goal
-// is to reject bare identifiers, not to mandate a minimum verbosity (#1951
-// draft_gate/Copilot review).
+// prose word. This rejects identifier-only/tautological rows (`AC1 | D1`,
+// `AC1 → D1`, `DoD`, empty cells) WITHOUT false-rejecting a terse-but-real
+// mapping (`Feature works | Regression test added`). The threshold is
+// deliberately >=1, not >=2: reject bare identifiers, do not mandate a minimum
+// verbosity (#1951).
 function rowIsSemantic(criterion, evidence) {
   return cellProseWordCount(criterion) >= 1 && cellProseWordCount(evidence) >= 1;
 }
@@ -697,36 +630,21 @@ export function detectLinkedRefinementDoc(body) {
 /**
  * Detect the refinement artifact on a parsed issue body.
  *
- * #1866: the tracker-backed refinement floor is the artifact (AC checklist,
- * DoD checklist, or a resolvable linked refinement doc) AND an explicit,
- * non-empty Non-goals section — the loop-grill / artifact-authority contract
- * requires Non-goals on a refined issue body, so the deterministic check
- * enforces it (fail-closed) with the distinct finding
- * `MISSING_EXPLICIT_NON_GOALS_FINDING`. The non-goals matcher is shared with
- * `validatePrBodySpec` (`PR_BODY_SPEC_NARRATIVE_SECTIONS.non_goals.patterns`),
- * so the two spec surfaces cannot drift on what counts as an explicit
- * Non-goals section. `hasACs` keeps its caller-facing meaning: true only when
- * the FULL check passes (#1951: a valid AC→DoD mapping matrix plus an explicit
- * Non-goals section, or a resolvable linked refinement doc plus Non-goals), so
- * every `.hasACs` consumer (enqueue gate, draft gate, parked-items discovery,
- * gate context) fails closed with no call-site change. `acItems`/`dodItems`
- * stay populated for downstream consumers: from the issue's own checklist
- * sections when present, otherwise projected from the matrix rows.
+ * The floor is a valid AC→DoD mapping matrix (or a resolvable linked refinement
+ * doc) AND an explicit, non-empty Non-goals section (#1866). A missing Non-goals
+ * section fails closed with the distinct finding
+ * `MISSING_EXPLICIT_NON_GOALS_FINDING`; its matcher is shared with
+ * `validatePrBodySpec` so the two spec surfaces cannot drift. `hasACs` is true
+ * only when the FULL check passes, so every `.hasACs` consumer fails closed with
+ * no call-site change. `acItems`/`dodItems` stay populated for downstream
+ * consumers: from the issue's own checklist sections when present, otherwise
+ * projected from the matrix rows.
  *
- * `resolveLinkedDoc` (optional, #1866): a `(path) => boolean` callback used to
- * verify that a linked `tmp/refinement/*.md` doc actually resolves (e.g.
- * `existsSync`). Enforcement-point callers (enqueue gate, draft-gate
- * linked-issue path) supply it; a linked doc found in the body then satisfies
- * the artifact check only when the callback returns true. When the callback is
- * not supplied the predicate stays pure/no-I/O and behavior is unchanged, and
- * the `linkedDoc` result carries no `resolves` field. When supplied and the
- * doc does not resolve, `linkedDoc.resolves === false` and the linked doc does
- * not satisfy the artifact check (other artifact sources still count).
- *
- * Result-shape note: on a `missing_explicit_non_goals` result, `source` keeps
- * the detected artifact origin (e.g. `issue-body-ac`) so callers/reporting can
- * still see what artifact exists; `hasACs` is false because the full
- * refinement check did not pass.
+ * `resolveLinkedDoc` (optional): a `(path) => boolean` callback verifying that a
+ * linked `tmp/refinement/*.md` doc actually resolves (e.g. `existsSync`). When
+ * not supplied the predicate stays pure/no-I/O and `linkedDoc` carries no
+ * `resolves` field; when supplied and the doc does not resolve, the linked doc
+ * does not satisfy the check (other artifact sources still count).
  *
  * @param {object} input
  * @param {string} [input.body]  Raw issue body Markdown.
@@ -960,9 +878,9 @@ export const PR_BODY_SPEC_NARRATIVE_SECTIONS = Object.freeze({
 /**
  * GitHub's accepted closing-keyword issue references (close/closes/closed,
  * fix/fixes/fixed, resolve/resolves/resolved), case-insensitive, followed by
- * `#N` or the cross-repo `owner/repo#N` form. Mirrors the linkage the
- * lightweight path (#1025) requires the PR body to carry (issue #1181: five
- * lightweight PRs merged without this and none auto-closed their issue).
+ * `#N` or the cross-repo `owner/repo#N` form. Required linkage on the PR body:
+ * five lightweight PRs merged without this and none auto-closed their issue
+ * (#1181).
  */
 const CLOSING_ISSUE_REFERENCE_PATTERN =
   /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:[\w.-]+\/[\w.-]+)?#(\d+)/giu;
@@ -1017,33 +935,22 @@ function sectionHasBody(section) {
  * Validate that a PR body carries every invariant required to serve as the
  * lightweight spec-of-record: Objective/why, in-scope, explicit non-goals,
  * testable Acceptance criteria (>=1 checklist item), Definition of done
- * (>=1 checklist item), Open questions/risks, and — unless explicit
- * issue-less mode is requested — a GitHub closing-keyword issue reference
- * (`Closes #N` and GitHub's other accepted forms — the lightweight path's
- * `Closes #N` linkage, issue #1181). Reuses the generic markdown logic
- * (parseMarkdownSections / AC + DoD patterns / extractChecklistItems) so
- * there is no parallel validator. Fails closed: every missing invariant is
- * reported under its distinct `missing_*` code. Pure; no side effects.
+ * (>=1 checklist item), Open questions/risks, and — unless issue-less mode is
+ * requested — a GitHub closing-keyword issue reference. Reuses the generic
+ * markdown logic so there is no parallel validator. Fails closed: every missing
+ * invariant is reported under its distinct `missing_*` code. Pure; no I/O.
  *
- * Issue-less mode (`issueLess: true`, issue #1210): the narrative invariants
- * stay unconditional, but the closing-issue linkage flips from REQUIRED to
- * FORBIDDEN — the PR is the sole artifact, so it MUST NOT carry a closing
- * reference to an issue that doesn't back it. A present reference in this
- * mode fails closed under `unexpected_closing_issue_reference`, distinct
- * from `missing_closing_issue_reference` (tracker-backed mode, the default)
- * so callers can tell "no issue expected" apart from "issue expected but
- * absent". `expectedIssue` and `issueLess` are mutually exclusive; callers
- * pick exactly one mode (tracker-backed, with or without a specific
- * expected issue) or issue-less — never both.
+ * Issue-less mode (`issueLess: true`): the closing-issue linkage flips from
+ * REQUIRED to FORBIDDEN (the PR is the sole artifact), failing closed under
+ * `unexpected_closing_issue_reference` — distinct from
+ * `missing_closing_issue_reference` (tracker-backed, the default).
+ * `expectedIssue` and `issueLess` are mutually exclusive; callers pick exactly
+ * one mode.
  *
- * `requireOpenQuestions` (default `true`, issue #1863): the lightweight
- * PR-body-as-spec contract (this function's original scope) requires an Open
- * questions/risks section; the ordinary tracker-backed PR-description
- * contract (skills/docs/copilot-loop-operations.md "PR description
- * contract") does not name one. Pass `false` (see
- * `validateTrackerBackedPrBodySpec` below) to skip the `missing_open_questions`
- * check without touching any other invariant — the lightweight caller's
- * default stays byte-identical.
+ * `requireOpenQuestions` (default `true`): the tracker-backed PR-description
+ * contract does not name an Open questions/risks section; pass `false` (see
+ * `validateTrackerBackedPrBodySpec`) to skip that check without touching any
+ * other invariant (#1863).
  *
  * @param {{ body?: string, expectedIssue?: number, issueLess?: boolean, requireOpenQuestions?: boolean }} input
  * @returns {{ checker: "validate-pr-body-spec", ok: boolean, errors: { code: string, message: string }[], sections: string[], acItems: string[], dodItems: string[], closesIssues: number[] }}
