@@ -11,10 +11,8 @@ import {
 } from "@dev-loops/core/loop/policy-constants";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
+import { waitWithHeartbeat } from "./_watch-heartbeat.mjs";
 
-/** Maximum interval between heartbeat outputs during watch delays.
- *  Must be shorter than pi-subagents default needsAttentionAfterMs (60s). */
-const WATCH_HEARTBEAT_MS = 45_000; // 45 seconds
 const REMOVED_FLAGS = new Set([
   "--poll-interval-ms",
 ]);
@@ -298,41 +296,28 @@ export async function watchCopilotReview(
         attempt,
         now(),
       );
-      if (pollDelayMs > 0) {
-        let remainingMs = pollDelayMs;
-        while (remainingMs > 0) {
-          const chunkMs = Math.min(WATCH_HEARTBEAT_MS, remainingMs);
-          await delayImpl(chunkMs);
-          remainingMs -= chunkMs;
-          if (remainingMs > 0) {
-            const nowMs = now();
-            process.stderr.write(
-              JSON.stringify({
-                ok: true,
-                type: "watch_heartbeat",
-                elapsedMs: nowMs - watchStartedAtMs,
-                totalBudgetMs: options.timeoutMs,
-                poll: attempt,
-                maxPolls: attemptBudget,
-              }) + "\n",
-            );
-            // The blocking review wait can span the full watch budget, which
-            // equals the runner-coordination stale window; refresh the lease
-            // alongside each heartbeat so the claim stays fresh for every caller
-            // of this engine. No-ops without DEVLOOPS_RUN_ID; best-effort.
-            try {
-              await ensureOwnershipImpl({
-                repo: options.repo,
-                pr: options.pr,
-                env,
-                cwd: leaseCwd,
-                claimIfMissing: true,
-                requireExisting: false,
-              });
-            } catch { /* best-effort: never affect the watch */ }
-          }
-        }
-      }
+      await waitWithHeartbeat(pollDelayMs, {
+        attempt,
+        attemptBudget,
+        watchStartedAtMs,
+        timeoutMs: options.timeoutMs,
+        now,
+        delayImpl,
+        // The blocking review wait can span the full watch budget, which equals
+        // the runner-coordination stale window; refresh the lease alongside each
+        // heartbeat so the claim stays fresh for every caller of this engine.
+        // No-ops without DEVLOOPS_RUN_ID; waitWithHeartbeat swallows any throw,
+        // so a lease-refresh failure here never affects the watch.
+        onHeartbeat: () =>
+          ensureOwnershipImpl({
+            repo: options.repo,
+            pr: options.pr,
+            env,
+            cwd: leaseCwd,
+            claimIfMissing: true,
+            requireExisting: false,
+          }),
+      });
     }
     const current = parseCopilotActivity(await fetchGithubCopilotActivityPayload(
       { repo: options.repo, pr: options.pr },
