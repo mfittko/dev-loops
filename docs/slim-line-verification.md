@@ -14,7 +14,8 @@ does not promote or merge the line elsewhere.
   commit `0649cd1e`; the main line stays frozen for the epic's duration.
 - Every included child PR targeted `1.0.2-slim`, enforced by
   `workflow.baseBranch: 1.0.2-slim` committed in `.devloops` on that branch.
-- The merge inventory over `0649cd1e..HEAD` contains only approved epic children
+- The merge inventory over the merged epic line (`0649cd1e..origin/1.0.2-slim`,
+  which excludes this closer PR) contains only approved epic children
   (the two admission guards, the consolidation refactors, the comment-slim
   leaves, the test-economy slices) plus the epic's own `.devloops` config chores.
   No unrelated feature commits are present.
@@ -45,8 +46,8 @@ and `test/packaged-install-smoke.test.mjs` (packed consumer boundary).
 `bun run verify` on the combined line (pinned Bun 1.4.1, Node >=24):
 
 - `test:all`: 8264 pass, 0 skip, 0 fail across 358 files.
-- `test:docs`: pass (190 files, 664 links, 231 rules; CHANGELOG completeness
-  against base `0649cd1e`).
+- `test:docs`: pass (664 links, 231 rules; CHANGELOG completeness against base
+  `0649cd1e`).
 - `test:workflows`: pass.
 
 The full verifier already executes the owning tests for pack, asset, and schema
@@ -67,8 +68,9 @@ or required.
 
 ## Epic before/after aggregation
 
-Aggregate change over the whole line (`0649cd1e..HEAD`): 187 files,
-+6087 / -8779 (net -2692 lines). By authority category:
+Aggregate change over the merged epic line (`0649cd1e..origin/1.0.2-slim`, which
+excludes this closer PR's own footprint): 187 files, +6087 / -8779 (net -2692
+lines). By authority category:
 
 | Category | files | +/- | net |
 |---|---|---|---|
