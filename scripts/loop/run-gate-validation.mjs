@@ -4,8 +4,8 @@
  *
  * The gate preamble runs this round's validation suites ONCE and records the
  * results here, so every per-angle reviewer of the same gate pass reads this
- * artifact instead of independently re-running the same suites (the token
- * cost that motivated #1550). write-gate-context.mjs's `--validation-results
+ * artifact instead of independently re-running the same suites (avoiding the
+ * redundant token cost). write-gate-context.mjs's `--validation-results
  * <path>` flag threads this artifact's path into the shared briefing prefix
  * so reviewers know where to read it.
  *
@@ -282,7 +282,7 @@ export async function buildValidationArtifact({ repo, pr, gate, headSha, suites,
     headSha,
     generatedAt: new Date().toISOString(),
     allPassed: suiteResults.every((s) => s.exitCode === 0),
-    // Stamp dependency state relative to the authoritative lockfile (#1627): a worktree
+    // Stamp dependency state relative to the authoritative lockfile: a worktree
     // whose installed deps do not match the lockfile is validated against
     // stale deps, so the artifact records the
     // delta instead of blessing it. Non-blocking (does not flip allPassed) — it
@@ -346,8 +346,8 @@ async function findAncestorPackageManifest(startDir, relativeManifestPath) {
 }
 
 /**
- * Compare the authoritative dependency lock against the installed tree
- * (#1627). Bun lock entries are checked against installed package manifests;
+ * Compare the authoritative dependency lock against the installed tree.
+ * Bun lock entries are checked against installed package manifests;
  * npm's package-lock is checked against its installed hidden lock snapshot.
  * A mismatch means the validation
  * suites ran against stale deps — stamped, not blocking, so gate consumers can

@@ -319,8 +319,8 @@ export function validateCliArgs(options) {
     if (options.carryForwardProof !== undefined && options.priorApprovals === undefined) {
       throw parseError("--carry-forward-proof requires --prior-approvals (it is only applied during criterion invalidation)");
     }
-    // #2000 AC7 (issue 2008 AC2 / ADR 0061): --changed-paths and --coverage-map
-    // are the affected-criteria producer's inputs. Both required together —
+    // ADR 0061 AC7: --changed-paths and --coverage-map are the
+    // affected-criteria producer's inputs. Both required together —
     // one without the other would silently drop the producer with no
     // diagnostic — and, like --carry-forward-proof, only meaningful inside
     // the --prior-approvals invalidation path.
@@ -446,9 +446,9 @@ function validateFindingsArray(parsed, flagLabel) {
 }
 
 // Best-effort read of a prior --ledger-out artifact (the same path this run
-// is about to overwrite) to recover the PR's already-linked follow-up issue
-// (#1807 idempotency, batching policy): a re-run of the judge pass over the
-// same round must reuse the PR's ONE tracked follow-up issue rather than
+// is about to overwrite) to recover the PR's already-linked follow-up issue:
+// a re-run of the judge pass over the same round must reuse the PR's ONE
+// tracked follow-up issue rather than
 // mint a duplicate, and must not re-append fingerprints it already recorded
 // there. Tolerates a missing/malformed prior artifact (first-ever run) by
 // returning an empty link set — never fails the pass over a stale/partial
@@ -483,7 +483,7 @@ async function readPriorFollowUpLinks(ledgerOutPath) {
 
 /**
  * Attach a stable per-finding `fingerprint` to every judge-disposed finding
- * (act/defer/reject — #1807's one-line reject audit entry keys on it too),
+ * (act/defer/reject — the one-line reject audit entry keys on it too),
  * then — for every `defer` disposition — create or append to the PR's ONE
  * tracked follow-up GitHub issue (batched: never one issue per finding).
  * Mutates `enriched` in place (each element already the judge-pass's own
@@ -625,7 +625,7 @@ async function enforceSpecAuthority(options, findings, resolvedRoot) {
     if (options.carryForwardProof !== undefined) {
       carryForwardProof = await readJsonArtifact(path.resolve(resolvedRoot, options.carryForwardProof), "--carry-forward-proof", parseError);
     }
-    // #2000 AC7 (issue 2008 AC2 / ADR 0061): when the changed-content->criteria producer's
+    // ADR 0061 AC7: when the changed-content->criteria producer's
     // inputs are BOTH supplied, use it to narrow affectedCriteria instead of the
     // all-stale fallback. An UNCERTAIN result (some changed path matched no
     // criterion's coverage) still fails closed to all-stale, but now against the
@@ -657,7 +657,7 @@ async function enforceSpecAuthority(options, findings, resolvedRoot) {
     }
   }
 
-  // AC6 (issue 2008 / ADR 0061): durable provenance the approval record must
+  // ADR 0061 AC6: durable provenance the approval record must
   // ALSO persist — the human-decision requirement in its own named shape, and
   // the chosen (authorized) remedy for every valid_compliant decision — derived
   // straight from the validated whole-spec verdict so writeApprovalsRecord
@@ -710,13 +710,13 @@ async function writeApprovalsRecord(approvalsPath, specAuthority, roundClean) {
         contentDigest: specAuthority.contentDigest,
         approvedCriteria,
         invalidation: specAuthority.invalidation,
-        // AC6 (issue 2008 / ADR 0061): provenance + the chosen compliant remedy,
-        // so a fresh process reconstructs why the round did/did not need a human
-        // spec decision and what remedy each valid_compliant finding authorized,
+        // ADR 0061 AC6: provenance + the chosen compliant remedy, so a fresh
+        // process reconstructs why the round did/did not need a human spec
+        // decision and what remedy each valid_compliant finding authorized,
         // without prompt memory.
         humanDecision: specAuthority.humanDecision,
         authorizedRemediations: specAuthority.authorizedRemediations,
-        // The coverage map used THIS round (when the #2000 AC7 / issue 2008 AC2 producer was supplied).
+        // The coverage map used THIS round (when the ADR 0061 AC7 producer was supplied).
         // This is a durable audit / re-entry-reconstruction record only: judge-pass
         // does NOT read prior.criterionCoverage back in. A re-entry round MUST still
         // pass --coverage-map explicitly for changed-paths narrowing to engage;
@@ -794,7 +794,7 @@ export async function judgePassCli(
     );
   }
 
-  // #1807: a `defer` disposition always tracks a GitHub issue — never only the
+  // A `defer` disposition always tracks a GitHub issue — never only the
   // ephemeral tmp ledger. One issue per PR, batched; idempotent across re-runs
   // via the prior --ledger-out artifact this run is about to overwrite.
   await applyFollowUpIssues(
@@ -803,7 +803,7 @@ export async function judgePassCli(
     { env, ghCommand, run, createIssue, commentIssue, listIssues },
   );
 
-  // AC1 (issue 2008 / ADR 0061): when spec-authority is engaged, both the
+  // ADR 0061 AC1: when spec-authority is engaged, both the
   // enriched ledger and the fixer act list carry the pinned revision identity +
   // the whole checked criterion set, via the ONE shared stamp helper — never
   // recomputed per writer. A no-op (byte-identical to before) when

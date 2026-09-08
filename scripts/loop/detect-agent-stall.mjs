@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Agent-level stall probe (#1669).
+ * Agent-level stall probe.
  *
  * Detects whether a dev-loop child (subagent) has stalled — no turn progress
  * for N minutes with no pending supervisor request — while NOT falsely bailing
@@ -182,7 +182,7 @@ async function runDetectAgentStall(options) {
     return parseError(`Invalid PR number: ${JSON.stringify(pr)}`);
   }
 
-  // Consume the workflow.stallDetection config surface (#1669): resolve
+  // Consume the workflow.stallDetection config surface: resolve
   // enabled + thresholdMinutes from the repo .devloops so a repo may disable
   // auto-bail (enabled: false -> never report a stall) or tune the window
   // without re-hardcoding. Falls back to built-in defaults when no config
