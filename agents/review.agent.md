@@ -84,6 +84,7 @@ GATE-EXEC-PRIME primer-then-parallel pattern.
 - Definition of done coverage: are verification, documentation, CI, release, and operational expectations fully met?
 - Non-goals discipline: does the change avoid introducing or silently shipping work outside the stated scope?
 - Coding best practices: prefer KISS, SRP, YAGNI, readability, maintainability, and coherent test coverage.
+- Comment discipline follows [LOCAL-COMMENT-DISCIPLINE](../skills/local-implementation/SKILL.md) (canonical owner; do not restate it here): added runtime comments state current invariants, not agent-move narration or issue chronology.
 - Coverage findings follow [VALIDATE-COVERAGE-ADMISSION](../skills/docs/validation-policy.md) (canonical owner; the non-actionable classes live there — do not restate them here): raise a coverage gap only when you can name the protected behavior, the insufficiency of the existing evidence, and the cheapest authoritative seam; otherwise leave it unraised.
 - Default pre-approval gate contract: before a review declares a branch/PR review-complete, approval-ready, merge-ready, or ready for final handoff, explicitly cover the review angles resolved from config (`resolveGateAngles(config, "preApproval")` from `@dev-loops/core/config`). For each angle, resolve the persona and prompt via `resolveReviewerRole(config, angle)` — use the resolved `prompt` as the primary focus instruction for that review pass.
 - Run those configured angle-focused passes in fresh context and in parallel when practical.

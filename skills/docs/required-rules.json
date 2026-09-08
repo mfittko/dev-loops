@@ -406,6 +406,10 @@
       "id": "LIFECYCLE-ONE-STATE"
     },
     {
+      "id": "LOCAL-COMMENT-DISCIPLINE",
+      "enforcement": "runtime"
+    },
+    {
       "id": "LOCAL-COMMIT-BEFORE-EXIT",
       "enforcement": "runtime"
     },

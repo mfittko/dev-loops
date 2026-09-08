@@ -11,6 +11,7 @@ import { ghJson as runGhJson } from "@dev-loops/core/github/gh";
 import { parseArgs } from "node:util";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "./check-size-budget.mjs";
 import { evaluateAdrTripwire as realEvaluateAdrTripwire } from "./check-adr-tripwire.mjs";
+import { evaluateCommentDiscipline as realEvaluateCommentDiscipline } from "./check-comment-discipline.mjs";
 import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -32,7 +33,12 @@ ready-for-review.mjs. Also enforces the fail-closed ADR tripwire (issue
 the shared gate config, or a rule-modality reversal) must add/update a
 docs/decisions/NNNN-*.md record or carry \`adr-tripwire:allow <reason>\` in its
 PR body. The ADR waiver is body-derived, so unlike the size-budget flag it is
-honored identically on this raw path.
+honored identically on this raw path. Also enforces the fail-closed
+comment-discipline guard (LOCAL-COMMENT-DISCIPLINE, issue #2054): a newly added
+runtime-source comment citing issue-number chronology or over the design-essay
+threshold blocks unless it carries the inline \`comment-discipline:allow\`
+marker; diff-scoped and added-lines-only, so it never flags pre-existing
+comments.
 
 Exit codes:
   0  Draft gate evidence exists and the size budget does not block — ready transition is allowed
@@ -118,7 +124,7 @@ async function fetchPrState({ repo, pr }, { env, ghCommand, runChild }) {
   };
 }
 
-export async function prePrReadyGate(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget, evaluateAdrTripwire = realEvaluateAdrTripwire } = {}) {
+export async function prePrReadyGate(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget, evaluateAdrTripwire = realEvaluateAdrTripwire, evaluateCommentDiscipline = realEvaluateCommentDiscipline } = {}) {
   const prState = await fetchPrState({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
   const headSha = prState.headRefOid;
   if (!headSha) throw new Error(`Could not resolve PR head SHA`);
@@ -219,6 +225,32 @@ export async function prePrReadyGate(options, { env = process.env, ghCommand = "
       draftGateMarker: gate.draftGateMarker,
       sizeBudget,
       adrTripwire,
+    };
+  }
+
+  // Fail-closed comment-discipline guard (LOCAL-COMMENT-DISCIPLINE, #2054):
+  // the same added-lines-only check readyForReview() runs — a newly added
+  // runtime comment citing issue chronology or over the design-essay
+  // threshold blocks unless the comment carries the inline escape marker.
+  const commentDiscipline = await evaluateCommentDiscipline({
+    base: `origin/${prState.baseRefName}`,
+    head: headSha,
+    repoRoot,
+  });
+  if (commentDiscipline.outcome === "block") {
+    return {
+      ok: false,
+      error: `PR #${options.pr} blocked by comment discipline: ${commentDiscipline.reasons.join("; ")}`,
+      repo: options.repo,
+      pr: options.pr,
+      currentHeadSha: headSha,
+      draftGateSatisfied: true,
+      unresolvedGateThreadCount: gate.unresolvedGateThreadCount,
+      draftGate: gate.draftGate,
+      draftGateMarker: gate.draftGateMarker,
+      sizeBudget,
+      adrTripwire,
+      commentDiscipline,
     };
   }
 
