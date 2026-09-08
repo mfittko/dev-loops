@@ -2,12 +2,13 @@
 /**
  * Sanctioned atomic version bump.
  *
- * The project version is a single source of truth fanned out across five
+ * The project version is a single source of truth fanned out across six
  * release surfaces that MUST move together on every bump. A human remembering
  * each one is how a release drifts (a root manifest bumped while the committed
- * `.claude` tree and lockfile stayed on the prior prerelease). This script sets
- * all five to one target in lockstep, regenerates the derived artifacts, stages
- * exactly the enumerated release files, and fails closed on any residual drift.
+ * `.claude` tree and lockfile stayed on the prior prerelease, or the CHANGELOG
+ * left on `## Unreleased`). This script sets all six to one target in lockstep,
+ * regenerates the derived artifacts, stages exactly the enumerated release
+ * files, and fails closed on any residual drift.
  *
  * Surfaces:
  *   1. root `package.json` `version`
@@ -18,6 +19,10 @@
  *   5. the generated `.claude` tree — `.claude/.claude-plugin/plugin.json`
  *      `version` and every pinned `npx dev-loops@<version>` call-site
  *      (produced by `scripts/claude/generate-claude-assets.mjs`)
+ *   6. `CHANGELOG.md` — the `## Unreleased` heading is stamped to `## <version>`
+ *      (entries left intact) so `extract-changelog-section.mjs` finds the
+ *      release section; fails closed when there is no Unreleased content to
+ *      stamp (an undocumented release must not proceed)
  *
  * Bump-only: it never commits, tags, pushes, or publishes. Commit + tag + push
  * and the stable-release approval gate remain operator/runbook-owned.
@@ -39,6 +44,7 @@ import { fileURLToPath } from "node:url";
 import { isDirectCliRun } from "../lib/direct-run.mjs";
 import { emitResult } from "../lib/jq-output.mjs";
 import { extractFullVersion } from "./assert-core-dependency-version.mjs";
+import { extractChangelogSection } from "./extract-changelog-section.mjs";
 
 const CORE_DEP = "@dev-loops/core";
 // A bare full semver token, optionally with a prerelease suffix. Build metadata
@@ -85,6 +91,52 @@ export function writeManifestSurfaces(repoRoot, version) {
   writeJson(corePath, core);
 
   return [rootPath, corePath];
+}
+
+/**
+ * Stamp the CHANGELOG's `## Unreleased` heading to `## <version>` so the
+ * release-time guard (`extract-changelog-section.mjs`) finds the section. The
+ * entries under the heading are left intact; only the heading line changes.
+ *
+ * Fails closed when there is no Unreleased content to stamp and the version is
+ * not already stamped — an undocumented release must not proceed silently.
+ * Idempotent: a tree already stamped at <version> (the Unreleased heading is
+ * gone and a populated `## <version>` section is present) is a no-op.
+ *
+ * @param {string} changelog - Full CHANGELOG.md contents.
+ * @param {string} version - Bare full version token to stamp.
+ * @returns {{ changelog: string, changed: boolean }}
+ */
+export function stampChangelog(changelog, version) {
+  const lines = changelog.split("\n");
+  const headingIdx = lines.findIndex((line) => /^##\s+Unreleased\b/i.test(line));
+
+  if (headingIdx !== -1) {
+    // Body = entries until the next "## " heading. Empty body means an
+    // undocumented release — fail closed.
+    const body = [];
+    for (let i = headingIdx + 1; i < lines.length; i += 1) {
+      if (/^##\s/.test(lines[i])) break;
+      body.push(lines[i]);
+    }
+    if (body.join("").trim() === "") {
+      throw new Error(
+        `CHANGELOG.md "## Unreleased" section is empty — nothing to stamp for ${version}; document the release before bumping`,
+      );
+    }
+    lines[headingIdx] = `## ${version}`;
+    return { changelog: lines.join("\n"), changed: true };
+  }
+
+  // No Unreleased heading: a no-op only when <version> is already stamped with
+  // content (the idempotent re-run). extractChangelogSection returns a non-empty
+  // string only for a populated matching section.
+  if (extractChangelogSection(changelog, version)) {
+    return { changelog, changed: false };
+  }
+  throw new Error(
+    `CHANGELOG.md has no "## Unreleased" section to stamp for ${version} (and no existing "## ${version}" section); document the release before bumping`,
+  );
 }
 
 /**
@@ -141,6 +193,13 @@ export function bumpVersion({ repoRoot, version, stage = true, run: runChild = r
     throw new Error(`target "${version}" is not a bare full version token (parsed as "${full}")`);
   }
 
+  // Surface 6: stamp the CHANGELOG first, so an undocumented release fails
+  // closed before any manifest/lockfile/.claude mutation. Hand-edited like
+  // surfaces 1-3; independent of the regen subprocesses.
+  const changelogPath = path.join(repoRoot, "CHANGELOG.md");
+  const { changelog: stampedChangelog } = stampChangelog(readFileSync(changelogPath, "utf8"), version);
+  writeFileSync(changelogPath, stampedChangelog);
+
   // Surfaces 1-3: hand-edited manifests.
   const manifestPaths = writeManifestSurfaces(repoRoot, version);
 
@@ -170,8 +229,19 @@ export function bumpVersion({ repoRoot, version, stage = true, run: runChild = r
     );
   }
 
+  // Confirm the release section is now extractable — the whole point of the
+  // CHANGELOG surface is that extract-changelog-section.mjs finds it.
+  if (!extractChangelogSection(readFileSync(changelogPath, "utf8"), version)) {
+    throw new Error(`CHANGELOG.md has no extractable "## ${version}" section after stamping`);
+  }
+
   // Stage only the enumerated release paths — never `git add -A` / `git add .`.
-  const stagedPaths = [...manifestPaths, path.join(repoRoot, "bun.lock"), path.join(repoRoot, ".claude")];
+  const stagedPaths = [
+    ...manifestPaths,
+    changelogPath,
+    path.join(repoRoot, "bun.lock"),
+    path.join(repoRoot, ".claude"),
+  ];
   if (stage) runChild("git", ["add", "--", ...stagedPaths], repoRoot);
 
   return { ok: true, version, surfaces, staged: stagedPaths };
