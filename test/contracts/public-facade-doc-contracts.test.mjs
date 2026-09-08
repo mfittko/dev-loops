@@ -211,9 +211,8 @@ test("workflow-surface taxonomy stays explicit and guards the entrypoint asset s
 });
 
 test("status reporting contract requires authoritative state-first resolution and fail-closed reconcile behavior", async () => {
-  const [publicContract, devLoopSkill, copilotFollowupSkill] = await Promise.all([
+  const [publicContract, copilotFollowupSkill] = await Promise.all([
     readRepo("skills/docs/public-dev-loop-contract.md"),
-    readRepo("skills/dev-loop/SKILL.md"),
     readCopilotFollowupSurface(),
   ]);
 
@@ -223,18 +222,15 @@ test("status reporting contract requires authoritative state-first resolution an
   assert.match(publicContract, /issue↔PR linkage resolution/i);
   assert.match(publicContract, /detect-linked-issue-pr\.mjs/i);
 
-  assert.match(devLoopSkill, /status\/progress\/readiness\/merge-state\/next-step/i);
-  assert.match(devLoopSkill, /fail closed to reconcile\/unknown/i);
-  assert.match(devLoopSkill, /identity resolution is handled by the startup resolver/i);
-  // detect-linked-issue-pr.mjs reference removed — main agent no longer runs startup resolver
-
-  assert.match(copilotFollowupSkill, /status\/progress\/readiness\/merge-state\/next-step/i);
-  assert.match(copilotFollowupSkill, /reconcile\/unknown instead of guessing from chat context/i);
+  // Non-owner skills reference the owner rules rather than re-stating the owner's
+  // prose. Only the rule-ID references are pinned here; the repeated status-shape
+  // ("status/progress/readiness/merge-state/next-step") and reconcile sentences
+  // are owned by FACADE-STATUS-AUTHORITATIVE-FAIL-CLOSED /
+  // FACADE-LINKED-PR-SINGLE-ARTIFACT (asserted above) and guarded against copied
+  // restatement by validate-rule-ownership's duplicate-imperative-sentence scan.
   assert.match(copilotFollowupSkill, /FACADE-STATUS-AUTHORITATIVE-FAIL-CLOSED/);
   assertRuleOwned("FACADE-LINKED-PR-SINGLE-ARTIFACT", PUBLIC_CONTRACT_PATH);
-  assert.match(devLoopSkill, /single canonical artifact for the issue and reuse it instead of opening another PR/i);
   assert.match(copilotFollowupSkill, /FACADE-LINKED-PR-SINGLE-ARTIFACT/);
-  assert.match(copilotFollowupSkill, /reuse\/update that canonical PR instead of opening another one/i);
 });
 
 test("copilot-pr-followup mandates upsert helper command for gate comments", async () => {
