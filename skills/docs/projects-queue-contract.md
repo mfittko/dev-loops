@@ -207,20 +207,25 @@ reorder) **MUST NOT** create or modify project/field structure.
 
 ### Error reporting
 
-When tooling fails closed, it emits a structured JSON error on stderr:
+When tooling fails closed, it emits a structured JSON error on stderr. Two shapes ship,
+by failure class:
 
-```json
-{
-  "ok": false,
-  "error": "Project 'Dev Loop Queue' not found for owner 'mfittko'."
-}
-```
+- **Domain failure** (board/field/item resolution, GitHub API): a top-level `code`
+  key rides alongside `ok`/`error` and maps to the exit code — this is the canonical
+  envelope owned by [Error format](#error-format) below (`{ ok, error, code }`, exit
+  2/3):
 
-The stderr payload follows the repo's standard CLI error format (`formatCliError`):
-`{ ok: false, error }` with an optional one-line `hint` (e.g. `"run with --help for usage"`)
-when a usage string exists — the full usage text is never inlined into this JSON payload;
-run the tool with `--help` for it. Remediation hints such as `code` keys or suggested
-commands live in documentation, not in the structured stderr output.
+  ```json
+  {"ok": false, "error": "Project 'Dev Loop Queue' not found for owner 'mfittko'.", "code": "PROJECT_NOT_FOUND"}
+  ```
+
+- **Usage / argument-parse error** (exit 1): the repo's standard `formatCliError`
+  shape, `{ ok, error }` with an optional one-line `hint` (e.g.
+  `"run with --help for usage"`) when a usage string exists. The full usage text is
+  never inlined into this JSON payload; run the tool with `--help` for it. This
+  parse-error shape carries no `code`.
+
+See [Error format](#error-format) for the domain-error `code`-to-exit mapping.
 
 ## Column auto-repair
 
@@ -547,7 +552,7 @@ Dev-loop queue wrappers will:
 - **Drive membership + ordering** from the board's `Next Up` column: `dev-loops queue run` reconciles `Next Up` items into queue entries before running (configured board is authoritative)
 - **Move** items to `In Progress` when processing starts, `Done` when complete
 - **Reorder** items when the operator adjusts priority via `--after` dependencies or manual intervention
-- **Fall back** gracefully when the board is absent or unreachable: the local queue file's entry order takes over, and no board mutations are attempted
+- **Fall back** to the local queue file's entry order **only when no board is configured**; no board mutations are attempted. A *configured* board that is unreachable does not fall back — it fails closed (surface and stop) per [QUEUE-BOARD-QUERY-FAIL-CLOSED](#queue-pickup-ordering), so an outage never silently drains Backlog or local order
 
 Use `dev-loops queue --help` to inspect the queue helper surface and per-subcommand `--help` for details.
 
@@ -586,9 +591,10 @@ GitHub API calls and no board mutations**. (It may still read the local
 `queue.statusColumns` renames the display name of a logical column:
 
 ```yaml
-queue:
+tracker:
   board:
     number: 7
+queue:
   statusColumns:
     next_up: "Todo"
     in_progress: "Doing"
@@ -600,9 +606,10 @@ queue:
 column (rarely needed):
 
 ```yaml
-queue:
+tracker:
   board:
     number: 7
+queue:
   stateColumnMap:
     blocked_needs_user_decision: next_up
 ```
