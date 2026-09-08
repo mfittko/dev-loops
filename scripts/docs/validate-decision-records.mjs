@@ -1,11 +1,10 @@
 #!/usr/bin/env node
-import { execFile } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
 import { isDirectCliRun } from "../_core-helpers.mjs";
+import { createGitClient, resolveBaseRef } from "./_doc-git-client.mjs";
 
 const FILENAME_RE = /^\d{4}-[a-z0-9-]+\.md$/;
 const TEMPLATE = "0000-template.md"; // permanently reserved template, not a record
@@ -98,67 +97,12 @@ export function detectIndexErrors(names) {
   return errors;
 }
 
-export function createGitClient(root, exec = promisify(execFile)) {
-  const run = (args) => exec("git", args, { cwd: root });
-  return {
-    async symbolicRef(ref) {
-      const { stdout } = await run(["symbolic-ref", ref]);
-      return stdout.trim();
-    },
-    async mergeBase(a, b) {
-      const { stdout } = await run(["merge-base", a, b]);
-      return stdout.trim();
-    },
-    async diffNameOnly(a, b, dir) {
-      // --no-renames so a git mv (rename) of a record surfaces as BOTH a deleted
-      // old path (-> deletion guard fires) and an added new path (not blocked),
-      // instead of collapsing to just the destination path and evading rule 3.
-      const { stdout } = await run(["diff", "--no-renames", "--name-only", a, b, "--", dir]);
-      return stdout.split(/\r?\n/).filter(Boolean);
-    },
-    async show(spec) {
-      const { stdout } = await run(["show", spec]);
-      return stdout;
-    },
-    async pathExistsIn(rev, rel) {
-      // `git cat-file -e` exits 128 for BOTH a path absent from a valid rev and
-      // a real repository failure (corrupt object, invalid rev), so its exit
-      // code cannot distinguish them. `git ls-tree <rev> -- <path>` prints the
-      // path iff it exists in <rev> and exits 0 whether or not it does, so an
-      // empty output is a cleanly-positive "not in base" (a newly added record —
-      // the only legitimate skip case) while a real git failure still rejects
-      // and fails closed. A base resolved via mergeBase is always a valid rev.
-      const { stdout } = await run(["ls-tree", "-z", rev, "--", rel]);
-      return stdout.length > 0;
-    },
-  };
-}
-
-async function resolveBaseRef(git, env = process.env) {
-  let defaultBranch = null;
-  try {
-    defaultBranch = (await git.symbolicRef("refs/remotes/origin/HEAD")).replace(/^refs\/remotes\/origin\//, "");
-  } catch {
-    defaultBranch = null;
-  }
-  if (defaultBranch) return git.mergeBase(`origin/${defaultBranch}`, "HEAD");
-  // No origin/HEAD. Try an env-provided base first (CI sets GITHUB_BASE_REF and
-  // fetches it into origin/<base>, so a non-main/master default branch still
-  // resolves), then conventional default names.
-  const candidates = [
-    ...(env.GITHUB_BASE_REF ? [`origin/${env.GITHUB_BASE_REF}`] : []),
-    ...["main", "master"].map((b) => `origin/${b}`),
-  ];
-  for (const branch of candidates) {
-    try {
-      const base = await git.mergeBase(branch, "HEAD");
-      if (base) return base;
-    } catch {
-      // try next candidate
-    }
-  }
-  return null;
-}
+// createGitClient + resolveBaseRef are shared with validate-changelog-completeness.mjs
+// via ./_doc-git-client.mjs so the two base-ref-dependent validators cannot
+// drift. This validator scopes diffNameOnly to the decisions dir and, unlike the
+// changelog one, uses newline-delimited names and never calls logSubjects.
+// Re-exported here for the injected-git test suite.
+export { createGitClient };
 
 /**
  * Validate decision records under `docs/decisions`.
@@ -208,7 +152,7 @@ export async function validateDecisionRecords({ root, git = createGitClient(root
   if (!base) {
     rule3 = { state: "degraded", notice: "base ref unavailable; skipping ADR-SUPERSEDE-NOT-REWRITE post-acceptance edit check" };
   } else {
-    const changed = await git.diffNameOnly(base, "HEAD", DECISIONS_DIR);
+    const changed = await git.diffNameOnly(base, "HEAD", { dir: DECISIONS_DIR });
     for (const rel of changed) {
       const baseName = path.posix.basename(rel);
       if (baseName === TEMPLATE || !rel.endsWith(".md")) continue;

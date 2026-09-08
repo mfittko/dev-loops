@@ -29,21 +29,13 @@
  * --manifest defaults to package.json, --lockfile to bun.lock.
  * Exits 0 on lockstep, 1 on mismatch, 2 on usage/parse errors.
  */
-import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+
+// Shared node:-builtins-only predicate: import-safe in release.yml (no `npm ci`).
+import { isDirectCliRun } from "../lib/direct-run.mjs";
 
 const CORE_DEP = "@dev-loops/core";
 const CORE_WORKSPACE_KEY = "packages/core";
-
-function isDirectCliRun(importMetaUrl, argv1 = process.argv[1]) {
-  if (typeof argv1 !== "string" || argv1.length === 0) return false;
-  try {
-    return realpathSync(argv1) === realpathSync(fileURLToPath(importMetaUrl));
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Extract the `major.minor` token from a semver version or npm range.

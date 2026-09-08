@@ -121,27 +121,38 @@ test("CLI exits 2 when a flag is missing its value", () => {
   assert.match(result.stderr, /--changelog requires a value/);
 });
 
-test("imports only node: builtins (must run dependency-free in release.yml — #1016)", async () => {
+test("imports only node: builtins transitively (must run dependency-free in release.yml — #1016)", async () => {
   // release.yml runs this script with no `npm ci`, so any workspace/3rd-party
   // import (e.g. @dev-loops/core via _core-helpers.mjs) ERR_MODULE_NOT_FOUNDs
-  // and the GitHub Release is never created. Guard against reintroduction.
-  const source = await readFile(scriptPath, "utf8");
-  // Match every module-specifier form a dependency could sneak in through:
-  // `import ... from "x"`, bare `import "x"`, `export ... from "x"`, and
-  // dynamic `import("x")` — not just the static `import ... from` Copilot noted.
+  // and the GitHub Release is never created. A relative import of a repo-local
+  // .mjs sibling resolves fine without node_modules, but ONLY if that sibling is
+  // itself deps-free — so verify the whole transitive closure (fail closed on a
+  // bare/workspace/3rd-party specifier at ANY depth), not just top-level imports.
   const importRe = /^\s*import\b[^"'\n;]*["']([^"']+)["']/gm;
   const exportFromRe = /^\s*export\b[^"'\n;]*\bfrom\s*["']([^"']+)["']/gm;
   const dynamicRe = /\bimport\s*\(\s*["']([^"']+)["']/g;
-  const specifiers = [
+  // Match every module-specifier form a dependency could sneak in through:
+  // `import ... from "x"`, bare `import "x"`, `export ... from "x"`, and
+  // dynamic `import("x")` — not just the static `import ... from`.
+  const specifiersOf = (source) => [
     ...[...source.matchAll(importRe)].map((m) => m[1]),
     ...[...source.matchAll(exportFromRe)].map((m) => m[1]),
     ...[...source.matchAll(dynamicRe)].map((m) => m[1]),
   ];
-  assert.notEqual(specifiers.length, 0, "expected at least one import");
-  for (const spec of specifiers) {
-    assert.ok(
-      spec.startsWith("node:"),
-      `non-node: import "${spec}" would break the deps-free release.yml runner`,
-    );
-  }
+  const seen = new Set();
+  const assertDepsFree = async (fileAbs, chain) => {
+    if (seen.has(fileAbs)) return;
+    seen.add(fileAbs);
+    const specifiers = specifiersOf(await readFile(fileAbs, "utf8"));
+    if (chain.length === 1) assert.notEqual(specifiers.length, 0, "expected at least one import");
+    for (const spec of specifiers) {
+      if (spec.startsWith("node:")) continue;
+      assert.ok(
+        spec.startsWith("./") || spec.startsWith("../"),
+        `non-node: import "${spec}" (via ${chain.join(" -> ")}) would break the deps-free release.yml runner`,
+      );
+      await assertDepsFree(path.resolve(path.dirname(fileAbs), spec), [...chain, spec]);
+    }
+  };
+  await assertDepsFree(scriptPath, ["extract-changelog-section.mjs"]);
 });

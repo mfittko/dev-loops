@@ -32,10 +32,9 @@
  * jq-output.mjs).
  */
 import { execFileSync } from "node:child_process";
-import fs from "node:fs";
-import { fileURLToPath } from "node:url";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { resolveNpmDistTag } from "./resolve-npm-dist-tag.mjs";
+import { isDirectCliRun } from "../lib/direct-run.mjs";
 
 const USAGE = `Usage: verify-release-approval.mjs --version <semver> --repo <owner/name> [--operator <login>] [--release-commit-date <iso>] [--jq <filter>] [--silent]
 Fail-closed operator-approval gate for STABLE releases (#1901, #1941). A stable
@@ -45,15 +44,6 @@ posted AFTER the release commit being tagged (default: git HEAD committer date;
 override with --release-commit-date). Prereleases pass through unchanged. Exit 0
 pass, 1 refusal/gh failure, 2 usage.
 ${JQ_OUTPUT_USAGE}`;
-
-function isDirectCliRun(importMetaUrl, argv1 = process.argv[1]) {
-  if (typeof argv1 !== "string" || argv1.length === 0) return false;
-  try {
-    return fs.realpathSync(argv1) === fs.realpathSync(fileURLToPath(importMetaUrl));
-  } catch {
-    return false;
-  }
-}
 
 function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
