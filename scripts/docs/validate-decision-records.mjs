@@ -116,7 +116,7 @@ export { createGitClient };
  * cannot be resolved (shallow checkout, no origin), it degrades gracefully: rule 3 is
  * skipped with a notice instead of failing every local run.
  *
- * Scope boundary (issue #1624): rule 3 deliberately guards only edits OUTSIDE a record's
+ * Scope boundary: rule 3 deliberately guards only edits OUTSIDE a record's
  * Status section. Edits INSIDE the Status section of an accepted record (e.g. an appended
  * annotation beyond the sanctioned Accepted -> Superseded flip) are NOT auto-enforced here:
  * judging whether a record's Status content is correct is a declared non-goal, and the

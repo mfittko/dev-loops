@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-// Resolve the board's single continue target for the live `/loop-continue` path
-// (#988 P1, extended #1091). It lists the "In Progress" column and, failing
+// Resolve the board's single continue target for the live `/loop-continue` path.
+// It lists the "In Progress" column and, failing
 // that, the "Next Up" column via list-queue-items.mjs — with NO routing opinions
 // beyond a single pick and NO guessing. It never touches Backlog.
 //
 //   exactly one In Progress   -> { ok: true, target: {kind,number}, source: "in-progress" }
 //   multiple In Progress      -> { ok: false, reason: "..." }  (names the items)
 //   zero In Progress:
-//     Next Up has items        -> single-contributor ownership gate (#1377) scans
+//     Next Up has items        -> single-contributor ownership gate scans
 //                                  Next Up by POSITION ascending, claims (@me) an
 //                                  unassigned item, RE-READS it (the claim is not
 //                                  compare-and-swap) and, ONLY when the viewer's
@@ -63,11 +63,11 @@ import { editPr } from "../github/edit-pr.mjs";
 
 // Illustrative default labels for USAGE/help + comments only; the actual query
 // columns resolve through queue.statusColumns.in_progress / .next_up at
-// runtime (#1098, #1143).
+// runtime.
 const IN_PROGRESS_COLUMN = "In Progress";
 const NEXT_UP_COLUMN = "Next Up";
 // Canonical fail-closed empty-queue message — matches queue-driver.mjs so
-// operators see one string regardless of which layer detects it (#1091).
+// operators see one string regardless of which layer detects it.
 const EMPTY_QUEUE_REASON = EMPTY_NEXT_UP_MESSAGE;
 
 const USAGE = `Usage: dev-loops queue resolve-active --repo <owner/name> [--project <number|id>]
@@ -190,7 +190,7 @@ function collapseToTarget(items) {
   return { ok: true, target: itemToTarget(items[0]), source: "in-progress" };
 }
 
-// Single-contributor ownership gate for Next Up pickup (#1377): fetch the
+// Single-contributor ownership gate for Next Up pickup: fetch the
 // target's current assignees via `gh`. Resolves the viewer login only when a
 // non-copilot assignee is present, keeping the copilot/empty cases immune to
 // viewer-login resolution failures (same posture as resolve-dev-loop-startup).
@@ -358,21 +358,21 @@ async function attemptClaimAndArbitrate(target, repo, { env, runChild, itemLabel
 // canonical message, and a query error propagates (fail closed — surface it,
 // no fallback).
 //
-// Ownership gate (#1377): each candidate is skipped if it is assigned to a
+// Ownership gate: each candidate is skipped if it is assigned to a
 // human other than the viewer (reported in `skipped`); an unassigned
 // candidate is claimed (`@me`) and picked; a viewer-owned or copilot-owned
 // candidate is picked as-is. If every item is foreign-owned, pickup fails
 // closed with the skip reasons — parallel loopers naturally take disjoint work.
 async function resolveNextUpHead(args, { env, runChild, cwd = process.cwd() } = {}) {
   // Resolve the next_up column name through the SAME statusColumns mapping
-  // board-sync uses (#1098): a repo that renamed Next Up (e.g. to "Todo") gets
+  // board-sync uses: a repo that renamed Next Up (e.g. to "Todo") gets
   // its configured column queried, not the literal default. Pickup SEMANTICS
   // (position-ascending HEAD, fail-closed on empty, never Backlog) are unchanged.
   const { columnNames, error: configError } = loadStateColumnMap(cwd);
   if (configError) {
     // A malformed `.devloops` must fail CLOSED — never silently fall back to the
     // literal "Next Up" and risk selecting the wrong item from a stale/renamed
-    // column (#1098). Throw so the CLI surfaces it (exit 2), mirroring a Next Up
+    // column. Throw so the CLI surfaces it (exit 2), mirroring a Next Up
     // query error's "propagate, no fallback" contract.
     throw Object.assign(
       new Error(`could not resolve next_up column (config read/parse error: ${configError})`),
@@ -436,7 +436,7 @@ async function resolveNextUpHead(args, { env, runChild, cwd = process.cwd() } = 
 
 async function main(args, { env = process.env, runChild = defaultRunChild, cwd = process.cwd() } = {}) {
   // Resolve the in_progress column name through the SAME statusColumns mapping
-  // board-sync uses (#1098, #1143): a repo that renamed In Progress gets its
+  // board-sync uses: a repo that renamed In Progress gets its
   // configured column queried, not the literal default. Fail CLOSED on a
   // malformed `.devloops` — never silently query the literal "In Progress"
   // and risk missing the active item on a renamed/stale column.
@@ -454,7 +454,7 @@ async function main(args, { env = process.env, runChild = defaultRunChild, cwd =
   );
   const items = listed.items ?? [];
   // Exactly one → continue it. Multiple → fail closed (never guess). Zero →
-  // fall through to the Next Up head (the live pickup path, #1091).
+  // fall through to the Next Up head (the live pickup path).
   if (items.length === 0) {
     return resolveNextUpHead(args, { env, runChild, cwd });
   }

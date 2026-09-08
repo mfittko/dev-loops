@@ -206,7 +206,7 @@ function normalizeItem(node) {
 
 // Select items whose issue/PR is closed and has been closed for >= olderThanMs.
 // `doneColumn` defaults to the literal "Done" for direct/pure-unit callers;
-// main() always passes the configured column name (#1098, #1143).
+// main() always passes the configured column name.
 function selectArchivable(items, { now, olderThanMs, doneColumn = "Done" }) {
   return items.filter((it) => {
     if (it.isArchived) return false;
@@ -236,7 +236,7 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd() } =
   const child = runChild ?? _runChild;
   const repo = validateRepo(args.repo);
   // Resolve the done column name through the SAME statusColumns mapping
-  // board-sync uses (#1098, #1143): a repo that renamed Done gets its
+  // board-sync uses: a repo that renamed Done gets its
   // configured column matched here, not the literal default. Fail CLOSED on a
   // malformed `.devloops` — never silently archive against the literal "Done"
   // and risk archiving nothing on a renamed/stale column.

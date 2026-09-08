@@ -112,7 +112,7 @@ const outerDiagram = renderStateDiagram(
 const gateDiagram = renderGateFlowchart(PUBLIC_DEV_LOOP_GATE_CONTRACT);
 
 // PR lifecycle: the 13-state vocabulary + required transitions exported by
-// packages/core/src/loop/pr-lifecycle.mjs (issue #1193), re-exported here so
+// packages/core/src/loop/pr-lifecycle.mjs, re-exported here so
 // this module's public surface is unchanged. The L2/L3 state-machine
 // conformance harness (scripts/docs/validate-state-machine-conformance.mjs)
 // imports the same core module directly rather than through this one, so it

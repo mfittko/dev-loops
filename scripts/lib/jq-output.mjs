@@ -1,6 +1,6 @@
-// Shared --jq / --silent output helper for the JSON-emitting dev-loops scripts
-// (issue #981, subsumes #963). One helper applied uniformly so the loop never
-// falls back to `gh api | python3` or inline `node -e` to read tool JSON.
+// Shared --jq / --silent output helper for the JSON-emitting dev-loops scripts.
+// One helper applied uniformly so the loop never falls back to
+// `gh api | python3` or inline `node -e` to read tool JSON.
 // BASE-JQ-OUTPUT-GUARANTEE: emitResult is the single shared emit path every
 // JSON-emitting command routes through (enforced by the jq-output-base-guarantee
 // contract test).
@@ -425,7 +425,7 @@ export function emitResult(
 }
 
 // Shared execution shell for the identical GitHub read-command CLIs
-// (view-issue, view-pr, list-issues; issue #2037). Those three commands had a
+// (view-issue, view-pr, list-issues). Those three commands had a
 // byte-identical runCli that differs only in its parser, domain operation, and
 // usage text — this hosts that one shell in the existing output-helper seam so
 // each command keeps its own parser/operation/usage and passes them in, rather
