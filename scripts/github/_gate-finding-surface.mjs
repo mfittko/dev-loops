@@ -30,13 +30,10 @@ import { captureParsedReviewThreads } from "./_review-thread-mutations.mjs";
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { GATE_NAMES, GATE_VERDICTS } from "./_gate-names.mjs";
 
-// Canonical filter/map for a paginated GET pulls/{pr}/reviews payload into the
-// comment-stream shape the gate summarizers consume. Validity comes from the
-// shared isSubmittedReview predicate below — two restatements of that
-// expression drifted once already; never inline it again.
 // The one predicate for "counts as a submitted review with content": every
 // consumer (verdict evidence, round resolution, fingerprint suppression) MUST
-// share this function, never restate the expression.
+// share this function, never restate the expression — two restatements
+// drifted apart once already.
 function isSubmittedReview(r) {
   return Boolean(r) && typeof r === "object" && r.state !== "PENDING"
     && typeof r.submitted_at === "string" && r.submitted_at.trim().length > 0
@@ -70,15 +67,10 @@ export const MEDIUM_FIX_WINDOW = 3;
 // Markers
 // ---------------------------------------------------------------------------
 
-// Slug a marker field value down to a safe, single-token spelling. Severity and
-// angle are controlled vocabulary in practice, but the marker format itself
-// must never break (a stray space would split it into unparseable garbage and
-// could, worst case, let free text masquerade as marker fields), so this is
-// belt-and-suspenders normalization, not display formatting. Also length-capped
-// (belt-and-braces): an angle label long enough to push the whole marker past
-// list-review-threads.mjs's 200-char listing excerpt would make the marker
-// itself unparseable there, silently hiding the thread from disposition and
-// from the unresolved-thread gate check.
+// Slugs a marker field to a single safe token: a stray space would split the
+// marker into unparseable garbage, and an over-long value would push it past
+// list-review-threads.mjs's 200-char listing excerpt, silently hiding the
+// thread from disposition and the unresolved-thread gate check.
 const MARKER_FIELD_MAX_CHARS = 40;
 
 function slugForMarker(value) {
@@ -87,22 +79,17 @@ function slugForMarker(value) {
   return bounded.length > 0 ? bounded : "unknown";
 }
 
-// True when a finding at `severity`, reconciled against the CURRENT round, is
-// disposed as deferred: high never defers; medium defers only once the chain
-// is past the in-gate fix window; low always defers immediately; question
-// never defers (it is answered, not deferred — an unanswered question blocks
-// gate-close as an unresolved thread, exactly like an open defect); nit always
-// defers immediately, with no fixer cycle. An unrecognized severity fails
-// CLOSED (false, never auto-deferred): a malformed/forged marker must surface
-// as a dangling gate-authored thread that blocks gate-close, never get
-// silently stamped `disposition=deferred` and resolved through the same path
-// as a genuine low/nit finding. Governs the THREAD disposition pass
-// ONLY — a locatable finding's round-gated fix window, decided through its own
-// resolvable review thread. Body-filed finding rendering
-// (renderNonLocatableBlock) deliberately does NOT call this: a body-filed
-// finding never gets a thread to fix through, so it is stamped deferred
-// unconditionally at render time, regardless of round (see that function's own
-// comment).
+// Severity-to-disposition mapping for the THREAD disposition pass (a
+// locatable finding's own resolvable review thread) at the CURRENT round:
+// high never defers; medium defers past the in-gate fix window; low and nit
+// always defer immediately; question never defers (it is answered, not
+// deferred — unanswered, it blocks gate-close as an unresolved thread, like
+// an open defect). An unrecognized severity fails CLOSED (false): a
+// malformed/forged marker must surface as a dangling gate-authored thread,
+// never get silently stamped `disposition=deferred` like a genuine low/nit.
+// renderNonLocatableBlock (body-filed findings) deliberately does not call
+// this: a body-filed finding never gets a thread to fix through, so it is
+// stamped deferred unconditionally at render time regardless of round.
 export function isDeferredAtRound(severity, round, mediumFixWindow = MEDIUM_FIX_WINDOW) {
   const sev = normalizeSeverity(severity);
   if (!VALID_SEVERITIES.has(sev)) return false;
@@ -111,24 +98,18 @@ export function isDeferredAtRound(severity, round, mediumFixWindow = MEDIUM_FIX_
   return true; // "low" or "nit" (and any legacy spelling of either)
 }
 
-// True when a finding at `severity` — RESOLVED (per `isDeferredAtRound` above)
-// at the current round — must ALSO be tracked on the PR's follow-up GitHub
-// issue and carry the thread marker's `disposition=deferred` stamp. This is
-// the net-reduction filing bar (#1846): resolving a thread and FILING it are
-// two different decisions. A `nit` is NEVER fileable — resolved-with-rationale
-// in-thread only, no matter the round; a resolved nit is cosmetic, not a
-// tracked backlog item. A `low` is fileable ONLY when its own marker carries
-// the explicit `operatorVisible` signal (rendered as the marker's `ov=1`
-// field, set from the finding's own `operatorVisible: true`) — the DEFAULT
-// (`operatorVisible` absent/false) is the conservative, net-negative-backlog
-// choice: NOT fileable, resolved-with-rationale instead. `medium` (past its
-// fix window) keeps its unchanged behavior: always fileable once
-// `isDeferredAtRound` selects it. `high`/`question` are never resolved by the
-// disposition pass to begin with (`isDeferredAtRound` excludes them), so they
-// are never fileable either. Governs whether `close-gate-findings.mjs`'s
-// disposition pass calls `ensureFollowUpIssue`/`stampDeferredDisposition` for
-// a given target, and (via `detectContractViolatingDeferredStamps`) whether an
-// already-stamped `disposition=deferred` marker is legitimate.
+// The net-reduction filing bar (#1846): resolving a thread (isDeferredAtRound)
+// and FILING it on the follow-up issue are different decisions. `nit` is
+// NEVER fileable — resolved-with-rationale in-thread only, a resolved nit is
+// cosmetic, not a backlog item. `low` is fileable ONLY when its own marker
+// carries the explicit `operatorVisible` signal (`ov=1`, set from the
+// finding's own `operatorVisible: true`); the default (absent/false) is the
+// conservative, net-negative-backlog choice. `medium` past its fix window is
+// always fileable. `high`/`question` are never resolved here to begin with,
+// so never fileable. Governs whether close-gate-findings.mjs's disposition
+// pass calls ensureFollowUpIssue/stampDeferredDisposition, and (via
+// detectContractViolatingDeferredStamps) whether an already-stamped
+// `disposition=deferred` marker is legitimate.
 export function isFileableDeferral(severity, operatorVisible, round, mediumFixWindow = MEDIUM_FIX_WINDOW) {
   const sev = normalizeSeverity(severity);
   if (sev === "medium") return round > mediumFixWindow;
@@ -141,11 +122,9 @@ export function isFileableDeferral(severity, operatorVisible, round, mediumFixWi
 // deferral suppresses re-raising the same finding at pre-approval too).
 // `disposition` is optional: pass "deferred" only when the finding is disposed
 // as deferred at render time (a body-filed finding, which never gets its own
-// resolvable thread, must be stamped up front rather than later). FINDING_MARKER_RE
-// (below) only ever accepts the literal `deferred` in that field, so any other
-// value would be silently unparseable by this module's own parser — throw here
-// instead, at the one place the marker is built, rather than let a producer and
-// this module's own reader disagree on the accepted vocabulary.
+// resolvable thread, must be stamped up front). FINDING_MARKER_RE (below)
+// only accepts the literal `deferred` here, so throw at the one place the
+// marker is built rather than let a producer and reader disagree.
 const VALID_MARKER_DISPOSITIONS = new Set(["deferred"]);
 
 // `issue` is the follow-up GitHub issue number a `disposition=deferred`
@@ -153,15 +132,14 @@ const VALID_MARKER_DISPOSITIONS = new Set(["deferred"]);
 // never live only in the thread marker and the ephemeral tmp ledger, so the
 // marker itself carries the re-attachment pointer.
 //
-// `operatorVisible` (#1846) is the explicit operator-visibility signal a `low`
-// finding's OWN PRODUCER attaches — rendered as the marker's `ov=1` field only
-// when `operatorVisible === true`; omitted (the default) is NOT operator
-// visible. This is the ONE place the signal is defined: a producer marks a
-// `low` finding visible by setting `operatorVisible: true` on the finding
-// object it feeds through the ledger (`write-gate-findings-log.mjs`'s
-// `--findings`/`--findings-file`); nothing infers visibility from a finding's
-// own text. `isFileableDeferral` (above) is the sole consumer — it never
-// affects `high`/`medium`/`question`/`nit` disposition.
+// `operatorVisible` is the explicit operator-visibility signal a `low`
+// finding's own producer attaches — rendered as the marker's `ov=1` field
+// only when `operatorVisible === true`; omitted (the default) is NOT
+// operator visible. This is the ONE place the signal is defined: a producer
+// sets `operatorVisible: true` on the finding object fed through the ledger
+// (write-gate-findings-log.mjs's `--findings`/`--findings-file`); nothing
+// infers visibility from a finding's own text. `isFileableDeferral` is the
+// sole consumer.
 export function buildFindingMarker({ fp, severity, angle, round, operatorVisible, disposition, issue }) {
   if (operatorVisible !== undefined && typeof operatorVisible !== "boolean") {
     throw new Error(`buildFindingMarker: operatorVisible must be a boolean (or omitted), got ${JSON.stringify(operatorVisible)}`);
@@ -219,9 +197,8 @@ const REVIEW_HEADER_RE = /^<!--\s*dev-loops:gate-findings-review\s+(draft_gate|p
 // 16-hex sha256 over path + normalized summary. Line is deliberately excluded
 // (it drifts across heads); angle/severity are excluded (a cross-gate or
 // cross-severity re-raise of the same underlying finding must still dedupe).
-// files[0] is trimmed: the two ledger writers disagree on whether a file entry
-// is pre-trimmed (readGateFindingsLedger below normalizes it too, but this is
-// cheap belt-and-braces consistency for any other caller of this function).
+// files[0] is trimmed here too (readGateFindingsLedger also normalizes it)
+// for any other caller of this function.
 export function fingerprintFinding(finding) {
   const filePath = Array.isArray(finding.files) && finding.files.length > 0 ? String(finding.files[0]).trim() : "";
   const normalizedSummary = String(finding.summary).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -239,55 +216,32 @@ export function collectFingerprints(text, set) {
 // Follow-up issue for deferred findings (#1807)
 // ---------------------------------------------------------------------------
 //
-// A `defer` disposition — the judge's relevance-based defer (judge-pass.mjs)
-// or the severity/round-based auto-defer (close-gate-findings.mjs's
-// disposition pass) — must never live only in a thread marker and the
-// ephemeral tmp findings ledger; it always creates or appends to ONE tracked
-// GitHub issue per PR (batched: every finding a PR ever defers is one entry
-// on that same issue, never one issue per finding). `existingIssueNumber`,
-// when the caller already knows one (a prior round's ledger, or an existing
-// thread marker's own `issue=` field), is reused: new entries are appended as
-// a comment instead of minting a second issue.
+// A `defer` disposition (judge-pass.mjs's relevance defer, or
+// close-gate-findings.mjs's severity/round auto-defer) always creates or
+// appends to ONE tracked GitHub issue per PR — batched, never one issue per
+// finding. `existingIssueNumber`, when the caller already knows one, is
+// reused instead of minting a second issue.
 
-// A finding's summary (and, transitively, angle) is untrusted free text from a
-// scoped-review agent. `ensureFollowUpIssue`'s append path renders this same
-// entry into a body that `commentIssue` guards with
-// `guardCommentBodyNoIssuePrIds` (fail-closed: throws on a bare `#<digits>`
-// auto-link token), while the create path's `createIssue` runs no such guard
-// at all — so a raw id in a finding's own summary would silently leak via
-// GitHub's auto-link on a first-ever defer, then abort the whole pass on a
-// LATER defer of the same PR, purely because of defer ordering.
+// A finding's summary/angle is untrusted free text. Both the append path
+// (guarded via commentIssue's guardCommentBodyNoIssuePrIds) and the create
+// path (unguarded) render through formatDeferredFindingEntry, which strips a
+// literal leading `#` off a bare digit token rather than entity-encoding it:
+// entity-encoding still decodes back to `#123` under the guard's own
+// decode-aware scan, but stripping the `#` means no decode path can ever
+// reassemble one, and it makes GitHub's own auto-linker a non-issue too
+// (auto-link syntax requires the leading `#`). Both paths render through
+// this one function, so they stay guard-safe symmetrically by construction.
 //
-// #1809 round-2: entity-encoding the hash (`&#35;123`) does NOT fix this.
-// `guardCommentBodyNoIssuePrIds` is decode-aware — it runs a single
-// renderer-like decode of numeric character references before scanning — so
-// `&#35;123` decodes straight back to `#123` and the guard refuses it exactly
-// like the raw form. The only guard-safe rendering is one that never leaves a
-// `#` immediately adjacent to digits in EITHER the raw or the decoded text, so
-// this strips the leading `#` from a bare id token instead of encoding it
-// (`#123` -> `123`): no decode path can ever reassemble a leading `#` from
-// bare digits. This also makes GitHub's own auto-linker a non-issue (auto-link
-// syntax requires the leading `#`), so the create path (still unguarded) is
-// safe too — both paths render through this one function, so they stay
-// symmetric by construction rather than by each independently avoiding the
-// guard.
+// ponytail: this strips only a literal `#` before digits, not the guard's
+// full HTML-entity decode surface (e.g. `&num;123`). That input is
+// unreachable from reviewer-authored finding prose; if it ever occurs the
+// guard still fail-closes the defer pass rather than leaking silently.
 //
-// ponytail: this strips only a LITERAL `#` before digits — every form a review
-// agent actually authors (prose ids like `#123`). It does NOT mirror the guard's
-// full entity-decode surface, so untrusted text that ALREADY contains an HTML
-// entity encoding of the number-sign adjacent to digits (`&num;123`, `&#x23;123`)
-// still decodes to a bare id under the guard. That input is unreachable from
-// reviewer-authored finding prose, and when it does occur the guard fail-closes
-// (the defer pass aborts — no silent leak), which is the correct backstop.
-// Mirroring the guard's decoder here would duplicate its evolving entity table
-// against input that never arrives; the guard stays the single authority.
-//
-// Runs on the RAW summary/angle text, BEFORE sanitizeInline/sanitizeCodeSpan:
-// those sanitizers emit their own numeric character references (e.g. `&#91;`
-// for `[`), which a bare-id strip would corrupt — see neutralizeBareIssuePrIds'
-// own doc (@dev-loops/core/github/comment-id-guard, the shared helper this used
-// to duplicate; #1922 hoisted it there so the fan-in consolidation seam and this
-// defer path share one implementation).
+// Runs on the RAW summary/angle text, before sanitizeInline/sanitizeCodeSpan
+// (which emit their own numeric character references that a bare-id strip
+// would corrupt) — see neutralizeBareIssuePrIds in
+// @dev-loops/core/github/comment-id-guard, the shared implementation this
+// and the fan-in consolidation seam both use.
 
 function formatDeferredFindingEntry({ fingerprint, severity, angle, summary, refUrl }) {
   const detail = typeof summary === "string" && summary.trim().length > 0
@@ -321,17 +275,12 @@ export function buildFollowUpIssueAppendComment({ entries }) {
 }
 
 /**
- * Resolve the PR's ONE tracked follow-up issue by asking GitHub itself,
- * rather than a caller's own local idempotency channel. #1807/cross-path fix:
- * `judge-pass.mjs` (relevance defer) and `close-gate-findings.mjs`
- * (severity/round defer) each cache the link in a DISJOINT local store — the
- * judge's own `--ledger-out` artifact vs. a thread marker's `issue=` field —
- * so a PR that fires both paths could mint two issues if each trusted only
- * its own cache. GitHub is the one channel both paths share: search open
- * issues for the deterministic per-PR title (`buildFollowUpIssueTitle`) and
- * require an EXACT title match (gh's `--search` is full-text/fuzzy, so a
- * substring or reordered-word hit must not be treated as this PR's issue).
- * Returns the lowest matching issue number, or `null` when none exists yet.
+ * Resolve the PR's ONE tracked follow-up issue via GitHub search, not a
+ * caller's own local cache: judge-pass.mjs and close-gate-findings.mjs each
+ * cache the link in a disjoint local store, so only GitHub is shared between
+ * them. Requires an EXACT title match against `buildFollowUpIssueTitle`
+ * (gh's `--search` is fuzzy, so a substring/reordered-word hit must not
+ * count). Returns the lowest matching issue number, or `null` if none exists.
  */
 export async function findFollowUpIssueOnGitHub(
   { repo, pr },
@@ -349,25 +298,17 @@ export async function findFollowUpIssueOnGitHub(
 /**
  * Create (or, when `existingIssueNumber` is already known, append a comment
  * to) the ONE tracked follow-up issue for a batch of `defer`-disposed
- * findings on one PR. Returns `{ issueNumber, created }`. The `createIssue` /
- * `commentIssue` / `listIssues` dependencies default to the sanctioned core
- * wrappers (`@dev-loops/core/github/issue-ops`) — never a raw `gh` call — and
- * are injectable so a caller/test can stub them without hitting the real API.
+ * findings on one PR. Returns `{ issueNumber, created }`. Dependencies
+ * default to the sanctioned core wrappers (`@dev-loops/core/github/issue-ops`,
+ * never a raw `gh` call) and are injectable for tests. An absent
+ * `existingIssueNumber` resolves against GitHub itself
+ * (`findFollowUpIssueOnGitHub`) before creating, rather than assuming no
+ * issue exists yet.
  *
- * When the caller does not already know an `existingIssueNumber` (its own
- * local cache is empty or stale), this resolves against GitHub itself
- * (`findFollowUpIssueOnGitHub`) BEFORE creating — the caller-supplied value
- * is trusted as a fast-path optimization (skips the search round-trip), but
- * an absent one is never treated as proof no issue exists yet.
- *
- * ponytail: a crash between `createIssue` returning and the caller writing
- * its own local link (the ledger/marker) no longer orphans a duplicate on
- * retry — the retry's search-before-create finds the just-created issue on
- * GitHub and appends instead. The one residual window is GitHub search's own
- * indexing lag: a retry landing in the brief gap before the new issue is
- * searchable could still create a second one. Narrowing that further (e.g. a
- * direct `gh issue view` fallback keyed on a caller-recorded issue number)
- * is not worth it until it is observed in practice.
+ * ponytail: a crash between `createIssue` returning and the caller
+ * persisting its own link no longer orphans a duplicate — retry's
+ * search-before-create finds it on GitHub and appends instead. Residual
+ * risk: GitHub search's own indexing lag on an immediate retry.
  */
 export async function ensureFollowUpIssue(
   { repo, pr, entries, existingIssueNumber },
@@ -386,13 +327,11 @@ export async function ensureFollowUpIssue(
     );
     return { issueNumber: resolvedIssueNumber, created: false };
   }
-  // #1809 round-2: `commentIssue` (append path, above) runs
-  // `guardCommentBodyNoIssuePrIds` internally; `createIssue` does not. Guard
-  // the create body explicitly here too — belt-and-braces symmetry with the
-  // append path, on top of (never instead of) formatDeferredFindingEntry's own
-  // guard-safe rendering — so a future rendering regression fails closed on
-  // BOTH paths identically rather than only on whichever path happens to defer
-  // second.
+  // commentIssue (append path, above) runs guardCommentBodyNoIssuePrIds
+  // internally; createIssue does not. Guard the create body explicitly here
+  // too, on top of (never instead of) formatDeferredFindingEntry's own
+  // guard-safe rendering, so a future rendering regression fails closed on
+  // both paths identically.
   const createBody = buildFollowUpIssueBody({ repo, pr, entries });
   guardCommentBodyNoIssuePrIds(createBody, { ref: "follow-up issue body" });
   const result = await createIssue(
@@ -406,24 +345,16 @@ export async function ensureFollowUpIssue(
 // Rendering (finding lines, inline comments, body-filed blocks)
 // ---------------------------------------------------------------------------
 
-// One deterministic, round-trip-parseable line rendering a finding's
-// severity/angle/summary. Shared by inline comments (unblockquoted — inline
-// review comments are never scanned by the evidence checker) and body-filed
-// blocks (blockquoted by the caller). `severity` is normalized (a legacy
-// spelling renders under its canonical replacement) AND sanitized. It renders
-// bare — "**${severity}**", never inside a code span — so it needs the same
-// bare-prose sanitizer (sanitizeInline) the verdict renderer's
-// sanitizeStructuredInline alias already applies to its own bare-prose
-// fields, not sanitizeCodeSpan (which leaves a raw `<` and the markdown
-// link/image bracket forms live): angle is wrapped in a code span below and
-// keeps sanitizeCodeSpan, summary already uses sanitizeInline. Sanitizing
-// severity also closes the blockquoted (renderNonLocatableBlock) caller's own
-// newline hazard: a newline inside "> **${severity}**" would put every
-// following field on its own un-blockquoted line, escaping the blockquote
-// this function's own callers document as load-bearing for the evidence
-// parser. normalizeSeverity alone is NOT that sanitizer — it only maps a
-// legacy spelling to its canonical name, it does not neutralize a hostile
-// character — so it is applied here in addition to, never instead of,
+// One deterministic, round-trip-parseable line rendering severity/angle/
+// summary, shared by inline comments (unblockquoted) and body-filed blocks
+// (blockquoted by the caller). `severity` is normalized (legacy spelling
+// renders under its canonical name) AND sanitized with sanitizeInline, not
+// sanitizeCodeSpan: it renders bare ("**${severity}**", not in a code span),
+// and sanitizing it also blocks a newline from escaping the blockquote a
+// body-filed block relies on (see renderNonLocatableBlock). angle keeps
+// sanitizeCodeSpan (it is in a code span); summary already uses
+// sanitizeInline. normalizeSeverity alone does not neutralize hostile
+// characters, so it is applied in addition to, never instead of,
 // sanitizeInline.
 function renderFindingLine({ severity, angle, summary, judgeDisposition }) {
   const safeSeverity = sanitizeInline(normalizeSeverity(severity));
@@ -448,10 +379,10 @@ export function renderInlineCommentBody(finding, { round }) {
   // never render its retired spelling here while its own marker parses back
   // as the canonical one.
   const severity = /** @type {string} */ (normalizeSeverity(finding.severity));
-  // #1846: carry the finding's own explicit operator-visibility signal onto
-  // the marker (`ov=1` when `finding.operatorVisible === true`) — anything
-  // else (absent, falsy, non-boolean) renders no field at all, the
-  // conservative default `isFileableDeferral` treats as NOT operator visible.
+  // Carry the finding's own explicit operator-visibility signal onto the
+  // marker (`ov=1` when `finding.operatorVisible === true`); anything else
+  // renders no field, the conservative default isFileableDeferral treats as
+  // NOT operator visible.
   const lines = [
     buildFindingMarker({ fp, severity, angle: finding.angle, round, operatorVisible: finding.operatorVisible === true }),
     renderFindingLine({ ...finding, severity }),
@@ -462,38 +393,30 @@ export function renderInlineCommentBody(finding, { round }) {
   return sanitizeCopilotSummonTokens(lines.join("\n"));
 }
 
-// Every content line after the marker is blockquoted: this is load-bearing.
-// The evidence checker's marker parser strips markdown headers/bold but NOT a
-// leading "> ", so no rendered finding line can ever match its line-start
-// gate:/head sha:/verdict:/summary: field regex, however a finding's own free
-// text is worded. That matters more than ever now that these blocks share a
-// body with the genuine verdict fields.
+// Every content line after the marker is blockquoted: load-bearing. The
+// evidence checker's marker parser strips markdown headers/bold but not a
+// leading "> ", so no finding line can ever match its own line-start
+// gate:/head sha:/verdict:/summary: field regex — these blocks share a body
+// with the genuine verdict fields.
 //
 // A body-filed finding never gets a resolvable thread (it lives in a review
-// body, not a review comment) and so never passes through the thread
-// disposition pass (which is where a THREADED medium finding gets its
-// round<=3 in-gate fix window before deferring). A body-filed finding has
-// no such window to begin with — there is no thread to fix it through — so it
-// is deferred BY CONSTRUCTION, at render time, regardless of round: every
-// non-high severity (medium, low, nit) is stamped disposition=deferred the
-// moment it is posted. high stays unstamped (the ledger blocks a clean
-// verdict on it; it is never body-filed as an accepted outcome). A question is
-// also stamped deferred here for the same structural reason (no thread to
-// answer it through) — the answered/never-deferred contract only applies to a
-// LOCATABLE question's own resolvable thread. This is what keeps the finding
-// from being suppressed by its own fingerprint (fingerprintFinding, matched
-// back on a later run via collectFingerprints) while tracked nowhere else
-// (fingerprint suppression + zero surface = permanent silent loss).
-// The invisible (HTML-comment) marker half of a body-filed finding, factored
-// out on its own (#1942): upsert-checkpoint-verdict.mjs's grouped findings
-// table is now the sole VISIBLE carrier of a body-filed finding's text, but
-// the fingerprint+disposition=deferred stamp this marker carries is still
-// load-bearing for GATE-EXEC-FINDING-THREADS — a later round's
-// collectSuppressedFingerprints match, and isFileableDeferral/
-// isDeferredAtRound's follow-up-issue tracking, both read this exact marker
-// back off the posted review body. Removing the human-readable duplicate the
-// table now makes redundant must never also drop this marker, or a body-filed
-// finding would re-surface as "new" every round with no durable disposition.
+// body, not a review comment), so it never gets the threaded medium
+// finding's round<=3 in-gate fix window. It is therefore deferred BY
+// CONSTRUCTION at render time, regardless of round: every non-high severity
+// (medium, low, nit, and question — a question also has no thread to answer
+// through here) is stamped disposition=deferred the moment it is posted.
+// high stays unstamped (a clean verdict blocks on it; it is never body-filed
+// as an accepted outcome). This keeps the finding from being suppressed by
+// its own fingerprint while tracked nowhere else.
+//
+// buildNonLocatableFindingMarker is factored out on its own (#1942):
+// upsert-checkpoint-verdict.mjs's grouped findings table is now the sole
+// VISIBLE carrier of a body-filed finding's text, but this invisible
+// marker's fingerprint+disposition=deferred stamp is still load-bearing for
+// GATE-EXEC-FINDING-THREADS (collectSuppressedFingerprints, and
+// isFileableDeferral/isDeferredAtRound's follow-up-issue tracking, all read
+// it back off the posted review body) — removing the now-redundant
+// human-readable duplicate must never also drop this marker.
 export function buildNonLocatableFindingMarker(finding, { round }) {
   const fp = fingerprintFinding(finding);
   // Normalized ONCE and reused for both the disposition decision and the
@@ -509,12 +432,9 @@ export function buildNonLocatableFindingMarker(finding, { round }) {
 // longer spliced into the posted verdict body itself (upsert-checkpoint-verdict.mjs
 // splices buildNonLocatableFindingMarker alone; see its own doc for why).
 export function renderNonLocatableBlock(finding, { round }) {
-  // The rendered "> **${severity}**" line goes through renderFindingLine
-  // below, which normalizes AND sanitizes severity again on its own —
-  // normalization alone is not a sanitizer, so this outer normalize is not
-  // what keeps a hostile (e.g. newline-bearing) severity out of the posted
-  // body; that guarantee lives in renderFindingLine's own sanitizeInline call
-  // on severity.
+  // renderFindingLine below normalizes AND sanitizes severity again on its
+  // own; that sanitizeInline call, not this outer normalize, is what keeps a
+  // hostile (e.g. newline-bearing) severity out of the posted body.
   const severity = /** @type {string} */ (normalizeSeverity(finding.severity));
   const lines = [
     buildNonLocatableFindingMarker(finding, { round }),
@@ -650,11 +570,10 @@ export async function readGateFindingsLedger(ledgerPath, { errorFactory = (messa
     if ("line" in f && f.line !== undefined && (!Number.isInteger(f.line) || f.line < 1)) {
       throw fail(`Gate findings ledger "${ledgerPath}" findings[${i}].line must be a positive integer`);
     }
-    // #1846: the explicit operator-visibility signal (see buildFindingMarker's
-    // own doc) — optional, boolean-only. A malformed value fails closed here
-    // rather than silently coercing to falsy (not-visible), so a producer's
-    // typo surfaces as a ledger-write error instead of a silently over-broad
-    // "resolved, not filed" default.
+    // The operator-visibility signal (see buildFindingMarker's own doc) is
+    // optional, boolean-only. A malformed value fails closed here instead of
+    // silently coercing to falsy, so a producer's typo is a ledger-write
+    // error, not a silently over-broad "resolved, not filed" default.
     if ("operatorVisible" in f && f.operatorVisible !== undefined && typeof f.operatorVisible !== "boolean") {
       throw fail(`Gate findings ledger "${ledgerPath}" findings[${i}].operatorVisible must be a boolean`);
     }
@@ -680,11 +599,11 @@ export async function readGateFindingsLedger(ledgerPath, { errorFactory = (messa
     Array.isArray(f.files) ? { ...f, files: f.files.map((entry) => entry.trim()) } : f
   ));
   // `provenance` is passed through UNVALIDATED (write-gate-findings-log.mjs
-  // validates it at write time via provenanceConsistencyError only when the
-  // ledger was written with --provenance); a
-  // reader that needs to trust it (e.g. upsert-checkpoint-verdict.mjs's
-  // withheld-tier mandatory-angle check) re-validates with the same function
-  // rather than assuming a hand-edited or shadow ledger is honest.
+  // validates it at write time via provenanceConsistencyError, only when
+  // written with --provenance); a reader that needs to trust it (e.g.
+  // upsert-checkpoint-verdict.mjs's withheld-tier mandatory-angle check)
+  // re-validates with the same function rather than assuming a hand-edited
+  // or shadow ledger is honest.
   const provenance = parsed.provenance !== undefined ? parsed.provenance : null;
   return { repo: repoSlug, pr, gate, headSha: fullHeadSha, verdict, findings: normalizedFindings, provenance, overallVerdict: overallVerdictRaw !== undefined ? overallVerdictRaw : null };
 }
@@ -722,17 +641,14 @@ export async function listPrReviews({ repo, pr }, { env, ghCommand, runChild }) 
 /**
  * Read every comment-shaped body a gate verdict can live on: the issue-comment
  * stream (verdicts posted by earlier versions) plus the PR review stream (the
- * round's single visible surface today). The reviews read is FAIL-OPEN by
- * default — a legacy issue-comment verdict still validates on its own — while
- * the issue-comment read stays fail-closed, exactly as each caller behaved
- * before this became one function.
+ * round's single visible surface today). The reviews read is FAIL-OPEN (a
+ * legacy issue-comment verdict still validates on its own); the issue-comment
+ * read stays fail-closed.
  *
- * When `reportSurfaces` is set, a consumer that must know WHICH surface it
- * actually scanned (an audit tool that would otherwise overclaim a review read
- * that silently failed) gets back `{ comments, surfaces }` listing exactly the
- * surfaces successfully read — never a review surface whose gh read failed.
- * This keeps the default fail-open behavior for all existing callers while
- * giving the audit a truthful surface list (no silent false-missing).
+ * When `reportSurfaces` is set, the caller gets back `{ comments, surfaces }`
+ * listing exactly the surfaces successfully read — never a review surface
+ * whose gh read failed — so an audit consumer never overclaims a silently
+ * failed review read, while every other caller keeps the fail-open default.
  */
 export async function fetchGateEvidenceComments({ repo, pr }, { env, ghCommand, runChild = defaultRunChild, reportSurfaces = false } = {}) {
   const comments = await listIssueComments({ repo, pr }, { env, ghCommand, runChild });
@@ -753,37 +669,32 @@ export async function fetchGateEvidenceComments({ repo, pr }, { env, ghCommand, 
 /**
  * Count unresolved GATE-AUTHORED review threads — threads whose first comment
  * was authored by the gate's own login (`login`) and carries a parseable
- * `dev-loops:finding` marker (any severity: high, medium, low, question, OR
- * nit). This is the gate-close predicate #1585 wires into
- * `fetchDraftGateEvidence`: a clean verdict alone no longer satisfies the
- * gate — every gate-authored thread must be resolved (fix-closed by the fixer
- * or defer-closed by the disposition pass) first.
+ * `dev-loops:finding` marker (any severity). This is the gate-close predicate
+ * (#1585) fetchDraftGateEvidence wires in: a clean verdict alone no longer
+ * satisfies the gate — every gate-authored thread must be resolved
+ * (fix-closed by the fixer, or defer-closed by the disposition pass) first.
  *
  * When `login` is `null`, the author-identity check is skipped and the count
- * is MARKER-ONLY (any unresolved thread carrying a finding marker). That is a
- * deliberately fail-closed proxy — a foreign comment that quotes a real marker
- * would over-count and block, which is safe (the gate waits) rather than
- * under-counting and proceeding. The disposition pass
- * (`selectDispositionTargets` in close-gate-findings.mjs) uses author identity
- * because it MUTATES threads (forgery matters there); this read-only counter
- * accepts the marker-only fallback so a caller without a resolved login (e.g.
- * detect-checkpoint-evidence reusing an existing thread payload) can still
- * assert the gate-close invariant without an extra `api user` round-trip.
+ * is MARKER-ONLY (any unresolved thread carrying a finding marker) — a
+ * deliberately fail-closed proxy: a foreign comment quoting a real marker
+ * over-counts and blocks (safe) rather than under-counting and proceeding.
+ * The disposition pass uses author identity because it MUTATES threads
+ * (forgery matters there); this read-only counter accepts the marker-only
+ * fallback so a caller without a resolved login can still assert the
+ * gate-close invariant without an extra `api user` round-trip.
  *
  * `threads` is the shape `fetchAllReviewThreads` (list-review-threads.mjs)
  * returns: `{ author, body, isResolved, ... }`.
  */
 export function countUnresolvedGateAuthoredThreads(threads, login) {
-  // A non-array `threads` is a caller contract violation; for a gate-close
-  // safety predicate the fail-closed posture is to THROW (callers catch and
-  // treat the unreadable state as -1 / blocked), never to silently coerce to
-  // an empty array and under-count dangling threads (#1585 review finding).
+  // A non-array `threads` is a caller contract violation; the fail-closed
+  // posture is to THROW (callers treat the unreadable state as -1/blocked)
+  // rather than silently coerce to [] and under-count dangling threads.
   if (!Array.isArray(threads)) {
     throw new Error(`countUnresolvedGateAuthoredThreads: threads must be an array, got ${typeof threads}`);
   }
-  // Any falsy login (null/undefined/"") falls back to the MARKER-ONLY fail-closed
-  // proxy — an empty-string login must NOT silently skip every thread (fail-open);
-  // it must over-count and block, matching the documented posture.
+  // Any falsy login (null/undefined/"") falls back to the MARKER-ONLY proxy —
+  // it must over-count and block (fail-closed), never silently skip threads.
   const loginKnown = typeof login === "string" && login.length > 0;
   let count = 0;
   for (const thread of threads) {
@@ -804,10 +715,10 @@ export function countUnresolvedGateAuthoredThreads(threads, login) {
  * of issuing a second thread walk.
  */
 export function countUnresolvedGateAuthoredThreadsFromRawNodes(rawNodes) {
-  // A non-array `rawNodes` is a caller contract violation; for a gate-close
-  // safety predicate, fail CLOSED — let the TypeError propagate to the caller's
-  // catch (detect-checkpoint-evidence sets unresolvedGateThreadCount = -1 /
-  // blocked) rather than silently coerce to [] and under-count (#1585 review).
+  // A non-array `rawNodes` is a caller contract violation; fail CLOSED — let
+  // the TypeError propagate (detect-checkpoint-evidence sets
+  // unresolvedGateThreadCount = -1/blocked) rather than silently coerce to
+  // [] and under-count.
   if (!Array.isArray(rawNodes)) {
     throw new Error(`countUnresolvedGateAuthoredThreadsFromRawNodes: rawNodes must be an array, got ${typeof rawNodes}`);
   }
@@ -845,14 +756,10 @@ export async function fetchUnresolvedGateThreadCount({ repo, pr }, gh) {
  * and the wrapper that performs the transition (ready-for-review.mjs) can never
  * disagree about what counts as evidence.
  *
- * #1585: a clean verdict is NO LONGER sufficient to satisfy the gate. Every
- * gate-authored review thread (high, medium, low, question, AND nit)
- * must be resolved first — the fixer triages every gate-authored finding
- * (fix-if-cheap-in-the-same-commit, else defer) and the disposition pass
- * (close-gate-findings) defer-closes what remains — so the gate-close
- * assertion here refuses ready-for-review while any gate-authored thread still
- * dangles. `unresolvedGateThreadCount` is fail-closed (-1) when the
- * thread/login state cannot be read.
+ * A clean verdict alone is not sufficient (see countUnresolvedGateAuthoredThreads):
+ * the gate-close assertion here also refuses ready-for-review while any
+ * gate-authored thread still dangles. `unresolvedGateThreadCount` is
+ * fail-closed (-1) when the thread/login state cannot be read.
  */
 export async function fetchDraftGateEvidence({ repo, pr, headSha }, gh) {
   const comments = await fetchGateEvidenceComments({ repo, pr }, gh);
@@ -862,12 +769,11 @@ export async function fetchDraftGateEvidence({ repo, pr, headSha }, gh) {
   const draftGateMarker = marker
     ? { ...marker, visible: true, contractComplete: marker.contractComplete === true }
     : { visible: false, contractComplete: false };
-  // #1585: a clean verdict is necessary but NO LONGER sufficient to close the
-  // gate. The verdict-clean flags below stay VERDICT-ONLY (unchanged) so a
-  // verdict/head mismatch is reported distinctly from an unresolved-thread
-  // mismatch; the unresolved-gate-authored-thread count is a SEPARATE field the
-  // callers (pre-pr-ready-gate / ready-for-review) assert alongside the verdict
-  // check. Fail-closed (-1) when the thread/login state is unreadable: the
+  // The verdict-clean flags below stay VERDICT-ONLY so a verdict/head mismatch
+  // is reported distinctly from an unresolved-thread mismatch; the
+  // unresolved-gate-authored-thread count is a SEPARATE field the callers
+  // (pre-pr-ready-gate / ready-for-review) assert alongside it. Fail-closed
+  // (-1) when the thread/login state is unreadable: the
   // callers treat a non-zero count (including -1) as gate-close-blocked.
   let unresolvedGateThreadCount;
   try {
@@ -970,42 +876,30 @@ export async function updateGateReview({ repo, pr, reviewId, body, allowedRefs }
 
 /**
  * Find the authenticated caller's own PENDING (author-only draft) review on
- * this PR. GitHub allows only ONE pending review per user per PR — and that
- * constraint is PR-scoped, NOT head-scoped — so ANY create (even a same-round
- * COMMENT submit) 422s while a pending review exists, whatever head it sits on
- * (#1912). A `--gate review --submit` re-run must therefore resolve that
- * pending review (submit it via `submitPendingReview`, or delete it) rather
- * than POST a second one. A pending review is author-only, so its marker is
- * never `visible`, which is exactly why the same-head marker scan misses it;
- * this reads the raw reviews list instead of the marker.
+ * this PR. GitHub allows only ONE pending review per user per PR (PR-scoped,
+ * not head-scoped), so ANY create 422s while one exists on whatever head
+ * (#1912): a `--gate review --submit` re-run must resolve it first (submit
+ * via `submitPendingReview`, or delete it) rather than POST a second one. A
+ * pending review is author-only, so its marker is never `visible` — this
+ * reads the raw reviews list instead.
  *
- * No author-identity check is needed: GitHub's list-reviews endpoint returns a
- * PENDING review ONLY to the token that authored it (other users' pending
- * reviews are never listed), so any `state === "PENDING"` entry here is already
- * the caller's own, and there is at most one. But "the caller's own" is not the
- * same as "this tool's own": the token may have a MANUAL pending draft (a
- * human review-in-progress in the GitHub UI on the same account). Submitting or
- * deleting THAT would be data loss, so this fails closed to a dev-loops draft —
- * only a pending review whose body carries the `### Gate review: \`review\``
- * header (`REVIEW_GATE_PENDING_HEADER_RE`, which every `--submit pending` post
- * renders) is treated as resolvable; a foreign/manual draft is reported as absent and
- * left untouched (the create then 422s with GitHub's own error rather than
- * clobbering the human's draft). The returned `sameHead` flag reports whether
- * its `commit_id` matches this round's head so the caller can submit a same-head
- * pending as-is but clear a STALE (different-head, or `commit_id`-less) one
- * before creating fresh — leaving a stale pending in place would 422 the
- * create. A pending review missing an integer `id` is treated as absent
- * (nothing to resolve). Returns `{ id, commitId, body, sameHead }` or `null`.
+ * No author-identity check is needed (GitHub lists a PENDING review only to
+ * its own author), but "the caller's own" is not the same as "this tool's
+ * own": the token may have a MANUAL pending draft from the GitHub UI.
+ * Submitting or deleting that would be data loss, so this fails closed to a
+ * dev-loops draft — only a pending review whose body carries the
+ * `### Gate review: \`review\`` header (REVIEW_GATE_PENDING_HEADER_RE) is
+ * treated as resolvable; a foreign/manual draft is reported as absent and
+ * left untouched. The returned `sameHead` flag reports whether the pending
+ * review's `commit_id` matches this round's head, so the caller can submit a
+ * same-head pending as-is but clear a stale one before creating fresh (a
+ * stale pending left in place would 422 the create). Returns
+ * `{ id, commitId, body, sameHead }` or `null`.
  */
-// A dev-loops review-gate pending draft always renders this exact header as the
-// VERY FIRST line of the body (`renderGateReviewCommentBody`). The core
-// GATE_REVIEW_COMMENT_HEADER_RE is scoped to draft_gate/pre_approval_gate only
-// (`review` is deliberately excluded there as non-evidence), so match the review
-// header locally — it is what distinguishes OUR OWN gate draft from a human's
-// manual review-in-progress on the same token (#1912 data-loss guard). Anchored
-// to the START of the body (no `m` flag), so a foreign draft that merely QUOTES
-// the header line lower down (e.g. citing another comment) does NOT match and is
-// never submitted/deleted (#1912 Copilot review round 2).
+// Anchored to the START of the body (no `m` flag): a foreign draft that
+// merely quotes the header line lower down must never match (#1912).
+// GATE_REVIEW_COMMENT_HEADER_RE (core) is scoped to draft_gate/
+// pre_approval_gate only, so `review`'s own header is matched locally here.
 const REVIEW_GATE_PENDING_HEADER_RE = /^###[ \t]+Gate review:[ \t]*`review`[ \t]*(?:\r?\n|$)/;
 
 export async function findOwnPendingReview({ repo, pr, headSha }, { env, ghCommand, runChild = defaultRunChild }) {
@@ -1067,26 +961,20 @@ export async function discardPendingReview({ repo, pr, reviewId }, { env, ghComm
 // Round determination
 // ---------------------------------------------------------------------------
 
-// A genuine gate verdict surface always carries
-// upsert-checkpoint-verdict.mjs's own render header ("### Gate review:
-// `<gate>`") — a literal shape no other machine-authored gate artifact in this
-// repo renders. Matching that (via the core-owned matchGateReviewCommentHeader)
-// rather than the LENIENT field parser (parseGateReviewCommentMarkerBody, which
-// accepts a bare gate name plus any hex token anywhere in the body) is what
-// keeps this count scoped to real verdicts. It is line-start anchored, so a
-// quoted header in a reply can't count.
+// A genuine gate verdict surface always carries upsert-checkpoint-verdict.mjs's
+// own render header ("### Gate review: `<gate>`") — a literal shape no other
+// machine-authored gate artifact renders. Matching that (matchGateReviewCommentHeader),
+// rather than the lenient field parser, is what keeps this count scoped to
+// real verdicts; it is line-start anchored, so a quoted header in a reply
+// can't count.
 //
-// The literal "**Reviewed head SHA:** `<sha>`" line renderGateReviewCommentBody
-// always renders immediately after the header identifies WHICH head a matched
-// body is evidence for. Round source (A) is the SIZE of the SET of distinct
-// reviewed-head SHAs collected across BOTH the PR-review and issue-comment
-// streams, never an additive raw count: the sanctioned producer now posts a PR
-// review, while historical rounds (and any hand-posted verdict) live on the
-// issue-comment stream, so a verdict for the SAME head can exist on both.
-// Deduping by head means that duplication can never inflate the round and end
-// the medium fix window early. A body that matches the header literal
-// but carries no parseable reviewed-head line contributes nothing — it cannot
-// be a genuine verdict for any distinguishable head, so it must not count.
+// Round source (A) is the SIZE of the SET of distinct reviewed-head SHAs
+// (the literal "**Reviewed head SHA:**" line) collected across BOTH the
+// PR-review and issue-comment streams, never an additive raw count: a
+// verdict for the SAME head can exist on both streams (the sanctioned
+// producer posts reviews; historical/hand-posted verdicts live on issue
+// comments), so deduping by head means duplication can never inflate the
+// round and end the medium fix window early.
 const REVIEWED_HEAD_SHA_RE = /^\*\*Reviewed head SHA:\*\*\s*`([0-9a-f]{7,64})`\s*$/m;
 
 function extractReviewedHeadSha(body) {
@@ -1102,14 +990,12 @@ export function collectVerdictHeadShas(comments, gate, headShas) {
   }
 }
 
-// Scoped strictly to review bodies that carry THIS gate's own header marker —
-// never mixes draft_gate/pre_approval_gate round numbers together. Only the
-// header's own round= is read: the poster stamps the header and every finding
-// marker in that same body from the SAME `round` variable, and an
-// inline-comment finding marker (a locatable finding's own thread) never
-// appears in a review BODY at all — only in the separate review comment GitHub
-// attaches it to — so scanning finding markers here could never find a round
-// the header does not already carry.
+// Scoped strictly to review bodies carrying THIS gate's own header marker —
+// never mixes draft_gate/pre_approval_gate round numbers. Only the header's
+// own round= is read: an inline-comment finding marker never appears in a
+// review BODY at all (only in the separate review comment GitHub attaches
+// it to), so scanning finding markers here could never find a round the
+// header does not already carry.
 function crossCheckRoundFromReviewBodies(bodies, gate) {
   let max = 0;
   for (const body of bodies) {
@@ -1161,31 +1047,26 @@ export async function resolveGateRound({ repo, pr, gate, headSha, reviews, issue
 // Review threads with full first-comment bodies
 // ---------------------------------------------------------------------------
 
-// list-review-threads.mjs's fetchAllReviewThreads deliberately excerpts each
-// thread's first-comment body to a bounded length for cheap listing. Every
-// decision made off a thread body (marker parsing, disposition, suppression)
-// needs the UNTRUNCATED body, so join the listing (threadId/commentId/path/
-// line/isResolved) with captureParsedReviewThreads' full first-comment text,
-// keyed on the comment databaseId the two share. The two are INDEPENDENT
-// paginated GraphQL walks, though: a thread created or cursor-shifted between
-// them can be present in one and absent from the other, so a join miss must
-// fail closed rather than silently fall back to the truncated excerpt (which
-// could run every downstream decision on a body cut mid-marker, varying with
-// fetch interleaving alone). The excerpt is self-identifying — excerptBody only
-// ever appends a trailing U+2026 when the body's length actually exceeded
-// BODY_EXCERPT_MAX_CHARS — so only fail when the join misses AND the listing
-// body is BOTH over that length AND ends with the ellipsis; a short body that
-// legitimately ends with its own literal "…" character (a reviewer's own prose)
-// never needed truncation and is already complete, so it is safe to keep as-is.
+// list-review-threads.mjs's fetchAllReviewThreads excerpts each thread's
+// first-comment body to a bounded length for cheap listing. Every decision
+// made off a thread body (marker parsing, disposition, suppression) needs
+// the UNTRUNCATED body, so join the listing with captureParsedReviewThreads'
+// full first-comment text, keyed on the shared comment databaseId. The two
+// are INDEPENDENT paginated GraphQL walks, so a thread present in one and
+// absent from the other (created/cursor-shifted between them) must fail
+// closed on a join miss rather than silently fall back to a possibly
+// mid-marker-truncated excerpt. The excerpt is self-identifying (a trailing
+// U+2026 is appended only when truncation actually occurred), so a join
+// miss only fails when the listing body is ALSO over BODY_EXCERPT_MAX_CHARS
+// and ends with that ellipsis — a short body legitimately ending in its own
+// "…" never needed truncation and is already complete.
 const BODY_EXCERPT_ELLIPSIS = "…";
 
-// Only a non-empty string body is a usable join hit. A comment whose
-// databaseId resolves but whose body is missing/empty (a minimized comment, a
-// GraphQL field genuinely absent) must NOT silently blank a thread's body —
-// that thread has a real listing excerpt already, and replacing it with "" is
-// strictly worse than a join MISS (which at least falls through to the
-// existing-excerpt/truncation check below); "" simply drops the thread out of
-// marker parsing, disposition, and suppression with no signal at all.
+// Only a non-empty string body is a usable join hit: a comment whose
+// databaseId resolves but whose body is missing/empty must not blank a
+// thread's real listing excerpt — "" would drop the thread out of marker
+// parsing, disposition, and suppression with no signal at all, which is
+// strictly worse than a join miss (falls through to the truncation check).
 function buildFullBodyByCommentId(comments) {
   const map = new Map();
   for (const comment of comments) {
