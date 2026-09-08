@@ -642,6 +642,21 @@ test("countCommentChangedLinesByFile: counts added AND removed comment lines per
   assert.equal(counts.get("src/foo.mjs"), 4);
 });
 
+test("countCommentChangedLinesByFile: a content line rendered as `++ `/`-- ` is not read as a file header", () => {
+  // A source line whose own content begins with `+ `/`- ` renders as `++ `/`-- `
+  // in the diff body; the `+++ `/`--- ` header guard requires a /dev/null or
+  // a/|b/ target, so these fall through to the changed-line branch and keep the
+  // current file rather than resetting it.
+  const diff = codeFileDiff("src/foo.mjs", [
+    "+// real comment",
+    "++ not a header, added code content",
+    "-- not a header, removed code content",
+  ]);
+  const counts = countCommentChangedLinesByFile(diff);
+  // Only the genuine comment counts; the two `++ `/`-- ` content lines are code.
+  assert.equal(counts.get("src/foo.mjs"), 1);
+});
+
 test("comments-only multi-thousand-line code diff scores ~0 logic and passes", () => {
   const path = "src/foo.mjs";
   const commentLines = repeatLine("+", "// filler invariant note", 2500);

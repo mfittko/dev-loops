@@ -223,7 +223,13 @@ export function parseNumstatZ(output) {
 //
 // Fail-closed by construction: `isCommentLine` returns false for anything not
 // confidently a comment (blank lines, code, ambiguous/unparseable content), so
-// an undetected line stays counted as logic and is never discounted.
+// an undetected line stays counted as logic and is never discounted. The one
+// bounded exception is inherited from the shared detector, not introduced here:
+// a JS line whose trimmed text starts with `*` reads as a JSDoc continuation, so
+// a rare `*`-led binary-operator continuation is discounted. That is the
+// operator-approved lexical rule the comment-discipline guard already applies;
+// reusing the same detector keeps one source of truth rather than a divergent,
+// stricter copy that would flag the guard's own comments differently.
 // ---------------------------------------------------------------------------
 
 export function countCommentChangedLinesByFile(diffOutput) {
