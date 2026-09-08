@@ -4146,7 +4146,14 @@ test("resolveFanoutGroups: the shipped default groups the preApproval design-qua
     );
     assert.deepEqual(
       units.find((u) => u.name === "finalization")?.angles,
-      ["contradiction-lens", "correctness-final", "ui-validation"],
+      ["correctness-final", "ui-validation"],
+    );
+    // contradiction-lens is intentionally NOT in a configured group (it is also
+    // a draft-gate angle, so grouping it globally would leak into the draft
+    // gate); it resolves as its own auto-chunk singleton unit here.
+    assert.deepEqual(
+      units.find((u) => u.angles.includes("contradiction-lens"))?.angles,
+      ["contradiction-lens"],
     );
     // Whole round: fewer dispatch units than resolved angles.
     assert.ok(units.length < preApprovalAngles.length);

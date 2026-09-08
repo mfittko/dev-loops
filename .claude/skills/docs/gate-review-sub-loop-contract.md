@@ -533,13 +533,18 @@ serves every gate without per-gate duplication. The shipped table groups **both*
 symmetrically: the `docs-surface` / `process` / `correctness-input` / `determinism-state`
 groups name draft-gate surfaces, and the `design-simplicity` / `design-solid` / `finalization`
 groups name the pre-approval gate's design-quality (`dry`/`kiss`/`yagni`/`deep` and
-`srp`/`soc`/`ocp`/`lsp`/`isp`/`dip`) and finalization (`contradiction-lens`/`correctness-final`/
-`ui-validation`) angles. Without the pre-approval groups those angles would have no configured
+`srp`/`soc`/`ocp`/`lsp`/`isp`/`dip`) and finalization (`correctness-final`/`ui-validation`)
+angles. Without the pre-approval groups those angles would have no configured
 reviewer-identity unit and would scatter across arbitrary auto-chunked leftover units, so a
 grouped pre-approval reviewer covering a semantic group would be rejected by
 `fanoutReviewerPairingError` even though the round was compliant. The draft-gate `docs` and
 `pr-checklist` angles the pre-approval set also resolves are already covered by the
-`docs-surface` and `process` groups, so they need no pre-approval-specific entry. Grouping only
+`docs-surface` and `process` groups, so they need no pre-approval-specific entry. The
+`contradiction-lens` finalization angle is deliberately left ungrouped: it is also a draft-gate
+angle, and because the table is global a group naming it would peel it into a dedicated unit in
+the draft gate too, so it stays an auto-chunk leftover in both gates. Only `correctness-final`
+and `ui-validation` (pre-approval-exclusive) are grouped, keeping all three added groups inert
+for the draft/spike gates. Grouping only
 changes how many reviewers are dispatched; the resolved angle SET, the distinct-reviewer floor
 (`countFreshDispatchUnits`, one distinct reviewer per resolved unit), and
 `requireFanoutProvenance` are unchanged for full-scope rounds.
