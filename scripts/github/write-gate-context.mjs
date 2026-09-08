@@ -1180,7 +1180,7 @@ function renderValidationResultsSection(validationResultsPath, headSha) {
  * fixed order. Pure and deterministic: identical input always renders
  * identical bytes. The CLI resolves live PR/issue bodies from GitHub before
  * calling this, so a same-head rebuild after a live description edit yields
- * DIFFERENT bytes — a conductor MUST NOT rebuild the context while reviewers
+ * DIFFERENT prefix bytes — a conductor MUST NOT rebuild the context while reviewers
  * for that head are still running (GATE-EXEC-BRIEFING-PREFIX in the
  * gate-review sub-loop contract).
  *
