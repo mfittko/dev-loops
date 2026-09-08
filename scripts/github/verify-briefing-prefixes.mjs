@@ -235,7 +235,7 @@ export function declaredGateOf(scope, gateNames = GATE_NAMES) {
  * A missing/hashless sentinel always fails closed (never grandfathered).
  *
  * When `expectedDispatchUnits` is > 0 (the caller's plan-derived pending-angle
- * floor, #1868), a round with ZERO sentinels FAILS CLOSED (records-floor): a
+ * floor), a round with ZERO sentinels FAILS CLOSED (records-floor): a
  * coordinator round whose plan recorded pending angles must record evidence,
  * so it can no longer pass vacuously. With `expectedDispatchUnits === 0` the
  * zero-sentinel case stays a trivial pass.
@@ -353,7 +353,7 @@ export function evaluateBriefingPrefixes(sentinels, gateRecords = null, expected
  * Programmatic entry: read this round's sentinels and per-gate records for
  * the head SHA and return `evaluateBriefingPrefixes`'s verdict, with no CLI/
  * exit-code/emit concerns. Used by `consolidate-fanin.mjs` so the rule's own
- * proof is mechanically invoked at consolidation time (#1618).
+ * proof is mechanically invoked at consolidation time.
  * `reviewerCount === 0` reads as "skip" downstream (AC4) unless
  * `expectedDispatchUnits` applies the records-floor (see
  * `evaluateBriefingPrefixes` above).

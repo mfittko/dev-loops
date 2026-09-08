@@ -2,7 +2,7 @@
 /**
  * build-adjacent-bundle.mjs — deterministic, neutral adjacent-code bundle builder.
  *
- * Runs ONCE (#895) and emits a NEUTRAL bundle every independent gate reviewer
+ * Runs ONCE and emits a NEUTRAL bundle every independent gate reviewer
  * is seeded with verbatim, instead of each reviewer re-deriving the diff +
  * adjacent code from scratch. Deterministic because it's a script, not an
  * agent: identical (head + changed files) input always produces an identical

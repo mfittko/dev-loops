@@ -112,7 +112,7 @@ function validateFindingsArray(parsed, flagLabel) {
       // can never be proven locatable and always resolves to "deferred".
       entry.disposition = deriveDisposition(f.severity, { locatable: hasLocatableShape(entry) });
     }
-    // Preserve the judge's relevance-based dispositions (#1525): without this,
+    // Preserve the judge's relevance-based dispositions: without this,
     // the judge suffix in renderFindingsCommentBody is unreachable dead code.
     if (typeof f.judgeDisposition === "string" && f.judgeDisposition.trim().length > 0) {
       entry.judgeDisposition = f.judgeDisposition.trim();
@@ -335,7 +335,7 @@ export function renderFindingsCommentBody({ gate, headSha, findings, omittedCoun
       // the single-line Markdown list item.
       const summary = sanitizeInline(finding.summary);
       const dispositionSuffix = finding.disposition ? ` — _${sanitizeInline(finding.disposition)}_` : "";
-      // Judge relevance-based disposition (#1525), alongside the
+      // Judge relevance-based disposition, alongside the
       // severity-derived one.
       const judgeSuffix = finding.judgeDisposition
         ? ` — judge: _${sanitizeInline(finding.judgeDisposition)}_`
@@ -708,7 +708,7 @@ function parseCommentMutationResponse(payload) {
 }
 
 async function createComment({ repo, pr, body }, { env, ghCommand }) {
-  // ISSUE/PR-ID GUARD (#1731): refuse a generated comment body that emits a
+  // ISSUE/PR-ID GUARD: refuse a generated comment body that emits a
   // raw issue/PR id (fail-closed) unless explicitly allowlisted.
   guardCommentBodyNoIssuePrIds(body, { ref: "gate findings comment body" });
   const payload = await runGhJson(
@@ -719,7 +719,7 @@ async function createComment({ repo, pr, body }, { env, ghCommand }) {
 }
 
 async function updateComment({ repo, commentId, body }, { env, ghCommand }) {
-  // ISSUE/PR-ID GUARD (#1731) — see createComment.
+  // ISSUE/PR-ID GUARD — see createComment.
   guardCommentBodyNoIssuePrIds(body, { ref: "gate findings comment body" });
   const payload = await runGhJson(
     ["api", "-X", "PATCH", `repos/${repo}/issues/comments/${commentId}`, "-f", `body=${body}`],

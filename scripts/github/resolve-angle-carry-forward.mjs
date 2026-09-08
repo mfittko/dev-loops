@@ -5,7 +5,7 @@
  * Given a PRIOR gate findings-log (verdict `clean` or `findings_present`, at
  * head A) and the delta A..B, decide per angle whether its prior verdict may
  * be CARRIED FORWARD to head B or the angle MUST re-run. A `findings_present`
- * angle whose surface the delta provably did not touch (#2017) carries
+ * angle whose surface the delta provably did not touch carries
  * forward WITH its prior open findings unchanged: carry-forward only skips
  * re-running a reviewer, it never converts an open finding into an approval.
  * The decision itself is the pure, fail-closed
@@ -168,7 +168,7 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
  * log's provenance) and `carriedFromHead` so the caller can write honest,
  * non-fabricated carried provenance. A carried angle whose prior verdict was
  * findings_present ALSO carries `prevVerdict: "findings_present"` and its
- * prior open `findings` (issue #2017) — the caller must write these findings
+ * prior open `findings` — the caller must write these findings
  * through unchanged, never dropped and never converted into a pass, so the
  * gate still blocks on them exactly as if freshly reviewed. A carried clean
  * angle carries `prevVerdict: "clean"` and an empty `findings` array.
@@ -190,7 +190,7 @@ export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [] }) {
   if (log.verdict !== "clean" && log.verdict !== "findings_present") {
     throw new Error(`prior gate findings-log verdict is ${JSON.stringify(log.verdict ?? null)}, not carry-forward-eligible (clean or findings_present) — nothing to carry forward (fail-closed)`);
   }
-  // FAIL-CLOSED (#2019): a "findings_present" overall verdict is only
+  // FAIL-CLOSED: a "findings_present" overall verdict is only
   // meaningful if `findings` is a non-empty array — a missing/empty/non-array
   // value is indistinguishable from a truncated log and would fall through to
   // the per-angle loop as all-clean, silently dropping whatever the round
@@ -268,7 +268,7 @@ export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [] }) {
   // ONE provenance.perAngle row. A match against more than one (a base angle
   // plus its `-delta-at-...` sibling, or a case-drifted duplicate) makes it
   // impossible to say which row owns the finding, so carrying it onto only one
-  // risks dropping it off the other or double-counting it (#2017). FAIL-CLOSED:
+  // risks dropping it off the other or double-counting it. FAIL-CLOSED:
   // every row in an ambiguous bucket always re-runs; only an unambiguous
   // single-row match is eligible for carry-with-findings below.
   const ambiguousAngles = new Set();

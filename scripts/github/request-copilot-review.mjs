@@ -30,7 +30,7 @@ const NO_CHANGES_SINCE_LAST_REVIEW_STATUS = "no_changes_since_last_review";
 const SUPPRESSED_POST_CONVERGENCE_DOCS_ONLY_STATUS = "suppressed_post_convergence_docs_only";
 const SUPPRESSED_DRAFT_STATUS = "suppressed_draft";
 // The app-style Copilot reviewer login. The REST requested_reviewers endpoint
-// only registers the Copilot bot under this exact `[bot]`-suffixed login (#1918).
+// only registers the Copilot bot under this exact `[bot]`-suffixed login.
 const COPILOT_REVIEWER_BOT_LOGIN = "copilot-pull-request-reviewer[bot]";
 // The requested-reviewer / review-list reads that verify a review request
 // landed are eventually consistent: an immediate read can still see stale
@@ -202,7 +202,7 @@ function parseReviewsPayload(text, { draftGateResetAtMs = null } = {}) {
     ? payload.headRefOid.trim()
     : null;
   // Apply the draft-gate round reset so the completed round count matches what
-  // detect-pr-gate-coordination-state computes (#896): when the draft gate has
+  // detect-pr-gate-coordination-state computes: when the draft gate has
   // re-passed clean on an earlier head, only reviews after that re-pass count.
   const reviewSummary = summarizeCopilotReviews(payload?.reviews, { headSha, draftGateResetAtMs });
   return {
@@ -242,7 +242,7 @@ async function fetchCopilotReviewIds({ repo, pr }, { env = process.env, ghComman
 }
 
 // Re-derives the completed round count with the draft-gate round reset applied
-// so it agrees with detect-pr-gate-coordination-state (#896): a clean
+// so it agrees with detect-pr-gate-coordination-state: a clean
 // draft_gate re-pass on an earlier head resets the count, excluding post-reset
 // reviews from the cap. Queried lazily, only once the raw count already hits
 // the cap, so the common under-cap path adds no API round-trip; reuses the
@@ -295,7 +295,7 @@ async function checkReviewObservablyInProgress(options, runtime, before) {
   return isReviewNowObservablyInProgress(before, after);
 }
 
-// GraphQL verification surface (#1980): the two REST reads above go blind
+// GraphQL verification surface: the two REST reads above go blind
 // once a request transitions into an in-progress review (GET
 // requested_reviewers empties out; `gh pr view --json reviews` never returns
 // another actor's PENDING review). GraphQL's reviewRequests/review nodes (any
@@ -574,7 +574,7 @@ export function getLastCopilotReviewHeadSha(prData) {
   return typeof sha === "string" && sha.trim().length > 0 ? sha.trim() : null;
 }
 
-// Shared classification seam (issue #1441): the same fail-closed
+// Shared classification seam: the same fail-closed
 // fetch-delta-then-classify pipeline the round-cap AC2 check below performs,
 // exposed for withdraw-copilot-review-request.mjs and
 // detect-pr-gate-coordination-state.mjs to reuse instead of re-implementing it.
@@ -600,8 +600,8 @@ function classifyRequestFailure(detail) {
   return undefined;
 }
 async function requestCopilotReview({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
-  // REST requested_reviewers with the app-style `[bot]`-suffixed login
-  // (#1918): `gh pr edit --add-reviewer @copilot` / the GraphQL requestReviews
+  // REST requested_reviewers with the app-style `[bot]`-suffixed login:
+  // `gh pr edit --add-reviewer @copilot` / the GraphQL requestReviews
   // mutation silently register no reviewer on repos whose Copilot reviewer is
   // the bot, and the plain (non-`[bot]`) login 422s. A genuine 422 (Copilot
   // truly unavailable) is still classified `unavailable` below.
@@ -738,7 +738,7 @@ export async function performCopilotReviewRequest(
       };
     }
   }
-  // Operator-authorized post-convergence suppression (#1441): a marker scoped
+  // Operator-authorized post-convergence suppression: a marker scoped
   // to an EXACT head SHA, written only after an operator explicitly withdrew a
   // stranded request on a head with a provable pure doc/prose delta since
   // Copilot's last submitted review. Checked BEFORE the round-cap logic
@@ -792,7 +792,7 @@ export async function performCopilotReviewRequest(
     const { config, errors } = await loadDevLoopConfig({ repoRoot });
     if (!errors || errors.length === 0) {
       refinementConfig = resolveRefinement(config);
-      // Light-dispatched PRs (#1210) enforce the COMPOSED cap —
+      // Light-dispatched PRs enforce the COMPOSED cap —
       // min(lightMode.maxCopilotRounds ?? 1, refinement.maxCopilotRounds) — so
       // this enforcement backstop cannot permit rounds beyond the lightweight cap.
       const effectiveCap = options.lightweight
@@ -823,7 +823,7 @@ export async function performCopilotReviewRequest(
   // decisions, the request itself); surface a config-load fallback on all of
   // them rather than just the path a given test happens to exercise.
   const withConfigWarning = (result) => (configWarning ? { ...result, configWarning } : result);
-  // Reconcile the completed-round count with detect-pr-gate-coordination-state (#896):
+  // Reconcile the completed-round count with detect-pr-gate-coordination-state:
   // when the raw count has reached the cap, re-derive it with the draft-gate round
   // reset applied. A clean draft_gate re-pass on an earlier head resets the count, so
   // a post-reset PR that detect reports as under-cap must NOT be refused here as
@@ -1006,7 +1006,7 @@ export async function performCopilotReviewRequest(
     if (lastReadError) {
       throw lastReadError;
     }
-    // Fallback (#1980): the requested_reviewers POST already returned exit 0
+    // Fallback: the requested_reviewers POST already returned exit 0
     // — the request is genuinely real — but neither REST nor the GraphQL
     // cross-check above observed it within the bounded verification window.
     // Treat this as eventually consistent instead of a hard failure; a truly
