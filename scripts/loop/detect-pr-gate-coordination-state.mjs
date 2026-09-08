@@ -30,19 +30,17 @@ import { existsSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { readFile } from "node:fs/promises";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-// Gate-coordination terminal stop actions where the dev-loop run is completing or
-// stopping (success OR stop). The runner-coordination lock is auto-released at these
-// boundaries so a fresh re-dispatch on the same PR acquires the lock without a
-// takeover (#1632). The Copilot-loop terminal release in `loop handoff` (#1128)
-// only covers Copilot-loop terminal states (CLEAN_CONVERGED / BLOCKED / DONE); a
-// merge-ready PR that is NOT in a Copilot-loop terminal state (e.g. an
-// internal-only PR at `pr_ready_no_feedback`, or a local-implementation gate
-// drive that stops at the approval checkpoint without a terminal handoff) would
+// Gate-coordination terminal stop actions where the dev-loop run is completing
+// or stopping (success OR stop). The runner-coordination lock is auto-released
+// at these boundaries so a fresh re-dispatch on the same PR acquires the lock
+// without a takeover. The Copilot-loop terminal release in `loop handoff`
+// only covers Copilot-loop terminal states (CLEAN_CONVERGED / BLOCKED / DONE);
+// a merge-ready PR that is NOT in a Copilot-loop terminal state would
 // otherwise hold a stale claim until the 30-min TTL. This set is the
-// gate-coordination counterpart: it fires at every run-completion/stop boundary
-// the agent reaches via this detector. `releaseAsyncRunnerOwnership` is
-// env-aware (no-op without DEVLOOPS_RUN_ID) and best-effort/non-fatal, so it is
-// safe for the conductor (polls all PRs with no run id) and read-only
+// gate-coordination counterpart: it fires at every run-completion/stop
+// boundary the agent reaches via this detector. `releaseAsyncRunnerOwnership`
+// is env-aware (no-op without DEVLOOPS_RUN_ID) and best-effort/non-fatal, so
+// it is safe for the conductor (polls all PRs with no run id) and read-only
 // inspections — it only ever clears a claim THIS run owns.
 export const TERMINAL_RUNNER_RELEASE_ACTIONS = new Set([
   PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
@@ -245,7 +243,7 @@ async function fetchPrFacts({ repo, pr }, { env = process.env, ghCommand = "gh",
 // reads `UNKNOWN`. After the initial fetch, re-poll up to `maxPolls` more times
 // while the value stays UNKNOWN (so at most 1 + maxPolls total fetches) before
 // deciding; never treat a transient UNKNOWN as a pass — the caller fails closed
-// to recheck if it never settles. (issue #980)
+// to recheck if it never settles.
 export async function fetchPrFactsWithSettledMergeable(
   options,
   {
@@ -267,8 +265,8 @@ export async function fetchPrFactsWithSettledMergeable(
   }
   return prData;
 }
-// Changed-file paths from `gh pr view --json files` (issue #976). Feeds the
-// path-triggered UI e2e scoping precondition in the evaluator.
+// Changed-file paths from `gh pr view --json files`. Feeds the path-triggered
+// UI e2e scoping precondition in the evaluator.
 export function extractChangedFiles(prData) {
   const files = Array.isArray(prData?.files) ? prData.files : [];
   return files
@@ -294,25 +292,19 @@ export function deriveUiE2ePassed(prData, checkNames = UI_E2E_CHECK_NAMES) {
   });
 }
 
-// Designer/vision recorded evidence for the touched rendered artifacts (#1443,
-// ADR 0041 UI half). Reuses the loop's existing outcome + artifact-bundle
-// record. The evidence source is the loop's recorded review outcome; absent any
-// recorded record this returns null, which the evaluator treats as missing and
-// fails closed for a rendered-artifact change (the required evidence must be
-// recorded). Light/spike carve-outs (designerReviewExempt) relax this.
-//
-// NOTE: the designer/vision loop currently records its outcome in its review
-// artifact, not a gate-detectable marker; this derivation defaults to null so
-// a rendered-artifact change without recorded evidence blocks. When the loop
-// gains a deterministic recorder, surface it here.
+// Designer/vision recorded evidence for the touched rendered artifacts (ADR
+// 0041 UI half). Reuses the loop's existing outcome + artifact-bundle record.
+// Absent any recorded record this returns null, which the evaluator treats as
+// missing and fails closed for a rendered-artifact change. Light/spike
+// carve-outs (designerReviewExempt) relax this. The designer/vision loop
+// currently records its outcome in its review artifact, not a
+// gate-detectable marker; when the loop gains a deterministic recorder,
+// surface it here.
 export function deriveUiDesignerReviewEvidence(recordedEvidence, changedFiles) {
-  // Designer/vision recorded-evidence read seam (#1443, ADR 0041 UI half):
-  // the loop records its outcome + artifact bundle, and the gate consumes that
-  // recorded evidence here via the --designer-review-evidence read seam. Absent
-  // recorded evidence, returns null (fails closed) so a rendered-artifact change
-  // without recorded evidence blocks; when recorded evidence is supplied with a
-  // satisfied recorded outcome, the required check passes (AC1). changedFiles is
-  // retained for forward-compat with a deterministic per-artifact recorder.
+  // The gate consumes the loop's recorded outcome via the
+  // --designer-review-evidence read seam. Absent it, returns null (fails
+  // closed). changedFiles is retained for forward-compat with a
+  // deterministic per-artifact recorder.
   return recordedEvidence ?? null;
 }
 
@@ -353,8 +345,8 @@ export function countPrChangedLines(prData) {
 }
 
 // Whether a light/spike relaxed-gate carve-out exempts the required
-// designer/vision recorded-evidence check (#1443). Mirrors the existing
-// relaxed-gate carve-outs (resolveGateDispatchMode): light-dispatched, spike,
+// designer/vision recorded-evidence check. Mirrors the existing relaxed-gate
+// carve-outs (resolveGateDispatchMode): light-dispatched, spike,
 // or a change under the configured light-mode threshold (files AND lines)
 // exempts. When changed-lines data is unavailable the line dimension is
 // treated as within threshold, preserving files-only behavior for callers
@@ -378,8 +370,8 @@ export function deriveUiDesignerReviewExempt({
 }
 
 // Ordered, de-duplicated list of ALL closing-referenced issue numbers for a PR.
-// Umbrella PRs legitimately close multiple issues (#1052), so the refinement
-// guard resolves against every one of them, not just a unique single ref.
+// Umbrella PRs legitimately close multiple issues, so the refinement guard
+// resolves against every one of them, not just a unique single ref.
 export function resolveLinkedIssuesFromPr(prData) {
   if (!prData || typeof prData !== "object") return [];
   const dedupe = (nums) => {
@@ -527,11 +519,11 @@ async function resolveNoIssueRefinementArtifact(body, expectedIssue) {
 // path so the two never drift on what counts as a fetched/evaluated artifact.
 // The ready-PR path reuses the SAME evaluated results to surface the
 // spec-of-record's AC data (acItems/uncheckedAcItems) for the pre_approval_gate
-// unticked-AC check (#1621) without re-deriving it.
+// unticked-AC check without re-deriving it.
 async function evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand, runChild }) {
   const { detectIssueRefinementArtifact } = await import("@dev-loops/core/loop/issue-refinement-artifact");
-  // #1866 follow-up: anchor linked refinement doc resolution to the repo root,
-  // never the ambient cwd — cwd is untrusted in this script (children run with
+  // Anchor linked refinement doc resolution to the repo root, never the
+  // ambient cwd — cwd is untrusted in this script (children run with
   // cwd: repoRoot) and a subdirectory invocation would false-block refined
   // issues whose tmp/refinement/*.md docs resolve only from the root.
   const docAnchor = resolveRepoRoot(process.cwd());
@@ -542,7 +534,7 @@ async function evaluateLinkedIssueArtifacts(linkedIssues, { repo, env, ghCommand
       evaluated.push({ issue, artifact: null });
       continue;
     }
-    // #1866: a linked refinement doc satisfies the artifact check only when it
+    // A linked refinement doc satisfies the artifact check only when it
     // actually resolves. Paths follow the `tmp/refinement/*.md` convention,
     // anchored to the repo root (see docAnchor above).
     evaluated.push({
@@ -584,7 +576,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
     // draft-gate boundary, so the status stays "unknown" and no finding is
     // recorded. But the linked issue's AC data is also the spec-of-record for
     // the pre_approval_gate unticked-AC check (ACCEPT-CRITERIA-VERIFY-AND-
-    // REFLECT, #1621), so fetch the linked issue bodies and surface
+    // REFLECT), so fetch the linked issue bodies and surface
     // acItems/uncheckedAcItems alongside the unknown status — the
     // pre_approval_gate refuses a `clean` verdict while unticked AC items
     // remain, reading exactly this field. `_onlyEnforcedWhenDraft: false`
@@ -599,16 +591,16 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
       refinedIssues,
       _onlyEnforcedWhenDraft: false,
     };
-    // #1877: the PR body's own AC/DoD checklist is the derived, self-contained
+    // The PR body's own AC/DoD checklist is the derived, self-contained
     // checklist mirroring the issue matrix. Surface its unchecked boxes so the
     // pre_approval_gate can fail closed on ANY open acceptance criterion in the
     // PR body itself (completeness check), independent of the spec-of-record
-    // unticked-AC read above (#1621). Sections absent from the body contribute
-    // no items — the draft-exit validateTrackerBackedPrBodySpec check (#1863)
-    // owns requiring the sections to exist. Computed BEFORE the allFailed early
-    // return: the extractor is pure and its only input (prData.body) is already
-    // in hand, so the #1877 block must not be hostage to a linked-issue fetch
-    // failure (#1621's "cannot verify what it cannot read" covers the
+    // unticked-AC read above. Sections absent from the body contribute no
+    // items — the draft-exit validateTrackerBackedPrBodySpec check owns
+    // requiring the sections to exist. Computed BEFORE the allFailed early
+    // return: the extractor is pure and its only input (prData.body) is
+    // already in hand, so this block must not be hostage to a linked-issue
+    // fetch failure ("cannot verify what it cannot read" covers the
     // spec-of-record check, not this one).
     const { extractPrBodyUncheckedChecklistItems } = await import("@dev-loops/core/loop/issue-refinement-artifact");
     const prBody = typeof prData?.body === "string" ? prData.body : "";
@@ -628,7 +620,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
     // Union the spec-of-record AC data across EVERY successfully-fetched linked
     // issue, not just the first present one: an umbrella PR closing several
     // refined issues must refuse a clean pre_approval_gate while ANY sibling
-    // issue still has an unticked AC (ACCEPT-CRITERIA-VERIFY-AND-REFLECT, #1621).
+    // issue still has an unticked AC (ACCEPT-CRITERIA-VERIFY-AND-REFLECT).
     // Reporting only the first-present issue's uncheckedAcItems would let a PR
     // whose first-linked issue is fully ticked pass clean while a later sibling
     // still has open ACs. The first-present artifact still anchors the single-
@@ -728,7 +720,7 @@ export async function loadRefinementArtifact({ repo, prData, prDraft, prClosed, 
     reason: isUmbrella
       ? `No linked issue (${scopeLabel}) carries a refinement artifact (ACs/DoD); draft gate cannot verify a refinement artifact.`
       : first.reason,
-    // #1951: thread the detector's per-finding taxonomy through (a checklist-only
+    // Thread the detector's per-finding taxonomy through (a checklist-only
     // linked issue is a missing_ac_dod_matrix miss, not a bare artifact miss)
     // so the draft gate — the unconditional backstop for the enqueue gate's
     // matrix floor — surfaces the same finding vocabulary and guidance naming
@@ -755,7 +747,7 @@ async function fetchLocalConflictFiles({ env = process.env, gitCommand = "git", 
   }
   return parseGitStatusConflictFiles(result.stdout);
 }
-// Operator-authorized post-convergence suppression (#1441): a prior EXPLICIT
+// Operator-authorized post-convergence suppression: a prior EXPLICIT
 // run of withdraw-copilot-review-request.mjs recorded a marker, scoped to an
 // exact head, after withdrawing a stranded request on a head that has advanced
 // past Copilot's last submitted review with a provable pure doc/prose delta
@@ -797,7 +789,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   }
   // Fetch Copilot requested-reviewers at the original position (before threads/graphql)
   // to preserve the gh call order existing tests expect; the reconciliation (timeline
-  // fetch) is deferred to after reviewSummary is computed (#1588).
+  // fetch) is deferred to after reviewSummary is computed.
   const copilotRequested = await fetchCopilotRequested(options, runtime);
   const threadsPayload = await fetchGithubReviewThreadsPayload(options, runtime);
   const parsedThreads = parseReviewThreads(threadsPayload);
@@ -808,7 +800,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   // When draft gate was re-passed on a different head, use its timestamp
   // to reset the Copilot round count — only reviews after the re-pass count.
   // Shared with request-copilot-review so both scripts compute the same
-  // completed round count / cap (#896). Prefix matching for the head SHA lets
+  // completed round count / cap. Prefix matching for the head SHA lets
   // shortened SHAs (7+) from gate comments match the full headRefOid.
   const draftGateResetAtMs = resolveDraftGateRoundResetMs({
     draftGate: gateEvidence.draftGate,
@@ -841,23 +833,23 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   // Resolve the refinement config (round cap, low-signal heuristic) and feed it to
   // the interpreter. Without it, the interpreter cannot see maxCopilotRounds and so
   // never resolves ROUND_CAP_CLEAN_FALLBACK — a post-cap clean head would fall to
-  // READY_TO_REREQUEST_REVIEW, dead-ending the loop at the round cap (#896). This
+  // READY_TO_REREQUEST_REVIEW, dead-ending the loop at the round cap. This
   // keeps the gate-coordination interpretation consistent with the standalone
   // detect-copilot-loop-state path and with request-copilot-review's cap logic.
   const interpreterRepoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
   const interpreterConfigResult = await loadDevLoopConfig({ repoRoot: interpreterRepoRoot });
   const interpreterConfigHasErrors = Array.isArray(interpreterConfigResult.errors) && interpreterConfigResult.errors.length > 0;
-  // preApprovalRequireCi (#1337) is resolved centrally inside resolveRefinement,
-  // so the interpreter honors gates.preApproval.requireCi:false here (shared by
+  // preApprovalRequireCi is resolved centrally inside resolveRefinement, so
+  // the interpreter honors gates.preApproval.requireCi:false here (shared by
   // detect and upsert via this context builder) without a separate threading step.
   const interpreterRefinementConfig = interpreterConfigHasErrors
     ? resolveRefinement({ version: 1 })
     : resolveRefinement(interpreterConfigResult.config ?? { version: 1 });
   if (options.lightweight) {
-    // Compose (not replace) the round cap for light-dispatched PRs (#1210):
+    // Compose (not replace) the round cap for light-dispatched PRs:
     // min(lightMode.maxCopilotRounds ?? 1, refinement.maxCopilotRounds), so
     // maxCopilotRounds: 0 still disables Copilot rounds everywhere. Shared with
-    // the maxCopilotRounds resolution below (#1126 requires the two to agree).
+    // the maxCopilotRounds resolution below (the two must agree).
     interpreterRefinementConfig.maxCopilotRounds = resolveEffectiveCopilotRoundCap(
       interpreterConfigHasErrors ? { version: 1 } : (interpreterConfigResult.config ?? { version: 1 }),
       { lightweight: true },
@@ -900,8 +892,8 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   };
 }
 
-// #1472: composes the formal-request guard's round-cap exemption from both
-// shapes that must suppress it — the interpreter's own roundCapCleanEligible
+// Composes the formal-request guard's round-cap exemption from both shapes
+// that must suppress it — the interpreter's own roundCapCleanEligible
 // (round_cap_clean_fallback) and the evaluator's independent ROUND_CAP_REACHED
 // grant (isRoundCapReachedCleanGrant, imported from packages/core, the same
 // predicate the core-side applyUnsettledCopilotReviewEntryGuard mirror uses).
@@ -926,7 +918,7 @@ async function fetchCopilotEverFormallyRequested({ repo, pr }, { env = process.e
   return false;
 }
 
-// #1472: builds the exact input object passed to evaluatePrGateCoordination.
+// Builds the exact input object passed to evaluatePrGateCoordination.
 // Exported (and used by detectPrGateCoordinationState below, not duplicated)
 // so a test can assert the real production wiring — e.g. that
 // unresolvedThreadCount is threaded from context.snapshot rather than a test
@@ -951,10 +943,10 @@ export function buildGateCoordinationEvaluatorInput({
     mergeStateStatus: context.mergeStateStatus,
     mergeable: context.mergeable,
     conflictFiles: context.conflictFiles,
-    // UI e2e auto-scoping (#976): path-triggered + fail-closed precondition.
+    // UI e2e auto-scoping: path-triggered + fail-closed precondition.
     changedFiles: extractChangedFiles(context.prData),
     uiE2ePassed: deriveUiE2ePassed(context.prData),
-    // Designer/vision recorded-evidence scoping (#1443, ADR 0041 UI half):
+    // Designer/vision recorded-evidence scoping (ADR 0041 UI half):
     // path-triggered + fail-closed, modeled on the UI e2e precondition above.
     // The recorded evidence flows through the --designer-review-evidence read
     // seam (AC1's reachable pass branch); absent it, fails closed (null).
@@ -965,15 +957,15 @@ export function buildGateCoordinationEvaluatorInput({
     ciStatus: context.snapshot?.ciStatus ?? null,
     copilotReviewRoundCount: context.snapshot?.copilotReviewRoundCount ?? 0,
     maxCopilotRounds,
-    // #1472: lets the evaluator's ROUND_CAP_REACHED handling independently
-    // confirm "zero unresolved threads" (the exhaustion note's own promise)
-    // rather than trusting a stale/compound lifecycleState label alone.
+    // Lets the evaluator's ROUND_CAP_REACHED handling independently confirm
+    // "zero unresolved threads" (the exhaustion note's own promise) rather
+    // than trusting a stale/compound lifecycleState label alone.
     unresolvedThreadCount: context.snapshot?.unresolvedThreadCount ?? null,
     sameHeadCleanConverged: context.interpretation.sameHeadCleanConverged,
-    // Operator-authorized post-convergence suppression (#1441): see
+    // Operator-authorized post-convergence suppression: see
     // resolvePostConvergenceReviewSuppressed above for how this is verified.
     postConvergenceReviewSuppressed: context.postConvergenceReviewSuppressed === true,
-    // Independent gate-ENTRY re-check (#1190): fed alongside (not derived from)
+    // Independent gate-ENTRY re-check: fed alongside (not derived from)
     // sameHeadCleanConverged, so an outstanding request on the current head refuses
     // RUN_PRE_APPROVAL_GATE even if sameHeadCleanConverged were somehow stale/wrong.
     copilotReviewRequestStatus: context.snapshot?.copilotReviewRequestStatus ?? "none",
@@ -997,21 +989,21 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const draftGateConfig = resolveGateConfig(config, "draft");
   const preApprovalGateConfig = resolveGateConfig(config, "preApproval");
   // Shared with interpreterRefinementConfig.maxCopilotRounds in
-  // loadPrGateCoordinationContext (#1126: the two must never disagree at the
-  // cap boundary) — the same lightweight composition (#1210) is applied here.
+  // loadPrGateCoordinationContext (the two must never disagree at the
+  // cap boundary) — the same lightweight composition is applied here.
   const maxCopilotRounds = options.lightweight
     ? resolveEffectiveCopilotRoundCap(config, { lightweight: true })
     : resolveRefinementConfig(config, "maxCopilotRounds");
   // Shared with interpretLoopState (consumed by copilot-pr-handoff.mjs) and
   // evaluatePrGateCoordination — the single source of truth for "is the
   // Copilot round cap reached" so this detector cannot disagree with the
-  // handoff at the cap boundary (#1126).
+  // handoff at the cap boundary.
   const roundCapReached = isCopilotRoundCapReached({
     copilotReviewRoundCount: context.snapshot?.copilotReviewRoundCount,
     maxCopilotRounds,
   });
-  // Designer/vision recorded-evidence read seam (#1443, ADR 0041 UI half):
-  // load the loop's recorded evidence (if the operator supplied
+  // Designer/vision recorded-evidence read seam (ADR 0041 UI half): load the
+  // loop's recorded evidence (if the operator supplied
   // --designer-review-evidence) so AC1's pass branch is reachable end-to-end;
   // absent it, the evaluator fails closed (a rendered-artifact change blocks
   // until recorded evidence is supplied).
@@ -1043,10 +1035,10 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     }),
     designerReviewEvidence,
   }));
-  // Copilot review request guard (#613): When Copilot has reviewed the PR
-  // but no formal review request was made, block pre-approval gate entry.
-  // Only query timeline when cheap preconditions pass — avoids unnecessary
-  // API call when guard cannot possibly trigger.
+  // Copilot review request guard: when Copilot has reviewed the PR but no
+  // formal review request was made, block pre-approval gate entry. Only
+  // query timeline when cheap preconditions pass — avoids unnecessary API
+  // call when guard cannot possibly trigger.
   const copilotReviewRequestStatus = context.snapshot?.copilotReviewRequestStatus ?? "none";
   const guardBoundaries = new Set([
     PR_CHECKPOINT.PRE_APPROVAL_GATE_NEEDED,
@@ -1054,11 +1046,11 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     PR_CHECKPOINT.FINAL_APPROVAL_READY,
   ]);
   const sameHeadCleanConverged = context.interpretation?.sameHeadCleanConverged ?? false;
-  // Round-cap clean fallback (#896): the interpreter resolved a clean post-cap head
+  // Round-cap clean fallback: the interpreter resolved a clean post-cap head
   // (zero unresolved threads + green CI) that Copilot will not re-review. The formal
   // request guard must not fire here — pre_approval_gate reviews the post-cap head.
   //
-  // #1472: without this, the guard below would rewrite the evaluator's
+  // Without this, the guard below would rewrite the evaluator's
   // ROUND_CAP_REACHED grant (see isRoundCapReachedCleanGrant) to
   // request_copilot_review whenever Copilot was never formally requested,
   // re-blocking the exact fallback the grant just opened. Widen the exemption
@@ -1071,7 +1063,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   const copilotReviewEverFormallyRequested = copilotReviewRequestStatus === "none"
     && guardBoundaries.has(result.gateBoundary)
     // cap-0 disables the Copilot gate, so shouldGuardCopilotReviewRequest always
-    // returns false here — skip the timeline fetch it would never need (#1126).
+    // returns false here — skip the timeline fetch it would never need.
     // (Restores the suppression the roundCapReached predicate swap dropped.)
     && maxCopilotRounds !== 0
     && !(roundCapReached
@@ -1143,11 +1135,11 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     ];
     result.gateEvidenceNote = null;
   }
-  // Expose effective round count in output for testability (#560)
+  // Expose effective round count in output for testability
   result.copilotReviewRoundCount = context.snapshot?.copilotReviewRoundCount ?? 0;
   // Auto-release the runner-coordination lock at gate-coordination terminal stop
   // boundaries — see TERMINAL_RUNNER_RELEASE_ACTIONS above for the rationale
-  // (#1632: success-or-stop release vs 30-min TTL; env-aware, best-effort,
+  // (success-or-stop release vs 30-min TTL; env-aware, best-effort,
   // fail-closed competitor preserved).
   if (TERMINAL_RUNNER_RELEASE_ACTIONS.has(result.nextAction)) {
     const releaseImpl = runtime.releaseAsyncRunnerOwnershipImpl ?? releaseAsyncRunnerOwnership;
