@@ -174,6 +174,10 @@ export async function evaluateCommentDiscipline({
     "-c", "core.pager=cat",
     "-c", "diff.noprefix=false",
     "-c", "diff.mnemonicPrefix=false",
+    // diff.renames=true keeps a renamed+edited file an R pair (only its edited
+    // lines are `+`); with renames off it shows as D+A and the whole re-added
+    // file reads as added, which would flag its pre-existing comments.
+    "-c", "diff.renames=true",
     "-c", "diff.algorithm=myers",
     "-c", "core.autocrlf=false",
   ];

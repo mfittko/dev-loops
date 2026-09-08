@@ -3,6 +3,7 @@ import { test } from "bun:test";
 
 import {
   computeCommentDiscipline,
+  evaluateCommentDiscipline,
   DEFAULT_MAX_ADDED_COMMENT_BLOCK_LINES,
   ESCAPE_MARKER,
 } from "../../scripts/loop/check-comment-discipline.mjs";
@@ -85,6 +86,12 @@ test("blocks an added design-essay comment block over the threshold", () => {
   });
   assert.equal(out.outcome, "block");
   assert.ok(out.findings.some((f) => f.type === "design-essay"));
+});
+
+test("evaluateCommentDiscipline fails closed on an implausible git ref (trust boundary)", async () => {
+  await assert.rejects(() => evaluateCommentDiscipline({ base: "a..b", head: "HEAD" }), /plausible git ref/);
+  await assert.rejects(() => evaluateCommentDiscipline({ base: "-x", head: "HEAD" }), /plausible git ref/);
+  await assert.rejects(() => evaluateCommentDiscipline({ base: "origin/main", head: ".." }), /plausible git ref/);
 });
 
 test("ignores non-runtime files (tests, docs, generated mirrors)", () => {
