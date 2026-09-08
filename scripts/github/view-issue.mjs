@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { buildParseError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseIssueNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { viewIssue as coreViewIssue, VIEW_ISSUE_DEFAULT_FIELDS } from "@dev-loops/core/github/issue-ops";
 import { parseArgs } from "node:util";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, matchJqOutputToken, runReadCommandCli } from "../lib/jq-output.mjs";
 
 // Default issue facts a follow-up run reads: body + identity/state for AC
 // checkbox sync and gate angles that need the linked issue. Callers needing a
@@ -108,29 +108,8 @@ export async function viewIssue(options, { env = process.env, ghCommand = "gh", 
   return coreViewIssue(options, { env, ghCommand, run });
 }
 
-export async function runCli(
-  argv = process.argv.slice(2),
-  { stdout = process.stdout, stderr = process.stderr, env = process.env, ghCommand = "gh", run = runChild } = {},
-) {
-  let options;
-  try {
-    options = parseViewIssueCliArgs(argv);
-  } catch (error) {
-    stderr.write(`${formatCliError(error)}\n`);
-    return 1;
-  }
-  if (options.help) {
-    stdout.write(`${USAGE}\n`);
-    return 0;
-  }
-  let result;
-  try {
-    result = await viewIssue(options, { env, ghCommand, run });
-  } catch (error) {
-    stderr.write(`${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`);
-    return 1;
-  }
-  return emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
+export async function runCli(argv = process.argv.slice(2), io = {}) {
+  return runReadCommandCli({ parse: parseViewIssueCliArgs, operate: viewIssue, usage: USAGE }, argv, io);
 }
 
 if (isDirectCliRun(import.meta.url)) {

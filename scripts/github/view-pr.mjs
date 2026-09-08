@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
+import { buildParseError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { parseArgs } from "node:util";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, matchJqOutputToken, runReadCommandCli } from "../lib/jq-output.mjs";
 
 // Default PR facts a follow-up run reads: the fields loop info surfaces plus the
 // head SHA. Callers needing a different set pass --json <fields> (a comma list,
@@ -120,29 +120,8 @@ export async function viewPr(options, { env = process.env, ghCommand = "gh", run
   return { ok: true, pr };
 }
 
-export async function runCli(
-  argv = process.argv.slice(2),
-  { stdout = process.stdout, stderr = process.stderr, env = process.env, ghCommand = "gh", run = runChild } = {},
-) {
-  let options;
-  try {
-    options = parseViewPrCliArgs(argv);
-  } catch (error) {
-    stderr.write(`${formatCliError(error)}\n`);
-    return 1;
-  }
-  if (options.help) {
-    stdout.write(`${USAGE}\n`);
-    return 0;
-  }
-  let result;
-  try {
-    result = await viewPr(options, { env, ghCommand, run });
-  } catch (error) {
-    stderr.write(`${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`);
-    return 1;
-  }
-  return emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
+export async function runCli(argv = process.argv.slice(2), io = {}) {
+  return runReadCommandCli({ parse: parseViewPrCliArgs, operate: viewPr, usage: USAGE }, argv, io);
 }
 
 if (isDirectCliRun(import.meta.url)) {

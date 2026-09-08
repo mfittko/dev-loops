@@ -55,6 +55,17 @@ const DIRECT_RUN_GUARD_RE =
 // the real risk (a regression sailing through silently), so this stays loose.
 const JSON_STRINGIFY_RE = /JSON\.stringify/;
 
+// A file is ALSO JSON-emitting if it delegates its whole CLI to the shared
+// read-command execution shell (issue #2037): view-issue/view-pr/list-issues
+// moved their parse -> help -> operate -> emit boilerplate (including the
+// `JSON.stringify` runtime-error envelope) into `runReadCommandCli` in
+// scripts/lib/jq-output.mjs, so the migrated files no longer literally contain
+// `JSON.stringify` themselves. Without this signal the extraction would make
+// them silently disappear from discovery — the exact vacuous-pass this guard
+// exists to prevent. The shell still emits their JSON, so they remain
+// JSON-emitting direct-CLI commands and must stay discovered.
+const RUN_READ_COMMAND_SHELL_RE = /runReadCommandCli/;
+
 // Accepted "routes through the shared emit path" evidence: a direct import of
 // jq-output.mjs (emitResult), or the refine checkers' shared
 // _refine-helpers.mjs wrapper (which itself imports jq-output.mjs — verified
@@ -124,7 +135,10 @@ async function discoverJsonEmittingCliScripts() {
   const candidates = [];
   for (const absPath of files) {
     const source = await readFile(absPath, "utf8");
-    if (DIRECT_RUN_GUARD_RE.test(source) && JSON_STRINGIFY_RE.test(source)) {
+    if (
+      DIRECT_RUN_GUARD_RE.test(source) &&
+      (JSON_STRINGIFY_RE.test(source) || RUN_READ_COMMAND_SHELL_RE.test(source))
+    ) {
       candidates.push({ absPath, relPath: path.relative(scriptsRoot, absPath), source });
     }
   }
@@ -179,6 +193,19 @@ test("every JSON-emitting direct-CLI script routes through the shared jq-output 
       `Fix: wire --jq/--silent via emitResult (see scripts/projects/list-queue-items.mjs), or add a` +
       ` reasoned EXCLUDED entry if this script is genuinely out of scope.`,
   );
+});
+
+test("the shared read-command shell keeps the migrated commands discovered (#2037: extraction cannot pass vacuously)", async () => {
+  // view-issue/view-pr/list-issues delegate to runReadCommandCli and no longer
+  // contain a literal JSON.stringify. This asserts the discovery signal above
+  // still finds all three AND that each routes through the shared emit path —
+  // so the consolidation cannot silently drop them from the base-guarantee set.
+  const candidates = await discoverJsonEmittingCliScripts();
+  const discovered = new Map(candidates.map((c) => [c.relPath, c.source]));
+  for (const relPath of ["github/view-issue.mjs", "github/view-pr.mjs", "github/list-issues.mjs"]) {
+    assert.ok(discovered.has(relPath), `${relPath} must still be discovered as a JSON-emitting direct-CLI command after the shared-shell extraction`);
+    assert.ok(routesThroughSharedEmitPath(discovered.get(relPath)), `${relPath} must still route through the shared jq-output emit path`);
+  }
 });
 
 test("every EXCLUDED entry is still a real, currently-discovered file (no stale allowlist entries)", async () => {
