@@ -191,11 +191,11 @@ board validates preconditions first:
 | Situation | Behavior | Exit code |
 |---|---|---|
 | No board configured (not opted in) | Fall back to positional ordering; no board mutations | N/A (normal) |
-| Board not found by title | Operation fails; no fallback to creation | 2 |
+| Board not found by title | Operation fails; no fallback to creation | 3 |
 | Board exists but Status field missing | Operation fails; manual reconciliation needed | 3 |
 | Board exists but Status field missing expected column | Operation fails; manual reconciliation needed | 3 |
 | GitHub API returns error | Operation fails; queue continues with next item | 2 |
-| Item not found on board (move/add operation) | Operation fails; no silent creation | 2 |
+| Item not found on board (move/add operation) | Operation fails; no silent creation | 3 |
 
 ### Idempotent bootstrap exception
 
@@ -213,8 +213,7 @@ by failure class:
 - **Domain error** (any error thrown from the command's `main` — board/field/item
   resolution, GitHub API, and argument *validation* such as `INVALID_REPO`): a
   top-level `code` key rides alongside `ok`/`error`, and each helper's
-  `classifyExitCode` maps the `code` to the exit status (`INVALID_*` → 1, not-found →
-  3, the enqueue refinement gate → 4, else → 2). See [Error format](#error-format)
+  `classifyExitCode` maps the `code` to the exit status. See [Error format](#error-format)
   below for the complete `code`-to-exit mapping. This is the canonical envelope owned
   by that section (`{ ok, error, code }`):
 
