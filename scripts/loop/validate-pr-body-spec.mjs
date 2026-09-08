@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Validate that a PR body carries the invariants required to serve as the
- * lightweight spec-of-record (issue #1025): Objective/why, in-scope, explicit
+ * lightweight spec-of-record: Objective/why, in-scope, explicit
  * non-goals, testable Acceptance criteria, Definition of done, and Open
  * questions/risks.
  *

@@ -149,8 +149,8 @@ export async function buildHandoffEnvelopeCli(
   // Build options for envelope builder
   const envelopeOptions = {};
 
-  // Carry the canonical sanctioned operation → wrapper command map (issue #1081)
-  // into every emitted envelope by DEFAULT so spawned subagents never re-derive it.
+  // Carry the canonical sanctioned operation → wrapper command map into every
+  // emitted envelope by DEFAULT so spawned subagents never re-derive it.
   envelopeOptions.sanctionedCommands = SANCTIONED_COMMANDS;
 
   // Repo slug: explicit --repo, then resolver output bundle, then git remote

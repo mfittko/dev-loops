@@ -1,4 +1,4 @@
-// Single source of truth (#1103, #1126) for "did a significant product/test-logic
+// Single source of truth for "did a significant product/test-logic
 // change land since the last Copilot review at the round cap". Both
 // detect-pr-gate-coordination-state.mjs and copilot-pr-handoff.mjs consume this
 // so they agree on the round-cap escape hatch: at the cap, a significant
@@ -96,7 +96,7 @@ function classifyLine(content, inBlock) {
   }
 }
 
-// Content-level significance filter (#1137). A JS/TS file change is "comment-only"
+// Content-level significance filter. A JS/TS file change is "comment-only"
 // when EVERY added/removed line in its patch is blank OR a comment line. Such
 // changes (JSDoc/inline-comment tweaks) must NOT reopen a Copilot round past the
 // cap. Comment rules:
@@ -191,7 +191,7 @@ export async function detectPostConvergenceSignificantChange(
   if (rawFiles.length === 0) {
     return false;
   }
-  // Content-aware filter (#1137): drop comment/JSDoc-only JS/TS changes BEFORE the
+  // Content-aware filter: drop comment/JSDoc-only JS/TS changes BEFORE the
   // existing size/count thresholds so trivial comment fixes no longer reopen a
   // Copilot round past the cap. Doc paths and un-classifiable files fall through
   // unchanged (isCommentOnlyFileChange returns false for them), preserving the

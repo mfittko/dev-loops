@@ -274,7 +274,7 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
     ? prData.headRefOid.trim()
     : null;
   const reviewSummary = summarizeCopilotReviews(prData.reviews, { headSha: prHeadSha, draftGateResetAtMs });
-  // Exclude the loop's own gate-evidence check (#1358): its conclusion is derived
+  // Exclude the loop's own gate-evidence check: its conclusion is derived
   // from the loop's own progress, so it must never block the pre_approval step
   // that would turn it green.
   const fallbackDerivation = deriveLoopCiStatusFromRollup(prData.statusCheckRollup);
@@ -380,7 +380,7 @@ export async function runCli(
     ? resolveRefinement({ version: 1 })
     : resolveRefinement(config.config);
   if (options.lightweight) {
-    // Compose (not replace) the round cap for light-dispatched PRs (#1210):
+    // Compose (not replace) the round cap for light-dispatched PRs:
     // min(lightMode.maxCopilotRounds ?? 1, refinement.maxCopilotRounds), so
     // maxCopilotRounds: 0 still disables Copilot rounds everywhere.
     refinementConfig.maxCopilotRounds = resolveEffectiveCopilotRoundCap(

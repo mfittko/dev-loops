@@ -2,7 +2,7 @@
 /**
  * check-adr-tripwire
  *
- * Fail-closed ADR tripwire for decision-shaped PRs (issue #1867). A lazy
+ * Fail-closed ADR tripwire for decision-shaped PRs. A lazy
  * tripwire, not an ADR-worthiness classifier: it detects the three
  * highest-signal mechanical surfaces and requires an ADR (or an explicit
  * waiver) alongside them, converting the advisory-first remainder of

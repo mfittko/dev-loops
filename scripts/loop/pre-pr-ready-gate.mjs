@@ -134,16 +134,16 @@ export async function prePrReadyGate(options, { env = process.env, ghCommand = "
   // When the PR is no longer draft, a visible clean draft_gate comment that
   // exists at all (one-time transition record) satisfies the VERDICT check
   // (don't require head-SHA matching after draft has been left). The gate-close
-  // invariant (#1585) is still enforced below: threadsResolved (0 unresolved
+  // invariant is still enforced below: threadsResolved (0 unresolved
   // gate-authored threads) is required regardless of draft state.
   const verdictClean = prState.isDraft
     ? gate.effectiveHeadClean
     : gate.cleanEvidenceExists;
-  // #1585: a clean verdict is necessary but not sufficient — every
-  // gate-authored review thread (high, medium, low, question, AND nit)
-  // must be resolved first. A clean verdict with dangling low threads
-  // is exactly the #1584 regression this guard now catches at the
-  // ready-for-review boundary instead of stalling at the merge boundary.
+  // A clean verdict is necessary but not sufficient — every gate-authored
+  // review thread (high, medium, low, question, AND nit) must be resolved
+  // first. A clean verdict with dangling low threads must not pass this
+  // guard at the ready-for-review boundary instead of stalling at the merge
+  // boundary.
   const threadsResolved = gate.unresolvedGateThreadCount === 0;
   const gateSatisfied = verdictClean && threadsResolved;
 
@@ -200,7 +200,7 @@ export async function prePrReadyGate(options, { env = process.env, ghCommand = "
     };
   }
 
-  // Fail-closed ADR tripwire (issue #1867): the same body-derived check
+  // Fail-closed ADR tripwire: the same body-derived check
   // readyForReview() runs — a decision-shaped surface touch requires a
   // docs/decisions/NNNN-*.md record in the diff or an `adr-tripwire:allow
   // <reason>` waiver in the PR body. Body-derived, so this raw path honors
@@ -228,7 +228,7 @@ export async function prePrReadyGate(options, { env = process.env, ghCommand = "
     };
   }
 
-  // Fail-closed comment-discipline guard (LOCAL-COMMENT-DISCIPLINE, #2054):
+  // Fail-closed comment-discipline guard (LOCAL-COMMENT-DISCIPLINE):
   // the same added-lines-only check readyForReview() runs — a newly added
   // runtime comment citing issue chronology or over the design-essay
   // threshold blocks unless the comment carries the inline escape marker.
@@ -254,9 +254,9 @@ export async function prePrReadyGate(options, { env = process.env, ghCommand = "
     };
   }
 
-  // Fail-closed PR-description contract for a TRACKER-BACKED PR (issue #1863):
-  // the deterministic validate-pr-body-spec check, previously wired only to
-  // the lightweight/issue-less path (#1025), now also runs on a draft PR that
+  // Fail-closed PR-description contract for a TRACKER-BACKED PR: the
+  // deterministic validate-pr-body-spec check, previously wired only to
+  // the lightweight/issue-less path, now also runs on a draft PR that
   // closes one or more issues — a linked issue with real ACs is necessary but
   // not sufficient; the PR's OWN body must carry Acceptance criteria +
   // Definition of done checklists, an explicit Non-goals section, and a

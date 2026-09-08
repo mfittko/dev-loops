@@ -119,7 +119,7 @@ async function main() {
   const queue = await readQueue(REPO_ROOT);
 
   // A configured GitHub Projects board is the authoritative queue MEMBERSHIP
-  // source (issue #864): fold its "Next Up" items into the queue before judging
+  // source: fold its "Next Up" items into the queue before judging
   // emptiness so a populated board with an empty local queue is no longer a
   // silent no-op. Fail-open — a board hiccup falls back to the local queue.
   // reconcileBoardMembership already logs an "added N ... from board Next Up"

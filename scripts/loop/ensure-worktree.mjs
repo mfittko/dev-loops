@@ -1,51 +1,36 @@
 #!/usr/bin/env node
 /**
  * Ensure a loop-owned worktree exists at its canonical namespaced path, then
- * provision it (issue #909). This is the lifecycle entrypoint: create OR reuse
- * the worktree, then copy/link the configured gitignored files in one step.
+ * provision it. This is the lifecycle entrypoint: create OR reuse the
+ * worktree, then copy/link the configured gitignored files in one step.
  *
  * - Canonical path comes from the shared resolveWorktreePath (namespaced
  *   `tmp/worktrees/dev-loops/<kind>-<n>`), so create/provision/cleanup agree.
  * - `git fetch --prune` every candidate remote (see branchRemoteCandidates)
- *   then `git worktree add` if absent. If a worktree already exists at the
- *   exact path it is REUSED (idempotent); if one exists there on a DIFFERENT
- *   branch it is a hard conflict (we never clobber); if it exists DETACHED
- *   (e.g. ui-review's pinPrHead), it is reused as-is with `branchOrigin:
- *   "reused-detached"` — there is no local branch to associate with a
- *   divergence report.
+ *   then `git worktree add` if absent. An existing worktree at the exact path
+ *   is REUSED (idempotent); one on a DIFFERENT branch is a hard conflict (we
+ *   never clobber); one DETACHED (e.g. ui-review's pinPrHead) is reused as-is
+ *   with `branchOrigin: "reused-detached"` — there is no local branch to
+ *   associate with a divergence report.
  * - The branch a fresh worktree is created from depends on what already
  *   exists, never on guessing: an existing LOCAL branch of that name is
  *   re-attached as-is; otherwise the first candidate remote (in priority
  *   order: the one `--base` names, then "origin" when it differs) that
  *   already has a matching REMOTE branch is tracked at its tip (never forked
- *   off base — that would silently drop the remote branch's commits and
- *   point upstream at base instead); only when NO candidate has it is a
- *   genuinely new branch created off the resolved base. See `branchOrigin`
- *   below. Caveat: a `--single-branch` clone only carries remote-tracking
- *   refs for the branches it was cloned with, so a genuinely existing but
- *   never-fetched remote branch can still fall through to created-from-base
- *   there — fetching does not retroactively widen a restricted refspec.
+ *   off base — that would silently drop the remote branch's commits); only
+ *   when NO candidate has it is a genuinely new branch created off the
+ *   resolved base. See `branchOrigin` below. A --single-branch clone may
+ *   still fall through to created-from-base for a never-fetched remote
+ *   branch — a restricted refspec is not widened by fetch.
  * - Provisioning is invoked via the imported provisionWorktree core (shared
  *   with provision-worktree.mjs's CLI) — not shelled out. It fails soft: a
- *   provision warning never aborts the worktree.
- * - Does NOT install dependencies (out of scope).
+ *   provision warning never aborts the worktree. Does NOT install
+ *   dependencies (out of scope).
  *
  * Prints a JSON result to stdout:
  *   { ok, path, created|reused, base?, branchOrigin, diverged?,
  *     fetchDegraded?, provision: { actions, summary }, guard }
- * (`base` is present only on create — the ref the worktree was created off,
- * see the branch-resolution bullet above and the full USAGE block below.
- * `branchOrigin` is ALWAYS present, on both create and reuse. `diverged` is
- * present, on both create and reuse, only when an existing local branch has
- * genuinely forked from a candidate remote's same-named branch. `fetchDegraded`
- * is present (`true`) only when at least one candidate remote's best-effort
- * fetch failed — the branch resolution above still ran, just against
- * whatever was already fetched. `provision` is the full provisionWorktree()
- * result, not just its summary. `guard` is the default-branch guard's
- * install result — best-effort: a failure there never fails the worktree,
- * see installGuard below. `commitMsgGuard` is the commit-message contract
- * guard's install result (issue #1869) — same best-effort contract, see
- * installCommitMsgGuardForRoot below.)
+ * See the full USAGE block below for the field-by-field contract.
  * A git create failure is a hard error (exit 1); provisioning is fail-soft.
  */
 import { execFileSync } from "node:child_process";
@@ -549,10 +534,10 @@ function installGuard(gitCommand, root, explicitBase) {
   }
 }
 
-// Installs the commit-msg contract guard (issue #1869) alongside the
-// default-branch guard above — same resolveHooksInstallTarget, same common
-// hooks directory, so it rides into every worktree the same way. Best-effort,
-// like installGuard: a failure here never fails the worktree.
+// Installs the commit-msg contract guard alongside the default-branch guard
+// above — same resolveHooksInstallTarget, same common hooks directory, so it
+// rides into every worktree the same way. Best-effort, like installGuard: a
+// failure here never fails the worktree.
 function installCommitMsgGuardForRoot(gitCommand, root) {
   try {
     const { gitDir, hooksPathOverride } = resolveHooksInstallTarget(gitCommand, root);

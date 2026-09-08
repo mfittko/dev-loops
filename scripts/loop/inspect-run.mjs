@@ -234,7 +234,7 @@ export async function inspectRun(options, { env = process.env, ghCommand = "gh" 
     reviewer: reviewerInputPath !== undefined ? "input" : "live",
   };
   // Resolve interpreter refinement so the steering re-interpretation below honors
-  // gates.preApproval.requireCi:false (#1337) for a CI-less repo; fail soft to defaults.
+  // gates.preApproval.requireCi:false for a CI-less repo; fail soft to defaults.
   let refinementConfig;
   try {
     const loaded = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(process.cwd()) });

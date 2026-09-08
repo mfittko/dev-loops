@@ -2,8 +2,8 @@
 /**
  * check-retro-tooling
  *
- * Deterministic, dependency-free verifier for the internal-tooling-only rule
- * (issue #982). Given a transcript of the shell commands the agent ran during a
+ * Deterministic, dependency-free verifier for the internal-tooling-only rule.
+ * Given a transcript of the shell commands the agent ran during a
  * dev-loop run, it detects AGENT-LEVEL raw escape-hatch calls that should have
  * gone through internal dev-loops tooling:
  *   - `gh ...` (incl. `gh api`, `gh ... --jq`)

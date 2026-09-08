@@ -2,7 +2,7 @@
 /**
  * Provision a freshly-created worktree with the gitignored files/dirs the app
  * and tests need, copied/symlinked from the main checkout per `.devloops`
- * `worktree.entries` (mode: copy/link, issue #909).
+ * `worktree.entries` (mode: copy/link).
  *
  * - Sources resolve against the main checkout (`--repo-root`), never cwd.
  * - Entries are repo-relative literal paths OR glob patterns (native fsp.glob).
@@ -18,7 +18,7 @@
  * fresh worktree there is no node_modules at all, so scripts/**'s
  * `@dev-loops/core` imports resolve UP-TREE to the nearest ancestor
  * node_modules (the main checkout's) — silently testing main's core instead
- * of the branch's (#1144). Stale/broken links are replaced; a real file/dir
+ * of the branch's. Stale/broken links are replaced; a real file/dir
  * already occupying the slot is left alone (dest-conflict, never clobbered).
  *
  * Prints a JSON summary of actions to stdout. Never throws on a per-entry
@@ -121,7 +121,7 @@ async function pathExists(p) {
 }
 
 /**
- * True when `abs` is, or sits under, a `node_modules` directory (#1627). A
+ * True when `abs` is, or sits under, a `node_modules` directory. A
  * source entry resolving under node_modules would link/copy the MAIN checkout's
  * installed dependencies into the worktree, silently testing main's deps instead
  * of the branch's (WORKTREE-DEPS-ISOLATED). Such entries are rejected by the
@@ -193,7 +193,7 @@ async function provisionLink(src, dest, logWarn) {
 /**
  * Ensure node_modules/@dev-loops/core -> ../../packages/core (relative) in the
  * worktree, pointing at the worktree's OWN packages/core — never the main
- * checkout's (#1144). Idempotent: a correct link is a no-op; a stale/broken
+ * checkout's. Idempotent: a correct link is a no-op; a stale/broken
  * link is replaced; a real file/dir at the dest is a dest-conflict skip
  * (never clobbered). node_modules is gitignored repo-wide, so this link is
  * always untracked.
@@ -262,8 +262,8 @@ export async function provisionWorktree({ worktreePath, repoRoot }, { loadConfig
         continue;
       }
       for (const src of matches) {
-        // Reject any entry whose resolved source is, or sits under, node_modules
-        // (#1627): provisioning must never mirror the main checkout's installed
+        // Reject any entry whose resolved source is, or sits under, node_modules:
+        // provisioning must never mirror the main checkout's installed
         // dependencies into a worktree (WORKTREE-DEPS-ISOLATED). Same reject shape
         // as the traversal guards.
         if (isUnderNodeModules(src, root)) {
