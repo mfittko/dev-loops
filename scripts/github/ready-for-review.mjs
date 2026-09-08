@@ -42,6 +42,12 @@ or a rule-modality reversal) must add/update a docs/decisions/NNNN-*.md
 record or carry \`adr-tripwire:allow <reason>\` in its PR body. The waiver is
 body-derived, so no flag surface exists or is needed.
 
+Also enforces the fail-closed comment-discipline guard
+(LOCAL-COMMENT-DISCIPLINE, issue #2054): a newly added runtime-source comment
+citing issue-number chronology or over the design-essay threshold blocks unless
+it carries the inline \`comment-discipline:allow\` marker; diff-scoped and
+added-lines-only, so it never flags pre-existing comments.
+
 ${JQ_OUTPUT_USAGE}`;
 const parseError = buildParseError(USAGE);
 const PR_VIEW_QUERY = `query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { id, isDraft, headRefOid, baseRefName, state, mergeStateStatus, title, body, closingIssuesReferences(first:10){ nodes{ number } } } } }`;

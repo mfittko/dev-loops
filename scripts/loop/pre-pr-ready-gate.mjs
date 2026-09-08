@@ -33,7 +33,12 @@ ready-for-review.mjs. Also enforces the fail-closed ADR tripwire (issue
 the shared gate config, or a rule-modality reversal) must add/update a
 docs/decisions/NNNN-*.md record or carry \`adr-tripwire:allow <reason>\` in its
 PR body. The ADR waiver is body-derived, so unlike the size-budget flag it is
-honored identically on this raw path.
+honored identically on this raw path. Also enforces the fail-closed
+comment-discipline guard (LOCAL-COMMENT-DISCIPLINE, issue #2054): a newly added
+runtime-source comment citing issue-number chronology or over the design-essay
+threshold blocks unless it carries the inline \`comment-discipline:allow\`
+marker; diff-scoped and added-lines-only, so it never flags pre-existing
+comments.
 
 Exit codes:
   0  Draft gate evidence exists and the size budget does not block — ready transition is allowed
