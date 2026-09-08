@@ -1,7 +1,7 @@
 /**
  * ISSUE/PR-ID GUARD for generated comment bodies.
  *
- * Mandate (#1731, operator directive): generated gate/review/verdict comment
+ * Mandate (operator directive): generated gate/review/verdict comment
  * bodies must NEVER emit raw issue or PR ids. Public comment surfaces are
  * world-readable, and a bare `#<digits>` in a comment body is auto-linked by
  * GitHub to that issue/PR — leaking internal cross-references and violating
@@ -119,7 +119,7 @@ export function extractIssuePrIds(body) {
 const BARE_ISSUE_PR_ID_RE = /#+(?=\d)/g;
 
 /**
- * The sanctioned pre-guard transform for GENERATED comment bodies (#1922):
+ * The sanctioned pre-guard transform for GENERATED comment bodies:
  * neutralize a bare `#<digits>` auto-link token to a guard-safe, non-auto-linking
  * form by stripping the leading `#` (`#123` -> `123`). Auto-link syntax requires
  * the leading `#`, so the result neither auto-links on GitHub nor trips

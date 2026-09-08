@@ -1,30 +1,19 @@
 /**
  * Deterministic outer dev-loop lifecycle state model.
  *
- * This module defines the sequential lifecycle phases — issue_intake →
- * refinement → implementation → draft_gate → feedback_resolution →
- * pre_approval_gate → merge — as a consultable graph so skills use
- * machine-resolved state instead of restating the flow in prose.
- *
- * This module provides:
- * - LIFECYCLE_STATE: stable phase name constants
- * - LIFECYCLE_TRANSITIONS: legal transition graph between phases
- * - LIFECYCLE_GRAPH: metadata (start, end, entry, terminal, nonterminal)
- * - LIFECYCLE_NEXT_ACTIONS: recommended next action for each phase
- * - resolveLifecycleState: resolver that maps inputs to one lifecycle phase
- * - getAllowedTransitions: helper to list allowed next phases
- * - COPILOT_INNER_STATE_MAP: maps lifecycle phases to copilot-loop-state.mjs inner states
+ * Defines the sequential lifecycle phases — issue_intake → refinement →
+ * implementation → draft_gate → feedback_resolution → pre_approval_gate →
+ * merge — as a consultable graph so skills use machine-resolved state instead
+ * of restating the flow in prose.
  *
  * Contract guarantees:
- * - One deterministic lifecycle phase per normalized input set
- * - Ambiguous or incomplete inputs fall back to issue_intake
- * - Transition graph enforces legal phase progression
- * - Purely functional; no I/O or side effects
+ * - One deterministic lifecycle phase per normalized input set.
+ * - Ambiguous or incomplete inputs fall back to issue_intake.
+ * - Purely functional; no I/O or side effects.
  *
- * Integration boundary:
- * - Skills call resolveLifecycleState to determine current phase
- * - Copilot-loop-state.mjs remains the inner machine for the Copilot review portion
- * - Lifecycle phases are the outer sequence; inner states are sub-phase detail
+ * Integration boundary: lifecycle phases are the outer sequence;
+ * copilot-loop-state.mjs remains the inner machine for the Copilot review
+ * portion (inner states are sub-phase detail).
  */
 
 // ---------------------------------------------------------------------------

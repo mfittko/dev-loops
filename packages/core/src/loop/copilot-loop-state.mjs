@@ -1,15 +1,9 @@
 /**
  * Deterministic state machine for the async Copilot review/fix loop.
  *
- * This module provides:
- * - STATE: stable state name constants
- * - TRANSITIONS: legal next-state graph for each state
- * - normalizeSnapshot: validate and canonicalize a raw loop-state snapshot
- * - interpretLoopState: map a snapshot to one current state + allowed transitions + next action
- *
- * The state machine owns workflow control.
- * Agent judgment (accept/defer a comment, confirm a fix, decide on another Copilot pass)
- * becomes an explicit bounded input (agentFixStatus) rather than hidden orchestration behavior.
+ * The state machine owns workflow control. Agent judgment (accept/defer a
+ * comment, confirm a fix, decide on another Copilot pass) enters as an explicit
+ * bounded input (agentFixStatus), never as hidden orchestration behavior.
  */
 
 import { deriveLoopCiStatusFromRollup } from "./copilot-ci-status.mjs";
@@ -76,9 +70,8 @@ export const DISPOSITION = Object.freeze({
 });
 
 /**
- * Legal transitions for each state.
- * Each entry lists the states that are reachable from the given state.
- * The agent layer selects among allowed transitions; the state machine enforces the graph.
+ * Legal transitions for each state. The agent layer selects among allowed
+ * transitions; the state machine enforces the graph.
  */
 export const TRANSITIONS = Object.freeze({
   [STATE.NO_PR]: [],
@@ -168,12 +161,9 @@ function isBlockedCiStatus(status) {
 
 /**
  * Single source of truth for whether the Copilot review round cap has been
- * reached (issue #1126). `copilot-pr-handoff.mjs` enforces the cap by calling
- * `interpretLoopState`, which uses this predicate internally; every other
- * caller that needs the same "cap reached" boolean (gate coordination,
- * detect-pr-gate-coordination-state) MUST call this function too rather than
- * re-deriving `copilotReviewRoundCount >= maxCopilotRounds` locally, so the
- * two never disagree at the cap boundary.
+ * reached. Every caller that needs the "cap reached" boolean MUST call this
+ * rather than re-derive `copilotReviewRoundCount >= maxCopilotRounds`, so no two
+ * callers disagree at the cap boundary.
  *
  * `copilotReviewRoundCount` counts COMPLETED rounds, so `>=` means every
  * permitted round has already happened. `maxCopilotRounds` of `null`/`0`/
@@ -211,9 +201,9 @@ export function buildSnapshotFromPrFacts({
   const prState = typeof prData?.state === "string" ? prData.state.toUpperCase() : "OPEN";
   const prMerged = prState === "MERGED";
   const prClosed = prState === "CLOSED";
-  // Default derivation excludes the loop's own gate-evidence check (#1358) so a
-  // caller that never threads an explicit ciStatus (e.g. gate-coordination
-  // detection) still never treats it as a blocking CI failure.
+  // Default derivation excludes the loop's own gate-evidence check so a caller
+  // that never threads an explicit ciStatus (e.g. gate-coordination detection)
+  // still never treats it as a blocking CI failure.
   const rollupDerivation = deriveLoopCiStatusFromRollup(prData?.statusCheckRollup);
 
   return normalizeSnapshot({
@@ -245,30 +235,17 @@ function isAutoRerequestEligible(snapshot, state) {
 
 /**
  * Normalize a raw snapshot object into a validated, canonical snapshot.
+ * Unknown or invalid field values are replaced with safe defaults. Throws if
+ * `raw` is not a non-null object.
  *
- * Unknown or invalid field values are replaced with safe defaults.
- * Throws if `raw` is not a non-null object.
- *
- * Snapshot schema:
- * - prExists {boolean} — whether a PR was found
- * - prNumber {number|null} — PR number if prExists, otherwise null
- * - prDraft {boolean} — whether the PR is in draft state
- * - prMerged {boolean} — whether the PR has been merged
- * - prClosed {boolean} — whether the PR has been closed without merge
- * - copilotReviewRequestStatus {"requested"|"already-requested"|"unavailable"|"none"|"failed"}
- *     — current known Copilot review-request state, or "none" if unknown
- * - copilotReviewPresent {boolean} — whether at least one Copilot review exists on the PR
- * - copilotReviewOnCurrentHead {boolean} — whether a submitted (non-PENDING) Copilot review
- *     exists for the current head commit; this alone does not prove the current-head
- *     review-request lifecycle is settled, so callers must still check request-state fields
- * - unresolvedThreadCount {number} — total unresolved review-thread count
- * - actionableThreadCount {number} — unresolved threads with non-bot actionable comments
- * - copilotReviewRoundCount {number} — completed Copilot review rounds observed on the PR
- * - ciStatus {"success"|"failure"|"pending"|"none"|"crediblyGreen"} — current CI check rollup status
- * - lastCopilotRoundMaxSignal {"high"|"mid"|"low"|null} — highest signal level across Copilot-authored threads
- * - agentFixStatus {"applied"|null} — agent-provided input: "applied" when code has been fixed
- * - failureDetails {Array<string>} — names of failing visible check-runs from refreshed head-scoped CI evidence
- * - excludedFailureDetails {Array<string>} — names of failing check-runs filtered out by PR-visibility intersection
+ * Non-obvious field semantics:
+ * - copilotReviewOnCurrentHead: a submitted (non-PENDING) Copilot review exists
+ *     for the current head. This alone does NOT prove the current-head
+ *     review-request lifecycle is settled; callers must still check request-state.
+ * - copilotReviewRoundCount: COMPLETED Copilot review rounds observed on the PR.
+ * - agentFixStatus: agent-provided input; "applied" when code has been fixed.
+ * - failureDetails vs excludedFailureDetails: visible failing check-runs vs
+ *     check-runs filtered out by the PR-visibility intersection.
  *
  * @param {object} raw - raw snapshot input
  * @returns {object} normalized snapshot
@@ -315,14 +292,12 @@ export function normalizeSnapshot(raw) {
 }
 
 /**
- * Return the post-request snapshot that should drive the next wait-cycle interpretation
- * once a Copilot review request has been explicitly issued or confirmed.
+ * Return the post-request snapshot that drives the next wait-cycle
+ * interpretation once a Copilot review request is issued or confirmed.
  *
- * This keeps the handoff helper on the same shared state-machine contract instead of
- * emitting a watch action that contradicts a same-head clean-convergence interpretation.
- * A confirmed request starts a new wait cycle for the current head, so prior
- * current-head clean-review convergence is cleared for handoff purposes while
- * preserving whether a submitted Copilot review has ever been observed on the PR.
+ * A confirmed active request starts a new wait cycle for the current head, so
+ * prior current-head clean-review convergence is cleared while whether a
+ * submitted Copilot review was ever observed on the PR is preserved.
  *
  * @param {object} snapshot
  * @param {string} reviewRequestStatus
@@ -363,7 +338,7 @@ export function applyConfirmedReviewRequest(snapshot, reviewRequestStatus) {
  * @param {number} [refinementConfig.lowSignalRoundThreshold]
  * @param {number} [refinementConfig.lowSignalMaxComments]
  * @param {number} [refinementConfig.maxCopilotRounds]
- * @param {boolean} [refinementConfig.preApprovalRequireCi] - #1337: default true. When false,
+ * @param {boolean} [refinementConfig.preApprovalRequireCi] - default true. When false,
  *   the pre-approval CI precondition is opted out, so a non-draft PR with a pending/none/failure
  *   CI verdict is not routed to waiting_for_ci / blocked_needs_user_decision (it is past the draft gate).
  * @returns {{
@@ -378,13 +353,11 @@ export function applyConfirmedReviewRequest(snapshot, reviewRequestStatus) {
 export function interpretLoopState(snapshot, refinementConfig) {
   const s = normalizeSnapshot(snapshot);
 
-  // Pre-approval CI opt-out (#1337): when `gates.preApproval.requireCi` is false,
-  // the CI verdict must not gate progression at the pre-approval boundary. A
-  // non-draft PR is past the draft gate, so this is the applicable knob — treat
-  // pending/none/failure CI as non-blocking here so a repo with no CI is not
-  // routed to WAITING_FOR_CI / BLOCKED_NEEDS_USER_DECISION before the downstream
-  // gate-coordination guards (which already honor this flag) are ever reached.
-  // Default true preserves current behavior for every caller that does not thread it.
+  // Pre-approval CI opt-out: when `gates.preApproval.requireCi` is false, the CI
+  // verdict must not gate progression at the pre-approval boundary. A non-draft
+  // PR is past the draft gate, so treat pending/none/failure CI as non-blocking
+  // here (a repo with no CI is not routed to WAITING_FOR_CI /
+  // BLOCKED_NEEDS_USER_DECISION). Default true preserves prior behavior.
   const preApprovalRequireCi = refinementConfig?.preApprovalRequireCi !== false;
   const ciBlocks = preApprovalRequireCi && isBlockedCiStatus(s.ciStatus);
   const ciWaits = preApprovalRequireCi && isWaitingCiStatus(s.ciStatus);
@@ -403,35 +376,19 @@ export function interpretLoopState(snapshot, refinementConfig) {
     state = STATE.BLOCKED_NEEDS_USER_DECISION;
   }
 
-  // Round-cap enforcement: when maxCopilotRounds is configured and the review-round
-  // count has been exhausted, stop re-requests before entering fix/reply-resolve routing.
-  // Gating here (before unresolved-thread checks) lets a CLEAN PR at the cap terminate as
-  // ROUND_CAP_CLEAN_FALLBACK ahead of the normal fix/wait routing. It does NOT blanket-
-  // override that routing: a NOT-clean PR (unresolved threads or non-green CI) with an
-  // in-flight request deliberately falls through to the normal fix/wait routing below
-  // (see the `!reviewInFlight` branch), and only a not-clean PR with no in-flight request
-  // hard-stops at ROUND_CAP_REACHED.
-  //
-  // Precedence at the cap: copilotReviewRoundCount counts COMPLETED rounds, so at
-  // `>= maxRounds` every permitted Copilot round is already done and any lingering
-  // in-flight request (requested/already-requested) is for a forbidden over-cap round.
-  // A stale Copilot reviewer assignment must therefore NOT block the clean fallback:
-  // when threads are clean and CI is green, route to ROUND_CAP_CLEAN_FALLBACK even if
-  // copilotReviewRequestStatus is requested/already-requested. Otherwise a lingering
-  // assignment would dead-end the loop at WAITING_FOR_COPILOT_REVIEW waiting for a
-  // review that can never come (no further round is permitted past the cap). The
-  // pre_approval_gate (current-head clean evidence, enforced elsewhere) reviews any
-  // post-cap head change, so this proceeds without skipping review of new code.
-  //
-  // An in-flight request only still blocks the cap block when the PR is NOT clean
-  // (unresolved threads or non-green CI) — that legitimately stays in the fix/wait
-  // routing below rather than terminating as a clean fallback.
-  //
-  // Head-advanced handling: even when the head has advanced past the last submitted
-  // Copilot review with clean threads and green CI, re-requesting another Copilot pass
-  // is forbidden at the cap, so this routes to ROUND_CAP_CLEAN_FALLBACK (not
-  // READY_TO_REREQUEST_REVIEW, which would trigger an illegal auto re-request). The
-  // pre_approval_gate handles the current head.
+  // Round-cap enforcement, gated before the fix/reply-resolve routing below.
+  // copilotReviewRoundCount counts COMPLETED rounds, so at `>= maxRounds` every
+  // permitted round is done and any lingering in-flight request is for a
+  // forbidden over-cap round. Precedence at the cap:
+  //   - clean PR (clean threads + green CI): ROUND_CAP_CLEAN_FALLBACK, even with
+  //     a lingering in-flight request or an advanced head — no further round is
+  //     permitted, so never re-open for re-request or wait on Copilot. Re-opening
+  //     would dead-end at WAITING_FOR_COPILOT_REVIEW on a review that can never
+  //     come. The pre_approval_gate (enforced elsewhere) reviews post-cap head
+  //     changes, so this skips no review of new code.
+  //   - not clean, no in-flight request: hard stop at ROUND_CAP_REACHED.
+  //   - not clean WITH an in-flight request: fall through to the normal
+  //     fix/reply-resolve/wait routing below (no forced clean fallback).
   const maxRounds = refinementConfig?.maxCopilotRounds;
   const reviewInFlight = s.copilotReviewRequestStatus === "requested"
     || s.copilotReviewRequestStatus === "already-requested";
@@ -442,16 +399,11 @@ export function interpretLoopState(snapshot, refinementConfig) {
     const ciClean = s.ciStatus === "success" || s.ciStatus === "crediblyGreen" || !preApprovalRequireCi;
     const cleanThreads = s.unresolvedThreadCount === 0;
     if (cleanThreads && ciClean) {
-      // Clean PR at the cap: proceed to the pre_approval_gate fallback regardless of a
-      // lingering Copilot reviewer assignment or an advanced head — no further Copilot
-      // round is permitted, so never re-open for re-request or wait on Copilot here.
       state = STATE.ROUND_CAP_CLEAN_FALLBACK;
     } else if (!reviewInFlight) {
-      // Not clean and no in-flight request: hard stop at the cap.
       state = STATE.ROUND_CAP_REACHED;
     }
-    // Not clean WITH an in-flight request: leave state undecided so the normal
-    // fix/reply-resolve/wait routing below handles it (do not force a clean fallback).
+    // Not clean WITH an in-flight request: leave state undecided for the routing below.
   }
 
   if (state === undefined) {

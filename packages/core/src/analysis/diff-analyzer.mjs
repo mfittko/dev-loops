@@ -1,54 +1,41 @@
 /**
  * Diff analysis for dynamic gate angle resolution.
  *
- * T0 — file-level: classifies files by extension and directory.
- * T1 — hunk-level: classifies hunks by change type (comments, imports, config, etc.).
- *
- * T2 (AST-level) is deferred to a follow-up.
- *
- * This module is intentionally pure and side-effect free.
+ * T0 file-level classifies files by extension/directory; T1 hunk-level
+ * classifies hunks by change type. This module is intentionally pure and
+ * side-effect free.
  */
 
 // ---------------------------------------------------------------------------
 // T0: File-level analysis
 // ---------------------------------------------------------------------------
 
-// Extensionless dotfile configs: static allowlist, no content sniffing. Matched
-// against the basename only, never a prefix/suffix guess. Deliberately just
-// .devloops (the reported consumer shape): runtime-version files like .nvmrc
-// were considered and REJECTED — classifying them config would let ci-guard/
-// determinism carry stale clean verdicts across a runtime bump; unknown
-// fails closed toward a full re-review, which is what a version bump needs.
+// Extensionless dotfile configs: static allowlist matched on basename only.
+// Runtime-version files like .nvmrc are REJECTED as config: classifying them
+// config would carry stale clean verdicts across a runtime bump. Unknown fails
+// closed to a full re-review.
 const DOTFILE_CONFIG_BASENAMES = new Set([".devloops"]);
 
-// #1442 (ADR 0041 prose half): the prose surface that triggers the required
-// `deslop` gate angle. skills/docs/** is deliberately excluded — those are
-// normative contracts (owned by the contract style guide + contradiction
-// lens), not prose, and deslop's contrast-cutting must not fight RFC-2119
-// modality.
+// Prose surface that arms the required `deslop` gate angle.
+// skills/docs/** is excluded via SKILLS_DOCS_EXEMPT_RE: those are normative
+// contracts, not prose.
 const PROSE_PATH_RE = /^docs\/(articles|presentations)\//;
 const NARRATIVE_DOC_RE = /^docs\/[^/]+\.(md|markdown)$/;
-// #1442 review finding: the skills/docs/** exemption must hold for the README
-// rule too. PROSE_PATH_RE / NARRATIVE_DOC_RE are anchored to `docs/` so
-// skills/docs files never match them; the README basename rule is the ONLY
-// path by which a skills/docs file could be classified prose (e.g. a future
-// `skills/docs/README-*.md`). Carve the normative-contract subtree out
-// explicitly so a README-named contract never arms deslop.
+// The README basename rule below is the only path by which a skills/docs file
+// could be classified prose, so carve the normative-contract subtree out here
+// so a README-named contract never arms deslop.
 const SKILLS_DOCS_EXEMPT_RE = /^(skills\/docs|\x2eclaude\/skills\/docs)\//;
 
 /**
- * Whether a file path is on the prose surface (#1442): docs/articles/**,
- * docs/presentations/**, README*, or a narrative direct-child docs/*.md.
- * skills/docs/** (and .claude/skills/docs/**) is exempt (normative
- * contracts, not prose) across ALL rules, including the README basename rule.
- *
+ * Whether a file path is on the prose surface. skills/docs/** (and
+ * .claude/skills/docs/**) is exempt across all rules, including the README
+ * basename rule.
  * @param {string} filePath
  * @returns {boolean}
  */
 export function isProsePath(filePath) {
-  // #1442 review finding (input-validation): exported trust-boundary guard.
-  // Fail closed (false) on a non-string/empty argument rather than crashing in
-  // normalizeSep(filePath).replaceAll(...).
+  // Exported trust-boundary guard: fail closed (false) on a non-string/empty
+  // argument rather than crashing in normalizeSep().
   if (typeof filePath !== "string" || filePath.length === 0) return false;
   const fp = normalizeSep(filePath);
   if (SKILLS_DOCS_EXEMPT_RE.test(fp)) return false;
@@ -69,18 +56,14 @@ export function isProsePath(filePath) {
  */
 
 /**
- * Parse `git diff --name-status` output into a T0 analysis.
- *
- * Each line format: `<status>\t<path>` or `<status>\t<old>\t<new>`.
- *
- * @param {string} nameStatusOutput — raw stdout from `git diff --name-status`
+ * Parse `git diff --name-status` output into a T0 analysis. Line format:
+ * `<status>\t<path>` or `<status>\t<old>\t<new>`.
+ * @param {string} nameStatusOutput
  * @returns {T0Result}
  */
 
 /**
- * Normalize file path separators to forward slashes.
- * Handles Windows backslash paths from git output on Windows.
- *
+ * Normalize path separators to forward slashes (Windows backslash paths).
  * @param {string} filePath
  * @returns {string}
  */
@@ -94,12 +77,9 @@ export function analyzeT0(nameStatusOutput) {
   const extensions = new Set();
   const directories = new Set();
   let renameCount = 0;
-  // #1442 review finding: prose arming must be scoped to content-carrying
-  // rows. A pure deletion (`D` name-status row) has no prose content for the
-  // deslop reviewer to strip — arming deslop on it over-selects and re-runs
-  // the fan-out over a content-free delta. Added/modified/renamed-dest rows
-  // (A / M / M? / R-dest) carry content and still arm prose. Rename rows emit
-  // `R<score>\told\tnew` (rawPath = parts[2], the new content-bearing path).
+  // Prose arming is scoped to content-carrying rows: a pure deletion (`D`) has
+  // no prose content to strip, so it must not arm deslop. Added/modified/
+  // renamed-dest rows carry content and arm prose.
   let prosePresent = false;
 
   for (const line of lines) {
@@ -118,12 +98,9 @@ export function analyzeT0(nameStatusOutput) {
     if (dir) directories.add(dir);
 
     if (status.startsWith("R")) renameCount++;
-    // #1442: a content-carrying prose file arms PROSE_PRESENT → deslop. Pure
-    // deletions (`D`) are excluded (no prose content to strip, avoids noise);
-    // a pure `R100` rename (git's 100% similarity score — no content changed)
-    // is likewise content-free and must not arm deslop. Renames with a score
-    // below 100 (`R<score>\told\tnew`, rawPath = the new content-bearing path)
-    // carry content and still arm prose.
+    // Pure deletions (`D`) and a pure `R100` rename (100% similarity, no content
+    // changed) are content-free and must not arm deslop. Renames scored below
+    // 100 carry content and still arm prose.
     if (prosePresent) continue;
     if (status === "D" || status.startsWith("D")) continue;
     if (status.startsWith("R") && status === "R100") continue;
@@ -131,9 +108,9 @@ export function analyzeT0(nameStatusOutput) {
   }
 
   const renameOnly = lines.length > 0 && renameCount === lines.length;
-  // Derive from the shared classifier so this predicate can't drift from it: a
-  // code/config/test file hosted under docs/ is not prose, so a mixed diff that
-  // includes one is not docs-only (it still gets the code-review surface).
+  // Derive from the shared classifier so this predicate can't drift: a code/
+  // config/test file under docs/ is not docs, so a mixed diff including one is
+  // not docs-only.
   const allDocs = lines.length > 0 && files.every((f) => classifyFile(f) === "docs");
 
   return {
@@ -202,10 +179,8 @@ export function classifyFile(filePath) {
  */
 
 /**
- * Check whether a diff line content (after stripping the + / - prefix) is
- * a comment or blank line — i.e. not logic.
- *
- * @param {string} content — trimmed line content (without + / - prefix)
+ * Whether a diff line's content (prefix stripped) is a comment or blank line.
+ * @param {string} content
  * @returns {boolean}
  */
 function isNonLogicLine(content) {
@@ -216,15 +191,13 @@ function isNonLogicLine(content) {
   return false;
 }
 
-// Security-sensitive seams (#1336): touching these primitives on caller-/plan-
-// influenced input is where trust-boundary bugs concentrate (drove #1335's 8
-// serial Copilot rounds). A changed line matching any of these triggers the
-// SECURITY_SENSITIVE_SEAM category so an up-front adversarial threat-model angle
-// is selected. Fail-safe by design — over-selection just adds one review lens.
-// Plain readFile/writeFile are deliberately excluded (ubiquitous JSON I/O would
-// flag nearly every script diff); the browser/process/network/destructive-fs/
-// upload seams below cover the genuinely dangerous surface, including #1335's
-// Playwright driver.
+// Security-sensitive seams: touching these primitives on caller-/plan-
+// influenced input is where trust-boundary bugs concentrate. A changed line
+// matching any triggers the SECURITY_SENSITIVE_SEAM category, adding an up-front
+// adversarial threat-model angle. Fail-safe: over-selection just adds one lens.
+// Plain readFile/writeFile are excluded (ubiquitous JSON I/O would flag nearly
+// every diff); the browser/process/network/destructive-fs/upload seams below
+// cover the genuinely dangerous surface.
 const SECURITY_SEAM_PATTERNS = [
   // Browser automation (driving a real browser over semi-trusted navigation)
   /\b(playwright|webkit|chromium|puppeteer)\b/i,
@@ -245,10 +218,8 @@ const SECURITY_SEAM_PATTERNS = [
 ];
 
 /**
- * Whether a changed diff line (content, prefix stripped) touches a
- * security-sensitive seam (#1336).
- *
- * @param {string} content — trimmed line content (without + / - prefix)
+ * Whether a changed diff line (prefix stripped) touches a security-sensitive seam.
+ * @param {string} content
  * @returns {boolean}
  */
 function isSecuritySensitiveSeamLine(content) {
@@ -256,29 +227,22 @@ function isSecuritySensitiveSeamLine(content) {
 }
 
 /**
- * Scan a unified diff for a security-sensitive seam (#1336) on any added/removed
- * LOGIC line of a CODE file. Two gates keep it precise: (1) file-gate — only a
- * file that `classifyFile()` calls `code` is scanned, so a yaml/markdown/json
- * line that merely names a primitive (e.g. `shell: true` in a persona prompt, or
- * `child_process` in a doc) never triggers; (2) `!isNonLogicLine` — within a code
- * file, a comment/blank line that names a primitive (e.g. `// spawn( a child`)
- * does not trigger either. Runs independently of the T0/T1 category path so it
- * also covers a pure-code diff (all files classify as `code`), which is the MOST
- * concentrated seam case (e.g. editing a Playwright/child_process driver) and the
- * one #1336 targets.
- *
- * @param {string} diffOutput — raw unified diff output
+ * Scan a unified diff for a security-sensitive seam on any added/removed LOGIC
+ * line of a CODE file. Two gates keep it precise: (1) only files classifyFile()
+ * calls `code` are scanned, so a yaml/json/md line naming a primitive never
+ * triggers; (2) !isNonLogicLine, so a comment naming a primitive never triggers.
+ * Runs independently of the T0/T1 path so it also covers a pure-code diff, the
+ * most concentrated seam case.
+ * @param {string} diffOutput
  * @returns {boolean}
  */
 export function diffHasSecuritySeam(diffOutput) {
   if (!diffOutput) return false;
   let inHunk = false;
-  // Only CODE files can carry an executable seam — a YAML/markdown/JSON line that
-  // merely names a primitive (e.g. `shell: true` in a persona prompt) is not a
-  // seam. Track the current file from the unified-diff `--- a/`/`+++ b/` headers
-  // and gate the scan on `classifyFile(...) === "code"`. Bare-hunk input (no file
-  // header — used in tests / direct hunk analysis) defaults to code so it still
-  // scans; a real `git diff` always carries headers, so it is gated per file.
+  // Only CODE files can carry an executable seam: a YAML/markdown/JSON line
+  // naming a primitive (e.g. `shell: true`) is not a seam. Track the current
+  // file from the `--- a/`/`+++ b/` headers and gate on classifyFile === "code".
+  // Bare-hunk input (no header, used in tests) defaults to code so it still scans.
   let currentFileIsCode = true;
   let fromPath = null;
   for (const line of diffOutput.split("\n")) {
@@ -312,9 +276,7 @@ export function diffHasSecuritySeam(diffOutput) {
  *
  * Detects:
  * - COMMENT_ONLY: only comment lines changed
- * - DOCS_ONLY: emitted when docs files are PRESENT in the diff (docs extensions
- *   .md/.markdown, or prose under docs/) — presence-based via
- *   t0PresentSurfaceCategories, not exclusivity
+ * - DOCS_ONLY: emitted when docs files are present (presence-based, not exclusive)
  * - CONFIG_ONLY: only config files changed
  * - TEST_ONLY: only test files changed
  * - RENAME_ONLY: all renames, no content changes
@@ -337,11 +299,10 @@ export function analyzeT1(diffOutput, t0) {
   let allChangedLinesAreNonLogic = true;
 
   for (const line of lines) {
-    // A new file's header block (diff --git, index, --- a/..., +++ b/...) ends
-    // the previous file's hunk run. Resetting here is what lets the counting
-    // below treat EVERY +/- line inside a hunk as content: a removed line whose
-    // content itself starts with "--" (a CLI flag, a YAML document separator)
-    // renders as "---…" in the diff, and a prefix-based header exclusion would
+    // A new file's header block ends the previous file's hunk run. Resetting
+    // here lets the counting below treat EVERY +/- line inside a hunk as
+    // content: a removed line whose content starts with "--" (a CLI flag, a YAML
+    // separator) renders as "---…" and a prefix-based header exclusion would
     // silently drop it from the counts.
     if (line.startsWith("diff --git ")) {
       inHunk = false;
@@ -379,19 +340,16 @@ export function analyzeT1(diffOutput, t0) {
   // Build categories from T0 (shared with inferCategoriesFromT0) + hunk analysis.
   for (const c of t0FileCategories(t0)) categories.add(c);
   if (hasLogicChange) categories.add("LOGIC_CHANGE");
-  // #1336: a diff touching a security-sensitive seam gets an up-front adversarial
+  // a diff touching a security-sensitive seam gets an up-front adversarial
   // threat-model angle, batched at draft time instead of drip-fed via Copilot.
   if (diffHasSecuritySeam(diffOutput)) categories.add("SECURITY_SENSITIVE_SEAM");
-  // Mixed diffs never satisfy the exclusive `_ONLY` checks above (some files are
-  // code), so their peripheral surfaces would be dropped. In this hunk-level path
-  // (only reached for genuinely mixed diffs), also union each surface by PRESENCE
-  // so e.g. a code+workflow diff pulls ci-guard alongside the LOGIC_CHANGE core
-  // (AC: mixed logic+CI -> core union ci-guard). The pure single-surface path
-  // (inferCategoriesFromT0) keeps exclusive semantics.
+  // Mixed diffs never satisfy the exclusive `_ONLY` checks (some files are code),
+  // so union each peripheral surface by PRESENCE (e.g. code+workflow pulls
+  // ci-guard alongside LOGIC_CHANGE). The single-surface path keeps exclusive
+  // semantics.
   for (const c of t0PresentSurfaceCategories(t0)) categories.add(c);
 
-  // COMMENT_ONLY: hunkCount > 0 (real diff), has changed lines, all are non-logic,
-  // and not a rename-only change
+  // COMMENT_ONLY: real diff, all changed lines non-logic, not a rename.
   if (hunkCount > 0 && hasAnyChangedLine && allChangedLinesAreNonLogic && !t0.renameOnly) {
     categories.add("COMMENT_ONLY");
   }
@@ -436,12 +394,10 @@ function t0FileCategories(t0) {
 }
 
 /**
- * Surface categories present in a MIXED diff (at least one file of the surface),
- * used only by the hunk-level path to union a mixed diff's peripheral lenses on
- * top of LOGIC_CHANGE. Reuses the same category names / angle mappings as the
- * exclusive path; presence (not exclusivity) is the correct trigger for a mixed
- * diff. Renames are handled by the exclusive path, so they are excluded here.
- *
+ * Surface categories present in a MIXED diff (>=1 file of the surface), used by
+ * the hunk-level path to union a mixed diff's peripheral lenses on top of
+ * LOGIC_CHANGE. Presence (not exclusivity) is the correct trigger for a mixed
+ * diff. Renames are handled by the exclusive path, so excluded here.
  * @param {T0Result} t0
  * @returns {string[]}
  */
@@ -466,12 +422,10 @@ function t0PresentSurfaceCategories(t0) {
  */
 function inferCategoriesFromT0(t0) {
   const categories = t0FileCategories(t0);
-  // Pure code-only change: a diff whose files all classify as code (and is not a
-  // rename) is a LOGIC_CHANGE. Without this, an all-code diff has a single file
-  // category (so analyzeDiff never runs hunk-level T1) and produces no category,
-  // which resolveDynamicAngles treats as "unclassifiable" → fallback-to-all. That
-  // regressed the primary case: a code-only PR must resolve to the LOGIC_CHANGE
-  // core review subset, not all angles.
+  // Pure code-only change (all files classify as code, not a rename) is a
+  // LOGIC_CHANGE. Without this an all-code diff yields no category, which
+  // resolveDynamicAngles treats as unclassifiable → fallback-to-all, regressing
+  // the primary case: a code-only PR must resolve to the LOGIC_CHANGE subset.
   if (!t0.renameOnly && t0.files.length > 0 && t0.files.every((f) => classifyFile(f) === "code")) {
     categories.push("LOGIC_CHANGE");
   }
@@ -503,14 +457,11 @@ export function analyzeDiff({ nameStatusOutput, diffOutput }) {
   // When t1 is null (unambiguous diff), infer categories from t0
   // so dynamic angle resolution can narrow for config-only / test-only etc.
   if (!t1) {
-    // #1442 Copilot finding: a genuinely MIXED diff whose T1 never ran (no
-    // diffOutput) must NOT get a T0-only PROSE_PRESENT category. Non-empty
-    // categories set ambiguous=false, so a mixed code+prose diff would
-    // under-select to just deslop + always-include and drop the code-review
-    // core. T0-only inference is only safe for unambiguous diffs (docs-only /
-    // single surface); a mixed diff without hunk content is unclassifiable, so
-    // return empty categories and let resolveDynamicAngles fall back to the
-    // full angle set (fail closed).
+    // A genuinely MIXED diff whose T1 never ran (no diffOutput) must NOT get a
+    // T0-only category: non-empty categories set ambiguous=false, so it would
+    // under-select and drop the code-review core. T0-only inference is safe only
+    // for unambiguous diffs; a mixed diff without hunk content is unclassifiable,
+    // so return empty categories and fall back to the full angle set (fail closed).
     const changeCategories = t0Ambiguous ? [] : inferCategoriesFromT0(t0);
     t1 = {
       changeCategories,
@@ -519,21 +470,18 @@ export function analyzeDiff({ nameStatusOutput, diffOutput }) {
     };
   }
 
-  // #1336: seam detection runs on the raw diff regardless of the T0/T1 path, so a
-  // pure-code diff (single `code` category, T1 skipped) editing a browser/exec/
-  // fetch/fs-mutation driver still triggers the up-front threat-model angle — the
-  // most concentrated seam case, and the one this feature targets.
+  // Seam detection runs on the raw diff regardless of the T0/T1 path, so a
+  // pure-code diff (T1 skipped) editing a browser/exec/fetch/fs-mutation driver
+  // still triggers the threat-model angle.
   if (!t1.changeCategories.includes("SECURITY_SENSITIVE_SEAM") && diffHasSecuritySeam(diffOutput)) {
     t1.changeCategories.push("SECURITY_SENSITIVE_SEAM");
   }
 
-  // `ambiguous` flags one specific case: a diff T0 could not classify (mixed file
-  // categories, so t0Ambiguous) AND whose hunk analysis still produced no
-  // category. It is NOT the only fallback trigger — resolveDynamicAngles also
-  // falls back whenever changeCategories is empty (e.g. a single lone unknown/
-  // asset file yields no category yet is not t0Ambiguous). A mixed diff that
-  // yields a category (e.g. LOGIC_CHANGE) is classified and not ambiguous, so
-  // LOGIC_CHANGE never forces fallback-to-all via this flag.
+  // `ambiguous` flags one case: a diff T0 could not classify (mixed categories)
+  // AND whose hunk analysis produced no category. It is NOT the only fallback
+  // trigger — resolveDynamicAngles also falls back whenever changeCategories is
+  // empty. A mixed diff that yields a category (e.g. LOGIC_CHANGE) is classified
+  // and not ambiguous, so LOGIC_CHANGE never forces fallback-to-all via this flag.
   const ambiguous = t0Ambiguous && t1.changeCategories.length === 0;
 
   return { t0, t1, ambiguous };
