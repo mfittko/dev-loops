@@ -82,6 +82,7 @@ const ORPHAN_ALLOWLIST = new Map([
   ["scripts/loop/validate-pr-body-spec.mjs", "delete or wire — CLI superseded by core validatePrBodySpec; its --expected-issue option has no caller (issue #1620 orphan)"],
   ["scripts/refine/refine-plan-file.mjs", "standalone — refine-flow phase-file step, agent-invoked"],
   ["scripts/refine/scaffold-spike-file.mjs", "standalone — refine-flow spike scaffold step, agent-invoked"],
+  ["scripts/release/bump-version.mjs", "standalone — sanctioned five-surface version bump, the only supported bump path per skills/docs/release-runbook.md; operator/runbook-invoked, deliberately not on the consumer CLI (maintainer-only) and bump-only so it does not run in release.yml"],
 ]);
 
 // Curated predicate orphans: `scripts/...` -> { export, disposition }.
