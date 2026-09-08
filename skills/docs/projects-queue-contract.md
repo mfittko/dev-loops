@@ -210,20 +210,24 @@ reorder) **MUST NOT** create or modify project/field structure.
 When tooling fails closed, it emits a structured JSON error on stderr. Two shapes ship,
 by failure class:
 
-- **Domain failure** (board/field/item resolution, GitHub API): a top-level `code`
-  key rides alongside `ok`/`error` and maps to the exit code — this is the canonical
-  envelope owned by [Error format](#error-format) below (`{ ok, error, code }`, exit
-  2/3):
+- **Domain error** (any error thrown from the command's `main` — board/field/item
+  resolution, GitHub API, and argument *validation* such as `INVALID_REPO`): a
+  top-level `code` key rides alongside `ok`/`error`, and `classifyExitCode` maps the
+  `code` to the exit status (`INVALID_*` → 1, GitHub API → 2, not-found → 3). This is
+  the canonical envelope owned by [Error format](#error-format) below
+  (`{ ok, error, code }`):
 
   ```json
   {"ok": false, "error": "Project 'Dev Loop Queue' not found for owner 'mfittko'.", "code": "PROJECT_NOT_FOUND"}
   ```
 
-- **Usage / argument-parse error** (exit 1): the repo's standard `formatCliError`
-  shape, `{ ok, error }` with an optional one-line `hint` (e.g.
+- **Argument-parse error** (exit 1, the `parseCliArgs` path): the repo's standard
+  `formatCliError` shape, `{ ok, error }` with an optional one-line `hint` (e.g.
   `"run with --help for usage"`) when a usage string exists. The full usage text is
   never inlined into this JSON payload; run the tool with `--help` for it. This
-  parse-error shape carries no `code`.
+  `formatCliError` parse-path shape carries no `code`. (Exit 1 alone does not imply a
+  missing `code`: an `INVALID_*` validation error from `main` also exits 1 but rides
+  the domain `{ ok, error, code }` envelope above.)
 
 See [Error format](#error-format) for the domain-error `code`-to-exit mapping.
 
