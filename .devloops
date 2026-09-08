@@ -160,8 +160,8 @@ workflow:
 localImplementation:
   lightMode:
     enabled: true
-    maxFiles: 2
-    maxLines: 20 # micro-PR ceiling (#1043)
+    maxFiles: 50
+    maxLines: 500 # hard ceiling only; the judge (#2070) decides the track within it
 
 tracker:
   board:

@@ -191,11 +191,11 @@ board validates preconditions first:
 | Situation | Behavior | Exit code |
 |---|---|---|
 | No board configured (not opted in) | Fall back to positional ordering; no board mutations | N/A (normal) |
-| Board not found by title | Operation fails; no fallback to creation | 2 |
+| Board not found by title | Operation fails; no fallback to creation | 3 |
 | Board exists but Status field missing | Operation fails; manual reconciliation needed | 3 |
 | Board exists but Status field missing expected column | Operation fails; manual reconciliation needed | 3 |
 | GitHub API returns error | Operation fails; queue continues with next item | 2 |
-| Item not found on board (move/add operation) | Operation fails; no silent creation | 2 |
+| Item not found on board (move/add operation) | Operation fails; no silent creation | 3 |
 
 ### Idempotent bootstrap exception
 
@@ -207,20 +207,27 @@ reorder) **MUST NOT** create or modify project/field structure.
 
 ### Error reporting
 
-When tooling fails closed, it emits a structured JSON error on stderr:
+When tooling fails closed, it emits a structured JSON error on stderr. Two shapes ship,
+by failure class:
 
-```json
-{
-  "ok": false,
-  "error": "Project 'Dev Loop Queue' not found for owner 'mfittko'."
-}
-```
+- **Domain error** (any error thrown from the command's `main` — board/field/item
+  resolution, GitHub API, and argument *validation* such as `INVALID_REPO`): a
+  top-level `code` key rides alongside `ok`/`error`, and each helper's
+  `classifyExitCode` maps the `code` to the exit status. See [Error format](#error-format)
+  below for the complete `code`-to-exit mapping. This is the canonical envelope owned
+  by that section (`{ ok, error, code }`):
 
-The stderr payload follows the repo's standard CLI error format (`formatCliError`):
-`{ ok: false, error }` with an optional one-line `hint` (e.g. `"run with --help for usage"`)
-when a usage string exists — the full usage text is never inlined into this JSON payload;
-run the tool with `--help` for it. Remediation hints such as `code` keys or suggested
-commands live in documentation, not in the structured stderr output.
+  ```json
+  {"ok": false, "error": "Project 'Dev Loop Queue' not found for owner 'mfittko'.", "code": "PROJECT_NOT_FOUND"}
+  ```
+
+- **Argument-parse error** (exit 1, the `parseCliArgs` path): the repo's standard
+  `formatCliError` shape, `{ ok, error }` with an optional one-line `hint` (e.g.
+  `"run with --help for usage"`) when a usage string exists. The full usage text is
+  never inlined into this JSON payload; run the tool with `--help` for it. This
+  `formatCliError` parse-path shape carries no `code`. (Exit 1 alone does not imply a
+  missing `code`: an `INVALID_*` validation error from `main` also exits 1 but rides
+  the domain `{ ok, error, code }` envelope above.)
 
 ## Column auto-repair
 
@@ -547,7 +554,7 @@ Dev-loop queue wrappers will:
 - **Drive membership + ordering** from the board's `Next Up` column: `dev-loops queue run` reconciles `Next Up` items into queue entries before running (configured board is authoritative)
 - **Move** items to `In Progress` when processing starts, `Done` when complete
 - **Reorder** items when the operator adjusts priority via `--after` dependencies or manual intervention
-- **Fall back** gracefully when the board is absent or unreachable: the local queue file's entry order takes over, and no board mutations are attempted
+- **Fall back** to the local queue file's entry order **only when no board is configured**; no board mutations are attempted. A *configured* board that is unreachable does not fall back — it fails closed (surface and stop) per [QUEUE-BOARD-QUERY-FAIL-CLOSED](#queue-pickup-ordering), so an outage never silently drains Backlog or local order
 
 Use `dev-loops queue --help` to inspect the queue helper surface and per-subcommand `--help` for details.
 
@@ -586,9 +593,10 @@ GitHub API calls and no board mutations**. (It may still read the local
 `queue.statusColumns` renames the display name of a logical column:
 
 ```yaml
-queue:
+tracker:
   board:
     number: 7
+queue:
   statusColumns:
     next_up: "Todo"
     in_progress: "Doing"
@@ -600,9 +608,10 @@ queue:
 column (rarely needed):
 
 ```yaml
-queue:
+tracker:
   board:
     number: 7
+queue:
   stateColumnMap:
     blocked_needs_user_decision: next_up
 ```
@@ -879,10 +888,12 @@ On failure, helpers emit structured JSON on stderr:
 {"ok": false, "error": "Item #999 not found in project for repo \"owner/name\"", "code": "ITEM_NOT_FOUND"}
 ```
 
-Exit codes:
-- `1` — usage or argument error
-- `2` — GitHub API error
-- `3` — project, field, column, or item not found
+Exit codes (from each helper's `classifyExitCode`):
+- `1` — usage or argument error (`INVALID_*`)
+- `2` — GitHub API error (the default for an unmapped `code`)
+- `3` — project, field, column, or item not found (`*_NOT_FOUND`)
+- `4` — refinement gate: an enqueue into the pickup column with no AC/DoD matrix
+  (`MISSING_REFINEMENT_ARTIFACT`, `add`/`move` only — see [QUEUE-ENQUEUE-REFINEMENT-GATE](#queue-pickup-ordering))
 
 #### Idempotent bootstrap exception
 

@@ -7,12 +7,8 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import {
-  summarizeHeadScopedCheckRunsSignal,
-  normalizeHeadScopedCommitStatus,
   normalizeHeadScopedCiContract,
-  partitionEntriesByCheckName,
   LOOP_DERIVED_CI_CHECK_NAMES,
-  LOOP_DERIVED_CI_CHECK_NAME,
 } from "@dev-loops/core/loop/copilot-ci-status";
 import {
   DEFAULT_POLL_INTERVAL_MS,
@@ -20,10 +16,8 @@ import {
 } from "@dev-loops/core/loop/policy-constants";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
-
-/** Maximum interval between heartbeat outputs during watch delays.
- *  Must be shorter than pi-subagents default needsAttentionAfterMs (60s). */
-const WATCH_HEARTBEAT_MS = 45_000; // 45 seconds
+import { observeHeadCiSignals } from "./observe-head-ci.mjs";
+import { waitWithHeartbeat } from "./_watch-heartbeat.mjs";
 const USAGE = `Usage: probe-ci-status.mjs --repo <owner/name> (--pr <number> | --commit <oid>) [--timeout-ms <n>] [--poll-interval-ms <n>]
 Block-wait on a PR's combined CI check/status state (GitHub Actions + CircleCI +
 any external commit-status / check-run) for the current head SHA, until terminal
@@ -183,21 +177,6 @@ function extractPrVisibleCheckNames(statusCheckRollup) {
     .filter((name) => typeof name === "string" && name.length > 0);
 }
 
-// Failing commit-status contexts (state "failure"/"error"), e.g. CircleCI which
-// reports through the status API rather than as check-runs.
-function extractFailedStatusContexts(statuses) {
-  if (!Array.isArray(statuses)) return [];
-  return statuses
-    .filter((s) => {
-      const state = typeof s?.state === "string" ? s.state.toLowerCase() : "";
-      return state === "failure" || state === "error";
-    })
-    .map((s) => ({
-      name: typeof s?.context === "string" && s.context.length > 0 ? s.context : "unknown",
-      conclusion: typeof s?.state === "string" ? s.state.toLowerCase() : "",
-    }));
-}
-
 async function fetchPrHeadSha({ repo, pr }, { env, ghCommand, runChild }) {
   const payload = await ghJson(
     ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,statusCheckRollup"],
@@ -227,79 +206,36 @@ async function fetchHeadCiState(
   { repo, headSha, prVisibleCheckNames },
   { env, ghCommand, runChild = defaultRunChild },
 ) {
-  const [checkRunsResult, statusesResult] = await Promise.all([
-    runChild(ghCommand, ["api", `repos/${repo}/commits/${headSha}/check-runs?per_page=100`], env),
-    runChild(ghCommand, ["api", `repos/${repo}/commits/${headSha}/status?per_page=100`], env),
-  ]);
+  const { checkRuns, statuses } = await observeHeadCiSignals(
+    { repo, headSha, prVisibleCheckNames },
+    { env, ghCommand, runChild },
+  );
 
-  let checkRunsSignal = null;
-  let checkRunsCount = 0;
-  let checkRunsError = checkRunsResult.code !== 0;
-  // Loop-derived gate-evidence exclusion (#1531): partition out
-  // LOOP_DERIVED_CI_CHECK_NAMES before computing status — the wait must not
-  // block on the derived signal the loop itself posts. A genuinely failing
-  // check beside a red gate-evidence still blocks; the excluded entry stays
-  // visible via excludedFailureDetails.
-  let checkRunsExcludedFailureDetails = [];
-  if (checkRunsResult.code === 0) {
-    try {
-      const payload = JSON.parse(checkRunsResult.stdout);
-      if (Array.isArray(payload?.check_runs)) {
-        const { matched: loopDerivedRuns, rest: nonLoopDerivedRuns } =
-          partitionEntriesByCheckName(payload.check_runs, LOOP_DERIVED_CI_CHECK_NAMES);
-        checkRunsExcludedFailureDetails =
-          summarizeHeadScopedCheckRunsSignal({ check_runs: loopDerivedRuns }).status === "failure"
-            ? [LOOP_DERIVED_CI_CHECK_NAME]
-            : [];
-        const visibleSet = prVisibleCheckNames?.length > 0 ? new Set(prVisibleCheckNames) : null;
-        const visibleRuns = visibleSet
-          ? nonLoopDerivedRuns.filter((run) => !run.name || visibleSet.has(run.name))
-          : nonLoopDerivedRuns;
-        const visibleSignal = summarizeHeadScopedCheckRunsSignal({ check_runs: visibleRuns });
-        const fullSignal = summarizeHeadScopedCheckRunsSignal({ check_runs: nonLoopDerivedRuns });
-        checkRunsSignal = {
-          ...visibleSignal,
-          unsupportedCompleted: fullSignal.unsupportedCompleted,
-          allQueued: fullSignal.allQueued,
-        };
-        checkRunsCount = nonLoopDerivedRuns.length;
-      } else {
-        checkRunsError = true; // exit 0 but no check_runs array → malformed payload, not empty
+  // A non-zero exit, unparseable payload, or missing array all read as a failed
+  // read (checkRuns.ok / statuses.ok === false). The watcher MUST NOT treat that
+  // as a genuine empty (no-checks) state — either failed read forces fetchError,
+  // which pins ciStatus to "pending" so the watch keeps polling (a persistent
+  // error settles as "timeout", never fabricated green).
+  const checkRunsError = !checkRuns.ok;
+  // Project the raw check-runs signals into this watcher's shape: visible signal
+  // status/failures, with the full-set unsupportedCompleted + allQueued flags.
+  const checkRunsSignal = checkRuns.ok
+    ? {
+        ...checkRuns.visibleSignal,
+        unsupportedCompleted: checkRuns.fullSignal.unsupportedCompleted,
+        allQueued: checkRuns.fullSignal.allQueued,
       }
-    } catch {
-      checkRunsSignal = null;
-      checkRunsError = true;
-    }
-  }
+    : null;
+  // Loop-derived gate-evidence exclusion count (#1531): use the non-loop-derived
+  // count so a head whose only checks are gate-evidence reads as check-less.
+  const checkRunsCount = checkRuns.ok ? checkRuns.nonLoopDerivedCount : 0;
+  const checkRunsExcludedFailureDetails = checkRuns.ok ? checkRuns.loopDerivedFailureDetails : [];
 
-  let commitStatus = null;
-  let statusesCount = 0;
-  let statusFailures = [];
-  let commitStatusExcludedFailureDetails = [];
-  let statusesError = statusesResult.code !== 0;
-  if (statusesResult.code === 0) {
-    try {
-      const payload = JSON.parse(statusesResult.stdout);
-      if (Array.isArray(payload?.statuses)) {
-        // Same gate-evidence exclusion mirrored for the commit-status API (#1531):
-        // its failure must not leak into commitStatus or failedChecks.
-        const { matched: loopDerivedStatuses, rest: nonLoopDerivedStatuses } =
-          partitionEntriesByCheckName(payload.statuses, LOOP_DERIVED_CI_CHECK_NAME);
-        commitStatusExcludedFailureDetails =
-          normalizeHeadScopedCommitStatus({ statuses: loopDerivedStatuses }) === "failure"
-            ? [LOOP_DERIVED_CI_CHECK_NAME]
-            : [];
-        commitStatus = normalizeHeadScopedCommitStatus({ statuses: nonLoopDerivedStatuses });
-        statusesCount = nonLoopDerivedStatuses.length;
-        statusFailures = extractFailedStatusContexts(nonLoopDerivedStatuses);
-      } else {
-        statusesError = true; // exit 0 but no statuses array → malformed payload, not empty
-      }
-    } catch {
-      commitStatus = null;
-      statusesError = true;
-    }
-  }
+  const statusesError = !statuses.ok;
+  const commitStatus = statuses.ok ? statuses.commitStatus : null;
+  const statusesCount = statuses.ok ? statuses.nonLoopDerivedCount : 0;
+  const statusFailures = statuses.ok ? statuses.statusFailures : [];
+  const commitStatusExcludedFailureDetails = statuses.ok ? statuses.excludedFailureDetails : [];
 
   const fetchError = checkRunsError || statusesError;
   const ciStatus = fetchError
@@ -322,11 +258,14 @@ async function fetchHeadCiState(
   const excludedFailureDetails = fetchError
     ? []
     : [...new Set([...checkRunsExcludedFailureDetails, ...commitStatusExcludedFailureDetails])];
-  // No-checks: zero check-runs AND zero commit-statuses, observed cleanly, AND
-  // no PR-visible expected checks. An expected-but-unreported statusCheckRollup
-  // entry is pending, not check-less. Also exclude loop-derived entries here
-  // (#1531): a head whose only checks are gate-evidence has no REAL CI to wait
-  // on, so it settles (after the grace window) rather than hanging to timeout.
+  // No-checks: zero check-runs AND zero commit-statuses, observed cleanly (no
+  // fetchError) AND with no PR-visible expected checks. If statusCheckRollup
+  // lists expected checks the providers haven't reported yet, that is pending
+  // (checks expected but not yet posted), not a genuinely check-less head.
+  // The no-checks settle logic must also exclude loop-derived entries: a head
+  // whose only checks are gate-evidence has no REAL CI to wait on, so it should
+  // settle (after the grace window) rather than hang to timeout. prVisibleCheckNames
+  // from the rollup includes gate-evidence, so filter it out here too (#1531).
   const nonLoopDerivedPrVisibleNames = prVisibleCheckNames?.filter(
     (name) => !LOOP_DERIVED_CI_CHECK_NAMES.includes(name),
   );
@@ -335,12 +274,15 @@ async function fetchHeadCiState(
     checkRunsCount === 0 &&
     statusesCount === 0 &&
     !(nonLoopDerivedPrVisibleNames?.length > 0);
-  // Zero-allocation stall (#1631): at least one real check-run, ALL still
-  // `queued` (no runner allocated), and no other provider actively progressing
-  // (commit-status absent or already terminal, never pending) — the watcher
-  // bails after ZERO_ALLOCATION_STALL_BAIL_MS instead of burning its full
-  // budget on a stuck queue. Any job in_progress/completed, or another
-  // provider still pending, never qualifies.
+  // Zero-allocation stall (#1631): at least one real check-run, ALL of them
+  // still `queued` (no runner allocated / no job picked up), and no other
+  // provider actively progressing — the stall qualifies only when the
+  // commit-status is absent or already terminal (never pending). A commit-status
+  // that already reached a terminal state (success/failure) or is absent means
+  // nobody is making progress while GitHub Actions sits unallocated, so the
+  // watcher bails after ZERO_ALLOCATION_STALL_BAIL_MS of observing this
+  // instead of burning its full budget on a stuck queue. A run with any job
+  // in_progress/completed, or another provider still pending, never qualifies.
   const allCheckRunsQueued =
     !fetchError &&
     checkRunsCount > 0 &&
@@ -366,45 +308,6 @@ function buildPollDelayMs(watchStartedAtMs, timeoutMs, pollIntervalMs, attempt, 
   }
   const scheduledAtMs = watchStartedAtMs + Math.min(timeoutMs, (attempt - 1) * pollIntervalMs);
   return Math.max(0, scheduledAtMs - nowMs);
-}
-
-// Sleeps `pollDelayMs` in WATCH_HEARTBEAT_MS chunks, emitting a stderr
-// watch_heartbeat between chunks (never after the final chunk). Shared by both
-// the PR-scoped and commit-scoped watch loops so heartbeat cadence/shape stay
-// identical. `onHeartbeat` runs alongside each heartbeat (best-effort,
-// caller-scoped side effect — e.g. the PR loop's runner-lease refresh).
-async function waitWithHeartbeat(
-  pollDelayMs,
-  { attempt, attemptBudget, watchStartedAtMs, timeoutMs, now, delayImpl, onHeartbeat },
-) {
-  let remainingMs = pollDelayMs;
-  while (remainingMs > 0) {
-    const chunkMs = Math.min(WATCH_HEARTBEAT_MS, remainingMs);
-    await delayImpl(chunkMs);
-    remainingMs -= chunkMs;
-    if (remainingMs > 0) {
-      process.stderr.write(
-        JSON.stringify({
-          ok: true,
-          type: "watch_heartbeat",
-          elapsedMs: now() - watchStartedAtMs,
-          totalBudgetMs: timeoutMs,
-          poll: attempt,
-          maxPolls: attemptBudget,
-        }) + "\n",
-      );
-      if (onHeartbeat) {
-        // Best-effort per the contract above: a throw/rejection here is a
-        // caller-side side-effect failure, not a CI-watch failure — swallow
-        // it so it can't abort the watch loop.
-        try {
-          await onHeartbeat();
-        } catch {
-          // intentionally ignored
-        }
-      }
-    }
-  }
 }
 
 function settledResult(state, { settled, status }) {
@@ -473,9 +376,11 @@ export async function watchCiStatus(
   // immediately (preserves single-check semantics). A real watch awaits the grace.
   const graceFloor = options.timeoutMs === 0 ? 1 : NO_CHECKS_GRACE_POLLS;
   let consecutiveNoChecks = 0;
-  // Zero-allocation stall bail (see ZERO_ALLOCATION_STALL_BAIL_MS above):
-  // track when the stall was first observed so the watcher can bail once it
-  // has persisted for stallBailMs.
+  // Zero-allocation stall bail (#1631): track the first poll that observed a
+  // zero-allocation stall (all check-runs queued, no provider actively
+  // progressing — commit-status absent or already terminal). The watcher
+  // bails once the stall has persisted for stallBailMs instead of
+  // burning the full watch budget on a stuck GitHub Actions queue.
   const stallBailMs = options.stallBailMs ?? ZERO_ALLOCATION_STALL_BAIL_MS;
   let stallStartedAtMs = null;
   for (let attempt = 1; attempt <= attemptBudget; attempt += 1) {
