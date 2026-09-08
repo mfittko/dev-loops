@@ -56,7 +56,7 @@ export function mapGateToConfigKey(gate) {
 }
 
 /**
- * `review` (#1808) angle resolution — a standalone gate with no config key of
+ * `review` angle resolution — a standalone gate with no config key of
  * its own: its resolved angle set is the UNION of both gates' configured
  * angle sets (resolveGateAngles, the STATIC pool — dynamic/tiered subtractive
  * resolution is deliberately not applied to review), never resolveGateAnglesDynamic.
@@ -109,7 +109,7 @@ export function gitEnvWithoutDirOverrides() {
  * Map a resolveGateAnglesDynamic result into the persisted artifact fields.
  * Does NOT re-derive angles — it only reshapes the resolver's output.
  *
- * Angles present in `resolverResult.addedAngles` (additive selection, #1048)
+ * Angles present in `resolverResult.addedAngles` (additive selection)
  * are recorded with action 'added' (reason from `resolverResult.addedReasons`)
  * instead of 'kept'.
  *
@@ -527,7 +527,7 @@ export function buildGateReviewsDir({ repo, pr, gate, headSha, tmpRoot = "tmp" }
 }
 
 /**
- * #1507 AC3 — same-head skip-completed resume. Scan the per-angle findings
+ * AC3 — same-head skip-completed resume. Scan the per-angle findings
  * directory for this head and return the angle names that already have a CLEAN
  * artifact stamped for this head. The preflight excludes groups whose angles are
  * all in this set, so a later session re-running the fan-out at the same head
@@ -646,7 +646,7 @@ export function buildGateBriefingPrefixPath({ repo, pr, gate, headSha, tmpRoot =
   return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".briefing-prefix.txt" });
 }
 
-// Deterministic path for a per-scope briefing companion file (AC3, #1572): a
+// Deterministic path for a per-scope briefing companion file (AC3): a
 // narrower slice of the same bundle for angles whose configured `scope` is
 // not "full" (see GATE_ANGLE_SCOPES). `scope` must be a non-"full"
 // GATE_ANGLE_SCOPES value (e.g. "changed-files" | "docs-only") — validated
@@ -671,7 +671,7 @@ export function buildValidationResultsPath({ repo, pr, gate, headSha, tmpRoot = 
 /**
  * Build the deterministic path for the materialized VOLATILE tail block
  * (round-level values that sit AFTER the cache boundary the briefing prefix
- * establishes — see #1474): a physically separate file sibling to the
+ * establishes): a physically separate file sibling to the
  * briefing prefix, so the stable/volatile split is a real file boundary
  * rather than only a documented convention. Mirrors buildGateBriefingPrefixPath
  * (same path-segment params).
@@ -728,7 +728,7 @@ export const PR_BODY_ABSENT_SENTINEL = "(no PR description is shown)";
  * PR_BODY_ABSENT_SENTINEL's rationale above. A resolved-but-empty body must
  * read as a truthful, distinguishable statement rather than silently
  * collapsing the `## Linked issue` section (which would then read identically
- * to "the PR closes no issue" — the exact indistinguishability #1511 targets).
+ * to "the PR closes no issue" — the exact indistinguishability targets).
  */
 export const ISSUE_BODY_ABSENT_SENTINEL = "(no issue body is shown)";
 
@@ -1107,8 +1107,8 @@ function extractDocsOnlyDiff(diffOutput) {
 }
 
 /**
- * Render the "## Reviewer source-read invariant" section (GATE-EXEC-SOURCE-READ-WORKTREE,
- * #1603): the rule that a reviewer citing a skill/doc/source file must read it
+ * Render the "## Reviewer source-read invariant" section (GATE-EXEC-SOURCE-READ-WORKTREE):
+ * the rule that a reviewer citing a skill/doc/source file must read it
  * from the WORKTREE SOURCE under review, not from an installed skill layout
  * (`.pi/skills/`, `~/.pi/agent/`). Installed copies lag a PR that modifies those
  * source files, so reading them produces false high-severity findings against
@@ -1204,7 +1204,7 @@ function renderValidationResultsSection(validationResultsPath, headSha) {
  * @param {string} input.contextPath — the sibling JSON artifact path
  * @param {string} input.briefingPrefixPath — this rendered file's own path
  * @param {string|null} [input.prBody]
- * @param {string|null} [input.issueRef] — label for the linked-issue section heading (e.g. "#877" or "#1496, #1511")
+ * @param {string|null} [input.issueRef] — label for the linked-issue section heading (e.g. a single issue-reference label, or a comma-joined multi-issue list)
  * @param {string|null} [input.issueBody] — single-issue body, rendered under `issueRef` with no `### <label>` sub-heading. Ignored when `issueSections` is given.
  * @param {{label: string, body: string}[]|null} [input.issueSections] — per-issue bodies for a multi-issue PR (structured, never pre-joined): each renders as a renderer-emitted `### <label>` line OUTSIDE any fence, followed by that issue's OWN pickFence-sized fenced block. Takes precedence over `issueBody` when non-empty.
  * @param {string|null} [input.diffOutput] — full diff text, when captured
@@ -1647,7 +1647,7 @@ function normalizeCarriedAnglesArg(carriedAngles) {
 }
 
 /**
- * Resolve the fan-out dispatch plan for a gate round (issue #1601): the
+ * Resolve the fan-out dispatch plan for a gate round: the
  * dispatch units (`resolveFanoutGroups`), the bounded-concurrency wave plan
  * (`scheduleFanoutWaves` via `scheduleParallelWaves`), and the two knobs
  * (`maxAnglesPerGroup`, `maxConcurrent`). The conductor dispatches
@@ -1668,7 +1668,7 @@ function normalizeCarriedAnglesArg(carriedAngles) {
 export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false, availableReviewers = null, completedAngles = null, carriedAngles = null } = {}) {
   const groups = resolveFanoutGroups(config, configGate, resolvedAngles, { fullLabel });
   const maxAnglesPerGroup = resolveMaxAnglesPerGroup(config);
-  // #1726: serial (one-at-a-time) dispatch of heavy reviewers when
+  // Serial (one-at-a-time) dispatch of heavy reviewers when
   // `gates.fanout.sequential` is set — effective concurrency is 1 unit per wave
   // regardless of maxConcurrent, so each heavy reviewer completes and writes its
   // evidence artifact before the next starts. Kept as a distinct emitted field so
@@ -1703,7 +1703,7 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
       }
     }
   }
-  // #1507: reviewer-budget preflight. The conductor reads `preflight.dispatch`
+  // Reviewer-budget preflight. The conductor reads `preflight.dispatch`
   // before spawning any reviewer; on `false` it records the shortfall (this
   // artifact is the resumable record) and stops without dispatching. `null`
   // budget (harness does not expose one) → proceed, no shortfall proven.
@@ -1756,7 +1756,7 @@ export function buildGateContextArtifact(options) {
       validationResultsPath: options.validationResultsPath ?? null,
     },
   };
-  // AC3 (#1572): each resolved angle's declared surface scope (fail-open
+  // AC3: each resolved angle's declared surface scope (fail-open
   // default "full" — resolveGateAngleScope). Only present when the caller
   // actually computed it (buildGateContext/CLI main do, for a non-empty
   // angle set); a bare buildGateContextArtifact call that never resolved
@@ -1780,14 +1780,14 @@ export function buildGateContextArtifact(options) {
   // DoD checklist + explicit Non-goals, or a linked refinement doc, per
   // detectIssueRefinementArtifact); "linked-issue-unrefined" (resolved, but
   // no linked issue carries the full refinement matrix — a distinguishable
-  // "linked, unrefined or matrix-incomplete" marker, AC4 of #1496); or "none"
+  // "linked, unrefined or matrix-incomplete" marker); or "none"
   // (the PR closes no issue). Only the CLI path sets it, so a null
   // acceptanceCriteria WITH this field means "genuinely absent" and one
-  // WITHOUT it means "never resolved" (#1496).
+  // WITHOUT it means "never resolved".
   if (typeof options.acceptanceCriteriaSource === "string") {
     artifact.scope.acceptanceCriteriaSource = options.acceptanceCriteriaSource;
   }
-  // ADD (#1140): an explicit posture marker distinguishing a full build-once
+  // An explicit posture marker distinguishing a full build-once
   // bundle from a thin briefing. Only set by the CLI (`--base` present → "base";
   // absent → "none"); programmatic `buildGateContext`/`writeGateContext` callers
   // that never pass `diffSource` leave the field out entirely, so this stays
@@ -1795,7 +1795,7 @@ export function buildGateContextArtifact(options) {
   if (typeof options.diffSource === "string" && options.diffSource.length > 0) {
     artifact.scope.diffSource = options.diffSource;
   }
-  // ADD (#895): the deterministic, neutral adjacent-code bundle. Only present
+  // The deterministic, neutral adjacent-code bundle. Only present
   // when the context-builder computed it — keeps the artifact shape backward
   // compatible for callers that build the artifact without an adjacency pass.
   if (options.adjacentCode && typeof options.adjacentCode === "object") {
@@ -1809,7 +1809,7 @@ export function buildGateContextArtifact(options) {
   if (typeof options.prefixMode === "string" && options.prefixMode.length > 0) {
     artifact.prefixMode = options.prefixMode;
   }
-  // Issue #1601: the fan-out dispatch plan — dispatch units (groups), the
+  // The fan-out dispatch plan — dispatch units (groups), the
   // bounded-concurrency wave plan, and the two knobs (maxAnglesPerGroup,
   // maxConcurrent). The conductor dispatches wave-by-wave from this plan
   // (see skills/docs/gate-review-sub-loop-contract.md). Only present when the
@@ -1824,7 +1824,7 @@ export function buildGateContextArtifact(options) {
 
 /**
  * Resolve the diff-derived scope fields shared by `buildGateContext` (the
- * programmatic `{ diff }` path) and the CLI `--base` path (#1140): the FULL
+ * programmatic `{ diff }` path) and the CLI `--base` path: the FULL
  * diff persisted to a deterministic `.diff` file, the parsed `changedFiles`,
  * and the neutral `adjacentCode` bundle built once from those changed files.
  * Extracted to a single function so both callers stay in sync — see the
@@ -1860,7 +1860,7 @@ async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFil
     }
   }
 
-  // Build the deterministic, neutral adjacent-code bundle ONCE (#895): for each
+  // Build the deterministic, neutral adjacent-code bundle ONCE: for each
   // changed source file, include its 1-hop import out-edges (files it imports)
   // and in-edges (files that import it), with size guards (skip
   // lockfiles/generated/binary/minified; cap per-file bytes; truncate the long
@@ -1915,7 +1915,7 @@ async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFil
 // configured pager; diff.noprefix=false + diff.mnemonicPrefix=false pin the a/ b/
 // prefixes (the --no-ext-diff flag is passed per-call below, NOT here, since
 // `-c diff.external=` would make git exec the empty string and die).
-// Cross-environment reproducibility (#1168): diff.algorithm=myers + diff.context=3
+// Cross-environment reproducibility: diff.algorithm=myers + diff.context=3
 // + core.abbrev=12 + core.autocrlf=false pin the diff body / hunk headers /
 // blob-id length / line endings; diff.renames=true additionally pins rename
 // DETECTION so a moved-and-edited file stays an R### pair in --name-status
@@ -2082,7 +2082,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // before.
   let prefixBytes;
   let prefixMode;
-  // AC3 (#1572): scope.<name> -> emitted companion-file path. Only built in
+  // AC3: scope.<name> -> emitted companion-file path. Only built in
   // self-rendered mode — under --prefix-file the CLI never resolves
   // prBody/issueBody, so a variant rendered here would carry the
   // absent-body sentinels even when the orchestrator's OWN recorded prefix
@@ -2113,7 +2113,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     }
     prefixMode = "file";
   } else {
-    // Issue #1853: the diff INLINED into the invariant prefix (and its
+    // The diff INLINED into the invariant prefix (and its
     // scoped "changed-files" variant below) is FILTERED — lockfiles,
     // generated/vendored trees, and any --diff-exclude-glob configured here
     // are dropped whole-file, so a lockfile-heavy diff no longer dominates
@@ -2210,7 +2210,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   const fullVolatilePath = path.resolve(repoRoot, volatilePath);
   const fullRequestPlanPath = path.resolve(repoRoot, requestPlanPath);
   await mkdir(path.dirname(fullPrefixPath), { recursive: true });
-  // No-rebuild-mid-fan-out enforcement (#1537): a rebuild that would CHANGE the
+  // No-rebuild-mid-fan-out enforcement: a rebuild that would CHANGE the
   // recorded prefix bytes while a fan-out for this head is IN FLIGHT (this
   // gate's reviewer sentinels still live) is REFUSED, not warned — a same-head
   // rebuild after a live PR/issue description edit yields DIFFERENT bytes and
@@ -2258,7 +2258,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     const priorPrefixHash = createHash("sha256").update(existingBytes).digest("hex");
     const newPrefixHash = createHash("sha256").update(prefixBytes).digest("hex");
     // Only a missing tmp/ dir means "no sentinels". Any other scan failure
-    // (EACCES, ENOTDIR, ...) could hide live sentinels, and #1537's
+    // (EACCES, ENOTDIR, ...) could hide live sentinels, and this
     // enforcement must not be bypassable by a broken scan — fail closed by
     // refusing the rebuild (the operator can fix the scan or retire first).
     if (scanError !== null) {
@@ -2274,7 +2274,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   }
   const prefixHash = createHash("sha256").update(prefixBytes).digest("hex");
 
-  // Request plan (#1474): angles partition by concrete resolved model via
+  // Request plan: angles partition by concrete resolved model via
   // resolveRoleModel(config, { role: angle, harness, kind: "angle" }) — the
   // SAME dispatch-time resolution a fan-out actually dispatches on (config
   // override → per-angle tier → built-in tier → null=inherit), unlike
@@ -2322,8 +2322,8 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     angleModels,
     // sha256:-prefixed, matching requestPrefixFingerprint's own format (one
     // format for both hash fields in this artifact) — distinct from the
-    // bare-hex `prefixHash` this function returns/uses for the #1537
-    // sentinel-hash comparisons above, which is an independent, older
+    // bare-hex `prefixHash` this function returns/uses for the
+    // no-rebuild-mid-fan-out enforcement's sentinel-hash comparisons above, which is an independent, older
     // contract this artifact does not own.
     sharedPrefixHash: `sha256:${prefixHash}`,
     blockBoundaries: REQUEST_PLAN_BLOCK_BOUNDARIES,
@@ -2349,7 +2349,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   }
   await writeFile(fullPrefixPath, prefixBytes);
 
-  // Volatile tail (#1474): physically separate from the stable prefix above.
+  // Volatile tail: physically separate from the stable prefix above.
   // acceptanceCriteria is deliberately NOT threaded here — see
   // {@link renderBriefingVolatile} for the rule. No separate unlink: writeFile
   // overwrites in place, so a failure here happens only after the prefix
@@ -2409,7 +2409,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  * @param {string|null} [input.prBody] — PR description text, inlined into the rendered briefing prefix
  * @param {string|null} [input.issueBody] — linked-issue body text, inlined under `acceptanceCriteria`'s label; omitted when absent
  * @param {number} [input.maxFileBytes] — per-file cap for the adjacent-code bundle (default DEFAULT_MAX_FILE_BYTES)
- * @param {number|null} [input.availableReviewers] — harness remaining reviewer budget for the #1507 preflight; null/omitted = unexposed (proceed, no shortfall proven)
+ * @param {number|null} [input.availableReviewers] — harness remaining reviewer budget for the preflight; null/omitted = unexposed (proceed, no shortfall proven)
  * @param {string[]|null} [input.carriedAngles] — angle names the fail-closed Phase 1.2 carry-forward seam (resolve-angle-carry-forward.mjs) has proven carried from a prior clean head; excluded from the preflight's `requiredReviewers`/`pendingGroups` alongside `completedAngles`; null/omitted = no carried angles known
  * @param {string} [input.tmpRoot]
  * @param {{ repoRoot?: string }} [opts]
@@ -2419,11 +2419,11 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  *   "file" mode is CLI-only (main()'s `--prefix-file` flag).
  *
  * The artifact additionally carries a deterministic, neutral `adjacentCode`
- * bundle (#895) when changed files are present: 1-hop import in/out-edges of the
+ * bundle when changed files are present: 1-hop import in/out-edges of the
  * changed files with size guards + a stripped/truncated manifest. Reviewers are
  * seeded with this verbatim instead of re-deriving the diff + adjacent code.
  */
-// #1866 review-gate coverage guard: hasAcChecklist reflects "an AC checklist
+// Review-gate coverage guard: hasAcChecklist reflects "an AC checklist
 // exists" (acItems.length > 0), independent of the Non-goals floor the
 // refinement predicate also enforces — a PR body with a real AC checklist but
 // no Non-goals still keeps the acceptance-criteria angle. Reads `acItems`
@@ -2454,7 +2454,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
         // not be coerced to false, so it fails closed (keeps
         // acceptance-criteria) rather than fail-open (drops it).
         hasClosingIssue: input.hasClosingIssue,
-        // #1866: hasAcChecklist reflects "AC checklist exists" (see
+        // hasAcChecklist reflects "AC checklist exists" (see
         // detectRefinementHasAcChecklist above) — not "review predicate
         // passes" — so an issue-less PR with a real checklist but no
         // Non-goals still keeps the acceptance-criteria angle.
@@ -2466,7 +2466,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
       });
   const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
 
-  // AC3 (#1572): each resolved angle's declared surface scope, straight from
+  // AC3: each resolved angle's declared surface scope, straight from
   // config (resolveGateAngleScope fails open to "full" for an angle with no
   // entry/scope/enabled entry).
   const angleScopes = Object.fromEntries(
@@ -2477,16 +2477,16 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
 
   // Diff-derived scope: persisted FULL diff (scope.diffPath), parsed
   // scope.changedFiles, and the neutral adjacentCode bundle, all built ONCE by
-  // the shared resolveDiffScope helper (also used by the CLI --base path, #1140).
+  // the shared resolveDiffScope helper (also used by the CLI --base path).
   const { diffPath, changedFiles, adjacentCode, diffOutput } = await resolveDiffScope(
     { diff: input.diff, repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot, maxFileBytes: input.maxFileBytes },
     { repoRoot },
   );
 
-  // Issue #1601: resolve the fan-out dispatch plan (groups + wave plan +
+  // Resolve the fan-out dispatch plan (groups + wave plan +
   // knobs) so the artifact carries it for the conductor to dispatch
   // wave-by-wave. Computed from the same config + resolved angles.
-  // #1507 AC3: same-head skip-completed resume — angles with a clean artifact
+  // AC3: same-head skip-completed resume — angles with a clean artifact
   // already stamped at this head are excluded from `preflight.requiredReviewers`
   // and from `pendingGroups`, so a later session dispatches only the shortfall.
   const completedAngles = input.completedAngles ?? await readCompletedAnglesForHead({ repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot }, { repoRoot });
@@ -2609,7 +2609,7 @@ export function assertWorktreeAtHead(headSha, { repoRoot }) {
  * description, every issue the PR closes, and each issue's body — from
  * GitHub, so a caller that simply omits the flags can never seed every
  * fan-out reviewer with the claim that the PR has no description and no
- * acceptance criteria (#1496/#1511). Explicit flags win: only fields still
+ * acceptance criteria. Explicit flags win: only fields still
  * unset are fetched, and a caller that passes all three never touches the
  * network.
  *
@@ -2631,7 +2631,7 @@ export function assertWorktreeAtHead(headSha, { repoRoot }) {
  * references are real) and classified via `detectIssueRefinementArtifact`
  * (the same detector the enqueue gate uses) so `acceptanceCriteriaSource`
  * distinguishes "linked issue carries a real refinement artifact" from
- * "linked issue is prose-only" (AC4 of #1496) — the latter stamped
+ * "linked issue is prose-only" (AC4) — the latter stamped
  * `"linked-issue-unrefined"`.
  *
  * Fails closed with a named error when the PR read fails. An unresolvable body
@@ -2677,8 +2677,8 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
   if (needsBody) options.prBody = typeof pr.body === "string" ? pr.body : "";
 
   // Recorded whenever `pr` was actually fetched (regardless of the acProvided
-  // short-circuit below), for the `review` gate's own angle resolution (#1808
-  // AC2): whether this PR closes an issue at all, independent of whether the
+  // short-circuit below), for the `review` gate's own angle resolution
+  // (AC2): whether this PR closes an issue at all, independent of whether the
   // caller also supplied an --acceptance-criteria pointer.
   const closingNumbers = resolveLinkedIssuesFromPr(pr);
   options.hasClosingIssue = closingNumbers.length > 0;
@@ -2713,7 +2713,7 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
     const key = `${repo.toLowerCase()}#${entry.number}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    // Same-repo refs render bare (`#42`). The comparison is case-insensitive
+    // Same-repo refs render bare (e.g. `#N`). The comparison is case-insensitive
     // because `--repo Owner/Repo` and the API's `owner/repo` name one repo.
     const sameRepo = repo.toLowerCase() === options.repo.toLowerCase();
     targets.push({ repo, number: entry.number, label: sameRepo ? `#${entry.number}` : `${repo}#${entry.number}` });
@@ -2739,7 +2739,7 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
       // "gives a reviewer real criteria to read" — true when the linked issue
       // is refined (`hasACs`: a valid AC→DoD matrix + Non-goals, or a
       // resolvable linked refinement doc + Non-goals) OR simply carries AC
-      // content (`acItems`). Both are checked (#1951): a linked-doc-refined
+      // content (`acItems`). Both are checked: a linked-doc-refined
       // issue intentionally returns `acItems: []` (criteria live in the doc),
       // so `acItems` alone would misclassify it as unrefined. This is
       // "provides criteria", NOT the refinement floor the draft gate enforces
@@ -2765,7 +2765,7 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
     // Caller supplied the issue body text directly (without also supplying
     // --acceptance-criteria) — classify it as given rather than making a
     // network call whose result would be discarded. Uses `hasACs ||
-    // acItems.length` (#1951, same predicate as the multi-issue loop above) so
+    // acItems.length` (same predicate as the multi-issue loop above) so
     // a linked-doc-refined body (`hasACs` true, `acItems: []`) is not
     // misclassified as linked-issue-unrefined.
     const suppliedArtifact = detectIssueRefinementArtifact({ body: options.issueBody });
@@ -2800,7 +2800,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
   try {
     // Resolve the spec-of-record (PR body, linked issue(s) + their bodies)
     // BEFORE any diff work: a bundle that cannot state the spec truthfully must
-    // not be written at all, and failing here costs nothing (#1496/#1511).
+    // not be written at all, and failing here costs nothing.
     // Skipped under --prefix-file: the recorded prefix bytes are the supplied
     // file's EXACT bytes (writeGateContext never renders prBody/issueBody into
     // them in that mode), so a GitHub read here would be spent resolving text
@@ -2809,7 +2809,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     if (!options.prefixFile) {
       await resolvePrSpecContext(options, { run });
     }
-    // AC3 (#1140): the CLI only produces the full build-once bundle
+    // AC3: the CLI only produces the full build-once bundle
     // (scope.diffPath + scope.changedFiles + adjacentCode) when it has a
     // resolvable diff source. --base is OPTIONAL rather than required — making
     // it required would break any existing caller that only ever passed
@@ -2949,12 +2949,12 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       options.angleScopes = Object.fromEntries(
         options.angles.map((name) => [name, resolveGateAngleScope(scopeConfig, scopeConfigKey, name)]),
       );
-      // Issue #1601: resolve the fan-out dispatch plan (groups + wave plan +
+      // Resolve the fan-out dispatch plan (groups + wave plan +
       // knobs) from the same loaded config + resolved angles + gate:full label,
       // so the artifact carries the wave plan the conductor dispatches
       // wave-by-wave. Independent of --angles vs dynamic resolution and of
       // --prefix-file (config is a local file read).
-      // #1507 AC3: same-head skip-completed resume (angles with a clean artifact
+      // AC3: same-head skip-completed resume (angles with a clean artifact
       // at this head are excluded from the required count + pending plan).
       const completedAngles = await readCompletedAnglesForHead({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp" }, { repoRoot });
       options.fanoutDispatch = resolveFanoutDispatch(scopeConfig, scopeConfigKey, options.angles, { fullLabel: options.fullLabel === true, availableReviewers: options.availableReviewers, completedAngles, carriedAngles: options.carriedAngles });

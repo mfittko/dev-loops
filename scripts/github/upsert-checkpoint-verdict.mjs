@@ -45,8 +45,8 @@ import { stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority"
 import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
-// The `review` gate's submit-mode vocabulary, scoped to --gate review only
-// (#1840). Mapped to the GitHub create-review `event` value in
+// The `review` gate's submit-mode vocabulary, scoped to --gate review only.
+// Mapped to the GitHub create-review `event` value in
 // resolveReviewSubmitEvent below: "pending" maps to a falsy value so
 // createGateReview (_gate-finding-surface.mjs) omits `event` from the payload
 // entirely, leaving the review PENDING (author-only draft). `discard` deletes
@@ -64,7 +64,7 @@ function resolveReviewSubmitEvent(mode) {
   switch (mode) {
     case "pending": return null;
     // discard never submits a review event — it deletes the pending draft — so
-    // it maps to a falsy event and is dispatched on its own path (#1912).
+    // it maps to a falsy event and is dispatched on its own path.
     case "discard": return null;
     case "comment": return "COMMENT";
     case "approve": return "APPROVE";
@@ -731,7 +731,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       // EMPTY/whitespace-only value (`--interactive-confirm=`, the common
       // `--flag=$VAR` unset-expansion shape), must NOT confirm — an absent
       // value never confirms, same shape as ui-review-teardown.mjs's
-      // --confirm (#1888): destructives stay gated unless truly asked.
+      // --confirm: destructives stay gated unless truly asked.
       const confirmValue = token.value === undefined ? undefined : token.value.trim();
       options.interactiveConfirm = confirmValue === undefined || (confirmValue !== "" && !/^(false|0|no)$/iu.test(confirmValue));
       continue;
@@ -763,7 +763,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   // write-gate-findings-log.mjs from consolidate-fanin.mjs's --ledger-out) is
   // the source of truth, so the caller need not pass --verdict at all — it is
   // derived by default and a contradicting explicit value is refused at
-  // enforcement time (#1616). The requirement is deferred to runtime
+  // enforcement time. The requirement is deferred to runtime
   // (upsertCheckpointVerdict) so a ledger whose `overallVerdict` is absent
   // (a legacy/inline ledger) still requires an explicit --verdict there.
   if (options.findingsLedger) {
@@ -795,7 +795,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       `--submit is scoped to --gate review only (draft_gate/pre_approval_gate always submit a COMMENT review and reject --submit — GATE-COMMENT-NON-SUBSTITUTION). Pass --gate review explicitly, or omit --submit.`,
     );
   }
-  // Headless/non-interactive safety (#1840): a review run under --auto may
+  // Headless/non-interactive safety: a review run under --auto may
   // only leave the review pending or submit it as a comment. approve/
   // request-changes carry GitHub-native branch-protection effects (satisfying
   // required approvals / blocking merge) independent of any dev-loops gate,
@@ -806,7 +806,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       `--submit ${options.submit} is not allowed with --auto (headless review runs may only leave a review pending or submit it as a comment); approve/request-changes/discard are reachable only via the interactive submit choice.`,
     );
   }
-  // Discard is destructive (deletes the caller's own pending review, #1912),
+  // Discard is destructive (deletes the caller's own pending review),
   // so it fails closed exactly like approve/request-changes: reachable only via
   // the interactive submit choice, never headless. Its own message so a
   // discard caller is told precisely what is required. Checked before the
@@ -821,7 +821,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   // APPROVE review, a branch-protection signal independent of any dev-loops
   // gate), so approve/request-changes fail closed unless the caller carries
   // the explicit --interactive-confirm token, reachable only via the review
-  // skill's interactive submit choice (#1888). --auto still refuses
+  // skill's interactive submit choice. --auto still refuses
   // regardless of the token (checked above first, so the more specific
   // headless error wins).
   if (options.gate === "review" && options.submit !== undefined && !HEADLESS_ALLOWED_REVIEW_SUBMIT_MODES.has(options.submit) && !options.interactiveConfirm) {
@@ -894,7 +894,7 @@ function normalizeStructuredFinding(f) {
   if (typeof f.disposition === "string" && f.disposition.trim().length > 0) {
     entry.disposition = f.disposition.trim();
   }
-  // Preserve the judge's relevance-based dispositions (#1525) so the
+  // Preserve the judge's relevance-based dispositions so the
   // structured findings render shows what was consciously not acted on.
   if (typeof f.judgeDisposition === "string" && f.judgeDisposition.trim().length > 0) {
     entry.judgeDisposition = f.judgeDisposition.trim();
@@ -936,7 +936,7 @@ function looksLikeFlatFinding(item) {
 // renders under a `general` fallback label.
 //
 // A finding that normalization CANNOT interpret (no usable summary, or not an
-// object) is NEVER silently dropped (#1526): it is tracked on the section's
+// object) is NEVER silently dropped: it is tracked on the section's
 // `unparseable` list so the clean-verdict cross-check can still see a
 // blocking severity it carries, and the rendered comment can surface it
 // explicitly as unparseable — distinguishable from "this finding is not
@@ -964,12 +964,12 @@ function buildAngleSectionFromNested(raw) {
   }
   // renderGateReviewCommentBody re-normalizes an already-normalized section
   // (its structuredFindings argument); preserve any unparseable entries carried
-  // on the input so re-normalization can never silently re-drop them (#1526).
+  // on the input so re-normalization can never silently re-drop them.
   // The severity is re-read through readRawSeverity (not copied verbatim) so a
   // non-string severity on a hand-crafted/producer-drift section is coerced to
   // the same canonical vocabulary first-creation uses — never carried as a
   // non-string that normalizeSeverity would skip and the renderer would emit as
-  // `[object Object]` (Copilot review feedback on #1526).
+  // `[object Object]` (Copilot review feedback).
   if (Array.isArray(raw.unparseable)) {
     for (const u of raw.unparseable) {
       if (u && typeof u === "object") unparseable.push({ severity: readRawSeverity(u) });
@@ -983,7 +983,7 @@ function buildAngleSectionFromNested(raw) {
 }
 // Read the severity off a raw finding the normalizer rejected, so the
 // clean-verdict cross-check can still decide whether an unparseable finding
-// carries a blocking severity (#1526). Returns the normalized severity string
+// carries a blocking severity. Returns the normalized severity string
 // (or "" when none is readable); an unknown/typo'd value normalizes to itself
 // and then matches no blocking severity, same as a parseable unknown severity.
 function readRawSeverity(f) {
@@ -1025,7 +1025,7 @@ function groupFlatFindingsByAngle(input) {
       // normalizeStructuredFindings' unrecognized-item guard before this grouping
       // runs, so a flat section never carries an unparseable entry. Kept as an
       // empty array so the section shape matches the nested path and consumers
-      // can read `angle.unparseable` uniformly (#1526).
+      // can read `angle.unparseable` uniformly.
       unparseable: [],
     });
   }
@@ -1094,7 +1094,7 @@ export function normalizeStructuredFindings(input) {
   }
   return angles.length > 0 ? angles : null;
 }
-// Leading severity emoji marker for a body-only finding line (#1942, pivoted
+// Leading severity emoji marker for a body-only finding line (pivoted
 // to the two-track shape). Row/line ORDER still follows SEVERITY_ORDER's rank
 // (imported above); this legend listing order is independent and fixed:
 // high, medium, low, nit, question. An unknown/empty severity renders no
@@ -1123,7 +1123,7 @@ function normalizeFlatFindingWithAngle(raw) {
 // finding shape normalizeFlatFindingWithAngle produces, so the no-ledger path
 // (structuredFindings alone, no finding surface) and the ledger path can share
 // one body-only list renderer. Each real finding is tagged with its own
-// section's angle; an unparseable entry (#1526, never dropped) is tagged
+// section's angle; an unparseable entry (never dropped) is tagged
 // `unparseable: true` so renderBodyOnlyFindingsList renders its own
 // "could not be interpreted" bullet instead of a normal finding line.
 function flattenAnglesForBodyList(angles) {
@@ -1208,14 +1208,14 @@ function renderBodyOnlyFindingLine(finding, ctx) {
   const dispositionSuffix = finding.disposition
     ? ` — _\`${sanitizeStructuredCodeSpan(finding.disposition)}\`_`
     : "";
-  // Judge relevance-based disposition (#1525).
+  // Judge relevance-based disposition.
   const judgeSuffix = finding.judgeDisposition
     ? ` — judge: _\`${sanitizeStructuredCodeSpan(finding.judgeDisposition)}\`_`
     : "";
   const angleSuffix = finding.angle ? ` _(${sanitizeStructuredInline(finding.angle)})_` : "";
   return `- ${markerPrefix}${summary}${location}${dispositionSuffix}${judgeSuffix}${angleSuffix}`;
 }
-// An unparseable entry (#1526) is never dropped: it renders its own
+// An unparseable entry is never dropped: it renders its own
 // "could not be interpreted" bullet, distinguishable from a normal finding.
 function renderUnparseableBodyLine(finding) {
   const sev = sanitizeStructuredCodeSpan(finding.severity) || "none";
@@ -1225,7 +1225,7 @@ function renderUnparseableBodyLine(finding) {
 const BODY_ONLY_FINDINGS_HEADER = "Body-only findings — no anchorable changed line, so carried in full here (plain list, angle in brackets, `file:line` linked to the blob when known):";
 // Render a flat list of body-only findings (each already normalized via
 // normalizeFlatFindingWithAngle, or flattened via flattenAnglesForBodyList) as
-// a plain bulleted list — NEVER a markdown table (#1942): this track is
+// a plain bulleted list — NEVER a markdown table: this track is
 // usually 0-2 findings, and a table's Angles column wraps letter-by-letter at
 // GitHub's comment width. Sorted by severityRank ascending (high first);
 // ties preserve input order via an explicit index tiebreak rather than
@@ -1246,7 +1246,7 @@ function renderBodyOnlyFindingsList(findings, ctx = {}) {
   return lines;
 }
 // The no-ledger shape both renderStructuredFindings and renderAngleVerdictDigest
-// render (#1942): flatten the per-angle sections into one body-only bulleted
+// render: flatten the per-angle sections into one body-only bulleted
 // list (no repo/headSha here — neither exported function takes them, so a
 // file:line renders in the same non-linked italic form it always has), then
 // the trailing clean-angle roster line. The whole block is bounded by
@@ -1268,18 +1268,18 @@ function renderStructuredFindingsBlock(angles) {
 // length-exceeded throw) instead of approximating its rendered size, and so
 // existing callers/tests that render the full per-angle breakdown keep this
 // name. Both this and renderAngleVerdictDigest render the identical body-only
-// list + clean roster (#1942) — there is no longer a distinct "full" vs
+// list + clean roster — there is no longer a distinct "full" vs
 // "reduced" shape.
 export function renderStructuredFindings(angles) {
   return renderStructuredFindingsBlock(angles);
 }
 // Kept as a separate exported name for existing callers (renderGateReviewCommentBody's
 // no-ledger branch) and tests; renders the SAME body-only list + clean roster
-// as renderStructuredFindings (#1942).
+// as renderStructuredFindings.
 export function renderAngleVerdictDigest(angles) {
   return renderStructuredFindingsBlock(angles);
 }
-// The aggregate line for every LOCATABLE finding this round carried (#1942):
+// The aggregate line for every LOCATABLE finding this round carried:
 // a locatable finding's full text lives ENTIRELY on its own inline PR review
 // comment (_gate-finding-surface.mjs's renderInlineCommentBody) — this line
 // never restates or per-row references it, only the count/severity
@@ -1326,7 +1326,7 @@ function buildInlineFindingsAggregateLine(locatableFindings) {
 function buildStructuredFindingsDigest(angles, severityCounts) {
   // Unparseable findings occupy a finding slot too, so they count toward the
   // per-angle total — the digest must not undercount a round whose tally and
-  // rendered breakdown both see the unparseable entries (#1526).
+  // rendered breakdown both see the unparseable entries.
   const angleTotal = angles.reduce((sum, a) => sum + a.findings.length + (Array.isArray(a.unparseable) ? a.unparseable.length : 0), 0);
   const countedTotal = severityCounts && typeof severityCounts === "object" && !Array.isArray(severityCounts)
     ? Object.entries(severityCounts).reduce((sum, [key, n]) => {
@@ -1427,7 +1427,7 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
   // When structured per-angle fan-in data is supplied (--findings-json), the
   // `**Findings summary:**` digest is computed from it; otherwise the digest
   // is the caller's free-text findingsSummary, unchanged either way regardless
-  // of whether this round also carries a finding surface (#1942 pivot — the
+  // of whether this round also carries a finding surface (pivot — the
   // digest line's own computation never changes; only the block below it does).
   const angles = normalizeStructuredFindings(structuredFindings);
   lines.push(
@@ -1456,7 +1456,7 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
     }
     // Never drop a body-filed finding from the VISIBLE list: every entry gets a
     // suppression marker stamped below, so one that fails normalization (no
-    // usable summary) must still render — as an unparseable row (#1526) — or it
+    // usable summary) must still render — as an unparseable row — or it
     // is invisible yet marked-suppressed, i.e. silently lost next round. Map
     // rather than filter-Boolean.
     const bodyOnlyRows = nonLocatableFindings.map(
@@ -1482,7 +1482,7 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
   // this exact marker back off the posted review body; dropping it would
   // silently re-surface the same finding as "new" every round with no
   // durable disposition — a semantics change the display-only regrouping
-  // above must not cause (#1942).
+  // above must not cause.
   if (Array.isArray(nonLocatableFindings)) {
     for (const finding of nonLocatableFindings) {
       lines.push(buildNonLocatableFindingMarker(finding, { round }));
@@ -1648,7 +1648,7 @@ async function verifyPostedSurface({ repo, pr, surface, commentId }, { env, ghCo
 // `reconcile-draft-gate` (which posts an inline verdict and so cannot satisfy
 // requireFanoutEvidence on draft_gate), this preserves fanout evidence. On
 // any failure mid-transition the PR is best-effort restored to ready before
-// rethrowing (#891).
+// rethrowing.
 //
 // Durability note: a process crash in the window between convertPrToDraft and
 // markPrReady leaves the PR in draft until a later dev-loop run (or a manual
@@ -1670,7 +1670,7 @@ async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRo
     // `_draftTransitionInProgress` guards against unbounded recursion: if GitHub's
     // draft-state read still lags the conversion mutation on re-entry (isDraft reads
     // false again), the reconcile branch must NOT fire a second time — it fails closed
-    // with a clear error instead of recursing indefinitely (exit 13). (#1020)
+    // with a clear error instead of recursing indefinitely (exit 13).
     result = await upsertCheckpointVerdict(
       { ...options, _draftTransitionInProgress: true },
       { env, ghCommand, repoRoot, runChild },
@@ -1697,7 +1697,7 @@ async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRo
     } catch (restoreError) {
       // The verdict WAS posted successfully; only the ready-restore failed. Make that
       // explicit so the caller does not re-post the gate (the comment already exists)
-      // and knows the PR may be left in draft until restored. (#891, Copilot review)
+      // and knows the PR may be left in draft until restored. (Copilot review)
       throw new Error(
         `draft_gate verdict was posted to ${options.repo}#${options.pr} (comment ${result.commentId ?? "?"}), ` +
         `but restoring the PR to ready failed; it may be left in draft. Do not re-post the gate — re-run ` +
@@ -1710,7 +1710,7 @@ async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRo
   return { ...result, draftTransition: true };
 }
 
-// #1472: builds the exact input object passed to evaluatePrGateCoordination.
+// Builds the exact input object passed to evaluatePrGateCoordination.
 // Exported (and used by upsertCheckpointVerdict below, not duplicated) so a
 // test can assert the real production wiring — e.g. that unresolvedThreadCount
 // is threaded from coordinationContext.snapshot rather than a test
@@ -1734,16 +1734,16 @@ export function buildCoordinationEvaluatorInput({
     ciStatus: coordinationContext.snapshot?.ciStatus ?? null,
     copilotReviewRoundCount: coordinationContext.snapshot?.copilotReviewRoundCount ?? 0,
     maxCopilotRounds,
-    // #1472: lets the evaluator's ROUND_CAP_REACHED handling independently
+    // Lets the evaluator's ROUND_CAP_REACHED handling independently
     // confirm "zero unresolved threads" (the exhaustion note's own promise)
     // rather than trusting a stale/compound lifecycleState label alone.
     unresolvedThreadCount: coordinationContext.snapshot?.unresolvedThreadCount ?? null,
     sameHeadCleanConverged: coordinationContext.interpretation.sameHeadCleanConverged,
-    // Operator-authorized post-convergence suppression (#1441): computed and
+    // Operator-authorized post-convergence suppression: computed and
     // verified once in loadPrGateCoordinationContext (resolvePostConvergenceReviewSuppressed)
     // — see detect-pr-gate-coordination-state.mjs.
     postConvergenceReviewSuppressed: coordinationContext.postConvergenceReviewSuppressed === true,
-    // Independent gate-ENTRY re-check (#1190): fed alongside (not derived from)
+    // Independent gate-ENTRY re-check: fed alongside (not derived from)
     // sameHeadCleanConverged, so an outstanding request on the current head refuses
     // RUN_PRE_APPROVAL_GATE even if sameHeadCleanConverged were somehow stale/wrong.
     copilotReviewRequestStatus: coordinationContext.snapshot?.copilotReviewRequestStatus ?? "none",
@@ -1913,7 +1913,7 @@ async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, pre
 // (skills/docs/gate-review-comment-contract.md): a non-clean verdict must not
 // carry an advancing next action. The mandated next action for a round that
 // found blocking findings is a closed set, so the tool DERIVES it rather than
-// accepting caller prose into a machine-read evidence surface (#1621). Returns
+// accepting caller prose into a machine-read evidence surface. Returns
 // null for a `clean` verdict — the caller's value is accepted unchanged.
 function deriveEffectiveNextAction(verdict, gate) {
   if (verdict !== "findings_present" && verdict !== "blocked") {
@@ -1955,7 +1955,7 @@ function scanBlockingFindings(structuredFindings, blocking) {
   return { blockingObserved: blocking.filter((sev) => observed.has(sev)), unparseableBlocking };
 }
 
-// GATE-EXEC-LIGHT-ESCALATION (#1621): does this round carry a finding at a
+// GATE-EXEC-LIGHT-ESCALATION: does this round carry a finding at a
 // blocking severity? A `findings_present` verdict is DEFINED as "found issues
 // at blocking severities" (GATE-COMMENT-VERDICT-VALUES), so it always carries
 // one when blocking severities are configured. Structured per-angle findings
@@ -1981,7 +1981,7 @@ function roundCarriesBlockingSeverity({ verdict, structuredFindings, findingsSev
 // resource, then adds it to the PR (adding an already-present label is a
 // no-op success). Both existing consumers (detect-checkpoint-evidence.mjs,
 // write-gate-context.mjs) already honor the label. Applied (not a post refusal)
-// so it never collides with GATE-EXEC-POST-BEFORE-FIX (#1621).
+// so it never collides with GATE-EXEC-POST-BEFORE-FIX.
 async function applyGateFullLabel({ repo, pr }, { env, ghCommand, runChild = defaultRunChild }) {
   const createResult = await runChild(
     ghCommand,
@@ -2041,7 +2041,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       // loadPrGateCoordinationContext call will surface the real error.
     }
   }
-  // `review` (#1808) is reachable on ANY PR with NO gate obligations: it never
+  // `review` is reachable on ANY PR with NO gate obligations: it never
   // waits on CI, never auto-resolves, is never forbidden by draft/pre-approval
   // lifecycle state, and never satisfies/consults draft_gate or pre_approval_gate
   // evidence. It therefore skips the coordination-context load below entirely
@@ -2051,7 +2051,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // Resolved submit mode for the review gate only; parseUpsertCheckpointVerdictCliArgs
   // already validated --submit, but this function is also a PUBLIC runtime
   // entry (tests, direct callers) that bypasses the CLI parser, so the same
-  // fail-closed guard is re-enforced here structurally (#1888) — never trust
+  // fail-closed guard is re-enforced here structurally — never trust
   // the caller's self-identification.
   const reviewSubmitMode = isReviewGate ? (options.submit ?? DEFAULT_REVIEW_SUBMIT_MODE) : undefined;
   if (isReviewGate && reviewSubmitMode !== undefined && !HEADLESS_ALLOWED_REVIEW_SUBMIT_MODES.has(reviewSubmitMode)) {
@@ -2080,7 +2080,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (!isReviewGate) {
     // Thread the light-dispatch signal so the context interpreter and the
     // maxCopilotRounds resolution below use the same composed lightweight cap
-    // (#1210) — the two must never disagree at the cap boundary.
+    // — the two must never disagree at the cap boundary.
     coordinationContext = await loadPrGateCoordinationContext({ repo: options.repo, pr: options.pr, lightweight: options.lightweight === true }, gh);
     evidence = coordinationContext.gateEvidence;
     canonicalHeadSha = resolveRequestedHeadSha(options.headSha, evidence.currentHeadSha);
@@ -2127,7 +2127,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       // evidence (on any head) has already passed it, and the pre-merge gate check
       // accepts that evidence. Re-posting is therefore a no-op, not an error —
       // return idempotent success so scripted/automated callers are not dead-ended
-      // by a hard throw. (#891)
+      // by a hard throw.
       const satisfied = coordinationContext.gateEvidence?.draftGate ?? {};
       // executionMode lives on the gate MARKER summary, not the COMMENT (strict)
       // summary: the strict `draftGate` summary is parsed from the visible comment
@@ -2166,7 +2166,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // evidence reconciled. RUN_DRAFT_GATE is forbidden on a ready PR in many
     // OTHER states too (merge conflicts, waiting-for-CI, unresolved feedback,
     // blocked); converting those to draft would be wrong, so this must NOT key
-    // off `gateActionForbidden` alone (#891).
+    // off `gateActionForbidden` alone.
     if (
       options.gate === "draft_gate"
       && !prIsDraft
@@ -2179,9 +2179,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // Fail closed on a lagged draft-state read: we are re-entering FROM
     // postDraftGateViaDraftTransition (which just converted the PR to draft) yet the
     // coordination context still reports the PR as non-draft. Recursing would loop
-    // indefinitely (the original #1020 hang → exit 13, error swallowed). Surface a
+    // indefinitely (the original hang → exit 13, error swallowed). Surface a
     // clear, actionable error instead so the operator knows the draft conversion did
-    // not take (or GitHub's read lags the mutation) and can retry. (#1020)
+    // not take (or GitHub's read lags the mutation) and can retry.
     if (
       options.gate === "draft_gate"
       && !prIsDraft
@@ -2227,7 +2227,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (options.findingsSeverityCounts && typeof options.findingsSeverityCounts === "object") {
     options.findingsSeverityCounts = normalizeSeverityCounts(options.findingsSeverityCounts);
   }
-  // Verdict consistency enforcement (#1616): when --findings-ledger carries the
+  // Verdict consistency enforcement: when --findings-ledger carries the
   // consolidator's computed `overallVerdict` (threaded from
   // consolidate-fanin.mjs's --ledger-out via write-gate-findings-log.mjs), the
   // posted --verdict MUST agree with it — hand-picking a different value is the
@@ -2243,13 +2243,13 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     const ledgerVerdict = preloadedFindingsLedger.overallVerdict;
     if (options.verdict === undefined) {
       // Derive: the caller need not pass --verdict at all when the ledger
-      // carries the consolidator's verdict (#1616 AC: "passing no --verdict
+      // carries the consolidator's verdict (AC: "passing no --verdict
       // is valid and correct").
       options.verdict = ledgerVerdict;
     } else if (options.verdict !== ledgerVerdict) {
       // Refuse the contradiction, naming both values and the head, citing the
       // rule whose meaning the consolidator's computation already implements.
-      // No override flag (#1616 AC): a round whose verdict genuinely differs
+      // No override flag (AC): a round whose verdict genuinely differs
       // from the computed one is a consolidator bug to fix, not an operator
       // decision to override.
       throw new Error(
@@ -2293,7 +2293,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       );
     }
   }
-  // ACCEPT-CRITERIA-VERIFY-AND-REFLECT (#1621): a `clean` pre_approval_gate
+  // ACCEPT-CRITERIA-VERIFY-AND-REFLECT: a `clean` pre_approval_gate
   // verdict must not be recorded while the spec-of-record still has unticked
   // Acceptance criteria. The spec-of-record's AC data is carried by
   // coordinationContext.refinementArtifact (loaded above) — for a tracker-backed
@@ -2316,7 +2316,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       `Cannot set verdict "clean" for ${options.gate} @ ${canonicalHeadSha}: the spec-of-record (linked issue(s) ${(acArtifact.linkedIssues ?? []).map((n) => `#${n}`).join(", ") || "?"}) still has ${items.length} unticked Acceptance criteria item(s): ${items.slice(0, 3).map((t) => `\`${t}\``).join(", ")}${items.length > 3 ? ", …" : ""}. Tick the satisfied ACs in the tracker issue before declaring the pre-approval gate clean — ACCEPT-CRITERIA-VERIFY-AND-REFLECT (skills/docs/acceptance-criteria-verification.md): a clean pre_approval_gate must not rely on a spec-of-record with unticked acceptance criteria.`,
     );
   }
-  // #1877 deterministic pre-approval block: ANY unchecked `- [ ]` in the PR
+  // Deterministic pre-approval block: ANY unchecked `- [ ]` in the PR
   // body's own Acceptance criteria or Definition of done sections fails the
   // round closed. This enforces COMPLETENESS (nothing left unchecked), not
   // truthfulness — a dishonestly-ticked `[x]` still passes and stays the
@@ -2341,8 +2341,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       );
     }
   }
-  // GATE-COMMENT-DRAFT-REQUIREMENTS / GATE-COMMENT-PREAPPROVAL-REQUIREMENTS
-  // (#1621): derive at the OPTION seam — mutating options.nextAction — so
+  // GATE-COMMENT-DRAFT-REQUIREMENTS / GATE-COMMENT-PREAPPROVAL-REQUIREMENTS:
+  // derive at the OPTION seam — mutating options.nextAction — so
   // BOTH the render and the same-head idempotency compare see the derived
   // value (a render-only fix would let the compare read the raw caller
   // string against the rendered derived one).
@@ -2473,7 +2473,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
             );
           }
         } else {
-          // Reuse the ledger loaded early for verdict enforcement (#1616) —
+          // Reuse the ledger loaded early for verdict enforcement —
           // only load here if it was not (defensive; options.findingsLedger
           // truthy at this point means the early load already populated it).
           preloadedFindingsLedger ??= await loadMatchingFindingsLedger(options, canonicalHeadSha);
@@ -2610,7 +2610,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const gateEvidence = isReviewGate ? { strict: null, marker: null } : selectGateEvidence(evidence, options.gate);
   const existing = isReviewGate ? null : summarizeExistingComment({ ...gateEvidence, headSha: canonicalHeadSha });
   const warning = isReviewGate ? null : detectStaleGateCommentWarning({ strict: gateEvidence.strict, headSha: canonicalHeadSha, gate: options.gate });
-  // FINDINGS-SOURCE FOOTGUN WARNING (#1912): a fanout_fanin round posted with
+  // FINDINGS-SOURCE FOOTGUN WARNING: a fanout_fanin round posted with
   // --findings-json but no --findings-ledger silently files ZERO inline
   // comments — the --findings-ledger (consolidate-fanin --ledger-out →
   // write-gate-findings-log) is the ONLY inline-comment source. Name the
@@ -2619,7 +2619,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const findingsLedgerWarning = ((options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin" && options.findingsJson && !options.findingsLedger)
     ? "WARNING: --findings-json without --findings-ledger files zero inline comments — the --findings-ledger (consolidate-fanin --ledger-out → write-gate-findings-log) is the only inline-comment source. Pass --findings-ledger to file inline findings."
     : null;
-  // PENDING-REVIEW RESOLUTION (#1912): GitHub allows only ONE pending review
+  // PENDING-REVIEW RESOLUTION: GitHub allows only ONE pending review
   // per user per PR (PR-scoped, NOT head-scoped), so a --gate review --submit
   // re-run must RESOLVE the caller's own pending review rather than POST a
   // second one, which 422s regardless of the pending review's head. The
@@ -2670,8 +2670,8 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       // STALE pending on a DIFFERENT head (or a commit_id-less draft): it is not
       // this round's surface, but GitHub's one-pending-per-PR-per-user limit
       // means it would 422 the create below. Delete it, then fall through to
-      // create a fresh review (or fresh pending) at the current head. (#1912
-      // draft_gate correctness finding: head-scoped detection alone left this
+      // create a fresh review (or fresh pending) at the current head.
+      // (draft_gate correctness finding: head-scoped detection alone left this
       // create path still 422-ing.)
       await discardPendingReview({ repo: options.repo, pr: options.pr, reviewId: ownPending.id }, gh);
     }
@@ -2694,7 +2694,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
     ...(findingSurface ? { round: findingSurface.round, nonLocatableFindings: findingSurface.nonLocatable, locatableFindings: findingSurface.locatable } : {}),
   });
-  // ISSUE/PR-ID GUARD (#1731): the rendered gate verdict body must never emit a
+  // ISSUE/PR-ID GUARD: the rendered gate verdict body must never emit a
   // raw issue/PR id (fail-closed unless explicitly allowlisted). Guarded here at
   // the single desiredBody choke point so BOTH the review surface (create/update
   // gate review) and the legacy issue-comment surface (updateComment below) are
@@ -2709,7 +2709,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       }
     : {};
   const desiredExecutionMode = options.executionMode ?? DEFAULT_EXECUTION_MODE;
-  // GATE-EXEC-LIGHT-ESCALATION (#1621): an inline round that surfaces a blocking
+  // GATE-EXEC-LIGHT-ESCALATION: an inline round that surfaces a blocking
   // finding escalates the next round to full fan-out by applying the gate:full
   // PR label. Applied (not a post refusal) so it never collides with
   // GATE-EXEC-POST-BEFORE-FIX. Only when fan-out evidence is required — the
@@ -2773,7 +2773,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     && (existing.sizeWaiverApprovedBy ?? null) === desiredSizeWaiverApprovedBy
     && unpostedFindings === 0
   ) {
-    // GATE-EXEC-LIGHT-ESCALATION (#1621): a same-head noop rerun must still
+    // GATE-EXEC-LIGHT-ESCALATION: a same-head noop rerun must still
     // ensure the gate:full label is on the PR — if the original post succeeded
     // but its label application failed (network/permissions), the noop would
     // otherwise never retry it. The add is idempotent (a present label is a
@@ -2943,7 +2943,7 @@ async function main() {
     if (inlineWarning && !options.silent) {
       process.stderr.write(`${inlineWarning}\n`);
     }
-    // Surface the findings-source footgun warning (#1912) on stderr too, so a
+    // Surface the findings-source footgun warning on stderr too, so a
     // CLI caller sees why a --findings-json-only fanout round filed no inline
     // comments. Same success-only, --silent-suppressed posture as above.
     if (result?.findingsLedgerWarning && !options.silent) {
