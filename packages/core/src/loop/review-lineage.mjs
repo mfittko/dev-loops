@@ -1,37 +1,22 @@
 /**
- * review-lineage.mjs — additive review-lineage base + per-fix-round delta
- * composition (issue #1468 slice 5).
+ * Additive review-lineage base + per-fix-round delta composition.
  *
- * A new head after a fix used to rebuild a full head-specific briefing. This
- * module introduces a stable review-lineage base plus deterministic per-round
- * delta artifacts, so round 2+ appends only what changed instead of replacing
- * the whole context.
- *
- * Artifact model (Section E of the #1468 spec):
- *
- *   review-lineage-base
- *     lineage identity + gate + stable contracts/instructions + original
- *     review target + original full diff.
- *
- *   round-N-delta
- *     exact base/reviewed SHAs + the fix diff + validation evidence + an
- *     independent findings verification checklist.
+ * A stable review-lineage base plus deterministic per-round delta artifacts let
+ * round 2+ append only what changed instead of rebuilding a full head-specific
+ * briefing.
  *
  * Composition contract:
- *
- *   round-N request = [lineage base][delta 1][delta 2]...[delta N][angle suffix]
+ *   round-N request = [lineage base][delta 1]...[delta N][angle suffix]
  *
  * Composition is append-only and byte-deterministic: the composed request is
  * the ordered concatenation of the lineage base and the individual delta
- * artifacts, never a parse/reserialize of the full PR context as a replacement
- * block. Round N+1 appends exactly one new delta segment; every prior segment
- * is byte-identical (same ref + same hash) — that is what the
- * "does not rebuild the full PR context" test asserts.
+ * artifacts, never a parse/reserialize of the full PR context. Round N+1 appends
+ * exactly one new delta segment; every prior segment is byte-identical (same
+ * ref + same hash).
  *
- * Carry-forward semantics are unchanged: a carried clean angle still records
- * its original reviewer and prior head. This module only preserves that
- * provenance in the composed request; it does not decide carry-forward (that
- * stays in gate-carry-forward.mjs) and it never fabricates a verdict.
+ * Carry-forward provenance (original reviewer + prior head of a carried clean
+ * angle) is preserved in the composed request but not decided here (that stays
+ * in gate-carry-forward.mjs); a verdict is never fabricated.
  *
  * This module is pure and offline: no GitHub, no harness, no clock.
  */
@@ -226,26 +211,16 @@ export const ANGLE_SUFFIX_SLOT = "angleSuffix";
 
 /**
  * Compose the round-N request as an append-only ordered segment list:
- *
  *   [lineage base][delta 1]...[delta N][angle suffix]
  *
- * The returned `segments` carry individual artifact bytes + hashes so a
- * consumer can render the request by concatenating segment bytes IN ORDER
- * (never parsing/reserializing prior segments). Round N+1 appends exactly one
- * new delta segment: callers should REUSE the prior composed segments (or the
- * base + prior deltas) rather than rebuilding the full PR context, and this
- * function's contract + tests pin that reuse property.
+ * Returned `segments` carry individual artifact bytes + hashes; a consumer
+ * renders the request by concatenating segment bytes IN ORDER. Round N+1 appends
+ * exactly one new delta segment and every earlier segment is byte-identical to
+ * the prior round's (same `ref` + same `hash`).
  *
- * Segments before the new delta are byte-identical to the prior round's
- * (same `ref` + same `hash`), which is the mechanical proof of append-only
- * composition (AC-2: does not rebuild the full PR context as a replacement
- * block).
- *
- * `carriedAngles` provenance is preserved unchanged (carry-forward semantics):
- * each entry is { angle, originalReviewer, priorHead } and is folded into the
- * composed hash so a carried angle's provenance is pinned — but never
- * fabricated. A carried clean angle keeps exactly the original reviewer and
- * prior head it was recorded with.
+ * `carriedAngles` provenance is preserved unchanged: each entry
+ * { angle, originalReviewer, priorHead } is folded into the composed hash so a
+ * carried angle's provenance is pinned, never fabricated.
  *
  * @param {object} input
  * @param {object} input.lineageBase - a valid review-lineage-base artifact.
@@ -384,7 +359,7 @@ export function renderComposedRequest(composed) {
 }
 
 /* ------------------------------------------------------------------ *
- * Compaction / rebase policy (issue #1468 slice 6)
+ * Compaction / rebase policy
  * ------------------------------------------------------------------ */
 
 /**

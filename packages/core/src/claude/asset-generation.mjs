@@ -7,8 +7,8 @@
  * Pi→Claude tool-name mapping (confirmed against Claude Code docs):
  *   read→Read, search→Grep+Glob, execute→Bash, bash→Bash, edit→Edit, write→Write,
  *   agent→Agent, subagent→Agent, todo→TodoWrite, review_loop→Agent (the review subagent).
- * Frontmatter *tool lists* are rewritten, and bodies are copied through `stripPiOnlyBlocks`
- * (#817): `<!-- pi-only -->`…`<!-- /pi-only -->` sections are removed for the Claude output so
+ * Frontmatter *tool lists* are rewritten, and bodies are copied through `stripPiOnlyBlocks`:
+ * `<!-- pi-only -->`…`<!-- /pi-only -->` sections are removed for the Claude output so
  * Pi-runtime-specific prose (e.g. `tools: [subagent]`/`maxSubagentDepth` assertions, the
  * `contact_supervisor`/`pi-intercom` bug guidance) doesn't contradict the Claude assets. The
  * source stays Pi-complete; general `subagent` prose is preserved (Claude has subagents too).
@@ -46,7 +46,7 @@ const GENERATED_NOTE = (source) =>
   `<!-- GENERATED from ${source} by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate. -->`;
 
 /**
- * Strip Pi-runtime-only prose blocks from a body for the Claude output (#817).
+ * Strip Pi-runtime-only prose blocks from a body for the Claude output.
  *
  * The canonical sources stay Pi-complete; sections that are Pi-runtime-specific and misleading
  * under Claude (e.g. `tools: [subagent]`/`maxSubagentDepth` assertions that contradict the
@@ -75,11 +75,11 @@ export function stripPiOnlyBlocks(body) {
 }
 
 /**
- * Rewrite the Pi package-local CLI invocation into the Claude version-pinned `npx` form (#801,
- * #833). The Pi runtime sources invoke the CLI as `node <dev-loops-package-root>/cli/index.mjs`
+ * Rewrite the Pi package-local CLI invocation into the Claude version-pinned `npx` form.
+ * The Pi runtime sources invoke the CLI as `node <dev-loops-package-root>/cli/index.mjs`
  * (resolves unambiguously from the installed package). The Claude plugin does NOT bundle `cli/`,
  * so for the generated tree those tokens become `npx dev-loops@<version>` — pinning the version
- * keeps the CLI from drifting against the published plugin version (#833). The Pi-only
+ * keeps the CLI from drifting against the published plugin version. The Pi-only
  * package-root resolution note is removed separately by `stripPiOnlyBlocks`.
  *
  * @param {string} body
@@ -210,7 +210,7 @@ export function transformAgent({ source, raw, version = "latest", config = {} })
 
 /**
  * Transform a canonical `commands/<name>.command.md` into a Claude `.claude/commands/<name>.md`
- * slash command (#972). Commands are thin wrappers over the public dev-loop contract: the body
+ * slash command. Commands are thin wrappers over the public dev-loop contract: the body
  * is a prompt (with `$ARGUMENTS`) that invokes the existing entrypoint, so there is NO routing
  * logic here. Frontmatter keeps Claude's command fields (`description`, `argument-hint`); the body
  * is passed through `stripPiOnlyBlocks` + `rewriteCliInvocation` like agents/skills.
