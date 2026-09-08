@@ -65,6 +65,9 @@ async function repoFixtureWithScanner() {
   await cp(path.join(REPO_ROOT, "scripts", "_cli-primitives.mjs"), path.join(dir, "scripts", "_cli-primitives.mjs"));
   await mkdir(path.join(dir, "scripts", "lib"), { recursive: true });
   await cp(path.join(REPO_ROOT, "scripts", "lib", "jq-output.mjs"), path.join(dir, "scripts", "lib", "jq-output.mjs"));
+  // jq-output.mjs and _core-helpers.mjs both import the node:-pure formatCliError
+  // copy; the fixture must carry it or the hook's module load ERR_MODULE_NOT_FOUNDs.
+  await cp(path.join(REPO_ROOT, "scripts", "lib", "format-cli-error.mjs"), path.join(dir, "scripts", "lib", "format-cli-error.mjs"));
   await mkdir(path.join(dir, "node_modules", "@dev-loops"), { recursive: true });
   await symlink(path.join(REPO_ROOT, "packages", "core"), path.join(dir, "node_modules", "@dev-loops", "core"), "dir");
 

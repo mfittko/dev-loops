@@ -26,7 +26,11 @@
 //                  (truthy test). <lit> is a JSON string/number/true/false/null.
 // Anything else -> JqFilterError (fail closed).
 
-import { formatCliError } from "../_core-helpers.mjs";
+// Import from the node:-pure copy, NOT ../_core-helpers.mjs: that re-exports
+// from @dev-loops/core, and jq-output sits on the release-script import closure
+// (verify-release-approval imports it), which the release workflows load with
+// bare `node` before any install. See scripts/lib/format-cli-error.mjs.
+import { formatCliError } from "./format-cli-error.mjs";
 
 export class JqFilterError extends Error {
   constructor(message) {
