@@ -160,8 +160,8 @@ workflow:
 localImplementation:
   lightMode:
     enabled: true
-    maxFiles: 10
-    maxLines: 100 # light-track ceiling (widened for the slim epic)
+    maxFiles: 50
+    maxLines: 500 # hard ceiling only; the judge (#2070) decides the track within it
 
 tracker:
   board:
