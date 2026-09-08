@@ -58,10 +58,10 @@ const READY_FLAG_PATTERN = /^--ready(?:$|=)/u;
 // flags), and the LAST occurrence decides — bare or =true/=1 enables,
 // anything else (=false, =0, ...) disables.
 const LIGHTWEIGHT_FLAG_PATTERN = /^--lightweight(?:=(.*))?$/iu;
-// #1626: `--issue <n>` declares the tracker link this PR closes. Consumed by the
+// `--issue <n>` declares the tracker link this PR closes. Consumed by the
 // wrapper (never forwarded to gh), same shape as --repo.
 const ISSUE_FLAG_PATTERN = /^--issue(?:=(.*))?$/u;
-// #1629: `--allow-replacement-pr <prior>` records a deliberate replacement of
+// `--allow-replacement-pr <prior>` records a deliberate replacement of
 // an existing open linked PR, overriding the duplicate-refusal guard. Consumed
 // by the wrapper (never forwarded to gh).
 const ALLOW_REPLACEMENT_FLAG_PATTERN = /^--allow-replacement-pr(?:=(.*))?$/u;
@@ -74,7 +74,7 @@ const TRUE_FLAG_VALUE_PATTERN = /^(?:true|1)$/iu;
 // Detect both the long `--assignee`/`--assignee=<login>` forms and the `-a`
 // short flag that `gh pr create` documents, so an explicit assignee in either
 // form suppresses the `--assignee @me` default (otherwise a caller passing
-// `-a <login>` would get a conflicting `--assignee @me` injected). (#894)
+// `-a <login>` would get a conflicting `--assignee @me` injected).
 const ASSIGNEE_FLAG_PATTERN = /^(?:--assignee(?:$|=)|-a$)/u;
 const DEFAULT_ASSIGNEE = "@me";
 const CLOSING_KEYWORD_PATTERN = /Closes\s+#(\d+)|Fixes\s+#(\d+)/i;
@@ -83,7 +83,7 @@ export function detectClosingKeyword(body) {
   if (!body || typeof body !== "string") return false;
   return CLOSING_KEYWORD_PATTERN.test(body.slice(0, MAX_BODY_SCAN_BYTES));
 }
-// #1626: extract the issue number from a `Closes #N` / `Fixes #N` closing
+// Extract the issue number from a `Closes #N` / `Fixes #N` closing
 // reference so create-pr can REFUSE a missing or mismatched reference when
 // `--issue <n>` declares the tracker link (a warning is invisible under --jq).
 export function extractClosingIssueNumber(body) {
@@ -121,18 +121,14 @@ function parsePrNumberFromOutput(stdout) {
   const match = PR_URL_NUMBER_PATTERN.exec(stdout ?? "");
   return match ? Number(match[1]) : null;
 }
-// Auto-enqueue ANY board item (issue or PR) into the given Status column — a
-// generic, idempotent, fail-open board add shared by create-pr (lightweight
-// PRs -> In Progress) and create-issue (new issues -> Backlog). This is the
-// "one guard where all callers route" fix for QUEUE-BOARD-LINKED: a guard that
-// only lives at one entry point. Reuses the same .devloops tracker.board
-// number / title resolution and add-queue-item's idempotent add — never
-// reimplements the board API calls. An ADD (not a status transition) — board
-// status transitions stay orchestrator-owned per sanctioned-commands.mjs.
-// Never throws: an unconfigured board, a missing --repo, an unparsed item
-// number, or an enqueue failure are all non-fatal no-ops reported in the
-// returned shape. `column` defaults to the configured In Progress column (the
-// historical lightweight-PR behavior).
+// Generic, idempotent, fail-open board add shared by create-pr (lightweight
+// PRs -> In Progress) and create-issue (new issues -> Backlog): the one guard
+// all callers route through (QUEUE-BOARD-LINKED). Reuses .devloops
+// tracker.board resolution and add-queue-item's idempotent add rather than
+// reimplementing the board API. An ADD only — status transitions stay
+// orchestrator-owned per sanctioned-commands.mjs. Never throws: an
+// unconfigured board, missing --repo, unparsed item number, or enqueue
+// failure are all non-fatal no-ops reported in the returned shape.
 export async function enqueueBoardItem({ repo, itemNumber, column, cwd, env, runChild }) {
   if (!repo) return { enqueued: false, reason: "repo-not-specified" };
   if (!Number.isInteger(itemNumber) || itemNumber < 1) return { enqueued: false, reason: "item-number-not-parsed" };
@@ -169,23 +165,22 @@ export async function enqueueIssuelessLightweightPr({ repo, prNumber, cwd, env, 
   }
   return board;
 }
-// #1629: FACADE-LINKED-PR-SINGLE-ARTIFACT — refuse opening a PR whose closing
-// keyword/`--issue` names an issue that already has an open same-repo linked
-// PR, so no issue can accrue a second open PR that would silently shadow the
-// first. A deliberate replacement records its intent via `--allow-replacement-pr
-// <prior>` (which matches the detected open linked-PR number). Issue-less
-// lightweight PRs carry no closing keyword and are exempt. When the check
-// cannot run because `--repo` is absent or the GitHub API is unavailable, the
-// guard FAILS CLOSED on ambiguity rather than silently risking a duplicate.
+// FACADE-LINKED-PR-SINGLE-ARTIFACT: refuse opening a PR whose closing
+// keyword/`--issue` names an issue with an already-open same-repo linked PR
+// (no issue may accrue a second, shadowing PR). `--allow-replacement-pr
+// <prior>` records a deliberate replacement (must match the detected open
+// linked-PR number). Issue-less lightweight PRs carry no closing keyword and
+// are exempt. FAILS CLOSED on ambiguity (missing `--repo` or GitHub API
+// unavailable) rather than silently risking a duplicate.
 //
-// Return value: `{ refusal: string | null, replaced?: number }`. `refusal` is
-// a non-null reason string to refuse with (null = allow), `replaced` records the
-// prior PR number when an explicit replacement override was honored.
+// Return value: `{ refusal: string | null, replaced?: number }` — `refusal`
+// non-null refuses with that reason (null = allow); `replaced` records the
+// prior PR number when a replacement override was honored.
 export async function resolveLinkedPrGuard({ repo, issue, allowReplacementPr, runtime = {} }) {
-  // #1629: treat an absent OR empty/whitespace repo slug as missing — an
-  // empty `--repo=`/`--repo ""` would otherwise reach the network probe with
-  // an invalid value and be misreported as "API unavailable" instead of the
-  // honest fail-closed ambiguity refusal (copilot review finding).
+  // Treat an absent OR empty/whitespace repo slug as missing — an empty
+  // `--repo=`/`--repo ""` would otherwise reach the network probe and be
+  // misreported as "API unavailable" instead of the honest fail-closed
+  // ambiguity refusal.
   if (repo === null || (typeof repo === "string" && repo.trim() === "")) {
     return { refusal: `FACADE-LINKED-PR-SINGLE-ARTIFACT: cannot verify whether issue #${issue} already has an open linked PR because --repo owner/name was not provided — refusing on ambiguity (fail closed). Pass --repo owner/name to enable the same-repo duplicate-linked-PR check.` };
   }
@@ -258,7 +253,7 @@ export function spawnCreatePr(ghArgs, { ghCommand = "gh", env = process.env } = 
   });
 }
 export async function main(argv = process.argv.slice(2), runtime = {}) {
-  // --help/-h short-circuits BEFORE wrapper-owned validation (#1626 Copilot
+  // --help/-h short-circuits BEFORE wrapper-owned validation (Copilot
   // finding): otherwise `--help --issue` (or a valueless `--issue`) would throw
   // an --issue validation error before help is honored.
   if (argv.includes("--help") || argv.includes("-h")) {
@@ -269,7 +264,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   const lastLightweightToken = argv.filter((token) => LIGHTWEIGHT_FLAG_PATTERN.test(token)).at(-1) ?? null;
   const lightweight = lastLightweightToken === "--lightweight" ||
     (typeof lastLightweightToken === "string" && TRUE_FLAG_VALUE_PATTERN.test(lastLightweightToken.slice("--lightweight=".length)));
-  // #1626: --issue <n> declares the tracker link this PR closes. Consumed by
+  // --issue <n> declares the tracker link this PR closes. Consumed by
   // the wrapper (never forwarded to gh) and makes the closing reference
   // (`Closes #n` / `Fixes #n`) a MUST — missing or mismatched is refused.
   const issuePresent = argv.some((token) => ISSUE_FLAG_PATTERN.test(token));
@@ -279,11 +274,11 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     // A present-but-valueless --issue (bare trailing token, or `--issue=`)
     // MUST refuse rather than silently skip enforcement — silently dropping
     // the MUST on a malformed invocation is the exact gap this PR closes.
-    // #1645: route through the shared parseIssueNumber primitive so the
+    // Route through the shared parseIssueNumber primitive so the
     // positive-integer rule lives in one place (@dev-loops/core/cli/primitives).
     issue = parseIssueNumber(issueRaw, parseError);
   }
-  // #1629: --allow-replacement-pr <prior> records a deliberate replacement of
+  // --allow-replacement-pr <prior> records a deliberate replacement of
   // an existing open linked PR (must match the detected prior PR number).
   // A present-but-valueless flag (bare trailing token, or `--allow-replacement-pr=`)
   // MUST refuse rather than silently skip the override — mirroring the
@@ -328,7 +323,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     return 0;
   }
   const body = await resolveBody(forwardedArgv);
-  // #1626: with --issue <n> the closing reference is a MUST. A warning is
+  // With --issue <n> the closing reference is a MUST. A warning is
   // invisible under --jq (which the repo's token-discipline contract
   // mandates), so a missing or mismatched reference is refused before gh is
   // invoked. Without --issue the caller has not declared a tracker link, so
@@ -351,7 +346,7 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   // template) and could carry a closing keyword this wrapper never saw, so it
   // fails toward not enqueuing and reports body-not-provided instead.
   const issueLess = lightweight && body !== null && !detectClosingKeyword(body);
-  // #1629: FACADE-LINKED-PR-SINGLE-ARTIFACT — refuse to open a second PR
+  // FACADE-LINKED-PR-SINGLE-ARTIFACT — refuse to open a second PR
   // against an issue that already has an open same-repo linked PR (the closing
   // keyword in the body names the tracker issue). Issue-less lightweight PRs
   // carry no closing keyword and are exempt. This is the first network call in
