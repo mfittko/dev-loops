@@ -16,7 +16,8 @@ const scriptPath = path.resolve("scripts/loop/detect-copilot-loop-state.mjs");
 
 // Config-hermeticity (issue #2055): resolve the Copilot round cap from a fixture
 // repoRoot that mirrors the real .devloops with maxCopilotRounds pinned to 2,
-// instead of the ambient .devloops (the slim line sets it to 1). Assertions are
+// instead of the ambient .devloops (the repo pins maxCopilotRounds to 2 for
+// test isolation). Assertions are
 // unchanged; the suites own their cap instead of inheriting the shipped one.
 // ponytail: one small tmp dir per test run, no teardown hook here — the OS reaps
 // os.tmpdir(); add cleanup if this helper ever grows a lifecycle.

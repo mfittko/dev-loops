@@ -19,7 +19,8 @@ const scriptPath = path.resolve("scripts/loop/detect-pr-gate-coordination-state.
 
 // Config-hermeticity (issue #2055): resolve the Copilot round cap from a fixture
 // repoRoot mirroring the real .devloops with maxCopilotRounds pinned to 2, not
-// the ambient .devloops (the slim line sets it to 1). Assertions are unchanged.
+// the ambient .devloops (the repo pins maxCopilotRounds to 2 for test
+// isolation). Assertions are unchanged.
 let capFixtureRepoRoot = null;
 beforeAll(async () => {
   capFixtureRepoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-cap-fixture-"));

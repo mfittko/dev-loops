@@ -15,7 +15,8 @@ const GH_ENTRIES = Symbol("request-copilot-review gh entries");
 
 // Config-hermeticity (issue #2055): these tests assert cap=2 round behavior.
 // Resolve the round cap from a fixture repoRoot pinning refinement.maxCopilotRounds: 2
-// instead of the ambient .devloops (the slim line sets it to 1). Assertions are
+// instead of the ambient .devloops (the repo pins maxCopilotRounds to 2 for
+// test isolation). Assertions are
 // unchanged; the suite simply owns its cap instead of inheriting the shipped one.
 let capFixtureRepoRoot = null;
 beforeAll(async () => {

@@ -18,7 +18,8 @@ import { runHandoff } from "../../scripts/loop/copilot-pr-handoff.mjs";
 // Config-hermeticity (issue #2055): the integration tests that exercise the real
 // runHandoff resolve the Copilot round cap from a fixture repoRoot mirroring the
 // real .devloops with maxCopilotRounds pinned to 2, not the ambient .devloops
-// (the slim line sets it to 1). Assertions are unchanged. runWatchCycle does not
+// (the repo pins maxCopilotRounds to 2 for test isolation). Assertions are
+// unchanged. runWatchCycle does not
 // forward a repoRoot to runHandoff, so inject it through a runHandoffImpl wrapper.
 let capFixtureRepoRoot = null;
 beforeAll(async () => {
