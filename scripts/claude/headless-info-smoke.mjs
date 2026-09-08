@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Headless read-only dev-loop info smoke (#775).
+ * Headless read-only dev-loop info smoke.
  *
  * Exercises a read-only dev-loop info path non-interactively (no LLM, no interactive session,
  * no `@earendil-works/pi-*`), so CI / the Docker image can verify the headless info surface.

@@ -40,7 +40,7 @@ const CONVENTIONAL_SUBJECT_RE = /^([a-z]+)(?:\([^()\n]+\))?!?:\s+\S/u;
 /**
  * Parse the conventional-commit type from a commit subject line.
  * Returns null for non-conventional subjects (same type vocabulary as the
- * commit-msg guard, issue #1864: reuse the existing detection, no new heuristic;
+ * commit-msg guard, reusing its existing detection rather than a new heuristic;
  * the subject shape here is looser than the guard's — scope-less subjects and
  * a breaking-change `!` suffix are accepted).
  *

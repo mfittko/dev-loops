@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Scaffold a STARTABLE spike findings artifact from an inline question (#988 P2).
+// Scaffold a STARTABLE spike findings artifact from an inline question.
 //
 // `/start-spike <question>` needs a findings artifact that passes
 // `validateSpikeExplorationSections` (non-empty Question/Approach/Findings) so
@@ -8,7 +8,7 @@
 // Recommendation is left for the spike to fill in (the exit marker), matching
 // the spike-mode contract — so this scaffolds an in-progress spike, not a
 // ready-for-exit one. No new spike behavior; the intake/gate/exit machinery is
-// the shipped #964/#965/#966 surface.
+// the existing shipped surface.
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";

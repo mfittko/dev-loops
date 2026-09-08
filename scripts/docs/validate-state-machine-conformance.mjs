@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * validate-state-machine-conformance.mjs — L2/L3 state-machine conformance +
- * invariant harness (issue #1148).
+ * invariant harness.
  *
  * L2 (doc <-> code conformance): for a registered machine, every transition the
  * doc's structured transition table declares must have a matching, executable
@@ -22,10 +22,10 @@
  * "no fail-closed (blocked) observation that still permits a gate-progressing
  * action" — the concrete analogs, for this machine, of the generic "no ->merged
  * without both gates clean" / "fail-closed states never dispatch a Backlog
- * pull" invariants named in issue #1148.
+ * pull" invariants.
  *
  * ---------------------------------------------------------------------------
- * Registration path (DoD3): adding a second machine requires ONLY calling
+ * Registration path: adding a second machine requires ONLY calling
  * `registerMachine(machine)` with:
  *   {
  *     name,                 // stable machine id, e.g. "pr-gate-coordination"
@@ -283,7 +283,7 @@ export function runMachineConformance(machine) {
 }
 
 // ---------------------------------------------------------------------------
-// Reference machine (issue #1148): pr-gate-coordination.
+// Reference machine: pr-gate-coordination.
 //
 // Doc side: skills/docs/pr-lifecycle-contract.md's "## Required transitions"
 // bullets, parsed at load time via parseRequiredTransitions so a doc edit is
@@ -298,7 +298,7 @@ export function runMachineConformance(machine) {
 // PR_CHECKPOINT / PR_CHECKPOINT_ACTION but no state-to-state table in the
 // doc's vocabulary (a gate boundary is coarser than a lifecycle state, and
 // several lifecycle transitions belong to the copilot inner-loop state graph,
-// out of scope per #1148/#1156/#1157). Each doc transition below is checked by
+// out of scope for this reference machine). Each doc transition below is checked by
 // actually calling the exported `evaluatePrGateCoordination` with a fixture
 // standing in for the "from" state and asserting the returned action/boundary
 // is consistent with the "to" state — a real characterization of the code,
@@ -316,9 +316,6 @@ const PR_LIFECYCLE_ABSTRACT_ROWS = new Map([
   ["`merge_conflict_resolution`->normal lifecycle re-entry state", [["merge_conflict_resolution", "waiting_for_copilot_review"]]],
 ]);
 
-// Issue #1193 added the doc's `final_gate_remediation` -> `final_local_preapproval_gate`
-// bullet (mirroring the draft pair's `draft_local_remediation` -> `draft_local_review_gate`
-// re-entry bullet), retiring the implied-edge allowlist that used to stand in for it here.
 const PR_LIFECYCLE_DOC_TRANSITIONS = parseRequiredTransitions(
   readFileSync(path.join(REPO_ROOT, "skills", "docs", "pr-lifecycle-contract.md"), "utf8"),
   { abstractRows: PR_LIFECYCLE_ABSTRACT_ROWS },
@@ -423,23 +420,14 @@ verified("waiting_for_copilot_review->merge_conflict_resolution", () => {
 // waiting_for_copilot_review -> final_local_preapproval_gate: the request/re-review cycle has settled
 // cleanly with no unresolved feedback and no further Copilot pass needed.
 //
-// Fixed by #1190 (previously a tracked known_gap; issue #1148 / epic #1104 comment thread): gate
-// ENTRY used to trust the caller-supplied `sameHeadCleanConverged` flag as-is, with no independent
-// signal to catch an unsettled/unreviewed current head — the only fail-closed guard against that
-// lived downstream, at *verdict-post* time (`upsert-checkpoint-verdict.mjs`'s unsettled-review
-// refusal). `evaluatePrGateCoordination` now takes an independent `copilotReviewRequestStatus`
-// signal (not derived from `sameHeadCleanConverged`) and refuses `RUN_PRE_APPROVAL_GATE` outright
-// whenever a Copilot review request is still outstanding on the current head — asserted at gate
-// *entry*, mirroring the verdict-post predicate instead of only duplicating it after the fact.
-//
-// #1588: the `requested` (unsettled) case below pins the #1190 guard's refusal — it stays. The
-// `none` (settled) case pins the clean-current-head-review -> pre_approval_gate routing. The
-// detector-level reconciliation (`resolveCopilotReviewRequestStatus` in
-// `scripts/loop/_copilot-review-request-status.mjs`) is what produces the settled `none` for the
-// #1584 trap state (lingering `requested` status whose request predates the latest same-head
-// submitted review). Before #1588, `detect-pr-gate-coordination-state.mjs` mapped `requested`
-// unconditionally and the guard dead-ended the loop into `stop` even though all pre-approval
-// preconditions were met.
+// Gate ENTRY requires an independent `copilotReviewRequestStatus` signal (not derived from
+// `sameHeadCleanConverged`) and refuses `RUN_PRE_APPROVAL_GATE` outright whenever a Copilot
+// review request is still outstanding on the current head — asserted at gate entry, not only
+// downstream at verdict-post time. The `requested` (unsettled) case below pins that refusal;
+// the `none` (settled) case pins the clean-current-head-review -> pre_approval_gate routing.
+// The detector-level reconciliation (`resolveCopilotReviewRequestStatus` in
+// `scripts/loop/_copilot-review-request-status.mjs`) is what produces the settled `none` for a
+// lingering `requested` status whose request predates the latest same-head submitted review.
 verified("waiting_for_copilot_review->final_local_preapproval_gate", () => {
   // Even a caller that reports sameHeadCleanConverged: true (e.g. a stale/racy
   // interpretation) must still be refused while a Copilot review request is
@@ -490,8 +478,8 @@ verified("final_local_preapproval_gate->final_gate_remediation", () => {
 
 // final_local_preapproval_gate -> waiting_for_human_pr_approval: clean current-head pre_approval_gate
 // evidence exists (the code additionally requires clean draft_gate evidence at this boundary — a
-// stricter-than-the-bullet precondition consistent with this doc's own boundary notes and #579's
-// "no gate exemptions"; the fixture below satisfies both so it characterizes real reachable behavior).
+// stricter-than-the-bullet precondition consistent with this doc's own boundary notes and the
+// "no gate exemptions" rule; the fixture below satisfies both so it characterizes real reachable behavior).
 verified("final_local_preapproval_gate->waiting_for_human_pr_approval", () => {
   const result = run({
     prDraft: false,
@@ -549,7 +537,7 @@ verified("waiting_for_merge->terminal_slice_complete", () => {
 // copilot_feedback_remediation / copilot_reply_resolve_pending / merge_conflict_resolution's
 // re-entry: these three transitions are decided by the copilot inner-loop state graph
 // (packages/core/src/loop/copilot-loop-state.mjs TRANSITIONS), which is out of scope for this
-// reference machine per #1148/#1156/#1157 — pr-gate-coordination only reacts to whichever STATE
+// reference machine — pr-gate-coordination only reacts to whichever STATE
 // it is handed, it does not compute the STATE-to-STATE progression itself.
 for (const key of [
   "waiting_for_copilot_review->copilot_feedback_remediation",
@@ -602,7 +590,7 @@ const PR_GATE_COORDINATION_MACHINE = {
 registerMachine(PR_GATE_COORDINATION_MACHINE);
 
 // ---------------------------------------------------------------------------
-// Second machine (issue #1156): conductor-routing.
+// Second machine: conductor-routing.
 //
 // Doc side: skills/docs/conductor-routing-contract.md's "## Required transitions" bullets,
 // parsed at load time via parseRequiredTransitions. The doc bullets one abstract row
@@ -678,7 +666,7 @@ const CONDUCTOR_ROUTING_MACHINE = {
   transitionChecks: CONDUCTOR_ROUTING_TRANSITION_CHECKS,
   safetyRules: [
     {
-      // Analog of "fail-closed states never dispatch a Backlog pull" (epic #1104 / docs:
+      // Analog of "fail-closed states never dispatch a Backlog pull" (docs:
       // ROUTING-FAIL-CLOSED-RECONCILE): a fail-closed observation never carries a live handoff.
       name: "fail-closed-no-dispatch",
       check: (result) => (result.routingOutcome !== OUTER_STATE.STOP_NEEDS_HUMAN && result.routingOutcome !== OUTER_STATE.NEEDS_RECONCILE)
@@ -690,7 +678,7 @@ const CONDUCTOR_ROUTING_MACHINE = {
 registerMachine(CONDUCTOR_ROUTING_MACHINE);
 
 // ---------------------------------------------------------------------------
-// Third machine (issue #1157): copilot-loop-state.
+// Third machine: copilot-loop-state.
 //
 // Doc side: skills/docs/copilot-loop-state-graph.md's "## Required transitions" bullets,
 // parsed at load time via parseRequiredTransitions.
@@ -797,7 +785,7 @@ const COPILOT_LOOP_STATE_MACHINE = {
 registerMachine(COPILOT_LOOP_STATE_MACHINE);
 
 // ---------------------------------------------------------------------------
-// Fourth machine (issue #1157): reviewer-loop-state.
+// Fourth machine: reviewer-loop-state.
 //
 // Doc side: skills/docs/reviewer-loop-state-graph.md's "## Required transitions" bullets, with
 // three abstract rows expanded via REVIEWER_LOOP_STATE_ABSTRACT_ROWS below. The interpreter
@@ -949,7 +937,7 @@ const REVIEWER_LOOP_STATE_MACHINE = {
 registerMachine(REVIEWER_LOOP_STATE_MACHINE);
 
 // ---------------------------------------------------------------------------
-// Fifth machine (issue #1267): refinement-grill-state.
+// Fifth machine: refinement-grill-state.
 //
 // Doc side: docs/refinement-grill-state-graph.md's "## Required transitions" bullets, with
 // one abstract row expanded via REFINEMENT_GRILL_ABSTRACT_ROWS below (the fail-closed
@@ -1025,7 +1013,7 @@ const REFINEMENT_GRILL_STATE_MACHINE = {
 registerMachine(REFINEMENT_GRILL_STATE_MACHINE);
 
 // ---------------------------------------------------------------------------
-// Sixth machine (issue #1233): public-dev-loop-routing.
+// Sixth machine: public-dev-loop-routing.
 //
 // Doc side: skills/docs/public-dev-loop-contract.md's "## Required transitions" bullets,
 // parsed at load time. Like conductor-routing, the gate graph is stateless per cycle, so each

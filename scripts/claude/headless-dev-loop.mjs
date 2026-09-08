@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * Headless dev-loop entry for Claude Code (#775).
+ * Headless dev-loop entry for Claude Code.
  *
  * Runs the dev-loop non-interactively via `claude -p` (the Claude Agent SDK headless path),
- * with the repo's `.claude/settings.json` hooks (gate + read-only guard, #773) active. It mints
+ * with the repo's `.claude/settings.json` hooks (gate + read-only guard) active. It mints
  * a neutral DEVLOOPS_RUN_ID (CA2) and propagates it into the spawned `claude` env so the headless
  * session is recognized as the dev-loop subagent context by the write-guard.
  *
@@ -124,14 +124,14 @@ async function main(argv) {
     );
     return 127;
   }
-  // #1706: the spawned run's process has now terminated (completed, killed,
+  // The spawned run's process has now terminated (completed, killed,
   // timed out, or crashed) — deterministically release every coordination claim
   // this run still owns so a dead run never leaves a leaky lock. Best-effort
   // and non-fatal; the driver's exit status is never altered by a failed sweep.
   if (!opts.dryRun) {
     try {
       const sweep = await releaseRunClaimsOnExit({ runId, root: repoRoot });
-      // #1706/review: surface a failed or partially-failed exit-claim sweep on
+      // Surface a failed or partially-failed exit-claim sweep on
       // stderr so leaked claims stay diagnosable, while keeping the sweep
       // non-fatal — the driver's exit status is never altered by sweep failure.
       if (sweep?.status === "scan_failed" || (sweep?.failed?.length ?? 0) > 0) {
