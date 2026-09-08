@@ -10,6 +10,7 @@ import { findBlockingTitleMarkers } from "@dev-loops/core/loop/pr-title-markers"
 import { syncBoardStatus as realSyncBoardStatus, loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
 import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { evaluateAdrTripwire } from "../loop/check-adr-tripwire.mjs";
+import { evaluateCommentDiscipline as realEvaluateCommentDiscipline } from "../loop/check-comment-discipline.mjs";
 import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { sanitizeInline } from "./post-gate-findings.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -131,7 +132,7 @@ async function postSizeBudgetWaiverComment({ repo, pr, headSha, sizeBudget, reas
   if (result.code !== 0) throw new Error(`Failed to post size-budget waiver record: ${result.stderr.trim() || `exit code ${result.code}`}`);
 }
 
-export async function readyForReview(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild: runChildImpl = runChild, syncBoardStatus = realSyncBoardStatus, evaluatePrSizeBudget = realEvaluatePrSizeBudget, evaluateAdrTripwire: evaluateAdrTripwireFn = evaluateAdrTripwire } = {}) {
+export async function readyForReview(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild: runChildImpl = runChild, syncBoardStatus = realSyncBoardStatus, evaluatePrSizeBudget = realEvaluatePrSizeBudget, evaluateAdrTripwire: evaluateAdrTripwireFn = evaluateAdrTripwire, evaluateCommentDiscipline: evaluateCommentDisciplineFn = realEvaluateCommentDiscipline } = {}) {
   const { config } = await loadDevLoopConfig({ repoRoot });
   const draftGateConfig = resolveGateConfig(config, "draft");
   const requireCi = draftGateConfig?.requireCi !== false;
@@ -181,6 +182,18 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   });
   if (adrTripwire.outcome === "block") {
     throw new Error(`PR #${options.pr} blocked by the ADR tripwire: ${adrTripwire.reasons.join("; ")}`);
+  }
+  // Fail-closed comment-discipline guard (LOCAL-COMMENT-DISCIPLINE, #2054):
+  // added-lines-only; blocks a newly added runtime comment that narrates
+  // issue chronology or exceeds the design-essay threshold, unless the
+  // comment carries the inline `comment-discipline:allow` escape marker.
+  const commentDiscipline = await evaluateCommentDisciplineFn({
+    base: `origin/${prState.baseRefName}`,
+    head: headSha,
+    repoRoot,
+  });
+  if (commentDiscipline.outcome === "block") {
+    throw new Error(`PR #${options.pr} blocked by comment discipline: ${commentDiscipline.reasons.join("; ")}`);
   }
   if (sizeBudget.waiver.t1Valid || sizeBudget.waiver.defaultValid) {
     await postSizeBudgetWaiverComment(

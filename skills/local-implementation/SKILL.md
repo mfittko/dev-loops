@@ -124,6 +124,9 @@ Follow [Anti-patterns](../docs/anti-patterns.md) for the general tooling-interna
 
 Apply [Structural Quality](../docs/structural-quality.md) from the `deep` review angle.
 
+<!-- rule: LOCAL-COMMENT-DISCIPLINE -->
+`LOCAL-COMMENT-DISCIPLINE`: A code comment states something about the code as it now is — a current invariant, a constraint, a fail-closed or security rationale, a calibration knob, or an external-contract note. A comment MUST NOT narrate agent moves, cite issue numbers as a chronology, or restate the acceptance criteria. A single `(#NNN)` reference to the authoritative reason is allowed; a chronology chain is not. This is the comment-side recurrence guard: it protects the cleaned comment state as it is created, so autonomous loops stop refilling the backlog owned by the comment-cleanup stream (#2042). Enforced fail-closed on added runtime-source lines by `scripts/loop/check-comment-discipline.mjs` (diff-scoped, added-lines-only, never the pre-existing backlog); a genuinely load-bearing exception carries the inline `comment-discipline:allow` escape marker.
+
 ## Light mode (small changes)
 
 <!-- rule: LOCAL-LIGHT-MODE-CONFIG-SURFACE -->
