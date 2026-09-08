@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * CLI wrapper for the `postMerge.actions` runner (#1457).
+ * CLI wrapper for the `postMerge.actions` runner.
  *
  * Runs a repo's declared `postMerge.actions` (`.devloops`) sequentially, in
  * declared order, with cwd set to the resolved MAIN checkout — never the

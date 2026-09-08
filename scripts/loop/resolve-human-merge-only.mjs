@@ -3,7 +3,7 @@
  * resolve-human-merge-only
  *
  * Prints the effective `autonomy.humanMergeOnly` invariant for the repo at `cwd` as `true`/`false`
- * on stdout. Used by the Claude PreToolUse bash-gate hook to enforce STOP-HUMAN-MERGE-001 (#1622):
+ * on stdout. Used by the Claude PreToolUse bash-gate hook to enforce STOP-HUMAN-MERGE-001:
  * the hook bundle is self-contained and cannot import `@dev-loops/core`, so it defers this one
  * config resolution to this repo-root script and fails open (`false`) when the script or config
  * is unavailable. The loop-level merge safety already refuses merge under humanMergeOnly regardless

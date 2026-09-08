@@ -1,5 +1,5 @@
 /**
- * Canonical sanctioned operation → wrapper command map (issue #1081).
+ * Canonical sanctioned operation → wrapper command map.
  *
  * SINGLE SOURCE OF TRUTH for "which wrapper does a dev-loop subagent use for
  * which GitHub/loop operation". Previously this knowledge was re-derived per
@@ -49,8 +49,8 @@ export const SANCTIONED_COMMANDS = Object.freeze({
   // Lifecycle mutations a subagent MAY perform (state transitions on the PR /
   // review). Board status transitions are deliberately NOT here — they are
   // orchestratorOwned (see below): in the current batch model the orchestrator
-  // owns board moves, and a subagent's In-Progress move rides ready-for-review.mjs
-  // (#1069), so there is no standalone subagent-sanctioned board-sync op.
+  // owns board moves, and a subagent's In-Progress move rides ready-for-review.mjs,
+  // so there is no standalone subagent-sanctioned board-sync op.
   lifecycle: Object.freeze({
     "ready-for-review": "scripts/github/ready-for-review.mjs",
     "pr-create": "scripts/github/create-pr.mjs",
@@ -97,7 +97,7 @@ const PATH_GROUP_KEYS = Object.freeze(
  * so a malformed/typo'd entry is RETURNED (and then fails the contract test's
  * shape+existence assertions) rather than being silently skipped. Auto-includes
  * any future path-bearing group. This is what keeps the map from drifting off
- * disk (#1081). For a well-formed map every element is a repo-root-relative
+ * disk. For a well-formed map every element is a repo-root-relative
  * `scripts/*.mjs` string; the no-filtering contract means a malformed map can
  * yield a non-string here, which the contract test is designed to catch.
  * @returns {unknown[]} wrapper-path values (strings for a well-formed map)

@@ -21,7 +21,7 @@ export async function loadCopilotEvidence({ repo, pr, copilotInputPath }, { env 
     snapshot = await autoDetectCopilotSnapshot({ repo, pr }, { env, ghCommand });
   }
   // Resolve the interpreter refinement config so the loop-state interpretation
-  // honors gates.preApproval.requireCi:false (#1337) — outer-loop routes the
+  // honors gates.preApproval.requireCi:false — outer-loop routes the
   // conductor on this interpretation, so a CI-less repo must not be read as
   // waiting_for_ci here. Fail soft to defaults if config cannot be loaded.
   let refinementConfig;
