@@ -1,55 +1,44 @@
 /**
  * gate-fanin.mjs — pure fan-in consolidation + cap/batch planning for the
- * gate-review fork sub-loop (epic #867, Phase 3 / #878).
+ * gate-review fork sub-loop.
  *
- * IMPORTANT: this module is PURE. It performs no I/O and never spawns agents.
- * Spawning the per-angle scoped `review` subagents is an agent-orchestrated
- * skill procedure (a node script cannot spawn Claude subagents). This module
- * only consolidates the structured per-angle findings artifacts the fan-out
- * produced, decides the gate verdict, plans the parallel/sequential batching of
- * the fan-out, and maps consolidated findings into the `--findings` JSON shape
- * understood by scripts/github/write-gate-findings-log.mjs.
+ * PURE: no I/O, never spawns agents. It consolidates the per-angle findings
+ * artifacts the fan-out produced, decides the gate verdict, plans the
+ * parallel/sequential batching, and maps consolidated findings into the
+ * `--findings` JSON shape understood by
+ * scripts/github/write-gate-findings-log.mjs.
  *
  * Per-angle review artifact shape (produced by the scoped `review` agent):
  *   {
  *     angle: string,
  *     verdict: "clean" | "findings_present",
- *     headSha: string,   // reviewed head; consolidate-fanin --head-sha enforces it (GATE-EXEC-ARTIFACT-HEAD-STAMP)
+ *     headSha: string,   // reviewed head; consolidate-fanin --head-sha enforces it
  *     findings: [{ severity, file?, line?, summary, recommendation? }]
  *   }
  *
  * Severity vocabulary (owned here; consumers import SEVERITY_ORDER /
- * VALID_SEVERITIES / normalizeSeverity), aligned to the Copilot review
- * severity scale:
+ * VALID_SEVERITIES / normalizeSeverity):
  *   "high" | "medium" | "low" (defects) | "question" | "nit" (non-defects)
- * Severity is the reviewer's advisory weight only. Deferral is a DISPOSITION
- * (derived at fan-in for non-blocking findings, finalized per thread by the
- * fix cycle / gate close), never a severity — the pre-rename severity
- * spellings ("must-fix", "worth-fixing-now", "nice-to-have", "defer") are
- * accepted on read and normalized to their canonical replacement (see
- * LEGACY_SEVERITY_ALIASES / normalizeSeverity). "question" and "nit" are
- * non-defect categories: a question is answered (never deferred) and an
- * unanswered one blocks gate-close like any unresolved thread; a nit is
- * deferred immediately, with no fixer cycle.
+ * Severity is the reviewer's advisory weight. Deferral is a DISPOSITION
+ * (derived at fan-in, finalized by the fix cycle / gate close), never a
+ * severity; pre-rename spellings are accepted on read and normalized (see
+ * LEGACY_SEVERITY_ALIASES / normalizeSeverity). A question is answered (never
+ * deferred) and an unanswered one blocks gate-close; a nit defers immediately,
+ * with no fixer cycle.
  */
 
 import { scheduleParallelWaves } from "./queue-parallel.mjs";
 import { trimmedOrNull } from "./normalize.mjs";
 
 /**
- * Schedule fan-out dispatch units into bounded-concurrency waves (issue #1601).
+ * Schedule fan-out dispatch units into bounded-concurrency waves: each wave
+ * holds at most `maxConcurrent` units, dispatched wave-by-wave (await a free
+ * slot before the next) instead of fire-all-then-retry. Replaces the unbounded
+ * concurrent fan-out that 429-stormed multi-angle gate rounds (issue #1601).
  *
- * Reuses the existing wave scheduler `scheduleParallelWaves`
- * (packages/core/src/loop/queue-parallel.mjs, originally the queue-mode parallel
- * scheduler): each wave holds at most `maxConcurrent` dispatch units, and the
- * conductor dispatches wave-by-wave — awaiting a free slot (wave completion)
- * before launching the next — instead of fire-all-then-retry. This replaces
- * the unbounded concurrent fan-out that 429-stormed multi-angle gate rounds
- * (issue #1588 drive: 5–6 reviewers 429'd per round).
- *
- * Pure: same input always yields the same wave plan (deterministic order, so
- * the wave plan a reviewer's gate-context artifact records is byte-stable
- * across fresh reviewer spawns for the same head+config).
+ * Pure and deterministic: same input yields the same wave plan (stable order),
+ * so a reviewer's recorded wave plan is byte-stable across fresh spawns for the
+ * same head+config.
  *
  * @param {{ name: string, angles: string[] }[]} dispatchGroups — `resolveFanoutGroups` output
  * @param {number} [maxConcurrent] — `gates.fanout.maxConcurrent` (default 4, min 1)
@@ -63,19 +52,14 @@ export function scheduleFanoutWaves(dispatchGroups, maxConcurrent = 4) {
 }
 
 /**
- * Adaptive concurrency backoff (issue #1601; retry discipline refined by #1907):
- * halve the active batch before escalating to foreground one-at-a-time fallback.
- * A transient dispatch failure (429/5xx) is first retried on the SAME unit with
- * exponential backoff — safe because a reviewer's findings artifact is an
- * idempotent single-write at a deterministic path — and the conductor reduces
- * concurrency ONLY after that unit's retries are exhausted (~3 failed attempts),
- * recomputing the wave plan with `backoffMaxConcurrent(maxConcurrent)` and
- * retrying the reduced wave; if a single-unit wave still fails, it falls back to
- * foreground (one-at-a-time) dispatch. This "retry the unit before reducing
- * concurrency" ordering is owned by GATE-EXEC-DISPATCH-RETRY-BACKOFF in
- * skills/docs/gate-review-sub-loop-contract.md; the backoff is recorded in the
- * round's provenance. Pure; never returns 0 (a backoff from 1 stays 1 →
- * foreground fallback owns that path).
+ * Adaptive concurrency backoff: halve the active batch before escalating to
+ * foreground one-at-a-time fallback. A transient dispatch failure is first
+ * retried on the SAME unit (idempotent single-write artifact); concurrency
+ * drops ONLY after that unit's retries are exhausted. This "retry the unit
+ * before reducing concurrency" ordering is owned by
+ * GATE-EXEC-DISPATCH-RETRY-BACKOFF in
+ * skills/docs/gate-review-sub-loop-contract.md. Pure; never returns 0 (a backoff
+ * from 1 stays 1 → foreground fallback owns that path).
  * @param {number} maxConcurrent
  * @returns {number}
  */
@@ -87,43 +71,27 @@ export function backoffMaxConcurrent(maxConcurrent) {
 /**
  * Reviewer-budget preflight for a gate fan-out (issue #1507).
  *
- * Before the conductor dispatches any reviewer, it derives how many reviewers
- * the round needs (one per dispatch unit — fresh angles + re-verifications) and
- * compares against the harness's remaining reviewer budget. When the budget
- * cannot cover the dispatch, the preflight reports the shortfall BEFORE any
- * reviewer spawns, naming the shortfall; the shortfall is a recorded, resumable
- * state (completed per-angle artifacts stay valid for their head, so a later
- * session resumes the fan-out instead of restarting it). A budget shortfall
- * NEVER downgrades a required gate to `inline_single_agent` and NEVER produces a
- * clean verdict — no new gate-exemption path (#1507 AC4).
+ * Derives how many reviewers the round needs (one per dispatch unit) and
+ * compares against the harness's remaining budget. On a PROVEN shortfall it
+ * reports the shortfall BEFORE any reviewer spawns; the shortfall is a recorded,
+ * resumable state (completed per-angle artifacts stay valid, so a later session
+ * resumes rather than restarts). A shortfall NEVER downgrades a required gate to
+ * `inline_single_agent` and NEVER produces a clean verdict.
  *
- * Pure: takes the dispatch plan + available budget, returns the decision. The
- * conductor reads `artifact.fanout.preflight` (emitted by `write-gate-context`)
- * and dispatches wave-by-wave only when `dispatch === true`; on `false` it
- * records the shortfall (the artifact itself is the resumable record) and
- * stops without spawning a single reviewer. `availableReviewers` is `null` when
- * the harness does not expose a budget — no shortfall can be proven, so the
- * preflight proceeds (today's behavior); it only blocks on a PROVEN shortfall.
- *
- * The returned `verdict` and `executionMode` are ALWAYS `null`: a shortfall is
- * not a verdict. `buildPreMergeGateCheck` / `evaluateInlineFanoutMode` reject a
- * gate with no clean current-head marker and a non-`fanout_fanin` execution
- * mode, so a shortfall state fails closed at merge rather than yielding a clean
- * or inline verdict (#1507 DoD).
+ * Pure. `availableReviewers` null = harness exposes no budget → no shortfall
+ * provable → preflight proceeds; it blocks only on a proven shortfall. The
+ * returned `verdict` and `executionMode` are ALWAYS null: a shortfall is not a
+ * verdict, and it fails closed at merge rather than yielding a clean/inline one.
  *
  * @param {{ name: string, angles: string[] }[]} dispatchGroups — `resolveFanoutGroups` output (fresh angles + re-verifications)
  * @param {number|null} [availableReviewers] — harness remaining reviewer budget; null/non-finite = unknown/unexposed
- * @param {{ completedAngles?: Iterable<string>, carriedAngles?: Iterable<string> }} [options] — `completedAngles`:
- *   angle names that already have a clean per-angle findings artifact stamped for THIS head.
- *   `carriedAngles`: angle names the fail-closed carry-forward seam (resolve-angle-carry-forward.mjs)
- *   has proven carried from a prior clean head, so no reviewer re-runs them this round either — that
- *   carry-forward resolution runs AFTER this preflight, so a head-bump re-gate must feed its result
- *   back in to avoid over-counting. A dispatch unit (group) whose angles are ALL complete-or-carried
- *   is excluded from the required count and from `pendingGroups`, so a later session resumes the
- *   fan-out instead of restarting it: it re-runs the preflight and dispatches only the groups not
- *   already resolved at this head. Membership is matched trim+lowercase (mirrors
- *   consolidate-fanin.mjs's own carried-key normalization) so a config/plan case difference in an
- *   angle name still excludes the right group instead of silently spending a reviewer on it.
+ * @param {{ completedAngles?: Iterable<string>, carriedAngles?: Iterable<string> }} [options] — angle names
+ *   already resolved for THIS head: `completedAngles` have a clean per-angle artifact stamped for it,
+ *   `carriedAngles` are proven carried forward from a prior clean head (that carry-forward runs AFTER this
+ *   preflight, so a head-bump re-gate must feed its result back in). A group whose angles are ALL
+ *   complete-or-carried is excluded from the required count and `pendingGroups`, so a later session
+ *   dispatches only unresolved groups. Membership is matched trim+lowercase (mirrors consolidate-fanin.mjs's
+ *   carried-key normalization) so a case difference still excludes the right group.
  * @returns {{ ok: boolean, dispatch: boolean, requiredReviewers: number, availableReviewers: number|null, shortfall: number|null, reason: string, verdict: null, executionMode: null, pendingGroups: { name: string, angles: string[] }[], skippedGroups: { name: string, angles: string[] }[], completedAngles: string[], carriedAngles: string[] }}
  */
 export function reviewerBudgetPreflight(dispatchGroups, availableReviewers, { completedAngles, carriedAngles } = {}) {
@@ -132,17 +100,13 @@ export function reviewerBudgetPreflight(dispatchGroups, availableReviewers, { co
     new Set(Array.isArray(iterable) ? iterable : iterable == null ? [] : [...iterable]);
   const completedSet = toSet(completedAngles);
   const carriedSet = toSet(carriedAngles);
-  // Same-head resume + head-bump carry-forward: one reviewer per dispatch unit
-  // (a group of N angles is one reviewer's scoped dispatch — see
-  // resolveFanoutGroups / countFreshDispatchUnits), but a group already
-  // RESOLVED for this round — every one of its angles either has a clean
-  // artifact stamped for this head OR is proven carried forward from a prior
-  // clean head — needs no reviewer and is excluded from the required count
-  // and the pending plan. The conductor dispatches only `pendingGroups`.
-  // Membership is matched trim+lowercase (`normalizeAngleKey`) — the same
-  // normalization consolidate-fanin.mjs applies to its own carried keys — so a
-  // config/plan case difference in an angle name still excludes the group
-  // instead of leaving it (and its exempted sibling) silently disagreeing.
+  // A group already RESOLVED for this round — every angle either clean-stamped
+  // for this head or proven carried forward — needs no reviewer and drops from
+  // the required count and the pending plan (the conductor dispatches only
+  // `pendingGroups`). Membership is matched trim+lowercase (`normalizeAngleKey`),
+  // the same normalization consolidate-fanin.mjs applies to its carried keys, so
+  // a case difference still excludes the group instead of leaving it and its
+  // exempted sibling silently disagreeing.
   const normalizeAngleKey = (a) => String(a).trim().toLowerCase();
   const completedKeys = new Set([...completedSet].map(normalizeAngleKey));
   const carriedKeys = new Set([...carriedSet].map(normalizeAngleKey));
@@ -165,8 +129,7 @@ export function reviewerBudgetPreflight(dispatchGroups, availableReviewers, { co
   if (typeof availableReviewers !== "number" || !Number.isFinite(availableReviewers)) {
     return { ok: true, dispatch: true, requiredReviewers, availableReviewers: null, shortfall: null, reason: "budget_unknown", verdict, executionMode, ...resume };
   }
-  // A negative/over-spent budget clamps to 0 (budget exhausted → shortfall for
-  // any non-empty round); a fractional budget truncates to the integer floor.
+  // A negative/over-spent budget clamps to 0; a fractional budget truncates.
   const available = Math.max(0, Math.trunc(availableReviewers));
   if (requiredReviewers === 0) {
     return { ok: true, dispatch: true, requiredReviewers: 0, availableReviewers: available, shortfall: null, reason: "no_reviewers_needed", verdict, executionMode, ...resume };
@@ -187,55 +150,35 @@ export function reviewerBudgetPreflight(dispatchGroups, availableReviewers, { co
   };
 }
 
-// Exported so other tools (e.g. scripts/loop/consolidate-fanin.mjs,
-// scripts/github/upsert-checkpoint-verdict.mjs) sort/rank/validate against
-// this single ordered copy of the severity vocabulary instead of each
-// hand-copying its own list (and its own load-time drift guard) — ORDER is
-// part of the contract here, not just membership, so a consumer that only
-// checked membership against a Set could accept a silently reordered copy.
-// Ranked by gate-close urgency, not just defect-severity: "question" sits
-// right after "high" because BOTH force gate-close to stay blocked (a high
-// finding via the fix loop, a question via never being auto-deferred) — it
-// outranks "medium"/"low", which both eventually defer. "nit" trails last:
-// it defers immediately, with no fixer cycle at all.
+// Exported as the single ordered copy of the severity vocabulary so consumers
+// (consolidate-fanin.mjs, upsert-checkpoint-verdict.mjs) rank against it rather
+// than each re-listing — ORDER is part of the contract, not just membership.
+// Ranked by gate-close urgency: "question" sits right after "high" because BOTH
+// force gate-close to stay blocked; "medium"/"low" eventually defer. "nit"
+// trails last: it defers immediately, with no fixer cycle.
 export const SEVERITY_ORDER = Object.freeze(["high", "question", "medium", "low", "nit"]);
 
-// The non-defect subset of SEVERITY_ORDER: a "question" is answered (never
-// fixed or deferred like a defect — see deriveDisposition), and a "nit"
-// always defers regardless of any gate's blockCleanOnFindingSeverities
-// config (see isDefaultDeferrableSeverity) — neither belongs in a
-// defect-only blocking vocabulary. Exported as the single source for that
-// partition so a consumer (e.g. config.mjs's BLOCKING_SEVERITY_SPELLINGS
-// vocabulary contract test) derives "defect severities" as
-// SEVERITY_ORDER minus this set, rather than re-hand-listing "question"/"nit".
-// Object.freeze on a Set only locks its OWN properties, not the add/delete
-// methods that mutate its internal collection — freezing is still applied
-// here for consistency with SEVERITY_ORDER and this file's other frozen
-// exports (GATE_CONFIG_KEY, LEGACY_SEVERITY_ALIASES, etc.), and it does stop
-// a caller from attaching a stray own property to the Set object itself.
+// The non-defect subset of SEVERITY_ORDER: a "question" is answered (see
+// deriveDisposition) and a "nit" always defers regardless of any gate's
+// blockCleanOnFindingSeverities (see isDefaultDeferrableSeverity) — neither
+// belongs in a defect-only blocking vocabulary. The single source for that
+// partition, so a consumer derives "defect severities" as SEVERITY_ORDER minus
+// this set. Object.freeze on a Set locks only its OWN properties, not the
+// add/delete that mutate its collection; it is applied for consistency with the
+// other frozen exports and does stop a stray own property on the Set object.
 export const NON_DEFECT_SEVERITIES = Object.freeze(new Set(["question", "nit"]));
 
 // Marker gate name → gates.<key> config key. Owned here so every caller of
 // resolveFanoutGroups maps the same way; passing the marker name verbatim
 // resolves no groups and silently downgrades pairing enforcement.
 export const GATE_CONFIG_KEY = Object.freeze({ draft_gate: "draft", pre_approval_gate: "preApproval" });
-// Object.freeze on a Set only locks its OWN properties, not the add/delete
-// methods that mutate its internal collection — freezing is still applied
-// here for consistency with SEVERITY_ORDER and this file's other frozen
-// exports (GATE_CONFIG_KEY, LEGACY_SEVERITY_ALIASES, etc.), and it does stop
-// a caller from attaching a stray own property to the Set object itself.
 export const VALID_SEVERITIES = Object.freeze(new Set(SEVERITY_ORDER));
 
 // Pre-rename spellings. Old ledgers, markers, and configs still carry them;
-// every read boundary normalizes through this map. Every SANCTIONED producer
-// (consolidateFanin, write-gate-findings-log.mjs, post-gate-findings.mjs)
-// normalizes before a severity reaches a marker/ledger, so a freshly posted
-// marker carries only a canonical spelling in practice — but this map is a
-// read-side normalizer, not a write-side enforcement boundary:
-// buildFindingMarker (_gate-finding-surface.mjs) is a thin text builder that
-// emits whatever severity string it is given, verbatim (a legacy-spelled
-// marker built directly, e.g. for round-trip test fixtures, still parses
-// correctly via normalizeSeverity on read).
+// every read boundary normalizes through this map. This is a read-side
+// normalizer, not a write-side enforcement boundary: buildFindingMarker emits
+// whatever severity string it is given verbatim, so a legacy-spelled marker
+// built directly still parses correctly via normalizeSeverity on read.
 export const LEGACY_SEVERITY_ALIASES = Object.freeze({
   "must-fix": "high",
   "worth-fixing-now": "medium",
@@ -245,19 +188,12 @@ export const LEGACY_SEVERITY_ALIASES = Object.freeze({
 
 /**
  * Map a legacy severity spelling to its canonical name; unknown values pass
- * through trimmed (the caller's validation still rejects them) — a
- * non-string passes through unchanged. Trimming BEFORE the alias lookup
- * (rather than requiring every caller to do it first) is what keeps every
- * call site of this function agreeing on the same value for the same
- * incidentally-whitespace-varied input: consolidate-fanin.mjs's own floor
- * validation trims before calling this, while gate-fanin's `consolidateFanin`
- * does not — two call sites trimming inconsistently is exactly how an
- * untrimmed "high " passed one gate's validation and then failed the
- * other's. Deliberately case-SENSITIVE (no lowercasing): every sanctioned
- * writer (slugForMarker, config authoring, this module's own producers)
- * already emits lowercase, so a forged/hand-edited mixed-case value (e.g.
- * "NIT") must fail VALID_SEVERITIES validation and dangle fail-closed rather
- * than being silently coerced into a real severity that then auto-defers.
+ * through trimmed (the caller's validation still rejects them), a non-string
+ * unchanged. Trims BEFORE the alias lookup so every call site agrees on the
+ * same value for a whitespace-varied input. Deliberately case-SENSITIVE: every
+ * sanctioned writer emits lowercase, so a forged mixed-case value (e.g. "NIT")
+ * must fail VALID_SEVERITIES validation and dangle fail-closed rather than be
+ * silently coerced into a real severity that then auto-defers.
  * @param {unknown} severity
  * @returns {unknown}
  */
@@ -269,13 +205,9 @@ export function normalizeSeverity(severity) {
 
 /**
  * Map a (possibly legacy-spelled/untrimmed) severity to its SEVERITY_ORDER
- * index — the ONE rank rule every sort/ordering consumer
- * (consolidate-fanin.mjs's `angleWorstSeverityRank`,
- * upsert-checkpoint-verdict.mjs's severity-grouped rendering) shares, so the
- * two can never drift on how an unknown severity ranks. An unrecognized
- * severity (after normalization) ranks LAST (`SEVERITY_ORDER.length`, never
- * -1) so it always sorts after every known severity instead of floating
- * above "high" the way a raw, unmapped `indexOf` would.
+ * index — the one rank rule every sort/ordering consumer shares. An
+ * unrecognized severity ranks LAST (`SEVERITY_ORDER.length`, never -1) so it
+ * sorts after every known severity instead of floating above "high".
  * @param {unknown} severity
  * @returns {number}
  */
@@ -285,13 +217,9 @@ export function severityRank(severity) {
 }
 
 /**
- * A zero-initialized severity→count map, one key per SEVERITY_ORDER entry, in
- * SEVERITY_ORDER's order. The shared starting point every severity tally in
- * this codebase (consolidateFanin's own `bySeverity`,
- * reconcile-draft-gate.mjs's no-findings placeholder) used
- * to hand-roll separately via `Object.fromEntries(SEVERITY_ORDER.map((s) =>
- * [s, 0]))` — one copy here means a severity added to SEVERITY_ORDER is
- * zero-initialized everywhere at once.
+ * A zero-initialized severity→count map, one key per SEVERITY_ORDER entry in
+ * order. Single source so a severity added to SEVERITY_ORDER is zero-initialized
+ * everywhere at once.
  * @returns {Record<string, number>}
  */
 export function zeroSeverityCounts() {
@@ -299,19 +227,11 @@ export function zeroSeverityCounts() {
 }
 
 /**
- * Tally `findings` by (normalized) severity into a {@link zeroSeverityCounts}
- * map. Each finding's severity is normalized through `normalizeSeverity`
- * before counting, so a legacy spelling still lands on its canonical key. A
- * finding whose normalized severity is not a recognized SEVERITY_ORDER member
- * is silently excluded from the tally rather than inflating an unknown key —
- * every routed call site here counts already-validated findings in practice
- * (consolidateFanin validates every result's severity before this runs), so
- * this guard is a defensive floor against future drift, not an escape hatch
- * for accepting unvalidated severities. `findings` and its entries are NOT nullish-tolerant:
- * a nullish `findings` argument throws (not iterable), and a nullish
- * individual entry throws reading `.severity` — no routed caller passes
- * either shape, so a caller that does gets a loud failure instead of a
- * silently wrong all-zero tally.
+ * Tally `findings` by normalized severity into a {@link zeroSeverityCounts}
+ * map. A finding whose normalized severity is not a SEVERITY_ORDER member is
+ * excluded (defensive floor; consolidateFanin validates before this runs). NOT
+ * nullish-tolerant: a nullish `findings` or a nullish entry throws — fail-loud
+ * rather than a silently wrong all-zero tally.
  * @param {Iterable<{severity: unknown}>} findings
  * @returns {Record<string, number>}
  */
@@ -326,9 +246,8 @@ export function tallySeverities(findings) {
 
 /**
  * Merge a severity→count map's legacy-spelled keys into their canonical keys
- * (summing counts) so both the CLI parser and direct programmatic callers of
- * the verdict poster share ONE merge rule. Values pass through unvalidated —
- * the caller keeps its own integer/shape checks.
+ * (summing) so CLI and programmatic callers share one merge rule. Values pass
+ * through unvalidated.
  * @param {Record<string, number>} counts
  * @returns {Record<string, number>} null-prototype object with canonical keys
  */
@@ -342,18 +261,12 @@ export function normalizeSeverityCounts(counts) {
 }
 
 /**
- * Resolve a finding's effective file path from EITHER shape the shared floor
- * accepts: `file` (singular string, hand-authored / future-producer ledgers) or
- * `files[0]` (the array shape consolidate-fanin / write-gate-findings-log emit).
- * The ONE resolver `hasLocatableShape` and every downstream consumer keys on,
- * so a consumer reading `finding.files[0]` directly can never crash on a
- * singular-`file` finding that already passed the floor. The value is TRIMMED
- * and a whitespace-only `file` is treated as ABSENT (it falls back to
- * `files[0]`, not shadows it), so the resolved path both matches the trimmed
- * commentable-line-set keys and is a valid GitHub review-comment `path` even
- * for an untrimmed hand-authored ledger entry (`readGateFindingsLedger` trims
- * `files[]` but not a singular `file`). Returns `undefined` when neither shape
- * names a non-blank string path.
+ * Resolve a finding's file path from either shape the floor accepts: `file`
+ * (singular string) or `files[0]` (array shape). The value is TRIMMED and a
+ * whitespace-only `file` is treated as ABSENT (falls back to `files[0]`), so the
+ * path matches the trimmed commentable-line keys and is a valid GitHub
+ * review-comment `path`. Returns `undefined` when neither shape names a
+ * non-blank string path.
  * @param {{ file?: unknown, files?: unknown }} finding
  * @returns {string|undefined}
  */
@@ -366,17 +279,11 @@ export function resolveFindingFile(finding) {
 }
 
 /**
- * A finding is LOCATABLE-SHAPED when it names a real file (via `file` or
- * `files[0]`) and a positive-integer `line` — the ONE shared shape check
- * every producer/consumer of the locatable/non-locatable distinction keys
- * on, whether the finding is the raw per-angle `{file, line}` shape
- * (consolidateFanin's own input) or the ledger's `{files, line}` shape
- * (write-gate-findings-log.mjs / post-gate-findings.mjs). This is NECESSARY
- * but not SUFFICIENT for a thread-locatable finding: `isLocatableFinding`
- * (scripts/github/_gate-finding-surface.mjs) additionally requires the
- * file:line to fall inside the reviewed diff, which only that caller
- * (holding the diff's commentable-line set) can check — this function is
- * its shared shape floor, not a replacement for it.
+ * A finding is LOCATABLE-SHAPED when it names a real file (via
+ * {@link resolveFindingFile}) and a positive-integer `line`. NECESSARY but not
+ * SUFFICIENT for a thread-locatable finding: `isLocatableFinding`
+ * (scripts/github/_gate-finding-surface.mjs) additionally requires the file:line
+ * to fall inside the reviewed diff, which only that caller can check.
  * @param {{ file?: unknown, files?: unknown, line?: unknown }} finding
  * @returns {boolean}
  */
@@ -387,20 +294,13 @@ export function hasLocatableShape(finding) {
 }
 
 /**
- * Derive the ledger disposition for a finding at `severity` — the ONE rule
- * every producer (consolidateFanin, write-gate-findings-log.mjs,
- * post-gate-findings.mjs) shares, so the three can never drift on what a
- * severity/locatability combination resolves to. A LOCATABLE `question` is
- * answered, never fixed or deferred — it gets its own disposition
- * ("needs-answer") regardless of `isBlocking` (a question can never be
- * blocking in practice — blockCleanOnFindingSeverities is restricted to
- * defect severities — but this stays severity-first rather than
- * isBlocking-first so that invariant is enforced here too, not just at the
- * config boundary). A NON-LOCATABLE question has no resolvable thread to
- * answer through — it is body-filed and deferred by construction, exactly
- * like every other non-`high` body-filed finding
- * (GATE-EXEC-DEFERRAL-RECORD). Every other severity ignores `locatable`
- * entirely: `isBlocking` alone decides accepted-for-fix vs deferred.
+ * Derive the ledger disposition for a finding at `severity` (already
+ * normalized) — the one rule every producer shares. A LOCATABLE `question` is
+ * answered ("needs-answer") regardless of `isBlocking`; severity-first so that
+ * invariant holds here, not just at the config boundary. A NON-LOCATABLE
+ * question is body-filed and deferred, like every other non-`high` body-filed
+ * finding (GATE-EXEC-DEFERRAL-RECORD). Every other severity ignores `locatable`:
+ * `isBlocking` alone decides accepted-for-fix vs deferred.
  * @param {string} severity — already normalized
  * @param {{ isBlocking?: boolean, locatable?: boolean }} [options]
  * @returns {"accepted-for-fix"|"deferred"|"needs-answer"}
@@ -411,19 +311,13 @@ export function deriveDisposition(severity, { isBlocking = false, locatable = fa
 }
 
 /**
- * Does `severity` (already normalized) have a default disposition that
- * `deriveDisposition` can resolve WITHOUT `isBlocking` context? "low" and
- * "nit" always defer regardless of any gate's `blockCleanOnFindingSeverities`
- * config, and "question" resolves off `locatable` alone — so a caller with no
- * `isBlocking` context (write-gate-findings-log.mjs / post-gate-findings.mjs's
- * CLI validators, which accept a bare `--findings` array with no config in
- * scope) can still fill in a default disposition for these three, and only
- * these three, when the caller left it unset. "high" and "medium" are
- * excluded: whether either blocks a clean verdict depends on config, which
- * only a caller holding `blockCleanOnFindingSeverities` can know — guessing
- * "deferred" for one of those here would be wrong for a repo that configures
- * it as blocking. Shared by both CLI validators (see `deriveDisposition`) so
- * the two can never restate this guard out of sync.
+ * Does `severity` (already normalized) have a default disposition
+ * `deriveDisposition` can resolve WITHOUT `isBlocking` context? "low" and "nit"
+ * always defer, and "question" resolves off `locatable` alone — so a CLI
+ * validator with no config in scope can fill a default for these three only.
+ * "high" and "medium" are excluded: whether either blocks a clean verdict
+ * depends on config, so guessing "deferred" here would be wrong for a repo that
+ * configures it as blocking.
  * @param {string} severity — already normalized
  * @returns {boolean}
  */
@@ -435,21 +329,19 @@ const VALID_VERDICTS = new Set(["clean", "findings_present"]);
 
 /**
  * Canonical fail-closed signal for when a child/agent cannot perform real
- * parallel fan-out (e.g. the harness does not honor the subagent tool at child
- * depth). The flow MUST fail closed with this message and route the gate review
- * to the conductor rather than silently degrading to a single-agent inline
- * review (which requireFanoutProvenance is designed to reject). Documented as a
- * contract in skills/docs/gate-review-sub-loop-contract.md.
+ * parallel fan-out. The flow MUST fail closed with this message and route the
+ * gate review to the conductor rather than silently degrading to a single-agent
+ * inline review. Contract: skills/docs/gate-review-sub-loop-contract.md.
  */
 export const FANOUT_UNAVAILABLE_MESSAGE = "fan-out unavailable — route to conductor";
 
 /**
- * Build a fail-closed Error carrying the route-to-conductor contract signal.
- * Callers throw this (or check `.routeToConductor === true`) when real fan-out
- * cannot be performed. `detail` is appended for diagnostics but the stable,
- * matchable prefix is always {@link FANOUT_UNAVAILABLE_MESSAGE}.
+ * Build a fail-closed Error carrying the route-to-conductor signal. Callers
+ * throw it (or check `.routeToConductor === true`) when real fan-out cannot be
+ * performed. `detail` is appended for diagnostics; the matchable prefix is
+ * always {@link FANOUT_UNAVAILABLE_MESSAGE}.
  *
- * @param {string} [detail] — optional diagnostic suffix (e.g. why fan-out failed)
+ * @param {string} [detail] — optional diagnostic suffix
  * @returns {Error & { routeToConductor: true, code: "FANOUT_UNAVAILABLE" }}
  */
 export function fanoutUnavailableError(detail) {
@@ -459,10 +351,8 @@ export function fanoutUnavailableError(detail) {
 }
 
 /**
- * Count DISTINCT reviewer identities actually recorded in a `perAngle` array.
- * An entry contributes an identity via `reviewer` (preferred) or `dispatchId`;
- * entries carrying neither are not countable reviewers (a bare `{angle}` proves
- * nothing about who reviewed it). Pure.
+ * Count DISTINCT reviewer identities recorded in a `perAngle` array (identity
+ * via {@link reviewerIdentity}); a bare `{angle}` contributes none. Pure.
  *
  * @param {unknown} perAngle
  * @returns {number}
@@ -481,9 +371,9 @@ export function countDistinctReviewers(perAngle) {
 /**
  * The single identity-selection rule for a perAngle entry: a non-empty
  * `reviewer` wins, else a non-empty `dispatchId`, else no identity. Returns
- * `{ id, label }` (label = which field carried the identity, for error
- * messages) or null. Shared by countDistinctReviewers and
- * fanoutReviewerPairingError so the two can never diverge.
+ * `{ id, label }` (label names the carrying field, for error messages) or null.
+ * Shared by countDistinctReviewers and fanoutReviewerPairingError so the two
+ * never diverge.
  *
  * @param {object} entry — a perAngle entry
  * @returns {{ id: string, label: "reviewer"|"dispatchId" }|null}
@@ -499,22 +389,18 @@ function reviewerIdentity(entry) {
 }
 
 /**
- * Validate INTERNAL CONSISTENCY of a fan-out provenance object. Returns an error
- * string when the provenance is malformed or self-inconsistent, or null when it
- * is well-formed and consistent. Shared by the write path (write-gate-findings-log)
- * and the enforcement read path (buildPreMergeGateCheck) so both agree.
+ * Validate INTERNAL CONSISTENCY of a fan-out provenance object. Returns an
+ * error string when malformed/self-inconsistent, else null. Shared by the write
+ * path and the enforcement read path (buildPreMergeGateCheck) so both agree.
  *
- * Consistency rule (documented in skills/docs/gate-review-sub-loop-contract.md):
- *   - `distinctReviewers` must be a non-negative integer.
- *   - `perAngle` must be an array, and non-empty when `distinctReviewers > 0`.
- *   - `distinctReviewers` must be <= the count of DISTINCT reviewer identities
- *     actually recorded in `perAngle` — you cannot claim more reviewers than you
- *     recorded dispatch entries for.
+ * Consistency rules (skills/docs/gate-review-sub-loop-contract.md):
+ *   - `distinctReviewers` a non-negative integer.
+ *   - `perAngle` an array, non-empty when `distinctReviewers > 0`.
+ *   - `distinctReviewers` <= distinct reviewer identities recorded in `perAngle`.
  *
- * HONEST CAVEAT: this makes recorded provenance internally consistent and raises
- * the bar, but the provenance is self-reported (written by the same agent whose
- * independence it claims), so it remains forgeable by a determined single agent.
- * Un-forgeable recording is the Pi-harness bridge (subagent tool at child depth).
+ * HONEST CAVEAT: this raises the bar but the provenance is self-reported (written
+ * by the same agent whose independence it claims), so it stays forgeable by a
+ * determined single agent. Un-forgeable recording is the Pi-harness bridge.
  *
  * @param {unknown} prov
  * @returns {string|null}
@@ -542,16 +428,13 @@ export function provenanceConsistencyError(prov) {
 }
 
 /**
- * Yield `{ entry, angle, group }` for each "fresh" entry in a `perAngle`
- * array — a valid object entry naming a non-blank `angle` and carrying no
- * `carriedFromHead` (a carried angle's clean verdict was reused from a prior
- * head's review, see @dev-loops/core/loop/gate-carry-forward, not freshly
- * reviewed here). `group` is the entry's normalized, non-blank `group`
- * string, or `null`. This is the ONE definition of "fresh" and "declared
- * group" — {@link freshAngleNames}, {@link countFreshDispatchUnits}, and
- * {@link fanoutReviewerPairingError} all derive from it so the write-time
- * floor and the pairing check can never silently drift apart on what either
- * term means. Pure.
+ * Yield `{ entry, angle, group }` for each "fresh" entry in a `perAngle` array:
+ * a valid object naming a non-blank `angle` and carrying no `carriedFromHead`
+ * (a carried angle's clean verdict was reused from a prior head, not reviewed
+ * here). `group` is the normalized non-blank `group` string or `null`. The ONE
+ * definition of "fresh" and "declared group" that {@link freshAngleNames},
+ * {@link countFreshDispatchUnits}, and {@link fanoutReviewerPairingError} all
+ * derive from, so the write-time floor and pairing check never drift. Pure.
  * @param {unknown} perAngle
  * @returns {Generator<{ entry: object, angle: string, group: string|null }>}
  */
@@ -568,10 +451,8 @@ function* freshEntries(perAngle) {
 }
 
 /**
- * Names of DISTINCT "fresh" angles in a `perAngle` array — see
- * {@link freshEntries}. Used by callers that need the names themselves (e.g.
- * resolving this round's dispatch groups via `resolveFanoutGroups` for
- * {@link fanoutReviewerPairingError}'s cross-check). Pure.
+ * Names of DISTINCT "fresh" angles in a `perAngle` array (see
+ * {@link freshEntries}). Pure.
  *
  * @param {unknown} perAngle
  * @returns {string[]}
@@ -584,18 +465,11 @@ export function freshAngleNames(perAngle) {
 
 /**
  * Count distinct FRESH dispatch units in a `perAngle` array: a fresh angle
- * that declares a `group` counts once per DISTINCT group name (its whole
- * group is one reviewer's dispatch), and a fresh angle with no `group`
- * counts as its own dispatch unit (today's one-reviewer-per-angle shape).
- * This is the grouping-aware generalization of counting distinct fresh
- * angle names via {@link freshAngleNames} — for an ungrouped ledger the two
- * are identical; for a grouped ledger this is <= the ungrouped count, since
- * one group of N angles is one dispatch unit, not N. Shared by the write
- * path (write-gate-findings-log.mjs) and the
- * requireFanoutProvenance read path (detect-checkpoint-evidence.mjs) so the
- * `distinctReviewers` floor scales with what was actually DISPATCHED, not
- * with the angle count a grouped round deliberately dispatches fewer
- * reviewers than. Pure.
+ * declaring a `group` counts once per DISTINCT group name (its group is one
+ * reviewer's dispatch), an ungrouped fresh angle counts as its own unit. Shared
+ * by the write path and the requireFanoutProvenance read path so the
+ * `distinctReviewers` floor scales with what was DISPATCHED, not the angle count
+ * a grouped round deliberately dispatches fewer reviewers than. Pure.
  *
  * @param {unknown} perAngle
  * @returns {number}
@@ -611,49 +485,30 @@ export function countFreshDispatchUnits(perAngle) {
 }
 
 /**
- * Validate the one-scoped-reviewer-per-fresh-angle contract (fanout_fanin
- * execution mandates one independent reviewer per resolved angle; #1431): no
- * two FRESH angles (angles without `carriedFromHead` — see
- * {@link freshEntries}) may share one reviewer identity (`reviewer`,
- * else `dispatchId` — matching {@link countDistinctReviewers}'s identity
- * rule), UNLESS every entry sharing that identity declares the SAME `group`
- * name (grouped fan-out dispatch, AC6/AC7 — see resolveFanoutGroups). The
- * recorded `group` is self-attested at write time; when `resolvedGroups` is
- * supplied (both call sites always supply it) it is also checked against
- * the CURRENT `gates.fanout.groups` table, so an edit to that table between
- * the round and a later read (e.g. a merge-evidence check) can invalidate a
- * ledger's group claim that was honest when written — see the
- * `resolvedGroups` paragraph below. Two
- * fresh angles sharing a reviewer with differing or missing `group` values
- * still violate the contract. Carried angles keep their prior reviewer and
- * are exempt. Pure; shared by the write path (write-gate-findings-log.mjs,
- * always-on) and the merge-evidence read path (detect-checkpoint-evidence.mjs,
- * scaling the `requireFanoutProvenance` floor) so both agree.
+ * Validate the one-scoped-reviewer-per-fresh-angle contract (#1431): no two
+ * FRESH angles (see {@link freshEntries}) may share one reviewer identity
+ * (matching {@link countDistinctReviewers}'s rule), UNLESS every entry sharing
+ * that identity declares the SAME `group` name (grouped fan-out dispatch). Two
+ * fresh angles sharing a reviewer with differing or missing `group` still
+ * violate; carried angles keep their prior reviewer and are exempt. Pure; shared
+ * by the write path and the merge-evidence read path so both agree.
  *
- * Returns an actionable error string naming the offending angle(s) when the
- * contract is violated (an ungrouped reviewer covering >1 fresh angle, angles
- * sharing a reviewer under inconsistent `group` values, or a fresh angle
- * recording no reviewer identity at all — which also silently lowers the
- * distinct-reviewer count below the fresh-angle count), or `null` when it
- * holds (including when `perAngle` has no fresh angles).
+ * Returns an actionable error string naming the offending angle(s) — an
+ * ungrouped reviewer covering >1 fresh angle, inconsistent `group` values, or a
+ * fresh angle recording no reviewer identity — or `null` when the contract holds
+ * (including when there are no fresh angles).
  *
- * The recorded `group` is self-attested (any non-empty string the writer
- * chooses), so the grouped exception above is only as strong as the caller
- * lets it be. An optional `resolvedGroups` (the round's `resolveFanoutGroups`
- * output, `{ name, angles }[]`) closes that: a shared identity is only
- * honored when every fresh angle it covers is a member of the SAME
- * configured dispatch unit — a fabricated `group` label spanning angles the
- * table splits apart (or never groups at all) no longer passes.
- * `resolveFanoutGroups` itself emits one-angle-per-unit singletons for
- * `gates.fanout.mode: per-angle` (bypasses configured groups), so passing its
- * output here rejects ANY shared identity in that mode — no separate mode flag
- * needed. As of #1601 (ADR 0048) `gate:full` dispatches GROUPED (fullLabel is a
- * no-op for dispatch shape), so a shared identity within an auto-chunked
- * dispatch unit is honored exactly as for a configured group.
- * Omitting `resolvedGroups` entirely keeps today's fully permissive behavior (any one
- * shared non-null `group` value is accepted, unchecked against config) — both
- * call sites already load config, so they should always supply it; this
- * default only preserves callers (and old ledgers) that don't.
+ * The recorded `group` is self-attested, so the grouped exception is only as
+ * strong as the caller allows. An optional `resolvedGroups` (the round's
+ * `resolveFanoutGroups` output) closes that: a shared identity is honored only
+ * when every fresh angle it covers is a member of the SAME configured unit, so a
+ * fabricated `group` label spanning angles the table splits apart no longer
+ * passes. `resolveFanoutGroups` emits one-angle singletons for
+ * `gates.fanout.mode: per-angle`, so passing its output rejects any shared
+ * identity in that mode. Per ADR 0048, `gate:full` dispatches GROUPED, so a
+ * shared identity within an auto-chunked unit is honored as for a configured
+ * group. Omitting `resolvedGroups` keeps the permissive behavior (any one shared
+ * non-null `group` accepted) for callers that don't load config.
  *
  * @param {unknown} perAngle
  * @param {{name: string, angles: string[]}[]|null} [resolvedGroups]
@@ -688,19 +543,17 @@ export function fanoutReviewerPairingError(perAngle, resolvedGroups = null) {
   const details = [];
   for (const [id, { angles, label, groups }] of anglesByIdentity) {
     if (angles.size <= 1) continue;
-    // One shared, non-null `group` across every entry for this identity is
-    // the grouped-dispatch exception: a single reviewer legitimately covers
-    // its whole declared group. Differing or missing `group` values fall
-    // back to the one-reviewer-per-angle rule.
+    // One shared, non-null `group` across every entry is the grouped-dispatch
+    // exception: a single reviewer legitimately covers its whole declared group.
+    // Differing or missing `group` falls back to one-reviewer-per-angle.
     const sameGroup = groups.size === 1 && [...groups][0] !== null;
     if (!sameGroup) {
       details.push(`${label} "${id}" is recorded for fresh angles: ${[...angles].join(", ")}`);
       continue;
     }
-    // resolvedGroups supplied: the claimed group is only honest when every
-    // angle it covers is a member of the SAME configured group — a claimed
-    // group spanning angles the table splits apart (or never groups) fails
-    // closed even though the audit record itself is internally consistent.
+    // resolvedGroups supplied: the claimed group is honest only when every angle
+    // it covers is a member of the SAME configured group — a claimed group
+    // spanning angles the table splits apart fails closed.
     if (configuredGroupOf.size > 0) {
       const configuredGroups = new Set([...angles].map((a) => configuredGroupOf.get(a) ?? null));
       if (configuredGroups.size !== 1 || configuredGroups.has(null)) {
@@ -716,10 +569,9 @@ export function fanoutReviewerPairingError(perAngle, resolvedGroups = null) {
 }
 
 /**
- * Base angle name for a delta-suffixed re-review entry (`<angle>-delta-at-...`,
- * e.g. `pr-checklist-delta-at-current-head`): a re-review scoped to only
- * the current head's delta still counts toward its base angle for both
- * mandatory-angle coverage and pool-membership checks.
+ * Base angle name for a delta-suffixed re-review entry (`<angle>-delta-at-...`):
+ * a re-review scoped to only the current head's delta still counts toward its
+ * base angle for both mandatory-angle coverage and pool-membership checks.
  *
  * @param {string} angle
  * @returns {string}
@@ -729,20 +581,16 @@ export function baseAngleName(angle) {
 }
 
 /**
- * Validate a recorded fan-out angle list against a gate's configured angle
- * contract: every mandatory angle must be represented, and — when a pool is
- * supplied — every recorded angle must be a member of it or of
- * {@link FANIN_SYNTHETIC_ANGLES} (delta-suffixed angles count toward their
- * {@link baseAngleName}). Pure; shared by the write
- * path (write-gate-findings-log's `provenance.perAngle`, upsert-checkpoint-verdict's
- * `--findings-json` per-angle results) and the merge-evidence read path
- * (detect-checkpoint-evidence re-validating the ledger's `provenance.perAngle`)
- * so all three enforce identically.
+ * Validate a recorded fan-out angle list against a gate's angle contract: every
+ * mandatory angle must be represented, and — when a pool is supplied — every
+ * recorded angle must be a member of it or of {@link FANIN_SYNTHETIC_ANGLES}
+ * (delta-suffixed angles count toward their {@link baseAngleName}). Pure; shared
+ * by the write path and the merge-evidence read path so all enforce identically.
  *
- * @param {unknown} recordedAngles — array of `{ angle: string, ... }` entries (provenance.perAngle or normalized per-angle findings)
+ * @param {unknown} recordedAngles — array of `{ angle: string, ... }` entries
  * @param {object} [gateAngleContract]
  * @param {string[]} [gateAngleContract.mandatoryAngles] — angles that must always be represented
- * @param {string[]|null} [gateAngleContract.pool] — configured angle pool; null/omitted/empty skips the foreign-angle check; {@link FANIN_SYNTHETIC_ANGLES} are unioned in before membership is checked
+ * @param {string[]|null} [gateAngleContract.pool] — configured angle pool; null/omitted/empty skips the foreign-angle check; {@link FANIN_SYNTHETIC_ANGLES} are unioned in first
  * @returns {{ missingMandatory: string[], foreignAngles: string[] }}
  */
 export function checkFanoutAngleCoverage(recordedAngles, { mandatoryAngles = [], pool = null } = {}) {
@@ -763,33 +611,23 @@ export function checkFanoutAngleCoverage(recordedAngles, { mandatoryAngles = [],
 
 /**
  * Angles the fan-in itself mandates and may synthesize (consolidate-fanin's
- * `--pr-checklist clean` upsert) without them appearing in any gate's
- * configured `angles` pool. Always legal in the foreign-angle check above —
- * requiring every consumer repo to also list them per-gate would make the two
- * tools contradict the shared contract they implement.
+ * `--pr-checklist clean` upsert) without appearing in any gate's configured
+ * pool. Always legal in the foreign-angle check above.
  */
 export const FANIN_SYNTHETIC_ANGLES = Object.freeze(["pr-checklist"]);
 
 /**
  * Validate a round's RESOLVED angle set — the full angle list the round
- * targeted, independent of any single gate's configured MANDATORY subset —
- * against the evidence actually recorded for it: every resolved angle must
- * have either a per-angle artifact in `recordedAngles` (matched by
- * {@link baseAngleName} plus a case-insensitive compare — same base+lowercase
- * rule consolidate-fanin.mjs applies to its own angle keys) or be
- * named in `carriedAngles` (angle names a caller has already PROVEN carried
- * forward from a prior clean head — never a bare, unverified name; the
- * consolidate-fanin CLI's own `--carried-angles` is only ever populated after
- * its `--carry-forward-plan` proof check, so passing it straight through here
- * keeps that same guarantee).
+ * targeted, independent of any gate's mandatory subset — against recorded
+ * evidence: every resolved angle must have a per-angle artifact in
+ * `recordedAngles` (matched by {@link baseAngleName} + case-insensitive compare)
+ * or be named in `carriedAngles` (names a caller has already PROVEN carried
+ * forward, e.g. after consolidate-fanin's `--carry-forward-plan` proof).
  *
- * This closes a gap {@link checkFanoutAngleCoverage} leaves open: that check
- * only protects a CALLER-SUPPLIED mandatory subset, so a wrong carry-forward
- * declaration naming only NON-mandatory angles under-dispatches with no
- * mechanical refusal — visible only in the ledger's own carried-angle
- * provenance (see the Gate Review Sub-Loop Contract's Phase 3 backstop
- * paragraph). This function protects every resolved angle, not just the
- * mandatory ones. Pure.
+ * Closes a gap {@link checkFanoutAngleCoverage} leaves open: that check protects
+ * only a caller-supplied mandatory subset, so a wrong carry-forward naming only
+ * NON-mandatory angles under-dispatches with no refusal. This protects every
+ * resolved angle. Pure.
  *
  * @param {unknown} resolvedAngles — the round's full resolved angle-name list
  * @param {object} [evidence]
@@ -810,11 +648,9 @@ export function checkResolvedAngleEvidence(resolvedAngles, { recordedAngles, car
       .map((e) => (e && typeof e === "object" && typeof e.angle === "string" ? e.angle.trim() : ""))
       .filter((a) => a.length > 0)
     : [];
-  // Matched base+lowercase, same as checkFanoutAngleCoverage's callers
-  // (consolidate-fanin's realAngleKeys/exemptCarriedKeys) and
-  // reviewerBudgetPreflight's normalizeAngleKey: per-angle artifacts are
-  // independently authored, so a case difference between a resolved angle
-  // name and its recorded/carried evidence must not read as missing.
+  // Matched base+lowercase (per-angle artifacts are independently authored, so a
+  // case difference must not read as missing), same rule as
+  // checkFanoutAngleCoverage's callers and reviewerBudgetPreflight.
   const normalizeAngleBase = (a) => baseAngleName(a).toLowerCase();
   const recordedBases = new Set(recorded.map(normalizeAngleBase));
   const carriedBases = new Set(
@@ -828,22 +664,17 @@ export function checkResolvedAngleEvidence(resolvedAngles, { recordedAngles, car
 }
 
 /**
- * Default cap on parallel fan-out reviewers when a caller does not supply one.
- * Mirrors the config default (gates.maxFanoutReviewers).
+ * Default cap on parallel fan-out reviewers when a caller supplies none. Mirrors
+ * gates.maxFanoutReviewers.
  */
 export const DEFAULT_MAX_FANOUT_REVIEWERS = 8;
 
-// Every sanctioned angle name is a short, hand-authored slug (e.g.
-// "contradiction-lens", "pr-checklist"); nothing legitimate ever
-// approaches this length. Bounding it here, at the trust boundary this
-// function already owns, fails a pathological artifact closed as malformed —
-// the same place every other angle-result defect is caught — instead of
-// leaving an unbounded reviewer-supplied string to reach the render path,
-// where consolidate-fanin.mjs's per-angle budget marking cannot compress it.
-// This is a malformed-artifact guard, not a comment-budget guarantee: several
-// angles each right at this cap can still exceed the render budget on their
-// headers alone and force the withheld tier — that outcome is the render
-// budget's degradation ladder doing its job, not something this cap prevents.
+// Every sanctioned angle name is a short hand-authored slug; nothing legitimate
+// approaches this length. Bounding it at this trust boundary fails a
+// pathological artifact closed as malformed — where every other angle-result
+// defect is caught. A malformed-artifact guard, not a comment-budget guarantee:
+// several angles each at this cap can still exceed the render budget, which the
+// render budget's degradation ladder handles.
 const MAX_ANGLE_NAME_LENGTH = 200;
 
 /**
@@ -970,9 +801,8 @@ export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities }
     verdict = "clean";
   }
 
-  // `findings` already carries each entry's normalized severity, so tallying
-  // it directly (rather than incrementing a running map inside the loop
-  // above) reproduces the same counts via the one shared tally rule.
+  // findings already carries each entry's normalized severity, so tallying it
+  // directly reproduces the same counts via the one shared tally rule.
   return {
     verdict,
     findings,
@@ -988,21 +818,19 @@ export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities }
 
 /**
  * The judge's relevance-based disposition vocabulary — distinct from the
- * severity-based `disposition` (accepted-for-fix/deferred/needs-answer) that
- * `deriveDisposition` owns. The judge decides *where* a finding is acted on
- * (this PR or a follow-up), never *whether* it is real: a `reject` is a
- * relevance verdict (out-of-scope against a named non-goal or scope
- * boundary), not a reproduction verdict. The fixer retains reproduction-based
- * rejection; the judge owns relevance (#1525).
+ * severity-based `disposition` that `deriveDisposition` owns. The judge decides
+ * *where* a finding is acted on (this PR or a follow-up), never *whether* it is
+ * real: a `reject` is a relevance verdict (out-of-scope), not a reproduction
+ * verdict. The fixer retains reproduction-based rejection; the judge owns
+ * relevance (#1525).
  */
 export const JUDGE_DISPOSITIONS = Object.freeze(["act", "defer", "reject"]);
 
 /**
- * Validate a judge verdict artifact shape (the dedicated `judge` agent's only
- * write). Pure; throws on a malformed verdict rather than silently enriching
- * findings with garbage. The judge is the designated memory across rounds, so
- * its artifact is the authoritative relevance record — a malformed one fails
- * closed rather than degrading to severity-only disposition.
+ * Validate a judge verdict artifact shape (the `judge` agent's only write).
+ * Pure; throws on a malformed verdict rather than enriching findings with
+ * garbage. The judge is the designated memory across rounds, so a malformed
+ * artifact fails closed rather than degrading to severity-only disposition.
  *
  * Shape:
  * ```
@@ -1064,8 +892,8 @@ export function validateJudgeVerdict(verdict) {
     if (typeof entry.rationale !== "string" || entry.rationale.trim().length === 0) {
       throw new Error(`judge verdict.dispositions[${i}].rationale must be a non-empty string naming the criterion, non-goal, or scope boundary`);
     }
-    // followUpDraft is REQUIRED on a defer disposition (soft-cap contract: a
-    // deferred finding carries a fileable follow-up draft). Optional otherwise.
+    // followUpDraft is REQUIRED on a defer disposition (a deferred finding
+    // carries a fileable follow-up draft). Optional otherwise.
     if (entry.disposition === "defer") {
       if (!entry.followUpDraft || typeof entry.followUpDraft !== "object" || Array.isArray(entry.followUpDraft)) {
         throw new Error(`judge verdict.dispositions[${i}].followUpDraft is required on a defer disposition`);
@@ -1080,31 +908,20 @@ export function validateJudgeVerdict(verdict) {
 }
 
 /**
- * Merge the judge's relevance-based dispositions into the consolidated findings
- * array (the flat per-finding shape `consolidateFanin` / `toFindingsLogShape`
- * produce). The judge runs AFTER fan-in and BEFORE the fix pass (#1525): it
- * receives the consolidated ledger, the issue's AC/DoD/non-goals, the PR's
- * declared scope, and prior-round ledgers, and emits a per-finding disposition
- * (`act` / `defer` / `reject`) plus a scope-drift verdict on the PR as a whole.
+ * Merge the judge's relevance-based dispositions into the flat consolidated
+ * findings array. The judge runs AFTER fan-in and BEFORE the fix pass (#1525):
+ * it emits a per-finding disposition (`act`/`defer`/`reject`) plus a scope-drift
+ * verdict on the PR as a whole.
  *
- * This function enriches each finding with `judgeDisposition`, `judgeRationale`,
- * and (for `defer`) `followUpDraft` so the disposition ledger and posted findings
- * comment carry what was consciously not acted on and why. The severity-based
- * `disposition` (accepted-for-fix/deferred/needs-answer) is LEFT INTACT — the
- * judge's relevance axis is complementary, not a replacement (a real defect
- * stays a real defect; the judge decides *where* it is fixed, not *whether* it
- * is real).
- *
- * The fix pass consumes only the `act` list; the fixer retains reproduction-
- * based rejection (a finding that does not reproduce is dead regardless of the
- * judge's verdict) but stops deciding relevance.
+ * Enriches each finding with `judgeDisposition`, `judgeRationale`, and (for
+ * `defer`) `followUpDraft`. The severity-based `disposition` is LEFT INTACT —
+ * the judge's relevance axis is complementary, not a replacement. The fix pass
+ * consumes only the `act` list.
  *
  * Pure. Fails closed (throws) when a disposition references an out-of-range
- * index — a judge verdict that names a finding that is not in the ledger is a
- * mismatch, never a silent enrichment — and when the dispositions do not
- * cover every finding: an undisposed finding must never be silently dropped
- * from the fixer's act list. An empty findings array with an empty
- * dispositions array is vacuously covered and returns without error.
+ * index, and when the dispositions do not cover every finding — an undisposed
+ * finding must never be silently dropped from the fixer's act list. An empty
+ * findings + empty dispositions pair is vacuously covered.
  *
  * @param {Array<object>} findings — the flat consolidated findings array
  * @param {object} judgeVerdict — the validated judge verdict artifact
@@ -1119,11 +936,9 @@ export function applyJudgeDispositions(findings, judgeVerdict) {
       throw new Error(`judge disposition index ${d.index} is out of range (findings has ${enriched.length} entries)`);
     }
     const target = enriched[d.index];
-    // Reset judge-owned fields before the re-merge: a pre-enriched finding
-    // (already-enriched from a prior round, re-disposed by THIS verdict)
-    // must not let stale judgeCriterion/followUpDraft survive a
-    // defer -> act/reject re-disposition — the merged copy carries only
-    // what the current disposition provides, never prior-round residue.
+    // Reset judge-owned fields before the re-merge so a re-disposed finding
+    // (defer -> act/reject) carries only what the current disposition provides,
+    // never stale judgeCriterion/followUpDraft from a prior round.
     delete target.judgeCriterion;
     delete target.followUpDraft;
     target.judgeDisposition = d.disposition;
@@ -1136,10 +951,9 @@ export function applyJudgeDispositions(findings, judgeVerdict) {
     }
   }
   // Coverage is judged against THIS verdict's disposed-index set, not field
-  // presence on the merged copy — an already-enriched ledger (a finding that
-  // already carries judgeDisposition from a prior round) must not let a
-  // verdict that disposes nothing pass silently. validateJudgeVerdict already
-  // rejects duplicate indexes, so the Set is exact.
+  // presence on the merged copy, so an already-enriched ledger can't let a
+  // verdict that disposes nothing pass silently. validateJudgeVerdict rejects
+  // duplicate indexes, so the Set is exact.
   const disposed = new Set(validated.dispositions.map((d) => d.index));
   const uncovered = enriched.reduce((positions, _f, i) => {
     if (!disposed.has(i)) positions.push(i);
@@ -1184,9 +998,8 @@ export function toFindingsLogShape(findings) {
     if (Number.isInteger(f.line) && f.line > 0) {
       entry.line = f.line;
     }
-    // Carry the judge's relevance-based dispositions through (#1525) so the
-    // durable ledger and posted findings comment show what was consciously not
-    // acted on and why.
+    // Carry the judge's relevance-based dispositions through so the ledger and
+    // posted findings comment show what was consciously not acted on.
     if (typeof f.judgeDisposition === "string" && f.judgeDisposition.trim().length > 0) {
       entry.judgeDisposition = f.judgeDisposition.trim();
     }
@@ -1206,16 +1019,13 @@ export function toFindingsLogShape(findings) {
 /**
  * Plan how a resolved angle set fans out across the reviewer cap. Pure.
  *
- * SUPERSEDED by `scheduleFanoutWaves` (#1601, ADR 0048): the gate fan-out
- * conductor now dispatches wave-by-wave at most `gates.fanout.maxConcurrent`
- * (M) dispatch units per wave, using the wave plan emitted by
- * `write-gate-context.mjs`. This helper is kept only for back-compat (zero
- * non-test callers) and no longer participates in the dispatch path.
+ * SUPERSEDED by `scheduleFanoutWaves` (ADR 0048): the conductor now dispatches
+ * wave-by-wave. Kept for back-compat only (zero non-test callers); no longer in
+ * the dispatch path.
  *
- * When `angles.length <= maxReviewers`, all reviewers run in a single parallel
- * batch (no degradation). When it exceeds the cap, the overflow is split into
- * sequential batches of at most `maxReviewers` each, and `degraded` is true so
- * the skill can record the sequential degradation in the gate evidence.
+ * When `angles.length <= maxReviewers`, all reviewers run in one parallel batch;
+ * otherwise the overflow splits into sequential batches of at most `maxReviewers`
+ * and `degraded` is true.
  *
  * @param {string[]} angles
  * @param {number} [maxReviewers] — default DEFAULT_MAX_FANOUT_REVIEWERS (8)
