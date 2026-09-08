@@ -4,11 +4,6 @@ strategy: local-first
 
 inputSource: tracker
 
-refinement:
-  # One Copilot round then converge; fan-out reviewers + judge + verify remain
-  # the enforcing gate. Slim epic throughput tradeoff; shipped default is 5.
-  maxCopilotRounds: 1
-
 gates:
   # Fail-closed enforcement that gate verdicts were produced by the
   # fan-out/fan-in review sub-loop (executionMode fanout_fanin + a findings-log
@@ -22,8 +17,8 @@ gates:
   # See skills/docs/gate-review-sub-loop-contract.md.
   requireFanoutProvenance: true
   # Bounded-parallel fan-out concurrency (#1907, supersedes the #1726 serial
-  # workaround): dispatch up to 5 dispatch units concurrently per wave via
-  # blocking joins, retrying a
+  # workaround): dispatch up to 3 dispatch units concurrently per wave via
+  # blocking joins (aligned with queue.maxParallel below), retrying a
   # transient (429/5xx) dispatch on the same unit with backoff before ever
   # reducing concurrency (skills/docs/gate-review-sub-loop-contract.md
   # GATE-EXEC-DISPATCH-RETRY-BACKOFF). This is bounded parallelism, not
@@ -35,7 +30,7 @@ gates:
   # false) is unchanged for other repos/harnesses (cross-harness
   # non-regression #1086).
   fanout:
-    maxConcurrent: 5
+    maxConcurrent: 3
   draft:
     dynamic:
       subtractive: true
@@ -152,16 +147,12 @@ workflow:
   requireRetrospective: true
   requireDraftFirst: true
   devModeDefault: true
-  # TEMPORARY (epic #2034 slim line): every dev-loop PR targets the 1.0.2-slim
-  # integration branch instead of the auto-detected default. Revert (delete this
-  # key) after the slim line is promoted or abandoned per #2047.
-  baseBranch: 1.0.2-slim
 
 localImplementation:
   lightMode:
     enabled: true
-    maxFiles: 50
-    maxLines: 500 # hard ceiling only; the judge (#2070) decides the track within it
+    maxFiles: 2
+    maxLines: 20 # micro-PR ceiling (#1043)
 
 tracker:
   board:
