@@ -26,6 +26,29 @@ test("blocks an added runtime comment that cites an issue-number chronology chai
   assert.ok(out.reasons.some((r) => r.includes("LOCAL-COMMENT-DISCIPLINE")));
 });
 
+test("blocks a chronology chain spread across multiple added comment lines (span aggregation)", () => {
+  const out = computeCommentDiscipline({
+    diffOutput: diff("scripts/loop/thing.mjs", [
+      added("// #1867 introduced the tripwire."),
+      added("// #1902 later relaxed it."),
+    ]),
+  });
+  assert.equal(out.outcome, "block");
+  assert.equal(out.findings[0].type, "issue-chronology");
+});
+
+test("scans shell (.sh) comments: blocks a # chronology chain, ignores a #! shebang", () => {
+  const block = computeCommentDiscipline({
+    diffOutput: diff("scripts/deploy.sh", [added("# #1867 then #1902 then #2034 chronology")]),
+  });
+  assert.equal(block.outcome, "block");
+  assert.equal(block.findings[0].type, "issue-chronology");
+  const clean = computeCommentDiscipline({
+    diffOutput: diff("scripts/deploy.sh", [added("#!/usr/bin/env bash"), added("# provisions the box (#2054)")]),
+  });
+  assert.equal(clean.outcome, "pass");
+});
+
 test("passes a clean current-invariant comment (single authoritative reference allowed)", () => {
   const out = computeCommentDiscipline({
     diffOutput: diff("scripts/loop/thing.mjs", [

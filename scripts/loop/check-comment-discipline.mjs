@@ -53,6 +53,10 @@ function isRuntimeSourceFile(p) {
 // A comment line, by file kind. Lexical and deliberately simple: JS-family
 // lines starting with a comment sigil, shell lines starting with `#` (a
 // shebang has no digit after `#` so it never reads as an issue reference).
+// ponytail: anchored at line start on purpose. A trailing inline comment
+// (`code // #1 then #2`) is not scanned; detecting it safely means excluding
+// string/URL `//` contexts, and agent narration lands in own-line comment
+// blocks/JSDoc, so the escape marker + reviewer cover the rare trailing case.
 function isCommentLine(text, filePath) {
   const t = text.trim();
   if (t.length === 0) return false;
@@ -97,7 +101,11 @@ export function computeCommentDiscipline({
   };
 
   for (const line of diffOutput.split("\n")) {
-    if (line.startsWith("+++ ")) {
+    // Treat `+++ ` as a file header only when it parses to a real diff target
+    // (`/dev/null` or a `b/`-prefixed path); an added source line whose content
+    // begins with `++ ` also starts with `+++ ` and must fall through to the
+    // added-line branch, not reset the current file.
+    if (line.startsWith("+++ ") && (line.slice(4).trim() === "/dev/null" || line.slice(4).trim().startsWith("b/"))) {
       flushSpan();
       const p = line.slice(4).trim();
       currentFile = p === "/dev/null" ? null : p.replace(/^b\//u, "");
@@ -157,9 +165,21 @@ export async function evaluateCommentDiscipline({
   assertPlausibleRef(base, "--base");
   assertPlausibleRef(head, "--head");
   const gitEnv = { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };
+  // Pin the diff body/prefixes/algorithm and disable external diff drivers so
+  // the analyzed bytes are environment-independent (the repo's established
+  // isolation set, mirroring check-size-budget.mjs / write-gate-context.mjs).
+  const isolation = [
+    "-c", "color.ui=false",
+    "-c", "color.diff=false",
+    "-c", "core.pager=cat",
+    "-c", "diff.noprefix=false",
+    "-c", "diff.mnemonicPrefix=false",
+    "-c", "diff.algorithm=myers",
+    "-c", "core.autocrlf=false",
+  ];
   const diffOutput = execFileSync(
     "git",
-    ["diff", "--unified=0", "--no-color", `${base}...${head}`],
+    [...isolation, "diff", "--no-ext-diff", "--unified=0", "--no-color", `${base}...${head}`],
     { cwd: repoRoot, env: gitEnv, maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] },
   ).toString();
   return computeCommentDiscipline({ diffOutput, maxAddedCommentBlockLines });
