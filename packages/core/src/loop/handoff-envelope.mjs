@@ -624,9 +624,6 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
   )) {
     throw new Error("handoff-envelope: wrapped needs_reconcile output requires exact outer and inner bundleKind needs_reconcile markers, outer selectedStrategy none, and inner selectedStrategy null");
   }
-  if (strategy === null && routeKind !== "needs_reconcile") {
-    throw new Error("handoff-envelope: a null resolverOutput.selectedStrategy is allowed only for the canonical needs_reconcile/fail_closed_reconcile tuple");
-  }
   if (bundleKind === "needs_reconcile" && !isReconciliation) {
     throw new Error("handoff-envelope: outer/inner bundleKind needs_reconcile requires inner routeKind needs_reconcile, selectedGate fail_closed_reconcile, and selectedStrategy null");
   }

@@ -554,6 +554,100 @@ test("buildResolveDevLoopStartupResult maps durable-artifact 'required' to check
   }, { prefix: "resolve-dev-loop-startup-" });
 });
 
+test("buildResolveDevLoopStartupResult fails closed when the checkpoint identity's repo does not match the current repo (no association lookup)", async () => {
+  await withTempDir(async (tempDir) => {
+    // Current repo resolves to mfittko/dev-loops via the origin remote, but the
+    // checkpoint was recorded for a DIFFERENT repository. A foreign checkpoint
+    // must not authorize an association lookup against this repo's base history:
+    // fail closed to needs_reconcile before resolveHasNewerMerge is ever called.
+    execFileSync("git", ["init"], { cwd: tempDir, stdio: "ignore" });
+    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tempDir, stdio: "ignore" });
+    const piDir = path.join(tempDir, ".pi");
+    await mkdir(piDir, { recursive: true });
+    await writeFile(
+      path.join(piDir, "dev-loop-retrospective-checkpoint.json"),
+      JSON.stringify({
+        state: "complete",
+        identity: { repo: "other/elsewhere", prNumber: 7, mergeCommit: "a786237ad6f7e9bc4facdc64c14a0dbf3e1c5f2c" },
+        provenance: { context: "fresh", seededFrom: "agent_tool_call_record", recordSource: "tmp/record.json" },
+      }),
+      "utf8",
+    );
+
+    let called = false;
+    const result = buildResolveDevLoopStartupResult(
+      {
+        currentState: {
+          target: { kind: "local_branch", branch: "feature/local-route" },
+          ownership: "local",
+          nextActor: "local",
+          status: "active",
+          authorization: "needs_confirmation",
+        },
+        artifactState: "not_applicable",
+        loopState: "active",
+      },
+      {
+        env: resolverTestEnv(),
+        cwd: tempDir,
+        config: { workflow: { requireRetrospective: true } },
+        resolveHasNewerMerge: () => { called = true; return false; },
+      },
+    );
+
+    assert.equal(called, false, "resolveHasNewerMerge must not be called for a foreign-repo checkpoint");
+    assert.equal(result.ok, true);
+    assert.equal(result.bundleKind, "needs_reconcile");
+    assert.equal(result.selectedStrategy, "none");
+  }, { prefix: "resolve-dev-loop-startup-" });
+});
+
+test("buildResolveDevLoopStartupResult fails closed when the current repo cannot be resolved (no association lookup)", async () => {
+  await withTempDir(async (tempDir) => {
+    // No git remote → detectRepoSlug returns null, so the current repo cannot be
+    // resolved. An unresolvable repo identity cannot authorize an association
+    // lookup even when the recorded identity.repo would otherwise match: fail
+    // closed to needs_reconcile without calling resolveHasNewerMerge.
+    const piDir = path.join(tempDir, ".pi");
+    await mkdir(piDir, { recursive: true });
+    await writeFile(
+      path.join(piDir, "dev-loop-retrospective-checkpoint.json"),
+      JSON.stringify({
+        state: "complete",
+        identity: { repo: "mfittko/dev-loops", prNumber: 7, mergeCommit: "a786237ad6f7e9bc4facdc64c14a0dbf3e1c5f2c" },
+        provenance: { context: "fresh", seededFrom: "agent_tool_call_record", recordSource: "tmp/record.json" },
+      }),
+      "utf8",
+    );
+
+    let called = false;
+    const result = buildResolveDevLoopStartupResult(
+      {
+        currentState: {
+          target: { kind: "local_branch", branch: "feature/local-route" },
+          ownership: "local",
+          nextActor: "local",
+          status: "active",
+          authorization: "needs_confirmation",
+        },
+        artifactState: "not_applicable",
+        loopState: "active",
+      },
+      {
+        env: resolverTestEnv(),
+        cwd: tempDir,
+        config: { workflow: { requireRetrospective: true } },
+        resolveHasNewerMerge: () => { called = true; return false; },
+      },
+    );
+
+    assert.equal(called, false, "resolveHasNewerMerge must not be called when the current repo is unresolvable");
+    assert.equal(result.ok, true);
+    assert.equal(result.bundleKind, "needs_reconcile");
+    assert.equal(result.selectedStrategy, "none");
+  }, { prefix: "resolve-dev-loop-startup-" });
+});
+
 test("buildResolveDevLoopStartupResult overrides caller-provided state with on-disk 'required'", async () => {
   await withTempDir(async (tempDir) => {
     const piDir = path.join(tempDir, ".pi");
