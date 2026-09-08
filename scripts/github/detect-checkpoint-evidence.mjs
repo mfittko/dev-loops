@@ -316,29 +316,18 @@ function normalizeGateMarkerSummary(summary) {
   };
 }
 /**
- * Decide whether a gate's recorded (or candidate, not-yet-posted) execution
- * mode satisfies fan-out evidence enforcement, independent of the ledger/
- * provenance/angle-coverage layer below it. Returns null when the mode
- * qualifies (fanout_fanin, or a light-mode-accepted inline verdict) and an
- * error message — identical wording wherever this runs — otherwise.
+ * Decide whether a gate's execution mode satisfies fan-out evidence
+ * enforcement (fanout_fanin, or a light-mode-accepted inline verdict),
+ * independent of the ledger/provenance/angle-coverage layer below it. Returns
+ * null when it qualifies, else an error message.
  *
- * This is the ONE place mode qualification is decided. buildPreMergeGateCheck
+ * The ONE place mode qualification is decided: buildPreMergeGateCheck
  * (merge-time) and upsert-checkpoint-verdict.mjs (post-time) both call this
- * against the same buildFanoutEnforcement-produced `gate` descriptor
- * so the two boundaries can never drift apart on what counts as an accepted
- * inline verdict.
+ * against the same `gate` descriptor so the two can never drift apart.
  */
 export function evaluateInlineFanoutMode(gate, fanoutEnforcement) {
-  // Light-mode acceptance (#1174): a genuinely under-threshold micro-PR
-  // collapses the gate fan-out to a single inline check (#1043). Accept that
-  // inline verdict ONLY when ALL hold, fail CLOSED otherwise:
-  //   - lightMode is enabled in config, AND
-  //   - the reviewed head's merge-base scope was RE-DERIVED under threshold
-  //     (scopeUnderThreshold; false whenever scope could not be derived), AND
-  //   - the PR carries no gate:full label (which always forces fan-out), AND
-  //   - the verdict records a non-empty inline reason.
-  // Any non-light inline verdict (over threshold / label / lightMode off /
-  // scope underivable) falls through to the byte-identical rejection below.
+  // Light-mode acceptance (#1174): fail CLOSED unless every condition below
+  // holds. Any non-light inline verdict falls through to the rejection below.
   const lightAccepted =
     gate.executionMode === "inline_single_agent"
     && fanoutEnforcement.lightMode === true
@@ -516,20 +505,15 @@ function gateVerdictState({ visible, verdict, contractComplete = true }) {
 }
 
 /**
- * Classify WHY the checkpoint-evidence pre-merge check is (un)satisfied, for the
- * gate-evidence commit-status mapping: `not_established` (evidence for the
- * current head simply doesn't exist yet — draft, mid-Copilot-loop, or right
- * after a fix commit before pre_approval_gate re-runs) reads as `pending`, not
- * `failure`; `violation` (a visible current-head comment carries a bad verdict —
- * blocked/findings_present — or another pre-merge check failed, e.g. unresolved
- * threads or a stale runner) reads as `failure`; `satisfied` reads as `success`.
- * Both gates clean is a precondition for `satisfied`, not the definition of it —
- * a clean-gates PR can still fail on an unrelated pre-merge failure, which is a
- * real problem (violation), not "waiting".
- *
- * @param {{ draftGate: object, preApprovalGateMarker: object }} evidence
- * @param {{ ok: boolean }} preMergeGateCheck
- * @returns {"satisfied"|"not_established"|"violation"}
+ * Classify WHY the checkpoint-evidence pre-merge check is (un)satisfied, for
+ * the gate-evidence commit-status mapping: `not_established` (evidence for
+ * the current head doesn't exist yet — draft, mid-Copilot-loop, or right
+ * after a fix commit before pre_approval_gate re-runs) reads as `pending`;
+ * `violation` (a visible current-head comment carries a bad verdict, or
+ * another pre-merge check failed) reads as `failure`; `satisfied` reads as
+ * `success`. Both gates clean is a precondition for `satisfied`, not its
+ * definition — a clean-gates PR can still fail on an unrelated pre-merge
+ * check, which is a real problem (violation), not "waiting".
  */
 export function deriveEvidenceState(evidence, preMergeGateCheck) {
   const draftState = gateVerdictState({ visible: evidence.draftGate.visible, verdict: evidence.draftGate.verdict });
@@ -623,9 +607,9 @@ async function readLedgerProvenanceInAny(checkouts, ledgerPath, criteria = {}) {
  * Build the fan-out evidence enforcement descriptor.
  *
  * Enforcement is ON by default (opt-out via gates.requireFanoutEvidence: false).
- * Returns { required: false } when enforcement is disabled OR when config is
- * unavailable (config == null — null or undefined — after a failed load) — config-unavailable must
- * fail open and never enable enforcement. When enabled, returns
+ * Returns { required: false } when disabled OR config is unavailable
+ * (config == null after a failed load) — config-unavailable must fail open
+ * and never enable enforcement. When enabled, returns
  * { required: true, requireProvenance, lightMode, hasFullLabel, gates } where
  * each per-required-gate entry records executionMode, inlineReason,
  * scopeUnderThreshold, and whether the deterministic findings-log ledger exists

@@ -121,18 +121,14 @@ function parsePrNumberFromOutput(stdout) {
   const match = PR_URL_NUMBER_PATTERN.exec(stdout ?? "");
   return match ? Number(match[1]) : null;
 }
-// Auto-enqueue ANY board item (issue or PR) into the given Status column — a
-// generic, idempotent, fail-open board add shared by create-pr (lightweight
-// PRs -> In Progress) and create-issue (new issues -> Backlog). This is the
-// "one guard where all callers route" fix for QUEUE-BOARD-LINKED: a guard that
-// only lives at one entry point. Reuses the same .devloops tracker.board
-// number / title resolution and add-queue-item's idempotent add — never
-// reimplements the board API calls. An ADD (not a status transition) — board
-// status transitions stay orchestrator-owned per sanctioned-commands.mjs.
-// Never throws: an unconfigured board, a missing --repo, an unparsed item
-// number, or an enqueue failure are all non-fatal no-ops reported in the
-// returned shape. `column` defaults to the configured In Progress column (the
-// historical lightweight-PR behavior).
+// Generic, idempotent, fail-open board add shared by create-pr (lightweight
+// PRs -> In Progress) and create-issue (new issues -> Backlog): the one guard
+// all callers route through (QUEUE-BOARD-LINKED). Reuses .devloops
+// tracker.board resolution and add-queue-item's idempotent add rather than
+// reimplementing the board API. An ADD only — status transitions stay
+// orchestrator-owned per sanctioned-commands.mjs. Never throws: an
+// unconfigured board, missing --repo, unparsed item number, or enqueue
+// failure are all non-fatal no-ops reported in the returned shape.
 export async function enqueueBoardItem({ repo, itemNumber, column, cwd, env, runChild }) {
   if (!repo) return { enqueued: false, reason: "repo-not-specified" };
   if (!Number.isInteger(itemNumber) || itemNumber < 1) return { enqueued: false, reason: "item-number-not-parsed" };
@@ -169,23 +165,22 @@ export async function enqueueIssuelessLightweightPr({ repo, prNumber, cwd, env, 
   }
   return board;
 }
-// #1629: FACADE-LINKED-PR-SINGLE-ARTIFACT — refuse opening a PR whose closing
-// keyword/`--issue` names an issue that already has an open same-repo linked
-// PR, so no issue can accrue a second open PR that would silently shadow the
-// first. A deliberate replacement records its intent via `--allow-replacement-pr
-// <prior>` (which matches the detected open linked-PR number). Issue-less
-// lightweight PRs carry no closing keyword and are exempt. When the check
-// cannot run because `--repo` is absent or the GitHub API is unavailable, the
-// guard FAILS CLOSED on ambiguity rather than silently risking a duplicate.
+// FACADE-LINKED-PR-SINGLE-ARTIFACT (#1629): refuse opening a PR whose closing
+// keyword/`--issue` names an issue with an already-open same-repo linked PR
+// (no issue may accrue a second, shadowing PR). `--allow-replacement-pr
+// <prior>` records a deliberate replacement (must match the detected open
+// linked-PR number). Issue-less lightweight PRs carry no closing keyword and
+// are exempt. FAILS CLOSED on ambiguity (missing `--repo` or GitHub API
+// unavailable) rather than silently risking a duplicate.
 //
-// Return value: `{ refusal: string | null, replaced?: number }`. `refusal` is
-// a non-null reason string to refuse with (null = allow), `replaced` records the
-// prior PR number when an explicit replacement override was honored.
+// Return value: `{ refusal: string | null, replaced?: number }` — `refusal`
+// non-null refuses with that reason (null = allow); `replaced` records the
+// prior PR number when a replacement override was honored.
 export async function resolveLinkedPrGuard({ repo, issue, allowReplacementPr, runtime = {} }) {
-  // #1629: treat an absent OR empty/whitespace repo slug as missing — an
-  // empty `--repo=`/`--repo ""` would otherwise reach the network probe with
-  // an invalid value and be misreported as "API unavailable" instead of the
-  // honest fail-closed ambiguity refusal (copilot review finding).
+  // Treat an absent OR empty/whitespace repo slug as missing — an empty
+  // `--repo=`/`--repo ""` would otherwise reach the network probe and be
+  // misreported as "API unavailable" instead of the honest fail-closed
+  // ambiguity refusal.
   if (repo === null || (typeof repo === "string" && repo.trim() === "")) {
     return { refusal: `FACADE-LINKED-PR-SINGLE-ARTIFACT: cannot verify whether issue #${issue} already has an open linked PR because --repo owner/name was not provided — refusing on ambiguity (fail closed). Pass --repo owner/name to enable the same-repo duplicate-linked-PR check.` };
   }

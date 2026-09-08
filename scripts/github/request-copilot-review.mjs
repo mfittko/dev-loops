@@ -241,18 +241,14 @@ async function fetchCopilotReviewIds({ repo, pr }, { env = process.env, ghComman
   return parseReviewsPayload(result.stdout);
 }
 
-// Re-derive the completed Copilot round count with the draft-gate round reset
-// applied, mirroring detect-pr-gate-coordination-state so both scripts agree on the
-// completed count and therefore on round-cap-reached (#896). A clean draft_gate
-// re-pass on an earlier head resets the count, so post-reset reviews must not be
-// counted toward the cap.
-//
-// Queried lazily — only when the raw (un-reset) count has already hit the cap — so
-// the common (under-cap) request path keeps its existing gh-call contract and adds
-// no API round-trip. Reads the same two verdict surfaces every other gate-evidence
-// reader shares (fetchGateEvidenceComments), not the full checkpoint-evidence
-// pipeline, to keep the added surface minimal. Best-effort: a fetch failure falls
-// back to the raw count, so the cap is never silently disabled.
+// Re-derives the completed round count with the draft-gate round reset applied
+// so it agrees with detect-pr-gate-coordination-state (#896): a clean
+// draft_gate re-pass on an earlier head resets the count, excluding post-reset
+// reviews from the cap. Queried lazily, only once the raw count already hits
+// the cap, so the common under-cap path adds no API round-trip; reuses the
+// shared gate-evidence comment reader, not the full checkpoint pipeline.
+// Best-effort: a fetch failure falls back to the raw count, never disabling
+// the cap.
 async function resolveDraftGateAdjustedRounds(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}, before) {
   try {
     const currentHeadSha = typeof before?.prData?.headRefOid === "string" && before.prData.headRefOid.trim().length > 0
@@ -300,14 +296,12 @@ async function checkReviewObservablyInProgress(options, runtime, before) {
 }
 
 // GraphQL verification surface (#1980): the two REST reads above go blind
-// once a request transitions into an in-progress review — GET
-// requested_reviewers empties out, and `gh pr view --json reviews` never
-// returns another actor's PENDING review. GraphQL's `reviewRequests`
-// connection and raw review nodes (any state, including PENDING) DO observe
-// both — the same state the GitHub UI renders. VERIFICATION only: never an
-// alternative request-mutation path (the REST POST above stays the only
-// mutation). Fail-soft — any gh/parse error here means "not observed on this
-// surface", never a throw, since this signal only ever ADDS a success path.
+// once a request transitions into an in-progress review (GET
+// requested_reviewers empties out; `gh pr view --json reviews` never returns
+// another actor's PENDING review). GraphQL's reviewRequests/review nodes (any
+// state, incl. PENDING) DO observe both. VERIFICATION only, never a mutation
+// path. Fail-soft: any gh/parse error here means "not observed", never a
+// throw, since this signal only ever ADDS a success path.
 const COPILOT_REVIEW_GRAPHQL_QUERY = [
   "query($owner: String!, $name: String!, $pr: Int!) {",
   "  repository(owner: $owner, name: $name) {",
@@ -554,9 +548,7 @@ export function getLastCopilotReviewHeadSha(prData) {
     (r) => r?.state !== "PENDING" && isCopilotLogin(r?.author?.login),
   );
   if (copilotReviews.length === 0) return null;
-  // Select the most recent Copilot review: sort by submittedAt descending,
-  // falling back to original array position when timestamps are missing
-  // (later index = more recent).
+  // Timestamps can be missing; fall back to array position (later = more recent).
   const indexed = copilotReviews.map((r, i) => ({ review: r, index: i }));
   indexed.sort((a, b) => {
     const parseTs = (r) => {
@@ -608,16 +600,11 @@ function classifyRequestFailure(detail) {
   return undefined;
 }
 async function requestCopilotReview({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
-  // Request via the REST requested_reviewers endpoint with the app-style
-  // `copilot-pull-request-reviewer[bot]` login (#1918). `gh pr edit
-  // --add-reviewer @copilot` (and the GraphQL requestReviews botIds mutation
-  // once Copilot already reviewed) return success but register no reviewer on
-  // repos whose Copilot reviewer is the bot — a silent no-op that stalled the
-  // loop at waiting_for_copilot. The REST call with the plain
-  // `copilot-pull-request-reviewer` login 422s ("Reviews may only be requested
-  // from collaborators…"); only the `[bot]`-suffixed login actually registers
-  // the request. A genuine 422 (Copilot reviewer truly unavailable) is still
-  // classified `unavailable` below.
+  // REST requested_reviewers with the app-style `[bot]`-suffixed login
+  // (#1918): `gh pr edit --add-reviewer @copilot` / the GraphQL requestReviews
+  // mutation silently register no reviewer on repos whose Copilot reviewer is
+  // the bot, and the plain (non-`[bot]`) login 422s. A genuine 422 (Copilot
+  // truly unavailable) is still classified `unavailable` below.
   const result = await runChild(
     ghCommand,
     [
@@ -751,15 +738,13 @@ export async function performCopilotReviewRequest(
       };
     }
   }
-  // Operator-authorized post-convergence suppression (#1441): withdraw-copilot-
-  // review-request.mjs writes a marker, scoped to an EXACT head SHA, only after
-  // explicitly withdrawing a stranded request on a head that has advanced past
-  // Copilot's last submitted review with a provable pure doc/prose delta since
-  // then. Checked BEFORE the round-cap logic below (unlike the round-cap AC2
-  // carry-forward check, this applies regardless of round count) so a below-cap
-  // re-request cannot immediately re-strand the exact head an operator already
-  // proved is safe to skip. Never automatic: without that marker this check is a
-  // no-op, and any further push invalidates it (new head no longer matches).
+  // Operator-authorized post-convergence suppression (#1441): a marker scoped
+  // to an EXACT head SHA, written only after an operator explicitly withdrew a
+  // stranded request on a head with a provable pure doc/prose delta since
+  // Copilot's last submitted review. Checked BEFORE the round-cap logic
+  // (applies regardless of round count) so a below-cap re-request cannot
+  // immediately re-strand that head. Never automatic; any further push
+  // invalidates the marker (new head no longer matches).
   if (!before.requested && !before.hasPendingReviewOnCurrentHead && !before.hasSubmittedReviewOnCurrentHead) {
     const currentHeadSha = typeof before.prData?.headRefOid === "string" && before.prData.headRefOid.trim().length > 0
       ? before.prData.headRefOid.trim()
@@ -903,17 +888,13 @@ export async function performCopilotReviewRequest(
         maxRounds,
       });
     }
-    // AC2 fail-closed convergence carry-forward: at the round cap, a post-convergence
-    // head bump whose delta since the last Copilot-reviewed head is PROVABLY a pure
-    // doc/prose bump must NOT force a fresh blocking Copilot round — this is the exact
-    // choke point (shared by --force-rerequest-review and the auto-rerequest-eligible
-    // path) where new commits bypass the cap. Consult the pure, path-based seam
-    // resolveConvergenceCarryForward on that delta. DEFAULT-SAFE: the delta lookup
-    // fails closed (null) on any uncertainty, and the seam returns carryForward:false
-    // on any code/test/config/CI or unclassifiable file (and on an empty delta), so
-    // every non-pure-doc case re-opens the round exactly as before. The
-    // "significant post-convergence change re-opens a cycle" exception and the round
-    // cap itself are untouched for those deltas.
+    // AC2 fail-closed convergence carry-forward: at the round cap, a
+    // post-convergence delta PROVABLY a pure doc/prose bump must not force a
+    // fresh blocking round. DEFAULT-SAFE: the delta lookup fails closed (null)
+    // on any uncertainty, and resolveConvergenceCarryForward returns
+    // carryForward:false on any code/test/config/CI or unclassifiable file
+    // (or an empty delta), so every non-pure-doc case re-opens the round
+    // exactly as before.
     const deltaChangedFiles = await fetchDeltaChangedFiles(
       { repo: options.repo, base: lastReviewSha, head: currentHeadSha },
       runtime,
@@ -1065,14 +1046,8 @@ export async function runCli(
     delayImpl,
     repoRoot,
   });
-  // Honest status under --silent: `ok: true` reports "the helper ran without
-  // error", not "a review was placed" — a caller checking only exit-code
-  // truthiness must NOT read a non-`requested` status (blocked_by_copilot_comment,
-  // round_cap_reached, etc.) as a placed request. --silent therefore answers
-  // "was a request just placed" specifically: exit 0 only for `requested`,
-  // non-zero for every other status. Non-silent output is unaffected — the full
-  // JSON body (with `ok: true`) still prints for every documented status; the
-  // caller MUST branch on `.status`, not `.ok`.
+  // --silent exit-code contract (see USAGE "Status contract" above): 0 only
+  // for status "requested", never derived from `ok`.
   const silentOk = options.silent ? result.status === "requested" : undefined;
   setExitCode(emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr, ok: silentOk }));
 }
