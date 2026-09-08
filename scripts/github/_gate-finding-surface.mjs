@@ -98,7 +98,7 @@ export function isDeferredAtRound(severity, round, mediumFixWindow = MEDIUM_FIX_
   return true; // "low" or "nit" (and any legacy spelling of either)
 }
 
-// The net-reduction filing bar (#1846): resolving a thread (isDeferredAtRound)
+// The net-reduction filing bar: resolving a thread (isDeferredAtRound)
 // and FILING it on the follow-up issue are different decisions. `nit` is
 // NEVER fileable — resolved-with-rationale in-thread only, a resolved nit is
 // cosmetic, not a backlog item. `low` is fileable ONLY when its own marker
@@ -128,7 +128,7 @@ export function isFileableDeferral(severity, operatorVisible, round, mediumFixWi
 const VALID_MARKER_DISPOSITIONS = new Set(["deferred"]);
 
 // `issue` is the follow-up GitHub issue number a `disposition=deferred`
-// finding is tracked on (#1807, GATE-EXEC-DEFERRAL-RECORD): a deferral must
+// finding is tracked on (GATE-EXEC-DEFERRAL-RECORD): a deferral must
 // never live only in the thread marker and the ephemeral tmp ledger, so the
 // marker itself carries the re-attachment pointer.
 //
@@ -213,7 +213,7 @@ export function collectFingerprints(text, set) {
 }
 
 // ---------------------------------------------------------------------------
-// Follow-up issue for deferred findings (#1807)
+// Follow-up issue for deferred findings (GATE-EXEC-DEFERRAL-RECORD)
 // ---------------------------------------------------------------------------
 //
 // A `defer` disposition (judge-pass.mjs's relevance defer, or
@@ -226,7 +226,7 @@ export function collectFingerprints(text, set) {
 // (guarded via commentIssue's guardCommentBodyNoIssuePrIds) and the create
 // path (unguarded) render through formatDeferredFindingEntry, which strips a
 // literal leading `#` off a bare digit token rather than entity-encoding it:
-// entity-encoding still decodes back to `#123` under the guard's own
+// entity-encoding still decodes back to a bare `#` immediately followed by digits under the guard's own
 // decode-aware scan, but stripping the `#` means no decode path can ever
 // reassemble one, and it makes GitHub's own auto-linker a non-issue too
 // (auto-link syntax requires the leading `#`). Both paths render through
@@ -409,7 +409,7 @@ export function renderInlineCommentBody(finding, { round }) {
 // as an accepted outcome). This keeps the finding from being suppressed by
 // its own fingerprint while tracked nowhere else.
 //
-// buildNonLocatableFindingMarker is factored out on its own (#1942):
+// buildNonLocatableFindingMarker is factored out on its own (GATE-COMMENT-SINGLE-SURFACE):
 // upsert-checkpoint-verdict.mjs's grouped findings table is now the sole
 // VISIBLE carrier of a body-filed finding's text, but this invisible
 // marker's fingerprint+disposition=deferred stamp is still load-bearing for
@@ -531,7 +531,7 @@ export async function readGateFindingsLedger(ledgerPath, { errorFactory = (messa
   // wrapper by write-gate-findings-log.mjs. Optional and additive: when absent
   // the ledger reads exactly as before (inline and fallback paths unaffected).
   // Fail closed on a present-but-invalid value rather than silently treating it
-  // as absent (#1616): a malformed `overallVerdict` must not let a contradicting
+  // as absent (GATE-COMMENT-VERDICT-VALUES): a malformed `overallVerdict` must not let a contradicting
   // `--verdict` slip through enforcement by defaulting to "no overallVerdict".
   const overallVerdictRaw = parsed.overallVerdict;
   if (overallVerdictRaw !== undefined) {
@@ -670,7 +670,7 @@ export async function fetchGateEvidenceComments({ repo, pr }, { env, ghCommand, 
  * Count unresolved GATE-AUTHORED review threads — threads whose first comment
  * was authored by the gate's own login (`login`) and carries a parseable
  * `dev-loops:finding` marker (any severity). This is the gate-close predicate
- * (#1585) fetchDraftGateEvidence wires in: a clean verdict alone no longer
+ * (GATE-EXEC-FINDING-THREADS) fetchDraftGateEvidence wires in: a clean verdict alone no longer
  * satisfies the gate — every gate-authored thread must be resolved
  * (fix-closed by the fixer, or defer-closed by the disposition pass) first.
  *
@@ -831,7 +831,7 @@ function parseReviewMutationResponse(payload) {
  *
  * `event` defaults to "COMMENT" (draft_gate/pre_approval_gate's only submit
  * mode — GATE-COMMENT-SINGLE-SURFACE). The standalone `review` gate's
- * `pending` submit mode (#1840) passes `event: null` so GitHub leaves the
+ * `pending` submit mode (GATE-REVIEW-SUBMIT-MODES) passes `event: null` so GitHub leaves the
  * review PENDING (author-only draft): a falsy `event` here — `null`, never
  * the parameter-default-triggering `undefined` — omits the `event` key from
  * the payload entirely, which is what the create-review API reads as "leave
@@ -878,7 +878,7 @@ export async function updateGateReview({ repo, pr, reviewId, body, allowedRefs }
  * Find the authenticated caller's own PENDING (author-only draft) review on
  * this PR. GitHub allows only ONE pending review per user per PR (PR-scoped,
  * not head-scoped), so ANY create 422s while one exists on whatever head
- * (#1912): a `--gate review --submit` re-run must resolve it first (submit
+ * (GATE-REVIEW-SUBMIT-MODES): a `--gate review --submit` re-run must resolve it first (submit
  * via `submitPendingReview`, or delete it) rather than POST a second one. A
  * pending review is author-only, so its marker is never `visible` — this
  * reads the raw reviews list instead.
@@ -897,7 +897,7 @@ export async function updateGateReview({ repo, pr, reviewId, body, allowedRefs }
  * `{ id, commitId, body, sameHead }` or `null`.
  */
 // Anchored to the START of the body (no `m` flag): a foreign draft that
-// merely quotes the header line lower down must never match (#1912).
+// merely quotes the header line lower down must never match (GATE-REVIEW-SUBMIT-MODES).
 // GATE_REVIEW_COMMENT_HEADER_RE (core) is scoped to draft_gate/
 // pre_approval_gate only, so `review`'s own header is matched locally here.
 const REVIEW_GATE_PENDING_HEADER_RE = /^###[ \t]+Gate review:[ \t]*`review`[ \t]*(?:\r?\n|$)/;
@@ -926,7 +926,7 @@ export async function findOwnPendingReview({ repo, pr, headSha }, { env, ghComma
  * This preserves the pending review's already-attached inline comments — the
  * events endpoint submits the draft as-is; only the event (and an optional body
  * override) are sent. Distinct from `createGateReview`, which would 422 when a
- * pending review already exists (#1912).
+ * pending review already exists (GATE-REVIEW-SUBMIT-MODES).
  */
 export async function submitPendingReview({ repo, pr, reviewId, event, body }, { env, ghCommand, runChild = defaultRunChild }) {
   const payload = { event, ...(typeof body === "string" && body.length > 0 ? { body } : {}) };
@@ -943,7 +943,7 @@ export async function submitPendingReview({ repo, pr, reviewId, event, body }, {
 /**
  * Delete an existing PENDING review via
  * `DELETE /repos/<owner>/<repo>/pulls/<pr>/reviews/<id>` — the "Discard" submit
- * choice (#1912), distinct from "Leave pending" which leaves the draft in
+ * choice (GATE-REVIEW-SUBMIT-MODES), distinct from "Leave pending" which leaves the draft in
  * place. Only ever called on the caller's OWN pending review (resolved via
  * `findOwnPendingReview`).
  */

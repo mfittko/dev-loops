@@ -126,7 +126,7 @@ function validateFindingsArray(parsed, flagLabel) {
       // validator both route through it so the two can never drift.
       entry.disposition = deriveDisposition(f.severity, { locatable: hasLocatableShape(entry) });
     }
-    // #1846: the explicit operator-visibility signal for a "low" finding —
+    // net-reduction disposition policy: the explicit operator-visibility signal for a "low" finding —
     // see buildFindingMarker's doc (_gate-finding-surface.mjs) for the full
     // contract. Boolean-only; absent/false is the conservative default.
     if ("operatorVisible" in f) {
@@ -151,7 +151,7 @@ function validateFindingsArray(parsed, flagLabel) {
       }
       entry.resolvedIn = sha;
     }
-    // Judge relevance-based dispositions (#1525): optional and additive —
+    // Judge relevance-based dispositions (GATE-EXEC-JUDGE-PHASE): optional and additive —
     // absent when no judge verdict ran, the finding writes exactly as before.
     if (typeof f.judgeDisposition === "string" && f.judgeDisposition.trim().length > 0) {
       const jd = f.judgeDisposition.trim();
@@ -166,7 +166,7 @@ function validateFindingsArray(parsed, flagLabel) {
     if (typeof f.judgeCriterion === "string" && f.judgeCriterion.trim().length > 0) {
       entry.judgeCriterion = f.judgeCriterion.trim();
     }
-    // #1807: a judge-pass-enriched finding may carry a stable `fingerprint`
+    // GATE-EXEC-DEFERRAL-RECORD: a judge-pass-enriched finding may carry a stable `fingerprint`
     // ([0-9a-f]{16}, matching the finding-marker regex) and a `defer` finding
     // additionally carries `followUpIssueNumber` (the PR's one tracked
     // follow-up issue). Both optional; a malformed fingerprint fails closed.
@@ -253,7 +253,7 @@ export function parseProvenanceJson(raw, resolvedGroups = null) {
     }
     // carriedFromHead marks an angle whose verdict was carried forward from a
     // prior head whose delta provably did not touch this angle's surface
-    // (#2017; @dev-loops/core/loop/gate-carry-forward). `reviewer` stays that
+    // (GATE-EXEC-ANGLE-CARRY-FORWARD; @dev-loops/core/loop/gate-carry-forward). `reviewer` stays that
     // prior head's reviewer (honest attribution) and still counts toward the
     // distinctReviewers consistency check below.
     if ("carriedFromHead" in a) {
@@ -262,7 +262,7 @@ export function parseProvenanceJson(raw, resolvedGroups = null) {
       }
       entry.carriedFromHead = a.carriedFromHead.trim().toLowerCase();
     }
-    // carriedVerdict (#2017) records which verdict a carried angle preserved:
+    // carriedVerdict (GATE-EXEC-ANGLE-CARRY-FORWARD) records which verdict a carried angle preserved:
     // "findings_present" means its prior open findings carried forward
     // unchanged (still recorded in --findings, never substituted here).
     // Requires carriedFromHead — it only labels provenance, it never itself
@@ -285,7 +285,7 @@ export function parseProvenanceJson(raw, resolvedGroups = null) {
   if (consistencyError) {
     throw parseError(`--${consistencyError}`);
   }
-  // One-scoped-reviewer-per-fresh-angle floor (#1431): no two fresh
+  // One-scoped-reviewer-per-fresh-angle floor (GATE-EXEC-FANOUT-DISPATCH-KEY): no two fresh
   // (non-carried) angles may share a reviewer identity, except fresh angles
   // sharing one under the SAME declared `group` (grouped fan-out dispatch —
   // see fanoutReviewerPairingError). `resolvedGroups` additionally rejects a
@@ -468,7 +468,7 @@ export function buildLogPath({ repo, pr, gate, headSha, tmpRoot }) {
 export async function writeGateFindingsLog(options, { repoRoot = process.cwd() } = {}) {
   const { findings: rawFindings, overallVerdict } = await resolveFindings(options);
   // When a judge verdict artifact is supplied, enrich the findings with the
-  // judge's relevance-based dispositions (#1525) before writing the ledger:
+  // judge's relevance-based dispositions (GATE-EXEC-JUDGE-PHASE) before writing the ledger:
   // applyJudgeDispositions fails closed on a malformed verdict, an
   // out-of-range index, or dispositions that do not cover every finding.
   let findings = rawFindings;
@@ -491,7 +491,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // bare-array input (legacy --findings-file, hand-authored --findings) has
   // no wrapper, so `overallVerdict` stays undefined, but the persisted
   // `verdict` is always the canonical normalized caller verdict either way
-  // (#1616).
+  // (GATE-COMMENT-VERDICT-VALUES).
 
   // Validate --verdict domain up front: the shared normalizeVerdict
   // (scripts/github/_gate-names.mjs) already guards non-strings internally,
@@ -518,7 +518,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     }
     normalizedOverallVerdict = verdict;
     // Fail closed on a caller-passed --verdict that contradicts the
-    // consolidator's computed verdict (#1616, GATE-COMMENT-VERDICT-VALUES).
+    // consolidator's computed verdict (GATE-COMMENT-VERDICT-VALUES).
     // The judge only enriches findings with act/defer/reject dispositions —
     // it never revises the round verdict — so this comparison runs the same
     // with or without --judge-verdict. A --judge-verdict run can still fail
@@ -573,7 +573,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     findings,
   };
   // `overallVerdict` is optional and additive (absent on a bare-array input);
-  // `verdict` above is always the canonical normalized caller value (#1616).
+  // `verdict` above is always the canonical normalized caller value (GATE-COMMENT-VERDICT-VALUES).
   if (normalizedOverallVerdict !== undefined) {
     log.overallVerdict = normalizedOverallVerdict;
   }
@@ -583,7 +583,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   if (provenance !== undefined) {
     log.provenance = provenance;
   }
-  // The judge's scope-drift verdict on the PR as a whole (#1525); optional
+  // The judge's scope-drift verdict on the PR as a whole (GATE-EXEC-JUDGE-PHASE); optional
   // and additive.
   if (scopeDrift !== undefined) {
     log.scopeDrift = scopeDrift;
