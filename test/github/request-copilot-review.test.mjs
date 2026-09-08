@@ -3,7 +3,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { describe, it, test } from "bun:test";
+import { afterAll, beforeAll, describe, it, test } from "bun:test";
 import { captureStream, makeGhMock, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 import { checkForCopilotComments, parseRequestCliArgs, performCopilotReviewRequest, runCli } from "../../scripts/github/request-copilot-review.mjs";
 import { formatCliError } from "../../scripts/_core-helpers.mjs";
@@ -12,6 +12,19 @@ import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-rev
 const scriptPath = path.resolve("scripts/github/request-copilot-review.mjs");
 
 const GH_ENTRIES = Symbol("request-copilot-review gh entries");
+
+// Config-hermeticity (issue #2055): these tests assert cap=2 round behavior.
+// Resolve the round cap from a fixture repoRoot pinning refinement.maxCopilotRounds: 2
+// instead of the ambient .devloops (the slim line sets it to 1). Assertions are
+// unchanged; the suite simply owns its cap instead of inheriting the shipped one.
+let capFixtureRepoRoot = null;
+beforeAll(async () => {
+  capFixtureRepoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-request-copilot-cap-fixture-"));
+  await writeFile(path.join(capFixtureRepoRoot, ".devloops"), "version: 1\nrefinement:\n  maxCopilotRounds: 2\n", "utf8");
+});
+afterAll(async () => {
+  if (capFixtureRepoRoot) await rm(capFixtureRepoRoot, { recursive: true, force: true });
+});
 
 async function runNode(args = [], options = {}) {
   if (args.includes("--help") || args.includes("-h")) {
@@ -29,7 +42,7 @@ async function runNode(args = [], options = {}) {
       env,
       runChild,
       delayImpl: unexpectedDelay,
-      repoRoot: options.cwd ?? process.cwd(),
+      repoRoot: options.cwd ?? capFixtureRepoRoot,
       setExitCode: (value) => { code = value; },
     });
   } catch (error) {
@@ -98,7 +111,7 @@ async function runInProcess(args, entries, { env = { GH_SEQUENCE_PATH: "1" }, de
   const { runChild, calls } = makeGhMock(entries, { repeatLastOnOverflow: true });
   const options = parseRequestCliArgs(args);
   try {
-    const result = await performCopilotReviewRequest(options, { env, ghCommand: "gh", runChild, delayImpl });
+    const result = await performCopilotReviewRequest(options, { env, ghCommand: "gh", runChild, delayImpl, repoRoot: capFixtureRepoRoot });
     return { result, calls };
   } catch (error) {
     // Attach the recorded gh calls to a rejection too, so a test asserting
@@ -2256,7 +2269,7 @@ describe("operator-authorized post-convergence suppression marker (#1441)", () =
       ], { repeatLastOnOverflow: true });
       const result = await performCopilotReviewRequest(
         { repo: "owner/repo", pr: 17, checkpointDir },
-        { env: { GH_SEQUENCE_PATH: "1" }, ghCommand: "gh", runChild },
+        { env: { GH_SEQUENCE_PATH: "1" }, ghCommand: "gh", runChild, repoRoot: capFixtureRepoRoot },
       );
       assert.equal(result.status, "suppressed_post_convergence_docs_only");
       assert.equal(calls.some(isCopilotRequestCall), false, "no fresh request should be placed");
@@ -2284,7 +2297,7 @@ describe("operator-authorized post-convergence suppression marker (#1441)", () =
       ], { repeatLastOnOverflow: true });
       const result = await performCopilotReviewRequest(
         { repo: "owner/repo", pr: 17, checkpointDir },
-        { env: { GH_SEQUENCE_PATH: "1" }, ghCommand: "gh", runChild },
+        { env: { GH_SEQUENCE_PATH: "1" }, ghCommand: "gh", runChild, repoRoot: capFixtureRepoRoot },
       );
       assert.equal(result.status, "requested");
       assert.ok(calls.some(isCopilotRequestCall), "a real request must still be placed");
@@ -2318,7 +2331,7 @@ describe("operator-authorized post-convergence suppression marker (#1441)", () =
       ], { repeatLastOnOverflow: true });
       const result = await performCopilotReviewRequest(
         { repo: "owner/repo", pr: 17, checkpointDir },
-        { env: { GH_SEQUENCE_PATH: "1" }, ghCommand: "gh", runChild },
+        { env: { GH_SEQUENCE_PATH: "1" }, ghCommand: "gh", runChild, repoRoot: capFixtureRepoRoot },
       );
       assert.equal(result.status, "requested");
       assert.ok(calls.some(isCopilotRequestCall), "a real request must still be placed");
