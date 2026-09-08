@@ -2,7 +2,8 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { main as moveQueueItemMain } from "../projects/move-queue-item.mjs";
-import { ghGraphql, resolveOwner } from "../github/gh.mjs";
+import { resolveOwner } from "../github/gh.mjs";
+import { discoverProjects } from "../projects/projects-access.mjs";
 
 const DEFAULT_NON_SUCCESS_COLUMN = "Backlog";
 
@@ -277,52 +278,12 @@ export function loadStateColumnMap(repoRoot) {
 
 // ── Minimal project lookup (read-only, no create/repair) ────────────────
 
-const LIST_USER_PROJECTS = [
-  "query($login:String!, $after:String) {",
-  "  user(login:$login) {",
-  "    projectsV2(first:50, after:$after) {",
-  "      pageInfo { hasNextPage endCursor }",
-  "      nodes { id number title url }",
-  "    }",
-  "  }",
-  "}"
-].join("\n");
-
-const LIST_ORG_PROJECTS = [
-  "query($login:String!, $after:String) {",
-  "  organization(login:$login) {",
-  "    projectsV2(first:50, after:$after) {",
-  "      pageInfo { hasNextPage endCursor }",
-  "      nodes { id number title url }",
-  "    }",
-  "  }",
-  "}"
-].join("\n");
-
+// Board-sync tolerates null project nodes (defensive against a partial page);
+// the shared discovery returns raw nodes, so this caller keeps its own null
+// filter at the call site rather than in the shared traversal.
 async function listAllProjects(login, kind, env, runChild) {
-  const query = kind === "org" ? LIST_ORG_PROJECTS : LIST_USER_PROJECTS;
-  const projects = [];
-  let after = null;
-  while (true) {
-    const vars = { login };
-    if (after) vars.after = after;
-    const payload = await ghGraphql(query, vars, env, runChild);
-    const connection = kind === "org"
-      ? payload?.data?.organization?.projectsV2
-      : payload?.data?.user?.projectsV2;
-    const nodes = connection?.nodes ?? [];
-    projects.push(...nodes.filter((n) => n != null));
-    const pageInfo = connection?.pageInfo ?? {};
-    if (!pageInfo.hasNextPage) break;
-    if (!pageInfo.endCursor) {
-      throw Object.assign(
-        new Error("Invalid projects list payload: hasNextPage is true but endCursor is missing"),
-        { code: "GH_API_ERROR" },
-      );
-    }
-    after = pageInfo.endCursor;
-  }
-  return projects;
+  const projects = await discoverProjects(login, kind, env, runChild);
+  return projects.filter((n) => n != null);
 }
 
 const projectNumberCache = new Map();
