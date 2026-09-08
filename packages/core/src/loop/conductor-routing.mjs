@@ -1,30 +1,22 @@
 /**
- * Conductor routing contract: deterministic routing and handoff decisions
- * above family-local state machines.
- *
- * This module provides:
- * - ROUTING_OUTCOME: closed routing outcome taxonomy constants
- * - LOOP_FAMILY: loop family identifier constants
- * - SOURCE_MODE: confidence/source mode constants
- * - ENTRYPOINT: handoff entrypoint identifier constants
- * - STOP_REASON: stop reason code constants (for outer-loop backward compat)
- * - evaluateConductorRouting: shared evaluator/policy entrypoint
+ * Conductor routing contract: deterministic routing and handoff decisions above
+ * family-local state machines. See skills/docs/conductor-routing-contract.md.
  *
  * Contract guarantees:
- * - One deterministic routing outcome per normalized input set
+ * - One deterministic routing outcome per normalized input set.
  * - Ambiguous, conflicting, or insufficient inputs return `needs_reconcile`
- *   rather than a guessed handoff
- * - The evaluator is purely functional; no I/O or side effects
- * - Callers use evaluateConductorRouting as the single routing authority
+ *   rather than a guessed handoff.
+ * - The evaluator is purely functional; no I/O or side effects.
+ * - evaluateConductorRouting is the single routing authority.
  *
- * Integration boundary (see skills/docs/conductor-routing-contract.md):
- * - This module starts after active-run identity and ownership are already resolved
- * - It consumes already-detected family-local lifecycle states as inputs
- * - It derives the routing outcome directly from states; it does not take a
- *   pre-computed outer-loop action as an input
- * - It emits routing decisions and handoff envelopes; it does not perform handoff
- * - Ownership/idempotency rules remain in conductor-ownership.mjs (#32)
- * - Family-local state machine semantics remain in copilot-loop-state.mjs etc. (#26)
+ * Integration boundary:
+ * - Starts after active-run identity and ownership are already resolved; it
+ *   consumes already-detected family-local lifecycle states as inputs.
+ * - Derives the routing outcome directly from states; it does not take a
+ *   pre-computed outer-loop action as an input.
+ * - Emits routing decisions and handoff envelopes; it does not perform handoff.
+ * - Ownership/idempotency rules remain in conductor-ownership.mjs; family-local
+ *   state machine semantics remain in copilot-loop-state.mjs etc.
  */
 
 // ---------------------------------------------------------------------------
@@ -580,7 +572,7 @@ function routeFromStates({
  * @param {{ repo: string, pr: number }} input.target
  *   Explicit target identity (already resolved by the caller).
  * @param {string} [input.ownershipState]
- *   Settled ownership/idempotency classification from conductor-ownership (#32).
+ *   Settled ownership/idempotency classification from conductor-ownership.
  *   "live_owner" → stay_with_current_live_owner (no new handoff this cycle).
  *   "duplicate_local_owners" → needs_reconcile.
  *   Other values or omission → routing continues from states.
