@@ -133,10 +133,13 @@ test("detect-reviewer-loop-state --input treats submitted review as handoff and 
   }
 });
 
-test.skip("detect-reviewer-loop-state auto-detect returns review_requested when reviewer is requested", async () => {
+test("detect-reviewer-loop-state auto-detect returns review_requested when reviewer is requested", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reviewer-auto-requested-"));
 
   try {
+    // Reviewer scope is auto-resolved from PR requested reviewers (no
+    // --reviewer-login flag exists): the requested_reviewers endpoint is
+    // consulted once to resolve scope and again by fetchReviewRequested.
     const { env } = await writeGhStub(tempDir, [
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo"],
@@ -146,6 +149,10 @@ test.skip("detect-reviewer-loop-state auto-detect returns review_requested when 
           number: 17,
           headRefOid: "abc123",
         }) + "\n",
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[{"login":"pi-reviewer"}],"teams":[]}\n',
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -162,8 +169,6 @@ test.skip("detect-reviewer-loop-state auto-detect returns review_requested when 
       "owner/repo",
       "--pr",
       "17",
-      "--reviewer-login",
-      "pi-reviewer",
     ], { env });
 
     assert.equal(result.code, 0);
@@ -177,7 +182,7 @@ test.skip("detect-reviewer-loop-state auto-detect returns review_requested when 
   }
 });
 
-test.skip("detect-reviewer-loop-state auto-detect returns waiting_for_user_submit for current-head draft review", async () => {
+test("detect-reviewer-loop-state auto-detect returns waiting_for_user_submit for current-head draft review", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reviewer-auto-draft-"));
 
   try {
@@ -188,6 +193,10 @@ test.skip("detect-reviewer-loop-state auto-detect returns waiting_for_user_submi
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo"],
         stdout: JSON.stringify({ isDraft: false, state: "OPEN", number: 17, headRefOid: "abc123" }) + "\n",
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -212,8 +221,6 @@ test.skip("detect-reviewer-loop-state auto-detect returns waiting_for_user_submi
       "owner/repo",
       "--pr",
       "17",
-      "--reviewer-login",
-      "pi-reviewer",
       "--local-state",
       localStatePath,
     ], { env });
@@ -229,7 +236,7 @@ test.skip("detect-reviewer-loop-state auto-detect returns waiting_for_user_submi
 });
 
 
-test.skip("detect-reviewer-loop-state auto-detect treats missing local state as empty metadata", async () => {
+test("detect-reviewer-loop-state auto-detect treats missing local state as empty metadata", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reviewer-auto-missing-local-"));
 
   try {
@@ -239,6 +246,10 @@ test.skip("detect-reviewer-loop-state auto-detect treats missing local state as 
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo"],
         stdout: JSON.stringify({ isDraft: false, state: "OPEN", number: 17, headRefOid: "abc123" }) + "\n",
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -271,7 +282,7 @@ test.skip("detect-reviewer-loop-state auto-detect treats missing local state as 
 });
 
 
-test.skip("detect-reviewer-loop-state auto-detect keeps fresh pending review ahead of historical submitted review", async () => {
+test("detect-reviewer-loop-state auto-detect keeps fresh pending review ahead of historical submitted review", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reviewer-auto-rereview-draft-"));
 
   try {
@@ -282,6 +293,10 @@ test.skip("detect-reviewer-loop-state auto-detect keeps fresh pending review ahe
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo"],
         stdout: JSON.stringify({ isDraft: false, state: "OPEN", number: 17, headRefOid: "newsha" }) + "\n",
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -313,8 +328,6 @@ test.skip("detect-reviewer-loop-state auto-detect keeps fresh pending review ahe
       "owner/repo",
       "--pr",
       "17",
-      "--reviewer-login",
-      "pi-reviewer",
       "--local-state",
       localStatePath,
     ], { env });
@@ -331,7 +344,7 @@ test.skip("detect-reviewer-loop-state auto-detect keeps fresh pending review ahe
   }
 });
 
-test.skip("detect-reviewer-loop-state auto-detect marks stale draft as review_invalidated", async () => {
+test("detect-reviewer-loop-state auto-detect marks stale draft as review_invalidated", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-reviewer-auto-invalidated-"));
 
   try {
@@ -339,6 +352,10 @@ test.skip("detect-reviewer-loop-state auto-detect marks stale draft as review_in
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo"],
         stdout: JSON.stringify({ isDraft: false, state: "OPEN", number: 17, headRefOid: "newsha" }) + "\n",
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
       },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
@@ -353,7 +370,7 @@ test.skip("detect-reviewer-loop-state auto-detect marks stale draft as review_in
     ]);
 
     const result = await runNode([
-      "--repo", "owner/repo", "--pr", "17", "--reviewer-login", "pi-reviewer",
+      "--repo", "owner/repo", "--pr", "17",
     ], { env });
 
     assert.equal(result.code, 0);
@@ -433,7 +450,7 @@ test("detect-reviewer-loop-state auto-detect fails when gh stub call budget is e
   }
 });
 
-test.skip("detect-reviewer-loop-state rejects malformed arguments deterministically", async () => {
+test("detect-reviewer-loop-state rejects malformed arguments deterministically", async () => {
   const missingPr = await runNode(["--repo", "owner/repo"]);
   assert.equal(missingPr.code, 1);
   assert.deepEqual(JSON.parse(missingPr.stderr), {
@@ -460,13 +477,6 @@ test.skip("detect-reviewer-loop-state rejects malformed arguments deterministica
   assert.deepEqual(JSON.parse(badBool.stderr), {
     ok: false,
     error: "--review-requested must be true or false",
-  });
-
-  const blankReviewerLogin = await runNode(["--repo", "owner/repo", "--pr", "17", "--reviewer-login", "   "]);
-  assert.equal(blankReviewerLogin.code, 1);
-  assert.deepEqual(JSON.parse(blankReviewerLogin.stderr), {
-    ok: false,
-    error: "--reviewer-login must not be empty",
   });
 
   const unknown = await runNode(["--repo", "owner/repo", "--pr", "17", "--wat"]);
