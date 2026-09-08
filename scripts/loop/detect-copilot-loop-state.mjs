@@ -22,14 +22,10 @@ import {
   summarizeLoopInterpretation,
 } from "@dev-loops/core/loop/copilot-loop-state";
 import {
-  summarizeHeadScopedCheckRunsSignal,
-  normalizeHeadScopedCommitStatus,
   normalizeHeadScopedCiContract,
   deriveLoopCiStatusFromRollup,
-  partitionEntriesByCheckName,
-  LOOP_DERIVED_CI_CHECK_NAME,
-  LOOP_DERIVED_CI_CHECK_NAMES,
 } from "@dev-loops/core/loop/copilot-ci-status";
+import { observeHeadCiSignals } from "../github/observe-head-ci.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { resolveCopilotReviewRequestStatus } from "./_copilot-review-request-status.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -172,90 +168,27 @@ function extractPrVisibleCheckNames(statusCheckRollup) {
 }
 
 async function fetchCurrentHeadCiEvidence({ repo, headSha, prVisibleCheckNames }, { env, ghCommand, runChild = defaultRunChild }) {
-  const [checkRunsResult, statusesResult] = await Promise.all([
-    runChild(
-      ghCommand,
-      ["api", `repos/${repo}/commits/${headSha}/check-runs?per_page=100`],
-      env,
-    ),
-    runChild(
-      ghCommand,
-      ["api", `repos/${repo}/commits/${headSha}/status?per_page=100`],
-      env,
-    ),
-  ]);
-  let checkRunsSignal = null;
-  let checkRunsCount = null;
-  // Failing-ness of the excluded gate-evidence run (#1358), tracked separately
-  // from the pre-existing PR-visibility exclusion (#740) — excluding it never
-  // masks a real failure and (unlike #740) never needs a crediblyGreen relabel
-  // either, since every reason it can be red is independently tracked
-  // elsewhere in the loop snapshot (#1387).
-  let loopDerivedFailureDetails = [];
-  if (checkRunsResult.code === 0) {
-    try {
-      const payload = JSON.parse(checkRunsResult.stdout);
-      if (Array.isArray(payload?.check_runs)) {
-        const { matched: loopDerivedRuns, rest: nonLoopDerivedRuns } =
-          partitionEntriesByCheckName(payload.check_runs, LOOP_DERIVED_CI_CHECK_NAMES);
-        loopDerivedFailureDetails = summarizeHeadScopedCheckRunsSignal({ check_runs: loopDerivedRuns }).status === "failure"
-          ? [LOOP_DERIVED_CI_CHECK_NAME]
-          : [];
-        const visibleSet = prVisibleCheckNames?.length > 0 ? new Set(prVisibleCheckNames) : null;
-        const visibleRuns = visibleSet
-          ? nonLoopDerivedRuns.filter((run) => !run.name || visibleSet.has(run.name))
-          : nonLoopDerivedRuns;
-        // Use visible runs for the status signal, but preserve the full-set
-        // unsupportedCompleted flag so hidden check-runs still contribute to
-        // the cautious none override (#740).
-        const visibleSignal = summarizeHeadScopedCheckRunsSignal({ check_runs: visibleRuns });
-        const fullSignal = summarizeHeadScopedCheckRunsSignal({ check_runs: nonLoopDerivedRuns });
-        const excludedRuns = visibleSet
-          ? nonLoopDerivedRuns.filter((run) => run.name && !visibleSet.has(run.name))
-          : [];
-        const excludedSignal = summarizeHeadScopedCheckRunsSignal({ check_runs: excludedRuns });
-        checkRunsSignal = {
-          ...visibleSignal,
-          unsupportedCompleted: fullSignal.unsupportedCompleted,
-          excludedFailureDetails: [...(excludedSignal.failureDetails ?? []), ...loopDerivedFailureDetails],
-        };
-        checkRunsCount = payload.check_runs.length;
+  const { checkRuns, statuses } = await observeHeadCiSignals(
+    { repo, headSha, prVisibleCheckNames },
+    { env, ghCommand, runChild },
+  );
+  // Project the raw check-runs signals into the detector's shape. Unlike the CI
+  // watcher, a failed read (checkRuns.ok === false) reads as a MISSING signal
+  // (null), not a hard pending: the detector may still classify from the one
+  // surviving provider. It surfaces both hidden and loop-derived (gate-evidence)
+  // failures via excludedFailureDetails, and uses the RAW check-run count so a
+  // head whose only checks are hidden/loop-derived is not seen as check-less.
+  const checkRunsSignal = checkRuns.ok
+    ? {
+        ...checkRuns.visibleSignal,
+        unsupportedCompleted: checkRuns.fullSignal.unsupportedCompleted,
+        excludedFailureDetails: [...(checkRuns.excludedSignal.failureDetails ?? []), ...checkRuns.loopDerivedFailureDetails],
       }
-    } catch {
-      checkRunsSignal = null;
-      checkRunsCount = null;
-    }
-  }
-  let commitStatus = null;
-  let statusesCount = null;
-  // Same gate-evidence exclusion as the check-runs path above, mirrored for the
-  // commit-status API: since #1385 turned gate-evidence into an explicit
-  // StatusContext (not a check-run), its FAILURE state must not leak into
-  // commitStatus either, or a red gate-evidence-only PR stays stuck at
-  // currentHeadCiStatus: "failure" forever (it can never go green without the
-  // very verdict this loop is trying to post). normalizeHeadScopedCommitStatus
-  // iterates whatever `.statuses` array it's given rather than trusting a
-  // precomputed combined field, so filtering the array first is sufficient —
-  // no separate recompute path needed.
-  let commitStatusExcludedFailureDetails = [];
-  if (statusesResult.code === 0) {
-    try {
-      const payload = JSON.parse(statusesResult.stdout);
-      if (Array.isArray(payload?.statuses)) {
-        const { matched: loopDerivedStatuses, rest: nonLoopDerivedStatuses } =
-          partitionEntriesByCheckName(payload.statuses, LOOP_DERIVED_CI_CHECK_NAME);
-        commitStatusExcludedFailureDetails = normalizeHeadScopedCommitStatus({ statuses: loopDerivedStatuses }) === "failure"
-          ? [LOOP_DERIVED_CI_CHECK_NAME]
-          : [];
-        commitStatus = normalizeHeadScopedCommitStatus({ statuses: nonLoopDerivedStatuses });
-        statusesCount = payload.statuses.length;
-      }
-    } catch {
-      commitStatus = null;
-      statusesCount = null;
-      commitStatusExcludedFailureDetails = [];
-    }
-  }
+    : null;
+  const checkRunsCount = checkRuns.ok ? checkRuns.rawCount : null;
+  const commitStatus = statuses.ok ? statuses.commitStatus : null;
+  const statusesCount = statuses.ok ? statuses.rawCount : null;
+  const commitStatusExcludedFailureDetails = statuses.ok ? statuses.excludedFailureDetails : [];
   if (checkRunsSignal === null && commitStatus === null) {
     return null;
   }
