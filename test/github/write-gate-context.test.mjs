@@ -26,7 +26,7 @@ import {
   buildValidationResultsPath,
   captureDiffFromBase,
   collapsePureSubstitutionRuns,
-  forbiddenGateRefusalMessage,
+  prematureGateOrderingRefusal,
   ISSUE_BODY_ABSENT_SENTINEL,
   main,
   mapGateToConfigKey,
@@ -1803,48 +1803,45 @@ test("CLI --base <ref> that fails to resolve fails closed (no artifact written, 
 });
 
 // --------------------------------------------------------------------------
-// Forbidden-gate tripwire: refuse a gate whose coordination action is in the
-// PR's forbiddenActions BEFORE any reviewer fork / diff capture / gate-context
-// tmp artifact is spent — not only at verdict post. Coordination is injected so
-// the test supplies a resolved context directly (no gh coordination surface to
-// stub). See scripts/github/write-gate-context.mjs forbiddenGateRefusalMessage.
+// Gate-ORDERING tripwire: refuse a pre_approval_gate BEFORE any reviewer fork /
+// diff capture / gate-context tmp artifact when the draft gate is not satisfied
+// (PR still draft, or no clean draft_gate verdict) — the one ordering
+// precondition where the detector and the verdict post can never disagree. Raw
+// coordination facts (prData.isDraft, gateEvidence.draftGateSatisfied) are
+// injected so the test supplies them directly. All run-context-specific gate
+// legality stays at the verdict post; this check never false-blocks a legal
+// gate. See scripts/github/write-gate-context.mjs prematureGateOrderingRefusal.
 // --------------------------------------------------------------------------
 
-test("forbiddenGateRefusalMessage: refuses a forbidden gate naming the legal next action; null for allowed / for review", () => {
-  const forbidden = forbiddenGateRefusalMessage({
-    gate: "pre_approval_gate",
-    coordination: { forbiddenActions: ["run_pre_approval_gate"], allowedNextActions: ["run_draft_gate"], reason: "PR still draft." },
-    repo: "owner/repo",
-    pr: 90,
-  });
-  assert.ok(forbidden, "forbidden gate yields a refusal message");
-  assert.match(forbidden, /run_pre_approval_gate/, "names the forbidden action");
-  assert.match(forbidden, /run_draft_gate/, "names the legal next action");
-  assert.match(forbidden, /PR still draft\./, "carries the coordination reason");
+test("prematureGateOrderingRefusal: refuses a premature pre_approval_gate; null once draft satisfied / for draft_gate / for review", () => {
+  const stillDraft = prematureGateOrderingRefusal({ gate: "pre_approval_gate", isDraft: true, draftGateSatisfied: false, repo: "owner/repo", pr: 90 });
+  assert.ok(stillDraft, "pre_approval on a still-draft PR yields a refusal");
+  assert.match(stillDraft, /pre_approval_gate/, "names the refused gate");
+  assert.match(stillDraft, /still draft/, "explains the PR is still draft");
+  assert.match(stillDraft, /run_draft_gate/, "names the legal next action");
+
+  const noDraftEvidence = prematureGateOrderingRefusal({ gate: "pre_approval_gate", isDraft: false, draftGateSatisfied: false, repo: "owner/repo", pr: 90 });
+  assert.ok(noDraftEvidence, "pre_approval on a ready PR with no clean draft_gate verdict yields a refusal");
+  assert.match(noDraftEvidence, /no clean draft_gate verdict/, "explains the missing draft-gate evidence");
 
   assert.equal(
-    forbiddenGateRefusalMessage({ gate: "pre_approval_gate", coordination: { forbiddenActions: [], allowedNextActions: ["run_pre_approval_gate"] }, repo: "owner/repo", pr: 90 }),
+    prematureGateOrderingRefusal({ gate: "pre_approval_gate", isDraft: false, draftGateSatisfied: true, repo: "owner/repo", pr: 90 }),
     null,
-    "an allowed gate yields no refusal",
+    "a ready PR with a satisfied draft gate is not refused (ordering precondition met)",
   );
   assert.equal(
-    forbiddenGateRefusalMessage({ gate: "review", coordination: { forbiddenActions: ["run_pre_approval_gate"] }, repo: "owner/repo", pr: 90 }),
+    prematureGateOrderingRefusal({ gate: "draft_gate", isDraft: true, draftGateSatisfied: false, repo: "owner/repo", pr: 90 }),
     null,
-    "review carries no requested gate action — never gated here",
+    "draft_gate has no predecessor gate — never an ordering violation",
   );
-
-  // Message-format fallbacks: empty allowedNextActions renders "(none)" and a
-  // missing reason omits the trailing reason suffix.
-  const noAllowed = forbiddenGateRefusalMessage({
-    gate: "draft_gate",
-    coordination: { forbiddenActions: ["run_draft_gate"], allowedNextActions: [] },
-    repo: "owner/repo",
-    pr: 90,
-  });
-  assert.match(noAllowed, /Legal next action\(s\): \(none\)\.$/, "empty allowedNextActions renders (none) with no trailing reason");
+  assert.equal(
+    prematureGateOrderingRefusal({ gate: "review", isDraft: true, draftGateSatisfied: false, repo: "owner/repo", pr: 90 }),
+    null,
+    "review carries no ordering obligation",
+  );
 });
 
-test("CLI tripwire: a forbidden gate exits non-zero naming the legal next action, writing NO gate-context artifact and NO diff", async () => {
+test("CLI tripwire: a premature pre_approval_gate exits non-zero naming run_draft_gate, writing NO gate-context artifact and NO diff", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   const priorExitCode = process.exitCode;
   process.exitCode = undefined;
@@ -1858,25 +1855,22 @@ test("CLI tripwire: a forbidden gate exits non-zero naming the legal next action
     ], {
       repoRoot,
       run: stubGhRun,
-      loadCoordination: async () => ({
-        forbiddenActions: ["run_pre_approval_gate"],
-        allowedNextActions: ["run_draft_gate"],
-        reason: "PR is still draft; run the draft gate first.",
-      }),
+      // Raw ordering facts: PR still draft, no clean draft_gate verdict.
+      loadCoordination: async () => ({ prData: { isDraft: true }, gateEvidence: { draftGateSatisfied: false } }),
     });
 
-    assert.equal(process.exitCode, 1, "forbidden gate fails closed with a non-zero exit");
+    assert.equal(process.exitCode, 1, "premature pre_approval_gate fails closed with a non-zero exit");
     const stderrText = stderrChunks.join("");
-    assert.match(stderrText, /forbiddenActions/, "the error explains the gate action is forbidden");
+    assert.match(stderrText, /draft gate is not satisfied/, "the error explains the draft gate is not satisfied");
     assert.match(stderrText, /run_draft_gate/, "the error names the legal next action");
 
     const artifact = await readGateContext({
       repo: "owner/repo", pr: 90, gate: "pre_approval_gate", headSha,
     }, { repoRoot });
-    assert.equal(artifact, null, "no gate-context artifact is written for a forbidden gate");
+    assert.equal(artifact, null, "no gate-context artifact is written for a premature pre_approval_gate");
 
     const diffPath = path.resolve(repoRoot, buildGateDiffPath({ repo: "owner/repo", pr: 90, gate: "pre_approval_gate", headSha }));
-    assert.equal(existsSync(diffPath), false, "no .diff tmp artifact is produced for a forbidden gate (refused before diff capture)");
+    assert.equal(existsSync(diffPath), false, "no .diff tmp artifact is produced (refused before diff capture)");
   } finally {
     process.stderr.write = origErr;
     process.exitCode = priorExitCode;
@@ -1884,37 +1878,52 @@ test("CLI tripwire: a forbidden gate exits non-zero naming the legal next action
   }
 });
 
-test("CLI tripwire: an ALLOWED gate builds its context and schedules its fan-out exactly as before", async () => {
+test("CLI tripwire: a pre_approval_gate with a satisfied draft gate builds its context and schedules its fan-out", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   let coordinationCalls = 0;
-  let seenLightweight = "unset";
   try {
     await main([
-      "--repo", "owner/repo", "--pr", "91", "--gate", "draft_gate",
+      "--repo", "owner/repo", "--pr", "91", "--gate", "pre_approval_gate",
       "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
     ], {
       repoRoot,
       run: stubGhRun,
-      loadCoordination: async (opts) => {
+      loadCoordination: async () => {
         coordinationCalls++;
-        seenLightweight = opts.lightweight;
-        return { forbiddenActions: [], allowedNextActions: ["run_draft_gate"] };
+        return { prData: { isDraft: false }, gateEvidence: { draftGateSatisfied: true } };
       },
     });
 
-    assert.equal(coordinationCalls, 1, "an obligation-carrying gate consults coordination once");
-    assert.equal(seenLightweight, false, "default (no --lightweight) consults coordination with lightweight:false");
+    assert.equal(coordinationCalls, 1, "pre_approval consults the ordering facts once");
     const artifact = await readGateContext({
-      repo: "owner/repo", pr: 91, gate: "draft_gate", headSha,
+      repo: "owner/repo", pr: 91, gate: "pre_approval_gate", headSha,
     }, { repoRoot });
-    assert.ok(artifact, "allowed gate writes its context artifact unchanged");
-    assert.ok(artifact.fanout && Array.isArray(artifact.fanout.groups) && artifact.fanout.groups.length > 0, "allowed gate schedules its fan-out unchanged");
+    assert.ok(artifact, "a ready PR with a satisfied draft gate builds its context unchanged");
+    assert.ok(artifact.fanout && Array.isArray(artifact.fanout.groups) && artifact.fanout.groups.length > 0, "schedules its fan-out unchanged");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
 
-test("CLI tripwire: the review gate proceeds WITHOUT a coordination lookup (matches the verdict-post carve-out)", async () => {
+test("CLI tripwire: draft_gate never consults coordination (no predecessor gate, no ordering obligation)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    await main([
+      "--repo", "owner/repo", "--pr", "96", "--gate", "draft_gate",
+      "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
+    ], {
+      repoRoot,
+      run: stubGhRun,
+      loadCoordination: async () => { throw new Error("coordination must not be consulted for draft_gate"); },
+    });
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 96, gate: "draft_gate", headSha }, { repoRoot });
+    assert.ok(artifact, "draft_gate builds its context without any coordination lookup");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI tripwire: the review gate proceeds WITHOUT a coordination lookup", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
     await main([
@@ -1935,15 +1944,13 @@ test("CLI tripwire: the review gate proceeds WITHOUT a coordination lookup (matc
   }
 });
 
-// Regression guard for the wiring: the DEFAULT loadCoordination must resolve
-// the fully-EVALUATED coordination result (detectPrGateCoordinationState —
-// which carries forbiddenActions/allowedNextActions/reason), NOT the raw
-// loadPrGateCoordinationContext (whose context object has none of those, so the
-// tripwire would silently never fire). Every other tripwire test injects the
-// evaluated shape, so only this real-resolver test catches a wrong-function
-// rewiring. Drives main() with a stubbed gh producing a draft PR (green CI, no
-// draft-gate evidence) so pre_approval_gate is genuinely forbidden.
-test("CLI tripwire (real resolver): the DEFAULT coordination path refuses a forbidden pre_approval_gate on a draft PR", async () => {
+// Regression guard: the DEFAULT loadCoordination reads the RAW coordination
+// context (loadPrGateCoordinationContext), whose prData.isDraft +
+// gateEvidence.draftGateSatisfied drive the ordering refusal. Every other
+// tripwire test injects the facts directly, so only this real-resolver test
+// catches a wrong default wiring. Drives main() with a stubbed gh producing a
+// still-draft PR with no draft_gate verdict, so pre_approval is premature.
+test("CLI tripwire (real resolver): the DEFAULT coordination path refuses a premature pre_approval_gate on a draft PR", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   const jsonLine = (o) => `${JSON.stringify(o)}\n`;
   const { runChild } = makeGhMock([
@@ -1963,48 +1970,27 @@ test("CLI tripwire (real resolver): the DEFAULT coordination path refuses a forb
     { matchByClaims: true, assertArgContains: ["headRefOid"], stdout: jsonLine({ headRefOid: headSha }) },
     { matchByClaims: true, assertArgContains: ["comments"], stdout: jsonLine([[]]) },
     { matchByClaims: true, assertArgContains: ["review_requested"], stdout: "\n" },
-  ]);
+  ], { repeatLastOnOverflow: true });
   const priorExitCode = process.exitCode;
   process.exitCode = undefined;
   const origErr = process.stderr.write;
   const stderrChunks = [];
   process.stderr.write = (chunk) => { stderrChunks.push(String(chunk)); return true; };
   try {
-    // No injected loadCoordination — this exercises main()'s real default,
-    // which must call detectPrGateCoordinationState.
+    // No injected loadCoordination — exercises main()'s real default
+    // (loadPrGateCoordinationContext), reading raw isDraft + draftGateSatisfied.
     await main([
       "--repo", "owner/repo", "--pr", "2", "--gate", "pre_approval_gate",
       "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
     ], { repoRoot, run: runChild });
 
-    assert.equal(process.exitCode, 1, "forbidden pre_approval_gate fails closed via the real resolver");
-    assert.match(stderrChunks.join(""), /run_pre_approval_gate/, "the real-resolver refusal names the forbidden action");
+    assert.equal(process.exitCode, 1, "premature pre_approval_gate fails closed via the real resolver");
+    assert.match(stderrChunks.join(""), /run_draft_gate/, "the real-resolver refusal names the legal next action");
     const artifact = await readGateContext({ repo: "owner/repo", pr: 2, gate: "pre_approval_gate", headSha }, { repoRoot });
-    assert.equal(artifact, null, "no artifact written when the real resolver reports the gate forbidden");
+    assert.equal(artifact, null, "no artifact written when the real resolver reports the draft gate unsatisfied");
   } finally {
     process.stderr.write = origErr;
     process.exitCode = priorExitCode;
-    await rm(repoRoot, { recursive: true, force: true });
-  }
-});
-
-test("CLI tripwire: --lightweight threads into the coordination lookup (light-dispatch cap parity with the verdict post)", async () => {
-  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
-  let seenLightweight = "unset";
-  try {
-    await main([
-      "--repo", "owner/repo", "--pr", "95", "--gate", "draft_gate",
-      "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha, "--lightweight",
-    ], {
-      repoRoot,
-      run: stubGhRun,
-      loadCoordination: async (opts) => {
-        seenLightweight = opts.lightweight;
-        return { forbiddenActions: [], allowedNextActions: ["run_draft_gate"] };
-      },
-    });
-    assert.equal(seenLightweight, true, "--lightweight reaches the coordination lookup so the tripwire uses the light Copilot round cap, matching the verdict post");
-  } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
@@ -2013,15 +1999,15 @@ test("CLI tripwire: a coordination-load FAILURE proceeds (fail-open on an unread
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   try {
     await main([
-      "--repo", "owner/repo", "--pr", "93", "--gate", "draft_gate",
+      "--repo", "owner/repo", "--pr", "93", "--gate", "pre_approval_gate",
       "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
     ], {
       repoRoot,
       run: stubGhRun,
       loadCoordination: async () => { throw new Error("gh unreachable"); },
     });
-    const artifact = await readGateContext({ repo: "owner/repo", pr: 93, gate: "draft_gate", headSha }, { repoRoot });
-    assert.ok(artifact, "an unread coordination state proceeds (not a forbidden signal); artifact still written");
+    const artifact = await readGateContext({ repo: "owner/repo", pr: 93, gate: "pre_approval_gate", headSha }, { repoRoot });
+    assert.ok(artifact, "an unread coordination state proceeds (not an ordering violation); artifact still written");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -2041,7 +2027,7 @@ test("CLI tripwire: --prefix-file mode skips the coordination lookup entirely (n
       loadCoordination: async () => { throw new Error("coordination must not be consulted under --prefix-file"); },
     });
     const artifact = await readGateContext({ repo: "owner/repo", pr: 94, gate: "pre_approval_gate", headSha }, { repoRoot });
-    assert.ok(artifact, "--prefix-file builds without any coordination lookup, even for an obligation-carrying gate");
+    assert.ok(artifact, "--prefix-file builds without any coordination lookup, even for pre_approval_gate");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

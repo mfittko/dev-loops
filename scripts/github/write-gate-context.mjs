@@ -44,50 +44,36 @@ import { viewIssue } from "./view-issue.mjs";
 import { buildAdjacentBundle, DEFAULT_MAX_FILE_BYTES } from "./build-adjacent-bundle.mjs";
 import { GATE_NAMES, gateScopePrefix, normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_carried-angles.mjs";
-import { resolveLinkedIssuesFromPr, detectPrGateCoordinationState } from "../loop/detect-pr-gate-coordination-state.mjs";
-import { PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
+import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
-// Map an obligation-carrying gate name to the coordination-state action it
-// requests. Mirrors upsert-checkpoint-verdict.mjs `resolveGateAction`: the two
-// consult the SAME PR_CHECKPOINT_ACTION vocabulary so the up-front tripwire and
-// the verdict-post refusal can never disagree about which action a gate means.
-// `review` carries no gate obligation and is never auto-resolved, so it has no
-// action here (returns null — never looked up against forbiddenActions).
-export function resolveRequestedGateAction(gate) {
-  if (gate === "draft_gate") return PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE;
-  if (gate === "pre_approval_gate") return PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE;
-  return null;
-}
-
 /**
- * Up-front forbidden-gate tripwire (pure): given a target gate and a resolved
- * coordination context, return a refusal message when the gate's action is in
- * the PR's current `forbiddenActions`, else null. Consumes the same
- * `detect-pr-gate-coordination-state` authority the verdict-post refusal uses
- * (upsert-checkpoint-verdict.mjs `gateActionForbidden`), one step earlier — so a
- * wrong gate is stopped BEFORE any reviewer fork, diff capture, or gate-context
- * tmp artifact is spent, not only when the verdict is posted. The message names
- * the legal next action(s) so the caller can re-enter the correct gate. Scoped
- * to draft_gate/pre_approval_gate: a gate with no requested action (review)
- * returns null (never gated here).
+ * Up-front gate-ORDERING tripwire (pure): a `pre_approval_gate` must come AFTER
+ * a satisfied draft gate on a ready (non-draft) PR. Given the target gate and
+ * the raw coordination facts (the PR's draft state and whether a clean
+ * draft_gate verdict exists), return a refusal message when a pre_approval fan-
+ * out is requested before the draft gate is satisfied, else null.
  *
- * @param {{ gate: string, coordination: { forbiddenActions?: string[], allowedNextActions?: string[], reason?: string }, repo: string, pr: number }} input
+ * This is DELIBERATELY scoped to the one gate-ordering precondition where the
+ * coordination detector and the verdict-post refusal can never disagree: it
+ * reads only raw draft-state + draft-gate evidence, never the run-context-
+ * specific Copilot-cycle / internal-only / lightweight guards. Those stay
+ * verdict-post-authoritative (the fail-closed backstop), so this up-front check
+ * can never false-block a legal gate — it only stops the unambiguous
+ * pre_approval-before-draft-gate case before any reviewer fork, diff capture, or
+ * gate-context tmp artifact is spent. `draft_gate` has no predecessor gate (no
+ * up-front ordering obligation) and `review` carries none, so both return null.
+ *
+ * @param {{ gate: string, isDraft: boolean, draftGateSatisfied: boolean, repo: string, pr: number }} input
  * @returns {string|null}
  */
-export function forbiddenGateRefusalMessage({ gate, coordination, repo, pr }) {
-  const requestedGateAction = resolveRequestedGateAction(gate);
-  if (!requestedGateAction) return null;
-  const forbidden = Array.isArray(coordination?.forbiddenActions)
-    && coordination.forbiddenActions.includes(requestedGateAction);
-  if (!forbidden) return null;
-  const allowed = Array.isArray(coordination?.allowedNextActions) && coordination.allowedNextActions.length > 0
-    ? coordination.allowedNextActions.join(", ")
-    : "(none)";
-  const reasonSuffix = typeof coordination?.reason === "string" && coordination.reason.trim().length > 0
-    ? ` ${coordination.reason.trim()}`
-    : "";
-  return `Refusing to build gate context for ${gate} on ${repo}#${pr}: this gate's action (${requestedGateAction}) is in the PR's current forbiddenActions. Legal next action(s): ${allowed}.${reasonSuffix}`;
+export function prematureGateOrderingRefusal({ gate, isDraft, draftGateSatisfied, repo, pr }) {
+  if (gate !== "pre_approval_gate") return null;
+  if (isDraft !== true && draftGateSatisfied === true) return null;
+  const why = isDraft === true
+    ? "the PR is still draft"
+    : "no clean draft_gate verdict exists for this PR";
+  return `Refusing to build gate context for pre_approval_gate on ${repo}#${pr}: ${why}, so the draft gate is not satisfied. Run the draft gate to clean and mark the PR ready for review before the pre_approval gate. Legal next action: run_draft_gate.`;
 }
 
 // Map the artifact gate name (draft_gate | pre_approval_gate) to the config
@@ -220,7 +206,6 @@ Optional:
   --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Skips the GitHub spec-of-record resolution (--pr-body/--issue-body/--acceptance-criteria) entirely — the recorded bytes come from this file, so a fetched PR/issue body could never reach them, and the CLI never touches GitHub in this mode at all (--base only runs local git reads). Omit for the default self-rendered prefix (prefixMode inline|pointer).
   --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-ARTIFACT) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing prefix (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
   --full-label                   The PR carries the gate:full label: dynamic angle resolution skips diff-class tier reduction (resolveGateTier returns gate_full_label) and resolves the untriered angle set. Only meaningful when --angles is omitted. When this flag is absent (and --prefix-file is not in use), the label is derived from the live PR via a labels read; a failed read fails closed to the untriered set. Under --prefix-file the CLI never touches GitHub, so the label cannot be derived and an omitted flag likewise fails closed to the untriered set (pass --angles to force a specific set there).
-  --lightweight                  This gate run is light-dispatched: the up-front forbidden-gate tripwire composes the SAME Copilot round cap the verdict-post refusal (upsert-checkpoint-verdict.mjs) uses. Pass it whenever the gate run is light-dispatched — exactly as you pass it to upsert-checkpoint-verdict.mjs / request-copilot-review.mjs — so a light run's tripwire cannot spuriously forbid a pre_approval_gate the verdict post would allow. Only affects the draft_gate/pre_approval_gate tripwire's coordination lookup (no effect on angle resolution or the artifact). Omit for full-dispatch runs.
   --available-reviewers <n>      Harness remaining reviewer budget for the #1507 reviewer-budget preflight (non-negative integer). When supplied, the artifact's fanout.preflight reports whether the budget covers this round's dispatch units; on a shortfall, fanout.preflight.dispatch is false and the conductor MUST NOT spawn any reviewer (the shortfall is a resumable state — the artifact records it). Omit when the harness does not expose a budget; the preflight then proceeds (no shortfall can be proven).
   --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean head (mirrors consolidate-fanin.mjs's own --carried-angles vocabulary, minus its --carry-forward-plan proof check — the caller here IS the fail-closed carry-forward seam, resolve-angle-carry-forward.mjs, never a guess). Like consolidate-fanin.mjs's own mandatory-angle refusal, a name whose review surface always re-runs (a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE evidence/security/description angle) fails closed (exit 1) rather than being honored. A dispatch group whose angles are all carried-or-already-complete (already-complete: a clean per-angle artifact already stamped for this head, scanned automatically — see readCompletedAnglesForHead) is excluded from fanout.preflight.requiredReviewers and pendingGroups, so a head-bump re-gate does not over-count angles Phase 1.2 is about to carry. A wrong/stale value can only shrink the dispatch plan, never grow it past the true group count — it can under-dispatch, never over-spend the budget or fabricate findings for an angle that DID run: the configured-mandatory coverage check and the fail-closed merge check's clean current-head merge marker requirement catch an under-dispatched round ONLY when the wrongly-carried angle is a CONFIGURED mandatory angle — neither ever unions the hardcoded ALWAYS_INCLUDE set, so a wrong value naming only a non-mandatory, non-ALWAYS_INCLUDE angle under-dispatches with no mechanical refusal, visible only in the ledger's own carried-angle provenance (an ALWAYS_INCLUDE name is already refused at this CLI's own entry, above). Omit for today's full-count behavior (nothing excluded).
   --tmp-root <path>              Root tmp directory (default: tmp/)
@@ -350,7 +335,6 @@ export function parseWriteGateContextCliArgs(argv) {
       "prefix-file": { type: "string" },
       "validation-results": { type: "string" },
       "full-label": { type: "boolean" },
-      "lightweight": { type: "boolean" },
       "available-reviewers": { type: "string" },
       "carried-angles": { type: "string" },
       "tmp-root": { type: "string" },
@@ -377,7 +361,6 @@ export function parseWriteGateContextCliArgs(argv) {
     prefixFile: null,
     validationResultsPath: null,
     fullLabel: false,
-    lightweight: false,
     availableReviewers: null,
     carriedAngles: null,
     tmpRoot: "tmp",
@@ -489,16 +472,6 @@ export function parseWriteGateContextCliArgs(argv) {
     }
     if (token.name === "full-label") {
       options.fullLabel = true;
-      continue;
-    }
-    if (token.name === "lightweight") {
-      // Light-dispatch parity with upsert-checkpoint-verdict.mjs /
-      // request-copilot-review.mjs: the forbidden-gate tripwire MUST evaluate
-      // coordination with the SAME composed Copilot round cap the verdict-post
-      // refusal uses, or a light run's full-cap tripwire could spuriously forbid
-      // a pre_approval_gate the verdict post would allow. Pass this whenever the
-      // gate run is light-dispatched, exactly as you pass it to the verdict post.
-      options.lightweight = true;
       continue;
     }
     if (token.name === "available-reviewers") {
@@ -2845,19 +2818,16 @@ export async function main(
   {
     repoRoot = process.cwd(),
     run = runChild,
-    // Injectable so the tripwire test can supply a resolved coordination
-    // context directly instead of stubbing the whole gh coordination surface.
-    // The default consults the real deterministic authority. It MUST be
-    // detectPrGateCoordinationState (the fully-EVALUATED result carrying
-    // allowedNextActions/forbiddenActions/reason), NOT the raw
-    // loadPrGateCoordinationContext, whose context object has no such fields.
-    // detectPrGateCoordinationState layers the gate-boundary guard overrides on
-    // top of evaluatePrGateCoordination, so the tripwire is AT LEAST AS STRICT
-    // as the verdict-post refusal (which evaluates the raw result directly): it
-    // may refuse a genuinely-premature gate earlier, never permits one the
-    // verdict post would refuse, and the verdict-post refusal stays the
-    // authoritative fail-closed backstop.
-    loadCoordination = (opts) => detectPrGateCoordinationState(opts, { runChild: run, repoRoot, cwd: repoRoot }),
+    // Injectable so the tripwire test can supply the raw coordination facts
+    // directly instead of stubbing the whole gh coordination surface. The
+    // default reads the raw coordination context (loadPrGateCoordinationContext):
+    // the ordering tripwire needs only the PR's draft state (prData.isDraft) and
+    // whether a clean draft_gate verdict exists (gateEvidence.draftGateSatisfied)
+    // — never the evaluated forbiddenActions, whose run-context-specific guards
+    // (Copilot-cycle / internal-only / lightweight) diverge from the verdict
+    // post. Consuming only the raw ordering facts is what keeps this check
+    // impossible-to-false-block.
+    loadCoordination = (opts) => loadPrGateCoordinationContext(opts, { runChild: run, repoRoot, cwd: repoRoot }),
   } = {},
 ) {
   let options;
@@ -2873,36 +2843,38 @@ export async function main(
     return;
   }
   try {
-    // Forbidden-gate tripwire — the FIRST action, before any spec-of-record
-    // read, diff capture, gate-context tmp artifact, or fan-out dispatch plan.
-    // Consult the deterministic coordination authority for the target gate and
-    // refuse (exit non-zero, naming the legal next action) when the gate's
-    // action is currently forbidden, so a wrong gate never spends reviewers.
-    // The verdict-post refusal (upsert-checkpoint-verdict.mjs gateActionForbidden)
-    // stays as defense in depth. Scoped to draft_gate/pre_approval_gate: review
-    // carries no gate obligation and is never auto-resolved, so it proceeds
-    // without a coordination lookup. Skipped under --prefix-file, which never
-    // touches GitHub (same invariant that skips spec-of-record resolution); the
-    // verdict-post refusal remains the backstop there. A coordination-load
-    // FAILURE (unreadable PR, offline) proceeds silently: an unread state is
-    // not a forbidden signal, so refusing on it would fail closed on the wrong
-    // signal. It is safe to swallow — a genuine GitHub-read problem surfaces
-    // immediately after at resolvePrSpecContext (which fails closed for every
-    // non-prefix-file mode), and the verdict-post refusal is the authoritative
-    // fail-closed guarantee. Only a SUCCESSFULLY-read forbidden action refuses.
-    if (resolveRequestedGateAction(options.gate) && !options.prefixFile) {
+    // Gate-ORDERING tripwire — the FIRST action, before any spec-of-record read,
+    // diff capture, gate-context tmp artifact, or fan-out dispatch plan. Refuse a
+    // pre_approval_gate (exit non-zero, naming run_draft_gate) when the draft gate
+    // is not yet satisfied, so a premature pre_approval fan-out never spends
+    // reviewers. DELIBERATELY scoped to the pre_approval-before-draft ordering
+    // precondition — the one case the coordination detector and the verdict-post
+    // refusal can never disagree on — using only raw draft-state + draft-gate
+    // evidence. Every run-context-specific gate legality (Copilot-cycle /
+    // internal-only / lightweight) stays at the verdict post
+    // (upsert-checkpoint-verdict.mjs, the authoritative fail-closed backstop), so
+    // this check can never false-block a legal gate. draft_gate has no predecessor
+    // gate and review carries no obligation, so neither triggers a lookup. Skipped
+    // under --prefix-file (never touches GitHub, same invariant that skips spec-of-
+    // record resolution). A coordination-load FAILURE proceeds silently: an unread
+    // state is not an ordering violation, a genuine read problem surfaces right
+    // after at resolvePrSpecContext (fail-closed for every non-prefix-file mode),
+    // and the verdict post is the authoritative backstop.
+    if (options.gate === "pre_approval_gate" && !options.prefixFile) {
       let coordination = null;
       try {
-        // Pass lightweight so detectPrGateCoordinationState composes the SAME
-        // Copilot round cap the verdict-post refusal uses (light-dispatch
-        // parity) — otherwise a light run's tripwire evaluates a full cap and can
-        // spuriously forbid a pre_approval_gate the verdict post would allow.
-        coordination = await loadCoordination({ repo: options.repo, pr: options.pr, lightweight: options.lightweight === true });
+        coordination = await loadCoordination({ repo: options.repo, pr: options.pr });
       } catch {
         coordination = null;
       }
       if (coordination) {
-        const refusal = forbiddenGateRefusalMessage({ gate: options.gate, coordination, repo: options.repo, pr: options.pr });
+        const refusal = prematureGateOrderingRefusal({
+          gate: options.gate,
+          isDraft: Boolean(coordination.prData?.isDraft),
+          draftGateSatisfied: coordination.gateEvidence?.draftGateSatisfied === true,
+          repo: options.repo,
+          pr: options.pr,
+        });
         if (refusal) throw new Error(refusal);
       }
     }
