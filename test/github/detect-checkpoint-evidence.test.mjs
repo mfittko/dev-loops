@@ -1615,10 +1615,15 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7): the SAME
         "      - name: pr-checklist",
         "        mandatory: true",
         "  fanout:",
-        "    maxAnglesPerGroup: 1",
-        // No gates.fanout.groups; maxAnglesPerGroup: 1 (≡ per-angle) keeps
-        // dry/kiss as separate singleton dispatch units (#1601) so a
-        // fabricated group label spanning them is still rejected.
+        "    mode: per-angle",
+        // mode: per-angle bypasses the shipped gates.fanout.groups table
+        // entirely, so dry/kiss resolve to separate singleton dispatch units
+        // regardless of any configured group that co-locates them (the shipped
+        // design-simplicity group does). maxAnglesPerGroup: 1 would NOT suffice
+        // here — configured groups are matched first and never split by that
+        // knob, so dry/kiss would resolve as one unit and a shared label would
+        // be legitimate. per-angle is what keeps the fabricated cross-unit label
+        // rejected independent of the shipped grouping table.
         "",
       ].join("\n"),
       "utf8",
