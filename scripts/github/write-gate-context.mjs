@@ -44,8 +44,37 @@ import { viewIssue } from "./view-issue.mjs";
 import { buildAdjacentBundle, DEFAULT_MAX_FILE_BYTES } from "./build-adjacent-bundle.mjs";
 import { GATE_NAMES, gateScopePrefix, normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_carried-angles.mjs";
-import { resolveLinkedIssuesFromPr } from "../loop/detect-pr-gate-coordination-state.mjs";
+import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+
+/**
+ * Up-front gate-ORDERING tripwire (pure): a `pre_approval_gate` must come AFTER
+ * a satisfied draft gate on a ready (non-draft) PR. Given the target gate and
+ * the raw coordination facts (the PR's draft state and whether a clean
+ * draft_gate verdict exists), return a refusal message when a pre_approval fan-
+ * out is requested before the draft gate is satisfied, else null.
+ *
+ * This is DELIBERATELY scoped to the one gate-ordering precondition where the
+ * coordination detector and the verdict-post refusal can never disagree: it
+ * reads only raw draft-state + draft-gate evidence, never the run-context-
+ * specific Copilot-cycle / internal-only / lightweight guards. Those stay
+ * verdict-post-authoritative (the fail-closed backstop), so this up-front check
+ * can never false-block a legal gate — it only stops the unambiguous
+ * pre_approval-before-draft-gate case before any reviewer fork, diff capture, or
+ * gate-context tmp artifact is spent. `draft_gate` has no predecessor gate (no
+ * up-front ordering obligation) and `review` carries none, so both return null.
+ *
+ * @param {{ gate: string, isDraft: boolean, draftGateSatisfied: boolean, repo: string, pr: number }} input
+ * @returns {string|null}
+ */
+export function prematureGateOrderingRefusal({ gate, isDraft, draftGateSatisfied, repo, pr }) {
+  if (gate !== "pre_approval_gate") return null;
+  if (isDraft !== true && draftGateSatisfied === true) return null;
+  const why = isDraft === true
+    ? "the PR is still draft"
+    : "no clean draft_gate verdict exists for this PR";
+  return `Refusing to build gate context for pre_approval_gate on ${repo}#${pr}: ${why}, so the draft gate is not satisfied. Run the draft gate to clean and mark the PR ready for review before the pre_approval gate. Legal next action: run_draft_gate.`;
+}
 
 // Map the artifact gate name (draft_gate | pre_approval_gate) to the config
 // gate key understood by resolveGateAnglesDynamic (draft | preApproval).
@@ -2780,11 +2809,29 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
  * CLI entrypoint. Exported (argv + repoRoot both overridable) so tests can
  * drive the `--base` diff-capture path against a throwaway git repo fixture
  * without spawning a subprocess. `run` is the injectable child-process runner
- * the GitHub spec-resolution reads go through.
+ * the GitHub spec-resolution reads go through. `loadCoordination` is the
+ * injectable coordination-facts reader the ordering tripwire consults (default:
+ * `loadPrGateCoordinationContext`).
  * @param {string[]} [argv]
- * @param {{ repoRoot?: string, run?: Function }} [runtime]
+ * @param {{ repoRoot?: string, run?: Function, loadCoordination?: Function }} [runtime]
  */
-export async function main(argv = process.argv.slice(2), { repoRoot = process.cwd(), run = runChild } = {}) {
+export async function main(
+  argv = process.argv.slice(2),
+  {
+    repoRoot = process.cwd(),
+    run = runChild,
+    // Injectable so the tripwire test can supply the raw coordination facts
+    // directly instead of stubbing the whole gh coordination surface. The
+    // default reads the raw coordination context (loadPrGateCoordinationContext):
+    // the ordering tripwire needs only the PR's draft state (prData.isDraft) and
+    // whether a clean draft_gate verdict exists (gateEvidence.draftGateSatisfied)
+    // — never the evaluated forbiddenActions, whose run-context-specific guards
+    // (Copilot-cycle / internal-only / lightweight) diverge from the verdict
+    // post. Consuming only the raw ordering facts is what keeps this check
+    // impossible-to-false-block.
+    loadCoordination = (opts) => loadPrGateCoordinationContext(opts, { runChild: run, repoRoot, cwd: repoRoot }),
+  } = {},
+) {
   let options;
   try {
     options = parseWriteGateContextCliArgs(argv);
@@ -2798,6 +2845,41 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     return;
   }
   try {
+    // Gate-ORDERING tripwire — the FIRST action, before any spec-of-record read,
+    // diff capture, gate-context tmp artifact, or fan-out dispatch plan. Refuse a
+    // pre_approval_gate (exit non-zero, naming run_draft_gate) when the draft gate
+    // is not yet satisfied, so a premature pre_approval fan-out never spends
+    // reviewers. DELIBERATELY scoped to the pre_approval-before-draft ordering
+    // precondition — the one case the coordination detector and the verdict-post
+    // refusal can never disagree on — using only raw draft-state + draft-gate
+    // evidence. Every run-context-specific gate legality (Copilot-cycle /
+    // internal-only / lightweight) stays at the verdict post
+    // (upsert-checkpoint-verdict.mjs, the authoritative fail-closed backstop), so
+    // this check can never false-block a legal gate. draft_gate has no predecessor
+    // gate and review carries no obligation, so neither triggers a lookup. Skipped
+    // under --prefix-file (never touches GitHub, same invariant that skips spec-of-
+    // record resolution). A coordination-load FAILURE proceeds silently: an unread
+    // state is not an ordering violation, a genuine read problem surfaces right
+    // after at resolvePrSpecContext (fail-closed for every non-prefix-file mode),
+    // and the verdict post is the authoritative backstop.
+    if (options.gate === "pre_approval_gate" && !options.prefixFile) {
+      let coordination = null;
+      try {
+        coordination = await loadCoordination({ repo: options.repo, pr: options.pr });
+      } catch {
+        coordination = null;
+      }
+      if (coordination) {
+        const refusal = prematureGateOrderingRefusal({
+          gate: options.gate,
+          isDraft: Boolean(coordination.prData?.isDraft),
+          draftGateSatisfied: coordination.gateEvidence?.draftGateSatisfied === true,
+          repo: options.repo,
+          pr: options.pr,
+        });
+        if (refusal) throw new Error(refusal);
+      }
+    }
     // Resolve the spec-of-record (PR body, linked issue(s) + their bodies)
     // BEFORE any diff work: a bundle that cannot state the spec truthfully must
     // not be written at all, and failing here costs nothing.

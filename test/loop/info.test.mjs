@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -91,6 +91,10 @@ test("info.mjs --issue produces human-readable output with gh stubs", async () =
       "#!/usr/bin/env node",
       "const args = process.argv.slice(2);",
       `const repo = "${repoSlug}";`,
+      `if (args[0] === "api" && args[1] === "graphql") {`,
+      `  process.stdout.write(JSON.stringify({ data: { repository: { issue: { timelineItems: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } } }) + "\\n");`,
+      `  process.exit(0);`,
+      `}`,
       `if (args[0] === "issue" && args[1] === "view") {`,
       `  const issueNum = parseInt(args[2]);`,
       `  if (issueNum === ${issueNumber}) {`,
@@ -115,17 +119,9 @@ test("info.mjs --issue produces human-readable output with gh stubs", async () =
     await writeFile(ghPath, ghScript);
     await import("fs").then(fs => fs.promises.chmod(ghPath, 0o755));
 
-    // Stub detect-linked-issue-pr.mjs so the startup resolver's linkage check
-    // succeeds (a real repo has this script; #1626 fails closed when it's
-    // absent, which would mask the strategy/route fields this test asserts).
-    const linkageDir = path.join(tmpDir, "scripts", "github");
-    await mkdir(linkageDir, { recursive: true });
-    await writeFile(
-      path.join(linkageDir, "detect-linked-issue-pr.mjs"),
-      `process.stdout.write(JSON.stringify({ ok: true, repo: ${JSON.stringify(repoSlug)}, issue: ${issueNumber}, hasOpenLinkedPr: false, prNumber: null }));`,
-      "utf8",
-    );
-
+    // Linkage detection runs the real module-relative detect-linked-issue-pr.mjs,
+    // which issues one `gh api graphql` timeline query answered by the stub above
+    // (no linked PR), so the strategy/route fields this test asserts resolve.
     const { code, stdout, stderr } = await runNode(["--issue", String(issueNumber), "--repo", repoSlug], {
       env: { ...process.env, PATH: `${tmpDir}:${process.env.PATH}`, DEVLOOPS_RUN_ID: "info-test" },
       cwd: tmpDir,
