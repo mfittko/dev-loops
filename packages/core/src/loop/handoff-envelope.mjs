@@ -54,6 +54,16 @@ const STRATEGY_DEFAULT_STOP_RULES = Object.freeze({
   ],
 });
 
+const RECONCILIATION_ACCEPTANCE_TEMPLATE = deepFreeze({
+  criteria: [
+    { id: "reconcile", must: "Resolve the reported authoritative-state conflict before selecting or executing a strategy.", severity: "required" },
+  ],
+  evidence: ["commands-run", "validation-output"],
+  maxFinalizationTurns: 1,
+  needsAttentionAfterMs: DEFAULT_NEEDS_ATTENTION_MS,
+  activeNoticeAfterMs: DEFAULT_ACTIVE_NOTICE_MS,
+});
+
 // ---------------------------------------------------------------------------
 // Acceptance template table
 // ---------------------------------------------------------------------------
@@ -584,8 +594,45 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
     throw new Error("handoff-envelope: resolverOutput is required and must be an object");
   }
 
-  const bundle = resolverOutput.bundle ?? resolverOutput;
-  const strategy = requireString(bundle.selectedStrategy, "resolverOutput.selectedStrategy");
+  const isWrapped = Object.hasOwn(resolverOutput, "bundle");
+  if (isWrapped && (!resolverOutput.bundle || typeof resolverOutput.bundle !== "object")) {
+    throw new Error("handoff-envelope: resolverOutput.bundle must be an object when present");
+  }
+  const bundle = isWrapped ? resolverOutput.bundle : resolverOutput;
+  const strategy = bundle.selectedStrategy === null
+    ? null
+    : requireString(bundle.selectedStrategy, "resolverOutput.selectedStrategy");
+  const routeKind = strategy === null
+    ? requireString(bundle.routeKind, "resolverOutput.routeKind")
+    : (trimmedOrNull(bundle.routeKind) ?? "route");
+  const selectedGate = trimmedOrNull(bundle.selectedGate);
+  const outerBundleKind = isWrapped ? trimmedOrNull(resolverOutput.bundleKind) : null;
+  const nestedBundleKind = trimmedOrNull(bundle.bundleKind);
+  if (outerBundleKind && nestedBundleKind && outerBundleKind !== nestedBundleKind) {
+    throw new Error(`handoff-envelope: outer bundleKind (${outerBundleKind}) and inner bundleKind (${nestedBundleKind}) must agree`);
+  }
+  const bundleKind = outerBundleKind ?? nestedBundleKind;
+  const isReconciliation = routeKind === "needs_reconcile"
+    && strategy === null
+    && selectedGate === "fail_closed_reconcile"
+    && bundleKind === "needs_reconcile";
+  if (isWrapped && isReconciliation && (
+    resolverOutput.bundleKind !== "needs_reconcile"
+    || bundle.bundleKind !== "needs_reconcile"
+    || resolverOutput.selectedStrategy !== "none"
+    || bundle.selectedStrategy !== null
+  )) {
+    throw new Error("handoff-envelope: wrapped needs_reconcile output requires exact outer and inner bundleKind needs_reconcile markers, outer selectedStrategy none, and inner selectedStrategy null");
+  }
+  if (bundleKind === "needs_reconcile" && !isReconciliation) {
+    throw new Error("handoff-envelope: outer/inner bundleKind needs_reconcile requires inner routeKind needs_reconcile, selectedGate fail_closed_reconcile, and selectedStrategy null");
+  }
+  if (routeKind === "needs_reconcile" && !isReconciliation) {
+    throw new Error("handoff-envelope: routeKind needs_reconcile requires outer bundleKind needs_reconcile, selectedGate fail_closed_reconcile, and selectedStrategy null");
+  }
+  if (strategy === null && !isReconciliation) {
+    throw new Error("handoff-envelope: a null resolverOutput.selectedStrategy is allowed only for the canonical needs_reconcile/fail_closed_reconcile tuple");
+  }
   const executionMode = requireString(bundle.executionMode, "resolverOutput.executionMode");
   const nextAction = requireString(bundle.nextAction, "resolverOutput.nextAction");
 
@@ -598,7 +645,9 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
   // profile instead of the default local-implementation gate. The spike
   // marker lives at the TOP level of the resolver output (the bundle does not
   // carry it), so it is read off `resolverOutput` directly.
-  const subGate = (strategy === INTERNAL_DEV_LOOP_STRATEGY.LOCAL_IMPLEMENTATION && isSpikeRun(resolverOutput))
+  const subGate = isReconciliation
+    ? selectedGate
+    : (strategy === INTERNAL_DEV_LOOP_STRATEGY.LOCAL_IMPLEMENTATION && isSpikeRun(resolverOutput))
     ? "spike"
     : resolveSubGate(strategy, gs);
   // Normalize each source independently, then fall back on the normalized result
@@ -609,10 +658,14 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
 
   const target = deriveTarget(bundle, repo);
   const requiredReads = deriveRequiredReads(bundle, resolverOutput);
-  const stopRules = deriveStopRules(settings, strategy);
+  const stopRules = isReconciliation
+    ? ["reconcile", ...(resolveHumanMergeOnly(settings) ? ["merge"] : [])]
+    : deriveStopRules(settings, strategy);
   const gateConfig = deriveGateConfig(settings, subGate);
   const derivedCwd = deriveCwd(bundle, { repoRoot: options.repoRoot, worktreeCwd: options.worktreeCwd });
-  const template = lookupAcceptanceTemplate(strategy, subGate);
+  const template = isReconciliation
+    ? RECONCILIATION_ACCEPTANCE_TEMPLATE
+    : lookupAcceptanceTemplate(strategy, subGate);
   // Lightweight PR-body-as-spec: retarget the phase-doc criterion
   // text to the PR description. Null/phase_doc leaves the criteria untouched, so
   // the non-lightweight path stays byte-identical.
@@ -650,6 +703,8 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
     maxCopilotRounds: settings?.refinement?.maxCopilotRounds ?? 5,
     executionMode,
 
+    ...(isReconciliation ? { routeKind, selectedStrategy: null } : {}),
+
     nextAction,
     requiredReads,
 
@@ -660,7 +715,7 @@ export function buildDevLoopHandoffEnvelope(resolverOutput, settings, gateState 
     requireDraftFirst: settings?.workflow?.requireDraftFirst ?? false,
 
     cwd: derivedCwd,
-    worktreeRequired: true,
+    worktreeRequired: !isReconciliation,
 
     acceptance: {
       criteria: acceptanceCriteria,
@@ -830,6 +885,58 @@ export function validateHandoffEnvelope(envelope) {
       reason: "must be a non-empty string",
       got: envelope.nextAction,
     });
+  }
+
+  // ----- terminal reconciliation tuple -----
+  // routeKind/selectedStrategy are omitted for ordinary routed envelopes to
+  // preserve the v1 shape. If either is present, both must identify the one
+  // supported no-strategy terminal envelope exactly; serialized/tampered
+  // envelopes receive the same fail-closed enforcement as the builder.
+  const hasRouteKind = Object.hasOwn(envelope, "routeKind");
+  const hasSelectedStrategy = Object.hasOwn(envelope, "selectedStrategy");
+  if (hasRouteKind || hasSelectedStrategy || envelope.currentGate === "fail_closed_reconcile") {
+    const reconciliationStopRulesAreCanonical = Array.isArray(envelope.stopRules)
+      && envelope.stopRules[0] === "reconcile"
+      && (envelope.stopRules.length === 1
+        || (envelope.stopRules.length === 2 && envelope.stopRules[1] === "merge"));
+    // Routing invariants only: acceptance prose remains the resolver's
+    // business, while nextAction must begin with one of the known fail-closed
+    // directives rather than arbitrary non-empty text.
+    const reconciliationCriterion = envelope.acceptance?.criteria;
+    const reconciliationAcceptanceIsCanonical = Array.isArray(reconciliationCriterion)
+      && reconciliationCriterion.some((criterion) => criterion?.id === "reconcile" && criterion?.severity === "required");
+    const normalizedNextAction = typeof envelope.nextAction === "string" ? envelope.nextAction.trim() : "";
+    const reconciliationNextActionIsActionable = [
+      "Reconcile ",
+      "Stop and reconcile ",
+      "Complete or explicitly skip ",
+      "Local implementation requires worktree isolation",
+    ].some((directive) => normalizedNextAction.startsWith(directive));
+    if (
+      envelope.routeKind !== "needs_reconcile"
+      || envelope.selectedStrategy !== null
+      || envelope.currentGate !== "fail_closed_reconcile"
+      || envelope.worktreeRequired !== false
+      || !reconciliationStopRulesAreCanonical
+      || !reconciliationAcceptanceIsCanonical
+      || !reconciliationNextActionIsActionable
+    ) {
+      errors.push({
+        field: "routeKind/selectedStrategy/currentGate/worktreeRequired/stopRules/acceptance.criteria",
+        reason: "terminal reconciliation must use the exact needs_reconcile / null / fail_closed_reconcile tuple, require no worktree, instruct reconciliation, stop at reconcile (plus optional merge), and carry a required reconcile acceptance criterion",
+        got: {
+          routeKind: envelope.routeKind,
+          selectedStrategy: envelope.selectedStrategy,
+          currentGate: envelope.currentGate,
+          worktreeRequired: envelope.worktreeRequired,
+          stopRules: envelope.stopRules,
+          nextAction: envelope.nextAction,
+          acceptanceCriteria: envelope.acceptance?.criteria,
+          acceptanceEvidence: envelope.acceptance?.evidence,
+          maxFinalizationTurns: envelope.acceptance?.maxFinalizationTurns,
+        },
+      });
+    }
   }
 
   // ----- requiredReads -----

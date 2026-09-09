@@ -149,14 +149,13 @@ export function normalizeCheckpointCycleIdentity(identity) {
  * cycle forever).
  *
  * A `complete` or `skipped` artifact is scoped by `hasNewerMergeSinceCheckpoint`:
- * when true, something has merged since the checkpoint's recorded discharge
- * point (or that point could not be verified at all), so the checkpoint
- * cannot cover the newer cycle — it fails closed to MISSING. The caller
- * derives `hasNewerMergeSinceCheckpoint` itself (this module stays
- * pure/I/O-free) by checking local git ancestry between the checkpoint's
- * recorded merge commit and the base branch, so this runs fresh on every
- * evaluation rather than depending on anything having written a fresh
- * `required` record for the new cycle.
+ * when true, a newer PR merged into the configured base branch since the
+ * checkpoint's recorded discharge point (or ancestry/association could not
+ * be verified), so the checkpoint cannot cover the newer cycle — it fails
+ * closed to MISSING. The caller derives the boolean itself (this module stays
+ * pure/I/O-free) from local git ancestry plus authoritative commit-to-PR
+ * association, so this runs fresh on every evaluation rather than depending
+ * on anything having written a fresh `required` record for the new cycle.
  *
  * `required`/`none` are not scoped by this comparison: `required` already
  * maps to MISSING regardless of recency (an outstanding requirement blocks
