@@ -197,6 +197,7 @@ export function buildSnapshotFromPrFacts({
   lastCopilotRoundMaxSignal = null,
   failureDetails = [],
   excludedFailureDetails,
+  copilotBodyFeedbackUnresolved = false,
 }) {
   const prState = typeof prData?.state === "string" ? prData.state.toUpperCase() : "OPEN";
   const prMerged = prState === "MERGED";
@@ -222,6 +223,7 @@ export function buildSnapshotFromPrFacts({
     ciStatus: ciStatus ?? rollupDerivation.status,
     failureDetails,
     excludedFailureDetails: excludedFailureDetails ?? rollupDerivation.excludedFailureDetails,
+    copilotBodyFeedbackUnresolved,
   });
 }
 
@@ -288,6 +290,7 @@ export function normalizeSnapshot(raw) {
     agentFixStatus: raw.agentFixStatus === "applied" ? "applied" : null,
     failureDetails: Array.isArray(raw.failureDetails) ? raw.failureDetails : [],
     excludedFailureDetails: Array.isArray(raw.excludedFailureDetails) ? raw.excludedFailureDetails : [],
+    copilotBodyFeedbackUnresolved: Boolean(raw.copilotBodyFeedbackUnresolved),
   };
 }
 
@@ -397,7 +400,7 @@ export function interpretLoopState(snapshot, refinementConfig) {
       && state !== STATE.PR_DRAFT && state !== STATE.REVIEW_REQUEST_UNAVAILABLE
       && state !== STATE.BLOCKED_NEEDS_USER_DECISION) {
     const ciClean = s.ciStatus === "success" || s.ciStatus === "crediblyGreen" || !preApprovalRequireCi;
-    const cleanThreads = s.unresolvedThreadCount === 0;
+    const cleanThreads = s.unresolvedThreadCount === 0 && !s.copilotBodyFeedbackUnresolved;
     if (cleanThreads && ciClean) {
       state = STATE.ROUND_CAP_CLEAN_FALLBACK;
     } else if (!reviewInFlight) {
@@ -406,11 +409,16 @@ export function interpretLoopState(snapshot, refinementConfig) {
     // Not clean WITH an in-flight request: leave state undecided for the routing below.
   }
 
+  // Unresolved feedback includes both inline review threads and a Copilot
+  // review-body finding on the current head (a body-only "Changes recommended"
+  // review with zero inline threads must not read as clean).
+  const unresolvedFeedback = s.unresolvedThreadCount > 0 || s.copilotBodyFeedbackUnresolved;
+
   if (state === undefined) {
-    if (s.unresolvedThreadCount > 0 && s.agentFixStatus === "applied") {
+    if (unresolvedFeedback && s.agentFixStatus === "applied") {
       // Agent has fixed the code; threads still need reply/resolve on GitHub
       state = STATE.ALREADY_FIXED_NEEDS_REPLY_RESOLVE;
-    } else if (s.unresolvedThreadCount > 0) {
+    } else if (unresolvedFeedback) {
       // Unresolved feedback exists — do not wait; enter fix/reply-resolve handling
       state = STATE.UNRESOLVED_FEEDBACK_PRESENT;
     } else if (s.copilotReviewRequestStatus === "requested" || s.copilotReviewRequestStatus === "already-requested") {
@@ -459,7 +467,8 @@ export function interpretLoopState(snapshot, refinementConfig) {
   const sameHeadCleanConverged = state === STATE.READY_TO_REREQUEST_REVIEW
     && s.copilotReviewOnCurrentHead
     && s.unresolvedThreadCount === 0
-    && s.actionableThreadCount === 0;
+    && s.actionableThreadCount === 0
+    && !s.copilotBodyFeedbackUnresolved;
 
   let nextAction = NEXT_ACTIONS[state];
   if (sameHeadCleanConverged) {

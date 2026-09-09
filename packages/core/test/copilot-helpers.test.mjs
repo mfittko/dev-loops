@@ -3,6 +3,7 @@ import { test } from "bun:test";
 
 import {
   containsBareCopilotSummon,
+  copilotReviewBodySignalsChanges,
   extractReviewCommitSha,
   isCopilotLogin,
   isGateMachineArtifactBody,
@@ -436,6 +437,101 @@ test("summarizeCopilotReviews ignores non-Copilot reviews", () => {
   const result = summarizeCopilotReviews(reviews, { headSha: "abc1234" });
   assert.equal(result.copilotReviewPresent, false);
   assert.equal(result.hasSubmittedReviewOnCurrentHead, false);
+});
+
+test("copilotReviewBodySignalsChanges: COMMENTED with a 'Changes recommended' body is a finding", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", "### 🟡 Changes recommended\n\nSome finding text."),
+    true,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: COMMENTED with an 'Approval recommended' body is clean", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", "### 🟢 Approval recommended\n\nLooks good."),
+    false,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: COMMENTED with an empty body is clean", () => {
+  assert.equal(copilotReviewBodySignalsChanges("COMMENTED", ""), false);
+  assert.equal(copilotReviewBodySignalsChanges("COMMENTED", null), false);
+});
+
+test("copilotReviewBodySignalsChanges: COMMENTED with only a generic footer is clean", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", "You can request another Copilot review once you've made changes."),
+    false,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: CHANGES_REQUESTED is always a finding regardless of body", () => {
+  assert.equal(copilotReviewBodySignalsChanges("CHANGES_REQUESTED", ""), true);
+  assert.equal(copilotReviewBodySignalsChanges("CHANGES_REQUESTED", null), true);
+  assert.equal(copilotReviewBodySignalsChanges("CHANGES_REQUESTED", "### 🟢 Approval recommended"), true);
+});
+
+test("copilotReviewBodySignalsChanges: APPROVED is never a finding", () => {
+  assert.equal(copilotReviewBodySignalsChanges("APPROVED", "### 🟡 Changes recommended"), false);
+});
+
+test("copilotReviewBodySignalsChanges: a body stating 'No changes recommended' is clean", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", "No changes recommended. Looks good."),
+    false,
+  );
+});
+
+test("summarizeCopilotReviews sets hasBodyFindingOnCurrentHead true for a current-head 🟡 COMMENTED review", () => {
+  const reviews = [
+    {
+      author: { login: "copilot-pull-request-reviewer" },
+      state: "COMMENTED",
+      commit: { oid: "abc1234" },
+      submittedAt: "2024-01-10T00:00:00Z",
+      body: "### 🟡 Changes recommended\n\nSome finding text.",
+    },
+  ];
+
+  const result = summarizeCopilotReviews(reviews, { headSha: "abc1234" });
+  assert.equal(result.hasBodyFindingOnCurrentHead, true);
+});
+
+test("summarizeCopilotReviews sets hasBodyFindingOnCurrentHead false for a current-head 🟢 COMMENTED review", () => {
+  const reviews = [
+    {
+      author: { login: "copilot-pull-request-reviewer" },
+      state: "COMMENTED",
+      commit: { oid: "abc1234" },
+      submittedAt: "2024-01-10T00:00:00Z",
+      body: "### 🟢 Approval recommended\n\nLooks good.",
+    },
+  ];
+
+  const result = summarizeCopilotReviews(reviews, { headSha: "abc1234" });
+  assert.equal(result.hasBodyFindingOnCurrentHead, false);
+});
+
+test("summarizeCopilotReviews: a later clean review on the same head supersedes an earlier finding", () => {
+  const reviews = [
+    {
+      author: { login: "copilot-pull-request-reviewer" },
+      state: "COMMENTED",
+      commit: { oid: "abc1234" },
+      submittedAt: "2024-01-10T00:00:00Z",
+      body: "### 🟡 Changes recommended\n\nSome finding text.",
+    },
+    {
+      author: { login: "copilot-pull-request-reviewer" },
+      state: "COMMENTED",
+      commit: { oid: "abc1234" },
+      submittedAt: "2024-01-11T00:00:00Z",
+      body: "### 🟢 Approval recommended\n\nLooks good now.",
+    },
+  ];
+
+  const result = summarizeCopilotReviews(reviews, { headSha: "abc1234" });
+  assert.equal(result.hasBodyFindingOnCurrentHead, false);
 });
 
 // ── Lenient gate comment parsing (#451) ───────────────────────────────────

@@ -43,6 +43,7 @@ test("normalizeSnapshot returns safe defaults for an empty object", () => {
     agentFixStatus: null,
     failureDetails: [],
     excludedFailureDetails: [],
+    copilotBodyFeedbackUnresolved: false,
   });
 });
 
@@ -1484,4 +1485,79 @@ test("round-cap clean fallback takes priority over the low-signal heuristic at t
   const result = interpretLoopState(snapshot, refinementConfig);
   assert.equal(result.state, STATE.ROUND_CAP_CLEAN_FALLBACK);
   assert.equal(result.roundCapCleanEligible, true);
+});
+
+// ---------------------------------------------------------------------------
+// copilotBodyFeedbackUnresolved — Copilot review-body finding with zero inline
+// threads must still surface as unresolved feedback, unioned with inline
+// thread detection.
+// ---------------------------------------------------------------------------
+
+test("interpretLoopState routes to UNRESOLVED_FEEDBACK_PRESENT when a body-only Copilot finding exists with zero inline threads", () => {
+  const snapshot = {
+    prExists: true,
+    prNumber: 17,
+    copilotReviewRequestStatus: "none",
+    copilotReviewPresent: true,
+    copilotReviewOnCurrentHead: true,
+    unresolvedThreadCount: 0,
+    actionableThreadCount: 0,
+    ciStatus: "success",
+    copilotBodyFeedbackUnresolved: true,
+  };
+
+  const result = interpretLoopState(snapshot);
+  assert.equal(result.state, STATE.UNRESOLVED_FEEDBACK_PRESENT);
+  assert.notEqual(result.state, STATE.READY_TO_REREQUEST_REVIEW);
+  assert.equal(result.sameHeadCleanConverged, false);
+
+  const summary = summarizeLoopInterpretation(result);
+  assert.equal(summary.loopDisposition, DISPOSITION.UNRESOLVED_FEEDBACK);
+  assert.equal(summary.terminal, false);
+});
+
+test("interpretLoopState blocks at ROUND_CAP_REACHED (not ROUND_CAP_CLEAN_FALLBACK) when a body-only Copilot finding exists at the round cap with no review in flight", () => {
+  const snapshot = {
+    prExists: true,
+    prNumber: 17,
+    copilotReviewRequestStatus: "none",
+    copilotReviewPresent: true,
+    copilotReviewOnCurrentHead: true,
+    unresolvedThreadCount: 0,
+    actionableThreadCount: 0,
+    ciStatus: "success",
+    copilotReviewRoundCount: 5,
+    copilotBodyFeedbackUnresolved: true,
+  };
+
+  const result = interpretLoopState(snapshot, { maxCopilotRounds: 2 });
+  assert.notEqual(result.state, STATE.ROUND_CAP_CLEAN_FALLBACK);
+  assert.equal(result.state, STATE.ROUND_CAP_REACHED);
+
+  // Contrast: the same snapshot with no body finding stays on the pre-existing
+  // clean-fallback path (proves inline-thread detection is unchanged).
+  const cleanResult = interpretLoopState({ ...snapshot, copilotBodyFeedbackUnresolved: false }, { maxCopilotRounds: 2 });
+  assert.equal(cleanResult.state, STATE.ROUND_CAP_CLEAN_FALLBACK);
+});
+
+test("interpretLoopState converges exactly as before when copilotBodyFeedbackUnresolved is false", () => {
+  const snapshot = {
+    prExists: true,
+    prNumber: 17,
+    copilotReviewRequestStatus: "none",
+    copilotReviewPresent: true,
+    copilotReviewOnCurrentHead: true,
+    unresolvedThreadCount: 0,
+    actionableThreadCount: 0,
+    ciStatus: "success",
+    copilotBodyFeedbackUnresolved: false,
+  };
+
+  const result = interpretLoopState(snapshot);
+  assert.equal(result.state, STATE.READY_TO_REREQUEST_REVIEW);
+  assert.equal(result.sameHeadCleanConverged, true);
+
+  const summary = summarizeLoopInterpretation(result);
+  assert.equal(summary.loopDisposition, DISPOSITION.CLEAN_CONVERGED);
+  assert.equal(summary.terminal, true);
 });
