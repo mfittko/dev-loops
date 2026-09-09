@@ -737,6 +737,42 @@ text — it is still the orchestrator's own authored persona/instructions (e.g.
 `COPILOT-FOLLOWUP-ADVERSARIAL-BRIEFING`), supplied verbatim via `--angle-suffix-file`; the
 composer only enforces WHERE that text goes.
 
+<!-- rule: GATE-EXEC-FANOUT-DISPATCH-EMIT -->
+`GATE-EXEC-FANOUT-DISPATCH-EMIT` (issue #2092): The composer produces ONE reviewer prompt;
+turning the whole round's gate-context bundle INTO those per-unit prompts is itself a single
+sanctioned step — `scripts/github/emit-fanout-dispatch.mjs` — NOT a composition the conductor
+re-derives per round. Given a gate + head whose `write-gate-context.mjs` bundle is already on
+disk, the emitter reads the artifact's fan-out dispatch plan (`artifact.fanout.groups`, or
+`artifact.fanout.pendingGroups` under `--pending`) and, for EACH resolved dispatch unit,
+writes a minimal angle-suffix and drives the composer above (`composeAndRecordReviewerPrompt`,
+the same atomic compose-and-record core the CLI uses). It emits one
+`{ scope, angles, group, promptPath }` per unit; the conductor then dispatches one
+fresh-context `review` subagent per emitted unit, seeded with that unit's `promptPath` bytes
+verbatim, and records each unit's `group` on Phase 3's `--provenance` (null for a singleton
+unit, the unit name for a multi-angle unit). This is the ONE documented dispatch path, and it
+closes three failure modes prose discipline never held:
+
+- **No coordinator persona re-derivation.** The emitted angle-suffix only NAMES the unit's
+  angle(s) and instructs the reviewer to self-resolve each angle's persona/focus via
+  `resolveReviewerRole` (see the [review agent's scoped angle-review mode](../../agents/review.md)).
+  The conductor never inspects `print-gates.mjs`, `angleScopes`, or hand-authors persona text
+  — reviewer composition is resolved by the review agent + the neutral bundle
+  (`GATE-EXEC-BUILD-ONCE-SEED`), and the fresh-context sentinel + briefing-prefix hash are
+  enforced unchanged (`GATE-EXEC-BRIEFING-PREFIX`).
+- **No ad-hoc reviewer grouping.** The emitter dispatches EXACTLY the units `resolveFanoutGroups`
+  emitted, under the unit's EXACT `name` — so a multi-angle unit records the same `group` label
+  the merge guard re-derives (`resolveFanoutGroups` in `detect-checkpoint-evidence.mjs`), and a
+  singleton records no group and shares no reviewer. A conductor can no longer hand-collapse
+  ungrouped angles onto an ad-hoc shared reviewer `resolveFanoutGroups` never emitted — the
+  `requireFanoutProvenance` breach seen on #2100/#2101, where an invented `group` label spanned
+  angles the table splits apart. Provenance / distinct-reviewer / grouped-dispatch / fail-closed
+  invariants are preserved identically to the hand-driven path (the ledger matches the merge
+  guard's own re-derivation by construction).
+- **Fail-closed inputs.** A missing gate-context artifact, an artifact carrying no fan-out plan
+  (a thin briefing built without `--base`), a plan resolving zero units, a unit with no angles,
+  or a unit whose invariant-prefix record is missing all refuse (exit 1) rather than dispatching
+  a partial or persona-less fan-out.
+
 **Per-harness delivery.** The composer's `--out` file holds the exact full reviewer prompt
 bytes; how those bytes REACH the spawned reviewer's actual prompt differs by harness:
 - **Code-driven fan-out (e.g. a `pi` `runs.all` batch dispatch):** the driver reads the

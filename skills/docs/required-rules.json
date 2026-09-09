@@ -274,6 +274,10 @@
       "enforcement": "doc"
     },
     {
+      "id": "GATE-EXEC-FANOUT-DISPATCH-EMIT",
+      "enforcement": "runtime"
+    },
+    {
       "id": "GATE-EXEC-FANOUT-DISPATCH-KEY",
       "enforcement": "doc"
     },
