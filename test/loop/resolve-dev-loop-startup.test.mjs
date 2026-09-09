@@ -105,7 +105,7 @@ const linkedPrGraphql = (prNumber) => JSON.stringify({
         url: `https://github.com/mfittko/dev-loops/pull/${prNumber}`,
         repository: { nameWithOwner: "mfittko/dev-loops" } } }] } } } },
 });
-const noLinkedPrGraphqlEntry = () => ({ assertArgs: ["graphql"], stdout: NO_LINKED_PR_GRAPHQL });
+const noLinkedPrGraphqlEntry = () => ({ assertArgs: ["api", "graphql"], stdout: NO_LINKED_PR_GRAPHQL });
 
 test("parseResolveDevLoopStartupCliArgs rejects missing --input", () => {
   assert.throws(() => parseResolveDevLoopStartupCliArgs([]), /--input .* is required/i);
@@ -1139,25 +1139,18 @@ test("resolver does not block non-local_implementation strategies from main chec
 // which stub the assignment read to reach a normal return.
 test("buildAutoResolvedInput fails closed (not-claimed) when the issue read fails and defaults to unassigned", async () => {
   const tmp = stampRepoWithOrigin();
-  const savedEnv = { ...process.env };
   try {
     // Stub linkage to SUCCEED (no open linked PR) so the ownership gate is
-    // reached — this test is about the gate, not linkage failure. The
-    // in-process call reads gh args from the ambient process.env.
+    // reached — this test is about the gate, not linkage failure.
     const ghStub = await writeGhStubHelper(tmp, [
       noLinkedPrGraphqlEntry(),
       { assertArgs: ["issue", "view", "999999", "assignees"], exitCode: 1, stderr: "gh: not found\n" },
     ], { matchMode: "claims" });
-    Object.assign(process.env, ghStub.env);
     assert.throws(
-      () => buildAutoResolvedInput({ issue: 999999, cwd: tmp }),
+      () => buildAutoResolvedInput({ issue: 999999, cwd: tmp, env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) } }),
       /Issue #999999 is not claimed by any contributor.*edit-issue\.mjs.*--issue 999999 --add-assignee @me/s,
     );
   } finally {
-    for (const key of Object.keys(process.env)) {
-      if (!(key in savedEnv)) delete process.env[key];
-    }
-    Object.assign(process.env, savedEnv);
     rmSync(tmp, { recursive: true, force: true });
   }
 });
@@ -1176,32 +1169,25 @@ test("buildAutoResolvedInput for a PR fails closed (not-claimed) when the PR rea
 
 test("buildAutoResolvedInput fails closed when linked-PR detection fails instead of fabricating resolved_no_open_pr (#1626)", async () => {
   const tmp = stampRepoWithOrigin();
-  const savedEnv = { ...process.env };
   try {
     // The linkage graphql call itself fails (transient gh error). This MUST
     // fail closed rather than defaulting to resolved_no_open_pr (a transient
     // failure would misroute an issue that HAS an open linked PR to
     // issue_intake, which the router cannot catch).
     const ghStub = await writeGhStubHelper(tmp, [
-      { assertArgs: ["graphql"], exitCode: 1, stderr: "gh: network error\n" },
+      { assertArgs: ["api", "graphql"], exitCode: 1, stderr: "gh: network error\n" },
     ], { matchMode: "claims" });
-    Object.assign(process.env, ghStub.env);
     assert.throws(
-      () => buildAutoResolvedInput({ issue: 999999, cwd: tmp }),
+      () => buildAutoResolvedInput({ issue: 999999, cwd: tmp, env: { ...ghStub.env, ...resolverTestEnv() } }),
       /linked-PR detection failed for issue #999999.*refusing to fabricate.*resolved_no_open_pr/s,
     );
   } finally {
-    for (const key of Object.keys(process.env)) {
-      if (!(key in savedEnv)) delete process.env[key];
-    }
-    Object.assign(process.env, savedEnv);
     rmSync(tmp, { recursive: true, force: true });
   }
 });
 
 test("buildAutoResolvedInput with local-first tracker source still hits the ownership gate (fails closed, not a phase-doc bypass)", async () => {
   const tmp = stampRepoWithOrigin();
-  const savedEnv = { ...process.env };
   try {
     // inputSource "tracker" (vs "phase-docs") keeps this on the issue-backed
     // path where the ownership gate applies — proving the tracker source
@@ -1210,21 +1196,17 @@ test("buildAutoResolvedInput with local-first tracker source still hits the owne
       noLinkedPrGraphqlEntry(),
       { assertArgs: ["issue", "view", "999999", "assignees"], exitCode: 1, stderr: "gh: not found\n" },
     ], { matchMode: "claims" });
-    Object.assign(process.env, ghStub.env);
     assert.throws(
       () => buildAutoResolvedInput({
         issue: 999999,
         cwd: tmp,
         targetPreference: "prefer_local",
         inputSource: "tracker",
+        env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
       }),
       /Issue #999999 is not claimed by any contributor/,
     );
   } finally {
-    for (const key of Object.keys(process.env)) {
-      if (!(key in savedEnv)) delete process.env[key];
-    }
-    Object.assign(process.env, savedEnv);
     rmSync(tmp, { recursive: true, force: true });
   }
 });
@@ -1379,7 +1361,7 @@ test("buildAutoResolvedInput detects Copilot authorship from linked PR author", 
     // matching): stub it as assigned to the viewer so the gate passes and the
     // linked-PR authorship path below is reached.
     const ghStub = await writeGhStubHelper(tempDir, [
-      { assertArgs: ["graphql"], stdout: linkedPrGraphql(740) },
+      { assertArgs: ["api", "graphql"], stdout: linkedPrGraphql(740) },
       { assertArgs: ["pr", "view", "740"], stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, state: "OPEN" }) },
       { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
       { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: "" }) },
@@ -1406,7 +1388,7 @@ test("buildAutoResolvedInput detects external_human authorship from linked PR au
     execFileSync("git", ["init"], { cwd: tempDir, stdio: "ignore" });
     execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tempDir, stdio: "ignore" });
     const ghStub = await writeGhStubHelper(tempDir, [
-      { assertArgs: ["graphql"], stdout: linkedPrGraphql(740) },
+      { assertArgs: ["api", "graphql"], stdout: linkedPrGraphql(740) },
       { assertArgs: ["pr", "view", "740"], stdout: JSON.stringify({ author: { login: "some-human-dev" }, state: "OPEN" }) },
       { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
       { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: "" }) },
