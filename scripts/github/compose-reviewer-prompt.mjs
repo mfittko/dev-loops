@@ -84,6 +84,68 @@ Exit codes:
 
 const parseError = buildParseError(USAGE);
 
+/**
+ * Compose one reviewer prompt (invariant prefix + volatile tail + angle suffix,
+ * in that fixed order) and record its dispatch-prompt layout ATOMICALLY — the
+ * reusable core the CLI and the one-shot fan-out emitter
+ * (emit-fanout-dispatch.mjs) both call, so a canonical-path dispatch prompt is
+ * NEVER produced by two independent code paths that could drift. All inputs are
+ * pre-validated by the caller (the CLI validates via its arg parser; the emitter
+ * derives them from the gate-context artifact + resolveFanoutGroups units).
+ *
+ * @returns {Promise<{ composed: boolean, reason?: string, recorded?: boolean,
+ *   promptPath?: string, prefixPath?: string, promptLength?: number, truncated?: boolean }>}
+ *   `composed: false` (with `reason`) is a caller-recoverable refusal (missing
+ *   prefix record, unreadable/empty suffix, or the composer's own shape refusal);
+ *   filesystem/record errors reject.
+ */
+export async function composeAndRecordReviewerPrompt({ repo, pr, gate, headSha, scope, angleSuffixFile, tmpRoot, out = null }) {
+  const prefixPath = buildGateBriefingPrefixPath({ repo, pr, gate, headSha, tmpRoot });
+  const volatilePath = buildGateBriefingVolatilePath({ repo, pr, gate, headSha, tmpRoot });
+
+  let prefixBytes;
+  try {
+    prefixBytes = await readFile(prefixPath, "utf8");
+  } catch (err) {
+    if (err?.code === "ENOENT") {
+      return { composed: false, reason: `no invariant-prefix record at ${JSON.stringify(prefixPath)} — run write-gate-context.mjs for this (gate, headSha) first` };
+    }
+    throw err;
+  }
+
+  // Volatile tail is best-effort (a round that never wrote one still composes).
+  let volatileBytes = "";
+  try {
+    volatileBytes = await readFile(volatilePath, "utf8");
+  } catch {
+    volatileBytes = "";
+  }
+
+  let angleSuffix;
+  try {
+    angleSuffix = await readFile(path.resolve(process.cwd(), angleSuffixFile), "utf8");
+  } catch (err) {
+    return { composed: false, reason: `--angle-suffix-file ${JSON.stringify(angleSuffixFile)} is unreadable (${err.code ?? "error"})` };
+  }
+
+  let composed;
+  try {
+    composed = composeReviewerPromptText({ prefixBytes, volatileBytes, angleSuffix });
+  } catch (err) {
+    return { composed: false, reason: err.message };
+  }
+
+  const outPath = out ?? path.join(path.dirname(prefixPath), `${gate}-${headSha}.dispatch-prompt-${scope}.txt`);
+  await mkdir(path.dirname(outPath), { recursive: true });
+  await writeFile(outPath, composed, "utf8");
+
+  const recordResult = await recordDispatchPromptLayout({ scope, headSha, prefixPath, promptText: composed, tmpRoot });
+  if (!recordResult.recorded) {
+    return { composed: true, recorded: false, promptPath: outPath, prefixPath, reason: recordResult.reason };
+  }
+  return { composed: true, recorded: true, promptPath: outPath, prefixPath, promptLength: composed.length, truncated: recordResult.truncated };
+}
+
 function resolveFlagValue(argv, flag) {
   const idx = argv.indexOf(flag);
   if (idx === -1) return null;
@@ -153,70 +215,19 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const silent = argv.includes("--silent") || argv.includes("-s");
   const finish = (payload, ok) => emitResult(payload, { jq, silent, ok });
 
-  let prefixPath, volatilePath;
+  let result;
   try {
-    prefixPath = buildGateBriefingPrefixPath({ repo, pr, gate, headSha, tmpRoot });
-    volatilePath = buildGateBriefingVolatilePath({ repo, pr, gate, headSha, tmpRoot });
+    result = await composeAndRecordReviewerPrompt({ repo, pr, gate, headSha, scope, angleSuffixFile: angleSuffixFileArg, tmpRoot, out: outArg ?? null });
   } catch (err) {
     process.stderr.write(`${formatCliError(err)}\n`);
     return 2;
   }
-
-  let prefixBytes;
-  try {
-    prefixBytes = await readFile(prefixPath, "utf8");
-  } catch (err) {
-    if (err?.code === "ENOENT") {
-      return finish({ ok: true, composed: false, reason: `no invariant-prefix record at ${JSON.stringify(prefixPath)} — run write-gate-context.mjs for this (gate, headSha) first` }, false);
-    }
-    process.stderr.write(`${formatCliError(err)}\n`);
-    return 2;
+  if (!result.composed) {
+    return finish({ ok: true, composed: false, reason: result.reason }, false);
   }
-
-  // Volatile tail is best-effort (a round that never wrote one still
-  // composes — GATE-EXEC-BRIEFING-PREFIX's volatile tail is not itself a
-  // mandatory input to this composer, only the invariant prefix is).
-  let volatileBytes = "";
-  try {
-    volatileBytes = await readFile(volatilePath, "utf8");
-  } catch {
-    volatileBytes = "";
+  if (!result.recorded) {
+    return finish({ ok: true, composed: true, recorded: false, promptPath: result.promptPath, prefixPath: result.prefixPath, reason: result.reason }, false);
   }
-
-  let angleSuffix;
-  try {
-    angleSuffix = await readFile(path.resolve(process.cwd(), angleSuffixFileArg), "utf8");
-  } catch (err) {
-    return finish({ ok: true, composed: false, reason: `--angle-suffix-file ${JSON.stringify(angleSuffixFileArg)} is unreadable (${err.code ?? "error"})` }, false);
-  }
-
-  let composed;
-  try {
-    composed = composeReviewerPromptText({ prefixBytes, volatileBytes, angleSuffix });
-  } catch (err) {
-    return finish({ ok: true, composed: false, reason: err.message }, false);
-  }
-
-  const outPath = outArg ?? path.join(path.dirname(prefixPath), `${gate}-${headSha}.dispatch-prompt-${scope}.txt`);
-  try {
-    await mkdir(path.dirname(outPath), { recursive: true });
-    await writeFile(outPath, composed, "utf8");
-  } catch (err) {
-    process.stderr.write(`${formatCliError(err)}\n`);
-    return 2;
-  }
-
-  let recordResult;
-  try {
-    recordResult = await recordDispatchPromptLayout({ scope, headSha, prefixPath, promptText: composed, tmpRoot });
-  } catch (err) {
-    process.stderr.write(`${formatCliError(err)}\n`);
-    return 2;
-  }
-  if (!recordResult.recorded) {
-    return finish({ ok: true, composed: true, recorded: false, promptPath: outPath, prefixPath, reason: recordResult.reason }, false);
-  }
-
   return finish({
     ok: true,
     composed: true,
@@ -226,10 +237,10 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     gate,
     repo,
     pr,
-    promptPath: outPath,
-    prefixPath,
-    promptLength: composed.length,
-    truncated: recordResult.truncated,
+    promptPath: result.promptPath,
+    prefixPath: result.prefixPath,
+    promptLength: result.promptLength,
+    truncated: result.truncated,
   }, true);
 }
 
