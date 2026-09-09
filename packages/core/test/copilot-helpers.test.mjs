@@ -534,6 +534,78 @@ test("summarizeCopilotReviews: a later clean review on the same head supersedes 
   assert.equal(result.hasBodyFindingOnCurrentHead, false);
 });
 
+test("summarizeCopilotReviews: a later finding on the same head supersedes an earlier clean review", () => {
+  const reviews = [
+    {
+      author: { login: "copilot-pull-request-reviewer" },
+      state: "COMMENTED",
+      commit: { oid: "abc1234" },
+      submittedAt: "2024-01-10T00:00:00Z",
+      body: "### 🟢 Approval recommended\n\nLooks good.",
+    },
+    {
+      author: { login: "copilot-pull-request-reviewer" },
+      state: "COMMENTED",
+      commit: { oid: "abc1234" },
+      submittedAt: "2024-01-11T00:00:00Z",
+      body: "### 🟡 Changes recommended\n\nA new finding.",
+    },
+  ];
+
+  const result = summarizeCopilotReviews(reviews, { headSha: "abc1234" });
+  assert.equal(result.hasBodyFindingOnCurrentHead, true);
+});
+
+test("summarizeCopilotReviews: equal-timestamp reviews on the same head fail toward surfacing regardless of order", () => {
+  const clean = {
+    author: { login: "copilot-pull-request-reviewer" },
+    state: "COMMENTED",
+    commit: { oid: "abc1234" },
+    submittedAt: "2024-01-10T00:00:00Z",
+    body: "### 🟢 Approval recommended\n\nLooks good.",
+  };
+  const finding = {
+    author: { login: "copilot-pull-request-reviewer" },
+    state: "COMMENTED",
+    commit: { oid: "abc1234" },
+    submittedAt: "2024-01-10T00:00:00Z",
+    body: "### 🟡 Changes recommended\n\nSame-second finding.",
+  };
+
+  assert.equal(summarizeCopilotReviews([finding, clean], { headSha: "abc1234" }).hasBodyFindingOnCurrentHead, true);
+  assert.equal(summarizeCopilotReviews([clean, finding], { headSha: "abc1234" }).hasBodyFindingOnCurrentHead, true);
+});
+
+test("summarizeCopilotReviews: a null-timestamp current-head finding still surfaces (fail toward surfacing)", () => {
+  const reviews = [
+    {
+      author: { login: "copilot-pull-request-reviewer" },
+      state: "COMMENTED",
+      commit: { oid: "abc1234" },
+      submittedAt: null,
+      body: "### 🟡 Changes recommended\n\nSome finding text.",
+    },
+  ];
+
+  const result = summarizeCopilotReviews(reviews, { headSha: "abc1234" });
+  assert.equal(result.hasBodyFindingOnCurrentHead, true);
+});
+
+test("summarizeCopilotReviews: a DISMISSED current-head review is never a body finding", () => {
+  const reviews = [
+    {
+      author: { login: "copilot-pull-request-reviewer" },
+      state: "DISMISSED",
+      commit: { oid: "abc1234" },
+      submittedAt: "2024-01-10T00:00:00Z",
+      body: "### 🟡 Changes recommended\n\nDismissed.",
+    },
+  ];
+
+  const result = summarizeCopilotReviews(reviews, { headSha: "abc1234" });
+  assert.equal(result.hasBodyFindingOnCurrentHead, false);
+});
+
 // ── Lenient gate comment parsing (#451) ───────────────────────────────────
 
 test("parseGateReviewCommentMarkerBody detects gate+head in non-standard format", () => {

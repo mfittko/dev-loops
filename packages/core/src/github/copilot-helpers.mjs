@@ -744,6 +744,10 @@ export function summarizeCopilotReviews(reviews, { headSha, draftGateResetAtMs }
       if (submittedAt !== null && (latestSubmittedReviewOnCurrentHeadAt === null || submittedAt > latestSubmittedReviewOnCurrentHeadAt)) {
         latestSubmittedReviewOnCurrentHeadAt = submittedAt;
         hasBodyFindingOnCurrentHead = copilotReviewBodySignalsChanges(state, review?.body);
+      } else if (submittedAt !== null && submittedAt === latestSubmittedReviewOnCurrentHeadAt) {
+        // Equal-timestamp tie on the same head: fail toward surfacing so array
+        // order never silently drops a finding when two reviews share a timestamp.
+        hasBodyFindingOnCurrentHead = hasBodyFindingOnCurrentHead || copilotReviewBodySignalsChanges(state, review?.body);
       } else if (submittedAt === null && latestSubmittedReviewOnCurrentHeadAt === null) {
         hasBodyFindingOnCurrentHead = hasBodyFindingOnCurrentHead || copilotReviewBodySignalsChanges(state, review?.body);
       }
