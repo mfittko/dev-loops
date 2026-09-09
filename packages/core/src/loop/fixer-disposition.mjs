@@ -50,8 +50,9 @@ function isNonEmptyString(value) {
 /**
  * Validate + normalize a raw fixer-disposition handoff. Throws on any
  * structural gap the evaluator must never silently tolerate: a missing
- * headSha, a missing threadId/fixingCommitSha/disposition on any entry, or a
- * duplicate threadId/fingerprint across entries.
+ * headSha, a non-array dispositions field, a missing
+ * threadId/fixingCommitSha/disposition on any entry, an unrecognized
+ * disposition value, or a duplicate threadId/fingerprint across entries.
  *
  * @param {object} raw
  * @returns {{ headSha: string, dispositions: Array<{ threadId: string, fingerprint: string|null, fixingCommitSha: string, disposition: string, validation: string|null }> }}
@@ -63,7 +64,10 @@ export function normalizeFixerDispositionHandoff(raw) {
   if (!isNonEmptyString(raw.headSha)) {
     throw new Error("Fixer disposition handoff is missing headSha");
   }
-  const rawDispositions = Array.isArray(raw.dispositions) ? raw.dispositions : [];
+  if (raw.dispositions !== undefined && !Array.isArray(raw.dispositions)) {
+    throw new Error("Fixer disposition handoff dispositions must be an array");
+  }
+  const rawDispositions = raw.dispositions ?? [];
   const seenThreadIds = new Set();
   const seenFingerprints = new Set();
   const dispositions = rawDispositions.map((entry, index) => {
@@ -91,11 +95,15 @@ export function normalizeFixerDispositionHandoff(raw) {
       }
       seenFingerprints.add(fingerprint);
     }
+    const disposition = entry.disposition.trim().toLowerCase();
+    if (!Object.values(FIXER_DISPOSITION_KIND).includes(disposition)) {
+      throw new Error(`Fixer disposition handoff entry for thread ${threadId} has an unrecognized disposition: ${disposition}`);
+    }
     return {
       threadId,
       fingerprint,
       fixingCommitSha: entry.fixingCommitSha.trim(),
-      disposition: entry.disposition.trim().toLowerCase(),
+      disposition,
       validation: isNonEmptyString(entry.validation) ? entry.validation.trim() : null,
     };
   });

@@ -34,6 +34,42 @@ test("normalizeFixerDispositionHandoff throws on missing fixingCommitSha", () =>
   );
 });
 
+test("normalizeFixerDispositionHandoff throws on missing disposition", () => {
+  assert.throws(
+    () => normalizeFixerDispositionHandoff({ headSha: SHA, dispositions: [{ threadId: "T1", fixingCommitSha: SHA }] }),
+    /missing disposition/,
+  );
+});
+
+test("normalizeFixerDispositionHandoff throws when dispositions is not an array (string)", () => {
+  assert.throws(
+    () => normalizeFixerDispositionHandoff({ headSha: SHA, dispositions: "nope" }),
+    /dispositions must be an array/,
+  );
+});
+
+test("normalizeFixerDispositionHandoff throws when dispositions is not an array (object)", () => {
+  assert.throws(
+    () => normalizeFixerDispositionHandoff({ headSha: SHA, dispositions: {} }),
+    /dispositions must be an array/,
+  );
+});
+
+test("normalizeFixerDispositionHandoff treats absent dispositions as legitimately empty", () => {
+  const normalized = normalizeFixerDispositionHandoff({ headSha: SHA });
+  assert.deepEqual(normalized.dispositions, []);
+});
+
+test("normalizeFixerDispositionHandoff throws on an unrecognized disposition value (typo)", () => {
+  assert.throws(
+    () => normalizeFixerDispositionHandoff({
+      headSha: SHA,
+      dispositions: [{ threadId: "T1", fixingCommitSha: SHA, disposition: "tacled" }],
+    }),
+    /unrecognized disposition: tacled/,
+  );
+});
+
 test("normalizeFixerDispositionHandoff throws on duplicate threadId", () => {
   assert.throws(
     () => normalizeFixerDispositionHandoff({
