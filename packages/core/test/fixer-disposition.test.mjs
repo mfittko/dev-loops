@@ -266,6 +266,29 @@ test("evaluateFixerDisposition names every incomplete thread, its expected commi
 });
 
 // ---------------------------------------------------------------------------
+// evaluateFixerDisposition always re-validates via normalizeFixerDispositionHandoff
+// — no "already an array" fast-path bypass of schema+enum validation.
+// ---------------------------------------------------------------------------
+
+test("evaluateFixerDisposition throws on a malformed array-bearing handoff instead of silently evaluating it", () => {
+  // dispositions is already an array (the old fast-path condition) but one
+  // entry carries an unrecognized disposition value — must still throw via
+  // normalizeFixerDispositionHandoff rather than pass through unvalidated.
+  const malformedHandoff = {
+    headSha: SHA,
+    dispositions: [{ threadId: "T1", fixingCommitSha: SHA, disposition: "not-a-real-disposition" }],
+  };
+  assert.throws(
+    () => evaluateFixerDisposition({
+      handoff: malformedHandoff,
+      liveThreads: [{ threadId: "T1", isResolved: true, replyBodies: [`Fixed in commit ${SHA}.`] }],
+      containment: { [SHA]: true },
+    }),
+    /unrecognized disposition: not-a-real-disposition/,
+  );
+});
+
+// ---------------------------------------------------------------------------
 // AC row 9 — cross-harness: the shared decision has no I/O and no side effects
 // ---------------------------------------------------------------------------
 

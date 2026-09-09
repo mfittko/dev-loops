@@ -130,15 +130,13 @@ function formatIncompleteReason(incomplete) {
  * verbatim across harnesses.
  *
  * @param {object} params
- * @param {{ headSha: string, dispositions: Array<object> }} params.handoff - raw or already-normalized; normalized internally either way
+ * @param {{ headSha: string, dispositions: Array<object> }} params.handoff - raw or already-normalized; ALWAYS re-validated via normalizeFixerDispositionHandoff (idempotent on already-normalized input), so a malformed array-bearing handoff can never bypass schema+enum validation just by already carrying an array
  * @param {Array<{ threadId: string, isResolved: boolean, replyBodies?: string[], claimedTackled?: boolean }>} [params.liveThreads]
  * @param {Record<string, boolean>} [params.containment] - fixingCommitSha -> true when the observed PR head contains it
  * @returns {{ ok: boolean, incomplete: Array<{ threadId: string, expectedCommit: string|null, failedStep: string }>, forbiddenActions: string[], nextAction: string|null, reason: string|null }}
  */
 export function evaluateFixerDisposition({ handoff, liveThreads = [], containment = {} } = {}) {
-  const normalizedHandoff = handoff && Array.isArray(handoff.dispositions)
-    ? handoff
-    : normalizeFixerDispositionHandoff(handoff ?? {});
+  const normalizedHandoff = normalizeFixerDispositionHandoff(handoff ?? {});
   const handoffByThreadId = new Map(normalizedHandoff.dispositions.map((entry) => [entry.threadId, entry]));
   const liveByThreadId = new Map(
     (Array.isArray(liveThreads) ? liveThreads : [])

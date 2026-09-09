@@ -808,10 +808,15 @@ async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, parsedTh
     handoff = normalizeFixerDispositionHandoff(JSON.parse(raw));
   } catch (error) {
     // A recorded-but-malformed checkpoint must fail closed rather than
-    // silently no-op — the fixer explicitly claimed tackled work here.
+    // silently no-op — the fixer explicitly claimed tackled work here. No
+    // real threadId is known for a checkpoint-level parse/schema failure, so
+    // a sentinel ("unknown") is used instead of null: downstream reason
+    // formatting renders `thread ${entry.threadId}` verbatim, and a raw null
+    // there reads as the illegible "thread null" (matches the "expected
+    // commit unknown" sentinel already used for the same reason string).
     return {
       complete: false,
-      incomplete: [{ threadId: null, expectedCommit: null, failedStep: `unreadable_checkpoint: ${error instanceof Error ? error.message : String(error)}` }],
+      incomplete: [{ threadId: "unknown", expectedCommit: null, failedStep: `unreadable_checkpoint: ${error instanceof Error ? error.message : String(error)}` }],
     };
   }
   const tackledShas = [...new Set(

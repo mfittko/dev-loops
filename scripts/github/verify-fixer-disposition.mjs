@@ -238,13 +238,16 @@ export async function verifyFixerDisposition(
     const { matchedTargets } = planBatchReplyTargets(initialSnapshot, "all");
     const commentIdByThreadId = new Map(matchedTargets.map((target) => [target.threadId, target.commentId]));
     for (const entry of actionable) {
-      const commentId = commentIdByThreadId.get(entry.threadId);
-      if (commentId === undefined) {
-        actions.push({ threadId: entry.threadId, ok: false, error: "no unresolved matching comment found to reply to" });
-        continue;
-      }
       try {
         if (entry.failedStep === FIXER_DISPOSITION_FAILED_STEP.REPLY_MISSING) {
+          // A REST comment is only required here: this branch is the one that
+          // actually posts a reply, so a missing/filtered commentId means
+          // there is nothing to reply to.
+          const commentId = commentIdByThreadId.get(entry.threadId);
+          if (commentId === undefined) {
+            actions.push({ threadId: entry.threadId, ok: false, error: "no unresolved matching comment found to reply to" });
+            continue;
+          }
           // Ordering: containment already verified above; post the one
           // evidenced reply and resolve in the same call (replyAndMaybeResolve
           // asserts isResolved before returning).
@@ -264,7 +267,8 @@ export async function verifyFixerDisposition(
         } else {
           // A commit-evidenced reply already exists live (idempotent re-entry
           // after a reply-succeeded/resolve-failed partial run) — resolve only,
-          // never post a second reply.
+          // never post a second reply. resolveThread needs only threadId, so a
+          // missing/filtered commentId must never block this path.
           const resolvedThread = await resolveThread(entry.threadId, runtime);
           if (!resolvedThread?.isResolved) {
             throw new Error(`Review thread did not resolve successfully: ${entry.threadId}`);

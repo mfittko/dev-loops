@@ -2820,6 +2820,85 @@ test("detect-pr-gate-coordination-state blocks on an incomplete fixer-dispositio
   }
 });
 
+test("detect-pr-gate-coordination-state formats a legible reason (no raw null threadId) when the fixer-disposition checkpoint is malformed", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-fixer-disposition-malformed-"));
+  const REPO = "owner/repo";
+  const PR = 3003;
+  const HEAD_SHA = "abc1122334";
+
+  try {
+    const { buildLogPath } = await import("../../scripts/github/write-gate-findings-log.mjs");
+    const logPath = buildLogPath({ repo: REPO, pr: PR, gate: "fixer-disposition", headSha: HEAD_SHA, tmpRoot: "tmp" });
+    const fullPath = path.join(tempDir, logPath);
+    await mkdir(path.dirname(fullPath), { recursive: true });
+    // Malformed: not valid JSON at all, so resolveFixerDispositionInput's
+    // normalizeFixerDispositionHandoff(JSON.parse(raw)) throws before any
+    // threadId is ever known.
+    await writeFile(fullPath, "{ not valid json", "utf8");
+
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+        stdout: jsonLine({
+          number: PR,
+          state: "OPEN",
+          isDraft: false,
+          headRefOid: HEAD_SHA,
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+          reviews: [],
+        }),
+      },
+      {
+        assertArgs: ["api", `repos/${REPO}/pulls/${PR}/requested_reviewers`],
+        stdout: jsonLine({ users: [], teams: [] }),
+      },
+      {
+        assertArgs: ["api", "graphql", `pr=${PR}`],
+        stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }),
+      },
+      {
+        assertArgs: ["pr", "view", String(PR), "--repo", REPO, "--json", "headRefOid"],
+        stdout: jsonLine({ headRefOid: HEAD_SHA }),
+      },
+      {
+        // Clean draft_gate evidence for the current head — isolates this
+        // test's assertions to the fixer-disposition boundary itself, rather
+        // than the pre-existing (unrelated) "no clean draft_gate evidence"
+        // override that also applies to a feedback_resolution boundary.
+        assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/issues/${PR}/comments?per_page=100`],
+        stdout: jsonLine([[
+          {
+            id: 11,
+            body: [
+              "Gate review: draft_gate",
+              `Reviewed head SHA: ${HEAD_SHA}`,
+              "Verdict: clean",
+              "Findings summary: no issues found",
+              "Next action: mark ready for review",
+            ].join("\n"),
+            html_url: "https://example.test/comment/11",
+            updated_at: "2026-05-31T20:00:00Z",
+          },
+        ]]),
+      },
+      {
+        assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],
+        stdout: "\n",
+      },
+    ]);
+
+    const runtime = buildMockRuntime(env, { repoRoot: tempDir });
+    const result = await detectPrGateCoordinationState({ repo: REPO, pr: PR }, runtime);
+
+    assert.equal(result.ok, true);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
+    assert.match(result.reason, /unreadable_checkpoint/);
+    assert.doesNotMatch(result.reason, /thread null(?!\w)/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("detect-pr-gate-coordination-state behaves exactly as before when no fixer-disposition checkpoint exists for the current head", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-no-fixer-disposition-"));
   const REPO = "owner/repo";

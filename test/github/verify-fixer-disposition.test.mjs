@@ -197,6 +197,49 @@ test("re-entry after reply-succeeded/resolve-failed only resolves, never posts a
 });
 
 // ---------------------------------------------------------------------------
+// copilot review (PR #2126): a NOT_RESOLVED entry needs only threadId to
+// resolve — a missing/filtered REST commentId (e.g. planBatchReplyTargets
+// never matches one because the evidenced reply's author has no login) must
+// never block a resolve-only action.
+// ---------------------------------------------------------------------------
+
+test("resolve-only path (NOT_RESOLVED) proceeds via threadId alone when no commentId is matched", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const dispositions = JSON.stringify([
+      { threadId: "T1", fixingCommitSha: FIX_SHA, disposition: "tackled" },
+    ]);
+    const { deps, calls } = runtime([
+      // 1. initial live-thread capture: T1 already carries the commit-evidenced
+      // reply, but its author has no login (e.g. a deleted GitHub account),
+      // so authorMatchesFilter("all") filters it out and planBatchReplyTargets
+      // never matches a commentId for T1. This is NOT_RESOLVED only — no
+      // reply is missing — so no commentId should ever be required.
+      threadsCallEntry([
+        { id: "T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: `Fixed in commit ${FIX_SHA}.`, author: null }] } },
+      ]),
+      // 2. containment compare for FIX_SHA
+      compareEntry(FIX_SHA, "ahead"),
+      // 3. resolve GraphQL mutation — no reply POST at all.
+      { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "T1", isResolved: true } } } })}\n` },
+      // 4. re-read live threads
+      threadsCallEntry([
+        { id: "T1", isResolved: true, comments: { nodes: [{ id: "c1", databaseId: 101, body: `Fixed in commit ${FIX_SHA}.`, author: null }] } },
+      ]),
+    ], repoRoot);
+
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, dispositions, tmpRoot: "tmp" }, deps);
+
+    assert.equal(result.complete, true);
+    assert.equal(result.actions.length, 1);
+    assert.equal(result.actions[0].ok, true);
+    assert.equal(result.actions[0].step, "resolved");
+    // No POST .../replies call anywhere in this run's gh call log.
+    assert.ok(calls.every((call) => !call.args.some((arg) => String(arg).includes("/replies"))));
+    assert.equal(calls.length, 4);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // AC row 5 — resolve success / re-read failure: the resolve mutation LIES
 // (reports isResolved:true) but the post-mutation live re-read still shows
 // the thread unresolved; the CLI must trust the re-read, not the mutation.
