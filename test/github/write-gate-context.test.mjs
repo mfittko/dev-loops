@@ -1832,6 +1832,16 @@ test("forbiddenGateRefusalMessage: refuses a forbidden gate naming the legal nex
     null,
     "review carries no requested gate action — never gated here",
   );
+
+  // Message-format fallbacks: empty allowedNextActions renders "(none)" and a
+  // missing reason omits the trailing reason suffix.
+  const noAllowed = forbiddenGateRefusalMessage({
+    gate: "draft_gate",
+    coordination: { forbiddenActions: ["run_draft_gate"], allowedNextActions: [] },
+    repo: "owner/repo",
+    pr: 90,
+  });
+  assert.match(noAllowed, /Legal next action\(s\): \(none\)\.$/, "empty allowedNextActions renders (none) with no trailing reason");
 });
 
 test("CLI tripwire: a forbidden gate exits non-zero naming the legal next action, writing NO gate-context artifact and NO diff", async () => {

@@ -2837,9 +2837,13 @@ export async function main(
     // The default consults the real deterministic authority. It MUST be
     // detectPrGateCoordinationState (the fully-EVALUATED result carrying
     // allowedNextActions/forbiddenActions/reason), NOT the raw
-    // loadPrGateCoordinationContext, whose context object has no such fields —
-    // the same evaluated result the verdict-post refusal reads, so the two can
-    // never disagree.
+    // loadPrGateCoordinationContext, whose context object has no such fields.
+    // detectPrGateCoordinationState layers the gate-boundary guard overrides on
+    // top of evaluatePrGateCoordination, so the tripwire is AT LEAST AS STRICT
+    // as the verdict-post refusal (which evaluates the raw result directly): it
+    // may refuse a genuinely-premature gate earlier, never permits one the
+    // verdict post would refuse, and the verdict-post refusal stays the
+    // authoritative fail-closed backstop.
     loadCoordination = (opts) => detectPrGateCoordinationState(opts, { runChild: run, repoRoot, cwd: repoRoot }),
   } = {},
 ) {
