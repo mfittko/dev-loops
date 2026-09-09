@@ -73,7 +73,8 @@ repeat phases those gates run:
    gate fan-out — prime the shared prefix before releasing the rest of the
    fan-out.
 3. **Phase 2 — fan-out.** One independent, fresh-context `review` agent — the
-   `dev-loops:review` persona in scoped angle-review mode (`agents/review.md`),
+   `dev-loops:review` persona in scoped angle-review mode
+   (`agents/review.agent.md`, generated to `.claude/agents/review.md`),
    spawned via the plain Agent tool, NOT a general-purpose agent — per
    resolved dispatch unit (`resolveFanoutGroups`), each seeded with the
    identical neutral bundle plus its angle(s) — unchanged from draft/
