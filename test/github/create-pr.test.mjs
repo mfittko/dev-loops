@@ -1291,6 +1291,29 @@ test("create-pr refuses a body whose SECOND closing reference disagrees, even wi
   }
 });
 
+test("create-pr --allow-cross-issue does NOT waive the explicit --issue path (every reference must match the declared issue)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-issue-waiver-noop-"));
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, [{ stdout: graphqlNoLinkedPrPayload() }]);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--issue", "2110",
+      "--base", "main",
+      "--head", "issue-2110",
+      "--title", "Add feature",
+      "--body", "Closes #2110\n\nCloses #2071",
+      "--allow-cross-issue",
+    ], { env });
+    assert.equal(result.code, 1);
+    const stderrPayload = JSON.parse(result.stderr);
+    assert.match(stderrPayload.error, /CLOSING-REF-BRANCH-MISMATCH/);
+    assert.match(stderrPayload.error, /#2071/);
+    assert.equal((await readGhCalls(ghLogPath)).length, 0);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("create-pr --issue refuses a wrong SECOND closing reference even when the first matches --issue", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-issue-multiref-"));
   try {

@@ -428,9 +428,11 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
       throw parseError(`--issue ${issue} requires the closing reference to match, but the body closes #${closingNumber} — refusing a mismatched closing reference`);
     }
     // The first reference matches, but GitHub closes EVERY reference — refuse a
-    // later disagreeing one too (unless waived) so a swapped body can't smuggle
-    // a second wrong close past a correct first one.
-    const extraRefusal = resolveClosingRefMismatch({ body, expectedIssue: issue, allowCrossIssue });
+    // later disagreeing one too so a swapped body can't smuggle a second wrong
+    // close past a correct first one. --allow-cross-issue does NOT apply here: it
+    // waives only the branch-derived guard (when --issue is omitted); an explicit
+    // --issue is the operator's declaration, so every reference must match it.
+    const extraRefusal = resolveClosingRefMismatch({ body, expectedIssue: issue, allowCrossIssue: false });
     if (extraRefusal) {
       throw parseError(extraRefusal);
     }
