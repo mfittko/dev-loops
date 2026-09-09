@@ -18,6 +18,13 @@ import { evaluatePrGateCoordination, isRoundCapReachedCleanGrant, PR_CHECKPOINT,
 import { shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-coordination";
 import { PLAN_FILE_PROMOTION_DOC_PATH_PATTERN } from "@dev-loops/core/loop/plan-file-promote-contract";
 import { UI_E2E_CHECK_NAMES } from "@dev-loops/core/loop/ui-e2e-scoping";
+import {
+  evaluateFixerDisposition,
+  FIXER_DISPOSITION_KIND,
+  normalizeFixerDispositionHandoff,
+} from "@dev-loops/core/loop/fixer-disposition";
+import { buildLogPath } from "../github/write-gate-findings-log.mjs";
+import { buildContainmentMap } from "../github/_commit-containment.mjs";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.mjs";
@@ -779,6 +786,49 @@ export async function resolvePostConvergenceReviewSuppressed({ repo, pr, current
   );
   return reverified.carryForward === true;
 }
+
+// GATE-EXEC-FIXER-DISPOSITION-BOUNDARY surface: read the durable checkpoint
+// (if any) verify-fixer-disposition.mjs wrote for this exact head and
+// re-verify it against LIVE thread state, never the checkpoint's own claims.
+// No checkpoint recorded for this head means nothing to enforce here (a PR
+// with no fixer-disposition ledger entry behaves exactly as before this
+// boundary existed) — returns null so the evaluator input omits the field.
+async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, parsedThreads, tmpRoot = "tmp" }, runtime = {}) {
+  const repoRoot = runtime.repoRoot ?? resolveRepoRoot(process.cwd());
+  const logPath = buildLogPath({ repo, pr, gate: "fixer-disposition", headSha: currentHeadSha, tmpRoot });
+  const fullPath = path.resolve(repoRoot, logPath);
+  let raw;
+  try {
+    raw = await readFile(fullPath, "utf8");
+  } catch {
+    return null;
+  }
+  let handoff;
+  try {
+    handoff = normalizeFixerDispositionHandoff(JSON.parse(raw));
+  } catch (error) {
+    // A recorded-but-malformed checkpoint must fail closed rather than
+    // silently no-op — the fixer explicitly claimed tackled work here.
+    return {
+      complete: false,
+      incomplete: [{ threadId: null, expectedCommit: null, failedStep: `unreadable_checkpoint: ${error instanceof Error ? error.message : String(error)}` }],
+    };
+  }
+  const tackledShas = [...new Set(
+    handoff.dispositions
+      .filter((entry) => entry.disposition === FIXER_DISPOSITION_KIND.TACKLED)
+      .map((entry) => entry.fixingCommitSha),
+  )];
+  const containment = await buildContainmentMap(tackledShas, { repo, headSha: currentHeadSha }, runtime);
+  const liveThreads = parsedThreads.threads.map((thread) => ({
+    threadId: thread.id,
+    isResolved: thread.isResolved,
+    replyBodies: parsedThreads.comments.filter((comment) => comment.threadId === thread.id).map((comment) => comment.body),
+  }));
+  const evaluation = evaluateFixerDisposition({ handoff, liveThreads, containment });
+  return { complete: evaluation.ok, incomplete: evaluation.incomplete };
+}
+
 export async function loadPrGateCoordinationContext(options, runtime = {}) {
   const prData = await fetchPrFactsWithSettledMergeable(options, runtime);
   const currentHeadSha = typeof prData?.headRefOid === "string" && prData.headRefOid.trim().length > 0
@@ -874,6 +924,10 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     { repo: options.repo, pr: options.pr, currentHeadSha, snapshot, prData },
     runtime,
   );
+  const fixerDisposition = await resolveFixerDispositionInput(
+    { repo: options.repo, pr: options.pr, currentHeadSha, parsedThreads },
+    runtime,
+  );
   return {
     repo: options.repo,
     pr: options.pr,
@@ -889,6 +943,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     refinementArtifact,
     refinementConfig: interpreterRefinementConfig,
     postConvergenceReviewSuppressed,
+    fixerDisposition,
   };
 }
 
@@ -977,6 +1032,11 @@ export function buildGateCoordinationEvaluatorInput({
     preApprovalGateMarker: context.gateEvidence.preApprovalGateMarker,
     refinementArtifact: context.refinementArtifact,
     postConvergenceSignificantChange,
+    // GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: present only when a durable
+    // fixer-disposition checkpoint exists for this head (resolveFixerDispositionInput
+    // returns null otherwise), so a PR with no recorded fixer handoff behaves
+    // exactly as before this boundary existed.
+    ...(context.fixerDisposition ? { fixerDisposition: context.fixerDisposition } : {}),
   };
 }
 

@@ -8,6 +8,7 @@ import {
   MISSING_AC_DOD_MATRIX_FINDING,
   MISSING_EXPLICIT_NON_GOALS_FINDING,
 } from "./issue-refinement-artifact.mjs";
+import { COMPLETE_FIXER_DISPOSITION_ACTION, FIXER_DISPOSITION_FORBIDDEN_ACTIONS } from "./fixer-disposition.mjs";
 
 export const PR_CHECKPOINT = Object.freeze({
   DRAFT_REVIEW: "draft_review",
@@ -70,6 +71,11 @@ export const PR_CHECKPOINT_ACTION = Object.freeze({
   REPORT_DONE: "report_done",
   RUN_UI_E2E_SUITE: "run_ui_e2e_suite",
   RECORD_DESIGNER_REVIEW: "record_designer_review",
+  // GATE-EXEC-FIXER-DISPOSITION-BOUNDARY: the only legal next action while a
+  // fixer's claimed-tackled threads have incomplete disposition. Value is the
+  // shared literal fixer-disposition.mjs's pure evaluator also returns as
+  // `nextAction` (asserted equal by test — see fixer-disposition.test.mjs).
+  COMPLETE_FIXER_DISPOSITION: COMPLETE_FIXER_DISPOSITION_ACTION,
 });
 
 function normalizeGateComment(summary = null) {
@@ -905,6 +911,49 @@ function evaluatePrGateCoordinationCore(input = {}) {
       conflictFiles,
         refinementArtifact,
     copilotReviewRoundCount,
+    });
+  }
+
+  // GATE-EXEC-FIXER-DISPOSITION-BOUNDARY (skills/docs/gate-review-sub-loop-contract.md):
+  // a caller-supplied fixerDisposition input records whether every thread a
+  // fixer claims to have tackled since the last push is fully disposed
+  // (commit contained, replied with that commit's evidence, resolved, and
+  // re-verified live — see fixer-disposition.mjs's pure evaluator). Present
+  // and NOT complete fails this boundary CLOSED regardless of
+  // unresolvedThreadCount or lifecycleState — the failure this closes is a
+  // review round opening over a dirty surface even when the thread count
+  // itself reads clean (bogus/uncontained evidence), so it must run ahead of
+  // every lifecycle-state branch below, not be derived from one.
+  const fixerDisposition = input.fixerDisposition && typeof input.fixerDisposition === "object"
+    ? input.fixerDisposition
+    : null;
+  if (fixerDisposition && fixerDisposition.complete !== true) {
+    pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION]);
+    pushUnique(forbiddenActions, FIXER_DISPOSITION_FORBIDDEN_ACTIONS);
+    const incompleteThreads = Array.isArray(fixerDisposition.incomplete) ? fixerDisposition.incomplete : [];
+    const reasonParts = incompleteThreads.map((entry) => (
+      `thread ${entry.threadId} (expected commit ${entry.expectedCommit ?? "unknown"}, failed step: ${entry.failedStep})`
+    ));
+    return buildResult({
+      repo: input.repo ?? null,
+      pr: Number.isInteger(input.pr) ? input.pr : null,
+      currentHeadSha,
+      lifecycleState: effectiveLifecycleState,
+      loopDisposition: DISPOSITION.UNRESOLVED_FEEDBACK,
+      gateBoundary: PR_CHECKPOINT.FEEDBACK_RESOLUTION,
+      draftGateAlreadySatisfied,
+      draftGate,
+      preApprovalGate,
+      allowedNextActions,
+      forbiddenActions,
+      nextAction: PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION,
+      reason: reasonParts.length > 0
+        ? `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY forbids every review/gate-dispatch action for ${incompleteThreads.length} tackled thread(s) with incomplete disposition: ${reasonParts.join("; ")}. The only legal next action is ${PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION}.`
+        : `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY forbids every review/gate-dispatch action until fixer disposition is complete and re-verified. The only legal next action is ${PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION}.`,
+      mergeStateStatus,
+      conflictFiles,
+      refinementArtifact,
+      copilotReviewRoundCount,
     });
   }
 

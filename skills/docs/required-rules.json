@@ -292,6 +292,11 @@
       "id": "GATE-EXEC-FINDING-THREADS"
     },
     {
+      "id": "GATE-EXEC-FIXER-DISPOSITION-BOUNDARY",
+      "enforcement": "runtime",
+      "enforcementNote": "packages/core/src/loop/fixer-disposition.mjs's pure evaluateFixerDisposition + pr-gate-coordination.mjs's fixerDisposition input force a blocked feedback_resolution result (forbiddenActions including request/rerequest Copilot review and gate-dispatch tokens) while a fixer's claimed-tackled thread is incomplete; scripts/github/verify-fixer-disposition.mjs is the enforcement CLI"
+    },
+    {
       "id": "GATE-EXEC-JUDGE-AUTHORITY-SPLIT"
     },
     {

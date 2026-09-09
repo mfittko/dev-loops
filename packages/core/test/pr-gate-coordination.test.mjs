@@ -8,6 +8,7 @@ import {
   shouldGuardCopilotReviewRequest,
 } from "../src/loop/pr-gate-coordination.mjs";
 import { DISPOSITION, interpretLoopState, STATE } from "../src/loop/copilot-loop-state.mjs";
+import { FIXER_DISPOSITION_FORBIDDEN_ACTIONS } from "../src/loop/fixer-disposition.mjs";
 
 function gate({ visible = false, headSha = null, verdict = null, contractComplete = false } = {}) {
   return {
@@ -3344,4 +3345,106 @@ test("contract: nextAction is always allowed and never forbidden, across every l
     }
   }
   assert.ok(checked > 0);
+});
+
+// ---------------------------------------------------------------------------
+// GATE-EXEC-FIXER-DISPOSITION-BOUNDARY (#1988): a fixerDisposition input that
+// is present and NOT complete forces a blocked feedback-resolution result,
+// regardless of unresolvedThreadCount or lifecycleState.
+// ---------------------------------------------------------------------------
+
+test("incomplete fixerDisposition forces a blocked result even when unresolvedThreadCount reads 0 (bogus/uncontained evidence)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 1975,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: true,
+    copilotReviewRequestStatus: "none",
+    unresolvedThreadCount: 0,
+    ciStatus: "success",
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+    fixerDisposition: {
+      complete: false,
+      incomplete: [
+        { threadId: "T1", expectedCommit: "abc1234", failedStep: "not_resolved" },
+      ],
+    },
+  });
+
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
+  assert.ok(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION));
+  assert.match(result.reason, /T1/);
+  assert.match(result.reason, /abc1234/);
+  assert.match(result.reason, /not_resolved/);
+  // Broader than postDraftForbidden: request/rerequest review + gate dispatch
+  // must ALL be forbidden, not just draft/merge transition tokens.
+  for (const token of FIXER_DISPOSITION_FORBIDDEN_ACTIONS) {
+    assert.ok(result.forbiddenActions.includes(token), `expected forbiddenActions to include ${token}`);
+  }
+});
+
+test("complete fixerDisposition does not block progression", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 1975,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: true,
+    copilotReviewRequestStatus: "none",
+    unresolvedThreadCount: 0,
+    ciStatus: "success",
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+    fixerDisposition: { complete: true, incomplete: [] },
+  });
+
+  assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
+});
+
+test("absent fixerDisposition input never blocks (backward compatible with existing callers)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 1975,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: true,
+    copilotReviewRequestStatus: "none",
+    unresolvedThreadCount: 0,
+    ciStatus: "success",
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
+});
+
+test("incomplete fixerDisposition blocks even a draft PR's mark-ready-for-review", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 10,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+    fixerDisposition: {
+      complete: false,
+      incomplete: [{ threadId: "T1", expectedCommit: "abc1234", failedStep: "reply_missing" }],
+    },
+  });
+
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
+  assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+  assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
 });
