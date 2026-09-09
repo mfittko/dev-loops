@@ -8939,6 +8939,42 @@ test("#2030: --gate review same-head rerun with a body-only correction UPDATES t
   }, { prefix: "dev-loops-upsert-review-samehead-update-" });
 });
 
+test("#2030: --gate review same-head body-only correction surfaces a verificationWarning when the post-update read fails under DEVLOOPS_RUN_ID (Copilot review, PRRT_kwDOScHU786g1qGB)", async () => {
+  await withTempDir(async (tempDir) => {
+    const { ledgerPath, body } = await createReviewGateAndCaptureBody(tempDir, { nextAction: "none — informational review, no re-gate required" });
+    const submitted = seededSubmittedReview({ id: 980, body });
+    const { runChild, calls } = makeGhMock([
+      ...reviewGateFindingSurfaceEntries({ files: null, pendingReviews: [submitted], reviews: [submitted], submittedReviews: [submitted] }),
+      {
+        assertArgs: ["api", "-X", "PUT", "repos/owner/repo/pulls/17/reviews/980", "--input", "-"],
+        stdout: '{"id":980,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-980"}\n',
+      },
+      // Post-update verification (mirrors the marker-update path's post-update
+      // read): both the first attempt and the 2000ms retry fail, so
+      // verifyPostedSurface resolves false on both, exercising the
+      // verificationWarning branch specific to the review-gate updated path.
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/reviews/980"], exitCode: 1, stderr: "not found\n" },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/reviews/980"], exitCode: 1, stderr: "not found\n" },
+    ]);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "please re-check the auth flow before merge",
+      findingsLedger: ledgerPath,
+      executionMode: "fanout_fanin",
+      submit: "comment",
+    }, { env: { ...runIdFreeEnv({}), DEVLOOPS_RUN_ID: "test-run-2125" }, ghCommand: "gh", runChild, repoRoot: tempDir });
+
+    assert.equal(result.action, "updated");
+    assert.equal(result.commentId, 980);
+    assert.match(result.verificationWarning, /Post-update verification failed: review 980 not retrievable after retry\./);
+    // Both the initial verify read and the post-retry verify read fired.
+    assert.equal(calls.filter((c) => c.args.includes("repos/owner/repo/pulls/17/reviews/980") && !c.args.includes("-X")).length, 2);
+  }, { prefix: "dev-loops-upsert-review-samehead-update-verify-fail-" });
+});
+
 test("#2030: --gate review correction that needs a NEW inline comment on a submitted review FAILS CLOSED (names the constraint and --new-round), no duplicate", async () => {
   await withTempDir(async (tempDir) => {
     const { body } = await createReviewGateAndCaptureBody(tempDir, { nextAction: "none — informational review, no re-gate required" });

@@ -2789,11 +2789,27 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         { repo: options.repo, pr: options.pr, reviewId: ownSubmitted.id, body: desiredBody, allowedRefs: options.allowedRefs },
         gh,
       );
+      // Post-update verification: mirrors the marker-based updated path below —
+      // verify the updated review is retrievable via a direct API fetch by id
+      // when a run id is set (production context) — DEVLOOPS_RUN_ID.
+      let verificationWarning = null;
+      if (envRunId) {
+        const verifyTarget = { repo: options.repo, pr: options.pr, surface: "review", commentId: updatedReview.reviewId };
+        let verified = await verifyPostedSurface(verifyTarget, gh);
+        if (!verified) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          verified = await verifyPostedSurface(verifyTarget, gh);
+        }
+        verificationWarning = !verified
+          ? `Post-update verification failed: review ${updatedReview.reviewId} not retrievable after retry.`
+          : null;
+      }
       return {
         ...reviewBaseResult,
         action: "updated",
         commentId: updatedReview.reviewId,
         ...((updatedReview.reviewUrl ?? ownSubmitted.commentUrl) ? { commentUrl: updatedReview.reviewUrl ?? ownSubmitted.commentUrl } : {}),
+        ...(verificationWarning ? { verificationWarning } : {}),
       };
     }
   }
