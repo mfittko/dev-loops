@@ -1764,6 +1764,78 @@ describe("tracker config (#1408)", () => {
 });
 
 // ============================================================================
+// queue.statusColumns / queue.stateColumnMap — strict schema now accepts what
+// the runtime reader (loadStateColumnMap) already consumes. Closes the drift
+// where a documented consumer `.devloops` failed strict validation and degraded
+// gate verdict posting to the fallback poster.
+// ============================================================================
+
+describe("queue.statusColumns / queue.stateColumnMap schema", () => {
+  test("a consumer .devloops with queue.statusColumns + stateColumnMap validates and round-trips into loadStateColumnMap", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-status-columns-"));
+    try {
+      // The repro shape from the issue, plus a per-state override.
+      await writeFile(
+        path.join(tmpDir, ".devloops"),
+        "version: 1\nstrategy: tracker-first\nqueue:\n  statusColumns:\n    next_up: Ready\n  stateColumnMap:\n    pr_draft: in_progress\n",
+      );
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const { loadStateColumnMap } = await import("../src/loop/queue-board-sync.mjs");
+      const result = await loadDevLoopConfig({ repoRoot: tmpDir });
+      // AC1/AC2: no "Unrecognized key" validation error; config loads.
+      assert.deepEqual(result.errors, [], "queue.statusColumns/stateColumnMap must validate without error");
+      assert.equal(result.config.queue.statusColumns.next_up, "Ready");
+      assert.equal(result.config.queue.stateColumnMap.pr_draft, "in_progress");
+      // AC3: same raw config round-trips through the runtime reader.
+      const mapping = loadStateColumnMap(tmpDir);
+      assert.equal(mapping.columnNames.next_up, "Ready", "renamed display name observed");
+      assert.equal(mapping.stateColumnMap.pr_draft, "in_progress", "per-state override observed");
+      assert.equal(mapping.error, null);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("AC4: invalid queue.statusColumns/stateColumnMap shapes and unknown queue keys fail closed", () => {
+    // Unknown logical-column key in statusColumns (strictObject rejects).
+    assert.ok(
+      !FileConfigSchema.safeParse({ version: 1, queue: { statusColumns: { bogus: "X" } } }).success,
+      "unknown logical-column key must be rejected",
+    );
+    // Non-string display-name value.
+    assert.ok(
+      !FileConfigSchema.safeParse({ version: 1, queue: { statusColumns: { next_up: 5 } } }).success,
+      "non-string display name must be rejected",
+    );
+    // Empty display-name value.
+    assert.ok(
+      !FileConfigSchema.safeParse({ version: 1, queue: { statusColumns: { next_up: "  " } } }).success,
+      "empty/whitespace display name must be rejected",
+    );
+    // Non-object statusColumns.
+    assert.ok(
+      !FileConfigSchema.safeParse({ version: 1, queue: { statusColumns: "Ready" } }).success,
+      "non-object statusColumns must be rejected",
+    );
+    // stateColumnMap value that is not a known logical column.
+    assert.ok(
+      !FileConfigSchema.safeParse({ version: 1, queue: { stateColumnMap: { pr_draft: "sideways" } } }).success,
+      "non-known logical-column value must be rejected",
+    );
+    // Every other unknown queue key still fails (QueueConfig stays strict).
+    assert.ok(
+      !FileConfigSchema.safeParse({ version: 1, queue: { bogusKey: true } }).success,
+      "unknown queue key must still fail closed",
+    );
+    // Valid shape still passes.
+    assert.ok(
+      FileConfigSchema.safeParse({ version: 1, queue: { statusColumns: { next_up: "Ready" }, stateColumnMap: { pr_draft: "in_progress" } } }).success,
+      "the documented valid shape must pass",
+    );
+  });
+});
+
+// ============================================================================
 // mergeConfigLayers — angle arrays merge BY NAME across layers (D3)
 //
 // gates.<gate>.angles is the one place `mergeConfigLayers` does NOT wholesale-
