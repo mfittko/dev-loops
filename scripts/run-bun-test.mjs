@@ -75,6 +75,13 @@ export function buildBunTestArgs(args, env = process.env) {
       index += 1;
       continue;
     }
+    // --timeout is centrally managed: drop any caller-provided value (both the
+    // --timeout=<n> and --timeout <n> spellings) so the parallelism-scaled default
+    // always wins. A stray caller --timeout would otherwise append after the managed
+    // one and, depending on Bun's last-wins resolution, silently reinstate the
+    // unscaled 5000ms wall this fix removes.
+    if (arg.startsWith("--timeout=")) continue;
+    if (arg === "--timeout") { index += 1; continue; }
     callerArgs.push(arg);
   }
   const reporting = dotsSeen ? [] : [FAILURE_ONLY_FLAG];

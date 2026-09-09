@@ -29,6 +29,18 @@ test("per-test timeout scales with parallelism and pins the anti-flake ceiling",
   assert.ok(!args.includes("--timeout=5000"), "must not emit the unscaled 5000ms default under parallel load");
 });
 
+// A caller-provided --timeout must never survive: the managed scaled value wins, and
+// no duplicate/overriding flag reaches Bun to reinstate the unscaled 5000ms wall.
+test("caller-provided --timeout is dropped so the managed scaled value wins", () => {
+  for (const callerTimeout of [["--timeout=5000"], ["--timeout", "5000"]]) {
+    const args = buildBunTestArgs([...callerTimeout, "example.test.mjs"], { BUN_TEST_PARALLELISM: "8" });
+    assert.equal(args.filter((arg) => arg.startsWith("--timeout")).length, 1, `exactly one --timeout in ${args.join(" ")}`);
+    assert.ok(args.includes("--timeout=40000"), `managed scaled --timeout in ${args.join(" ")}`);
+    assert.ok(!args.includes("--timeout=5000") && !args.includes("5000"), "caller 5000ms timeout must be stripped");
+    assert.ok(args.includes("example.test.mjs"), "the test file arg is preserved");
+  }
+});
+
 test("launcher centrally deduplicates canonical reporting and discovery flags", () => {
   const args = buildBunTestArgs([
     "--only-failures", "--only-failures",
