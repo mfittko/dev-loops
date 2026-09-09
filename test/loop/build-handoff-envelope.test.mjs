@@ -183,7 +183,7 @@ test("build-handoff-envelope accepts a needs_reconcile result with no selected s
     const resolverOutput = makeResolverOutput({
       bundleKind: "needs_reconcile",
       selectedStrategy: "none",
-      nextAction: "Complete the required retrospective before routing.",
+      nextAction: "Complete or explicitly skip the required post-run behavioral retrospective before starting or resuming the next dev-loop run.",
       bundle: {
         ...makeResolverOutput().bundle,
         bundleKind: "needs_reconcile",
@@ -191,7 +191,7 @@ test("build-handoff-envelope accepts a needs_reconcile result with no selected s
         selectedGate: "fail_closed_reconcile",
         selectedStrategy: null,
         loopState: "unknown",
-        nextAction: "Complete the required retrospective before routing.",
+        nextAction: "Complete or explicitly skip the required post-run behavioral retrospective before starting or resuming the next dev-loop run.",
       },
     });
     const inputPath = await writeTempJson(tempDir, "resolver.json", resolverOutput);
@@ -202,7 +202,7 @@ test("build-handoff-envelope accepts a needs_reconcile result with no selected s
     assert.equal(envelope.currentGate, "fail_closed_reconcile");
     assert.equal(envelope.routeKind, "needs_reconcile");
     assert.equal(envelope.selectedStrategy, null);
-    assert.equal(envelope.nextAction, "Complete the required retrospective before routing.");
+    assert.equal(envelope.nextAction, "Complete or explicitly skip the required post-run behavioral retrospective before starting or resuming the next dev-loop run.");
     assert.ok(envelope.stopRules.includes("reconcile"));
   } finally {
     await rm(tempDir, { recursive: true, force: true });
