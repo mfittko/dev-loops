@@ -220,6 +220,7 @@ Optional:
   --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Skips the GitHub spec-of-record resolution (--pr-body/--issue-body/--acceptance-criteria) entirely — the recorded bytes come from this file, so a fetched PR/issue body could never reach them, and the CLI never touches GitHub in this mode at all (--base only runs local git reads). Omit for the default self-rendered prefix (prefixMode inline|pointer).
   --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-ARTIFACT) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing prefix (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
   --full-label                   The PR carries the gate:full label: dynamic angle resolution skips diff-class tier reduction (resolveGateTier returns gate_full_label) and resolves the untriered angle set. Only meaningful when --angles is omitted. When this flag is absent (and --prefix-file is not in use), the label is derived from the live PR via a labels read; a failed read fails closed to the untriered set. Under --prefix-file the CLI never touches GitHub, so the label cannot be derived and an omitted flag likewise fails closed to the untriered set (pass --angles to force a specific set there).
+  --lightweight                  This gate run is light-dispatched: the up-front forbidden-gate tripwire composes the SAME Copilot round cap the verdict-post refusal (upsert-checkpoint-verdict.mjs) uses. Pass it whenever the gate run is light-dispatched — exactly as you pass it to upsert-checkpoint-verdict.mjs / request-copilot-review.mjs — so a light run's tripwire cannot spuriously forbid a pre_approval_gate the verdict post would allow. Only affects the draft_gate/pre_approval_gate tripwire's coordination lookup (no effect on angle resolution or the artifact). Omit for full-dispatch runs.
   --available-reviewers <n>      Harness remaining reviewer budget for the #1507 reviewer-budget preflight (non-negative integer). When supplied, the artifact's fanout.preflight reports whether the budget covers this round's dispatch units; on a shortfall, fanout.preflight.dispatch is false and the conductor MUST NOT spawn any reviewer (the shortfall is a resumable state — the artifact records it). Omit when the harness does not expose a budget; the preflight then proceeds (no shortfall can be proven).
   --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean head (mirrors consolidate-fanin.mjs's own --carried-angles vocabulary, minus its --carry-forward-plan proof check — the caller here IS the fail-closed carry-forward seam, resolve-angle-carry-forward.mjs, never a guess). Like consolidate-fanin.mjs's own mandatory-angle refusal, a name whose review surface always re-runs (a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE evidence/security/description angle) fails closed (exit 1) rather than being honored. A dispatch group whose angles are all carried-or-already-complete (already-complete: a clean per-angle artifact already stamped for this head, scanned automatically — see readCompletedAnglesForHead) is excluded from fanout.preflight.requiredReviewers and pendingGroups, so a head-bump re-gate does not over-count angles Phase 1.2 is about to carry. A wrong/stale value can only shrink the dispatch plan, never grow it past the true group count — it can under-dispatch, never over-spend the budget or fabricate findings for an angle that DID run: the configured-mandatory coverage check and the fail-closed merge check's clean current-head merge marker requirement catch an under-dispatched round ONLY when the wrongly-carried angle is a CONFIGURED mandatory angle — neither ever unions the hardcoded ALWAYS_INCLUDE set, so a wrong value naming only a non-mandatory, non-ALWAYS_INCLUDE angle under-dispatches with no mechanical refusal, visible only in the ledger's own carried-angle provenance (an ALWAYS_INCLUDE name is already refused at this CLI's own entry, above). Omit for today's full-count behavior (nothing excluded).
   --tmp-root <path>              Root tmp directory (default: tmp/)
@@ -349,6 +350,7 @@ export function parseWriteGateContextCliArgs(argv) {
       "prefix-file": { type: "string" },
       "validation-results": { type: "string" },
       "full-label": { type: "boolean" },
+      "lightweight": { type: "boolean" },
       "available-reviewers": { type: "string" },
       "carried-angles": { type: "string" },
       "tmp-root": { type: "string" },
@@ -375,6 +377,7 @@ export function parseWriteGateContextCliArgs(argv) {
     prefixFile: null,
     validationResultsPath: null,
     fullLabel: false,
+    lightweight: false,
     availableReviewers: null,
     carriedAngles: null,
     tmpRoot: "tmp",
@@ -486,6 +489,16 @@ export function parseWriteGateContextCliArgs(argv) {
     }
     if (token.name === "full-label") {
       options.fullLabel = true;
+      continue;
+    }
+    if (token.name === "lightweight") {
+      // Light-dispatch parity with upsert-checkpoint-verdict.mjs /
+      // request-copilot-review.mjs: the forbidden-gate tripwire MUST evaluate
+      // coordination with the SAME composed Copilot round cap the verdict-post
+      // refusal uses, or a light run's full-cap tripwire could spuriously forbid
+      // a pre_approval_gate the verdict post would allow. Pass this whenever the
+      // gate run is light-dispatched, exactly as you pass it to the verdict post.
+      options.lightweight = true;
       continue;
     }
     if (token.name === "available-reviewers") {
@@ -2880,7 +2893,11 @@ export async function main(
     if (resolveRequestedGateAction(options.gate) && !options.prefixFile) {
       let coordination = null;
       try {
-        coordination = await loadCoordination({ repo: options.repo, pr: options.pr });
+        // Pass lightweight so detectPrGateCoordinationState composes the SAME
+        // Copilot round cap the verdict-post refusal uses (light-dispatch
+        // parity) — otherwise a light run's tripwire evaluates a full cap and can
+        // spuriously forbid a pre_approval_gate the verdict post would allow.
+        coordination = await loadCoordination({ repo: options.repo, pr: options.pr, lightweight: options.lightweight === true });
       } catch {
         coordination = null;
       }

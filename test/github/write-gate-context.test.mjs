@@ -1887,6 +1887,7 @@ test("CLI tripwire: a forbidden gate exits non-zero naming the legal next action
 test("CLI tripwire: an ALLOWED gate builds its context and schedules its fan-out exactly as before", async () => {
   const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
   let coordinationCalls = 0;
+  let seenLightweight = "unset";
   try {
     await main([
       "--repo", "owner/repo", "--pr", "91", "--gate", "draft_gate",
@@ -1894,13 +1895,15 @@ test("CLI tripwire: an ALLOWED gate builds its context and schedules its fan-out
     ], {
       repoRoot,
       run: stubGhRun,
-      loadCoordination: async () => {
+      loadCoordination: async (opts) => {
         coordinationCalls++;
+        seenLightweight = opts.lightweight;
         return { forbiddenActions: [], allowedNextActions: ["run_draft_gate"] };
       },
     });
 
     assert.equal(coordinationCalls, 1, "an obligation-carrying gate consults coordination once");
+    assert.equal(seenLightweight, false, "default (no --lightweight) consults coordination with lightweight:false");
     const artifact = await readGateContext({
       repo: "owner/repo", pr: 91, gate: "draft_gate", headSha,
     }, { repoRoot });
@@ -1981,6 +1984,27 @@ test("CLI tripwire (real resolver): the DEFAULT coordination path refuses a forb
   } finally {
     process.stderr.write = origErr;
     process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI tripwire: --lightweight threads into the coordination lookup (light-dispatch cap parity with the verdict post)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  let seenLightweight = "unset";
+  try {
+    await main([
+      "--repo", "owner/repo", "--pr", "95", "--gate", "draft_gate",
+      "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha, "--lightweight",
+    ], {
+      repoRoot,
+      run: stubGhRun,
+      loadCoordination: async (opts) => {
+        seenLightweight = opts.lightweight;
+        return { forbiddenActions: [], allowedNextActions: ["run_draft_gate"] };
+      },
+    });
+    assert.equal(seenLightweight, true, "--lightweight reaches the coordination lookup so the tripwire uses the light Copilot round cap, matching the verdict post");
+  } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
