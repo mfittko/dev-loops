@@ -800,8 +800,20 @@ async function resolveFixerDispositionInput({ repo, pr, currentHeadSha, parsedTh
   let raw;
   try {
     raw = await readFile(fullPath, "utf8");
-  } catch {
-    return null;
+  } catch (error) {
+    // A genuine absence (no checkpoint was ever written) is the only case
+    // that behaves exactly as before — a PR with no checkpoint is unaffected
+    // by this boundary. Any OTHER read error (EACCES, EIO, transient FS
+    // error) must fail closed instead of silently looking like "no
+    // checkpoint": route it through the same shape used below for a
+    // recorded-but-malformed checkpoint.
+    if (error?.code === "ENOENT") {
+      return null;
+    }
+    return {
+      complete: false,
+      incomplete: [{ threadId: "unknown", expectedCommit: null, failedStep: `unreadable_checkpoint: ${error instanceof Error ? error.message : String(error)}` }],
+    };
   }
   let handoff;
   try {
