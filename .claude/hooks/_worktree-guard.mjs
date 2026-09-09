@@ -216,6 +216,7 @@ export function isWorktreeCoreIsolated(cwd, worktreePaths) {
  *
  * Decision order:
  *  - outside `tmp/worktrees/` + main checkout  -> reject `main_checkout_detected`
+ *  - outside `tmp/worktrees/` + unresolvable worktree root -> reject `not_in_worktree` (fail closed, no vacuous admit)
  *  - outside `tmp/worktrees/` + core-isolated  -> ADMIT (verified-isolation)
  *  - outside `tmp/worktrees/` + not isolated   -> reject `not_in_worktree`
  *  - under `tmp/worktrees/` + not a real worktree -> reject `not_in_worktree`
@@ -235,6 +236,14 @@ export function classifyWorktreeIsolation({ cwd, mainWorktreePath, allWorktreePa
     }
     // Outside tmp/worktrees and not the main checkout: assert the REAL
     // core-isolation invariant instead of rejecting on path prefix alone.
+    // The invariant is only meaningful for a checkout that resolves to a real
+    // listed git worktree root; when the root cannot be resolved (an unlisted
+    // checkout, or an empty/unparseable `git worktree list` — which also nulls
+    // mainWorktreePath and skips the main-checkout guard above) the core-isolation
+    // check would vacuously return true, so fail closed rather than admit.
+    if (resolveContainingWorktreeRoot(cwd, allWorktreePaths) === null) {
+      return { ok: false, error: "not_in_worktree", detail: "outside_not_isolated" };
+    }
     if (isWorktreeCoreIsolated(cwd, allWorktreePaths)) {
       return { ok: true };
     }

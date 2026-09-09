@@ -455,6 +455,34 @@ test("classifyWorktreeIsolation: REJECTS an outside checkout that is not core-is
   }
 });
 
+test("classifyWorktreeIsolation: REJECTS an outside checkout that is not a listed worktree (fail closed, no vacuous admit)", () => {
+  // An outside checkout absent from `git worktree list` resolves to a null root;
+  // the core-isolation check would vacuously return true, so the classifier must
+  // fail closed rather than admit.
+  const decision = classifyWorktreeIsolation({
+    cwd: "/home/user/unlisted-checkout",
+    mainWorktreePath: "/home/user/repo",
+    allWorktreePaths: ["/home/user/repo"],
+  });
+  assert.equal(decision.ok, false);
+  assert.equal(decision.error, "not_in_worktree");
+  assert.equal(decision.detail, "outside_not_isolated");
+});
+
+test("classifyWorktreeIsolation: REJECTS on an empty/unparseable worktree list (null main path must not vacuously admit)", () => {
+  // An exit-0 but unparseable `git worktree list` nulls mainWorktreePath (skips the
+  // main-checkout guard) and yields no worktree paths (null root). The classifier
+  // must still fail closed — never admit the main checkout via vacuous isolation.
+  const decision = classifyWorktreeIsolation({
+    cwd: "/home/user/repo",
+    mainWorktreePath: null,
+    allWorktreePaths: [],
+  });
+  assert.equal(decision.ok, false);
+  assert.equal(decision.error, "not_in_worktree");
+  assert.equal(decision.detail, "outside_not_isolated");
+});
+
 test("classifyWorktreeIsolation: REJECTS the main checkout with main_checkout_detected (happy-path guidance preserved)", () => {
   const decision = classifyWorktreeIsolation({
     cwd: "/home/user/repo",
