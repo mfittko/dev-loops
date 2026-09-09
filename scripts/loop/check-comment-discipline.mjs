@@ -3,8 +3,8 @@
  * check-comment-discipline (LOCAL-COMMENT-DISCIPLINE)
  *
  * Recurrence guard, comment-side analogue of the coverage-admission rule.
- * Flags newly added runtime-source comments that narrate issue-number
- * chronology or balloon into a design essay, so a cleaned comment state stays
+ * Flags newly added runtime-source comments that carry any issue/pr number
+ * or balloon into a design essay, so a cleaned comment state stays
  * clean as it is created. Deterministic, diff-scoped, added-lines-only: it
  * only ever reads the `+` lines a PR introduces, so it can never flag the
  * pre-existing backlog owned by the comment-cleanup stream.
