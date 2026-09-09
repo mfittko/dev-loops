@@ -450,8 +450,9 @@ function boardRefConfig(ownerKey) {
 /**
  * Logical board columns the queue status-column config recognizes. Mirrors
  * LOGICAL_COLUMN in loop/queue-board-sync.mjs; kept inline (a frozen 4-value
- * list) to avoid a config <-> queue-board-sync import cycle, since
- * queue-board-sync already imports readDevloopsSettings from this module.
+ * list) so this low-level config-schema module does not depend on
+ * queue-board-sync, which pulls in the projects/GitHub-access modules through
+ * its own imports. The two lists are pinned in lockstep by the schema test.
  */
 const QueueLogicalColumn = z.enum(["next_up", "in_progress", "ready_for_review", "done"]);
 

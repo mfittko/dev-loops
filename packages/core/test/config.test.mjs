@@ -1777,7 +1777,7 @@ describe("queue.statusColumns / queue.stateColumnMap schema", () => {
       // The repro shape from the issue, plus a per-state override.
       await writeFile(
         path.join(tmpDir, ".devloops"),
-        "version: 1\nstrategy: tracker-first\nqueue:\n  statusColumns:\n    next_up: Ready\n  stateColumnMap:\n    pr_draft: in_progress\n",
+        "version: 1\nqueue:\n  statusColumns:\n    next_up: Ready\n  stateColumnMap:\n    pr_draft: in_progress\n",
       );
       const { loadDevLoopConfig } = await import("../src/config/config.mjs");
       const { loadStateColumnMap } = await import("../src/loop/queue-board-sync.mjs");
