@@ -211,6 +211,30 @@ test("--pending with a PRESENT-but-empty pendingGroups refuses (does not re-emit
   });
 });
 
+test("--pending fails closed (exit 1) when pendingGroups is present but not an array", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir, { fanout: { groups: [{ name: "coverage", angles: ["coverage"] }], pendingGroups: { bad: true } } });
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--pending"],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(JSON.parse(result.stdout).error, /present but not an array/);
+  });
+});
+
+test("fails closed (exit 1) when a multi-angle unit has a missing/non-string name", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir, { fanout: { groups: [{ angles: ["dry", "kiss"] }] } });
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(JSON.parse(result.stdout).error, /missing or non-string name/);
+  });
+});
+
 test("fails closed (exit 1) when a unit name sanitizes to an empty, invalid scope", async () => {
   await withTmpDir(async (tmpDir) => {
     // A multi-angle unit whose name is all-punctuation sanitizes to "", so the

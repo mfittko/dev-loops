@@ -61,10 +61,11 @@ ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Emitted one composed prompt per resolved dispatch unit
   1  Refused: the gate-context artifact is missing (run write-gate-context.mjs
-     first), carries no fanout dispatch plan, resolves zero units, a unit carries
-     no angles, a unit's name sanitizes to an invalid scope, two units derive a
-     colliding scope, or a unit's invariant-prefix record is missing / suffix
-     could not be composed
+     first), carries no fanout dispatch plan, has a present-but-non-array
+     pendingGroups under --pending, resolves zero units, a unit carries no
+     angles, a multi-angle unit has a missing/non-string name, a unit's name
+     sanitizes to an invalid scope, two units derive a colliding scope, or a
+     unit's invariant-prefix record is missing / suffix could not be composed
   2  Usage or internal error (bad --repo/--pr/--gate/--head-sha shape, filesystem
      error, or invalid --jq filter)`.trim();
 
@@ -200,7 +201,19 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   if (!fanout || typeof fanout !== "object") {
     return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — gate-context artifact at ${JSON.stringify(contextPath)} carries no fanout dispatch plan — re-run write-gate-context.mjs (a thin briefing with no --base emits no fanout plan)` }, false);
   }
-  const units = pendingOnly && Array.isArray(fanout.pendingGroups) ? fanout.pendingGroups : fanout.groups;
+  // --pending falls back to `groups` ONLY when pendingGroups is genuinely ABSENT
+  // (an older artifact). A PRESENT-but-non-array pendingGroups is a malformed
+  // plan and refuses — silently falling back would mask a broken plan and
+  // re-emit the full set the caller explicitly did not ask for.
+  let units;
+  if (pendingOnly && fanout.pendingGroups !== undefined) {
+    if (!Array.isArray(fanout.pendingGroups)) {
+      return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — fanout.pendingGroups is present but not an array (malformed plan); re-run write-gate-context.mjs` }, false);
+    }
+    units = fanout.pendingGroups;
+  } else {
+    units = fanout.groups;
+  }
   if (!Array.isArray(units) || units.length === 0) {
     return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — fanout dispatch plan resolves zero units (${pendingOnly ? "pendingGroups" : "groups"}) — nothing to dispatch` }, false);
   }
@@ -216,6 +229,14 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     const angles = Array.isArray(unit?.angles) ? unit.angles.filter((a) => typeof a === "string" && a.trim().length > 0) : [];
     if (angles.length === 0) {
       return finish({ ok: false, error: `dispatch unit ${JSON.stringify(unit?.name ?? unit)} carries no angles — malformed fanout plan` }, false);
+    }
+    // A multi-angle unit's name becomes the provenance `group` (a string the
+    // merge guard re-derives via resolveFanoutGroups), so it MUST be a non-empty
+    // string. A singleton records no group, so its name is only used for the
+    // (validated) scope. Refuse a malformed multi-angle name rather than emit a
+    // non-string/absent provenance group.
+    if (angles.length > 1 && (typeof unit.name !== "string" || unit.name.trim().length === 0)) {
+      return finish({ ok: false, error: `multi-angle dispatch unit for angles ${JSON.stringify(angles)} has a missing or non-string name — cannot record its provenance group; malformed fanout plan` }, false);
     }
     const normalizedUnit = { name: unit.name, angles };
     const scope = dispatchUnitScope(gate, normalizedUnit);
