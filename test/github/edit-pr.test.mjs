@@ -230,6 +230,24 @@ test("editPr: refuses a new body whose closing reference disagrees with the PR's
   );
 });
 
+test("editPr: refuses a wrong SECOND closing reference even when the first matches (GitHub closes every one)", async () => {
+  const { run } = stubGh();
+  const fetchPrContext = async () => ({ headRefName: "issue-2092", closingIssuesReferences: [] });
+  await assert.rejects(
+    () => editPr(editOpts({ body: "Closes #2092\n\nCloses #2071" }), { run, fetchPrContext }),
+    /CLOSING-REF-BRANCH-MISMATCH.*#2071/s,
+  );
+});
+
+test("editPr: refuses a mismatch expressed with a non-Closes/Fixes verb (Resolves)", async () => {
+  const { run } = stubGh();
+  const fetchPrContext = async () => ({ headRefName: "issue-2092", closingIssuesReferences: [] });
+  await assert.rejects(
+    () => editPr(editOpts({ body: "Resolves #2071" }), { run, fetchPrContext }),
+    /CLOSING-REF-BRANCH-MISMATCH.*#2071.*#2092/s,
+  );
+});
+
 test("editPr: accepts a correct-match body derived from the PR's branch slug", async () => {
   const { run, calls } = stubGh();
   const fetchPrContext = async () => ({ headRefName: "issue-2092", closingIssuesReferences: [] });

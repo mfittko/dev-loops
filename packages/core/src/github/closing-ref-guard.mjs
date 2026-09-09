@@ -5,22 +5,43 @@
 // and a merge would then close the wrong issue — this is the fail-closed
 // backstop against that data-integrity hole.
 
-const CLOSING_KEYWORD_PATTERN = /Closes\s+#(\d+)|Fixes\s+#(\d+)/i;
+// GitHub auto-closes a linked issue on ANY of its closing keywords in ANY case
+// (close/closes/closed, fix/fixes/fixed, resolve/resolves/resolved) — not only
+// Closes/Fixes. The guard must recognize the full set, or a swapped body using
+// e.g. `Resolves #N` would slip past yet still close the wrong issue on merge.
+// The pattern is GLOBAL because a body may carry several references and GitHub
+// honors every one; the mismatch check inspects them all, not just the first.
+// Never call `.test()`/`.exec()` on this shared global regex (they mutate its
+// lastIndex) — route through extractClosingIssueNumbers, which uses matchAll.
+const CLOSING_KEYWORD_PATTERN = /\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\b\s+#(\d+)/gi;
 const MAX_BODY_SCAN_BYTES = 16 * 1024;
 
-// True when the body carries any `Closes #N` / `Fixes #N` closing keyword.
-export function detectClosingKeyword(body) {
-  if (!body || typeof body !== "string") return false;
-  return CLOSING_KEYWORD_PATTERN.test(body.slice(0, MAX_BODY_SCAN_BYTES));
+// Every issue number the body's closing references name, in order, de-duplicated.
+export function extractClosingIssueNumbers(body) {
+  if (!body || typeof body !== "string") return [];
+  const seen = new Set();
+  const out = [];
+  for (const match of body.slice(0, MAX_BODY_SCAN_BYTES).matchAll(CLOSING_KEYWORD_PATTERN)) {
+    const n = Number(match[1]);
+    if (!seen.has(n)) {
+      seen.add(n);
+      out.push(n);
+    }
+  }
+  return out;
 }
 
-// The issue number from the body's first `Closes #N` / `Fixes #N` reference,
-// or null when the body carries none.
+// True when the body carries any closing keyword.
+export function detectClosingKeyword(body) {
+  return extractClosingIssueNumbers(body).length > 0;
+}
+
+// The issue number from the body's first closing reference, or null when the
+// body carries none. Back-compat surface (create-pr's `--issue` missing-reference
+// check); the mismatch guard uses extractClosingIssueNumbers to see every one.
 export function extractClosingIssueNumber(body) {
-  if (!body || typeof body !== "string") return null;
-  const match = CLOSING_KEYWORD_PATTERN.exec(body.slice(0, MAX_BODY_SCAN_BYTES));
-  if (!match) return null;
-  return Number(match[1] ?? match[2]);
+  const all = extractClosingIssueNumbers(body);
+  return all.length > 0 ? all[0] : null;
 }
 
 // Branch slug `[<prefix>/]issue-<N>[-<slug>]` -> N. Matches the dev-loop
@@ -57,10 +78,15 @@ export function resolveExpectedIssueFromPrContext(ctx) {
 export function resolveClosingRefMismatch({ body, expectedIssue, allowCrossIssue = false }) {
   if (allowCrossIssue) return null;
   if (!Number.isInteger(expectedIssue)) return null;
-  const closingNumber = extractClosingIssueNumber(body);
-  if (closingNumber === null) return null;
-  if (closingNumber !== expectedIssue) {
-    return `CLOSING-REF-BRANCH-MISMATCH: the body closes #${closingNumber} but the branch resolves to issue #${expectedIssue} — refusing a mismatched closing reference (pass --allow-cross-issue to record a deliberate cross-issue reference)`;
+  const closing = extractClosingIssueNumbers(body);
+  if (closing.length === 0) return null;
+  // Refuse when ANY closing reference disagrees — GitHub closes every one, so a
+  // correct first reference does not excuse a wrong second (a single-issue
+  // dev-loop PR closes only its branch's issue; a deliberate multi/cross-issue
+  // reference uses the waiver).
+  const disagreeing = closing.find((n) => n !== expectedIssue);
+  if (disagreeing !== undefined) {
+    return `CLOSING-REF-BRANCH-MISMATCH: the body closes #${disagreeing} but the branch resolves to issue #${expectedIssue} — refusing a mismatched closing reference (pass --allow-cross-issue to record a deliberate cross-issue reference)`;
   }
   return null;
 }

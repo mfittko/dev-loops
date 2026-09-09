@@ -4,6 +4,7 @@ import { test } from "bun:test";
 import {
   detectClosingKeyword,
   extractClosingIssueNumber,
+  extractClosingIssueNumbers,
   extractIssueFromBranchSlug,
   resolveExpectedIssueFromPrContext,
   resolveClosingRefMismatch,
@@ -19,6 +20,22 @@ test("extractClosingIssueNumber reads Closes/Fixes and null otherwise", () => {
 test("detectClosingKeyword true only when a closing keyword is present", () => {
   assert.equal(detectClosingKeyword("Closes #1"), true);
   assert.equal(detectClosingKeyword("plain text"), false);
+});
+
+test("extractClosingIssueNumber recognizes GitHub's full closing vocabulary (not just Closes/Fixes)", () => {
+  for (const verb of ["Close", "Closes", "Closed", "Fix", "Fixes", "Fixed", "Resolve", "Resolves", "Resolved", "RESOLVES"]) {
+    assert.equal(extractClosingIssueNumber(`${verb} #77`), 77, `verb ${verb} must be recognized`);
+  }
+  // Not a closing keyword adjacent to a number: no false match.
+  assert.equal(extractClosingIssueNumber("foreclose #5"), null);
+  assert.equal(extractClosingIssueNumber("prefix #5"), null);
+  assert.equal(extractClosingIssueNumber("closing the door on #5"), null);
+});
+
+test("extractClosingIssueNumbers returns every closing reference, de-duplicated in order", () => {
+  assert.deepEqual(extractClosingIssueNumbers("Closes #2110 and also Resolves #2071"), [2110, 2071]);
+  assert.deepEqual(extractClosingIssueNumbers("Closes #5, Closes #5"), [5]);
+  assert.deepEqual(extractClosingIssueNumbers("no closing keyword"), []);
 });
 
 test("extractIssueFromBranchSlug parses default and prefixed slugs", () => {
@@ -46,11 +63,33 @@ test("resolveExpectedIssueFromPrContext falls back to closingIssuesReferences wh
   assert.equal(resolveExpectedIssueFromPrContext(null), null);
 });
 
+test("resolveExpectedIssueFromPrContext accepts a plain-number closingIssuesReferences entry and skips non-positive/non-integer ones", () => {
+  assert.equal(resolveExpectedIssueFromPrContext({ headRefName: "fix/thing", closingIssuesReferences: [42] }), 42);
+  // Skip a 0/negative/non-integer entry and fall through to the next valid one.
+  assert.equal(
+    resolveExpectedIssueFromPrContext({ headRefName: "fix/thing", closingIssuesReferences: [0, -3, { number: "x" }, { number: 7 }] }),
+    7,
+  );
+  assert.equal(resolveExpectedIssueFromPrContext({ headRefName: "fix/thing", closingIssuesReferences: [0, -3] }), null);
+});
+
 test("resolveClosingRefMismatch refuses a disagreeing reference with a named error", () => {
   const refusal = resolveClosingRefMismatch({ body: "Closes #2071", expectedIssue: 2110 });
   assert.match(refusal, /CLOSING-REF-BRANCH-MISMATCH/);
   assert.match(refusal, /#2071/);
   assert.match(refusal, /#2110/);
+});
+
+test("resolveClosingRefMismatch refuses a wrong SECOND reference even when the first matches (GitHub closes every one)", () => {
+  const refusal = resolveClosingRefMismatch({ body: "Closes #2110\n\nCloses #2071", expectedIssue: 2110 });
+  assert.match(refusal, /CLOSING-REF-BRANCH-MISMATCH/);
+  assert.match(refusal, /#2071/);
+});
+
+test("resolveClosingRefMismatch refuses a mismatch expressed with a non-Closes/Fixes verb (Resolves)", () => {
+  const refusal = resolveClosingRefMismatch({ body: "Resolves #2071", expectedIssue: 2110 });
+  assert.match(refusal, /CLOSING-REF-BRANCH-MISMATCH/);
+  assert.match(refusal, /#2071/);
 });
 
 test("resolveClosingRefMismatch accepts a correct-match body", () => {

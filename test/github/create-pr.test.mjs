@@ -1243,3 +1243,46 @@ test("create-pr --allow-cross-issue waives the branch-derived mismatch for a del
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("create-pr refuses a body whose SECOND closing reference disagrees, even with a correct first (GitHub closes every one)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-multiref-"));
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, [{ stdout: graphqlNoLinkedPrPayload() }]);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--base", "main",
+      "--head", "issue-2110",
+      "--title", "Add feature",
+      "--body", "Closes #2110\n\nResolves #2071",
+    ], { env });
+    assert.equal(result.code, 1);
+    const stderrPayload = JSON.parse(result.stderr);
+    assert.match(stderrPayload.error, /CLOSING-REF-BRANCH-MISMATCH/);
+    assert.match(stderrPayload.error, /#2071/);
+    assert.equal((await readGhCalls(ghLogPath)).length, 0);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr --issue refuses a wrong SECOND closing reference even when the first matches --issue", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-issue-multiref-"));
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, [{ stdout: graphqlNoLinkedPrPayload() }]);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--issue", "2110",
+      "--base", "main",
+      "--head", "issue-2110",
+      "--title", "Add feature",
+      "--body", "Closes #2110\n\nCloses #2071",
+    ], { env });
+    assert.equal(result.code, 1);
+    const stderrPayload = JSON.parse(result.stderr);
+    assert.match(stderrPayload.error, /CLOSING-REF-BRANCH-MISMATCH/);
+    assert.match(stderrPayload.error, /#2071/);
+    assert.equal((await readGhCalls(ghLogPath)).length, 0);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
