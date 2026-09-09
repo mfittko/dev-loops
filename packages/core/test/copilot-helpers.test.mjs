@@ -513,6 +513,20 @@ test("copilotReviewBodySignalsChanges: 🟡 is authoritative even alongside a 'n
   );
 });
 
+test("copilotReviewBodySignalsChanges: underscore-emphasis 'No _changes recommended_' still reads clean", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", "No _changes recommended_. Looks good."),
+    false,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: 🟡 is authoritative alongside the word 'no' elsewhere in the body", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", "### 🟡 Changes recommended\n\nno issues elsewhere though."),
+    true,
+  );
+});
+
 test("summarizeCopilotReviews sets hasBodyFindingOnCurrentHead true for a current-head 🟡 COMMENTED review", () => {
   const reviews = [
     {

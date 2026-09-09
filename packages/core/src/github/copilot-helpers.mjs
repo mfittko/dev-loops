@@ -11,28 +11,20 @@ import { trimmedOrNull } from "../loop/normalize.mjs";
 // review is.
 export const SUBMITTED_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"]);
 
-// Copilot's COMMENTED review summary opens with a disposition header:
-// "### 🟡 Changes recommended" (findings) or "### 🟢 Approval recommended"
-// (clean). The 🟡 marker / "changes recommended" phrase is the finding signal;
-// an explicit approval/clean signal (🟢, "approval recommended", or a negated
-// "no ... changes recommended" — including markdown emphasis between the words)
-// overrides a bare phrase mention so a clean body is never a false finding. A
-// 🟡 marker is authoritative and is never overridden. A CHANGES_REQUESTED
-// review always carries a finding regardless of body (fail toward surfacing on
-// an ambiguous non-empty body). APPROVED/DISMISSED never do.
-const COPILOT_CHANGES_RECOMMENDED_RE = /🟡|changes\s+recommended/iu;
-const COPILOT_APPROVAL_MARKER_RE = /🟢|approval\s+recommended|\bno\b[^\n]*\bchanges\s+recommended/iu;
+// Copilot's COMMENTED review summary opens with a disposition header whose
+// emoji is the authoritative signal: "### 🟡 Changes recommended" (findings)
+// vs "### 🟢 Approval recommended" (clean). Keying on the 🟡 marker means a
+// clean body that merely quotes the phrase "changes recommended" — with or
+// without markdown emphasis ("No **changes recommended**", "No _changes
+// recommended_") — is never a false finding. The strong no-emoji signal is
+// already covered by the CHANGES_REQUESTED state.
+const COPILOT_CHANGES_RECOMMENDED_MARKER = "🟡";
 
 export function copilotReviewBodySignalsChanges(state, body) {
   const normalizedState = typeof state === "string" ? state.toUpperCase() : "";
   if (normalizedState === "CHANGES_REQUESTED") return true;
   if (normalizedState !== "COMMENTED") return false;
-  const text = typeof body === "string" ? body : "";
-  if (!COPILOT_CHANGES_RECOMMENDED_RE.test(text)) return false;
-  // A 🟡 marker is authoritative; otherwise an explicit approval/negation signal
-  // (🟢, "approval recommended", "No changes recommended") reads clean.
-  if (!/🟡/u.test(text) && COPILOT_APPROVAL_MARKER_RE.test(text)) return false;
-  return true;
+  return typeof body === "string" && body.includes(COPILOT_CHANGES_RECOMMENDED_MARKER);
 }
 const GATE_REVIEW_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
 // `review` is a RECOGNIZED gate header that carries no draft/pre-approval
