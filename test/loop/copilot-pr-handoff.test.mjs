@@ -2934,3 +2934,49 @@ test("runHandoff never enters a CI-wait on a DIRTY branch — stops, integration
     process.env.PATH = originalPath;
   }
 });
+
+test("runHandoff backstop: integrated but head still DIRTY never watches, stays terminal, releases ownership", async () => {
+  // Merge-state lag: integrateBase succeeds and pushes, but GitHub's cached
+  // mergeStateStatus is still DIRTY on the re-baseline read. The would-be watch
+  // must be downgraded to a terminal stop (not a leaked non-terminal watch).
+  const dirtyReadyPrView = JSON.stringify({
+    headRefOid: "newsha",
+    isDraft: false,
+    state: "OPEN",
+    number: 17,
+    reviews: [],
+    statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
+    mergeable: "CONFLICTING",
+    mergeStateStatus: "DIRTY",
+    baseRefName: "main",
+  });
+  const entries = [];
+  for (let i = 0; i < 2; i += 1) {
+    entries.push({ assertArgs: ["pr", "view", "17", "--repo", "owner/repo"], stdout: dirtyReadyPrView + "\n" });
+    entries.push({ assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' });
+    entries.push({ assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" });
+  }
+  const { runChild } = makeGhMock(entries, { matchMode: "claims" });
+  const parsed = parseHandoffCliArgs(["--repo", "owner/repo", "--pr", "17"]);
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${gitStubDir}${path.delimiter}${originalPath}`;
+  try {
+    let integrated = false;
+    const result = await runHandoff(parsed, {
+      env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }),
+      ghCommand: "gh",
+      runChild,
+      repoRoot: capFixtureRepoRoot,
+      integrateBase: async () => { integrated = true; return { ok: true, action: "clean_merge", pushed: true }; },
+    });
+    assert.equal(integrated, true, "preflight must integrate the DIRTY branch first");
+    assert.notEqual(result.action, "watch", "a still-DIRTY head must never enter a CI-wait");
+    assert.equal(result.action, "stop");
+    assert.equal(result.terminal, true, "backstop stop must be terminal (no leaked non-terminal watch)");
+    assert.equal(result.loopDisposition, "blocked");
+    assert.equal(result.watchArgs, undefined);
+    assert.match(result.nextAction, /FACADE-NEVER-CI-WAIT-WHILE-DIRTY/);
+  } finally {
+    process.env.PATH = originalPath;
+  }
+});

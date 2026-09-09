@@ -351,10 +351,13 @@ export function isBehindBaseMergeState(snapshot) {
 
 // Default base integration: the sanctioned resolve-pr-conflicts.mjs fetches
 // origin/<base>, merges (auto-resolving ONLY the safe additive CHANGELOG case,
-// else fail-closed), verifies docs, and pushes. Injected in tests.
+// else fail-closed), verifies docs, and pushes. It operates on repoRoot's
+// checked-out branch, so repoRoot MUST be the PR head's worktree (the sanctioned
+// per-PR pickup checkout) — the same assumption the resolve-pr-conflicts CLI
+// carries. Injected in tests.
 async function defaultIntegrateBase({ repoRoot, base }, { env = process.env } = {}) {
   return resolvePrConflicts(
-    { repoRoot, base: base ?? null, verify: true, push: true, json: true },
+    { repoRoot, base: base ?? null, verify: true, push: true },
     { env },
   );
 }
@@ -740,7 +743,7 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
       };
     }
   }
-  const interpretationSummary = summarizeLoopInterpretation(interpretation, refinementConfig);
+  let interpretationSummary = summarizeLoopInterpretation(interpretation, refinementConfig);
   const effectiveReviewRequestStatus = reviewRequestStatus
     ?? (snapshot.copilotReviewRequestStatus === "requested" || snapshot.copilotReviewRequestStatus === "already-requested"
       ? snapshot.copilotReviewRequestStatus
@@ -768,6 +771,10 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
       nextAction: `PR #${options.pr} is CONFLICTING/DIRTY against ${conflictBase}; GitHub cannot dispatch CI on a conflicted branch, so no CI-wait is entered (FACADE-NEVER-CI-WAIT-WHILE-DIRTY). Integrate origin/${conflictBase} first (resolve-pr-conflicts.mjs), push, and re-gate at the new head (FACADE-PICKUP-INTEGRATE-BASE-FIRST).`,
       allowedTransitions: [],
     };
+    // Re-derive the summary from the blocked interpretation so terminal /
+    // loopDisposition reflect the stop (BLOCKED is terminal); the terminal
+    // release path below then frees the async-runner claim.
+    interpretationSummary = summarizeLoopInterpretation(interpretation, refinementConfig);
   }
   const result = {
     ok: true,
