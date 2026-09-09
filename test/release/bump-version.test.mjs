@@ -22,7 +22,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { bumpVersion, inspectSurfaces, stampChangelog, writeManifestSurfaces } from "../../scripts/release/bump-version.mjs";
+import { bumpVersion, inspectSurfaces, run, stampChangelog, writeManifestSurfaces } from "../../scripts/release/bump-version.mjs";
 import { extractChangelogSection } from "../../scripts/release/extract-changelog-section.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -112,8 +112,10 @@ test("bumpVersion rejects a non-bare target token (range operator or partial sem
 // fixture reaches full lockstep exactly as the real tools would.
 function makeRegenRunner(dir, version, { regenPlugin = true } = {}) {
   const calls = [];
-  const run = (command, args) => {
+  const silents = [];
+  const run = (command, args, cwd, silent) => {
     calls.push([command, ...args].join(" "));
+    silents.push(silent);
     if (command === "bun" && args.includes("--lockfile-only")) {
       writeFileSync(path.join(dir, "bun.lock"), lockfile(version));
     }
@@ -124,7 +126,7 @@ function makeRegenRunner(dir, version, { regenPlugin = true } = {}) {
       }
     }
   };
-  return { run, calls };
+  return { run, calls, silents };
 }
 
 test("bumpVersion drives surfaces → guards → staging in order and stages only the enumerated release paths", () => {
@@ -247,4 +249,89 @@ test("stampChangelog is an idempotent no-op on an already-stamped changelog", ()
   const result = stampChangelog(stamped, PRERELEASE);
   assert.equal(result.changed, false);
   assert.equal(result.changelog, stamped);
+});
+
+// --silent contract for the shared spawn path: a cheap real child (`sh`) proves
+// the quiet-on-success / replay-on-failure behavior spawnSync stdio mocking
+// can't (it would just assert the mock was called correctly, not the real
+// stdio wiring).
+function spyStreams() {
+  const stdoutChunks = [];
+  const stderrChunks = [];
+  const originalStdoutWrite = process.stdout.write;
+  const originalStderrWrite = process.stderr.write;
+  process.stdout.write = (chunk, ...rest) => {
+    stdoutChunks.push(chunk);
+    return true;
+  };
+  process.stderr.write = (chunk, ...rest) => {
+    stderrChunks.push(chunk);
+    return true;
+  };
+  return {
+    stdoutChunks,
+    stderrChunks,
+    restore() {
+      process.stdout.write = originalStdoutWrite;
+      process.stderr.write = originalStderrWrite;
+    },
+  };
+}
+
+test("run(..., silent=true) suppresses a successful child's stdout and stderr entirely", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "bump-version-run-"));
+  const spy = spyStreams();
+  try {
+    assert.doesNotThrow(() => run("sh", ["-c", "echo out; echo err 1>&2"], dir, true));
+    assert.equal(spy.stdoutChunks.join(""), "");
+    assert.equal(spy.stderrChunks.join(""), "");
+  } finally {
+    spy.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("run(..., silent=true) replays a failing child's diagnostics to stderr and still throws", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "bump-version-run-"));
+  const spy = spyStreams();
+  try {
+    assert.throws(() => run("sh", ["-c", "echo boom 1>&2; exit 3"], dir, true), /exited 3/);
+    assert.match(spy.stderrChunks.join(""), /boom/);
+    assert.equal(spy.stdoutChunks.join(""), "");
+  } finally {
+    spy.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("bumpVersion threads silent to every injected runChild call and leaks nothing to the parent streams", () => {
+  const dir = makeFixture("1.0.0-pre.0");
+  const spy = spyStreams();
+  try {
+    const { run: recordingRun, calls, silents } = makeRegenRunner(dir, PRERELEASE);
+    const result = bumpVersion({ repoRoot: dir, version: PRERELEASE, silent: true, run: recordingRun });
+
+    assert.ok(result.ok);
+    assert.ok(calls.length > 0);
+    assert.ok(silents.every((s) => s === true), `expected every call silent, got ${JSON.stringify(silents)}`);
+    assert.equal(spy.stdoutChunks.join(""), "");
+    assert.equal(spy.stderrChunks.join(""), "");
+  } finally {
+    spy.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("bumpVersion leaves silent falsy on injected runChild calls by default (routing preserved)", () => {
+  const dir = makeFixture("1.0.0-pre.0");
+  try {
+    const { run: recordingRun, calls, silents } = makeRegenRunner(dir, PRERELEASE);
+    const result = bumpVersion({ repoRoot: dir, version: PRERELEASE, run: recordingRun });
+
+    assert.ok(result.ok);
+    assert.ok(calls.length > 0);
+    assert.ok(silents.every((s) => !s), `expected every call non-silent, got ${JSON.stringify(silents)}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

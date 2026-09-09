@@ -61,10 +61,22 @@ function writeJson(file, value) {
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function run(command, args, cwd) {
-  // Route the subprocess's own stdout to stderr (fd 2) so this script's stdout
-  // stays a single clean JSON summary that --jq/--silent can consume.
-  const result = spawnSync(command, args, { cwd, stdio: ["ignore", 2, 2], encoding: "utf8" });
+// Non-silent (default): route the subprocess's own stdout to stderr (fd 2) so
+// this script's stdout stays a single clean JSON summary that --jq can
+// consume. Silent: capture the child's stdout/stderr instead of inheriting;
+// discard it on success, replay it to stderr only when the child fails, so a
+// genuine error still surfaces under --silent.
+export function run(command, args, cwd, silent = false) {
+  const result = spawnSync(command, args, {
+    cwd,
+    stdio: silent ? ["ignore", "pipe", "pipe"] : ["ignore", 2, 2],
+    encoding: "utf8",
+  });
+  if (silent && !result.error && result.status === 0) return;
+  if (silent) {
+    if (result.stdout) process.stderr.write(result.stdout);
+    if (result.stderr) process.stderr.write(result.stderr);
+  }
   if (result.error) throw new Error(`${command} ${args.join(" ")} failed to start: ${result.error.message}`);
   if (result.status !== 0) throw new Error(`${command} ${args.join(" ")} exited ${result.status}`);
 }
@@ -185,7 +197,7 @@ export function inspectSurfaces(repoRoot, version) {
 // `run` is injectable so the orchestration (surface writes → regen → guards →
 // staging → drift-throw) is testable without a resolvable @dev-loops/core or a
 // real bun install; production passes the default module `run`.
-export function bumpVersion({ repoRoot, version, stage = true, run: runChild = run }) {
+export function bumpVersion({ repoRoot, version, stage = true, silent = false, run: runChild = run }) {
   const full = extractFullVersion(version);
   if (full !== version) {
     // extractFullVersion tolerates leading range operators / `v`; the target
@@ -204,20 +216,20 @@ export function bumpVersion({ repoRoot, version, stage = true, run: runChild = r
   const manifestPaths = writeManifestSurfaces(repoRoot, version);
 
   // Surface 4: regenerate the lockfile from the bumped manifests.
-  runChild("bun", ["install", "--lockfile-only"], repoRoot);
+  runChild("bun", ["install", "--lockfile-only"], repoRoot, silent);
 
   // Surface 5: regenerate the .claude tree (stamps plugin.json version + npx pins
   // from the now-bumped root package.json version).
-  runChild("node", [path.join(repoRoot, "scripts/claude/generate-claude-assets.mjs")], repoRoot);
+  runChild("node", [path.join(repoRoot, "scripts/claude/generate-claude-assets.mjs")], repoRoot, silent);
 
   // Fail-closed drift guards over the regenerated surfaces.
-  runChild("bun", ["install", "--frozen-lockfile"], repoRoot); // proves bun.lock is in lockstep
+  runChild("bun", ["install", "--frozen-lockfile"], repoRoot, silent); // proves bun.lock is in lockstep
   runChild("node", [
     path.join(repoRoot, "scripts/release/assert-core-dependency-version.mjs"),
     "--release-version",
     version,
-  ], repoRoot);
-  runChild("node", [path.join(repoRoot, "scripts/claude/generate-claude-assets.mjs"), "--check"], repoRoot);
+  ], repoRoot, silent);
+  runChild("node", [path.join(repoRoot, "scripts/claude/generate-claude-assets.mjs"), "--check"], repoRoot, silent);
 
   // Direct surface inspection: a clear per-surface drift report on top of the guards.
   const surfaces = inspectSurfaces(repoRoot, version);
@@ -242,7 +254,7 @@ export function bumpVersion({ repoRoot, version, stage = true, run: runChild = r
     path.join(repoRoot, "bun.lock"),
     path.join(repoRoot, ".claude"),
   ];
-  if (stage) runChild("git", ["add", "--", ...stagedPaths], repoRoot);
+  if (stage) runChild("git", ["add", "--", ...stagedPaths], repoRoot, silent);
 
   return { ok: true, version, surfaces, staged: stagedPaths };
 }
@@ -282,7 +294,7 @@ function main(argv) {
     repoRootArg ?? path.join(path.dirname(fileURLToPath(import.meta.url)), "../.."),
   );
   try {
-    const result = bumpVersion({ repoRoot, version });
+    const result = bumpVersion({ repoRoot, version, silent });
     process.exit(emitResult(result, { jq, silent }));
   } catch (error) {
     process.stderr.write(`[bump-version] ${error.message}\n`);
