@@ -163,6 +163,76 @@ test("detectAcDodMatrix skips a fenced table (anti-spoof)", () => {
   assert.equal(m.found, false);
 });
 
+// A 3-column matrix with a leading index column: the criterion and evidence
+// columns must resolve BY HEADER NAME, so the index column shifts them to
+// positions 1 and 2. The `## Acceptance criteria / Definition of Done` heading
+// matches no matrix-section pattern, so detection here comes from the named
+// columns alone.
+test("detectAcDodMatrix accepts a 3-column matrix with a leading index column, resolving columns by header name", () => {
+  const body = [
+    "## Acceptance criteria / Definition of Done", "",
+    "| # | Acceptance criterion | Definition of Done |",
+    "|---|----------------------|--------------------|",
+    "| AC1 | The schema accepts the documented config. | QueueConfig accepts statusColumns and stateColumnMap. |",
+    "| AC2 | A consumer config loads. | Config load reports no validation error. |",
+    "",
+  ].join("\n");
+  const m = detectAcDodMatrix(body);
+  assert.equal(m.found, true);
+  assert.equal(m.valid, true);
+  assert.equal(m.rowCount, 2);
+  // criterion/evidence read from the NAMED columns, never the index cell.
+  assert.deepEqual(m.rows, [
+    { criterion: "The schema accepts the documented config.", evidence: "QueueConfig accepts statusColumns and stateColumnMap." },
+    { criterion: "A consumer config loads.", evidence: "Config load reports no validation error." },
+  ]);
+});
+
+test("detectAcDodMatrix accepts a 3-column matrix with an empty leading header column", () => {
+  const body = [
+    "## Acceptance criteria / Definition of Done", "",
+    "|  | Acceptance criterion | Definition of Done |",
+    "|---|---|---|",
+    "| 1 | The parser accepts indexed rows. | A unit test covers the indexed shape. |",
+    "",
+  ].join("\n");
+  const m = detectAcDodMatrix(body);
+  assert.equal(m.found, true);
+  assert.equal(m.valid, true);
+  assert.equal(m.rowCount, 1);
+  assert.deepEqual(m.rows, [
+    { criterion: "The parser accepts indexed rows.", evidence: "A unit test covers the indexed shape." },
+  ]);
+});
+
+test("detectAcDodMatrix still fails closed on an identifier-only indexed matrix (rowIsSemantic unrelaxed)", () => {
+  const body = [
+    "## Acceptance criteria / Definition of Done", "",
+    "| No | Acceptance criterion | Definition of Done |",
+    "|---|---|---|",
+    "| 1 | AC1 | D1 |",
+    "| 2 | AC2 | D2 |",
+    "",
+  ].join("\n");
+  const m = detectAcDodMatrix(body);
+  assert.equal(m.found, true);
+  assert.equal(m.valid, false);
+  assert.match(m.reason, /identifier-only|tautological/);
+});
+
+test("detectAcDodMatrix still fails closed on an empty (header-only) indexed matrix", () => {
+  const body = [
+    "## Acceptance criteria / Definition of Done", "",
+    "| # | Acceptance criterion | Definition of Done |",
+    "|---|---|---|",
+    "",
+  ].join("\n");
+  const m = detectAcDodMatrix(body);
+  assert.equal(m.found, true);
+  assert.equal(m.valid, false);
+  assert.match(m.reason, /empty/);
+});
+
 // ---------------------------------------------------------------------------
 // #1951: derivePrChecklistsFromIssueMatrix (PR projection)
 // ---------------------------------------------------------------------------
