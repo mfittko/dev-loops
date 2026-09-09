@@ -84,7 +84,7 @@
     ]
   },
   "dependencies": {
-    "@dev-loops/core": "^1.0.2-slim.0",
+    "@dev-loops/core": "^1.0.2",
     "yaml": "^2.9.0",
     "zod": "^4.4.3"
   },
@@ -96,7 +96,7 @@
     "url": "https://github.com/mfittko/dev-loops/issues"
   },
   "homepage": "https://github.com/mfittko/dev-loops#readme",
-  "version": "1.0.2-slim.0",
+  "version": "1.0.2",
   "files": [
     "cli/",
     "lib/",
