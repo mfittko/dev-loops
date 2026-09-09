@@ -34,6 +34,23 @@ export function resolveBunTestParallelism(env = process.env) {
   return value;
 }
 
+// Per-test timeout. Bun's fixed 5000ms default is the wall a single test may run.
+// verify runs three legs concurrently (verify.mjs) while test:all forks `--parallel`
+// Bun workers, so subprocess-spawning tests (runNode/makeGhMock in test/_helpers.mjs)
+// see CPU oversubscription that inflates real subprocess round-trips past 5000ms and
+// times them out non-deterministically. Scale the ceiling linearly with worker count:
+// at parallelism=1 it stays the 5000ms default (isolated runs still catch a genuine
+// hang fast), and each added worker grants proportional headroom for the contention it
+// creates. It is a ceiling for load-induced drift, not an expected duration — the
+// slowest real test runs well under 5000ms unloaded. Upgrade path: if a value other
+// than linear-in-parallelism is needed (e.g. also scaling by concurrent verify legs, or
+// timings-informed per-file limits), change resolveBunTestTimeoutMs and its guard test.
+export const PER_TEST_TIMEOUT_BASE_MS = 5000;
+
+export function resolveBunTestTimeoutMs(env = process.env) {
+  return PER_TEST_TIMEOUT_BASE_MS * resolveBunTestParallelism(env);
+}
+
 export function buildBunTestArgs(args, env = process.env) {
   const callerArgs = [];
   // Coalesce every dots-reporter spelling (literal --dots, --reporter=dots,
@@ -61,7 +78,7 @@ export function buildBunTestArgs(args, env = process.env) {
     callerArgs.push(arg);
   }
   const reporting = dotsSeen ? [] : [FAILURE_ONLY_FLAG];
-  return ["test", ...reporting, TMP_IGNORE_FLAG, `--parallel=${resolveBunTestParallelism(env)}`, "--no-isolate", ...callerArgs];
+  return ["test", ...reporting, TMP_IGNORE_FLAG, `--parallel=${resolveBunTestParallelism(env)}`, `--timeout=${resolveBunTestTimeoutMs(env)}`, "--no-isolate", ...callerArgs];
 }
 
 function hasDotsReporter(args) {
