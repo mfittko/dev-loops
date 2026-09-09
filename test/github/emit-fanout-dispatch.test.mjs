@@ -39,10 +39,10 @@ const FANOUT = {
   pendingGroups: [{ name: "contradiction-lens", angles: ["contradiction-lens"] }],
 };
 
-async function seedBundle(tmpDir, { fanout = FANOUT } = {}) {
+async function seedBundle(tmpDir, { fanout = FANOUT, withPrefix = true } = {}) {
   const dir = path.join(tmpDir, "tmp", "gate-context", "o-r", "pr-7");
   await mkdir(dir, { recursive: true });
-  await writeFile(path.join(dir, `${GATE}-${HEAD_SHA}.briefing-prefix.txt`), PREFIX_BYTES, "utf8");
+  if (withPrefix) await writeFile(path.join(dir, `${GATE}-${HEAD_SHA}.briefing-prefix.txt`), PREFIX_BYTES, "utf8");
   await writeFile(path.join(dir, `${GATE}-${HEAD_SHA}.briefing-volatile.txt`), VOLATILE_BYTES, "utf8");
   const artifact = fanout === null ? {} : { fanout };
   await writeFile(path.join(dir, `${GATE}-${HEAD_SHA}.json`), JSON.stringify(artifact), "utf8");
@@ -144,6 +144,73 @@ test("fails closed (exit 1) when the fanout plan resolves zero units", async () 
     );
     assert.equal(result.status, 1, result.stderr);
     assert.match(JSON.parse(result.stdout).error, /zero units/);
+  });
+});
+
+test("fails closed (exit 1) on an angle-less dispatch unit", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir, { fanout: { groups: [{ name: "empty", angles: ["", "  "] }] } });
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(JSON.parse(result.stdout).error, /carries no angles/);
+  });
+});
+
+test("fails closed (exit 1) when a unit's invariant-prefix record is missing", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir, { fanout: { groups: [{ name: "coverage", angles: ["coverage"] }] }, withPrefix: false });
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(JSON.parse(result.stdout).error, /failed to compose reviewer prompt/);
+  });
+});
+
+test("fails closed (exit 1) when two units derive a colliding scope", async () => {
+  await withTmpDir(async (tmpDir) => {
+    // Two distinct unit names that sanitize to the same scope segment.
+    await seedBundle(tmpDir, { fanout: { groups: [
+      { name: "a:b", angles: ["x", "y"] },
+      { name: "a-b", angles: ["p", "q"] },
+    ] } });
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(JSON.parse(result.stdout).error, /collides with an earlier unit/);
+  });
+});
+
+test("--pending falls back to groups only when pendingGroups is ABSENT", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir, { fanout: { groups: [{ name: "coverage", angles: ["coverage"] }] } });
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--pending"],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).count, 1);
+  });
+});
+
+test("normalizes a unit's angles once: a blank angle is filtered, keeping scope/suffix/group consistent", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir, { fanout: { groups: [{ name: "coverage", angles: ["coverage", ""] }] } });
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const unit = JSON.parse(result.stdout).units[0];
+    assert.deepEqual(unit.angles, ["coverage"]);
+    assert.equal(unit.group, null); // singleton after normalization — shares no reviewer
+    assert.equal(unit.scope, "pre-approval-gate-coverage");
   });
 });
 

@@ -44,21 +44,26 @@ Optional:
   --pending                    Emit only fanout.pendingGroups (the resumable
                                shortfall subset a budget-limited round still owes)
                                instead of the full fanout.groups. Falls back to
-                               fanout.groups when pendingGroups is absent.
+                               fanout.groups only when pendingGroups is ABSENT (an
+                               older artifact); a PRESENT-but-empty pendingGroups
+                               means nothing is pending and refuses with "zero
+                               units" rather than silently re-emitting the full set.
   --tmp-root <path>            The tmp/ directory the round's gate-context
                                artifacts live under (default: process.cwd()/tmp;
                                must match the write-gate-context.mjs call).
 Output (stdout, JSON):
   { "ok": true, "gate": "...", "headSha": "...", "repo": "...", "pr": "...",
     "count": <n>, "units": [ { "scope": "...", "angles": ["..."], "group": <name|null>, "promptPath": "..." } ] }
-  On error (stderr, JSON):
-  { "ok": false, "error": "...", "hint"?: "run with --help for usage" }
+  A fail-closed refusal (exit 1) emits { "ok": false, "error": "..." } on STDOUT
+  (via the shared jq-output emitter); a usage/parse error (exit 2) emits
+  { "ok": false, "error": "...", "hint"?: "run with --help for usage" } on STDERR.
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Emitted one composed prompt per resolved dispatch unit
   1  Refused: the gate-context artifact is missing (run write-gate-context.mjs
-     first), carries no fanout dispatch plan, resolves zero units, or a unit's
-     invariant-prefix record is missing / suffix could not be composed
+     first), carries no fanout dispatch plan, resolves zero units, a unit carries
+     no angles, two units derive a colliding scope, or a unit's invariant-prefix
+     record is missing / suffix could not be composed
   2  Usage or internal error (bad --repo/--pr/--gate/--head-sha shape, filesystem
      error, or invalid --jq filter)`.trim();
 
@@ -200,19 +205,33 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   }
 
   const emitted = [];
+  const seenScopes = new Set();
   for (const unit of units) {
+    // Normalize the unit's angle list ONCE, then feed that same array to the
+    // zero-angle guard, the scope/suffix derivation, and the singleton/group
+    // decision — so a malformed unit (e.g. one blank angle) can never make the
+    // three disagree on whether the unit is a singleton (a scope/suffix/group
+    // split); it refuses cleanly below instead.
     const angles = Array.isArray(unit?.angles) ? unit.angles.filter((a) => typeof a === "string" && a.trim().length > 0) : [];
     if (angles.length === 0) {
       return finish({ ok: false, error: `dispatch unit ${JSON.stringify(unit?.name ?? unit)} carries no angles — malformed fanout plan` }, false);
     }
-    const scope = dispatchUnitScope(gate, unit);
+    const normalizedUnit = { name: unit.name, angles };
+    const scope = dispatchUnitScope(gate, normalizedUnit);
     if (!VALID_SCOPE_RE.test(scope)) {
       return finish({ ok: false, error: `derived scope ${JSON.stringify(scope)} for unit ${JSON.stringify(unit?.name)} is not a valid reviewer scope (alphanumeric/hyphen only)` }, false);
     }
+    // sanitizeScopeSegment is lossy, so two distinct resolveFanoutGroups unit
+    // names could collapse to one scope — which would silently overwrite a
+    // sibling unit's prompt file and share its sentinel scope. Refuse instead.
+    if (seenScopes.has(scope)) {
+      return finish({ ok: false, error: `dispatch unit ${JSON.stringify(unit?.name)} derives scope ${JSON.stringify(scope)}, which collides with an earlier unit's scope — distinct units must dispatch under distinct scopes` }, false);
+    }
+    seenScopes.add(scope);
     const suffixPath = path.join(path.dirname(contextPath), `${gate}-${headSha}.angle-suffix-${scope}.txt`);
     try {
       await mkdir(path.dirname(suffixPath), { recursive: true });
-      await writeFile(suffixPath, buildAngleNamingSuffix(unit), "utf8");
+      await writeFile(suffixPath, buildAngleNamingSuffix(normalizedUnit), "utf8");
     } catch (err) {
       process.stderr.write(`${formatCliError(err)}\n`);
       return 2;
@@ -228,7 +247,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     if (!result.composed || !result.recorded) {
       return finish({ ok: false, error: `failed to compose reviewer prompt for unit ${JSON.stringify(unit?.name)} (scope ${scope}): ${result.reason}` }, false);
     }
-    emitted.push({ scope, angles, group: angles.length > 1 ? unit.name : null, promptPath: result.promptPath });
+    emitted.push({ scope, angles, group: angles.length > 1 ? normalizedUnit.name : null, promptPath: result.promptPath });
   }
 
   return finish({ ok: true, gate, headSha, repo, pr, count: emitted.length, units: emitted }, true);

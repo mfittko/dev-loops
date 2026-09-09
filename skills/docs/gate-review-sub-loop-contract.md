@@ -770,8 +770,11 @@ closes three failure modes prose discipline never held:
   guard's own re-derivation by construction).
 - **Fail-closed inputs.** A missing gate-context artifact, an artifact carrying no fan-out plan
   (a thin briefing built without `--base`), a plan resolving zero units, a unit with no angles,
-  or a unit whose invariant-prefix record is missing all refuse (exit 1) rather than dispatching
-  a partial or persona-less fan-out.
+  two units deriving a colliding sanitized scope, or a unit whose invariant-prefix record is
+  missing all refuse (exit 1) rather than dispatching a partial or persona-less fan-out. Each
+  unit's angle list is normalized ONCE and threaded through the scope, suffix, and provenance
+  `group` derivation, so a malformed unit can never split those three views of whether it is a
+  singleton.
 
 **Per-harness delivery.** The composer's `--out` file holds the exact full reviewer prompt
 bytes; how those bytes REACH the spawned reviewer's actual prompt differs by harness:
