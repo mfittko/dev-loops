@@ -62,6 +62,27 @@ test("copilot review gates keep phase-specific angle ownership in one canonical 
     assert.doesNotMatch(devLoopPreApprovalOwnedAngles, pattern);
   }
 });
+
+test("tracker-backed PR validation guidance keeps stable evidence canonical and template/mirror surfaces in parity", async () => {
+  const [operationsDoc, claudeMirror, template] = await Promise.all([
+    readRepo("skills/docs/copilot-loop-operations.md"),
+    readRepo(".claude/skills/docs/copilot-loop-operations.md"),
+    readRepo(".github/pull_request_template.md"),
+  ]);
+  const ruleId = "OPS-PR-VALIDATION-STABLE-EVIDENCE";
+  assertRuleOwned(ruleId, "skills/docs/copilot-loop-operations.md");
+  const ownedText = extractOwnedText(operationsDoc, ruleId);
+  assert.match(ownedText, /command or named check/i);
+  assert.match(ownedText, /stable pass\/fail outcome/i);
+  assert.match(ownedText, /aggregate test, assertion, or asset counts/i);
+  assert.match(ownedText, /skip counts.*durations.*timestamps.*incidental totals/i);
+  assert.match(ownedText, /explicit acceptance criterion.*exact quantity behaviorally significant/i);
+  assert.match(ownedText, /head-stamped validation and gate artifacts/i);
+  assert.equal(claudeMirror, operationsDoc, "generated Claude contract mirror must remain byte-identical");
+  assert.match(template, new RegExp(`rule-ref: ${ruleId}`));
+  assert.match(template, /list each command or named check with its stable pass\/fail outcome/i);
+  assert.match(template, /Keep volatile counts, durations, timestamps, and incidental totals in the head-stamped validation\/gate artifacts/i);
+});
 test("copilot-pr-followup skill routes review requests and wait seams through deterministic helpers", async () => {
   const skillContent = await readRepo("skills/copilot-pr-followup/SKILL.md");
   const requestSectionMatch = skillContent.match(/<!-- rule: COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY -->[\s\S]*?## Step 6: Async watch behavior/);
