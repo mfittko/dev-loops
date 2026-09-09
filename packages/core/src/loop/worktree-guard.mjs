@@ -35,12 +35,13 @@ export function isUnderWorktreePath(cwd) {
  * @returns {string | null} The main worktree path, or null if it cannot be parsed.
  */
 export function parseMainWorktreePath(worktreeListOutput) {
-  const firstLine = worktreeListOutput.split("\n")[0].trim();
-  if (!firstLine) return null;
-  // Find the first hex SHA (7+ chars) preceded by whitespace; take everything before it as the path.
-  const shaIdx = firstLine.search(/\s[0-9a-f]{7,64}\b/iu);
-  if (shaIdx === -1) return null;
-  return firstLine.slice(0, shaIdx).trim();
+  // The main worktree is the FIRST parseable entry — derived from the same
+  // parser `parseAllWorktreePaths` uses, so the two can never disagree about
+  // which path is the main checkout. Parsing only the raw first line would
+  // return null on a leading blank/SHA-less line while `parseAllWorktreePaths`
+  // still parses the real main line, nulling the main-checkout guard while the
+  // path stays admittable (the leading-blank-line fail-open).
+  return parseAllWorktreePaths(worktreeListOutput)[0] ?? null;
 }
 
 /**

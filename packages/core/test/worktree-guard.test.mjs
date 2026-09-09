@@ -86,6 +86,15 @@ test("parseMainWorktreePath: returns null for output without path", () => {
   assert.equal(parseMainWorktreePath("535a18a [main]"), null);
 });
 
+test("parseMainWorktreePath: skips a leading blank line and agrees with parseAllWorktreePaths[0]", () => {
+  // A leading blank line must not null the main path while parseAllWorktreePaths
+  // still parses it — the two MUST agree on which entry is the main checkout,
+  // else the classifier's main-checkout guard is silently skipped.
+  const output = "\n/home/user/repo  535a18a [main]\n/home/user/repo/tmp/worktrees/issue-1  535a18a [issue-1]\n";
+  assert.equal(parseMainWorktreePath(output), "/home/user/repo");
+  assert.equal(parseMainWorktreePath(output), parseAllWorktreePaths(output)[0]);
+});
+
 // ---------------------------------------------------------------------------
 // isMainCheckout
 // ---------------------------------------------------------------------------
