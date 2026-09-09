@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { buildAngleNamingSuffix, dispatchUnitScope, sanitizeScopeSegment } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, sanitizeScopeSegment } from "../../scripts/github/emit-fanout-dispatch.mjs";
 
 const emitCliPath = path.resolve("scripts/github/emit-fanout-dispatch.mjs");
 
@@ -28,8 +28,9 @@ const PR = "7";
 const PREFIX_BYTES = "## Invariant prefix\nrepo: o/r\nhead: c\n";
 const VOLATILE_BYTES = "# volatile tail\ngate: pre_approval_gate\n";
 
-// A configured group (shared reviewer), an auto-chunk multi-angle unit
-// (group:...), and a singleton — the three shapes resolveFanoutGroups emits.
+// A CONFIGURED group (design-simplicity — in the shipped gates.fanout.groups),
+// an AUTO-CHUNK leftover unit (group:...), and a singleton. Only the configured
+// group shares a reviewer; the auto-chunk unit splits into per-angle singletons.
 const FANOUT = {
   groups: [
     { name: "design-simplicity", angles: ["dry", "kiss"] },
@@ -60,7 +61,7 @@ test("requires --repo/--pr/--gate/--head-sha", () => {
   assert.equal(runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE]).status, 2);
 });
 
-test("emits one composed prompt per resolved dispatch unit with exact-name provenance groups", async () => {
+test("shares a reviewer only for a configured group; splits an auto-chunk unit into per-angle singletons", async () => {
   await withTmpDir(async (tmpDir) => {
     await seedBundle(tmpDir);
     const result = runEmitCli(
@@ -70,25 +71,27 @@ test("emits one composed prompt per resolved dispatch unit with exact-name prove
     assert.equal(result.status, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, true);
-    assert.equal(payload.count, 3);
+    // design-simplicity (shared) + determinism + state-concurrency + contradiction-lens
+    assert.equal(payload.count, 4);
 
     const bySc = Object.fromEntries(payload.units.map((u) => [u.scope, u]));
-    // configured group → shared reviewer, group = exact configured name
+    // configured group → shared reviewer, group = configured name
     const cfg = bySc["pre-approval-gate-group-design-simplicity"];
     assert.ok(cfg, "configured group scope present");
     assert.deepEqual(cfg.angles, ["dry", "kiss"]);
     assert.equal(cfg.group, "design-simplicity");
-    // auto-chunk unit → shared reviewer, group = exact resolveFanoutGroups name
-    const auto = payload.units.find((u) => u.group === "group:determinism+state-concurrency");
-    assert.ok(auto, "auto-chunk unit carries its exact name as the provenance group");
-    assert.deepEqual(auto.angles, ["determinism", "state-concurrency"]);
-    // singleton → own reviewer, group null (never shares)
-    const single = bySc["pre-approval-gate-contradiction-lens"];
-    assert.ok(single, "singleton scope present");
-    assert.equal(single.group, null);
+    // auto-chunk unit's angles each become their own singleton reviewer (no shared group)
+    const det = bySc["pre-approval-gate-determinism"];
+    const stc = bySc["pre-approval-gate-state-concurrency"];
+    assert.ok(det && stc, "auto-chunk angles dispatched as distinct singletons");
+    assert.equal(det.group, null);
+    assert.equal(stc.group, null);
+    assert.deepEqual(det.angles, ["determinism"]);
+    // no shared unit carries the auto-chunk `group:...` name as provenance
+    assert.ok(!payload.units.some((u) => u.group === "group:determinism+state-concurrency"));
+    // singleton stays a singleton
+    assert.equal(bySc["pre-approval-gate-contradiction-lens"].group, null);
 
-    // Each composed prompt inlines the invariant prefix first, then the
-    // angle-naming suffix that names the unit's angles.
     for (const unit of payload.units) {
       const composed = await readFile(unit.promptPath, "utf8");
       assert.ok(composed.startsWith(PREFIX_BYTES), `prefix-first for ${unit.scope}`);
@@ -109,6 +112,42 @@ test("--pending emits only the pendingGroups subset", async () => {
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.count, 1);
     assert.equal(payload.units[0].angles[0], "contradiction-lens");
+  });
+});
+
+test("--pending falls back to groups only when pendingGroups is ABSENT", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir, { fanout: { groups: [{ name: "coverage", angles: ["coverage"] }] } });
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--pending"],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).count, 1);
+  });
+});
+
+test("--pending with a PRESENT-but-empty pendingGroups refuses (does not re-emit groups)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir, { fanout: { groups: [{ name: "coverage", angles: ["coverage"] }], pendingGroups: [] } });
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--pending"],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(JSON.parse(result.stdout).error, /zero units/);
+  });
+});
+
+test("--pending fails closed (exit 1) when pendingGroups is present but not an array", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir, { fanout: { groups: [{ name: "coverage", angles: ["coverage"] }], pendingGroups: { bad: true } } });
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--pending"],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(JSON.parse(result.stdout).error, /present but not an array/);
   });
 });
 
@@ -171,13 +210,10 @@ test("fails closed (exit 1) when a unit's invariant-prefix record is missing", a
   });
 });
 
-test("fails closed (exit 1) when two units derive a colliding scope", async () => {
+test("fails closed (exit 1) when two split singletons derive a colliding scope", async () => {
   await withTmpDir(async (tmpDir) => {
-    // Two distinct unit names that sanitize to the same scope segment.
-    await seedBundle(tmpDir, { fanout: { groups: [
-      { name: "a:b", angles: ["x", "y"] },
-      { name: "a-b", angles: ["p", "q"] },
-    ] } });
+    // A non-configured unit whose two angles sanitize to the same scope segment.
+    await seedBundle(tmpDir, { fanout: { groups: [{ name: "u", angles: ["foo.bar", "foo-bar"] }] } });
     const result = runEmitCli(
       ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
       { cwd: tmpDir },
@@ -187,59 +223,9 @@ test("fails closed (exit 1) when two units derive a colliding scope", async () =
   });
 });
 
-test("--pending falls back to groups only when pendingGroups is ABSENT", async () => {
+test("fails closed (exit 1) when an angle sanitizes to an empty, invalid scope", async () => {
   await withTmpDir(async (tmpDir) => {
-    await seedBundle(tmpDir, { fanout: { groups: [{ name: "coverage", angles: ["coverage"] }] } });
-    const result = runEmitCli(
-      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--pending"],
-      { cwd: tmpDir },
-    );
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(JSON.parse(result.stdout).count, 1);
-  });
-});
-
-test("--pending with a PRESENT-but-empty pendingGroups refuses (does not re-emit groups)", async () => {
-  await withTmpDir(async (tmpDir) => {
-    await seedBundle(tmpDir, { fanout: { groups: [{ name: "coverage", angles: ["coverage"] }], pendingGroups: [] } });
-    const result = runEmitCli(
-      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--pending"],
-      { cwd: tmpDir },
-    );
-    assert.equal(result.status, 1, result.stderr);
-    assert.match(JSON.parse(result.stdout).error, /zero units/);
-  });
-});
-
-test("--pending fails closed (exit 1) when pendingGroups is present but not an array", async () => {
-  await withTmpDir(async (tmpDir) => {
-    await seedBundle(tmpDir, { fanout: { groups: [{ name: "coverage", angles: ["coverage"] }], pendingGroups: { bad: true } } });
-    const result = runEmitCli(
-      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--pending"],
-      { cwd: tmpDir },
-    );
-    assert.equal(result.status, 1, result.stderr);
-    assert.match(JSON.parse(result.stdout).error, /present but not an array/);
-  });
-});
-
-test("fails closed (exit 1) when a multi-angle unit has a missing/non-string name", async () => {
-  await withTmpDir(async (tmpDir) => {
-    await seedBundle(tmpDir, { fanout: { groups: [{ angles: ["dry", "kiss"] }] } });
-    const result = runEmitCli(
-      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
-      { cwd: tmpDir },
-    );
-    assert.equal(result.status, 1, result.stderr);
-    assert.match(JSON.parse(result.stdout).error, /missing or non-string name/);
-  });
-});
-
-test("fails closed (exit 1) when a unit name sanitizes to an empty, invalid scope", async () => {
-  await withTmpDir(async (tmpDir) => {
-    // A multi-angle unit whose name is all-punctuation sanitizes to "", so the
-    // derived scope is "<prefix>group-" (trailing hyphen) — invalid.
-    await seedBundle(tmpDir, { fanout: { groups: [{ name: ":::", angles: ["x", "y"] }] } });
+    await seedBundle(tmpDir, { fanout: { groups: [{ name: "u", angles: ["@@@"] }] } });
     const result = runEmitCli(
       ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
       { cwd: tmpDir },
@@ -249,7 +235,7 @@ test("fails closed (exit 1) when a unit name sanitizes to an empty, invalid scop
   });
 });
 
-test("normalizes a unit's angles once: a blank angle is filtered, keeping scope/suffix/group consistent", async () => {
+test("normalizes a unit's angles once: a blank angle is filtered, keeping scope/group consistent", async () => {
   await withTmpDir(async (tmpDir) => {
     await seedBundle(tmpDir, { fanout: { groups: [{ name: "coverage", angles: ["coverage", ""] }] } });
     const result = runEmitCli(
@@ -264,10 +250,30 @@ test("normalizes a unit's angles once: a blank angle is filtered, keeping scope/
   });
 });
 
+test("expandDispatchUnits: configured group stays shared, everything else splits to singletons", () => {
+  const configured = new Set(["design-simplicity"]);
+  const units = [
+    { name: "design-simplicity", angles: ["dry", "kiss"] },
+    { name: "group:a+b", angles: ["a", "b"] }, // auto-chunk leftover
+    { name: "solo", angles: ["solo"] },
+  ];
+  const out = expandDispatchUnits(units, configured);
+  assert.deepEqual(out, [
+    { name: "design-simplicity", angles: ["dry", "kiss"] },
+    { name: "a", angles: ["a"] },
+    { name: "b", angles: ["b"] },
+    { name: "solo", angles: ["solo"] },
+  ]);
+});
+
+test("expandDispatchUnits: a configured-name unit with one resolved angle is a singleton, not a shared group", () => {
+  const out = expandDispatchUnits([{ name: "design-simplicity", angles: ["dry"] }], new Set(["design-simplicity"]));
+  assert.deepEqual(out, [{ name: "dry", angles: ["dry"] }]);
+});
+
 test("dispatchUnitScope: singleton uses the angle name; multi-angle sanitizes the unit name", () => {
   assert.equal(dispatchUnitScope("draft_gate", { name: "coverage", angles: ["coverage"] }), "draft-gate-coverage");
   assert.equal(dispatchUnitScope("pre_approval_gate", { name: "design-simplicity", angles: ["dry", "kiss"] }), "pre-approval-gate-group-design-simplicity");
-  assert.equal(dispatchUnitScope("draft_gate", { name: "group:a+b", angles: ["a", "b"] }), "draft-gate-group-group-a-b");
 });
 
 test("sanitizeScopeSegment collapses non-alphanumeric runs to single hyphens", () => {

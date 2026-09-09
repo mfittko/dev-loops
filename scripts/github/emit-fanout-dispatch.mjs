@@ -7,20 +7,27 @@ import { gateScopePrefix, normalizeGate } from "./_gate-names.mjs";
 import { HEAD_SHA_RE, VALID_SCOPE_RE } from "./record-dispatch-prompt-layout.mjs";
 import { buildGateContextPath } from "./write-gate-context.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
+import { loadDevLoopConfig } from "@dev-loops/core/config";
 
 const USAGE = `Usage: emit-fanout-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--pending] [--tmp-root <path>] [--help]
 The SANCTIONED one-shot gate fan-out dispatch step (issue #2092): given a gate +
-head whose write-gate-context.mjs bundle is already on disk, it emits ONE dispatch
-unit per resolved fan-out unit (the artifact's fanout.groups / fanout.pendingGroups,
-from resolveFanoutGroups) and, for each, composes a ready-to-dispatch reviewer
-prompt via compose-reviewer-prompt.mjs's atomic composer. It is the ONE place the
-gate-context bundle is turned into per-unit reviewer prompts, so a coordinator
-never re-derives persona/prompt composition, never spelunks print-gates.mjs, and
-— crucially — never hand-collapses ungrouped angles onto an ad-hoc shared reviewer
-that resolveFanoutGroups never emitted (the requireFanoutProvenance breach seen on
-#2100/#2101). Each unit is dispatched under the EXACT unit name resolveFanoutGroups
-assigned, so the ledger's provenance groups match the merge guard's own
-re-derivation (detect-checkpoint-evidence.mjs) by construction.
+head whose write-gate-context.mjs bundle is already on disk, it reads the resolved
+fan-out plan (the artifact's fanout.groups / fanout.pendingGroups, from
+resolveFanoutGroups) and, for each dispatch unit, composes a ready-to-dispatch
+reviewer prompt via compose-reviewer-prompt.mjs's atomic composer. It is the ONE
+place the gate-context bundle is turned into per-unit reviewer prompts, so a
+coordinator never re-derives persona/prompt composition and never spelunks
+print-gates.mjs.
+
+Dispatch-unit rule: only a CONFIGURED gates.fanout.groups group shares one
+reviewer. Every angle NOT in a configured group gets its OWN distinct reviewer —
+including angles resolveFanoutGroups auto-chunked into a leftover \`group:...\`
+unit, which this step SPLITS back into per-angle singletons. A coordinator can
+therefore never seed a shared reviewer for an ad-hoc auto-chunk unit the
+configured table never named (the requireFanoutProvenance breach seen on
+#2100/#2101). A configured group's reviewer records that group's name as its
+provenance \`group\`, matching the merge guard's own resolveFanoutGroups
+re-derivation (detect-checkpoint-evidence.mjs); a singleton records no group.
 
 The per-unit angle-suffix this emits only NAMES the unit's angle(s) and instructs
 the reviewer to self-resolve each angle's persona/prompt (resolveReviewerRole) —
@@ -32,7 +39,7 @@ Run write-gate-context.mjs FIRST (it writes the briefing prefix, volatile tail,
 and the fanout dispatch plan this reads). Then dispatch ONE fresh-context \`review\`
 subagent per emitted unit, seeded with that unit's promptPath bytes verbatim, and
 record each unit's \`group\` on Phase 3's provenance (null for a singleton unit; the
-unit name for a multi-angle unit).
+configured group name for a shared unit).
 
 Required:
   --repo <owner/name>        Same vocabulary as write-gate-context.mjs.
@@ -63,9 +70,9 @@ Exit codes:
   1  Refused: the gate-context artifact is missing (run write-gate-context.mjs
      first), carries no fanout dispatch plan, has a present-but-non-array
      pendingGroups under --pending, resolves zero units, a unit carries no
-     angles, a multi-angle unit has a missing/non-string name, a unit's name
-     sanitizes to an invalid scope, two units derive a colliding scope, or a
-     unit's invariant-prefix record is missing / suffix could not be composed
+     angles, a dispatch unit's name sanitizes to an invalid scope, two units
+     derive a colliding scope, or a unit's invariant-prefix record is missing /
+     suffix could not be composed
   2  Usage or internal error (bad --repo/--pr/--gate/--head-sha shape, filesystem
      error, or invalid --jq filter)`.trim();
 
@@ -125,6 +132,35 @@ export function buildAngleNamingSuffix(unit) {
     ? `Self-resolve this angle's persona and focus prompt via resolveReviewerRole(config, "${angles[0]}") from @dev-loops/core/config, then review adversarially per your scoped angle-review mode. Write one findings artifact for this angle at its per-angle path.`
     : `For EACH angle above, self-resolve its persona and focus prompt via resolveReviewerRole(config, <angle>) from @dev-loops/core/config, then review adversarially per your scoped angle-review mode. Write one findings artifact PER ANGLE at its per-angle path — one artifact per angle, never one merged artifact for the unit.`;
   return `${header}\n\n${body}\n`;
+}
+
+/**
+ * Expand resolveFanoutGroups units into the dispatch units this step actually
+ * seeds reviewers for: only a CONFIGURED gates.fanout.groups group (a
+ * multi-angle unit whose name is in `configuredGroupNames`) shares one reviewer;
+ * every other angle — an ungrouped angle that resolveFanoutGroups auto-chunked
+ * into a leftover `group:...` unit, or a single-angle unit — gets its OWN
+ * singleton reviewer. This is the "angles not in a configured group get their
+ * own distinct reviewer" rule: a coordinator can never seed a shared reviewer
+ * for an ad-hoc auto-chunk unit the configured table never named (the
+ * requireFanoutProvenance breach seen on #2100/#2101). Angle order is preserved.
+ * Pure.
+ * @param {{ name: string, angles: string[] }[]} units resolveFanoutGroups output
+ * @param {Set<string>} configuredGroupNames configured gates.fanout.groups names
+ * @returns {{ name: string, angles: string[] }[]}
+ */
+export function expandDispatchUnits(units, configuredGroupNames) {
+  const out = [];
+  for (const unit of Array.isArray(units) ? units : []) {
+    const angles = Array.isArray(unit?.angles) ? unit.angles.filter((a) => typeof a === "string" && a.trim().length > 0) : [];
+    const isConfiguredGroup = angles.length > 1 && typeof unit?.name === "string" && configuredGroupNames.has(unit.name);
+    if (isConfiguredGroup) {
+      out.push({ name: unit.name, angles });
+    } else {
+      for (const angle of angles) out.push({ name: angle, angles: [angle] });
+    }
+  }
+  return out;
 }
 
 function resolveFlagValue(argv, flag) {
@@ -217,29 +253,38 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   if (!Array.isArray(units) || units.length === 0) {
     return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — fanout dispatch plan resolves zero units (${pendingOnly ? "pendingGroups" : "groups"}) — nothing to dispatch` }, false);
   }
-
-  const emitted = [];
-  const seenScopes = new Set();
+  // An angle-less resolved unit is a malformed plan: refuse rather than silently
+  // contribute zero reviewers for it.
   for (const unit of units) {
-    // Normalize the unit's angle list ONCE, then feed that same array to the
-    // zero-angle guard, the scope/suffix derivation, and the singleton/group
-    // decision — so a malformed unit (e.g. one blank angle) can never make the
-    // three disagree on whether the unit is a singleton (a scope/suffix/group
-    // split); it refuses cleanly below instead.
     const angles = Array.isArray(unit?.angles) ? unit.angles.filter((a) => typeof a === "string" && a.trim().length > 0) : [];
     if (angles.length === 0) {
       return finish({ ok: false, error: `dispatch unit ${JSON.stringify(unit?.name ?? unit)} carries no angles — malformed fanout plan` }, false);
     }
-    // A multi-angle unit's name becomes the provenance `group` (a string the
-    // merge guard re-derives via resolveFanoutGroups), so it MUST be a non-empty
-    // string. A singleton records no group, so its name is only used for the
-    // (validated) scope. Refuse a malformed multi-angle name rather than emit a
-    // non-string/absent provenance group.
-    if (angles.length > 1 && (typeof unit.name !== "string" || unit.name.trim().length === 0)) {
-      return finish({ ok: false, error: `multi-angle dispatch unit for angles ${JSON.stringify(angles)} has a missing or non-string name — cannot record its provenance group; malformed fanout plan` }, false);
-    }
-    const normalizedUnit = { name: unit.name, angles };
-    const scope = dispatchUnitScope(gate, normalizedUnit);
+  }
+
+  // Only CONFIGURED gates.fanout.groups share one reviewer; every ungrouped
+  // angle (including one resolveFanoutGroups auto-chunked into a leftover unit)
+  // gets its own singleton reviewer. Load the same config write-gate-context
+  // resolved against (this step runs in that worktree).
+  let configuredGroupNames;
+  try {
+    const { config } = await loadDevLoopConfig({ repoRoot: process.cwd() });
+    configuredGroupNames = new Set((config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
+  } catch (err) {
+    process.stderr.write(`${formatCliError(err)}\n`);
+    return 2;
+  }
+  // Every dispatch unit here already carries a filtered, non-empty angle list; a
+  // shared unit is a configured group (a valid string name), a singleton uses
+  // its angle as the name — so both the scope and the provenance group are
+  // well-formed by construction.
+  const dispatchUnits = expandDispatchUnits(units, configuredGroupNames);
+
+  const emitted = [];
+  const seenScopes = new Set();
+  for (const unit of dispatchUnits) {
+    const angles = unit.angles;
+    const scope = dispatchUnitScope(gate, unit);
     if (!VALID_SCOPE_RE.test(scope)) {
       return finish({ ok: false, error: `derived scope ${JSON.stringify(scope)} for unit ${JSON.stringify(unit?.name)} is not a valid reviewer scope (alphanumeric/hyphen only)` }, false);
     }
@@ -253,7 +298,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     const suffixPath = path.join(path.dirname(contextPath), `${gate}-${headSha}.angle-suffix-${scope}.txt`);
     try {
       await mkdir(path.dirname(suffixPath), { recursive: true });
-      await writeFile(suffixPath, buildAngleNamingSuffix(normalizedUnit), "utf8");
+      await writeFile(suffixPath, buildAngleNamingSuffix(unit), "utf8");
     } catch (err) {
       process.stderr.write(`${formatCliError(err)}\n`);
       return 2;
@@ -269,7 +314,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     if (!result.composed || !result.recorded) {
       return finish({ ok: false, error: `failed to compose reviewer prompt for unit ${JSON.stringify(unit?.name)} (scope ${scope}): ${result.reason}` }, false);
     }
-    emitted.push({ scope, angles, group: angles.length > 1 ? normalizedUnit.name : null, promptPath: result.promptPath });
+    emitted.push({ scope, angles, group: angles.length > 1 ? unit.name : null, promptPath: result.promptPath });
   }
 
   return finish({ ok: true, gate, headSha, repo, pr, count: emitted.length, units: emitted }, true);
