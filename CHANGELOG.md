@@ -18,6 +18,34 @@ All notable changes to this project will be documented in this file.
   idempotent (a re-run over an already-stamped CHANGELOG is a no-op), and stages
   `CHANGELOG.md` among the enumerated release files.
 
+### Fixed
+
+- **PR pickup integrates the base branch FIRST and never CI-waits on a
+  `CONFLICTING`/`DIRTY` branch (issue [2096](https://github.com/mfittko/dev-loops/issues/2096)).**
+  Closes a hard deadlock: GitHub does not dispatch `pull_request` CI on a
+  conflicted PR, so a loop that picked up a behind/diverged PR and proceeded to
+  wait for CI waited forever (observed picking up a PR left behind post-epic
+  `main`). The deterministic pickup preflight (`runBasePickupPreflight` in
+  `scripts/loop/copilot-pr-handoff.mjs`) now reads the PR's
+  `mergeable`/`mergeStateStatus` as the FIRST action — before any gate or
+  CI-wait — and, when the branch is behind base or `CONFLICTING`/`DIRTY`,
+  integrates `origin/<base>` via the sanctioned `resolve-pr-conflicts.mjs`
+  (merge, additive-CHANGELOG auto-resolve, or fail closed) and pushes, then
+  re-baselines at the new head so the gate/CI re-runs there. It NEVER enters a
+  CI/review wait while `mergeStateStatus` is `DIRTY` / `mergeable` is
+  `CONFLICTING`: it either integrates the base first or stops with a clear
+  actionable message, and a fail-closed backstop at the watch decision refuses
+  to route a conflicted head to a wait. A watch-refresh re-entry never
+  auto-merges on every poll but still refuses to re-enter a wait while
+  conflicting. `detect-copilot-loop-state.mjs` carries `mergeable`,
+  `mergeStateStatus`, and `baseRefName` on the snapshot to drive it. The rule is
+  documented in `skills/docs/public-dev-loop-contract.md`
+  (`FACADE-PICKUP-INTEGRATE-BASE-FIRST`, `FACADE-NEVER-CI-WAIT-WHILE-DIRTY`).
+  Proven by `test/loop/copilot-pr-handoff.test.mjs` (dirty-state rehearsal
+  asserting no CI-wait is entered while `DIRTY`, base-integrated-first,
+  behind-integration, fail-closed-on-unresolvable, and watch-refresh
+  no-auto-merge paths). Generated `.claude/` mirror regenerated in lockstep.
+
 ## 1.0.2-slim.0
 
 ### Added

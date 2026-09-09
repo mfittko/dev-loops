@@ -8,7 +8,7 @@ import { afterAll as after, beforeAll as before, test } from "bun:test";
 import { makeGhMock, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper, writeJson as writeJsonHelper } from "../_helpers.mjs";
 
 import { formatCliError } from "../../scripts/_core-helpers.mjs";
-import { parseHandoffCliArgs, runHandoff } from "../../scripts/loop/copilot-pr-handoff.mjs";
+import { isBehindBaseMergeState, isConflictingMergeState, parseHandoffCliArgs, runBasePickupPreflight, runHandoff } from "../../scripts/loop/copilot-pr-handoff.mjs";
 import { STATE } from "../../packages/core/src/loop/copilot-loop-state.mjs";
 import { claimRunnerOwnership, loadRunnerCoordinationState, recordExitSignalForRunner } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY } from "../../packages/core/src/loop/timeout-policy.mjs";
@@ -868,7 +868,7 @@ if (args[0] === "api" && args[1] === "repos/owner/repo/commits/newsha/status?per
   process.exit(0);
 }
 
-if (args[0] === "pr" && args[1] === "view" && args.includes("--json") && args.includes("headRefOid,isDraft,state,number,reviews,statusCheckRollup")) {
+if (args[0] === "pr" && args[1] === "view" && args.includes("--json") && args.some((a) => a.startsWith("headRefOid,isDraft,state,number,reviews,statusCheckRollup"))) {
   write({
     headRefOid: "newsha",
     isDraft: false,
@@ -1173,7 +1173,7 @@ if (args[0] === "api" && args[1] === "repos/owner/repo/commits/newsha/status?per
   process.exit(0);
 }
 
-if (args[0] === "pr" && args[1] === "view" && args.includes("--json") && args.includes("headRefOid,isDraft,state,number,reviews,statusCheckRollup")) {
+if (args[0] === "pr" && args[1] === "view" && args.includes("--json") && args.some((a) => a.startsWith("headRefOid,isDraft,state,number,reviews,statusCheckRollup"))) {
   write({
     headRefOid: "newsha",
     isDraft: false,
@@ -2798,5 +2798,139 @@ test("copilot-pr-handoff skips internal detection when GH_SEQUENCE_PATH is set (
     assert.equal(output.internalOnlySkipCopilot, undefined);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PR-pickup base-integration preflight (#deadlock): integrate base FIRST;
+// never CI-wait on a CONFLICTING/DIRTY branch.
+// ---------------------------------------------------------------------------
+
+const OPEN_SNAPSHOT = {
+  prExists: true,
+  prNumber: 17,
+  prDraft: false,
+  prMerged: false,
+  prClosed: false,
+};
+
+test("isConflictingMergeState / isBehindBaseMergeState classify merge state", () => {
+  assert.equal(isConflictingMergeState({ mergeStateStatus: "DIRTY" }), true);
+  assert.equal(isConflictingMergeState({ mergeable: "CONFLICTING" }), true);
+  assert.equal(isConflictingMergeState({ mergeStateStatus: "CLEAN", mergeable: "MERGEABLE" }), false);
+  assert.equal(isConflictingMergeState({}), false);
+  assert.equal(isBehindBaseMergeState({ mergeStateStatus: "BEHIND" }), true);
+  assert.equal(isBehindBaseMergeState({ mergeStateStatus: "DIRTY" }), false);
+});
+
+test("runBasePickupPreflight is a no-op on a mergeable-clean branch", async () => {
+  let called = false;
+  const result = await runBasePickupPreflight(
+    { repo: "owner/repo", pr: 17, snapshot: { ...OPEN_SNAPSHOT, mergeStateStatus: "CLEAN", mergeable: "MERGEABLE", baseRefName: "main" }, repoRoot: "/tmp/x" },
+    { integrateBase: async () => { called = true; return { ok: true }; } },
+  );
+  assert.equal(result.action, "none");
+  assert.equal(result.integrated, false);
+  assert.equal(called, false, "integrateBase must not run on a clean branch");
+});
+
+test("runBasePickupPreflight integrates the base FIRST on a DIRTY branch (pickup)", async () => {
+  const calls = [];
+  const result = await runBasePickupPreflight(
+    { repo: "owner/repo", pr: 17, snapshot: { ...OPEN_SNAPSHOT, mergeStateStatus: "DIRTY", mergeable: "CONFLICTING", baseRefName: "main" }, repoRoot: "/tmp/wt" },
+    { integrateBase: async (args) => { calls.push(args); return { ok: true, action: "clean_merge", pushed: true }; } },
+  );
+  assert.equal(result.action, "integrated");
+  assert.equal(result.integrated, true);
+  assert.equal(result.base, "main");
+  assert.equal(result.pushed, true);
+  assert.deepEqual(calls, [{ repoRoot: "/tmp/wt", base: "main" }]);
+});
+
+test("runBasePickupPreflight integrates a BEHIND branch too", async () => {
+  let called = false;
+  const result = await runBasePickupPreflight(
+    { repo: "owner/repo", pr: 17, snapshot: { ...OPEN_SNAPSHOT, mergeStateStatus: "BEHIND", mergeable: "MERGEABLE", baseRefName: "main" }, repoRoot: "/tmp/wt" },
+    { integrateBase: async () => { called = true; return { ok: true, action: "clean_merge", pushed: true }; } },
+  );
+  assert.equal(result.action, "integrated");
+  assert.equal(called, true);
+});
+
+test("runBasePickupPreflight fails closed (blocked) on an unresolvable DIRTY conflict — never CI-wait", async () => {
+  const result = await runBasePickupPreflight(
+    { repo: "owner/repo", pr: 17, snapshot: { ...OPEN_SNAPSHOT, mergeStateStatus: "DIRTY", mergeable: "CONFLICTING", baseRefName: "main" }, repoRoot: "/tmp/wt" },
+    { integrateBase: async () => { const e = new Error("Unresolvable merge conflict"); e.conflictFiles = ["src/a.js"]; throw e; } },
+  );
+  assert.equal(result.action, "blocked");
+  assert.equal(result.integrated, false);
+  assert.deepEqual(result.conflictFiles, ["src/a.js"]);
+  assert.match(result.message, /re-gate at the new head/);
+});
+
+test("runBasePickupPreflight refuses to auto-integrate on a watch-refresh but still blocks a DIRTY branch", async () => {
+  let called = false;
+  const blocked = await runBasePickupPreflight(
+    { repo: "owner/repo", pr: 17, snapshot: { ...OPEN_SNAPSHOT, mergeStateStatus: "DIRTY", mergeable: "CONFLICTING", baseRefName: "main" }, repoRoot: "/tmp/wt", watchStatus: "idle" },
+    { integrateBase: async () => { called = true; return { ok: true }; } },
+  );
+  assert.equal(blocked.action, "blocked");
+  assert.equal(called, false, "a watch-refresh must not merge/push on every poll");
+  assert.match(blocked.message, /CONFLICTING\/DIRTY/);
+
+  const behind = await runBasePickupPreflight(
+    { repo: "owner/repo", pr: 17, snapshot: { ...OPEN_SNAPSHOT, mergeStateStatus: "BEHIND", baseRefName: "main" }, repoRoot: "/tmp/wt", watchStatus: "idle" },
+    { integrateBase: async () => { called = true; return { ok: true }; } },
+  );
+  assert.equal(behind.action, "none");
+  assert.equal(called, false);
+});
+
+test("runBasePickupPreflight is a no-op when the PR is merged/closed", async () => {
+  for (const snap of [{ prExists: false }, { prExists: true, prMerged: true }, { prExists: true, prClosed: true }]) {
+    const result = await runBasePickupPreflight(
+      { repo: "owner/repo", pr: 17, snapshot: { ...snap, mergeStateStatus: "DIRTY" }, repoRoot: "/tmp/wt" },
+      { integrateBase: async () => { throw new Error("must not run"); } },
+    );
+    assert.equal(result.action, "none");
+  }
+});
+
+test("runHandoff never enters a CI-wait on a DIRTY branch — stops, integration blocked", async () => {
+  const dirtyPrView = JSON.stringify({
+    isDraft: false,
+    state: "OPEN",
+    number: 17,
+    reviews: [],
+    statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
+    mergeable: "CONFLICTING",
+    mergeStateStatus: "DIRTY",
+    baseRefName: "main",
+  });
+  const { runChild } = makeGhMock([
+    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo"], stdout: dirtyPrView + "\n" },
+    { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+    { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
+  ], { matchMode: "claims" });
+  const parsed = parseHandoffCliArgs(["--repo", "owner/repo", "--pr", "17"]);
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${gitStubDir}${path.delimiter}${originalPath}`;
+  try {
+    const result = await runHandoff(parsed, {
+      env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }),
+      ghCommand: "gh",
+      runChild,
+      repoRoot: capFixtureRepoRoot,
+      integrateBase: async () => { const e = new Error("Unresolvable merge conflict"); e.conflictFiles = ["src/a.js"]; throw e; },
+    });
+    assert.notEqual(result.action, "watch", "must NOT enter a CI-wait while DIRTY");
+    assert.equal(result.action, "stop");
+    assert.equal(result.basePickupPreflight.action, "blocked");
+    assert.equal(result.watchArgs, undefined);
+    assert.equal(result.requestWatchContract.watchEntryConfirmed, false);
+    assert.match(result.nextAction, /cannot enter a CI-wait/);
+    assert.match(result.nextAction, /FACADE-NEVER-CI-WAIT-WHILE-DIRTY/);
+  } finally {
+    process.env.PATH = originalPath;
   }
 });

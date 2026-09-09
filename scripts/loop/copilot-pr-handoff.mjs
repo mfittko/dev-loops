@@ -2,6 +2,7 @@
 import { buildParseError, formatCliError, isCopilotLogin, isDirectCliRun, normalizeTimestamp, parseJsonText } from "../_core-helpers.mjs";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
+import { resolvePrConflicts } from "./resolve-pr-conflicts.mjs";
 import { detectRepoSlug, parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { resolveRunId } from "@dev-loops/core/loop/run-context";
 import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveRefinement } from "@dev-loops/core/config";
@@ -336,7 +337,84 @@ async function fetchReopenCycleFacts({ repo, pr }, { env = process.env, ghComman
   }
 }
 
-export async function runHandoff(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, repoRoot } = {}) {
+// A PR whose base has diverged into a merge conflict reports mergeable
+// CONFLICTING / mergeStateStatus DIRTY. GitHub does NOT dispatch pull_request CI
+// on such a branch, so any loop that proceeds to a CI/review wait there waits
+// forever (the deadlock). BEHIND is not itself a deadlock, but pickup integrates
+// the base then too so the branch re-gates current.
+export function isConflictingMergeState(snapshot) {
+  return snapshot?.mergeStateStatus === "DIRTY" || snapshot?.mergeable === "CONFLICTING";
+}
+export function isBehindBaseMergeState(snapshot) {
+  return snapshot?.mergeStateStatus === "BEHIND";
+}
+
+// Default base integration: the sanctioned resolve-pr-conflicts.mjs fetches
+// origin/<base>, merges (auto-resolving ONLY the safe additive CHANGELOG case,
+// else fail-closed), verifies docs, and pushes. Injected in tests.
+async function defaultIntegrateBase({ repoRoot, base }, { env = process.env } = {}) {
+  return resolvePrConflicts(
+    { repoRoot, base: base ?? null, verify: true, push: true, json: true },
+    { env },
+  );
+}
+
+// Deterministic PR-pickup preflight (#deadlock): integrate the base branch FIRST,
+// before any gate or CI-wait, and NEVER enter a CI-wait on a CONFLICTING/DIRTY
+// branch. Returns `integrated` (head advanced → re-baseline and re-gate),
+// `blocked` (fail closed — resolve the conflict before gating), or `none`.
+export async function runBasePickupPreflight(
+  { repo, pr, snapshot, repoRoot, watchStatus },
+  { env = process.env, integrateBase = defaultIntegrateBase } = {},
+) {
+  if (!snapshot?.prExists || snapshot.prMerged || snapshot.prClosed) {
+    return { action: "none", integrated: false, reason: "no_open_pr" };
+  }
+  const conflicting = isConflictingMergeState(snapshot);
+  const behind = isBehindBaseMergeState(snapshot);
+  if (!conflicting && !behind) {
+    return { action: "none", integrated: false, mergeStateStatus: snapshot.mergeStateStatus ?? null };
+  }
+  const base = snapshot.baseRefName ?? "main";
+  // A watch-refresh re-entry polls the same head; it MUST NOT auto-integrate
+  // (that would merge/push on every poll) but MUST still refuse to re-enter a
+  // CI-wait while conflicting.
+  if (watchStatus !== undefined) {
+    if (conflicting) {
+      return {
+        action: "blocked",
+        integrated: false,
+        base,
+        conflicting: true,
+        mergeStateStatus: snapshot.mergeStateStatus ?? null,
+        message: `PR #${pr} is CONFLICTING/DIRTY against ${base}; GitHub cannot dispatch CI on a conflicted branch, so no CI-wait is entered (FACADE-NEVER-CI-WAIT-WHILE-DIRTY). Integrate origin/${base} first (resolve-pr-conflicts.mjs) and re-gate (FACADE-PICKUP-INTEGRATE-BASE-FIRST).`,
+      };
+    }
+    return { action: "none", integrated: false, mergeStateStatus: snapshot.mergeStateStatus ?? null };
+  }
+  try {
+    const res = await integrateBase({ repoRoot, base }, { env });
+    return {
+      action: "integrated",
+      integrated: true,
+      base,
+      resolveAction: res?.action ?? null,
+      pushed: Boolean(res?.pushed),
+    };
+  } catch (error) {
+    return {
+      action: "blocked",
+      integrated: false,
+      base,
+      conflicting,
+      mergeStateStatus: snapshot.mergeStateStatus ?? null,
+      conflictFiles: Array.isArray(error?.conflictFiles) ? error.conflictFiles : undefined,
+      message: `PR #${pr} cannot enter a CI-wait: it could not be integrated with origin/${base}: ${error instanceof Error ? error.message : String(error)}. Resolve the conflict, push, and re-gate at the new head (FACADE-PICKUP-INTEGRATE-BASE-FIRST / FACADE-NEVER-CI-WAIT-WHILE-DIRTY).`,
+    };
+  }
+}
+
+export async function runHandoff(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, repoRoot, integrateBase } = {}) {
   // Single resolved repo root for config + runner-coordination reads/writes.
   // Defaults to the checkout's git toplevel (production); an injected repoRoot
   // keeps the whole cascade hermetic when driven in-process.
@@ -382,6 +460,55 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
     { repo: options.repo, pr: options.pr },
     { env, ghCommand, runChild },
   );
+  // Deterministic PR-pickup preflight (#deadlock): integrate the base branch
+  // FIRST — before any gate or CI-wait — and never enter a CI-wait on a
+  // CONFLICTING/DIRTY branch (GitHub cannot dispatch CI there, so the wait never
+  // ends). Runs ahead of loop interpretation so integration precedes gate/CI.
+  const basePickup = await runBasePickupPreflight(
+    { repo: options.repo, pr: options.pr, snapshot, repoRoot: resolvedRepoRoot, watchStatus: options.watchStatus },
+    { env, integrateBase },
+  );
+  if (basePickup.action === "blocked") {
+    const runnerRelease = await releaseAsyncRunnerOwnership({
+      repo: options.repo,
+      pr: options.pr,
+      env,
+      cwd: resolvedRepoRoot,
+    });
+    return {
+      ok: true,
+      action: "stop",
+      state: STATE.BLOCKED_NEEDS_USER_DECISION,
+      allowedTransitions: [],
+      nextAction: basePickup.message,
+      autoRerequestEligible: false,
+      sameHeadCleanConverged: false,
+      roundCapCleanEligible: false,
+      loopDisposition: "blocked",
+      terminal: true,
+      snapshot,
+      runnerOwnership,
+      ...(runnerRelease.status !== "skipped_no_async_run_id" ? { runnerRelease } : {}),
+      basePickupPreflight: basePickup,
+      requestWatchContract: {
+        action: "stop",
+        nextAction: basePickup.message,
+        requestStatus: "none",
+        routingState: "non_ready_state",
+        watchEntryConfirmed: false,
+        watchArgs: null,
+        stopState: "blocked",
+      },
+    };
+  }
+  if (basePickup.integrated) {
+    // The base integration advanced the head; re-baseline at the new head so the
+    // gate / CI re-runs there (re-gate-on-new-head).
+    snapshot = await autoDetectSnapshot(
+      { repo: options.repo, pr: options.pr },
+      { env, ghCommand, runChild },
+    );
+  }
   const config = await loadDevLoopConfig({ repoRoot: resolvedRepoRoot });
   if (config.errors?.length > 0) {
     console.error("[copilot-pr-handoff] config warnings:", JSON.stringify(config.errors));
@@ -627,6 +754,20 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
     action = "fix";
   } else {
     action = "stop";
+  }
+  // Fail-closed backstop (#deadlock): a CONFLICTING/DIRTY head can never route to
+  // a CI/review wait — GitHub cannot dispatch CI there. The pickup preflight
+  // above integrates or blocks a conflicted branch first, so this guards the
+  // watch decision itself as defense-in-depth.
+  if (action === "watch" && isConflictingMergeState(snapshot)) {
+    const conflictBase = snapshot.baseRefName ?? "main";
+    action = "stop";
+    interpretation = {
+      ...interpretation,
+      state: STATE.BLOCKED_NEEDS_USER_DECISION,
+      nextAction: `PR #${options.pr} is CONFLICTING/DIRTY against ${conflictBase}; GitHub cannot dispatch CI on a conflicted branch, so no CI-wait is entered (FACADE-NEVER-CI-WAIT-WHILE-DIRTY). Integrate origin/${conflictBase} first (resolve-pr-conflicts.mjs), push, and re-gate at the new head (FACADE-PICKUP-INTEGRATE-BASE-FIRST).`,
+      allowedTransitions: [],
+    };
   }
   const result = {
     ok: true,

@@ -142,7 +142,7 @@ export function parseDetectCliArgs(argv) {
 async function fetchPrView({ repo, pr }, { env, ghCommand, runChild = defaultRunChild }) {
   const result = await runChild(
     ghCommand,
-    ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+    ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup,mergeable,mergeStateStatus,baseRefName"],
     env,
   );
   if (result.code !== 0) {
@@ -327,7 +327,7 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
       currentHeadCiStatus = "crediblyGreen";
     }
   }
-  return buildSnapshotFromPrFacts({
+  const snapshot = buildSnapshotFromPrFacts({
     prData,
     prNumber: pr,
     copilotReviewRequestStatus,
@@ -341,6 +341,17 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
     failureDetails,
     excludedFailureDetails,
   });
+  // Merge-state facts drive the base-integration preflight (never CI-wait on a
+  // CONFLICTING/DIRTY branch — GitHub cannot dispatch CI there). Carried as
+  // passthrough fields the loop interpreter ignores; only the pickup preflight reads them.
+  return {
+    ...snapshot,
+    mergeable: typeof prData.mergeable === "string" ? prData.mergeable : null,
+    mergeStateStatus: typeof prData.mergeStateStatus === "string" ? prData.mergeStateStatus : null,
+    baseRefName: typeof prData.baseRefName === "string" && prData.baseRefName.trim().length > 0
+      ? prData.baseRefName.trim()
+      : null,
+  };
 }
 export async function runCli(
   argv = process.argv.slice(2),
