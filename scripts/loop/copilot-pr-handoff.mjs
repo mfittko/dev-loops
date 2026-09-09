@@ -384,7 +384,12 @@ export async function runBasePickupPreflight(
     // one-cycle window is ever shown to matter in practice.
     return { action: "none", integrated: false, mergeStateStatus: snapshot.mergeStateStatus ?? null };
   }
-  const base = snapshot.baseRefName ?? "main";
+  // Pass the PR's actual base through; when it is unknown (null) let
+  // resolve-pr-conflicts derive it from `gh pr view` rather than defaulting to
+  // "main" — a repo whose base is not main must never merge the wrong branch.
+  // baseLabel is display-only (messages), where "main" is a readable fallback.
+  const base = snapshot.baseRefName ?? null;
+  const baseLabel = base ?? "main";
   // A watch-refresh re-entry polls the same head; it MUST NOT auto-integrate
   // (that would merge/push on every poll) but MUST still refuse to re-enter a
   // CI-wait while conflicting.
@@ -393,10 +398,10 @@ export async function runBasePickupPreflight(
       return {
         action: "blocked",
         integrated: false,
-        base,
+        base: baseLabel,
         conflicting: true,
         mergeStateStatus: snapshot.mergeStateStatus ?? null,
-        message: `PR #${pr} is CONFLICTING/DIRTY against ${base}; GitHub cannot dispatch CI on a conflicted branch, so no CI-wait is entered (FACADE-NEVER-CI-WAIT-WHILE-DIRTY). Integrate origin/${base} first (resolve-pr-conflicts.mjs) and re-gate (FACADE-PICKUP-INTEGRATE-BASE-FIRST).`,
+        message: `PR #${pr} is CONFLICTING/DIRTY against ${baseLabel}; GitHub cannot dispatch CI on a conflicted branch, so no CI-wait is entered (FACADE-NEVER-CI-WAIT-WHILE-DIRTY). Integrate origin/${baseLabel} first (resolve-pr-conflicts.mjs) and re-gate (FACADE-PICKUP-INTEGRATE-BASE-FIRST).`,
       };
     }
     return { action: "none", integrated: false, mergeStateStatus: snapshot.mergeStateStatus ?? null };
@@ -406,7 +411,7 @@ export async function runBasePickupPreflight(
     return {
       action: "integrated",
       integrated: true,
-      base,
+      base: res?.base ?? baseLabel,
       resolveAction: res?.action ?? null,
       pushed: Boolean(res?.pushed),
     };
@@ -414,11 +419,11 @@ export async function runBasePickupPreflight(
     return {
       action: "blocked",
       integrated: false,
-      base,
+      base: baseLabel,
       conflicting,
       mergeStateStatus: snapshot.mergeStateStatus ?? null,
       conflictFiles: Array.isArray(error?.conflictFiles) ? error.conflictFiles : undefined,
-      message: `PR #${pr} cannot enter a CI-wait: it could not be integrated with origin/${base}: ${error instanceof Error ? error.message : String(error)}. Resolve the conflict, push, and re-gate at the new head (FACADE-PICKUP-INTEGRATE-BASE-FIRST / FACADE-NEVER-CI-WAIT-WHILE-DIRTY).`,
+      message: `PR #${pr} cannot enter a CI-wait: it could not be integrated with origin/${baseLabel}: ${error instanceof Error ? error.message : String(error)}. Resolve the conflict, push, and re-gate at the new head (FACADE-PICKUP-INTEGRATE-BASE-FIRST / FACADE-NEVER-CI-WAIT-WHILE-DIRTY).`,
     };
   }
 }
