@@ -44,7 +44,7 @@ import { viewIssue } from "./view-issue.mjs";
 import { buildAdjacentBundle, DEFAULT_MAX_FILE_BYTES } from "./build-adjacent-bundle.mjs";
 import { GATE_NAMES, gateScopePrefix, normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_carried-angles.mjs";
-import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
+import { resolveLinkedIssuesFromPr, detectPrGateCoordinationState } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -2834,8 +2834,13 @@ export async function main(
     run = runChild,
     // Injectable so the tripwire test can supply a resolved coordination
     // context directly instead of stubbing the whole gh coordination surface.
-    // The default consults the real deterministic authority.
-    loadCoordination = (opts) => loadPrGateCoordinationContext(opts, { runChild: run, repoRoot, cwd: repoRoot }),
+    // The default consults the real deterministic authority. It MUST be
+    // detectPrGateCoordinationState (the fully-EVALUATED result carrying
+    // allowedNextActions/forbiddenActions/reason), NOT the raw
+    // loadPrGateCoordinationContext, whose context object has no such fields —
+    // the same evaluated result the verdict-post refusal reads, so the two can
+    // never disagree.
+    loadCoordination = (opts) => detectPrGateCoordinationState(opts, { runChild: run, repoRoot, cwd: repoRoot }),
   } = {},
 ) {
   let options;
