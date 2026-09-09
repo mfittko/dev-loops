@@ -89,7 +89,7 @@ dev-loops loop ensure-worktree --repo-root <main> --issue <n>
 
 (source-repo fallback: `node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>`)
 
-This validates worktree isolation (current directory under `tmp/worktrees/`) and branch identity (current branch matches the working branch); `--check-subagents` only reports subagent availability and is advisory (fails-open, does not block the gate). If the gate fails, **stop and fix the violation** before proceeding — do not bypass it in normal workflow execution.
+This validates worktree isolation (the checkout's `node_modules/@dev-loops/core` resolves to its own `packages/core`; `tmp/worktrees/` stays the recommended default but is no longer the enforced condition) and branch identity (current branch matches the working branch); `--check-subagents` only reports subagent availability and is advisory (fails-open, does not block the gate). If the gate fails, **stop and fix the violation** before proceeding — do not bypass it in normal workflow execution.
 
 This gate does **not** apply to other routed strategies (`copilot_pr_followup`, `external_pr_followup`, `reviewer_fixer`, `wait_watch`, `final_approval`, `issue_intake`); those strategies have their own execution rules and may edit code from any checkout as needed. The development-only bypass (`DEVLOOPS_PREFLIGHT_BYPASS=1`) exists for testing the gate itself and MUST NOT be used in production workflow runs — it is a testing convenience, not an operational escape hatch.
 
