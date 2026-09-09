@@ -3,6 +3,11 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { parsePrNumber, requireTokenValue, resolveBodyOrFile, runChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectGrillEmbedHeading } from "@dev-loops/core/loop/issue-refinement-artifact";
+import {
+  detectClosingKeyword,
+  resolveExpectedIssueFromPrContext,
+  resolveClosingRefMismatch,
+} from "@dev-loops/core/github/closing-ref-guard";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -30,6 +35,17 @@ At least one edit:
   --enforce-grill               Opt-in GRILL-SUBLOOP-NO-EMBED-SYNTHESIS (#1628):
                                 refuse a body that embeds grill
                                 transcript/synthesis/Q&A headings.
+  --allow-cross-issue           Waive the branch-derived closing-reference
+                                mismatch guard for a deliberate cross-issue
+                                reference. By default a new body whose closing
+                                reference disagrees with the PR's resolved issue
+                                (its branch slug \`issue-<N>\` / \`dl/issue-<N>-*\`,
+                                else its closingIssuesReferences) is refused so a
+                                swapped body cannot silently re-point the PR at
+                                the wrong issue. The guard recognizes GitHub's
+                                full closing-keyword vocabulary (close/fix/resolve
+                                variants, any case), not only \`Closes\`/\`Fixes\`,
+                                and checks every reference in the body.
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/repo", "pr": 17, "edited": ["title", "body", ...] }
 Error output (stderr, JSON):
@@ -56,6 +72,7 @@ export function parseEditPrCliArgs(argv) {
       milestone: { type: "string" },
       base: { type: "string" },
       "enforce-grill": { type: "boolean" },
+      "allow-cross-issue": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -74,6 +91,7 @@ export function parseEditPrCliArgs(argv) {
     milestone: undefined,
     base: undefined,
     enforceGrill: false,
+    allowCrossIssue: false,
     jq: undefined,
     silent: false,
   };
@@ -162,6 +180,15 @@ export function parseEditPrCliArgs(argv) {
       options.enforceGrill = true;
       continue;
     }
+    if (token.name === "allow-cross-issue") {
+      // Boolean flag: bare enables; parseArgs also accepts `=value` for a
+      // boolean, so honor an explicit `=false`/`=0` (disable) rather than
+      // enabling on mere presence — enabling on `=false` would be a fail-open on
+      // the guard's own escape hatch. Last occurrence wins.
+      const v = token.value;
+      options.allowCrossIssue = v === undefined || v === true || /^(?:true|1)$/iu.test(String(v));
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -195,6 +222,30 @@ async function resolveBody(options) {
   // silently clear the PR body (USAGE promises --body/--title reject empties).
   // allowStdin: `--body-file -` reads stdin (fd 0).
   return resolveBodyOrFile({ body: options.body, bodyFile: options.bodyFile, allowStdin: true });
+}
+
+// Read the PR's own facts needed to resolve the issue it is expected to close:
+// its head branch slug and its GitHub-derived closingIssuesReferences. Returns
+// null when the read fails, so the caller can fail closed on ambiguity.
+// Injectable via the editPr `fetchPrContext` option for tests.
+async function defaultFetchPrContext(options, { run, ghCommand, env }) {
+  let result;
+  try {
+    result = await run(
+      ghCommand,
+      ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "headRefName,closingIssuesReferences"],
+      env,
+    );
+  } catch {
+    return null;
+  }
+  if (!result || result.code !== 0) return null;
+  try {
+    const parsed = JSON.parse(result.stdout);
+    return { headRefName: parsed.headRefName, closingIssuesReferences: parsed.closingIssuesReferences };
+  } catch {
+    return null;
+  }
 }
 
 // Build the `gh pr edit` args and the parallel `edited` list (which fields were
@@ -240,7 +291,39 @@ async function buildEditArgs(options) {
   return { args, edited };
 }
 
-export async function editPr(options, { env = process.env, ghCommand = "gh", run = runChild } = {}) {
+export async function editPr(
+  options,
+  { env = process.env, ghCommand = "gh", run = runChild, fetchPrContext = defaultFetchPrContext } = {},
+) {
+  // CLOSING-REF-BRANCH-MISMATCH: when the edit sets a body carrying a
+  // `Closes`/`Fixes` reference, refuse it when that reference disagrees with the
+  // issue the PR is expected to close (resolved from its branch slug, else its
+  // closingIssuesReferences) so a swapped body cannot silently re-point the PR
+  // at the wrong issue. A body with no closing reference, a PR with no
+  // resolvable issue (issue-less), and --allow-cross-issue all pass. Resolving
+  // the body here also consumes `--body-file -` (stdin) once; it is forwarded
+  // inline so the grill check and buildEditArgs never re-read the exhausted fd 0.
+  if (options.body !== undefined || options.bodyFile !== undefined) {
+    const guardBody = await resolveBody(options);
+    if (!options.allowCrossIssue && detectClosingKeyword(guardBody)) {
+      const ctx = await fetchPrContext(options, { run, ghCommand, env });
+      if (ctx === null) {
+        throw new Error(
+          `CLOSING-REF-BRANCH-MISMATCH: cannot verify the issue PR #${options.pr} is expected to close (gh pr view failed), so the body's closing reference cannot be checked — refusing on ambiguity (fail closed). Pass --allow-cross-issue to record a deliberate cross-issue reference.`,
+        );
+      }
+      const refusal = resolveClosingRefMismatch({
+        body: guardBody,
+        expectedIssue: resolveExpectedIssueFromPrContext(ctx),
+        allowCrossIssue: false,
+      });
+      if (refusal) throw new Error(refusal);
+    }
+    if (options.bodyFile === "-") {
+      options.body = guardBody;
+      options.bodyFile = undefined;
+    }
+  }
   // GRILL-SUBLOOP-NO-EMBED-SYNTHESIS (#1628): behind the --enforce-grill opt-in,
   // refuse to write a body that embeds grill transcript/synthesis/Q&A headings
   // (the raw Q&A and synthesis belong in an ephemeral tmp artifact, not the
