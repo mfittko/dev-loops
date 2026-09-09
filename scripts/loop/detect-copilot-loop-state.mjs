@@ -142,7 +142,7 @@ export function parseDetectCliArgs(argv) {
 async function fetchPrView({ repo, pr }, { env, ghCommand, runChild = defaultRunChild }) {
   const result = await runChild(
     ghCommand,
-    ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+    ["pr", "view", String(pr), "--repo", repo, "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup,mergeable,mergeStateStatus,baseRefName"],
     env,
   );
   if (result.code !== 0) {
@@ -254,6 +254,15 @@ function hasSubmittedCopilotReviewOffCurrentHead(reviewSummary, currentHeadSha) 
 }
 
 
+// GitHub returns mergeable/mergeStateStatus as canonical uppercase GraphQL
+// enums, but normalize defensively (trim + uppercase, empty → null) so the
+// pickup preflight's exact string guards can never miss a conflicted state.
+function normalizeMergeEnum(value) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toUpperCase();
+  return normalized.length > 0 ? normalized : null;
+}
+
 export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride, localValidationHeadSha, draftGateResetAtMs }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const prData = await fetchPrView({ repo, pr }, { env, ghCommand, runChild });
   if (prData === null) {
@@ -327,7 +336,7 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
       currentHeadCiStatus = "crediblyGreen";
     }
   }
-  return buildSnapshotFromPrFacts({
+  const snapshot = buildSnapshotFromPrFacts({
     prData,
     prNumber: pr,
     copilotReviewRequestStatus,
@@ -341,6 +350,20 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
     failureDetails,
     excludedFailureDetails,
   });
+  // Merge-state facts drive the base-integration preflight (never CI-wait on a
+  // CONFLICTING/DIRTY branch — GitHub cannot dispatch CI there). Carried as
+  // passthrough fields the loop interpreter ignores; only the pickup preflight
+  // reads them. Normalize the two enum fields to trimmed-uppercase (empty → null)
+  // so the preflight's exact DIRTY/CONFLICTING/BEHIND matches can never miss a
+  // conflicted state on a casing/whitespace variance and re-open the deadlock.
+  return {
+    ...snapshot,
+    mergeable: normalizeMergeEnum(prData.mergeable),
+    mergeStateStatus: normalizeMergeEnum(prData.mergeStateStatus),
+    baseRefName: typeof prData.baseRefName === "string" && prData.baseRefName.trim().length > 0
+      ? prData.baseRefName.trim()
+      : null,
+  };
 }
 export async function runCli(
   argv = process.argv.slice(2),
