@@ -1091,6 +1091,46 @@
           "type": "integer",
           "exclusiveMinimum": 0,
           "description": "Archive done board items older than this many days."
+        },
+        "statusColumns": {
+          "type": "object",
+          "properties": {
+            "next_up": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in_progress": {
+              "type": "string",
+              "minLength": 1
+            },
+            "ready_for_review": {
+              "type": "string",
+              "minLength": 1
+            },
+            "done": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false,
+          "description": "Logical-column -> board display-name overrides. Consumed by loadStateColumnMap (loop/queue-board-sync.mjs)."
+        },
+        "stateColumnMap": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1
+          },
+          "additionalProperties": {
+            "type": "string",
+            "enum": [
+              "next_up",
+              "in_progress",
+              "ready_for_review",
+              "done"
+            ]
+          },
+          "description": "Loop-state -> known logical column overrides. Consumed by loadStateColumnMap (loop/queue-board-sync.mjs)."
         }
       },
       "additionalProperties": false,
