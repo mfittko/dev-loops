@@ -2,6 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   resolveAuthoritativeStartupResumeBundle,
   normalizeCheckpointCycleIdentity,
@@ -51,6 +52,16 @@ import { loadBoardConfig } from "@dev-loops/core/loop/queue-board-sync";
 import { main as reconcileQueue } from "../projects/reconcile-queue.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+
+// detect-linked-issue-pr.mjs is a BUNDLED helper (package.json `files` ships
+// scripts/), so it must resolve from this module's own installed location, not
+// the target repoRoot. A non-vendored consumer's repoRoot has no scripts/ tree;
+// resolving there threw "Cannot find module" and disabled linkage resolution.
+// Matches the module-relative sibling pattern (ui-review-diagnose.mjs).
+const DETECT_LINKED_ISSUE_PR_SCRIPT = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../github/detect-linked-issue-pr.mjs",
+);
 const USAGE = `Usage:
   resolve-dev-loop-startup.mjs --issue <number>
   resolve-dev-loop-startup.mjs --pr <number>
@@ -670,7 +681,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     let linkagePayload = null;
     try {
       const linkageJson = execFileSync(process.execPath, [
-        path.join(repoRoot, "scripts/github/detect-linked-issue-pr.mjs"),
+        DETECT_LINKED_ISSUE_PR_SCRIPT,
         "--repo", repo, "--issue", String(issue),
       ], { cwd: repoRoot, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
       linkagePayload = JSON.parse(linkageJson);
