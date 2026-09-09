@@ -3,16 +3,16 @@
  * check-comment-discipline (LOCAL-COMMENT-DISCIPLINE)
  *
  * Recurrence guard, comment-side analogue of the coverage-admission rule.
- * Flags newly added runtime-source comments that narrate issue-number
- * chronology or balloon into a design essay, so a cleaned comment state stays
+ * Flags newly added runtime-source comments that carry any issue/pr number
+ * or balloon into a design essay, so a cleaned comment state stays
  * clean as it is created. Deterministic, diff-scoped, added-lines-only: it
  * only ever reads the `+` lines a PR introduces, so it can never flag the
  * pre-existing backlog owned by the comment-cleanup stream.
  *
  * Flag classes (per contiguous span of added comment lines):
- *  1. issue-chronology: the span cites two or more distinct `#NNN` issue
- *     references. A single reference to the authoritative reason is allowed;
- *     a chain is chronology narration.
+ *  1. issue-reference: the span cites any `#NNN` issue/pr number. Historic and
+ *     load-bearing references alike are forbidden; a comment cites the
+ *     governing contract/rule by name/path/rule-id instead of a number.
  *  2. design-essay: the span exceeds the added-comment-block line threshold
  *     (a calibration knob, not a hard invariant).
  *
@@ -93,8 +93,8 @@ export function computeCommentDiscipline({
     if (span === null) return;
     const text = span.lines.join("\n");
     if (!span.escaped) {
-      if (countDistinctIssueRefs(text) >= 2) {
-        findings.push({ type: "issue-chronology", path: span.file, snippet: span.lines[0].trim().slice(0, 120) });
+      if (countDistinctIssueRefs(text) >= 1) {
+        findings.push({ type: "issue-reference", path: span.file, snippet: span.lines[0].trim().slice(0, 120) });
       }
       if (span.lines.length > maxAddedCommentBlockLines) {
         findings.push({ type: "design-essay", path: span.file, lines: span.lines.length, snippet: span.lines[0].trim().slice(0, 120) });
@@ -139,11 +139,11 @@ export function computeCommentDiscipline({
   if (findings.length === 0) {
     return { ok: true, outcome: "pass", findings, reasons: [] };
   }
-  const reasons = findings.map((f) => f.type === "issue-chronology"
-    ? `${f.path}: added comment cites an issue-number chronology chain (LOCAL-COMMENT-DISCIPLINE): "${f.snippet}"`
+  const reasons = findings.map((f) => f.type === "issue-reference"
+    ? `${f.path}: added comment cites an issue/pr number (LOCAL-COMMENT-DISCIPLINE forbids any); cite the governing contract/rule by name/path/rule-id instead: "${f.snippet}"`
     : `${f.path}: added comment block is ${f.lines} lines, over the ${maxAddedCommentBlockLines}-line design-essay threshold (LOCAL-COMMENT-DISCIPLINE): "${f.snippet}"`);
   reasons.push(
-    `Comment discipline blocked: an added runtime-source comment violates LOCAL-COMMENT-DISCIPLINE. State a current invariant, not agent-move narration or issue chronology; add \`${ESCAPE_MARKER}\` to the comment to admit a load-bearing exception.`,
+    `Comment discipline blocked: an added runtime-source comment violates LOCAL-COMMENT-DISCIPLINE. State a current invariant and cite the governing contract/rule by name/path/rule-id, never an issue/pr number; add \`${ESCAPE_MARKER}\` to the comment to admit a genuinely load-bearing exception.`,
   );
   return { ok: false, outcome: "block", findings, reasons };
 }
@@ -194,12 +194,12 @@ export async function evaluateCommentDiscipline({
 
 const USAGE = `Usage: check-comment-discipline.mjs --base <ref> [--head <ref>]
 
-Fail-closed comment-discipline guard (LOCAL-COMMENT-DISCIPLINE, issue #2054).
+Fail-closed comment-discipline guard (rule LOCAL-COMMENT-DISCIPLINE).
 Diff-scoped and added-lines-only: flags newly added runtime-source comments
-that cite a #NNN issue-number chronology chain (two or more distinct refs) or
-exceed the design-essay comment-block threshold. An added comment line
-carrying \`${ESCAPE_MARKER}\` exempts its span. Never reads pre-existing
-comments. Emits pass | block.
+that cite any #NNN issue/pr number (cite the governing contract/rule by
+name/path/rule-id instead) or exceed the design-essay comment-block threshold.
+An added comment line carrying \`${ESCAPE_MARKER}\` exempts its span. Never
+reads pre-existing comments. Emits pass | block.
 
 Required:
   --base <ref>          Git ref to diff against (git diff <ref>...<head>)

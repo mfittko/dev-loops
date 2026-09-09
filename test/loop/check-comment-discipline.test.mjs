@@ -16,44 +16,44 @@ function diff(file, lines) {
 const added = (s) => `+${s}`;
 const context = (s) => ` ${s}`;
 
-test("blocks an added runtime comment that cites an issue-number chronology chain", () => {
+test("blocks a single added #NNN issue reference in a runtime comment", () => {
   const out = computeCommentDiscipline({
     diffOutput: diff("scripts/loop/thing.mjs", [
-      added("// #1867 introduced the tripwire, then #1902 relaxed it, superseded by #2034"),
+      added("// Fail closed when the base ref is unresolvable (#2054): silence must mean checked."),
     ]),
   });
   assert.equal(out.outcome, "block");
-  assert.equal(out.findings[0].type, "issue-chronology");
+  assert.equal(out.findings[0].type, "issue-reference");
   assert.ok(out.reasons.some((r) => r.includes("LOCAL-COMMENT-DISCIPLINE")));
 });
 
-test("blocks a chronology chain spread across multiple added comment lines (span aggregation)", () => {
+test("blocks any issue reference spread across multiple added comment lines (span aggregation)", () => {
   const out = computeCommentDiscipline({
     diffOutput: diff("scripts/loop/thing.mjs", [
-      added("// #1867 introduced the tripwire."),
-      added("// #1902 later relaxed it."),
+      added("// State the current invariant here."),
+      added("// #1902 relaxed it."),
     ]),
   });
   assert.equal(out.outcome, "block");
-  assert.equal(out.findings[0].type, "issue-chronology");
+  assert.equal(out.findings[0].type, "issue-reference");
 });
 
-test("scans shell (.sh) comments: blocks a # chronology chain, ignores a #! shebang", () => {
+test("scans shell (.sh) comments: blocks a single # issue ref, ignores a #! shebang", () => {
   const block = computeCommentDiscipline({
-    diffOutput: diff("scripts/deploy.sh", [added("# #1867 then #1902 then #2034 chronology")]),
+    diffOutput: diff("scripts/deploy.sh", [added("# provisions the box (#2054)")]),
   });
   assert.equal(block.outcome, "block");
-  assert.equal(block.findings[0].type, "issue-chronology");
+  assert.equal(block.findings[0].type, "issue-reference");
   const clean = computeCommentDiscipline({
-    diffOutput: diff("scripts/deploy.sh", [added("#!/usr/bin/env bash"), added("# provisions the box (#2054)")]),
+    diffOutput: diff("scripts/deploy.sh", [added("#!/usr/bin/env bash"), added("# provisions the box per infra-provisioning-contract PROV-BOX-01")]),
   });
   assert.equal(clean.outcome, "pass");
 });
 
-test("passes a clean current-invariant comment (single authoritative reference allowed)", () => {
+test("passes a current-invariant comment that cites the contract/rule by name/rule-id (no issue number)", () => {
   const out = computeCommentDiscipline({
     diffOutput: diff("scripts/loop/thing.mjs", [
-      added("// Fail closed when the base ref is unresolvable (#2054): silence must mean checked."),
+      added("// Fail closed when the base ref is unresolvable (per gate-review-sub-loop-contract GATE-EXEC-FAIL-CLOSED): silence must mean checked."),
     ]),
   });
   assert.equal(out.outcome, "pass");
