@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- **A dev-loop runner no longer leaves an active tracker issue in `Next Up` after creating a draft PR (issue [2029](https://github.com/mfittko/dev-loops/issues/2029)).** The pure board-column derivation in `packages/core/src/loop/queue-board-sync.mjs` treated an open DRAFT linked PR as not-yet-in-flight, so the board advertised actively owned work as pickable: a second queue consumer could select it, and an operator could not tell implementation was underway. `deriveReconcileColumn` moved an open linked PR to In Progress only when `prIsDraft === false` (a draft returned `null`, leaving the item untouched in `Next Up`), and `DEFAULT_STATE_LOGICAL_MAP.pr_draft` mapped the inner `pr_draft` loop state to `NEXT_UP` — both contradicting the outer lifecycle, which already resolves a draft PR to `implementation` (In Progress). Both signals are fixed at the single shared source every board mover reads: `deriveReconcileColumn` now derives `IN_PROGRESS` for any OPEN linked PR regardless of draft state (merged still maps to Done, closed-unmerged and no-linked-PR still leave the item untouched), and `pr_draft` now maps to `IN_PROGRESS`. This converges the startup self-heal reconcile (`scripts/loop/resolve-dev-loop-startup.mjs`), the `dev-loops queue reconcile` command (`scripts/projects/reconcile-queue.mjs`), and any `boardColumnForLoopState` sync on the same invariant: an issue whose linked PR is OPEN (draft or ready) is never advertised in the pickup queue. Pre-PR states (`no_pr`, `issue_opened`, `issue_intake`, `refinement`) stay `NEXT_UP` so genuine pickable work is unchanged. Proven by `packages/core/test/queue-board-sync.test.mjs` (draft linked PR and draft PR item both derive In Progress; `pr_draft` maps to In Progress across the default map, column-name override, revert path, and invalid-override fallback) and `test/projects/reconcile-queue.test.mjs` (a `Next Up` item with an open draft linked PR is planned out of the pickup column).
+
 ## 1.0.2
 
 ### Added
