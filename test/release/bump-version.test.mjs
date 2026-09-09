@@ -279,14 +279,25 @@ function spyStreams() {
 }
 
 test("run(..., silent=true) suppresses a successful child's stdout and stderr entirely", () => {
+  // A JS-level spy on process.stdout/stderr.write can't see this: a child
+  // spawned with fd-inherit stdio (the original bug, `["ignore", 2, 2]`)
+  // writes straight to the parent's OS file descriptors, bypassing those
+  // wrappers. Spawn a real worker subprocess instead and assert on the
+  // fd-level buffers `spawnSync` captures for it — those DO catch a
+  // fd-inherit leak.
   const dir = mkdtempSync(path.join(tmpdir(), "bump-version-run-"));
-  const spy = spyStreams();
+  const bumpVersionUrl = new URL("../../scripts/release/bump-version.mjs", import.meta.url).href;
+  const workerPath = path.join(dir, "worker.mjs");
+  writeFileSync(
+    workerPath,
+    `import { run } from ${JSON.stringify(bumpVersionUrl)};\nrun("sh", ["-c", "echo out; echo err 1>&2"], process.cwd(), true);\n`,
+  );
   try {
-    assert.doesNotThrow(() => run("sh", ["-c", "echo out; echo err 1>&2"], dir, true));
-    assert.equal(spy.stdoutChunks.join(""), "");
-    assert.equal(spy.stderrChunks.join(""), "");
+    const res = spawnSync(process.execPath, [workerPath], { encoding: "utf8" });
+    assert.equal(res.status, 0, `worker should exit 0: ${res.stderr}`);
+    assert.equal(res.stdout, "");
+    assert.equal(res.stderr, "");
   } finally {
-    spy.restore();
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -304,9 +315,8 @@ test("run(..., silent=true) replays a failing child's diagnostics to stderr and 
   }
 });
 
-test("bumpVersion threads silent to every injected runChild call and leaks nothing to the parent streams", () => {
+test("bumpVersion threads silent to every injected runChild call", () => {
   const dir = makeFixture("1.0.0-pre.0");
-  const spy = spyStreams();
   try {
     const { run: recordingRun, calls, silents } = makeRegenRunner(dir, PRERELEASE);
     const result = bumpVersion({ repoRoot: dir, version: PRERELEASE, silent: true, run: recordingRun });
@@ -314,10 +324,7 @@ test("bumpVersion threads silent to every injected runChild call and leaks nothi
     assert.ok(result.ok);
     assert.ok(calls.length > 0);
     assert.ok(silents.every((s) => s === true), `expected every call silent, got ${JSON.stringify(silents)}`);
-    assert.equal(spy.stdoutChunks.join(""), "");
-    assert.equal(spy.stderrChunks.join(""), "");
   } finally {
-    spy.restore();
     rmSync(dir, { recursive: true, force: true });
   }
 });
