@@ -65,11 +65,14 @@ function writeJson(file, value) {
 // this script's stdout stays a single clean JSON summary that --jq can
 // consume. Silent: capture the child's stdout/stderr instead of inheriting;
 // discard it on success, replay it to stderr only when the child fails, so a
-// genuine error still surfaces under --silent.
+// genuine error still surfaces under --silent. maxBuffer: Infinity under silent
+// so capture matches the fd-inherit path's unbounded output and never
+// reclassifies an otherwise-successful large-output child as a failure.
 export function run(command, args, cwd, silent = false) {
   const result = spawnSync(command, args, {
     cwd,
     stdio: silent ? ["ignore", "pipe", "pipe"] : ["ignore", 2, 2],
+    ...(silent ? { maxBuffer: Infinity } : {}),
     encoding: "utf8",
   });
   if (silent && !result.error && result.status === 0) return;

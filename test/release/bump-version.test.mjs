@@ -315,6 +315,22 @@ test("run(..., silent=true) replays a failing child's diagnostics to stderr and 
   }
 });
 
+test("run(..., silent=true) does not reclassify a >1MB successful child as a failure", () => {
+  // Capture (silent) is subject to spawnSync's maxBuffer, which fd-inherit
+  // (default) never imposes; maxBuffer: Infinity keeps a large-output success a
+  // success. ~1.1MB exceeds Node's default 1MB ceiling.
+  const dir = mkdtempSync(path.join(tmpdir(), "bump-version-run-"));
+  const spy = spyStreams();
+  try {
+    assert.doesNotThrow(() => run("sh", ["-c", "head -c 1100000 /dev/zero | tr '\\0' a"], dir, true));
+    assert.equal(spy.stdoutChunks.join(""), "");
+    assert.equal(spy.stderrChunks.join(""), "");
+  } finally {
+    spy.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("bumpVersion threads silent to every injected runChild call", () => {
   const dir = makeFixture("1.0.0-pre.0");
   try {
