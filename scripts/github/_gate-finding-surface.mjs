@@ -920,6 +920,44 @@ export async function findOwnPendingReview({ repo, pr, headSha }, { env, ghComma
 }
 
 /**
+ * Find the caller's OWN same-head SUBMITTED review-gate review — the round's
+ * existing surface for a `--gate review` rerun. Sibling of findOwnPendingReview
+ * for the submitted (no longer PENDING) case: once submitted a review is no
+ * longer PENDING, so findOwnPendingReview stops seeing it and a naive rerun
+ * would POST a duplicate. Matches only a review whose `state` is not PENDING,
+ * whose `commit_id` equals this round's head, and whose body opens with the
+ * `### Gate review: \`review\`` header (REVIEW_GATE_PENDING_HEADER_RE).
+ *
+ * Author identity is REQUIRED here (unlike findOwnPendingReview): GitHub lists
+ * EVERY submitted review, not only the caller's own, so a foreign author's
+ * same-head review-gate review must never be treated as this tool's surface.
+ * The `api user` login read is deferred until a header/head candidate exists,
+ * so the common create path (no prior review) pays only the reviews list read.
+ * Returns `{ id, body, commentUrl }` or `null`.
+ */
+export async function findOwnSubmittedReview({ repo, pr, headSha }, gh) {
+  const payload = await runGhJson(prReviewsApiArgs(repo, pr), gh);
+  const candidates = flattenPaginatedSlurp(payload).filter((r) =>
+    r?.state !== "PENDING"
+    && Number.isInteger(r?.id)
+    && typeof r?.commit_id === "string"
+    && r.commit_id === headSha
+    && REVIEW_GATE_PENDING_HEADER_RE.test(typeof r?.body === "string" ? r.body : ""),
+  );
+  if (candidates.length === 0) return null;
+  const login = await resolveAuthenticatedLogin(gh);
+  const own = candidates.find((r) =>
+    typeof r?.user?.login === "string" && r.user.login.length > 0 && r.user.login === login,
+  );
+  if (!own) return null;
+  return {
+    id: own.id,
+    body: typeof own.body === "string" ? own.body : "",
+    commentUrl: typeof own.html_url === "string" && own.html_url.trim().length > 0 ? own.html_url.trim() : null,
+  };
+}
+
+/**
  * Submit an existing PENDING review via
  * `POST /repos/<owner>/<repo>/pulls/<pr>/reviews/<id>/events`, mapping the
  * review-gate submit mode's event (`COMMENT` | `REQUEST_CHANGES` | `APPROVE`).
