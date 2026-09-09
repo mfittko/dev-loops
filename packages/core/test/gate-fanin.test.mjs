@@ -705,6 +705,51 @@ describe("fanoutReviewerPairingError (#1431 — one scoped reviewer per fresh an
   });
 });
 
+describe("fanoutReviewerPairingError × the shipped preApproval grouping (light-track grouped provenance)", () => {
+  async function shippedPreApprovalGroups() {
+    const os = await import("node:os");
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const path = await import("node:path");
+    const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+    const { resolveFanoutGroups } = await import("../src/config/config.mjs");
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-gatefanin-preapproval-"));
+    try {
+      const { config } = await loadDevLoopConfig({ repoRoot: tmpDir });
+      const angles = config.gates.preApproval.angles.map((a) => (typeof a === "string" ? a : a.name));
+      return { config, angles, groups: resolveFanoutGroups(config, "preApproval", angles) };
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  }
+
+  test("a light-track ledger recording one reviewer per resolved dispatch UNIT passes under the shipped grouped default", async () => {
+    const { groups } = await shippedPreApprovalGroups();
+    // One distinct reviewer per resolved group; every angle in a group shares
+    // that group's reviewer + declared group name.
+    const perAngle = groups.flatMap((g, i) =>
+      g.angles.map((angle) => ({ angle, reviewer: `rev-${i}`, group: g.name })),
+    );
+    assert.equal(fanoutReviewerPairingError(perAngle, groups), null);
+    // The design-quality set collapses: fewer fresh dispatch units than fresh angles.
+    assert.ok(countFreshDispatchUnits(perAngle) < freshAngleNames(perAngle).length);
+  });
+
+  test("regression: one reviewer covering two angles the table places in DIFFERENT units still fails closed under the grouped default", async () => {
+    const { groups } = await shippedPreApprovalGroups();
+    const simplicity = groups.find((g) => g.name === "design-simplicity");
+    const solid = groups.find((g) => g.name === "design-solid");
+    // dry (design-simplicity) + srp (design-solid) are placed in different units.
+    const error = fanoutReviewerPairingError(
+      [
+        { angle: simplicity.angles[0], reviewer: "x", group: "design-quality" },
+        { angle: solid.angles[0], reviewer: "x", group: "design-quality" },
+      ],
+      groups,
+    );
+    assert.match(error, /does not place all of them in one group/);
+  });
+});
+
 describe("checkFanoutAngleCoverage (#1196 — mandatory angles + angle-pool membership)", () => {
   test("passes when every mandatory angle is recorded and every angle is in the pool", () => {
     const result = checkFanoutAngleCoverage(
