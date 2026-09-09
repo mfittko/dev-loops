@@ -308,6 +308,28 @@ describe("spec extraction from a tracker body", () => {
     // Digest of the extracted spec matches the structured spec.
     assert.equal(computeSpecDigest(spec), computeSpecDigest(SPEC));
   });
+
+  test("extractSpecFromBody reads a 3-column indexed AC→DoD matrix (columns resolved by name)", () => {
+    const body = [
+      "## Acceptance criteria / Definition of Done",
+      "",
+      "| # | Acceptance criterion | Definition of Done |",
+      "|---|----------------------|--------------------|",
+      "| AC1 | The schema accepts the documented config. | QueueConfig accepts statusColumns and stateColumnMap. |",
+      "| AC2 | A consumer config loads. | Config load reports no validation error. |",
+    ].join("\n");
+    const spec = extractSpecFromBody(body);
+    assert.deepEqual(spec.acceptanceCriteria, [
+      "The schema accepts the documented config.",
+      "A consumer config loads.",
+    ]);
+    assert.deepEqual(spec.definitionOfDone, [
+      "QueueConfig accepts statusColumns and stateColumnMap.",
+      "Config load reports no validation error.",
+    ]);
+    // A non-empty authoritative spec so spec-context no longer fails closed.
+    assert.ok(computeSpecDigest(spec).length > 0);
+  });
 });
 
 // #2016 regression: the spec identity must be derived from the authoritative
