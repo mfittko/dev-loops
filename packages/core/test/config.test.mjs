@@ -1796,6 +1796,25 @@ describe("queue.statusColumns / queue.stateColumnMap schema", () => {
     }
   });
 
+  test("the schema's logical-column allow-list stays in lockstep with LOGICAL_COLUMN", async () => {
+    // Pins the inline QueueLogicalColumn enum to queue-board-sync's LOGICAL_COLUMN:
+    // if a 5th logical column is added there without updating the schema, the
+    // loop below fails on the new value (schema rejects it), catching the drift.
+    const { LOGICAL_COLUMN } = await import("../src/loop/queue-board-sync.mjs");
+    const columns = Object.values(LOGICAL_COLUMN);
+    assert.equal(columns.length, 4, "LOGICAL_COLUMN has four columns; expand the schema enum if this changes");
+    for (const col of columns) {
+      assert.ok(
+        FileConfigSchema.safeParse({ version: 1, queue: { statusColumns: { [col]: "X" } } }).success,
+        `statusColumns must accept the known logical column "${col}"`,
+      );
+      assert.ok(
+        FileConfigSchema.safeParse({ version: 1, queue: { stateColumnMap: { some_state: col } } }).success,
+        `stateColumnMap must accept the known logical column "${col}" as a value`,
+      );
+    }
+  });
+
   test("AC4: invalid queue.statusColumns/stateColumnMap shapes and unknown queue keys fail closed", () => {
     // Unknown logical-column key in statusColumns (strictObject rejects).
     assert.ok(
