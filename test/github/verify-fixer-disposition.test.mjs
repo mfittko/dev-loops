@@ -197,6 +197,47 @@ test("re-entry after reply-succeeded/resolve-failed only resolves, never posts a
 });
 
 // ---------------------------------------------------------------------------
+// AC row 5 — resolve success / re-read failure: the resolve mutation LIES
+// (reports isResolved:true) but the post-mutation live re-read still shows
+// the thread unresolved; the CLI must trust the re-read, not the mutation.
+// ---------------------------------------------------------------------------
+
+test("resolve mutation reports isResolved:true but the live re-read still shows unresolved, so it stays incomplete", async () => {
+  await withRepoRoot(async (repoRoot) => {
+    const dispositions = JSON.stringify([
+      { threadId: "T1", fixingCommitSha: FIX_SHA, disposition: "tackled" },
+    ]);
+    const { deps, calls } = runtime([
+      // 1. initial live-thread capture
+      threadsCallEntry([
+        { id: "T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }] } },
+      ]),
+      // 2. containment compare for FIX_SHA
+      compareEntry(FIX_SHA, "ahead"),
+      // 3. reply POST
+      { assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/101/replies`], stdout: `${JSON.stringify({ id: 555, html_url: "https://example.com/555" })}\n` },
+      // 4. resolve GraphQL mutation LIES: reports isResolved:true.
+      { assertArgs: ["api", "graphql"], assertArgContains: ["resolveReviewThread"], stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: "T1", isResolved: true } } } })}\n` },
+      // 5. re-read live threads: still unresolved despite the mutation's claim.
+      threadsCallEntry([
+        { id: "T1", isResolved: false, comments: { nodes: [{ id: "c1", databaseId: 101, body: "please fix", author: { login: "reviewer", __typename: "User" } }, { id: "c2", databaseId: 102, body: `Fixed in commit ${FIX_SHA}.`, author: { login: "gate-bot", __typename: "Bot" } }] } },
+      ]),
+    ], repoRoot);
+
+    const result = await verifyFixerDisposition({ repo: REPO, pr: PR, headSha: HEAD_SHA, dispositions, tmpRoot: "tmp" }, deps);
+
+    assert.equal(result.complete, false);
+    assert.equal(result.incomplete.length, 1);
+    assert.equal(result.incomplete[0].failedStep, "not_resolved");
+    // The mutation itself didn't throw (it claimed success) ...
+    assert.equal(result.actions[0].ok, true);
+    // ... but the CLI re-fetched live rather than trusting that claim, so
+    // overall completion still reflects the true unresolved state.
+    assert.equal(calls.length, 5);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // AC row 6 — unrelated threads are never touched
 // ---------------------------------------------------------------------------
 
