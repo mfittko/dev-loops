@@ -91,6 +91,22 @@ function graphCommitAssociations(nodes = [], pageInfo = { hasNextPage: false, en
   });
 }
 
+// Linkage detection now runs the real bundled detect-linked-issue-pr.mjs
+// (module-relative), which issues one `gh api graphql` timeline query. Answer
+// it through the same gh stub the rest of the resolver's gh calls use.
+const NO_LINKED_PR_GRAPHQL = JSON.stringify({
+  data: { repository: { issue: { timelineItems: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } },
+});
+const linkedPrGraphql = (prNumber) => JSON.stringify({
+  data: { repository: { issue: { timelineItems: {
+    pageInfo: { hasNextPage: false, endCursor: null },
+    nodes: [{ __typename: "ConnectedEvent", createdAt: "2026-01-01T00:00:00Z",
+      subject: { __typename: "PullRequest", number: prNumber, state: "OPEN",
+        url: `https://github.com/mfittko/dev-loops/pull/${prNumber}`,
+        repository: { nameWithOwner: "mfittko/dev-loops" } } }] } } } },
+});
+const noLinkedPrGraphqlEntry = () => ({ assertArgs: ["graphql"], stdout: NO_LINKED_PR_GRAPHQL });
+
 test("parseResolveDevLoopStartupCliArgs rejects missing --input", () => {
   assert.throws(() => parseResolveDevLoopStartupCliArgs([]), /--input .* is required/i);
 });
@@ -1123,15 +1139,25 @@ test("resolver does not block non-local_implementation strategies from main chec
 // which stub the assignment read to reach a normal return.
 test("buildAutoResolvedInput fails closed (not-claimed) when the issue read fails and defaults to unassigned", async () => {
   const tmp = stampRepoWithOrigin();
+  const savedEnv = { ...process.env };
   try {
-    // #1626: stub linkage to SUCCEED (no open linked PR) so the ownership gate
-    // is reached — this test is about the gate, not linkage failure.
-    await stubNoLinkedPr(tmp, 999999);
+    // Stub linkage to SUCCEED (no open linked PR) so the ownership gate is
+    // reached — this test is about the gate, not linkage failure. The
+    // in-process call reads gh args from the ambient process.env.
+    const ghStub = await writeGhStubHelper(tmp, [
+      noLinkedPrGraphqlEntry(),
+      { assertArgs: ["issue", "view", "999999", "assignees"], exitCode: 1, stderr: "gh: not found\n" },
+    ], { matchMode: "claims" });
+    Object.assign(process.env, ghStub.env);
     assert.throws(
       () => buildAutoResolvedInput({ issue: 999999, cwd: tmp }),
       /Issue #999999 is not claimed by any contributor.*edit-issue\.mjs.*--issue 999999 --add-assignee @me/s,
     );
   } finally {
+    for (const key of Object.keys(process.env)) {
+      if (!(key in savedEnv)) delete process.env[key];
+    }
+    Object.assign(process.env, savedEnv);
     rmSync(tmp, { recursive: true, force: true });
   }
 });
@@ -1148,29 +1174,43 @@ test("buildAutoResolvedInput for a PR fails closed (not-claimed) when the PR rea
   }
 });
 
-test("buildAutoResolvedInput fails closed when linked-PR detection fails instead of fabricating resolved_no_open_pr (#1626)", () => {
+test("buildAutoResolvedInput fails closed when linked-PR detection fails instead of fabricating resolved_no_open_pr (#1626)", async () => {
   const tmp = stampRepoWithOrigin();
+  const savedEnv = { ...process.env };
   try {
-    // No detect-linked-issue-pr.mjs in the tmp repo → execFileSync fails. This
-    // MUST fail closed rather than defaulting to resolved_no_open_pr (a
-    // transient failure would misroute an issue that HAS an open linked PR to
+    // The linkage graphql call itself fails (transient gh error). This MUST
+    // fail closed rather than defaulting to resolved_no_open_pr (a transient
+    // failure would misroute an issue that HAS an open linked PR to
     // issue_intake, which the router cannot catch).
+    const ghStub = await writeGhStubHelper(tmp, [
+      { assertArgs: ["graphql"], exitCode: 1, stderr: "gh: network error\n" },
+    ], { matchMode: "claims" });
+    Object.assign(process.env, ghStub.env);
     assert.throws(
       () => buildAutoResolvedInput({ issue: 999999, cwd: tmp }),
       /linked-PR detection failed for issue #999999.*refusing to fabricate.*resolved_no_open_pr/s,
     );
   } finally {
+    for (const key of Object.keys(process.env)) {
+      if (!(key in savedEnv)) delete process.env[key];
+    }
+    Object.assign(process.env, savedEnv);
     rmSync(tmp, { recursive: true, force: true });
   }
 });
 
 test("buildAutoResolvedInput with local-first tracker source still hits the ownership gate (fails closed, not a phase-doc bypass)", async () => {
   const tmp = stampRepoWithOrigin();
+  const savedEnv = { ...process.env };
   try {
     // inputSource "tracker" (vs "phase-docs") keeps this on the issue-backed
     // path where the ownership gate applies — proving the tracker source
-    // itself doesn't bypass the gate. #1626: stub linkage so the gate is reached.
-    await stubNoLinkedPr(tmp, 999999);
+    // itself doesn't bypass the gate. Stub linkage so the gate is reached.
+    const ghStub = await writeGhStubHelper(tmp, [
+      noLinkedPrGraphqlEntry(),
+      { assertArgs: ["issue", "view", "999999", "assignees"], exitCode: 1, stderr: "gh: not found\n" },
+    ], { matchMode: "claims" });
+    Object.assign(process.env, ghStub.env);
     assert.throws(
       () => buildAutoResolvedInput({
         issue: 999999,
@@ -1181,6 +1221,10 @@ test("buildAutoResolvedInput with local-first tracker source still hits the owne
       /Issue #999999 is not claimed by any contributor/,
     );
   } finally {
+    for (const key of Object.keys(process.env)) {
+      if (!(key in savedEnv)) delete process.env[key];
+    }
+    Object.assign(process.env, savedEnv);
     rmSync(tmp, { recursive: true, force: true });
   }
 });
@@ -1240,19 +1284,13 @@ for (const strategyValue of ["tracker-first", "github-first"]) {
     await withTempDir(async (tempDir) => {
       execFileSync("git", ["init"], { cwd: tempDir, stdio: "ignore" });
       execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tempDir, stdio: "ignore" });
-      await mkdir(path.join(tempDir, "scripts", "github"), { recursive: true });
-      await writeFile(
-        path.join(tempDir, "scripts/github/detect-linked-issue-pr.mjs"),
-        'process.stdout.write(JSON.stringify({ ok: true, repo: "mfittko/dev-loops", issue: 511, hasOpenLinkedPr: false, prNumber: null }));',
-        "utf8",
-      );
       await writeFile(
         path.join(tempDir, ".devloops"),
         `version: 1\nstrategy: ${strategyValue}\ninputSource: phase-docs\n`,
         "utf8",
       );
 
-      const ghStub = await writeGhStubHelper(tempDir, [], { repeatLastOnOverflow: true, logCalls: true });
+      const ghStub = await writeGhStubHelper(tempDir, [noLinkedPrGraphqlEntry()], { repeatLastOnOverflow: true, logCalls: true });
       const result = await runNode(["--issue", "511"], {
         cwd: tempDir,
         // resolverTestEnv() satisfies the async-start contract explicitly (CI
@@ -1271,6 +1309,32 @@ for (const strategyValue of ["tracker-first", "github-first"]) {
     }, { prefix: "resolve-dev-loop-tracker-first-strategy-" });
   });
 }
+
+// Linked-PR detection must resolve module-relative, not repoRoot-relative: a
+// non-vendored consumer repo has no scripts/ tree at all, so a repoRoot-based
+// lookup for the bundled detect-linked-issue-pr helper cannot find it. This
+// rehearses that packaged-layout shape directly against runCli.
+test("runCli --issue resolves linked-PR detection module-relative even when the target repoRoot ships no scripts/ tree", async () => {
+  await withTempDir(async (tempDir) => {
+    execFileSync("git", ["init"], { cwd: tempDir, stdio: "ignore" });
+    execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tempDir, stdio: "ignore" });
+
+    const ghStub = await writeGhStubHelper(tempDir, [
+      noLinkedPrGraphqlEntry(),
+      { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
+      { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
+    ], { matchMode: "claims" });
+    const result = await runNode(["--issue", "511"], {
+      cwd: tempDir,
+      env: { ...ghStub.env, ...resolverTestEnv({ DEVLOOPS_OWNERSHIP_BYPASS: undefined }) },
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.bundle.issueLinkageResolution, "resolved_no_open_pr");
+    assert.doesNotMatch(result.stderr, /Cannot find module/);
+  }, { prefix: "resolve-dev-loop-linkage-module-relative-" });
+});
 
 test("local-first phase-doc intake fires no tracker artifact / Copilot call before promotion (#953 AC3)", async () => {
   // local-first comes from the shipped extension defaults (settings only sets
@@ -1310,18 +1374,12 @@ test("buildAutoResolvedInput detects Copilot authorship from linked PR author", 
   await withTempDir(async (tempDir) => {
     execFileSync("git", ["init"], { cwd: tempDir, stdio: "ignore" });
     execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tempDir, stdio: "ignore" });
-    // Create the detect-linked-issue-pr script path so the subprocess can resolve
-    await mkdir(path.join(tempDir, "scripts", "github"), { recursive: true });
-    await writeFile(
-      path.join(tempDir, "scripts/github/detect-linked-issue-pr.mjs"),
-      'process.stdout.write(JSON.stringify({ ok: true, repo: "mfittko/dev-loops", issue: 735, hasOpenLinkedPr: true, prNumber: 740 }));',
-      "utf8",
-    );
     // Stub gh pr view to return Copilot author. The ownership gate also reads
     // the issue's own assignees + viewer login (order-independent "claims"
     // matching): stub it as assigned to the viewer so the gate passes and the
     // linked-PR authorship path below is reached.
     const ghStub = await writeGhStubHelper(tempDir, [
+      { assertArgs: ["graphql"], stdout: linkedPrGraphql(740) },
       { assertArgs: ["pr", "view", "740"], stdout: JSON.stringify({ author: { login: "copilot-swe-agent" }, state: "OPEN" }) },
       { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
       { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: "" }) },
@@ -1347,13 +1405,8 @@ test("buildAutoResolvedInput detects external_human authorship from linked PR au
   await withTempDir(async (tempDir) => {
     execFileSync("git", ["init"], { cwd: tempDir, stdio: "ignore" });
     execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tempDir, stdio: "ignore" });
-    await mkdir(path.join(tempDir, "scripts", "github"), { recursive: true });
-    await writeFile(
-      path.join(tempDir, "scripts/github/detect-linked-issue-pr.mjs"),
-      'process.stdout.write(JSON.stringify({ ok: true, repo: "mfittko/dev-loops", issue: 735, hasOpenLinkedPr: true, prNumber: 740 }));',
-      "utf8",
-    );
     const ghStub = await writeGhStubHelper(tempDir, [
+      { assertArgs: ["graphql"], stdout: linkedPrGraphql(740) },
       { assertArgs: ["pr", "view", "740"], stdout: JSON.stringify({ author: { login: "some-human-dev" }, state: "OPEN" }) },
       { assertArgs: ["issue", "view", "735", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
       { assertArgs: ["issue", "view", "735", "body"], stdout: JSON.stringify({ body: "" }) },
@@ -1385,22 +1438,11 @@ async function initRepoWithOrigin(tempDir) {
   execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tempDir, stdio: "ignore" });
 }
 
-// Shadow detect-linked-issue-pr.mjs with a canned "no linked PR" result so the
-// ownership-gate tests don't also need to stub that helper's own gh calls.
-async function stubNoLinkedPr(tempDir, issue) {
-  await mkdir(path.join(tempDir, "scripts", "github"), { recursive: true });
-  await writeFile(
-    path.join(tempDir, "scripts/github/detect-linked-issue-pr.mjs"),
-    `process.stdout.write(JSON.stringify({ ok: true, repo: "mfittko/dev-loops", issue: ${issue}, hasOpenLinkedPr: false, prNumber: null }));`,
-    "utf8",
-  );
-}
-
 test("--issue assigned_to_other fails closed naming the foreign assignee (no readiness bundle)", async () => {
   await withTempDir(async (tempDir) => {
     await initRepoWithOrigin(tempDir);
-    await stubNoLinkedPr(tempDir, 511);
     const ghStub = await writeGhStubHelper(tempDir, [
+      noLinkedPrGraphqlEntry(),
       { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "foreign-dev" }] }) },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
     ], { matchMode: "claims" });
@@ -1422,8 +1464,8 @@ test("--issue: a claim-contested race's raced-past loser sees only the tiebreak 
   // winner as assignee — never both, never the loser itself.
   await withTempDir(async (tempDir) => {
     await initRepoWithOrigin(tempDir);
-    await stubNoLinkedPr(tempDir, 511);
     const ghStub = await writeGhStubHelper(tempDir, [
+      noLinkedPrGraphqlEntry(),
       { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "tiebreak-winner" }] }) },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "raced-past-loser" }) },
     ], { matchMode: "claims" });
@@ -1440,8 +1482,8 @@ test("--issue: a claim-contested race's raced-past loser sees only the tiebreak 
 test("--issue unassigned fails closed naming the exact claim command (no readiness bundle)", async () => {
   await withTempDir(async (tempDir) => {
     await initRepoWithOrigin(tempDir);
-    await stubNoLinkedPr(tempDir, 511);
     const ghStub = await writeGhStubHelper(tempDir, [
+      noLinkedPrGraphqlEntry(),
       { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [] }) },
     ], { matchMode: "claims" });
     const result = await runNode(["--issue", "511"], {
@@ -1460,8 +1502,8 @@ test("--issue unassigned fails closed naming the exact claim command (no readine
 test("--issue assigned to the viewer (assigned_to_me) proceeds", async () => {
   await withTempDir(async (tempDir) => {
     await initRepoWithOrigin(tempDir);
-    await stubNoLinkedPr(tempDir, 511);
     const ghStub = await writeGhStubHelper(tempDir, [
+      noLinkedPrGraphqlEntry(),
       { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }] }) },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
     ], { matchMode: "claims" });
@@ -1479,10 +1521,10 @@ test("--issue assigned to the viewer (assigned_to_me) proceeds", async () => {
 test("DEVLOOPS_OWNERSHIP_BYPASS=1 skips the ownership gate for read-only inspection (e.g. info.mjs)", async () => {
   await withTempDir(async (tempDir) => {
     await initRepoWithOrigin(tempDir);
-    await stubNoLinkedPr(tempDir, 511);
     // Foreign-owned and unclaimed would normally fail closed; the bypass lets a
     // read-only preview through without ever calling gh api user.
     const ghStub = await writeGhStubHelper(tempDir, [
+      noLinkedPrGraphqlEntry(),
       { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "foreign-dev" }] }) },
     ], { matchMode: "claims" });
     const result = await runNode(["--issue", "511"], {
@@ -1498,11 +1540,11 @@ test("DEVLOOPS_OWNERSHIP_BYPASS=1 skips the ownership gate for read-only inspect
 test("--issue assigned_to_copilot is unchanged: proceeds and never resolves a viewer login", async () => {
   await withTempDir(async (tempDir) => {
     await initRepoWithOrigin(tempDir);
-    await stubNoLinkedPr(tempDir, 511);
     // No "api user" entry at all: if the copilot short-circuit regressed and
     // the gate tried to resolve a viewer login anyway, the unmatched claims-mode
     // call would fail closed and this test would catch that regression.
     const ghStub = await writeGhStubHelper(tempDir, [
+      noLinkedPrGraphqlEntry(),
       { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "copilot-swe-agent" }] }) },
     ], { matchMode: "claims" });
     const result = await runNode(["--issue", "511"], {
@@ -1518,8 +1560,8 @@ test("--issue assigned_to_copilot is unchanged: proceeds and never resolves a vi
 test("--issue fails closed with a distinct reason when the viewer login cannot be resolved", async () => {
   await withTempDir(async (tempDir) => {
     await initRepoWithOrigin(tempDir);
-    await stubNoLinkedPr(tempDir, 511);
     const ghStub = await writeGhStubHelper(tempDir, [
+      noLinkedPrGraphqlEntry(),
       { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "someone" }] }) },
       { assertArgs: ["api", "user"], exitCode: 1, stderr: "gh: not authenticated\n" },
     ], { matchMode: "claims" });
@@ -1763,15 +1805,15 @@ test("viewer-login memo is reset per buildAutoResolvedInput invocation (no stale
   try {
     await initRepoWithOrigin(tempDirAlice);
     await initRepoWithOrigin(tempDirBob);
-    await stubNoLinkedPr(tempDirAlice, 12);
-    await stubNoLinkedPr(tempDirBob, 12);
     // Same issue #12, same assignee (alice) in both stubs — only the VIEWER
     // (gh api user) differs between the two calls.
     const ghStubAlice = await writeGhStubHelper(tempDirAlice, [
+      noLinkedPrGraphqlEntry(),
       { assertArgs: ["issue", "view", "12", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "alice" }] }) },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "alice" }) },
     ], { matchMode: "claims" });
     const ghStubBob = await writeGhStubHelper(tempDirBob, [
+      noLinkedPrGraphqlEntry(),
       { assertArgs: ["issue", "view", "12", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "alice" }] }) },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "bob" }) },
     ], { matchMode: "claims" });
@@ -1807,8 +1849,8 @@ test("viewer-login memo is reset per buildAutoResolvedInput invocation (no stale
 test("--issue co-assigned to the viewer AND another human is contested (assigned_to_other), not assigned_to_me", async () => {
   await withTempDir(async (tempDir) => {
     await initRepoWithOrigin(tempDir);
-    await stubNoLinkedPr(tempDir, 511);
     const ghStub = await writeGhStubHelper(tempDir, [
+      noLinkedPrGraphqlEntry(),
       { assertArgs: ["issue", "view", "511", "assignees"], stdout: JSON.stringify({ assignees: [{ login: "test-viewer" }, { login: "someone-else" }] }) },
       { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "test-viewer" }) },
     ], { matchMode: "claims" });
