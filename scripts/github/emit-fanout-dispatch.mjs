@@ -62,8 +62,9 @@ Exit codes:
   0  Emitted one composed prompt per resolved dispatch unit
   1  Refused: the gate-context artifact is missing (run write-gate-context.mjs
      first), carries no fanout dispatch plan, resolves zero units, a unit carries
-     no angles, two units derive a colliding scope, or a unit's invariant-prefix
-     record is missing / suffix could not be composed
+     no angles, a unit's name sanitizes to an invalid scope, two units derive a
+     colliding scope, or a unit's invariant-prefix record is missing / suffix
+     could not be composed
   2  Usage or internal error (bad --repo/--pr/--gate/--head-sha shape, filesystem
      error, or invalid --jq filter)`.trim();
 

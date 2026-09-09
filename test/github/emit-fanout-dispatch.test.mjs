@@ -199,6 +199,32 @@ test("--pending falls back to groups only when pendingGroups is ABSENT", async (
   });
 });
 
+test("--pending with a PRESENT-but-empty pendingGroups refuses (does not re-emit groups)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir, { fanout: { groups: [{ name: "coverage", angles: ["coverage"] }], pendingGroups: [] } });
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--pending"],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(JSON.parse(result.stdout).error, /zero units/);
+  });
+});
+
+test("fails closed (exit 1) when a unit name sanitizes to an empty, invalid scope", async () => {
+  await withTmpDir(async (tmpDir) => {
+    // A multi-angle unit whose name is all-punctuation sanitizes to "", so the
+    // derived scope is "<prefix>group-" (trailing hyphen) — invalid.
+    await seedBundle(tmpDir, { fanout: { groups: [{ name: ":::", angles: ["x", "y"] }] } });
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(JSON.parse(result.stdout).error, /not a valid reviewer scope/);
+  });
+});
+
 test("normalizes a unit's angles once: a blank angle is filtered, keeping scope/suffix/group consistent", async () => {
   await withTmpDir(async (tmpDir) => {
     await seedBundle(tmpDir, { fanout: { groups: [{ name: "coverage", angles: ["coverage", ""] }] } });
