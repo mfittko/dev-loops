@@ -81,7 +81,13 @@ export function buildBunTestArgs(args, env = process.env) {
     // one and, depending on Bun's last-wins resolution, silently reinstate the
     // unscaled 5000ms wall this fix removes.
     if (arg.startsWith("--timeout=")) continue;
-    if (arg === "--timeout") { index += 1; continue; }
+    if (arg === "--timeout") {
+      // Consume the following token only when it is the numeric value. A malformed
+      // bare --timeout (no value, or followed by another flag or a test file) drops
+      // only the flag, so a positional test file is never silently swallowed.
+      if (/^\d+$/.test(args[index + 1] ?? "")) index += 1;
+      continue;
+    }
     callerArgs.push(arg);
   }
   const reporting = dotsSeen ? [] : [FAILURE_ONLY_FLAG];

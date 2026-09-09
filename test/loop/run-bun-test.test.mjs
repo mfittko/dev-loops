@@ -39,6 +39,11 @@ test("caller-provided --timeout is dropped so the managed scaled value wins", ()
     assert.ok(!args.includes("--timeout=5000") && !args.includes("5000"), "caller 5000ms timeout must be stripped");
     assert.ok(args.includes("example.test.mjs"), "the test file arg is preserved");
   }
+  // A malformed bare --timeout (no numeric value) must drop only the flag and never
+  // swallow the following test file, which would silently broaden the run.
+  const bare = buildBunTestArgs(["--timeout", "example.test.mjs"], { BUN_TEST_PARALLELISM: "8" });
+  assert.equal(bare.filter((arg) => arg.startsWith("--timeout")).length, 1, "only the managed --timeout survives a bare caller flag");
+  assert.ok(bare.includes("--timeout=40000") && bare.includes("example.test.mjs"), "bare --timeout drops the flag but keeps the test file");
 });
 
 test("launcher centrally deduplicates canonical reporting and discovery flags", () => {
