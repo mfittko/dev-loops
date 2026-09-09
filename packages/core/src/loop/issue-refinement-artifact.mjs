@@ -443,6 +443,24 @@ function rowIsSemantic(criterion, evidence) {
 }
 
 /**
+ * Resolve which columns hold the criterion and evidence by HEADER NAME, so a
+ * leading index column (`#`, `No`, `Idx`, empty, …) shifts the mapped columns
+ * off positions 0/1 without breaking detection. Returns `{ criterionCol,
+ * evidenceCol }` when both header families are named in distinct columns.
+ * Falls back to positions 0/1 for a matrix-heading table whose columns are not
+ * explicitly named (the pre-index-aware behavior); returns null otherwise.
+ */
+function resolveMatrixColumns(headerCells, underHeading) {
+  const criterionCol = headerCells.findIndex((h) => MATRIX_CRITERION_HEADER.test(h ?? ""));
+  const evidenceCol = headerCells.findIndex((h) => MATRIX_EVIDENCE_HEADER.test(h ?? ""));
+  if (criterionCol >= 0 && evidenceCol >= 0 && criterionCol !== evidenceCol) {
+    return { criterionCol, evidenceCol };
+  }
+  if (underHeading) return { criterionCol: 0, evidenceCol: 1 };
+  return null;
+}
+
+/**
  * Parse every GFM pipe table in a Markdown body (skipping fenced code spans via
  * the shared `stepFence`). Returns an array of
  * `{ heading, headerCells, rows }` where `rows` is the list of data rows (each
@@ -508,26 +526,27 @@ function parseMarkdownTables(body) {
  */
 export function detectAcDodMatrix(body = "") {
   const tables = parseMarkdownTables(body);
-  const candidates = tables.filter((t) => {
-    if (!Array.isArray(t.headerCells) || t.headerCells.length < 2) return false;
+  const candidates = [];
+  for (const t of tables) {
+    if (!Array.isArray(t.headerCells) || t.headerCells.length < 2) continue;
     const underHeading = typeof t.heading === "string" &&
       MATRIX_SECTION_PATTERNS.some((p) => p.test(t.heading));
-    const headerNamesMap =
-      MATRIX_CRITERION_HEADER.test(t.headerCells[0] ?? "") &&
-      MATRIX_EVIDENCE_HEADER.test(t.headerCells[1] ?? "");
-    return underHeading || headerNamesMap;
-  });
+    const cols = resolveMatrixColumns(t.headerCells, underHeading);
+    if (cols) candidates.push({ ...t, ...cols });
+  }
   if (candidates.length === 0) {
     return { found: false, valid: false, rowCount: 0, rows: [], reason: "No AC→DoD mapping matrix table found." };
   }
   // Prefer the first candidate that has >=1 semantic row; otherwise report the
   // first candidate as malformed.
   for (const table of candidates) {
+    const { criterionCol, evidenceCol } = table;
+    const minCells = Math.max(criterionCol, evidenceCol) + 1;
     const semanticRows = [];
     for (const cells of table.rows) {
-      if (cells.length < 2) continue;
-      const criterion = cells[0] ?? "";
-      const evidence = cells[1] ?? "";
+      if (cells.length < minCells) continue;
+      const criterion = cells[criterionCol] ?? "";
+      const evidence = cells[evidenceCol] ?? "";
       if (rowIsSemantic(criterion, evidence)) {
         semanticRows.push({ criterion, evidence });
       }
