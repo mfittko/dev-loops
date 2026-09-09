@@ -206,9 +206,15 @@ test("loadBoardConfig surfaces config read errors", async () => {
 
 // ── boardColumnForLoopState (AC1, AC3, AC5) ──────────────────────────────
 
-test("boardColumnForLoopState maps issue_opened and pr_draft to Next Up (AC1)", () => {
+test("boardColumnForLoopState maps issue_opened / issue_intake / no_pr to Next Up (AC1)", () => {
   assert.equal(boardColumnForLoopState("issue_opened"), "Next Up");
-  assert.equal(boardColumnForLoopState("pr_draft"), "Next Up");
+  assert.equal(boardColumnForLoopState("issue_intake"), "Next Up");
+  assert.equal(boardColumnForLoopState("no_pr"), "Next Up");
+});
+
+test("boardColumnForLoopState maps pr_draft to In Progress (#2029)", () => {
+  // A draft PR exists → a runner is active; the item is no longer pickable.
+  assert.equal(boardColumnForLoopState("pr_draft"), "In Progress");
 });
 
 test("boardColumnForLoopState maps active/feedback states to In Progress (AC1)", () => {
@@ -260,7 +266,8 @@ test("boardColumnForLoopState honors a config-driven column name override (AC3)"
       [LOGICAL_COLUMN.DONE]: "Shipped",
     },
   };
-  assert.equal(boardColumnForLoopState("pr_draft", mapping), "Todo");
+  assert.equal(boardColumnForLoopState("issue_opened", mapping), "Todo");
+  assert.equal(boardColumnForLoopState("pr_draft", mapping), "Doing");
   assert.equal(boardColumnForLoopState("waiting_for_copilot_review", mapping), "Doing");
   assert.equal(boardColumnForLoopState("merged", mapping), "Shipped");
 });
@@ -279,8 +286,10 @@ test("boardColumnForLoopState supports a reverse transition merged->Done then re
   assert.equal(boardColumnForLoopState("merged"), "Done");
   // reverted: PR reopened back to ready -> In Progress (moves backward)
   assert.equal(boardColumnForLoopState("pr_ready_no_feedback"), "In Progress");
-  // ready -> draft reverts further back to Next Up
-  assert.equal(boardColumnForLoopState("pr_draft"), "Next Up");
+  // ready -> draft still stays In Progress: a runner owns the draft PR (#2029)
+  assert.equal(boardColumnForLoopState("pr_draft"), "In Progress");
+  // reverting all the way to no PR returns the item to Next Up (pickable again)
+  assert.equal(boardColumnForLoopState("no_pr"), "Next Up");
 });
 
 // ── loadStateColumnMap (AC2/AC3/AC6) ─────────────────────────────────────
@@ -374,9 +383,9 @@ test("loadStateColumnMap ignores stateColumnMap entries with an unknown logical-
   );
   try {
     const mapping = loadStateColumnMap(dir);
-    // invalid value ignored — pr_draft keeps its default logical column (Next Up)
+    // invalid value ignored — pr_draft keeps its default logical column (In Progress, #2029)
     assert.equal(Object.prototype.hasOwnProperty.call(mapping.stateColumnMap, "pr_draft"), false);
-    assert.equal(boardColumnForLoopState("pr_draft", mapping), "Next Up");
+    assert.equal(boardColumnForLoopState("pr_draft", mapping), "In Progress");
     // valid value applies
     assert.equal(mapping.stateColumnMap["blocked_needs_user_decision"], "next_up");
     assert.equal(boardColumnForLoopState("blocked_needs_user_decision", mapping), "Next Up");
@@ -587,10 +596,18 @@ test("deriveReconcileColumn: open issue with open non-draft linked PR → In Pro
   );
 });
 
-test("deriveReconcileColumn: open issue with draft linked PR → null (untouched)", () => {
+test("deriveReconcileColumn: open issue with draft linked PR → In Progress (#2029)", () => {
+  // A draft PR means a runner already owns the item; it must leave Next Up.
   assert.equal(
     deriveReconcileColumn({ itemKind: "issue", issueState: "OPEN", prState: "OPEN", prIsDraft: true }),
-    null,
+    LOGICAL_COLUMN.IN_PROGRESS,
+  );
+});
+
+test("deriveReconcileColumn: draft PR item itself → In Progress (#2029)", () => {
+  assert.equal(
+    deriveReconcileColumn({ itemKind: "pr", issueState: null, prState: "OPEN", prIsDraft: true }),
+    LOGICAL_COLUMN.IN_PROGRESS,
   );
 });
 

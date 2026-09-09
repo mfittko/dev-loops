@@ -50,9 +50,11 @@ export const DEFAULT_STATE_LOGICAL_MAP = Object.freeze({
   issue_intake: LOGICAL_COLUMN.NEXT_UP,
   refinement: LOGICAL_COLUMN.NEXT_UP,
   no_pr: LOGICAL_COLUMN.NEXT_UP,
-  pr_draft: LOGICAL_COLUMN.NEXT_UP,
 
   // In Progress — active implementation / review / feedback resolution
+  // A draft PR exists, so a runner owns the item; it is no longer pickable.
+  // This reconciles with the outer `implementation` lifecycle mapping.
+  pr_draft: LOGICAL_COLUMN.IN_PROGRESS,
   implementation: LOGICAL_COLUMN.IN_PROGRESS,
   // Tolerated alias for `implementation` (conceptual name);
   // the queue driver passes the real `implementation` lifecycle state.
@@ -125,8 +127,9 @@ export function deriveReconcileColumn(facts = {}) {
   // Merged PR (item is a PR, or issue's linked PR merged) => Done.
   if (prState === "MERGED") return LOGICAL_COLUMN.DONE;
   if (itemKind === "issue" && issueState === "CLOSED") return LOGICAL_COLUMN.DONE;
-  // Open, ready (non-draft) PR => In Progress.
-  if (prState === "OPEN" && prIsDraft === false) return LOGICAL_COLUMN.IN_PROGRESS;
+  // Any OPEN linked PR (draft or ready) => In Progress: a runner owns the item,
+  // so it must never be advertised in the pickup queue.
+  if (prState === "OPEN") return LOGICAL_COLUMN.IN_PROGRESS;
   // Otherwise leave the item untouched (Backlog / Next Up ordering preserved).
   return null;
 }
