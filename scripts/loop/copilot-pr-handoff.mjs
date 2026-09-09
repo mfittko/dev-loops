@@ -376,6 +376,12 @@ export async function runBasePickupPreflight(
   const conflicting = isConflictingMergeState(snapshot);
   const behind = isBehindBaseMergeState(snapshot);
   if (!conflicting && !behind) {
+    // ponytail: UNKNOWN/null merge state (GitHub still computing it, common
+    // right after a push) reads as non-conflicting here and proceeds. This is
+    // bounded and self-correcting, not a re-opened deadlock: once GitHub
+    // computes DIRTY, the very next watch-refresh cycle hits the conflicting
+    // guard below and blocks. Add an explicit UNKNOWN re-poll only if that
+    // one-cycle window is ever shown to matter in practice.
     return { action: "none", integrated: false, mergeStateStatus: snapshot.mergeStateStatus ?? null };
   }
   const base = snapshot.baseRefName ?? "main";

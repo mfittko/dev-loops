@@ -2980,3 +2980,46 @@ test("runHandoff backstop: integrated but head still DIRTY never watches, stays 
     process.env.PATH = originalPath;
   }
 });
+
+test("runHandoff integrates a DIRTY head, re-baselines at the CLEAN new head, and proceeds to gate/watch", async () => {
+  // AC3 positive path: after integration the loop must re-read at the advanced
+  // head. A CLEAN re-baseline proceeds to normal routing (here: watch) — proving
+  // the fresh snapshot is used, not a stale DIRTY one that would hit the backstop.
+  const dirtyPrView = JSON.stringify({
+    headRefOid: "oldsha", isDraft: false, state: "OPEN", number: 17, reviews: [],
+    statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
+    mergeable: "CONFLICTING", mergeStateStatus: "DIRTY", baseRefName: "main",
+  });
+  const cleanPrView = JSON.stringify({
+    headRefOid: "newsha", isDraft: false, state: "OPEN", number: 17, reviews: [],
+    statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
+    mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", baseRefName: "main",
+  });
+  const { runChild } = makeGhMock([
+    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo"], stdout: dirtyPrView + "\n" },
+    { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+    { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
+    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo"], stdout: cleanPrView + "\n" },
+    { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+    { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
+  ], { matchMode: "claims" });
+  const parsed = parseHandoffCliArgs(["--repo", "owner/repo", "--pr", "17"]);
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${gitStubDir}${path.delimiter}${originalPath}`;
+  try {
+    let integrated = false;
+    const result = await runHandoff(parsed, {
+      env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }),
+      ghCommand: "gh",
+      runChild,
+      repoRoot: capFixtureRepoRoot,
+      integrateBase: async () => { integrated = true; return { ok: true, action: "clean_merge", pushed: true }; },
+    });
+    assert.equal(integrated, true, "a DIRTY head must be integrated first");
+    assert.equal(result.action, "watch", "a CLEAN re-baseline must proceed to normal routing, not the DIRTY backstop stop");
+    assert.equal(result.snapshot.mergeStateStatus, "CLEAN", "the re-baselined (fresh) snapshot must be used");
+    assert.ok(result.watchArgs, "expected watchArgs on the proceed path");
+  } finally {
+    process.env.PATH = originalPath;
+  }
+});
