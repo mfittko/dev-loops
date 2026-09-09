@@ -68,6 +68,10 @@
       "enforcementNote": "Path assumptions are agent behavior."
     },
     {
+      "id": "CLOSING-REF-BRANCH-MISMATCH",
+      "enforcement": "runtime"
+    },
+    {
       "id": "CONFIRM-CORE-EXPLICIT",
       "enforcement": "agent",
       "enforcementNote": "Seeking explicit confirmation is agent judgment; no script can require it."
