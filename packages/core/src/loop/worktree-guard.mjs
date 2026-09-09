@@ -115,10 +115,15 @@ export function isListedWorktree(cwd, worktreePaths) {
 /**
  * Resolve the root of the listed git worktree that contains `cwd`.
  *
- * Mirrors `isListedWorktree`'s matching (realpath-resolved, tmp/worktrees/-scoped,
- * exact-or-subdirectory) but returns the worktree ROOT instead of a boolean, so
- * callers can address files relative to the worktree's own subtree (`packages/`,
- * `node_modules/`) rather than the possibly-nested `cwd`.
+ * Returns the worktree ROOT (realpath-resolved, exact-or-subdirectory match)
+ * instead of a boolean, so callers can address files relative to the worktree's
+ * own subtree (`packages/`, `node_modules/`) rather than the possibly-nested
+ * `cwd`. Matches ANY listed worktree — not just `tmp/worktrees/`-scoped ones —
+ * so the core-isolation invariant is evaluable for a sibling/linked checkout
+ * that lives outside `tmp/worktrees/`; the caller decides admit/reject.
+ * When `cwd` sits under nested worktrees (a `tmp/worktrees/` child inside its
+ * parent checkout), the LONGEST matching root wins, so the innermost worktree's
+ * own subtree is addressed regardless of `git worktree list` order.
  *
  * @param {string} cwd - Absolute or relative path inside the worktree.
  * @param {string[]} worktreePaths - Array of paths from `parseAllWorktreePaths`.
@@ -128,16 +133,16 @@ export function resolveContainingWorktreeRoot(cwd, worktreePaths) {
   let resolvedCwd;
   try { resolvedCwd = realpathSync(cwd); } catch { resolvedCwd = cwd; }
   const normalizedCwd = resolvedCwd.replace(/\\/g, "/").replace(/\/+$/u, "");
+  let best = null;
   for (const p of worktreePaths) {
     let resolvedP;
     try { resolvedP = realpathSync(p); } catch { resolvedP = p; }
     const normalizedP = resolvedP.replace(/\\/g, "/").replace(/\/+$/u, "");
-    if (!isUnderWorktreePath(normalizedP)) continue;
     if (normalizedCwd === normalizedP || normalizedCwd.startsWith(normalizedP + "/")) {
-      return normalizedP;
+      if (best === null || normalizedP.length > best.length) best = normalizedP;
     }
   }
-  return null;
+  return best;
 }
 
 /**
@@ -189,6 +194,58 @@ export function isWorktreeCoreIsolated(cwd, worktreePaths) {
     return true;
   }
   return linkReal === coreReal;
+}
+
+/**
+ * Shared admit/reject decision for local-implementation worktree isolation.
+ *
+ * The single source of truth both enforcement sites route through
+ * (`pre-flight-gate.mjs` `checkWorktreeIsolation` and
+ * `resolve-dev-loop-startup.mjs`'s `local_implementation` block), so they
+ * cannot diverge. Each caller maps the returned `error`/`detail` to its own
+ * guidance/reason wording; this function owns only the decision.
+ *
+ * `tmp/worktrees/` stays the default and recommended location, but it is not
+ * the invariant. The real invariant is core isolation: a checkout's
+ * `node_modules/@dev-loops/core` resolves to its OWN `packages/core`.
+ * A checkout OUTSIDE `tmp/worktrees/` that is not the main checkout and
+ * satisfies that invariant is admitted rather than rejected on path prefix
+ * alone; one that does not satisfy it (its core link escapes its own
+ * `packages/core`) fails closed.
+ *
+ * Decision order:
+ *  - outside `tmp/worktrees/` + main checkout  -> reject `main_checkout_detected`
+ *  - outside `tmp/worktrees/` + core-isolated  -> ADMIT (verified-isolation)
+ *  - outside `tmp/worktrees/` + not isolated   -> reject `not_in_worktree`
+ *  - under `tmp/worktrees/` + not a real worktree -> reject `not_in_worktree`
+ *  - under `tmp/worktrees/` + core link escapes -> reject `core_link_escapes`
+ *  - otherwise -> ADMIT
+ *
+ * @param {object} params
+ * @param {string} params.cwd - Current working directory (absolute or relative).
+ * @param {string | null} params.mainWorktreePath - From `parseMainWorktreePath`.
+ * @param {string[]} params.allWorktreePaths - From `parseAllWorktreePaths`.
+ * @returns {{ ok: true } | { ok: false, error: string, detail: string }}
+ */
+export function classifyWorktreeIsolation({ cwd, mainWorktreePath, allWorktreePaths }) {
+  if (!isUnderWorktreePath(cwd)) {
+    if (mainWorktreePath !== null && isMainCheckout(cwd, mainWorktreePath)) {
+      return { ok: false, error: "main_checkout_detected", detail: "main_checkout" };
+    }
+    // Outside tmp/worktrees and not the main checkout: assert the REAL
+    // core-isolation invariant instead of rejecting on path prefix alone.
+    if (isWorktreeCoreIsolated(cwd, allWorktreePaths)) {
+      return { ok: true };
+    }
+    return { ok: false, error: "not_in_worktree", detail: "outside_not_isolated" };
+  }
+  if (!isListedWorktree(cwd, allWorktreePaths)) {
+    return { ok: false, error: "not_in_worktree", detail: "fake_worktree" };
+  }
+  if (!isWorktreeCoreIsolated(cwd, allWorktreePaths)) {
+    return { ok: false, error: "core_link_escapes", detail: "core_escapes" };
+  }
+  return { ok: true };
 }
 
 

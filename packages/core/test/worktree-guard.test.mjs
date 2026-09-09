@@ -12,6 +12,7 @@ import {
   isListedWorktree,
   resolveContainingWorktreeRoot,
   isWorktreeCoreIsolated,
+  classifyWorktreeIsolation,
   realpathNearestExisting,
   resolveTrackedFromCheckIgnore,
   detectSubagentAvailability,
@@ -340,6 +341,156 @@ test("resolveContainingWorktreeRoot: resolves the containing worktree root from 
     mkdirSync(path.join(root, "src"), { recursive: true });
     const listed = [base, root];
     assert.equal(resolveContainingWorktreeRoot(path.join(root, "src"), listed), realpathSync(root));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("resolveContainingWorktreeRoot: prefers the longest (innermost) matching worktree root", () => {
+  // A tmp/worktrees child nested inside its parent checkout: cwd matches both,
+  // but the innermost worktree must win regardless of list order.
+  const base = mkdtempSync(path.join(tmpdir(), "wt-nest-"));
+  try {
+    const parent = path.join(base, "checkout");
+    const child = path.join(parent, "tmp", "worktrees", "issue-9");
+    mkdirSync(path.join(child, "src"), { recursive: true });
+    // Parent listed BEFORE child — first-match would wrongly pick parent.
+    const listed = [parent, child];
+    assert.equal(resolveContainingWorktreeRoot(path.join(child, "src"), listed), realpathSync(child));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #2063 — the core-isolation invariant is evaluable OUTSIDE tmp/worktrees
+// ---------------------------------------------------------------------------
+
+// A sibling/linked checkout that is NOT under tmp/worktrees and is not the main
+// checkout. `base` is the main checkout; `outside` sits next to it (its path is
+// not a subdirectory of base and carries no tmp/worktrees segment).
+function makeOutsideCheckoutFixture() {
+  const parent = mkdtempSync(path.join(tmpdir(), "wt-outside-"));
+  const base = path.join(parent, "main");
+  const outside = path.join(parent, "sibling-checkout");
+  mkdirSync(base, { recursive: true });
+  mkdirSync(outside, { recursive: true });
+  return { parent, base, outside };
+}
+
+test("isWorktreeCoreIsolated: true for an outside (non-tmp/worktrees) checkout whose core link resolves to its OWN packages/core (#2063)", () => {
+  const { parent, base, outside } = makeOutsideCheckoutFixture();
+  try {
+    const ownCore = path.join(outside, "packages", "core");
+    mkdirSync(ownCore, { recursive: true });
+    const scope = path.join(outside, "node_modules", "@dev-loops");
+    mkdirSync(scope, { recursive: true });
+    symlinkSync(ownCore, path.join(scope, "core"));
+    assert.equal(isUnderWorktreePath(outside), false);
+    assert.equal(isWorktreeCoreIsolated(outside, [base, outside]), true);
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test("isWorktreeCoreIsolated: false (fails closed) for an outside checkout whose core link escapes its own packages/core (#2063)", () => {
+  const { parent, base, outside } = makeOutsideCheckoutFixture();
+  try {
+    mkdirSync(path.join(outside, "packages", "core"), { recursive: true });
+    const mainCore = path.join(base, "node_modules", "@dev-loops", "core");
+    mkdirSync(mainCore, { recursive: true });
+    const scope = path.join(outside, "node_modules", "@dev-loops");
+    mkdirSync(scope, { recursive: true });
+    symlinkSync(mainCore, path.join(scope, "core")); // escapes to the main checkout
+    // Before #2063 this returned a vacuous `true` (root scoped to tmp/worktrees
+    // only); it must now be actually computed and fail closed.
+    assert.equal(isWorktreeCoreIsolated(outside, [base, outside]), false);
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// classifyWorktreeIsolation — the shared admit/reject decision (#2063)
+// ---------------------------------------------------------------------------
+
+test("classifyWorktreeIsolation: ADMITS an outside-but-core-isolated checkout (#2063)", () => {
+  const { parent, base, outside } = makeOutsideCheckoutFixture();
+  try {
+    const ownCore = path.join(outside, "packages", "core");
+    mkdirSync(ownCore, { recursive: true });
+    const scope = path.join(outside, "node_modules", "@dev-loops");
+    mkdirSync(scope, { recursive: true });
+    symlinkSync(ownCore, path.join(scope, "core"));
+    const decision = classifyWorktreeIsolation({
+      cwd: outside,
+      mainWorktreePath: base,
+      allWorktreePaths: [base, outside],
+    });
+    assert.deepEqual(decision, { ok: true });
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test("classifyWorktreeIsolation: REJECTS an outside checkout that is not core-isolated (fail closed, #2063)", () => {
+  const { parent, base, outside } = makeOutsideCheckoutFixture();
+  try {
+    mkdirSync(path.join(outside, "packages", "core"), { recursive: true });
+    const mainCore = path.join(base, "node_modules", "@dev-loops", "core");
+    mkdirSync(mainCore, { recursive: true });
+    const scope = path.join(outside, "node_modules", "@dev-loops");
+    mkdirSync(scope, { recursive: true });
+    symlinkSync(mainCore, path.join(scope, "core"));
+    const decision = classifyWorktreeIsolation({
+      cwd: outside,
+      mainWorktreePath: base,
+      allWorktreePaths: [base, outside],
+    });
+    assert.equal(decision.ok, false);
+    assert.equal(decision.error, "not_in_worktree");
+    assert.equal(decision.detail, "outside_not_isolated");
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test("classifyWorktreeIsolation: REJECTS the main checkout with main_checkout_detected (happy-path guidance preserved)", () => {
+  const decision = classifyWorktreeIsolation({
+    cwd: "/home/user/repo",
+    mainWorktreePath: "/home/user/repo",
+    allWorktreePaths: ["/home/user/repo"],
+  });
+  assert.equal(decision.ok, false);
+  assert.equal(decision.error, "main_checkout_detected");
+  assert.equal(decision.detail, "main_checkout");
+});
+
+test("classifyWorktreeIsolation: REJECTS a fake worktree under tmp/worktrees (not a real git worktree)", () => {
+  const decision = classifyWorktreeIsolation({
+    cwd: "/home/user/repo/tmp/worktrees/fake/src",
+    mainWorktreePath: "/home/user/repo",
+    allWorktreePaths: ["/home/user/repo"],
+  });
+  assert.equal(decision.ok, false);
+  assert.equal(decision.error, "not_in_worktree");
+  assert.equal(decision.detail, "fake_worktree");
+});
+
+test("classifyWorktreeIsolation: ADMITS a provisioned tmp/worktrees worktree (default happy path)", () => {
+  const { base, root } = makeIsolationFixture();
+  try {
+    const ownCore = path.join(root, "packages", "core");
+    mkdirSync(ownCore, { recursive: true });
+    const scope = path.join(root, "node_modules", "@dev-loops");
+    mkdirSync(scope, { recursive: true });
+    symlinkSync(ownCore, path.join(scope, "core"));
+    const decision = classifyWorktreeIsolation({
+      cwd: root,
+      mainWorktreePath: base,
+      allWorktreePaths: [base, root],
+    });
+    assert.deepEqual(decision, { ok: true });
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
