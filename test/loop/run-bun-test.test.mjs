@@ -5,15 +5,45 @@ import { access, mkdir, mkdtemp, open, readFile, rm, writeFile } from "node:fs/p
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { buildBunTestArgs, childResult, createOutputCapture, createTestProgress, discoverRepositoryTests, parseBunSummary, resolveBunTestFiles, resolveBunTestParallelism, runBunTest } from "../../scripts/run-bun-test.mjs";
+import { buildBunTestArgs, childResult, createOutputCapture, createTestProgress, discoverRepositoryTests, parseBunSummary, PER_TEST_TIMEOUT_BASE_MS, resolveBunTestFiles, resolveBunTestParallelism, resolveBunTestTimeoutMs, runBunTest } from "../../scripts/run-bun-test.mjs";
 
 test("launcher applies local and CI parallelism with failure-only shared workers", () => {
-  assert.deepEqual(buildBunTestArgs(["example.test.mjs"], {}), ["test", "--only-failures", "--path-ignore-patterns=tmp/**", "--parallel=8", "--no-isolate", "example.test.mjs"]);
-  assert.deepEqual(buildBunTestArgs(["--shard=1/4"], { BUN_TEST_PARALLELISM: "2" }), ["test", "--only-failures", "--path-ignore-patterns=tmp/**", "--parallel=2", "--no-isolate", "--shard=1/4"]);
+  assert.deepEqual(buildBunTestArgs(["example.test.mjs"], {}), ["test", "--only-failures", "--path-ignore-patterns=tmp/**", "--parallel=8", "--timeout=40000", "--no-isolate", "example.test.mjs"]);
+  assert.deepEqual(buildBunTestArgs(["--shard=1/4"], { BUN_TEST_PARALLELISM: "2" }), ["test", "--only-failures", "--path-ignore-patterns=tmp/**", "--parallel=2", "--timeout=10000", "--no-isolate", "--shard=1/4"]);
   for (const value of ["0", "-1", "2.5", "many"]) assert.throws(
     () => resolveBunTestParallelism({ BUN_TEST_PARALLELISM: value }),
     /positive integer/,
   );
+});
+
+// Guard: the per-test timeout MUST scale with parallelism, never silently revert to
+// Bun's fixed 5000ms uniform default under parallel load (that is the #2099 flake).
+test("per-test timeout scales with parallelism and pins the anti-flake ceiling", () => {
+  assert.equal(resolveBunTestTimeoutMs({ BUN_TEST_PARALLELISM: "1" }), PER_TEST_TIMEOUT_BASE_MS);
+  assert.equal(resolveBunTestTimeoutMs({}), PER_TEST_TIMEOUT_BASE_MS * 8);
+  assert.equal(resolveBunTestTimeoutMs({ BUN_TEST_PARALLELISM: "4" }), PER_TEST_TIMEOUT_BASE_MS * 4);
+  // Under any parallelism > 1 the ceiling is strictly above the unscaled 5000ms default.
+  for (const p of ["2", "8", "16"]) assert.ok(resolveBunTestTimeoutMs({ BUN_TEST_PARALLELISM: p }) > 5000);
+  const args = buildBunTestArgs(["example.test.mjs"], { BUN_TEST_PARALLELISM: "8" });
+  assert.ok(args.includes("--timeout=40000"), `expected scaled --timeout in ${args.join(" ")}`);
+  assert.ok(!args.includes("--timeout=5000"), "must not emit the unscaled 5000ms default under parallel load");
+});
+
+// A caller-provided --timeout must never survive: the managed scaled value wins, and
+// no duplicate/overriding flag reaches Bun to reinstate the unscaled 5000ms wall.
+test("caller-provided --timeout is dropped so the managed scaled value wins", () => {
+  for (const callerTimeout of [["--timeout=5000"], ["--timeout", "5000"]]) {
+    const args = buildBunTestArgs([...callerTimeout, "example.test.mjs"], { BUN_TEST_PARALLELISM: "8" });
+    assert.equal(args.filter((arg) => arg.startsWith("--timeout")).length, 1, `exactly one --timeout in ${args.join(" ")}`);
+    assert.ok(args.includes("--timeout=40000"), `managed scaled --timeout in ${args.join(" ")}`);
+    assert.ok(!args.includes("--timeout=5000") && !args.includes("5000"), "caller 5000ms timeout must be stripped");
+    assert.ok(args.includes("example.test.mjs"), "the test file arg is preserved");
+  }
+  // A malformed bare --timeout (no numeric value) must drop only the flag and never
+  // swallow the following test file, which would silently broaden the run.
+  const bare = buildBunTestArgs(["--timeout", "example.test.mjs"], { BUN_TEST_PARALLELISM: "8" });
+  assert.equal(bare.filter((arg) => arg.startsWith("--timeout")).length, 1, "only the managed --timeout survives a bare caller flag");
+  assert.ok(bare.includes("--timeout=40000") && bare.includes("example.test.mjs"), "bare --timeout drops the flag but keeps the test file");
 });
 
 test("launcher centrally deduplicates canonical reporting and discovery flags", () => {
