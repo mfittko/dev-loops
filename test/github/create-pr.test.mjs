@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -648,6 +649,36 @@ test("create-pr normalizes a prefixed configured baseBranch to a bare branch nam
     const ghCall = (await readGhCalls(ghLogPath))[0];
     const baseIdx = ghCall.indexOf("--base");
     assert.equal(ghCall[baseIdx + 1], "release-x");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr resolves workflow.baseBranch from the worktree root even when invoked from a subdirectory (#2062)", async () => {
+  // The reviewer gap: config loaded cwd-relative silently misses
+  // workflow.baseBranch when create-pr runs from a subdir of the worktree.
+  // resolveBaseDefault now resolves the git top level for the config load.
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-base-subdir-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: tempDir });
+    await writeDevloops(tempDir, "version: 1\nworkflow:\n  baseBranch: release-x\n");
+    const subDir = path.join(tempDir, "packages", "core");
+    await mkdir(subDir, { recursive: true });
+    const { env, ghLogPath } = await writeGhStub(subDir, [
+      { stdout: "https://github.com/owner/repo/pull/1\n" },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--head", "feature",
+      "--title", "Add feature",
+      "--body", "no closing keyword here",
+    ], { env, cwd: subDir });
+    assert.equal(result.code, 0, result.stderr);
+    const ghCall = (await readGhCalls(ghLogPath))[0];
+    const baseIdx = ghCall.indexOf("--base");
+    assert.equal(ghCall[baseIdx + 1], "release-x");
+    assert.ok(!ghCall.includes("main"));
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

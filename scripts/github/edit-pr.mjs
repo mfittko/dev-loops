@@ -7,7 +7,7 @@ import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const USAGE = `Usage: edit-pr.mjs --repo <owner/name> --pr <number> [--title <t>] [--body <b> | --body-file <path>] [--add-assignee <u>] [--remove-assignee <u>] [--milestone <m>] [--base <branch>]
-Edit PR title/body/assignees/milestone. Thin wrapper over \`gh pr edit\` — use this
+Edit PR title/body/assignees/milestone/base. Thin wrapper over \`gh pr edit\` — use this
 instead of an agent-level raw \`gh pr edit\` so the loop's internal-tooling record
 stays clean (siblings: view-pr.mjs, comment-issue.mjs; #1057).
 Required:
