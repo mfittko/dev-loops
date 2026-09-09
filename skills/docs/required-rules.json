@@ -176,6 +176,12 @@
       "id": "FACADE-LINKED-PR-SINGLE-ARTIFACT"
     },
     {
+      "id": "FACADE-NEVER-CI-WAIT-WHILE-DIRTY"
+    },
+    {
+      "id": "FACADE-PICKUP-INTEGRATE-BASE-FIRST"
+    },
+    {
       "id": "FACADE-STATUS-AUTHORITATIVE-FAIL-CLOSED"
     },
     {

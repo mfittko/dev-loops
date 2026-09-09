@@ -407,6 +407,14 @@ When an open linked PR reports merge conflict against `main`, treat this as an e
 4. only when that context is complete for one current head, resolve the conflict locally on the PR branch
 5. <!-- rule: FACADE-CONFLICT-REVALIDATE-NEW-HEAD --> `FACADE-CONFLICT-REVALIDATE-NEW-HEAD`: after conflict resolution, orchestration MUST rerun required local validation, gate checks, and required CI checks for the new head before approval/merge evaluation
 
+### Base integration is the deterministic FIRST action of PR pickup
+
+<!-- rule: FACADE-PICKUP-INTEGRATE-BASE-FIRST -->
+`FACADE-PICKUP-INTEGRATE-BASE-FIRST`: when the deterministic pickup path (the `loop handoff` / startup-continue route) picks up an existing PR, the FIRST action — before any gate run or CI-wait — is to read the PR's `mergeable` / `mergeStateStatus` and, when the branch is behind base or `CONFLICTING`/`DIRTY`, integrate `origin/<base>` (merge, or the sanctioned `resolve-pr-conflicts.mjs` additive-conflict resolver) and push. Only after the branch is mergeable-clean and re-based on the current base do gates / CI-wait proceed. This rule lives in the sanctioned pickup path (`scripts/loop/copilot-pr-handoff.mjs` `runBasePickupPreflight`), so every coordinator does it the same way without re-deriving it.
+
+<!-- rule: FACADE-NEVER-CI-WAIT-WHILE-DIRTY -->
+`FACADE-NEVER-CI-WAIT-WHILE-DIRTY`: the pickup path MUST NEVER enter a CI-wait (or Copilot-review wait) while `mergeStateStatus` is `DIRTY` / `mergeable` is `CONFLICTING`. GitHub does not dispatch `pull_request` CI on a conflicted branch, so a wait there never ends — the deadlock (observed on PR #2028). A conflicted PR is resolved first (integrate the base), or the loop fails closed with a clear actionable stop; it never waits for CI that can never dispatch. After integration the loop re-gates at the new head (`FACADE-CONFLICT-REVALIDATE-NEW-HEAD`).
+
 ## `auto dev loop` durable auto contract
 
 When the public intent is `auto dev loop`, the router MUST:
