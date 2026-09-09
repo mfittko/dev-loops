@@ -447,12 +447,34 @@ function boardRefConfig(ownerKey) {
     });
 }
 
+/**
+ * Logical board columns the queue status-column config recognizes. Mirrors
+ * LOGICAL_COLUMN in loop/queue-board-sync.mjs; kept inline (a frozen 4-value
+ * list) so this low-level config-schema module does not depend on
+ * queue-board-sync, which pulls in the projects/GitHub-access modules through
+ * its own imports. The two lists are pinned in lockstep by the schema test.
+ */
+const QueueLogicalColumn = z.enum(["next_up", "in_progress", "ready_for_review", "done"]);
+
 /** Queue mode config */
 const QueueConfig = z.strictObject({
   maxParallel: z.number().int().min(1).max(10).default(3).describe("Maximum queue items worked in parallel."),
   maxAutoFiledIssues: z.number().int().min(0).max(100).default(10).describe("Cap on auto-filed issues per run."),
   reDispatchMaxRetries: z.number().int().min(0).max(10).default(1).describe("Retries when re-dispatching a failed queue item."),
   archiveOlderThanDays: z.number().int().positive().describe("Archive done board items older than this many days.").optional(),
+  statusColumns: z
+    .strictObject({
+      next_up: z.string().trim().min(1).optional(),
+      in_progress: z.string().trim().min(1).optional(),
+      ready_for_review: z.string().trim().min(1).optional(),
+      done: z.string().trim().min(1).optional(),
+    })
+    .describe("Logical-column -> board display-name overrides. Consumed by loadStateColumnMap (loop/queue-board-sync.mjs).")
+    .optional(),
+  stateColumnMap: z
+    .record(z.string().trim().min(1), QueueLogicalColumn)
+    .describe("Loop-state -> known logical column overrides. Consumed by loadStateColumnMap (loop/queue-board-sync.mjs).")
+    .optional(),
 });
 
 /**
