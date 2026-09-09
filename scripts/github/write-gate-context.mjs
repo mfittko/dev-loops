@@ -2809,9 +2809,11 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
  * CLI entrypoint. Exported (argv + repoRoot both overridable) so tests can
  * drive the `--base` diff-capture path against a throwaway git repo fixture
  * without spawning a subprocess. `run` is the injectable child-process runner
- * the GitHub spec-resolution reads go through.
+ * the GitHub spec-resolution reads go through. `loadCoordination` is the
+ * injectable coordination-facts reader the ordering tripwire consults (default:
+ * `loadPrGateCoordinationContext`).
  * @param {string[]} [argv]
- * @param {{ repoRoot?: string, run?: Function }} [runtime]
+ * @param {{ repoRoot?: string, run?: Function, loadCoordination?: Function }} [runtime]
  */
 export async function main(
   argv = process.argv.slice(2),
