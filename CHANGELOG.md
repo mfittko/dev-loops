@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- **The standalone `review` gate no longer creates a duplicate submitted review on a same-head correction (issue [2030](https://github.com/mfittko/dev-loops/issues/2030)).** `scripts/github/upsert-checkpoint-verdict.mjs` hard-coded `existing = null` for `gate: review`, so a same-head rerun of a submitted COMMENT review POSTed a second review instead of updating or suppressing the first (the core body parser deliberately returns `null` for a `review` header, so no path could recognize the already-submitted review as the round's existing surface). A new `findOwnSubmittedReview` helper (`scripts/github/_gate-finding-surface.mjs`) resolves the caller's OWN same-head submitted review-gate review — matched by own author, head `commit_id`, and the `` ### Gate review: `review` `` header, with the `api user` login read deferred until a header/head candidate exists. The review gate now routes same-head corrections by body equality: a byte-identical body is a `noop` (no second review), a body-only correction updates the submitted review body in place via `updateGateReview` (`action: "updated"`), and a correction that needs a NEW inline comment on an already-submitted review fails closed (GitHub has no endpoint to attach it) with an actionable error naming the new review-scoped `--new-round` escape hatch that forces a fresh review round. The pending-review flow (`findOwnPendingReview`/`submitPendingReview`) and `draft_gate`/`pre_approval_gate` verdict posting are unchanged; the new scan is reached only when `isReviewGate` is true. The usage text and review-gate inline comment no longer claim the review gate "always creates a fresh review". Proven by new tests in `test/github/upsert-checkpoint-verdict.test.mjs` (same-head noop, body-only update, new-inline fail-closed, `--new-round` fresh review with a distinct id, `findOwnSubmittedReview` author/head/header/pending matching, and `--new-round` review-gate scoping).
+
 ## 1.0.2
 
 ### Added
