@@ -5,12 +5,9 @@ import { requireTokenValue } from "../_cli-primitives.mjs";
 import { createPiAdapter } from "@dev-loops/core/harness";
 import { parseArgs } from "node:util";
 import {
-  isUnderWorktreePath,
   parseMainWorktreePath,
-  isMainCheckout,
   parseAllWorktreePaths,
-  isListedWorktree,
-  isWorktreeCoreIsolated,
+  classifyWorktreeIsolation,
   detectSubagentAvailability,
 } from "@dev-loops/core/loop/worktree-guard";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -93,58 +90,44 @@ function checkWorktreeIsolation({ cwd, env, gitCommand = "git" }) {
     };
   }
   const mainWorktreePath = parseMainWorktreePath(worktreeListOutput);
-  if (!isUnderWorktreePath(cwd)) {
-    if (mainWorktreePath !== null && isMainCheckout(cwd, mainWorktreePath)) {
-      return {
-        ok: false,
-        error: "main_checkout_detected",
-        guidance:
-          `Current directory appears to be the main git checkout (${mainWorktreePath}).\n` +
-          "Local implementation requires worktree isolation. Create a worktree:\n" +
-          "  node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>\n" +
-          "  (creates+provisions tmp/worktrees/dev-loops/<kind>-<n> from origin/main)\n" +
-          "Then re-run from the worktree directory.",
-        mainWorktreePath,
-      };
-    }
-    return {
-      ok: false,
-      error: "not_in_worktree",
-      guidance:
-        "Local implementation requires worktree isolation. Create a worktree:\n" +
-        "  node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>\n" +
-        "  (creates+provisions tmp/worktrees/dev-loops/<kind>-<n> from origin/main)\n" +
-        "Then re-run from the worktree directory.",
-      mainWorktreePath: mainWorktreePath ?? undefined,
-    };
-  }
   const allPaths = parseAllWorktreePaths(worktreeListOutput);
-  if (!isListedWorktree(cwd, allPaths)) {
-    return {
-      ok: false,
-      error: "not_in_worktree",
-      guidance:
-        "Current directory is under tmp/worktrees/ but is not a real git worktree.\n" +
-        "Create a worktree with:\n" +
-        "  node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>\n" +
-        "  (creates+provisions tmp/worktrees/dev-loops/<kind>-<n> from origin/main)\n" +
-        "Then re-run from the worktree directory.",
-      mainWorktreePath: mainWorktreePath ?? undefined,
-    };
+  const decision = classifyWorktreeIsolation({ cwd, mainWorktreePath, allWorktreePaths: allPaths });
+  if (decision.ok) {
+    return { ok: true, mainWorktreePath: mainWorktreePath ?? undefined };
   }
-  if (!isWorktreeCoreIsolated(cwd, allPaths)) {
-    return {
-      ok: false,
-      error: "core_link_escapes",
-      guidance:
-        "Worktree isolation violation: node_modules/@dev-loops/core resolves OUTSIDE this worktree's own packages/core (WORKTREE-DEPS-ISOLATED / WORKTREE-CREATE-PROVISION). " +
-        "A worktree must resolve its own packages/core, not the main checkout's. Re-provision the worktree with:\n" +
-        "  node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>\n" +
-        "Then re-run from the worktree directory.",
-      mainWorktreePath: mainWorktreePath ?? undefined,
-    };
-  }
-  return { ok: true, mainWorktreePath: mainWorktreePath ?? undefined };
+  // Shared decision, site-local guidance keyed on the classifier's `detail`.
+  // tmp/worktrees stays the default and recommended location; an outside
+  // checkout is admitted only when the real core-isolation invariant holds.
+  const GUIDANCE = {
+    main_checkout:
+      `Current directory appears to be the main git checkout (${mainWorktreePath}).\n` +
+      "Local implementation requires worktree isolation. Create a worktree:\n" +
+      "  node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>\n" +
+      "  (creates+provisions tmp/worktrees/dev-loops/<kind>-<n> from origin/main)\n" +
+      "Then re-run from the worktree directory.",
+    outside_not_isolated:
+      "Local implementation requires worktree isolation, but this checkout is outside tmp/worktrees/ and its node_modules/@dev-loops/core does not resolve to its own packages/core. Create a worktree:\n" +
+      "  node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>\n" +
+      "  (creates+provisions tmp/worktrees/dev-loops/<kind>-<n> from origin/main)\n" +
+      "Then re-run from the worktree directory.",
+    fake_worktree:
+      "Current directory is under tmp/worktrees/ but is not a real git worktree.\n" +
+      "Create a worktree with:\n" +
+      "  node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>\n" +
+      "  (creates+provisions tmp/worktrees/dev-loops/<kind>-<n> from origin/main)\n" +
+      "Then re-run from the worktree directory.",
+    core_escapes:
+      "Worktree isolation violation: node_modules/@dev-loops/core resolves OUTSIDE this worktree's own packages/core (WORKTREE-DEPS-ISOLATED / WORKTREE-CREATE-PROVISION). " +
+      "A worktree must resolve its own packages/core, not the main checkout's. Re-provision the worktree with:\n" +
+      "  node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>\n" +
+      "Then re-run from the worktree directory.",
+  };
+  return {
+    ok: false,
+    error: decision.error,
+    guidance: GUIDANCE[decision.detail],
+    mainWorktreePath: mainWorktreePath ?? undefined,
+  };
 }
 function checkBranchIdentity({ cwd, env, expectedBranch, gitCommand = "git" }) {
   if (!expectedBranch) {

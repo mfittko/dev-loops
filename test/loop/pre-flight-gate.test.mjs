@@ -616,3 +616,68 @@ test("gate passes when a worktree's @dev-loops/core link resolves into its own p
     rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Verified-isolation OUTSIDE tmp/worktrees (#2063)
+// ---------------------------------------------------------------------------
+
+test("gate passes for a checkout OUTSIDE tmp/worktrees whose @dev-loops/core link resolves to its own packages/core (#2063)", async () => {
+  const parent = mkdtempSync(path.join(tmpdir(), "preflight-outside-ok-"));
+  try {
+    const mainDir = path.join(parent, "main");
+    const outside = path.join(parent, "sibling-checkout"); // NOT under tmp/worktrees, not the main checkout
+    const realCore = path.join(outside, "packages", "core");
+    mkdirSync(realCore, { recursive: true });
+    mkdirSync(mainDir, { recursive: true });
+    const linkDir = path.join(outside, "node_modules", "@dev-loops");
+    mkdirSync(linkDir, { recursive: true });
+    symlinkSync(realCore, path.join(linkDir, "core"));
+
+    const logFile = path.join(parent, "git.log");
+    const worktreeListOut = [
+      `${realpathSync(mainDir)}  535a18a [main]`,
+      `${realpathSync(outside)}  535a18a [sibling]`,
+    ].join("\n");
+    writeGitStub(parent, { worktreeListOut, logFile });
+
+    const result = await runGate([], { cwd: outside, gitDir: parent });
+
+    assert.equal(result.exitCode, 0);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.checks.worktree, true);
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test("gate fails closed for a checkout OUTSIDE tmp/worktrees whose @dev-loops/core link escapes its own packages/core (#2063)", async () => {
+  const parent = mkdtempSync(path.join(tmpdir(), "preflight-outside-escape-"));
+  try {
+    const mainDir = path.join(parent, "main");
+    const outside = path.join(parent, "sibling-checkout");
+    mkdirSync(path.join(outside, "packages", "core"), { recursive: true });
+    const mainDeps = path.join(mainDir, "node_modules", "@dev-loops", "core");
+    mkdirSync(mainDeps, { recursive: true });
+    const linkDir = path.join(outside, "node_modules", "@dev-loops");
+    mkdirSync(linkDir, { recursive: true });
+    symlinkSync(mainDeps, path.join(linkDir, "core")); // escapes to the main checkout
+
+    const logFile = path.join(parent, "git.log");
+    const worktreeListOut = [
+      `${realpathSync(mainDir)}  535a18a [main]`,
+      `${realpathSync(outside)}  535a18a [sibling]`,
+    ].join("\n");
+    writeGitStub(parent, { worktreeListOut, logFile });
+
+    const result = await runGate([], { cwd: outside, gitDir: parent });
+
+    assert.equal(result.exitCode, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.error, "not_in_worktree");
+    assert.ok(payload.guidance.includes("own packages/core"));
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+});

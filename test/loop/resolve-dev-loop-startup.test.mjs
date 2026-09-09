@@ -1060,6 +1060,85 @@ test("resolver resolves normally for local_implementation from worktree", () => 
   }
 });
 
+/**
+ * Simulate a checkout OUTSIDE tmp/worktrees that is a real listed git worktree
+ * and not the main checkout (a sibling/linked checkout). `git worktree list`
+ * reports [main, outside]. `outside`'s node_modules/@dev-loops/core resolves to
+ * its OWN packages/core when `isolated`, or escapes to main's when not. (#2063)
+ */
+function writeOutsideCheckoutEnv(tempDir, { isolated }) {
+  const mainDir = path.join(tempDir, "main");
+  const outside = path.join(tempDir, "sibling-checkout");
+  mkdirSync(path.join(outside, "packages", "core"), { recursive: true });
+  mkdirSync(mainDir, { recursive: true });
+  const scope = path.join(outside, "node_modules", "@dev-loops");
+  mkdirSync(scope, { recursive: true });
+  const target = isolated
+    ? path.join(outside, "packages", "core")
+    : path.join(mainDir, "node_modules", "@dev-loops", "core");
+  if (!isolated) mkdirSync(target, { recursive: true });
+  symlinkSync(target, path.join(scope, "core"));
+
+  const worktreeListOut = `${realpathSync(mainDir)}  535a18a [main]\n${realpathSync(outside)}  535a18a [sibling]`;
+  const gitPath = path.join(tempDir, "git");
+  writeFileSync(gitPath, [
+    "#!/usr/bin/env sh",
+    'if [ "$1" = "worktree" ] && [ "$2" = "list" ]; then',
+    "  cat <<'WTEOF'",
+    worktreeListOut,
+    "WTEOF",
+    "fi",
+    "exit 0",
+  ].join("\n"), { mode: 0o755 });
+  return { mainDir, outside, gitPath };
+}
+
+const OUTSIDE_LOCAL_STATE = {
+  currentState: {
+    target: { kind: "local_phase", issue: 2063, phase: "issue-2063" },
+    ownership: "local",
+    nextActor: "local",
+    status: "active",
+    authorization: "authorized",
+  },
+  loopState: "implementation_pending",
+  artifactState: "not_applicable",
+  issueLinkageResolution: "not_applicable",
+};
+
+test("resolver ADMITS local_implementation from an outside-but-core-isolated checkout (#2063)", () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "resolver-outside-ok-"));
+  try {
+    const { outside } = writeOutsideCheckoutEnv(tempDir, { isolated: true });
+    const env = { ...process.env, PATH: `${tempDir}${path.delimiter}${process.env.PATH || ""}` };
+    const result = buildResolveDevLoopStartupResult(OUTSIDE_LOCAL_STATE, { env, cwd: outside });
+    assert.equal(result.ok, true);
+    assert.equal(result.bundleKind, "resolved");
+    assert.equal(result.selectedStrategy, "local_implementation");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("resolver FAILS CLOSED for an outside checkout whose core link escapes its own packages/core (#2063)", () => {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "resolver-outside-escape-"));
+  try {
+    const { outside } = writeOutsideCheckoutEnv(tempDir, { isolated: false });
+    const env = { ...process.env, PATH: `${tempDir}${path.delimiter}${process.env.PATH || ""}` };
+    const result = buildResolveDevLoopStartupResult(OUTSIDE_LOCAL_STATE, { env, cwd: outside });
+    assert.equal(result.ok, true);
+    assert.equal(result.bundleKind, "needs_reconcile");
+    assert.equal(result.selectedStrategy, "none");
+    assert.equal(result.bundle.routeKind, "needs_reconcile");
+    assert.ok(
+      result.nextAction.includes("own packages/core"),
+      `nextAction should name the core-isolation failure, got: ${result.nextAction}`,
+    );
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("resolver bypasses worktree check with DEVLOOPS_WORKTREE_BYPASS=1 from main checkout", () => {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "resolver-bypass-"));
   try {
