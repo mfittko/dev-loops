@@ -7,10 +7,10 @@ import { gateScopePrefix, normalizeGate } from "./_gate-names.mjs";
 import { HEAD_SHA_RE, VALID_SCOPE_RE } from "./record-dispatch-prompt-layout.mjs";
 import { buildGateContextPath } from "./write-gate-context.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
-import { loadDevLoopConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveFanoutEffectiveConcurrency } from "@dev-loops/core/config";
 
 const USAGE = `Usage: emit-fanout-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--pending] [--tmp-root <path>] [--help]
-The SANCTIONED one-shot gate fan-out dispatch step (issue #2092): given a gate +
+The SANCTIONED one-shot gate fan-out dispatch step: given a gate +
 head whose write-gate-context.mjs bundle is already on disk, it reads the resolved
 fan-out plan (the artifact's fanout.groups / fanout.pendingGroups, from
 resolveFanoutGroups) and, for each dispatch unit, composes a ready-to-dispatch
@@ -24,8 +24,8 @@ reviewer. Every angle NOT in a configured group gets its OWN distinct reviewer �
 including angles resolveFanoutGroups auto-chunked into a leftover \`group:...\`
 unit, which this step SPLITS back into per-angle singletons. A coordinator can
 therefore never seed a shared reviewer for an ad-hoc auto-chunk unit the
-configured table never named (the requireFanoutProvenance breach seen on
-#2100/#2101). A configured group's reviewer records that group's name as its
+configured table never named (a requireFanoutProvenance breach). A configured
+group's reviewer records that group's name as its
 provenance \`group\`, matching the merge guard's own resolveFanoutGroups
 re-derivation (detect-checkpoint-evidence.mjs); a singleton records no group.
 
@@ -60,7 +60,11 @@ Optional:
                                must match the write-gate-context.mjs call).
 Output (stdout, JSON):
   { "ok": true, "gate": "...", "headSha": "...", "repo": "...", "pr": "...",
-    "count": <n>, "units": [ { "scope": "...", "angles": ["..."], "group": <name|null>, "promptPath": "..." } ] }
+    "count": <n>, "maxConcurrent": <n>, "units": [ { "scope": "...", "angles": ["..."], "group": <name|null>, "promptPath": "..." } ] }
+  Wave the EMITTED units at most \`maxConcurrent\` at a time (1 when
+  gates.fanout.sequential is set). Do NOT use the artifact's fanout.wavePlan to
+  bound this step: that plan is computed over the UNSPLIT resolveFanoutGroups
+  units and no longer matches this step's split unit set.
   A fail-closed refusal (exit 1) emits { "ok": false, "error": "..." } on STDOUT
   (via the shared jq-output emitter); a usage/parse error (exit 2) emits
   { "ok": false, "error": "...", "hint"?: "run with --help for usage" } on STDERR.
@@ -142,17 +146,28 @@ export function buildAngleNamingSuffix(unit) {
  * into a leftover `group:...` unit, or a single-angle unit — gets its OWN
  * singleton reviewer. This is the "angles not in a configured group get their
  * own distinct reviewer" rule: a coordinator can never seed a shared reviewer
- * for an ad-hoc auto-chunk unit the configured table never named (the
- * requireFanoutProvenance breach seen on #2100/#2101). Angle order is preserved.
- * Pure.
+ * for an ad-hoc auto-chunk unit the configured table never named (a
+ * requireFanoutProvenance breach). Angle order is preserved. Pure.
  * @param {{ name: string, angles: string[] }[]} units resolveFanoutGroups output
  * @param {Set<string>} configuredGroupNames configured gates.fanout.groups names
  * @returns {{ name: string, angles: string[] }[]}
  */
+/**
+ * The single normalization for a unit's angle list: keep non-empty string
+ * angles, trimmed. Used by both the angle-less refusal pre-check and
+ * expandDispatchUnits so the fail-closed guard and the dispatch classification
+ * can never disagree on a unit's angle set. Pure.
+ * @param {{ angles?: unknown }} unit
+ * @returns {string[]}
+ */
+export function normalizeUnitAngles(unit) {
+  return Array.isArray(unit?.angles) ? unit.angles.filter((a) => typeof a === "string" && a.trim().length > 0).map((a) => a.trim()) : [];
+}
+
 export function expandDispatchUnits(units, configuredGroupNames) {
   const out = [];
   for (const unit of Array.isArray(units) ? units : []) {
-    const angles = Array.isArray(unit?.angles) ? unit.angles.filter((a) => typeof a === "string" && a.trim().length > 0).map((a) => a.trim()) : [];
+    const angles = normalizeUnitAngles(unit);
     const isConfiguredGroup = angles.length > 1 && typeof unit?.name === "string" && configuredGroupNames.has(unit.name);
     if (isConfiguredGroup) {
       out.push({ name: unit.name, angles });
@@ -256,8 +271,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // An angle-less resolved unit is a malformed plan: refuse rather than silently
   // contribute zero reviewers for it.
   for (const unit of units) {
-    const angles = Array.isArray(unit?.angles) ? unit.angles.filter((a) => typeof a === "string" && a.trim().length > 0).map((a) => a.trim()) : [];
-    if (angles.length === 0) {
+    if (normalizeUnitAngles(unit).length === 0) {
       return finish({ ok: false, error: `dispatch unit ${JSON.stringify(unit?.name ?? unit)} carries no angles — malformed fanout plan` }, false);
     }
   }
@@ -267,9 +281,14 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // gets its own singleton reviewer. Load the same config write-gate-context
   // resolved against (this step runs in that worktree).
   let configuredGroupNames;
+  let maxConcurrent;
   try {
     const { config } = await loadDevLoopConfig({ repoRoot: process.cwd() });
     configuredGroupNames = new Set((config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
+    // The concurrency bound the coordinator MUST wave the EMITTED (split) units
+    // by — the artifact's fanout.wavePlan is computed over the UNSPLIT
+    // resolveFanoutGroups units and no longer matches this step's unit set.
+    maxConcurrent = resolveFanoutEffectiveConcurrency(config);
   } catch (err) {
     process.stderr.write(`${formatCliError(err)}\n`);
     return 2;
@@ -317,7 +336,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     emitted.push({ scope, angles, group: angles.length > 1 ? unit.name : null, promptPath: result.promptPath });
   }
 
-  return finish({ ok: true, gate, headSha, repo, pr, count: emitted.length, units: emitted }, true);
+  return finish({ ok: true, gate, headSha, repo, pr, count: emitted.length, maxConcurrent, units: emitted }, true);
 }
 
 if (isDirectCliRun(import.meta.url)) {

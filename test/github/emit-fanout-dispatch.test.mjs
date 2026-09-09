@@ -73,6 +73,9 @@ test("shares a reviewer only for a configured group; splits an auto-chunk unit i
     assert.equal(payload.ok, true);
     // design-simplicity (shared) + determinism + state-concurrency + contradiction-lens
     assert.equal(payload.count, 4);
+    // the coordinator waves the EMITTED units by this bound, not the stale wavePlan
+    assert.equal(typeof payload.maxConcurrent, "number");
+    assert.ok(payload.maxConcurrent >= 1);
 
     const bySc = Object.fromEntries(payload.units.map((u) => [u.scope, u]));
     // configured group → shared reviewer, group = configured name
