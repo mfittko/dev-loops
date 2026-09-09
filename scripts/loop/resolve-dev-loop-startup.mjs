@@ -13,12 +13,9 @@ import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "
 import { requireTokenValue, parsePositiveInteger } from "../_cli-primitives.mjs";
 import { execFileSync } from "node:child_process";
 import {
-  isUnderWorktreePath,
   parseMainWorktreePath,
-  isMainCheckout,
   parseAllWorktreePaths,
-  isListedWorktree,
-  isWorktreeCoreIsolated,
+  classifyWorktreeIsolation,
 } from "@dev-loops/core/loop/worktree-guard";
 import {
   validateAsyncStartContext,
@@ -1262,19 +1259,19 @@ export function buildResolveDevLoopStartupResult(input, {
       });
       const mainPath = parseMainWorktreePath(worktreeOutput);
       const allPaths = parseAllWorktreePaths(worktreeOutput);
-      if (!isUnderWorktreePath(effectiveCwd)) {
-        const reason = mainPath !== null && isMainCheckout(effectiveCwd, mainPath)
-          ? `Local implementation requires worktree isolation. Current directory is the main git checkout (${mainPath}). Run \`node scripts/loop/ensure-worktree.mjs --repo-root ${mainPath} --issue <n>${worktreeHintBaseFlag}\` to create+provision the worktree under tmp/worktrees/dev-loops/<kind>-<n>, then re-run from there.`
-          : `Local implementation requires worktree isolation. Current directory is not under tmp/worktrees/. Run \`node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>${worktreeHintBaseFlag}\` to create+provision a worktree under tmp/worktrees/dev-loops/<kind>-<n>, then re-run from there.`;
-        return buildNeedsReconcileStartupResult(bundle, reason);
-      }
-      if (!isListedWorktree(effectiveCwd, allPaths)) {
-        const reason = `Local implementation requires worktree isolation. Current directory is under tmp/worktrees/ but is not listed as a git worktree by \`git worktree list\`. Create a proper worktree with \`node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>${worktreeHintBaseFlag}\` and re-run.`;
-        return buildNeedsReconcileStartupResult(bundle, reason);
-      }
-      if (!isWorktreeCoreIsolated(effectiveCwd, allPaths)) {
-        const reason = `Local implementation requires worktree isolation. node_modules/@dev-loops/core in this worktree resolves OUTSIDE its own packages/core (WORKTREE-DEPS-ISOLATED / WORKTREE-CREATE-PROVISION), so it would test the main checkout's core instead of this branch's. Re-provision the worktree with \`node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>${worktreeHintBaseFlag}\` and re-run from there.`;
-        return buildNeedsReconcileStartupResult(bundle, reason);
+      // Shared admit/reject decision (classifyWorktreeIsolation) so this site
+      // and pre-flight-gate.mjs cannot diverge. tmp/worktrees stays the default;
+      // an outside checkout is admitted only when its core-isolation invariant
+      // holds (its node_modules/@dev-loops/core resolves to its own packages/core).
+      const decision = classifyWorktreeIsolation({ cwd: effectiveCwd, mainWorktreePath: mainPath, allWorktreePaths: allPaths });
+      if (!decision.ok) {
+        const REASON = {
+          main_checkout: `Local implementation requires worktree isolation. Current directory is the main git checkout (${mainPath}). Run \`node scripts/loop/ensure-worktree.mjs --repo-root ${mainPath} --issue <n>${worktreeHintBaseFlag}\` to create+provision the worktree under tmp/worktrees/dev-loops/<kind>-<n>, then re-run from there.`,
+          outside_not_isolated: `Local implementation requires worktree isolation. Current directory is outside tmp/worktrees/ and its node_modules/@dev-loops/core does not resolve to its own packages/core. Run \`node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>${worktreeHintBaseFlag}\` to create+provision a worktree under tmp/worktrees/dev-loops/<kind>-<n>, then re-run from there.`,
+          fake_worktree: `Local implementation requires worktree isolation. Current directory is under tmp/worktrees/ but is not listed as a git worktree by \`git worktree list\`. Create a proper worktree with \`node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>${worktreeHintBaseFlag}\` and re-run.`,
+          core_escapes: `Local implementation requires worktree isolation. node_modules/@dev-loops/core in this worktree resolves OUTSIDE its own packages/core (WORKTREE-DEPS-ISOLATED / WORKTREE-CREATE-PROVISION), so it would test the main checkout's core instead of this branch's. Re-provision the worktree with \`node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>${worktreeHintBaseFlag}\` and re-run from there.`,
+        };
+        return buildNeedsReconcileStartupResult(bundle, REASON[decision.detail]);
       }
     } catch {
       return buildNeedsReconcileStartupResult(
