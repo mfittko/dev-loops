@@ -92,6 +92,23 @@ test("resolveClosingRefMismatch refuses a mismatch expressed with a non-Closes/F
   assert.match(refusal, /#2071/);
 });
 
+test("closing references inside fenced or inline-code spans are ignored (GitHub does not auto-close them)", () => {
+  // A fenced example or inline-code mention must NOT spoof the guard: only the
+  // real trailing reference is honored.
+  const fenced = "See the example:\n\n```\nCloses #2071\n```\n\nCloses #2110";
+  assert.deepEqual(extractClosingIssueNumbers(fenced), [2110]);
+  assert.equal(resolveClosingRefMismatch({ body: fenced, expectedIssue: 2110 }), null);
+  const inline = "The `Closes #2071` example is illustrative. Closes #2110";
+  assert.deepEqual(extractClosingIssueNumbers(inline), [2110]);
+  assert.equal(resolveClosingRefMismatch({ body: inline, expectedIssue: 2110 }), null);
+});
+
+test("resolveClosingRefMismatch also inspects the cross-repo owner/repo#N closing form", () => {
+  const refusal = resolveClosingRefMismatch({ body: "Closes owner/other-repo#2071", expectedIssue: 2110 });
+  assert.match(refusal, /CLOSING-REF-BRANCH-MISMATCH/);
+  assert.match(refusal, /#2071/);
+});
+
 test("resolveClosingRefMismatch accepts a correct-match body", () => {
   assert.equal(resolveClosingRefMismatch({ body: "Closes #2110", expectedIssue: 2110 }), null);
 });

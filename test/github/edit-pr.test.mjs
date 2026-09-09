@@ -307,6 +307,21 @@ test("parseEditPrCliArgs: --allow-cross-issue flag is wired", () => {
   assert.equal(opts.allowCrossIssue, true);
 });
 
+test("parseEditPrCliArgs: --allow-cross-issue=false does NOT enable the waiver (no fail-open on the escape hatch)", () => {
+  assert.equal(parseEditPrCliArgs(["--repo", "o/n", "--pr", "5", "--body", "x", "--allow-cross-issue=false"]).allowCrossIssue, false);
+  assert.equal(parseEditPrCliArgs(["--repo", "o/n", "--pr", "5", "--body", "x", "--allow-cross-issue=0"]).allowCrossIssue, false);
+  assert.equal(parseEditPrCliArgs(["--repo", "o/n", "--pr", "5", "--body", "x", "--allow-cross-issue=true"]).allowCrossIssue, true);
+});
+
+test("editPr: --allow-cross-issue=false still enforces the mismatch guard (the disable form does not waive)", async () => {
+  const { run } = stubGh();
+  const fetchPrContext = async () => ({ headRefName: "issue-2092", closingIssuesReferences: [] });
+  await assert.rejects(
+    () => editPr(editOpts({ body: "Closes #2071", allowCrossIssue: false }), { run, fetchPrContext }),
+    /CLOSING-REF-BRANCH-MISMATCH/,
+  );
+});
+
 test("editPr: --enforce-grill with --body-file - forwards stdin inline (no fd 0 double-read), not --body-file -", () => {
   // Under --enforce-grill the grill check reads std IN first; the fix forwards
   // the resolved text inline so the gh call never re-reads the exhausted fd 0.

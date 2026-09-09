@@ -1,34 +1,22 @@
 // Canonical closing-reference primitives shared by the create-pr / edit-pr
-// wrappers so both guard a `Closes #N` / `Fixes #N` body reference against the
-// branch's own resolved issue with one implementation. A body swap that
-// re-points the reference at a different issue would otherwise pass silently,
-// and a merge would then close the wrong issue — this is the fail-closed
-// backstop against that data-integrity hole.
+// wrappers so both guard a body's closing reference against the branch's own
+// resolved issue with one implementation. A body swap that re-points the
+// reference at a different issue would otherwise pass silently, and a merge
+// would then close the wrong issue — this is the fail-closed backstop against
+// that data-integrity hole.
 
-// GitHub auto-closes a linked issue on ANY of its closing keywords in ANY case
-// (close/closes/closed, fix/fixes/fixed, resolve/resolves/resolved) — not only
-// Closes/Fixes. The guard must recognize the full set, or a swapped body using
-// e.g. `Resolves #N` would slip past yet still close the wrong issue on merge.
-// The pattern is GLOBAL because a body may carry several references and GitHub
-// honors every one; the mismatch check inspects them all, not just the first.
-// Never call `.test()`/`.exec()` on this shared global regex (they mutate its
-// lastIndex) — route through extractClosingIssueNumbers, which uses matchAll.
-const CLOSING_KEYWORD_PATTERN = /\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\b\s+#(\d+)/gi;
-const MAX_BODY_SCAN_BYTES = 16 * 1024;
+import { extractClosingIssueNumbers as extractCanonicalClosingRefs } from "../loop/issue-refinement-artifact.mjs";
 
-// Every issue number the body's closing references name, in order, de-duplicated.
+// Every issue number the body's closing references name. Delegates to the ONE
+// canonical body-spec parser so the closing-keyword vocabulary (close/closes/
+// closed, fix/fixes/fixed, resolve/resolves/resolved, any case), the cross-repo
+// `owner/repo#N` form, fenced/inline-code stripping (a `Closes #N` inside a
+// ```fenced``` example or `inline code` span does not auto-close on GitHub and
+// must not spoof the guard), and de-duplication stay owned in ONE place — the
+// guard never re-implements them.
 export function extractClosingIssueNumbers(body) {
   if (!body || typeof body !== "string") return [];
-  const seen = new Set();
-  const out = [];
-  for (const match of body.slice(0, MAX_BODY_SCAN_BYTES).matchAll(CLOSING_KEYWORD_PATTERN)) {
-    const n = Number(match[1]);
-    if (!seen.has(n)) {
-      seen.add(n);
-      out.push(n);
-    }
-  }
-  return out;
+  return extractCanonicalClosingRefs(body);
 }
 
 // True when the body carries any closing keyword.

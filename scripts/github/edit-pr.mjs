@@ -181,7 +181,12 @@ export function parseEditPrCliArgs(argv) {
       continue;
     }
     if (token.name === "allow-cross-issue") {
-      options.allowCrossIssue = true;
+      // Boolean flag: bare enables; parseArgs also accepts `=value` for a
+      // boolean, so honor an explicit `=false`/`=0` (disable) rather than
+      // enabling on mere presence — enabling on `=false` would be a fail-open on
+      // the guard's own escape hatch. Last occurrence wins.
+      const v = token.value;
+      options.allowCrossIssue = v === undefined || v === true || /^(?:true|1)$/iu.test(String(v));
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
