@@ -482,6 +482,37 @@ test("copilotReviewBodySignalsChanges: a body stating 'No changes recommended' i
   );
 });
 
+test("copilotReviewBodySignalsChanges: markdown emphasis between 'No' and 'changes recommended' still reads clean", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", "No **changes recommended**. Looks good."),
+    false,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: a 🟢 header without the negation phrase is clean", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", "### 🟢 Approval recommended"),
+    false,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: a 🟡 header is a finding", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", "### 🟡 Changes recommended\n\nfinding"),
+    true,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: 🟡 is authoritative even alongside a 'no ... changes' phrase", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges(
+      "COMMENTED",
+      "### 🟡 Changes recommended\n\nno further changes recommended for the other file.",
+    ),
+    true,
+  );
+});
+
 test("summarizeCopilotReviews sets hasBodyFindingOnCurrentHead true for a current-head 🟡 COMMENTED review", () => {
   const reviews = [
     {
@@ -599,6 +630,28 @@ test("summarizeCopilotReviews: a DISMISSED current-head review is never a body f
       commit: { oid: "abc1234" },
       submittedAt: "2024-01-10T00:00:00Z",
       body: "### 🟡 Changes recommended\n\nDismissed.",
+    },
+  ];
+
+  const result = summarizeCopilotReviews(reviews, { headSha: "abc1234" });
+  assert.equal(result.hasBodyFindingOnCurrentHead, false);
+});
+
+test("summarizeCopilotReviews: snake_case submitted_at feeds latest-wins supersession", () => {
+  const reviews = [
+    {
+      author: { login: "copilot-pull-request-reviewer" },
+      state: "COMMENTED",
+      commit: { oid: "abc1234" },
+      submitted_at: "2024-01-10T00:00:00Z",
+      body: "### 🟡 Changes recommended\n\nSome finding text.",
+    },
+    {
+      author: { login: "copilot-pull-request-reviewer" },
+      state: "COMMENTED",
+      commit: { oid: "abc1234" },
+      submitted_at: "2024-01-11T00:00:00Z",
+      body: "### 🟢 Approval recommended\n\nLooks good now.",
     },
   ];
 

@@ -11,21 +11,28 @@ import { trimmedOrNull } from "../loop/normalize.mjs";
 // review is.
 export const SUBMITTED_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"]);
 
-// Copilot posts its review summary as a COMMENTED review whose body opens with
-// a disposition header: "### 🟡 Changes recommended" (has findings) vs
-// "### 🟢 Approval recommended" (clean). The 🟡 marker / "changes recommended"
-// phrase is the finding signal; 🟢 / "approval recommended" / an empty body is
-// clean. A CHANGES_REQUESTED review always carries a finding regardless of body
-// (fail toward surfacing on an ambiguous non-empty body). APPROVED/DISMISSED and
-// a clean COMMENTED body never do. Copilot's generic footer (e.g. a "request
-// another Copilot review" line) is not the header signal, so it never fires.
-const COPILOT_CHANGES_RECOMMENDED_RE = /🟡|(?<!\bno\s)changes\s+recommended/iu;
+// Copilot's COMMENTED review summary opens with a disposition header:
+// "### 🟡 Changes recommended" (findings) or "### 🟢 Approval recommended"
+// (clean). The 🟡 marker / "changes recommended" phrase is the finding signal;
+// an explicit approval/clean signal (🟢, "approval recommended", or a negated
+// "no ... changes recommended" — including markdown emphasis between the words)
+// overrides a bare phrase mention so a clean body is never a false finding. A
+// 🟡 marker is authoritative and is never overridden. A CHANGES_REQUESTED
+// review always carries a finding regardless of body (fail toward surfacing on
+// an ambiguous non-empty body). APPROVED/DISMISSED never do.
+const COPILOT_CHANGES_RECOMMENDED_RE = /🟡|changes\s+recommended/iu;
+const COPILOT_APPROVAL_MARKER_RE = /🟢|approval\s+recommended|\bno\b[^\n]*\bchanges\s+recommended/iu;
 
 export function copilotReviewBodySignalsChanges(state, body) {
   const normalizedState = typeof state === "string" ? state.toUpperCase() : "";
   if (normalizedState === "CHANGES_REQUESTED") return true;
   if (normalizedState !== "COMMENTED") return false;
-  return COPILOT_CHANGES_RECOMMENDED_RE.test(typeof body === "string" ? body : "");
+  const text = typeof body === "string" ? body : "";
+  if (!COPILOT_CHANGES_RECOMMENDED_RE.test(text)) return false;
+  // A 🟡 marker is authoritative; otherwise an explicit approval/negation signal
+  // (🟢, "approval recommended", "No changes recommended") reads clean.
+  if (!/🟡/u.test(text) && COPILOT_APPROVAL_MARKER_RE.test(text)) return false;
+  return true;
 }
 const GATE_REVIEW_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
 // `review` is a RECOGNIZED gate header that carries no draft/pre-approval
@@ -740,7 +747,9 @@ export function summarizeCopilotReviews(reviews, { headSha, draftGateResetAtMs }
 
     if (SUBMITTED_REVIEW_STATES.has(state)) {
       hasSubmittedReviewOnCurrentHead = true;
-      const submittedAt = typeof review?.submittedAt === "string" ? review.submittedAt : null;
+      const submittedAt = typeof review?.submittedAt === "string"
+        ? review.submittedAt
+        : (typeof review?.submitted_at === "string" ? review.submitted_at : null);
       if (submittedAt !== null && (latestSubmittedReviewOnCurrentHeadAt === null || submittedAt > latestSubmittedReviewOnCurrentHeadAt)) {
         latestSubmittedReviewOnCurrentHeadAt = submittedAt;
         hasBodyFindingOnCurrentHead = copilotReviewBodySignalsChanges(state, review?.body);
