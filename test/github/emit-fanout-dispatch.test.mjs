@@ -250,6 +250,27 @@ test("normalizes a unit's angles once: a blank angle is filtered, keeping scope/
   });
 });
 
+test("trims padded angle names so the dispatched angle and scope carry no whitespace", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir, { fanout: { groups: [{ name: "coverage", angles: ["  coverage  "] }] } });
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const unit = JSON.parse(result.stdout).units[0];
+    assert.deepEqual(unit.angles, ["coverage"]);
+    assert.equal(unit.scope, "pre-approval-gate-coverage");
+  });
+});
+
+test("expandDispatchUnits: trims padded angles", () => {
+  assert.deepEqual(expandDispatchUnits([{ name: "u", angles: [" a ", "b "] }], new Set()), [
+    { name: "a", angles: ["a"] },
+    { name: "b", angles: ["b"] },
+  ]);
+});
+
 test("expandDispatchUnits: configured group stays shared, everything else splits to singletons", () => {
   const configured = new Set(["design-simplicity"]);
   const units = [

@@ -152,7 +152,7 @@ export function buildAngleNamingSuffix(unit) {
 export function expandDispatchUnits(units, configuredGroupNames) {
   const out = [];
   for (const unit of Array.isArray(units) ? units : []) {
-    const angles = Array.isArray(unit?.angles) ? unit.angles.filter((a) => typeof a === "string" && a.trim().length > 0) : [];
+    const angles = Array.isArray(unit?.angles) ? unit.angles.filter((a) => typeof a === "string" && a.trim().length > 0).map((a) => a.trim()) : [];
     const isConfiguredGroup = angles.length > 1 && typeof unit?.name === "string" && configuredGroupNames.has(unit.name);
     if (isConfiguredGroup) {
       out.push({ name: unit.name, angles });
@@ -256,7 +256,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // An angle-less resolved unit is a malformed plan: refuse rather than silently
   // contribute zero reviewers for it.
   for (const unit of units) {
-    const angles = Array.isArray(unit?.angles) ? unit.angles.filter((a) => typeof a === "string" && a.trim().length > 0) : [];
+    const angles = Array.isArray(unit?.angles) ? unit.angles.filter((a) => typeof a === "string" && a.trim().length > 0).map((a) => a.trim()) : [];
     if (angles.length === 0) {
       return finish({ ok: false, error: `dispatch unit ${JSON.stringify(unit?.name ?? unit)} carries no angles — malformed fanout plan` }, false);
     }
