@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -25,6 +26,7 @@ import {
   buildValidationResultsPath,
   captureDiffFromBase,
   collapsePureSubstitutionRuns,
+  forbiddenGateRefusalMessage,
   ISSUE_BODY_ABSENT_SENTINEL,
   main,
   mapGateToConfigKey,
@@ -1795,6 +1797,126 @@ test("CLI --base <ref> that fails to resolve fails closed (no artifact written, 
     } finally {
       process.exitCode = priorExitCode;
     }
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// --------------------------------------------------------------------------
+// Forbidden-gate tripwire: refuse a gate whose coordination action is in the
+// PR's forbiddenActions BEFORE any reviewer fork / diff capture / gate-context
+// tmp artifact is spent — not only at verdict post. Coordination is injected so
+// the test supplies a resolved context directly (no gh coordination surface to
+// stub). See scripts/github/write-gate-context.mjs forbiddenGateRefusalMessage.
+// --------------------------------------------------------------------------
+
+test("forbiddenGateRefusalMessage: refuses a forbidden gate naming the legal next action; null for allowed / for review", () => {
+  const forbidden = forbiddenGateRefusalMessage({
+    gate: "pre_approval_gate",
+    coordination: { forbiddenActions: ["run_pre_approval_gate"], allowedNextActions: ["run_draft_gate"], reason: "PR still draft." },
+    repo: "owner/repo",
+    pr: 90,
+  });
+  assert.ok(forbidden, "forbidden gate yields a refusal message");
+  assert.match(forbidden, /run_pre_approval_gate/, "names the forbidden action");
+  assert.match(forbidden, /run_draft_gate/, "names the legal next action");
+  assert.match(forbidden, /PR still draft\./, "carries the coordination reason");
+
+  assert.equal(
+    forbiddenGateRefusalMessage({ gate: "pre_approval_gate", coordination: { forbiddenActions: [], allowedNextActions: ["run_pre_approval_gate"] }, repo: "owner/repo", pr: 90 }),
+    null,
+    "an allowed gate yields no refusal",
+  );
+  assert.equal(
+    forbiddenGateRefusalMessage({ gate: "review", coordination: { forbiddenActions: ["run_pre_approval_gate"] }, repo: "owner/repo", pr: 90 }),
+    null,
+    "review carries no requested gate action — never gated here",
+  );
+});
+
+test("CLI tripwire: a forbidden gate exits non-zero naming the legal next action, writing NO gate-context artifact and NO diff", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  const priorExitCode = process.exitCode;
+  process.exitCode = undefined;
+  const origErr = process.stderr.write;
+  const stderrChunks = [];
+  process.stderr.write = (chunk) => { stderrChunks.push(String(chunk)); return true; };
+  try {
+    await main([
+      "--repo", "owner/repo", "--pr", "90", "--gate", "pre_approval_gate",
+      "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
+    ], {
+      repoRoot,
+      run: stubGhRun,
+      loadCoordination: async () => ({
+        forbiddenActions: ["run_pre_approval_gate"],
+        allowedNextActions: ["run_draft_gate"],
+        reason: "PR is still draft; run the draft gate first.",
+      }),
+    });
+
+    assert.equal(process.exitCode, 1, "forbidden gate fails closed with a non-zero exit");
+    const stderrText = stderrChunks.join("");
+    assert.match(stderrText, /forbiddenActions/, "the error explains the gate action is forbidden");
+    assert.match(stderrText, /run_draft_gate/, "the error names the legal next action");
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 90, gate: "pre_approval_gate", headSha,
+    }, { repoRoot });
+    assert.equal(artifact, null, "no gate-context artifact is written for a forbidden gate");
+
+    const diffPath = path.resolve(repoRoot, buildGateDiffPath({ repo: "owner/repo", pr: 90, gate: "pre_approval_gate", headSha }));
+    assert.equal(existsSync(diffPath), false, "no .diff tmp artifact is produced for a forbidden gate (refused before diff capture)");
+  } finally {
+    process.stderr.write = origErr;
+    process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI tripwire: an ALLOWED gate builds its context and schedules its fan-out exactly as before", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  let coordinationCalls = 0;
+  try {
+    await main([
+      "--repo", "owner/repo", "--pr", "91", "--gate", "draft_gate",
+      "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
+    ], {
+      repoRoot,
+      run: stubGhRun,
+      loadCoordination: async () => {
+        coordinationCalls++;
+        return { forbiddenActions: [], allowedNextActions: ["run_draft_gate"] };
+      },
+    });
+
+    assert.equal(coordinationCalls, 1, "an obligation-carrying gate consults coordination once");
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 91, gate: "draft_gate", headSha,
+    }, { repoRoot });
+    assert.ok(artifact, "allowed gate writes its context artifact unchanged");
+    assert.ok(artifact.fanout && Array.isArray(artifact.fanout.groups) && artifact.fanout.groups.length > 0, "allowed gate schedules its fan-out unchanged");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI tripwire: the review gate proceeds WITHOUT a coordination lookup (matches the verdict-post carve-out)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeBaseDiffRepo();
+  try {
+    await main([
+      "--repo", "owner/repo", "--pr", "92", "--gate", "review",
+      "--head-sha", headSha, "--angles", '["scope"]', "--base", baseSha,
+    ], {
+      repoRoot,
+      run: stubGhRun,
+      loadCoordination: async () => { throw new Error("coordination must not be consulted for the review gate"); },
+    });
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 92, gate: "review", headSha,
+    }, { repoRoot });
+    assert.ok(artifact, "review gate builds its context without any coordination lookup");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

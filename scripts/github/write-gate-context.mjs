@@ -44,8 +44,51 @@ import { viewIssue } from "./view-issue.mjs";
 import { buildAdjacentBundle, DEFAULT_MAX_FILE_BYTES } from "./build-adjacent-bundle.mjs";
 import { GATE_NAMES, gateScopePrefix, normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_carried-angles.mjs";
-import { resolveLinkedIssuesFromPr } from "../loop/detect-pr-gate-coordination-state.mjs";
+import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
+import { PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+
+// Map an obligation-carrying gate name to the coordination-state action it
+// requests. Mirrors upsert-checkpoint-verdict.mjs `resolveGateAction`: the two
+// consult the SAME PR_CHECKPOINT_ACTION vocabulary so the up-front tripwire and
+// the verdict-post refusal can never disagree about which action a gate means.
+// `review` carries no gate obligation and is never auto-resolved, so it has no
+// action here (returns null — never looked up against forbiddenActions).
+export function resolveRequestedGateAction(gate) {
+  if (gate === "draft_gate") return PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE;
+  if (gate === "pre_approval_gate") return PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE;
+  return null;
+}
+
+/**
+ * Up-front forbidden-gate tripwire (pure): given a target gate and a resolved
+ * coordination context, return a refusal message when the gate's action is in
+ * the PR's current `forbiddenActions`, else null. Consumes the same
+ * `detect-pr-gate-coordination-state` authority the verdict-post refusal uses
+ * (upsert-checkpoint-verdict.mjs `gateActionForbidden`), one step earlier — so a
+ * wrong gate is stopped BEFORE any reviewer fork, diff capture, or gate-context
+ * tmp artifact is spent, not only when the verdict is posted. The message names
+ * the legal next action(s) so the caller can re-enter the correct gate. Scoped
+ * to draft_gate/pre_approval_gate: a gate with no requested action (review)
+ * returns null (never gated here).
+ *
+ * @param {{ gate: string, coordination: { forbiddenActions?: string[], allowedNextActions?: string[], reason?: string }, repo: string, pr: number }} input
+ * @returns {string|null}
+ */
+export function forbiddenGateRefusalMessage({ gate, coordination, repo, pr }) {
+  const requestedGateAction = resolveRequestedGateAction(gate);
+  if (!requestedGateAction) return null;
+  const forbidden = Array.isArray(coordination?.forbiddenActions)
+    && coordination.forbiddenActions.includes(requestedGateAction);
+  if (!forbidden) return null;
+  const allowed = Array.isArray(coordination?.allowedNextActions) && coordination.allowedNextActions.length > 0
+    ? coordination.allowedNextActions.join(", ")
+    : "(none)";
+  const reasonSuffix = typeof coordination?.reason === "string" && coordination.reason.trim().length > 0
+    ? ` ${coordination.reason.trim()}`
+    : "";
+  return `Refusing to build gate context for ${gate} on ${repo}#${pr}: this gate's action (${requestedGateAction}) is in the PR's current forbiddenActions. Legal next action(s): ${allowed}.${reasonSuffix}`;
+}
 
 // Map the artifact gate name (draft_gate | pre_approval_gate) to the config
 // gate key understood by resolveGateAnglesDynamic (draft | preApproval).
@@ -2784,7 +2827,17 @@ export async function resolvePrSpecContext(options, { run = runChild, env = proc
  * @param {string[]} [argv]
  * @param {{ repoRoot?: string, run?: Function }} [runtime]
  */
-export async function main(argv = process.argv.slice(2), { repoRoot = process.cwd(), run = runChild } = {}) {
+export async function main(
+  argv = process.argv.slice(2),
+  {
+    repoRoot = process.cwd(),
+    run = runChild,
+    // Injectable so the tripwire test can supply a resolved coordination
+    // context directly instead of stubbing the whole gh coordination surface.
+    // The default consults the real deterministic authority.
+    loadCoordination = (opts) => loadPrGateCoordinationContext(opts, { runChild: run, repoRoot, cwd: repoRoot }),
+  } = {},
+) {
   let options;
   try {
     options = parseWriteGateContextCliArgs(argv);
@@ -2798,6 +2851,35 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     return;
   }
   try {
+    // Forbidden-gate tripwire — the FIRST action, before any spec-of-record
+    // read, diff capture, gate-context tmp artifact, or fan-out dispatch plan.
+    // Consult the deterministic coordination authority for the target gate and
+    // refuse (exit non-zero, naming the legal next action) when the gate's
+    // action is currently forbidden, so a wrong gate never spends reviewers.
+    // The verdict-post refusal (upsert-checkpoint-verdict.mjs gateActionForbidden)
+    // stays as defense in depth. Scoped to draft_gate/pre_approval_gate: review
+    // carries no gate obligation and is never auto-resolved, so it proceeds
+    // without a coordination lookup. Skipped under --prefix-file, which never
+    // touches GitHub (same invariant that skips spec-of-record resolution); the
+    // verdict-post refusal remains the backstop there. A coordination-load
+    // FAILURE (unreadable PR, offline) proceeds silently: an unread state is
+    // not a forbidden signal, so refusing on it would fail closed on the wrong
+    // signal. It is safe to swallow — a genuine GitHub-read problem surfaces
+    // immediately after at resolvePrSpecContext (which fails closed for every
+    // non-prefix-file mode), and the verdict-post refusal is the authoritative
+    // fail-closed guarantee. Only a SUCCESSFULLY-read forbidden action refuses.
+    if (resolveRequestedGateAction(options.gate) && !options.prefixFile) {
+      let coordination = null;
+      try {
+        coordination = await loadCoordination({ repo: options.repo, pr: options.pr });
+      } catch {
+        coordination = null;
+      }
+      if (coordination) {
+        const refusal = forbiddenGateRefusalMessage({ gate: options.gate, coordination, repo: options.repo, pr: options.pr });
+        if (refusal) throw new Error(refusal);
+      }
+    }
     // Resolve the spec-of-record (PR body, linked issue(s) + their bodies)
     // BEFORE any diff work: a bundle that cannot state the spec truthfully must
     // not be written at all, and failing here costs nothing.
