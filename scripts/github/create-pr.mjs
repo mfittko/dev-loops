@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { parseIssueNumber, resolveBodyOrFile, runChild as _runChild } from "../_cli-primitives.mjs";
 import { resolveSettings, applyDevloopsBoard } from "../projects/_resolve-project.mjs";
 import { loadDevLoopConfig, resolveBaseBranch } from "@dev-loops/core/config";
+import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { main as addQueueItemMain } from "../projects/add-queue-item.mjs";
 import { loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
 import { detectLinkedIssuePr } from "./detect-linked-issue-pr.mjs";
@@ -246,33 +247,17 @@ export function buildCreatePrArgs(argv, { baseDefault = null } = {}) {
   };
 }
 
-// Best-effort git worktree root for `cwd` so `.devloops` is read from the
-// worktree root even when create-pr is invoked from a subdirectory (the config
-// otherwise resolves cwd-relative and silently misses workflow.baseBranch).
-// Falls back to cwd when git cannot resolve a top level (not a repo, git
-// absent) — never throws.
-function resolveConfigRepoRoot(cwd) {
-  try {
-    const top = execFileSync("git", ["rev-parse", "--show-toplevel"], {
-      cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    return top.length > 0 ? top : cwd;
-  } catch {
-    return cwd;
-  }
-}
-
 // Resolve the base branch to inject when the caller gave no explicit
 // `--base`/`-B`: `workflow.baseBranch` from `.devloops` at the worktree root
-// (normalized to a bare name), else the auto-detected default branch. Never
-// throws — a missing or malformed config degrades to auto-detect via
-// resolveBaseBranch.
+// (normalized to a bare name), else the auto-detected default branch. The repo
+// root is resolved via the shared resolveRepoRoot (git-toplevel, with a
+// .git/.devloops short-circuit) so config is read from the worktree root even
+// when create-pr is invoked from a subdirectory. Never throws — a missing or
+// malformed config degrades to auto-detect via resolveBaseBranch.
 export async function resolveBaseDefault(cwd, { loadConfig = loadDevLoopConfig } = {}) {
   let config = null;
   try {
-    ({ config } = await loadConfig({ repoRoot: resolveConfigRepoRoot(cwd) }));
+    ({ config } = await loadConfig({ repoRoot: resolveRepoRoot(cwd) }));
   } catch {
     config = null;
   }
