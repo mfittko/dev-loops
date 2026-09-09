@@ -37,12 +37,15 @@ At least one edit:
                                 transcript/synthesis/Q&A headings.
   --allow-cross-issue           Waive the branch-derived closing-reference
                                 mismatch guard for a deliberate cross-issue
-                                reference. By default a new body whose
-                                \`Closes\`/\`Fixes\` issue disagrees with the PR's
-                                resolved issue (its branch slug \`issue-<N>\` /
-                                \`dl/issue-<N>-*\`, else its closingIssuesReferences)
-                                is refused so a swapped body cannot silently
-                                re-point the PR at the wrong issue.
+                                reference. By default a new body whose closing
+                                reference disagrees with the PR's resolved issue
+                                (its branch slug \`issue-<N>\` / \`dl/issue-<N>-*\`,
+                                else its closingIssuesReferences) is refused so a
+                                swapped body cannot silently re-point the PR at
+                                the wrong issue. The guard recognizes GitHub's
+                                full closing-keyword vocabulary (close/fix/resolve
+                                variants, any case), not only \`Closes\`/\`Fixes\`,
+                                and checks every reference in the body.
 Output (stdout, JSON):
   { "ok": true, "repo": "owner/repo", "pr": 17, "edited": ["title", "body", ...] }
 Error output (stderr, JSON):

@@ -1226,7 +1226,7 @@ test("create-pr exempts an issue-less --head branch even when the body carries a
 test("create-pr --allow-cross-issue waives the branch-derived mismatch for a deliberate cross-issue reference", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-branch-waiver-"));
   try {
-    const { env } = await writeGhStub(tempDir, [
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
       { stdout: graphqlNoLinkedPrPayload() },
       { stdout: "https://github.com/owner/repo/pull/1\n" },
     ]);
@@ -1239,6 +1239,32 @@ test("create-pr --allow-cross-issue waives the branch-derived mismatch for a del
       "--allow-cross-issue",
     ], { env });
     assert.equal(result.code, 0);
+    // The waiver flag is consumed by the wrapper and MUST NOT be forwarded to gh.
+    const calls = await readGhCalls(ghLogPath);
+    const createCall = calls.find((args) => args.includes("create"));
+    assert.ok(createCall, "expected a gh pr create call");
+    assert.ok(!createCall.includes("--allow-cross-issue"), "--allow-cross-issue must not be forwarded to gh");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr refuses a space-form --allow-cross-issue value (boolean flag; fail closed rather than leak it to gh and wrongly enable the waiver)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-xissue-spaceform-"));
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, [{ stdout: graphqlNoLinkedPrPayload() }]);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--base", "main",
+      "--head", "issue-2110",
+      "--title", "Add feature",
+      "--body", "Closes #85",
+      "--allow-cross-issue", "false",
+    ], { env });
+    assert.equal(result.code, 1);
+    const stderrPayload = JSON.parse(result.stderr);
+    assert.match(stderrPayload.error, /--allow-cross-issue is a boolean flag/);
+    assert.equal((await readGhCalls(ghLogPath)).length, 0);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

@@ -29,9 +29,12 @@ Behavior:
   - honors an explicit \`--assignee <login>\` / \`-a <login>\` when supplied (no default injected)
   - rejects \`--ready\` before invoking \`gh\`
   - accepts \`--issue <n>\` (consumed here, never forwarded to \`gh\`): declares the
-    tracker link this PR closes and makes a missing or mismatched \`Closes #N\`/
-    \`Fixes #N\` closing reference in \`--body\`/\`--body-file\` FATAL (refused before
-    \`gh\` is invoked). Without \`--issue\`, the expected issue is derived from the
+    tracker link this PR closes and makes a missing or mismatched closing
+    reference in \`--body\`/\`--body-file\` FATAL (refused before \`gh\` is invoked).
+    The closing reference is recognized across GitHub's full closing-keyword
+    vocabulary (\`close\`/\`closes\`/\`closed\`, \`fix\`/\`fixes\`/\`fixed\`,
+    \`resolve\`/\`resolves\`/\`resolved\`, any case), not only \`Closes\`/\`Fixes\`, and
+    EVERY reference in the body is checked. Without \`--issue\`, the expected issue is derived from the
     PR's head branch slug (\`--head\`, else the current branch; \`issue-<N>\` /
     \`dl/issue-<N>-*\`) and a body whose closing
     reference DISAGREES with it is refused (a swapped body cannot silently
@@ -361,7 +364,16 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   }
   // --allow-cross-issue waives the branch-derived closing-reference mismatch
   // guard for a deliberate cross-issue reference. A bare flag is the enable
-  // form; an explicit `=false`/`=0` disables it.
+  // form; an explicit `=false`/`=0` disables it. A space-form value would BOTH
+  // leak the stray token to `gh` AND (bare token present) wrongly enable the
+  // waiver — a fail-open on the guard's own escape hatch — so refuse it.
+  const bareCrossIssueIdx = argv.findIndex((token) => token === "--allow-cross-issue");
+  if (bareCrossIssueIdx !== -1) {
+    const next = argv[bareCrossIssueIdx + 1];
+    if (typeof next === "string" && !next.startsWith("-")) {
+      throw parseError("--allow-cross-issue is a boolean flag: pass it bare (--allow-cross-issue) or as --allow-cross-issue=false, never a space-separated value");
+    }
+  }
   const lastCrossIssueToken = argv.filter((token) => ALLOW_CROSS_ISSUE_FLAG_PATTERN.test(token)).at(-1) ?? null;
   const allowCrossIssue = lastCrossIssueToken === "--allow-cross-issue" ||
     (typeof lastCrossIssueToken === "string" && TRUE_FLAG_VALUE_PATTERN.test(lastCrossIssueToken.slice("--allow-cross-issue=".length)));
