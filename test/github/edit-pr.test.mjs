@@ -217,6 +217,111 @@ test("editPr: --base combines with other edits and appears once in the forwarded
   assert.deepEqual(calls[0], ["pr", "edit", "5", "--repo", "o/n", "--title", "T", "--base", "main"]);
 });
 
+// --- branch-derived closing-reference guard (CLOSING-REF-BRANCH-MISMATCH) ---
+
+const editOpts = (over) => ({ repo: "o/n", pr: 17, addAssignees: [], removeAssignees: [], allowCrossIssue: false, ...over });
+
+test("editPr: refuses a new body whose closing reference disagrees with the PR's branch-slug issue", async () => {
+  const { run } = stubGh();
+  const fetchPrContext = async () => ({ headRefName: "dl/issue-2092-body-swap", closingIssuesReferences: [] });
+  await assert.rejects(
+    () => editPr(editOpts({ body: "Body text. Closes #2071" }), { run, fetchPrContext }),
+    /CLOSING-REF-BRANCH-MISMATCH.*#2071.*#2092/s,
+  );
+});
+
+test("editPr: refuses a wrong SECOND closing reference even when the first matches (GitHub closes every one)", async () => {
+  const { run } = stubGh();
+  const fetchPrContext = async () => ({ headRefName: "issue-2092", closingIssuesReferences: [] });
+  await assert.rejects(
+    () => editPr(editOpts({ body: "Closes #2092\n\nCloses #2071" }), { run, fetchPrContext }),
+    /CLOSING-REF-BRANCH-MISMATCH.*#2071/s,
+  );
+});
+
+test("editPr: refuses a mismatch expressed with a non-Closes/Fixes verb (Resolves)", async () => {
+  const { run } = stubGh();
+  const fetchPrContext = async () => ({ headRefName: "issue-2092", closingIssuesReferences: [] });
+  await assert.rejects(
+    () => editPr(editOpts({ body: "Resolves #2071" }), { run, fetchPrContext }),
+    /CLOSING-REF-BRANCH-MISMATCH.*#2071.*#2092/s,
+  );
+});
+
+test("editPr: accepts a correct-match body derived from the PR's branch slug", async () => {
+  const { run, calls } = stubGh();
+  const fetchPrContext = async () => ({ headRefName: "issue-2092", closingIssuesReferences: [] });
+  const result = await editPr(editOpts({ body: "Closes #2092" }), { run, fetchPrContext });
+  assert.deepEqual(result.edited, ["body"]);
+  assert.equal(calls.length, 1);
+});
+
+test("editPr: falls back to closingIssuesReferences when the branch encodes no issue, and refuses a mismatch", async () => {
+  const { run } = stubGh();
+  const fetchPrContext = async () => ({ headRefName: "fix/thing", closingIssuesReferences: [{ number: 2092 }] });
+  await assert.rejects(
+    () => editPr(editOpts({ body: "Closes #2071" }), { run, fetchPrContext }),
+    /CLOSING-REF-BRANCH-MISMATCH.*#2071.*#2092/s,
+  );
+});
+
+test("editPr: exempts an issue-less PR (no branch issue, no closingIssuesReferences) even with a closing reference", async () => {
+  const { run, calls } = stubGh();
+  const fetchPrContext = async () => ({ headRefName: "fix/thing", closingIssuesReferences: [] });
+  const result = await editPr(editOpts({ body: "Closes #2071" }), { run, fetchPrContext });
+  assert.deepEqual(result.edited, ["body"]);
+  assert.equal(calls.length, 1);
+});
+
+test("editPr: --allow-cross-issue waives the mismatch guard (and never fetches PR context)", async () => {
+  const { run, calls } = stubGh();
+  let fetched = false;
+  const fetchPrContext = async () => { fetched = true; return null; };
+  const result = await editPr(editOpts({ body: "Closes #2071", allowCrossIssue: true }), { run, fetchPrContext });
+  assert.deepEqual(result.edited, ["body"]);
+  assert.equal(fetched, false, "waiver must skip the PR-context fetch entirely");
+  assert.equal(calls.length, 1);
+});
+
+test("editPr: fails closed when the PR context cannot be resolved and the body carries a closing reference", async () => {
+  const { run } = stubGh();
+  const fetchPrContext = async () => null;
+  await assert.rejects(
+    () => editPr(editOpts({ body: "Closes #2071" }), { run, fetchPrContext }),
+    /CLOSING-REF-BRANCH-MISMATCH.*fail closed/s,
+  );
+});
+
+test("editPr: a body with no closing reference never fetches PR context and edits normally", async () => {
+  const { run, calls } = stubGh();
+  let fetched = false;
+  const fetchPrContext = async () => { fetched = true; return { headRefName: "issue-2092", closingIssuesReferences: [] }; };
+  const result = await editPr(editOpts({ body: "Just a plain body update, no closing keyword" }), { run, fetchPrContext });
+  assert.deepEqual(result.edited, ["body"]);
+  assert.equal(fetched, false, "no closing reference means nothing to mislink, so no fetch");
+  assert.equal(calls.length, 1);
+});
+
+test("parseEditPrCliArgs: --allow-cross-issue flag is wired", () => {
+  const opts = parseEditPrCliArgs(["--repo", "o/n", "--pr", "5", "--body", "x", "--allow-cross-issue"]);
+  assert.equal(opts.allowCrossIssue, true);
+});
+
+test("parseEditPrCliArgs: --allow-cross-issue=false does NOT enable the waiver (no fail-open on the escape hatch)", () => {
+  assert.equal(parseEditPrCliArgs(["--repo", "o/n", "--pr", "5", "--body", "x", "--allow-cross-issue=false"]).allowCrossIssue, false);
+  assert.equal(parseEditPrCliArgs(["--repo", "o/n", "--pr", "5", "--body", "x", "--allow-cross-issue=0"]).allowCrossIssue, false);
+  assert.equal(parseEditPrCliArgs(["--repo", "o/n", "--pr", "5", "--body", "x", "--allow-cross-issue=true"]).allowCrossIssue, true);
+});
+
+test("editPr: --allow-cross-issue=false still enforces the mismatch guard (the disable form does not waive)", async () => {
+  const { run } = stubGh();
+  const fetchPrContext = async () => ({ headRefName: "issue-2092", closingIssuesReferences: [] });
+  await assert.rejects(
+    () => editPr(editOpts({ body: "Closes #2071", allowCrossIssue: false }), { run, fetchPrContext }),
+    /CLOSING-REF-BRANCH-MISMATCH/,
+  );
+});
+
 test("editPr: --enforce-grill with --body-file - forwards stdin inline (no fd 0 double-read), not --body-file -", () => {
   // Under --enforce-grill the grill check reads std IN first; the fix forwards
   // the resolved text inline so the gh call never re-reads the exhausted fd 0.

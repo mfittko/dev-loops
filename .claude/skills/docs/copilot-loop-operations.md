@@ -178,6 +178,9 @@ Only use `node <resolved-skill-scripts>/github/create-pr.mjs` when authoritative
 
 MUST use `node <resolved-skill-scripts>/github/create-pr.mjs --repo <owner/name> --assignee @me --base <base> --head <head> --title "..." --body-file <body-file>` (always draft, self-assigned by default; `--assignee @me` is the default).
 
+<!-- rule: CLOSING-REF-BRANCH-MISMATCH -->
+`CLOSING-REF-BRANCH-MISMATCH`: The sanctioned `create-pr.mjs` and `edit-pr.mjs` wrappers MUST refuse (fail closed) a `--body`/`--body-file` carrying a closing reference that disagrees with the issue the PR's own branch resolves to, so a swapped body cannot silently re-point the PR at the wrong issue (a merge would then close it). It recognizes GitHub's full closing-keyword vocabulary (`close`/`closes`/`closed`, `fix`/`fixes`/`fixed`, `resolve`/`resolves`/`resolved`, any case) — not only `Closes`/`Fixes` — and inspects EVERY reference in the body, refusing when any one disagrees (GitHub auto-closes every closing keyword, so a correct first reference does not excuse a wrong second). The expected issue is derived from the branch slug (`issue-<N>` or `dl/issue-<N>-*`): `create-pr` uses the `--head` branch, else the current branch, and an explicit `--issue <n>` still wins; `edit-pr` uses the PR's head branch slug, else its `closingIssuesReferences`. A correct-match reference, a body with no closing reference, and a PR/branch with no resolvable issue (issue-less lightweight) all pass unobstructed; `--allow-cross-issue` records a deliberate cross-issue reference. This guard only compares the referenced issue number — it never alters GitHub auto-close semantics and never rewrites the body. The `Closes`/`Fixes` body-spec vocabulary itself stays owned by `validatePrBodySpec` at the draft-exit boundary.
+
 ## Timeout and watch policy
 
 This workflow is intentionally long-lived, but one Copilot review watch boundary must still be capped.

@@ -1,6 +1,12 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import {
+  detectClosingKeyword,
+  extractClosingIssueNumber,
+  extractIssueFromBranchSlug,
+  resolveClosingRefMismatch,
+} from "@dev-loops/core/github/closing-ref-guard";
 import { parseIssueNumber, resolveBodyOrFile, runChild as _runChild } from "../_cli-primitives.mjs";
 import { resolveSettings, applyDevloopsBoard } from "../projects/_resolve-project.mjs";
 import { loadDevLoopConfig, resolveBaseBranch } from "@dev-loops/core/config";
@@ -23,10 +29,20 @@ Behavior:
   - honors an explicit \`--assignee <login>\` / \`-a <login>\` when supplied (no default injected)
   - rejects \`--ready\` before invoking \`gh\`
   - accepts \`--issue <n>\` (consumed here, never forwarded to \`gh\`): declares the
-    tracker link this PR closes and makes a missing or mismatched \`Closes #N\`/
-    \`Fixes #N\` closing reference in \`--body\`/\`--body-file\` FATAL (refused before
-    \`gh\` is invoked). Without \`--issue\` the closing keyword is not enforced
-    (issue-less \`--lightweight\` PRs intentionally carry none).
+    tracker link this PR closes and makes a missing or mismatched closing
+    reference in \`--body\`/\`--body-file\` FATAL (refused before \`gh\` is invoked).
+    The closing reference is recognized across GitHub's full closing-keyword
+    vocabulary (\`close\`/\`closes\`/\`closed\`, \`fix\`/\`fixes\`/\`fixed\`,
+    \`resolve\`/\`resolves\`/\`resolved\`, any case), not only \`Closes\`/\`Fixes\`, and
+    EVERY reference in the body is checked. Without \`--issue\`, the expected issue is derived from the
+    PR's head branch slug (\`--head\`, else the current branch; \`issue-<N>\` /
+    \`dl/issue-<N>-*\`) and a body whose closing
+    reference DISAGREES with it is refused (a swapped body cannot silently
+    re-point the PR at the wrong issue); a body with no closing reference and an
+    issue-less branch both pass (issue-less \`--lightweight\` PRs intentionally
+    carry none). \`--allow-cross-issue\` (consumed here, never forwarded to \`gh\`)
+    waives that branch-derived mismatch check for a deliberate cross-issue
+    reference.
   - refuses opening a PR whose closing keyword/\`--issue\` names an issue that already
     has an open same-repo linked PR (FACADE-LINKED-PR-SINGLE-ARTIFACT), naming the prior
     PR; \`--allow-replacement-pr <prior>\` (consumed here, never forwarded to \`gh\`)
@@ -73,6 +89,25 @@ const ISSUE_FLAG_PATTERN = /^--issue(?:=(.*))?$/u;
 // an existing open linked PR, overriding the duplicate-refusal guard. Consumed
 // by the wrapper (never forwarded to gh).
 const ALLOW_REPLACEMENT_FLAG_PATTERN = /^--allow-replacement-pr(?:=(.*))?$/u;
+// `--allow-cross-issue` records a deliberate cross-issue closing reference,
+// waiving the branch-derived closing-reference mismatch guard. Consumed by the
+// wrapper (never forwarded to gh).
+const ALLOW_CROSS_ISSUE_FLAG_PATTERN = /^--allow-cross-issue(?:=(.*))?$/iu;
+// Resolve the current git branch so the closing reference can be checked
+// against the issue the branch was cut for when `--issue` is omitted. Injectable
+// via runtime for tests; returns null when the branch cannot be resolved.
+function resolveCurrentBranch({ cwd = process.cwd(), env = process.env } = {}) {
+  try {
+    return execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd,
+      env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim() || null;
+  } catch {
+    return null;
+  }
+}
 // Both `--repo owner/name` and `--repo=owner/name` — gh accepts either form.
 const REPO_FLAG_PATTERN = /^--repo(?:$|=)/u;
 // An explicit base in any form `gh pr create` accepts: `--base <b>`,
@@ -80,6 +115,10 @@ const REPO_FLAG_PATTERN = /^--repo(?:$|=)/u;
 // resolveBaseBranch default so the caller value always wins (and no second
 // `--base` is added).
 const BASE_FLAG_PATTERN = /^(?:--base(?:$|=)|-B$)/u;
+// The PR's head branch in any form `gh pr create` accepts: `--head <b>`,
+// `--head=<b>`, or the `-H` short flag. Forwarded to gh unchanged; read here to
+// derive the expected issue for the branch-derived closing-reference guard.
+const HEAD_FLAG_PATTERN = /^(?:--head(?:$|=)|-H$)/u;
 const PR_URL_NUMBER_PATTERN = /\/pull\/(\d+)(?:\D|$)/u;
 const DRAFT_FLAG_PATTERN = /^--draft(?:=(.*))?$/iu;
 // Shared inline-boolean truthiness for --draft= and --lightweight= values.
@@ -90,21 +129,10 @@ const TRUE_FLAG_VALUE_PATTERN = /^(?:true|1)$/iu;
 // `-a <login>` would get a conflicting `--assignee @me` injected).
 const ASSIGNEE_FLAG_PATTERN = /^(?:--assignee(?:$|=)|-a$)/u;
 const DEFAULT_ASSIGNEE = "@me";
-const CLOSING_KEYWORD_PATTERN = /Closes\s+#(\d+)|Fixes\s+#(\d+)/i;
-const MAX_BODY_SCAN_BYTES = 16 * 1024;
-export function detectClosingKeyword(body) {
-  if (!body || typeof body !== "string") return false;
-  return CLOSING_KEYWORD_PATTERN.test(body.slice(0, MAX_BODY_SCAN_BYTES));
-}
-// Extract the issue number from a `Closes #N` / `Fixes #N` closing
-// reference so create-pr can REFUSE a missing or mismatched reference when
-// `--issue <n>` declares the tracker link (a warning is invisible under --jq).
-export function extractClosingIssueNumber(body) {
-  if (!body || typeof body !== "string") return null;
-  const match = CLOSING_KEYWORD_PATTERN.exec(body.slice(0, MAX_BODY_SCAN_BYTES));
-  if (!match) return null;
-  return Number(match[1] ?? match[2]);
-}
+// Closing-reference primitives are owned by the shared core guard so create-pr
+// and edit-pr compare `Closes #N` / `Fixes #N` against the branch's resolved
+// issue with one implementation. Re-exported here for back-compat consumers.
+export { detectClosingKeyword, extractClosingIssueNumber };
 // Never reads stdin (`gh pr create` doesn't either — body always comes from an
 // explicit --body/--body-file), so allowStdin stays false. An unreadable or
 // empty --body-file FAILS CLOSED (throws) rather than silently substituting ""
@@ -334,9 +362,24 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     }
     allowReplacementPr = Number(trimmed);
   }
-  // Strip --lightweight, --issue, and --allow-replacement-pr (each with its
-  // value in the space form) so none is forwarded to `gh pr create` (which
-  // rejects unknown flags).
+  // --allow-cross-issue waives the branch-derived closing-reference mismatch
+  // guard for a deliberate cross-issue reference. A bare flag is the enable
+  // form; an explicit `=false`/`=0` disables it. A space-form value would BOTH
+  // leak the stray token to `gh` AND (bare token present) wrongly enable the
+  // waiver — a fail-open on the guard's own escape hatch — so refuse it.
+  const bareCrossIssueIdx = argv.findIndex((token) => token === "--allow-cross-issue");
+  if (bareCrossIssueIdx !== -1) {
+    const next = argv[bareCrossIssueIdx + 1];
+    if (typeof next === "string" && !next.startsWith("-")) {
+      throw parseError("--allow-cross-issue is a boolean flag: pass it bare (--allow-cross-issue) or as --allow-cross-issue=false, never a space-separated value");
+    }
+  }
+  const lastCrossIssueToken = argv.filter((token) => ALLOW_CROSS_ISSUE_FLAG_PATTERN.test(token)).at(-1) ?? null;
+  const allowCrossIssue = lastCrossIssueToken === "--allow-cross-issue" ||
+    (typeof lastCrossIssueToken === "string" && TRUE_FLAG_VALUE_PATTERN.test(lastCrossIssueToken.slice("--allow-cross-issue=".length)));
+  // Strip --lightweight, --issue, --allow-replacement-pr, and
+  // --allow-cross-issue (each with its value in the space form) so none is
+  // forwarded to `gh pr create` (which rejects unknown flags).
   // for...of + skip-flag avoids a hand-rolled index loop (arg-parsing contract).
   const forwardedArgv = [];
   let skipNext = false;
@@ -353,6 +396,8 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
       if (!token.includes("=")) skipNext = true;
       continue;
     }
+    // Boolean flag (bare or `=value`): never consumes a following space token.
+    if (ALLOW_CROSS_ISSUE_FLAG_PATTERN.test(token)) continue;
     forwardedArgv.push(token);
   }
   // When the caller gave no explicit --base/-B, resolve the default base from
@@ -381,6 +426,32 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     }
     if (closingNumber !== issue) {
       throw parseError(`--issue ${issue} requires the closing reference to match, but the body closes #${closingNumber} — refusing a mismatched closing reference`);
+    }
+    // The first reference matches, but GitHub closes EVERY reference — refuse a
+    // later disagreeing one too so a swapped body can't smuggle a second wrong
+    // close past a correct first one. --allow-cross-issue does NOT apply here: it
+    // waives only the branch-derived guard (when --issue is omitted); an explicit
+    // --issue is the operator's declaration, so every reference must match it.
+    const extraRefusal = resolveClosingRefMismatch({ body, expectedIssue: issue, allowCrossIssue: false });
+    if (extraRefusal) {
+      throw parseError(extraRefusal);
+    }
+  } else {
+    // No explicit --issue: derive the expected issue from the PR's head branch
+    // slug — the explicit `--head` value, else (like gh) the current branch. A
+    // body whose closing reference disagrees with that issue is refused
+    // (fail-closed) so a swapped body cannot silently re-point the PR at the
+    // wrong issue. A branch with no issue (issue-less), a body with no closing
+    // reference, and --allow-cross-issue all pass.
+    const headBranch = getFlagValue(forwardedArgv, HEAD_FLAG_PATTERN)
+      ?? resolveCurrentBranch({ cwd: runtime.cwd ?? process.cwd(), env: runtime.env ?? process.env });
+    const refusal = resolveClosingRefMismatch({
+      body,
+      expectedIssue: extractIssueFromBranchSlug(headBranch),
+      allowCrossIssue,
+    });
+    if (refusal) {
+      throw parseError(refusal);
     }
   }
   // Issue-less lightweight: caller signals lightweight AND an explicit body

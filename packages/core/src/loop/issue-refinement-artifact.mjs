@@ -903,7 +903,7 @@ export const PR_BODY_SPEC_NARRATIVE_SECTIONS = Object.freeze({
 const CLOSING_ISSUE_REFERENCE_PATTERN =
   /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:[\w.-]+\/[\w.-]+)?#(\d+)/giu;
 
-function extractClosingIssueNumbers(body) {
+export function extractClosingIssueNumbers(body) {
   // Same fence-skip as sectionHasBody: a `Closes #N` line quoted inside a
   // ```fenced``` example (e.g. a PR-template sample) must not spoof the gate.
   let fence = null;
