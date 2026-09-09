@@ -2116,6 +2116,51 @@ policy rationale instead of a follow-up issue link, and stamps no `disposition=d
 `unfiledResolutionMessage` in `close-gate-findings.mjs`). Either way, a shared body across multiple threads is permitted only
 when one named shared root cause genuinely closed them all.
 
+<!-- rule: GATE-EXEC-FIXER-DISPOSITION-BOUNDARY -->
+`GATE-EXEC-FIXER-DISPOSITION-BOUNDARY`: `GATE-EXEC-THREAD-DISPOSITION` above describes how a
+gate-authored thread eventually closes; this rule is the per-fixer FAIL-CLOSED boundary that sits
+between one fixer push and the NEXT review or gate round — the failure it closes (#1975, #1988) is
+repeated fixer pushes and follow-on gate rounds accumulating unresolved threads because a push
+claimed to address findings without the PR conversation ever carrying a commit-evidenced reply and
+resolution. After every fixer push, every review thread that fixer's handoff marks
+`disposition: "tackled"` MUST be: (1) recorded in the handoff with its thread id (or finding
+fingerprint) and fixing commit SHA
+(`normalizeFixerDispositionHandoff`, `packages/core/src/loop/fixer-disposition.mjs` — throws on a
+missing threadId/fixingCommitSha/disposition or a duplicate threadId/fingerprint); (2) commit
+verified — the fixing commit must be CONTAINED by the observed PR head, never merely pushed
+somewhere (`isCommitContainedByHead`, `scripts/github/_commit-containment.mjs`; a `gh compare`
+`identical`/`ahead` status only — `behind`/`diverged`, an API error, or a missing containment fact
+all fail closed as NOT contained); (3) replied with that commit's evidence; (4) resolved; and (5)
+re-read live and reverified resolved. `evaluateFixerDisposition` (same module) is the single PURE
+decision this boundary enforces: no GitHub/git I/O inside it — live thread state and the
+containment fact table are injected as data, which is what keeps the decision identical across
+every harness (Pi, Claude Code, Codex). It reports one `failedStep` per incomplete thread —
+`missing_from_handoff`, `commit_not_contained`, `reply_missing`, or `not_resolved` — and a SHA
+alone, an uncontained SHA, a wrong-branch or superseded SHA, or a thread whose diff location went
+outdated never authorizes resolution on its own (outdated location does not waive disposition).
+Only threads the fixer explicitly marks `tackled` are in scope: untackled, deferred, rejected,
+foreign-authored, or newly-arrived threads keep their existing `GATE-EXEC-THREAD-DISPOSITION`
+judgment path untouched — this boundary never auto-resolves a thread outside that set. While any
+tackled thread is incomplete, the forbidden-action set
+(`FIXER_DISPOSITION_FORBIDDEN_ACTIONS`, same module) is DELIBERATELY BROADER than
+`pr-gate-coordination.mjs`'s own `postDraftForbidden`: it also forbids requesting or re-requesting
+Copilot review and every gate-dispatch token, because the failure this closes is specifically the
+NEXT review round opening over a dirty surface — this must fire even when the caller's own
+`unresolvedThreadCount` reads 0 (bogus or uncontained evidence must not read as clean).
+`packages/core/src/loop/pr-gate-coordination.mjs` accepts a `fixerDisposition: { complete, incomplete }`
+input; present and not complete, it forces a blocked `feedback_resolution` result ahead of every
+lifecycle-state branch, naming every incomplete thread, its expected fixing commit, its failed
+step, and the only legal next action (`complete_fixer_disposition`).
+`scripts/github/verify-fixer-disposition.mjs` is the enforcement CLI: it loads (or records) the
+durable checkpoint at `tmp/gate-findings/<repo-slug>/pr-<N>/fixer-disposition-<headSha>.json`,
+captures live thread state, computes containment, evaluates, and — only for a thread whose
+containment already checked out — posts the one evidenced reply and resolves, or resolves alone
+when a matching evidenced reply already exists live (idempotent re-entry: it checks live state
+FIRST, so a restart, a rate limit, a timeout, or a reply-succeeded/resolve-failed partial run never
+posts a duplicate evidence reply). `scripts/loop/detect-pr-gate-coordination-state.mjs` surfaces
+this same evaluation into the shared coordination seam; a PR with no recorded checkpoint for its
+current head behaves exactly as it did before this boundary existed.
+
 <!-- rule: GATE-EXEC-DEFERRAL-RECORD -->
 `GATE-EXEC-DEFERRAL-RECORD`: A deferred finding's record lives in up to THREE places, never a
 standalone summary comment as an extra: the finding's own posted surface — the resolving reply on

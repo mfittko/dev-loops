@@ -66,6 +66,7 @@ const ORPHAN_ALLOWLIST = new Map([
   ["scripts/github/close-gate-findings.mjs", "standalone — gate fan-in close step, invoked by gate procedure subagents, not code/CI wired"],
   ["scripts/github/create-label.mjs", "standalone — operator tool for one-off label creation"],
   ["scripts/github/emit-fanout-dispatch.mjs", "standalone — sanctioned one-shot gate fan-out dispatch step (issue #2092), agent-invoked to emit one composed reviewer prompt per resolved dispatch unit"],
+  ["scripts/github/verify-fixer-disposition.mjs", "standalone — GATE-EXEC-FIXER-DISPOSITION-BOUNDARY enforcement CLI (issue #1988), agent-invoked after a fixer push, not code/CI wired"],
   ["scripts/github/reconcile-gate-evidence-status.mjs", "standalone — merge-readiness gate-evidence status reconcile (issue #1935), agent-invoked after the post-drive audit to re-fire a stuck required status"],
   ["scripts/github/manage-sub-issues.mjs", "standalone — agent/operator sub-issue tree command (documented in scripts/README)"],
   ["scripts/github/resolve-angle-carry-forward.mjs", "standalone — gate angle carry-forward step, agent-invoked"],

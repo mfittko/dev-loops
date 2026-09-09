@@ -35,6 +35,7 @@
     "./loop/copilot-ci-status": "./src/loop/copilot-ci-status.mjs",
     "./loop/copilot-loop-iterations": "./src/loop/copilot-loop-iterations.mjs",
     "./loop/copilot-loop-state": "./src/loop/copilot-loop-state.mjs",
+    "./loop/fixer-disposition": "./src/loop/fixer-disposition.mjs",
     "./loop/gate-carry-forward": "./src/loop/gate-carry-forward.mjs",
     "./loop/gate-evidence-reconcile": "./src/loop/gate-evidence-reconcile.mjs",
     "./loop/gate-fanin": "./src/loop/gate-fanin.mjs",
