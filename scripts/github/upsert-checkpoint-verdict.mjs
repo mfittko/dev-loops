@@ -31,6 +31,7 @@ import {
   discardPendingReview,
   fetchPrFiles,
   findOwnPendingReview,
+  findOwnSubmittedReview,
   fingerprintFinding,
   isLocatableFinding,
   listPrReviews,
@@ -96,8 +97,12 @@ in place (back-compat); new rounds always post a review.
 The gate (draft_gate or pre_approval_gate) is auto-resolved from the PR gate
 coordination state when --gate is not provided. Explicit --gate is still accepted
 but must match the coordination state's allowed next actions. --gate review is
-NEVER auto-resolved (must be passed explicitly): it carries no gate obligation,
-skips coordination-state/CI entirely, and always posts fresh.
+NEVER auto-resolved (must be passed explicitly): it carries no gate obligation
+and skips coordination-state/CI entirely. Its same-head reruns are idempotent
+too: a matching own submitted review is left as-is (noop), a body-only
+correction updates it in place, and a correction needing a NEW inline comment
+fails closed (GitHub cannot add one to a submitted review) — pass --new-round to
+force a fresh review round instead.
 Required:
   --repo <owner/name>
   --pr <number>
@@ -256,6 +261,16 @@ Optional:
                                             step after a human made the choice;
                                             it is not a headless bypass and is
                                             refused together with --auto.
+  --new-round                              SCOPED TO --gate review ONLY. Bypass
+                                            the same-head submitted-review dedup
+                                            and force a FRESH review round even
+                                            when the caller's own submitted
+                                            review already exists at this head.
+                                            The deliberate path for an intended
+                                            additional round, and the escape
+                                            hatch when a correction needs a new
+                                            inline comment a submitted review
+                                            cannot carry.
   --auto                                   Headless/non-interactive run (mirrors
                                             scripts/projects/add-queue-item.mjs's
                                             --auto). Only meaningful together with
@@ -550,6 +565,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       lightweight: { type: "boolean" },
       "size-budget-json": { type: "string" },
       submit: { type: "string" },
+      "new-round": { type: "boolean" },
       auto: { type: "boolean" },
       "interactive-confirm": { type: "boolean" },
       "spec-authority": { type: "string" },
@@ -578,6 +594,7 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
     lightweight: false,
     sizeBudgetJson: undefined,
     submit: undefined,
+    newRound: false,
     auto: false,
     interactiveConfirm: false,
     specAuthority: undefined,
@@ -722,6 +739,10 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
       options.submit = raw;
       continue;
     }
+    if (token.name === "new-round") {
+      options.newRound = true;
+      continue;
+    }
     if (token.name === "auto") {
       options.auto = true;
       continue;
@@ -793,6 +814,14 @@ export function parseUpsertCheckpointVerdictCliArgs(argv) {
   if (options.submit !== undefined && options.gate !== "review") {
     throw parseError(
       `--submit is scoped to --gate review only (draft_gate/pre_approval_gate always submit a COMMENT review and reject --submit — GATE-COMMENT-NON-SUBSTITUTION). Pass --gate review explicitly, or omit --submit.`,
+    );
+  }
+  // --new-round is the review-gate escape hatch that bypasses same-head
+  // submitted-review dedup to force a fresh review; draft_gate/pre_approval_gate
+  // dedup on their own visible-marker surface and have no such hatch.
+  if (options.newRound && options.gate !== "review") {
+    throw parseError(
+      `--new-round is scoped to --gate review only (it forces a fresh review round past the same-head submitted-review dedup). Pass --gate review explicitly, or omit --new-round.`,
     );
   }
   // Headless/non-interactive safety: a review run under --auto may
@@ -2599,9 +2628,11 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     ? buildStructuredFindingsDigest(structuredFindings, options.findingsSeverityCounts)
     : options.findingsSummary;
   // review consults no draft_gate/pre_approval_gate evidence (it must never
-  // match, dedupe against, or overwrite either gate's posted verdict) and is a
-  // single-shot post with no re-run dedup of its own — it always creates a
-  // fresh review.
+  // match, dedupe against, or overwrite either gate's posted verdict), so its
+  // `existing` stays null here — the shared marker-summary path is scoped to
+  // the other two gates. review dedups instead on its OWN submitted review, via
+  // findOwnSubmittedReview below (a body-only correction updates in place, a
+  // new-inline correction fails closed, --new-round forces a fresh round).
   const gateEvidence = isReviewGate ? { strict: null, marker: null } : selectGateEvidence(evidence, options.gate);
   const existing = isReviewGate ? null : summarizeExistingComment({ ...gateEvidence, headSha: canonicalHeadSha });
   const warning = isReviewGate ? null : detectStaleGateCommentWarning({ strict: gateEvidence.strict, headSha: canonicalHeadSha, gate: options.gate });
@@ -2703,6 +2734,69 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         suppressed: findingSurface.suppressedCount,
       }
     : {};
+  // SUBMITTED-REVIEW RESOLUTION (review gate): a same-head own SUBMITTED review
+  // is this round's existing surface. Without this, a same-head rerun POSTs a
+  // duplicate submitted review (findOwnPendingReview above only sees the
+  // author-only PENDING draft, never a submitted one). --new-round is the
+  // deliberate escape hatch that bypasses this dedup to force a fresh review.
+  // Runs AFTER resolveFindingSurface so findingSurface.locatable already tells
+  // us whether a correction needs a new inline comment GitHub cannot add to an
+  // already-submitted review.
+  if (isReviewGate && !options.newRound) {
+    const ownSubmitted = await findOwnSubmittedReview(
+      { repo: options.repo, pr: options.pr, headSha: canonicalHeadSha },
+      gh,
+    );
+    if (ownSubmitted) {
+      const reviewBaseResult = {
+        ok: true,
+        repo: options.repo,
+        pr: options.pr,
+        gate: options.gate,
+        headSha: canonicalHeadSha,
+        currentHeadSha: evidence?.currentHeadSha ?? canonicalHeadSha,
+        surface: "review",
+        submit: reviewSubmitMode,
+        blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
+        executionMode: options.executionMode ?? DEFAULT_EXECUTION_MODE,
+        ...findingSurfaceFields,
+        ...(findingsLedgerWarning ? { findingsLedgerWarning } : {}),
+        ...(specAuthority ? { specAuthority } : {}),
+      };
+      // A still-unposted locatable finding would need an inline comment, and
+      // GitHub exposes no endpoint to add one to an already-submitted review.
+      // Fail closed rather than silently drop it to body text; --new-round
+      // posts a fresh review that CAN carry the inline comment.
+      if (findingSurface && findingSurface.locatable.length > 0) {
+        throw new Error(
+          `Cannot correct the already-submitted review ${ownSubmitted.id} on ${options.repo}#${options.pr}: `
+          + `this round adds ${findingSurface.locatable.length} inline finding(s), and GitHub has no endpoint to add inline `
+          + `comments to a submitted review. Re-run with --new-round to post a fresh review round that carries the new inline comment(s).`,
+        );
+      }
+      // Byte-identical body: nothing to correct, suppress the duplicate repost.
+      if (desiredBody === ownSubmitted.body) {
+        return {
+          ...reviewBaseResult,
+          action: "noop",
+          commentId: ownSubmitted.id,
+          ...(ownSubmitted.commentUrl ? { commentUrl: ownSubmitted.commentUrl } : {}),
+        };
+      }
+      // Body-only correction (no new inline comment): update the submitted
+      // review body in place instead of creating a duplicate.
+      const updatedReview = await updateGateReview(
+        { repo: options.repo, pr: options.pr, reviewId: ownSubmitted.id, body: desiredBody, allowedRefs: options.allowedRefs },
+        gh,
+      );
+      return {
+        ...reviewBaseResult,
+        action: "updated",
+        commentId: updatedReview.reviewId,
+        ...((updatedReview.reviewUrl ?? ownSubmitted.commentUrl) ? { commentUrl: updatedReview.reviewUrl ?? ownSubmitted.commentUrl } : {}),
+      };
+    }
+  }
   const desiredExecutionMode = options.executionMode ?? DEFAULT_EXECUTION_MODE;
   // GATE-EXEC-LIGHT-ESCALATION: an inline round that surfaces a blocking
   // finding escalates the next round to full fan-out by applying the gate:full
