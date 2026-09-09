@@ -8,8 +8,10 @@ import { main, gatherLiveFacts } from "../../scripts/projects/reconcile-queue.mj
 // Facts consumed by planReconcile via deriveReconcileColumn. A ready open
 // non-draft linked PR on an open issue derives → In Progress.
 const READY_LINKED_PR = { itemKind: "issue", issueState: "OPEN", prState: "OPEN", prIsDraft: false };
-// Nothing to derive (no linked PR / still draft) → untouched.
+// Nothing to derive (no linked PR) → untouched.
 const UNTOUCHED = { itemKind: "issue", issueState: "OPEN", prState: null, prIsDraft: null };
+// An open DRAFT linked PR now derives → In Progress (a runner owns it, #2029).
+const DRAFT_LINKED_PR = { itemKind: "issue", issueState: "OPEN", prState: "OPEN", prIsDraft: true };
 
 // Run main() with fully injected deps so no network / gh / .devloops is needed.
 // cwd omitted → loadStateColumnMap falls back to the AC1 default column names,
@@ -88,6 +90,19 @@ describe("reconcile-queue main (#1069)", () => {
     assert.equal(result.moved, 0);
     assert.equal(result.unchanged, 1);
     assert.equal(moveCalls.length, 0);
+  });
+
+  it("#2029: a Next Up item with an open draft linked PR → one move to In Progress (leaves the pickup column)", async () => {
+    const moveCalls = [];
+    const result = await run({
+      items: [{ itemId: "I_9", issueNumber: 9, prNumber: null, status: "Next Up" }],
+      facts: [["I_9", DRAFT_LINKED_PR]],
+      moveCalls,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.moved, 1);
+    assert.equal(moveCalls.length, 1);
+    assert.equal(moveCalls[0].toColumn, "In Progress");
   });
 
   it("gatherLiveFacts with doneColumn skips a Done-status item (zero gh calls) but still gathers a non-Done item", async () => {
