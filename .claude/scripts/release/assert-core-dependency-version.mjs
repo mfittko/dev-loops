@@ -1,0 +1,251 @@
+#!/usr/bin/env node
+/**
+ * Release-time guard: fail closed when the published `dev-loops` package's
+ * `@dev-loops/core` dependency OR the committed `bun.lock` version
+ * fields are out of lockstep with the version being released — comparing the
+ * full version token (major.minor.patch + prerelease), not just major.minor.
+ *
+ * Two checks:
+ * 1. The `@dev-loops/core` dependency range in the root manifest must resolve
+ *    to the same full version (including prerelease token) as the release. A
+ *    major.minor-only comparison would let two different prereleases of the
+ *    same major.minor pass (`1.0 == 1.0`), so the comparison uses the full token.
+ * 2. `bun.lock` must be in full lockstep: the `packages/core` workspace entry
+ *    version and the root `@dev-loops/core` dependency spec must both resolve
+ *    to the same full version as the release — a lockfile pinned to a stale
+ *    version must not pass every other green gate unnoticed.
+ *
+ * Runs in release.yml BEFORE the GitHub Release is created, so a mismatched
+ * manifest or stale lockfile never becomes a release (and never fires
+ * npm-publish). release.yml has no `npm ci`, so this script imports only
+ * `node:` builtins — a workspace import here would ERR_MODULE_NOT_FOUND and
+ * skip the guard entirely (same constraint as extract-changelog-section.mjs).
+ *
+ * Usage:
+ *   node scripts/release/assert-core-dependency-version.mjs [--release-version <v>] [--manifest <path>] [--lockfile <path>]
+ *
+ * --release-version defaults to the manifest `version`. Pass the tag-derived
+ * version in release.yml so a manifest that forgot its own bump is also caught.
+ * --manifest defaults to package.json, --lockfile to bun.lock.
+ * Exits 0 on lockstep, 1 on mismatch, 2 on usage/parse errors.
+ */
+import { readFile } from "node:fs/promises";
+
+// Shared node:-builtins-only predicate: import-safe in release.yml (no `npm ci`).
+import { isDirectCliRun } from "../lib/direct-run.mjs";
+
+const CORE_DEP = "@dev-loops/core";
+const CORE_WORKSPACE_KEY = "packages/core";
+
+/**
+ * Extract the `major.minor` token from a semver version or npm range.
+ * Handles leading range operators (^, ~, >=, >, <=, <, =, v) and compound
+ * ranges by taking the first `<digits>.<digits>` occurrence.
+ * @param {string} spec
+ * @returns {string} e.g. "0.6"
+ */
+export function extractMajorMinor(spec) {
+  const match = String(spec).match(/(\d+)\.(\d+)/);
+  if (!match) {
+    throw new Error(`cannot parse a major.minor version from "${spec}"`);
+  }
+  return `${match[1]}.${match[2]}`;
+}
+
+/**
+ * Extract the full version token (`major.minor.patch[-prerelease]`) from a
+ * semver version or npm range. Anchored at the start of the spec: only leading
+ * range operators (^, ~, >=, <, =) and whitespace plus a `v`/`V` shorthand may
+ * precede the version, so a spec that merely CONTAINS a version substring
+ * (e.g. `workspace:^1.0.0-rc.7`, `file:core-1.0.0-rc.7.tgz`) fails closed
+ * instead of false-passing. Takes the first
+ * version token in a compound range; build metadata (`+build`) is dropped
+ * because it does not affect version precedence.
+ * @param {string} spec
+ * @returns {string} e.g. "1.0.0-rc.7"
+ */
+export function extractFullVersion(spec) {
+  const match = String(spec).match(
+    /^[\s^~>=<]*[vV]?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?/,
+  );
+  if (!match) {
+    throw new Error(`cannot parse a full version from "${spec}"`);
+  }
+  const [, major, minor, patch, prerelease] = match;
+  return prerelease === undefined
+    ? `${major}.${minor}.${patch}`
+    : `${major}.${minor}.${patch}-${prerelease}`;
+}
+
+/**
+ * Assert the `@dev-loops/core` dependency range is in lockstep (same full
+ * version, including the prerelease token) with the release version. Throws on
+ * mismatch (fail closed).
+ * @param {{releaseVersion: string, coreRange: string}} input
+ * @returns {{releaseVersion: string, coreRange: string, fullVersion: string, majorMinor: string}}
+ */
+export function assertCoreDependencyInLockstep({ releaseVersion, coreRange } = {}) {
+  if (!releaseVersion) throw new Error("releaseVersion is required");
+  if (!coreRange) {
+    throw new Error(`root package must declare a "${CORE_DEP}" dependency`);
+  }
+  const releaseFull = extractFullVersion(releaseVersion);
+  const coreFull = extractFullVersion(coreRange);
+  if (releaseFull !== coreFull) {
+    throw new Error(
+      `${CORE_DEP} dependency "${coreRange}" (version ${coreFull}) does not match ` +
+        `the release version ${releaseVersion} (version ${releaseFull}). ` +
+        `Bump the ${CORE_DEP} range to ^${releaseFull} before releasing ` +
+        `(root cause of #1033; #1886 adds prerelease-token coverage).`,
+    );
+  }
+  return {
+    releaseVersion,
+    coreRange,
+    fullVersion: releaseFull,
+    majorMinor: extractMajorMinor(releaseVersion),
+  };
+}
+
+/**
+ * Assert every release-sensitive `bun.lock` version field is in full lockstep (same
+ * full version, including the prerelease token) with the release version.
+ * Covers the four fields rc.7 left stale: root version, root package entry
+ * version, the `packages/core` workspace entry version, and the
+ * `@dev-loops/core` dependency spec. Throws on any mismatch (fail closed).
+ * @param {{releaseVersion: string, lockfile: object}} input
+ * @returns {{releaseVersion: string, expectedVersion: string, checked: string[]}}
+ */
+export function assertBunLockInLockstep({ releaseVersion, lockfile } = {}) {
+  if (!releaseVersion) throw new Error("releaseVersion is required");
+  if (!lockfile || typeof lockfile !== "object") {
+    throw new Error("a parsed bun.lock object is required");
+  }
+  const expectedVersion = extractFullVersion(releaseVersion);
+  const root = lockfile.workspaces?.[""] ?? {};
+  const workspace = lockfile.workspaces?.[CORE_WORKSPACE_KEY];
+  const checks = [
+    ["workspace entry version", workspace?.version],
+    [`${CORE_DEP} dependency spec`, root.dependencies?.[CORE_DEP]],
+  ];
+  const failures = [];
+  for (const [label, value] of checks) {
+    let actualFull;
+    try {
+      actualFull = value === undefined ? undefined : extractFullVersion(value);
+    } catch {
+      actualFull = undefined;
+    }
+    if (actualFull !== expectedVersion) {
+      const shown = value === undefined ? "<missing>" : `"${value}"`;
+      failures.push(
+        `${label}: ${shown} does not match release version ${releaseVersion} (${expectedVersion})`,
+      );
+    }
+  }
+  if (failures.length > 0) {
+    throw new Error(
+      `bun.lock is out of lockstep with the release version:\n  ${failures.join("\n  ")}`,
+    );
+  }
+  return {
+    releaseVersion,
+    expectedVersion,
+    checked: [
+      "workspace entry version",
+      `${CORE_DEP} dependency spec`,
+    ],
+  };
+}
+
+/** Parse Bun's text lockfile (JSONC with trailing commas) without dependencies. */
+export function parseBunLock(raw) {
+  return JSON.parse(String(raw).replace(/"(?:\\.|[^"\\])*"|,\s*([}\]])/gu, (match, close) => close ?? match));
+}
+
+/**
+ * Escape untrusted interpolated values for GitHub-Actions log output the way
+ * the toolkit does: percent-encode `%`, then escape carriage returns and
+ * newlines (`%0D`/`%0A`). A crafted manifest/lockfile value containing a
+ * newline can otherwise forge `::error::`/`::warning::` annotation lines into
+ * the release workflow log and obscure or fake the guard's verdict.
+ * @param {string} text
+ * @returns {string}
+ */
+function ciSafe(text) {
+  return String(text)
+    .replace(/%/g, "%25")
+    .replace(/\r/g, "%0D")
+    .replace(/\n/g, "%0A");
+}
+
+function usageError(message) {
+  const err = new Error(message);
+  err.usage = true;
+  return err;
+}
+
+function parseArgs(argv) {
+  const out = { manifest: "package.json", lockfile: "bun.lock", releaseVersion: null };
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === "--release-version" || arg === "--manifest" || arg === "--lockfile") {
+      const value = argv[++i];
+      // Fail closed like extract-changelog-section.mjs: a flag missing its value
+      // is a usage error (exit 2), not a silent fallback that defeats the guard.
+      if (value === undefined) throw usageError(`${arg} requires a value`);
+      if (arg === "--release-version") out.releaseVersion = value;
+      else if (arg === "--manifest") out.manifest = value;
+      else out.lockfile = value;
+    } else {
+      throw usageError(`unknown argument: ${arg}`);
+    }
+  }
+  return out;
+}
+
+async function main(argv) {
+  const { manifest, lockfile: lockfilePath, releaseVersion } = parseArgs(argv);
+  // An unreadable or invalid manifest is a usage/parse error (exit 2), not a
+  // lockstep mismatch (exit 1) — matches the header contract and extract-changelog-section.mjs.
+  let pkg;
+  try {
+    pkg = JSON.parse(await readFile(manifest, "utf8"));
+  } catch (err) {
+    throw usageError(`cannot read or parse manifest "${manifest}": ${err.message}`);
+  }
+  const version = releaseVersion ?? pkg.version;
+  const coreResult = assertCoreDependencyInLockstep({
+    releaseVersion: version,
+    coreRange: pkg.dependencies?.[CORE_DEP],
+  });
+  process.stdout.write(
+    ciSafe(
+      `${CORE_DEP} ${coreResult.coreRange} is in lockstep with release ${coreResult.releaseVersion} (version ${coreResult.fullVersion}).`,
+    ) + "\n",
+  );
+
+  // The lockfile version fields are also part of the release contract.
+  // Same exit discipline as the manifest: unreadable/invalid = exit 2,
+  // out-of-lockstep = exit 1.
+  let lockfile;
+  try {
+    const rawLockfile = await readFile(lockfilePath, "utf8");
+    lockfile = parseBunLock(rawLockfile);
+  } catch (err) {
+    throw usageError(`cannot read or parse lockfile "${lockfilePath}": ${err.message}`);
+  }
+  const lockResult = assertBunLockInLockstep({ releaseVersion: version, lockfile });
+  process.stdout.write(
+    ciSafe(
+      `bun.lock version fields are in lockstep with release ${lockResult.releaseVersion} (version ${lockResult.expectedVersion}).`,
+    ) + "\n",
+  );
+}
+
+if (isDirectCliRun(import.meta.url)) {
+  main(process.argv.slice(2)).catch((err) => {
+    process.stderr.write(`::error::${ciSafe(err.message)}\n`);
+    process.exit(err.usage ? 2 : 1);
+  });
+}

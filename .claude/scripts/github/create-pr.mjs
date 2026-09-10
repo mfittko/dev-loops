@@ -1,0 +1,514 @@
+#!/usr/bin/env node
+import { spawn, execFileSync } from "node:child_process";
+import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import {
+  detectClosingKeyword,
+  extractClosingIssueNumber,
+  extractIssueFromBranchSlug,
+  resolveClosingRefMismatch,
+} from "@dev-loops/core/github/closing-ref-guard";
+import { parseIssueNumber, resolveBodyOrFile, runChild as _runChild } from "../_cli-primitives.mjs";
+import { resolveSettings, applyDevloopsBoard } from "../projects/_resolve-project.mjs";
+import { loadDevLoopConfig, resolveBaseBranch } from "@dev-loops/core/config";
+import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
+import { main as addQueueItemMain } from "../projects/add-queue-item.mjs";
+import { loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
+import { detectLinkedIssuePr } from "./detect-linked-issue-pr.mjs";
+const USAGE = `Usage: create-pr.mjs [gh pr create args...]
+Canonical PR-creation wrapper around \`gh pr create\`. Every PR opened through this
+tool is ALWAYS a draft and is self-assigned by default. Never call raw \`gh pr create\`.
+Behavior:
+  - injects exactly one \`--draft\` when absent (draft is the only mode)
+  - defaults \`--base\` (when neither \`--base\`/\`--base=\` nor \`-B\` is given) to
+    \`resolveBaseBranch(config)\` so a repo that configures \`workflow.baseBranch\` in
+    \`.devloops\` targets that branch instead of \`gh\`'s repository-default fallback;
+    an unset \`workflow.baseBranch\` resolves to the auto-detected default branch
+    (unchanged targeting). An explicit \`--base\`/\`-B\` always wins and is forwarded
+    unchanged. Resolution never throws (a missing/malformed config auto-detects).
+  - defaults \`--assignee @me\` when no assignee is given (self-assigned by default)
+  - honors an explicit \`--assignee <login>\` / \`-a <login>\` when supplied (no default injected)
+  - rejects \`--ready\` before invoking \`gh\`
+  - accepts \`--issue <n>\` (consumed here, never forwarded to \`gh\`): declares the
+    tracker link this PR closes and makes a missing or mismatched closing
+    reference in \`--body\`/\`--body-file\` FATAL (refused before \`gh\` is invoked).
+    The closing reference is recognized across GitHub's full closing-keyword
+    vocabulary (\`close\`/\`closes\`/\`closed\`, \`fix\`/\`fixes\`/\`fixed\`,
+    \`resolve\`/\`resolves\`/\`resolved\`, any case), not only \`Closes\`/\`Fixes\`, and
+    EVERY reference in the body is checked. Without \`--issue\`, the expected issue is derived from the
+    PR's head branch slug (\`--head\`, else the current branch; \`issue-<N>\` /
+    \`dl/issue-<N>-*\`) and a body whose closing
+    reference DISAGREES with it is refused (a swapped body cannot silently
+    re-point the PR at the wrong issue); a body with no closing reference and an
+    issue-less branch both pass (issue-less \`--lightweight\` PRs intentionally
+    carry none). \`--allow-cross-issue\` (consumed here, never forwarded to \`gh\`)
+    waives that branch-derived mismatch check for a deliberate cross-issue
+    reference.
+  - refuses opening a PR whose closing keyword/\`--issue\` names an issue that already
+    has an open same-repo linked PR (FACADE-LINKED-PR-SINGLE-ARTIFACT), naming the prior
+    PR; \`--allow-replacement-pr <prior>\` (consumed here, never forwarded to \`gh\`)
+    records a deliberate replacement and lets the create through when <prior> matches the
+    detected open linked-PR number. This adds the first network call (a same-repo linked-PR
+    probe) to an otherwise-offline wrapper; when it cannot run (no \`--repo\`, or the GitHub
+    API unavailable) the guard FAILS CLOSED on ambiguity rather than silently risking a
+    duplicate.
+  - \`--lightweight\` (consumed here in every form — bare or \`=true/1/false/0\`, last
+    occurrence wins — never forwarded to \`gh\`): when an explicit \`--body\`/
+    \`--body-file\` also carries no \`Closes #N\`/\`Fixes #N\`, the new PR is issue-less
+    lightweight and is auto-enqueued as a board PR item in the configured In Progress column
+    (reuses \`tracker.board\` number / title from \`.devloops\`, same as the queue
+    scripts). Requires an explicit \`--repo owner/name\` (space or = form). A trailing stdout
+    line reports the outcome: \`{"board":{"enqueued":bool,...}}\`. No board configured, no
+    \`--repo\`, no explicit body source, or an enqueue error is a non-fatal no-op (noted in
+    that line; exit code unaffected). Omitting \`--lightweight\`, or a body that already
+    carries a closing keyword (tracker-backed), never calls the board.
+  - forwards every other argument to \`gh pr create\` unchanged
+  - preserves the underlying \`gh pr create\` stdout, stderr, and exit code
+Examples:
+  node scripts/github/create-pr.mjs --repo owner/repo --base main --head feature --title "..." --body-file pr.md
+  node <resolved-skill-scripts>/github/create-pr.mjs --repo owner/repo --base main --head feature --title "..." --body-file pr.md
+Notes:
+  - Use \`gh pr ready\` later to leave draft state; this wrapper never opens a ready PR.
+  - Wrapper-owned validation: \`--ready\` (rejected), \`--issue\` closing-reference enforcement, and the linked-PR duplicate guard; all other argument validation is left to \`gh pr create\`.
+  - \`--issue <n>\` makes the closing reference a MUST (refused if missing or mismatched); without \`--issue\` the closing keyword is not enforced.
+  - The linked-PR duplicate guard runs for any closing keyword/\`--issue\` and fails closed on ambiguity when the probe cannot run.
+Exit codes:
+  0  \`gh pr create\` succeeded
+  1  wrapper validation failed or \`gh\` could not be spawned
+  N  same non-zero exit code returned by \`gh pr create\``.trim();
+const parseError = buildParseError(USAGE);
+const READY_FLAG_PATTERN = /^--ready(?:$|=)/u;
+// Bare and inline-boolean forms, mirroring DRAFT_FLAG_PATTERN below: every
+// matching token is consumed (never forwarded to gh, which rejects unknown
+// flags), and the LAST occurrence decides — bare or =true/=1 enables,
+// anything else (=false, =0, ...) disables.
+const LIGHTWEIGHT_FLAG_PATTERN = /^--lightweight(?:=(.*))?$/iu;
+// `--issue <n>` declares the tracker link this PR closes. Consumed by the
+// wrapper (never forwarded to gh), same shape as --repo.
+const ISSUE_FLAG_PATTERN = /^--issue(?:=(.*))?$/u;
+// `--allow-replacement-pr <prior>` records a deliberate replacement of
+// an existing open linked PR, overriding the duplicate-refusal guard. Consumed
+// by the wrapper (never forwarded to gh).
+const ALLOW_REPLACEMENT_FLAG_PATTERN = /^--allow-replacement-pr(?:=(.*))?$/u;
+// `--allow-cross-issue` records a deliberate cross-issue closing reference,
+// waiving the branch-derived closing-reference mismatch guard. Consumed by the
+// wrapper (never forwarded to gh).
+const ALLOW_CROSS_ISSUE_FLAG_PATTERN = /^--allow-cross-issue(?:=(.*))?$/iu;
+// Resolve the current git branch so the closing reference can be checked
+// against the issue the branch was cut for when `--issue` is omitted. Injectable
+// via runtime for tests; returns null when the branch cannot be resolved.
+function resolveCurrentBranch({ cwd = process.cwd(), env = process.env } = {}) {
+  try {
+    return execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd,
+      env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+// Both `--repo owner/name` and `--repo=owner/name` — gh accepts either form.
+const REPO_FLAG_PATTERN = /^--repo(?:$|=)/u;
+// An explicit base in any form `gh pr create` accepts: `--base <b>`,
+// `--base=<b>`, or the `-B` short flag. Any match suppresses the injected
+// resolveBaseBranch default so the caller value always wins (and no second
+// `--base` is added).
+const BASE_FLAG_PATTERN = /^(?:--base(?:$|=)|-B$)/u;
+// The PR's head branch in any form `gh pr create` accepts: `--head <b>`,
+// `--head=<b>`, or the `-H` short flag. Forwarded to gh unchanged; read here to
+// derive the expected issue for the branch-derived closing-reference guard.
+const HEAD_FLAG_PATTERN = /^(?:--head(?:$|=)|-H$)/u;
+const PR_URL_NUMBER_PATTERN = /\/pull\/(\d+)(?:\D|$)/u;
+const DRAFT_FLAG_PATTERN = /^--draft(?:=(.*))?$/iu;
+// Shared inline-boolean truthiness for --draft= and --lightweight= values.
+const TRUE_FLAG_VALUE_PATTERN = /^(?:true|1)$/iu;
+// Detect both the long `--assignee`/`--assignee=<login>` forms and the `-a`
+// short flag that `gh pr create` documents, so an explicit assignee in either
+// form suppresses the `--assignee @me` default (otherwise a caller passing
+// `-a <login>` would get a conflicting `--assignee @me` injected).
+const ASSIGNEE_FLAG_PATTERN = /^(?:--assignee(?:$|=)|-a$)/u;
+const DEFAULT_ASSIGNEE = "@me";
+// Closing-reference primitives are owned by the shared core guard so create-pr
+// and edit-pr compare `Closes #N` / `Fixes #N` against the branch's resolved
+// issue with one implementation. Re-exported here for back-compat consumers.
+export { detectClosingKeyword, extractClosingIssueNumber };
+// Never reads stdin (`gh pr create` doesn't either — body always comes from an
+// explicit --body/--body-file), so allowStdin stays false. An unreadable or
+// empty --body-file FAILS CLOSED (throws) rather than silently substituting ""
+// (which used to let a broken/blank --body-file open a body-less PR unnoticed).
+async function resolveBody(args) {
+  const bodyIdx = args.indexOf("--body");
+  if (bodyIdx !== -1 && bodyIdx + 1 < args.length) {
+    return args[bodyIdx + 1];
+  }
+  const bodyFileIdx = args.indexOf("--body-file");
+  if (bodyFileIdx !== -1 && bodyFileIdx + 1 < args.length) {
+    return resolveBodyOrFile({ bodyFile: args[bodyFileIdx + 1], allowStdin: false });
+  }
+  return null; // no --body/--body-file given
+}
+// A plain string value for a single-value flag, in both the space form
+// (`--repo owner/name`) and the inline form (`--repo=owner/name`); unlike
+// resolveBody, never reads a file. Returns null when the flag is absent.
+function getFlagValue(args, flagPattern) {
+  const idx = args.findIndex((token) => flagPattern.test(token));
+  if (idx === -1) return null;
+  const eq = args[idx].indexOf("=");
+  if (eq !== -1) return args[idx].slice(eq + 1);
+  return idx + 1 < args.length ? args[idx + 1] : null;
+}
+function parsePrNumberFromOutput(stdout) {
+  const match = PR_URL_NUMBER_PATTERN.exec(stdout ?? "");
+  return match ? Number(match[1]) : null;
+}
+// Generic, idempotent, fail-open board add shared by create-pr (lightweight
+// PRs -> In Progress) and create-issue (new issues -> Backlog): the one guard
+// all callers route through (QUEUE-BOARD-LINKED). Reuses .devloops
+// tracker.board resolution and add-queue-item's idempotent add rather than
+// reimplementing the board API. An ADD only — status transitions stay
+// orchestrator-owned per sanctioned-commands.mjs. Never throws: an
+// unconfigured board, missing --repo, unparsed item number, or enqueue
+// failure are all non-fatal no-ops reported in the returned shape.
+export async function enqueueBoardItem({ repo, itemNumber, column, cwd, env, runChild }) {
+  if (!repo) return { enqueued: false, reason: "repo-not-specified" };
+  if (!Number.isInteger(itemNumber) || itemNumber < 1) return { enqueued: false, reason: "item-number-not-parsed" };
+  const settings = resolveSettings(cwd);
+  if (!settings?.project && !settings?.title) {
+    return { enqueued: false, reason: "no-board-configured" };
+  }
+  const { columnNames, error: columnError } = loadStateColumnMap(cwd);
+  if (columnError) {
+    return { enqueued: false, reason: `config-error: ${columnError}` };
+  }
+  const args = { repo, item: itemNumber };
+  applyDevloopsBoard(args, cwd);
+  args.column = column ?? columnNames[LOGICAL_COLUMN.IN_PROGRESS];
+  try {
+    const result = await addQueueItemMain(args, { env, runChild, cwd });
+    const { itemId, issueNumber, prNumber, status, alreadyPresent } = result.item;
+    return { enqueued: true, itemId, issueNumber, prNumber, status, alreadyPresent };
+  } catch (err) {
+    return { enqueued: false, reason: `enqueue-error: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
+// Back-compat alias: issue-less lightweight PRs enqueue into In Progress. Keeps
+// the historical return contract (prNumber + no issueNumber) so existing
+// consumers of the lightweight-PR board note stay unchanged.
+export async function enqueueIssuelessLightweightPr({ repo, prNumber, cwd, env, runChild }) {
+  if (!Number.isInteger(prNumber) || prNumber < 1) return { enqueued: false, reason: "pr-number-not-parsed" };
+  const board = await enqueueBoardItem({ repo, itemNumber: prNumber, cwd, env, runChild });
+  if (board.reason === "item-number-not-parsed") board.reason = "pr-number-not-parsed";
+  if (board.enqueued) {
+    const { itemId, prNumber: n, status, alreadyPresent } = board;
+    return { enqueued: true, itemId, prNumber: n, status, alreadyPresent };
+  }
+  return board;
+}
+// FACADE-LINKED-PR-SINGLE-ARTIFACT: refuse opening a PR whose closing
+// keyword/`--issue` names an issue with an already-open same-repo linked PR
+// (no issue may accrue a second, shadowing PR). `--allow-replacement-pr
+// <prior>` records a deliberate replacement (must match the detected open
+// linked-PR number). Issue-less lightweight PRs carry no closing keyword and
+// are exempt. FAILS CLOSED on ambiguity (missing `--repo` or GitHub API
+// unavailable) rather than silently risking a duplicate.
+//
+// Return value: `{ refusal: string | null, replaced?: number }` — `refusal`
+// non-null refuses with that reason (null = allow); `replaced` records the
+// prior PR number when a replacement override was honored.
+export async function resolveLinkedPrGuard({ repo, issue, allowReplacementPr, runtime = {} }) {
+  // Treat an absent OR empty/whitespace repo slug as missing — an empty
+  // `--repo=`/`--repo ""` would otherwise reach the network probe and be
+  // misreported as "API unavailable" instead of the honest fail-closed
+  // ambiguity refusal.
+  if (repo === null || (typeof repo === "string" && repo.trim() === "")) {
+    return { refusal: `FACADE-LINKED-PR-SINGLE-ARTIFACT: cannot verify whether issue #${issue} already has an open linked PR because --repo owner/name was not provided — refusing on ambiguity (fail closed). Pass --repo owner/name to enable the same-repo duplicate-linked-PR check.` };
+  }
+  let linked;
+  try {
+    linked = await detectLinkedIssuePr({ repo, issue }, { env: runtime.env, ghCommand: runtime.ghCommand, runChild: runtime.runChild });
+  } catch (err) {
+    return { refusal: `FACADE-LINKED-PR-SINGLE-ARTIFACT: could not verify whether issue #${issue} already has an open linked PR because the GitHub API was unavailable (${err instanceof Error ? err.message : String(err)}) — refusing on ambiguity (fail closed).` };
+  }
+  if (!linked.hasOpenLinkedPr) {
+    return { refusal: null };
+  }
+  if (allowReplacementPr !== null && Number(allowReplacementPr) === Number(linked.prNumber)) {
+    return { refusal: null, replaced: linked.prNumber };
+  }
+  return { refusal: `FACADE-LINKED-PR-SINGLE-ARTIFACT: issue #${issue} already has an open linked PR #${linked.prNumber} (${linked.prUrl}) — refusing to open a duplicate. Pass --allow-replacement-pr ${linked.prNumber} to record a deliberate replacement.` };
+}
+
+export function buildCreatePrArgs(argv, { baseDefault = null } = {}) {
+  const args = [...argv];
+  if (args.includes("--help") || args.includes("-h")) {
+    return {
+      help: true,
+      ghArgs: null,
+    };
+  }
+  if (args.some((token) => READY_FLAG_PATTERN.test(token))) {
+    throw parseError("create-pr rejects --ready; open the PR as draft first, then run `gh pr ready` after the draft gate is satisfied");
+  }
+  const draftTokens = args.filter((token) => DRAFT_FLAG_PATTERN.test(token));
+  const lastDraftToken = draftTokens.length > 0 ? draftTokens.at(-1) : null;
+  const lastDraftSuppliesDraft = lastDraftToken === "--draft" || (typeof lastDraftToken === "string" && TRUE_FLAG_VALUE_PATTERN.test(lastDraftToken.slice("--draft=".length)));
+  const hasAssignee = args.some((token) => ASSIGNEE_FLAG_PATTERN.test(token));
+  // Inject the resolved base default only when the caller gave no explicit
+  // `--base`/`-B` — an explicit base always wins and is forwarded unchanged, so
+  // exactly one `--base` ever reaches gh. A null/empty baseDefault injects
+  // nothing (main only resolves one when base is absent; a caller passing base
+  // resolves none).
+  const hasBase = args.some((token) => BASE_FLAG_PATTERN.test(token));
+  const injectBase = !hasBase && typeof baseDefault === "string" && baseDefault.trim().length > 0;
+  return {
+    help: false,
+    ghArgs: [
+      "pr",
+      "create",
+      ...args,
+      ...(injectBase ? ["--base", baseDefault] : []),
+      ...(hasAssignee ? [] : ["--assignee", DEFAULT_ASSIGNEE]),
+      ...(lastDraftSuppliesDraft ? [] : ["--draft"]),
+    ],
+  };
+}
+
+// Resolve the base branch to inject when the caller gave no explicit
+// `--base`/`-B`: `workflow.baseBranch` from `.devloops` at the worktree root
+// (normalized to a bare name), else the auto-detected default branch. The repo
+// root is resolved via the shared resolveRepoRoot (git-toplevel, with a
+// .git/.devloops short-circuit) so config is read from the worktree root even
+// when create-pr is invoked from a subdirectory. Never throws — a missing or
+// malformed config degrades to auto-detect via resolveBaseBranch.
+export async function resolveBaseDefault(cwd, { loadConfig = loadDevLoopConfig } = {}) {
+  let config = null;
+  try {
+    ({ config } = await loadConfig({ repoRoot: resolveRepoRoot(cwd) }));
+  } catch {
+    config = null;
+  }
+  return resolveBaseBranch(config, { cwd });
+}
+// captureStdout tees gh's stdout to a buffer (still writing it straight through to
+// process.stdout, unbuffered) so the PR URL can be parsed once gh exits, without
+// changing what a caller/terminal sees. Only enabled for the issue-less lightweight
+// path; every other caller keeps the plain "inherit" byte-identical behavior.
+export function spawnCreatePr(ghArgs, { ghCommand = "gh", env = process.env } = {}, { captureStdout = false } = {}) {
+  return new Promise((resolve, reject) => {
+    // `gh pr create` never reads stdin (body comes from --body/--body-file), so
+    // the captured path ignores it rather than inheriting: inheriting a
+    // never-closing stdin (e.g. an in-process test runner) would hang any child
+    // that waits for stdin to end.
+    const child = spawn(ghCommand, ghArgs, {
+      env,
+      stdio: captureStdout ? ["ignore", "pipe", "inherit"] : "inherit",
+    });
+    let stdout = "";
+    if (captureStdout) {
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk;
+        process.stdout.write(chunk);
+      });
+    }
+    child.on("error", reject);
+    child.on("close", (code) => {
+      resolve({ code: typeof code === "number" ? code : 1, stdout });
+    });
+  });
+}
+export async function main(argv = process.argv.slice(2), runtime = {}) {
+  // --help/-h short-circuits BEFORE wrapper-owned validation (Copilot
+  // finding): otherwise `--help --issue` (or a valueless `--issue`) would throw
+  // an --issue validation error before help is honored.
+  if (argv.includes("--help") || argv.includes("-h")) {
+    process.stdout.write(`${USAGE}\n`);
+    return 0;
+  }
+  // Last occurrence wins, same as the --draft handling in buildCreatePrArgs.
+  const lastLightweightToken = argv.filter((token) => LIGHTWEIGHT_FLAG_PATTERN.test(token)).at(-1) ?? null;
+  const lightweight = lastLightweightToken === "--lightweight" ||
+    (typeof lastLightweightToken === "string" && TRUE_FLAG_VALUE_PATTERN.test(lastLightweightToken.slice("--lightweight=".length)));
+  // --issue <n> declares the tracker link this PR closes. Consumed by
+  // the wrapper (never forwarded to gh) and makes the closing reference
+  // (`Closes #n` / `Fixes #n`) a MUST — missing or mismatched is refused.
+  const issuePresent = argv.some((token) => ISSUE_FLAG_PATTERN.test(token));
+  const issueRaw = getFlagValue(argv, ISSUE_FLAG_PATTERN);
+  let issue = null;
+  if (issuePresent) {
+    // A present-but-valueless --issue (bare trailing token, or `--issue=`)
+    // MUST refuse rather than silently skip enforcement — silently dropping
+    // the MUST on a malformed invocation is the exact gap this PR closes.
+    // Route through the shared parseIssueNumber primitive so the
+    // positive-integer rule lives in one place (@dev-loops/core/cli/primitives).
+    issue = parseIssueNumber(issueRaw, parseError);
+  }
+  // --allow-replacement-pr <prior> records a deliberate replacement of
+  // an existing open linked PR (must match the detected prior PR number).
+  // A present-but-valueless flag (bare trailing token, or `--allow-replacement-pr=`)
+  // MUST refuse rather than silently skip the override — mirroring the
+  // --issue MUST (copilot review finding).
+  const allowReplacementPresent = argv.some((token) => ALLOW_REPLACEMENT_FLAG_PATTERN.test(token));
+  const allowReplacementRaw = getFlagValue(argv, ALLOW_REPLACEMENT_FLAG_PATTERN);
+  if (allowReplacementPresent && (allowReplacementRaw === null || allowReplacementRaw.trim() === "")) {
+    throw parseError("--allow-replacement-pr requires a positive integer PR number (the existing open linked PR being replaced)");
+  }
+  let allowReplacementPr = null;
+  if (allowReplacementRaw !== null) {
+    const trimmed = allowReplacementRaw.trim();
+    if (!/^[1-9]\d*$/u.test(trimmed)) {
+      throw parseError("--allow-replacement-pr must be a positive integer PR number (the existing open linked PR being replaced)");
+    }
+    allowReplacementPr = Number(trimmed);
+  }
+  // --allow-cross-issue waives the branch-derived closing-reference mismatch
+  // guard for a deliberate cross-issue reference. A bare flag is the enable
+  // form; an explicit `=false`/`=0` disables it. A space-form value would BOTH
+  // leak the stray token to `gh` AND (bare token present) wrongly enable the
+  // waiver — a fail-open on the guard's own escape hatch — so refuse it.
+  const bareCrossIssueIdx = argv.findIndex((token) => token === "--allow-cross-issue");
+  if (bareCrossIssueIdx !== -1) {
+    const next = argv[bareCrossIssueIdx + 1];
+    if (typeof next === "string" && !next.startsWith("-")) {
+      throw parseError("--allow-cross-issue is a boolean flag: pass it bare (--allow-cross-issue) or as --allow-cross-issue=false, never a space-separated value");
+    }
+  }
+  const lastCrossIssueToken = argv.filter((token) => ALLOW_CROSS_ISSUE_FLAG_PATTERN.test(token)).at(-1) ?? null;
+  const allowCrossIssue = lastCrossIssueToken === "--allow-cross-issue" ||
+    (typeof lastCrossIssueToken === "string" && TRUE_FLAG_VALUE_PATTERN.test(lastCrossIssueToken.slice("--allow-cross-issue=".length)));
+  // Strip --lightweight, --issue, --allow-replacement-pr, and
+  // --allow-cross-issue (each with its value in the space form) so none is
+  // forwarded to `gh pr create` (which rejects unknown flags).
+  // for...of + skip-flag avoids a hand-rolled index loop (arg-parsing contract).
+  const forwardedArgv = [];
+  let skipNext = false;
+  for (const token of argv) {
+    if (skipNext) { skipNext = false; continue; }
+    if (LIGHTWEIGHT_FLAG_PATTERN.test(token)) continue;
+    if (ISSUE_FLAG_PATTERN.test(token)) {
+      // = form carries the value; space form consumes the next token too.
+      if (!token.includes("=")) skipNext = true;
+      continue;
+    }
+    if (ALLOW_REPLACEMENT_FLAG_PATTERN.test(token)) {
+      // = form carries the value; space form consumes the next token too.
+      if (!token.includes("=")) skipNext = true;
+      continue;
+    }
+    // Boolean flag (bare or `=value`): never consumes a following space token.
+    if (ALLOW_CROSS_ISSUE_FLAG_PATTERN.test(token)) continue;
+    forwardedArgv.push(token);
+  }
+  // When the caller gave no explicit --base/-B, resolve the default base from
+  // workflow.baseBranch (or the auto-detected default branch) so a configured
+  // non-default base is honored instead of gh's repository-default fallback.
+  const hasBase = forwardedArgv.some((token) => BASE_FLAG_PATTERN.test(token));
+  const baseDefault = hasBase
+    ? null
+    : await resolveBaseDefault(runtime.cwd ?? process.cwd(), runtime);
+  const { help, ghArgs } = buildCreatePrArgs(forwardedArgv, { baseDefault });
+  if (help) {
+    process.stdout.write(`${USAGE}\n`);
+    return 0;
+  }
+  const body = await resolveBody(forwardedArgv);
+  // With --issue <n> the closing reference is a MUST. A warning is
+  // invisible under --jq (which the repo's token-discipline contract
+  // mandates), so a missing or mismatched reference is refused before gh is
+  // invoked. Without --issue the caller has not declared a tracker link, so
+  // there is nothing to enforce (issue-less lightweight PRs intentionally
+  // carry no closing keyword).
+  if (issue !== null) {
+    const closingNumber = extractClosingIssueNumber(body);
+    if (closingNumber === null) {
+      throw parseError(`--issue ${issue} requires a closing reference (Closes #${issue} or Fixes #${issue}) in --body/--body-file, but none was found — GitHub will not auto-close the linked issue on merge`);
+    }
+    if (closingNumber !== issue) {
+      throw parseError(`--issue ${issue} requires the closing reference to match, but the body closes #${closingNumber} — refusing a mismatched closing reference`);
+    }
+    // The first reference matches, but GitHub closes EVERY reference — refuse a
+    // later disagreeing one too so a swapped body can't smuggle a second wrong
+    // close past a correct first one. --allow-cross-issue does NOT apply here: it
+    // waives only the branch-derived guard (when --issue is omitted); an explicit
+    // --issue is the operator's declaration, so every reference must match it.
+    const extraRefusal = resolveClosingRefMismatch({ body, expectedIssue: issue, allowCrossIssue: false });
+    if (extraRefusal) {
+      throw parseError(extraRefusal);
+    }
+  } else {
+    // No explicit --issue: derive the expected issue from the PR's head branch
+    // slug — the explicit `--head` value, else (like gh) the current branch. A
+    // body whose closing reference disagrees with that issue is refused
+    // (fail-closed) so a swapped body cannot silently re-point the PR at the
+    // wrong issue. A branch with no issue (issue-less), a body with no closing
+    // reference, and --allow-cross-issue all pass.
+    const headBranch = getFlagValue(forwardedArgv, HEAD_FLAG_PATTERN)
+      ?? resolveCurrentBranch({ cwd: runtime.cwd ?? process.cwd(), env: runtime.env ?? process.env });
+    const refusal = resolveClosingRefMismatch({
+      body,
+      expectedIssue: extractIssueFromBranchSlug(headBranch),
+      allowCrossIssue,
+    });
+    if (refusal) {
+      throw parseError(refusal);
+    }
+  }
+  // Issue-less lightweight: caller signals lightweight AND an explicit body
+  // source (--body/--body-file) carries no closing keyword. A tracker-backed
+  // lightweight PR (closing keyword present) never reaches the board — its
+  // issue already owns the board entry. A null body (no explicit source) is
+  // NOT classified issue-less: the body may come from elsewhere (editor,
+  // template) and could carry a closing keyword this wrapper never saw, so it
+  // fails toward not enqueuing and reports body-not-provided instead.
+  const issueLess = lightweight && body !== null && !detectClosingKeyword(body);
+  // FACADE-LINKED-PR-SINGLE-ARTIFACT — refuse to open a second PR
+  // against an issue that already has an open same-repo linked PR (the closing
+  // keyword in the body names the tracker issue). Issue-less lightweight PRs
+  // carry no closing keyword and are exempt. This is the first network call in
+  // an otherwise-offline wrapper; the guard FAILS CLOSED on ambiguity (missing
+  // --repo, or the GitHub API unavailable) rather than silently risking a
+  // duplicate. A matching --allow-replacement-pr <prior> records the intent and
+  // lets the replacement through.
+  const closingIssue = issue ?? extractClosingIssueNumber(body);
+  if (closingIssue !== null) {
+    const guard = await resolveLinkedPrGuard({
+      repo: getFlagValue(forwardedArgv, REPO_FLAG_PATTERN),
+      issue: closingIssue,
+      allowReplacementPr,
+      runtime,
+    });
+    if (guard.refusal) {
+      throw parseError(guard.refusal);
+    }
+    if (guard.replaced) {
+      process.stderr.write(`[create-pr] FACADE-LINKED-PR-SINGLE-ARTIFACT: opening replacement PR, replacing linked PR #${guard.replaced} for issue #${closingIssue}.\n`);
+    }
+  }
+  const { code, stdout } = await spawnCreatePr(ghArgs, runtime, { captureStdout: issueLess });
+  if (lightweight && code === 0 && (issueLess || body === null)) {
+    const board = issueLess
+      ? await enqueueIssuelessLightweightPr({
+          repo: getFlagValue(forwardedArgv, REPO_FLAG_PATTERN),
+          prNumber: parsePrNumberFromOutput(stdout),
+          cwd: runtime.cwd ?? process.cwd(),
+          env: runtime.env ?? process.env,
+          runChild: runtime.runChild ?? _runChild,
+        })
+      : { enqueued: false, reason: "body-not-provided" };
+    if (!board.enqueued) {
+      process.stderr.write(`[create-pr] Board note: PR not enqueued (${board.reason}).\n`);
+    }
+    process.stdout.write(`${JSON.stringify({ board })}\n`);
+  }
+  return code;
+}
+if (isDirectCliRun(import.meta.url)) {
+  try {
+    const exitCode = await main();
+    process.exitCode = exitCode;
+  } catch (error) {
+    process.stderr.write(`${formatCliError(error)}\n`);
+    process.exitCode = 1;
+  }
+}

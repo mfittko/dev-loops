@@ -97,6 +97,10 @@ const RUN_CONTEXT_TEST = path.join("packages", "core", "test", "run-context.test
 const ASYNC_START = path.join("packages", "core", "src", "loop", "async-start-contract.mjs");
 const ASYNC_START_TEST = path.join("packages", "core", "test", "async-start-contract.test.mjs");
 const RUN_CONTEXT_GENERATED = path.join(".claude", "hooks", "_run-context.mjs");
+// The scripts-root bundle (issue #2123) vendors a byte-verbatim copy of `scripts/` into
+// `.claude/scripts/` — including `conductor-monitor.mjs` — so its adapter-boundary reads are
+// permitted at the mirrored path too, same as `RUN_CONTEXT_GENERATED` above.
+const CONDUCTOR_GENERATED = path.join(".claude", "scripts", "loop", "conductor-monitor.mjs");
 
 /**
  * `PI_*` vars the Pi runtime injects, mapped to the files allowed to read them.
@@ -118,10 +122,10 @@ const HARNESS_RUNTIME_ENV = new Map([
   ],
   ["PI_SESSION", [PI_ADAPTER, PI_ADAPTER_TEST]], // inside-Pi detection
   ["PI_INTERACTIVE", [PI_ADAPTER, PI_ADAPTER_TEST]], // interactivity override
-  ["PI_AGENT_SESSIONS_DIR", [CONDUCTOR, CONDUCTOR_TEST]], // Pi session dir
-  ["PI_SUBAGENT_SESSIONS_DIR", [CONDUCTOR, CONDUCTOR_TEST]], // Pi session dir
-  ["PI_SUBAGENT_ASYNC_RUNS_DIR", [CONDUCTOR, CONDUCTOR_TEST]], // Pi async-run dir
-  ["PI_SUBAGENT_ASYNC_RESULTS_DIR", [CONDUCTOR, CONDUCTOR_TEST]], // Pi async-result dir
+  ["PI_AGENT_SESSIONS_DIR", [CONDUCTOR, CONDUCTOR_TEST, CONDUCTOR_GENERATED]], // Pi session dir
+  ["PI_SUBAGENT_SESSIONS_DIR", [CONDUCTOR, CONDUCTOR_TEST, CONDUCTOR_GENERATED]], // Pi session dir
+  ["PI_SUBAGENT_ASYNC_RUNS_DIR", [CONDUCTOR, CONDUCTOR_TEST, CONDUCTOR_GENERATED]], // Pi async-run dir
+  ["PI_SUBAGENT_ASYNC_RESULTS_DIR", [CONDUCTOR, CONDUCTOR_TEST, CONDUCTOR_GENERATED]], // Pi async-result dir
 ]);
 
 /** Match any `PI_<UPPER_SNAKE>` token (candidate env-var name). */

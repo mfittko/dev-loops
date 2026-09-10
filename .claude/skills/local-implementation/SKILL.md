@@ -72,7 +72,7 @@ When the local spec already lives in a tracker issue:
 For the `local_implementation` strategy, before any planning or implementation mutation, you MUST run the pre-flight gate:
 
 ```sh
-dev-loops loop pre-flight-gate --expected-branch <working-branch> --check-subagents
+npx dev-loops@1.0.2 loop pre-flight-gate --expected-branch <working-branch> --check-subagents
 ```
 
 (source-repo fallback: `node scripts/loop/pre-flight-gate.mjs --expected-branch <working-branch> --check-subagents`)
@@ -80,7 +80,7 @@ dev-loops loop pre-flight-gate --expected-branch <working-branch> --check-subage
 Before creating or reusing a worktree for local implementation, use the canonical lifecycle entrypoint (`WORKTREE-CREATE-PROVISION`, see [Worktree usage guidance](../docs/worktree-guidance.md#create-or-reuse--provision-ensure-worktreemjs)):
 
 ```sh
-dev-loops loop ensure-worktree --repo-root <main> --issue <n>
+npx dev-loops@1.0.2 loop ensure-worktree --repo-root <main> --issue <n>
 ```
 
 (source-repo fallback: `node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>`)
@@ -130,7 +130,7 @@ Apply [Structural Quality](../docs/structural-quality.md) from the `deep` review
 
 Use `scripts/loop/detect-change-scope.mjs` to determine scope:
 ```sh
-node scripts/loop/detect-change-scope.mjs
+node <resolved-skill-scripts>/loop/detect-change-scope.mjs
 ```
 
 ## Deterministic logging structure
@@ -275,7 +275,7 @@ Before variant fan-out, optionally run one bounded audit when the active phase w
 When used:
 - run one bounded audit before variant fan-out
 - write the audit artifact to `tmp/phases/phase-x/audit/refinement-audit-summary.json`
-- use `node scripts/loop/run-refinement-audit.mjs --paths ... --output tmp/phases/phase-x/audit/refinement-audit-summary.json`
+- use `node <resolved-skill-scripts>/loop/run-refinement-audit.mjs --paths ... --output tmp/phases/phase-x/audit/refinement-audit-summary.json`
 - pass a concise audit summary into every refiner briefing
 - keep the audit opt-in; do not turn it into a mandatory precondition
 - preserve prioritized findings, the highest-value follow-up candidates, and an explicit statement of what this phase will not rewrite or broaden in the merged plan and review artifacts

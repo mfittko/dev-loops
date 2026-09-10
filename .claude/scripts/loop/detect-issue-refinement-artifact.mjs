@@ -1,0 +1,187 @@
+#!/usr/bin/env node
+import { readFile } from "node:fs/promises";
+import { buildParseError, formatCliError, isDirectCliRun, parseJsonText } from "../_core-helpers.mjs";
+import { requireTokenValue, runChild } from "../_cli-primitives.mjs";
+import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
+import { parseArgs } from "node:util";
+import {
+  detectIssueRefinementArtifact,
+  REFINEMENT_SOURCE,
+} from "@dev-loops/core/loop/issue-refinement-artifact";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+const USAGE = `Usage:
+  detect-issue-refinement-artifact.mjs --repo <owner/name> --issue <number>
+  detect-issue-refinement-artifact.mjs --input <path>
+Detect whether a GitHub issue carries the refinement floor: the
+authoritative AC→DoD mapping matrix (a two-column table) + an explicit
+Non-goals section, or a complete linked refinement doc (#1951).
+Required (exactly one):
+  --repo <owner/name>   Repository slug (e.g. owner/name)
+  --issue <number>      Issue number
+  --input <path>        Path to a JSON file with { "repo", "issue", "body" }
+Success output (stdout, JSON):
+  {
+    "ok": true,
+    "repo": "owner/name",
+    "issue": 532,
+    "source": "issue-body-matrix" | "issue-body-ac" | "issue-body-dod" | "linked-doc" | "missing",
+    "hasACs": true | false,
+    "acItems": [...],
+    "dodItems": [...],
+    "linkedDoc": { "found": true, "path": "...", "reason": "..." },
+    "finding": "missing_refinement_artifact" | "missing_ac_dod_matrix" | "malformed_ac_dod_matrix" | "missing_explicit_non_goals" | null,
+    "reason": "..."
+  }
+Error output (stderr, JSON):
+  { "ok": false, "error": "...", "usage": "..." }
+${JQ_OUTPUT_USAGE}`.trim();
+const parseError = buildParseError(USAGE);
+export function parseDetectIssueRefinementArtifactCliArgs(argv) {
+  const options = {
+    help: false,
+    repo: undefined,
+    issue: undefined,
+    input: undefined,
+  };
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      help: { type: "boolean", short: "h" },
+      repo: { type: "string" },
+      issue: { type: "string" },
+      input: { type: "string" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+  for (const token of tokens) {
+    if (token.kind === "positional") {
+      throw parseError(`Unknown argument: ${token.value}`);
+    }
+    if (token.kind !== "option") {
+      continue;
+    }
+    if (token.name === "help") {
+      options.help = true;
+      return options;
+    }
+    if (token.name === "repo") {
+      options.repo = requireTokenValue(token, parseError).trim();
+      continue;
+    }
+    if (token.name === "issue") {
+      const value = requireTokenValue(token, parseError);
+      if (!/^\d+$/.test(value) || Number(value) === 0) {
+        throw parseError("--issue must be a positive integer");
+      }
+      options.issue = Number(value);
+      continue;
+    }
+    if (token.name === "input") {
+      options.input = requireTokenValue(token, parseError).trim();
+      continue;
+    }
+    if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
+    throw parseError(`Unknown argument: ${token.rawName}`);
+  }
+  const hasInput = typeof options.input === "string" && options.input.length > 0;
+  const hasRemote = typeof options.repo === "string" && options.repo.length > 0 && Number.isInteger(options.issue);
+  if (options.help) {
+    return options;
+  }
+  if (hasInput === hasRemote) {
+    throw parseError("Provide exactly one of --input <path> or --repo <owner/name> --issue <number>");
+  }
+  return options;
+}
+export async function fetchIssueBody(
+  { repo, issue },
+  { env = process.env, ghCommand = "gh", runChild: childRunner = runChild } = {},
+) {
+  const result = await childRunner(
+    ghCommand,
+    ["issue", "view", String(issue), "--repo", repo, "--json", "body"],
+    env,
+  );
+  if (result.code !== 0) {
+    const detail = result.stderr.trim() || `exit code ${result.code}`;
+    throw new Error(`gh command failed: ${detail}`);
+  }
+  const payload = parseJsonText(result.stdout, { label: "gh issue view" });
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid gh issue view payload: missing body");
+  }
+  return typeof payload.body === "string" ? payload.body : "";
+}
+async function loadInputPayload(inputPath) {
+  const text = await readFile(inputPath, "utf8");
+  const payload = parseJsonText(text, { label: `input file ${inputPath}` });
+  if (!payload || typeof payload !== "object") {
+    throw new Error(`Input file ${inputPath} must be a JSON object`);
+  }
+  return payload;
+}
+function toOutput(repo, issue, artifact) {
+  return {
+    ok: true,
+    repo: repo ?? null,
+    issue: issue ?? null,
+    source: artifact.source,
+    hasACs: artifact.hasACs,
+    acItems: artifact.acItems,
+    dodItems: artifact.dodItems,
+    linkedDoc: artifact.linkedDoc,
+    sections: artifact.sections,
+    finding: artifact.finding,
+    reason: artifact.reason,
+    sources: REFINEMENT_SOURCE,
+  };
+}
+export async function detectIssueRefinementArtifactFromOptions(options, { env = process.env, ghCommand = "gh" } = {}) {
+  if (typeof options.input === "string" && options.input.length > 0) {
+    const payload = await loadInputPayload(options.input);
+    const body = typeof payload.body === "string" ? payload.body : "";
+    const issue = Number.isInteger(payload.issue) ? payload.issue : options.issue ?? null;
+    const repo = typeof payload.repo === "string" ? payload.repo : options.repo ?? null;
+    const artifact = detectIssueRefinementArtifact({ body, issueNumber: issue });
+    return toOutput(repo, issue, artifact);
+  }
+  if (typeof options.repo === "string" && options.repo.length > 0 && Number.isInteger(options.issue)) {
+    parseRepoSlug(options.repo);
+    const body = await fetchIssueBody({ repo: options.repo, issue: options.issue }, { env, ghCommand });
+    const artifact = detectIssueRefinementArtifact({ body, issueNumber: options.issue });
+    return toOutput(options.repo, options.issue, artifact);
+  }
+  throw new Error("detect-issue-refinement-artifact requires either --input <path> or --repo/--issue");
+}
+export async function runCli(
+  argv = process.argv.slice(2),
+  { stdout = process.stdout, stderr = process.stderr, env = process.env, ghCommand = "gh" } = {},
+) {
+  let options;
+  try {
+    options = parseDetectIssueRefinementArtifactCliArgs(argv);
+  } catch (error) {
+    stderr.write(`${formatCliError(error, { usage: USAGE })}\n`);
+    return 1;
+  }
+  if (options.help) {
+    stdout.write(`${USAGE}\n`);
+    return 0;
+  }
+  try {
+    const result = await detectIssueRefinementArtifactFromOptions(options, { env, ghCommand });
+    return emitResult(result, { jq: options.jq, silent: options.silent, stdout, stderr });
+  } catch (error) {
+    stderr.write(`${formatCliError(error)}\n`);
+    return 1;
+  }
+}
+if (isDirectCliRun(import.meta.url)) {
+  const code = await runCli();
+  if (code !== 0) {
+    process.exitCode = code;
+  }
+}

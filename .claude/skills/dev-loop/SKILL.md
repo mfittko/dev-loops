@@ -161,7 +161,7 @@ fan-out dispatch, run the CLI seam that derives the run's spec/digest identities
 never hand-derives them:
 
 ```sh
-content_digest=$(node scripts/loop/spec-context.mjs --repo <owner/name> --issue <linked_issue_number> \
+content_digest=$(node <resolved-skill-scripts>/loop/spec-context.mjs --repo <owner/name> --issue <linked_issue_number> \
   --content-file <reviewed-content-path> --head-sha <current_head_sha> \
   --spec-out <spec-path> --identity-out <identity-path> --jq '.contentDigest')
 ```
@@ -170,7 +170,7 @@ On a fixer-push re-entry round (a prior clean round's `--approvals-out` record e
 the AC7 affected-criteria producer's input:
 
 ```sh
-node scripts/loop/spec-context.mjs changed-paths --base <prior_approved_head_sha> --head <current_head_sha> \
+node <resolved-skill-scripts>/loop/spec-context.mjs changed-paths --base <prior_approved_head_sha> --head <current_head_sha> \
   --jq '.changedFiles' > <changed-paths-path>
 ```
 
@@ -187,7 +187,7 @@ any record type. Full per-writer flag detail: Gate Review Sub-Loop Contract Phas
 **Gate fan-out dispatch (inline imperative — #1637):** When you dispatch the `draft_gate` / `pre_approval_gate` fan-out (parallel fresh-context reviewers seeded from the one neutral context bundle), you MUST join their results through the sanctioned fan-in CLI — not by hand-rolling the wait. Never hand-roll reviewer dispatch via `Promise.all(runs.run)` + transcript-tailing; await each reviewer's findings artifact at its deterministic output path (`tmp/gate-reviews/<repo-slug>/pr-<N>/<gate>-<headSha>/<angle>.json`) and consolidate via ONE call, always with `--spec-authority <identity-path>` from above:
 
 ```sh
-dev-loops gate consolidate-fanin --findings-dir <dir> --head-sha <current_head_sha> --gate <gate> \
+npx dev-loops@1.0.2 gate consolidate-fanin --findings-dir <dir> --head-sha <current_head_sha> --gate <gate> \
   --expected-dispatch-units <n> --out <findings-json-path> --ledger-out <ledger-path> \
   --spec-authority <identity-path> --jq '.severityCounts'
 ```
@@ -205,7 +205,7 @@ bridge to derive the fixer's act list for Phase 4, always with the spec-authorit
 durable-approval flags across re-entry:
 
 ```sh
-dev-loops gate judge-pass --repo <owner/name> --pr <N> --gate <gate> --head-sha <current_head_sha> \
+npx dev-loops@1.0.2 gate judge-pass --repo <owner/name> --pr <N> --gate <gate> --head-sha <current_head_sha> \
   --findings-file <ledger-path> --judge-verdict <verdict-path> --out <act-list-path> --ledger-out <enriched-ledger-path> \
   --spec-file <spec-path> --content-digest "$content_digest" --spec-authority-verdict <spec-authority-verdict-path> \
   [--prior-approvals <prior-approvals-path> --approvals-out <approvals-out-path>] \
@@ -234,7 +234,7 @@ The cross-refs (`ANTIPATTERN-FANIN-WAIT` in [Anti-patterns](../docs/anti-pattern
 
 **Blocking join for a nested single-child step, never sleep-poll (#1907):** when this run's turn is awaiting a nested child IT dispatched — a judge, a fixer, or a single reviewer — join it with a blocking dispatch (`async: false`) or one `bg_wait` nonBlocking subscription. Do not sleep-poll for it and do not end the turn to await it (observed failure: repeated 180/240/300s sleep loops). This is the actionable alternative behind `END-TURN-AND-AWAIT-WAKE` in [Anti-patterns](../docs/anti-patterns.md); see [dev-loop agent — Subagent delegation](../../agents/dev-loop.md#subagent-delegation) for the agent-contract pin of the same rule.
 
-**Agent-level stall → auto-fresh-dispatch (#1669):** When a dev-loop child shows no turn progress for `workflow.stallDetection.thresholdMinutes` (default 5) with no pending supervisor request, auto-bail to a fresh-context dispatch (carrying worktree state + a recovery brief) instead of waiting through a manual interrupt+resume. Distinguish a TRUE stall (no turn progress) from a SANCTIONED long watch (an active bash/subagent tool call that heartbeats its runner claim) — a fresh runner-coordination heartbeat exempts a run from stall. Detector + probe: `node scripts/loop/detect-agent-stall.mjs --repo <owner/name> [--pr <n>] [--status <path>]`. See [Agent-level stall detection](../docs/agent-stall-detection.md). Interrupt+resume remains the manual fallback.
+**Agent-level stall → auto-fresh-dispatch (#1669):** When a dev-loop child shows no turn progress for `workflow.stallDetection.thresholdMinutes` (default 5) with no pending supervisor request, auto-bail to a fresh-context dispatch (carrying worktree state + a recovery brief) instead of waiting through a manual interrupt+resume. Distinguish a TRUE stall (no turn progress) from a SANCTIONED long watch (an active bash/subagent tool call that heartbeats its runner claim) — a fresh runner-coordination heartbeat exempts a run from stall. Detector + probe: `node <resolved-skill-scripts>/loop/detect-agent-stall.mjs --repo <owner/name> [--pr <n>] [--status <path>]`. See [Agent-level stall detection](../docs/agent-stall-detection.md). Interrupt+resume remains the manual fallback.
 
 **Round-cap budget check (enforced):** After every watch cycle, fix pass, or reply-resolve, check whether completed Copilot review rounds have reached the resolved round cap (`refinement.maxCopilotRounds`, default 5; light-dispatched PRs resolve the lower `resolveEffectiveCopilotRoundCap`, default 1 — owned by `COPILOT-FOLLOWUP-ROUND-CAP`). Stop re-requesting Copilot review when the limit is reached **within that review cycle**. Exception: the post-convergence new-cycle re-request carve-out (a converged loop that later takes significant post-convergence changes on a newer head opens a new cycle even if the previous one hit the cap) is owned by `COPILOT-FOLLOWUP-ROUND-CAP`. Read these gate-cadence facts via the token-economical convention above (`run-watch-cycle.mjs --concise`, or `--jq`/`--silent` for a single field/predicate) — never `| python3` or `node -e`.
 

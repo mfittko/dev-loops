@@ -144,7 +144,7 @@ Write the raw Q&A transcript ONLY to the gitignored, ephemeral, session-scoped a
 The rewritten description carries ONLY normative locked content: context, the decided approach, the `## AC / DoD matrix` (the authoritative AC→DoD mapping table), `## Non-goals`, and a linked refinement doc reference if present. (A body MAY additionally carry human-readable `## Acceptance criteria` / `## Definition of done` prose, but the matrix — not those checklists — is what refinement detection requires.) Write it back with:
 
 ```
-dev-loops issue edit --repo <owner/repo> --issue <n> --body-file <tmp-body-path>
+npx dev-loops@1.0.2 issue edit --repo <owner/repo> --issue <n> --body-file <tmp-body-path>
 ```
 
 (source-repo fallback: `node scripts/github/edit-issue.mjs --repo <owner/repo> --issue <n> --body-file <tmp-body-path>`)
@@ -152,7 +152,7 @@ dev-loops issue edit --repo <owner/repo> --issue <n> --body-file <tmp-body-path>
 **Post the rationale as a separate results comment** (`GRILL-SUBLOOP-RATIONALE-COMMENT`): the description and the rationale are two distinct artifacts — never merge them. When the operator accepts an escalated RFC-worthy decision from the rationale, it is persisted as an ADR per the [Decision record contract](../docs/decision-record-contract.md). Write the rationale (gaps found and filled, the RFC recommendation and rejected alternatives, and decisions taken) to a second tmp file and post it as its own comment titled `🔬 Grill / refinement results`:
 
 ```
-node scripts/github/comment-issue.mjs --repo <owner/repo> --issue <n> --body-file <tmp-rationale-path>
+node <resolved-skill-scripts>/github/comment-issue.mjs --repo <owner/repo> --issue <n> --body-file <tmp-rationale-path>
 ```
 
 Never `gh issue comment` directly, and never fold this content back into the issue body. The same `#<number>` hygiene rule (`GRILL-SUBLOOP-NO-BARE-HASH`) applies to the comment. A zero-iteration `grill_clean` target (already refined, body left unchanged) has no rationale to post and skips this step; any run that actually filled a gap MUST post the results comment.

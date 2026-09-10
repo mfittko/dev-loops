@@ -57,6 +57,23 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const SCRIPTS_DIR = path.join(REPO_ROOT, "scripts");
 const SKIP_DIR_NAMES = new Set(["node_modules", ".git", "vendor", "site", "tmp", "test"]);
 
+// `.claude/scripts/**` and `.claude/node_modules/**` (issue #2123's scripts-root bundle) are
+// byte-verbatim GENERATED MIRRORS of `scripts/**` / vendored deps: a wrapper's own `--help`/usage
+// banner commonly self-references its own relative path, and the mirror copy sits at a DIFFERENT
+// absolute path than the canonical entry point being checked — so scanning it as a "non-test
+// source" makes a script look like its own caller (a false non-test-caller positive) instead of
+// correctly staying orphaned. Any REAL caller of a `scripts/` CLI entry point lives in `scripts/`,
+// `packages/`, `cli/`, `.claude/hooks/` (hand-authored), or a workflow file — never only in these
+// two generated mirrors, so excluding just them (not all of `.claude/`) is precise.
+const GENERATED_BUNDLE_MIRROR_PREFIXES = [
+  `.claude${path.sep}scripts${path.sep}`,
+  `.claude${path.sep}node_modules${path.sep}`,
+];
+
+function isUnderGeneratedBundleMirror(relPath) {
+  return GENERATED_BUNDLE_MIRROR_PREFIXES.some((prefix) => relPath.startsWith(prefix));
+}
+
 // Explicit current orphan inventory (scripts/): *path* -> one-line disposition.
 // Re-sync by running the test with a deliberately-added/removed entry, or by
 // wiring/deleting a script and removing its line here.
@@ -137,7 +154,10 @@ async function read(f) {
 // All non-test .mjs sources in the repo (scripts/, packages/, cli/, lib/, etc.).
 async function nonTestSources() {
   const all = await walkMjs(REPO_ROOT);
-  return all.filter((f) => !f.split(path.sep).includes("test"));
+  return all.filter((f) => {
+    if (f.split(path.sep).includes("test")) return false;
+    return !isUnderGeneratedBundleMirror(path.relative(REPO_ROOT, f));
+  });
 }
 
 // Shared import/export-from statement scraper: returns `{ statement, spec }` for

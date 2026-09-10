@@ -1,0 +1,156 @@
+#!/usr/bin/env node
+import { execFileSync } from "node:child_process";
+import process from "node:process";
+import { parseArgs } from "node:util";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+
+const USAGE = `Usage: detect-change-scope.mjs [--base <ref>] [--head <ref>]
+Detect change scope from git diff for light-mode eligibility.
+Options:
+  --base <ref>   Override base ref (default: HEAD~1)
+  --head <ref>   Override head ref; ignored unless --base is also set
+  --help, -h     Show this help
+
+${JQ_OUTPUT_USAGE}
+
+Exit codes:
+  0   Success
+  1   Error
+  2   Invalid --jq filter
+`;
+
+function parseCliArgs(argv) {
+  const { tokens } = parseArgs({
+    args: [...argv],
+    options: {
+      base: { type: "string" },
+      head: { type: "string" },
+      help: { type: "boolean", short: "h" },
+      ...JQ_OUTPUT_PARSE_OPTIONS,
+    },
+    allowPositionals: true,
+    strict: false,
+    tokens: true,
+  });
+
+  const opts = { base: null, head: null };
+  for (const token of tokens) {
+    if (token.kind === "option") {
+      if (token.name === "help") {
+        if (token.value !== undefined) {
+          throw new Error(`unknown argument: ${token.rawName}=${token.value}`);
+        }
+        process.stdout.write(USAGE);
+        process.exit(0);
+      }
+      if (token.name === "base") {
+        opts.base = token.value ?? null;
+        continue;
+      }
+      if (token.name === "head") {
+        opts.head = token.value ?? null;
+        continue;
+      }
+      if (matchJqOutputToken(token, opts)) continue;
+    }
+  }
+  return opts;
+}
+export function parseGitDiffStat(output) {
+  const trimmed = output.trim();
+  if (trimmed.length === 0) {
+    return { filesChanged: 0, linesChanged: 0 };
+  }
+  const lines = trimmed.split("\n");
+  const lastLine = lines[lines.length - 1];
+  const isSummary = /\d+\s+files?\s+changed/.test(lastLine) || /\d+\s+insertion/.test(lastLine) || /\d+\s+deletion/.test(lastLine);
+  const fileCount = isSummary ? lines.length - 1 : lines.length;
+  let insertions = 0;
+  let deletions = 0;
+  if (isSummary) {
+    const insMatch = lastLine.match(/(\d+)\s+insertion/);
+    const delMatch = lastLine.match(/(\d+)\s+deletion/);
+    if (insMatch) insertions = parseInt(insMatch[1], 10);
+    if (delMatch) deletions = parseInt(delMatch[1], 10);
+  }
+  return { filesChanged: fileCount, linesChanged: insertions + deletions };
+}
+function detectScope({ base, head, cwd } = {}) {
+  let diffArgs = ["diff", "--stat"];
+  if (base && head) {
+    diffArgs.push(`${base}..${head}`);
+  } else if (base) {
+    diffArgs.push(base);
+  } else {
+    diffArgs.push("HEAD~1..HEAD");
+  }
+  let output;
+  try {
+    output = execFileSync("git", diffArgs, { encoding: "utf8", maxBuffer: 1_000_000, cwd: cwd || undefined });
+  } catch (err) {
+    return { ok: false, filesChanged: 0, linesChanged: 0, error: err instanceof Error ? err.message : String(err) };
+  }
+  const parsed = parseGitDiffStat(output);
+  return { ok: true, ...parsed };
+}
+function isEligibleForLightMode(scope, threshold) {
+  return scope.filesChanged <= threshold.maxFiles && scope.linesChanged <= threshold.maxLines;
+}
+/**
+ * Detect change scope for the merge-base diff between `base` and `head` (the
+ * three-dot `base...head` diff git resolves against merge-base(base, head)).
+ *
+ * Fails CLOSED: a missing base/head, or any git failure, returns `{ ok: false }`
+ * so callers that gate on scope (e.g. the light-mode pre-merge acceptance) reject
+ * rather than silently treating an unmeasurable diff as under threshold. Reuses
+ * the same `parseGitDiffStat` scope resolution as `detectScope`.
+ */
+function detectMergeBaseScope({ base, head, cwd } = {}) {
+  if (!base || !head) {
+    return { ok: false, filesChanged: 0, linesChanged: 0, error: "base and head are required for merge-base scope detection" };
+  }
+  let output;
+  try {
+    output = execFileSync("git", ["diff", "--stat", `${base}...${head}`], { encoding: "utf8", maxBuffer: 1_000_000, cwd: cwd || undefined });
+  } catch (err) {
+    return { ok: false, filesChanged: 0, linesChanged: 0, error: err instanceof Error ? err.message : String(err) };
+  }
+  return { ok: true, ...parseGitDiffStat(output) };
+}
+async function main() {
+  const opts = parseCliArgs(process.argv.slice(2));
+  const scope = detectScope(opts);
+  let threshold = { maxFiles: 3, maxLines: 200 };
+  let eligible = false;
+  try {
+    const { loadDevLoopConfig, resolveLightMode } = await import(
+      "@dev-loops/core/config"
+    );
+    const { config, errors } = await loadDevLoopConfig({ repoRoot: process.cwd() });
+    if (Array.isArray(errors) && errors.length > 0) {
+    } else {
+      const lightMode = resolveLightMode(config);
+      if (lightMode && scope.ok !== false) {
+        threshold = { maxFiles: lightMode.maxFiles, maxLines: lightMode.maxLines };
+        eligible = isEligibleForLightMode(scope, threshold);
+      }
+    }
+  } catch {
+  }
+  // This tool always exits 0 on a parsed run (scope.ok:false only reflects a git
+  // diff failure inside the payload, never the process outcome) — force ok:true
+  // as emitResult's default so --jq/--silent compose without changing that.
+  process.exitCode = emitResult(
+    { ...scope, eligibleForLightMode: eligible, threshold },
+    { jq: opts.jq, silent: opts.silent, ok: true },
+  );
+}
+const isDirectRun =
+  process.argv[1] && process.argv[1].includes("detect-change-scope.mjs");
+if (isDirectRun) {
+  main().catch((err) => {
+    process.stderr.write(`${err.message}\n`);
+    process.exitCode = 1;
+  });
+}
+export { detectScope, detectMergeBaseScope, isEligibleForLightMode };

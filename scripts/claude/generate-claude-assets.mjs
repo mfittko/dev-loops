@@ -13,6 +13,7 @@
  *   --repo-root <path>   Override the repo root (default: cwd).
  */
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 
 import { transformAgent, transformSkill, transformCommand, stripPiOnlyBlocks } from "@dev-loops/core/claude/asset-generation";
@@ -106,7 +107,109 @@ export function collectGeneratedAssets({ repoRoot = process.cwd() } = {}) {
   // local paths. The no-drift check keeps them in sync with packages/core/src.
   assets.push(...collectHookBundle(repoRoot));
 
+  // Self-contained scripts-root bundle (issue #2123). The Claude plugin ships only agents/
+  // commands/hooks/skills — skills/commands/agents invoke 46 script wrappers
+  // (`scripts/{github,loop,projects,refine,release,security}/*.mjs`) plus `@dev-loops/core` that
+  // a plugin-only install (no source checkout, no global `dev-loops`) cannot otherwise resolve.
+  // Bundle scripts/** verbatim, the runtime deps those wrappers import (yaml, zod) verbatim from
+  // this repo's own node_modules, `@dev-loops/core` (respecting its package.json `files`, which
+  // already excludes packages/core/test), and the self-contained resolver
+  // (`resolveScriptsRoot`) that picks between a live checkout and this bundle at runtime — see
+  // `packages/core/src/claude/scripts-root-resolver.mjs`.
+  assets.push(...collectScriptsBundle(repoRoot));
+  assets.push(...collectNodeModulesVendorBundle(repoRoot));
+  assets.push(...collectCoreVendorBundle(repoRoot));
+  assets.push(...collectScriptsRootResolverAsset(repoRoot));
+
   return assets;
+}
+
+/**
+ * Recursively collect every file under an absolute source directory as verbatim
+ * `{ target, content }` bundle assets rooted at `targetRel`. No banner/content mutation — third-
+ * party and vendored-verbatim trees must byte-match their source so `--check` is byte-stable.
+ */
+function collectDirVerbatim(absSourceDir, targetRel) {
+  const out = [];
+  if (!fs.existsSync(absSourceDir)) return out;
+  for (const entry of fs.readdirSync(absSourceDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    const childAbs = path.join(absSourceDir, entry.name);
+    const childTarget = `${targetRel}/${entry.name}`;
+    if (entry.isDirectory()) {
+      out.push(...collectDirVerbatim(childAbs, childTarget));
+    } else if (entry.isFile()) {
+      out.push({ target: childTarget, content: fs.readFileSync(childAbs, "utf8") });
+    }
+  }
+  return out;
+}
+
+/** Verbatim `scripts/**` → `.claude/scripts/**` (the 46 wrappers skills/commands/agents invoke,
+ * plus every other file under `scripts/` — a wrapper's data file is never known ahead of time, so
+ * the whole tree is bundled rather than tracing each wrapper's own reads). */
+function collectScriptsBundle(repoRoot) {
+  return collectDirVerbatim(path.join(repoRoot, "scripts"), ".claude/scripts");
+}
+
+/** Runtime deps the bundled scripts import at runtime (`yaml`, `zod`) — resolved via Node's own
+ * module resolution starting from `repoRoot`'s package.json, so this finds an ancestor
+ * `node_modules` (e.g. the main checkout's, when `repoRoot` is a nested worktree that has no
+ * `node_modules` of its own) exactly the way the bundled scripts would resolve them at runtime. A
+ * repoRoot with neither installed (e.g. a bare fixture tree) is a no-op, matching every other
+ * bundle collector here. */
+const NODE_MODULES_VENDOR = ["yaml", "zod"];
+
+function collectNodeModulesVendorBundle(repoRoot) {
+  const out = [];
+  let require_;
+  try {
+    require_ = createRequire(path.join(repoRoot, "package.json"));
+  } catch {
+    return out;
+  }
+  for (const pkgName of NODE_MODULES_VENDOR) {
+    let pkgJsonPath;
+    try {
+      pkgJsonPath = require_.resolve(`${pkgName}/package.json`);
+    } catch {
+      continue; // not resolvable from repoRoot — no-op
+    }
+    out.push(...collectDirVerbatim(path.dirname(pkgJsonPath), `.claude/node_modules/${pkgName}`));
+  }
+  return out;
+}
+
+/** `@dev-loops/core` vendored into the bundle, respecting its OWN package.json `files` allowlist
+ * (`src/**\/*.mjs`, `src/**\/*.yaml`, `bin/**\/*.mjs`) plus `package.json` itself (needed so the
+ * bundled scripts' `@dev-loops/core/...` imports resolve via its `exports` map). `files` already
+ * excludes `packages/core/test/` — respecting it is what bounds the bundle size, no separate
+ * prune step needed. */
+function collectCoreVendorBundle(repoRoot) {
+  const coreDir = path.join(repoRoot, "packages/core");
+  const pkgJsonPath = path.join(coreDir, "package.json");
+  if (!fs.existsSync(pkgJsonPath)) return [];
+  const out = [
+    { target: ".claude/node_modules/@dev-loops/core/package.json", content: fs.readFileSync(pkgJsonPath, "utf8") },
+  ];
+  const allowedExtBySubdir = { src: [".mjs", ".yaml"], bin: [".mjs"] };
+  for (const [sub, allowedExts] of Object.entries(allowedExtBySubdir)) {
+    for (const asset of collectDirVerbatim(path.join(coreDir, sub), `.claude/node_modules/@dev-loops/core/${sub}`)) {
+      if (allowedExts.some((ext) => asset.target.endsWith(ext))) out.push(asset);
+    }
+  }
+  return out;
+}
+
+/** The self-contained resolver vendored to `.claude/resolve-scripts-root.mjs` (addressed at
+ * runtime as `${CLAUDE_PLUGIN_ROOT}/resolve-scripts-root.mjs`). Verbatim copy plus the same
+ * generated-banner convention as `HOOK_BUNDLE` — this module has no cross-module imports, so no
+ * rewrites are needed. */
+function collectScriptsRootResolverAsset(repoRoot) {
+  const source = "packages/core/src/claude/scripts-root-resolver.mjs";
+  const abs = path.join(repoRoot, source);
+  if (!fs.existsSync(abs)) return [];
+  const banner = `${HOOK_BUNDLE_BANNER_PREFIX}${source} by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate.\n`;
+  return [{ target: ".claude/resolve-scripts-root.mjs", content: banner + fs.readFileSync(abs, "utf8") }];
 }
 
 /**
@@ -205,6 +308,12 @@ function listExistingAssetFiles(repoRoot) {
     ...listFilesRecursive(repoRoot, ".claude/agents"),
     ...listFilesRecursive(repoRoot, ".claude/commands"),
     ...listFilesRecursive(repoRoot, ".claude/skills"),
+    // `.claude/scripts/` and `.claude/node_modules/` are entirely generated (issue #2123's
+    // scripts-root bundle) — nothing hand-authored lives under either, so every file there
+    // participates in orphan detection directly (no banner-scoping needed, unlike `.claude/hooks/`
+    // below).
+    ...listFilesRecursive(repoRoot, ".claude/scripts"),
+    ...listFilesRecursive(repoRoot, ".claude/node_modules"),
   ];
   // `.claude/hooks/` mixes hand-authored scripts (hooks.json, _hook-io.mjs, the three hook
   // scripts) with generated bundle modules. Only the generated ones — identified by the
@@ -218,6 +327,11 @@ function listExistingAssetFiles(repoRoot) {
       // unreadable — skip
     }
   }
+  // The vendored scripts-root resolver sits directly under `.claude/` (addressed at runtime as
+  // `${CLAUDE_PLUGIN_ROOT}/resolve-scripts-root.mjs`), alongside hand-authored `settings.json` —
+  // track it by its fixed path, same as the plugin manifest above.
+  const resolverPath = ".claude/resolve-scripts-root.mjs";
+  if (fs.existsSync(path.join(repoRoot, resolverPath))) files.push(resolverPath);
   return files;
 }
 

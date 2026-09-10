@@ -85,12 +85,30 @@ Verify all material claims against source, tests, configuration, and CI.
 
 ## Skill asset path resolution
 
-When this skill refers to helper paths such as `scripts/...` or `docs/...`, resolve them from the actual skill installation layout you are running, not from the active target repository checkout.
+When this skill (or any other dev-loop skill, command, or agent) refers to helper paths such as
+`<resolved-skill-scripts>/...` or `docs/...`, resolve them from the actual skill installation
+layout you are running, not from the active target repository checkout — and never fall back to
+raw `gh` when a script cannot be resolved.
 
-Use this rule:
+`<resolved-skill-scripts>` is the SCRIPTS ROOT, resolved deterministically (issue #2123) by
+running the vendored resolver once per session:
+
+```sh
+node "${CLAUDE_PLUGIN_ROOT}/resolve-scripts-root.mjs"
+```
+
+It prints the resolved scripts root on stdout, in this order: (a) a live dev-loops source
+checkout — walking up from cwd to a directory whose `package.json` `name` is `dev-loops` and that
+also has a `scripts/` dir; (b) else the bundled copy shipped inside this plugin at
+`${CLAUDE_PLUGIN_ROOT}/scripts`; (c) else it HARD-STOPS: it exits non-zero and writes an error to
+stderr naming the unresolved wrapper. Treat a hard-stop as a packaging/installer bug and STOP —
+NEVER fall back to raw `gh`. Substitute the printed root for every `<resolved-skill-scripts>`
+placeholder.
+
+For illustration only (do not hand-derive this — always run the resolver above):
 - if the skill is installed as a normalized standalone copy, the required bundled contract docs live under the shared `../docs/` directory next to the installed skill directories. <!-- rule: ASSET-PATH-INSTALLED-NO-ASSUME --> `ASSET-PATH-INSTALLED-NO-ASSUME`: Agents MUST NOT assume helper scripts are bundled unless that installed layout actually contains them.
 - if you are working in the `dev-loops` source repository, this skill file lives under `skills/copilot-pr-followup/`, so source-repo helper scripts live two levels up at `../../scripts/`, while required bundled contract docs live one level up at `../docs/`
-- when in doubt, resolve helper paths relative to this [skill file](./SKILL.md) first, then verify the target file exists before running it
+- when in doubt, trust the resolver's printed root over a hand-derived relative path
 
 Required bundled runtime contract docs for installed copies of this skill:
 - [Public Dev Loop Contract](../docs/public-dev-loop-contract.md)
@@ -133,7 +151,7 @@ Apply [Structural Quality](../docs/structural-quality.md) standards from the `de
 
 Treat the PR as the main working artifact once it exists.
 
-Before invoking `resolve-dev-loop-startup.mjs --pr <number>` to continue an externally-created PR (one `create-pr` did not just self-assign), claim ownership: `node scripts/github/edit-pr.mjs --repo <owner/name> --pr <number> --add-assignee @me` (skip if already assigned to the viewer). The resolver's single-contributor ownership gate fails closed on a foreign or unclaimed assignee, or a linked issue assigned to another human — see [Public Dev Loop Contract](../docs/public-dev-loop-contract.md#single-contributor-ownership-gate-resolve-dev-loop-startup).
+Before invoking `resolve-dev-loop-startup.mjs --pr <number>` to continue an externally-created PR (one `create-pr` did not just self-assign), claim ownership: `node <resolved-skill-scripts>/github/edit-pr.mjs --repo <owner/name> --pr <number> --add-assignee @me` (skip if already assigned to the viewer). The resolver's single-contributor ownership gate fails closed on a foreign or unclaimed assignee, or a linked issue assigned to another human — see [Public Dev Loop Contract](../docs/public-dev-loop-contract.md#single-contributor-ownership-gate-resolve-dev-loop-startup).
 
 Inspect: PR body/title (must satisfy [PR description contract](../docs/copilot-loop-operations.md)), closing reference (operator-controlled; subagents must NOT modify), author, review summaries, unresolved comments, latest commits, CI results.
 
@@ -380,7 +398,7 @@ Both gates run this same checkpoint review chain, owned end-to-end by [Gate Revi
    angle-specific prompt and never into the byte-identical prefix `GATE-EXEC-BRIEFING-PREFIX`
    hashes, listing every currently open or resolved finding thread regardless of author so the
    reviewer does not re-raise what a thread already covers; build the block from
-   `node scripts/github/capture-review-threads.mjs --repo <owner/name> --pr <number>` output
+   `node <resolved-skill-scripts>/github/capture-review-threads.mjs --repo <owner/name> --pr <number>` output
    (the full-bodies read, not `list-review-threads.mjs`'s 200-char listing excerpt), never
    an ad-hoc GraphQL call. The block's content, dedupe contract, and prefix-hash non-interference
    are owned by `GATE-EXEC-FINDING-THREADS` in
@@ -503,7 +521,7 @@ Do not report completion or advance to the next PR queue item until `.pi/dev-loo
 After the retrospective checkpoint write, run the post-merge board sync and archive as standard steps of the post-merge hook (see [Merge Preconditions](../docs/merge-preconditions.md) "Post-merge"):
 
 ```sh
-dev-loops queue sync-status --repo <owner/name> --pr <number> --item <linked-issue> --logical-column done || true
+npx dev-loops@1.0.2 queue sync-status --repo <owner/name> --pr <number> --item <linked-issue> --logical-column done || true
 node <resolved-skill-scripts>/projects/archive-done-items.mjs --repo <owner/name> || true
 ```
 

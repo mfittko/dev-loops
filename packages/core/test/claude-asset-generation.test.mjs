@@ -8,6 +8,8 @@ import {
   splitFrontmatter,
   stripPiOnlyBlocks,
   rewriteCliInvocation,
+  rewriteBareScriptsInvocation,
+  rewriteBareDevLoopsInvocation,
   transformAgent,
   transformSkill,
   transformCommand,
@@ -30,6 +32,59 @@ test("transformAgent and transformSkill rewrite the package-local CLI form to th
   const skill = transformSkill({ source: "skills/s/SKILL.md", raw: skillRaw, version: "1.2.3" });
   assert.ok(skill.includes("npx dev-loops@1.2.3 loop info"));
   assert.equal(skill.includes("<dev-loops-package-root>"), false);
+});
+
+// --- rewriteBareScriptsInvocation (issue #2123) ---
+
+test("rewriteBareScriptsInvocation routes a genuine bare invocation through <resolved-skill-scripts>", () => {
+  const body = "claim ownership: `node scripts/github/edit-pr.mjs --repo <owner/name> --pr <number>`.";
+  const out = rewriteBareScriptsInvocation(body);
+  assert.equal(out, "claim ownership: `node <resolved-skill-scripts>/github/edit-pr.mjs --repo <owner/name> --pr <number>`.");
+});
+
+test("rewriteBareScriptsInvocation leaves a documented \"source-repo fallback\" note bare", () => {
+  const body = "(source-repo fallback: `node scripts/loop/pre-flight-gate.mjs --expected-branch <b>`)";
+  assert.equal(rewriteBareScriptsInvocation(body), body);
+});
+
+test("rewriteBareScriptsInvocation leaves a \"missing helper\" detection probe bare", () => {
+  const body = "1. Detect the missing helper: try `node scripts/github/upsert-checkpoint-verdict.mjs --help` from the consumer repo.";
+  assert.equal(rewriteBareScriptsInvocation(body), body);
+});
+
+test("rewriteBareScriptsInvocation does not spuriously exempt a genuine invocation from an unrelated later \"fallback\" mention", () => {
+  const body = "Detector + probe: `node scripts/loop/detect-agent-stall.mjs --repo <owner/name>`. Interrupt+resume remains the manual fallback.";
+  const out = rewriteBareScriptsInvocation(body);
+  assert.ok(out.includes("node <resolved-skill-scripts>/loop/detect-agent-stall.mjs"), out);
+});
+
+test("rewriteBareScriptsInvocation handles a node/scripts split across a markdown line wrap", () => {
+  const body = "then `node\n   scripts/github/upsert-checkpoint-verdict.mjs --repo <owner/repo> --pr <n>`";
+  const out = rewriteBareScriptsInvocation(body);
+  assert.ok(out.includes("node <resolved-skill-scripts>/github/upsert-checkpoint-verdict.mjs"), out);
+});
+
+test("rewriteBareScriptsInvocation leaves a bare `scripts/...` mention with no `node ` prefix untouched (prose, not an invocation)", () => {
+  const body = "Use `scripts/loop/detect-change-scope.mjs` to determine scope.";
+  assert.equal(rewriteBareScriptsInvocation(body), body);
+});
+
+// --- rewriteBareDevLoopsInvocation (issue #2123) ---
+
+test("rewriteBareDevLoopsInvocation routes a bare fenced-code dev-loops invocation to the pinned npx form", () => {
+  const body = "```sh\ndev-loops loop pre-flight-gate --expected-branch <b> --check-subagents\n```";
+  const out = rewriteBareDevLoopsInvocation(body, "1.2.3");
+  assert.equal(out, "```sh\nnpx dev-loops@1.2.3 loop pre-flight-gate --expected-branch <b> --check-subagents\n```");
+});
+
+test("rewriteBareDevLoopsInvocation leaves a mid-sentence prose mention of dev-loops outside a fence untouched", () => {
+  const body = "informational review, independent of any\ndev-loops gate — it never satisfies `draft_gate`/`pre_approval_gate`.";
+  assert.equal(rewriteBareDevLoopsInvocation(body, "1.2.3"), body);
+});
+
+test("rewriteBareDevLoopsInvocation leaves an already-versioned npx dev-loops@<version> line alone", () => {
+  const body = "```sh\nnpx dev-loops@1.2.3 loop pre-flight-gate --expected-branch <b>\n```";
+  assert.equal(rewriteBareDevLoopsInvocation(body, "1.2.3"), body);
 });
 
 test("stripPiOnlyBlocks removes <!-- pi-only --> blocks and collapses blank runs; keeps other prose", () => {

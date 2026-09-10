@@ -26,3 +26,8 @@ worktrees/
 
 # local-only scratch (never commit)
 .pi-subagents/
+
+# Issue #2123: the Claude plugin's scripts-root bundle vendors yaml/zod/@dev-loops/core verbatim
+# into .claude/node_modules/ so the generated .claude/ tree is committed and shipped (unlike a real
+# node_modules cache). Un-ignore it explicitly — it must win over the blanket node_modules/ rule.
+!.claude/node_modules/
