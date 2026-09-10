@@ -121,8 +121,33 @@ export function rewriteGeneratedRepoDocLinks(body) {
  */
 export const WRAPPER_LAUNCHER = "dev-loops-run";
 
-/** CLI namespaces the routed `dev-loops <ns> <sub>` form recognizes (matches the real subcommand surface). */
-const WRAPPER_NS = "loop|gate|pr|queue|project|refine|release|security";
+/**
+ * CLI namespaces the routed `dev-loops <ns> <sub>` form recognizes — the real top-level keys of
+ * `SUBCOMMAND_ROUTES` in `cli/index.mjs` (locked by
+ * `test/contracts/claude-no-bare-invocation.test.mjs`'s recurrence guard, which reads those keys
+ * directly). `release` and `security` are NOT CLI namespaces (no such routes exist); `issue` and
+ * `inspect` are and were previously missing here, which left e.g. `dev-loops issue edit …` bare
+ * and unrouted in the generated tree (#2123 follow-up).
+ */
+export const WRAPPER_NS = "gate|loop|pr|issue|queue|project|inspect|refine";
+
+/**
+ * Regex source (no flags) matching a bare `node scripts/<dir>/…/<file>.mjs` invocation, at ANY
+ * subdirectory depth (one-or-more `dir/` segments), not just one subdirectory level, so a
+ * nested wrapper is caught too. Capture group 1 is the matched `scripts/…mjs` path. Exported so
+ * the no-bare-invocation guard test can build the identical regex rather than re-deriving it
+ * (single source of truth).
+ */
+export const BARE_NODE_SCRIPTS_SOURCE = String.raw`\bnode (scripts\/(?:[a-z0-9-]+\/)+[A-Za-z0-9._-]+\.mjs)`;
+
+/**
+ * Regex source (no flags) matching a bare, unrouted `dev-loops <namespace> <sub>` invocation.
+ * Requires an immediate lowercase-starting subcommand (lookahead) so prose (`dev-loops gate.`,
+ * `dev-loops gate — …`, `` `dev-loops queue` ``) and the already-pinned `npx dev-loops@<version>`
+ * CLI form never match. Exported so the no-bare-invocation guard test can build the identical
+ * regex from the same `WRAPPER_NS` rather than re-deriving it (single source of truth).
+ */
+export const BARE_DEV_LOOPS_NS_SOURCE = String.raw`\bdev-loops (${WRAPPER_NS}) (?=[a-z])`;
 
 /**
  * Route real wrapper invocations in a generated body through the resolver launcher so a
@@ -141,8 +166,8 @@ const WRAPPER_NS = "loop|gate|pr|queue|project|refine|release|security";
  */
 export function rewriteWrapperInvocation(body, launcher = WRAPPER_LAUNCHER) {
   return String(body)
-    .replace(/\bnode (scripts\/[a-z0-9-]+\/[A-Za-z0-9._-]+\.mjs)/g, `${launcher} $1`)
-    .replace(new RegExp(`\\bdev-loops (${WRAPPER_NS}) (?=[a-z])`, "g"), `${launcher} cli/index.mjs $1 `);
+    .replace(new RegExp(BARE_NODE_SCRIPTS_SOURCE, "g"), `${launcher} $1`)
+    .replace(new RegExp(BARE_DEV_LOOPS_NS_SOURCE, "g"), `${launcher} cli/index.mjs $1 `);
 }
 
 /**
