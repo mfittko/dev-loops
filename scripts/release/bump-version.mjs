@@ -158,7 +158,17 @@ export function writeClaudePluginPin(repoRoot, version) {
     delete entry.integrity;
   }
   // Mirror the real published entry shape: dev-loops depends on @dev-loops/core via a ^-range.
-  lock.packages["node_modules/dev-loops"].dependencies["@dev-loops/core"] = `^${version}`;
+  // The lockstep loop above only confirms the two first-party ENTRIES exist; a committed lock can
+  // still have a `node_modules/dev-loops` entry with no `dependencies` object (e.g. hand-edited or
+  // from an older npm lock shape) — fail closed with the exact missing path instead of a bare
+  // TypeError from the property set below.
+  const devLoopsDeps = lock.packages["node_modules/dev-loops"].dependencies;
+  if (typeof devLoopsDeps !== "object" || devLoopsDeps === null) {
+    throw new Error(
+      'plugin lockfile missing expected shape: packages["node_modules/dev-loops"].dependencies',
+    );
+  }
+  devLoopsDeps["@dev-loops/core"] = `^${version}`;
   writeJson(lockPath, lock);
 
   return [manifestPath, lockPath];

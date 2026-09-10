@@ -54,6 +54,17 @@ if (!resolvedRoot) {
   );
   process.exit(3);
 }
-const target = path.join(resolvedRoot, rel);
+// `rel` names a package-relative script path; every generated wrapper only ever passes one of its
+// own literal call-sites. Reject an absolute path or a `../` traversal segment before it reaches
+// `path.join` — either would let a resolved script path escape `resolvedRoot` and run a script
+// this launcher never meant to trust. Fail closed: same exit code as the missing-arg case above.
+const resolved = path.resolve(resolvedRoot, rel);
+const escapes = path.isAbsolute(rel) || rel.split(/[\\/]/).includes("..")
+  || !(resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep));
+if (escapes) {
+  console.error(`dev-loops-run: rejecting script path outside the resolved root: '${rel}'`);
+  process.exit(2);
+}
+const target = resolved;
 const r = spawnSync(process.execPath, [target, ...process.argv.slice(3)], { stdio: "inherit" });
 process.exit(r.status ?? 1);

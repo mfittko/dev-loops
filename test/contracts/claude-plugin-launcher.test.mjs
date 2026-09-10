@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -170,6 +170,53 @@ test("missing script argument: exit 2", () => {
     const r = runLauncher(launcher, [], dir);
     assert.equal(r.status, 2);
     assert.match(r.stderr, /missing/i);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Path-escape guard: `rel` (argv[2]) is untrusted wrapper-caller input joined against
+// `resolvedRoot`. An absolute `rel` or a `../` traversal segment must never reach `path.join` —
+// reject before spawn, fail closed with the same exit code as the missing-arg case, and prove the
+// escaped script never actually ran (a marker file it would have written stays absent).
+test("path-escape guard: an absolute rel is rejected — exit 2, stderr names the wrapper, nothing outside the root runs", () => {
+  const { dir, pluginRoot, launcher } = makeFixtureRoot();
+  try {
+    writeInstalledManifest(pluginRoot, "1.0.2");
+    const marker = path.join(dir, "evil-ran.marker");
+    const evil = path.join(dir, "evil.mjs");
+    writeFileSync(evil, `import { writeFileSync as w } from "node:fs";\nw(${JSON.stringify(marker)}, "ran");\n`);
+    const consumerCwd = mkdtempSync(path.join(tmpdir(), "dev-loops-run-escape-abs-"));
+    try {
+      const r = runLauncher(launcher, [evil], consumerCwd);
+      assert.equal(r.status, 2);
+      assert.match(r.stderr, /dev-loops-run/);
+      assert.match(r.stderr, new RegExp(evil.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+      assert.equal(existsSync(marker), false, "escaped script must never run");
+    } finally {
+      rmSync(consumerCwd, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("path-escape guard: a traversing rel is rejected — exit 2, stderr names the wrapper, nothing outside the root runs", () => {
+  const { dir, pluginRoot, launcher } = makeFixtureRoot();
+  try {
+    writeInstalledManifest(pluginRoot, "1.0.2");
+    const marker = path.join(dir, "evil-ran.marker");
+    writeFileSync(path.join(dir, "evil.mjs"), `import { writeFileSync as w } from "node:fs";\nw(${JSON.stringify(marker)}, "ran");\n`);
+    const consumerCwd = mkdtempSync(path.join(tmpdir(), "dev-loops-run-escape-trav-"));
+    try {
+      const r = runLauncher(launcher, ["../../evil.mjs"], consumerCwd);
+      assert.equal(r.status, 2);
+      assert.match(r.stderr, /dev-loops-run/);
+      assert.match(r.stderr, /\.\.\/\.\.\/evil\.mjs/);
+      assert.equal(existsSync(marker), false, "escaped script must never run");
+    } finally {
+      rmSync(consumerCwd, { recursive: true, force: true });
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

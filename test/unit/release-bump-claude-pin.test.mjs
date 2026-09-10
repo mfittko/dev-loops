@@ -132,6 +132,21 @@ test("writeClaudePluginPin fails closed when the lock is missing a first-party e
   }
 });
 
+test("writeClaudePluginPin fails closed with a named path when node_modules/dev-loops has no dependencies object", () => {
+  const dir = makeFixture("1.0.0-pre.0");
+  try {
+    const lock = readJson(path.join(dir, ".claude/package-lock.json"));
+    delete lock.packages["node_modules/dev-loops"].dependencies;
+    writeJson(path.join(dir, ".claude/package-lock.json"), lock);
+    assert.throws(
+      () => writeClaudePluginPin(dir, "9.9.9"),
+      /node_modules\/dev-loops"\]\.dependencies/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("inspectSurfaces reports the three new rows ok:true after a lockstep bump", () => {
   const dir = makeFixture("1.0.0-pre.0");
   try {
