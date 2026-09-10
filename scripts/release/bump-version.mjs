@@ -2,13 +2,13 @@
 /**
  * Sanctioned atomic version bump.
  *
- * The project version is a single source of truth fanned out across six
+ * The project version is a single source of truth fanned out across seven
  * release surfaces that MUST move together on every bump. A human remembering
  * each one is how a release drifts (a root manifest bumped while the committed
  * `.claude` tree and lockfile stayed on the prior prerelease, or the CHANGELOG
- * left on `## Unreleased`). This script sets all six to one target in lockstep,
- * regenerates the derived artifacts, stages exactly the enumerated release
- * files, and fails closed on any residual drift.
+ * left on `## Unreleased`). This script sets all seven to one target in
+ * lockstep, regenerates the derived artifacts, stages exactly the enumerated
+ * release files, and fails closed on any residual drift.
  *
  * Surfaces:
  *   1. root `package.json` `version`
@@ -23,6 +23,10 @@
  *      (entries left intact) so `extract-changelog-section.mjs` finds the
  *      release section; fails closed when there is no Unreleased content to
  *      stamp (an undocumented release must not proceed)
+ *   7. the Claude plugin's native dependency pin (#2123) — `.claude/package.json`
+ *      `dependencies["dev-loops"]` and the two first-party entries in the
+ *      committed `.claude/package-lock.json` (`writeClaudePluginPin`), kept in
+ *      lockstep so a plugin-only install's auto-install resolves the release
  *
  * Bump-only: it never commits, tags, pushes, or publishes. Commit + tag + push
  * and the stable-release approval gate remain operator/runbook-owned.
@@ -108,6 +112,58 @@ export function writeManifestSurfaces(repoRoot, version) {
   return [rootPath, corePath];
 }
 
+// The two first-party entries the committed `.claude/package-lock.json` lockstep-patches on every
+// bump (#2123): the pinned `dev-loops` package and its `@dev-loops/core` runtime dependency. Kept
+// as a lockstep pair (not derived) since the tarball URL shape is registry convention, not a
+// computation from the package name.
+const CLAUDE_PLUGIN_LOCKSTEP = [
+  ["node_modules/dev-loops", (v) => `https://registry.npmjs.org/dev-loops/-/dev-loops-${v}.tgz`],
+  ["node_modules/@dev-loops/core", (v) => `https://registry.npmjs.org/@dev-loops/core/-/core-${v}.tgz`],
+];
+
+/**
+ * Patch the Claude plugin's dependency pin (#2123): `.claude/package.json` declares an exact
+ * `dev-loops` dependency, and `.claude/package-lock.json` (a committed npm v3 lock, generated once
+ * against a published version) must move in lockstep on every release so a plugin-only install's
+ * native auto-install (`npm ci --ignore-scripts`) resolves the matching toolchain.
+ *
+ * Pure JSON surgery, no network: bump runs pre-publish, so the target version's tarball is not yet
+ * on the registry — `npm install` would fail (ETARGET). Only the two first-party lock entries
+ * (`dev-loops`, `@dev-loops/core`) are mutated; the rest of the transitive tree is left byte-stable
+ * so the lock stays internally consistent (`npm ci` validates the lock's own dependency graph, not
+ * a fresh registry resolution). `integrity` is deleted on both first-party entries — unknown
+ * pre-publish; `npm ci` recomputes it from the downloaded tarball when `resolved` is present.
+ * @returns {string[]} the two file paths touched.
+ */
+export function writeClaudePluginPin(repoRoot, version) {
+  const manifestPath = path.join(repoRoot, ".claude/package.json");
+  const manifest = readJson(manifestPath);
+  if (!manifest.dependencies || !("dev-loops" in manifest.dependencies)) {
+    throw new Error(".claude/package.json has no dev-loops dependency to bump");
+  }
+  manifest.dependencies["dev-loops"] = version;
+  writeJson(manifestPath, manifest);
+
+  const lockPath = path.join(repoRoot, ".claude/package-lock.json");
+  const lock = readJson(lockPath);
+  if (!lock.packages?.[""]?.dependencies) {
+    throw new Error(".claude/package-lock.json is missing packages[\"\"].dependencies");
+  }
+  lock.packages[""].dependencies["dev-loops"] = version;
+  for (const [key, resolvedUrl] of CLAUDE_PLUGIN_LOCKSTEP) {
+    const entry = lock.packages[key];
+    if (!entry) throw new Error(`.claude/package-lock.json is missing ${key}`);
+    entry.version = version;
+    entry.resolved = resolvedUrl(version);
+    delete entry.integrity;
+  }
+  // Mirror the real published entry shape: dev-loops depends on @dev-loops/core via a ^-range.
+  lock.packages["node_modules/dev-loops"].dependencies["@dev-loops/core"] = `^${version}`;
+  writeJson(lockPath, lock);
+
+  return [manifestPath, lockPath];
+}
+
 /**
  * Stamp the CHANGELOG's `## Unreleased` heading to `## <version>` so the
  * release-time guard (`extract-changelog-section.mjs`) finds the section. The
@@ -179,6 +235,13 @@ export function inspectSurfaces(repoRoot, version) {
   const pins = (grep.stdout || "").split("\n").filter(Boolean);
   const pinsOk = pins.length > 0 && pins.every((p) => p === `dev-loops@${version}`);
 
+  // Claude plugin dependency pin (#2123): manifest exact-pin + the two first-party lock entries.
+  const pluginManifest = readJson(path.join(repoRoot, ".claude/package.json"));
+  const pluginLock = readJson(path.join(repoRoot, ".claude/package-lock.json"));
+  const pluginPin = pluginManifest.dependencies?.["dev-loops"];
+  const lockDl = pluginLock.packages?.["node_modules/dev-loops"];
+  const lockCore = pluginLock.packages?.["node_modules/@dev-loops/core"];
+
   return [
     { name: "root package.json version", value: root.version, ok: root.version === version },
     { name: "packages/core package.json version", value: core.version, ok: core.version === version },
@@ -193,6 +256,21 @@ export function inspectSurfaces(repoRoot, version) {
       name: "pinned npx call-sites",
       value: [...new Set(pins)].join(",") || "(none found)",
       ok: pinsOk,
+    },
+    { name: ".claude plugin dev-loops pin", value: pluginPin, ok: pluginPin === version },
+    {
+      name: ".claude lockfile dev-loops",
+      value: lockDl?.version,
+      ok: lockDl?.version === version
+        && lockDl?.resolved === `https://registry.npmjs.org/dev-loops/-/dev-loops-${version}.tgz`
+        && lockDl?.integrity === undefined,
+    },
+    {
+      name: ".claude lockfile @dev-loops/core",
+      value: lockCore?.version,
+      ok: lockCore?.version === version
+        && lockCore?.resolved === `https://registry.npmjs.org/@dev-loops/core/-/core-${version}.tgz`
+        && lockCore?.integrity === undefined,
     },
   ];
 }
@@ -217,6 +295,10 @@ export function bumpVersion({ repoRoot, version, stage = true, silent = false, r
 
   // Surfaces 1-3: hand-edited manifests.
   const manifestPaths = writeManifestSurfaces(repoRoot, version);
+
+  // Claude plugin dependency pin (#2123): hand-edited like surfaces 1-3, independent of the regen
+  // subprocesses. `.claude` is already in the enumerated staged paths below, so both files ship.
+  writeClaudePluginPin(repoRoot, version);
 
   // Surface 4: regenerate the lockfile from the bumped manifests.
   runChild("bun", ["install", "--lockfile-only"], repoRoot, silent);

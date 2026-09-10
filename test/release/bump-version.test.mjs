@@ -1,4 +1,4 @@
-// Sanctioned atomic version-bump contract (five-surface lockstep bump).
+// Sanctioned atomic version-bump contract (seven-surface lockstep bump).
 //
 // Coverage layers, all CI-safe (no bun install, no resolvable @dev-loops/core):
 //  - Pure fixture units for the surface logic: manifest edits, per-surface drift
@@ -37,7 +37,27 @@ function lockfile(version) {
   return `{\n  "workspaces": {\n    "": { "dependencies": { "${CORE_DEP}": "^${version}" } },\n    "packages/core": { "name": "${CORE_DEP}", "version": "${version}" }\n  }\n}\n`;
 }
 
-// A minimal fixture carrying all five surfaces, initially at `from`.
+// A minimal `.claude` plugin lock fixture carrying just the two first-party lockstep entries
+// `writeClaudePluginPin` mutates (#2123) — mirrors the committed lock's relevant shape.
+function claudePluginLock(version) {
+  return {
+    lockfileVersion: 3,
+    packages: {
+      "": { name: "dev-loops-plugin", dependencies: { "dev-loops": version } },
+      "node_modules/dev-loops": {
+        version,
+        resolved: `https://registry.npmjs.org/dev-loops/-/dev-loops-${version}.tgz`,
+        dependencies: { "@dev-loops/core": `^${version}` },
+      },
+      "node_modules/@dev-loops/core": {
+        version,
+        resolved: `https://registry.npmjs.org/@dev-loops/core/-/core-${version}.tgz`,
+      },
+    },
+  };
+}
+
+// A minimal fixture carrying all seven surfaces, initially at `from`.
 function makeFixture(from) {
   const dir = mkdtempSync(path.join(tmpdir(), "bump-version-fixture-"));
   mkdirSync(path.join(dir, "packages/core"), { recursive: true });
@@ -51,6 +71,8 @@ function makeFixture(from) {
   writeJson(path.join(dir, "packages/core/package.json"), { name: CORE_DEP, version: from });
   writeJson(path.join(dir, ".claude/.claude-plugin/plugin.json"), { name: "dev-loops", version: from });
   writeFileSync(path.join(dir, ".claude/agents/x.md"), `Run \`npx dev-loops@${from} loop startup\`.\n`);
+  writeJson(path.join(dir, ".claude/package.json"), { name: "dev-loops-plugin", private: true, dependencies: { "dev-loops": from } });
+  writeJson(path.join(dir, ".claude/package-lock.json"), claudePluginLock(from));
   writeFileSync(path.join(dir, "bun.lock"), lockfile(from));
   writeFileSync(
     path.join(dir, "CHANGELOG.md"),
@@ -78,7 +100,7 @@ test("inspectSurfaces confirms all five surfaces when in lockstep and flags each
   try {
     const clean = inspectSurfaces(dir, PRERELEASE);
     assert.ok(clean.every((s) => s.ok), `expected all surfaces ok, got ${JSON.stringify(clean)}`);
-    assert.equal(clean.length, 6); // 5 surfaces; the .claude surface reports plugin + pins separately
+    assert.equal(clean.length, 9); // 7 surfaces; the generated-.claude and plugin-pin surfaces each report multiple rows
 
     // Drift one surface (the plugin manifest) and confirm exactly it fails closed.
     writeJson(path.join(dir, ".claude/.claude-plugin/plugin.json"), { name: "dev-loops", version: "9.9.9" });
