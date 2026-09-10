@@ -57,7 +57,7 @@ draft/pre-approval gates run, with `--gate review` threaded through every stage,
 but stops after fan-in/verdict-post — it never reaches the judge, fix, or
 repeat phases those gates run:
 
-1. **Phase 1 — context-builder.** `node scripts/github/write-gate-context.mjs
+1. **Phase 1 — context-builder.** `dev-loops-run scripts/github/write-gate-context.mjs
    --repo <owner/repo> --pr <n> --gate review --head-sha <sha> --base <ref>
    [...]` — the SAME build-once neutral bundle (diff + adjacent code) draft/
    pre-approval get. Angle resolution for `review` is NOT dynamic/tiered: it is
@@ -76,7 +76,7 @@ repeat phases those gates run:
    resolved dispatch unit (`resolveFanoutGroups`), each seeded with the
    identical neutral bundle plus its angle(s) — unchanged from draft/
    pre-approval fan-out; no new reviewer angles, no bespoke review agent.
-4. **Phase 3 — fan-in + post.** `node scripts/loop/consolidate-fanin.mjs
+4. **Phase 3 — fan-in + post.** `dev-loops-run scripts/loop/consolidate-fanin.mjs
    --gate review [...] --ledger-out <path>` synthesizes the per-angle findings
    into one disposition ledger and computed verdict, then `node
    scripts/github/upsert-checkpoint-verdict.mjs --repo <owner/repo> --pr <n>
