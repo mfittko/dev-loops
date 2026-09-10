@@ -7,7 +7,7 @@ Use it together with:
 - [Public Dev Loop Contract](./public-dev-loop-contract.md) — owner of `FACADE-LINKED-PR-SINGLE-ARTIFACT`, `FACADE-BOOTSTRAP-WATCH-ROUTE`, `FACADE-BOOTSTRAP-ISOLATED-WORKTREE-CONTINUATION`
 - [Retrospective Checkpoint Contract](./retrospective-checkpoint-contract.md) when the current step depends on async start/resume/status or retrospective enforcement
 - [Stop Conditions](./stop-conditions.md) — owner of `STOP-INITIAL-COPILOT-001` and the other strategy-wide stop/wait rules this procedure operationalizes
-- [Merge Preconditions](./merge-preconditions.md) — the merge gate this procedure defers to before `gh pr merge`
+- [Merge Preconditions](./merge-preconditions.md) — the merge gate this procedure defers to before merging (via the sanctioned wrapper `scripts/github/merge-pr.mjs`; raw `gh pr merge` is forbidden)
 
 When routed work is issue-first rather than already in active PR follow-up, use the procedure below before entering the shared post-PR loop. Treat this document as the issue-refinement specialist procedure for the routed `issue_intake` seam.
 
