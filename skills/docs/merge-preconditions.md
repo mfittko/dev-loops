@@ -61,6 +61,39 @@ Before merge, ALL of the following MUST hold:
 >
 > Head-advanced sibling case (issue 1441): the loop converged, the round's threads were reply-resolved on a NEW head, so `copilotReviewOnCurrentHead` is false. Withdrawing alone would just make the loop re-request Copilot on that head and strand again. The tool covers this too, but only when the delta since Copilot's last SUBMITTED review is provably a pure doc/prose bump (the same fail-closed classifier `request-copilot-review.mjs` already trusts at the round cap) — any code/test/config/CI or unclassifiable delta, a non-linear advance, or an unavailable compare still refuses, exactly as before. On success it records an operator-authorized suppression marker scoped to that exact head (`scripts/loop/_post-convergence-review-suppression.mjs`); `request-copilot-review.mjs` and the gate coordinator (`evaluatePrGateCoordination`'s `postConvergenceReviewSuppressed` input) both honor that marker so the round is not forced open again and `pre_approval_gate` can post. Any further push changes the head and invalidates the marker.
 
+## Sanctioned merge wrapper (issue #1939)
+
+The canonical merge path is the sanctioned wrapper `scripts/github/merge-pr.mjs`
+(`node scripts/github/merge-pr.mjs --repo <owner/name> --pr <n> --human-approved-by <login>`,
+squash by default, `--method` configurable). It runs the full precondition list
+above fail-closed and refuses with a non-zero, machine-readable reason naming the
+specific failing precondition; only when every precondition holds does it perform
+the merge and return `{ ok, merged, mergeCommit, approvedBy, mergeClass, approvalVia, ... }`
+under the same `--jq`/`--silent` base-CLI contract as the other helpers. It reuses
+`detect-checkpoint-evidence` for the draft_gate / current-head pre_approval_gate /
+threads / runner-lock / fan-out-provenance set — it does not re-derive it.
+
+- Every merge passes `--human-approved-by <login>`, validated as a real GitHub login
+  (not a bare boolean or free text) and stamped on the result and audit trail.
+- **Merge class.** A normal **drain** merge is satisfied by a recorded standing
+  authorization (`autonomy.humanMergeOnly: false`) OR a fresh operator approval. A
+  **stable-release** (`--stable-release`), **size-escalated** (`gates.size` outcome
+  `escalate`/`block`), or **T1-touching** merge is escalated: a standing
+  authorization does NOT satisfy it — a fresh per-merge operator approval is required.
+- **Fresh per-merge approval** is verified against an agent-unforgeable, head-pinned
+  record, in preference order: a genuine `APPROVED` review by `<login>` on the current
+  head SHA (a Copilot/bot review never satisfies it, reusing the prohibition on
+  agent-submitted APPROVE reviews), else a head-pinned operator comment marker
+  `approve merge <headSha>` authored by `<login>`. It fails closed on a stale
+  (earlier-commit), agent/bot-authored, or wrong-login approval, and re-gates on every
+  head bump.
+- **Stable-release safety.** The wrapper only merges the PR to its base. It NEVER tags
+  or publishes and does NOT satisfy the operator-owned stable-release approval gate;
+  `--stable-release` only raises the approval requirement.
+- Raw `gh pr merge` is forbidden — see `RAW-GH-PR-MERGE-BYPASS` in
+  [Anti-patterns](anti-patterns.md). It is a recorded raw-`gh` violation
+  (`check-retro-tooling.mjs`), and the PreToolUse Bash gate stays as defense-in-depth.
+
 ### Items 3 and 4 apply to every path, not just the dev-loop tooling
 
 Items 3 and 4 (clean `draft_gate` / current-head `pre_approval_gate` verdicts) are
@@ -240,8 +273,10 @@ human action and this authorization step is **non-overridable**:
   "merge" instruction. The lifecycle resolver therefore never advances to the merge
   state and parks at the `pre_approval_gate` human-merge handoff.
 - The agent still runs the full mechanical pre-merge evidence check and reports
-  merge-ready + gate evidence, then hands off to a human to perform `gh pr merge`.
-  The agent **never** runs `gh pr merge` itself.
+  merge-ready + gate evidence, then hands off to a human, who merges through the
+  sanctioned wrapper `scripts/github/merge-pr.mjs`. Under `humanMergeOnly` the agent
+  **never** performs the merge itself — not the wrapper and never a raw `gh pr merge`;
+  merge is a human action.
 
 This makes human-gated merge an enforced repo invariant, not a per-run default an
 explicit instruction can unlock.
@@ -274,8 +309,11 @@ merge-authorization rule.
 - `resolveLifecycleState` (`@dev-loops/core/loop/lifecycle-state`) consults this gate
   IN ADDITION TO `resolveEffectiveMergeAuthorized`: when it is required, the lifecycle
   parks at `pre_approval_gate` (the existing human-approval handoff) instead of
-  advancing to `merge`, even under a standing authorization. The agent must not run
-  `gh pr merge` for such a PR until a human review satisfies it.
+  advancing to `merge`, even under a standing authorization. The agent must not merge
+  such a PR — including via the sanctioned wrapper — until a human review satisfies it,
+  and it must never run a raw `gh pr merge`. The wrapper `scripts/github/merge-pr.mjs`
+  itself refuses (precondition `size_budget_human_approval`) until that human approval
+  is present.
 
 ### `approval` — offer to assign a human at the handoff (opt-in)
 

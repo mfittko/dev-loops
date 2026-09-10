@@ -64,15 +64,19 @@ test("gh after && / | / ; separator is caught", () => {
   assert.match(violations[0], /gh pr view/);
 });
 
-test("allowed write-ops (gh pr merge / pr ready) are recorded, not violations", () => {
-  const transcript = [
-    "gh pr merge 982 --squash",
-    "gh pr ready 982",
-  ].join("\n");
-  const { violations, allowedWriteOps, internalToolingOnly } = analyzeTranscript(transcript);
+test("gh pr ready is still an allowed write-op (no wrapper-forbidden raw form)", () => {
+  const { violations, allowedWriteOps, internalToolingOnly } = analyzeTranscript("gh pr ready 982");
   assert.deepEqual(violations, []);
-  assert.equal(allowedWriteOps.length, 2);
+  assert.equal(allowedWriteOps.length, 1);
   assert.equal(internalToolingOnly, true);
+});
+
+test("raw `gh pr merge` is a flagged violation now that merge-pr.mjs wraps it (issue #1939)", () => {
+  const { violations, allowedWriteOps, internalToolingOnly } = analyzeTranscript("gh pr merge 982 --squash");
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], /gh pr merge/);
+  assert.deepEqual(allowedWriteOps, []);
+  assert.equal(internalToolingOnly, false);
 });
 
 test("raw `gh issue create` is a violation now that create-issue.mjs wraps it", () => {
@@ -95,8 +99,8 @@ test("representative mixed transcript classifies correctly", () => {
   ].join("\n");
   const { violations, allowedWriteOps, internalToolingOnly } = analyzeTranscript(transcript);
   assert.equal(internalToolingOnly, false);
-  assert.equal(violations.length, 3); // gh api, python3, node -e
-  assert.equal(allowedWriteOps.length, 1); // gh pr merge
+  assert.equal(violations.length, 4); // gh api, python3, node -e, gh pr merge
+  assert.equal(allowedWriteOps.length, 0); // gh pr merge is no longer allowlisted
 });
 
 test("env-prefixed, wrapper-prefixed, and path-prefixed raw calls are violations", () => {

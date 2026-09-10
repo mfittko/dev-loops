@@ -307,7 +307,7 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
       return {
         decision: "deny",
         reason:
-          `gh pr merge blocked: missing pre-merge gate evidence for PR #${prNumber} (need clean current-head draft_gate + pre_approval_gate; inline verdicts are not accepted). Run the dev-loop gates instead of merging directly.` +
+          `gh pr merge blocked: missing pre-merge gate evidence for PR #${prNumber} (need clean current-head draft_gate + pre_approval_gate; inline verdicts are not accepted). Route the merge through the sanctioned wrapper \`node scripts/github/merge-pr.mjs --repo <owner/name> --pr ${prNumber} --human-approved-by <login>\`, which runs the full precondition set fail-closed — raw \`gh pr merge\` is forbidden (issue #1939).` +
           (alsoWritesEvidence
             ? " This command also writes gate evidence, but hooks evaluate before the command runs — write the evidence in a separate call, then merge alone."
             : ""),

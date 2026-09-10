@@ -77,9 +77,12 @@ export const SANCTIONED_COMMANDS = Object.freeze({
 
   // Orchestrator-owned: a spawned dev-loop subagent must NEVER do these. Board
   // status transitions live here (not in `lifecycle`) — the orchestrator owns
-  // move-queue-item/sync-item-status in the current batch model.
+  // move-queue-item/sync-item-status in the current batch model. Merge is
+  // orchestrator-owned too, and the orchestrator performs it through the
+  // sanctioned wrapper (scripts/github/merge-pr.mjs --human-approved-by <login>);
+  // raw `gh pr merge` is forbidden (issue #1939).
   orchestratorOwned: Object.freeze([
-    "gh pr merge",
+    "pr merge via scripts/github/merge-pr.mjs --human-approved-by <login> (raw gh pr merge forbidden)",
     "board status transitions (move-queue-item / sync-item-status.mjs; current batch model)",
   ]),
 });

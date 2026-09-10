@@ -24,8 +24,10 @@
  *   - dev-loops subcommands and `node scripts/....mjs` invocations. Those scripts
  *     legitimately call gh/GraphQL/etc. internally — that IS the tooling.
  *   - A small explicit allowlist of write-ops that have no internal wrapper today:
- *     `gh pr merge`, `gh pr ready`. These are recorded as `allowedWriteOps` rather
- *     than violations so the gate is not blocked forever on an unavoidable gap.
+ *     `gh pr ready`. This is recorded as `allowedWriteOps` rather
+ *     than a violation so the gate is not blocked forever on an unavoidable gap.
+ *     (`gh pr merge` was removed once its wrapper — scripts/github/merge-pr.mjs —
+ *     shipped, per issue #1939, so a raw `gh pr merge` is now a flagged violation.)
  *     Once an op gains a sanctioned wrapper it is removed from this allowlist so a
  *     raw agent-level call is flagged (the analyzer only ever sees agent Bash-tool
  *     commands, never a wrapper's internal subprocess, so no false positive results).
@@ -84,7 +86,11 @@ Exit codes:
  * @type {ReadonlyArray<RegExp>}
  */
 const ALLOWED_WRITE_OPS = Object.freeze([
-  /^gh\s+pr\s+merge\b/,
+  // `gh pr merge` is NO LONGER allowlisted (issue #1939): it now has a sanctioned
+  // wrapper (scripts/github/merge-pr.mjs), so a raw agent-level `gh pr merge` is
+  // flagged as a violation directing the caller to the wrapper. The analyzer only
+  // ever sees the agent's own top-level Bash commands, never merge-pr.mjs's
+  // internal subprocess, so removing it produces no false positive.
   /^gh\s+pr\s+ready\b/,
 ]);
 

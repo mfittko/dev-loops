@@ -51,6 +51,15 @@ test("decideBashGate denies ungated gh pr merge in the target repo", () => {
   assert.match(d.reason, /#1/);
 });
 
+// issue #1939: raw `gh pr merge` is forbidden — the interception deny directs the caller to the
+// sanctioned wrapper so a flagged raw merge names its replacement.
+test("decideBashGate deny for a raw merge points to the merge-pr.mjs wrapper", () => {
+  const d = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, gatePassed: false });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /scripts\/github\/merge-pr\.mjs/);
+  assert.match(d.reason, /--human-approved-by/);
+});
+
 // #1172: PreToolUse blocks pre-execution, so a compound write+merge command never runs the write —
 // the ledger looks like it "vanished". Hint the split when the command also writes gate evidence.
 test("decideBashGate hints the write/merge split when the compound command also writes gate evidence", () => {

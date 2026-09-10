@@ -536,6 +536,10 @@
       "id": "QUEUE-RENAME-CONFLICT-NO-MUTATION"
     },
     {
+      "id": "RAW-GH-PR-MERGE-BYPASS",
+      "enforcement": "doc"
+    },
+    {
       "id": "RAW-GH-PR-READY-BYPASS",
       "enforcement": "doc"
     },
