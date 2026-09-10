@@ -10,23 +10,30 @@ check still applies.
 ## Enter the wait
 
 Use the envelope's artifact identity, `nextAction`, `stopRules`, and timeout policy.
-Preserve the existing outer-loop checkpoint reattachment procedure in the public
-entrypoint; checkpoint state is context for a fresh detector, not permission to act
-on a stale head. If facts conflict or a required helper is unavailable, report the
-concrete reconciliation problem.
+`wait_watch` is a pure read/observe route (ownership-exempt for that reason): the
+outer wait observes, refreshes, and re-attaches only; it never mutates PR, repo,
+board, or checkpoint state, and it may wait on work it does not own. Preserve the
+existing outer-loop checkpoint reattachment procedure in the public entrypoint;
+checkpoint state is context for a fresh detector, not permission to act on a stale
+head. If facts conflict or a required helper is unavailable, report the concrete
+reconciliation problem.
 
 | Current boundary | Command / action |
 | --- | --- |
 | Initial Copilot implementation, no follow-up-ready PR | `dev-loops loop watch-initial --repo <owner/name> --issue <N>`; preserve the bootstrap budget and exceptions in `FACADE-BOOTSTRAP-WATCH-ROUTE` and its adjacent rules in the public contract. |
-| Current PR | Refresh with `dev-loops loop loop-state --repo <owner/name> --pr <N>`. If the refreshed state remains waiting and preflight below is satisfied, use `dev-loops loop watch-cycle --repo <owner/name> --pr <N> --concise`. |
+| Current PR | Refresh with `dev-loops loop loop-state --repo <owner/name> --pr <N>` (add `--lightweight` for a light-dispatched PR so the round cap composes correctly). If the refreshed state remains waiting and preflight below is satisfied, use `dev-loops loop watch-cycle --repo <owner/name> --pr <N> --concise`. |
 | Pending/absent CI | The cycle routes to the provider-agnostic CI watcher. The direct equivalent is `dev-loops loop watch-ci --repo <owner/name> --pr <N> --timeout-ms <remaining-budget-ms>`. Failed CI needs follow-up, not more waiting. |
 
 Before invoking handoff/watch-cycle, route a newly actionable state through the
 fresh-envelope sequence below. If the snapshot reports `mergeStateStatus=BEHIND`
-or `DIRTY`, `mergeable=CONFLICTING`, or a new review request is needed, load the
-full follow-up and operations procedures for the sanctioned preflight before
-invoking it. Those are conditional additional reads, not savings on a preflight
-that actually needs them. Preserve ownership, worktree, and authorization checks;
+or `DIRTY`, `mergeable=CONFLICTING`, or a new review request is needed, that state
+is a transition, not a wait: resolve the fresh envelope and load its destination
+`requiredReads` — which pull in the follow-up and operations preflight — before
+acting. Do not direct-load those procedures ahead of the envelope; they are
+conditional reads the destination route requires, not savings on a preflight that
+actually needs them. A `DIRTY`/`CONFLICTING` base never enters a CI or review wait
+(`FACADE-NEVER-CI-WAIT-WHILE-DIRTY`): the handoff integrates the base or fails
+closed first. Preserve ownership, worktree, and authorization checks;
 if an authorized route cannot be established, stop for reconciliation. The
 handoff owns base-integration and request decisions; obey its stop result. Enter
 a review watcher only when it returns
@@ -45,7 +52,9 @@ After a watch settles:
 
 1. Refresh authoritative state with `dev-loops loop loop-state --repo <owner/name> --pr <N>`.
    For `timeout`/`idle`, use `dev-loops loop handoff --repo <owner/name> --pr <N> --watch-status <status>`
-   for the existing timeout refresh. Bootstrap
+   for the existing timeout refresh. For a light-dispatched PR, pass `--lightweight`
+   on these round-cap-consuming refreshes (`loop-state`, `handoff`) so the composed
+   lightweight cap is enforced. Bootstrap
    waits re-resolve the issue and its linked PR. Use command `--jq`/`--silent`
    fields or concise output; no inline JSON interpreters.
 2. Run `dev-loops loop startup --pr <N>` (or `--issue <N>` for bootstrap), preserving
@@ -76,10 +85,12 @@ The cycle helper supplies its bounded policy internally; do not pass it unsuppor
 flags such as `--probe-only` or `--poll-interval-ms`. Flag support is command-specific:
 `watch-ci` supports `--poll-interval-ms`; `watch-cycle` does not.
 
-For zero current-head CI suites only, the existing detector exception remains:
-previous-head CI green plus local `bun run verify` passed for this exact head
-allows a refresh with `--local-validation-head-sha <head-sha>` to establish
-`crediblyGreen`. Never infer it from missing CI alone.
+For a zero current-head-suite head, the detector derives CI status automatically
+from GitHub facts and the previous-head rollup; the watch-route CLIs expose no flag
+to assert local validation (the `--local-validation-head-sha` surface was removed
+in the #549 CLI-surface audit to auto-resolve derivable state), so an agent cannot
+force `crediblyGreen` from the wait route. Never infer green from missing CI: a
+refresh still reporting raw `none` routes to CI follow-up, not a self-certified green.
 
 Wait only through the deterministic tools in `COPILOT-FOLLOWUP-WAIT-TOOLS`.
 Helper-owned polling is expected; do not create shell sleep/poll loops, detached
