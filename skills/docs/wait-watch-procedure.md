@@ -72,8 +72,9 @@ authorization. Quiet observations before exhaustion are healthy waits, not
 blockers. The initial-implementation seam retains its separate one-hour budget
 and public-contract quiet/activity exceptions. Use explicit bounded timeouts on
 direct probes; zero-timeout probes are only for requested one-shot status checks.
-The cycle helper supplies its bounded policy internally; do not invent unsupported
-flags such as `--probe-only` or `--poll-interval-ms`.
+The cycle helper supplies its bounded policy internally; do not pass it unsupported
+flags such as `--probe-only` or `--poll-interval-ms`. Flag support is command-specific:
+`watch-ci` supports `--poll-interval-ms`; `watch-cycle` does not.
 
 For zero current-head CI suites only, the existing detector exception remains:
 previous-head CI green plus local `bun run verify` passed for this exact head
