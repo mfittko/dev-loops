@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
-import { renderBriefingPointerLine, sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
+import { renderBriefingPointerLine, sha256Hex, DISPATCH_PROMPT_LEADING_CAP_BYTES } from "@dev-loops/core/loop/review-dispatch-plan";
 import { evaluateDispatchPromptLayout, verifyDispatchPromptLayoutForHead } from "../../scripts/github/verify-dispatch-prompt-layout.mjs";
 import { validateBriefingPrefixPath, dispatchPromptLayoutRecordPath } from "../../scripts/github/record-dispatch-prompt-layout.mjs";
 
@@ -252,6 +252,46 @@ test("record-dispatch-prompt-layout.mjs records a full-content hash; the round p
     const verifyResult = runVerifyCli(["--head-sha", HEAD_SHA], { cwd: tmpDir });
     assert.equal(verifyResult.status, 0, verifyResult.stderr);
     assert.equal(JSON.parse(verifyResult.stdout).verified, true);
+  });
+});
+
+// AC1 (representative large prompt): a prompt LONGER than the leading-bytes cap
+// still binds by its FULL content — promptContentHash is the sha256 of the whole
+// prompt, never of the truncated `leading` capture. A regression that hashed
+// `leading` instead of `promptText` would still match a same-truncated emitted
+// file and pass every other test; this pins the full-content invariant.
+test("record-dispatch-prompt-layout.mjs binds a >cap prompt by FULL content (not the truncated leading capture)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const relPath = await writeGateContextPrefix(tmpDir);
+    // A prompt comfortably past DISPATCH_PROMPT_LEADING_CAP_BYTES whose bytes
+    // AFTER the cap still matter: the emitted file carries the full bytes.
+    const bigPrompt = `${PREFIX_BYTES}## Angle: coverage\n${"x".repeat(DISPATCH_PROMPT_LEADING_CAP_BYTES)}TAIL-AFTER-CAP\n`;
+    assert.ok(bigPrompt.length > DISPATCH_PROMPT_LEADING_CAP_BYTES);
+    const promptFile = path.join(tmpDir, "big-prompt.txt");
+    await writeFile(promptFile, bigPrompt, "utf8");
+    await writeEmittedPrompt(tmpDir, "draft-gate-coverage", bigPrompt);
+    const result = runRecordCli(
+      ["--scope", "draft-gate-coverage", "--head-sha", HEAD_SHA, "--prefix-path", relPath, "--prompt-file", promptFile],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).truncated, true);
+
+    const record = JSON.parse(await readFile(dispatchPromptLayoutRecordPath(path.join(tmpDir, "tmp"), "draft-gate-coverage", HEAD_SHA), "utf8"));
+    // Hash is over the FULL prompt, never the truncated leading capture.
+    assert.equal(record.promptContentHash, sha256Hex(bigPrompt));
+    assert.notEqual(record.promptContentHash, sha256Hex(record.leading));
+    assert.equal(record.leading.length, DISPATCH_PROMPT_LEADING_CAP_BYTES);
+
+    // Binds against the full-bytes emitted file — the >cap tail is part of the proof.
+    const okResult = await verifyDispatchPromptLayoutForHead(path.join(tmpDir, "tmp"), HEAD_SHA);
+    assert.equal(okResult.verified, true);
+
+    // A tail-only drift past the cap is still caught (proves the bind is not
+    // limited to the first cap bytes).
+    await writeEmittedPrompt(tmpDir, "draft-gate-coverage", `${PREFIX_BYTES}## Angle: coverage\n${"x".repeat(DISPATCH_PROMPT_LEADING_CAP_BYTES)}DIFFERENT-TAIL\n`);
+    const driftResult = await verifyDispatchPromptLayoutForHead(path.join(tmpDir, "tmp"), HEAD_SHA);
+    assert.equal(driftResult.verified, false);
   });
 });
 

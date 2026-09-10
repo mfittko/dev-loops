@@ -3424,6 +3424,32 @@ test("#2131: fails closed on a hand-composed POINTER-seeding emitted unit (not i
   );
 });
 
+test("#2131: fails closed when a present record binds to NO emitted unit on disk (hand-composed dispatch, via consolidateGateFanin)", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-layout-"));
+      try {
+        const bytes = "## Invariant prefix\nrepo: o/r\n";
+        await writeGateBriefingRecord(tmpRoot, "draft_gate", HEAD_A, bytes);
+        const prefixPath = path.join(tmpRoot, "gate-context", "mfittko-dev-loops", "pr-1646", `draft_gate-${HEAD_A}.briefing-prefix.txt`);
+        // Record present, but emitted:null omits the canonical emitted-prompt file entirely.
+        await writeDispatchPromptRecord(tmpRoot, "draft-gate-coverage", HEAD_A, {
+          prefixPath,
+          leading: `${bytes}## Angle: coverage\nDo the thing.`,
+          emitted: null,
+        });
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
+          (err) => err.message.includes("GATE-EXEC") && /do not bind to the sanctioned emitter's inline-aligned emitted unit/.test(err.message),
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
 test("#2131: fails closed when the recorded prompt drifts from the emitted unit (altered suffix / mismatched delivered prompt)", async () => {
   await withFindingsDir(
     { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A } },
