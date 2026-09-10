@@ -512,7 +512,11 @@ node "$(dirname "$0")/gh-impl.mjs" "$@"
     // that repoRoot's own github.com origin would now auto-resolve.
     const failure = spawnSync("node", [path.join(repoRoot, "cli/index.mjs"), "project", "list"], {
       cwd: tempRoot,
-      env,
+      // ponytail: tempRoot is never git-init'd, but git still walks parent
+      // directories looking for a .git; cap the walk at tempRoot so a host
+      // whose TMPDIR happens to sit inside a git checkout can't leak an
+      // ancestor's origin remote into this fail-closed assertion.
+      env: { ...env, GIT_CEILING_DIRECTORIES: tempRoot },
       encoding: "utf8",
     });
     assert.equal(failure.status, 1);

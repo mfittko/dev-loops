@@ -6,8 +6,8 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { main, classifyExitCode } from "@dev-loops/core/projects/list-queue-items";
 import { detectRepoSlug } from "@dev-loops/core/github/repo-slug";
 
-const USAGE = `Usage: dev-loops queue list --repo <owner/name> [--project <number|id>] [--column <name>] [--limit <n>]
-       dev-loops queue list --repo <owner/name> [--project <number|id>] --summary [--done-limit <n>]
+const USAGE = `Usage: dev-loops queue list [--repo <owner/name>] [--project <number|id>] [--column <name>] [--limit <n>]
+       dev-loops queue list [--repo <owner/name>] [--project <number|id>] --summary [--done-limit <n>]
        (dev-loops project list … is a back-compat alias)
 
 List GitHub Projects V2 items filtered by Status column, ordered by position

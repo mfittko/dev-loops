@@ -228,6 +228,18 @@ test("detectRepoSlug returns null for unparseable remote URL", () => {
   }
 });
 
+test("detectRepoSlug returns owner/repo from an HTTPS github.com remote without a .git suffix", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "repo-slug-test-"));
+  try {
+    execFileSync("git", ["init"], { cwd: tmpDir, stdio: "ignore" });
+    execFileSync("git", ["-C", tmpDir, "remote", "add", "origin", "https://github.com/owner/name"]);
+    const slug = detectRepoSlug(tmpDir);
+    assert.equal(slug, "owner/name");
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("detectRepoSlug returns owner/repo from an SSH scp-style github.com remote", () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "repo-slug-test-"));
   try {
