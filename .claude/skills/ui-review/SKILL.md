@@ -9,14 +9,14 @@ user-invocable: false
 
 # UI Review
 
-`dev-loops loop startup --pr <n> --ui-review` routes the PR to this strategy
+`dev-loops-run cli/index.mjs loop startup --pr <n> --ui-review` routes the PR to this strategy
 deterministically. When the public router selects `ui_review`, this route
 reviews a PR by proving the change in the running app from an isolated
 worktree, rather than reading the diff alone. It is the running-app review
 sibling of the `reviewer_fixer` route.
 
 Each stage below is invoked as a `dev-loops` CLI subcommand
-(`dev-loops loop ui-review-provision`, `ui-review-drive`, `ui-review-diagnose`,
+(`dev-loops-run cli/index.mjs loop ui-review-provision`, `ui-review-drive`, `ui-review-diagnose`,
 `ui-review-report`, `ui-review-teardown`) — the agent orchestrates the
 sequence, threading each stage's result JSON into the next per its contract;
 there is no separate chaining orchestrator.
@@ -50,8 +50,8 @@ must be acknowledged before they run.
 
 The route's first operational step provisions an isolated worktree for the PR
 head and boots the branch's app to a ready state, via
-`dev-loops loop ui-review-provision --repo-root <p> --pr <n>`
-(source-repo fallback: `node scripts/loop/ui-review-provision.mjs --repo-root <p> --pr <n>`; pure orchestration in
+`dev-loops-run cli/index.mjs loop ui-review-provision --repo-root <p> --pr <n>`
+(source-repo fallback: `dev-loops-run scripts/loop/ui-review-provision.mjs --repo-root <p> --pr <n>`; pure orchestration in
 `packages/core/src/loop/ui-review-provision.mjs`). It
 reuses the worktree machinery (`ensure-worktree`, `provision-worktree`), refuses
 to operate in the primary checkout, installs only the dependency-lock delta,
@@ -82,8 +82,8 @@ assumption — a run recipe is trusted-branch input, not untrusted data.
 
 Once the app is booted, the route drives the changed UI flows against the
 handed-off app URL via
-`dev-loops loop ui-review-drive --repo-root <p> --app-url <url> --output-dir <p> [--changed-path <p> ...]`
-(source-repo fallback: `node scripts/loop/ui-review-drive.mjs ...`; pure
+`dev-loops-run cli/index.mjs loop ui-review-drive --repo-root <p> --app-url <url> --output-dir <p> [--changed-path <p> ...]`
+(source-repo fallback: `dev-loops-run scripts/loop/ui-review-drive.mjs ...`; pure
 orchestration in `packages/core/src/loop/ui-review-drive.mjs`). It launches
 one headless WebKit context, authenticates as the change's target role through a
 project-provided dev-login recipe, dismisses config-declared interstitials once
@@ -129,8 +129,8 @@ boundary as the run recipe.
 Once failures are captured, the route maps each one to a source line and then to
 a PR diff line so the poster can anchor an inline comment on a real changed line,
 via
-`dev-loops loop ui-review-diagnose --pr <n> --drive-result <p> [--repo <slug>]`
-(source-repo fallback: `node scripts/loop/ui-review-diagnose.mjs ...`; pure
+`dev-loops-run cli/index.mjs loop ui-review-diagnose --pr <n> --drive-result <p> [--repo <slug>]`
+(source-repo fallback: `dev-loops-run scripts/loop/ui-review-diagnose.mjs ...`; pure
 mapping in `packages/core/src/loop/ui-review-diagnose.mjs`). It reuses PR
 state from `loop info --pr` rather than re-fetching, fetches the PR's unified
 diff, and for each failure parses the exception type/message plus the top in-repo
@@ -157,8 +157,8 @@ dependence, so the same failures always produce the same ordered output.
 
 The terminal reporting stage turns the ranked findings into a head-pinned
 PENDING PR review plus a self-contained screenshot artifact, via
-`dev-loops loop ui-review-report --pr <n> --diagnose-result <p> --html-output <p> [--repo <slug>]`
-(source-repo fallback: `node scripts/loop/ui-review-report.mjs ...`; pure
+`dev-loops-run cli/index.mjs loop ui-review-report --pr <n> --diagnose-result <p> --html-output <p> [--repo <slug>]`
+(source-repo fallback: `dev-loops-run scripts/loop/ui-review-report.mjs ...`; pure
 decisions in `packages/core/src/loop/ui-review-report.mjs`). It reuses the
 shared pending-review poster (`scripts/github/stage-reviewer-draft.mjs` +
 `buildDraftReviewPayload`) — a caller/adapter, not a new poster. Each anchorable
@@ -195,8 +195,8 @@ The terminal cleanup stage tears down the loop's transient state — stops the
 app booted in provision, drops the dev-DB rows the drive created, removes the
 provisioned worktree — and ALWAYS emits a side-effect ledger so nothing is
 silently orphaned, via
-`dev-loops loop ui-review-teardown --repo-root <p> --provision-result <p> [--drive-result <p>] [--row-manifest <p>] [--confirm] [--no-stop-app]`
-(source-repo fallback: `node scripts/loop/ui-review-teardown.mjs ...`; pure
+`dev-loops-run cli/index.mjs loop ui-review-teardown --repo-root <p> --provision-result <p> [--drive-result <p>] [--row-manifest <p>] [--confirm] [--no-stop-app]`
+(source-repo fallback: `dev-loops-run scripts/loop/ui-review-teardown.mjs ...`; pure
 decisions in `packages/core/src/loop/ui-review-teardown.mjs`). It reads
 the prior-stage result JSON — the app PID + applied migrations + worktree path
 from provision, and the rows-created signal from the drive.

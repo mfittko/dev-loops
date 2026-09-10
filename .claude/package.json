@@ -1,0 +1,7 @@
+{
+  "name": "dev-loops-plugin",
+  "private": true,
+  "dependencies": {
+    "dev-loops": "1.0.2"
+  }
+}

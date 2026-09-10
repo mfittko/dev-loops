@@ -1,0 +1,70 @@
+#!/usr/bin/env node
+// dev-loops-run — resolver launcher for the Claude Code plugin.
+//
+// The Claude plugin ships without `scripts/`, `packages/core`, or `node_modules`; every generated
+// skill/command/agent invokes wrappers through this launcher instead of bare `node scripts/…` or
+// `dev-loops <ns> …`. It resolves the dev-loops toolchain root in this order, NO version
+// comparison:
+//   1. a live source checkout, detected by walking up from `process.cwd()` for a dir whose
+//      `package.json` has `name === "dev-loops"` and a sibling `scripts/` dir — wins
+//      UNCONDITIONALLY, even over a newer auto-installed package, so a dogfooder's live edits
+//      always run without a reinstall or release.
+//   2. the plugin's auto-installed `dev-loops` package at `<pluginRoot>/node_modules/dev-loops`.
+//   3. neither resolves → hard-stop (exit 3). Never shells out to the GitHub CLI as a fallback;
+//      never reads `CLAUDE_PLUGIN_ROOT` (empirically unset in the Claude Code runtime).
+//
+// Only `node:` builtins — this file cannot import the dev-loops core runtime package (unresolvable
+// from the plugin cache before auto-install; this launcher is what FINDS that package).
+//
+// Usage: dev-loops-run <pkg-relative-path> [args…]
+//   dev-loops-run scripts/loop/watch-cycle.mjs --pr 5
+//   dev-loops-run cli/index.mjs gate judge-pass --pr 5
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+
+const here = path.dirname(fileURLToPath(import.meta.url)); // <pluginRoot>/bin
+const pluginRoot = path.dirname(here);                     // <pluginRoot>
+
+function isCheckout(dir) {
+  const pj = path.join(dir, "package.json");
+  if (!existsSync(pj) || !existsSync(path.join(dir, "scripts"))) return false;
+  try { return JSON.parse(readFileSync(pj, "utf8")).name === "dev-loops"; } catch { return false; }
+}
+function findCheckout(start) {
+  let dir = start;
+  for (;;) {
+    if (isCheckout(dir)) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+const rel = process.argv[2];
+if (!rel) { console.error("dev-loops-run: missing script argument"); process.exit(2); }
+const checkout = findCheckout(process.cwd());
+const installed = path.join(pluginRoot, "node_modules", "dev-loops");
+const resolvedRoot = checkout ?? (existsSync(installed) ? installed : null);
+if (!resolvedRoot) {
+  console.error(
+    `dev-loops-run: cannot resolve dev-loops toolchain for '${rel}': no source checkout ` +
+    `(CWD walk-up from ${process.cwd()}) and no installed package at ${installed}`,
+  );
+  process.exit(3);
+}
+// `rel` names a package-relative script path; every generated wrapper only ever passes one of its
+// own literal call-sites. Reject an absolute path or a `../` traversal segment before it reaches
+// `path.join` — either would let a resolved script path escape `resolvedRoot` and run a script
+// this launcher never meant to trust. Fail closed: same exit code as the missing-arg case above.
+const resolved = path.resolve(resolvedRoot, rel);
+const escapes = path.isAbsolute(rel) || rel.split(/[\\/]/).includes("..")
+  || !(resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep));
+if (escapes) {
+  console.error(`dev-loops-run: rejecting script path outside the resolved root: '${rel}'`);
+  process.exit(2);
+}
+const target = resolved;
+const r = spawnSync(process.execPath, [target, ...process.argv.slice(3)], { stdio: "inherit" });
+process.exit(r.status ?? 1);

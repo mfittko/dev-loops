@@ -156,6 +156,53 @@ test("scanDiffText ignores only Bun's generated terminal registry integrity fiel
   assert.equal(scanDiffText(sourceDiff).findings[0].detectorClass, DETECTOR_CLASSES.HIGH_ENTROPY);
 });
 
+test("scanDiffText skips only the high-entropy detector for the committed .claude plugin lock (#2123)", () => {
+  const digest = `sha512-${join("kZ9mQ2", "vL7pR4", "wT8nJ1", "zY6cF3")}==`;
+  function npmLockDiff(addedLine) {
+    return [
+      "diff --git a/.claude/package-lock.json b/.claude/package-lock.json",
+      "--- /dev/null",
+      "+++ b/.claude/package-lock.json",
+      "@@ -0,0 +1 @@",
+      `+${addedLine}`,
+    ].join("\n");
+  }
+
+  // A registry integrity digest, a long resolved tarball URL, and a hyphenated platform package
+  // name (all real npm-lock shapes) — none block in this one generated file.
+  // Realistic-shaped (real fragments have no single quoted piece >=20 chars, matching this
+  // file's own split-literal convention above) so a real digit-bearing transitive-dep URL/name
+  // is what proves the file-scoped high-entropy exemption, not just the short sha512 digest.
+  const resolvedUrl = join("https://registry.npmjs.org/@aws-sdk/cred", "ential-prov", "ider-env/-/cr", "edential-prov", "ider-env-3.97", "2.37.tgz");
+  const platformPackageName = join("@mariozechner/clipb", "oard-linux-r", "iscv64-gnu");
+
+  assert.deepEqual(scanDiffText(npmLockDiff(`      "integrity": "${digest}",`)), { ok: true, findings: [] });
+  assert.deepEqual(
+    scanDiffText(npmLockDiff(`      "resolved": "${resolvedUrl}",`)),
+    { ok: true, findings: [] },
+  );
+  assert.deepEqual(
+    scanDiffText(npmLockDiff(`        "${platformPackageName}": "0.3.9"`)),
+    { ok: true, findings: [] },
+  );
+
+  // The same integrity field in any OTHER file (including a different package-lock.json path) still blocks.
+  assert.equal(
+    scanDiffText(npmLockDiff(`      "integrity": "${digest}",`).replaceAll(".claude/package-lock.json", "src/config.mjs")).findings[0].detectorClass,
+    DETECTOR_CLASSES.HIGH_ENTROPY,
+  );
+  assert.equal(
+    scanDiffText(npmLockDiff(`      "integrity": "${digest}",`).replaceAll(".claude/package-lock.json", "package-lock.json")).findings[0].detectorClass,
+    DETECTOR_CLASSES.HIGH_ENTROPY,
+  );
+
+  // The literal-credential and sink-pattern detectors still run unchanged over this file.
+  const literalDiff = npmLockDiff(`      "note": "${join("ghp_", "aBcDeFgHiJ", "kLmNoPqRsT", "1234567890")}",`);
+  assert.equal(scanDiffText(literalDiff).findings[0].detectorClass, DETECTOR_CLASSES.LITERAL_CREDENTIAL);
+  const sinkDiff = npmLockDiff(`echo "$${SINK_TEST_VALUE_NAME}"`);
+  assert.equal(scanDiffText(sinkDiff).findings[0].detectorClass, DETECTOR_CLASSES.SINK_PATTERN);
+});
+
 test("scanDiffText treats Bun's generated clipboard platform package names as metadata only in bun.lock", () => {
   const packageName = join("@mariozechner/clipboard-", "linux-x64-gnu");
   const lockDiff = [

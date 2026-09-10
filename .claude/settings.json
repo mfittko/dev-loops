@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(node scripts/github/edit-issue.mjs:*)"
+      "Bash(node scripts/github/edit-issue.mjs:*)",
+      "Bash(dev-loops-run:*)"
     ]
   },
   "hooks": {

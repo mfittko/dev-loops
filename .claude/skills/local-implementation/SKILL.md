@@ -61,7 +61,7 @@ When the local spec already lives in a tracker issue:
 - sync durable scope / acceptance / status changes back to the tracker issue rather than maintaining a duplicate local phase doc
 - keep `tmp/` as temporary local execution state only; it does not become a second durable spec surface
 - for tracker-backed sessions, the handoff path is always: push the working branch → open a PR → merge via GitHub
-- <!-- rule: LOCAL-PR-CREATE-CANONICAL --> for tracker-backed sessions, you MUST open PRs through the canonical `dev-loops pr create` path — always draft and always assigned — self-assigned by default (`--assignee @me` when none is given; honors an explicit `--assignee <login>` / `-a <login>`) — and MUST NOT open them via raw `gh pr create`. The PR body MUST contain `Closes #N` (or `Fixes #N`) for the linked issue so GitHub auto-closes it on merge. When `.devloops` sets `workflow.requireDraftFirst` to true, use `dev-loops pr create --assignee @me ...`; the always-draft creation mechanism is owned by [`OPS-DRAFT-FIRST-PR`](../docs/copilot-loop-operations.md) — `create-pr.mjs` is unconditionally draft-only regardless of the toggle, which separately governs whether the draft-gate boundary is enforced before ready.
+- <!-- rule: LOCAL-PR-CREATE-CANONICAL --> for tracker-backed sessions, you MUST open PRs through the canonical `dev-loops-run cli/index.mjs pr create` path — always draft and always assigned — self-assigned by default (`--assignee @me` when none is given; honors an explicit `--assignee <login>` / `-a <login>`) — and MUST NOT open them via raw `gh pr create`. The PR body MUST contain `Closes #N` (or `Fixes #N`) for the linked issue so GitHub auto-closes it on merge. When `.devloops` sets `workflow.requireDraftFirst` to true, use `dev-loops-run cli/index.mjs pr create --assignee @me ...`; the always-draft creation mechanism is owned by [`OPS-DRAFT-FIRST-PR`](../docs/copilot-loop-operations.md) — `create-pr.mjs` is unconditionally draft-only regardless of the toggle, which separately governs whether the draft-gate boundary is enforced before ready.
 - <!-- rule: LOCAL-TRACKER-NO-DIRECT-MERGE --> `LOCAL-TRACKER-NO-DIRECT-MERGE`: for tracker-backed sessions, agents MUST NOT suggest a direct local-main merge and MUST NOT merge the working branch into local `main` at phase completion
 
 ## Primary execution rules
@@ -72,18 +72,18 @@ When the local spec already lives in a tracker issue:
 For the `local_implementation` strategy, before any planning or implementation mutation, you MUST run the pre-flight gate:
 
 ```sh
-dev-loops loop pre-flight-gate --expected-branch <working-branch> --check-subagents
+dev-loops-run cli/index.mjs loop pre-flight-gate --expected-branch <working-branch> --check-subagents
 ```
 
-(source-repo fallback: `node scripts/loop/pre-flight-gate.mjs --expected-branch <working-branch> --check-subagents`)
+(source-repo fallback: `dev-loops-run scripts/loop/pre-flight-gate.mjs --expected-branch <working-branch> --check-subagents`)
 
 Before creating or reusing a worktree for local implementation, use the canonical lifecycle entrypoint (`WORKTREE-CREATE-PROVISION`, see [Worktree usage guidance](../docs/worktree-guidance.md#create-or-reuse--provision-ensure-worktreemjs)):
 
 ```sh
-dev-loops loop ensure-worktree --repo-root <main> --issue <n>
+dev-loops-run cli/index.mjs loop ensure-worktree --repo-root <main> --issue <n>
 ```
 
-(source-repo fallback: `node scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>`)
+(source-repo fallback: `dev-loops-run scripts/loop/ensure-worktree.mjs --repo-root <main> --issue <n>`)
 
 This validates worktree isolation (the checkout's `node_modules/@dev-loops/core` resolves to its own `packages/core`; `tmp/worktrees/` stays the recommended default but is no longer the enforced condition) and branch identity (current branch matches the working branch); `--check-subagents` only reports subagent availability and is advisory (fails-open, does not block the gate). If the gate fails, **stop and fix the violation** before proceeding — do not bypass it in normal workflow execution.
 
@@ -130,7 +130,7 @@ Apply [Structural Quality](../docs/structural-quality.md) from the `deep` review
 
 Use `scripts/loop/detect-change-scope.mjs` to determine scope:
 ```sh
-node scripts/loop/detect-change-scope.mjs
+dev-loops-run scripts/loop/detect-change-scope.mjs
 ```
 
 ## Deterministic logging structure
@@ -275,7 +275,7 @@ Before variant fan-out, optionally run one bounded audit when the active phase w
 When used:
 - run one bounded audit before variant fan-out
 - write the audit artifact to `tmp/phases/phase-x/audit/refinement-audit-summary.json`
-- use `node scripts/loop/run-refinement-audit.mjs --paths ... --output tmp/phases/phase-x/audit/refinement-audit-summary.json`
+- use `dev-loops-run scripts/loop/run-refinement-audit.mjs --paths ... --output tmp/phases/phase-x/audit/refinement-audit-summary.json`
 - pass a concise audit summary into every refiner briefing
 - keep the audit opt-in; do not turn it into a mandatory precondition
 - preserve prioritized findings, the highest-value follow-up candidates, and an explicit statement of what this phase will not rewrite or broaden in the merged plan and review artifacts
@@ -516,7 +516,7 @@ After the phase plan passes review:
 10. Update `tmp/phases/phase-x/manifest.json` and `tmp/phases/index.json`.
 11. Update [Implementation State](../../docs/IMPLEMENTATION_STATE.md).
 12. <!-- rule: LOCAL-COMMIT-BEFORE-EXIT --> **Exit validation gate — no uncommitted changes.** Before the subagent session terminates, run `git status --porcelain` and verify the output is empty. If uncommitted changes exist, first determine whether they are intended implementation changes or unintended/post-validation deltas. Revert any unintended or speculative changes. For intended changes, rerun the narrowest justified validation (`bun run verify` or equivalent) before staging and committing with an appropriate message; for tracker-backed sessions, also push the branch. A subagent session that exits with uncommitted changes in the worktree is a workflow defect and MUST NOT be treated as a clean completion. After committing, verify `git status --porcelain` is empty before declaring phase completion. This exit validation gate is now mechanically backed by a `SubagentStop` hook (`.claude/hooks/subagent-stop-uncommitted-guard.mjs`, #1619) that refuses a subagent stop when the worktree under `tmp/worktrees/` has uncommitted changes, naming `LOCAL-COMMIT-BEFORE-EXIT` and the dirty paths — so an uncommitted worktree can no longer exit silently (post-merge `cleanup-worktree.mjs` force-removes worktrees and would otherwise destroy uncommitted work). The hook is role-aware (#1925): a read-only role (`judge`/`review`, per `READONLY_SUBAGENT_ROLES`) whose contract forbids commits is exempt — any dirty tracked edit in its worktree is foreign (orchestrator-owned), so the guard allows the stop with an advisory naming the orchestrator as responsible; enforcement stays for the orchestrator and every editing role (`developer`, `fixer`, `docs`, `quality`).
-13. For tracker-backed sessions, create the PR from the working branch against the resolved base branch — `.devloops` `workflow.baseBranch` when configured, else the repo's auto-detected default branch (`resolveBaseBranch(config, { cwd })` from `@dev-loops/core/config`; bare name, e.g. `main`) — never a hardcoded `--base main`: `dev-loops pr create --assignee @me --repo <owner/name> --base <resolved-base> --head <branch> --title "..." --body-file <body-file>` (fallback when the CLI helper is unavailable: `node <resolved-skill-scripts>/github/create-pr.mjs --repo <owner/name> --assignee @me --base <resolved-base> --head <branch> --title "..." --body-file <body-file>`); never raw `gh pr create`. Draft/assignment/`Closes #N` policy: [LOCAL-PR-CREATE-CANONICAL](#tracker-backed-local-implementation) above.
+13. For tracker-backed sessions, create the PR from the working branch against the resolved base branch — `.devloops` `workflow.baseBranch` when configured, else the repo's auto-detected default branch (`resolveBaseBranch(config, { cwd })` from `@dev-loops/core/config`; bare name, e.g. `main`) — never a hardcoded `--base main`: `dev-loops-run cli/index.mjs pr create --assignee @me --repo <owner/name> --base <resolved-base> --head <branch> --title "..." --body-file <body-file>` (fallback when the CLI helper is unavailable: `node <resolved-skill-scripts>/github/create-pr.mjs --repo <owner/name> --assignee @me --base <resolved-base> --head <branch> --title "..." --body-file <body-file>`); never raw `gh pr create`. Draft/assignment/`Closes #N` policy: [LOCAL-PR-CREATE-CANONICAL](#tracker-backed-local-implementation) above.
 14. If authorized, merge the fully reviewed, locally validated phase branch back into local `main` (phase-doc-backed sessions) or proceed through the PR gate pipeline (tracker-backed sessions).
 15. If authorization for PR creation or merge is still pending (commit authorization is already enforced by the exit validation gate in step 12), mark the phase as `awaiting-finalization` rather than `completed`, and record exactly which finalization step is pending.
 
