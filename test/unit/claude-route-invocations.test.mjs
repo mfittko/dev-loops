@@ -28,11 +28,17 @@ test("rewrites the `dev-loops <ns> <sub>` CLI form to `dev-loops-run cli/index.m
   );
 });
 
-test("every documented namespace is routed", () => {
-  for (const ns of ["loop", "gate", "pr", "queue", "project", "refine", "release", "security"]) {
+test("every real CLI namespace is routed", () => {
+  for (const ns of ["gate", "loop", "pr", "issue", "queue", "project", "inspect", "refine"]) {
     const out = rewriteWrapperInvocation(`dev-loops ${ns} sub-command`);
     assert.equal(out, `dev-loops-run cli/index.mjs ${ns} sub-command`);
   }
+});
+
+test("rewrites a nested (multi-level) scripts/ path, not just one subdirectory level", () => {
+  const body = "Run `node scripts/loop/inspect-run-viewer/foo.mjs --pr 5`.";
+  const out = rewriteWrapperInvocation(body);
+  assert.equal(out, "Run `dev-loops-run scripts/loop/inspect-run-viewer/foo.mjs --pr 5`.");
 });
 
 test("prose mentions of the CLI namespace are left untouched (no trailing lowercase subcommand)", () => {

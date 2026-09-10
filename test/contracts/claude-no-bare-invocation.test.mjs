@@ -8,18 +8,29 @@
 // `.claude/skills/dev-loop/templates/**`) and hand-authored hooks/settings are a documented
 // out-of-scope allowlist (not scanned): they hold illustrative prose examples and permission
 // patterns, not agent-executed generated instructions.
+//
+// The two regex sources below are imported from `asset-generation.mjs`, the SAME source
+// `rewriteWrapperInvocation` builds its rewrite regexes from — a shared single source of truth so
+// this guard and the transform can never drift out of sync (a prior version hand-duplicated a
+// stale namespace list here and passed falsely while `issue`/`inspect` invocations stayed bare).
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { splitFrontmatter } from "../../packages/core/src/claude/asset-generation.mjs";
+import {
+  BARE_DEV_LOOPS_NS_SOURCE,
+  BARE_NODE_SCRIPTS_SOURCE,
+  splitFrontmatter,
+  WRAPPER_NS,
+} from "../../packages/core/src/claude/asset-generation.mjs";
+import { SUBCOMMAND_ROUTES } from "../../cli/index.mjs";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 
-const BARE_NODE_SCRIPTS_RE = /\bnode (scripts\/[a-z0-9-]+\/[A-Za-z0-9._-]+\.mjs)/;
-const BARE_DEV_LOOPS_NS_RE = /\bdev-loops (loop|gate|pr|queue|project|refine|release|security) (?=[a-z])/;
+const BARE_NODE_SCRIPTS_RE = new RegExp(BARE_NODE_SCRIPTS_SOURCE);
+const BARE_DEV_LOOPS_NS_RE = new RegExp(BARE_DEV_LOOPS_NS_SOURCE);
 
 function bodiesOf(globDirs) {
   const out = [];
@@ -83,4 +94,25 @@ test("self-check: an injected bare invocation is flagged by both regexes", () =>
   // Confirm the routed form does NOT re-trip either regex (proves the rewrite is what clears it).
   assert.equal(BARE_NODE_SCRIPTS_RE.test("Run `dev-loops-run scripts/loop/watch-cycle.mjs --pr 5`."), false);
   assert.equal(BARE_DEV_LOOPS_NS_RE.test("Run `dev-loops-run cli/index.mjs gate judge-pass --pr 5`."), false);
+});
+
+test("both bare-invocation regexes catch a nested (multi-level) scripts/ path", () => {
+  assert.ok(BARE_NODE_SCRIPTS_RE.test("Run `node scripts/loop/inspect-run-viewer/foo.mjs --pr 5`."));
+  assert.equal(BARE_NODE_SCRIPTS_RE.test("Run `dev-loops-run scripts/loop/inspect-run-viewer/foo.mjs --pr 5`."), false);
+});
+
+// Recurrence guard: `WRAPPER_NS` is a hand-maintained string, not derived at runtime from
+// `SUBCOMMAND_ROUTES` (asset-generation.mjs cannot import `cli/index.mjs` — the Claude asset
+// generator ships in `@dev-loops/core`, which must not depend on the CLI package). This test reads
+// the CLI's own route table directly (the same import `referenced-docs-commands-shipped.test.mjs`
+// already uses) and fails the instant a future CLI namespace is added/removed without updating
+// `WRAPPER_NS` to match — the exact drift that produced #2123's bare `dev-loops issue edit`.
+test("WRAPPER_NS matches the real top-level CLI namespaces (SUBCOMMAND_ROUTES keys in cli/index.mjs)", () => {
+  const realNamespaces = Object.keys(SUBCOMMAND_ROUTES).sort();
+  const wrapperNamespaces = WRAPPER_NS.split("|").sort();
+  assert.deepEqual(
+    wrapperNamespaces,
+    realNamespaces,
+    `WRAPPER_NS (${WRAPPER_NS}) must equal cli/index.mjs SUBCOMMAND_ROUTES keys (${Object.keys(SUBCOMMAND_ROUTES).join(", ")})`,
+  );
 });
