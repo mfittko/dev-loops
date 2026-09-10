@@ -2885,7 +2885,15 @@ async function initLocalOriginRepo(tempDir) {
   execFileSync("git", ["checkout", "-b", "main", "--quiet"], { cwd: tempDir, stdio: "ignore" });
   execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: tempDir, stdio: "ignore" });
   execFileSync("git", ["config", "user.name", "Test"], { cwd: tempDir, stdio: "ignore" });
-  execFileSync("git", ["remote", "add", "origin", remoteDir], { cwd: tempDir, stdio: "ignore" });
+  // "origin" is the real git@github.com:mfittko/dev-loops.git slug (so the
+  // hardened, github.com-only detectRepoSlug resolves it, matching the repo
+  // the fixtures below assert against), but pushInsteadOf silently redirects
+  // the actual push transport to a local bare repo, and a fake ssh command
+  // makes any real fetch fail instantly with no network — so this stays
+  // fully hermetic and offline, same as before.
+  execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tempDir, stdio: "ignore" });
+  execFileSync("git", ["config", `url.${remoteDir}.pushInsteadOf`, "git@github.com:mfittko/dev-loops.git"], { cwd: tempDir, stdio: "ignore" });
+  execFileSync("git", ["config", "core.sshCommand", "false"], { cwd: tempDir, stdio: "ignore" });
   await writeFile(path.join(tempDir, "README.md"), "init\n", "utf8");
   execFileSync("git", ["add", "-A"], { cwd: tempDir, stdio: "ignore" });
   execFileSync("git", ["commit", "--quiet", "-m", "init"], { cwd: tempDir, stdio: "ignore" });

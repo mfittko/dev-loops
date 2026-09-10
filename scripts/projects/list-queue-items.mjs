@@ -4,6 +4,7 @@ import { applyDevloopsBoard } from "./_resolve-project.mjs";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { main, classifyExitCode } from "@dev-loops/core/projects/list-queue-items";
+import { detectRepoSlug } from "@dev-loops/core/github/repo-slug";
 
 const USAGE = `Usage: dev-loops queue list --repo <owner/name> [--project <number|id>] [--column <name>] [--limit <n>]
        dev-loops queue list --repo <owner/name> [--project <number|id>] --summary [--done-limit <n>]
@@ -13,7 +14,9 @@ List GitHub Projects V2 items filtered by Status column, ordered by position
 ascending. Returns machine-readable JSON.
 
 Options:
-  --repo <owner/name>     Required. Repository to scope the project search.
+  --repo <owner/name>     Repository to scope the project search. Auto-detected
+                          from the git origin remote (github.com only) when
+                          omitted; pass explicitly to override.
   --project <number|id>   Project number (integer) or node ID. When omitted,
                           resolved from the .devloops tracker.board
                           number / title.
@@ -194,10 +197,22 @@ async function runCli(argv, { stdout = process.stdout, stderr = process.stderr, 
     return;
   }
 
-  // Resolve the board from .devloops when --project is absent.
-  applyDevloopsBoard(args, cwd);
-
   try {
+    if (!args.repo) {
+      const detected = detectRepoSlug(cwd);
+      if (detected) {
+        args.repo = detected;
+      } else {
+        throw Object.assign(
+          new Error("--repo is required and could not be auto-detected from the git origin remote. Set an origin remote pointing at a github.com repo, or pass --repo <owner/name>."),
+          { code: "INVALID_REPO" },
+        );
+      }
+    }
+
+    // Resolve the board from .devloops when --project is absent.
+    applyDevloopsBoard(args, cwd);
+
     const result = await main(args, { env, runChild });
     if (args.table) {
       stdout.write(renderItemsTable(result.items));
