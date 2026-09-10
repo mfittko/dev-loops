@@ -147,12 +147,15 @@ export async function recordDispatchPromptLayout({ scope, headSha, prefixPath, p
   const leading = truncated ? promptText.slice(0, DISPATCH_PROMPT_LEADING_CAP_BYTES) : promptText;
   // Full-content hash of the delivered/recorded prompt (never truncated). The
   // fan-in re-discovers the sanctioned emitter's canonical emitted-prompt file
-  // on disk and requires this hash to equal that file's hash, so a record that
-  // captured a hand-composed pointer prompt, a paraphrased suffix, or any prompt
-  // that is not the emitted unit fails closed — provenance binds to the emitted
-  // unit (GATE-EXEC-FANOUT-DISPATCH-EMIT / GATE-EXEC-BRIEFING-PREFIX), not to a
-  // coordinator-authored record. It does NOT prove delivered-task identity (that
-  // the subagent actually received the bytes); that hop is the documented
+  // on disk and requires this hash to equal that file's hash, so a record whose
+  // captured prompt is not byte-identical to the emitted unit — a paraphrased
+  // suffix or any mismatched delivered prompt — fails closed here. (A
+  // pointer-seeded prompt, where record and emitted file agree but neither
+  // inlines the prefix, is instead rejected by the separate inline-alignment
+  // leg.) Together these bind provenance to the emitted unit
+  // (GATE-EXEC-FANOUT-DISPATCH-EMIT / GATE-EXEC-BRIEFING-PREFIX), never to a
+  // coordinator-authored record alone. Neither proves delivered-task identity
+  // (that the subagent actually received the bytes); that hop is the documented
   // best-effort boundary.
   const promptContentHash = sha256Hex(promptText);
   const recordPath = dispatchPromptLayoutRecordPath(tmpRoot, scope, headSha);

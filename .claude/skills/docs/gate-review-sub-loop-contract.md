@@ -804,9 +804,15 @@ bytes; how those bytes REACH the spawned reviewer's actual prompt differs by har
   bytes verbatim — with NO added preamble, wrapper text, or paraphrase — as the Agent tool's
   `prompt` parameter. This makes the prompt CODE-COMPOSED (the composer, not the agent, decides
   the byte sequence), but the final hop — the orchestrating agent relaying those exact bytes
-  into the tool call — is not itself mechanically enforced by this CLI; `verify-dispatch-prompt-layout.mjs`'s
-  fan-in check (below) is what catches a relay that drifted (added a preamble, truncated,
-  reordered). Honest finding (closes the `#1841` AC3 gap this scope is best-effort on): Claude
+  into the tool call — is not itself mechanically enforced by this CLI. On the sanctioned
+  composer path the dispatch record's `promptContentHash` is hashed atomically from the SAME
+  composed bytes that become the emitted `--out` file, so `verify-dispatch-prompt-layout.mjs`'s
+  fan-in check (below) binds the record to that emitted unit and catches a record that is NOT
+  the emitted unit (a hand-composed prompt, a paraphrased suffix, a mismatched delivered
+  prompt) — but it does NOT observe what the agent actually pasted into the tool call, so a
+  FAITHFUL record of the emitted bytes paired with a drifted actual relay (an added preamble in
+  the tool call itself) is the documented delivered-task boundary below ("Three identities, one
+  honest boundary"), not something this check can catch. Honest finding (closes the `#1841` AC3 gap this scope is best-effort on): Claude
   Code's Agent-tool dispatch layer exposes no usage/cache-read telemetry to the orchestrating
   agent for a spawned subagent, so REAL provider cache reuse across sibling reviewers of one
   round (`org+model content-hash reads on reviewers 2..N`) cannot be measured or verified from
