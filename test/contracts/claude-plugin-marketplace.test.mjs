@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 import { readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -73,4 +73,31 @@ test("the catalog defers versioning to plugin.json (no entry-level version to dr
 test("the publish files allowlist ships the marketplace catalog", async () => {
   const pkg = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
   assert.ok(pkg.files.includes(".claude-plugin/"), "files allowlist must include .claude-plugin/");
+});
+
+// Plugin size (issue #2123): making the plugin self-contained means vendoring scripts/**,
+// packages/core (pruned to its package.json `files` allowlist — excludes packages/core/test), and
+// the runtime deps those scripts import (yaml, zod) into `.claude/`. Measured at generation time:
+// scripts/ ~6.6M, node_modules/{yaml,zod} ~7.5M, @dev-loops/core (pruned) ~1.6M — a ~17M total
+// generated `.claude/` tree, above the issue's rough ~7-8M dependency-only estimate because that
+// estimate covered only yaml+zod, not the scripts/core copies. No published marketplace size
+// ceiling exists (Claude Code plugins have no documented size limit as of this writing); the
+// bound below is this repo's own sanity ceiling, generous over the measured ~17M so a real
+// regression (e.g. accidentally vendoring a `node_modules` subtree wholesale, or forgetting to
+// prune `packages/core/test`) fails loudly well before it would matter.
+function directorySizeBytes(absDir) {
+  if (!existsSync(absDir)) return 0;
+  let total = 0;
+  for (const entry of readdirSync(absDir, { withFileTypes: true })) {
+    const abs = path.join(absDir, entry.name);
+    total += entry.isDirectory() ? directorySizeBytes(abs) : statSync(abs).size;
+  }
+  return total;
+}
+
+test("the generated .claude tree stays under the plugin size ceiling (issue #2123 scripts-root bundle)", () => {
+  const claudeDir = path.join(repoRoot, ".claude");
+  const sizeMb = directorySizeBytes(claudeDir) / (1024 * 1024);
+  const CEILING_MB = 40; // generous over the measured ~17M — see the comment above.
+  assert.ok(sizeMb < CEILING_MB, `.claude tree is ${sizeMb.toFixed(1)}M, expected under ${CEILING_MB}M`);
 });

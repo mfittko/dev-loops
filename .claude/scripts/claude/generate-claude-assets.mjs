@@ -164,15 +164,13 @@ const NODE_MODULES_VENDOR = ["yaml", "zod"];
 // zod, additionally ship per their OWN `files` allowlist) or a type-declaration file (`.d.ts`/
 // `.d.cts`/`.d.mts`, load-bearing only for a type checker, never for `node` at runtime). Skipping
 // both keeps the vendored bundle to what actually runs, and — as a side effect — excludes a
-// dependency's own bundled test fixtures (zod ships `src/**/*.test.ts`), which would otherwise
-// read as brand-new high-entropy-looking content to the pre-commit secret scanner every time this
-// bundle is regenerated fresh (untracked node_modules has no prior commit for `-C
-// --find-copies-harder` to diff against, unlike the scripts/@dev-loops/core mirrors below).
+// dependency's own bundled test fixtures (zod ships `src/**/*.test.ts`).
+//
 // A vendored dep's own already-public, already-audited source can still trip the pre-commit
 // secret scanner (`scripts/security/scan-staged-diff.mjs`) the first time it's freshly vendored:
-// `-C --find-copies-harder` resolves the scripts/@dev-loops/core mirrors against their
+// `-C --find-copies-harder` resolves the scripts/@dev-loops/core mirrors below against their
 // already-committed originals (no new "added" lines to scan), but yaml/zod live in this repo's OWN
-// untracked node_modules, so THEIR compiled output has no prior commit to diff against and reads
+// untracked node_modules, so their compiled output has no prior commit to diff against and reads
 // as entirely new. Two narrow, REVIEWED patterns account for every hit the zod v3/v4 compiled
 // runtime currently produces (confirmed benign — a StackOverflow citation comment, and zod v3's
 // compiled `ZodParsedType.<kind>` property-access check, misread as a high-entropy token by the
