@@ -144,7 +144,7 @@ Write the raw Q&A transcript ONLY to the gitignored, ephemeral, session-scoped a
 The rewritten description carries ONLY normative locked content: context, the decided approach, the `## AC / DoD matrix` (the authoritative AC→DoD mapping table), `## Non-goals`, and a linked refinement doc reference if present. (A body MAY additionally carry human-readable `## Acceptance criteria` / `## Definition of done` prose, but the matrix — not those checklists — is what refinement detection requires.) Write it back with:
 
 ```
-dev-loops issue edit --repo <owner/repo> --issue <n> --body-file <tmp-body-path>
+dev-loops-run cli/index.mjs issue edit --repo <owner/repo> --issue <n> --body-file <tmp-body-path>
 ```
 
 (source-repo fallback: `dev-loops-run scripts/github/edit-issue.mjs --repo <owner/repo> --issue <n> --body-file <tmp-body-path>`)
