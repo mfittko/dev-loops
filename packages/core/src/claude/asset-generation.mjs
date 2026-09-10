@@ -134,11 +134,15 @@ export const WRAPPER_NS = "gate|loop|pr|issue|queue|project|inspect|refine";
 /**
  * Regex source (no flags) matching a bare `node scripts/<dir>/…/<file>.mjs` invocation, at ANY
  * subdirectory depth (one-or-more `dir/` segments), not just one subdirectory level, so a
- * nested wrapper is caught too. Capture group 1 is the matched `scripts/…mjs` path. Exported so
- * the no-bare-invocation guard test can build the identical regex rather than re-deriving it
- * (single source of truth).
+ * nested wrapper is caught too. The `node`→`scripts/` gap matches ANY whitespace (`\s+`),
+ * including a source line-wrap (`node` at a line end, `scripts/…mjs` beginning the next), so a
+ * prose-wrapped invocation is routed and the guard test that shares this source catches it too —
+ * a single-space-only pattern silently left wrapped invocations bare and passed the guard falsely
+ * (#2123). The `.mjs` path anchor keeps false positives impossible. Capture group 1 is the matched
+ * `scripts/…mjs` path. Exported so the no-bare-invocation guard test can build the identical regex
+ * rather than re-deriving it (single source of truth).
  */
-export const BARE_NODE_SCRIPTS_SOURCE = String.raw`\bnode (scripts\/(?:[a-z0-9-]+\/)+[A-Za-z0-9._-]+\.mjs)`;
+export const BARE_NODE_SCRIPTS_SOURCE = String.raw`\bnode\s+(scripts\/(?:[a-z0-9-]+\/)+[A-Za-z0-9._-]+\.mjs)`;
 
 /**
  * Regex source (no flags) matching a bare, unrouted `dev-loops <namespace> <sub>` invocation.

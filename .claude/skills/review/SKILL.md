@@ -78,8 +78,7 @@ repeat phases those gates run:
    pre-approval fan-out; no new reviewer angles, no bespoke review agent.
 4. **Phase 3 — fan-in + post.** `dev-loops-run scripts/loop/consolidate-fanin.mjs
    --gate review [...] --ledger-out <path>` synthesizes the per-angle findings
-   into one disposition ledger and computed verdict, then `node
-   scripts/github/upsert-checkpoint-verdict.mjs --repo <owner/repo> --pr <n>
+   into one disposition ledger and computed verdict, then `dev-loops-run scripts/github/upsert-checkpoint-verdict.mjs --repo <owner/repo> --pr <n>
    --gate review --head-sha <sha> --findings-ledger <path> --next-action "none
    — informational review, no re-gate required" --submit <mode> [--auto]
    [...]` posts the SINGLE visible PR review surface

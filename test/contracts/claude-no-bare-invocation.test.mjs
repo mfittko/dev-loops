@@ -101,6 +101,14 @@ test("both bare-invocation regexes catch a nested (multi-level) scripts/ path", 
   assert.equal(BARE_NODE_SCRIPTS_RE.test("Run `dev-loops-run scripts/loop/inspect-run-viewer/foo.mjs --pr 5`."), false);
 });
 
+// #2123: the guard reads whole-file body content, so a bare invocation authored line-wrapped
+// between `node` and `scripts/` (prose reflow) must be caught too — a single-space-only regex
+// missed it and the guard passed with false confidence for wrapped forms.
+test("the bare-node-scripts regex catches a newline-wrapped `node`→`scripts/` invocation", () => {
+  assert.ok(BARE_NODE_SCRIPTS_RE.test("then `node\n   scripts/github/upsert-checkpoint-verdict.mjs --repo x`"));
+  assert.equal(BARE_NODE_SCRIPTS_RE.test("then `dev-loops-run\n   scripts/github/upsert-checkpoint-verdict.mjs --repo x`"), false);
+});
+
 // Recurrence guard: `WRAPPER_NS` is a hand-maintained string, not derived at runtime from
 // `SUBCOMMAND_ROUTES` (asset-generation.mjs cannot import `cli/index.mjs` — the Claude asset
 // generator ships in `@dev-loops/core`, which must not depend on the CLI package). This test reads

@@ -71,3 +71,12 @@ test("accepts a custom launcher name", () => {
   const out = rewriteWrapperInvocation(body, "custom-run");
   assert.equal(out, "Run `custom-run scripts/loop/watch-cycle.mjs` and `custom-run cli/index.mjs gate judge-pass`.");
 });
+
+// #2123: a source-authored invocation line-wrapped between `node` and `scripts/` (prose reflow,
+// `node` ending one line and `scripts/…mjs` beginning the next) must still route — a single-space
+// pattern left it bare on a plugin-only install and the guard passed falsely.
+test("routes an invocation wrapped across a newline between `node` and `scripts/`", () => {
+  const body = "then `node\n   scripts/github/upsert-checkpoint-verdict.mjs --repo <owner/repo>`";
+  const out = rewriteWrapperInvocation(body);
+  assert.equal(out, "then `dev-loops-run scripts/github/upsert-checkpoint-verdict.mjs --repo <owner/repo>`");
+});

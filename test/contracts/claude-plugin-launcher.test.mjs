@@ -97,6 +97,54 @@ test("checkout-wins: a live checkout runs over a NEWER installed package, no rei
   }
 });
 
+// #2123: `isCheckout` requires package.json name === "dev-loops" AND a sibling scripts/ dir.
+// A consumer repo commonly has a differently-named package.json + a scripts/ dir; that ancestor
+// must NOT be misresolved as a dev-loops checkout — the installed package wins.
+test("checkout-detection: an ancestor with a non-`dev-loops` package.json name is not a checkout — installed wins", () => {
+  const { dir, pluginRoot, launcher } = makeFixtureRoot();
+  try {
+    writeInstalledManifest(pluginRoot, "1.0.2");
+    writeScript(path.join(pluginRoot, "node_modules/dev-loops/scripts/probe.mjs"), "FROM_INSTALLED");
+
+    // Foreign ancestor: has a package.json (different name) AND a sibling scripts/ dir.
+    const foreign = path.join(dir, "foreign-repo");
+    mkdirSync(path.join(foreign, "scripts"), { recursive: true });
+    writeFileSync(path.join(foreign, "package.json"), JSON.stringify({ name: "some-consumer-app", version: "2.0.0" }));
+    writeScript(path.join(foreign, "scripts/probe.mjs"), "FROM_FOREIGN");
+    const cwd = path.join(foreign, "nested");
+    mkdirSync(cwd, { recursive: true });
+
+    const r = runLauncher(launcher, ["scripts/probe.mjs"], cwd);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /FROM_INSTALLED/);
+    assert.equal(/FROM_FOREIGN/.test(r.stdout), false, "a non-`dev-loops` ancestor must not be treated as a checkout");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #2123: a malformed/unreadable ancestor package.json must be swallowed (walk continues) without
+// crashing the launcher — the try/catch in `isCheckout` keeps walking up to the installed package.
+test("checkout-detection: a malformed ancestor package.json is skipped, not a crash — installed wins", () => {
+  const { dir, pluginRoot, launcher } = makeFixtureRoot();
+  try {
+    writeInstalledManifest(pluginRoot, "1.0.2");
+    writeScript(path.join(pluginRoot, "node_modules/dev-loops/scripts/probe.mjs"), "FROM_INSTALLED");
+
+    const broken = path.join(dir, "broken-repo");
+    mkdirSync(path.join(broken, "scripts"), { recursive: true });
+    writeFileSync(path.join(broken, "package.json"), "{ this is not valid json ");
+    const cwd = path.join(broken, "nested");
+    mkdirSync(cwd, { recursive: true });
+
+    const r = runLauncher(launcher, ["scripts/probe.mjs"], cwd);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /FROM_INSTALLED/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("hard-stop: neither checkout nor installed resolves — exit 3, stderr names wrapper + script, stdout empty, no gh fallback", () => {
   const { dir, launcher } = makeFixtureRoot();
   try {
