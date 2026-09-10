@@ -115,7 +115,7 @@ export function rewriteGeneratedRepoDocLinks(body) {
 }
 
 /**
- * Name of the resolver launcher committed at `.claude/bin/dev-loops-run` (#2123). It self-locates
+ * Name of the resolver launcher committed at `.claude/bin/dev-loops-run`. It self-locates
  * a source checkout (cwd walk-up, unconditional priority) or the plugin's auto-installed
  * `dev-loops` package, and hard-stops (never falls back to raw `gh`) when neither resolves.
  */
@@ -127,7 +127,7 @@ export const WRAPPER_LAUNCHER = "dev-loops-run";
  * `test/contracts/claude-no-bare-invocation.test.mjs`'s recurrence guard, which reads those keys
  * directly). `release` and `security` are NOT CLI namespaces (no such routes exist); `issue` and
  * `inspect` are and were previously missing here, which left e.g. `dev-loops issue edit …` bare
- * and unrouted in the generated tree (#2123 follow-up).
+ * and unrouted in the generated tree.
  */
 export const WRAPPER_NS = "gate|loop|pr|issue|queue|project|inspect|refine";
 
@@ -137,8 +137,8 @@ export const WRAPPER_NS = "gate|loop|pr|issue|queue|project|inspect|refine";
  * nested wrapper is caught too. The `node`→`scripts/` gap matches ANY whitespace (`\s+`),
  * including a source line-wrap (`node` at a line end, `scripts/…mjs` beginning the next), so a
  * prose-wrapped invocation is routed and the guard test that shares this source catches it too —
- * a single-space-only pattern silently left wrapped invocations bare and passed the guard falsely
- * (#2123). The `.mjs` path anchor keeps false positives impossible. Capture group 1 is the matched
+ * a single-space-only pattern silently left wrapped invocations bare and passed the guard falsely.
+ * The `.mjs` path anchor keeps false positives impossible. Capture group 1 is the matched
  * `scripts/…mjs` path. Exported so the no-bare-invocation guard test can build the identical regex
  * rather than re-deriving it (single source of truth).
  */
@@ -155,7 +155,7 @@ export const BARE_DEV_LOOPS_NS_SOURCE = String.raw`\bdev-loops (${WRAPPER_NS}) (
 
 /**
  * Route real wrapper invocations in a generated body through the resolver launcher so a
- * plugin-only install (no `scripts/`, no `node_modules`) still resolves every wrapper (#2123).
+ * plugin-only install (no `scripts/`, no `node_modules`) still resolves every wrapper.
  * Two disjoint forms; args are preserved byte-for-byte:
  *   node scripts/<dir>/<file>.mjs …  → <launcher> scripts/<dir>/<file>.mjs …
  *   dev-loops <namespace> <sub> …    → <launcher> cli/index.mjs <namespace> <sub> …

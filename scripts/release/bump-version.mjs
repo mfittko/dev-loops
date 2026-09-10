@@ -23,7 +23,7 @@
  *      (entries left intact) so `extract-changelog-section.mjs` finds the
  *      release section; fails closed when there is no Unreleased content to
  *      stamp (an undocumented release must not proceed)
- *   7. the Claude plugin's native dependency pin (#2123) — `.claude/package.json`
+ *   7. the Claude plugin's native dependency pin — `.claude/package.json`
  *      `dependencies["dev-loops"]` and the two first-party entries in the
  *      committed `.claude/package-lock.json` (`writeClaudePluginPin`), kept in
  *      lockstep so a plugin-only install's auto-install resolves the release
@@ -113,7 +113,7 @@ export function writeManifestSurfaces(repoRoot, version) {
 }
 
 // The two first-party entries the committed `.claude/package-lock.json` lockstep-patches on every
-// bump (#2123): the pinned `dev-loops` package and its `@dev-loops/core` runtime dependency. Kept
+// bump: the pinned `dev-loops` package and its `@dev-loops/core` runtime dependency. Kept
 // as a lockstep pair (not derived) since the tarball URL shape is registry convention, not a
 // computation from the package name.
 const CLAUDE_PLUGIN_LOCKSTEP = [
@@ -122,7 +122,7 @@ const CLAUDE_PLUGIN_LOCKSTEP = [
 ];
 
 /**
- * Patch the Claude plugin's dependency pin (#2123): `.claude/package.json` declares an exact
+ * Patch the Claude plugin's dependency pin: `.claude/package.json` declares an exact
  * `dev-loops` dependency, and `.claude/package-lock.json` (a committed npm v3 lock, generated once
  * against a published version) must move in lockstep on every release so a plugin-only install's
  * native auto-install (`npm ci --ignore-scripts`) resolves the matching toolchain.
@@ -235,7 +235,7 @@ export function inspectSurfaces(repoRoot, version) {
   const pins = (grep.stdout || "").split("\n").filter(Boolean);
   const pinsOk = pins.length > 0 && pins.every((p) => p === `dev-loops@${version}`);
 
-  // Claude plugin dependency pin (#2123): manifest exact-pin + the two first-party lock entries.
+  // Claude plugin dependency pin: manifest exact-pin + the two first-party lock entries.
   const pluginManifest = readJson(path.join(repoRoot, ".claude/package.json"));
   const pluginLock = readJson(path.join(repoRoot, ".claude/package-lock.json"));
   const pluginPin = pluginManifest.dependencies?.["dev-loops"];
@@ -296,7 +296,7 @@ export function bumpVersion({ repoRoot, version, stage = true, silent = false, r
   // Surfaces 1-3: hand-edited manifests.
   const manifestPaths = writeManifestSurfaces(repoRoot, version);
 
-  // Claude plugin dependency pin (#2123): hand-edited like surfaces 1-3, independent of the regen
+  // Claude plugin dependency pin: hand-edited like surfaces 1-3, independent of the regen
   // subprocesses. `.claude` is already in the enumerated staged paths below, so both files ship.
   writeClaudePluginPin(repoRoot, version);
 

@@ -319,7 +319,7 @@ export function parseAddedLines(diffText) {
  * @param {string} diffText
  * @returns {{ ok: boolean, findings: { file: string, line: number, detectorClass: string, reason: string }[] }}
  */
-// The committed `.claude/package-lock.json` (#2123) is, like `bun.lock`, a fully
+// The committed `.claude/package-lock.json` is, like `bun.lock`, a fully
 // machine-generated lockfile whose every token derives from public npm registry metadata
 // (Subresource Integrity digests, `resolved` tarball URLs, and long hyphenated per-platform
 // package names from its real transitive tree) — none of it is a secret by construction.
