@@ -43,9 +43,9 @@ or merge.
 
 After a watch settles:
 
-1. Refresh authoritative state with `dev-loops loop loop-state --repo <owner/name>
-   --pr <N>`. For `timeout`/`idle`, use `dev-loops loop handoff --repo <owner/name>
-   --pr <N> --watch-status <status>` for the existing timeout refresh. Bootstrap
+1. Refresh authoritative state with `dev-loops loop loop-state --repo <owner/name> --pr <N>`.
+   For `timeout`/`idle`, use `dev-loops loop handoff --repo <owner/name> --pr <N> --watch-status <status>`
+   for the existing timeout refresh. Bootstrap
    waits re-resolve the issue and its linked PR. Use command `--jq`/`--silent`
    fields or concise output; no inline JSON interpreters.
 2. Run `dev-loops loop startup --pr <N>` (or `--issue <N>` for bootstrap), preserving
