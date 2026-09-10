@@ -146,9 +146,7 @@ const STRATEGY_REQUIRED_READS = {
   ],
   wait_watch: [
     SHARED_PUBLIC_CONTRACT,
-    SHARED_RETROSPECTIVE_CONTRACT,
-    "skills/copilot-pr-followup/SKILL.md",
-    "skills/docs/copilot-loop-operations.md",
+    "skills/docs/wait-watch-procedure.md",
   ],
   final_approval: [
     SHARED_PUBLIC_CONTRACT,

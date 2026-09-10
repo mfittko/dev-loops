@@ -78,6 +78,9 @@ dev-loop must check the checkpoint before treating the start as a fresh intake o
    - Use the checkpoint's `copilotState` and `reviewerState` as last-known context for
      re-attachment, then re-baseline with fresh detectors (`copilot-pr-handoff.mjs`
      or `detect-copilot-loop-state.mjs`) before acting on the state.
+   - Re-run startup for that canonical PR, build and validate its fresh envelope,
+     and load its `requiredReads` before executing a destination action. The
+     checkpoint does not bypass a changed route's ownership or gate requirements.
 3. If `outerAction` is `stop`:
    - Report the `reason` field and the authoritative state from the checkpoint.
    - `stop` means the loop is blocked or needs a human decision; ask for direction
@@ -102,7 +105,7 @@ Load only the route-specific internal skill required by `selectedStrategy`:
 | `copilot_pr_followup` | [Copilot PR Follow-up Skill](../copilot-pr-followup/SKILL.md) + [Copilot Loop Operations](../docs/copilot-loop-operations.md) |
 | `external_pr_followup` | same as `copilot_pr_followup` |
 | `reviewer_fixer` | same as `copilot_pr_followup` |
-| `wait_watch` | same as `copilot_pr_followup` |
+| `wait_watch` | [Wait / Watch Procedure](../docs/wait-watch-procedure.md) |
 | `final_approval` | same as `copilot_pr_followup` + [Final Approval Skill](../final-approval/SKILL.md) |
 
 Do not preload route packs before the resolver selects the strategy.

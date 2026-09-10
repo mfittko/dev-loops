@@ -22,7 +22,8 @@ post-PR mechanics:
 - `copilot_pr_followup`
 - `external_pr_followup`
 - `reviewer_fixer`
-- `wait_watch`
+- `wait_watch` uses the separate [Wait / Watch Procedure](../docs/wait-watch-procedure.md);
+  load this full follow-up skill only when a fresh envelope selects follow-up.
 
 Route-specific companion docs:
 - routed `issue_intake` work is implemented through this skill plus [Copilot Loop Operations](../docs/copilot-loop-operations.md) and [Issue Intake Procedure](../docs/issue-intake-procedure.md)
@@ -203,7 +204,9 @@ Practical rules: do not poll manually. `waiting_for_copilot_review` → `run-wat
 
 Preferred approach:
 - route decisions through `copilot-pr-handoff.mjs` output; enter watcher only on `action: "watch"` with `watchEntryConfirmed=true`; prefer `dev-loops-run cli/index.mjs loop watch-cycle` for deterministic handoff → watch
-- `changed` → re-enter Step 7 fix/reply-resolve/validate immediately; do not stop after one watch cycle
+- `changed` → refresh startup, build and validate the new envelope, and load its
+  `requiredReads` before entering the selected follow-up (Step 7 when fixing);
+  do not stop after one watch cycle
 - `timeout`/`idle` → re-run `copilot-pr-handoff.mjs --watch-status <status>` once to refresh state; if still `waiting_for_copilot_review` after 30-minute watch budget exhausted, hard stop with `watch timeout — PR #<number> needs manual attention`
 - zero-timeout `idle` probes are for explicit one-shot status/reattach checks only; they are not the normal async wait mechanism
 - after a successful fix / reply-resolve / re-request cycle, returning to `waiting_for_copilot_review` is a persistence boundary: resume the watcher instead of reporting completion

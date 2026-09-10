@@ -2049,6 +2049,53 @@ test("wait_watch (state-derived) is exempt: a waiting canonical state with an un
   assert.equal(result.selectedStrategy, "wait_watch");
 });
 
+test("wait_watch narrows initial reading and fresh re-entry restores destination contracts", async () => {
+  const input = {
+    artifactState: "open",
+    loopState: "waiting_for_copilot_review",
+    currentState: {
+      target: { kind: "pr", pr: 740 },
+      ownership: "copilot", nextActor: "copilot",
+      status: "waiting", authorization: "authorized",
+    },
+  };
+  const options = { env: resolverTestEnv(), cwd: os.tmpdir() };
+  const waiting = buildResolveDevLoopStartupResult(input, options);
+  const watchReads = ["skills/docs/public-dev-loop-contract.md", "skills/docs/wait-watch-procedure.md"];
+  assert.deepEqual(waiting.requiredReads, watchReads);
+  const envelope = buildDevLoopHandoffEnvelope(waiting, {}, {}, { repoSlug: "owner/repo", repoRoot: os.tmpdir() });
+  assert.equal(validateHandoffEnvelope(envelope).ok, true);
+  assert.deepEqual(envelope.requiredReads, watchReads);
+  const words = (await Promise.all(watchReads.map(file => readFile(new URL(`../../${file}`, import.meta.url), "utf8"))))
+    .reduce((total, content) => total + content.trim().split(/\s+/u).length, 0);
+  assert.ok(words <= 23_531 / 2, `wait route loads ${words} words against the 23,531-word baseline`);
+
+  for (const [status, nextActor, strategy] of [
+    ["active", "copilot", "copilot_pr_followup"],
+    ["active", "reviewer", "reviewer_fixer"],
+    ["blocked", "user", "none"],
+  ]) {
+    const refreshed = buildResolveDevLoopStartupResult({
+      ...input, loopState: status === "blocked" ? "blocked_needs_user_decision" : "unresolved_feedback_present",
+      currentState: { ...input.currentState, status, nextActor },
+    }, options);
+    assert.equal(refreshed.selectedStrategy, strategy);
+    if (strategy === "none") {
+      assert.equal(refreshed.canonicalStateSummary.routeKind, "stop");
+      assert.throws(() => buildDevLoopHandoffEnvelope(refreshed, {}, {}, {
+        repoSlug: "owner/repo", repoRoot: os.tmpdir(),
+      }), /null resolverOutput.selectedStrategy/);
+      continue;
+    }
+    const next = buildDevLoopHandoffEnvelope(refreshed, {}, {}, { repoSlug: "owner/repo", repoRoot: os.tmpdir() });
+    assert.equal(validateHandoffEnvelope(next).ok, true);
+    assert.deepEqual(next.requiredReads, refreshed.requiredReads);
+    assert.equal(next.requiredReads.includes("skills/docs/wait-watch-procedure.md"), false);
+    assert.ok(next.requiredReads.includes("skills/copilot-pr-followup/SKILL.md"));
+    assert.ok(next.requiredReads.includes("skills/docs/retrospective-checkpoint-contract.md"));
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Lightweight PR-body-as-spec modifier (issue #1025)
 // ---------------------------------------------------------------------------
