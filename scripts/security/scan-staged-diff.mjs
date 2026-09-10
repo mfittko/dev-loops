@@ -54,9 +54,17 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   // for content that was already reviewed at its canonical path. This does NOT weaken detection:
   // a copy that actually differs from its source still shows those differing lines as added, and
   // every added line is still scanned exactly as before.
+  //
+  // .claude/node_modules/ is excluded outright: it is a byte-reproducible mirror of published npm
+  // packages (yaml/zod/@dev-loops/core), enforced by the generate-claude-assets `--check`, whose
+  // canonical sources (`node_modules/`, `packages/core/src/`) the scanner already never sees or
+  // whose authored copy it scans directly. Copy-detection cannot rescue it — the vendored deps'
+  // source lives under gitignored `node_modules/`, so there is no committed original to match
+  // against, and third-party lexer/token constants read as high-entropy false positives. Excluding
+  // it mirrors the existing posture of never scanning `node_modules/`, not a new gap in coverage.
   const { stdout: diffText } = await runCommand(
     gitCommand,
-    ["diff", "--cached", "-C", "--find-copies-harder", "--no-color"],
+    ["diff", "--cached", "-C", "--find-copies-harder", "--no-color", "--", ".", ":(exclude).claude/node_modules"],
     { cwd, env },
   );
   const result = scanDiffText(diffText);

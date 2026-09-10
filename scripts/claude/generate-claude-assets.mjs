@@ -166,35 +166,11 @@ const NODE_MODULES_VENDOR = ["yaml", "zod"];
 // both keeps the vendored bundle to what actually runs, and — as a side effect — excludes a
 // dependency's own bundled test fixtures (zod ships `src/**/*.test.ts`).
 //
-// A vendored dep's own already-public, already-audited source can still trip the pre-commit
-// secret scanner (`scripts/security/scan-staged-diff.mjs`) the first time it's freshly vendored:
-// `-C --find-copies-harder` resolves the scripts/@dev-loops/core mirrors below against their
-// already-committed originals (no new "added" lines to scan), but yaml/zod live in this repo's OWN
-// untracked node_modules, so their compiled output has no prior commit to diff against and reads
-// as entirely new. Two narrow, REVIEWED patterns account for every hit the zod v3/v4 compiled
-// runtime currently produces (confirmed benign — a StackOverflow citation comment, and zod v3's
-// compiled `ZodParsedType.<kind>` property-access check, misread as a high-entropy token by the
-// generic heuristic): mark exactly those two shapes with the scanner's own documented per-line
-// `secret-scan:allow` marker (`packages/core/src/security/secret-scan.mjs`). This is NOT a
-// blanket vendor-directory exemption — it matches specific line SHAPES, not "any flagged line", so
-// a genuinely different future hit (e.g. an actual credential-shaped literal introduced by a zod
-// version bump) still fails closed and forces a human look before the bundle can regenerate clean.
-const KNOWN_SAFE_VENDOR_LINE_PATTERNS = [
-  { re: /^\s*\/\/\s*(?:based on\s+)?https:\/\/stackoverflow\.com\//, reason: "vendored dep: StackOverflow citation comment, not a secret" },
-  { re: /\bZodParsedType\.[a-z]+\b/, reason: "vendored dep: zod v3 compiled ZodParsedType property-access check, not a secret" },
-];
-
-function markKnownSafeVendorLines(content) {
-  return content
-    .split("\n")
-    .map((line) => {
-      if (line.includes("secret-scan:allow")) return line; // already marked — do not double-append
-      const pattern = KNOWN_SAFE_VENDOR_LINE_PATTERNS.find(({ re }) => re.test(line));
-      return pattern ? `${line} // secret-scan:allow ${pattern.reason}` : line;
-    })
-    .join("\n");
-}
-
+// The vendored dep tree is copied byte-verbatim. Its already-public, already-audited compiled
+// source would trip the pre-commit secret scanner on high-entropy lexer/token constants, so
+// `scripts/security/scan-staged-diff.mjs` excludes `.claude/node_modules/` outright — the same
+// posture it already holds toward the real `node_modules/` this is a byte-reproducible mirror of.
+// The bundle is therefore left unmodified; no per-line marker rewrite runs over vendored code.
 function collectRuntimeDepDirVerbatim(absSourceDir, targetRel) {
   const out = [];
   if (!fs.existsSync(absSourceDir)) return out;
@@ -206,9 +182,7 @@ function collectRuntimeDepDirVerbatim(absSourceDir, targetRel) {
       out.push(...collectRuntimeDepDirVerbatim(childAbs, childTarget));
     } else if (entry.isFile()) {
       if (/\.d\.(ts|cts|mts)$/.test(entry.name)) continue; // type declarations, not read by node
-      const content = fs.readFileSync(childAbs, "utf8");
-      const isCode = /\.(mjs|cjs|js)$/.test(entry.name);
-      out.push({ target: childTarget, content: isCode ? markKnownSafeVendorLines(content) : content });
+      out.push({ target: childTarget, content: fs.readFileSync(childAbs, "utf8") });
     }
   }
   return out;

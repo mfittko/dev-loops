@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 
 import { collectGeneratedAssets } from "../../scripts/claude/generate-claude-assets.mjs";
-import { scanLineText, ALLOW_MARKER } from "../../packages/core/src/security/secret-scan.mjs";
 
 // Issue #2123: the Claude plugin ships only agents/commands/hooks/skills/settings.json — no
 // scripts/, no packages/core, no node_modules, no dev-loops bin. Skills/commands/agents invoke
@@ -73,43 +73,27 @@ test("the repo's blanket node_modules/ .gitignore rule does not silently drop .c
   assert.equal(result.status, 1, ".claude/node_modules/ must be un-ignored in .gitignore (!.claude/node_modules/)");
 });
 
-test("known-safe vendored zod lines (StackOverflow citation comments, compiled ZodParsedType checks) are marked secret-scan:allow", () => {
-  // The generator's `markKnownSafeVendorLines` neutralizes two REVIEWED false-positive shapes
-  // zod's compiled runtime currently produces for the pre-commit secret scanner (see
-  // `generate-claude-assets.mjs`'s `KNOWN_SAFE_VENDOR_LINE_PATTERNS` for the full rationale) — this
-  // pins that the marking actually ran (not a silent no-op).
-  const assets = collectGeneratedAssets({ repoRoot });
-  const zodRuntime = assets.filter((a) => a.target.startsWith(".claude/node_modules/zod/") && /\.(js|cjs)$/.test(a.target));
-  assert.ok(zodRuntime.length > 0, "expected zod runtime files to be bundled");
-  const markedCount = zodRuntime.reduce((n, a) => n + (a.content.match(new RegExp(`// ${ALLOW_MARKER}`, "g")) ?? []).length, 0);
-  assert.ok(markedCount >= 10, `expected a substantial number of marked known-safe lines, got ${markedCount}`);
-});
-
-test("the specific zod files previously found to trip the secret scanner (v3/types.{cjs,js}, v4/core/regexes.{cjs,js}) are now fully marked (no un-marked hit remains)", () => {
-  // The exact file set discovered (and reviewed) during issue #2123: every one of their flagged
-  // lines was either a StackOverflow citation comment or a compiled `ZodParsedType.<kind>`
-  // property-access check — both covered by `KNOWN_SAFE_VENDOR_LINE_PATTERNS`. Scoped to this
-  // specific, already-characterized file set (not the whole yaml/zod tree) because a raw
-  // `scanLineText` per-line re-scan does not reproduce the real scanner's diff/copy-detection
-  // semantics tree-wide — see the git history of this test for the false alarm that taught us that.
+test("vendored runtime deps are bundled byte-verbatim (the generator never rewrites third-party code)", () => {
+  // The bundle is a byte-reproducible mirror of the published packages; the secret scanner excludes
+  // `.claude/node_modules/` outright (same posture it holds toward the real node_modules/ this
+  // mirrors), so no per-line marker rewrite runs over vendored code. Pin a representative compiled
+  // file against its node_modules source to prove verbatim copy (no appended markers, no edits).
   const assets = collectGeneratedAssets({ repoRoot });
   const byTarget = new Map(assets.map((a) => [a.target, a.content]));
-  const previouslyFlagged = [
-    ".claude/node_modules/zod/v3/types.cjs",
-    ".claude/node_modules/zod/v3/types.js",
-    ".claude/node_modules/zod/v4/core/regexes.cjs",
-    ".claude/node_modules/zod/v4/core/regexes.js",
-  ];
-  const offenders = [];
-  for (const target of previouslyFlagged) {
-    const content = byTarget.get(target);
-    assert.ok(content, `expected ${target} to be bundled`);
-    for (const [index, line] of content.split("\n").entries()) {
-      if (line.includes(ALLOW_MARKER)) continue;
-      if (scanLineText(line).length > 0) offenders.push(`${target}:${index + 1}`);
-    }
-  }
-  assert.deepEqual(offenders, [], `un-marked secret-scan hit(s) remain: ${offenders.join(", ")}`);
+  const sample = ".claude/node_modules/zod/v4/core/regexes.js";
+  const bundled = byTarget.get(sample);
+  assert.ok(bundled, `expected ${sample} to be bundled`);
+  assert.equal(
+    bundled.includes("secret-scan:allow"),
+    false,
+    "vendored code must not carry generator-appended secret-scan markers (it is copied verbatim)",
+  );
+  // Resolve the zod source the same way the generator does (createRequire walks up to the main
+  // checkout's node_modules — a nested worktree hoists deps), then byte-compare.
+  const require_ = createRequire(path.join(repoRoot, "package.json"));
+  const zodRoot = path.dirname(require_.resolve("zod/package.json"));
+  const source = fs.readFileSync(path.join(zodRoot, "v4/core/regexes.js"), "utf8");
+  assert.equal(bundled, source, `${sample} must be a byte-verbatim copy of its node_modules source`);
 });
 
 test("the vendored resolve-scripts-root.mjs is self-contained (no @dev-loops/core import)", () => {

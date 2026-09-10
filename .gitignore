@@ -27,7 +27,12 @@ worktrees/
 # local-only scratch (never commit)
 .pi-subagents/
 
-# Issue #2123: the Claude plugin's scripts-root bundle vendors yaml/zod/@dev-loops/core verbatim
-# into .claude/node_modules/ so the generated .claude/ tree is committed and shipped (unlike a real
+# The Claude plugin's scripts-root bundle vendors yaml/zod/@dev-loops/core verbatim into
+# .claude/node_modules/ so the generated .claude/ tree is committed and shipped (unlike a real
 # node_modules cache). Un-ignore it explicitly — it must win over the blanket node_modules/ rule.
+# The nested-directory negation is load-bearing: a vendored dep carries `dist/` dirs, which the
+# blanket `dist/` rule above excludes; git cannot re-include a file whose parent directory stays
+# excluded, so the subdirectories themselves must be re-included before their files.
 !.claude/node_modules/
+!.claude/node_modules/**/
+!.claude/node_modules/**
