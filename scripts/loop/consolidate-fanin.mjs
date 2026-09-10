@@ -1073,15 +1073,17 @@ export async function consolidateGateFanin(options) {
 
     // GATE-EXEC-BRIEFING-PREFIX dispatch-prompt layout: the hash checks above
     // prove the recorded prefix is byte-identical across reviewers, but prove
-    // nothing about whether any reviewer's actual prompt led with it. This
-    // reads the leading-bytes dispatch records record-dispatch-prompt-layout.mjs
-    // writes at fan-out and fails closed when a recorded prompt is angle-first
-    // instead of prefix-first. A round with no dispatch-prompt records at all
-    // is never newly blocked — progressive/optional capture, same posture as
-    // GATE-EXEC-PRIMER-EVIDENCE below.
+    // nothing about whether any reviewer's actual prompt was the sanctioned
+    // emitted unit. This reads the dispatch records record-dispatch-prompt-layout.mjs
+    // writes at fan-out and fails closed when a present record does not BIND to
+    // the sanctioned emitter's emitted unit (missing promptContentHash, no
+    // canonical emitted file on disk, a hash mismatch from an altered suffix /
+    // mismatched delivered prompt, or an emitted unit that is not inline-aligned).
+    // A round with no dispatch-prompt records at all is never newly blocked —
+    // progressive/optional capture, same posture as GATE-EXEC-PRIMER-EVIDENCE below.
     const layoutVerdict = await verifyDispatchPromptLayoutForHead(tmpRoot, options.headSha);
     if (layoutVerdict.recordCount > 0 && !layoutVerdict.verified) {
-      throw new Error(`GATE-EXEC-BRIEFING-PREFIX dispatch-prompt layout verification failed for head ${options.headSha} (${layoutVerdict.recordCount} dispatch-prompt record(s)): ${layoutVerdict.reason} — the fan-in refuses to consolidate a round whose reviewer prompt was not cache-aligned. Re-dispatch the offending reviewer(s) prefix-first, then re-consolidate.`);
+      throw new Error(`GATE-EXEC-FANOUT-DISPATCH-EMIT dispatch-prompt layout verification failed for head ${options.headSha} (${layoutVerdict.recordCount} dispatch-prompt record(s)): ${layoutVerdict.reason} — the fan-in refuses to consolidate a round whose reviewer prompt did not bind to the sanctioned emitter's emitted unit. Re-run the sanctioned emitter (emit-fanout-dispatch.mjs) for the offending unit(s), re-dispatch from the emitted promptPath bytes, then re-consolidate.`);
     }
   }
 

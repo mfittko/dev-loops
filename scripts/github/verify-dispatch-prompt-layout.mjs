@@ -3,27 +3,36 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
-import { verifyPromptLeadingAlignment } from "@dev-loops/core/loop/review-dispatch-plan";
+import { verifyPromptLeadingAlignment, sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { validateBriefingPrefixPath } from "./record-dispatch-prompt-layout.mjs";
 
 const USAGE = `Usage: verify-dispatch-prompt-layout.mjs --head-sha <sha> [--tmp-root <path>] [--help]
-Fan-in enforcement of the reviewer-PROMPT layout half of GATE-EXEC-BRIEFING-PREFIX
-(skills/docs/gate-review-sub-loop-contract.md), completing #1468: verify-briefing-
-prefixes.mjs proves the recorded prefix HASH is byte-identical across a round's
-reviewer sentinels, but proves nothing about whether any reviewer's ACTUAL prompt
-led with those bytes. This checker reads the leading-bytes dispatch records
-record-dispatch-prompt-layout.mjs writes at fan-out and fails closed (exit 1) when
-any recorded prompt does NOT lead with the round's byte-identical invariant prefix
-(inline mode) or its byte-identical pointer line (pointer-seeding mode) — an
-angle-first prompt (dynamic per-unit prose ahead of the prefix/pointer) fails this
-mechanically instead of only being documented.
+Fan-in enforcement of the reviewer-PROMPT provenance half of GATE-EXEC-FANOUT-DISPATCH-EMIT
+/ GATE-EXEC-BRIEFING-PREFIX (skills/docs/gate-review-sub-loop-contract.md):
+verify-briefing-prefixes.mjs proves the recorded prefix HASH is byte-identical
+across a round's reviewer sentinels, but proves nothing about whether any
+reviewer's ACTUAL prompt was the sanctioned emitter's emitted unit. This checker
+reads the dispatch records record-dispatch-prompt-layout.mjs writes at fan-out and
+fails closed (exit 1) unless each present record BINDS to the sanctioned emitter's
+emitted unit:
+  1. its recorded full-content hash (promptContentHash) equals the hash of the
+     canonical \`<gate>-<headSha>.dispatch-prompt-<scope>.txt\` emitted file, and
+  2. that emitted file LEADS with the round's byte-identical invariant prefix
+     INLINE (never angle-first, never pointer-seeded).
+This rejects the three failure modes prose discipline never held: a hand-composed
+pointer-seeding prompt, a paraphrased/altered suffix (a matching invariant prefix
+does NOT prove an unchanged suffix), and any mismatched delivered prompt. It binds
+recorded-layout identity to generated-file identity; it does NOT prove
+delivered-task identity — whether the spawned subagent actually received those
+bytes is the orchestrating-agent relay hop, which no Claude Code Agent-tool
+primitive exposes for independent verification (documented best-effort boundary,
+see GATE-EXEC-BRIEFING-PREFIX "Per-harness delivery").
 
-Ground truth for the comparison is ALWAYS re-discovered on disk here (never
-trusted from a record's own stored "prefixPath" directory): each record's
-basename names a (gate, headSha) pair, and this checker independently locates
-that gate's real \`<tmp-root>/gate-context/**/<gate>-<headSha>.briefing-prefix.txt\`
-record (the same file write-gate-context.mjs/verify-briefing-prefixes.mjs treat
-as authoritative) to read its bytes.
+Ground truth is ALWAYS re-discovered on disk here (never trusted from a record's
+own stored path): each record's prefix basename names a (gate, headSha) pair, and
+this checker independently locates that gate's real
+\`<tmp-root>/gate-context/**/<gate>-<headSha>.briefing-prefix.txt\` and its sibling
+\`<gate>-<headSha>.dispatch-prompt-<scope>.txt\` emitted file to read their bytes.
 
 Required:
   --head-sha <sha>  The FULL 40- or 64-char reviewed head SHA (git rev-parse HEAD);
@@ -40,10 +49,12 @@ ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Verified: no dispatch-prompt records found for this round (progressive/optional
      capture — a round the orchestrator has not yet been updated to capture never
-     newly blocks), OR every recorded prompt is aligned
-  1  Fail closed: at least one recorded prompt does not lead with the round's
-     byte-identical invariant prefix or pointer line, or a record's own
-     "prefixPath" basename no longer names a real on-disk gate-context record
+     newly blocks), OR every present record binds to the sanctioned inline-aligned emitted unit
+  1  Fail closed: at least one present record does NOT bind to the sanctioned emitter's
+     emitted unit — a missing full-content hash, no canonical emitted file on disk,
+     a hash mismatch (altered suffix / mismatched delivered / hand-composed prompt),
+     an emitted unit that is not inline-aligned, or a "prefixPath" basename that no
+     longer names a real on-disk gate-context record
   2  Usage or internal error, or invalid --jq filter`.trim();
 
 const HEAD_SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
@@ -66,7 +77,7 @@ function resolveFlagValue(argv, flag) {
  * record means the prompt-layout proof cannot be verified for that reviewer.
  * @param {string} tmpRoot
  * @param {string} headSha — lowercase hex, already validated
- * @returns {Promise<Array<{ scope: string, prefixPath: string|null, leading: string|null }>>}
+ * @returns {Promise<Array<{ scope: string, prefixPath: string|null, leading: string|null, promptContentHash: string|null }>>}
  */
 async function readDispatchPromptRecords(tmpRoot, headSha) {
   const suffix = `-${headSha}.json`;
@@ -89,9 +100,10 @@ async function readDispatchPromptRecords(tmpRoot, headSha) {
       const parsed = JSON.parse(raw);
       const prefixPath = typeof parsed?.prefixPath === "string" && parsed.prefixPath.length > 0 ? parsed.prefixPath : null;
       const leading = typeof parsed?.leading === "string" ? parsed.leading : null;
-      results.push({ scope, prefixPath, leading });
+      const promptContentHash = typeof parsed?.promptContentHash === "string" && parsed.promptContentHash.length > 0 ? parsed.promptContentHash : null;
+      results.push({ scope, prefixPath, leading, promptContentHash });
     } catch {
-      results.push({ scope, prefixPath: null, leading: null });
+      results.push({ scope, prefixPath: null, leading: null, promptContentHash: null });
     }
   }
   return results;
@@ -133,14 +145,64 @@ async function findGateBriefingPrefixBytes(tmpRoot, gate, headSha) {
 }
 
 /**
- * Pure comparison over already-read records + already-read prefix bytes.
- * Exported for direct unit testing without touching the filesystem.
+ * Re-discover the sanctioned emitter's canonical emitted-prompt FILE for
+ * `gate`/`scope`/`headSha` on disk — the `<gate>-<headSha>.dispatch-prompt-<scope>.txt`
+ * file `compose-reviewer-prompt.mjs`/`emit-fanout-dispatch.mjs` write next to the
+ * invariant prefix. Located by name under `<tmpRoot>/gate-context/**`, NEVER
+ * trusted from the record's own stored path (same posture as
+ * `findGateBriefingPrefixBytes`), so a record cannot point the binding check at
+ * an arbitrary file. Returns the emitted bytes, or `null` when no such emitted
+ * file exists (a dispatch that did NOT go through the sanctioned emitter — its
+ * provenance cannot be verified, so the caller fails closed).
+ * @param {string} tmpRoot
+ * @param {string} gate
+ * @param {string} scope
+ * @param {string} headSha — lowercase hex, already validated
+ * @returns {Promise<string|null>}
+ */
+async function findEmittedPromptBytes(tmpRoot, gate, scope, headSha) {
+  const root = path.join(tmpRoot, "gate-context");
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true, recursive: true });
+  } catch (err) {
+    if (err.code === "ENOENT") return null;
+    throw err;
+  }
+  const targetName = `${gate}-${headSha}.dispatch-prompt-${scope}.txt`;
+  const matches = entries
+    .filter((e) => e.isFile() && e.name === targetName)
+    .sort((a, b) => (a.parentPath ?? "").localeCompare(b.parentPath ?? ""));
+  if (matches.length === 0) return null;
+  const dir = matches[0].parentPath ?? root;
+  try {
+    return await readFile(path.join(dir, targetName), "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Pure comparison over already-read records + already-read prefix bytes + the
+ * RE-DISCOVERED sanctioned emitted-unit bytes for each record's scope. Exported
+ * for direct unit testing without touching the filesystem.
  *
- * @param {Array<{ scope: string, prefixPath: string|null, leading: string|null }>} records
+ * Each present record must BIND to the sanctioned emitter's emitted unit
+ * (GATE-EXEC-FANOUT-DISPATCH-EMIT): the record's full-content hash must equal
+ * the emitted file's hash, and that emitted file must lead with the round's
+ * invariant prefix INLINE. This rejects a hand-composed pointer-seeding prompt,
+ * a paraphrased/altered suffix, and any mismatched delivered prompt — none of
+ * which reproduce the emitted unit's bytes. It binds recorded-layout identity to
+ * generated-file identity; it does NOT prove delivered-task identity (that the
+ * subagent actually received the bytes) — that hop is the documented best-effort
+ * boundary (see GATE-EXEC-BRIEFING-PREFIX "Per-harness delivery").
+ *
+ * @param {Array<{ scope: string, prefixPath: string|null, leading: string|null, promptContentHash: string|null }>} records
  * @param {Map<string, string>} prefixBytesByPath — record's raw "prefixPath" string -> the RE-DISCOVERED real prefix bytes for its (gate, headSha)
+ * @param {Map<string, { contentHash: string|null, inlineAligned: boolean }>} emittedByScope — record scope -> the RE-DISCOVERED emitted unit's full-content hash and whether it leads with the invariant prefix inline; absent scope means no emitted file was found
  * @returns {{ verified: boolean, reason?: string, misaligned?: Array<{scope:string, reason:string}> }}
  */
-export function evaluateDispatchPromptLayout(records, prefixBytesByPath) {
+export function evaluateDispatchPromptLayout(records, prefixBytesByPath, emittedByScope = new Map()) {
   if (records.length === 0) {
     return { verified: true, reason: "no dispatch-prompt records found for this round" };
   }
@@ -155,15 +217,31 @@ export function evaluateDispatchPromptLayout(records, prefixBytesByPath) {
       misaligned.push({ scope: r.scope, reason: `recorded "prefixPath" ${JSON.stringify(r.prefixPath)} no longer names a real on-disk gate-context briefing-prefix record` });
       continue;
     }
-    const verdict = verifyPromptLeadingAlignment({ promptLeading: r.leading, prefixBytes, prefixPath: r.prefixPath });
-    if (!verdict.aligned) {
-      misaligned.push({ scope: r.scope, reason: verdict.reason });
+    // A present record with no full-content hash cannot bind to the emitted unit
+    // — a coordinator-authored record cannot prove emitted-unit provenance on its
+    // own. Never grandfathered (same fail-closed posture as a null prefixPath).
+    if (r.promptContentHash === null) {
+      misaligned.push({ scope: r.scope, reason: "dispatch-prompt record carries no promptContentHash — a coordinator-authored record cannot prove it binds to the sanctioned emitter's emitted unit (GATE-EXEC-FANOUT-DISPATCH-EMIT); never grandfathered in" });
+      continue;
+    }
+    const emitted = emittedByScope.get(r.scope);
+    if (emitted === undefined || emitted.contentHash === null) {
+      misaligned.push({ scope: r.scope, reason: `no sanctioned emitter emitted-prompt file (<gate>-<headSha>.dispatch-prompt-${r.scope}.txt) found on disk for this record — a dispatch not produced by emit-fanout-dispatch.mjs / compose-reviewer-prompt.mjs cannot bind its provenance to an emitted unit (GATE-EXEC-FANOUT-DISPATCH-EMIT)` });
+      continue;
+    }
+    if (emitted.contentHash !== r.promptContentHash) {
+      misaligned.push({ scope: r.scope, reason: "recorded prompt bytes do not match the sanctioned emitter's emitted unit (altered/paraphrased suffix, a mismatched delivered prompt, or a hand-composed prompt) — a matching invariant prefix does not prove an unchanged suffix (GATE-EXEC-FANOUT-DISPATCH-EMIT)" });
+      continue;
+    }
+    if (!emitted.inlineAligned) {
+      misaligned.push({ scope: r.scope, reason: "the emitted unit does not LEAD with the round's byte-identical invariant prefix INLINE (angle-first or pointer-seeded emitted prompt) — GATE-EXEC-BRIEFING-PREFIX requires the invariant prefix inlined as the emitted prompt's leading bytes" });
+      continue;
     }
   }
   if (misaligned.length > 0) {
     return {
       verified: false,
-      reason: `${misaligned.length} of ${records.length} dispatched reviewer prompt(s) for this round do not lead with the round's byte-identical invariant prefix or pointer line (GATE-EXEC-BRIEFING-PREFIX) — an angle-first prompt defeats cache alignment.`,
+      reason: `${misaligned.length} of ${records.length} dispatched reviewer prompt(s) for this round do not bind to the sanctioned emitter's inline-aligned emitted unit (GATE-EXEC-FANOUT-DISPATCH-EMIT / GATE-EXEC-BRIEFING-PREFIX) — hand-composed pointer seeding, an altered suffix, or a mismatched delivered prompt cannot satisfy a clean gate.`,
       misaligned,
     };
   }
@@ -183,14 +261,34 @@ export function evaluateDispatchPromptLayout(records, prefixBytesByPath) {
 export async function verifyDispatchPromptLayoutForHead(tmpRoot, headSha) {
   const records = await readDispatchPromptRecords(tmpRoot, headSha);
   const prefixBytesByPath = new Map();
+  const emittedByScope = new Map();
   for (const r of records) {
-    if (r.prefixPath === null || prefixBytesByPath.has(r.prefixPath)) continue;
+    if (r.prefixPath === null) continue;
     const check = validateBriefingPrefixPath(r.prefixPath, headSha);
     if (!check.ok) continue; // left unset -> evaluateDispatchPromptLayout fails closed on it
-    const bytes = await findGateBriefingPrefixBytes(tmpRoot, check.gate, headSha);
-    if (bytes !== null) prefixBytesByPath.set(r.prefixPath, bytes);
+    if (!prefixBytesByPath.has(r.prefixPath)) {
+      const bytes = await findGateBriefingPrefixBytes(tmpRoot, check.gate, headSha);
+      if (bytes !== null) prefixBytesByPath.set(r.prefixPath, bytes);
+    }
+    // Re-discover the sanctioned emitter's emitted unit on disk (never trusted
+    // from the record's own path) and bind the record to it by full-content
+    // hash + INLINE prefix alignment. A record whose emitted file is missing,
+    // whose bytes differ, or that is not inline-aligned fails closed.
+    if (!emittedByScope.has(r.scope)) {
+      const prefixBytes = prefixBytesByPath.get(r.prefixPath);
+      const emittedBytes = await findEmittedPromptBytes(tmpRoot, check.gate, r.scope, headSha);
+      if (emittedBytes === null || prefixBytes === undefined) {
+        emittedByScope.set(r.scope, { contentHash: null, inlineAligned: false });
+      } else {
+        const verdict = verifyPromptLeadingAlignment({ promptLeading: emittedBytes, prefixBytes, prefixPath: r.prefixPath });
+        emittedByScope.set(r.scope, {
+          contentHash: sha256Hex(emittedBytes),
+          inlineAligned: verdict.aligned && verdict.mode === "inline",
+        });
+      }
+    }
   }
-  const verdict = evaluateDispatchPromptLayout(records, prefixBytesByPath);
+  const verdict = evaluateDispatchPromptLayout(records, prefixBytesByPath, emittedByScope);
   return {
     verified: verdict.verified,
     headSha,

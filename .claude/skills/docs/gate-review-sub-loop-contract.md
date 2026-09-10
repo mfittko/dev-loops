@@ -712,7 +712,13 @@ bytes into the prompt (`prefixMode: "file"` below, or any other pointer-based se
 pointer LINE ITSELF — not just the file it names — MUST be byte-identical across every
 reviewer of the round; a pointer that varies per reviewer (e.g. embeds the angle name or a
 per-reviewer path) defeats prefix matching exactly as an inlined angle-first prefix would,
-even though the referenced file's bytes are still shared.
+even though the referenced file's bytes are still shared. This pointer-based PREFIX-recording
+mode is distinct from the sanctioned fan-out dispatch: the emitted UNIT that
+`GATE-EXEC-FANOUT-DISPATCH-EMIT`'s composer produces ALWAYS inlines the prefix (never a
+pointer line), and the "Emitted-unit binding" fan-in check below rejects a pointer-seeded
+emitted prompt as not inline-aligned. Pointer-based seeding governs how the PREFIX bytes are
+recorded for hash byte-identity; it is not a compliant emitted-prompt LAYOUT for a dispatched
+reviewer.
 
 **The composer (issue #1852, by construction, not by agent discipline).** Hand-composing a
 reviewer prompt — leading with a per-group preamble and instructing the reviewer to READ the
@@ -798,9 +804,15 @@ bytes; how those bytes REACH the spawned reviewer's actual prompt differs by har
   bytes verbatim — with NO added preamble, wrapper text, or paraphrase — as the Agent tool's
   `prompt` parameter. This makes the prompt CODE-COMPOSED (the composer, not the agent, decides
   the byte sequence), but the final hop — the orchestrating agent relaying those exact bytes
-  into the tool call — is not itself mechanically enforced by this CLI; `verify-dispatch-prompt-layout.mjs`'s
-  fan-in check (below) is what catches a relay that drifted (added a preamble, truncated,
-  reordered). Honest finding (closes the `#1841` AC3 gap this scope is best-effort on): Claude
+  into the tool call — is not itself mechanically enforced by this CLI. On the sanctioned
+  composer path the dispatch record's `promptContentHash` is hashed atomically from the SAME
+  composed bytes that become the emitted `--out` file, so `verify-dispatch-prompt-layout.mjs`'s
+  fan-in check (below) binds the record to that emitted unit and catches a record that is NOT
+  the emitted unit (a hand-composed prompt, a paraphrased suffix, a mismatched delivered
+  prompt) — but it does NOT observe what the agent actually pasted into the tool call, so a
+  FAITHFUL record of the emitted bytes paired with a drifted actual relay (an added preamble in
+  the tool call itself) is the documented delivered-task boundary below ("Three identities, one
+  honest boundary"), not something this check can catch. Honest finding (closes the `#1841` AC3 gap this scope is best-effort on): Claude
   Code's Agent-tool dispatch layer exposes no usage/cache-read telemetry to the orchestrating
   agent for a spawned subagent, so REAL provider cache reuse across sibling reviewers of one
   round (`org+model content-hash reads on reviewers 2..N`) cannot be measured or verified from
@@ -811,6 +823,18 @@ bytes; how those bytes REACH the spawned reviewer's actual prompt differs by har
   still guarantees, by construction, that every compliant dispatch UNIT of a round shares a
   byte-identical leading prefix span, which is the necessary (if not independently provable)
   precondition for the provider to ever reuse its cache.
+- **Agent-driven fan-out (Codex's agent tool):** Codex is agent-driven and, like Claude Code,
+  routes through the generic batch/agent adapter rather than a dedicated concrete adapter (only
+  `pi` ships one today; the per-harness fixtures stamp Claude Code and Codex onto the same
+  generic adapter with a distinct env). Its agent-tool dispatch therefore carries the SAME
+  observed limitation as the Claude Code case above: the orchestrating agent has no primitive to
+  inject a program-constructed byte-exact prompt independently of the prompt parameter it
+  constructs, so the final relay hop is not mechanically enforced (the delivered-task boundary),
+  and the dispatch layer exposes no usage/cache-read telemetry for a spawned subagent, so real
+  provider cache reuse is not measurable from inside it either. This repo does NOT independently
+  qualify Codex's agent-tool dispatch for production — the limitation is documented explicitly,
+  never certified away; the same by-construction emitted-unit binding and ordering invariants are
+  what remain assertable.
 
 **Content inlining.** `write-gate-context.mjs` renders this invariant block as a
 `<gate>-<headSha>.briefing-prefix.txt` file sibling to the JSON context artifact, in a
@@ -951,25 +975,47 @@ therefore NEVER left unrecorded. The underlying capture primitive
 from/points at> --prompt-file <path to the ACTUAL composed prompt text>`) remains directly
 callable for a caller that already has an independently-composed prompt file on disk. Either
 way, the record captures the prompt's leading bytes (up to `DISPATCH_PROMPT_LEADING_CAP_BYTES`,
-`@dev-loops/core/loop/review-dispatch-plan`) to `tmp/checkpoint-dispatch-prompt-<scope>-<headSha>.json`.
-Before Phase 3 consolidation, the fan-in ALSO runs
+`@dev-loops/core/loop/review-dispatch-plan`) AND a `promptContentHash` — the sha256 of the FULL
+recorded prompt, never truncated — to `tmp/checkpoint-dispatch-prompt-<scope>-<headSha>.json`.
+
+**Emitted-unit binding (issue #2131).** Before Phase 3 consolidation, the fan-in runs
 `scripts/github/verify-dispatch-prompt-layout.mjs --head-sha <sha>` (wired into
 `consolidate-fanin.mjs`'s own `--head-sha` block, alongside `verify-briefing-prefixes.mjs`),
-which fails closed (exit 1) when a recorded prompt's leading bytes do NOT match either: the
-round's byte-identical invariant prefix itself (inline mode), or the byte-identical pointer
-LINE naming the SAME prefix path, rendered by `renderBriefingPointerLine`
-(`@dev-loops/core/loop/review-dispatch-plan`) — the fixed line `verifyPromptLeadingAlignment`
-checks the leading bytes against under pointer-seeding mode, with the angle-specific text
-strictly AFTER it. An angle-first prompt (dynamic per-unit prose ahead of the prefix/pointer)
-matches neither and fails this mechanically, not only by prose review. Ground truth is ALWAYS
-re-discovered on disk from the round's real `<gate>-<headSha>.briefing-prefix.txt` record —
-never trusted from a captured record's own stored path — so a stale/tampered record can never
-smuggle in different bytes. A round with NO dispatch-prompt records at all is still never newly
-blocked (progressive/optional capture, same posture as `GATE-EXEC-PRIMER-EVIDENCE` below) — this
-stays true for a caller that genuinely never adopted the composer (e.g. a pre-#1852 artifact
-replayed offline); the records-floor residual this closes is that the SANCTIONED path can no
-longer silently be the one that never captures, since composing on that path now always
-captures.
+which fails closed (exit 1) unless EACH present dispatch record BINDS to the sanctioned emitter's
+emitted unit — the canonical `<gate>-<headSha>.dispatch-prompt-<scope>.txt` file the composer
+writes sibling to the invariant prefix. The bind requires BOTH: (1) the record's
+`promptContentHash` equals the sha256 of that emitted file (re-discovered on disk by name under
+`<tmp-root>/gate-context/**`, NEVER trusted from the record's own stored path), and (2) the
+emitted file LEADS with the round's byte-identical invariant prefix INLINE (`prefixBytes` as its
+leading bytes, the layout `composeReviewerPromptText` produces by construction), angle-specific
+text strictly AFTER. A leading-prefix match alone is not sufficient — **a matching invariant
+prefix does not prove an unchanged suffix**, so the full-content hash is what closes the
+altered-suffix gap. This mechanically rejects the three failure modes prose discipline never
+held (the #2129 incident): a hand-composed **pointer-seeding** prompt (leads with the
+`renderBriefingPointerLine` pointer LINE, not the inlined prefix — not inline-aligned, so
+rejected), a **paraphrased/altered suffix** (recorded hash ≠ emitted-file hash), and any
+**mismatched delivered prompt**.
+
+**Three identities, one honest boundary.** This binds **recorded-layout identity** (the
+`promptContentHash` in the record) to **generated-file identity** (the emitted unit re-hashed on
+disk). It does NOT establish **delivered-task identity** — whether the spawned subagent actually
+received those exact bytes. Under Claude Code's Agent tool the orchestrating agent relays the
+emitted `--out` bytes into the `prompt` parameter by hand, and no Agent-tool primitive exposes
+that final hop for independent verification, so a coordinator that honestly records the delivered
+bytes is caught when they drift from the emitted unit, but a coordinator that records the emitted
+bytes while delivering something else is not mechanically provable here. That relay hop is the
+documented fail-closed best-effort boundary (see "Per-harness delivery" above and
+`GATE-EXEC-FANOUT-DISPATCH-EMIT`), exposed as a limitation rather than papered over — treating
+the emitted-file hash as proof of task delivery is an explicit non-goal.
+
+A present record that carries no `promptContentHash`, or that binds to no emitted unit on disk,
+FAILS CLOSED — never grandfathered (same posture as a null `prefixPath`/`leading`): a
+coordinator-authored record cannot prove emitted-unit provenance on its own. A round with NO
+dispatch-prompt records at all is still never newly blocked (progressive/optional capture, same
+posture as `GATE-EXEC-PRIMER-EVIDENCE` below) — this stays true for a caller that genuinely never
+adopted the composer (e.g. a pre-#1852 artifact replayed offline). A noncompliant round recovers
+by re-running the sanctioned emitter (`emit-fanout-dispatch.mjs`) and re-consolidating; the
+original review history and audit records are preserved, not relabeled valid.
 
 **Records-floor (issue #1868).** The remaining vacuous-pass shape — a coordinator round that
 records ZERO dispatch/briefing evidence for a gate that DID dispatch units — is closed
@@ -1155,10 +1201,11 @@ result (mismatched or missing prefix hashes across this round's reviewer
 sentinels, or a sentinel count short of the dispatch units the conductor spawned)
 MUST stop the pass rather than proceed to consolidation. In the SAME `--head-sha`
 block it ALSO runs `scripts/github/verify-dispatch-prompt-layout.mjs --head-sha
-<sha>` (issue #1841, completing #1468's own acceptance — see the "Prompt-LAYOUT
-enforcement" paragraph under `GATE-EXEC-BRIEFING-PREFIX` above), which fails
-closed on any recorded reviewer prompt that does not LEAD with the round's
-byte-identical invariant prefix or pointer line. The conductor supplies
+<sha>` (issue #1841/#2131, completing #1468's own acceptance — see the
+"Prompt-LAYOUT enforcement" / "Emitted-unit binding" paragraphs under
+`GATE-EXEC-BRIEFING-PREFIX` above), which fails closed on any recorded reviewer
+prompt that does not BIND to the sanctioned emitter's inline-aligned emitted unit
+(full-content hash match + INLINE invariant prefix). The conductor supplies
 the expected dispatch-unit count via `--expected-dispatch-units <n>` (the Phase 1
 context artifact's `fanout.pendingGroups.length` — the dispatched dispatch-UNIT
 count, NOT `fanout.wavePlan.length`, which is the WAVE count, typically 1, not

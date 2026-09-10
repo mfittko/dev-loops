@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
-import { renderBriefingPointerLine } from "@dev-loops/core/loop/review-dispatch-plan";
+import { renderBriefingPointerLine, sha256Hex, DISPATCH_PROMPT_LEADING_CAP_BYTES } from "@dev-loops/core/loop/review-dispatch-plan";
 import { evaluateDispatchPromptLayout, verifyDispatchPromptLayoutForHead } from "../../scripts/github/verify-dispatch-prompt-layout.mjs";
 import { validateBriefingPrefixPath, dispatchPromptLayoutRecordPath } from "../../scripts/github/record-dispatch-prompt-layout.mjs";
 
@@ -41,8 +41,17 @@ async function writeGateContextPrefix(tmpDir, headSha = HEAD_SHA, bytes = PREFIX
   return relPath;
 }
 
+// Simulate the sanctioned emitter's canonical emitted-prompt file
+// (`<gate>-<headSha>.dispatch-prompt-<scope>.txt`, written by
+// compose-reviewer-prompt.mjs sibling to the invariant prefix).
+async function writeEmittedPrompt(tmpDir, scope, content, headSha = HEAD_SHA) {
+  const dir = path.join(tmpDir, "tmp", "gate-context", "o-r", "pr-1");
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, `${GATE}-${headSha}.dispatch-prompt-${scope}.txt`), content, "utf8");
+}
+
 // ---------------------------------------------------------------------------
-// Pure function: evaluateDispatchPromptLayout
+// Pure function: evaluateDispatchPromptLayout (emitted-unit binding)
 // ---------------------------------------------------------------------------
 
 test("evaluateDispatchPromptLayout: zero records is trivially verified (progressive/optional capture)", () => {
@@ -51,29 +60,70 @@ test("evaluateDispatchPromptLayout: zero records is trivially verified (progress
   assert.match(result.reason, /no dispatch-prompt records/);
 });
 
-test("evaluateDispatchPromptLayout: a prefix-first (inline) record verifies", () => {
+test("evaluateDispatchPromptLayout: a record bound to the inline-aligned emitted unit verifies", () => {
   const prefixPath = "tmp/gate-context/o-r/pr-1/draft_gate-abc.briefing-prefix.txt";
+  const emitted = `${PREFIX_BYTES}## Angle: coverage\n`;
   const result = evaluateDispatchPromptLayout(
-    [{ scope: "draft-gate-coverage", prefixPath, leading: `${PREFIX_BYTES}## Angle: coverage\n` }],
+    [{ scope: "draft-gate-coverage", prefixPath, leading: emitted, promptContentHash: sha256Hex(emitted) }],
     new Map([[prefixPath, PREFIX_BYTES]]),
+    new Map([["draft-gate-coverage", { contentHash: sha256Hex(emitted), inlineAligned: true }]]),
   );
   assert.equal(result.verified, true);
 });
 
-test("evaluateDispatchPromptLayout: REJECTS an angle-first record (dynamic prose ahead of the prefix)", () => {
+test("evaluateDispatchPromptLayout: REJECTS a record with no promptContentHash (coordinator-authored, never grandfathered)", () => {
   const prefixPath = "tmp/gate-context/o-r/pr-1/draft_gate-abc.briefing-prefix.txt";
   const result = evaluateDispatchPromptLayout(
-    [{ scope: "draft-gate-coverage", prefixPath, leading: `## Angle: coverage\n${PREFIX_BYTES}` }],
+    [{ scope: "draft-gate-coverage", prefixPath, leading: `${PREFIX_BYTES}x`, promptContentHash: null }],
     new Map([[prefixPath, PREFIX_BYTES]]),
+    new Map([["draft-gate-coverage", { contentHash: sha256Hex(`${PREFIX_BYTES}x`), inlineAligned: true }]]),
   );
   assert.equal(result.verified, false);
-  assert.equal(result.misaligned.length, 1);
-  assert.equal(result.misaligned[0].scope, "draft-gate-coverage");
+  assert.match(result.misaligned[0].reason, /no promptContentHash/);
+});
+
+test("evaluateDispatchPromptLayout: REJECTS when no sanctioned emitted file exists for the scope", () => {
+  const prefixPath = "tmp/gate-context/o-r/pr-1/draft_gate-abc.briefing-prefix.txt";
+  const emitted = `${PREFIX_BYTES}## Angle: coverage\n`;
+  const result = evaluateDispatchPromptLayout(
+    [{ scope: "draft-gate-coverage", prefixPath, leading: emitted, promptContentHash: sha256Hex(emitted) }],
+    new Map([[prefixPath, PREFIX_BYTES]]),
+    new Map(), // no emitted file discovered
+  );
+  assert.equal(result.verified, false);
+  assert.match(result.misaligned[0].reason, /no sanctioned emitter emitted-prompt file/);
+});
+
+test("evaluateDispatchPromptLayout: REJECTS an altered suffix (matching prefix, hash mismatch to emitted unit)", () => {
+  const prefixPath = "tmp/gate-context/o-r/pr-1/draft_gate-abc.briefing-prefix.txt";
+  const emitted = `${PREFIX_BYTES}## Angle: coverage\nORIGINAL\n`;
+  const delivered = `${PREFIX_BYTES}## Angle: coverage\nPARAPHRASED\n`; // same prefix, altered suffix
+  const result = evaluateDispatchPromptLayout(
+    [{ scope: "draft-gate-coverage", prefixPath, leading: delivered, promptContentHash: sha256Hex(delivered) }],
+    new Map([[prefixPath, PREFIX_BYTES]]),
+    new Map([["draft-gate-coverage", { contentHash: sha256Hex(emitted), inlineAligned: true }]]),
+  );
+  assert.equal(result.verified, false);
+  assert.match(result.misaligned[0].reason, /do not match the sanctioned emitter's emitted unit/);
+});
+
+test("evaluateDispatchPromptLayout: REJECTS a hand-composed pointer-seeding record (emitted unit not inline-aligned)", () => {
+  const prefixPath = "tmp/gate-context/o-r/pr-1/draft_gate-abc.briefing-prefix.txt";
+  const pointerLine = renderBriefingPointerLine(prefixPath);
+  const emitted = `${pointerLine}\n## Angle: coverage\n`; // pointer-seeded, NOT inline
+  const result = evaluateDispatchPromptLayout(
+    [{ scope: "draft-gate-coverage", prefixPath, leading: emitted, promptContentHash: sha256Hex(emitted) }],
+    new Map([[prefixPath, PREFIX_BYTES]]),
+    new Map([["draft-gate-coverage", { contentHash: sha256Hex(emitted), inlineAligned: false }]]),
+  );
+  assert.equal(result.verified, false);
+  assert.match(result.misaligned[0].reason, /does not LEAD with the round's byte-identical invariant prefix INLINE/);
 });
 
 test("evaluateDispatchPromptLayout: a record with no matching prefix bytes fails closed", () => {
   const result = evaluateDispatchPromptLayout(
-    [{ scope: "draft-gate-coverage", prefixPath: "does/not/exist.txt", leading: "anything" }],
+    [{ scope: "draft-gate-coverage", prefixPath: "does/not/exist.txt", leading: "anything", promptContentHash: "sha256:x" }],
+    new Map(),
     new Map(),
   );
   assert.equal(result.verified, false);
@@ -82,21 +132,12 @@ test("evaluateDispatchPromptLayout: a record with no matching prefix bytes fails
 
 test("evaluateDispatchPromptLayout: a malformed record (null prefixPath/leading) fails closed, never grandfathered", () => {
   const result = evaluateDispatchPromptLayout(
-    [{ scope: "draft-gate-coverage", prefixPath: null, leading: null }],
+    [{ scope: "draft-gate-coverage", prefixPath: null, leading: null, promptContentHash: null }],
+    new Map(),
     new Map(),
   );
   assert.equal(result.verified, false);
   assert.match(result.misaligned[0].reason, /never grandfathered/);
-});
-
-test("evaluateDispatchPromptLayout: a pointer-mode record verifies against the byte-identical pointer line", () => {
-  const prefixPath = "tmp/gate-context/o-r/pr-1/draft_gate-abc.briefing-prefix.txt";
-  const pointerLine = renderBriefingPointerLine(prefixPath);
-  const result = evaluateDispatchPromptLayout(
-    [{ scope: "draft-gate-coverage", prefixPath, leading: `${pointerLine}\n## Angle: coverage\n` }],
-    new Map([[prefixPath, PREFIX_BYTES]]),
-  );
-  assert.equal(result.verified, true);
 });
 
 // ---------------------------------------------------------------------------
@@ -120,7 +161,7 @@ test("validateBriefingPrefixPath: rejects a non-canonical basename (wrong head S
 });
 
 // ---------------------------------------------------------------------------
-// verifyDispatchPromptLayoutForHead — programmatic fan-in entry
+// verifyDispatchPromptLayoutForHead — programmatic fan-in entry (real I/O)
 // ---------------------------------------------------------------------------
 
 test("verifyDispatchPromptLayoutForHead: no records for the head -> verified (offline/legacy path unchanged)", async () => {
@@ -131,13 +172,14 @@ test("verifyDispatchPromptLayoutForHead: no records for the head -> verified (of
   });
 });
 
-test("verifyDispatchPromptLayoutForHead: reads a real record + real prefix file and verifies a prefix-first prompt", async () => {
+test("verifyDispatchPromptLayoutForHead: record bound to the on-disk inline-aligned emitted unit verifies", async () => {
   await withTmpDir(async (tmpDir) => {
     const relPath = await writeGateContextPrefix(tmpDir);
-    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    const emitted = `${PREFIX_BYTES}## Angle: coverage\n`;
+    await writeEmittedPrompt(tmpDir, "draft-gate-coverage", emitted);
     await writeFile(
       dispatchPromptLayoutRecordPath(path.join(tmpDir, "tmp"), "draft-gate-coverage", HEAD_SHA),
-      JSON.stringify({ scope: "draft-gate-coverage", headSha: HEAD_SHA, prefixPath: relPath, leading: `${PREFIX_BYTES}## Angle: coverage\n` }),
+      JSON.stringify({ scope: "draft-gate-coverage", headSha: HEAD_SHA, prefixPath: relPath, leading: emitted, promptContentHash: sha256Hex(emitted) }),
     );
     const result = await verifyDispatchPromptLayoutForHead(path.join(tmpDir, "tmp"), HEAD_SHA);
     assert.equal(result.verified, true);
@@ -145,17 +187,50 @@ test("verifyDispatchPromptLayoutForHead: reads a real record + real prefix file 
   });
 });
 
-test("verifyDispatchPromptLayoutForHead: fails closed on a real angle-first record", async () => {
+test("verifyDispatchPromptLayoutForHead: fails closed when the recorded prompt does not match the emitted unit (altered suffix)", async () => {
   await withTmpDir(async (tmpDir) => {
     const relPath = await writeGateContextPrefix(tmpDir);
-    await mkdir(path.join(tmpDir, "tmp"), { recursive: true });
+    await writeEmittedPrompt(tmpDir, "draft-gate-coverage", `${PREFIX_BYTES}## Angle: coverage\nORIGINAL\n`);
+    const delivered = `${PREFIX_BYTES}## Angle: coverage\nPARAPHRASED\n`;
     await writeFile(
       dispatchPromptLayoutRecordPath(path.join(tmpDir, "tmp"), "draft-gate-coverage", HEAD_SHA),
-      JSON.stringify({ scope: "draft-gate-coverage", headSha: HEAD_SHA, prefixPath: relPath, leading: `## Angle: coverage\n${PREFIX_BYTES}` }),
+      JSON.stringify({ scope: "draft-gate-coverage", headSha: HEAD_SHA, prefixPath: relPath, leading: delivered, promptContentHash: sha256Hex(delivered) }),
     );
     const result = await verifyDispatchPromptLayoutForHead(path.join(tmpDir, "tmp"), HEAD_SHA);
     assert.equal(result.verified, false);
     assert.equal(result.misaligned[0].scope, "draft-gate-coverage");
+  });
+});
+
+test("verifyDispatchPromptLayoutForHead: fails closed on a real record JSON that OMITS promptContentHash (legacy/coordinator record, never grandfathered)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const relPath = await writeGateContextPrefix(tmpDir);
+    const emitted = `${PREFIX_BYTES}## Angle: coverage\n`;
+    await writeEmittedPrompt(tmpDir, "draft-gate-coverage", emitted);
+    // A record with NO promptContentHash key at all — readDispatchPromptRecords
+    // must map the absent field to null and the evaluator must fail closed.
+    await writeFile(
+      dispatchPromptLayoutRecordPath(path.join(tmpDir, "tmp"), "draft-gate-coverage", HEAD_SHA),
+      JSON.stringify({ scope: "draft-gate-coverage", headSha: HEAD_SHA, prefixPath: relPath, leading: emitted }),
+    );
+    const result = await verifyDispatchPromptLayoutForHead(path.join(tmpDir, "tmp"), HEAD_SHA);
+    assert.equal(result.verified, false);
+    assert.match(result.misaligned[0].reason, /no promptContentHash/);
+  });
+});
+
+test("verifyDispatchPromptLayoutForHead: fails closed when no emitted unit exists on disk (hand-composed dispatch)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const relPath = await writeGateContextPrefix(tmpDir);
+    const delivered = `${PREFIX_BYTES}## Angle: coverage\n`;
+    // record present, but NO <gate>-<headSha>.dispatch-prompt-<scope>.txt emitted file
+    await writeFile(
+      dispatchPromptLayoutRecordPath(path.join(tmpDir, "tmp"), "draft-gate-coverage", HEAD_SHA),
+      JSON.stringify({ scope: "draft-gate-coverage", headSha: HEAD_SHA, prefixPath: relPath, leading: delivered, promptContentHash: sha256Hex(delivered) }),
+    );
+    const result = await verifyDispatchPromptLayoutForHead(path.join(tmpDir, "tmp"), HEAD_SHA);
+    assert.equal(result.verified, false);
+    assert.match(result.misaligned[0].reason, /no sanctioned emitter emitted-prompt file/);
   });
 });
 
@@ -169,11 +244,14 @@ test("record-dispatch-prompt-layout.mjs --help exits 0", () => {
   assert.match(result.stdout, /record-dispatch-prompt-layout/);
 });
 
-test("record-dispatch-prompt-layout.mjs writes a record readable back by the verifier and passes the round", async () => {
+test("record-dispatch-prompt-layout.mjs records a full-content hash; the round passes only with a matching emitted unit", async () => {
   await withTmpDir(async (tmpDir) => {
     const relPath = await writeGateContextPrefix(tmpDir);
+    const promptBody = `${PREFIX_BYTES}## Angle: coverage\nDo the thing.`;
     const promptFile = path.join(tmpDir, "prompt.txt");
-    await writeFile(promptFile, `${PREFIX_BYTES}## Angle: coverage\nDo the thing.`, "utf8");
+    await writeFile(promptFile, promptBody, "utf8");
+    // Sanctioned emitter would also write the canonical emitted file:
+    await writeEmittedPrompt(tmpDir, "draft-gate-coverage", promptBody);
     const result = runRecordCli(
       ["--scope", "draft-gate-coverage", "--head-sha", HEAD_SHA, "--prefix-path", relPath, "--prompt-file", promptFile],
       { cwd: tmpDir },
@@ -185,11 +263,52 @@ test("record-dispatch-prompt-layout.mjs writes a record readable back by the ver
     const recordRaw = await readFile(dispatchPromptLayoutRecordPath(path.join(tmpDir, "tmp"), "draft-gate-coverage", HEAD_SHA), "utf8");
     const record = JSON.parse(recordRaw);
     assert.equal(record.prefixPath, relPath);
-    assert.equal(record.leading, `${PREFIX_BYTES}## Angle: coverage\nDo the thing.`);
+    assert.equal(record.leading, promptBody);
+    assert.equal(record.promptContentHash, sha256Hex(promptBody));
 
     const verifyResult = runVerifyCli(["--head-sha", HEAD_SHA], { cwd: tmpDir });
     assert.equal(verifyResult.status, 0, verifyResult.stderr);
     assert.equal(JSON.parse(verifyResult.stdout).verified, true);
+  });
+});
+
+// AC1 (representative large prompt): a prompt LONGER than the leading-bytes cap
+// still binds by its FULL content — promptContentHash is the sha256 of the whole
+// prompt, never of the truncated `leading` capture. A regression that hashed
+// `leading` instead of `promptText` would still match a same-truncated emitted
+// file and pass every other test; this pins the full-content invariant.
+test("record-dispatch-prompt-layout.mjs binds a >cap prompt by FULL content (not the truncated leading capture)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const relPath = await writeGateContextPrefix(tmpDir);
+    // A prompt comfortably past DISPATCH_PROMPT_LEADING_CAP_BYTES whose bytes
+    // AFTER the cap still matter: the emitted file carries the full bytes.
+    const bigPrompt = `${PREFIX_BYTES}## Angle: coverage\n${"x".repeat(DISPATCH_PROMPT_LEADING_CAP_BYTES)}TAIL-AFTER-CAP\n`;
+    assert.ok(bigPrompt.length > DISPATCH_PROMPT_LEADING_CAP_BYTES);
+    const promptFile = path.join(tmpDir, "big-prompt.txt");
+    await writeFile(promptFile, bigPrompt, "utf8");
+    await writeEmittedPrompt(tmpDir, "draft-gate-coverage", bigPrompt);
+    const result = runRecordCli(
+      ["--scope", "draft-gate-coverage", "--head-sha", HEAD_SHA, "--prefix-path", relPath, "--prompt-file", promptFile],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).truncated, true);
+
+    const record = JSON.parse(await readFile(dispatchPromptLayoutRecordPath(path.join(tmpDir, "tmp"), "draft-gate-coverage", HEAD_SHA), "utf8"));
+    // Hash is over the FULL prompt, never the truncated leading capture.
+    assert.equal(record.promptContentHash, sha256Hex(bigPrompt));
+    assert.notEqual(record.promptContentHash, sha256Hex(record.leading));
+    assert.equal(record.leading.length, DISPATCH_PROMPT_LEADING_CAP_BYTES);
+
+    // Binds against the full-bytes emitted file — the >cap tail is part of the proof.
+    const okResult = await verifyDispatchPromptLayoutForHead(path.join(tmpDir, "tmp"), HEAD_SHA);
+    assert.equal(okResult.verified, true);
+
+    // A tail-only drift past the cap is still caught (proves the bind is not
+    // limited to the first cap bytes).
+    await writeEmittedPrompt(tmpDir, "draft-gate-coverage", `${PREFIX_BYTES}## Angle: coverage\n${"x".repeat(DISPATCH_PROMPT_LEADING_CAP_BYTES)}DIFFERENT-TAIL\n`);
+    const driftResult = await verifyDispatchPromptLayoutForHead(path.join(tmpDir, "tmp"), HEAD_SHA);
+    assert.equal(driftResult.verified, false);
   });
 });
 
@@ -259,7 +378,7 @@ test("verify-dispatch-prompt-layout.mjs --help exits 0", () => {
   assert.equal(result.status, 0);
 });
 
-test("verify-dispatch-prompt-layout.mjs exits 0 with reviewerCount 0 when nothing is recorded", async () => {
+test("verify-dispatch-prompt-layout.mjs exits 0 with recordCount 0 when nothing is recorded", async () => {
   await withTmpDir(async (tmpDir) => {
     const result = runVerifyCli(["--head-sha", HEAD_SHA], { cwd: tmpDir });
     assert.equal(result.status, 0);
@@ -269,12 +388,17 @@ test("verify-dispatch-prompt-layout.mjs exits 0 with reviewerCount 0 when nothin
   });
 });
 
-test("verify-dispatch-prompt-layout.mjs exits 1 (fails closed) on an angle-first dispatched prompt", async () => {
+test("verify-dispatch-prompt-layout.mjs exits 1 (fails closed) on a hand-composed pointer-seeding dispatch", async () => {
   await withTmpDir(async (tmpDir) => {
     const relPath = await writeGateContextPrefix(tmpDir);
+    const pointerLine = renderBriefingPointerLine(relPath);
+    // A hand-composed pointer-seeding prompt: leads with the pointer line, not
+    // the inlined invariant prefix. The coordinator writes it as the emitted
+    // file AND records its hash — but it is NOT inline-aligned, so it fails.
+    const promptBody = `${pointerLine}\n## Angle: coverage\nDo the thing.`;
     const promptFile = path.join(tmpDir, "prompt.txt");
-    // Angle-first: dynamic per-unit prose BEFORE the invariant prefix.
-    await writeFile(promptFile, `## Angle: coverage\nDo the thing.\n${PREFIX_BYTES}`, "utf8");
+    await writeFile(promptFile, promptBody, "utf8");
+    await writeEmittedPrompt(tmpDir, "draft-gate-coverage", promptBody);
     const recordResult = runRecordCli(
       ["--scope", "draft-gate-coverage", "--head-sha", HEAD_SHA, "--prefix-path", relPath, "--prompt-file", promptFile],
       { cwd: tmpDir },
@@ -286,6 +410,23 @@ test("verify-dispatch-prompt-layout.mjs exits 1 (fails closed) on an angle-first
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.verified, false);
     assert.equal(payload.misaligned[0].scope, "draft-gate-coverage");
+  });
+});
+
+test("verify-dispatch-prompt-layout.mjs recovery: a compliant replacement round passes (audit-preserving)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const relPath = await writeGateContextPrefix(tmpDir);
+    const compliant = `${PREFIX_BYTES}## Angle: coverage\nDo the thing.`;
+    const promptFile = path.join(tmpDir, "prompt.txt");
+    await writeFile(promptFile, compliant, "utf8");
+    await writeEmittedPrompt(tmpDir, "draft-gate-coverage", compliant);
+    runRecordCli(
+      ["--scope", "draft-gate-coverage", "--head-sha", HEAD_SHA, "--prefix-path", relPath, "--prompt-file", promptFile],
+      { cwd: tmpDir },
+    );
+    const result = runVerifyCli(["--head-sha", HEAD_SHA], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).verified, true);
   });
 });
 

@@ -17,7 +17,7 @@ import { checkFanoutAngleCoverage } from "@dev-loops/core/loop/gate-fanin";
 import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { buildCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
 import { buildPrimerEvidence } from "@dev-loops/core/loop/primer-evidence";
-import { buildReviewDispatchPlan, CACHE_BOUNDARY_AFTER_SHARED_PREFIX, PRIMER_FORM_LEAD_REVIEWER, renderBriefingPointerLine } from "@dev-loops/core/loop/review-dispatch-plan";
+import { buildReviewDispatchPlan, CACHE_BOUNDARY_AFTER_SHARED_PREFIX, PRIMER_FORM_LEAD_REVIEWER, renderBriefingPointerLine, sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 import { dispatchPromptLayoutRecordPath } from "../../scripts/github/record-dispatch-prompt-layout.mjs";
 import { runNode } from "../_helpers.mjs";
 
@@ -3343,12 +3343,28 @@ test("#1618 record-matching: a sentinel whose hash matches NO gate record fails 
 // prompt is caught mechanically here, not only documented.
 // ---------------------------------------------------------------------------
 
-async function writeDispatchPromptRecord(tmpRoot, scope, headSha, { prefixPath, leading }) {
+// Write both the dispatch-prompt record AND (unless `emitted: null`) the
+// sanctioned emitter's canonical `<gate>-<headSha>.dispatch-prompt-<scope>.txt`
+// file the fan-in re-discovers to bind provenance. These test bodies are all
+// below the leading cap, so `leading` here holds the full prompt and its
+// promptContentHash (sha256 over `leading`) equals the emitted file's hash by
+// default — the binding the fan-in checks. (In the real recorder `leading` is a
+// capped capture and `promptContentHash` is hashed over the full prompt, so the
+// two are not interchangeable for a >cap prompt.) `emitted` defaults to `leading`
+// to model that same-bytes sanctioned case; pass a different `emitted` to
+// simulate a delivered/hand-composed prompt that drifted from the emitted unit,
+// or `emitted: null` to omit the emitted file entirely.
+async function writeDispatchPromptRecord(tmpRoot, scope, headSha, { prefixPath, leading, emitted = leading, gate = "draft_gate" }) {
   await mkdir(tmpRoot, { recursive: true });
   await writeFile(
     dispatchPromptLayoutRecordPath(tmpRoot, scope, headSha),
-    JSON.stringify({ scope, headSha, prefixPath, leading }),
+    JSON.stringify({ scope, headSha, prefixPath, leading, promptContentHash: sha256Hex(leading) }),
   );
+  if (emitted !== null) {
+    const dir = path.join(tmpRoot, "gate-context", "mfittko-dev-loops", "pr-1646");
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, `${gate}-${headSha}.dispatch-prompt-${scope}.txt`), emitted);
+  }
 }
 
 test("#1841 AC4: a head with no dispatch-prompt records still consolidates (offline/legacy path unchanged)", async () => {
@@ -3388,7 +3404,7 @@ test("#1841 AC1/AC2: a round whose dispatched reviewer prompt is prefix-first (i
   );
 });
 
-test("#1841 AC1/AC2: a round whose dispatched reviewer prompt leads with the byte-identical POINTER line consolidates", async () => {
+test("#2131: fails closed on a hand-composed POINTER-seeding emitted unit (not inline-aligned — no longer the sanctioned dispatch)", async () => {
   await withFindingsDir(
     { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A } },
     async (dir) => {
@@ -3402,8 +3418,61 @@ test("#1841 AC1/AC2: a round whose dispatched reviewer prompt leads with the byt
           prefixPath,
           leading: `${pointerLine}\n## Angle: coverage\nDo the thing.`,
         });
-        const result = await consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot });
-        assert.equal(result.overallVerdict, "clean");
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
+          (err) => err.message.includes("GATE-EXEC") && /do not bind to the sanctioned emitter's inline-aligned emitted unit/.test(err.message),
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+test("#2131: fails closed when a present record binds to NO emitted unit on disk (hand-composed dispatch, via consolidateGateFanin)", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-layout-"));
+      try {
+        const bytes = "## Invariant prefix\nrepo: o/r\n";
+        await writeGateBriefingRecord(tmpRoot, "draft_gate", HEAD_A, bytes);
+        const prefixPath = path.join(tmpRoot, "gate-context", "mfittko-dev-loops", "pr-1646", `draft_gate-${HEAD_A}.briefing-prefix.txt`);
+        // Record present, but emitted:null omits the canonical emitted-prompt file entirely.
+        await writeDispatchPromptRecord(tmpRoot, "draft-gate-coverage", HEAD_A, {
+          prefixPath,
+          leading: `${bytes}## Angle: coverage\nDo the thing.`,
+          emitted: null,
+        });
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
+          (err) => err.message.includes("GATE-EXEC") && /do not bind to the sanctioned emitter's inline-aligned emitted unit/.test(err.message),
+        );
+      } finally {
+        await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+test("#2131: fails closed when the recorded prompt drifts from the emitted unit (altered suffix / mismatched delivered prompt)", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_A } },
+    async (dir) => {
+      const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "consolidate-fanin-layout-"));
+      try {
+        const bytes = "## Invariant prefix\nrepo: o/r\n";
+        await writeGateBriefingRecord(tmpRoot, "draft_gate", HEAD_A, bytes);
+        const prefixPath = path.join(tmpRoot, "gate-context", "mfittko-dev-loops", "pr-1646", `draft_gate-${HEAD_A}.briefing-prefix.txt`);
+        await writeDispatchPromptRecord(tmpRoot, "draft-gate-coverage", HEAD_A, {
+          prefixPath,
+          leading: `${bytes}## Angle: coverage\nPARAPHRASED\n`,
+          emitted: `${bytes}## Angle: coverage\nORIGINAL\n`, // emitted unit differs from what was recorded
+        });
+        await assert.rejects(
+          () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
+          (err) => err.message.includes("GATE-EXEC") && /do not bind to the sanctioned emitter's inline-aligned emitted unit/.test(err.message),
+        );
       } finally {
         await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
       }
@@ -3427,7 +3496,7 @@ test("#1841 AC1/AC2: fails closed when a dispatched reviewer prompt is ANGLE-FIR
         });
         await assert.rejects(
           () => consolidateGateFanin({ findingsDir: dir, headSha: HEAD_A, tmpRoot }),
-          (err) => err.message.includes("GATE-EXEC-BRIEFING-PREFIX") && /do not lead with the round's byte-identical/.test(err.message),
+          (err) => err.message.includes("GATE-EXEC") && /do not bind to the sanctioned emitter's inline-aligned emitted unit/.test(err.message),
         );
       } finally {
         await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});

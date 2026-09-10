@@ -4,7 +4,7 @@ import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { GATE_NAMES, canonicalizeScope } from "./_gate-names.mjs";
-import { DISPATCH_PROMPT_LEADING_CAP_BYTES } from "@dev-loops/core/loop/review-dispatch-plan";
+import { DISPATCH_PROMPT_LEADING_CAP_BYTES, sha256Hex } from "@dev-loops/core/loop/review-dispatch-plan";
 
 const USAGE = `Usage: record-dispatch-prompt-layout.mjs --scope <name> --head-sha <sha> --prefix-path <path> --prompt-file <path> [--help]
 Capture the LEADING bytes of a dispatched reviewer's ACTUAL composed prompt
@@ -145,6 +145,19 @@ export async function recordDispatchPromptLayout({ scope, headSha, prefixPath, p
   }
   const truncated = promptText.length > DISPATCH_PROMPT_LEADING_CAP_BYTES;
   const leading = truncated ? promptText.slice(0, DISPATCH_PROMPT_LEADING_CAP_BYTES) : promptText;
+  // Full-content hash of the delivered/recorded prompt (never truncated). The
+  // fan-in re-discovers the sanctioned emitter's canonical emitted-prompt file
+  // on disk and requires this hash to equal that file's hash, so a record whose
+  // captured prompt is not byte-identical to the emitted unit — a paraphrased
+  // suffix or any mismatched delivered prompt — fails closed here. (A
+  // pointer-seeded prompt, where record and emitted file agree but neither
+  // inlines the prefix, is instead rejected by the separate inline-alignment
+  // leg.) Together these bind provenance to the emitted unit
+  // (GATE-EXEC-FANOUT-DISPATCH-EMIT / GATE-EXEC-BRIEFING-PREFIX), never to a
+  // coordinator-authored record alone. Neither proves delivered-task identity
+  // (that the subagent actually received the bytes); that hop is the documented
+  // best-effort boundary.
+  const promptContentHash = sha256Hex(promptText);
   const recordPath = dispatchPromptLayoutRecordPath(tmpRoot, scope, headSha);
   await mkdir(path.dirname(recordPath), { recursive: true });
   const record = {
@@ -154,6 +167,7 @@ export async function recordDispatchPromptLayout({ scope, headSha, prefixPath, p
     gate: pathCheck.gate,
     leading,
     truncated,
+    promptContentHash,
     capturedAt: new Date().toISOString(),
   };
   await writeFile(recordPath, JSON.stringify(record, null, 2) + "\n", "utf8");
