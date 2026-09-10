@@ -90,6 +90,30 @@ test("verifyFreshHumanApproval: refuses a wrong-login approval", () => {
   assert.equal(res.satisfied, false);
 });
 
+test("verifyFreshHumanApproval: a negating operator comment never reads as approval", () => {
+  for (const body of [`disapprove merge ${HEAD}`, `not approve merge ${HEAD}`, `please do not approve merge ${HEAD}`]) {
+    const res = verifyFreshHumanApproval({ approvedBy: "mfittko", currentHeadSha: HEAD, comments: [{ user: { login: "mfittko" }, body }] });
+    assert.equal(res.satisfied, false, `must reject: ${body}`);
+  }
+  // A genuine marker opening its own line (after a list/quote prefix) is accepted.
+  for (const body of [`approve merge ${HEAD}`, `- approve merge ${HEAD}`, `> approve merge ${HEAD}`, `context\napprove merge ${HEAD}`]) {
+    const res = verifyFreshHumanApproval({ approvedBy: "mfittko", currentHeadSha: HEAD, comments: [{ user: { login: "mfittko" }, body }] });
+    assert.equal(res.satisfied, true, `must accept: ${JSON.stringify(body)}`);
+  }
+});
+
+test("verifyFreshHumanApproval: a GitHub App [bot] author never satisfies", () => {
+  const review = verifyFreshHumanApproval({ approvedBy: "github-actions", currentHeadSha: HEAD, reviews: [{ user: { login: "github-actions[bot]" }, state: "APPROVED", commit_id: HEAD }] });
+  assert.equal(review.satisfied, false);
+  const comment = verifyFreshHumanApproval({ approvedBy: "dependabot", currentHeadSha: HEAD, comments: [{ user: { login: "dependabot[bot]" }, body: `approve merge ${HEAD}` }] });
+  assert.equal(comment.satisfied, false);
+});
+
+test("resolveCiGreenFromRollup: a malformed check entry fails closed", () => {
+  assert.equal(resolveCiGreenFromRollup([{}]).green, false);
+  assert.equal(resolveCiGreenFromRollup([{ foo: "bar" }]).green, false);
+});
+
 test("resolveMergeApprovalDecision: standing authorization allows a drain merge", () => {
   const res = resolveMergeApprovalDecision({ mergeClass: MERGE_CLASS.DRAIN, standingAuthorized: true, freshApproval: { satisfied: false } });
   assert.equal(res.authorized, true);

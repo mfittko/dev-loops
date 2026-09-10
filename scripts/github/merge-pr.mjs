@@ -128,16 +128,26 @@ function defaultDetectEvidence({ repo, pr, env, cwd }) {
       [DETECT_EVIDENCE_PATH, "--repo", repo, "--pr", String(pr)],
       { env, cwd, maxBuffer: 16 * 1024 * 1024 },
       (error, stdout, stderr) => {
-        const ok = !error;
         let parsed = null;
-        try { parsed = JSON.parse(ok ? stdout : stderr); } catch { parsed = null; }
+        try { parsed = JSON.parse(error ? stderr : stdout); } catch { parsed = null; }
+        // A zero exit with unparseable output must NOT pass as satisfied evidence:
+        // we could no longer read the size-budget outcome (which sets the merge
+        // class), so treat it as a gate_evidence failure and fail closed.
+        const ok = !error && parsed !== null;
         const size = parsed?.preApprovalGate ?? {};
+        const failures = Array.isArray(parsed?.preMergeGateCheck?.failures)
+          ? parsed.preMergeGateCheck.failures
+          : parsed?.error
+            ? [parsed.error]
+            : ok
+              ? []
+              : ["detect-checkpoint-evidence output could not be read"];
         resolve({
           ok,
           sizeOutcome: typeof size.sizeOutcome === "string" ? size.sizeOutcome : null,
           touchesT1: size.sizeTouchesT1 === true,
           currentHeadSha: typeof parsed?.currentHeadSha === "string" ? parsed.currentHeadSha : null,
-          failures: Array.isArray(parsed?.preMergeGateCheck?.failures) ? parsed.preMergeGateCheck.failures : (parsed?.error ? [parsed.error] : []),
+          failures,
         });
       },
     );

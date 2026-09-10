@@ -57,6 +57,16 @@ function reviewLogin(entry) {
   return null;
 }
 
+// A non-human login: the Copilot reviewer/bot (bracket-free `Copilot`
+// variants, caught by isCopilotLogin) or any GitHub App bot login, which
+// GitHub renders with a `[bot]` suffix (e.g. `github-actions[bot]`). Such a
+// login can never satisfy the human-approval requirement. (A `[bot]` login can
+// never be the named `--human-approved-by <login>` either — isValidGithubLogin
+// rejects the brackets — so this only ever fires on a review/comment AUTHOR.)
+function isNonHumanLogin(login) {
+  return isCopilotLogin(login) || /\[bot\]$/i.test(login);
+}
+
 function reviewCommit(entry) {
   if (typeof entry?.commit_id === "string" && entry.commit_id.length > 0) return entry.commit_id;
   if (typeof entry?.commitId === "string" && entry.commitId.length > 0) return entry.commitId;
@@ -93,17 +103,22 @@ export function verifyFreshHumanApproval({ approvedBy, currentHeadSha, reviews =
   for (const entry of Array.isArray(reviews) ? reviews : []) {
     if ((typeof entry?.state === "string" ? entry.state : null) !== "APPROVED") continue;
     const login = reviewLogin(entry);
-    if (login === null || isCopilotLogin(login)) continue; // agent/bot review never satisfies
+    if (login === null || isNonHumanLogin(login)) continue; // agent/bot review never satisfies
     if (login !== approvedBy) continue; // wrong login
     if (reviewCommit(entry) !== head) continue; // stale — approval on an earlier commit
     return { satisfied: true, via: "approved_review", reason: null };
   }
 
-  const markerRe = new RegExp(`approve\\s+merge\\s+${escapeRegex(head)}(?:\\b|$)`, "i");
+  // The marker must OPEN its line (after only leading whitespace / list / quote
+  // markers) so a negating operator comment never reads as approval: an
+  // unanchored `approve merge <head>` would also match `disapprove merge <head>`
+  // and `not approve merge <head>` — a fail-open on the merge-authorization
+  // path. The trailing `(?:\b|$)` keeps `<head>abc` from matching `<head>`.
+  const markerRe = new RegExp(`^[ \\t>*-]*approve\\s+merge\\s+${escapeRegex(head)}(?:\\b|$)`, "im");
   for (const entry of Array.isArray(comments) ? comments : []) {
     const login = reviewLogin(entry);
     const body = typeof entry?.body === "string" ? entry.body : "";
-    if (login === null || isCopilotLogin(login)) continue; // agent/bot comment never satisfies
+    if (login === null || isNonHumanLogin(login)) continue; // agent/bot comment never satisfies
     if (login !== approvedBy) continue; // wrong login
     if (!markerRe.test(body)) continue; // not a head-pinned marker for this head
     return { satisfied: true, via: "comment_marker", reason: null };
@@ -158,6 +173,11 @@ export function resolveCiGreenFromRollup(rollup) {
     const status = typeof check?.status === "string" ? check.status.toUpperCase() : null;
     const conclusion = typeof check?.conclusion === "string" ? check.conclusion.toUpperCase() : null;
     const state = typeof check?.state === "string" ? check.state.toUpperCase() : null;
+    // A rollup entry with no recognizable status/state/conclusion is malformed —
+    // fail closed rather than admit it as green.
+    if (state === null && status === null && conclusion === null) {
+      return { green: false, reason: "CI status rollup has an unreadable check entry" };
+    }
     if (state !== null) {
       if (state === "SUCCESS") continue;
       if (state === "PENDING" || state === "EXPECTED") return { green: false, reason: `CI not settled (${check?.context ?? "check"}=${state})` };
