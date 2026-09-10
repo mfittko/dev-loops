@@ -115,6 +115,37 @@ export function rewriteGeneratedRepoDocLinks(body) {
 }
 
 /**
+ * Name of the resolver launcher committed at `.claude/bin/dev-loops-run` (#2123). It self-locates
+ * a source checkout (cwd walk-up, unconditional priority) or the plugin's auto-installed
+ * `dev-loops` package, and hard-stops (never falls back to raw `gh`) when neither resolves.
+ */
+export const WRAPPER_LAUNCHER = "dev-loops-run";
+
+/** CLI namespaces the routed `dev-loops <ns> <sub>` form recognizes (matches the real subcommand surface). */
+const WRAPPER_NS = "loop|gate|pr|queue|project|refine|release|security";
+
+/**
+ * Route real wrapper invocations in a generated body through the resolver launcher so a
+ * plugin-only install (no `scripts/`, no `node_modules`) still resolves every wrapper (#2123).
+ * Two disjoint forms; args are preserved byte-for-byte:
+ *   node scripts/<dir>/<file>.mjs …  → <launcher> scripts/<dir>/<file>.mjs …
+ *   dev-loops <namespace> <sub> …    → <launcher> cli/index.mjs <namespace> <sub> …
+ * The namespace form requires an immediate lowercase-starting subcommand (lookahead), so prose
+ * (`dev-loops gate.`, `dev-loops gate — …`, `` `dev-loops queue` ``) and the already-pinned
+ * `npx dev-loops@<version>` CLI form are never touched. Idempotent: the rewritten output never
+ * re-matches (the launcher name is followed by a path/`cli/index.mjs`, not `scripts/` or a bare
+ * namespace token).
+ * @param {string} body
+ * @param {string} [launcher]
+ * @returns {string}
+ */
+export function rewriteWrapperInvocation(body, launcher = WRAPPER_LAUNCHER) {
+  return String(body)
+    .replace(/\bnode (scripts\/[a-z0-9-]+\/[A-Za-z0-9._-]+\.mjs)/g, `${launcher} $1`)
+    .replace(new RegExp(`\\bdev-loops (${WRAPPER_NS}) (?=[a-z])`, "g"), `${launcher} cli/index.mjs $1 `);
+}
+
+/**
  * Map a single Pi tool name to its Claude tool name(s).
  * @param {string} name
  * @returns {string[]} Claude tool names (empty if unknown).
@@ -184,7 +215,7 @@ function normalizeToolList(value) {
  */
 export function transformAgent({ source, raw, version = "latest", config = {} }) {
   const { frontmatter, body: rawBody } = splitFrontmatter(raw, source);
-  const body = rewriteGeneratedRepoDocLinks(rewriteCliInvocation(stripPiOnlyBlocks(rawBody), version));
+  const body = rewriteWrapperInvocation(rewriteGeneratedRepoDocLinks(rewriteCliInvocation(stripPiOnlyBlocks(rawBody), version)));
   const tools = mapTools(normalizeToolList(frontmatter.tools));
   const model = resolveRoleModel(config, { role: String(frontmatter.name ?? ""), harness: "claude" });
 
@@ -219,7 +250,7 @@ export function transformAgent({ source, raw, version = "latest", config = {} })
  */
 export function transformCommand({ source, raw, version = "latest" }) {
   const { frontmatter, body: rawBody } = splitFrontmatter(raw, source);
-  const body = rewriteGeneratedRepoDocLinks(rewriteCliInvocation(stripPiOnlyBlocks(rawBody), version));
+  const body = rewriteWrapperInvocation(rewriteGeneratedRepoDocLinks(rewriteCliInvocation(stripPiOnlyBlocks(rawBody), version)));
 
   const lines = ["---"];
   if (frontmatter.description != null) {
@@ -241,7 +272,7 @@ export function transformCommand({ source, raw, version = "latest" }) {
  */
 export function transformSkill({ source, raw, version = "latest" }) {
   const { frontmatter, body: rawBody } = splitFrontmatter(raw, source);
-  const body = rewriteCliInvocation(stripPiOnlyBlocks(rawBody), version);
+  const body = rewriteWrapperInvocation(rewriteCliInvocation(stripPiOnlyBlocks(rawBody), version));
   const tools = mapTools(normalizeToolList(frontmatter["allowed-tools"]));
 
   const lines = ["---"];
