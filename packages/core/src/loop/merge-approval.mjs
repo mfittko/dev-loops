@@ -1,5 +1,5 @@
 /**
- * Sanctioned merge-wrapper decision logic (issue #1939). Pure, no I/O.
+ * Sanctioned merge-wrapper decision logic. Pure, no I/O.
  *
  * The CLI wrapper `scripts/github/merge-pr.mjs` gathers live GitHub facts
  * (mergeable state, CI rollup, gate evidence, size-budget outcome, reviews,
@@ -23,8 +23,7 @@ import { resolveSizeBudgetHumanApprovalRequired } from "./size-budget-merge-gate
 
 // A GitHub login: 1-39 chars, alphanumeric or single internal hyphens, never
 // leading/trailing hyphen. This rejects a bare boolean, empty/whitespace, and
-// free text — the "validated as a real GitHub login rather than a bare boolean
-// or free text" requirement (issue #1939 AC 2).
+// free text, so `--human-approved-by` is a real login, not a boolean or free text.
 const GITHUB_LOGIN_RE = /^[A-Za-z0-9](?:-?[A-Za-z0-9])*$/;
 
 /** True when `login` is shaped like a real GitHub login (fails closed on non-string). */

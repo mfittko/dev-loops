@@ -80,7 +80,7 @@ export const SANCTIONED_COMMANDS = Object.freeze({
   // move-queue-item/sync-item-status in the current batch model. Merge is
   // orchestrator-owned too, and the orchestrator performs it through the
   // sanctioned wrapper (scripts/github/merge-pr.mjs --human-approved-by <login>);
-  // raw `gh pr merge` is forbidden (issue #1939).
+  // raw `gh pr merge` is forbidden (RAW-GH-PR-MERGE-BYPASS in anti-patterns.md).
   orchestratorOwned: Object.freeze([
     "pr merge via scripts/github/merge-pr.mjs --human-approved-by <login> (raw gh pr merge forbidden)",
     "board status transitions (move-queue-item / sync-item-status.mjs; current batch model)",
