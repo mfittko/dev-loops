@@ -302,7 +302,7 @@ Each refiner variant should make room for:
 - risks and unresolved questions
 - when a bounded audit artifact exists: prioritized findings, highest-value follow-up candidates, and what the phase will not rewrite or broaden
 - RFC escalation notes when technical decisions should go to the parent session / human operator
-- for watcher/predicate-heavy phases: explicit negative-case tests and timeout semantics, including any zero-timeout or single-check contract
+- for watcher/predicate-heavy phases: explicit negative-case tests and timeout semantics, including any zero-timeout or single-check contract; verify the recommended watcher CLI, supported timeout flags, and mutation-capable preflight against source before drafting a reduced-read procedure
 
 Use the template in [Phase Variant Template](../dev-loop/templates/phase-variant.md).
 
