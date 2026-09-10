@@ -225,8 +225,11 @@ export async function mergePr(options, runtime = {}) {
   // explicitly — otherwise the wrapper would report ok/exit-0 for a merge that
   // never happened.
   const mergeRun = await runChild(ghCommand, ["pr", "merge", String(options.pr), "--repo", options.repo, `--${options.method}`], { env });
-  if (mergeRun && typeof mergeRun.code === "number" && mergeRun.code !== 0) {
-    throw new Error(`gh pr merge exited ${mergeRun.code}: ${(mergeRun.stderr || "").trim() || "no stderr"}`);
+  // Anything but an explicit code 0 fails closed: a non-zero exit AND a
+  // signal-kill (runChild resolves `{ code: null }`) both mean the merge did
+  // not cleanly succeed, so neither may report ok/exit-0.
+  if (!mergeRun || mergeRun.code !== 0) {
+    throw new Error(`gh pr merge did not succeed (code ${mergeRun?.code ?? "null"}): ${(mergeRun?.stderr || "").trim() || "no stderr"}`);
   }
   const merged = await ghJson(
     ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "mergeCommit,state"],

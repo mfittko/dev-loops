@@ -193,7 +193,9 @@ Documented pattern — **write, verify, then merge alone**:
 
 1. Write the gate evidence (findings-log ledger / checkpoint verdict) in its own Bash call.
 2. Verify it landed (e.g. `ls tmp/gate-findings/<slug>/pr-<n>/`) in a separate call.
-3. Run `gh pr merge` alone, with no other command chained via `&&`/`;`/newline.
+3. Run the sanctioned merge wrapper (`node scripts/github/merge-pr.mjs …`) alone, with no other
+   command chained via `&&`/`;`/newline; a raw `gh pr merge` is forbidden and, as defense-in-depth,
+   still tripped by the same PreToolUse gate.
 
 ## Title markers
 

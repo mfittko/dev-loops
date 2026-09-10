@@ -165,10 +165,11 @@ violations):** dev-loops subcommands and `node scripts/*.mjs` invocations — th
 scripts legitimately call `gh`/GraphQL internally; that is the tooling. The rule
 targets the agent's own top-level shell calls, not a script's internals.
 
-**Write-op allowlist (verifier only):** only `gh pr merge` and `gh pr ready` have
-no internal wrapper today; the verifier records those as `allowedWriteOps` rather
-than violations so the gap is surfaced distinctly, not as a breach. Ops that DO
-have a sanctioned wrapper — `gh issue create` (`scripts/github/create-issue.mjs`),
+**Write-op allowlist (verifier only):** only `gh pr ready` has
+no internal wrapper today; the verifier records it as an `allowedWriteOp` rather
+than a violation so the gap is surfaced distinctly, not as a breach. Ops that DO
+have a sanctioned wrapper — `gh pr merge` (`scripts/github/merge-pr.mjs`, issue
+#1939), `gh issue create` (`scripts/github/create-issue.mjs`),
 `gh issue edit` (`scripts/github/edit-issue.mjs`), `gh label create`
 (`scripts/github/create-label.mjs`) — are NOT allowlisted, so a raw agent-level
 call is flagged as a violation. The verifier only ever classifies the agent's own
