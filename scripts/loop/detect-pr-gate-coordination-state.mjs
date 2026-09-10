@@ -887,6 +887,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     unresolvedThreadCount: parsedThreads.summary.unresolvedThreads,
     actionableThreadCount: parsedThreads.summary.actionableThreads,
     copilotReviewRoundCount: reviewSummary.completedCopilotReviewRounds,
+    copilotBodyFeedbackUnresolved: reviewSummary.hasBodyFindingOnCurrentHead,
   });
   if (snapshot.unresolvedThreadCount > 0
       && !snapshot.copilotReviewOnCurrentHead

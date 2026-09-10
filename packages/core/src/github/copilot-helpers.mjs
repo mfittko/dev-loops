@@ -10,6 +10,22 @@ import { trimmedOrNull } from "../loop/normalize.mjs";
 // acting on the gate's behalf must agree with the gate about what a submitted
 // review is.
 export const SUBMITTED_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"]);
+
+// Copilot's COMMENTED review summary opens with a disposition header whose
+// emoji is the authoritative signal: "### 🟡 Changes recommended" (findings)
+// vs "### 🟢 Approval recommended" (clean). Keying on the 🟡 marker means a
+// clean body that merely quotes the phrase "changes recommended" — with or
+// without markdown emphasis ("No **changes recommended**", "No _changes
+// recommended_") — is never a false finding. The strong no-emoji signal is
+// already covered by the CHANGES_REQUESTED state.
+const COPILOT_CHANGES_RECOMMENDED_MARKER = "🟡";
+
+export function copilotReviewBodySignalsChanges(state, body) {
+  const normalizedState = typeof state === "string" ? state.toUpperCase() : "";
+  if (normalizedState === "CHANGES_REQUESTED") return true;
+  if (normalizedState !== "COMMENTED") return false;
+  return typeof body === "string" && body.includes(COPILOT_CHANGES_RECOMMENDED_MARKER);
+}
 const GATE_REVIEW_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
 // `review` is a RECOGNIZED gate header that carries no draft/pre-approval
 // evidence by design. Recognizing it lets
@@ -700,6 +716,7 @@ export function summarizeCopilotReviews(reviews, { headSha, draftGateResetAtMs }
   let hasPendingReviewOnCurrentHead = false;
   let hasSubmittedReviewOnCurrentHead = false;
   let latestSubmittedReviewOnCurrentHeadAt = null;
+  let hasBodyFindingOnCurrentHead = false;
   let completedCopilotReviewRounds = 0;
 
   for (const review of effectiveReviews) {
@@ -722,9 +739,18 @@ export function summarizeCopilotReviews(reviews, { headSha, draftGateResetAtMs }
 
     if (SUBMITTED_REVIEW_STATES.has(state)) {
       hasSubmittedReviewOnCurrentHead = true;
-      const submittedAt = typeof review?.submittedAt === "string" ? review.submittedAt : null;
+      const submittedAt = typeof review?.submittedAt === "string"
+        ? review.submittedAt
+        : (typeof review?.submitted_at === "string" ? review.submitted_at : null);
       if (submittedAt !== null && (latestSubmittedReviewOnCurrentHeadAt === null || submittedAt > latestSubmittedReviewOnCurrentHeadAt)) {
         latestSubmittedReviewOnCurrentHeadAt = submittedAt;
+        hasBodyFindingOnCurrentHead = copilotReviewBodySignalsChanges(state, review?.body);
+      } else if (submittedAt !== null && submittedAt === latestSubmittedReviewOnCurrentHeadAt) {
+        // Equal-timestamp tie on the same head: fail toward surfacing so array
+        // order never silently drops a finding when two reviews share a timestamp.
+        hasBodyFindingOnCurrentHead = hasBodyFindingOnCurrentHead || copilotReviewBodySignalsChanges(state, review?.body);
+      } else if (submittedAt === null && latestSubmittedReviewOnCurrentHeadAt === null) {
+        hasBodyFindingOnCurrentHead = hasBodyFindingOnCurrentHead || copilotReviewBodySignalsChanges(state, review?.body);
       }
     }
   }
@@ -740,5 +766,6 @@ export function summarizeCopilotReviews(reviews, { headSha, draftGateResetAtMs }
     hasPendingReviewOnCurrentHead,
     hasSubmittedReviewOnCurrentHead,
     latestSubmittedReviewOnCurrentHeadAt,
+    hasBodyFindingOnCurrentHead,
   };
 }

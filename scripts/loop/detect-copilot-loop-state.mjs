@@ -349,6 +349,7 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
     ciStatus: currentHeadCiStatus,
     failureDetails,
     excludedFailureDetails,
+    copilotBodyFeedbackUnresolved: reviewSummary.hasBodyFindingOnCurrentHead,
   });
   // Merge-state facts drive the base-integration preflight (never CI-wait on a
   // CONFLICTING/DIRTY branch — GitHub cannot dispatch CI there). Carried as

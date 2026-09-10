@@ -3,6 +3,7 @@ import { test } from "bun:test";
 
 import {
   containsBareCopilotSummon,
+  copilotReviewBodySignalsChanges,
   extractReviewCommitSha,
   isCopilotLogin,
   isGateMachineArtifactBody,
@@ -436,6 +437,240 @@ test("summarizeCopilotReviews ignores non-Copilot reviews", () => {
   const result = summarizeCopilotReviews(reviews, { headSha: "abc1234" });
   assert.equal(result.copilotReviewPresent, false);
   assert.equal(result.hasSubmittedReviewOnCurrentHead, false);
+});
+
+test("copilotReviewBodySignalsChanges: COMMENTED with a 'Changes recommended' body is a finding", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", "### 🟡 Changes recommended\n\nSome finding text."),
+    true,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: COMMENTED with an 'Approval recommended' body is clean", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", "### 🟢 Approval recommended\n\nLooks good."),
+    false,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: COMMENTED with an empty body is clean", () => {
+  assert.equal(copilotReviewBodySignalsChanges("COMMENTED", ""), false);
+  assert.equal(copilotReviewBodySignalsChanges("COMMENTED", null), false);
+});
+
+test("copilotReviewBodySignalsChanges: COMMENTED with only a generic footer is clean", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", "You can request another Copilot review once you've made changes."),
+    false,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: CHANGES_REQUESTED is always a finding regardless of body", () => {
+  assert.equal(copilotReviewBodySignalsChanges("CHANGES_REQUESTED", ""), true);
+  assert.equal(copilotReviewBodySignalsChanges("CHANGES_REQUESTED", null), true);
+  assert.equal(copilotReviewBodySignalsChanges("CHANGES_REQUESTED", "### 🟢 Approval recommended"), true);
+});
+
+test("copilotReviewBodySignalsChanges: APPROVED is never a finding", () => {
+  assert.equal(copilotReviewBodySignalsChanges("APPROVED", "### 🟡 Changes recommended"), false);
+});
+
+test("copilotReviewBodySignalsChanges: a body stating 'No changes recommended' is clean", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", "No changes recommended. Looks good."),
+    false,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: markdown emphasis between 'No' and 'changes recommended' still reads clean", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", "No **changes recommended**. Looks good."),
+    false,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: a 🟢 header without the negation phrase is clean", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", "### 🟢 Approval recommended"),
+    false,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: a 🟡 header is a finding", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", "### 🟡 Changes recommended\n\nfinding"),
+    true,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: 🟡 is authoritative even alongside a 'no ... changes' phrase", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges(
+      "COMMENTED",
+      "### 🟡 Changes recommended\n\nno further changes recommended for the other file.",
+    ),
+    true,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: underscore-emphasis 'No _changes recommended_' still reads clean", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", "No _changes recommended_. Looks good."),
+    false,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: 🟡 is authoritative alongside the word 'no' elsewhere in the body", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", "### 🟡 Changes recommended\n\nno issues elsewhere though."),
+    true,
+  );
+});
+
+test("summarizeCopilotReviews sets hasBodyFindingOnCurrentHead true for a current-head 🟡 COMMENTED review", () => {
+  const reviews = [
+    {
+      author: { login: "copilot-pull-request-reviewer" },
+      state: "COMMENTED",
+      commit: { oid: "abc1234" },
+      submittedAt: "2024-01-10T00:00:00Z",
+      body: "### 🟡 Changes recommended\n\nSome finding text.",
+    },
+  ];
+
+  const result = summarizeCopilotReviews(reviews, { headSha: "abc1234" });
+  assert.equal(result.hasBodyFindingOnCurrentHead, true);
+});
+
+test("summarizeCopilotReviews sets hasBodyFindingOnCurrentHead false for a current-head 🟢 COMMENTED review", () => {
+  const reviews = [
+    {
+      author: { login: "copilot-pull-request-reviewer" },
+      state: "COMMENTED",
+      commit: { oid: "abc1234" },
+      submittedAt: "2024-01-10T00:00:00Z",
+      body: "### 🟢 Approval recommended\n\nLooks good.",
+    },
+  ];
+
+  const result = summarizeCopilotReviews(reviews, { headSha: "abc1234" });
+  assert.equal(result.hasBodyFindingOnCurrentHead, false);
+});
+
+test("summarizeCopilotReviews: a later clean review on the same head supersedes an earlier finding", () => {
+  const reviews = [
+    {
+      author: { login: "copilot-pull-request-reviewer" },
+      state: "COMMENTED",
+      commit: { oid: "abc1234" },
+      submittedAt: "2024-01-10T00:00:00Z",
+      body: "### 🟡 Changes recommended\n\nSome finding text.",
+    },
+    {
+      author: { login: "copilot-pull-request-reviewer" },
+      state: "COMMENTED",
+      commit: { oid: "abc1234" },
+      submittedAt: "2024-01-11T00:00:00Z",
+      body: "### 🟢 Approval recommended\n\nLooks good now.",
+    },
+  ];
+
+  const result = summarizeCopilotReviews(reviews, { headSha: "abc1234" });
+  assert.equal(result.hasBodyFindingOnCurrentHead, false);
+});
+
+test("summarizeCopilotReviews: a later finding on the same head supersedes an earlier clean review", () => {
+  const reviews = [
+    {
+      author: { login: "copilot-pull-request-reviewer" },
+      state: "COMMENTED",
+      commit: { oid: "abc1234" },
+      submittedAt: "2024-01-10T00:00:00Z",
+      body: "### 🟢 Approval recommended\n\nLooks good.",
+    },
+    {
+      author: { login: "copilot-pull-request-reviewer" },
+      state: "COMMENTED",
+      commit: { oid: "abc1234" },
+      submittedAt: "2024-01-11T00:00:00Z",
+      body: "### 🟡 Changes recommended\n\nA new finding.",
+    },
+  ];
+
+  const result = summarizeCopilotReviews(reviews, { headSha: "abc1234" });
+  assert.equal(result.hasBodyFindingOnCurrentHead, true);
+});
+
+test("summarizeCopilotReviews: equal-timestamp reviews on the same head fail toward surfacing regardless of order", () => {
+  const clean = {
+    author: { login: "copilot-pull-request-reviewer" },
+    state: "COMMENTED",
+    commit: { oid: "abc1234" },
+    submittedAt: "2024-01-10T00:00:00Z",
+    body: "### 🟢 Approval recommended\n\nLooks good.",
+  };
+  const finding = {
+    author: { login: "copilot-pull-request-reviewer" },
+    state: "COMMENTED",
+    commit: { oid: "abc1234" },
+    submittedAt: "2024-01-10T00:00:00Z",
+    body: "### 🟡 Changes recommended\n\nSame-second finding.",
+  };
+
+  assert.equal(summarizeCopilotReviews([finding, clean], { headSha: "abc1234" }).hasBodyFindingOnCurrentHead, true);
+  assert.equal(summarizeCopilotReviews([clean, finding], { headSha: "abc1234" }).hasBodyFindingOnCurrentHead, true);
+});
+
+test("summarizeCopilotReviews: a null-timestamp current-head finding still surfaces (fail toward surfacing)", () => {
+  const reviews = [
+    {
+      author: { login: "copilot-pull-request-reviewer" },
+      state: "COMMENTED",
+      commit: { oid: "abc1234" },
+      submittedAt: null,
+      body: "### 🟡 Changes recommended\n\nSome finding text.",
+    },
+  ];
+
+  const result = summarizeCopilotReviews(reviews, { headSha: "abc1234" });
+  assert.equal(result.hasBodyFindingOnCurrentHead, true);
+});
+
+test("summarizeCopilotReviews: a DISMISSED current-head review is never a body finding", () => {
+  const reviews = [
+    {
+      author: { login: "copilot-pull-request-reviewer" },
+      state: "DISMISSED",
+      commit: { oid: "abc1234" },
+      submittedAt: "2024-01-10T00:00:00Z",
+      body: "### 🟡 Changes recommended\n\nDismissed.",
+    },
+  ];
+
+  const result = summarizeCopilotReviews(reviews, { headSha: "abc1234" });
+  assert.equal(result.hasBodyFindingOnCurrentHead, false);
+});
+
+test("summarizeCopilotReviews: snake_case submitted_at feeds latest-wins supersession", () => {
+  const reviews = [
+    {
+      author: { login: "copilot-pull-request-reviewer" },
+      state: "COMMENTED",
+      commit: { oid: "abc1234" },
+      submitted_at: "2024-01-10T00:00:00Z",
+      body: "### 🟡 Changes recommended\n\nSome finding text.",
+    },
+    {
+      author: { login: "copilot-pull-request-reviewer" },
+      state: "COMMENTED",
+      commit: { oid: "abc1234" },
+      submitted_at: "2024-01-11T00:00:00Z",
+      body: "### 🟢 Approval recommended\n\nLooks good now.",
+    },
+  ];
+
+  const result = summarizeCopilotReviews(reviews, { headSha: "abc1234" });
+  assert.equal(result.hasBodyFindingOnCurrentHead, false);
 });
 
 // ── Lenient gate comment parsing (#451) ───────────────────────────────────
