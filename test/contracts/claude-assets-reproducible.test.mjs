@@ -81,6 +81,29 @@ test("Pi-runtime-only prose is stripped from generated assets but retained in so
   }
 });
 
+test("watch procedure is bundled with shared re-entry and harness-specific persistence", () => {
+  const assets = collectGeneratedAssets({ repoRoot });
+  const source = fs.readFileSync(path.join(repoRoot, "skills/docs/wait-watch-procedure.md"), "utf8");
+  const generated = assets.find(a => a.target === ".claude/skills/docs/wait-watch-procedure.md");
+  assert.ok(generated);
+  assert.match(source, /Under Pi, a bounded child exits on external wait/);
+  assert.doesNotMatch(generated.content, /Under Pi, a bounded child exits on external wait/);
+  for (const content of [source, generated.content]) {
+    assert.match(content, /Under Claude Code, continue pending non-terminal waits inline/);
+    assert.match(content, /loop startup --pr/);
+    assert.match(content, /loop build-envelope --input/);
+    assert.match(content, /validate it before consuming it/);
+    assert.match(content, /Load the fresh envelope's ordered `requiredReads` before executing/);
+    assert.match(content, /Do not start another cycle to\nevade that exhausted boundary/);
+  }
+  for (const file of ["skills/dev-loop/SKILL.md", ".claude/skills/dev-loop/SKILL.md"]) {
+    const content = file.startsWith(".claude/")
+      ? assets.find(a => a.target === file).content
+      : fs.readFileSync(path.join(repoRoot, file), "utf8");
+    assert.match(content, /\| `wait_watch` \| \[Wait \/ Watch Procedure\]\(\.\.\/docs\/wait-watch-procedure\.md\) \|/);
+  }
+});
+
 test("the committed .claude tree is byte-reproducible from the canonical sources (no drift)", () => {
   const assets = collectGeneratedAssets({ repoRoot });
   assert.ok(assets.length > 0, "expected to generate at least one asset");

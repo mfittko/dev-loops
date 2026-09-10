@@ -97,5 +97,4 @@ Helpers to run first:
 
 Required reading:
 - [Public Dev Loop Contract](public-dev-loop-contract.md)
-- [Copilot Loop Operations](copilot-loop-operations.md)
-- [Stop conditions](stop-conditions.md)
+- [Wait / Watch Procedure](wait-watch-procedure.md)
