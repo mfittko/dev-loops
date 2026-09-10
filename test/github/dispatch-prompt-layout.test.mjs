@@ -202,6 +202,23 @@ test("verifyDispatchPromptLayoutForHead: fails closed when the recorded prompt d
   });
 });
 
+test("verifyDispatchPromptLayoutForHead: fails closed on a real record JSON that OMITS promptContentHash (legacy/coordinator record, never grandfathered)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const relPath = await writeGateContextPrefix(tmpDir);
+    const emitted = `${PREFIX_BYTES}## Angle: coverage\n`;
+    await writeEmittedPrompt(tmpDir, "draft-gate-coverage", emitted);
+    // A record with NO promptContentHash key at all — readDispatchPromptRecords
+    // must map the absent field to null and the evaluator must fail closed.
+    await writeFile(
+      dispatchPromptLayoutRecordPath(path.join(tmpDir, "tmp"), "draft-gate-coverage", HEAD_SHA),
+      JSON.stringify({ scope: "draft-gate-coverage", headSha: HEAD_SHA, prefixPath: relPath, leading: emitted }),
+    );
+    const result = await verifyDispatchPromptLayoutForHead(path.join(tmpDir, "tmp"), HEAD_SHA);
+    assert.equal(result.verified, false);
+    assert.match(result.misaligned[0].reason, /no promptContentHash/);
+  });
+});
+
 test("verifyDispatchPromptLayoutForHead: fails closed when no emitted unit exists on disk (hand-composed dispatch)", async () => {
   await withTmpDir(async (tmpDir) => {
     const relPath = await writeGateContextPrefix(tmpDir);

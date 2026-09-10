@@ -712,7 +712,13 @@ bytes into the prompt (`prefixMode: "file"` below, or any other pointer-based se
 pointer LINE ITSELF — not just the file it names — MUST be byte-identical across every
 reviewer of the round; a pointer that varies per reviewer (e.g. embeds the angle name or a
 per-reviewer path) defeats prefix matching exactly as an inlined angle-first prefix would,
-even though the referenced file's bytes are still shared.
+even though the referenced file's bytes are still shared. This pointer-based PREFIX-recording
+mode is distinct from the sanctioned fan-out dispatch: the emitted UNIT that
+`GATE-EXEC-FANOUT-DISPATCH-EMIT`'s composer produces ALWAYS inlines the prefix (never a
+pointer line), and the "Emitted-unit binding" fan-in check below rejects a pointer-seeded
+emitted prompt as not inline-aligned. Pointer-based seeding governs how the PREFIX bytes are
+recorded for hash byte-identity; it is not a compliant emitted-prompt LAYOUT for a dispatched
+reviewer.
 
 **The composer (issue #1852, by construction, not by agent discipline).** Hand-composing a
 reviewer prompt — leading with a per-group preamble and instructing the reviewer to READ the
