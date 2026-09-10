@@ -219,7 +219,15 @@ export async function mergePr(options, runtime = {}) {
   }
 
   // All preconditions satisfied — perform the merge. NEVER a tag or publish.
-  await runChild(ghCommand, ["pr", "merge", String(options.pr), "--repo", options.repo, `--${options.method}`], { env });
+  // runChild resolves for ANY exit code (it only rejects on a spawn error), so a
+  // `gh pr merge` that exits non-zero (a branch-protection block, a precondition
+  // that shifted between check and merge, a transient conflict) must be caught
+  // explicitly — otherwise the wrapper would report ok/exit-0 for a merge that
+  // never happened.
+  const mergeRun = await runChild(ghCommand, ["pr", "merge", String(options.pr), "--repo", options.repo, `--${options.method}`], { env });
+  if (mergeRun && typeof mergeRun.code === "number" && mergeRun.code !== 0) {
+    throw new Error(`gh pr merge exited ${mergeRun.code}: ${(mergeRun.stderr || "").trim() || "no stderr"}`);
+  }
   const merged = await ghJson(
     ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "mergeCommit,state"],
     { env, ghCommand, runChild },

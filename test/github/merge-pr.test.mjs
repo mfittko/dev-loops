@@ -116,6 +116,17 @@ test("stable-release merge with a fresh head-pinned operator comment marker succ
   assert.equal(result.approvalVia, "comment_marker");
 });
 
+test("a non-zero `gh pr merge` exit throws instead of reporting a false success", async () => {
+  const { runtime } = makeRuntime();
+  // Override runChild so the merge call exits non-zero (e.g. a branch-protection block).
+  runtime.runChild = async (cmd, args) => ({ stdout: "", stderr: "protected branch", code: 1, cmd, args });
+  let threw = null;
+  try { await mergePr(baseOptions(), runtime); } catch (e) { threw = e; }
+  assert.ok(threw, "a failed merge must throw");
+  assert.match(threw.message, /gh pr merge exited 1/);
+  assert.ok(!threw.mergePrFailure, "a merge-execution failure is not a precondition failure");
+});
+
 test("main honors --jq and --silent identically to the sibling wrappers", async () => {
   const stdout = captureStream();
   const { runtime } = makeRuntime();
