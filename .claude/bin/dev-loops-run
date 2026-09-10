@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// dev-loops-run — resolver launcher for the Claude Code plugin (#2123).
+// dev-loops-run — resolver launcher for the Claude Code plugin.
 //
 // The Claude plugin ships without `scripts/`, `packages/core`, or `node_modules`; every generated
 // skill/command/agent invokes wrappers through this launcher instead of bare `node scripts/…` or
