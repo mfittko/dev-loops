@@ -3345,10 +3345,15 @@ test("#1618 record-matching: a sentinel whose hash matches NO gate record fails 
 
 // Write both the dispatch-prompt record AND (unless `emitted: null`) the
 // sanctioned emitter's canonical `<gate>-<headSha>.dispatch-prompt-<scope>.txt`
-// file the fan-in re-discovers to bind provenance. `emitted` defaults to
-// `leading` (the sanctioned path records the exact emitted bytes); pass a
-// different `emitted` to simulate a delivered/hand-composed prompt that drifted
-// from the emitted unit, or `emitted: null` to omit the emitted file entirely.
+// file the fan-in re-discovers to bind provenance. These test bodies are all
+// below the leading cap, so `leading` here holds the full prompt and its
+// promptContentHash (sha256 over `leading`) equals the emitted file's hash by
+// default — the binding the fan-in checks. (In the real recorder `leading` is a
+// capped capture and `promptContentHash` is hashed over the full prompt, so the
+// two are not interchangeable for a >cap prompt.) `emitted` defaults to `leading`
+// to model that same-bytes sanctioned case; pass a different `emitted` to
+// simulate a delivered/hand-composed prompt that drifted from the emitted unit,
+// or `emitted: null` to omit the emitted file entirely.
 async function writeDispatchPromptRecord(tmpRoot, scope, headSha, { prefixPath, leading, emitted = leading, gate = "draft_gate" }) {
   await mkdir(tmpRoot, { recursive: true });
   await writeFile(
