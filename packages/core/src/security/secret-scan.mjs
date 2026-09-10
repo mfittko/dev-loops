@@ -319,6 +319,17 @@ export function parseAddedLines(diffText) {
  * @param {string} diffText
  * @returns {{ ok: boolean, findings: { file: string, line: number, detectorClass: string, reason: string }[] }}
  */
+// The committed `.claude/package-lock.json` (#2123) is, like `bun.lock`, a fully
+// machine-generated lockfile whose every token derives from public npm registry metadata
+// (Subresource Integrity digests, `resolved` tarball URLs, and long hyphenated per-platform
+// package names from its real transitive tree) — none of it is a secret by construction.
+// Unlike bun.lock's narrow tuple shape, an npm v3 lock spreads those long tokens across many
+// distinct field shapes, so rather than enumerate every
+// field individually the HIGH_ENTROPY detector is skipped for this one generated file; the
+// literal-credential and sink-pattern detectors still run over every line unchanged, so a real
+// credential shape landing here is still caught.
+const HIGH_ENTROPY_EXEMPT_FILES = new Set([".claude/package-lock.json"]);
+
 export function scanDiffText(diffText) {
   const findings = [];
   for (const entry of parseAddedLines(diffText)) {
@@ -334,7 +345,9 @@ export function scanDiffText(diffText) {
         // names cross the generic entropy threshold despite containing no value.
         .replace(/@mariozechner\/clipboard-[a-z0-9-]+/gu, "<clipboard-platform-package>")
       : entry.text;
+    const skipHighEntropy = HIGH_ENTROPY_EXEMPT_FILES.has(entry.file ?? "");
     for (const hit of scanLineText(text)) {
+      if (skipHighEntropy && hit.detectorClass === DETECTOR_CLASSES.HIGH_ENTROPY) continue;
       findings.push({ file: entry.file, line: entry.line, ...hit });
     }
   }
