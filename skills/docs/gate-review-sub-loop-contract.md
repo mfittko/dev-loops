@@ -823,6 +823,18 @@ bytes; how those bytes REACH the spawned reviewer's actual prompt differs by har
   still guarantees, by construction, that every compliant dispatch UNIT of a round shares a
   byte-identical leading prefix span, which is the necessary (if not independently provable)
   precondition for the provider to ever reuse its cache.
+- **Agent-driven fan-out (Codex's agent tool):** Codex is agent-driven and, like Claude Code,
+  routes through the generic batch/agent adapter rather than a dedicated concrete adapter (only
+  `pi` ships one today; the per-harness fixtures stamp Claude Code and Codex onto the same
+  generic adapter with a distinct env). Its agent-tool dispatch therefore carries the SAME
+  observed limitation as the Claude Code case above: the orchestrating agent has no primitive to
+  inject a program-constructed byte-exact prompt independently of the prompt parameter it
+  constructs, so the final relay hop is not mechanically enforced (the delivered-task boundary),
+  and the dispatch layer exposes no usage/cache-read telemetry for a spawned subagent, so real
+  provider cache reuse is not measurable from inside it either. This repo does NOT independently
+  qualify Codex's agent-tool dispatch for production — the limitation is documented explicitly,
+  never certified away; the same by-construction emitted-unit binding and ordering invariants are
+  what remain assertable.
 
 **Content inlining.** `write-gate-context.mjs` renders this invariant block as a
 `<gate>-<headSha>.briefing-prefix.txt` file sibling to the JSON context artifact, in a
