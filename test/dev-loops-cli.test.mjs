@@ -507,14 +507,21 @@ node "$(dirname "$0")/gh-impl.mjs" "$@"
     assert.equal(payload.items[0].issueNumber, 748);
     assert.equal(payload.items[0].status, "Next Up");
 
-    const failure = spawnSync("node", ["./cli/index.mjs", "project", "list"], {
-      cwd: repoRoot,
-      env,
+    // cwd has no .git origin, so --repo cannot be auto-detected: this is the
+    // fail-closed INVALID_REPO path, not the (unrelated) --repo-omitted path
+    // that repoRoot's own github.com origin would now auto-resolve.
+    const failure = spawnSync("node", [path.join(repoRoot, "cli/index.mjs"), "project", "list"], {
+      cwd: tempRoot,
+      // ponytail: tempRoot is never git-init'd, but git still walks parent
+      // directories looking for a .git; cap the walk at tempRoot so a host
+      // whose TMPDIR happens to sit inside a git checkout can't leak an
+      // ancestor's origin remote into this fail-closed assertion.
+      env: { ...env, GIT_CEILING_DIRECTORIES: tempRoot },
       encoding: "utf8",
     });
     assert.equal(failure.status, 1);
     assert.equal(failure.stdout, "");
-    assert.match(failure.stderr, /--repo is required/);
+    assert.match(failure.stderr, /could not be auto-detected/);
     assert.match(failure.stderr, /"code":"INVALID_REPO"/);
   } finally {
     await rm(tempRoot, { recursive: true, force: true });

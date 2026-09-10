@@ -2885,7 +2885,31 @@ async function initLocalOriginRepo(tempDir) {
   execFileSync("git", ["checkout", "-b", "main", "--quiet"], { cwd: tempDir, stdio: "ignore" });
   execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: tempDir, stdio: "ignore" });
   execFileSync("git", ["config", "user.name", "Test"], { cwd: tempDir, stdio: "ignore" });
-  execFileSync("git", ["remote", "add", "origin", remoteDir], { cwd: tempDir, stdio: "ignore" });
+  // "origin" is the real git@github.com:mfittko/dev-loops.git slug (so the
+  // hardened, github.com-only detectRepoSlug resolves it, matching the repo
+  // the fixtures below assert against). `url.*.insteadOf`/`pushInsteadOf`
+  // can't redirect the transport without also breaking that: git's URL
+  // rewriting is applied uniformly, so any config that redirects fetch also
+  // makes `git remote get-url origin` report the rewritten (local) URL
+  // instead of the github slug, which is exactly what detectRepoSlug reads.
+  // Instead, `core.sshCommand` points at a fake ssh binary that intercepts
+  // the `git-upload-pack`/`git-receive-pack` command github's ssh transport
+  // would normally run remotely, and runs it against the local bare repo
+  // directly — so both fetch and push stay fully hermetic and offline, while
+  // `origin`'s configured (and reported) URL never changes.
+  const remoteRunnerPath = path.join(remoteRoot, "fake-ssh.sh");
+  const remoteRunnerLines = [
+    "#!/usr/bin/env sh",
+    'eval "last=\\${$#}"',
+    "case \"$last\" in",
+    `  *git-upload-pack*) exec git-upload-pack "${remoteDir}" ;;`,
+    `  *git-receive-pack*) exec git-receive-pack "${remoteDir}" ;;`,
+    "  *) exit 0 ;;",
+    "esac",
+  ];
+  writeFileSync(remoteRunnerPath, `${remoteRunnerLines.join("\n")}\n`, { mode: 0o755 });
+  execFileSync("git", ["remote", "add", "origin", "git@github.com:mfittko/dev-loops.git"], { cwd: tempDir, stdio: "ignore" });
+  execFileSync("git", ["config", "core.sshCommand", remoteRunnerPath], { cwd: tempDir, stdio: "ignore" });
   await writeFile(path.join(tempDir, "README.md"), "init\n", "utf8");
   execFileSync("git", ["add", "-A"], { cwd: tempDir, stdio: "ignore" });
   execFileSync("git", ["commit", "--quiet", "-m", "init"], { cwd: tempDir, stdio: "ignore" });

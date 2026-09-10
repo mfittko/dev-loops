@@ -1,5 +1,6 @@
 import { describe, it } from "bun:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
@@ -906,6 +907,80 @@ describe("list-queue-items", () => {
         assert.match(err, /INVALID_PROJECT/);
         process.exitCode = 0; // avoid leaking a failure code into the test runner
       });
+    });
+  });
+});
+
+describe("repo auto-detect from git origin remote (#1952)", () => {
+  function projectListResponses(project) {
+    return [
+      { payload: userPayload() },
+      { payload: listUserProjectsResponse([project]) },
+      { payload: getFieldsResponse([STATUS_FIELD]) },
+      { payload: getItemsResponse([]) },
+    ];
+  }
+
+  function spyRunChild(responses) {
+    const calls = [];
+    const base = mockRunChild(responses);
+    const spy = async (cmd, args, env) => {
+      calls.push({ cmd, args, env });
+      return base(cmd, args, env);
+    };
+    spy.calls = calls;
+    return spy;
+  }
+
+  async function withGitCwd(remoteUrl, fn) {
+    const dir = mkdtempSync(nodePath.join(tmpdir(), "list-queue-git-"));
+    try {
+      execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+      if (remoteUrl) {
+        execFileSync("git", ["-C", dir, "remote", "add", "origin", remoteUrl]);
+      }
+      await fn(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("runCli auto-detects --repo from the git origin remote when omitted", async () => {
+    await withGitCwd("https://github.com/owner/repo.git", async (cwd) => {
+      const child = spyRunChild(projectListResponses(EXISTING_PROJECT));
+      await runCli(["--project", "1"], {
+        env: {}, cwd, runChild: child,
+        stdout: { write() {} }, stderr: { write() {} },
+      });
+      assert.equal(process.exitCode, 0);
+      assert.ok(child.calls[0].args.includes("login=owner"));
+    });
+  });
+
+  it("runCli: explicit --repo wins over the git origin auto-detect", async () => {
+    await withGitCwd("https://github.com/other/repo.git", async (cwd) => {
+      const child = spyRunChild(projectListResponses(EXISTING_PROJECT));
+      await runCli(["--repo", "explicit/repo", "--project", "1"], {
+        env: {}, cwd, runChild: child,
+        stdout: { write() {} }, stderr: { write() {} },
+      });
+      assert.equal(process.exitCode, 0);
+      assert.ok(child.calls[0].args.includes("login=explicit"));
+    });
+  });
+
+  it("runCli fails closed (INVALID_REPO, exit 1) when --repo is omitted and no origin remote resolves", async () => {
+    await withGitCwd(null, async (cwd) => {
+      let err = "";
+      await runCli(["--project", "1"], {
+        env: {}, cwd, runChild: mockRunChild([]),
+        stdout: { write() {} }, stderr: { write(s) { err += s; } },
+      });
+      assert.equal(process.exitCode, 1);
+      assert.match(err, /INVALID_REPO/);
+      assert.match(err, /git origin remote/);
+      assert.match(err, /--repo/);
+      process.exitCode = 0; // avoid leaking a failure code into the test runner
     });
   });
 });

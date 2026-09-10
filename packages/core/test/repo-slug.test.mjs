@@ -227,3 +227,63 @@ test("detectRepoSlug returns null for unparseable remote URL", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("detectRepoSlug returns owner/repo from an HTTPS github.com remote without a .git suffix", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "repo-slug-test-"));
+  try {
+    execFileSync("git", ["init"], { cwd: tmpDir, stdio: "ignore" });
+    execFileSync("git", ["-C", tmpDir, "remote", "add", "origin", "https://github.com/owner/name"]);
+    const slug = detectRepoSlug(tmpDir);
+    assert.equal(slug, "owner/name");
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("detectRepoSlug returns owner/repo from an SSH scp-style github.com remote", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "repo-slug-test-"));
+  try {
+    execFileSync("git", ["init"], { cwd: tmpDir, stdio: "ignore" });
+    execFileSync("git", ["-C", tmpDir, "remote", "add", "origin", "git@github.com:owner/name.git"]);
+    const slug = detectRepoSlug(tmpDir);
+    assert.equal(slug, "owner/name");
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("detectRepoSlug returns owner/repo from an ssh:// github.com remote", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "repo-slug-test-"));
+  try {
+    execFileSync("git", ["init"], { cwd: tmpDir, stdio: "ignore" });
+    execFileSync("git", ["-C", tmpDir, "remote", "add", "origin", "ssh://git@github.com/owner/name.git"]);
+    const slug = detectRepoSlug(tmpDir);
+    assert.equal(slug, "owner/name");
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("detectRepoSlug returns null for a non-github.com HTTPS remote", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "repo-slug-test-"));
+  try {
+    execFileSync("git", ["init"], { cwd: tmpDir, stdio: "ignore" });
+    execFileSync("git", ["-C", tmpDir, "remote", "add", "origin", "https://gitlab.com/owner/repo.git"]);
+    const slug = detectRepoSlug(tmpDir);
+    assert.equal(slug, null);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("detectRepoSlug returns null for a non-github.com scp-style remote", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "repo-slug-test-"));
+  try {
+    execFileSync("git", ["init"], { cwd: tmpDir, stdio: "ignore" });
+    execFileSync("git", ["-C", tmpDir, "remote", "add", "origin", "git@bitbucket.org:owner/name.git"]);
+    const slug = detectRepoSlug(tmpDir);
+    assert.equal(slug, null);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

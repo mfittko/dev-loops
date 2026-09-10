@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Changed
 
 - Narrow `wait_watch` startup reading to the public routing contract and a short watch procedure. Re-entry loads the freshly selected route's contracts before acting; watch budgets, gates, authorization, and Pi/Claude continuation behavior remain unchanged.
+- **`dev-loops queue list` / `dev-loops project list` auto-detect the repo from the git origin remote when `--repo` is omitted (issue [1952](https://github.com/mfittko/dev-loops/issues/1952)).** Explicit `--repo` still wins. A non-GitHub or absent origin remote fails closed with `INVALID_REPO`, naming both the git-remote fallback and `--repo`. The shared `detectRepoSlug` helper is hardened to only resolve `github.com` hosts (SSH scp, `ssh://`, and HTTPS forms), returning `null` for any other host.
 
 ### Added
 

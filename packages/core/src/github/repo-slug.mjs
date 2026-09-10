@@ -83,10 +83,33 @@ export function dedupeRepoSlugOptions(options) {
   }
   return uniqueOptions;
 }
+// Parses a git remote URL into an <owner/name> slug, but only for github.com
+// remotes. The URI form (scheme://[user@]host[:port]/path) is checked before
+// the scp form (host:path), because the scp regex also matches URIs like
+// https://... — checking scp first would misparse the host out of the scheme.
+function parseGitHubRemoteSlug(url) {
+  let host, path;
+  const uri = url.match(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\/(.+)$/);
+  const scp = url.match(/^(?:[^@/]+@)?([^/:]+):(.+)$/);
+  if (uri) {
+    host = uri[1];
+    path = uri[2];
+  } else if (scp) {
+    host = scp[1];
+    path = scp[2];
+  } else {
+    return null;
+  }
+  if (host.toLowerCase() !== "github.com") return null;
+  const seg = path.match(/([^/]+)\/([^/]+?)(?:\.git)?\/?$/);
+  if (!seg) return null;
+  return `${seg[1]}/${seg[2]}`;
+}
+
 /**
  * Auto-detect <owner/name> from `git remote get-url origin`.
  * Returns the slug string on success, or null when detection fails
- * (no origin remote, not a git repo, or unparseable URL).
+ * (no origin remote, not a git repo, non-github.com host, or unparseable URL).
  * Does NOT throw — callers should add their own context-specific error messages.
  */
 export function detectRepoSlug(cwd) {
@@ -96,9 +119,7 @@ export function detectRepoSlug(cwd) {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     }).trim();
-    const match = url.match(/[:/]([^/]+)\/([^/]+?)(?:\.git)?$/);
-    if (!match) return null;
-    return `${match[1]}/${match[2]}`;
+    return parseGitHubRemoteSlug(url);
   } catch {
     return null;
   }
