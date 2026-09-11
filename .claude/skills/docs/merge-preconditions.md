@@ -75,11 +75,22 @@ threads / runner-lock / fan-out-provenance set — it does not re-derive it.
 
 - Every merge passes `--human-approved-by <login>`, validated as a real GitHub login
   (not a bare boolean or free text) and stamped on the result and audit trail.
+- **humanMergeOnly refuses the wrapper.** When `autonomy.humanMergeOnly` is set, merge is
+  a human-only action: the wrapper refuses outright (the agent hands off, and does not run
+  even the wrapper), regardless of any fresh approval.
 - **Merge class.** A normal **drain** merge is satisfied by a recorded standing
-  authorization (`autonomy.humanMergeOnly: false`) OR a fresh operator approval. A
+  authorization OR a fresh operator approval. A standing authorization is NOT established by
+  config alone (`autonomy.humanMergeOnly: false` authorizes nothing on its own): the
+  orchestrator asserts a recorded standing authorization via `--standing-authorization`;
+  absent that flag, a drain merge also requires a fresh operator approval. A
   **stable-release** (`--stable-release`), **size-escalated** (`gates.size` outcome
   `escalate`/`block`), or **T1-touching** merge is escalated: a standing
   authorization does NOT satisfy it — a fresh per-merge operator approval is required.
+- **Head-pinned.** The merge mutation passes `--match-head-commit <headSha>` so a push
+  between the precondition reads and the merge fails closed instead of merging an unchecked
+  newer head; the gate-evidence head must also match the checked head, and CI-green reuses
+  the loop-safe rollup normalization that excludes the separately-validated `gate-evidence`
+  check.
 - **Fresh per-merge approval** is verified against an agent-unforgeable, head-pinned
   record, in preference order: a genuine `APPROVED` review by `<login>` on the current
   head SHA (a Copilot/bot review never satisfies it, reusing the prohibition on
@@ -100,9 +111,10 @@ Items 3 and 4 (clean `draft_gate` / current-head `pre_approval_gate` verdicts) a
 enforced two ways, and both must be closed for the precondition to hold in
 practice:
 
-- **Client-side:** the PreToolUse Bash hook blocks an ungated `gh pr ready` /
-  `gh pr merge` invocation, and `detect-checkpoint-evidence.mjs` is what the
-  dev-loop tooling calls before merging.
+- **Client-side:** the PreToolUse Bash hook blocks an ungated `gh pr ready`, and
+  denies a raw `gh pr merge` outright (the sanctioned wrapper `merge-pr.mjs` is the
+  only merge path; a raw merge would bypass its approver/merge-class/fresh-approval
+  checks), and `detect-checkpoint-evidence.mjs` is what the wrapper calls before merging.
 - **Server-side:** the `gate-evidence` status check
   (`.github/workflows/gate-evidence.yml`) re-runs the same verdict check on
   GitHub's own token for every non-draft PR. It is **pre-merge-only** (#1702):

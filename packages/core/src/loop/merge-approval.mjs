@@ -20,6 +20,7 @@
 import { isCopilotLogin } from "../github/copilot-helpers.mjs";
 import { findBlockingTitleMarkers } from "./pr-title-markers.mjs";
 import { resolveSizeBudgetHumanApprovalRequired } from "./size-budget-merge-gate.mjs";
+import { deriveLoopCiStatusFromRollup } from "./copilot-ci-status.mjs";
 
 // A GitHub login: 1-39 chars, alphanumeric or single internal hyphens, never
 // leading/trailing hyphen. This rejects a bare boolean, empty/whitespace, and
@@ -99,12 +100,23 @@ export function verifyFreshHumanApproval({ approvedBy, currentHeadSha, reviews =
   }
   const head = currentHeadSha.trim();
 
+  // Reduce to each login's LATEST submitted review (reviews arrive oldest-first,
+  // so the last occurrence wins — matching resolveHumanReviewDecision). A login
+  // whose APPROVED review was later superseded by a COMMENTED / CHANGES_REQUESTED
+  // / DISMISSED review no longer satisfies: only their latest state counts.
+  const latestReviewByLogin = new Map();
   for (const entry of Array.isArray(reviews) ? reviews : []) {
-    if ((typeof entry?.state === "string" ? entry.state : null) !== "APPROVED") continue;
     const login = reviewLogin(entry);
-    if (login === null || isNonHumanLogin(login)) continue; // agent/bot review never satisfies
-    if (login !== approvedBy) continue; // wrong login
-    if (reviewCommit(entry) !== head) continue; // stale — approval on an earlier commit
+    if (login === null) continue;
+    latestReviewByLogin.set(login, entry);
+  }
+  const approverReview = latestReviewByLogin.get(approvedBy);
+  if (
+    approverReview
+    && !isNonHumanLogin(approvedBy) // agent/bot review never satisfies
+    && (typeof approverReview.state === "string" ? approverReview.state : null) === "APPROVED"
+    && reviewCommit(approverReview) === head // head-pinned — a stale/earlier-commit approval never satisfies
+  ) {
     return { satisfied: true, via: "approved_review", reason: null };
   }
 
@@ -161,35 +173,24 @@ export function resolveMergeApprovalDecision({ mergeClass, standingAuthorized = 
 
 /**
  * Resolve CI-green from a `gh pr view --json statusCheckRollup` payload.
- * Fails closed: any failing/cancelled/timed-out or still-running/queued check
- * is NOT green. An empty rollup (no required checks) is green.
+ *
+ * Delegates to the canonical loop-safe normalizer `deriveLoopCiStatusFromRollup`,
+ * which EXCLUDES the loop-derived `gate-evidence` / `gate-evidence-runner` checks
+ * (detect-checkpoint-evidence validates those separately, so a cancelled/failing
+ * derived check must not block a merge whose real CI is green) and treats a
+ * completed-but-no-conclusion or otherwise-unreadable entry as non-success.
+ * Fails closed: only a real `success` is green; pending/failure/unavailable are
+ * not. An empty rollup (no required checks) is green.
  */
 export function resolveCiGreenFromRollup(rollup) {
   if (!Array.isArray(rollup)) return { green: false, reason: "CI status rollup unavailable" };
-  for (const check of rollup) {
-    // CheckRun: { status: "COMPLETED"|..., conclusion: "SUCCESS"|... }
-    // StatusContext: { state: "SUCCESS"|"PENDING"|"FAILURE"|... }
-    const status = typeof check?.status === "string" ? check.status.toUpperCase() : null;
-    const conclusion = typeof check?.conclusion === "string" ? check.conclusion.toUpperCase() : null;
-    const state = typeof check?.state === "string" ? check.state.toUpperCase() : null;
-    // A rollup entry with no recognizable status/state/conclusion is malformed —
-    // fail closed rather than admit it as green.
-    if (state === null && status === null && conclusion === null) {
-      return { green: false, reason: "CI status rollup has an unreadable check entry" };
-    }
-    if (state !== null) {
-      if (state === "SUCCESS") continue;
-      if (state === "PENDING" || state === "EXPECTED") return { green: false, reason: `CI not settled (${check?.context ?? "check"}=${state})` };
-      return { green: false, reason: `CI not green (${check?.context ?? "check"}=${state})` };
-    }
-    if (status !== null && status !== "COMPLETED") {
-      return { green: false, reason: `CI not settled (${check?.name ?? "check"}=${status})` };
-    }
-    if (conclusion === null) continue; // completed with no conclusion (rare) — treat as neutral
-    if (["SUCCESS", "NEUTRAL", "SKIPPED"].includes(conclusion)) continue;
-    return { green: false, reason: `CI not green (${check?.name ?? "check"}=${conclusion})` };
-  }
-  return { green: true, reason: null };
+  const { status, excludedFailureDetails } = deriveLoopCiStatusFromRollup(rollup);
+  if (status === "success") return { green: true, reason: null };
+  return {
+    green: false,
+    reason: `CI is not green on the current head (status=${status})`,
+    ...(Array.isArray(excludedFailureDetails) && excludedFailureDetails.length > 0 ? { excludedFailureDetails } : {}),
+  };
 }
 
 /**
@@ -232,9 +233,15 @@ export function evaluateMergePreconditions({
     failures.push({ precondition: "ci_green", reason: "CI status could not be resolved for the current head" });
   }
 
-  const titleMarkers = findBlockingTitleMarkers(title);
-  if (titleMarkers.length > 0) {
-    failures.push({ precondition: "title_markers", reason: `PR title carries merge-blocking marker(s): ${titleMarkers.join(", ")}` });
+  // findBlockingTitleMarkers returns [] for a non-string title, so an absent or
+  // malformed title payload would silently pass this fail-closed gate — refuse it.
+  if (typeof title !== "string" || title.trim().length === 0) {
+    failures.push({ precondition: "title_markers", reason: "PR title is missing or unreadable; cannot verify it is free of merge-blocking markers" });
+  } else {
+    const titleMarkers = findBlockingTitleMarkers(title);
+    if (titleMarkers.length > 0) {
+      failures.push({ precondition: "title_markers", reason: `PR title carries merge-blocking marker(s): ${titleMarkers.join(", ")}` });
+    }
   }
 
   if (!gateEvidence || gateEvidence.ok !== true) {

@@ -25,8 +25,10 @@ test("resolve-human-merge-only prints exactly what the repo config's resolveHuma
   assert.match(r.stdout.trim(), /^(true|false)$/);
   const { config } = await loadDevLoopConfig({ cwd: repoRoot });
   assert.equal(r.stdout.trim(), String(resolveHumanMergeOnly(config)));
-  // and the hook-decisions gate must agree: under this repo's resolved invariant, a gh pr merge is
-  // refused actor-independently (STOP-HUMAN-MERGE-001)
+  // and the hook-decisions gate must agree: a raw `gh pr merge` in the target repo is ALWAYS
+  // denied (raw merges are forbidden — route through the wrapper). Under humanMergeOnly it is
+  // refused actor-independently with STOP-HUMAN-MERGE-001; otherwise with the forbidden/wrapper
+  // reason.
   const { decideBashGate } = await import("../../packages/core/src/claude/hook-decisions.mjs");
   const d = decideBashGate({
     command: "gh pr merge 1 --squash",
@@ -35,6 +37,7 @@ test("resolve-human-merge-only prints exactly what the repo config's resolveHuma
     agentType: null,
     humanMergeOnly: r.stdout.trim() === "true",
   });
-  assert.equal(d.decision, resolveHumanMergeOnly(config) ? "deny" : "allow");
+  assert.equal(d.decision, "deny");
   if (resolveHumanMergeOnly(config)) assert.match(d.reason, /STOP-HUMAN-MERGE-001/);
+  else assert.match(d.reason, /gh pr merge is forbidden/);
 });

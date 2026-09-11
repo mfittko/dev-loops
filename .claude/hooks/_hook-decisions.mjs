@@ -288,31 +288,38 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
     };
   }
 
-  if (gateError) {
-    const which = isMerge ? "pre-merge gate" : "draft-gate";
+  // Raw `gh pr merge` is FORBIDDEN outright (RAW-GH-PR-MERGE-BYPASS): the only
+  // sanctioned merge path is the wrapper, which enforces the mandatory approver,
+  // merge class, and fresh-approval checks a bare evidence gate cannot. A
+  // gate-passed raw merge would bypass all of those, so this denies
+  // unconditionally (not only when evidence is missing) and points to the wrapper.
+  // The wrapper's own internal `gh pr merge` is a child_process spawn, never a
+  // Bash tool call, so it is never seen here.
+  if (isMerge) {
+    // This hook evaluates PreToolUse — BEFORE the Bash tool call runs. A compound command that
+    // writes gate evidence (findings-log ledger, checkpoint verdict) and merges in the same call
+    // is blocked here with the write never having executed. Hint the split when the command
+    // carries an evidence-writing invocation alongside the merge.
+    const alsoWritesEvidence = commandContainsEvidenceWrite(command);
     return {
       decision: "deny",
-      reason: `${verb} blocked: ${which} evidence check failed (${gateError}).`,
+      reason:
+        `gh pr merge is forbidden: route the merge through the sanctioned wrapper \`node scripts/github/merge-pr.mjs --repo <owner/name> --pr ${prNumber} --human-approved-by <login>\`, which runs the full precondition set fail-closed (mandatory approver, merge class, fresh approval) — a raw \`gh pr merge\` bypasses those (RAW-GH-PR-MERGE-BYPASS).` +
+        (gateError ? ` (pre-merge gate evidence check also failed: ${gateError})` : "") +
+        (alsoWritesEvidence
+          ? " This command also writes gate evidence, but hooks evaluate before the command runs — never chain an evidence write with the merge."
+          : ""),
     };
   }
 
+  // `gh pr ready` keeps its gate-conditional behavior.
+  if (gateError) {
+    return {
+      decision: "deny",
+      reason: `${verb} blocked: draft-gate evidence check failed (${gateError}).`,
+    };
+  }
   if (!gatePassed) {
-    if (isMerge) {
-      // This hook evaluates PreToolUse — BEFORE the Bash tool call runs. A compound command that
-      // writes gate evidence (findings-log ledger, checkpoint verdict) and merges in the same call
-      // is blocked here with the write never having executed, which looks like the evidence
-      // "vanished". Hint the split when the command carries an evidence-writing invocation
-      // alongside the merge, so the failure is self-explaining instead of looking like data loss.
-      const alsoWritesEvidence = commandContainsEvidenceWrite(command);
-      return {
-        decision: "deny",
-        reason:
-          `gh pr merge blocked: missing pre-merge gate evidence for PR #${prNumber} (need clean current-head draft_gate + pre_approval_gate; inline verdicts are not accepted). Route the merge through the sanctioned wrapper \`node scripts/github/merge-pr.mjs --repo <owner/name> --pr ${prNumber} --human-approved-by <login>\`, which runs the full precondition set fail-closed — raw \`gh pr merge\` is forbidden (issue #1939).` +
-          (alsoWritesEvidence
-            ? " This command also writes gate evidence, but hooks evaluate before the command runs — write the evidence in a separate call, then merge alone."
-            : ""),
-      };
-    }
     return {
       decision: "deny",
       reason: `gh pr ready blocked: no visible clean draft_gate checkpoint verdict comment found for PR #${prNumber}.`,

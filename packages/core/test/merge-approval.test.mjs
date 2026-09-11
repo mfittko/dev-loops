@@ -80,6 +80,38 @@ test("verifyFreshHumanApproval: refuses agent/bot-authored approval", () => {
   assert.equal(comment.satisfied, false);
 });
 
+test("verifyFreshHumanApproval: a superseded approval (later COMMENTED/CHANGES_REQUESTED by the same login) never satisfies", () => {
+  // Reviews arrive oldest-first; the login's LATEST state is authoritative.
+  const superseded = verifyFreshHumanApproval({
+    approvedBy: "alice",
+    currentHeadSha: HEAD,
+    reviews: [
+      { user: { login: "alice" }, state: "APPROVED", commit_id: HEAD },
+      { user: { login: "alice" }, state: "CHANGES_REQUESTED", commit_id: HEAD },
+    ],
+  });
+  assert.equal(superseded.satisfied, false);
+  const dismissedToComment = verifyFreshHumanApproval({
+    approvedBy: "alice",
+    currentHeadSha: HEAD,
+    reviews: [
+      { user: { login: "alice" }, state: "APPROVED", commit_id: HEAD },
+      { user: { login: "alice" }, state: "COMMENTED", commit_id: HEAD },
+    ],
+  });
+  assert.equal(dismissedToComment.satisfied, false);
+  // A later re-APPROVED by the same login DOES satisfy (latest wins).
+  const reApproved = verifyFreshHumanApproval({
+    approvedBy: "alice",
+    currentHeadSha: HEAD,
+    reviews: [
+      { user: { login: "alice" }, state: "CHANGES_REQUESTED", commit_id: HEAD },
+      { user: { login: "alice" }, state: "APPROVED", commit_id: HEAD },
+    ],
+  });
+  assert.equal(reApproved.satisfied, true);
+});
+
 test("verifyFreshHumanApproval: refuses a wrong-login approval", () => {
   const res = verifyFreshHumanApproval({
     approvedBy: "alice",
@@ -127,14 +159,18 @@ test("resolveMergeApprovalDecision: standing authorization does NOT satisfy an e
   assert.equal(withFresh.authorized, true);
 });
 
-test("resolveCiGreenFromRollup: green only when every check succeeded", () => {
-  assert.equal(resolveCiGreenFromRollup([]).green, true);
+test("resolveCiGreenFromRollup: green only on a real all-success rollup (fails closed otherwise)", () => {
   assert.equal(resolveCiGreenFromRollup([{ status: "COMPLETED", conclusion: "SUCCESS" }]).green, true);
   assert.equal(resolveCiGreenFromRollup([{ status: "COMPLETED", conclusion: "FAILURE" }]).green, false);
   assert.equal(resolveCiGreenFromRollup([{ status: "IN_PROGRESS", conclusion: null }]).green, false);
   assert.equal(resolveCiGreenFromRollup([{ state: "SUCCESS" }]).green, true);
   assert.equal(resolveCiGreenFromRollup([{ state: "PENDING" }]).green, false);
+  // Fail closed: no-CI ("none"), malformed entries, and a null rollup are not green.
+  assert.equal(resolveCiGreenFromRollup([]).green, false);
+  assert.equal(resolveCiGreenFromRollup([{}]).green, false);
   assert.equal(resolveCiGreenFromRollup(null).green, false);
+  // A loop-derived gate-evidence check is EXCLUDED, so a failing gate-evidence does not block real green CI.
+  assert.equal(resolveCiGreenFromRollup([{ name: "gate-evidence", status: "COMPLETED", conclusion: "FAILURE" }, { name: "test", status: "COMPLETED", conclusion: "SUCCESS" }]).green, true);
 });
 
 function greenFacts(overrides = {}) {
@@ -171,6 +207,8 @@ test("evaluateMergePreconditions: each missing precondition is named individuall
     [{ mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" }, "mergeable"],
     [{ ciGreen: { green: false, reason: "x" } }, "ci_green"],
     [{ title: "WIP: add wrapper" }, "title_markers"],
+    [{ title: null }, "title_markers"],
+    [{ title: "   " }, "title_markers"],
     [{ gateEvidence: { ok: false, failures: ["missing visible clean draft_gate comment"] } }, "gate_evidence"],
     [{ sizeOutcome: "escalate", humanReviewDecision: null, standingAuthorized: true }, "size_budget_human_approval"],
     [{ standingAuthorized: false }, "merge_approval"],

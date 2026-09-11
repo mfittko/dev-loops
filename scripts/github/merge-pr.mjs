@@ -6,7 +6,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson as defaultGhJson } from "@dev-loops/core/github/gh";
-import { loadDevLoopConfig, resolveEffectiveMergeAuthorizedFromLoad } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveEffectiveMergeAuthorizedFromLoad, resolveHumanMergeOnly } from "@dev-loops/core/config";
 import { resolveHumanReviewDecision, countUnresolvedHumanChangesRequested } from "@dev-loops/core/loop/size-budget-merge-gate";
 import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { evaluateMergePreconditions, resolveCiGreenFromRollup, isValidGithubLogin } from "@dev-loops/core/loop/merge-approval";
@@ -35,6 +35,13 @@ Optional:
   --stable-release             Mark this as a stable-release merge, forcing the
                                escalated approval class (a standing authorization
                                never satisfies it). Does NOT tag or publish.
+  --standing-authorization     Assert a recorded standing merge authorization
+                               applies (autonomy.humanMergeOnly:false is not, by
+                               itself, a standing authorization). Only then can a
+                               drain merge proceed without a fresh operator
+                               approval; absent this flag, a drain merge also
+                               requires a fresh approval. Ignored under
+                               humanMergeOnly (the wrapper refuses outright).
 
 Preconditions (each refuses with a machine-readable reason naming the failing one):
   human_approver, mergeable, ci_green, title_markers, gate_evidence,
@@ -44,7 +51,8 @@ Preconditions (each refuses with a machine-readable reason naming the failing on
 
 Merge classes:
   drain      normal merge — satisfied by a recorded standing authorization
-             (autonomy.humanMergeOnly:false) OR a fresh operator approval.
+             (asserted via --standing-authorization, and only when
+             autonomy.humanMergeOnly is false) OR a fresh operator approval.
   escalated  size escalate/block, T1-touching, or --stable-release — requires a
              fresh per-merge operator approval; a standing authorization does not
              satisfy it. Fresh approval = a head-pinned APPROVED review by
@@ -69,13 +77,14 @@ export function parseMergePrCliArgs(argv) {
       "human-approved-by": { type: "string" },
       method: { type: "string" },
       "stable-release": { type: "boolean" },
+      "standing-authorization": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
     strict: false,
     tokens: true,
   });
-  const options = { help: false, repo: undefined, pr: undefined, humanApprovedBy: undefined, method: "squash", stableRelease: false };
+  const options = { help: false, repo: undefined, pr: undefined, humanApprovedBy: undefined, method: "squash", stableRelease: false, standingAuthorization: false };
   for (const token of tokens) {
     if (token.kind === "positional") throw parseError(`Unknown argument: ${token.value}`);
     if (token.kind !== "option") continue;
@@ -85,6 +94,7 @@ export function parseMergePrCliArgs(argv) {
     if (token.name === "human-approved-by") { options.humanApprovedBy = requireTokenValue(token, parseError).trim(); continue; }
     if (token.name === "method") { options.method = requireTokenValue(token, parseError).trim().toLowerCase(); continue; }
     if (token.name === "stable-release") { options.stableRelease = true; continue; }
+    if (token.name === "standing-authorization") { options.standingAuthorization = true; continue; }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -183,7 +193,30 @@ export async function mergePr(options, runtime = {}) {
 
   const evidence = await detectEvidence({ repo: options.repo, pr: options.pr, env, cwd });
   const configLoad = await loadConfig({ repoRoot: resolveRepoRoot(cwd) });
-  const standingAuthorized = resolveEffectiveMergeAuthorizedFromLoad(true, configLoad);
+
+  // Under autonomy.humanMergeOnly, merge is a fixed human-only action: the agent
+  // must hand off and NOT run even this wrapper (merge-preconditions.md, the
+  // humanMergeOnly section). Fail closed before any precondition/merge work.
+  if (resolveHumanMergeOnly(configLoad?.config)) {
+    const error = new Error("merge refused: autonomy.humanMergeOnly is set — merge is a human-only action and the agent must hand off, not run the merge wrapper");
+    error.mergePrFailure = { ok: false, merged: false, repo: options.repo, pr: options.pr, headSha: currentHeadSha, approvedBy: options.humanApprovedBy, humanMergeOnly: true };
+    throw error;
+  }
+
+  // A standing authorization is NOT established by config alone
+  // (autonomy.humanMergeOnly:false authorizes nothing). The orchestrator asserts
+  // a recorded standing authorization exists via --standing-authorization; the
+  // config guard then only rejects the humanMergeOnly case (already handled
+  // above). Absent the flag, a drain merge requires a fresh operator approval.
+  const standingAuthorized = options.standingAuthorization === true && resolveEffectiveMergeAuthorizedFromLoad(true, configLoad);
+
+  // Head race: the gate evidence is read by a separate `gh pr view` inside
+  // detect-checkpoint-evidence. If a push landed between our head read and the
+  // evidence read, the evidence is for a different head than the approval/title/
+  // mergeable facts — fail closed so every head bump re-gates.
+  const evidenceHeadMismatch = typeof evidence.currentHeadSha === "string"
+    && evidence.currentHeadSha.length > 0
+    && evidence.currentHeadSha !== currentHeadSha;
 
   const verdict = evaluateMergePreconditions({
     humanApprovedBy: options.humanApprovedBy,
@@ -191,7 +224,12 @@ export async function mergePr(options, runtime = {}) {
     mergeStateStatus: typeof prView?.mergeStateStatus === "string" ? prView.mergeStateStatus : null,
     ciGreen: resolveCiGreenFromRollup(prView?.statusCheckRollup),
     title: typeof prView?.title === "string" ? prView.title : null,
-    gateEvidence: { ok: evidence.ok === true, failures: evidence.failures },
+    gateEvidence: {
+      ok: evidence.ok === true && !evidenceHeadMismatch,
+      failures: evidenceHeadMismatch
+        ? [...(evidence.failures ?? []), `gate evidence head ${evidence.currentHeadSha} does not match the current head ${currentHeadSha} (a push landed mid-check); re-run at the current head`]
+        : evidence.failures,
+    },
     sizeOutcome: evidence.sizeOutcome,
     touchesT1: evidence.touchesT1,
     humanReviewDecision: resolveHumanReviewDecision(rawReviews),
@@ -224,7 +262,17 @@ export async function mergePr(options, runtime = {}) {
   // that shifted between check and merge, a transient conflict) must be caught
   // explicitly — otherwise the wrapper would report ok/exit-0 for a merge that
   // never happened.
-  const mergeRun = await runChild(ghCommand, ["pr", "merge", String(options.pr), "--repo", options.repo, `--${options.method}`], { env });
+  // `--match-head-commit <sha>` pins the mutation to the exact head every
+  // precondition was checked against: a push between the reads and this command
+  // makes `gh pr merge` fail closed instead of merging an unchecked newer head.
+  // `env` is runChild's THIRD POSITIONAL arg (not an options object) — passing
+  // `{ env }` would replace the child env with `{ env: ... }`, stripping
+  // GH_TOKEN/PATH so `gh` could not run.
+  const mergeRun = await runChild(
+    ghCommand,
+    ["pr", "merge", String(options.pr), "--repo", options.repo, `--${options.method}`, "--match-head-commit", currentHeadSha],
+    env,
+  );
   // Anything but an explicit code 0 fails closed: a non-zero exit AND a
   // signal-kill (runChild resolves `{ code: null }`) both mean the merge did
   // not cleanly succeed, so neither may report ok/exit-0.
@@ -235,10 +283,16 @@ export async function mergePr(options, runtime = {}) {
     ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "mergeCommit,state"],
     { env, ghCommand, runChild },
   );
+  // Postcondition: a `gh pr merge` that exits 0 but whose state is not MERGED
+  // (e.g. auto-merge queued, or a race) is NOT a completed merge — never report
+  // it as a success.
+  if (String(merged?.state ?? "").toUpperCase() !== "MERGED") {
+    throw new Error(`gh pr merge exited 0 but PR #${options.pr} is not MERGED (state=${merged?.state ?? "unknown"}); refusing to report a false success`);
+  }
 
   return {
     ok: true,
-    merged: String(merged?.state ?? "").toUpperCase() === "MERGED",
+    merged: true,
     mergeCommit: typeof merged?.mergeCommit?.oid === "string" ? merged.mergeCommit.oid : null,
     approvedBy: options.humanApprovedBy,
     mergeClass: verdict.mergeClass,
