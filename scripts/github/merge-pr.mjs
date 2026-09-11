@@ -10,6 +10,7 @@ import { loadDevLoopConfig, resolveEffectiveMergeAuthorizedFromLoad, resolveHuma
 import { resolveHumanReviewDecision, countUnresolvedHumanChangesRequested } from "@dev-loops/core/loop/size-budget-merge-gate";
 import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { evaluateMergePreconditions, resolveCiGreenFromRollup, isValidGithubLogin } from "@dev-loops/core/loop/merge-approval";
+import { flattenPaginatedSlurp } from "./post-gate-findings.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
 const VALID_METHODS = new Set(["squash", "merge", "rebase"]);
@@ -130,13 +131,6 @@ export function parseMergePrCliArgs(argv) {
   return options;
 }
 
-// Flatten a `gh api --paginate --slurp` payload (array of per-page arrays) into
-// a single flat array; a non-paginated array passes through unchanged.
-function flattenSlurp(payload) {
-  if (!Array.isArray(payload)) return [];
-  return payload.every((entry) => Array.isArray(entry)) ? payload.flat() : payload;
-}
-
 // Default gate-evidence probe: shell the sanctioned detect-checkpoint-evidence
 // CLI and read its verdict. It is the single source of truth for draft_gate /
 // current-head pre_approval_gate verdicts, unresolved threads, the runner lock,
@@ -195,11 +189,11 @@ export async function mergePr(options, runtime = {}) {
   const currentHeadSha = typeof prView?.headRefOid === "string" && prView.headRefOid.trim().length > 0 ? prView.headRefOid.trim() : null;
   if (!currentHeadSha) throw new Error("Invalid gh pr view payload: missing headRefOid");
 
-  const rawReviews = flattenSlurp(await ghJson(
+  const rawReviews = flattenPaginatedSlurp(await ghJson(
     ["api", "--paginate", "--slurp", `repos/${options.repo}/pulls/${options.pr}/reviews?per_page=100`],
     { env, ghCommand, runChild },
   )).map((r) => ({ login: r?.user?.login ?? null, state: r?.state ?? null, commit_id: r?.commit_id ?? null, type: r?.user?.type ?? null }));
-  const comments = flattenSlurp(await ghJson(
+  const comments = flattenPaginatedSlurp(await ghJson(
     ["api", "--paginate", "--slurp", `repos/${options.repo}/issues/${options.pr}/comments?per_page=100`],
     { env, ghCommand, runChild },
   )).map((c) => ({ login: c?.user?.login ?? null, body: c?.body ?? "", type: c?.user?.type ?? null }));
