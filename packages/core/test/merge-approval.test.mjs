@@ -141,6 +141,17 @@ test("verifyFreshHumanApproval: a GitHub App [bot] author never satisfies", () =
   assert.equal(comment.satisfied, false);
 });
 
+test("verifyFreshHumanApproval: a Bot-type author with a bracket-free login never satisfies", () => {
+  // A bot account whose login has no [bot] suffix is still excluded by user.type === "Bot".
+  const review = verifyFreshHumanApproval({ approvedBy: "some-bot", currentHeadSha: HEAD, reviews: [{ login: "some-bot", type: "Bot", state: "APPROVED", commit_id: HEAD }] });
+  assert.equal(review.satisfied, false);
+  const comment = verifyFreshHumanApproval({ approvedBy: "some-bot", currentHeadSha: HEAD, comments: [{ login: "some-bot", type: "Bot", body: `approve merge ${HEAD}` }] });
+  assert.equal(comment.satisfied, false);
+  // The same login as a genuine User does satisfy.
+  const human = verifyFreshHumanApproval({ approvedBy: "some-bot", currentHeadSha: HEAD, reviews: [{ login: "some-bot", type: "User", state: "APPROVED", commit_id: HEAD }] });
+  assert.equal(human.satisfied, true);
+});
+
 test("resolveCiGreenFromRollup: a malformed check entry fails closed", () => {
   assert.equal(resolveCiGreenFromRollup([{}]).green, false);
   assert.equal(resolveCiGreenFromRollup([{ foo: "bar" }]).green, false);
@@ -206,6 +217,9 @@ test("evaluateMergePreconditions: each missing precondition is named individuall
     [{ humanApprovedBy: "" }, "human_approver"],
     [{ mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" }, "mergeable"],
     [{ ciGreen: { green: false, reason: "x" } }, "ci_green"],
+    [{ ciGreen: false }, "ci_green"], // a non-object ciGreen fails closed
+    [{ ciGreen: null }, "ci_green"],
+    [{ touchesT1: null }, "size_budget_human_approval"], // a missing T1 signal fails closed at the size gate
     [{ title: "WIP: add wrapper" }, "title_markers"],
     [{ title: null }, "title_markers"],
     [{ title: "   " }, "title_markers"],

@@ -67,6 +67,14 @@ function isNonHumanLogin(login) {
   return isCopilotLogin(login) || /\[bot\]$/i.test(login);
 }
 
+// A non-human review/comment author. Beyond the login-shape check, a GitHub Bot
+// account carries `user.type === "Bot"` even when its login has no `[bot]`
+// suffix — reject it by that authoritative type so a bracket-free bot login can
+// never satisfy the named fresh approver.
+function isNonHumanAuthor(entry, login) {
+  return isNonHumanLogin(login) || (typeof entry?.type === "string" && entry.type.toLowerCase() === "bot");
+}
+
 function reviewCommit(entry) {
   if (typeof entry?.commit_id === "string" && entry.commit_id.length > 0) return entry.commit_id;
   if (typeof entry?.commitId === "string" && entry.commitId.length > 0) return entry.commitId;
@@ -113,7 +121,7 @@ export function verifyFreshHumanApproval({ approvedBy, currentHeadSha, reviews =
   const approverReview = latestReviewByLogin.get(approvedBy);
   if (
     approverReview
-    && !isNonHumanLogin(approvedBy) // agent/bot review never satisfies
+    && !isNonHumanAuthor(approverReview, approvedBy) // agent/bot review never satisfies
     && (typeof approverReview.state === "string" ? approverReview.state : null) === "APPROVED"
     && reviewCommit(approverReview) === head // head-pinned — a stale/earlier-commit approval never satisfies
   ) {
@@ -129,7 +137,7 @@ export function verifyFreshHumanApproval({ approvedBy, currentHeadSha, reviews =
   for (const entry of Array.isArray(comments) ? comments : []) {
     const login = reviewLogin(entry);
     const body = typeof entry?.body === "string" ? entry.body : "";
-    if (login === null || isNonHumanLogin(login)) continue; // agent/bot comment never satisfies
+    if (login === null || isNonHumanAuthor(entry, login)) continue; // agent/bot comment never satisfies
     if (login !== approvedBy) continue; // wrong login
     if (!markerRe.test(body)) continue; // not a head-pinned marker for this head
     return { satisfied: true, via: "comment_marker", reason: null };
@@ -180,7 +188,8 @@ export function resolveMergeApprovalDecision({ mergeClass, standingAuthorized = 
  * derived check must not block a merge whose real CI is green) and treats a
  * completed-but-no-conclusion or otherwise-unreadable entry as non-success.
  * Fails closed: only a real `success` is green; pending/failure/unavailable are
- * not. An empty rollup (no required checks) is green.
+ * not. An empty or no-CI rollup normalizes to `none`, which is NOT green (a PR
+ * with no visible CI does not auto-satisfy this precondition).
  */
 export function resolveCiGreenFromRollup(rollup) {
   if (!Array.isArray(rollup)) return { green: false, reason: "CI status rollup unavailable" };
@@ -208,7 +217,10 @@ export function evaluateMergePreconditions({
   title = null,
   gateEvidence = null,
   sizeOutcome = null,
-  touchesT1 = false,
+  // Default null (not false): a missing/absent T1 signal must reach
+  // resolveSizeBudgetHumanApprovalRequired as a non-boolean so it fails closed,
+  // rather than being coerced to "T1 untouched".
+  touchesT1 = null,
   humanReviewDecision = null,
   unresolvedChangesRequestedCount = null,
   currentHeadSha = null,
@@ -227,10 +239,10 @@ export function evaluateMergePreconditions({
     failures.push({ precondition: "mergeable", reason: `PR is not conflict-free with base (mergeable=${mergeable ?? "unknown"}, mergeStateStatus=${mergeStateStatus ?? "unknown"}); expected mergeable=MERGEABLE` });
   }
 
-  if (ciGreen && ciGreen.green !== true) {
-    failures.push({ precondition: "ci_green", reason: ciGreen.reason ?? "CI is not green on the current head" });
-  } else if (ciGreen == null) {
-    failures.push({ precondition: "ci_green", reason: "CI status could not be resolved for the current head" });
+  // Fail closed on anything but an explicit { green: true } — a `false`, null, or
+  // malformed ciGreen must NOT slip past this fail-closed aggregate.
+  if (!ciGreen || ciGreen.green !== true) {
+    failures.push({ precondition: "ci_green", reason: (ciGreen && ciGreen.reason) ? ciGreen.reason : "CI status could not be resolved for the current head" });
   }
 
   // findBlockingTitleMarkers returns [] for a non-string title, so an absent or

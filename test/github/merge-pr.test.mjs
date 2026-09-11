@@ -62,6 +62,19 @@ test("parse: --human-approved-by is mandatory and login-validated", () => {
   assert.equal(ok.method, "squash");
   assert.equal(ok.standingAuthorization, false);
   assert.equal(parseMergePrCliArgs(["--repo", "o/r", "--pr", "5", "--human-approved-by", "mfittko", "--standing-authorization"]).standingAuthorization, true);
+  // An explicit disable is honored, not read as enabled (no presence-means-true fail-open).
+  assert.equal(parseMergePrCliArgs(["--repo", "o/r", "--pr", "5", "--human-approved-by", "mfittko", "--standing-authorization=false"]).standingAuthorization, false);
+  assert.equal(parseMergePrCliArgs(["--repo", "o/r", "--pr", "5", "--human-approved-by", "mfittko", "--stable-release=0"]).stableRelease, false);
+});
+
+test("a config load/validation error fails closed (cannot verify humanMergeOnly or standing auth)", async () => {
+  const { runtime, calls } = makeRuntime();
+  runtime.loadConfig = async () => ({ config: null, errors: [{ message: "malformed .devloops" }] });
+  let threw = null;
+  try { await mergePr(baseOptions(), runtime); } catch (e) { threw = e; }
+  assert.ok(threw);
+  assert.equal(threw.mergePrFailure.configError, true);
+  assert.equal(calls.runChild.length, 0, "no merge when config is unverifiable");
 });
 
 test("fully-satisfied standing-authorized drain merge succeeds, stamps the approver, head-pins the merge", async () => {

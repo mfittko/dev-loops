@@ -14,6 +14,14 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 
 const VALID_METHODS = new Set(["squash", "merge", "rebase"]);
 
+// A boolean flag token: bare (`--flag`) is true; an explicit inline value
+// (`--flag=false`/`=0`/`=no`) is honored so an explicit disable is never read as
+// enabled. `=true`/`=1`/`=yes` (and any other value) resolve true.
+function flagValueTrue(token) {
+  if (token.value === undefined || token.value === null || token.value === "") return true;
+  return !/^(?:false|0|no)$/i.test(String(token.value).trim());
+}
+
 const USAGE = `Usage: merge-pr.mjs --repo <owner/name> --pr <number> --human-approved-by <github-login>
                    [--method squash|merge|rebase] [--stable-release]
 
@@ -93,8 +101,11 @@ export function parseMergePrCliArgs(argv) {
     if (token.name === "pr") { options.pr = parsePrNumber(requireTokenValue(token, parseError), parseError); continue; }
     if (token.name === "human-approved-by") { options.humanApprovedBy = requireTokenValue(token, parseError).trim(); continue; }
     if (token.name === "method") { options.method = requireTokenValue(token, parseError).trim().toLowerCase(); continue; }
-    if (token.name === "stable-release") { options.stableRelease = true; continue; }
-    if (token.name === "standing-authorization") { options.standingAuthorization = true; continue; }
+    // Honor an explicit `=false`/`=0` value so `--stable-release=false` /
+    // `--standing-authorization=false` cannot be silently treated as enabled — a
+    // presence-means-true parse would fail OPEN on an explicit disable.
+    if (token.name === "stable-release") { options.stableRelease = flagValueTrue(token); continue; }
+    if (token.name === "standing-authorization") { options.standingAuthorization = flagValueTrue(token); continue; }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -155,7 +166,9 @@ function defaultDetectEvidence({ repo, pr, env, cwd }) {
         resolve({
           ok,
           sizeOutcome: typeof size.sizeOutcome === "string" ? size.sizeOutcome : null,
-          touchesT1: size.sizeTouchesT1 === true,
+          // Preserve a missing/non-boolean T1 signal as null so the size gate
+          // fails closed on absent evidence rather than reading it as "untouched".
+          touchesT1: typeof size.sizeTouchesT1 === "boolean" ? size.sizeTouchesT1 : null,
           currentHeadSha: typeof parsed?.currentHeadSha === "string" ? parsed.currentHeadSha : null,
           failures,
         });
@@ -185,14 +198,24 @@ export async function mergePr(options, runtime = {}) {
   const rawReviews = flattenSlurp(await ghJson(
     ["api", "--paginate", "--slurp", `repos/${options.repo}/pulls/${options.pr}/reviews?per_page=100`],
     { env, ghCommand, runChild },
-  )).map((r) => ({ login: r?.user?.login ?? null, state: r?.state ?? null, commit_id: r?.commit_id ?? null }));
+  )).map((r) => ({ login: r?.user?.login ?? null, state: r?.state ?? null, commit_id: r?.commit_id ?? null, type: r?.user?.type ?? null }));
   const comments = flattenSlurp(await ghJson(
     ["api", "--paginate", "--slurp", `repos/${options.repo}/issues/${options.pr}/comments?per_page=100`],
     { env, ghCommand, runChild },
-  )).map((c) => ({ login: c?.user?.login ?? null, body: c?.body ?? "" }));
+  )).map((c) => ({ login: c?.user?.login ?? null, body: c?.body ?? "", type: c?.user?.type ?? null }));
 
   const evidence = await detectEvidence({ repo: options.repo, pr: options.pr, env, cwd });
   const configLoad = await loadConfig({ repoRoot: resolveRepoRoot(cwd) });
+
+  // Fail closed on a config load/validation error: an unreadable `.devloops` is
+  // the very file that would declare humanMergeOnly and drive fan-out-evidence
+  // enforcement, so a fresh approval must not be able to merge past a config we
+  // could not verify.
+  if (Array.isArray(configLoad?.errors) && configLoad.errors.length > 0) {
+    const error = new Error(`merge refused: dev-loop config could not be loaded/validated (${configLoad.errors.length} error(s)) — cannot verify humanMergeOnly or standing authorization`);
+    error.mergePrFailure = { ok: false, merged: false, repo: options.repo, pr: options.pr, headSha: currentHeadSha, approvedBy: options.humanApprovedBy, configError: true };
+    throw error;
+  }
 
   // Under autonomy.humanMergeOnly, merge is a fixed human-only action: the agent
   // must hand off and NOT run even this wrapper (merge-preconditions.md, the
