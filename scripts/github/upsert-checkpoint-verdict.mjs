@@ -1831,13 +1831,21 @@ async function enforcePostTimeFanoutMode({ repo, pr, gate, executionMode, inline
     hasFullLabel,
     baseRef,
   });
-  if (!fanoutEnforcement.required) return;
+  if (!fanoutEnforcement.required) return fanoutEnforcement;
   for (const gateResult of fanoutEnforcement.gates) {
     const modeFailure = evaluateInlineFanoutMode(gateResult, fanoutEnforcement);
     if (modeFailure) {
       throw new Error(`Cannot post a ${executionMode} verdict for ${repo}#${pr} ${gate}: ${modeFailure}`);
     }
   }
+  // The durable-ledger existence refusal (a fanout_fanin verdict cannot be
+  // posted until write-gate-findings-log.mjs's canonical ledger for the reviewed
+  // head is on disk) is applied by the caller AFTER its mandatory-angle coverage
+  // checks, so the more specific coverage message wins when both would fire.
+  // Returning the descriptor lets the caller reuse this call's already-computed
+  // per-gate `ledgerExists`/`ledgerPath` instead of re-running buildFanoutEnforcement,
+  // so the post-time and merge-time boundaries stay on the one predicate.
+  return fanoutEnforcement;
 }
 
 /**
@@ -2101,6 +2109,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   let canonicalHeadSha = options.headSha;
   let draftGateConfig = null;
   let preApprovalGateConfig = null;
+  // The post-time fan-out enforcement descriptor (buildFanoutEnforcement's
+  // result) captured from enforcePostTimeFanoutMode, so the durable-ledger
+  // refusal below reuses its already-computed per-gate ledgerExists/ledgerPath.
+  let postTimeFanoutEnforcement = null;
   if (!isReviewGate) {
     // Thread the light-dispatch signal so the context interpreter and the
     // maxCopilotRounds resolution below use the same composed lightweight cap
@@ -2227,7 +2239,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // verdict here, before it is posted, for every verdict value. No override
     // flag — requireFanoutEvidence: false is the only opt-out, and that is
     // already handled inside buildFanoutEnforcement.
-    await enforcePostTimeFanoutMode(
+    postTimeFanoutEnforcement = await enforcePostTimeFanoutMode(
       {
         repo: options.repo,
         pr: options.pr,
@@ -2636,12 +2648,42 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   const gateEvidence = isReviewGate ? { strict: null, marker: null } : selectGateEvidence(evidence, options.gate);
   const existing = isReviewGate ? null : summarizeExistingComment({ ...gateEvidence, headSha: canonicalHeadSha });
   const warning = isReviewGate ? null : detectStaleGateCommentWarning({ strict: gateEvidence.strict, headSha: canonicalHeadSha, gate: options.gate });
+  // DURABLE-LEDGER FAIL-CLOSED REFUSAL: a requireFanoutEvidence fanout_fanin
+  // verdict cannot be recorded until write-gate-findings-log.mjs's canonical
+  // durable ledger (tmp/gate-findings/<slug>/pr-<n>/<gate>-<head>.json) for the
+  // reviewed head is actually on disk. This upgrades the former advisory
+  // findingsLedgerWarning into a hard refusal at the PRODUCE step — earlier than
+  // the local pre-merge hook (detect-checkpoint-evidence's buildPreMergeGateCheck),
+  // which fails closed on the SAME `ledgerExists` predicate reactively at merge
+  // time. CI genuinely cannot verify this ledger (it is a gitignored,
+  // worktree-local tmp/ file only the reviewing machine holds — see
+  // skills/docs/merge-preconditions.md), so this post-time layer is what closes
+  // the local write-skip that the CI gate-evidence check's
+  // --skip-fanout-ledger-check cannot cover. The enforcement descriptor is
+  // reused from enforcePostTimeFanoutMode (its per-gate ledgerExists/ledgerPath)
+  // so the post-time and merge-time boundaries can never drift on the path or
+  // the predicate. The consolidator's --ledger-out scratch path is NOT this
+  // ledger; only write-gate-findings-log.mjs writes the canonical path. Placed
+  // AFTER the mandatory-angle coverage checks above so their more specific
+  // "coverage proof" message wins when both would fire.
+  if (postTimeFanoutEnforcement?.required && (options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin") {
+    const postingGate = postTimeFanoutEnforcement.gates.find((gateResult) => gateResult.name === options.gate);
+    if (postingGate && !postingGate.ledgerExists) {
+      throw new Error(
+        `Cannot post a fanout_fanin verdict for ${options.repo}#${options.pr} ${options.gate}: `
+        + `requireFanoutEvidence is enabled but no durable findings-log ledger exists for the reviewed head (${postingGate.ledgerPath}). `
+        + `Write it with write-gate-findings-log.mjs (from consolidate-fanin.mjs's --ledger-out) before posting the verdict.`,
+      );
+    }
+  }
   // FINDINGS-SOURCE FOOTGUN WARNING: a fanout_fanin round posted with
   // --findings-json but no --findings-ledger silently files ZERO inline
   // comments — the --findings-ledger (consolidate-fanin --ledger-out →
   // write-gate-findings-log) is the ONLY inline-comment source. Name the
   // missing source so the caller knows why no inline comments appeared.
   // Advisory only: it never blocks the post and is surfaced on every path.
+  // Retained for the requireFanoutEvidence:false path (where the refusal above
+  // never fires) and for the inline-source diagnostic it uniquely gives.
   const findingsLedgerWarning = ((options.executionMode ?? DEFAULT_EXECUTION_MODE) === "fanout_fanin" && options.findingsJson && !options.findingsLedger)
     ? "WARNING: --findings-json without --findings-ledger files zero inline comments — the --findings-ledger (consolidate-fanin --ledger-out → write-gate-findings-log) is the only inline-comment source. Pass --findings-ledger to file inline findings."
     : null;

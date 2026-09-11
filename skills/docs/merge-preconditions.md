@@ -193,6 +193,21 @@ findings-log ledger/provenance layer (`gates.requireFanoutEvidence` /
 runner can never see it. That layer remains client-side/self-reported-only — the
 same "not un-forgeable" caveat the sub-loop contract already documents.
 
+`--skip-fanout-ledger-check` is therefore a **deliberate, justified exception**,
+not an accidental gap: the fan-out findings-log ledger at
+`tmp/gate-findings/<slug>/pr-<n>/<gate>-<head>.json` is inherently machine-local,
+so scoping the CI check down to what a stateless runner CAN verify is the only
+correct posture. Making CI read the worktree-local ledger is a non-goal. The
+local write-skip this CI skip cannot cover — a `fanout_fanin` verdict posted
+without the durable ledger ever being written — is closed instead at the
+**verdict-post refusal** in `scripts/github/upsert-checkpoint-verdict.mjs`: a
+`requireFanoutEvidence` `fanout_fanin` verdict-post fails closed unless that
+canonical durable ledger for the reviewed head already exists on disk, refusing
+at post time (earlier than the local pre-merge hook, `detect-checkpoint-evidence`)
+via the SAME `ledgerExists` predicate the merge-time check uses. So the durable
+write is unbypassable locally, and CI never claims green on a layer it genuinely
+cannot see.
+
 ### Evidence writes and `gh pr merge` MUST be separate tool calls (#1172)
 
 The PreToolUse Bash gate evaluates `gh pr merge` **before** the Bash tool call executes. A compound

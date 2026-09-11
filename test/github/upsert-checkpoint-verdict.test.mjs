@@ -19,6 +19,7 @@ import {
 } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { buildFanoutEnforcement, evaluateInlineFanoutMode } from "../../scripts/github/detect-checkpoint-evidence.mjs";
+import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { renderFallbackGateReviewCommentBody } from "../../skills/dev-loop/scripts/post-gate-verdict-fallback.mjs";
 // #1592: several fixtures below deliberately keep pre-rename severity
@@ -3655,6 +3656,9 @@ test("upsert-checkpoint-verdict self-heals a ready PR via draft transition, pres
     // coverage, so findingsJson is the minimal covering shape.
     const findingsPath = path.join(tempDir, "findings.json");
     await writeFile(findingsPath, JSON.stringify([{ angle: "pr-description", verdict: "clean", findings: [] }]), "utf8");
+    // requireFanoutEvidence is on (schema default for the bare tempDir repoRoot),
+    // so the fanout_fanin post needs its canonical durable ledger present.
+    await stageDurableLedger(tempDir, { headSha, gate: "draft_gate" });
     const result = await upsertCheckpointVerdict({
       repo: "owner/repo",
       pr: 17,
@@ -5096,6 +5100,10 @@ test("upsert-checkpoint-verdict WARNS on stderr (not silence) for a foreign angl
     // Repo config opting into warn mode; extension defaults still supply the
     // draft pool + mandatory pr-description.
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  rejectForeignAngles: false\n", "utf8");
+    // requireFanoutEvidence stays on (schema default), so stage the fanout_fanin
+    // round's canonical durable ledger; this test is about foreign-angle warn
+    // mode, not the ledger refusal.
+    await stageDurableLedger(tempDir, { headSha: "abc1234000000000000000000000000000000000", gate: "draft_gate" });
     const findingsPath = path.join(tempDir, "findings.json");
     await writeFile(
       findingsPath,
@@ -5250,6 +5258,9 @@ test("upsert-checkpoint-verdict posts a withheld fanout_fanin verdict whose --fi
     // Same ledger shape as the covered-provenance positive test below, but
     // with NO provenance key at all — the vacuous-coverage case under test.
     const ledgerPath = await writeSingleSurfaceLedger(tempDir, [BODY_FILED_FINDING]);
+    // requireFanoutEvidence stays on (the .devloops above leaves the schema
+    // default), so stage the canonical durable ledger the existence check reads.
+    await stageDurableLedger(tempDir, { headSha: SINGLE_SURFACE_HEAD, verdict: "findings_present" });
     const entries = [
       ...singleSurfaceLeadingEntries(),
       {
@@ -5825,9 +5836,53 @@ test("upsert-checkpoint-verdict fails closed on an inline verdict when the base 
   }, { prefix: "dev-loops-upsert-postgate-scope-underivable-" });
 });
 
-test("upsert-checkpoint-verdict accepts a fanout_fanin verdict regardless of requireFanoutEvidence", async () => {
+// Stage write-gate-findings-log.mjs's canonical durable ledger on disk at the
+// EXACT path the post-time refusal (and the merge-time check) resolve via
+// buildLogPath, so a requireFanoutEvidence fanout_fanin verdict-post is accepted.
+async function stageDurableLedger(repoRoot, { repo = "owner/repo", pr = 17, gate = "draft_gate", headSha, verdict = "clean", findings = [] }) {
+  const ledgerPath = path.resolve(repoRoot, buildLogPath({ repo, pr, gate, headSha, tmpRoot: "tmp" }));
+  await mkdir(path.dirname(ledgerPath), { recursive: true });
+  await writeFile(ledgerPath, JSON.stringify({ repo, pr, gate, headSha, verdict, findings }), "utf8");
+  return ledgerPath;
+}
+
+// Two-arm guard: a requireFanoutEvidence fanout_fanin verdict-post is REFUSED
+// when write-gate-findings-log.mjs's canonical durable ledger for the reviewed
+// head is absent, and SUCCEEDS once it is present — pinning both arms so the
+// refusal is proven to be gated on the durable write, not always-on. This
+// closes the local write-skip the CI gate-evidence check (--skip-fanout-ledger-check)
+// cannot cover.
+const POSTGATE_FANOUT_HEAD = "abc1234000000000000000000000000000000000";
+
+test("upsert-checkpoint-verdict REFUSES a requireFanoutEvidence fanout_fanin verdict when the durable ledger is absent", async () => {
   await withTempDir(async (tempDir) => {
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\n", "utf8");
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(findingsPath, JSON.stringify([{ angle: "pr-description", verdict: "clean", findings: [] }]), "utf8");
+
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
+    ], { repeatLastOnOverflow: true });
+    const result = await runNode([
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", POSTGATE_FANOUT_HEAD,
+      "--verdict", "clean", "--findings-severity-counts", '{"high":0}',
+      "--findings-json", findingsPath, "--next-action", "mark ready for review",
+      "--execution-mode", "fanout_fanin",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 1, result.stderr);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    // The refusal names the missing canonical ledger path and the write step.
+    assert.match(payload.error, /no durable findings-log ledger exists for the reviewed head/);
+    assert.match(payload.error, new RegExp(`tmp/gate-findings/owner-repo/pr-17/draft_gate-${POSTGATE_FANOUT_HEAD}\\.json`));
+    assert.match(payload.error, /write-gate-findings-log\.mjs/);
+  }, { prefix: "dev-loops-upsert-postgate-fanout-refuse-" });
+});
+
+test("upsert-checkpoint-verdict ACCEPTS a requireFanoutEvidence fanout_fanin verdict once the durable ledger is present", async () => {
+  await withTempDir(async (tempDir) => {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\n", "utf8");
+    await stageDurableLedger(tempDir, { headSha: POSTGATE_FANOUT_HEAD });
     const findingsPath = path.join(tempDir, "findings.json");
     await writeFile(findingsPath, JSON.stringify([{ angle: "pr-description", verdict: "clean", findings: [] }]), "utf8");
 
@@ -5839,7 +5894,7 @@ test("upsert-checkpoint-verdict accepts a fanout_fanin verdict regardless of req
       },
     ], { repeatLastOnOverflow: true });
     const result = await runNode([
-      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", POSTGATE_FANOUT_HEAD,
       "--verdict", "clean", "--findings-severity-counts", '{"high":0}',
       "--findings-json", findingsPath, "--next-action", "mark ready for review",
       "--execution-mode", "fanout_fanin",
@@ -6059,6 +6114,10 @@ test("upsert-checkpoint-verdict posts a withheld fanout_fanin round via --findin
       "        enabled: false",
       "",
     ].join("\n"), "utf8");
+    // requireFanoutEvidence defaults on (schema default), so this fanout_fanin
+    // post still needs the durable ledger present; stage it so the test keeps
+    // exercising the no-mandatory-angle coverage escape, not the ledger refusal.
+    await stageDurableLedger(tempDir, { headSha: "abc1234000000000000000000000000000000000" });
     const env = await writeGhStub(tempDir, [
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
       {
@@ -6513,6 +6572,13 @@ test("upsert-checkpoint-verdict posts a withheld fanout_fanin verdict when --fin
         ],
       },
     });
+    // requireFanoutEvidence stays on here (the .devloops above pins the
+    // mandatory angle but leaves the schema default), so the durable-ledger
+    // existence refusal applies. Stage the canonical durable ledger the
+    // post-time (and merge-time) check resolves via buildLogPath — in the real
+    // workflow this IS the file --findings-ledger points at; the test keeps the
+    // scratch ledger for the provenance-coverage assertion.
+    await stageDurableLedger(tempDir, { headSha: SINGLE_SURFACE_HEAD, verdict: "findings_present" });
     const entries = [
       ...singleSurfaceLeadingEntries(),
       {
