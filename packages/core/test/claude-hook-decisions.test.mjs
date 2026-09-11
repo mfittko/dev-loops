@@ -41,14 +41,22 @@ test("decideBashGate denies ungated gh pr ready in the target repo", () => {
   assert.match(d.reason, /#17/);
 });
 
-// gh pr merge is gated on the full pre-merge evidence (draft_gate + pre_approval_gate); a direct
-// merge must not bypass the pre-approval gate the way a hand-run `gh pr merge` previously could.
-test("decideBashGate denies ungated gh pr merge in the target repo", () => {
+// Raw `gh pr merge` is forbidden outright — only the wrapper is sanctioned. A direct
+// merge must never bypass the wrapper's mandatory approver / merge-class / fresh-approval checks.
+test("decideBashGate denies a raw gh pr merge in the target repo", () => {
   const d = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, gatePassed: false });
   assert.equal(d.decision, "deny");
-  assert.match(d.reason, /gh pr merge blocked/);
-  assert.match(d.reason, /pre_approval_gate/);
-  assert.match(d.reason, /#1/);
+  assert.match(d.reason, /gh pr merge is forbidden/);
+  assert.match(d.reason, /--pr 1\b/);
+});
+
+// issue #1939: raw `gh pr merge` is forbidden — the interception deny directs the caller to the
+// sanctioned wrapper so a flagged raw merge names its replacement.
+test("decideBashGate deny for a raw merge points to the merge-pr.mjs wrapper", () => {
+  const d = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, gatePassed: false });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /scripts\/github\/merge-pr\.mjs/);
+  assert.match(d.reason, /--human-approved-by/);
 });
 
 // #1172: PreToolUse blocks pre-execution, so a compound write+merge command never runs the write —
@@ -60,7 +68,7 @@ test("decideBashGate hints the write/merge split when the compound command also 
     gatePassed: false,
   });
   assert.equal(d.decision, "deny");
-  assert.match(d.reason, /gh pr merge blocked/);
+  assert.match(d.reason, /gh pr merge is forbidden/);
   assert.match(d.reason, /hooks evaluate before the command runs/);
 
   const d2 = decideBashGate({
@@ -75,15 +83,15 @@ test("decideBashGate hints the write/merge split when the compound command also 
 test("decideBashGate keeps the standard message for a bare gh pr merge (no evidence write)", () => {
   const d = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, gatePassed: false });
   assert.equal(d.decision, "deny");
-  assert.match(d.reason, /gh pr merge blocked/);
+  assert.match(d.reason, /gh pr merge is forbidden/);
   assert.doesNotMatch(d.reason, /hooks evaluate before the command runs/);
 });
 
-test("decideBashGate allows gh pr merge when pre-merge evidence passed", () => {
-  assert.equal(
-    decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, gatePassed: true }).decision,
-    "allow",
-  );
+test("decideBashGate denies a raw gh pr merge even when pre-merge evidence passed (forbidden outright)", () => {
+  const d = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, gatePassed: true });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /gh pr merge is forbidden/);
+  assert.match(d.reason, /merge-pr\.mjs/);
 });
 
 test("decideBashGate passes through gh pr merge for a non-target --repo", () => {
@@ -104,15 +112,14 @@ test("decideBashGate passes through gh pr merge outside the target repo", () => 
 test("decideBashGate denies gh pr merge in a later compound segment", () => {
   const d = decideBashGate({ command: "echo ok && gh pr merge 1 --squash", repoSlug: TARGET, gatePassed: false });
   assert.equal(d.decision, "deny");
-  assert.match(d.reason, /gh pr merge blocked/);
+  assert.match(d.reason, /gh pr merge is forbidden/);
 });
 
 test("decideBashGate applies the stricter merge gate when both ready and merge appear", () => {
-  // gh pr ready && gh pr merge — merge gate (stricter) must be applied, not just draft_gate.
+  // gh pr ready && gh pr merge — the merge verb (forbidden outright) is the stricter deny.
   const d = decideBashGate({ command: "gh pr ready 1 && gh pr merge 1", repoSlug: TARGET, gatePassed: false });
   assert.equal(d.decision, "deny");
-  assert.match(d.reason, /gh pr merge blocked/);
-  assert.match(d.reason, /pre_approval_gate/);
+  assert.match(d.reason, /gh pr merge is forbidden/);
 });
 
 test("decideBashGate denies gh pr merge when PR number cannot be determined", () => {
@@ -121,10 +128,11 @@ test("decideBashGate denies gh pr merge when PR number cannot be determined", ()
   assert.match(d.reason, /could not determine the PR number/);
 });
 
-test("decideBashGate denies with a pre-merge gate error reason for gh pr merge", () => {
+test("decideBashGate denies a raw gh pr merge and still surfaces a gate error", () => {
   const d = decideBashGate({ command: "gh pr merge 42", repoSlug: TARGET, gateError: "could not run the gate guard script" });
   assert.equal(d.decision, "deny");
-  assert.match(d.reason, /pre-merge gate evidence check failed/);
+  assert.match(d.reason, /gh pr merge is forbidden/);
+  assert.match(d.reason, /gate evidence check also failed/);
 });
 
 test("decideBashGate allows gh pr ready when the draft gate passed", () => {
@@ -718,8 +726,10 @@ test("decideBashGate refuses gh pr merge under humanMergeOnly, actor-independent
   const dNoEvidence = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, humanMergeOnly: true, gatePassed: false, agentType: null });
   assert.equal(dNoEvidence.decision, "deny");
   assert.match(dNoEvidence.reason, /STOP-HUMAN-MERGE-001/);
-  // without humanMergeOnly the normal merge gating applies (gatePassed true → allow)
-  assert.equal(decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, humanMergeOnly: false, gatePassed: true, agentType: null }).decision, "allow");
+  // without humanMergeOnly a raw merge is still forbidden outright (route through the wrapper)
+  const dNoHumanOnly = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, humanMergeOnly: false, gatePassed: true, agentType: null });
+  assert.equal(dNoHumanOnly.decision, "deny");
+  assert.match(dNoHumanOnly.reason, /gh pr merge is forbidden/);
   // non-target repo is unaffected by this repo's humanMergeOnly invariant
   assert.equal(decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: "someone/else", humanMergeOnly: true, gatePassed: true, agentType: null }).decision, "allow");
 });

@@ -447,21 +447,31 @@ See [Merge Preconditions](../docs/merge-preconditions.md). Verify: zero unresolv
 ### Human approval checkpoint
 
 After merge-ready preconditions pass, verify [Merge Preconditions](../docs/merge-preconditions.md) authoritatively before reporting merge-ready. Stop at the human approval checkpoint by default. Cross-check via `dev-loops-run cli/index.mjs gate capture-threads` (not prose assertion).
-Follow [Merge Preconditions](../docs/merge-preconditions.md): stop at `waiting_for_merge_authorization` after approval unless merge explicitly authorized. Run pre-merge gate evidence check before any `gh pr merge`.
+Follow [Merge Preconditions](../docs/merge-preconditions.md): stop at `waiting_for_merge_authorization` after approval unless merge explicitly authorized. When authorized, merge through the sanctioned wrapper `dev-loops-run scripts/github/merge-pr.mjs --repo <owner/name> --pr <number> --human-approved-by <login>` — it runs the full pre-merge precondition set fail-closed before merging; a raw `gh pr merge` is forbidden.
 
 When `approval.enabled` is set, don't just park silently at this stop: run `dev-loops-run cli/index.mjs gate offer-human-handoff --repo <owner/name> --pr <number>` to surface candidate reviewers/assignees, then **offer** them to the operator. Only on operator confirmation, route the PR with `--assign <login>` / `--request-review <login>`. This is OFFER-only — never auto-assign. See the `approval` section in [Merge Preconditions](../docs/merge-preconditions.md); it pairs with `autonomy.humanMergeOnly`.
 
 ### Mechanical pre-merge gate evidence check
 
-Immediately before any `gh pr merge`, run:
+The sanctioned merge wrapper is the canonical merge path and runs this check
+internally, fail-closed, before it merges:
 
 ```sh
-node <resolved-skill-scripts>/github/detect-checkpoint-evidence.mjs \
+node <resolved-skill-scripts>/github/merge-pr.mjs \
   --repo <owner/name> \
-  --pr <number>
+  --pr <number> \
+  --human-approved-by <login>
 ```
 
-This helper is always-on: it uses `gh api` to read both verdict surfaces — the PR review stream (primary, per `GATE-COMMENT-SINGLE-SURFACE`) and visible PR issue comments (back-compat, for legacy and fallback-posted verdicts) — and fails closed unless both required gate verdicts are visible on either surface: a clean `draft_gate` verdict for the one-time draft boundary and a clean current-head `pre_approval_gate` verdict. Do not run `gh pr merge` if this command exits non-zero. There is no opt-out flag. Resolved threads, green CI, clean Copilot rereview, or local notes do not substitute for this successful helper output. If a final approval or merge boundary sees `gh pr merge` without a same-boundary successful check, treat that as a workflow violation and stop.
+The wrapper reuses `detect-checkpoint-evidence.mjs` (always-on: it reads both verdict
+surfaces — the PR review stream, primary per `GATE-COMMENT-SINGLE-SURFACE`, and visible
+PR issue comments for legacy/fallback verdicts — and fails closed unless both required
+gate verdicts are visible: a clean `draft_gate` and a clean current-head
+`pre_approval_gate`). You may also run `detect-checkpoint-evidence.mjs --repo <owner/name>
+--pr <number>` standalone for a read-only pre-merge check. Resolved threads, green CI,
+clean Copilot rereview, or local notes never substitute for the wrapper's fail-closed
+verdict. A raw `gh pr merge` is forbidden (`RAW-GH-PR-MERGE-BYPASS`); if a final approval
+or merge boundary sees a raw `gh pr merge`, treat that as a workflow violation and stop.
 
 ### Stale runner-coordination lock held by a completed run
 

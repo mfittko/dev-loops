@@ -42,7 +42,7 @@ sanctionedCommands?: {
   edits: Record<string, string>;
   lifecycle: Record<string, string>;
   forbidden: string[];                   // raw `gh pr view/checks/edit`, `node -e`, `python -c`, transcript tailing, sleep-poll loops
-  orchestratorOwned: string[];           // `gh pr merge`, board status transitions — never done by a subagent
+  orchestratorOwned: string[];           // pr merge via merge-pr.mjs (raw `gh pr merge` forbidden), board status transitions — never done by a subagent
 };
 ```
 

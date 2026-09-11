@@ -7,7 +7,7 @@ Use it together with:
 - [Public Dev Loop Contract](./public-dev-loop-contract.md) — owner of `FACADE-LINKED-PR-SINGLE-ARTIFACT`, `FACADE-BOOTSTRAP-WATCH-ROUTE`, `FACADE-BOOTSTRAP-ISOLATED-WORKTREE-CONTINUATION`
 - [Retrospective Checkpoint Contract](./retrospective-checkpoint-contract.md) when the current step depends on async start/resume/status or retrospective enforcement
 - [Stop Conditions](./stop-conditions.md) — owner of `STOP-INITIAL-COPILOT-001` and the other strategy-wide stop/wait rules this procedure operationalizes
-- [Merge Preconditions](./merge-preconditions.md) — the merge gate this procedure defers to before `gh pr merge`
+- [Merge Preconditions](./merge-preconditions.md) — the merge gate this procedure defers to before merging (via the sanctioned wrapper `scripts/github/merge-pr.mjs`; raw `gh pr merge` is forbidden)
 
 When routed work is issue-first rather than already in active PR follow-up, use the procedure below before entering the shared post-PR loop. Treat this document as the issue-refinement specialist procedure for the routed `issue_intake` seam.
 
@@ -244,9 +244,9 @@ gh pr review <pr-number> --repo <resolved-repo> --approve --body "..."
 node <resolved-skill-scripts>/github/detect-checkpoint-evidence.mjs --repo <resolved-repo> --pr <pr-number>
 ```
 
-The merge itself is gated, not implied by the lines above. Before any `gh pr merge`, follow [Merge Preconditions](./merge-preconditions.md): all preconditions (green CI, clean `draft_gate` + current-head `pre_approval_gate`, zero unresolved threads, explicit merge authorization) must hold. Critically, when `autonomy.humanMergeOnly: true` is set, merge is a fixed human-only action — `resolveEffectiveMergeAuthorized` fails closed, the agent **never** runs `gh pr merge`, and instead reports merge-ready + gate evidence and hands off to a human. Only when **not** `humanMergeOnly` and merge is explicitly authorized may the agent run:
+The merge itself is gated, not implied by the lines above. The sanctioned merge path is the wrapper `scripts/github/merge-pr.mjs`, which runs all preconditions (green CI, clean `draft_gate` + current-head `pre_approval_gate`, zero unresolved threads, merge authorization) fail-closed before merging; a raw `gh pr merge` is forbidden (`RAW-GH-PR-MERGE-BYPASS`). See [Merge Preconditions](./merge-preconditions.md). Critically, when `autonomy.humanMergeOnly: true` is set, merge is a fixed human-only action — `resolveEffectiveMergeAuthorized` fails closed, the agent **never** merges, and instead reports merge-ready + gate evidence and hands off to a human. Only when **not** `humanMergeOnly` and merge is explicitly authorized may the agent run:
 ```sh
-gh pr merge <pr-number> --repo <resolved-repo> --squash --delete-branch
+node scripts/github/merge-pr.mjs --repo <resolved-repo> --pr <pr-number> --human-approved-by <login>
 ```
 
 Bootstrap-wait interpretation remains fail-closed and observational-first — same seam as Phase 2's `waiting_for_initial_copilot_implementation` handling above: `ready_for_followup` resumes from the now-substantive linked PR; `timed_out` is observational first; refresh authoritative state and re-apply the Phase 2 branching (still-waiting vs. seam-exit) rather than re-deriving it here.

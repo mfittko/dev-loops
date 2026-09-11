@@ -42,6 +42,7 @@
     "./loop/handoff-envelope": "./src/loop/handoff-envelope.mjs",
     "./loop/lifecycle-state": "./src/loop/lifecycle-state.mjs",
     "./loop/markdown-sections": "./src/loop/markdown-sections.mjs",
+    "./loop/merge-approval": "./src/loop/merge-approval.mjs",
     "./loop/issue-refinement-artifact": "./src/loop/issue-refinement-artifact.mjs",
     "./loop/phase-files": "./src/loop/phase-files.mjs",
     "./loop/policy-constants": "./src/loop/policy-constants.mjs",

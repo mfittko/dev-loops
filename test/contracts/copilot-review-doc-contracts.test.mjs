@@ -268,8 +268,13 @@ test("copilot-pr-followup skill hardens reply-resolve, gate sequencing, and merg
   );
   assert.match(
     step7,
-    /Do not run `gh pr merge` if this command exits non-zero/i,
-    "mechanical pre-merge check should block merge on missing evidence",
+    /merge-pr\.mjs/i,
+    "mechanical pre-merge check should name the sanctioned merge wrapper as the canonical merge path",
+  );
+  assert.match(
+    step7,
+    /raw `gh pr merge` is forbidden/i,
+    "the skill should forbid a raw gh pr merge in favor of the wrapper",
   );
   assert.match(
     step7,
