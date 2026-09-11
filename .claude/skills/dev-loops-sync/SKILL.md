@@ -1,8 +1,6 @@
 ---
 name: "dev-loops-sync"
-description: "Provision or refresh the dev-loops agents and skills in a Multica workspace from a detected dev-loops source. Idempotent desired-state sync — imports the 7 skills as SKILL.md-only, deletes deprecated carrier skills, pins agents to a runtime, sets DEVLOOPS_HOME, and binds skills to agents. Use when setting up dev-loops in a new Multica workspace or re-syncing after a dev-loops release."
-allowed-tools: Read Bash
-user-invocable: true
+description: "Provision or refresh the dev-loops agents and skills in a Multica workspace from a detected dev-loops source, driving the `multica` CLI. Idempotent desired-state sync — imports the 7 skills as SKILL.md-only, deletes deprecated carrier skills, pins agents to a runtime, sets DEVLOOPS_HOME, and binds skills to agents. Use when setting up dev-loops in a new workspace or re-syncing after a dev-loops release."
 ---
 <!-- GENERATED from skills/dev-loops-sync/SKILL.md by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate. -->
 
@@ -14,53 +12,48 @@ dev-loops **source**, with as few Multica-specific deviations as possible.
 
 ## Design invariants
 
+- **Drives the `multica` CLI.** No raw HTTP, no PAT files. In an agent run the
+  daemon injects `MULTICA_SERVER_URL` / `MULTICA_TOKEN` / `MULTICA_WORKSPACE_ID`,
+  so the CLI authenticates and targets the workspace natively. Standalone, pass
+  `--profile` (or `--server-url`) and `--workspace`.
 - **Skills are SKILL.md-only.** No bundled tools or contract docs. Everything a
   skill references — `scripts/**`, `../docs/**`, templates — resolves from the
-  detected dev-loops source at runtime via `dev-loops-run` (self checkout →
-  local checkout → claude plugin → pi). Copying those into Multica is the
-  deviation this skill removes; the deprecated `dev-loops-runtime` and
-  `dev-loops-contracts` carrier skills are deleted on sync.
-- **Source is auto-detected in order: self → local → claude → pi.** First match
-  wins: the dev-loops checkout this script ships in (walk up from the script dir
-  for a `dev-loops` `package.json` + sibling `scripts/`), then
-  `~/github/dev-loops` (checkout), then
-  `~/.claude/plugins/cache/dev-loops/dev-loops/<version>`, then
-  `~/.pi/agent/npm/node_modules/dev-loops`. Pi is last because it is the most
-  likely to lag. Override with `--source` / `DEVLOOPS_HOME`.
+  detected dev-loops source at runtime via `dev-loops-run` (checkout → claude
+  plugin → pi). The deprecated `dev-loops-runtime` / `dev-loops-contracts`
+  carrier skills are deleted on sync.
+- **Source detection: `self` → `local` → `claude` → `pi`.** `self` is this
+  script's own checkout (set once it ships inside dev-loops). `local` is a
+  best-effort guess (`~/github/dev-loops`) for the common dogfooder layout — it
+  is **not** a portable default; set `DEVLOOPS_HOME` or pass `--source` for any
+  other checkout location. `claude`/`pi` are the standard install roots. Every
+  synced agent carries `DEVLOOPS_HOME` so the resolver finds the checkout even
+  when working a non-dev-loops repo (see mfittko/dev-loops#2145).
 - **Skill content comes from the `.claude` build**, not the raw `skills/`
-  source — the raw source inlines a `<!-- pi-only -->` resolver ladder that
-  points a Claude runtime at a (possibly stale) pi install. The sync prefers
-  `<source>/.claude/skills` and falls back to `<source>/skills`.
-- **Agents carry `DEVLOOPS_HOME`** (the checkout path) in their per-agent
-  `custom_env`, so the resolver can find the live checkout even when the agent
-  works a non-dev-loops repo (cwd walk-up misses).
-- **One Multica-specific piece: the agent→skill map** (which skills each agent
-  gets). It lives in the script's `BIND` constant. Everything else is derived
-  from the source.
+  source (which inlines a `<!-- pi-only -->` resolver ladder pointing a Claude
+  runtime at a possibly-stale pi install). The sync prefers
+  `<source>/.claude/skills`, falling back to `<source>/skills`.
+- **One Multica-specific piece: the agent→skill map** (`BIND` in the script).
 
 ## Usage
 
-Invoke the script through the standard `node scripts/…` form. In the generated
-`.claude` output this is rewritten to go through `dev-loops-run`, which resolves
-the live source before running:
-
 ```bash
-dev-loops-run scripts/multica/dev-loops-sync.mjs \
-  --source /abs/path/to/dev-loops \   # optional; auto-detected self>local>claude>pi
-  --checkout /abs/path/to/dev-loops \ # optional; DEVLOOPS_HOME for agents (defaults to source when it's a checkout)
-  --workspace <slug-or-id> \          # repeatable; prompts/lists if omitted
-  --runtime claude \                  # runtime provider to pin agents to (default: claude)
-  --api http://localhost:18908 \      # or MULTICA_API
-  --pat <token>                       # or MULTICA_PAT, or a ~/.multica/profiles/*/config.json
+# In an agent run (workspace + auth from the daemon):
+dev-loops-run scripts/multica/dev-loops-sync.mjs
+
+# Standalone, refreshing after a dev-loops release:
+dev-loops-run scripts/multica/dev-loops-sync.mjs --pull \
+  --profile <profile> --workspace <slug-or-id> [--workspace <slug-or-id> ...]
+
+# Other flags: --source DIR (or DEVLOOPS_HOME), --runtime claude,
+#              --server-url URL, --mca PATH
 ```
 
-Missing `--source` is auto-detected (or prompted on a TTY). Missing
-`--workspace` lists the available workspaces and prompts. The PAT is read from a
-Multica profile `config.json` when not passed.
+`--pull` runs `git -C <checkout> pull --ff-only` before syncing (no-op if the
+source is not a checkout) so a scheduled run picks up a new dev-loops release.
+Omitted `--source` is auto-detected; omitted `--workspace` uses
+`MULTICA_WORKSPACE_ID` (agent context) or prompts.
 
-The sync is **idempotent** — re-run it after a dev-loops release to pull the new
-skill/agent text. It updates in place, creates what's missing, and removes the
-deprecated carrier skills.
+Idempotent — re-run after a dev-loops release to pull the new skill/agent text.
 
 ## What it converges to
 
@@ -71,5 +64,4 @@ deprecated carrier skills.
   their mapped skills.
 - No `dev-loops-runtime` / `dev-loops-contracts` skills.
 
-Squads are intentionally out of scope — they are a Multica-native concern, not
-part of the dev-loops source.
+Squads are intentionally out of scope — they are a Multica-native concern.

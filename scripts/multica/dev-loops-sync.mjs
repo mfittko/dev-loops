@@ -1,18 +1,21 @@
 #!/usr/bin/env node
 // dev-loops-sync — sync dev-loops agents + skills into a Multica workspace from a
-// detected source (self checkout > local > claude > pi). Skills are SKILL.md-only
-// (tools/docs resolve from the source at runtime via dev-loops-run); agents are
-// pinned to a runtime, carry DEVLOOPS_HOME, and are bound to their skills. Idempotent.
+// detected source (self > local > claude > pi), driving the `multica` CLI (not raw
+// HTTP). Skills are SKILL.md-only (tools/docs resolve from the source at runtime via
+// dev-loops-run); agents are pinned to a runtime, carry DEVLOOPS_HOME, and are bound
+// to their skills. Idempotent.
 //
-//   node scripts/multica/dev-loops-sync.mjs [--source DIR] [--workspace SLUG ...]
-//                                           [--runtime claude] [--api URL] [--pat TOKEN]
-// Omitted --source is auto-detected (or it guides you to install one).
-// Omitted --workspace is listed and prompted.
+//   multica-run: node dev-loops-sync.mjs [--source DIR] [--pull]
+//                  [--workspace SLUG ...] [--runtime claude]
+//                  [--profile NAME] [--server-url URL] [--mca PATH]
+// In an agent run the daemon injects MULTICA_SERVER_URL/MULTICA_TOKEN/MULTICA_WORKSPACE_ID,
+// so no --profile/--workspace is needed. Standalone: pass --profile (or --server-url) so
+// the CLI can authenticate; omit --workspace to be prompted, or pass slugs/ids.
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 
 const HOME = homedir(), A = args();
@@ -20,17 +23,40 @@ const SKILLS = ["copilot-pr-followup", "dev-loop", "final-approval", "local-impl
 const CARRIERS = ["dev-loops-runtime", "dev-loops-contracts"]; // deprecated: resolve from source, don't copy
 const BIND = { "dev-loop": ["dev-loop", "copilot-pr-followup", "final-approval"], developer: ["local-implementation"], docs: [], fixer: ["copilot-pr-followup"], judge: [], quality: [], refiner: ["loop-grill"], review: ["review", "ui-review"] };
 const AGENTS = Object.keys(BIND);
-
 const CLONE = "git clone https://github.com/mfittko/dev-loops ~/github/dev-loops";
 
-// --- source: self checkout > local checkout > claude plugin > pi install ------
-const isCheckout = (d) => d && existsSync(join(d, "scripts")) && (() => { try { return JSON.parse(readFileSync(join(d, "package.json"), "utf8")).name === "dev-loops"; } catch { return false; } })();
-// When this script runs from inside a dev-loops checkout (e.g. scripts/multica/),
-// prefer that checkout: walk up from the script dir for a dev-loops package.json + scripts/.
-const selfCheckout = () => { let d = dirname(fileURLToPath(import.meta.url)); for (let i = 0; i < 6; i++) { if (isCheckout(d)) return d; const up = dirname(d); if (up === d) break; d = up; } return null; };
+// --- multica CLI -------------------------------------------------------------
+function resolveMca() {
+  const tries = [A.mca, process.env.MULTICA_BIN, "multica"].filter(Boolean);
+  for (const t of tries) { try { execFileSync(t, ["--help"], { stdio: "ignore" }); return t; } catch {} }
+  const built = "/tmp/mca";
+  try { execFileSync("go", ["build", "-o", built, "./cmd/multica"], { cwd: join(HOME, "github/multica/server"), stdio: "inherit" }); return built; }
+  catch { die("no `multica` binary: pass --mca PATH, set MULTICA_BIN, put `multica` on PATH, or make the source checkout buildable."); }
+}
+const MCA = resolveMca();
+const BASE = [...(A.profile ? ["--profile", A.profile] : []), ...(A["server-url"] ? ["--server-url", A["server-url"]] : [])];
+// run a CLI command; parse JSON stdout when present. `ws` scopes to a workspace id.
+function cli(cmd, { ws, stdin } = {}) {
+  const argv = [...BASE, ...(ws ? ["--workspace-id", ws] : []), ...cmd];
+  const out = execFileSync(MCA, argv, { input: stdin, encoding: "utf8", maxBuffer: 64 << 20 });
+  const t = out.trim();
+  if (!t) return null;
+  try { return JSON.parse(t); } catch { return t; }
+}
+const listArr = (j, ...k) => Array.isArray(j) ? j : (k.map((x) => j?.[x]).find(Boolean) || []);
+
+// --- source: self (this checkout) > local > claude > pi ----------------------
 const claudeDir = () => { try { const j = JSON.parse(readFileSync(join(HOME, ".claude/plugins/installed_plugins.json"), "utf8")); return Object.entries(j).find(([k]) => k.includes("dev-loops"))?.[1]?.[0]?.installPath || null; } catch { return null; } };
-const SOURCES = [["self", selfCheckout()], ["local", join(HOME, "github/dev-loops")], ["claude", claudeDir()], ["pi", join(HOME, ".pi/agent/npm/node_modules/dev-loops")]];
+const selfDir = () => { let d = dirname(fileURLToPath(import.meta.url)); for (;;) { if (isCheckout(d)) return d; const p = dirname(d); if (p === d) return null; d = p; } };
+// Portable detectors first: `self` (this script's own checkout, set once it ships
+// inside dev-loops) and DEVLOOPS_HOME (set on every synced agent) need no machine
+// assumptions; claude/pi are standard install roots. `local` is a best-effort guess
+// for the common dogfooder layout only.
+// ponytail: `~/github/dev-loops` is a convention guess, not a portable default — set
+// DEVLOOPS_HOME or pass --source for any other checkout location.
+const SOURCES = [["self", selfDir()], ["local", join(HOME, "github/dev-loops")], ["claude", claudeDir()], ["pi", join(HOME, ".pi/agent/npm/node_modules/dev-loops")]];
 const has = (d) => d && existsSync(join(d, "package.json"));
+function isCheckout(d) { try { return !!d && existsSync(join(d, "scripts")) && JSON.parse(readFileSync(join(d, "package.json"), "utf8")).name === "dev-loops"; } catch { return false; } }
 const skillsDir = (s) => existsSync(join(s, ".claude/skills")) ? join(s, ".claude/skills") : join(s, "skills");
 const agentsDir = (s) => existsSync(join(s, ".claude/agents")) ? join(s, ".claude/agents") : join(s, "agents");
 
@@ -52,68 +78,79 @@ const clip = (s) => s.length <= 255 ? s : s.slice(0, 254).replace(/\s+\S*$/, "")
 
 async function ask(q) { if (!process.stdin.isTTY) die(`need input, no TTY: ${q}`); const rl = createInterface({ input: process.stdin, output: process.stdout }); const a = (await rl.question(q)).trim(); rl.close(); return a; }
 function die(m) { console.error("error:", m); process.exit(1); }
-function args() { const a = { workspace: [] }; const v = process.argv.slice(2); for (let i = 0; i < v.length; i++) v[i] === "--workspace" ? a.workspace.push(v[++i]) : v[i].startsWith("--") && (a[v[i].slice(2)] = v[++i]); return a; }
+function args() { const a = { workspace: [] }; const v = process.argv.slice(2); for (let i = 0; i < v.length; i++) { const k = v[i]; if (k === "--workspace") a.workspace.push(v[++i]); else if (k === "--pull") a.pull = true; else if (k.startsWith("--")) a[k.slice(2)] = v[++i]; } return a; }
 
 async function resolveSource() {
-  if (A.source || process.env.DEVLOOPS_HOME) return A.source || process.env.DEVLOOPS_HOME;
-  const hit = SOURCES.find(([, d]) => has(d));
-  if (hit) { console.log(`source: ${hit[0]} ${hit[1]}`); return hit[1]; }
-  // no source: guide setup
-  console.error("No dev-loops source found. Checked, in order:");
-  console.error("  self   the dev-loops checkout this script ships in");
-  console.error("  local  ~/github/dev-loops        (a live checkout)");
-  console.error("  claude ~/.claude/plugins/…/dev-loops (claude plugin install)");
-  console.error("  pi     ~/.pi/agent/npm/…/dev-loops   (pi install)");
-  console.error(`\nGet one (local checkout is preferred and is what DEVLOOPS_HOME points at):\n  ${CLONE}`);
-  console.error("  or install the dev-loops plugin in Claude/Pi per its README, then re-run.");
-  if (process.stdin.isTTY && (await ask("\nClone the checkout now? [y/N] ")).toLowerCase() === "y") {
-    execSync(CLONE.replace("~", HOME), { stdio: "inherit", shell: "/bin/bash" });
-    return join(HOME, "github/dev-loops");
+  let src = A.source || process.env.DEVLOOPS_HOME;
+  if (!src) {
+    const hit = SOURCES.find(([, d]) => has(d));
+    if (hit) { src = hit[1]; console.log(`source: ${hit[0]} ${src}`); }
   }
-  process.exit(2);
+  if (!src) {
+    console.error("No dev-loops source found (checked self, ~/github/dev-loops, claude plugin, pi install).");
+    console.error(`Get one (local checkout is preferred and is what DEVLOOPS_HOME points at):\n  ${CLONE}`);
+    console.error("  or install the dev-loops plugin in Claude/Pi per its README, then re-run.");
+    if (process.stdin.isTTY && (await ask("Clone the checkout now? [y/N] ")).toLowerCase() === "y") {
+      execFileSync("bash", ["-c", CLONE.replace("~", HOME)], { stdio: "inherit" });
+      src = join(HOME, "github/dev-loops");
+    } else process.exit(2);
+  }
+  if (A.pull && isCheckout(src)) {
+    console.log(`pull: git -C ${src} pull --ff-only`);
+    try { execFileSync("git", ["-C", src, "pull", "--ff-only"], { stdio: "inherit" }); }
+    catch { die("git pull --ff-only failed — resolve the checkout state, then re-run."); }
+  } else if (A.pull) console.log("pull: skipped (source is not a git checkout).");
+  return src;
 }
 
 async function main() {
   const src = await resolveSource();
   if (!has(src)) die(`not a dev-loops source: ${src}`);
   const [sd, ad] = [skillsDir(src), agentsDir(src)];
-  const home = A.checkout || (isCheckout(src) ? src : SOURCES.find(([k, d]) => (k === "self" || k === "local") && isCheckout(d))?.[1]) || null;
-
-  const api = A.api || process.env.MULTICA_API || "http://localhost:18908";
-  const pat = A.pat || process.env.MULTICA_PAT || patFromProfile(api);
-  if (!pat) die("no PAT: pass --pat, set MULTICA_PAT, or have a ~/.multica/profiles/*/config.json");
+  const home = A.checkout || (isCheckout(src) ? src : SOURCES.find(([k, d]) => k === "local" && isCheckout(d))?.[1]) || null;
+  const provider = A.runtime || "claude";
 
   const skills = SKILLS.map((n) => ({ name: n, content: readFileSync(join(sd, n, "SKILL.md"), "utf8") }));
   const agents = AGENTS.map((n) => { const f = existsSync(join(ad, `${n}.agent.md`)) ? `${n}.agent.md` : `${n}.md`; const { d, body } = fm(readFileSync(join(ad, f), "utf8")); return { name: n, description: clip(d.description || n), instructions: body }; });
 
-  const allWs = await req("GET", api, pat, null, "/api/workspaces");
-  let sel = A.workspace.length ? A.workspace : (process.env.MULTICA_WORKSPACES?.split(",") || []);
-  if (!sel.length) { console.log("workspaces:", allWs.map((w) => w.slug).join(", ")); sel = (await ask("target slug(s), comma-separated: ")).split(",").map((s) => s.trim()).filter(Boolean); }
-  const provider = A.runtime || "claude";
+  // Resolve target workspace ids. In an agent run MULTICA_WORKSPACE_ID is injected → single implicit ws.
+  let targets = A.workspace;
+  if (!targets.length && process.env.MULTICA_WORKSPACE_ID) targets = [process.env.MULTICA_WORKSPACE_ID];
+  const wsList = listArr(cli(["workspace", "list", "--output", "json"]), "workspaces", "data");
+  if (!targets.length) {
+    console.log("workspaces:", wsList.map((w) => w.slug).join(", "));
+    targets = (await ask("target slug(s), comma-separated: ")).split(",").map((s) => s.trim()).filter(Boolean);
+  }
+  const ids = targets.map((sel) => wsList.find((w) => w.slug === sel || w.id === sel)?.id || sel);
 
-  for (const s of sel) {
-    const ws = allWs.find((w) => w.slug === s || w.id === s); if (!ws) die(`no workspace: ${s}`);
-    const c = (m, p, b) => req(m, api, pat, ws.id, p, b);
-    const listed = async (p) => { const j = await c("GET", p); return j.skills || j.agents || (Array.isArray(j) ? j : j.data) || []; };
+  for (const wsId of ids) {
+    const slug = wsList.find((w) => w.id === wsId)?.slug || wsId;
+    const exSkills = listArr(cli(["skill", "list", "--output", "json"], { ws: wsId }), "skills", "data");
+    const sid = {};
+    for (const sk of skills) {
+      const e = exSkills.find((x) => x.name === sk.name);
+      const r = e
+        ? cli(["skill", "update", e.id, "--content-stdin", "--output", "json"], { ws: wsId, stdin: sk.content })
+        : cli(["skill", "create", "--name", sk.name, "--description", `dev-loops ${sk.name}`, "--content-stdin", "--output", "json"], { ws: wsId, stdin: sk.content });
+      sid[sk.name] = e ? e.id : (r?.id || r?.skill?.id);
+    }
+    let removed = 0;
+    for (const dep of CARRIERS) { const e = exSkills.find((x) => x.name === dep); if (e) { cli(["skill", "delete", e.id], { ws: wsId }); removed++; } }
 
-    const exSkills = await listed("/api/skills"), sid = {};
-    for (const sk of skills) { const e = exSkills.find((x) => x.name === sk.name); const r = e ? await c("PUT", `/api/skills/${e.id}`, { content: sk.content, files: [] }) : await c("POST", "/api/skills", { name: sk.name, description: `dev-loops ${sk.name}`, content: sk.content }); sid[sk.name] = e ? e.id : (r.id || r.skill?.id); }
-    let removed = 0; for (const dep of CARRIERS) { const e = exSkills.find((x) => x.name === dep); if (e) { await c("DELETE", `/api/skills/${e.id}`); removed++; } }
-
-    const rts = await listed("/api/runtimes"), rt = rts.find((r) => r.provider === provider && r.status === "online") || rts.find((r) => r.provider === provider);
-    if (!rt) die(`[${ws.slug}] no ${provider} runtime`);
-    const exAgents = await listed("/api/agents");
+    const rts = listArr(cli(["runtime", "list", "--output", "json"], { ws: wsId }), "runtimes", "data");
+    const rt = rts.find((r) => r.provider === provider && r.status === "online") || rts.find((r) => r.provider === provider);
+    if (!rt) die(`[${slug}] no ${provider} runtime`);
+    const exAgents = listArr(cli(["agent", "list", "--output", "json"], { ws: wsId }), "agents", "data");
     for (const a of agents) {
       const e = exAgents.find((x) => x.name === a.name);
-      const id = e ? (await c("PUT", `/api/agents/${e.id}`, { description: a.description, instructions: a.instructions }), e.id) : (await c("POST", "/api/agents", { name: a.name, description: a.description, instructions: a.instructions, runtime_id: rt.id, visibility: "private" })).id;
-      if (home) await c("PUT", `/api/agents/${id}/env`, { custom_env: { DEVLOOPS_HOME: home } });
-      await c("PUT", `/api/agents/${id}/skills`, { skill_ids: (BIND[a.name] || []).map((n) => sid[n]).filter(Boolean) });
+      let id;
+      if (e) { cli(["agent", "update", e.id, "--description", a.description, "--instructions", a.instructions, "--output", "json"], { ws: wsId }); id = e.id; }
+      else { const r = cli(["agent", "create", "--name", a.name, "--description", a.description, "--instructions", a.instructions, "--runtime-id", rt.id, "--visibility", "private", "--output", "json"], { ws: wsId }); id = r?.id || r?.agent?.id; }
+      if (home) cli(["agent", "env", "set", id, "--custom-env-stdin", "--output", "json"], { ws: wsId, stdin: JSON.stringify({ DEVLOOPS_HOME: home }) });
+      cli(["agent", "skills", "set", id, "--skill-ids", (BIND[a.name] || []).map((n) => sid[n]).filter(Boolean).join(","), "--output", "json"], { ws: wsId });
     }
-    console.log(`[${ws.slug}] skills=${skills.length}, carriers removed=${removed}, agents=${agents.length}, runtime=${provider}, DEVLOOPS_HOME=${home || "(unset)"}`);
+    console.log(`[${slug}] skills=${skills.length}, carriers removed=${removed}, agents=${agents.length}, runtime=${provider}, DEVLOOPS_HOME=${home || "(unset)"}`);
   }
 }
-
-function patFromProfile(api) { const dir = join(HOME, ".multica/profiles"); if (!existsSync(dir)) return null; const host = new URL(api).host.replace(/[:.]/g, "-"); const cs = readdirSync(dir).map((d) => join(dir, d, "config.json")).filter(existsSync); const pick = cs.find((c) => c.includes(host)) || cs[0]; try { return JSON.parse(readFileSync(pick, "utf8")).token; } catch { return null; } }
-async function req(m, api, pat, ws, p, b) { const u = api + p + (ws ? (p.includes("?") ? "&" : "?") + "workspace_id=" + ws : ""); const r = await fetch(u, { method: m, headers: { Authorization: `Bearer ${pat}`, "Content-Type": "application/json", ...(ws ? { "X-Workspace-ID": ws } : {}) }, body: b ? JSON.stringify(b) : undefined }); if (!r.ok) throw new Error(`${m} ${p} -> ${r.status} ${(await r.text()).slice(0, 140)}`); return r.status === 204 ? {} : r.json(); }
 
 main().catch((e) => die(e.message));
