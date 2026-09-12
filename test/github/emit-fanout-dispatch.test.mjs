@@ -116,6 +116,12 @@ test("--pending emits only the pendingGroups subset", async () => {
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.count, 1);
     assert.equal(payload.units[0].angles[0], "contradiction-lens");
+    assert.equal(payload.pending, true);
+    // the persisted keyed plan body carries the same pending: true round marker
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    const persisted = JSON.parse(await readFile(planPath, "utf8"));
+    assert.equal(persisted.pending, true);
   });
 });
 
@@ -140,6 +146,7 @@ test("a successful run persists the keyed emit-plan artifact with the full resul
     assert.equal(persisted.headSha, HEAD_SHA);
     assert.equal(persisted.repo, REPO);
     assert.equal(persisted.pr, PR);
+    assert.equal(persisted.pending, false);
     assert.equal(persisted.count, stdoutPayload.count);
     assert.equal(persisted.maxConcurrent, stdoutPayload.maxConcurrent);
     assert.deepEqual(persisted.units, stdoutPayload.units);

@@ -60,7 +60,7 @@ Optional:
                                must match the write-gate-context.mjs call).
 Output (stdout, JSON):
   { "ok": true, "gate": "...", "headSha": "...", "repo": "...", "pr": "...",
-    "count": <n>, "maxConcurrent": <n>, "units": [ { "scope": "...", "angles": ["..."], "group": <name|null>, "promptPath": "..." } ] }
+    "pending": <true|false>, "count": <n>, "maxConcurrent": <n>, "units": [ { "scope": "...", "angles": ["..."], "group": <name|null>, "promptPath": "..." } ] }
   Wave the EMITTED units at most \`maxConcurrent\` at a time (1 when
   gates.fanout.sequential is set). Do NOT use the artifact's fanout.wavePlan to
   bound this step: that plan is computed over the UNSPLIT resolveFanoutGroups
@@ -354,7 +354,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // failure and takes the module's formatCliError/exit-2 tier, matching the
   // suffix-write catch block directly above — exit 1 stays reserved for
   // plan-semantics refusals.
-  const payload = { ok: true, gate, headSha, repo, pr, count: emitted.length, maxConcurrent, units: emitted };
+  const payload = { ok: true, gate, headSha, repo, pr, pending: pendingOnly, count: emitted.length, maxConcurrent, units: emitted };
   const planPath = buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot });
   try {
     await mkdir(path.dirname(planPath), { recursive: true });
