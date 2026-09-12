@@ -1,6 +1,6 @@
 ---
 name: multica-dispatch
-description: Multica-native fan-out/fan-in contract behind `dev-loop` when running inside a Multica workspace. Dedicated canonical agents receive bounded work through a root dispatch comment on the existing parent issue (mention-dispatch, replies in-thread) — not Pi's in-process subagent tool. Gate rounds use a hybrid topology — one durable Multica `review` assignment, whose agent fans its review groups out through its harness-native subagents and aggregates them into one parent-issue result. Outside Multica, the ordinary Pi-subagent dispatch is unchanged. Loaded by the synced canonical agents in a Multica workspace.
+description: Multica-native dispatch contract behind `dev-loop` when running inside a Multica workspace. Non-gate work may go to dedicated canonical agents through a root dispatch comment on the existing parent issue. A top-level Multica `dev-loop` remains the gate coordinator and runs the complete gate round with harness-native subagents. Outside Multica, ordinary harness dispatch is unchanged. Loaded by the synced canonical agents in a Multica workspace.
 ---
 
 # Multica Dispatch
@@ -13,22 +13,17 @@ environment — standalone Pi, Claude Code, CI — fan-out uses the ordinary Pi
 
 ## Dispatch rule
 
-When this agent, running as the loop orchestrator inside Multica, must fan out
-bounded loop work (a review, a refiner pass, a judge verdict, a fix, docs or
-quality work), it dispatches to the **dedicated canonical agents** for those
-roles — `review`, `refiner`, `judge`, `fixer`, `developer`, `docs`, `quality` —
-through a **root dispatch comment on the existing parent issue**, instead of
-Pi's in-process `subagent` tool.
+Except for gate-round work (defined below), when this agent must dispatch
+bounded work inside Multica, it uses the **dedicated canonical agent** for the
+role through a **root dispatch comment on the existing parent issue**.
 
 - **One child issue per reviewer/dispatch unit is overkill and is NOT the
   default.** The parent issue is the fan-out surface: no new issues are created
   merely because fan-out exists. Gate/reviewer fan-out **never** creates
   sub-issues — including when multiple review groups target the same agent.
   A multi-group draft gate therefore emits **zero** `multica issue create`
-  operations and dispatches on the existing parent issue.
-- **A gate round is exactly ONE durable Multica `review` assignment** on the
-  parent issue — never one Multica assignment per review group. The parallel
-  fresh-context work happens INSIDE that assignment (hybrid dispatch, below).
+  operations and zero durable parent-issue dispatches; it stays inside the
+  top-level coordinator run.
 - **Resolve each target agent from the live roster at dispatch time**:
   `multica agent list --output json` by name. Never hardcode or persist a
   workspace-specific agent ID in any committed source. Mention-link each agent
@@ -74,21 +69,32 @@ Pi's in-process `subagent` tool.
   Each worker runs in its own session, on its own checkout. The dispatch
   comment is the only shared surface; the thread reply is the only return
   channel.
-- **Hybrid dispatch topology for gate rounds (one Multica assignment,
-  harness-native fan-out).** `dev-loop` dispatches exactly **one** durable
-  Multica `review` assignment on the parent issue for a gate round — never
-  one assignment per review group. The `review` agent then fans its review
-  groups out through its Pi or Claude harness-native subagents, concurrently,
-  in fresh contexts, and aggregates their results into **one** parent-issue
-  result. Harness subagents are internal workers, not additional Multica
-  assignments: they create no issues, post no separate durable results, and
-  never invoke `dev-loop` recursively. Do not specify a model in
-  harness-subagent calls — they inherit the parent Multica agent's
-  runtime/model configuration, which Multica owns. Other roles (`refiner`,
-  `judge`, `fixer`, …) follow the same shape: one Multica assignment per
-  distinct dedicated agent per round; that agent may parallelize internally
-  with its harness-native subagents. Never manufacture concurrency with
-  child issues.
+
+## Gate rounds stay inside the top-level run
+
+A top-level Multica `dev-loop` run is already the gate coordinator. It executes
+the complete gate round itself with Pi- or Claude-native subagents:
+
+1. prepare Phase 1 context/spec evidence, then run the Phase 1.5 primer;
+2. consume the contract-emitted grouped dispatch units, without reimplementing
+   grouping, and run them in bounded waves using `gates.fanout.maxConcurrent`
+   (default `3`);
+3. join the findings through the sanctioned fan-in;
+4. run the independent, read-only judge as a harness-native child; and
+5. run any required fixer and re-gate cycle before closing the gate.
+
+Each reviewer child receives exactly one emitted unit, starts in fresh context,
+and cannot delegate further. Judge and fixer children are likewise internal to
+the coordinator run. No gate review group, judge, or fixer phase creates a
+Multica issue, dispatch comment, mention, durable assignments, or separate
+Multica run. Do not specify a model in harness-native child calls: they inherit
+the top-level Multica agent's runtime/model configuration, which Multica owns.
+This rule is provider-independent and applies to Pi and Claude hosts alike.
+
+After a clean draft gate, preserve the canonical lifecycle: mark the PR ready,
+complete the configured Copilot review/fix rounds, then run the pre-approval
+gate and stop for human approval. Never jump from draft gate directly to
+pre-approval.
 
 ## No recursive dev-loop dispatch (provider-independent)
 
@@ -98,14 +104,11 @@ spawn or delegate to another native `dev-loop` child — not via Pi's in-process
 This rule is **provider-independent**: it binds whichever harness (Pi or
 Claude Code) is hosting the Multica `dev-loop` agent.
 
-When the startup resolver selects a strategy, route the resolved strategy's
-work **directly to the corresponding dedicated Multica agent** (`developer`,
-`review`, `refiner`, `judge`, `fixer`, … as applicable) through the durable
-Multica dispatch described above. Do NOT add an intermediate nested `dev-loop`
-child: the nested entrypoint would re-resolve routing, re-derive an envelope,
-and fan out through its own harness dispatch — a recursion the platform's issue
-assignment already performs once, and the source of the observed double-loop
-behavior.
+When the startup resolver selects a strategy, execute gate-round work in this
+same coordinator run as specified above. Non-gate work may route directly to a
+dedicated Multica agent through the durable dispatch described above. Do NOT
+add an intermediate nested `dev-loop` child: it would re-resolve routing and
+duplicate the coordinator.
 
 Native Pi/Claude `dev-loop` child delegation remains ONLY the non-Multica
 fallback: outside a Multica workspace (no daemon-injected
@@ -137,8 +140,8 @@ harness dispatch applies exactly as the dev-loop skill specifies.
 
 Creating a child issue is allowed **only when a human explicitly requests
 work decomposition.** It is not a fallback for freshness, concurrency, stages,
-waves, or reviewer groups — the parent-issue dispatch comment covers all of
-those. When a human does request decomposition, the child issue description
+waves, or reviewer groups — ordinary durable dispatch or the coordinator-owned
+gate fan-out covers those. When a human does request decomposition, the child issue description
 carries the full dispatch contract (dispatch unit, reviewed head SHA,
 repository and PR, required prompt/context, result contract — post the result
 as a comment on the child issue, then set its status), and the parent performs
@@ -165,8 +168,9 @@ thread/attachments.
 
 ## Boundary
 
-This skill changes the transport (durable Multica issue threads and mentions
-instead of in-process subagents), not the dev-loop policy: bounded tasks, stop
-rules, acceptance criteria, and fan-in evidence all remain exactly as the
-dev-loop skill and the handoff envelope define them. It never applies outside a
+For non-gate work, this skill changes the transport to durable Multica issue
+threads and mentions. For gate rounds, it preserves harness-native subagents
+inside the top-level run. It does not change dev-loop policy: bounded tasks,
+stop rules, acceptance criteria, and fan-in evidence remain exactly as the
+dev-loop skill and handoff envelope define them. It never applies outside a
 Multica workspace.

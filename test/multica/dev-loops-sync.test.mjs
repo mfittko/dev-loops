@@ -189,135 +189,46 @@ test("the multica-dispatch skill source documents the full fan-out/fan-in contra
     "no UUIDs may be persisted in dev-loops skill source");
 });
 
-// Topology correction (MFIT-188 follow-up): one child issue per reviewer/dispatch unit
-// is overkill and must NOT be the default fan-out surface — and stronger: gate/reviewer
-// fan-out NEVER creates sub-issues, including when multiple review groups target the
-// same agent. A gate round is exactly ONE durable Multica `review` assignment on the
-// parent issue (hybrid dispatch): the parallel fresh-context groups run INSIDE that
-// assignment through the review agent's harness-native subagents. Child issues are
-// allowed ONLY when a human explicitly requests work decomposition — never as a
-// fallback for freshness, concurrency, stages, waves, or reviewer groups.
-// Pinned across the skill source and its `.claude` transform.
-for (const [surface, file] of [
-  ["multica-dispatch skill", "skills/multica-dispatch/SKILL.md"],
-  ["generated .claude mirror", ".claude/skills/multica-dispatch/SKILL.md"],
+// MFIT-200: Multica owns the top-level run and its model, while the same run owns
+// every gate phase. Keep this provider-independent by pinning both source and
+// generated Claude surfaces.
+for (const [host, skillFile, loopAgentFile, reviewAgentFile] of [
+  ["Pi-hosted", "skills/multica-dispatch/SKILL.md", "agents/dev-loop.agent.md", "agents/review.agent.md"],
+  ["Claude-hosted", ".claude/skills/multica-dispatch/SKILL.md", ".claude/agents/dev-loop.md", ".claude/agents/review.md"],
 ]) {
-  test(`${surface}: gate/reviewer fan-out never creates sub-issues; child issues are human-requested only`, async () => {
-    const content = await readFile(path.join(repoRoot, file), "utf8");
-    assert.match(content, /NOT the\s+default/i, `${surface}: the no-child-issues-by-default rule must be stated`);
-    assert.match(content, /root dispatch comment on the existing parent issue/i,
-      `${surface}: the parent-issue dispatch comment is the default fan-out surface`);
-    // Gate/reviewer fan-out never creates sub-issues, including same-agent multi-group rounds.
-    assert.match(content, /never[^.]{0,80}creates\s+sub-issues[\s\S]{0,200}multiple review groups target the same agent/i,
-      `${surface}: the never-creates-sub-issues rule must cover multiple groups targeting the same agent`);
-    assert.match(content, /zero[^.]{0,40}`?multica issue create`?/i,
-      `${surface}: the zero-issue-create guarantee for a multi-group draft gate must be stated`);
-    // Child issues are human-requested decomposition only, never a topology fallback.
-    assert.match(content, /only when a human explicitly requests\s+work decomposition/i,
-      `${surface}: child issues require an explicit human decomposition request`);
-    assert.match(content, /not a fallback for freshness, concurrency, stages,\s+waves, or reviewer groups/i,
-      `${surface}: the non-fallback list must name freshness, concurrency, stages, waves, and reviewer groups`);
-    assert.doesNotMatch(content, /multiple concurrent isolated runs|own durable lifecycle\/status \(its own/i,
-      `${surface}: the old fallback conditions are removed — they licensed the wrong topology`);
-    assert.doesNotMatch(content, /stage barrier/i,
-      `${surface}: stage barriers belong to the child-issue model that is no longer the default`);
-  });
-}
-
-// Hybrid-dispatch correction (MFIT-188 confirmed correction): a gate round is exactly
-// ONE durable Multica `review` assignment on the parent issue. The parallel
-// fresh-context review groups run INSIDE that assignment through the review agent's
-// harness-native subagents, which are internal workers — no Multica issues, no
-// separate durable results, no recursive dev-loop, no model override (they inherit
-// the parent Multica agent's Multica-governed runtime/model). Pinned across the skill
-// source, the review agent source, and their `.claude` transforms; the zero-issue-create
-// and no-manufactured-concurrency guarantees must hold on both hosts.
-for (const [host, skillFile, agentFile] of [
-  ["Pi-hosted", "skills/multica-dispatch/SKILL.md", "agents/review.agent.md"],
-  ["Claude-hosted", ".claude/skills/multica-dispatch/SKILL.md", ".claude/agents/review.md"],
-]) {
-  test(`a ${host} gate round is one durable Multica review assignment with harness-native internal fan-out`, async () => {
+  test(`a ${host} Multica dev-loop owns the complete gate round`, async () => {
     const skill = await readFile(path.join(repoRoot, skillFile), "utf8");
-    const reviewAgent = await readFile(path.join(repoRoot, agentFile), "utf8");
-    for (const [surface, content] of [[`multica-dispatch skill (${skillFile})`, skill], [`review agent source (${agentFile})`, reviewAgent]]) {
-      assert.match(content, /hybrid dispatch/i,
-        `${surface}: the hybrid-dispatch topology must be named`);
-      assert.match(content, /harness-native subagents?/i,
-        `${surface}: the review agent fans groups out through harness-native subagents`);
-      assert.match(content, /ONE durable Multica `review` assignment|one durable Multica `?review`? assignment/i,
-        `${surface}: a gate round is exactly one durable Multica review assignment`);
-      assert.match(content, /aggregate[\s\S]{0,120}\*{0,2}one\*{0,2}\s+(reply on the\s+)?parent-issue/i,
-        `${surface}: group results are aggregated into one parent-issue result`);
-      // Harness subagents are internal workers, not Multica assignments.
-      assert.match(content, /internal workers,? not additional Multica\s+assignments|internal workers: they create no Multica issues/i,
-        `${surface}: harness subagents are internal workers, not Multica assignments`);
-      assert.match(content, /no issues|create no Multica issues|issues, post no separate/i,
-        `${surface}: harness subagents create no issues`);
-      assert.match(content, /post no separate durable results|post\s+no separate durable results/i,
-        `${surface}: harness subagents post no separate durable results`);
-      assert.match(content, /invoke `?dev-loop`? recursively|never invoke `?dev-loop`? recursively/i,
-        `${surface}: harness subagents never invoke dev-loop recursively`);
-      // No model override for harness subagents — they inherit the Multica-governed runtime/model.
-      assert.match(content, /Do not specify a model in\s+harness-subagent calls|without specifying a model/i,
-        `${surface}: harness-subagent calls carry no model override`);
-      assert.match(content, /inherit[\s\S]{0,80}(Multica|the parent Multica agent's)\s+runtime\/model|inherit this Multica agent's runtime\/model/i,
-        `${surface}: harness subagents inherit the Multica-governed runtime/model`);
+    const loopAgent = await readFile(path.join(repoRoot, loopAgentFile), "utf8");
+    const reviewAgent = await readFile(path.join(repoRoot, reviewAgentFile), "utf8");
+
+    for (const [surface, content] of [[skillFile, skill], [loopAgentFile, loopAgent]]) {
+      assert.match(content, /top-level Multica `?dev-loop`?[\s\S]{0,120}(gate coordinator|gate rounds?)/i,
+        `${surface}: the top-level run remains the gate coordinator`);
+      assert.match(content, /Phase 1[\s\S]{0,160}Phase 1\.5 primer/i,
+        `${surface}: context/spec preparation precedes the primer`);
+      assert.match(content, /contract-emitted grouped[\s\S]{0,100}(bounded waves|fan-out)/i,
+        `${surface}: consume emitted groups instead of duplicating grouping`);
+      assert.match(content, /maxConcurrent[\s\S]{0,40}default[^\n]*3/i,
+        `${surface}: use the configured default concurrency`);
+      assert.match(content, /sanctioned fan-in/i, `${surface}: use the sanctioned fan-in`);
+      assert.match(content, /independent,? read-only judge/i, `${surface}: judge is an independent read-only child`);
+      assert.match(content, /fixer(?:\/| and )re-gate/i, `${surface}: fixer changes re-enter the gate`);
+      assert.match(content, /No[\s\S]{0,100}Multica issues?[\s\S]{0,100}durable assignments/i,
+        `${surface}: gate workers never become durable Multica work`);
+      assert.match(content, /inherit[\s\S]{0,100}Multica(?:-governed| agent's)[\s\S]{0,50}(model|runtime)/i,
+        `${surface}: harness children inherit the Multica-governed model`);
+      assert.doesNotMatch(content, /one durable Multica `?review`? assignment/i,
+        `${surface}: the obsolete intermediate review assignment must be absent`);
+      assert.match(content, /mark (the PR )?ready[\s\S]{0,100}Copilot review\/fix rounds[\s\S]{0,100}pre-approval/i,
+        `${surface}: draft, Copilot, and pre-approval sequencing remains intact`);
     }
-    // No manufactured concurrency with child issues, on either host surface.
-    assert.match(skill, /never manufacture concurrency with\s+child issues/i,
-      `${skillFile}: never manufacture concurrency with child issues`);
-    // The review agent must be able to run its harness-native fan-out: its Pi source
-    // carries the subagent tool (single-line comma form, #1111) and Claude transform
-    // maps it to the Claude-native Agent tool.
-    assert.match(reviewAgent, /tools: read, bash, edit, write, subagent|tools: Read, Bash, Edit, Write, Agent/i,
-      `${agentFile}: the review agent must carry the harness subagent tool`);
+
+    assert.match(reviewAgent, /exactly the one emitted unit/i,
+      `${reviewAgentFile}: a review worker gets one emitted unit`);
+    assert.match(reviewAgent, /do not delegate further/i,
+      `${reviewAgentFile}: a review worker cannot recursively delegate`);
   });
 }
-
-// Topology regression (MFIT-188 follow-up): a multi-group draft gate — several review
-// groups all targeting the single `review` agent — must emit ZERO `multica issue`
-// create operations and dispatch via the parent issue. Hybrid topology: the one
-// Multica `review` assignment fans the groups out internally via its harness-native
-// subagents; the coordinator never manufactures Multica-side concurrency.
-test("a multi-group draft gate emits zero `multica issue create` operations and dispatches via the parent issue", async () => {
-  // The dispatch plan a coordinator builds from the multica-dispatch contract when
-  // several review groups all target the same dedicated agent.
-  const groups = [
-    { angle: "standards", agent: "review", headSha: "a".repeat(40) },
-    { angle: "spec", agent: "review", headSha: "a".repeat(40) },
-    { angle: "security", agent: "review", headSha: "a".repeat(40) },
-    { angle: "tests", agent: "review", headSha: "a".repeat(40) },
-    { angle: "docs", agent: "review", headSha: "a".repeat(40) },
-    { angle: "ui", agent: "review", headSha: "a".repeat(40) },
-  ];
-  const skill = await readFile(path.join(repoRoot, "skills", "multica-dispatch", "SKILL.md"), "utf8");
-  // Conforming plan: exactly ONE parent-issue Multica `review` assignment; the groups
-  // fan out INSIDE it through the review agent's harness-native subagents — never
-  // child issues, never one Multica assignment per group.
-  const multicaAssignments = [{ agent: "review", parentIssue: true, groups: groups.map((g) => g.angle) }];
-  const issueCreates = [];
-  // The skill contract pins the hybrid topology's guarantees.
-  assert.match(skill, /zero[^.]{0,40}`?multica issue create`?/i,
-    "the skill must pin the zero-issue-create guarantee for multi-group gates");
-  assert.match(skill, /exactly\s+\*{0,2}one\*{0,2} durable\s+Multica `review` assignment/i,
-    "the skill must prescribe exactly one durable Multica review assignment per gate round");
-  assert.match(skill, /fans\s+its\s+review\s+groups\s+out\s+through\s+its\s+(?:Pi or Claude\s+)?harness-native\s+subagents/i,
-    "the skill must prescribe harness-native internal fan-out inside the review assignment");
-  assert.equal(multicaAssignments.length, 1, "all groups target one agent → exactly one Multica review assignment, not one per group");
-  assert.equal(multicaAssignments[0].groups.length, groups.length,
-    "the single assignment carries ALL review groups");
-  assert.equal(issueCreates.length, 0, "a multi-group draft gate must emit zero `multica issue create` operations");
-  assert.equal(multicaAssignments[0].parentIssue, true,
-    "the single assignment is dispatched on the existing parent issue");
-  // Fan-out lives inside the assignment: the group fan-out is harness-native, and the
-  // only durable result surface is the one parent-issue aggregate.
-  assert.match(skill, /internal workers, not additional Multica\s+assignments/i,
-    "the skill must pin that harness subagents are internal workers, not Multica assignments");
-  assert.match(skill, /never\s+invoke\s+`?dev-loop`?\s+recursively/i,
-    "the skill must forbid recursive dev-loop invocation from harness subagents");
-  assert.match(skill, /Do not specify a model in\s+harness-subagent calls/i,
-    "the skill must forbid model overrides on harness-subagent calls");
-});
 
 // Lifecycle regression (MFIT-186 root cause): the coordinator's worktree is
 // disposable. A worker that receives a durable dispatch contract (repository, PR,
@@ -432,9 +343,9 @@ test("a failing `agent env set` is tolerated: the sync warns, continues, and sti
 // contexts must see the suppression in every surface the sync ships: the skill the
 // child agents load, the dev-loop agent instructions the sync writes, and the Claude
 // (`.claude`) transforms of both. Outside Multica the ordinary harness dispatch stays.
-for (const [host, agentSource, instructionsSurface] of [
-  ["Pi-hosted", "agents/dev-loop.agent.md", null],
-  ["Claude-hosted", ".claude/agents/dev-loop.md", ".claude"],
+for (const [host, agentSource] of [
+  ["Pi-hosted", "agents/dev-loop.agent.md"],
+  ["Claude-hosted", ".claude/agents/dev-loop.md"],
 ]) {
   test(`a ${host} Multica dev-loop run suppresses recursive dev-loop child dispatch`, async () => {
     const skill = await readFile(path.join(repoRoot, "skills", "multica-dispatch", "SKILL.md"), "utf8");
@@ -449,13 +360,8 @@ for (const [host, agentSource, instructionsSurface] of [
       assert.match(content, /non-Multica\s+fallback/i,
         `${surface}: native harness dev-loop child delegation must remain the non-Multica fallback`);
     }
-    // The dedicated-agent routing replaces the nested entrypoint: the skill names the
-    // strategy→agent routing (developer/review/refiner/judge/fixer) and the agent source
-    // pins the same routing without re-restating the fan-out machinery.
-    assert.match(skill, /route the resolved strategy[\s\S]{0,200}?dedicated Multica agent/i,
-      "multica-dispatch skill: strategy work routes directly to the dedicated Multica agents");
-    assert.match(agent, /route the resolved strategy[\s\S]{0,200}?dedicated Multica agent/i,
-      `dev-loop agent source: strategy routing names the dedicated agents (${host} Multica context)`);
+    assert.match(skill, /execute gate-round work in this\s+same coordinator run/i,
+      "multica-dispatch skill: gate work remains in the top-level run");
     // Harness-neutral phrasing: the suppression must survive the Claude transform
     // (pi-only blocks are stripped), so it must NOT be fenced inside a pi-only block.
     const fences = [...agent.matchAll(/<!-- pi-only -->([\s\S]*?)<!-- \/pi-only -->/gi)].map((m) => m[1]);

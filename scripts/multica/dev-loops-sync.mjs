@@ -24,10 +24,10 @@ import { createInterface } from "node:readline/promises";
 
 const HOME = homedir(), A = args();
 const SKILLS = ["copilot-pr-followup", "dev-loop", "final-approval", "local-implementation", "loop-grill", "review", "ui-review"];
-// Multica-native fan-out/fan-in contract, bound to every canonical agent: in Multica the
-// loop dispatches work through a root dispatch comment on the existing parent issue
-// (mention-dispatch to the dedicated agents, replies in-thread). The dispatch context
-// is durable and self-contained: no coordinator worktree path in the briefing, an
+// Multica-native dispatch contract, bound to every canonical agent: ordinary delegated
+// work uses a root dispatch comment on the existing parent issue. Gate rounds remain in
+// the top-level dev-loop run and use harness-native children. The durable dispatch
+// context is self-contained: no coordinator worktree path in the briefing, an
 // immutable committed head SHA (repo + PR + SHA), context in the comment/attachment,
 // results back through the thread — never the coordinator's tmp/. Child issues are an
 // explicit fallback only, carrying the same durable-context rules — not Pi's in-process
