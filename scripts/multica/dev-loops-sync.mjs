@@ -11,6 +11,10 @@
 // In an agent run the daemon injects MULTICA_SERVER_URL/MULTICA_TOKEN/MULTICA_WORKSPACE_ID,
 // so no --profile/--workspace is needed. Standalone: pass --profile (or --server-url) so
 // the CLI can authenticate; omit --workspace to be prompted, or pass slugs/ids.
+//
+// Model invariant: the agent model is owned by Multica configuration. This script never
+// passes --model — not on create (omit → inherit runtime defaults), not on update (omit →
+// preserve the existing selection). Verified by test/multica/dev-loops-sync.test.mjs.
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
@@ -20,9 +24,13 @@ import { createInterface } from "node:readline/promises";
 
 const HOME = homedir(), A = args();
 const SKILLS = ["copilot-pr-followup", "dev-loop", "final-approval", "local-implementation", "loop-grill", "review", "ui-review"];
+// Multica-native fan-out/fan-in contract, bound to every canonical agent: in Multica the
+// loop dispatches children through durable Multica child issues + stage barriers, not Pi's
+// in-process subagent tool. Outside Multica the ordinary Pi dispatch is unchanged.
+const MULTICA_DISPATCH = "multica-dispatch";
 const CARRIERS = ["dev-loops-runtime", "dev-loops-contracts"]; // deprecated: resolve from source, don't copy
 const BIND = { "dev-loop": ["dev-loop", "copilot-pr-followup", "final-approval"], developer: ["local-implementation"], docs: [], fixer: ["copilot-pr-followup"], judge: [], quality: [], refiner: ["loop-grill"], review: ["review", "ui-review"] };
-const AGENTS = Object.keys(BIND);
+const AGENTS = Object.keys(BIND).map((n) => ({ name: n, skills: [...(BIND[n] || []), MULTICA_DISPATCH] }));
 const CLONE = "git clone https://github.com/mfittko/dev-loops ~/github/dev-loops";
 
 // --- multica CLI -------------------------------------------------------------
@@ -110,8 +118,8 @@ async function main() {
   const home = A.checkout || (isCheckout(src) ? src : SOURCES.find(([k, d]) => k === "local" && isCheckout(d))?.[1]) || null;
   const provider = A.runtime || "claude";
 
-  const skills = SKILLS.map((n) => ({ name: n, content: readFileSync(join(sd, n, "SKILL.md"), "utf8") }));
-  const agents = AGENTS.map((n) => { const f = existsSync(join(ad, `${n}.agent.md`)) ? `${n}.agent.md` : `${n}.md`; const { d, body } = fm(readFileSync(join(ad, f), "utf8")); return { name: n, description: clip(d.description || n), instructions: body }; });
+  const skills = [...SKILLS, MULTICA_DISPATCH].map((n) => ({ name: n, content: readFileSync(join(sd, n, "SKILL.md"), "utf8") }));
+  const agents = AGENTS.map((n) => { const f = existsSync(join(ad, `${n.name}.agent.md`)) ? `${n.name}.agent.md` : `${n.name}.md`; const { d, body } = fm(readFileSync(join(ad, f), "utf8")); return { ...n, description: clip(d.description || n.name), instructions: body }; });
 
   // Resolve target workspace ids. In an agent run MULTICA_WORKSPACE_ID is injected → single implicit ws.
   let targets = A.workspace;
@@ -147,7 +155,7 @@ async function main() {
       if (e) { cli(["agent", "update", e.id, "--description", a.description, "--instructions", a.instructions, "--output", "json"], { ws: wsId }); id = e.id; }
       else { const r = cli(["agent", "create", "--name", a.name, "--description", a.description, "--instructions", a.instructions, "--runtime-id", rt.id, "--visibility", "private", "--output", "json"], { ws: wsId }); id = r?.id || r?.agent?.id; }
       if (home) cli(["agent", "env", "set", id, "--custom-env-stdin", "--output", "json"], { ws: wsId, stdin: JSON.stringify({ DEVLOOPS_HOME: home }) });
-      cli(["agent", "skills", "set", id, "--skill-ids", (BIND[a.name] || []).map((n) => sid[n]).filter(Boolean).join(","), "--output", "json"], { ws: wsId });
+      cli(["agent", "skills", "set", id, "--skill-ids", a.skills.map((n) => sid[n]).filter(Boolean).join(","), "--output", "json"], { ws: wsId });
     }
     console.log(`[${slug}] skills=${skills.length}, carriers removed=${removed}, agents=${agents.length}, runtime=${provider}, DEVLOOPS_HOME=${home || "(unset)"}`);
   }

@@ -1,6 +1,6 @@
 ---
 name: dev-loops-sync
-description: Provision or refresh the dev-loops agents and skills in a Multica workspace from a detected dev-loops source, driving the `multica` CLI. Idempotent desired-state sync — imports the 7 skills as SKILL.md-only, deletes deprecated carrier skills, pins agents to a runtime, sets DEVLOOPS_HOME, and binds skills to agents. Use when setting up dev-loops in a new workspace or re-syncing after a dev-loops release.
+description: Provision or refresh the dev-loops agents and skills in a Multica workspace from a detected dev-loops source, driving the `multica` CLI. Idempotent desired-state sync — imports the 8 skills (incl. the Multica-native `multica-dispatch` fan-out contract), deletes deprecated carrier skills, pins agents to a runtime, sets DEVLOOPS_HOME, and binds skills to agents without ever touching agent models. Use when setting up dev-loops in a new workspace or re-syncing after a dev-loops release.
 ---
 
 # dev-loops-sync
@@ -31,6 +31,18 @@ dev-loops **source**, with as few Multica-specific deviations as possible.
   runtime at a possibly-stale pi install). The sync prefers
   `<source>/.claude/skills`, falling back to `<source>/skills`.
 - **One Multica-specific piece: the agent→skill map** (`BIND` in the script).
+- **The agent model is owned by Multica configuration.** The sync never passes
+  `--model`: created agents omit model selection and inherit the runtime default;
+  existing agents are updated in place with their model untouched. Workspace
+  selections (e.g. `makora/zai-org/GLM-5.3`) survive every re-sync.
+- **`multica-dispatch` is bound to every canonical agent.** It carries the
+  Multica-native fan-out/fan-in contract: inside Multica, loop fan-out goes to the
+  dedicated canonical agents (`review`, `refiner`, `judge`, `fixer`, …) through
+  durable child issues and stage barriers — with the dispatch unit, reviewed head
+  SHA, required context, and result contract in the child issue, no shared
+  worktree/scratchpad — instead of Pi's in-process `subagent` tool. Outside
+  Multica, the ordinary Pi-subagent dispatch is unchanged. Agent IDs resolve from
+  the live roster at dispatch time; none are persisted in dev-loops source.
 
 ## Usage
 
@@ -55,11 +67,12 @@ Idempotent — re-run after a dev-loops release to pull the new skill/agent text
 
 ## What it converges to
 
-- The 7 canonical skills (`copilot-pr-followup, dev-loop, final-approval,
-  local-implementation, loop-grill, review, ui-review`), content-only.
+- The 8 canonical skills (`copilot-pr-followup, dev-loop, dev-loops-sync,
+  final-approval, local-implementation, loop-grill, multica-dispatch, review,
+  ui-review`), content-only.
 - The 8 canonical agents (`dev-loop, developer, docs, fixer, judge, quality,
   refiner, review`), pinned to the chosen runtime, `DEVLOOPS_HOME` set, bound to
-  their mapped skills.
+  their mapped skills **plus `multica-dispatch`**, models untouched.
 - No `dev-loops-runtime` / `dev-loops-contracts` skills.
 
 Squads are intentionally out of scope — they are a Multica-native concern.
