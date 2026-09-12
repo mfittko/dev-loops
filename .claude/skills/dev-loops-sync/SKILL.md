@@ -33,6 +33,11 @@ dev-loops **source**, with as few Multica-specific deviations as possible.
   runtime at a possibly-stale pi install). The sync prefers
   `<source>/.claude/skills`, falling back to `<source>/skills`.
 - **One Multica-specific piece: the agent→skill map** (`BIND` in the script).
+- **`agent env set` (the `DEVLOOPS_HOME` pin) is desired state, not a gate.** An
+  agent run may lack owner/admin permission for it on some agents; the sync
+  tolerates the failure (warns on stderr, continues) so remaining bindings still
+  sync. A stale-but-set `DEVLOOPS_HOME` is harmless, a sync that dies mid-loop
+  is not.
 - **The agent model is owned by Multica configuration.** The sync never passes
   `--model`: created agents omit model selection and inherit the runtime default;
   existing agents are updated in place with their model untouched. Workspace

@@ -156,7 +156,11 @@ async function main() {
       let id;
       if (e) { cli(["agent", "update", e.id, "--description", a.description, "--instructions", a.instructions, "--output", "json"], { ws: wsId }); id = e.id; }
       else { const r = cli(["agent", "create", "--name", a.name, "--description", a.description, "--instructions", a.instructions, "--runtime-id", rt.id, "--visibility", "private", "--output", "json"], { ws: wsId }); id = r?.id || r?.agent?.id; }
-      if (home) cli(["agent", "env", "set", id, "--custom-env-stdin", "--output", "json"], { ws: wsId, stdin: JSON.stringify({ DEVLOOPS_HOME: home }) });
+      // DEVLOOPS_HOME is desired state, not a gate: an agent run may lack owner/admin
+      // permission for `agent env set` on some agents. Tolerate the failure (warn, keep
+      // going) so the remaining bindings still sync — a stale-but-set DEVLOOPS_HOME is
+      // harmless, a sync that dies mid-loop is not.
+      if (home) { try { cli(["agent", "env", "set", id, "--custom-env-stdin", "--output", "json"], { ws: wsId, stdin: JSON.stringify({ DEVLOOPS_HOME: home }) }); } catch (e) { console.error(`[${slug}] warning: agent env set failed for ${a.name} (continuing): ${String(e?.message || e).split("\n")[0]}`); } }
       cli(["agent", "skills", "set", id, "--skill-ids", a.skills.map((n) => sid[n]).filter(Boolean).join(","), "--output", "json"], { ws: wsId });
     }
     console.log(`[${slug}] skills=${skills.length}, carriers removed=${removed}, agents=${agents.length}, runtime=${provider}, DEVLOOPS_HOME=${home || "(unset)"}`);

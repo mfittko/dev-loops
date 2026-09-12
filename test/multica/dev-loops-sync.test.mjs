@@ -50,7 +50,7 @@ if (rest[0] === "skill" && rest[1] === "create") { const id = "sk-" + state.skil
 if (rest[0] === "skill" && rest[1] === "delete") { state.skills = state.skills.filter((s) => s.id !== rest[2]); save(state); json({ ok: true }); process.exit(0); }
 if (rest[0] === "agent" && rest[1] === "update") { const a = state.agents.find((x) => x.id === rest[2]); a.description = flag("--description"); a.instructions = flag("--instructions") ?? a.instructions; save(state); json({ id: rest[2] }); process.exit(0); }
 if (rest[0] === "agent" && rest[1] === "create") { const id = "ag-" + state.agents.length; state.agents.push({ id, name: flag("--name"), model: null, description: flag("--description"), instructions: flag("--instructions"), env: {}, skills: [] }); save(state); json({ id }); process.exit(0); }
-if (rest[0] === "agent" && rest[1] === "env" && rest[2] === "set") { state.agents.find((a) => a.id === rest[3]).env = JSON.parse(stdin); save(state); json({ ok: true }); process.exit(0); }
+if (rest[0] === "agent" && rest[1] === "env" && rest[2] === "set") { if (process.env.FAKE_ENV_SET_FAIL === "1" && rest[3] === "ag-0") { console.error("fake cli: permission denied"); process.exit(3); } state.agents.find((a) => a.id === rest[3]).env = JSON.parse(stdin); save(state); json({ ok: true }); process.exit(0); }
 if (rest[0] === "agent" && rest[1] === "skills" && rest[2] === "set") { state.agents.find((a) => a.id === rest[3]).skills = flag("--skill-ids").split(",").filter(Boolean); save(state); json({ ok: true }); process.exit(0); }
 console.error("fake cli: unhandled " + rest.join(" ")); process.exit(9);
 `;
@@ -64,9 +64,9 @@ async function makeFakeWorkspace(presetAgents) {
   await writeFile(statePath, JSON.stringify(presetAgents
     ? { skills: [], agents: CANONICAL_AGENTS.map((name, i) => ({ id: `ag-${i}`, name, model: PRESET_MODEL, description: "old", instructions: "old", env: {}, skills: [] })) }
     : { skills: [], agents: [] }));
-  const run = () => spawnSync(process.execPath, [scriptPath, "--mca", cliPath, "--source", repoRoot, "--workspace", WS_SLUG], {
+  const run = (extraEnv = {}) => spawnSync(process.execPath, [scriptPath, "--mca", cliPath, "--source", repoRoot, "--workspace", WS_SLUG], {
     encoding: "utf8",
-    env: { PATH: process.env.PATH, HOME: dir, MULTICA_WORKSPACE_ID: "" },
+    env: { PATH: process.env.PATH, HOME: dir, MULTICA_WORKSPACE_ID: "", ...extraEnv },
   });
   const readState = async () => JSON.parse(await readFile(statePath, "utf8"));
   const readLog = async () => JSON.parse(await readFile(logPath, "utf8"));
@@ -208,6 +208,28 @@ for (const [surface, file] of [
       `${surface}: stage barriers belong to the child-issue model that is no longer the default`);
   });
 }
+
+test("a failing `agent env set` is tolerated: the sync warns, continues, and still binds every agent's skills", async () => {
+  const ws = await makeFakeWorkspace(true);
+  try {
+    const r = ws.run({ FAKE_ENV_SET_FAIL: "1" }); // permission wall on the FIRST agent only
+    assert.equal(r.status, 0, `sync must not die when agent env set is denied: ${r.stderr}`);
+    assert.match(r.stderr, /warning: agent env set failed for dev-loop/, "the failure is surfaced as a warning");
+    const state = await ws.readState();
+    // Every agent after the denied one still got its env + skill bindings.
+    const denied = state.agents.find((a) => a.id === "ag-0");
+    assert.ok(!denied.env?.DEVLOOPS_HOME, "the denied agent's env is untouched");
+    for (const a of state.agents.filter((a) => a.id !== "ag-0")) {
+      assert.equal(a.env?.DEVLOOPS_HOME, repoRoot, `agent ${a.name} env still set`);
+    }
+    for (const a of state.agents) {
+      const bound = (a.skills || []).map((id) => state.skills.find((s) => s.id === id)?.name);
+      assert.ok(bound.includes("multica-dispatch"), `agent ${a.name} still bound to multica-dispatch despite the env-set denial`);
+    }
+  } finally {
+    await rm(ws.dir, { recursive: true, force: true });
+  }
+});
 
 // Recursive dev-loop dispatch suppression (MFIT-188 follow-up override): inside a
 // Multica workspace a top-level `dev-loop` run is already the coordinator and must
