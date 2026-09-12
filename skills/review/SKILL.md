@@ -86,8 +86,9 @@ repeat phases those gates run:
    sibling `emit-fanout-dispatch.mjs` persisted in Phase 2, consumed by the
    fan-in's `GATE-EXEC-EMIT-PLAN-KEY` fail-closed round-key guard — a stale or
    foreign emit plan fails closed instead of being consumed). Before posting,
-   write the durable ledger through `write-gate-findings-log.mjs --findings-file
-   <ledger-out-path> --emit-plan <emit-plan-path> --provenance <json>` so the
+   write the durable ledger through `write-gate-findings-log.mjs` with
+   `--findings-file <ledger-out-path> --emit-plan <emit-plan-path>` and
+   `--provenance <json>` so the
    same keyed plan also guards that caller-supplied reviewer provenance
    corresponds to the emitted units; the plan remains a guard, never a findings
    or provenance source. Then `node

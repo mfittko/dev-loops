@@ -1359,8 +1359,8 @@ emit-plan key" / "is stamped for ... but this round consolidates ...") before an
 flag is a guard only: the plan is never a findings or provenance source — the
 gate-context bundle's `fanout.groups` stays authoritative — and omitting the
 flag preserves the current fan-in behavior exactly. On the sanctioned fan-out
-path, pass the same keyed plan to the later `write-gate-findings-log.mjs
---emit-plan <path> --provenance <json>` call. That shared provenance-write seam
+path, pass the same keyed plan to the later `write-gate-findings-log.mjs` call
+with `--emit-plan <path> --provenance <json>`. That shared provenance-write seam
 additionally verifies the full round key (`repo`, `pr`, `gate`, `headSha`) and
 that the caller-supplied fresh provenance corresponds exactly to the emitted
 units: the same angle set and group per angle, one reviewer identity per emitted

@@ -375,8 +375,8 @@ When passing `--findings-severity-counts` for an inline round, substitute the co
 
 ### Gate fan-out/fan-in procedure (agent-orchestrated)
 
-Every sanctioned fan-out round passes the emitter's keyed `--emit-plan
-<emit-plan-path>` to BOTH Phase 3 consumers: `consolidate-fanin.mjs` and the
+Every sanctioned fan-out round passes the emitter's keyed plan to BOTH Phase 3
+consumers: use `--emit-plan <emit-plan-path>` on `consolidate-fanin.mjs` and the
 later `write-gate-findings-log.mjs --provenance <json>` call. At the shared
 provenance-write seam the plan only guards correspondence to emitted units; it
 never supplies findings or provenance. Omission stays backward-compatible for
