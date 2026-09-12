@@ -1,0 +1,35 @@
+fix(multica): durable, self-contained dispatch context — no coordinator worktree dependency
+
+Root-cause constraint from the MFIT-188 review follow-up: the MFIT-186 reviewer
+failures were a lifecycle mismatch — independent Multica runs cannot consume
+paths inside another task's disposable worktree — not a reason to retain child
+issues or keep coordinator worktrees alive.
+
+The multica-dispatch skill now pins, on BOTH the same-issue mention fan-out path
+and the exceptional child-issue fallback (Pi- and Claude-hosted agents alike):
+
+- Never place a coordinator/task absolute worktree path in a dispatch briefing.
+- Before dispatch, the reviewed head is committed and independently
+  addressable; the briefing passes repository, PR, and the exact head SHA.
+- Each worker uses its own Multica-managed checkout/worktree at that
+  immutable head (`multica repo checkout --ref <sha>`).
+- The prompt/context is self-contained: in the dispatch comment (or child
+  issue description) or an issue attachment. Deterministic gate-context
+  inputs are recreated in the worker when cheap; only non-reconstructible
+  data is attached.
+- Workers return findings through the issue thread/attachments — never
+  required outputs into the coordinator's tmp/ tree, which dies with the
+  coordinator's worktree.
+- Fan-in consumes those durable thread/attachment results after the
+  coordinator is re-triggered.
+
+Surfaces updated in lockstep: multica-dispatch skill, dev-loops-sync skill
+docs, sync script header, generated .claude mirror, CHANGELOG. Regression
+coverage: contract tests pin the durable-context rules across the skill
+source and the .claude transform, and a new lifecycle test deletes the
+coordinator worktree immediately after a (pushed-head) dispatch and proves
+the worker still clones its own checkout at the exact head, validates
+context, and returns a result. bun run verify: 8609 pass / 0 fail across
+375 files.
+
+Refs MFIT-188 root-cause constraint (issue comment 01a09627-e28c).

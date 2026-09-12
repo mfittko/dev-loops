@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
-import { mkdtemp, rm, writeFile, chmod, readFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, chmod, readFile, mkdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -208,6 +209,120 @@ for (const [surface, file] of [
       `${surface}: stage barriers belong to the child-issue model that is no longer the default`);
   });
 }
+
+// Root-cause constraint (MFIT-186 follow-up, MFIT-188): the reviewer failures were a
+// lifecycle mismatch — independent Multica runs cannot consume paths inside another
+// task's disposable worktree. The dispatch context must therefore be durable and
+// self-contained on BOTH the same-issue mention fan-out path and the exceptional
+// child-issue fallback, for both Pi- and Claude-hosted Multica agents. Pinned across
+// the skill source and its generated `.claude` transform.
+for (const [surface, file] of [
+  ["multica-dispatch skill", "skills/multica-dispatch/SKILL.md"],
+  ["generated .claude mirror", ".claude/skills/multica-dispatch/SKILL.md"],
+]) {
+  test(`${surface}: dispatch context is durable and self-contained — no coordinator worktree dependency`, async () => {
+    const content = await readFile(path.join(repoRoot, file), "utf8");
+    // Never place a coordinator/task absolute worktree path in a dispatch briefing.
+    assert.match(content, /Never place a\s+coordinator\/task absolute worktree path/i,
+      `${surface}: the no-worktree-path-in-briefing rule must be stated explicitly`);
+    assert.match(content, /independently addressable/i,
+      `${surface}: the reviewed head must be committed and independently addressable before dispatch`);
+    // Worker uses its own Multica-managed checkout at the immutable head.
+    assert.match(content, /own\s+Multica-managed checkout/i,
+      `${surface}: each worker must use its own Multica-managed checkout/worktree at the head SHA`);
+    // Self-contained prompt/context: recreate deterministic inputs when cheap, attach only what cannot be reconstructed.
+    assert.match(content, /Recreate deterministic\s+gate-context inputs in\s+the worker when cheap/i,
+      `${surface}: deterministic gate-context inputs are recreated in the worker, not referenced`);
+    assert.match(content, /attach only data that cannot be reconstructed/i,
+      `${surface}: only non-reconstructible data may travel as an attachment`);
+    // Results return through durable issue surfaces — never the coordinator's tmp/.
+    assert.match(content, /never\s+write required outputs into the coordinator's/i,
+      `${surface}: workers must not write required outputs into the coordinator's tmp/ tree`);
+    assert.match(content, /thread\/attachment|thread\/attachments/i,
+      `${surface}: fan-in consumes durable thread/attachment results`);
+  });
+}
+
+// Lifecycle regression (MFIT-186 root cause): the coordinator's worktree is
+// disposable. A worker that receives a durable dispatch contract (repository, PR,
+// exact head SHA, self-contained prompt/context, expected result shape) must still
+// be able to validate its context and produce a result after the coordinator's
+// worktree is deleted immediately after dispatch — proving the contract carries no
+// coordinator-worktree dependency. Modeled hermetically: build a real git repo with a
+// committed head, write the dispatch contract as the skill prescribes (and a
+// deliberately coordinator-local prompt file that dies with the "worktree"), delete
+// the coordinator worktree, then reconstruct the worker's view from the durable
+// contract alone and check the worker can validate and answer.
+test("a worker still validates context and returns a result when the coordinator worktree is deleted immediately after dispatch", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "multica-dispatch-lifecycle-"));
+  try {
+    // The remote origin — what outlives the coordinator's disposable worktree and
+    // what a pushed head is "independently addressable" through.
+    const origin = path.join(dir, "origin.git");
+    // Coordinator worktree: a repo with one committed, PUSHED head (the reviewed
+    // work) plus uncommitted scratch that never leaves the coordinator.
+    const coordinatorWt = path.join(dir, "coordinator-worktree");
+    await mkdir(coordinatorWt, { recursive: true });
+    const git = (...a) => spawnSync("git", ["-C", coordinatorWt, ...a], { encoding: "utf8" });
+    spawnSync("git", ["init", "-q", "--bare", origin], { encoding: "utf8" });
+    git("init", "-q", "-b", "main");
+    await writeFile(path.join(coordinatorWt, "BRIEF.md"), "The reviewed work: gate context file.\n");
+    await writeFile(path.join(coordinatorWt, "uncommitted-scratch.txt"), "never committed\n");
+    git("add", "BRIEF.md");
+    git("-c", "user.email=t@example", "-c", "user.name=t", "commit", "-qm", "head under review");
+    const push = git("push", "-q", origin, "main");
+    assert.equal(push.status, 0, `the reviewed head must be pushed (independently addressable) before dispatch: ${push.stderr}`);
+    const head = git("rev-parse", "HEAD").stdout.trim();
+
+    // The skill's dispatch rule: the briefing carries repository, PR, and the exact
+    // head SHA, plus a self-contained prompt — never a coordinator-local path.
+    const dispatchComment = JSON.stringify({
+      dispatchUnit: "Validate the gate context at the reviewed head and report the verdict.",
+      repository: origin,
+      pr: 2147,
+      headSha: head,
+      prompt: "Read BRIEF.md at the head SHA in your own checkout; report its first line.",
+      expectedResultShape: "In-thread reply: verdict + evidence",
+    });
+    // A coordinator-local scratch file is the anti-pattern the rule forbids: it
+    // lives outside the durable contract and must die with the worktree.
+    const scratch = path.join(coordinatorWt, "tmp", "coordinator-only.txt");
+    await mkdir(path.dirname(scratch), { recursive: true });
+    await writeFile(scratch, "coordinator scratchpad");
+
+    // The durable contract must not require any coordinator-worktree path.
+    const contract = JSON.parse(dispatchComment);
+    assert.equal(JSON.stringify(contract).includes(coordinatorWt), false,
+      "the dispatch briefing must not require a coordinator worktree path");
+
+    // Delete the coordinator worktree immediately after dispatch.
+    await rm(coordinatorWt, { recursive: true, force: true });
+    assert.equal(existsSync(coordinatorWt), false, "coordinator worktree is gone");
+
+    // Worker view: reconstruct entirely from the durable contract. Its own
+    // "Multica-managed checkout" is a fresh clone of the repository at the
+    // immutable head — the coordinator worktree no longer exists anywhere.
+    const workerWt = path.join(dir, "worker-checkout");
+    const clone = spawnSync("git", ["clone", "-q", contract.repository, workerWt], { encoding: "utf8" });
+    assert.equal(clone.status, 0, `worker's own checkout must succeed without the coordinator worktree: ${clone.stderr}`);
+    const wgit = (...a) => spawnSync("git", ["-C", workerWt, ...a], { encoding: "utf8" });
+    assert.equal(wgit("rev-parse", "HEAD").stdout.trim(), contract.headSha,
+      "worker's own checkout is at the exact reviewed head");
+    assert.equal(existsSync(path.join(workerWt, "BRIEF.md")), true,
+      "worker can validate context: the reviewed file exists at the head in its own checkout");
+    const brief = await readFile(path.join(workerWt, "BRIEF.md"), "utf8");
+    assert.equal(existsSync(path.join(workerWt, "uncommitted-scratch.txt")), false,
+      "uncommitted coordinator scratch never reaches the worker");
+
+    // Worker returns its result through the durable surface (modeled as the
+    // in-thread reply payload) — the coordinator's tmp/ tree is already deleted.
+    const reply = { verdict: "validated", evidence: brief.split("\n")[0], head: contract.headSha, pr: contract.pr };
+    assert.equal(reply.evidence.startsWith("The reviewed work"), true,
+      "worker produced a result from its own checkout after the coordinator worktree was deleted");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 test("a failing `agent env set` is tolerated: the sync warns, continues, and still binds every agent's skills", async () => {
   const ws = await makeFakeWorkspace(true);

@@ -49,10 +49,16 @@ dev-loops **source**, with as few Multica-specific deviations as possible.
   the distinct agents the round needs, each with its dispatch unit, reviewed head
   SHA, required context, and expected result shape; workers reply in the same
   thread and the coordinator fans in there, with no shared worktree/scratchpad —
-  instead of Pi's in-process `subagent` tool. One child issue per dispatch unit is
+  instead of Pi's in-process `subagent` tool. The dispatch context is durable and
+  self-contained: no coordinator/task worktree path ever appears in a dispatch
+  briefing (workers get their own Multica-managed checkout at the immutable,
+  committed head SHA), context travels in the comment or an issue attachment,
+  and results come back through the thread/attachments — never through the
+  coordinator's `tmp/`. One child issue per dispatch unit is
   overkill and NOT the default; child issues are an explicit fallback only (an
   agent needing multiple concurrent isolated runs, or a unit needing its own
-  durable lifecycle/status). It also forbids
+  durable lifecycle/status), and the fallback carries the same durable-context
+  rules. It also forbids
   **recursive `dev-loop` child dispatch** inside Multica (provider-independent,
   binding Pi and Claude hosts alike): a top-level Multica `dev-loop` run is
   already the coordinator — it routes the resolved strategy directly to the

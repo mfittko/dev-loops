@@ -34,7 +34,9 @@ Pi's in-process `subagent` tool.
   1. **Dispatch unit** — the one bounded task, phrased as a complete
      instruction (not a pointer to the parent's context). Scope, exit condition,
      and validation expectation.
-  2. **Reviewed head SHA** — the exact commit SHA the work applies to. The
+  2. **Reviewed head SHA** — the exact commit SHA the work applies to,
+     passed together with the repository and PR number. The head must be
+     committed and independently addressable (pushed) before dispatch. The
      worker works from this SHA (checkout/`repo checkout --ref`), not from a
      mutable branch tip, so a later push cannot silently move the target.
   3. **Required prompt/context** — the files to read (the envelope's
@@ -44,10 +46,28 @@ Pi's in-process `subagent` tool.
   4. **Expected result shape** — what the worker must deliver and where: a
      reply in the same thread stating verdict/outcome explicitly, with
      changed-file paths, commands run, and validation output.
+- **Dispatch context is durable and self-contained.** Everything the worker
+  needs must travel in the dispatch comment (or, on the child-issue fallback,
+  the child issue description) or an issue attachment — a complete
+  instruction, not a pointer into the coordinator's session. Never place a
+  coordinator/task absolute worktree path in a dispatch briefing:
+  independent Multica runs cannot consume paths inside another task's
+  disposable worktree. Before dispatch, ensure the reviewed head is committed
+  and independently addressable, and pass repository, PR, and the exact head
+  SHA — never a mutable branch tip. Each worker checks out its own
+  Multica-managed checkout/worktree at that immutable head (`multica repo
+  checkout <url> --ref <sha>`). Recreate deterministic gate-context inputs in
+  the worker when cheap; attach only data that cannot be reconstructed.
+- **Results return through durable issue surfaces.** Workers reply with
+  findings through the issue thread (or issue attachments) — they must never
+  write required outputs into the coordinator's `tmp/` tree, which does not
+  exist for the worker and dies with the coordinator's worktree. Fan-in
+  consumes those durable thread/attachment results after the coordinator is
+  re-triggered.
 - **Do not assume the worker shares the parent's worktree or scratchpad.**
-  Each worker runs in its own session, on its own checkout. Everything it needs
-  must travel in the dispatch comment; everything the parent needs back must
-  come out of the worker's thread reply.
+  Each worker runs in its own session, on its own checkout. The dispatch
+  comment is the only shared surface; the thread reply is the only return
+  channel.
 - **Parallelism comes from distinct dedicated agents.** If several angles
   belong to the same agent, group them into that agent's single dispatch run or
   accept serialization — never create extra dispatch surface for one agent's
@@ -87,7 +107,10 @@ harness dispatch applies exactly as the dev-loop skill specifies.
 - Never sleep-poll worker runs. The coordinator reconciles receipts when it is
   next woken or re-derives them from the thread state (`multica issue comment
   list <parent-id> --thread <root> ...`) — the durable record is the join
-  point.
+  point. This is also why the worker must never depend on the coordinator's
+  worktree surviving: the coordinator's worktree may be deleted right after
+  dispatch, and the worker must still be able to validate its context (repo,
+  PR, head SHA, self-contained prompt) and return a result through the thread.
 
 ## Child-issue fallback (explicit only)
 
@@ -100,9 +123,13 @@ Create a child issue **only** as an explicit fallback when:
 
 Never create a child issue merely because fan-out exists. When the fallback is
 warranted, the child issue description must carry the full dispatch contract
-(dispatch unit, reviewed head SHA, required prompt/context, result contract —
-post the result as a comment on the child issue, then set its status), and the
-parent performs fan-in by reading each finished child's result.
+(dispatch unit, reviewed head SHA, repository and PR, required
+prompt/context, result contract — post the result as a comment on the child
+issue, then set its status), and the parent performs fan-in by reading each
+finished child's result. The child-issue path carries the same durable-context
+rules as the mention-dispatch path: no coordinator worktree paths in the
+briefing, immutable committed head, self-contained context (description or
+attachment), results back through the child issue's thread/attachments.
 
 ## Failure handling
 
