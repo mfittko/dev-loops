@@ -244,7 +244,10 @@ Optional:
                                  round key (gate, headSha) against the round being consolidated and
                                  FAILS CLOSED (exit 1, "cannot verify emit-plan key" / "is stamped for ...")
                                  on a mismatch, a missing/malformed key field, or an unreadable/non-JSON
-                                 plan — BEFORE any --out/--ledger-out write. REQUIRES --gate and
+                                 plan — BEFORE any --out/--ledger-out write. On that fail-closed
+                                 path any pre-existing files at --out/--ledger-out are REMOVED, so a
+                                 rejected round leaves no stale durable output for a caller to
+                                 consume. REQUIRES --gate and
                                  --head-sha (the round the plan's key is verified against). A guard
                                  only: the plan is never a findings or provenance source — the
                                  gate-context bundle's fanout.groups stays authoritative.
@@ -333,6 +336,7 @@ Exit codes:
      embedded (gate, headSha) key does not match the round being consolidated,
      an --emit-plan given without --gate/--head-sha, or an
      unreadable/non-JSON/missing-key --emit-plan artifact
+     (which also clears any pre-existing --out/--ledger-out files)
   2  Invalid --jq filter`.trim();
 
 const parseError = buildParseError(USAGE);
@@ -1004,8 +1008,32 @@ export async function consolidateGateFanin(options) {
   // round writes no --out/--ledger-out and fails fastest. The parser pairing
   // check cannot see a direct programmatic caller, so the pair requirement is
   // re-checked inside the guard — both entry paths fail closed identically.
+  // A rejected round must also leave no DURABLE output: any pre-existing files
+  // at --out/--ledger-out are from an earlier round at these paths and would
+  // otherwise survive as this round's stale result, so the guard clears both
+  // (rm force, ENOENT-tolerant) BEFORE re-throwing the verification error —
+  // done here, inside consolidateGateFanin's guard, so a programmatic caller
+  // fails identically to the CLI. The clear itself is best-effort-bounded: a
+  // clear failure is reported alongside the verification error and does not
+  // mask it.
   if (options.emitPlan !== undefined) {
-    await verifyEmitPlanKey(options.emitPlan, { gate: options.gate, headSha: options.headSha });
+    try {
+      await verifyEmitPlanKey(options.emitPlan, { gate: options.gate, headSha: options.headSha });
+    } catch (err) {
+      const clearErrors = [];
+      for (const outPath of [options.out, options.ledgerOut]) {
+        if (outPath === undefined) continue;
+        try {
+          await rm(outPath, { force: true });
+        } catch (clearErr) {
+          clearErrors.push(`could not clear ${JSON.stringify(outPath)}: ${clearErr instanceof Error ? clearErr.message : String(clearErr)}`);
+        }
+      }
+      if (clearErrors.length > 0) {
+        err.message = `${err.message} — additionally, the stale-output clear on this fail-closed path failed: ${clearErrors.join("; ")}`;
+      }
+      throw err;
+    }
   }
   const dir = options.findingsDir;
   let entries;

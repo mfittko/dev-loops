@@ -202,6 +202,41 @@ test("a refusal run writes NO emit-plan artifact", async () => {
   });
 });
 
+// Stale-plan regression (Copilot review, emit-fanout-dispatch.mjs:350): an
+// earlier SUCCESSFUL run at the same (repo, pr, gate, head) key persists the
+// keyed plan; a later failed emission at that key used to leave that stale
+// plan on disk, and a downstream fan-in key-checks exactly that path — the
+// stale plan passes the key guard even though the current emission never
+// completed. The emitter must REMOVE the keyed plan BEFORE the emission loop,
+// so every refusal/error return leaves it absent.
+test("a failed re-run REMOVES a pre-existing keyed emit-plan from an earlier successful run", async () => {
+  await withTmpDir(async (tmpDir) => {
+    // 1. A successful run persists the keyed plan.
+    await seedBundle(tmpDir);
+    const okRun = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(okRun.status, 0, okRun.stderr);
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    assert.equal(JSON.parse(await readFile(planPath, "utf8")).ok, true);
+
+    // 2. A refusal at the SAME key (zero units — one of the exit-1 returns
+    //    between the plan removal and the success-only persist).
+    await seedBundle(tmpDir, { fanout: { groups: [] } });
+    const refused = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(refused.status, 1, refused.stderr);
+
+    // 3. The earlier round's keyed plan is GONE — the stale plan cannot pass a
+    //    downstream fan-in key check as this round's plan.
+    await assert.rejects(() => readFile(planPath, "utf8"), { code: "ENOENT" });
+  });
+});
+
 test("--pending falls back to groups only when pendingGroups is ABSENT", async () => {
   await withTmpDir(async (tmpDir) => {
     await seedBundle(tmpDir, {

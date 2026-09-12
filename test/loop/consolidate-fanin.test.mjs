@@ -1233,6 +1233,89 @@ test("consolidate-fanin CLI: --emit-plan with a mismatched key exits 1 (parser a
   );
 });
 
+// Stale-output regression (Copilot review, consolidate-fanin.mjs:1009): the
+// --emit-plan key guard fail-closes (exit 1) BEFORE any --out/--ledger-out
+// write — but a PREVIOUS round at the same output paths may have left files
+// there, and a rejected round that leaves them on disk lets a caller consume
+// the stale findings/ledger as this round's result. The guard must clear both
+// requested paths (rm force, ENOENT-tolerant) while still surfacing the exact
+// verification error.
+test("consolidateGateFanin clears pre-existing --out/--ledger-out on the emit-plan key-mismatch fail-closed path", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } },
+    async (dir) => {
+      const planDir = await mkdtemp(path.join(os.tmpdir(), "emit-plan-stale-out-"));
+      try {
+        const wrongGate = { ...matchingEmitPlan(), gate: "draft_gate" };
+        const planPath = await writeEmitPlan(planDir, wrongGate);
+        // Pre-existing outputs from an earlier round at the same paths.
+        const outPath = path.join(planDir, "out", "findings.json");
+        const ledgerPath = path.join(planDir, "out", "ledger.json");
+        await mkdir(path.dirname(outPath), { recursive: true });
+        await writeFile(outPath, JSON.stringify({ stale: "previous round findings" }), "utf8");
+        await writeFile(ledgerPath, JSON.stringify({ stale: "previous round ledger" }), "utf8");
+        await assert.rejects(
+          consolidateGateFanin({
+            findingsDir: dir,
+            emitPlan: planPath,
+            gate: "review",
+            headSha: EMIT_HEAD,
+            out: outPath,
+            ledgerOut: ledgerPath,
+          }),
+          (err) => err.message.includes("is stamped for gate") && err.message.includes("this round consolidates gate review"),
+        );
+        // Both stale outputs are GONE — the rejected round leaves no durable
+        // output for a caller to consume as this round's result.
+        assert.equal(existsSync(outPath), false);
+        assert.equal(existsSync(ledgerPath), false);
+      } finally {
+        await rm(planDir, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// CLI twin: the same pre-existing-output scenario through the spawned CLI —
+// exit 1 AND both stale files removed, so the CLI and programmatic paths fail
+// identically.
+test("consolidate-fanin CLI: --emit-plan key mismatch exits 1 and removes pre-existing --out/--ledger-out", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } },
+    async (dir) => {
+      const planDir = await mkdtemp(path.join(os.tmpdir(), "emit-plan-stale-cli-"));
+      try {
+        const wrongGate = { ...matchingEmitPlan(), gate: "draft_gate" };
+        const planPath = await writeEmitPlan(planDir, wrongGate);
+        const outPath = path.join(planDir, "out", "findings.json");
+        const ledgerPath = path.join(planDir, "out", "ledger.json");
+        await mkdir(path.dirname(outPath), { recursive: true });
+        await writeFile(outPath, JSON.stringify({ stale: true }), "utf8");
+        await writeFile(ledgerPath, JSON.stringify({ stale: true }), "utf8");
+        const cliResult = await runNode(
+          path.join(import.meta.dirname, "..", "..", "scripts", "loop", "consolidate-fanin.mjs"),
+          [
+            "--findings-dir", dir,
+            "--emit-plan", planPath,
+            "--gate", "review",
+            "--head-sha", EMIT_HEAD,
+            "--out", outPath,
+            "--ledger-out", ledgerPath,
+          ],
+        );
+        assert.equal(cliResult.code, 1);
+        const payload = JSON.parse(cliResult.stderr);
+        assert.equal(payload.ok, false);
+        assert.match(payload.error, /is stamped for gate "draft_gate" but this round consolidates gate review/);
+        assert.equal(existsSync(outPath), false);
+        assert.equal(existsSync(ledgerPath), false);
+      } finally {
+        await rm(planDir, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
 // End-to-end regression: the REAL emit CLI writes the keyed plan for a round,
 // then the REAL consolidate-fanin CLI consumes it with a matching key and
 // produces the expected consolidated outputs — the producer/consumer

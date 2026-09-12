@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
@@ -72,9 +72,11 @@ Output (stdout, JSON):
   <gate>-<headSha>.emit-plan.json sibling of the gate-context bundle
   (buildGateEmitPlanPath, GATE-EXEC-FANOUT-DISPATCH-EMIT) — body = the emitter's
   own result object — so a consumer reads THAT keyed path and never hand-rolls
-  a fixed-path stdout capture that concurrent gates would clobber; a failed
-  persist exits 2 (a persist failure is an IO failure, not a plan-semantics
-  refusal).
+  a fixed-path stdout capture that concurrent gates would clobber; the keyed
+  plan is REMOVED at the start of the run, so any refusal or error leaves NO
+  plan file on disk even when an earlier successful run at the same key wrote
+  one; a failed persist exits 2 (a persist failure is an IO failure, not a
+  plan-semantics refusal).
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Emitted one composed prompt per resolved dispatch unit
@@ -259,6 +261,23 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   if (!fanout || typeof fanout !== "object") {
     return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — gate-context artifact at ${JSON.stringify(contextPath)} carries no fanout dispatch plan — re-run write-gate-context.mjs (a thin briefing with no --base emits no fanout plan)` }, false);
   }
+
+  // GATE-EXEC-FANOUT-DISPATCH-EMIT: clear the keyed
+  // <gate>-<headSha>.emit-plan.json sibling (buildGateEmitPlanPath) BEFORE the
+  // emission loop, so every refusal/error return below leaves it ABSENT.
+  // Without this, a successful earlier run at the same gate/head key survives a
+  // failed re-run, and a later fan-in (which key-checks that file) can accept
+  // the stale plan as this round's — the exact stale-plan hazard the key guard
+  // trusts this path's freshness for. ENOENT on the rm is fine (no prior plan
+  // exists). The success-only WRITE placement at the end of main is unchanged —
+  // this removes, it does not pre-persist anything.
+  try {
+    await rm(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), { force: true });
+  } catch (err) {
+    process.stderr.write(`${formatCliError(err)}\n`);
+    return 2;
+  }
+
   // --pending falls back to `groups` ONLY when pendingGroups is genuinely ABSENT
   // (an older artifact). A PRESENT-but-non-array pendingGroups is a malformed
   // plan and refuses — silently falling back would mask a broken plan and
@@ -343,17 +362,23 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     emitted.push({ scope, angles, group: angles.length > 1 ? unit.name : null, promptPath: result.promptPath });
   }
 
-  // GATE-EXEC-FANOUT-DISPATCH-EMIT: persist the emitted round plan to the
-  // keyed <gate>-<headSha>.emit-plan.json sibling of the gate-context bundle
-  // (buildGateEmitPlanPath). Placement is success-only — AFTER the whole
+  // GATE-EXEC-FANOUT-DISPATCH-EMIT: clear the keyed <gate>-<headSha>.emit-plan.json
+  // sibling BEFORE the emission loop, so every refusal/error return below leaves
+  // it ABSENT. Without this, a successful earlier run at the same gate/head key
+  // would survive a failed re-run and a later fan-in (which key-checks that file)
+  // could accept the stale plan as this round's — the exact stale-plan hazard the
+  // key guard trusts the path's freshness for. ENOENT on the rm is fine (no prior
+  // plan exists). The success-only WRITE placement at the end of main is unchanged;
+  // this removal does not pre-persist anything, it only removes.
   // per-unit loop — so a failure anywhere earlier leaves NO plan file, never a
-  // half-persisted round; a re-run at the same key overwrites deterministically
-  // (the same round). Two gates at one head write distinct files by path
-  // construction. The persist is unconditional on the success path
-  // (--pending/--jq/--silent shape stdout only). A failed persist is an IO
-  // failure and takes the module's formatCliError/exit-2 tier, matching the
-  // suffix-write catch block directly above — exit 1 stays reserved for
-  // plan-semantics refusals.
+  // half-persisted round (the pre-loop rm above removed any prior plan at this
+  // key, so "leaves NO plan file" now holds even across re-runs); a re-run at the
+  // same key overwrites deterministically (the same round). Two gates at one
+  // head write distinct files by path construction. The persist is unconditional
+  // on the success path (--pending/--jq/--silent shape stdout only). A failed
+  // persist is an IO failure and takes the module's formatCliError/exit-2 tier,
+  // matching the suffix-write catch block directly above — exit 1 stays reserved
+  // for plan-semantics refusals.
   const payload = { ok: true, gate, headSha, repo, pr, pending: pendingOnly, count: emitted.length, maxConcurrent, units: emitted };
   const planPath = buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot });
   try {
