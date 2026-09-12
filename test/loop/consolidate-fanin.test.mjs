@@ -1239,6 +1239,97 @@ test("consolidateGateFanin fails closed on a programmatic non-string round gate 
   );
 });
 
+// Programmatic non-canonical gate SPELLING regression (Copilot review round 5,
+// consolidate-fanin.mjs): verifyEmitPlanKey normalizes the round gate
+// (trim+lowercase) only for its own key compare, but options.gate was never
+// normalized — so a programmatic gate: "REVIEW" (or padded " review ") passed
+// the key check yet every downstream `options.gate === ...` comparison
+// (the cache-telemetry gate binding, the gate config resolution, the result's
+// gate echo) saw a raw string that never equals "review". The guard now
+// normalizes options.gate BEFORE any downstream use; a non-canonical gate
+// string fails closed with the same VALID_GATES membership check, no
+// coercion.
+test("consolidateGateFanin normalizes a programmatic gate: 'REVIEW' and processes the round as review, not preApproval", async () => {
+  await withFindingsDir(
+    { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: TELEMETRY_HEAD } },
+    async (dir) => {
+      const planDir = await mkdtemp(path.join(os.tmpdir(), "emit-plan-review-case-"));
+      const tdir = await mkdtemp(path.join(os.tmpdir(), "cache-telemetry-review-case-"));
+      try {
+        const planPath = await writeEmitPlan(planDir, { ...matchingEmitPlan(), headSha: TELEMETRY_HEAD });
+        // A cache-telemetry artifact stamped gate: "review" (this normalized
+        // round's real gate). Under the old bug, gate: "REVIEW" reached the
+        // cache-telemetry gate compare as the raw "REVIEW" string and was
+        // REJECTED ("REVIEW" !== "review") even though the round was genuinely
+        // review — the observable gate-dependent behavior the round spelling
+        // drives.
+        const evidence = buildCacheTelemetryEvidence({
+          plan: buildReviewDispatchPlan({
+            gate: "review",
+            headSha: TELEMETRY_HEAD,
+            sharedPrefixHash: PRIMER_FP,
+            requestGroups: [
+              { model: "model-a", requestPrefixFingerprint: PRIMER_FP, cacheBoundary: CACHE_BOUNDARY_AFTER_SHARED_PREFIX, ttlIntent: "1h", angles: ["scope"] },
+            ],
+            capabilities: { harness: "claude" },
+          }),
+          primerCacheCreations: [{ model: "model-a", primerForm: PRIMER_FORM_LEAD_REVIEWER, tokens: 12000 }],
+          reviewerCacheReads: [{ model: "model-a", angle: "scope", tokens: 200 }],
+        });
+        const telemetryPath = path.join(tdir, "cache-telemetry.json");
+        await writeFile(telemetryPath, JSON.stringify(evidence), "utf8");
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          emitPlan: planPath,
+          cacheTelemetry: telemetryPath,
+          gate: "REVIEW",
+          headSha: TELEMETRY_HEAD,
+        });
+        // 1. The uppercase spelling passed the emit-plan key check (the guard
+        //    normalizes for its compare) and the round proceeded — including
+        //    the gate-bound cache-telemetry acceptance the raw "REVIEW"
+        //    spelling used to break.
+        assert.equal(result.ok, true);
+        // 2. The round was processed as review: the result's gate echo is the
+        //    normalized canonical spelling, not the caller's raw "REVIEW".
+        assert.equal(result.gate, "review");
+      } finally {
+        await rm(planDir, { recursive: true, force: true }).catch(() => {});
+        await rm(tdir, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+test("consolidateGateFanin accepts a padded programmatic gate ('  review  ') and fails closed on a non-canonical gate string", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } },
+    async (dir) => {
+      const planDir = await mkdtemp(path.join(os.tmpdir(), "emit-plan-pad-gate-"));
+      try {
+        const planPath = await writeEmitPlan(planDir, matchingEmitPlan());
+        // Padded spelling: key check passes, gate normalized to "review".
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          emitPlan: planPath,
+          gate: "  review  ",
+          headSha: EMIT_HEAD,
+        });
+        assert.equal(result.ok, true);
+        assert.equal(result.gate, "review");
+        // A non-canonical gate STRING (not undefined/non-string) fails closed —
+        // same VALID_GATES membership check, no coercion.
+        await assert.rejects(
+          consolidateGateFanin({ findingsDir: dir, gate: "bogus" }),
+          (err) => err.message.includes("--gate must be a canonical supported gate") && err.message.includes("bogus"),
+        );
+      } finally {
+        await rm(planDir, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
 // Non-string plan gate regression (same finding): the plan's embedded gate must
 // itself be a canonical gate string — e.g. gate: 123 in the plan file must
 // fail closed, not coerce.

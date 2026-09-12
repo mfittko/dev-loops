@@ -389,6 +389,18 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // is an IO failure and takes the module's formatCliError/exit-2 tier, matching
   // the suffix-write catch block directly above — exit 1 stays reserved for
   // plan-semantics refusals.
+  //
+  // Final-emission failure (Copilot review round 5): a data-invalid but
+  // syntactically valid filter (e.g. `.count | length` — a number is not a
+  // valid `length` input) makes finish() exit 2 AFTER the plan was persisted,
+  // and a throw is the same tier. That leaves a key-valid plan from a FAILED
+  // invocation that a later fan-in key-check would accept as this round's —
+  // the exact stale-plan hazard the start-of-flow rm protects every earlier
+  // refusal against. Remove the plan (ENOENT-tolerant force rm) on either
+  // failure shape, then propagate the exit-2/throw unchanged. Only the final
+  // success emit runs after the persist, so guarding here (rather than around
+  // each earlier finish call, all of which run before the persist) is the one
+  // complete seam.
   const payload = { ok: true, gate, headSha, repo, pr, pending: pendingOnly, count: emitted.length, maxConcurrent, units: emitted };
   const planPath = buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot });
   try {
@@ -398,7 +410,31 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     process.stderr.write(`${formatCliError(err)}\n`);
     return 2;
   }
-  return finish(payload, true);
+  try {
+    const result = finish(payload, true);
+    // finish() returning 2 is emitResult's data-dependent jq-error path (exit
+    // 2, distinct from the ok predicate's 0/1): the just-persisted plan came
+    // from this FAILED emission and must not survive for a later fan-in to
+    // consume. ENOENT-tolerant force rm; a clear failure never masks the
+    // exit-2.
+    if (result === 2) {
+      try {
+        await rm(planPath, { force: true });
+      } catch {
+        // Best-effort clear only — never mask the exit-2.
+      }
+    }
+    return result;
+  } catch (err) {
+    // A throw from the final emission is the same failure tier: the persisted
+    // plan must not survive it. Best-effort clear; never mask the throw.
+    try {
+      await rm(planPath, { force: true });
+    } catch {
+      // Best-effort clear only — never mask the original emit failure.
+    }
+    throw err;
+  }
 }
 
 if (isDirectCliRun(import.meta.url)) {

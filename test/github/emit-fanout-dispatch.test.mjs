@@ -574,6 +574,44 @@ test("an invalid --jq filter exits 2 and leaves the keyed plan ABSENT after a pr
   });
 });
 
+// Data-invalid --jq regression (Copilot review round 5,
+// emit-fanout-dispatch.mjs final-emission path): a filter that is
+// SYNTACTICALLY valid but fails against the payload's DATA (`.count | length`
+// — a number is not a valid `length` input) passes the syntax preflight and
+// evaluates only at finish(), AFTER the success-only persist. Before the fix,
+// that exit 2 left the just-persisted keyed plan on disk — a key-valid plan
+// from a FAILED invocation that a later fan-in key-check would accept. The
+// final-emission failure path must remove the plan, then propagate the
+// exit 2.
+test("a data-invalid --jq filter exits 2 AFTER the persist and REMOVES the keyed plan", async () => {
+  await withTmpDir(async (tmpDir) => {
+    // 1. A successful run persists the keyed plan (seeds a valid plan).
+    await seedBundle(tmpDir);
+    const okRun = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(okRun.status, 0, okRun.stderr);
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    assert.equal(JSON.parse(await readFile(planPath, "utf8")).ok, true);
+
+    // 2. Re-run at the SAME key with a data-invalid (syntax-valid) --jq filter:
+    //    it passes the preflight, the plan is re-persisted, finish() evaluates
+    //    the filter against the payload and exits 2.
+    const failed = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--jq", ".count | length"],
+      { cwd: tmpDir },
+    );
+    assert.equal(failed.status, 2, failed.stderr);
+    assert.match(JSON.parse(failed.stderr).error, /--jq/);
+
+    // 3. The keyed plan is ABSENT — the persisted plan from the FAILED
+    //    invocation did not survive the exit-2 emission failure.
+    await assert.rejects(() => readFile(planPath, "utf8"), { code: "ENOENT" });
+  });
+});
+
 test("expandDispatchUnits: a configured-name unit with one resolved angle is a singleton, not a shared group", () => {
   const out = expandDispatchUnits([{ name: "design-simplicity", angles: ["dry"] }], new Set(["design-simplicity"]));
   assert.deepEqual(out, [{ name: "dry", angles: ["dry"] }]);
