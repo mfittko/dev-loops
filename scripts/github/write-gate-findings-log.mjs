@@ -342,7 +342,7 @@ export async function verifyEmitPlanProvenance(planPath, provenance, round, { re
   try {
     plan = JSON.parse(await readFile(fullPath, "utf8"));
   } catch (error) {
-    throw parseError(`cannot verify emit-plan provenance: --emit-plan "${planPath}" could not be read/parsed: ${error instanceof Error ? error.message : String(error)}`);
+    throw parseError(`GATE-EXEC-EMIT-PLAN-KEY: cannot verify emit-plan provenance: --emit-plan "${planPath}" could not be read/parsed: ${error instanceof Error ? error.message : String(error)}`);
   }
   const planHeadSha = normalizeFullHeadSha(plan?.headSha);
   const planPr = typeof plan?.pr === "string" && /^\d+$/.test(plan.pr) ? Number(plan.pr) : plan?.pr;

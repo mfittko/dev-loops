@@ -287,7 +287,7 @@
     },
     {
       "id": "GATE-EXEC-EMIT-PLAN-KEY",
-      "enforcement": "doc"
+      "enforcement": "runtime"
     },
     {
       "id": "GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK"

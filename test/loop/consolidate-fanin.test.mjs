@@ -1017,13 +1017,11 @@ test("parseConsolidateFaninCliArgs rejects an empty --emit-plan value", () => {
   );
 });
 
-// Copilot review round 4: the pairing check moved OUT of the parser (a
-// parser-level exit skipped the guard's stale-output cleanup) into
-// consolidateGateFanin's own guard — see the programmatic tests below.
+// The pairing check lives in consolidateGateFanin's guard so programmatic and
+// CLI callers receive the same validation.
 test("parseConsolidateFaninCliArgs no longer pairs --emit-plan at parse time (the guard owns the pair check)", () => {
   // Parse-time pairing is deferred to the guard: a bare --emit-plan parses OK
-  // so the CLI path reaches the guard (which fails closed AND clears stale
-  // outputs). The required flag itself still parses with its pair.
+  // so the CLI path reaches the same guard as programmatic callers.
   const result = parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--emit-plan", "/tmp/p.json"]);
   assert.equal(result.emitPlan, "/tmp/p.json");
   assert.equal(result.gate, undefined);
@@ -1377,14 +1375,7 @@ test("consolidate-fanin CLI: --emit-plan with a mismatched key exits 1 (parser a
   );
 });
 
-// Stale-output regression (Copilot review, consolidate-fanin.mjs:1009): the
-// --emit-plan key guard fail-closes (exit 1) BEFORE any --out/--ledger-out
-// write — but a PREVIOUS round at the same output paths may have left files
-// there, and a rejected round that leaves them on disk lets a caller consume
-// the stale findings/ledger as this round's result. The guard must clear both
-// requested paths (rm force, ENOENT-tolerant) while still surfacing the exact
-// verification error.
-test("consolidateGateFanin clears pre-existing --out/--ledger-out on the emit-plan key-mismatch fail-closed path", async () => {
+test("consolidateGateFanin preserves pre-existing --out/--ledger-out on emit-plan key mismatch", async () => {
   await withFindingsDir(
     { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } },
     async (dir) => {
@@ -1396,8 +1387,10 @@ test("consolidateGateFanin clears pre-existing --out/--ledger-out on the emit-pl
         const outPath = path.join(planDir, "out", "findings.json");
         const ledgerPath = path.join(planDir, "out", "ledger.json");
         await mkdir(path.dirname(outPath), { recursive: true });
-        await writeFile(outPath, JSON.stringify({ stale: "previous round findings" }), "utf8");
-        await writeFile(ledgerPath, JSON.stringify({ stale: "previous round ledger" }), "utf8");
+        const priorOut = JSON.stringify({ prior: "findings" });
+        const priorLedger = JSON.stringify({ prior: "ledger" });
+        await writeFile(outPath, priorOut, "utf8");
+        await writeFile(ledgerPath, priorLedger, "utf8");
         await assert.rejects(
           consolidateGateFanin({
             findingsDir: dir,
@@ -1409,10 +1402,8 @@ test("consolidateGateFanin clears pre-existing --out/--ledger-out on the emit-pl
           }),
           (err) => err.message.includes("is stamped for gate") && err.message.includes("this round consolidates gate review"),
         );
-        // Both stale outputs are GONE — the rejected round leaves no durable
-        // output for a caller to consume as this round's result.
-        assert.equal(existsSync(outPath), false);
-        assert.equal(existsSync(ledgerPath), false);
+        assert.equal(await readFile(outPath, "utf8"), priorOut);
+        assert.equal(await readFile(ledgerPath, "utf8"), priorLedger);
       } finally {
         await rm(planDir, { recursive: true, force: true }).catch(() => {});
       }
@@ -1420,14 +1411,7 @@ test("consolidateGateFanin clears pre-existing --out/--ledger-out on the emit-pl
   );
 });
 
-// Pairing-check cleanup regression (Copilot review round 4,
-// consolidate-fanin.mjs): the --emit-plan-without---gate/--head-sha pairing
-// check used to run at PARSE time, exiting before consolidateGateFanin's
-// guard could clear stale --out/--ledger-out — so stale outputs from a
-// previous round survived the rejected round. The pairing check now lives in
-// the shared guard, so the CLI parse-error path is gone and the same
-// invocation exits 1 with BOTH stale files cleared.
-test("consolidate-fanin CLI: --emit-plan without --gate/--head-sha exits 1 and removes pre-existing --out/--ledger-out", async () => {
+test("consolidate-fanin CLI: --emit-plan without --gate/--head-sha preserves pre-existing outputs", async () => {
   await withFindingsDir(
     { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } },
     async (dir) => {
@@ -1438,8 +1422,10 @@ test("consolidate-fanin CLI: --emit-plan without --gate/--head-sha exits 1 and r
         const outPath = path.join(planDir, "out", "findings.json");
         const ledgerPath = path.join(planDir, "out", "ledger.json");
         await mkdir(path.dirname(outPath), { recursive: true });
-        await writeFile(outPath, JSON.stringify({ stale: true }), "utf8");
-        await writeFile(ledgerPath, JSON.stringify({ stale: true }), "utf8");
+        const priorOut = JSON.stringify({ prior: "findings" });
+        const priorLedger = JSON.stringify({ prior: "ledger" });
+        await writeFile(outPath, priorOut, "utf8");
+        await writeFile(ledgerPath, priorLedger, "utf8");
         const cliResult = await runNode(
           path.join(import.meta.dirname, "..", "..", "scripts", "loop", "consolidate-fanin.mjs"),
           [
@@ -1453,8 +1439,8 @@ test("consolidate-fanin CLI: --emit-plan without --gate/--head-sha exits 1 and r
         const payload = JSON.parse(cliResult.stderr);
         assert.equal(payload.ok, false);
         assert.match(payload.error, /--emit-plan requires both --gate and --head-sha/);
-        assert.equal(existsSync(outPath), false);
-        assert.equal(existsSync(ledgerPath), false);
+        assert.equal(await readFile(outPath, "utf8"), priorOut);
+        assert.equal(await readFile(ledgerPath, "utf8"), priorLedger);
       } finally {
         await rm(planDir, { recursive: true, force: true }).catch(() => {});
       }
@@ -1462,10 +1448,7 @@ test("consolidate-fanin CLI: --emit-plan without --gate/--head-sha exits 1 and r
   );
 });
 
-// CLI twin: the same pre-existing-output scenario through the spawned CLI —
-// exit 1 AND both stale files removed, so the CLI and programmatic paths fail
-// identically.
-test("consolidate-fanin CLI: --emit-plan key mismatch exits 1 and removes pre-existing --out/--ledger-out", async () => {
+test("consolidate-fanin CLI: --emit-plan key mismatch preserves pre-existing outputs", async () => {
   await withFindingsDir(
     { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } },
     async (dir) => {
@@ -1476,8 +1459,10 @@ test("consolidate-fanin CLI: --emit-plan key mismatch exits 1 and removes pre-ex
         const outPath = path.join(planDir, "out", "findings.json");
         const ledgerPath = path.join(planDir, "out", "ledger.json");
         await mkdir(path.dirname(outPath), { recursive: true });
-        await writeFile(outPath, JSON.stringify({ stale: true }), "utf8");
-        await writeFile(ledgerPath, JSON.stringify({ stale: true }), "utf8");
+        const priorOut = JSON.stringify({ prior: "findings" });
+        const priorLedger = JSON.stringify({ prior: "ledger" });
+        await writeFile(outPath, priorOut, "utf8");
+        await writeFile(ledgerPath, priorLedger, "utf8");
         const cliResult = await runNode(
           path.join(import.meta.dirname, "..", "..", "scripts", "loop", "consolidate-fanin.mjs"),
           [
@@ -1493,8 +1478,8 @@ test("consolidate-fanin CLI: --emit-plan key mismatch exits 1 and removes pre-ex
         const payload = JSON.parse(cliResult.stderr);
         assert.equal(payload.ok, false);
         assert.match(payload.error, /is stamped for gate "draft_gate" but this round consolidates gate review/);
-        assert.equal(existsSync(outPath), false);
-        assert.equal(existsSync(ledgerPath), false);
+        assert.equal(await readFile(outPath, "utf8"), priorOut);
+        assert.equal(await readFile(ledgerPath, "utf8"), priorLedger);
       } finally {
         await rm(planDir, { recursive: true, force: true }).catch(() => {});
       }

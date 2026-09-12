@@ -15,6 +15,7 @@ import {
 import { runNode as runNodeHelper } from "../_helpers.mjs";
 
 const writeGateFindingsLogScript = path.resolve("scripts/github/write-gate-findings-log.mjs");
+const emitFanoutDispatchScript = path.resolve("scripts/github/emit-fanout-dispatch.mjs");
 
 // #1592: several fixtures below deliberately keep pre-rename severity
 // spellings ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
@@ -100,22 +101,37 @@ test("parseWriteGateFindingsLogCliArgs keeps --emit-plan optional and requires p
   assert.equal(withoutPlan.emitPlan, undefined);
 });
 
-test("writeGateFindingsLog accepts caller provenance that exactly matches the keyed emit plan", async () => {
+test("carry-forward uses the real emitter's pending plan for fresh-only provenance", async () => {
   await withAngleContractRepo(async (repoRoot) => {
     const headSha = "abc1234567890abcdef000000000000000000000";
-    const planPath = path.join(repoRoot, "draft.emit-plan.json");
-    await writeFile(planPath, JSON.stringify({
-      ok: true,
-      repo: "owner/repo",
-      pr: "42",
-      gate: "draft_gate",
-      headSha,
-      count: 2,
-      units: [
-        { scope: "draft-scope", angles: ["scope"], group: null, promptPath: "scope.txt" },
-        { scope: "draft-pr-description", angles: ["pr-description"], group: null, promptPath: "pr-description.txt" },
-      ],
+    const tmpRoot = path.join(repoRoot, "tmp");
+    const contextDir = path.join(tmpRoot, "gate-context", "owner-repo", "pr-42");
+    await mkdir(contextDir, { recursive: true });
+    await writeFile(path.join(contextDir, `draft_gate-${headSha}.briefing-prefix.txt`), "# prefix\n", "utf8");
+    await writeFile(path.join(contextDir, `draft_gate-${headSha}.briefing-volatile.txt`), "# volatile\n", "utf8");
+    await writeFile(path.join(contextDir, `draft_gate-${headSha}.json`), JSON.stringify({
+      fanout: {
+        groups: [
+          { name: "scope", angles: ["scope"] },
+          { name: "coverage", angles: ["coverage"] },
+          { name: "pr-description", angles: ["pr-description"] },
+        ],
+        pendingGroups: [
+          { name: "scope", angles: ["scope"] },
+          { name: "pr-description", angles: ["pr-description"] },
+        ],
+      },
     }), "utf8");
+    const emitted = await runNodeHelper(emitFanoutDispatchScript, [
+      "--repo", "owner/repo",
+      "--pr", "42",
+      "--gate", "draft_gate",
+      "--head-sha", headSha,
+      "--pending",
+    ], { cwd: repoRoot });
+    assert.equal(emitted.code, 0, emitted.stderr);
+    const planPath = path.join(contextDir, `draft_gate-${headSha}.emit-plan.json`);
+    assert.deepEqual(JSON.parse(await readFile(planPath, "utf8")).units.map((unit) => unit.angles), [["scope"], ["pr-description"]]);
     const result = await writeGateFindingsLog({
       repo: "owner/repo",
       pr: 42,
@@ -132,7 +148,7 @@ test("writeGateFindingsLog accepts caller provenance that exactly matches the ke
         ],
       }),
       emitPlan: planPath,
-      tmpRoot: path.join(repoRoot, "tmp"),
+      tmpRoot,
     }, { repoRoot });
     assert.equal(result.ok, true);
     assert.equal(result.log.provenance.perAngle.length, 3);

@@ -456,7 +456,7 @@ async function verifyEmitPlanKey(planPath, { gate, headSha }) {
   // would then match, passing the key check with an invalid round
   // (Copilot review round 4). undefined still means the flag was never given.
   if (gate === undefined || headSha === undefined) {
-    throw new Error("--emit-plan requires both --gate and --head-sha to verify the plan's embedded key against this round");
+    throw new Error("GATE-EXEC-EMIT-PLAN-KEY: --emit-plan requires both --gate and --head-sha to verify the plan's embedded key against this round");
   }
   if (typeof gate !== "string" || !VALID_GATES.has(gate.trim().toLowerCase())) {
     throw new Error(`--emit-plan requires a canonical supported gate (one of: ${[...VALID_GATES].join(", ")}) to verify the plan's embedded key against, got ${JSON.stringify(gate)}`);
@@ -1017,43 +1017,10 @@ export async function consolidateGateFanin(options) {
   // --emit-plan key guard (GATE-EXEC-FANOUT-DISPATCH-EMIT): placed after the
   // headSha re-normalization (so the plan's stamp is compared against the
   // normalized round head) and BEFORE the --findings-dir read, so a rejected
-  // round writes no --out/--ledger-out and fails fastest. The pair requirement
-  // (gate + headSha) lives ONLY here, inside the guard — the CLI parser no
-  // longer duplicates it (a parser-level check would exit before this
-  // cleanup could clear stale --out/--ledger-out files, Copilot review
-  // round 4), so both entry paths fail closed AND clear stale outputs
-  // identically.
-  // A rejected round must also leave no DURABLE output: any pre-existing files
-  // at --out/--ledger-out are from an earlier round at these paths and would
-  // otherwise survive as this round's stale result, so the guard clears both
-  // (rm force, ENOENT-tolerant) BEFORE re-throwing the verification error —
-  // done here, inside consolidateGateFanin's guard, so a programmatic caller
-  // fails identically to the CLI. The clear itself is best-effort-bounded: a
-  // clear failure is reported alongside the verification error and does not
-  // mask it.
+  // invocation writes no --out/--ledger-out and fails fastest. Validation does
+  // not delete caller-owned files that predate this invocation.
   if (options.emitPlan !== undefined) {
-    try {
-      await verifyEmitPlanKey(options.emitPlan, { gate: options.gate, headSha: options.headSha });
-    } catch (err) {
-      const clearErrors = [];
-      for (const outPath of [options.out, options.ledgerOut]) {
-        if (outPath === undefined) continue;
-        try {
-          await rm(outPath, { force: true });
-        } catch (clearErr) {
-          clearErrors.push(`could not clear ${JSON.stringify(outPath)}: ${clearErr instanceof Error ? clearErr.message : String(clearErr)}`);
-        }
-      }
-      if (clearErrors.length > 0) {
-        // Wrap instead of mutating the caught value: a new Error keeps the
-        // original as `cause` (preserving its stack; also safe if a non-Error
-        // was thrown) while appending the clear-failure details — the
-        // verification error text stays the leading message.
-        const cause = err instanceof Error ? err : new Error(String(err));
-        throw new Error(`${cause.message} — additionally, the stale-output clear on this fail-closed path failed: ${clearErrors.join("; ")}`, { cause: err });
-      }
-      throw err;
-    }
+    await verifyEmitPlanKey(options.emitPlan, { gate: options.gate, headSha: options.headSha });
   }
   // Round-gate normalization (Copilot review round 5): a direct programmatic
   // caller bypasses parseConsolidateFaninCliArgs (whose --gate parsing admits
@@ -1067,7 +1034,7 @@ export async function consolidateGateFanin(options) {
   // programmatic gate: null/123/"bogus" fails closed here too (emit-plan
   // callers still get the guard's own "--emit-plan requires ..." wording —
   // the guard runs first and owns that rejection). Placed AFTER the guard so
-  // the guard's pair/canonical checks and stale-output cleanup stay the first
+  // the guard's pair/canonical checks stay the first
   // fail-closed seam; every downstream consumer (cache-telemetry compare,
   // gate config resolution, the result's gate echo) sees the normalized value.
   if (options.gate !== undefined) {
