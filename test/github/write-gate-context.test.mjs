@@ -21,6 +21,7 @@ import {
   buildGateContextArtifact,
   buildGateContextPath,
   buildGateDiffPath,
+  buildGateEmitPlanPath,
   buildGateRequestPlanPath,
   buildGateReviewsDir,
   buildValidationResultsPath,
@@ -355,6 +356,30 @@ test("buildGateDiffPath rejects unsafe pr/gate/headSha segments (same safety as 
   assert.throws(() => buildGateDiffPath({ repo: "owner/repo", pr: "0x10", gate: "draft_gate", headSha: "abc1234" }), /pr.*unsafe/);
   assert.throws(() => buildGateDiffPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "../../etc/passwd" }), /head-sha.*unsafe/);
   assert.throws(() => buildGateDiffPath({ repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "xyz" }), /head-sha.*unsafe/);
+});
+
+// ---------------------------------------------------------------------------
+// Emit-plan path builder (mirrors buildGateContextPath, .emit-plan.json suffix)
+// ---------------------------------------------------------------------------
+
+test("buildGateEmitPlanPath produces the keyed .emit-plan.json sibling of the context artifact", () => {
+  const sha = "c".repeat(40);
+  const p = buildGateEmitPlanPath({ repo: "o/r", pr: 7, gate: "review", headSha: sha, tmpRoot: "tmp" });
+  assert.equal(p, path.join("tmp", "gate-context", "o-r", "pr-7", `review-${sha}.emit-plan.json`));
+  // Default tmpRoot is "tmp" (same convention as every buildGate*Path sibling).
+  assert.equal(buildGateEmitPlanPath({ repo: "o/r", pr: 7, gate: "review", headSha: sha }), p);
+});
+
+test("buildGateEmitPlanPath differs from buildGateContextPath by exactly the suffix and keys two gates at one head apart", () => {
+  const sha = "c".repeat(40);
+  const planPath = buildGateEmitPlanPath({ repo: "o/r", pr: 7, gate: "review", headSha: sha });
+  const jsonPath = buildGateContextPath({ repo: "o/r", pr: 7, gate: "review", headSha: sha });
+  assert.equal(path.dirname(planPath), path.dirname(jsonPath));
+  assert.equal(path.basename(planPath, ".emit-plan.json"), path.basename(jsonPath, ".json"));
+  // Two gates at the same head derive DISTINCT paths — the keyed de-collision
+  // property the concurrent-emitter incident shape depends on.
+  const other = buildGateEmitPlanPath({ repo: "o/r", pr: 7, gate: "draft_gate", headSha: sha });
+  assert.notEqual(other, planPath);
 });
 
 // ---------------------------------------------------------------------------

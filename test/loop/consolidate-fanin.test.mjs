@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -961,6 +962,341 @@ test("consolidateGateFanin proceeds unchanged without a cache-telemetry artifact
       assert.equal(result.ok, true);
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// GATE-EXEC-FANOUT-DISPATCH-EMIT / GATE-EXEC-ARTIFACT-HEAD-STAMP: the optional
+// --emit-plan key guard. The emitter's keyed <gate>-<headSha>.emit-plan.json
+// artifact must match the round being consolidated (gate + headSha) or the
+// fan-in fails closed before any --out/--ledger-out write — a stale or foreign
+// plan must never pass as this round's plan. Omitting the flag preserves the
+// current behavior byte-for-byte (guard-only, never a findings source).
+// ---------------------------------------------------------------------------
+
+const EMIT_HEAD = "e5".repeat(20);
+
+async function writeEmitPlan(dir, plan, filename = "emit-plan.json") {
+  await mkdir(dir, { recursive: true });
+  const planPath = path.join(dir, filename);
+  await writeFile(planPath, typeof plan === "string" ? plan : JSON.stringify(plan), "utf8");
+  return planPath;
+}
+
+function matchingEmitPlan() {
+  return {
+    ok: true,
+    gate: "review",
+    headSha: EMIT_HEAD,
+    repo: "o/r",
+    pr: "7",
+    count: 1,
+    maxConcurrent: 4,
+    units: [{ scope: "review-coverage", angles: ["coverage"], group: null, promptPath: "tmp/x" }],
+  };
+}
+
+test("parseConsolidateFaninCliArgs: no --emit-plan flag leaves emitPlan undefined", () => {
+  const result = parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x"]);
+  assert.equal(result.emitPlan, undefined);
+});
+
+test("parseConsolidateFaninCliArgs parses --emit-plan with its --gate/--head-sha pair", () => {
+  const result = parseConsolidateFaninCliArgs([
+    "--findings-dir", "/tmp/x",
+    "--emit-plan", "/tmp/plan.json",
+    "--gate", "review",
+    "--head-sha", EMIT_HEAD,
+  ]);
+  assert.equal(result.emitPlan, "/tmp/plan.json");
+});
+
+test("parseConsolidateFaninCliArgs rejects an empty --emit-plan value", () => {
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--emit-plan", "  ", "--gate", "review", "--head-sha", EMIT_HEAD]),
+    /--emit-plan requires a non-empty path/,
+  );
+});
+
+test("parseConsolidateFaninCliArgs rejects --emit-plan without --gate and --head-sha (combined message)", () => {
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--emit-plan", "/tmp/p.json"]),
+    /--emit-plan requires --gate and --head-sha/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--emit-plan", "/tmp/p.json", "--gate", "review"]),
+    /--emit-plan requires --gate and --head-sha/,
+  );
+  assert.throws(
+    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--emit-plan", "/tmp/p.json", "--head-sha", EMIT_HEAD]),
+    /--emit-plan requires --gate and --head-sha/,
+  );
+});
+
+test("consolidateGateFanin accepts a matching emit-plan key and proceeds unchanged", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } },
+    async (dir) => {
+      const planDir = await mkdtemp(path.join(os.tmpdir(), "emit-plan-"));
+      try {
+        const planPath = await writeEmitPlan(planDir, matchingEmitPlan());
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          emitPlan: planPath,
+          gate: "review",
+          headSha: EMIT_HEAD,
+        });
+        assert.equal(result.ok, true);
+        assert.equal(result.overallVerdict, "clean");
+      } finally {
+        await rm(planDir, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+test("consolidateGateFanin fails closed on an emit-plan gate mismatch (same head), writing no outputs", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } },
+    async (dir) => {
+      const planDir = await mkdtemp(path.join(os.tmpdir(), "emit-plan-"));
+      try {
+        const wrongGate = { ...matchingEmitPlan(), gate: "draft_gate" };
+        const planPath = await writeEmitPlan(planDir, wrongGate);
+        const outPath = path.join(planDir, "out", "findings.json");
+        const ledgerPath = path.join(planDir, "out", "ledger.json");
+        await assert.rejects(
+          consolidateGateFanin({
+            findingsDir: dir,
+            emitPlan: planPath,
+            gate: "review",
+            headSha: EMIT_HEAD,
+            out: outPath,
+            ledgerOut: ledgerPath,
+          }),
+          (err) => err.message.includes("is stamped for gate") && err.message.includes("draft_gate") && err.message.includes("this round consolidates gate review"),
+        );
+        assert.equal(existsSync(outPath), false);
+        assert.equal(existsSync(ledgerPath), false);
+      } finally {
+        await rm(planDir, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+test("consolidateGateFanin fails closed on an emit-plan head mismatch (same gate), naming both heads and writing no outputs", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } },
+    async (dir) => {
+      const planDir = await mkdtemp(path.join(os.tmpdir(), "emit-plan-"));
+      try {
+        const wrongHead = { ...matchingEmitPlan(), headSha: "d4".repeat(20) };
+        const planPath = await writeEmitPlan(planDir, wrongHead);
+        const outPath = path.join(planDir, "out", "findings.json");
+        const ledgerPath = path.join(planDir, "out", "ledger.json");
+        await assert.rejects(
+          consolidateGateFanin({
+            findingsDir: dir,
+            emitPlan: planPath,
+            gate: "review",
+            headSha: EMIT_HEAD,
+            out: outPath,
+            ledgerOut: ledgerPath,
+          }),
+          (err) => err.message.includes("is stamped for head") && err.message.includes("d4".repeat(20)) && err.message.includes(`this round consolidates head ${EMIT_HEAD}`),
+        );
+        assert.equal(existsSync(outPath), false);
+        assert.equal(existsSync(ledgerPath), false);
+      } finally {
+        await rm(planDir, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+test("consolidateGateFanin fails closed on a malformed/missing/unreadable emit-plan key (cannot-verify wording)", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } },
+    async (dir) => {
+      const planDir = await mkdtemp(path.join(os.tmpdir(), "emit-plan-"));
+      try {
+        const base = { findingsDir: dir, gate: "review", headSha: EMIT_HEAD };
+        // missing gate field
+        const noGate = { ...matchingEmitPlan() };
+        delete noGate.gate;
+        await assert.rejects(
+          consolidateGateFanin({ ...base, emitPlan: await writeEmitPlan(planDir, noGate, "no-gate.json") }),
+          (err) => err.message.startsWith("cannot verify emit-plan key") && err.message.includes('"gate"'),
+        );
+        // whitespace-only gate field
+        const blankGate = { ...matchingEmitPlan(), gate: "   " };
+        await assert.rejects(
+          consolidateGateFanin({ ...base, emitPlan: await writeEmitPlan(planDir, blankGate, "blank-gate.json") }),
+          (err) => err.message.startsWith("cannot verify emit-plan key") && err.message.includes('"gate"'),
+        );
+        // non-hex headSha field
+        const badSha = { ...matchingEmitPlan(), headSha: "zzz" };
+        await assert.rejects(
+          consolidateGateFanin({ ...base, emitPlan: await writeEmitPlan(planDir, badSha, "bad-sha.json") }),
+          (err) => err.message.startsWith("cannot verify emit-plan key") && err.message.includes('"headSha"'),
+        );
+        // missing headSha field
+        const noSha = { ...matchingEmitPlan() };
+        delete noSha.headSha;
+        await assert.rejects(
+          consolidateGateFanin({ ...base, emitPlan: await writeEmitPlan(planDir, noSha, "no-sha.json") }),
+          (err) => err.message.startsWith("cannot verify emit-plan key") && err.message.includes('"headSha"'),
+        );
+        // non-JSON file
+        await assert.rejects(
+          consolidateGateFanin({ ...base, emitPlan: await writeEmitPlan(planDir, "{ not json", "not-json.json") }),
+          (err) => err.message.startsWith("cannot verify emit-plan key") && err.message.includes("not valid JSON"),
+        );
+        // unreadable path
+        await assert.rejects(
+          consolidateGateFanin({ ...base, emitPlan: path.join(planDir, "nonexistent.json") }),
+          (err) => err.message.startsWith("cannot verify emit-plan key") && err.message.includes("could not be read"),
+        );
+      } finally {
+        await rm(planDir, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// Normalization twin: a plan whose headSha differs only in CASE from the
+// round's --head-sha is the same round key (GATE-EXEC-ARTIFACT-HEAD-STAMP
+// trim+lowercase semantics) and must never false-reject.
+test("consolidateGateFanin accepts an emit-plan headSha that differs only in case", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } },
+    async (dir) => {
+      const planDir = await mkdtemp(path.join(os.tmpdir(), "emit-plan-"));
+      try {
+        const upper = { ...matchingEmitPlan(), headSha: EMIT_HEAD.toUpperCase() };
+        const result = await consolidateGateFanin({
+          findingsDir: dir,
+          emitPlan: await writeEmitPlan(planDir, upper),
+          gate: "review",
+          headSha: EMIT_HEAD,
+        });
+        assert.equal(result.ok, true);
+      } finally {
+        await rm(planDir, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// Programmatic callers bypass the parser, so the in-function guard must
+// itself require the pair a mismatched key can be checked against.
+test("consolidateGateFanin fails closed when emitPlan is given programmatically without gate/headSha", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } },
+    async (dir) => {
+      const planDir = await mkdtemp(path.join(os.tmpdir(), "emit-plan-"));
+      try {
+        const planPath = await writeEmitPlan(planDir, matchingEmitPlan());
+        await assert.rejects(
+          consolidateGateFanin({ findingsDir: dir, emitPlan: planPath }),
+          (err) => err.message.includes("--emit-plan requires both --gate and --head-sha"),
+        );
+      } finally {
+        await rm(planDir, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// CLI twin: the parser path and the programmatic path fail identically — one
+// spawned CLI run with a mismatched plan exits 1 with the mismatch error.
+test("consolidate-fanin CLI: --emit-plan with a mismatched key exits 1 (parser and function agree)", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } },
+    async (dir) => {
+      const planDir = await mkdtemp(path.join(os.tmpdir(), "emit-plan-cli-"));
+      try {
+        const wrongGate = { ...matchingEmitPlan(), gate: "draft_gate" };
+        const planPath = await writeEmitPlan(planDir, wrongGate);
+        const cliResult = await runNode(
+          path.join(import.meta.dirname, "..", "..", "scripts", "loop", "consolidate-fanin.mjs"),
+          ["--findings-dir", dir, "--emit-plan", planPath, "--gate", "review", "--head-sha", EMIT_HEAD],
+        );
+        assert.equal(cliResult.code, 1);
+        const payload = JSON.parse(cliResult.stderr);
+        assert.equal(payload.ok, false);
+        assert.match(payload.error, /is stamped for gate "draft_gate" but this round consolidates gate review/);
+      } finally {
+        await rm(planDir, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// End-to-end regression: the REAL emit CLI writes the keyed plan for a round,
+// then the REAL consolidate-fanin CLI consumes it with a matching key and
+// produces the expected consolidated outputs — the producer/consumer
+// round-trip through the shared keyed path.
+test("emit CLI then consolidate-fanin CLI with --emit-plan: one round end to end", async () => {
+  const workDir = await mkdtemp(path.join(os.tmpdir(), "emit-plan-e2e-"));
+  try {
+    const HEAD_SHA = "c".repeat(40);
+    const GATE = "review";
+    const REPO = "o/r";
+    const PR = "7";
+    const PREFIX_BYTES = "## Invariant prefix\nrepo: o/r\nhead: c\n";
+    const dir = path.join(workDir, "tmp", "gate-context", "o-r", "pr-7");
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, `${GATE}-${HEAD_SHA}.briefing-prefix.txt`), PREFIX_BYTES, "utf8");
+    await writeFile(path.join(dir, `${GATE}-${HEAD_SHA}.briefing-volatile.txt`), "# volatile tail\n", "utf8");
+    await writeFile(
+      path.join(dir, `${GATE}-${HEAD_SHA}.json`),
+      JSON.stringify({ fanout: { groups: [{ name: "coverage", angles: ["coverage"] }] } }),
+      "utf8",
+    );
+    const emit = await runNode(
+      path.join(import.meta.dirname, "..", "..", "scripts", "github", "emit-fanout-dispatch.mjs"),
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: workDir },
+    );
+    assert.equal(emit.code, 0, emit.stderr);
+    const emitPayload = JSON.parse(emit.stdout);
+    assert.equal(emitPayload.count, 1);
+    const planPath = path.join(dir, `${GATE}-${HEAD_SHA}.emit-plan.json`);
+    assert.ok(existsSync(planPath), "the keyed emit-plan artifact exists");
+
+    // Per-angle findings dir OUTSIDE the emit tmp tree, stamped for the head.
+    const findingsDir = path.join(workDir, "findings");
+    await mkdir(findingsDir, { recursive: true });
+    await writeFile(
+      path.join(findingsDir, "coverage.json"),
+      JSON.stringify({ angle: "coverage", verdict: "clean", findings: [], headSha: HEAD_SHA }),
+      "utf8",
+    );
+    const outPath = path.join(workDir, "out", "findings.json");
+    const ledgerPath = path.join(workDir, "out", "ledger.json");
+    const cliResult = await runNode(
+      path.join(import.meta.dirname, "..", "..", "scripts", "loop", "consolidate-fanin.mjs"),
+      [
+        "--findings-dir", findingsDir,
+        "--emit-plan", planPath,
+        "--gate", GATE,
+        "--head-sha", HEAD_SHA,
+        "--out", outPath,
+        "--ledger-out", ledgerPath,
+        "--tmp-root", path.join(workDir, "tmp"),
+      ],
+    );
+    assert.equal(cliResult.code, 0, cliResult.stderr);
+    const payload = JSON.parse(cliResult.stdout);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.overallVerdict, "clean");
+    assert.deepEqual(payload.severityCounts, { high: 0, medium: 0, low: 0, question: 0, nit: 0 });
+    assert.ok(JSON.parse(await readFile(outPath, "utf8")));
+    assert.ok(JSON.parse(await readFile(ledgerPath, "utf8")));
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => {});
+  }
 });
 
 // pr-checklist mandatory-angle upsert

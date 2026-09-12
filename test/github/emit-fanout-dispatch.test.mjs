@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, sanitizeScopeSegment } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { buildGateEmitPlanPath } from "../../scripts/github/write-gate-context.mjs";
 
 const emitCliPath = path.resolve("scripts/github/emit-fanout-dispatch.mjs");
 
@@ -40,13 +41,13 @@ const FANOUT = {
   pendingGroups: [{ name: "contradiction-lens", angles: ["contradiction-lens"] }],
 };
 
-async function seedBundle(tmpDir, { fanout = FANOUT, withPrefix = true } = {}) {
+async function seedBundle(tmpDir, { fanout = FANOUT, withPrefix = true, gate = GATE } = {}) {
   const dir = path.join(tmpDir, "tmp", "gate-context", "o-r", "pr-7");
   await mkdir(dir, { recursive: true });
-  if (withPrefix) await writeFile(path.join(dir, `${GATE}-${HEAD_SHA}.briefing-prefix.txt`), PREFIX_BYTES, "utf8");
-  await writeFile(path.join(dir, `${GATE}-${HEAD_SHA}.briefing-volatile.txt`), VOLATILE_BYTES, "utf8");
+  if (withPrefix) await writeFile(path.join(dir, `${gate}-${HEAD_SHA}.briefing-prefix.txt`), PREFIX_BYTES, "utf8");
+  await writeFile(path.join(dir, `${gate}-${HEAD_SHA}.briefing-volatile.txt`), VOLATILE_BYTES, "utf8");
   const artifact = fanout === null ? {} : { fanout };
-  await writeFile(path.join(dir, `${GATE}-${HEAD_SHA}.json`), JSON.stringify(artifact), "utf8");
+  await writeFile(path.join(dir, `${gate}-${HEAD_SHA}.json`), JSON.stringify(artifact), "utf8");
   return dir;
 }
 
@@ -115,6 +116,82 @@ test("--pending emits only the pendingGroups subset", async () => {
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.count, 1);
     assert.equal(payload.units[0].angles[0], "contradiction-lens");
+  });
+});
+
+// GATE-EXEC-FANOUT-DISPATCH-EMIT: a successful run persists the emitted round
+// plan to the keyed <gate>-<headSha>.emit-plan.json sibling of the gate-context
+// bundle (buildGateEmitPlanPath), body = the emitter's own result object — never a
+// fixed-path stdout capture that concurrent gates would clobber.
+test("a successful run persists the keyed emit-plan artifact with the full result body", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const stdoutPayload = JSON.parse(result.stdout);
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    const persisted = JSON.parse(await readFile(planPath, "utf8"));
+    assert.equal(persisted.ok, true);
+    assert.equal(persisted.gate, GATE);
+    assert.equal(persisted.headSha, HEAD_SHA);
+    assert.equal(persisted.repo, REPO);
+    assert.equal(persisted.pr, PR);
+    assert.equal(persisted.count, stdoutPayload.count);
+    assert.equal(persisted.maxConcurrent, stdoutPayload.maxConcurrent);
+    assert.deepEqual(persisted.units, stdoutPayload.units);
+    for (const unit of persisted.units) {
+      assert.deepEqual(Object.keys(unit).sort(), ["angles", "group", "promptPath", "scope"].sort());
+    }
+  });
+});
+
+// Two gates at the same head/repo/pr write DISTINCT keyed plan files; the
+// review plan stays byte-identical after the draft_gate emitter runs — the
+// concurrent-emitter clobbering hazard the keyed artifact exists to remove.
+test("two gates at the same head persist distinct, mutually-intact emit plans", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir, { gate: "review" });
+    await seedBundle(tmpDir, { gate: "draft_gate" });
+    const review = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", "review", "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(review.status, 0, review.stderr);
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const reviewPlanPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: "review", headSha: HEAD_SHA, tmpRoot });
+    const reviewPlanBefore = await readFile(reviewPlanPath, "utf8");
+
+    const draft = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", "draft_gate", "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(draft.status, 0, draft.stderr);
+    const draftPlanPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: "draft_gate", headSha: HEAD_SHA, tmpRoot });
+    assert.notEqual(draftPlanPath, reviewPlanPath);
+    assert.equal(JSON.parse(await readFile(reviewPlanPath, "utf8")).gate, "review");
+    assert.equal(JSON.parse(await readFile(draftPlanPath, "utf8")).gate, "draft_gate");
+    // The review plan is intact (byte-identical) after the draft_gate run.
+    assert.equal(await readFile(reviewPlanPath, "utf8"), reviewPlanBefore);
+  });
+});
+
+// Success-only placement: a refusal run (zero units) must leave NO plan file —
+// never a half-persisted round.
+test("a refusal run writes NO emit-plan artifact", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir, { fanout: { groups: [] } });
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 1, result.stderr);
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    await assert.rejects(() => readFile(planPath, "utf8"), { code: "ENOENT" });
   });
 });
 

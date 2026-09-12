@@ -286,6 +286,10 @@
       "enforcement": "doc"
     },
     {
+      "id": "GATE-EXEC-EMIT-PLAN-KEY",
+      "enforcement": "doc"
+    },
+    {
       "id": "GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK"
     },
     {

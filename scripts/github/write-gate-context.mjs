@@ -687,6 +687,18 @@ export function buildGateBriefingScopePath({ repo, pr, gate, headSha, scope, tmp
   return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: `.briefing-${scope}.txt` });
 }
 
+// Deterministic path for the keyed emit-plan artifact
+// (GATE-EXEC-FANOUT-DISPATCH-EMIT): emit-fanout-dispatch.mjs's own emitted
+// round plan persisted as a keyed sibling of the gate-context bundle, so two
+// concurrent emitters at different gates write distinct files by construction
+// and a coordinator never hand-rolls a fixed-path stdout capture that collides
+// across gates. Mirrors buildGateContextPath (same path-segment params); the
+// body is the emitter's own result object, so the artifact is self-describing
+// and key-stamped.
+export function buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
+  return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".emit-plan.json" });
+}
+
 // Deterministic path for the shared validation-results artifact
 // (GATE-EXEC-VALIDATION-ARTIFACT, `run-gate-validation.mjs`): the record of
 // this round's validation suites, run once and read (not re-run) by every

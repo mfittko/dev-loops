@@ -760,7 +760,16 @@ units at most `maxConcurrent` at a time. The conductor MUST bound this step by t
 `maxConcurrent` (`resolveFanoutEffectiveConcurrency`, 1 when `gates.fanout.sequential`), NOT by
 `artifact.fanout.wavePlan`: that wave plan is computed over the UNSPLIT `resolveFanoutGroups`
 units and no longer matches this step's split unit set (an auto-chunk leftover the emitter
-splits into N singletons would over-dispatch a single wave slot). This is the ONE documented
+splits into N singletons would over-dispatch a single wave slot). On success
+the emitter ALSO persists its emitted round plan to the keyed
+`<gate>-<headSha>.emit-plan.json` sibling of the gate-context bundle
+(`buildGateEmitPlanPath` in `write-gate-context.mjs`, the same
+`buildGateArtifactPath` keying as every other gate artifact), with the emitter's
+own result object as the body — self-describing and key-stamped — so two
+concurrent emitters at different gates write distinct files by construction and
+a coordinator consumes THAT keyed path, retiring the hand-rolled fixed-path
+stdout-capture habit whose shared file a concurrent gate silently clobbers.
+This is the ONE documented
 dispatch path, and it closes three failure modes prose discipline never held:
 
 - **No coordinator persona re-derivation.** The emitted angle-suffix only NAMES the unit's
@@ -1337,6 +1346,20 @@ passes. This enforces the Section D honesty invariant: a harness
 whose cache reuse is not measurable must never be reported as a verified `1
 write + N reads` result.
 
+<!-- rule: GATE-EXEC-EMIT-PLAN-KEY -->
+`GATE-EXEC-EMIT-PLAN-KEY`: when `consolidate-fanin.mjs` is invoked with the
+optional `--emit-plan <path>` (the emitter's keyed `<gate>-<headSha>.emit-plan.json`
+artifact from `GATE-EXEC-FANOUT-DISPATCH-EMIT` above), the plan's embedded
+round key (`gate`, `headSha`) MUST match the round being consolidated — checked
+with `GATE-EXEC-ARTIFACT-HEAD-STAMP`'s own trim+lowercase head compare — and a
+mismatch, a missing/malformed key field, an unreadable/non-JSON plan, or a plan
+given without `--gate`/`--head-sha` FAILS CLOSED (exit 1, "cannot verify
+emit-plan key" / "is stamped for ... but this round consolidates ...") before any
+`--out`/`--ledger-out` write, so a rejected round leaves no durable output. The
+flag is a guard only: the plan is never a findings or provenance source — the
+gate-context bundle's `fanout.groups` stays authoritative — and omitting the
+flag preserves the current fan-in behavior exactly.
+
 Merge the parallel reviewer findings into one consolidated fix plan with the
 sanctioned fan-in CLI:
 
@@ -1345,7 +1368,8 @@ dev-loops gate consolidate-fanin --findings-dir <dir> --head-sha <sha> \
   --gate <draft_gate|pre_approval_gate> --expected-dispatch-units <n> \
   --out <path> --ledger-out <path> --spec-authority <identity-path> \
   --jq '.severityCounts' \
-  [--carried-angles <json> --carry-forward-plan <json>]
+  [--carried-angles <json> --carry-forward-plan <json>] \
+  [--emit-plan <path>]
 ```
 
 (`scripts/loop/consolidate-fanin.mjs`), a thin wrapper over the pure

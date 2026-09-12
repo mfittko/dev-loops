@@ -5,7 +5,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { gateScopePrefix, normalizeGate } from "./_gate-names.mjs";
 import { HEAD_SHA_RE, VALID_SCOPE_RE } from "./record-dispatch-prompt-layout.mjs";
-import { buildGateContextPath } from "./write-gate-context.mjs";
+import { buildGateContextPath, buildGateEmitPlanPath } from "./write-gate-context.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
 import { loadDevLoopConfig, resolveFanoutEffectiveConcurrency } from "@dev-loops/core/config";
 
@@ -68,6 +68,13 @@ Output (stdout, JSON):
   A fail-closed refusal (exit 1) emits { "ok": false, "error": "..." } on STDOUT
   (via the shared jq-output emitter); a usage/parse error (exit 2) emits
   { "ok": false, "error": "...", "hint"?: "run with --help for usage" } on STDERR.
+  On success this step ALSO persists its emitted round plan to the keyed
+  <gate>-<headSha>.emit-plan.json sibling of the gate-context bundle
+  (buildGateEmitPlanPath, GATE-EXEC-FANOUT-DISPATCH-EMIT) — body = the emitter's
+  own result object — so a consumer reads THAT keyed path and never hand-rolls
+  a fixed-path stdout capture that concurrent gates would clobber; a failed
+  persist exits 2 (a persist failure is an IO failure, not a plan-semantics
+  refusal).
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Emitted one composed prompt per resolved dispatch unit
@@ -336,7 +343,27 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     emitted.push({ scope, angles, group: angles.length > 1 ? unit.name : null, promptPath: result.promptPath });
   }
 
-  return finish({ ok: true, gate, headSha, repo, pr, count: emitted.length, maxConcurrent, units: emitted }, true);
+  // GATE-EXEC-FANOUT-DISPATCH-EMIT: persist the emitted round plan to the
+  // keyed <gate>-<headSha>.emit-plan.json sibling of the gate-context bundle
+  // (buildGateEmitPlanPath). Placement is success-only — AFTER the whole
+  // per-unit loop — so a failure anywhere earlier leaves NO plan file, never a
+  // half-persisted round; a re-run at the same key overwrites deterministically
+  // (the same round). Two gates at one head write distinct files by path
+  // construction. The persist is unconditional on the success path
+  // (--pending/--jq/--silent shape stdout only). A failed persist is an IO
+  // failure and takes the module's formatCliError/exit-2 tier, matching the
+  // suffix-write catch block directly above — exit 1 stays reserved for
+  // plan-semantics refusals.
+  const payload = { ok: true, gate, headSha, repo, pr, count: emitted.length, maxConcurrent, units: emitted };
+  const planPath = buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot });
+  try {
+    await mkdir(path.dirname(planPath), { recursive: true });
+    await writeFile(planPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  } catch (err) {
+    process.stderr.write(`${formatCliError(err)}\n`);
+    return 2;
+  }
+  return finish(payload, true);
 }
 
 if (isDirectCliRun(import.meta.url)) {
