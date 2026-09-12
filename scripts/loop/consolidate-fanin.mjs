@@ -1030,7 +1030,12 @@ export async function consolidateGateFanin(options) {
         }
       }
       if (clearErrors.length > 0) {
-        err.message = `${err.message} — additionally, the stale-output clear on this fail-closed path failed: ${clearErrors.join("; ")}`;
+        // Wrap instead of mutating the caught value: a new Error keeps the
+        // original as `cause` (preserving its stack; also safe if a non-Error
+        // was thrown) while appending the clear-failure details — the
+        // verification error text stays the leading message.
+        const cause = err instanceof Error ? err : new Error(String(err));
+        throw new Error(`${cause.message} — additionally, the stale-output clear on this fail-closed path failed: ${clearErrors.join("; ")}`, { cause: err });
       }
       throw err;
     }

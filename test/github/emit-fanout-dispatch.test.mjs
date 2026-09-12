@@ -237,6 +237,39 @@ test("a failed re-run REMOVES a pre-existing keyed emit-plan from an earlier suc
   });
 });
 
+// Early-refusal regression (Copilot review, emit-fanout-dispatch.mjs:276): the
+// same contract must hold when the gate-context artifact carries NO fanout plan
+// at all — the plan-removal runs before any validation/refusal return, so the
+// no-fanout-plan refusal (an EARLIER return than the zero-units one) also
+// removes a pre-existing keyed plan from an earlier successful run.
+test("the no-fanout-plan EARLY refusal REMOVES a pre-existing keyed emit-plan too", async () => {
+  await withTmpDir(async (tmpDir) => {
+    // 1. A successful run persists the keyed plan.
+    await seedBundle(tmpDir);
+    const okRun = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(okRun.status, 0, okRun.stderr);
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    assert.equal(JSON.parse(await readFile(planPath, "utf8")).ok, true);
+
+    // 2. The EARLY refusal at the SAME key — artifact with no fanout plan at
+    //    all (fanout: null seeds an empty artifact object).
+    await seedBundle(tmpDir, { fanout: null });
+    const refused = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(refused.status, 1, refused.stderr);
+    assert.match(JSON.parse(refused.stdout).error, /carries no fanout dispatch plan/);
+
+    // 3. The earlier round's keyed plan is GONE even on the early refusal path.
+    await assert.rejects(() => readFile(planPath, "utf8"), { code: "ENOENT" });
+  });
+});
+
 test("--pending falls back to groups only when pendingGroups is ABSENT", async () => {
   await withTmpDir(async (tmpDir) => {
     await seedBundle(tmpDir, {

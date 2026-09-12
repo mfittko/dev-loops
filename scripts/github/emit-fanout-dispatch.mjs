@@ -257,25 +257,27 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     return 2;
   }
 
-  const fanout = artifact?.fanout;
-  if (!fanout || typeof fanout !== "object") {
-    return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — gate-context artifact at ${JSON.stringify(contextPath)} carries no fanout dispatch plan — re-run write-gate-context.mjs (a thin briefing with no --base emits no fanout plan)` }, false);
-  }
-
   // GATE-EXEC-FANOUT-DISPATCH-EMIT: clear the keyed
-  // <gate>-<headSha>.emit-plan.json sibling (buildGateEmitPlanPath) BEFORE the
-  // emission loop, so every refusal/error return below leaves it ABSENT.
-  // Without this, a successful earlier run at the same gate/head key survives a
-  // failed re-run, and a later fan-in (which key-checks that file) can accept
-  // the stale plan as this round's — the exact stale-plan hazard the key guard
-  // trusts this path's freshness for. ENOENT on the rm is fine (no prior plan
-  // exists). The success-only WRITE placement at the end of main is unchanged —
-  // this removes, it does not pre-persist anything.
+  // <gate>-<headSha>.emit-plan.json sibling (buildGateEmitPlanPath) immediately
+  // after the gate-context artifact is read — BEFORE any plan validation or
+  // refusal return (including the no-fanout-plan refusal above) — so every
+  // non-success exit leaves it ABSENT. Without this, a successful earlier run
+  // at the same gate/head key survives a failed re-run, and a later fan-in
+  // (which key-checks that file) can accept the stale plan as this round's —
+  // the exact stale-plan hazard the key guard trusts this path's freshness
+  // for. ENOENT on the rm is fine (no prior plan exists). The success-only
+  // WRITE placement at the end of main is unchanged — this removes, it does
+  // not pre-persist anything.
   try {
     await rm(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), { force: true });
   } catch (err) {
     process.stderr.write(`${formatCliError(err)}\n`);
     return 2;
+  }
+
+  const fanout = artifact?.fanout;
+  if (!fanout || typeof fanout !== "object") {
+    return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — gate-context artifact at ${JSON.stringify(contextPath)} carries no fanout dispatch plan — re-run write-gate-context.mjs (a thin briefing with no --base emits no fanout plan)` }, false);
   }
 
   // --pending falls back to `groups` ONLY when pendingGroups is genuinely ABSENT
@@ -362,23 +364,16 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     emitted.push({ scope, angles, group: angles.length > 1 ? unit.name : null, promptPath: result.promptPath });
   }
 
-  // GATE-EXEC-FANOUT-DISPATCH-EMIT: clear the keyed <gate>-<headSha>.emit-plan.json
-  // sibling BEFORE the emission loop, so every refusal/error return below leaves
-  // it ABSENT. Without this, a successful earlier run at the same gate/head key
-  // would survive a failed re-run and a later fan-in (which key-checks that file)
-  // could accept the stale plan as this round's — the exact stale-plan hazard the
-  // key guard trusts the path's freshness for. ENOENT on the rm is fine (no prior
-  // plan exists). The success-only WRITE placement at the end of main is unchanged;
-  // this removal does not pre-persist anything, it only removes.
-  // per-unit loop — so a failure anywhere earlier leaves NO plan file, never a
-  // half-persisted round (the pre-loop rm above removed any prior plan at this
-  // key, so "leaves NO plan file" now holds even across re-runs); a re-run at the
-  // same key overwrites deterministically (the same round). Two gates at one
-  // head write distinct files by path construction. The persist is unconditional
-  // on the success path (--pending/--jq/--silent shape stdout only). A failed
-  // persist is an IO failure and takes the module's formatCliError/exit-2 tier,
-  // matching the suffix-write catch block directly above — exit 1 stays reserved
-  // for plan-semantics refusals.
+  // GATE-EXEC-FANOUT-DISPATCH-EMIT: success-only persist of the emitted round
+  // plan at this point — every refusal/error return above already left NO plan
+  // file (the pre-validation rm removed any prior plan at this key, so
+  // "leaves NO plan file" holds even across re-runs). A re-run at the same key
+  // overwrites deterministically (the same round). Two gates at one head write
+  // distinct files by path construction. The persist is unconditional on the
+  // success path (--pending/--jq/--silent shape stdout only). A failed persist
+  // is an IO failure and takes the module's formatCliError/exit-2 tier, matching
+  // the suffix-write catch block directly above — exit 1 stays reserved for
+  // plan-semantics refusals.
   const payload = { ok: true, gate, headSha, repo, pr, pending: pendingOnly, count: emitted.length, maxConcurrent, units: emitted };
   const planPath = buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot });
   try {
