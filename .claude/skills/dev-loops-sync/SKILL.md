@@ -56,13 +56,17 @@ dev-loops **source**, with as few Multica-specific deviations as possible.
   and results come back through the thread/attachments — never through the
   coordinator's `tmp/`. One child issue per dispatch unit is
   overkill and NOT the default: gate/reviewer fan-out **never** creates
-  sub-issues — even when multiple review groups target the same agent, they
-  dispatch on the existing parent issue (combined into one dispatch or
-  serialized — a multi-group draft gate emits zero `multica issue create`
-  operations); child issues are allowed **only when a human explicitly
-  requests work decomposition** — never as a fallback for freshness,
-  concurrency, stages, waves, or reviewer groups — and carry the same
-  durable-context rules. It also forbids
+  sub-issues — even when multiple review groups target the same agent. A gate
+  round is exactly **one** durable Multica `review` assignment on the parent
+  issue (hybrid dispatch): that agent fans its review groups out through its
+  Pi or Claude harness-native subagents (concurrent, fresh-context, no model
+  override — they inherit the Multica-governed runtime/model), aggregates
+  them, and posts one parent-issue result — never one Multica assignment per
+  group, never manufactured concurrency via child issues (a multi-group
+  draft gate emits zero `multica issue create` operations); child issues are
+  allowed **only when a human explicitly requests work decomposition** —
+  never as a fallback for freshness, concurrency, stages, waves, or reviewer
+  groups — and carry the same durable-context rules. It also forbids
   **recursive `dev-loop` child dispatch** inside Multica (provider-independent,
   binding Pi and Claude hosts alike): a top-level Multica `dev-loop` run is
   already the coordinator — it routes the resolved strategy directly to the

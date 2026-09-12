@@ -1,6 +1,6 @@
 ---
 name: multica-dispatch
-description: Multica-native fan-out/fan-in contract behind `dev-loop` when running inside a Multica workspace. Dedicated canonical agents receive bounded work through a root dispatch comment on the existing parent issue (mention-dispatch, replies in-thread) — not Pi's in-process subagent tool. Outside Multica, the ordinary Pi-subagent dispatch is unchanged. Loaded by the synced canonical agents in a Multica workspace.
+description: Multica-native fan-out/fan-in contract behind `dev-loop` when running inside a Multica workspace. Dedicated canonical agents receive bounded work through a root dispatch comment on the existing parent issue (mention-dispatch, replies in-thread) — not Pi's in-process subagent tool. Gate rounds use a hybrid topology — one durable Multica `review` assignment, whose agent fans its review groups out through its harness-native subagents and aggregates them into one parent-issue result. Outside Multica, the ordinary Pi-subagent dispatch is unchanged. Loaded by the synced canonical agents in a Multica workspace.
 ---
 
 # Multica Dispatch
@@ -26,6 +26,9 @@ Pi's in-process `subagent` tool.
   sub-issues — including when multiple review groups target the same agent.
   A multi-group draft gate therefore emits **zero** `multica issue create`
   operations and dispatches on the existing parent issue.
+- **A gate round is exactly ONE durable Multica `review` assignment** on the
+  parent issue — never one Multica assignment per review group. The parallel
+  fresh-context work happens INSIDE that assignment (hybrid dispatch, below).
 - **Resolve each target agent from the live roster at dispatch time**:
   `multica agent list --output json` by name. Never hardcode or persist a
   workspace-specific agent ID in any committed source. Mention-link each agent
@@ -71,12 +74,21 @@ Pi's in-process `subagent` tool.
   Each worker runs in its own session, on its own checkout. The dispatch
   comment is the only shared surface; the thread reply is the only return
   channel.
-- **Parallelism comes from distinct dedicated agents.** If several angles
-  belong to the same agent, group them into that agent's single dispatch run or
-  accept serialization — never create extra dispatch surface for one agent's
-  angles. If Multica serializes repeated mentions of the same agent, combine
-  all pending groups for that agent into **one** dispatch (or let them
-  serialize) — do not manufacture concurrency with child issues.
+- **Hybrid dispatch topology for gate rounds (one Multica assignment,
+  harness-native fan-out).** `dev-loop` dispatches exactly **one** durable
+  Multica `review` assignment on the parent issue for a gate round — never
+  one assignment per review group. The `review` agent then fans its review
+  groups out through its Pi or Claude harness-native subagents, concurrently,
+  in fresh contexts, and aggregates their results into **one** parent-issue
+  result. Harness subagents are internal workers, not additional Multica
+  assignments: they create no issues, post no separate durable results, and
+  never invoke `dev-loop` recursively. Do not specify a model in
+  harness-subagent calls — they inherit the parent Multica agent's
+  runtime/model configuration, which Multica owns. Other roles (`refiner`,
+  `judge`, `fixer`, …) follow the same shape: one Multica assignment per
+  distinct dedicated agent per round; that agent may parallelize internally
+  with its harness-native subagents. Never manufacture concurrency with
+  child issues.
 
 ## No recursive dev-loop dispatch (provider-independent)
 
