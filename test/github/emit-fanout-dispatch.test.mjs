@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, sanitizeScopeSegment } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, main, sanitizeScopeSegment } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { buildGateEmitPlanPath } from "../../scripts/github/write-gate-context.mjs";
 
 const emitCliPath = path.resolve("scripts/github/emit-fanout-dispatch.mjs");
@@ -153,6 +153,26 @@ test("a successful run persists the keyed emit-plan artifact with the full resul
     for (const unit of persisted.units) {
       assert.deepEqual(Object.keys(unit).sort(), ["angles", "group", "promptPath", "scope"].sort());
     }
+  });
+});
+
+test("a failed emit-plan write removes a partially-created final artifact", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    const status = await main(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      {
+        tmpRootDefault: tmpRoot,
+        persistPlan: async (file, data) => {
+          await writeFile(file, data.slice(0, 16), "utf8");
+          throw Object.assign(new Error("simulated partial write"), { code: "ENOSPC" });
+        },
+      },
+    );
+    assert.equal(status, 2);
+    await assert.rejects(() => readFile(planPath, "utf8"), { code: "ENOENT" });
   });
 });
 

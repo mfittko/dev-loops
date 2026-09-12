@@ -1376,9 +1376,9 @@ sanctioned fan-in CLI:
 dev-loops gate consolidate-fanin --findings-dir <dir> --head-sha <sha> \
   --gate <draft_gate|pre_approval_gate> --expected-dispatch-units <n> \
   --out <path> --ledger-out <path> --spec-authority <identity-path> \
+  --emit-plan <path> \
   --jq '.severityCounts' \
-  [--carried-angles <json> --carry-forward-plan <json>] \
-  [--emit-plan <path>]
+  [--carried-angles <json> --carry-forward-plan <json>]
 ```
 
 (`scripts/loop/consolidate-fanin.mjs`), a thin wrapper over the pure

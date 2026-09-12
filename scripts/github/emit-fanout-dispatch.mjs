@@ -195,7 +195,7 @@ function resolveFlagValue(argv, flag) {
   return val;
 }
 
-export async function main(argv = process.argv.slice(2), { tmpRootDefault = path.join(process.cwd(), "tmp") } = {}) {
+export async function main(argv = process.argv.slice(2), { tmpRootDefault = path.join(process.cwd(), "tmp"), persistPlan = writeFile } = {}) {
   if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(`${USAGE}\n`);
     return 0;
@@ -405,8 +405,13 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const planPath = buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot });
   try {
     await mkdir(path.dirname(planPath), { recursive: true });
-    await writeFile(planPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    await persistPlan(planPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   } catch (err) {
+    try {
+      await rm(planPath, { force: true });
+    } catch {
+      // Best-effort clear only — never mask the original persist failure.
+    }
     process.stderr.write(`${formatCliError(err)}\n`);
     return 2;
   }
