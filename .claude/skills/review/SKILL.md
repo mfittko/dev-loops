@@ -77,8 +77,12 @@ repeat phases those gates run:
    identical neutral bundle plus its angle(s) — unchanged from draft/
    pre-approval fan-out; no new reviewer angles, no bespoke review agent.
 4. **Phase 3 — fan-in + post.** `dev-loops-run scripts/loop/consolidate-fanin.mjs
-   --gate review [...] --ledger-out <path>` synthesizes the per-angle findings
-   into one disposition ledger and computed verdict, then `dev-loops-run scripts/github/upsert-checkpoint-verdict.mjs --repo <owner/repo> --pr <n>
+   --gate review [...] --emit-plan <emit-plan-path> --ledger-out <path>`
+   synthesizes the per-angle findings into one disposition ledger and computed
+   verdict (`<emit-plan-path>` is the keyed `review-<headSha>.emit-plan.json`
+   sibling `emit-fanout-dispatch.mjs` persisted in Phase 2, consumed by the
+   fan-in's `GATE-EXEC-EMIT-PLAN-KEY` fail-closed round-key guard — a stale or
+   foreign emit plan fails closed instead of being consumed), then `dev-loops-run scripts/github/upsert-checkpoint-verdict.mjs --repo <owner/repo> --pr <n>
    --gate review --head-sha <sha> --findings-ledger <path> --next-action "none
    — informational review, no re-gate required" --submit <mode> [--auto]
    [...]` posts the SINGLE visible PR review surface

@@ -270,6 +270,71 @@ test("the no-fanout-plan EARLY refusal REMOVES a pre-existing keyed emit-plan to
   });
 });
 
+// Missing-artifact regression (Copilot review round 3): the keyed-plan removal
+// must run BEFORE the gate-context artifact read/parse, so the
+// missing-artifact refusal — the EARLIEST exit in the flow — cannot leave a
+// stale keyed plan from an earlier successful run at the same key.
+test("the missing-artifact refusal REMOVES a pre-existing keyed emit-plan too", async () => {
+  await withTmpDir(async (tmpDir) => {
+    // 1. A successful run persists the keyed plan.
+    await seedBundle(tmpDir);
+    const okRun = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(okRun.status, 0, okRun.stderr);
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    assert.equal(JSON.parse(await readFile(planPath, "utf8")).ok, true);
+
+    // 2. Remove the context artifact entirely, then re-run at the SAME key —
+    //    the emitter refuses with "no gate-context artifact" before reading it.
+    const artifactPath = path.join(tmpDir, "tmp", "gate-context", "o-r", "pr-7", `${GATE}-${HEAD_SHA}.json`);
+    await rm(artifactPath, { force: true });
+    const refused = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(refused.status, 1, refused.stderr);
+    assert.match(JSON.parse(refused.stdout).error, /no gate-context artifact/);
+
+    // 3. The earlier round's keyed plan is GONE even on the missing-artifact path.
+    await assert.rejects(() => readFile(planPath, "utf8"), { code: "ENOENT" });
+  });
+});
+
+// Malformed-artifact regression (Copilot review round 3): the same contract
+// holds when the gate-context artifact exists but is NOT valid JSON — the
+// JSON.parse throw exits (2) before any plan validation, and the keyed plan
+// from an earlier successful run must already be removed by then.
+test("the malformed (non-JSON) artifact refusal REMOVES a pre-existing keyed emit-plan too", async () => {
+  await withTmpDir(async (tmpDir) => {
+    // 1. A successful run persists the keyed plan.
+    await seedBundle(tmpDir);
+    const okRun = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(okRun.status, 0, okRun.stderr);
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    assert.equal(JSON.parse(await readFile(planPath, "utf8")).ok, true);
+
+    // 2. Corrupt the artifact to non-JSON, then re-run at the SAME key — the
+    //    JSON.parse throw takes the exit-2 path.
+    const artifactPath = path.join(tmpDir, "tmp", "gate-context", "o-r", "pr-7", `${GATE}-${HEAD_SHA}.json`);
+    await writeFile(artifactPath, "{not valid json", "utf8");
+    const refused = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(refused.status, 2, refused.stderr);
+
+    // 3. The earlier round's keyed plan is GONE even on the malformed-artifact path.
+    await assert.rejects(() => readFile(planPath, "utf8"), { code: "ENOENT" });
+  });
+});
+
 test("--pending falls back to groups only when pendingGroups is ABSENT", async () => {
   await withTmpDir(async (tmpDir) => {
     await seedBundle(tmpDir, {

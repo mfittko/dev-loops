@@ -246,6 +246,25 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     return 2;
   }
 
+  // GATE-EXEC-FANOUT-DISPATCH-EMIT: clear the keyed
+  // <gate>-<headSha>.emit-plan.json sibling (buildGateEmitPlanPath) at the
+  // very START of the emission flow — BEFORE the gate-context artifact is
+  // read/parsed — so literally every non-success exit after this point
+  // (missing artifact, malformed/unparseable JSON, no fanout plan, zero
+  // units, any per-unit refusal) leaves it ABSENT. Without this, a successful
+  // earlier run at the same gate/head key survives a failed re-run, and a
+  // later fan-in (which key-checks that file) can accept the stale plan as
+  // this round's — the exact stale-plan hazard the key guard trusts this
+  // path's freshness for. ENOENT on the rm is fine (no prior plan exists).
+  // The success-only WRITE at the end of main is unchanged — this removes,
+  // it does not pre-persist anything.
+  try {
+    await rm(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), { force: true });
+  } catch (err) {
+    process.stderr.write(`${formatCliError(err)}\n`);
+    return 2;
+  }
+
   let artifact;
   try {
     artifact = JSON.parse(await readFile(contextPath, "utf8"));
@@ -253,24 +272,6 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     if (err?.code === "ENOENT") {
       return finish({ ok: false, error: `no gate-context artifact at ${JSON.stringify(contextPath)} — run write-gate-context.mjs for this (gate, headSha) first` }, false);
     }
-    process.stderr.write(`${formatCliError(err)}\n`);
-    return 2;
-  }
-
-  // GATE-EXEC-FANOUT-DISPATCH-EMIT: clear the keyed
-  // <gate>-<headSha>.emit-plan.json sibling (buildGateEmitPlanPath) immediately
-  // after the gate-context artifact is read — BEFORE any plan validation or
-  // refusal return (including the no-fanout-plan refusal above) — so every
-  // non-success exit leaves it ABSENT. Without this, a successful earlier run
-  // at the same gate/head key survives a failed re-run, and a later fan-in
-  // (which key-checks that file) can accept the stale plan as this round's —
-  // the exact stale-plan hazard the key guard trusts this path's freshness
-  // for. ENOENT on the rm is fine (no prior plan exists). The success-only
-  // WRITE placement at the end of main is unchanged — this removes, it does
-  // not pre-persist anything.
-  try {
-    await rm(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), { force: true });
-  } catch (err) {
     process.stderr.write(`${formatCliError(err)}\n`);
     return 2;
   }
@@ -366,10 +367,11 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
 
   // GATE-EXEC-FANOUT-DISPATCH-EMIT: success-only persist of the emitted round
   // plan at this point — every refusal/error return above already left NO plan
-  // file (the pre-validation rm removed any prior plan at this key, so
-  // "leaves NO plan file" holds even across re-runs). A re-run at the same key
-  // overwrites deterministically (the same round). Two gates at one head write
-  // distinct files by path construction. The persist is unconditional on the
+  // file (the start-of-flow rm removed any prior plan at this key before the
+  // artifact was even read, so "leaves NO plan file" holds even across
+  // re-runs). A re-run at the same key overwrites deterministically (the same
+  // round). Two gates at one head write distinct files by path construction.
+  // The persist is unconditional on the
   // success path (--pending/--jq/--silent shape stdout only). A failed persist
   // is an IO failure and takes the module's formatCliError/exit-2 tier, matching
   // the suffix-write catch block directly above — exit 1 stays reserved for
