@@ -362,6 +362,13 @@ When passing `--findings-severity-counts` for an inline round, substitute the co
 
 ### Gate fan-out/fan-in procedure (agent-orchestrated)
 
+Every sanctioned fan-out round passes the emitter's keyed `--emit-plan
+<emit-plan-path>` to BOTH Phase 3 consumers: `consolidate-fanin.mjs` and the
+later `write-gate-findings-log.mjs --provenance <json>` call. At the shared
+provenance-write seam the plan only guards correspondence to emitted units; it
+never supplies findings or provenance. Omission stays backward-compatible for
+callers outside this sanctioned path.
+
 Both gates run this same checkpoint review chain, owned end-to-end by [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md) (`GATE-EXEC-BUILD-ONCE-SEED`, `GATE-EXEC-BRIEFING-PREFIX`, `GATE-EXEC-SEPARATE-CHAINS`, `GATE-EXEC-POST-BEFORE-FIX`, `GATE-EXEC-REGATE-MANDATORY`, `GATE-EXEC-ANGLE-CARRY-FORWARD`, `GATE-EXEC-LIGHT-ESCALATION`); this section owns only this skill's dispatch of that chain. It is an **agent-orchestrated skill procedure** — a node script cannot spawn the per-angle reviewers, so the conductor agent drives the fan-out and uses the pure `@dev-loops/core/loop/gate-fanin` helpers only for consolidation, batching, and ledger mapping.
 
 1. **Context (Phase 1):** before building the gate-context artifact, run

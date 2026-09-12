@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
@@ -39,6 +39,7 @@ Optional:
                                  distinctReviewers must be <= the distinct reviewers recorded in perAngle (perAngle non-empty when distinctReviewers > 0)
                                  no two fresh (non-carried) angles may share one reviewer identity, and every fresh angle must record one (reviewer or dispatchId) — one scoped reviewer per angle (use inline_single_agent + --inline-reason for a sanctioned single-reviewer run)
                                  EXCEPTION: fresh angles sharing a reviewer may all declare the same "group" name (grouped fan-out dispatch); differing or missing group names still fail closed
+  --emit-plan <path>             Optional keyed emit-fanout-dispatch plan. When supplied, requires --provenance and fails closed unless that caller-supplied provenance matches the plan's round key and emitted fresh units exactly. The plan is a guard only; it never supplies provenance or findings. Omitted preserves current behavior.
   --full-label                   The PR carries the gate:full label: dispatch groups resolve to one angle per unit, so any reviewer identity shared across fresh angles is rejected regardless of a declared "group" (mirrors write-gate-context.mjs's --full-label). Only meaningful when --provenance is supplied. Omitted (default false) keeps current behavior.
   --judge-verdict <path>         Path to the judge agent's verdict artifact (JSON). When supplied, the findings are
                                  enriched with the judge's relevance-based dispositions (judgeDisposition /
@@ -329,6 +330,84 @@ export async function checkProvenanceAngleCoverage(provenance, gate, { repoRoot 
   }
   return { warning: null };
 }
+
+/**
+ * Guard caller-supplied provenance against the sanctioned emitter's persisted
+ * plan. The plan is never used to construct provenance: it only proves that
+ * the already-validated fresh rows describe exactly the units actually emitted.
+ */
+export async function verifyEmitPlanProvenance(planPath, provenance, round, { repoRoot = process.cwd() } = {}) {
+  let plan;
+  const fullPath = path.resolve(repoRoot, planPath);
+  try {
+    plan = JSON.parse(await readFile(fullPath, "utf8"));
+  } catch (error) {
+    throw parseError(`cannot verify emit-plan provenance: --emit-plan "${planPath}" could not be read/parsed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const planHeadSha = normalizeFullHeadSha(plan?.headSha);
+  const planPr = typeof plan?.pr === "string" && /^\d+$/.test(plan.pr) ? Number(plan.pr) : plan?.pr;
+  if (plan?.repo !== round.repo || planPr !== round.pr || normalizeGate(plan?.gate) !== round.gate || planHeadSha !== round.headSha) {
+    throw parseError(`--emit-plan "${planPath}" is stamped for ${JSON.stringify({ repo: plan?.repo, pr: plan?.pr, gate: plan?.gate, headSha: plan?.headSha })} but this findings log writes ${JSON.stringify(round)} — a stale or foreign emit plan must not be consumed`);
+  }
+  if (plan.ok !== true || !Array.isArray(plan.units) || plan.units.length === 0 || plan.count !== plan.units.length) {
+    throw parseError(`cannot verify emit-plan provenance: --emit-plan "${planPath}" must carry a non-empty units array whose length equals count`);
+  }
+
+  const expected = new Map();
+  for (let unitIndex = 0; unitIndex < plan.units.length; unitIndex += 1) {
+    const unit = plan.units[unitIndex];
+    if (!unit || typeof unit !== "object" || !Array.isArray(unit.angles) || unit.angles.length === 0) {
+      throw parseError(`cannot verify emit-plan provenance: --emit-plan units[${unitIndex}] must carry a non-empty angles array`);
+    }
+    const group = unit.group === null ? undefined : unit.group;
+    if (group !== undefined && (typeof group !== "string" || group.trim().length === 0)) {
+      throw parseError(`cannot verify emit-plan provenance: --emit-plan units[${unitIndex}].group must be null or a non-empty string`);
+    }
+    if ((unit.angles.length === 1) !== (group === undefined)) {
+      throw parseError(`cannot verify emit-plan provenance: --emit-plan units[${unitIndex}].group must be null for a singleton and non-empty for a multi-angle unit`);
+    }
+    for (const rawAngle of unit.angles) {
+      if (typeof rawAngle !== "string" || rawAngle.trim().length === 0) {
+        throw parseError(`cannot verify emit-plan provenance: --emit-plan units[${unitIndex}].angles must contain only non-empty strings`);
+      }
+      const angle = rawAngle.trim();
+      if (expected.has(angle)) {
+        throw parseError(`cannot verify emit-plan provenance: --emit-plan emits angle ${JSON.stringify(angle)} more than once`);
+      }
+      expected.set(angle, { group: group?.trim(), unitIndex });
+    }
+  }
+
+  const actual = new Map();
+  for (const entry of provenance.perAngle.filter((item) => item.carriedFromHead === undefined)) {
+    if (actual.has(entry.angle)) {
+      throw parseError(`--provenance.perAngle records fresh angle ${JSON.stringify(entry.angle)} more than once; it cannot correspond to one emitted unit`);
+    }
+    actual.set(entry.angle, entry);
+  }
+  const missing = [...expected.keys()].filter((angle) => !actual.has(angle));
+  const extra = [...actual.keys()].filter((angle) => !expected.has(angle));
+  if (missing.length > 0 || extra.length > 0) {
+    throw parseError(`--provenance.perAngle does not correspond to --emit-plan fresh angles (missing: ${missing.join(", ") || "none"}; extra: ${extra.join(", ") || "none"})`);
+  }
+
+  const identitiesByUnit = new Map();
+  for (const [angle, expectedEntry] of expected) {
+    const actualEntry = actual.get(angle);
+    if (actualEntry.group !== expectedEntry.group) {
+      throw parseError(`--provenance.perAngle angle ${JSON.stringify(angle)} records group ${JSON.stringify(actualEntry.group ?? null)} but --emit-plan records ${JSON.stringify(expectedEntry.group ?? null)}`);
+    }
+    const identity = actualEntry.reviewer ?? actualEntry.dispatchId;
+    const prior = identitiesByUnit.get(expectedEntry.unitIndex);
+    if (prior !== undefined && prior !== identity) {
+      throw parseError(`--provenance.perAngle records multiple reviewer identities for --emit-plan unit ${expectedEntry.unitIndex}; one emitted unit must correspond to one reviewer`);
+    }
+    identitiesByUnit.set(expectedEntry.unitIndex, identity);
+  }
+  if (provenance.distinctReviewers < plan.units.length) {
+    throw parseError(`--provenance.distinctReviewers (${provenance.distinctReviewers}) is smaller than --emit-plan's ${plan.units.length} fresh dispatch units`);
+  }
+}
 export function parseWriteGateFindingsLogCliArgs(argv) {
   const { tokens } = parseArgs({
     args: [...argv],
@@ -342,6 +421,7 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
       findings: { type: "string" },
       "findings-file": { type: "string" },
       provenance: { type: "string" },
+      "emit-plan": { type: "string" },
       "full-label": { type: "boolean" },
       "judge-verdict": { type: "string" },
       "tmp-root": { type: "string" },
@@ -416,6 +496,12 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
       options.provenance = requireTokenValue(token, parseError);
       continue;
     }
+    if (token.name === "emit-plan") {
+      const emitPlan = requireTokenValue(token, parseError).trim();
+      if (emitPlan.length === 0) throw parseError("--emit-plan requires a non-empty path");
+      options.emitPlan = emitPlan;
+      continue;
+    }
     if (token.name === "full-label") {
       options.fullLabel = true;
       continue;
@@ -450,6 +536,9 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
   if (options.findings !== undefined && options.findingsFile !== undefined) {
     throw parseError("--findings and --findings-file are mutually exclusive; pass only one");
   }
+  if (options.emitPlan !== undefined && options.provenance === undefined) {
+    throw parseError("--emit-plan requires --provenance so the emitted units have caller-supplied provenance to validate");
+  }
   return options;
 }
 export function buildLogPath({ repo, pr, gate, headSha, tmpRoot }) {
@@ -475,7 +564,6 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   let scopeDrift;
   if (options.judgeVerdict) {
     const judgePath = path.resolve(repoRoot, options.judgeVerdict);
-    const { readFile } = await import("node:fs/promises");
     let judgeVerdict;
     try {
       judgeVerdict = JSON.parse(await readFile(judgePath, "utf8"));
@@ -548,6 +636,14 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       resolvedGroups = null;
     }
     provenance = parseProvenanceJson(options.provenance, resolvedGroups);
+  }
+  if (options.emitPlan !== undefined) {
+    await verifyEmitPlanProvenance(options.emitPlan, provenance, {
+      repo: options.repo,
+      pr: options.pr,
+      gate: options.gate,
+      headSha: options.headSha,
+    }, { repoRoot });
   }
   // Angle-coverage enforcement (fail-closed on missing mandatory angles / foreign
   // angles) only applies when provenance is actually recorded — provenance

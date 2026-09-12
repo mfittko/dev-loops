@@ -1358,7 +1358,16 @@ emit-plan key" / "is stamped for ... but this round consolidates ...") before an
 `--out`/`--ledger-out` write, so a rejected round leaves no durable output. The
 flag is a guard only: the plan is never a findings or provenance source — the
 gate-context bundle's `fanout.groups` stays authoritative — and omitting the
-flag preserves the current fan-in behavior exactly.
+flag preserves the current fan-in behavior exactly. On the sanctioned fan-out
+path, pass the same keyed plan to the later `write-gate-findings-log.mjs
+--emit-plan <path> --provenance <json>` call. That shared provenance-write seam
+additionally verifies the full round key (`repo`, `pr`, `gate`, `headSha`) and
+that the caller-supplied fresh provenance corresponds exactly to the emitted
+units: the same angle set and group per angle, one reviewer identity per emitted
+unit, and no under-reported `distinctReviewers` count. Carried rows are outside
+the fresh emit plan and remain governed by the carry-forward proof. This second
+use is still a guard only: it never derives provenance or findings from the
+plan, and omitting it preserves the findings-log writer's current behavior.
 
 Merge the parallel reviewer findings into one consolidated fix plan with the
 sanctioned fan-in CLI:
@@ -1969,6 +1978,8 @@ node scripts/github/write-gate-findings-log.mjs \
   --head-sha <sha> \
   --verdict <clean|findings_present|blocked> \
   --spec-authority <identity-path> \
+  --emit-plan <emit-plan-path> \
+  --provenance <json> \
   --findings-file <path>   # or inline: --findings '[{"severity":"high","angle":"scope","summary":"...","files":["path.mjs"],"line":42,"disposition":"accepted-for-fix"}]'
 ```
 
@@ -1977,6 +1988,10 @@ use it for any non-trivial ledger so the array never rides a shell string;
 `post-gate-findings.mjs` accepts the same flag. The `consolidate-fanin` CLI's
 `--ledger-out <path>` writes a `{ overallVerdict, findings }` wrapper — pass
 that path straight to `--findings-file` on both tools, no hand extraction.
+The sanctioned fan-out path also passes the emitter's keyed plan to this write
+via `--emit-plan`; the option remains additive for legacy/inline callers, but
+when present it requires `--provenance` and applies the correspondence guard
+owned by `GATE-EXEC-EMIT-PLAN-KEY` above.
 `write-gate-findings-log.mjs` threads the wrapper's `overallVerdict` (the
 consolidator's computed verdict) into the durable ledger, so
 `upsert-checkpoint-verdict.mjs` enforces verdict consistency against it (#1616,
