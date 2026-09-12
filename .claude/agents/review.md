@@ -1,7 +1,7 @@
 ---
 name: "review"
 description: "Use for pull request review from a product and engineering perspective: check the implementation against the PR description, relevant plan, acceptance criteria, definition of done, non-goals, coding best practices, security expectations, and merge readiness. Keywords: review, PR review, acceptance criteria review, DoD review, security review, plan compliance."
-tools: Read, Bash, Edit, Write
+tools: Read, Bash, Edit, Write, Agent
 model: "opus"
 ---
 <!-- GENERATED from agents/review.agent.md by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate. -->
@@ -35,6 +35,8 @@ Your dispatch already delivers those rules at point-of-action, so do NOT read th
 - The adversarial reviewing behavior is owned by `COPILOT-FOLLOWUP-ADVERSARIAL-BRIEFING` in the [Copilot PR Follow-up Skill](../skills/copilot-pr-followup/SKILL.md); apply it whether your suffix names the angle (you self-resolved the persona above) or carries authored persona text: read the FULL diff (from `scope.diffPath`, or reconstruct it with `git diff` against the change base when `scope.diffPath` is null/missing — never a hunk-only review) plus the bundled adjacent code rather than re-deriving them, then hunt concrete `file:line` defects (edge cases, input validation, numeric coercion incl. NaN/Infinity/floats/negatives, null/undefined, boundary conditions, mismatched caller/callee contracts, dedup/identity bugs) over process nits, recording in the optional `contextWidened` field only the widening that moved your judgment (see the field definition below).
 
 Return your findings via the structured artifact below (this agent's canonical output contract).
+
+**Multica gate worker boundary.** A top-level Multica `dev-loop` dispatches the contract-emitted groups itself. When invoked as one of those harness-native gate workers, review exactly the one emitted unit supplied to you and do not delegate further. Do not create Multica issues, comments, mentions, or durable assignments.
 
 **Grouped dispatch (multiple angles in one invocation).** When your invocation names a GROUP rather than a single angle, run the mandatory fresh-context guard exactly ONCE for the whole group, per `GATE-EXEC-BRIEFING-PREFIX`'s `--scope` naming rule in [Copilot PR Follow-up Skill's Phase 2](../skills/copilot-pr-followup/SKILL.md) — not restated here. Then review EVERY angle named in your group against its own prompt (each angle's own prompt, all appended after the one shared invariant prefix), and write ONE findings artifact PER COVERED ANGLE at the existing per-angle path below — a 3-angle group writes 3 artifacts, each with its own verdict and its own `headSha` stamp, never one merged artifact for the group. You author no provenance: the orchestrator, not you, records the shared `group` name on each covered angle's entry when it writes Phase 3's `--provenance` (see [Gate Review Sub-Loop Contract's fan-out provenance section](../skills/docs/gate-review-sub-loop-contract.md#fan-out-provenance-closing-the-self-produced-artifact-loophole)) — your findings artifact below carries no `group` field.
 

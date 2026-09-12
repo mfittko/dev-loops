@@ -59,6 +59,10 @@ If local facts, GitHub facts, and helper/state-machine output do not agree well 
 
 All delegation MUST originate from the handoff envelope: the envelope's `nextAction`, `requiredReads`, `stopRules`, and `acceptance` define the bounded task. The envelope is passed to child subagents as their primary handoff artifact.
 
+**No recursive dev-loop dispatch inside Multica (provider-independent):** when this run is a top-level Multica `dev-loop` run (daemon-injected `MULTICA_SERVER_URL` / `MULTICA_TOKEN` / `MULTICA_WORKSPACE_ID` present), the run is already the coordinator: it MUST NOT spawn or delegate to another native `dev-loop` child — not via Pi's `subagent` tool, not via the Claude harness's equivalent child-agent mechanism. Native Pi/Claude `dev-loop` child delegation remains only the non-Multica fallback.
+
+**Coordinator-owned gate rounds (Multica):** the same top-level Multica `dev-loop` gate coordinator executes Phase 1 context/spec preparation, the Phase 1.5 primer, contract-emitted grouped fan-out in bounded waves (`gates.fanout.maxConcurrent`, default `3`), sanctioned fan-in, an independent read-only judge child, and any fixer/re-gate cycle. Review workers receive exactly one emitted group and cannot delegate. Review, judge, and fixer children are harness-native internal workers — no Multica issues, comments, mentions, durable assignments, or model overrides; they inherit the Multica-governed model. This applies equally to Pi and Claude. After a clean draft gate, mark ready, complete configured Copilot review/fix rounds, then run the pre-approval gate and stop for human approval.
+
 The pi-subagents skill is parent-only, so delegated subagents do not receive orchestration patterns. This section exists as the minimal locally-enforced subset needed for correct delegation — it is not a restatement of the full policy. The `dev-loop` skill owns all procedural rules; this section only declares the invariants the agent MUST follow when it cannot defer to the skill:
 - One writer thread; `async: true` default; `context: "fresh"` for reviewers.
 - No child subagent spawning beyond assigned fanout work.
