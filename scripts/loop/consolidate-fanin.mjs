@@ -244,10 +244,10 @@ Optional:
                                  round key (gate, headSha) against the round being consolidated and
                                  FAILS CLOSED (exit 1, "cannot verify emit-plan key" / "is stamped for ...")
                                  on a mismatch, a missing/malformed key field, or an unreadable/non-JSON
-                                 plan — BEFORE any --out/--ledger-out write. On that fail-closed
-                                 path any pre-existing files at --out/--ledger-out are REMOVED, so a
-                                 rejected round leaves no stale durable output for a caller to
-                                 consume. REQUIRES --gate and
+                                 plan — BEFORE any --out/--ledger-out write. A rejected invocation
+                                 writes no new output and preserves pre-existing caller-owned files
+                                 at those paths; callers MUST honor the non-zero exit and MUST NOT
+                                 infer success from path existence. REQUIRES --gate and
                                  --head-sha (the round the plan's key is verified against). A guard
                                  only: the plan is never a findings or provenance source — the
                                  gate-context bundle's fanout.groups stays authoritative.
@@ -336,7 +336,8 @@ Exit codes:
      embedded (gate, headSha) key does not match the round being consolidated,
      an --emit-plan given without --gate/--head-sha, or an
      unreadable/non-JSON/missing-key --emit-plan artifact
-     (which also clears any pre-existing --out/--ledger-out files)
+     (the rejected invocation writes no new output and preserves pre-existing
+     caller-owned files; callers must honor exit 1)
   2  Invalid --jq filter`.trim();
 
 const parseError = buildParseError(USAGE);
@@ -788,11 +789,9 @@ export function parseConsolidateFaninCliArgs(argv) {
   }
   // --emit-plan pairing is NOT checked here: the pair requirement lives in
   // consolidateGateFanin's own guard (verifyEmitPlanKey), which runs on BOTH
-  // entry paths. A parser-level check would fire BEFORE the guard's stale-
-  // output cleanup, so a CLI round with a bare --emit-plan and pre-existing
-  // --out/--ledger-out files from an earlier round would fail closed but
-  // leave those stale durable outputs on disk (Copilot review round 4). The
-  // guard rejects the same pairing fail-closed AND clears both stale paths.
+  // entry paths and gives CLI and programmatic callers the same refusal.
+  // Validation writes no new output and preserves pre-existing caller-owned
+  // paths; callers must honor the non-zero exit rather than path existence.
   // --carried-angles is proof-carrying, not a bare trust-me list: a mandatory
   // angle or a fabricated name could otherwise mint a clean per-angle entry
   // with no reviewer ever having run. It requires --carry-forward-plan (the

@@ -1355,7 +1355,9 @@ with `GATE-EXEC-ARTIFACT-HEAD-STAMP`'s own trim+lowercase head compare — and a
 mismatch, a missing/malformed key field, an unreadable/non-JSON plan, or a plan
 given without `--gate`/`--head-sha` FAILS CLOSED (exit 1, "cannot verify
 emit-plan key" / "is stamped for ... but this round consolidates ...") before any
-`--out`/`--ledger-out` write, so a rejected round leaves no durable output. The
+`--out`/`--ledger-out` write. A rejected invocation writes no new output and
+preserves pre-existing caller-owned files at those paths; callers MUST honor the
+non-zero exit and MUST NOT infer success from path existence. The
 flag is a guard only: the plan is never a findings or provenance source — the
 gate-context bundle's `fanout.groups` stays authoritative — and omitting the
 flag preserves the current fan-in behavior exactly. On the sanctioned fan-out
