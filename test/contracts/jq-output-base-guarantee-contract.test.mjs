@@ -114,6 +114,10 @@ const EXCLUDED = new Map([
     "pages/render-article.mjs",
     "Derived-artifact generator (npm run articles:render): emits HTML files; JSON.stringify appears only inside thrown error messages, and stdout is a one-line human status — nothing for a caller to filter with --jq.",
   ],
+  [
+    "multica/dev-loops-sync.mjs",
+    "Multica workspace provisioning tool (skills/dev-loops-sync), not a dev-loop operator-facing read command: stdout is a human progress log per workspace plus one summary line; the JSON.stringify calls build `--custom-env-stdin` payloads and fake-CLI fixtures, not a --jq-consumed tool result on stdout.",
+  ],
 ]);
 
 async function walk(dir) {
