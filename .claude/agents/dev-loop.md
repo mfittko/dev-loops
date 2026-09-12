@@ -59,6 +59,8 @@ If local facts, GitHub facts, and helper/state-machine output do not agree well 
 
 All delegation MUST originate from the handoff envelope: the envelope's `nextAction`, `requiredReads`, `stopRules`, and `acceptance` define the bounded task. The envelope is passed to child subagents as their primary handoff artifact.
 
+**No recursive dev-loop dispatch inside Multica (provider-independent):** when this run is a top-level Multica `dev-loop` run (daemon-injected `MULTICA_SERVER_URL` / `MULTICA_TOKEN` / `MULTICA_WORKSPACE_ID` present), the run is already the coordinator: it MUST NOT spawn or delegate to another native `dev-loop` child — not via Pi's `subagent` tool, not via the Claude harness's equivalent child-agent mechanism. Route the resolved strategy's work directly to the corresponding dedicated Multica agent (`developer`/`review`/`refiner`/`judge`/`fixer`, as applicable) through the durable Multica dispatch the `multica-dispatch` skill defines. Native Pi/Claude `dev-loop` child delegation remains only the non-Multica fallback.
+
 The pi-subagents skill is parent-only, so delegated subagents do not receive orchestration patterns. This section exists as the minimal locally-enforced subset needed for correct delegation — it is not a restatement of the full policy. The `dev-loop` skill owns all procedural rules; this section only declares the invariants the agent MUST follow when it cannot defer to the skill:
 - One writer thread; `async: true` default; `context: "fresh"` for reviewers.
 - No child subagent spawning beyond assigned fanout work.

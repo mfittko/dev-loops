@@ -40,9 +40,15 @@ dev-loops **source**, with as few Multica-specific deviations as possible.
   dedicated canonical agents (`review`, `refiner`, `judge`, `fixer`, …) through
   durable child issues and stage barriers — with the dispatch unit, reviewed head
   SHA, required context, and result contract in the child issue, no shared
-  worktree/scratchpad — instead of Pi's in-process `subagent` tool. Outside
-  Multica, the ordinary Pi-subagent dispatch is unchanged. Agent IDs resolve from
-  the live roster at dispatch time; none are persisted in dev-loops source.
+  worktree/scratchpad — instead of Pi's in-process `subagent` tool. It also forbids
+  **recursive `dev-loop` child dispatch** inside Multica (provider-independent,
+  binding Pi and Claude hosts alike): a top-level Multica `dev-loop` run is
+  already the coordinator — it routes the resolved strategy directly to the
+  dedicated agents and never spawns an intermediate nested `dev-loop`; native
+  harness `dev-loop` child delegation remains only the non-Multica fallback.
+  Outside Multica, the ordinary Pi-subagent dispatch is unchanged. Agent IDs
+  resolve from the live roster at dispatch time; none are persisted in
+  dev-loops source.
 
 ## Usage
 

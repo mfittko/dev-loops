@@ -187,3 +187,42 @@ test("the multica-dispatch skill source documents the full fan-out/fan-in contra
   assert.doesNotMatch(content, /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/,
     "no UUIDs may be persisted in dev-loops skill source");
 });
+
+// Recursive dev-loop dispatch suppression (MFIT-188 follow-up override): inside a
+// Multica workspace a top-level `dev-loop` run is already the coordinator and must
+// never spawn another native `dev-loop` child — provider-independent, so BOTH the
+// Pi-hosted (subagent tool) and the Claude-hosted (child-agent mechanism) Multica
+// contexts must see the suppression in every surface the sync ships: the skill the
+// child agents load, the dev-loop agent instructions the sync writes, and the Claude
+// (`.claude`) transforms of both. Outside Multica the ordinary harness dispatch stays.
+for (const [host, agentSource, instructionsSurface] of [
+  ["Pi-hosted", "agents/dev-loop.agent.md", null],
+  ["Claude-hosted", ".claude/agents/dev-loop.md", ".claude"],
+]) {
+  test(`a ${host} Multica dev-loop run suppresses recursive dev-loop child dispatch`, async () => {
+    const skill = await readFile(path.join(repoRoot, "skills", "multica-dispatch", "SKILL.md"), "utf8");
+    const agent = await readFile(path.join(repoRoot, agentSource), "utf8");
+    for (const [surface, content] of [[`multica-dispatch skill`, skill], [`dev-loop agent source (${agentSource})`, agent]]) {
+      assert.match(content, /no recursive dev-loop dispatch/i,
+        `${surface}: the no-recursive-dev-loop-dispatch rule must be present for a ${host} Multica context`);
+      assert.match(content, /provider-independent/i,
+        `${surface}: the rule must be stated as provider-independent (binds Pi and Claude hosts alike)`);
+      assert.match(content, /MUST NOT\s+spawn or delegate to another native `?dev-loop`? child/i,
+        `${surface}: recursive dev-loop child dispatch must be explicitly forbidden for a ${host} Multica context`);
+      assert.match(content, /non-Multica\s+fallback/i,
+        `${surface}: native harness dev-loop child delegation must remain the non-Multica fallback`);
+    }
+    // The dedicated-agent routing replaces the nested entrypoint: the skill names the
+    // strategy→agent routing (developer/review/refiner/judge/fixer) and the agent source
+    // pins the same routing without re-restating the fan-out machinery.
+    assert.match(skill, /route the resolved strategy[\s\S]{0,200}?dedicated Multica agent/i,
+      "multica-dispatch skill: strategy work routes directly to the dedicated Multica agents");
+    assert.match(agent, /route the resolved strategy[\s\S]{0,200}?dedicated Multica agent/i,
+      `dev-loop agent source: strategy routing names the dedicated agents (${host} Multica context)`);
+    // Harness-neutral phrasing: the suppression must survive the Claude transform
+    // (pi-only blocks are stripped), so it must NOT be fenced inside a pi-only block.
+    const fences = [...agent.matchAll(/<!-- pi-only -->([\s\S]*?)<!-- \/pi-only -->/gi)].map((m) => m[1]);
+    assert.equal(fences.some((body) => /no recursive dev-loop dispatch/i.test(body)), false,
+      `dev-loop agent source: the suppression rule must not be pi-only-fenced — a Claude-hosted Multica run must see it too`);
+  });
+}

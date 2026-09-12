@@ -33,6 +33,28 @@ quality work), it dispatches to the **dedicated canonical agent** for that role 
   travel in the child issue; everything the parent needs back must come out of
   the child issue.
 
+## No recursive dev-loop dispatch (provider-independent)
+
+A top-level Multica `dev-loop` run is **already the coordinator**. It MUST NOT
+spawn or delegate to another native `dev-loop` child — not via Pi's in-process
+`subagent` tool, not via the Claude harness's equivalent child-agent mechanism.
+This rule is **provider-independent**: it binds whichever harness (Pi or
+Claude Code) is hosting the Multica `dev-loop` agent.
+
+When the startup resolver selects a strategy, route the resolved strategy's
+work **directly to the corresponding dedicated Multica agent** (`developer`,
+`review`, `refiner`, `judge`, `fixer`, … as applicable) through the durable
+Multica dispatch described above. Do NOT add an intermediate nested `dev-loop`
+child: the nested entrypoint would re-resolve routing, re-derive an envelope,
+and fan out through its own harness dispatch — a recursion the platform's issue
+assignment already performs once, and the source of the observed double-loop
+behavior.
+
+Native Pi/Claude `dev-loop` child delegation remains ONLY the non-Multica
+fallback: outside a Multica workspace (no daemon-injected
+`MULTICA_SERVER_URL` / `MULTICA_TOKEN` / `MULTICA_WORKSPACE_ID`), the ordinary
+harness dispatch applies exactly as the dev-loop skill specifies.
+
 ## Durable child contract
 
 The child issue description MUST carry, in order:
