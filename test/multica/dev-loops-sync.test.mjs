@@ -96,8 +96,8 @@ test("sync imports and binds the multica-dispatch skill to every canonical agent
       assert.ok(skillIds[name], `skill ${name} must be imported`);
       assert.ok(state.skills.find((s) => s.name === name).content.length > 0, `skill ${name} must carry content`);
     }
-    assert.match(state.skills.find((s) => s.name === "multica-dispatch").content, /child issue/i,
-      "multica-dispatch skill content must describe child-issue dispatch");
+    assert.match(state.skills.find((s) => s.name === "multica-dispatch").content, /root dispatch comment/i,
+      "multica-dispatch skill content must describe root-dispatch-comment fan-out on the parent issue");
     for (const a of state.agents) {
       const bound = (a.skills || []).map((id) => state.skills.find((s) => s.id === id)?.name);
       assert.deepEqual(bound.sort(), [...BIND_MAP[a.name], "multica-dispatch"].sort(), `agent ${a.name} must bind its skill map + multica-dispatch`);
@@ -172,12 +172,12 @@ test("newly created agents omit model selection and inherit runtime defaults", a
 test("the multica-dispatch skill source documents the full fan-out/fan-in contract", async () => {
   const content = await readFile(path.join(repoRoot, "skills", "multica-dispatch", "SKILL.md"), "utf8");
   for (const [topic, re] of [
-    ["child issue creation", /child issue/i],
-    ["parallel staging / stage barriers", /stage/i],
-    ["completion wake-up", /wake/i],
+    ["root dispatch comment on the parent issue", /root dispatch comment/i],
+    ["mention dispatch of the dedicated agents", /mention-link each agent/i],
+    ["in-thread worker replies (receipts)", /replies? .*in the same thread|same thread/i],
     ["durable inputs (reviewed head SHA)", /head SHA/i],
-    ["durable result contract", /result contract/i],
-    ["fan-in", /fan-in/i],
+    ["expected result shape", /expected result shape/i],
+    ["fan-in on the thread", /fan-in/i],
     ["failure handling", /blocked/i],
     ["standalone Pi fallback preserved", /subagent/i],
   ]) {
@@ -187,6 +187,27 @@ test("the multica-dispatch skill source documents the full fan-out/fan-in contra
   assert.doesNotMatch(content, /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/,
     "no UUIDs may be persisted in dev-loops skill source");
 });
+
+// Scope correction (MFIT-188 review): one child issue per reviewer/dispatch unit is
+// overkill and must NOT be the default fan-out surface. The parent issue's comment
+// thread is the fan-out surface; child issues exist only as an explicit fallback
+// (same agent needing multiple concurrent isolated runs, or a unit needing its own
+// durable lifecycle/status). Pinned across the skill source and its `.claude` transform.
+for (const [surface, file] of [
+  ["multica-dispatch skill", "skills/multica-dispatch/SKILL.md"],
+  ["generated .claude mirror", ".claude/skills/multica-dispatch/SKILL.md"],
+]) {
+  test(`${surface}: child issues are an explicit fallback, never the default fan-out surface`, async () => {
+    const content = await readFile(path.join(repoRoot, file), "utf8");
+    assert.match(content, /NOT the\s+default/i, `${surface}: the no-child-issues-by-default rule must be stated`);
+    assert.match(content, /root dispatch comment on the existing parent issue/i,
+      `${surface}: the parent-issue dispatch comment is the default fan-out surface`);
+    assert.match(content, /explicit fallback/i,
+      `${surface}: child issues must be scoped to the explicit-fallback conditions`);
+    assert.doesNotMatch(content, /stage barrier/i,
+      `${surface}: stage barriers belong to the child-issue model that is no longer the default`);
+  });
+}
 
 // Recursive dev-loop dispatch suppression (MFIT-188 follow-up override): inside a
 // Multica workspace a top-level `dev-loop` run is already the coordinator and must

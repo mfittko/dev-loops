@@ -25,8 +25,10 @@ import { createInterface } from "node:readline/promises";
 const HOME = homedir(), A = args();
 const SKILLS = ["copilot-pr-followup", "dev-loop", "final-approval", "local-implementation", "loop-grill", "review", "ui-review"];
 // Multica-native fan-out/fan-in contract, bound to every canonical agent: in Multica the
-// loop dispatches children through durable Multica child issues + stage barriers, not Pi's
-// in-process subagent tool. Outside Multica the ordinary Pi dispatch is unchanged.
+// loop dispatches work through a root dispatch comment on the existing parent issue
+// (mention-dispatch to the dedicated agents, replies in-thread); child issues are an
+// explicit fallback only — not Pi's in-process subagent tool. Outside Multica the
+// ordinary Pi dispatch is unchanged.
 const MULTICA_DISPATCH = "multica-dispatch";
 const CARRIERS = ["dev-loops-runtime", "dev-loops-contracts"]; // deprecated: resolve from source, don't copy
 const BIND = { "dev-loop": ["dev-loop", "copilot-pr-followup", "final-approval"], developer: ["local-implementation"], docs: [], fixer: ["copilot-pr-followup"], judge: [], quality: [], refiner: ["loop-grill"], review: ["review", "ui-review"] };

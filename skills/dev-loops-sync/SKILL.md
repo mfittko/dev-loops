@@ -37,10 +37,15 @@ dev-loops **source**, with as few Multica-specific deviations as possible.
   selections (e.g. `makora/zai-org/GLM-5.3`) survive every re-sync.
 - **`multica-dispatch` is bound to every canonical agent.** It carries the
   Multica-native fan-out/fan-in contract: inside Multica, loop fan-out goes to the
-  dedicated canonical agents (`review`, `refiner`, `judge`, `fixer`, …) through
-  durable child issues and stage barriers — with the dispatch unit, reviewed head
-  SHA, required context, and result contract in the child issue, no shared
-  worktree/scratchpad — instead of Pi's in-process `subagent` tool. It also forbids
+  dedicated canonical agents (`review`, `refiner`, `judge`, `fixer`, …) through a
+  **root dispatch comment on the existing parent issue** — one comment mentioning
+  the distinct agents the round needs, each with its dispatch unit, reviewed head
+  SHA, required context, and expected result shape; workers reply in the same
+  thread and the coordinator fans in there, with no shared worktree/scratchpad —
+  instead of Pi's in-process `subagent` tool. One child issue per dispatch unit is
+  overkill and NOT the default; child issues are an explicit fallback only (an
+  agent needing multiple concurrent isolated runs, or a unit needing its own
+  durable lifecycle/status). It also forbids
   **recursive `dev-loop` child dispatch** inside Multica (provider-independent,
   binding Pi and Claude hosts alike): a top-level Multica `dev-loop` run is
   already the coordinator — it routes the resolved strategy directly to the
