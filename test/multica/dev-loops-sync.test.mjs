@@ -314,7 +314,10 @@ test("a worker still validates context and returns a result when the coordinator
     const coordinatorWt = path.join(dir, "coordinator-worktree");
     await mkdir(coordinatorWt, { recursive: true });
     const git = (...a) => spawnSync("git", ["-C", coordinatorWt, ...a], { encoding: "utf8" });
-    spawnSync("git", ["init", "-q", "--bare", origin], { encoding: "utf8" });
+    // `-b main` pins the bare origin's branch name: without it the bare repo's HEAD
+    // points at the runner's `init.defaultBranch` default and the push lands on a
+    // differently-named ref, leaving the clone on an unborn HEAD.
+    spawnSync("git", ["init", "-q", "--bare", "-b", "main", origin], { encoding: "utf8" });
     git("init", "-q", "-b", "main");
     await writeFile(path.join(coordinatorWt, "BRIEF.md"), "The reviewed work: gate context file.\n");
     await writeFile(path.join(coordinatorWt, "uncommitted-scratch.txt"), "never committed\n");
