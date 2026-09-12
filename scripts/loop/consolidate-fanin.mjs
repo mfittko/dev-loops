@@ -438,7 +438,10 @@ function normalizeHeadShaValue(value) {
 // silently corrupts provenance while looking exactly like a success. Gate
 // compare is trim+lowercase (single mismatch error per field); headSha reuses
 // normalizeHeadShaValue (GATE-EXEC-ARTIFACT-HEAD-STAMP trim+lowercase
-// semantics) so a case-different stamp still matches. Runs INSIDE
+// semantics) so a case-different stamp still matches. Both gates are validated
+// against VALID_GATES before comparing (non-strings fail closed; no String()
+// coercion — a programmatic gate: null must never stringify into a plan stamped
+// gate: "null", Copilot review round 4). Runs INSIDE
 // consolidateGateFanin — not only in the parser — so a direct programmatic
 // caller cannot bypass the check. Unreadable/invalid-JSON/missing-key errors
 // all carry the "cannot verify emit-plan key" prefix; a mismatch carries the
@@ -446,8 +449,17 @@ function normalizeHeadShaValue(value) {
 // --cache-telemetry guard uses. A guard only: nothing from the plan flows
 // into any output.
 async function verifyEmitPlanKey(planPath, { gate, headSha }) {
+  // The round's --gate must be a canonical supported gate (string membership in
+  // VALID_GATES, no String() coercion) BEFORE any compare: a direct
+  // programmatic call can pass gate: null/123, and String() coercion would
+  // stringify null into "null" — which a malformed plan stamped gate: "null"
+  // would then match, passing the key check with an invalid round
+  // (Copilot review round 4). undefined still means the flag was never given.
   if (gate === undefined || headSha === undefined) {
     throw new Error("--emit-plan requires both --gate and --head-sha to verify the plan's embedded key against this round");
+  }
+  if (typeof gate !== "string" || !VALID_GATES.has(gate.trim().toLowerCase())) {
+    throw new Error(`--emit-plan requires a canonical supported gate (one of: ${[...VALID_GATES].join(", ")}) to verify the plan's embedded key against, got ${JSON.stringify(gate)}`);
   }
   let text;
   try {
@@ -462,14 +474,14 @@ async function verifyEmitPlanKey(planPath, { gate, headSha }) {
     throw new Error(`cannot verify emit-plan key: --emit-plan "${planPath}" is not valid JSON`);
   }
   const planGate = typeof plan?.gate === "string" ? plan.gate.trim().toLowerCase() : "";
-  if (planGate.length === 0) {
-    throw new Error(`cannot verify emit-plan key: --emit-plan "${planPath}" is missing a non-empty "gate" field (emit-fanout-dispatch.mjs's own result object carries one)`);
+  if (planGate.length === 0 || !VALID_GATES.has(planGate)) {
+    throw new Error(`cannot verify emit-plan key: --emit-plan "${planPath}" is missing a canonical string "gate" field (one of: ${[...VALID_GATES].join(", ")}; emit-fanout-dispatch.mjs's own result object carries one), got ${JSON.stringify(plan?.gate)}`);
   }
   const planHeadSha = normalizeHeadShaValue(plan?.headSha);
   if (planHeadSha === null) {
     throw new Error(`cannot verify emit-plan key: --emit-plan "${planPath}" carries no valid "headSha" field (a 7-64 char hex SHA, emit-fanout-dispatch.mjs's own result object carries one), got ${JSON.stringify(plan?.headSha)}`);
   }
-  const roundGate = String(gate).trim().toLowerCase();
+  const roundGate = gate.trim().toLowerCase();
   if (planGate !== roundGate) {
     throw new Error(`--emit-plan "${planPath}" is stamped for gate "${planGate}" but this round consolidates gate ${roundGate} — a stale or foreign emit plan must not be consumed for a different round (fail-closed)`);
   }
@@ -774,13 +786,13 @@ export function parseConsolidateFaninCliArgs(argv) {
   if ((options.primerEvidence === undefined) !== (options.primerPlan === undefined)) {
     throw parseError("--primer-evidence and --primer-plan must be given together: a primer-evidence artifact cannot be enforced against no plan, and a plan without its recorded evidence would silently skip the gate");
   }
-  // --emit-plan is a key guard: the plan's embedded (gate, headSha) round key
-  // can only be verified against a round the caller names — without both
-  // --gate and --head-sha there is nothing to check against, so a bare
-  // --emit-plan fails closed here rather than passing vacuously.
-  if (options.emitPlan !== undefined && (options.gate === undefined || options.headSha === undefined)) {
-    throw parseError("--emit-plan requires --gate and --head-sha — the plan's embedded round key (gate, headSha) must be verified against the round being consolidated");
-  }
+  // --emit-plan pairing is NOT checked here: the pair requirement lives in
+  // consolidateGateFanin's own guard (verifyEmitPlanKey), which runs on BOTH
+  // entry paths. A parser-level check would fire BEFORE the guard's stale-
+  // output cleanup, so a CLI round with a bare --emit-plan and pre-existing
+  // --out/--ledger-out files from an earlier round would fail closed but
+  // leave those stale durable outputs on disk (Copilot review round 4). The
+  // guard rejects the same pairing fail-closed AND clears both stale paths.
   // --carried-angles is proof-carrying, not a bare trust-me list: a mandatory
   // angle or a fabricated name could otherwise mint a clean per-angle entry
   // with no reviewer ever having run. It requires --carry-forward-plan (the
@@ -1005,9 +1017,12 @@ export async function consolidateGateFanin(options) {
   // --emit-plan key guard (GATE-EXEC-FANOUT-DISPATCH-EMIT): placed after the
   // headSha re-normalization (so the plan's stamp is compared against the
   // normalized round head) and BEFORE the --findings-dir read, so a rejected
-  // round writes no --out/--ledger-out and fails fastest. The parser pairing
-  // check cannot see a direct programmatic caller, so the pair requirement is
-  // re-checked inside the guard — both entry paths fail closed identically.
+  // round writes no --out/--ledger-out and fails fastest. The pair requirement
+  // (gate + headSha) lives ONLY here, inside the guard — the CLI parser no
+  // longer duplicates it (a parser-level check would exit before this
+  // cleanup could clear stale --out/--ledger-out files, Copilot review
+  // round 4), so both entry paths fail closed AND clear stale outputs
+  // identically.
   // A rejected round must also leave no DURABLE output: any pre-existing files
   // at --out/--ledger-out are from an earlier round at these paths and would
   // otherwise survive as this round's stale result, so the guard clears both

@@ -1017,19 +1017,17 @@ test("parseConsolidateFaninCliArgs rejects an empty --emit-plan value", () => {
   );
 });
 
-test("parseConsolidateFaninCliArgs rejects --emit-plan without --gate and --head-sha (combined message)", () => {
-  assert.throws(
-    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--emit-plan", "/tmp/p.json"]),
-    /--emit-plan requires --gate and --head-sha/,
-  );
-  assert.throws(
-    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--emit-plan", "/tmp/p.json", "--gate", "review"]),
-    /--emit-plan requires --gate and --head-sha/,
-  );
-  assert.throws(
-    () => parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--emit-plan", "/tmp/p.json", "--head-sha", EMIT_HEAD]),
-    /--emit-plan requires --gate and --head-sha/,
-  );
+// Copilot review round 4: the pairing check moved OUT of the parser (a
+// parser-level exit skipped the guard's stale-output cleanup) into
+// consolidateGateFanin's own guard — see the programmatic tests below.
+test("parseConsolidateFaninCliArgs no longer pairs --emit-plan at parse time (the guard owns the pair check)", () => {
+  // Parse-time pairing is deferred to the guard: a bare --emit-plan parses OK
+  // so the CLI path reaches the guard (which fails closed AND clears stale
+  // outputs). The required flag itself still parses with its pair.
+  const result = parseConsolidateFaninCliArgs(["--findings-dir", "/tmp/x", "--emit-plan", "/tmp/p.json"]);
+  assert.equal(result.emitPlan, "/tmp/p.json");
+  assert.equal(result.gate, undefined);
+  assert.equal(result.headSha, undefined);
 });
 
 test("consolidateGateFanin accepts a matching emit-plan key and proceeds unchanged", async () => {
@@ -1208,6 +1206,61 @@ test("consolidateGateFanin fails closed when emitPlan is given programmatically 
   );
 });
 
+// Non-string round gate regression (Copilot review round 4,
+// consolidate-fanin.mjs verifyEmitPlanKey): the guard used to treat only
+// undefined as missing and String()-coerce everything else, so a programmatic
+// call with gate: null plus a malformed plan stamped gate: "null" passed the
+// key check. The round's --gate must be a canonical supported gate (string
+// membership in VALID_GATES, no coercion) before any compare.
+test("consolidateGateFanin fails closed on a programmatic non-string round gate (gate: null)", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } },
+    async (dir) => {
+      const planDir = await mkdtemp(path.join(os.tmpdir(), "emit-plan-null-gate-"));
+      try {
+        // The exact adversarial shape: plan stamped gate: "null" would have
+        // matched String(null) under the old coercion.
+        const stampedNull = { ...matchingEmitPlan(), gate: "null" };
+        const planPath = await writeEmitPlan(planDir, stampedNull);
+        await assert.rejects(
+          consolidateGateFanin({ findingsDir: dir, emitPlan: planPath, gate: null, headSha: EMIT_HEAD }),
+          (err) => err.message.includes("--emit-plan requires a canonical supported gate") && err.message.includes("null"),
+        );
+        // A numeric gate fails closed identically.
+        const planPath2 = await writeEmitPlan(planDir, matchingEmitPlan(), "num-round.json");
+        await assert.rejects(
+          consolidateGateFanin({ findingsDir: dir, emitPlan: planPath2, gate: 123, headSha: EMIT_HEAD }),
+          (err) => err.message.includes("--emit-plan requires a canonical supported gate") && err.message.includes("123"),
+        );
+      } finally {
+        await rm(planDir, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// Non-string plan gate regression (same finding): the plan's embedded gate must
+// itself be a canonical gate string — e.g. gate: 123 in the plan file must
+// fail closed, not coerce.
+test("consolidateGateFanin fails closed on an emit-plan with a non-string gate (123)", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } },
+    async (dir) => {
+      const planDir = await mkdtemp(path.join(os.tmpdir(), "emit-plan-num-plan-gate-"));
+      try {
+        const numericGate = { ...matchingEmitPlan(), gate: 123 };
+        const planPath = await writeEmitPlan(planDir, numericGate);
+        await assert.rejects(
+          consolidateGateFanin({ findingsDir: dir, emitPlan: planPath, gate: "review", headSha: EMIT_HEAD }),
+          (err) => err.message.startsWith("cannot verify emit-plan key") && err.message.includes('canonical string "gate"') && err.message.includes("123"),
+        );
+      } finally {
+        await rm(planDir, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
 // CLI twin: the parser path and the programmatic path fail identically — one
 // spawned CLI run with a mismatched plan exits 1 with the mismatch error.
 test("consolidate-fanin CLI: --emit-plan with a mismatched key exits 1 (parser and function agree)", async () => {
@@ -1267,6 +1320,48 @@ test("consolidateGateFanin clears pre-existing --out/--ledger-out on the emit-pl
         );
         // Both stale outputs are GONE — the rejected round leaves no durable
         // output for a caller to consume as this round's result.
+        assert.equal(existsSync(outPath), false);
+        assert.equal(existsSync(ledgerPath), false);
+      } finally {
+        await rm(planDir, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+  );
+});
+
+// Pairing-check cleanup regression (Copilot review round 4,
+// consolidate-fanin.mjs): the --emit-plan-without---gate/--head-sha pairing
+// check used to run at PARSE time, exiting before consolidateGateFanin's
+// guard could clear stale --out/--ledger-out — so stale outputs from a
+// previous round survived the rejected round. The pairing check now lives in
+// the shared guard, so the CLI parse-error path is gone and the same
+// invocation exits 1 with BOTH stale files cleared.
+test("consolidate-fanin CLI: --emit-plan without --gate/--head-sha exits 1 and removes pre-existing --out/--ledger-out", async () => {
+  await withFindingsDir(
+    { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } },
+    async (dir) => {
+      const planDir = await mkdtemp(path.join(os.tmpdir(), "emit-plan-pair-cli-"));
+      try {
+        const planPath = await writeEmitPlan(planDir, matchingEmitPlan());
+        // Pre-existing outputs from an earlier round at the same paths.
+        const outPath = path.join(planDir, "out", "findings.json");
+        const ledgerPath = path.join(planDir, "out", "ledger.json");
+        await mkdir(path.dirname(outPath), { recursive: true });
+        await writeFile(outPath, JSON.stringify({ stale: true }), "utf8");
+        await writeFile(ledgerPath, JSON.stringify({ stale: true }), "utf8");
+        const cliResult = await runNode(
+          path.join(import.meta.dirname, "..", "..", "scripts", "loop", "consolidate-fanin.mjs"),
+          [
+            "--findings-dir", dir,
+            "--emit-plan", planPath,
+            "--out", outPath,
+            "--ledger-out", ledgerPath,
+          ],
+        );
+        assert.equal(cliResult.code, 1);
+        const payload = JSON.parse(cliResult.stderr);
+        assert.equal(payload.ok, false);
+        assert.match(payload.error, /--emit-plan requires both --gate and --head-sha/);
         assert.equal(existsSync(outPath), false);
         assert.equal(existsSync(ledgerPath), false);
       } finally {

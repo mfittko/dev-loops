@@ -2,7 +2,7 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { gateScopePrefix, normalizeGate } from "./_gate-names.mjs";
 import { HEAD_SHA_RE, VALID_SCOPE_RE } from "./record-dispatch-prompt-layout.mjs";
 import { buildGateContextPath, buildGateEmitPlanPath } from "./write-gate-context.mjs";
@@ -276,6 +276,16 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     return 2;
   }
 
+  // --jq syntax preflight (Copilot review round 4): runs AFTER the keyed-plan
+  // removal above (so an invalid filter still leaves the keyed plan ABSENT —
+  // a prior successful run's stale plan must never survive a failed re-run)
+  // but BEFORE any unit is composed and BEFORE the success-only plan persist,
+  // so a syntactically invalid filter can never exit 2 with a freshly written
+  // keyed plan on disk. emitResult's own data-dependent jq errors (e.g. `length`
+  // on a scalar) stay at emit time, unchanged.
+  const jqSyntaxError = preflightJqFilter(jq);
+  if (jqSyntaxError !== undefined) return jqSyntaxError;
+
   const fanout = artifact?.fanout;
   if (!fanout || typeof fanout !== "object") {
     return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — gate-context artifact at ${JSON.stringify(contextPath)} carries no fanout dispatch plan — re-run write-gate-context.mjs (a thin briefing with no --base emits no fanout plan)` }, false);
@@ -372,7 +382,10 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // re-runs). A re-run at the same key overwrites deterministically (the same
   // round). Two gates at one head write distinct files by path construction.
   // The persist is unconditional on the
-  // success path (--pending/--jq/--silent shape stdout only). A failed persist
+  // success path (--pending/--jq/--silent shape stdout only); the --jq filter
+  // is syntax-preflighted BEFORE this write, so a post-persist jq failure is
+  // limited to data-dependent evaluation errors against a successfully emitted
+  // round. A failed persist
   // is an IO failure and takes the module's formatCliError/exit-2 tier, matching
   // the suffix-write catch block directly above — exit 1 stays reserved for
   // plan-semantics refusals.

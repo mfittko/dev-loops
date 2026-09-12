@@ -525,6 +525,55 @@ test("expandDispatchUnits: configured group stays shared, everything else splits
   ]);
 });
 
+// Invalid---jq regression (Copilot review round 4, emit-fanout-dispatch.mjs): the
+// keyed plan was persisted BEFORE finish(payload, true) evaluated the --jq
+// filter, so an invalid filter (exit 2) left a keyed plan from a FAILED
+// emitter invocation that a later fan-in would accept. The --jq syntax
+// preflight now runs BEFORE the success-only persist (and after the
+// start-of-flow plan removal), so an invalid filter exits 2 with the keyed
+// plan ABSENT even when a prior successful run at the same key seeded one.
+test("a pre-valid --jq filter does not affect a successful run", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--jq", ".count"],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), "4");
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    assert.equal(JSON.parse(await readFile(planPath, "utf8")).ok, true);
+  });
+});
+
+test("an invalid --jq filter exits 2 and leaves the keyed plan ABSENT after a prior successful run", async () => {
+  await withTmpDir(async (tmpDir) => {
+    // 1. A successful run persists the keyed plan (seeds the stale plan).
+    await seedBundle(tmpDir);
+    const okRun = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(okRun.status, 0, okRun.stderr);
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    assert.equal(JSON.parse(await readFile(planPath, "utf8")).ok, true);
+
+    // 2. Re-run at the SAME key with a syntactically INVALID --jq filter —
+    //    the preflight exits 2 after the start-of-flow plan removal.
+    const refused = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--jq", "[unclosed"],
+      { cwd: tmpDir },
+    );
+    assert.equal(refused.status, 2, refused.stderr);
+    assert.match(JSON.parse(refused.stderr).error, /--jq/);
+
+    // 3. The keyed plan is ABSENT — no plan from a failed emitter invocation.
+    await assert.rejects(() => readFile(planPath, "utf8"), { code: "ENOENT" });
+  });
+});
+
 test("expandDispatchUnits: a configured-name unit with one resolved angle is a singleton, not a shared group", () => {
   const out = expandDispatchUnits([{ name: "design-simplicity", angles: ["dry"] }], new Set(["design-simplicity"]));
   assert.deepEqual(out, [{ name: "dry", angles: ["dry"] }]);
