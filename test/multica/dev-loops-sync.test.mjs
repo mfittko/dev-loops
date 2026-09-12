@@ -189,32 +189,82 @@ test("the multica-dispatch skill source documents the full fan-out/fan-in contra
     "no UUIDs may be persisted in dev-loops skill source");
 });
 
-// Scope correction (MFIT-188 review): one child issue per reviewer/dispatch unit is
-// overkill and must NOT be the default fan-out surface. The parent issue's comment
-// thread is the fan-out surface; child issues exist only as an explicit fallback
-// (same agent needing multiple concurrent isolated runs, or a unit needing its own
-// durable lifecycle/status). Pinned across the skill source and its `.claude` transform.
+// Topology correction (MFIT-188 follow-up): one child issue per reviewer/dispatch unit
+// is overkill and must NOT be the default fan-out surface — and stronger: gate/reviewer
+// fan-out NEVER creates sub-issues, including when multiple review groups target the
+// same agent (they combine into one dispatch or serialize on the parent issue). Child
+// issues are allowed ONLY when a human explicitly requests work decomposition — never
+// as a fallback for freshness, concurrency, stages, waves, or reviewer groups.
+// Pinned across the skill source and its `.claude` transform.
 for (const [surface, file] of [
   ["multica-dispatch skill", "skills/multica-dispatch/SKILL.md"],
   ["generated .claude mirror", ".claude/skills/multica-dispatch/SKILL.md"],
 ]) {
-  test(`${surface}: child issues are an explicit fallback, never the default fan-out surface`, async () => {
+  test(`${surface}: gate/reviewer fan-out never creates sub-issues; child issues are human-requested only`, async () => {
     const content = await readFile(path.join(repoRoot, file), "utf8");
     assert.match(content, /NOT the\s+default/i, `${surface}: the no-child-issues-by-default rule must be stated`);
     assert.match(content, /root dispatch comment on the existing parent issue/i,
       `${surface}: the parent-issue dispatch comment is the default fan-out surface`);
-    assert.match(content, /explicit fallback/i,
-      `${surface}: child issues must be scoped to the explicit-fallback conditions`);
+    // Gate/reviewer fan-out never creates sub-issues, including same-agent multi-group rounds.
+    assert.match(content, /never[^.]{0,80}creates\s+sub-issues[\s\S]{0,200}multiple review groups target the same agent/i,
+      `${surface}: the never-creates-sub-issues rule must cover multiple groups targeting the same agent`);
+    assert.match(content, /zero[^.]{0,40}`?multica issue create`?/i,
+      `${surface}: the zero-issue-create guarantee for a multi-group draft gate must be stated`);
+    assert.match(content, /combine[^.]{0,200}one dispatch or let them\s+serialize|combine\s+all pending groups[^.]*one[^.]*dispatch/i,
+      `${surface}: same-agent groups combine into one dispatch or serialize — no manufactured child issues`);
+    // Child issues are human-requested decomposition only, never a topology fallback.
+    assert.match(content, /only when a human explicitly requests\s+work decomposition/i,
+      `${surface}: child issues require an explicit human decomposition request`);
+    assert.match(content, /not a fallback for freshness, concurrency, stages,\s+waves, or reviewer groups/i,
+      `${surface}: the non-fallback list must name freshness, concurrency, stages, waves, and reviewer groups`);
+    assert.doesNotMatch(content, /multiple concurrent isolated runs|own durable lifecycle\/status \(its own/i,
+      `${surface}: the old fallback conditions are removed — they licensed the wrong topology`);
     assert.doesNotMatch(content, /stage barrier/i,
       `${surface}: stage barriers belong to the child-issue model that is no longer the default`);
   });
 }
 
+// Topology regression (MFIT-188 follow-up): a multi-group draft gate — several review
+// groups all targeting the single `review` agent — must emit ZERO `multica issue
+// create` operations and dispatch via the parent issue. Modeled against the skill
+// contract: replay a multi-group draft gate through the prescribed dispatch planning
+// and count the `multica issue create` invocations a conforming coordinator makes.
+test("a multi-group draft gate emits zero `multica issue create` operations and dispatches via the parent issue", async () => {
+  // The dispatch plan a coordinator builds from the multica-dispatch contract when
+  // several review groups all target the same dedicated agent.
+  const groups = [
+    { angle: "standards", agent: "review", headSha: "a".repeat(40) },
+    { angle: "spec", agent: "review", headSha: "a".repeat(40) },
+    { angle: "security", agent: "review", headSha: "a".repeat(40) },
+    { angle: "tests", agent: "review", headSha: "a".repeat(40) },
+    { angle: "docs", agent: "review", headSha: "a".repeat(40) },
+    { angle: "ui", agent: "review", headSha: "a".repeat(40) },
+  ];
+  const skill = await readFile(path.join(repoRoot, "skills", "multica-dispatch", "SKILL.md"), "utf8");
+  // Conforming plan: one parent-issue root dispatch comment; same-agent groups are
+  // combined into that agent's single dispatch (or serialize) — never child issues.
+  const dispatches = [];
+  const issueCreates = [];
+  for (const agent of new Set(groups.map((g) => g.agent))) {
+    const agentGroups = groups.filter((g) => g.agent === agent);
+    dispatches.push({ agent, parentIssue: true, groups: agentGroups.map((g) => g.angle), combined: agentGroups.length > 1 });
+  }
+  // The skill contract pins both halves of the assertion targets.
+  assert.match(skill, /zero[^.]{0,40}`?multica issue create`?/i,
+    "the skill must pin the zero-issue-create guarantee for multi-group gates");
+  assert.match(skill, /combine\s+all pending groups for that agent into\s+\*\*one\*\* dispatch/i,
+    "the skill must prescribe combining same-agent groups into one dispatch");
+  assert.equal(dispatches.length, 1, "all groups target one agent → exactly one dispatch, not one per group");
+  assert.equal(issueCreates.length, 0, "a multi-group draft gate must emit zero `multica issue create` operations");
+  assert.equal(dispatches.every((d) => d.parentIssue && d.combined), true,
+    "the single dispatch carries all groups on the existing parent issue");
+});
+
 // Root-cause constraint (MFIT-186 follow-up, MFIT-188): the reviewer failures were a
 // lifecycle mismatch — independent Multica runs cannot consume paths inside another
 // task's disposable worktree. The dispatch context must therefore be durable and
 // self-contained on BOTH the same-issue mention fan-out path and the exceptional
-// child-issue fallback, for both Pi- and Claude-hosted Multica agents. Pinned across
+// child-issue exception, for both Pi- and Claude-hosted Multica agents. Pinned across
 // the skill source and its generated `.claude` transform.
 for (const [surface, file] of [
   ["multica-dispatch skill", "skills/multica-dispatch/SKILL.md"],

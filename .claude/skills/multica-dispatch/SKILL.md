@@ -24,7 +24,10 @@ Pi's in-process `subagent` tool.
 
 - **One child issue per reviewer/dispatch unit is overkill and is NOT the
   default.** The parent issue is the fan-out surface: no new issues are created
-  merely because fan-out exists.
+  merely because fan-out exists. Gate/reviewer fan-out **never** creates
+  sub-issues — including when multiple review groups target the same agent.
+  A multi-group draft gate therefore emits **zero** `multica issue create`
+  operations and dispatches on the existing parent issue.
 - **Resolve each target agent from the live roster at dispatch time**:
   `multica agent list --output json` by name. Never hardcode or persist a
   workspace-specific agent ID in any committed source. Mention-link each agent
@@ -49,9 +52,9 @@ Pi's in-process `subagent` tool.
      reply in the same thread stating verdict/outcome explicitly, with
      changed-file paths, commands run, and validation output.
 - **Dispatch context is durable and self-contained.** Everything the worker
-  needs must travel in the dispatch comment (or, on the child-issue fallback,
-  the child issue description) or an issue attachment — a complete
-  instruction, not a pointer into the coordinator's session. Never place a
+  needs must travel in the dispatch comment (or, on the human-requested
+  child-issue exception, the child issue description) or an issue attachment —
+  a complete instruction, not a pointer into the coordinator's session. Never place a
   coordinator/task absolute worktree path in a dispatch briefing:
   independent Multica runs cannot consume paths inside another task's
   disposable worktree. Before dispatch, ensure the reviewed head is committed
@@ -73,7 +76,9 @@ Pi's in-process `subagent` tool.
 - **Parallelism comes from distinct dedicated agents.** If several angles
   belong to the same agent, group them into that agent's single dispatch run or
   accept serialization — never create extra dispatch surface for one agent's
-  angles.
+  angles. If Multica serializes repeated mentions of the same agent, combine
+  all pending groups for that agent into **one** dispatch (or let them
+  serialize) — do not manufacture concurrency with child issues.
 
 ## No recursive dev-loop dispatch (provider-independent)
 
@@ -113,39 +118,40 @@ harness dispatch applies exactly as the dev-loop skill specifies.
   worktree surviving: the coordinator's worktree may be deleted right after
   dispatch, and the worker must still be able to validate its context (repo,
   PR, head SHA, self-contained prompt) and return a result through the thread.
+  A dispatch contract on the parent issue is deliberately anonymous with
+  respect to concurrent runs: nothing in it may assume a particular worker
+  run instance, so serialization or a fresh mention run of the same agent
+  satisfies it equally.
 
-## Child-issue fallback (explicit only)
+## Child-issue exception (human-requested only)
 
-Create a child issue **only** as an explicit fallback when:
-
-- the same agent truly needs multiple concurrent isolated runs (a single
-  mention-dispatch cannot carry them), or
-- a dispatch unit needs its own durable lifecycle/status (its own
-  `in_review`/`blocked` state on the board, its own acceptance barrier).
-
-Never create a child issue merely because fan-out exists. When the fallback is
-warranted, the child issue description must carry the full dispatch contract
-(dispatch unit, reviewed head SHA, repository and PR, required
-prompt/context, result contract — post the result as a comment on the child
-issue, then set its status), and the parent performs fan-in by reading each
-finished child's result. The child-issue path carries the same durable-context
-rules as the mention-dispatch path: no coordinator worktree paths in the
-briefing, immutable committed head, self-contained context (description or
-attachment), results back through the child issue's thread/attachments.
+Creating a child issue is allowed **only when a human explicitly requests
+work decomposition.** It is not a fallback for freshness, concurrency, stages,
+waves, or reviewer groups — the parent-issue dispatch comment covers all of
+those. When a human does request decomposition, the child issue description
+carries the full dispatch contract (dispatch unit, reviewed head SHA,
+repository and PR, required prompt/context, result contract — post the result
+as a comment on the child issue, then set its status), and the parent performs
+fan-in by reading each finished child's result. The child-issue path carries
+the same durable-context rules as the mention-dispatch path: no coordinator
+worktree paths in the briefing, immutable committed head, self-contained
+context (description or attachment), results back through the child issue's
+thread/attachments.
 
 ## Failure handling
 
 - A worker that cannot proceed replies in-thread stating the blocker (and, on
-  the child-issue fallback, sets `blocked` on its issue). The coordinator
+  the child-issue exception, sets `blocked` on its issue). The coordinator
   treats that as a failed lane, not a pass.
 - A worker that finishes without satisfying the expected result shape is a
   finding: re-dispatch a bounded fix request in the same thread (or a fresh
-  child issue under the fallback rules) against the same reviewed head SHA, or
-  record the failure in the coordinator's gate evidence — never silently pass
-  it.
+  child issue under the human-requested exception) against the same reviewed
+  head SHA, or record the failure in the coordinator's gate evidence — never
+  silently pass it.
 - On any re-dispatch, reuse the durable dispatch contract (fresh comment or
-  fresh child issue, fresh head SHA if the parent advanced, full context) — the
-  worker never inherits the coordinator's session state.
+  fresh child issue when a human requested decomposition, fresh head SHA if the
+  parent advanced, full context) — the worker never inherits the coordinator's
+  session state.
 
 ## Boundary
 

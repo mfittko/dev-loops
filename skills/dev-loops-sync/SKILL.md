@@ -53,10 +53,14 @@ dev-loops **source**, with as few Multica-specific deviations as possible.
   committed head SHA), context travels in the comment or an issue attachment,
   and results come back through the thread/attachments — never through the
   coordinator's `tmp/`. One child issue per dispatch unit is
-  overkill and NOT the default; child issues are an explicit fallback only (an
-  agent needing multiple concurrent isolated runs, or a unit needing its own
-  durable lifecycle/status), and the fallback carries the same durable-context
-  rules. It also forbids
+  overkill and NOT the default: gate/reviewer fan-out **never** creates
+  sub-issues — even when multiple review groups target the same agent, they
+  dispatch on the existing parent issue (combined into one dispatch or
+  serialized — a multi-group draft gate emits zero `multica issue create`
+  operations); child issues are allowed **only when a human explicitly
+  requests work decomposition** — never as a fallback for freshness,
+  concurrency, stages, waves, or reviewer groups — and carry the same
+  durable-context rules. It also forbids
   **recursive `dev-loop` child dispatch** inside Multica (provider-independent,
   binding Pi and Claude hosts alike): a top-level Multica `dev-loop` run is
   already the coordinator — it routes the resolved strategy directly to the
