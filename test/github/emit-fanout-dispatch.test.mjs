@@ -204,13 +204,31 @@ test("a refusal run writes NO emit-plan artifact", async () => {
 
 test("--pending falls back to groups only when pendingGroups is ABSENT", async () => {
   await withTmpDir(async (tmpDir) => {
-    await seedBundle(tmpDir, { fanout: { groups: [{ name: "coverage", angles: ["coverage"] }] } });
+    await seedBundle(tmpDir, {
+      fanout: {
+        groups: [
+          { name: "coverage", angles: ["coverage"] },
+          { name: "consistency", angles: ["consistency"] },
+        ],
+      },
+    });
     const result = runEmitCli(
       ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--pending"],
       { cwd: tmpDir },
     );
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(JSON.parse(result.stdout).count, 1);
+    assert.equal(JSON.parse(result.stdout).count, 2);
+    // the fallback stamps pending: true over the full-group units in the
+    // persisted keyed plan body — documented actual fallback semantics
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    const persisted = JSON.parse(await readFile(planPath, "utf8"));
+    assert.equal(persisted.pending, true);
+    assert.equal(persisted.units.length, 2);
+    assert.deepEqual(
+      persisted.units.flatMap((unit) => unit.angles).sort(),
+      ["consistency", "coverage"],
+    );
   });
 });
 
