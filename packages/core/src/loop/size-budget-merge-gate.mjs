@@ -37,6 +37,14 @@ const VALID_SIZE_OUTCOMES = new Set(["pass", "escalate", "block"]);
  * {@link resolveHumanReviewDecision}, which derives it from raw PR reviews
  * and treats a Copilot review as never satisfying it.
  *
+ * `humanApprovalSatisfied` is the shared-resolver signal (see
+ * `verifyFreshHumanApproval` in merge-approval.mjs): a head-pinned APPROVED
+ * review OR a head-pinned `approve merge <headSha>` operator comment, either
+ * one already excluding bot/agent authors and stale (non-head) commits. When
+ * `true`, it satisfies this gate the same as `reviewDecision === "APPROVED"`
+ * — the comment fallback is a solo-owner path (GitHub forbids self-approval,
+ * so a solo-owner PR can never carry an `APPROVED` review object).
+ *
  * `touchesT1` is unprefixed here, but the persisted verdict field a caller
  * would source it from is size-namespaced (`sizeTouchesT1` in
  * copilot-helpers.mjs's detect-checkpoint-evidence output) — a caller wiring
@@ -46,6 +54,7 @@ const VALID_SIZE_OUTCOMES = new Set(["pass", "escalate", "block"]);
  *   sizeOutcome?: "pass"|"escalate"|"block"|null,
  *   touchesT1?: boolean,
  *   reviewDecision?: "APPROVED"|"CHANGES_REQUESTED"|null,
+ *   humanApprovalSatisfied?: boolean,
  *   unresolvedChangesRequestedCount?: number,
  * }} [input]
  * @returns {boolean}
@@ -54,6 +63,7 @@ export function resolveSizeBudgetHumanApprovalRequired({
   sizeOutcome,
   touchesT1,
   reviewDecision,
+  humanApprovalSatisfied,
   unresolvedChangesRequestedCount,
 } = {}) {
   if (!VALID_SIZE_OUTCOMES.has(sizeOutcome)) return true; // size evidence absent/unreadable
@@ -62,7 +72,11 @@ export function resolveSizeBudgetHumanApprovalRequired({
   const requiresEscalatedReview = sizeOutcome === "escalate" || sizeOutcome === "block" || touchesT1 === true;
   if (!requiresEscalatedReview) return false; // pass, T1 untouched — no size-imposed requirement
 
-  if (reviewDecision !== "APPROVED") return true; // absent / CHANGES_REQUESTED / Copilot-only / unknown
+  // ponytail: reviewDecision === "APPROVED" is kept only as the back-compat
+  // path for the queue-driver.mjs caller (no comment context) and the
+  // pure-function unit tests; production wiring feeds humanApprovalSatisfied.
+  const approvalPresent = humanApprovalSatisfied === true || reviewDecision === "APPROVED";
+  if (!approvalPresent) return true; // absent / CHANGES_REQUESTED / Copilot-only / unknown
   if (typeof unresolvedChangesRequestedCount !== "number" || unresolvedChangesRequestedCount !== 0) return true;
   return false;
 }

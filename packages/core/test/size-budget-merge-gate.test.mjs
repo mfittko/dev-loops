@@ -102,6 +102,32 @@ test("resolveSizeBudgetHumanApprovalRequired: human APPROVED + zero unresolved C
   );
 });
 
+test("resolveSizeBudgetHumanApprovalRequired: humanApprovalSatisfied true + zero unresolved CHANGES_REQUESTED + no review object is NOT required (AC1: comment-derived approval satisfies without an APPROVED review)", () => {
+  assert.equal(
+    resolveSizeBudgetHumanApprovalRequired({
+      sizeOutcome: "escalate",
+      touchesT1: false,
+      reviewDecision: null,
+      humanApprovalSatisfied: true,
+      unresolvedChangesRequestedCount: 0,
+    }),
+    false,
+  );
+});
+
+test("resolveSizeBudgetHumanApprovalRequired: humanApprovalSatisfied true is STILL required when a human CHANGES_REQUESTED is unresolved (AC2: the comment path enforces the same unresolved-CHANGES_REQUESTED guard)", () => {
+  assert.equal(
+    resolveSizeBudgetHumanApprovalRequired({
+      sizeOutcome: "escalate",
+      touchesT1: false,
+      reviewDecision: null,
+      humanApprovalSatisfied: true,
+      unresolvedChangesRequestedCount: 1,
+    }),
+    true,
+  );
+});
+
 test("resolveSizeBudgetHumanApprovalRequired: an unreadable unresolvedChangesRequestedCount fails closed", () => {
   assert.equal(
     resolveSizeBudgetHumanApprovalRequired({

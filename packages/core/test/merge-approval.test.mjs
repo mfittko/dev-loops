@@ -240,6 +240,22 @@ test("evaluateMergePreconditions: escalated PR with only standing auth is refuse
   assert.ok(res.failures.some((f) => f.precondition === "merge_approval"));
 });
 
+test("evaluateMergePreconditions: merge_approval and size_budget_human_approval draw from the same shared resolver — both fail without the comment, both pass with it (AC5)", () => {
+  const escalatedNoReview = { sizeOutcome: "escalate", touchesT1: false, standingAuthorized: false, humanReviewDecision: null, reviews: [] };
+
+  const withoutComment = evaluateMergePreconditions(greenFacts({ ...escalatedNoReview, comments: [] }));
+  assert.equal(withoutComment.ok, false);
+  assert.ok(withoutComment.failures.some((f) => f.precondition === "merge_approval"));
+  assert.ok(withoutComment.failures.some((f) => f.precondition === "size_budget_human_approval"));
+
+  const withComment = evaluateMergePreconditions(greenFacts({
+    ...escalatedNoReview,
+    comments: [{ user: { login: "mfittko" }, body: `approve merge ${HEAD}` }],
+  }));
+  assert.equal(withComment.ok, true, JSON.stringify(withComment.failures));
+  assert.equal(withComment.approvalVia, "comment_marker");
+});
+
 test("evaluateMergePreconditions: escalated PR with a fresh operator comment marker passes", () => {
   const res = evaluateMergePreconditions(greenFacts({
     stableRelease: true,
