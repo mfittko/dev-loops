@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -1417,6 +1417,66 @@ test("create-pr skips the LOCAL-COMMENT-DISCIPLINE preflight (only) when --base 
     assert.equal(result.code, 0, result.stderr);
     assert.equal(result.stdout, "https://github.com/owner/repo/pull/1\n");
     assert.equal((await readGhCalls(ghLogPath)).length, 1);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr fails closed when the resolvability probe errors for a reason other than an absent ref", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-comment-discipline-probe-fault-"));
+  try {
+    // A real git repo where origin/main resolves — we ARE in a work tree, so
+    // this is NOT the non-git/absent-ref skip case the previous test covers.
+    // `git rev-parse --verify --quiet <ref>^{commit}` normalizes every
+    // revision-resolution failure (absent ref, malformed ref, even a
+    // corrupted/unreadable object) to exit 1 by design (verified empirically
+    // against git 2.50), so real git cannot produce the non-1 status this
+    // test targets. To exercise the "any OTHER thrown error propagates"
+    // branch honestly, this test shadows `git` on PATH with a stub (same
+    // technique as writeGhStub) that answers the preflight's exact two-call
+    // probe sequence — `rev-parse --is-inside-work-tree` (true, matching this
+    // real repo) then `rev-parse --verify --quiet origin/<base>^{commit}`
+    // (exit 13, simulating a repo-level fault distinct from status-1
+    // "absent") — and exits 99 on any other invocation so a drift in
+    // create-pr's git call sequence fails the test loudly instead of masking
+    // it.
+    await initSizeBudgetFixtureRepo(tempDir, {
+      headFiles: [
+        { path: "scripts/sample.mjs", content: "export const x = 1;\n" },
+      ],
+    });
+    const gitStubDir = path.join(tempDir, "git-stub");
+    await mkdir(gitStubDir, { recursive: true });
+    const gitStubPath = path.join(gitStubDir, "git");
+    await writeFile(gitStubPath, [
+      "#!/usr/bin/env bun",
+      'const argv = process.argv.slice(2);',
+      'if (argv[0] === "rev-parse" && argv[1] === "--is-inside-work-tree") {',
+      '  process.stdout.write("true\\n");',
+      "  process.exit(0);",
+      "}",
+      'if (argv[0] === "rev-parse" && argv[1] === "--verify") {',
+      "  process.exit(13);",
+      "}",
+      'process.stderr.write(`unexpected git-stub invocation: ${argv.join(" ")}\\n`);',
+      "process.exit(99);",
+      "",
+    ].join("\n"), "utf8");
+    await chmod(gitStubPath, 0o755);
+    const { env: ghEnv, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: "https://github.com/owner/repo/pull/1\n" },
+    ]);
+    const env = { ...ghEnv, PATH: [gitStubDir, ghEnv.PATH].join(path.delimiter) };
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--base", "malformed-base",
+      "--head", "feature",
+      "--title", "T",
+      "--body", "no closing keyword",
+    ], { env, cwd: tempDir });
+    assert.notEqual(result.code, 0);
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

@@ -110,21 +110,45 @@ function resolveCurrentBranch({ cwd = process.cwd(), env = process.env } = {}) {
   }
 }
 // True only when `ref` resolves to a commit. Used solely to decide whether the
-// comment-discipline preflight has a diffable base at all (non-git worktree,
-// or a base with no matching remote-tracking ref) — the ONLY case that
-// preflight is allowed to skip. Any other failure (a git I/O error, a
-// malformed ref, an evaluator bug) must propagate and fail closed instead of
-// being swallowed here.
+// comment-discipline preflight has a diffable base at all — the ONLY two cases
+// that preflight is allowed to skip are (1) cwd is not a git work tree, and
+// (2) the ref itself is absent (rev-parse exits 1). Both are probed
+// explicitly below; every other failure (missing git binary, an I/O error, a
+// malformed ref that exits non-1, an evaluator bug) is RETHROWN so the caller
+// fails closed instead of silently skipping. GIT_DIR/GIT_WORK_TREE are
+// stripped from the probe env, mirroring evaluateCommentDiscipline, so an
+// inherited override can never point the probe at the wrong repo.
 function isResolvableRef(ref, { cwd, env }) {
+  const gitEnv = { ...env, GIT_DIR: undefined, GIT_WORK_TREE: undefined };
+  let isWorkTree;
+  try {
+    isWorkTree = execFileSync("git", ["rev-parse", "--is-inside-work-tree"], {
+      cwd,
+      env: gitEnv,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch (err) {
+    if (err.code === "ENOENT") {
+      throw err;
+    }
+    return false; // not a git work tree: documented skip case
+  }
+  if (isWorkTree !== "true") {
+    return false; // not a git work tree: documented skip case
+  }
   try {
     execFileSync("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
       cwd,
-      env,
+      env: gitEnv,
       stdio: ["ignore", "ignore", "ignore"],
     });
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    if (err.status === 1) {
+      return false; // ref genuinely absent: documented skip case
+    }
+    throw err; // malformed ref, I/O error, missing git: fail closed
   }
 }
 // Both `--repo owner/name` and `--repo=owner/name` — gh accepts either form.
