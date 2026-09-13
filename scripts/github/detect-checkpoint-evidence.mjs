@@ -644,7 +644,7 @@ function readHeadDevloopsSource(repoRoot, headSha) {
 /**
  * Resolve the config that governs the angle-pool / fanout-groups /
  * mandatory-angle layer: the PR HEAD commit's committed `.devloops`, not the
- * invoking checkout's (issue #1972). A fan-out that ran conformantly under
+ * invoking checkout's. A fan-out that ran conformantly under
  * its own (possibly renamed/regrouped) config must validate from ANY
  * checkout, including a pre-merge main that predates the change — the ledger
  * BYTES already read from any checkout (readLedgerProvenanceInAny), but the
@@ -725,7 +725,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   // failure) — reuse it instead of a second `git rev-parse --show-toplevel`.
   const repoRoot = checkouts[0];
   // Angle-pool / fanout-groups / mandatory-angle layer authority: the PR
-  // HEAD's committed config, not this invoking checkout's (issue #1972) — see
+  // HEAD's committed config, not this invoking checkout's — see
   // resolveAngleLayerConfig. ONE resolution, reused for every resolver below
   // (resolveGateConfig, resolveGateAngleContract, resolveFanoutGroups,
   // including the per-candidate resolution inside readLedgerProvenanceInAny)

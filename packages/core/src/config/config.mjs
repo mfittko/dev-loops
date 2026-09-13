@@ -1503,7 +1503,7 @@ export async function loadDevLoopConfig(options = {}) {
   // content directly instead of reading this checkout's disk file — used to
   // resolve config from a different ref (e.g. a PR head commit, read via git)
   // while extensionDefaults and .pi/dev-loop/defaults still come from
-  // repoRoot on disk (issue #1972). Presence of the key (even `{ raw: null }`,
+  // repoRoot on disk. Presence of the key (even `{ raw: null }`,
   // meaning "no .devloops at that ref") switches modes; omitting the option
   // entirely preserves today's disk-read behavior.
   if (options.devloopsOverride !== undefined) {
