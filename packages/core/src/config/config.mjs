@@ -1232,15 +1232,18 @@ function mergeAngleArrays(targetRaw, sourceRaw) {
  * @param {string} filePath
  * @returns {Promise<object|null>}
  */
-async function readConfigFile(filePath) {
-  let raw;
-  try {
-    raw = await readFile(filePath, "utf8");
-  } catch (err) {
-    if (err.code === "ENOENT") return null;
-    throw configError(`Cannot read config file: ${err.message}`, err.code, filePath);
-  }
-
+/**
+ * Parse already-read config text (YAML or JSON, keyed off `filePath`'s
+ * extension) into a plain object. Split out of {@link readConfigFile} so a
+ * caller that already has the raw text from somewhere other than this
+ * checkout's disk (e.g. `loadDevLoopConfig`'s `devloopsOverride`, which reads
+ * a PR head commit's `.devloops` via git) can reuse the exact same parsing
+ * rules instead of re-implementing them.
+ * @param {string} raw
+ * @param {string} filePath - used only for its extension and in error messages
+ * @returns {Record<string, unknown>}
+ */
+function parseConfigContent(raw, filePath) {
   if (raw.trim() === "") {
     throw configError("Config file is empty", "EMPTY_FILE", filePath);
   }
@@ -1273,6 +1276,17 @@ async function readConfigFile(filePath) {
   }
 
   return parsed;
+}
+
+async function readConfigFile(filePath) {
+  let raw;
+  try {
+    raw = await readFile(filePath, "utf8");
+  } catch (err) {
+    if (err.code === "ENOENT") return null;
+    throw configError(`Cannot read config file: ${err.message}`, err.code, filePath);
+  }
+  return parseConfigContent(raw, filePath);
 }
 
 /**
@@ -1356,6 +1370,24 @@ async function applyLayer(merged, basePaths, layer, warnings, errors, options = 
     return merged;
   }
 
+  return applyParsedLayer(merged, filePath, data, layer, warnings, errors);
+}
+
+/**
+ * Validate + merge one already-parsed config layer's data into `merged`.
+ * Split out of {@link applyLayer} so `loadDevLoopConfig`'s `devloopsOverride`
+ * (a PR head commit's `.devloops`, read via git rather than this checkout's
+ * disk) goes through the exact same deprecation normalization, schema
+ * validation, and merge rules as every disk-sourced layer.
+ * @param {Record<string, unknown>} merged
+ * @param {string} filePath - source path/label, used in warnings/errors only
+ * @param {Record<string, unknown>} data - already-parsed layer content
+ * @param {"extensionDefaults"|"defaults"|"devloops"} layer
+ * @param {string[]} warnings
+ * @param {ConfigLoadError[]} errors
+ * @returns {Record<string, unknown>}
+ */
+function applyParsedLayer(merged, filePath, data, layer, warnings, errors) {
   // Deprecated `strategy: "github-first"` alias: normalized to
   // "tracker-first" BEFORE this layer's FileConfigSchema validation (the enum
   // only accepts the canonical value, else the whole layer drops as invalid).
@@ -1435,6 +1467,7 @@ async function applyLayer(merged, basePaths, layer, warnings, errors, options = 
  * @typedef {object} LoadOptions
  * @property {string} [repoRoot] - Path to repository root (default: process.cwd())
  * @property {string} [extensionDefaultsBasePath] - Base path (no extension) to extension defaults; overrides the package-relative default
+ * @property {{ raw: string|null, path?: string }} [devloopsOverride] - When present, sources the devloops (primary override) layer from `raw` instead of reading `<repoRoot>/.devloops*` off disk; `raw: null` means "no .devloops at this source" (a legitimate state, distinct from omitting the option entirely, which reads disk as usual)
  */
 
 /**
@@ -1466,26 +1499,52 @@ export async function loadDevLoopConfig(options = {}) {
     warnOnMissing: true,
   });
 
-  // .devloops (primary override) existence: only ENOENT means genuinely absent.
-  // Any other error (EACCES/EISDIR) means it exists but is unreadable, so
-  // select the .devloops path and let applyLayer record the structured error.
-  let primaryExists = false;
-  for (const ext of ["", ".yaml", ".yml", ".json"]) {
-    try {
-      await readFile(devloopsPath + ext, "utf8");
-      primaryExists = true;
-      break;
-    } catch (err) {
-      if (err?.code !== "ENOENT") {
+  // `devloopsOverride` sources the devloops (primary override) layer's
+  // content directly instead of reading this checkout's disk file — used to
+  // resolve config from a different ref (e.g. a PR head commit, read via git)
+  // while extensionDefaults and .pi/dev-loop/defaults still come from
+  // repoRoot on disk. Presence of the key (even `{ raw: null }`,
+  // meaning "no .devloops at that ref") switches modes; omitting the option
+  // entirely preserves today's disk-read behavior.
+  if (options.devloopsOverride !== undefined) {
+    const { raw, path: overridePath = devloopsPath } = options.devloopsOverride ?? {};
+    if (typeof raw === "string") {
+      try {
+        const data = parseConfigContent(raw, overridePath);
+        merged = applyParsedLayer(merged, overridePath, data, "devloops", warnings, errors);
+      } catch (err) {
+        errors.push({
+          path: overridePath,
+          message: `${path.basename(overridePath)}: ${err.message}`,
+          layer: "devloops",
+        });
+      }
+    }
+    // raw == null: no .devloops present at the overridden source — leave
+    // `merged` at extensionDefaults+defaults, mirroring primaryExists: false
+    // below.
+  } else {
+    // .devloops (primary override) existence: only ENOENT means genuinely absent.
+    // Any other error (EACCES/EISDIR) means it exists but is unreadable, so
+    // select the .devloops path and let applyLayer record the structured error.
+    let primaryExists = false;
+    for (const ext of ["", ".yaml", ".yml", ".json"]) {
+      try {
+        await readFile(devloopsPath + ext, "utf8");
         primaryExists = true;
         break;
+      } catch (err) {
+        if (err?.code !== "ENOENT") {
+          primaryExists = true;
+          break;
+        }
+        // ENOENT — genuinely absent, try next extension
       }
-      // ENOENT — genuinely absent, try next extension
     }
-  }
 
-  if (primaryExists) {
-    merged = await applyLayer(merged, devloopsPath, "devloops", warnings, errors);
+    if (primaryExists) {
+      merged = await applyLayer(merged, devloopsPath, "devloops", warnings, errors);
+    }
   }
 
   // Validate final merged config

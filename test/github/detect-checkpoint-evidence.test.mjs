@@ -2248,6 +2248,576 @@ test("buildFanoutEnforcement (#1174) re-derives scope fail-closed and sets scope
   }
 });
 
+// ---------------------------------------------------------------------------
+// Issue #1972: the angle-pool/fanout-groups/mandatory-angle layer must
+// resolve from the PR HEAD commit's committed config, not the invoking
+// checkout's — a config-changing PR (angle rename, regroup, pool edit) must
+// validate from any checkout, including a pre-merge main that predates it.
+// ---------------------------------------------------------------------------
+
+// requireFanoutProvenance stays off (default) in these fixtures: it only
+// gates the distinctReviewers-floor/pairing layer, which is orthogonal to
+// this issue and already covered by the AC7 tests above. Mandatory-angle
+// coverage (this issue's concern) is enforced independently of that flag.
+// `pr-checklist` is a built-in mandatory default (BUILT_IN_DEFAULTS) that
+// merges into every preApproval config regardless of this fixture, so every
+// ledger below must also record it or trip an unrelated missing-mandatory
+// failure.
+const RENAME_CLASS_DEVLOOPS = (mandatoryAngleName) => [
+  "version: 1",
+  "gates:",
+  "  requireFanoutEvidence: true",
+  "  preApproval:",
+  "    angles:",
+  "      - dry",
+  "      - kiss",
+  `      - name: ${mandatoryAngleName}`,
+  "        mandatory: true",
+  "",
+].join("\n");
+
+test("buildFanoutEnforcement (#1972, AC2): a rename-class .devloops PR validates from a stale invoking checkout that predates the rename", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-head-config-rename-"));
+  try {
+    const g = (...args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+    g("init", "-q");
+    g("config", "user.email", "t@t.t");
+    g("config", "user.name", "t");
+    g("config", "commit.gpgsign", "false");
+    await writeFile(path.join(dir, ".devloops"), RENAME_CLASS_DEVLOOPS("legacy-mandatory"), "utf8");
+    g("add", "-A");
+    g("commit", "-qm", "base (old angle name)");
+    const baseSha = g("rev-parse", "HEAD").trim();
+    await writeFile(path.join(dir, ".devloops"), RENAME_CLASS_DEVLOOPS("renamed-mandatory"), "utf8");
+    g("add", "-A");
+    g("commit", "-qm", "rename legacy-mandatory -> renamed-mandatory");
+    const headSha = g("rev-parse", "HEAD").trim();
+    // The invoking checkout predates the rename: check back out to base so
+    // the on-disk .devloops still carries the OLD angle name, exactly like a
+    // pre-merge main that hasn't seen the PR's config change yet.
+    g("checkout", "-q", baseSha);
+
+    const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-1972");
+    await mkdir(ledgerDir, { recursive: true });
+    // The fan-out ran under the PR HEAD's NEW config, recording the RENAMED
+    // angle (plus the always-mandatory pr-checklist default) — a fully
+    // conformant round under the NEW config.
+    await writeFile(
+      path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
+      `${JSON.stringify({
+        gate: "pre_approval_gate", headSha, findings: [],
+        provenance: {
+          distinctReviewers: 1,
+          perAngle: [
+            { angle: "dry", reviewer: "review-a" },
+            { angle: "kiss", reviewer: "review-a" },
+            { angle: "renamed-mandatory", reviewer: "review-a" },
+            { angle: "pr-checklist", reviewer: "review-a" },
+          ],
+        },
+      })}\n`,
+      "utf8",
+    );
+
+    // Invoking checkout's own on-disk config still carries the OLD name.
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+    const marker = { visible: true, headSha, executionMode: "fanout_fanin" };
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: 1972, currentHeadSha: headSha,
+      draftGateMarker: { visible: false }, preApprovalGateMarker: marker,
+      config, cwd: dir, hasFullLabel: false,
+    });
+    const gate = enforcement.gates.find((entry) => entry.name === "pre_approval_gate");
+    // The angle-pool/mandatory-angle layer sourced from the PR HEAD commit's
+    // config: the NEW name is mandatory, the OLD (invoking-checkout) name is
+    // not carried over.
+    assert.ok(gate.mandatoryAngles.includes("renamed-mandatory"), JSON.stringify(gate.mandatoryAngles));
+    assert.ok(!gate.mandatoryAngles.includes("legacy-mandatory"), JSON.stringify(gate.mandatoryAngles));
+    assert.ok(gate.provenance, "the head-config-conformant ledger satisfies readLedgerProvenanceInAny");
+    const result = buildPreMergeGateCheck({
+      currentHeadSha: headSha,
+      draftGate: { visible: true, verdict: "clean" },
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha },
+    }, 0, null, enforcement);
+    assert.equal(result.ok, true, JSON.stringify(result.failures));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildFanoutEnforcement (#1972, AC3): a ledger that violates the PR HEAD config still fails closed", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-head-config-violation-"));
+  try {
+    const g = (...args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+    g("init", "-q");
+    g("config", "user.email", "t@t.t");
+    g("config", "user.name", "t");
+    g("config", "commit.gpgsign", "false");
+    await writeFile(path.join(dir, ".devloops"), RENAME_CLASS_DEVLOOPS("legacy-mandatory"), "utf8");
+    g("add", "-A");
+    g("commit", "-qm", "base (old angle name)");
+    const baseSha = g("rev-parse", "HEAD").trim();
+    await writeFile(path.join(dir, ".devloops"), RENAME_CLASS_DEVLOOPS("renamed-mandatory"), "utf8");
+    g("add", "-A");
+    g("commit", "-qm", "rename legacy-mandatory -> renamed-mandatory");
+    const headSha = g("rev-parse", "HEAD").trim();
+    g("checkout", "-q", baseSha);
+
+    const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-1973");
+    await mkdir(ledgerDir, { recursive: true });
+    // Non-conformant even under the NEW head config: the mandatory
+    // "renamed-mandatory" angle is never recorded — the fix changes which
+    // config is authoritative, not whether angle coverage is enforced.
+    await writeFile(
+      path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
+      `${JSON.stringify({
+        gate: "pre_approval_gate", headSha, findings: [],
+        provenance: {
+          distinctReviewers: 1,
+          perAngle: [
+            { angle: "dry", reviewer: "review-a" },
+            { angle: "kiss", reviewer: "review-a" },
+            { angle: "pr-checklist", reviewer: "review-a" },
+          ],
+        },
+      })}\n`,
+      "utf8",
+    );
+
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+    const marker = { visible: true, headSha, executionMode: "fanout_fanin" };
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: 1973, currentHeadSha: headSha,
+      draftGateMarker: { visible: false }, preApprovalGateMarker: marker,
+      config, cwd: dir, hasFullLabel: false,
+    });
+    const gate = enforcement.gates.find((entry) => entry.name === "pre_approval_gate");
+    assert.ok(gate.mandatoryAngles.includes("renamed-mandatory"), JSON.stringify(gate.mandatoryAngles));
+    const result = buildPreMergeGateCheck({
+      currentHeadSha: headSha,
+      draftGate: { visible: true, verdict: "clean" },
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha },
+    }, 0, null, enforcement);
+    assert.equal(result.ok, false);
+    assert.ok(
+      result.failures.some((f) => f.includes("renamed-mandatory")),
+      JSON.stringify(result.failures),
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildFanoutEnforcement (#1972, AC4): angle-layer config falls back to the invoking checkout, without loosening enforcement, when the head commit is unresolvable locally", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-head-config-fallback-commit-"));
+  try {
+    const g = (...args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+    g("init", "-q");
+    g("config", "user.email", "t@t.t");
+    g("config", "user.name", "t");
+    g("config", "commit.gpgsign", "false");
+    await writeFile(
+      path.join(dir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  requireFanoutEvidence: true",
+        "  preApproval:",
+        "    angles:",
+        "      - dry",
+        "      - name: invoking-mandatory",
+        "        mandatory: true",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    g("add", "-A");
+    g("commit", "-qm", "base");
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+
+    // A plausible-looking but locally-unresolvable head SHA — never fetched
+    // into any checkout sharing this .git (unlike a real PR head, which the
+    // reviewing worktree always has).
+    const unresolvableSha = "f".repeat(40);
+    const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-1974");
+    await mkdir(ledgerDir, { recursive: true });
+    await writeFile(
+      path.join(ledgerDir, `pre_approval_gate-${unresolvableSha}.json`),
+      `${JSON.stringify({
+        gate: "pre_approval_gate", headSha: unresolvableSha, findings: [],
+        provenance: {
+          distinctReviewers: 1,
+          perAngle: [
+            { angle: "dry", reviewer: "review-a" },
+            { angle: "invoking-mandatory", reviewer: "review-a" },
+            { angle: "pr-checklist", reviewer: "review-a" },
+          ],
+        },
+      })}\n`,
+      "utf8",
+    );
+    const marker = { visible: true, headSha: unresolvableSha, executionMode: "fanout_fanin" };
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: 1974, currentHeadSha: unresolvableSha,
+      draftGateMarker: { visible: false }, preApprovalGateMarker: marker,
+      config, cwd: dir, hasFullLabel: false,
+    });
+    const gate = enforcement.gates.find((entry) => entry.name === "pre_approval_gate");
+    // Fell back to the invoking checkout's OWN mandatory angle — never
+    // silently dropped/emptied, never looser than today's behavior.
+    assert.ok(gate.mandatoryAngles.includes("invoking-mandatory"), JSON.stringify(gate.mandatoryAngles));
+    assert.ok(gate.provenance, "a ledger conformant with the invoking (fallback) config still validates");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildFanoutEnforcement (#1972, AC4): angle-layer config falls back to the invoking checkout when the PR head's .devloops fails to parse", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-head-config-fallback-parse-"));
+  try {
+    const g = (...args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+    g("init", "-q");
+    g("config", "user.email", "t@t.t");
+    g("config", "user.name", "t");
+    g("config", "commit.gpgsign", "false");
+    const goodDevloops = [
+      "version: 1",
+      "gates:",
+      "  requireFanoutEvidence: true",
+      "  preApproval:",
+      "    angles:",
+      "      - dry",
+      "      - name: invoking-mandatory",
+      "        mandatory: true",
+      "",
+    ].join("\n");
+    await writeFile(path.join(dir, ".devloops"), goodDevloops, "utf8");
+    g("add", "-A");
+    g("commit", "-qm", "base (valid config)");
+    const baseSha = g("rev-parse", "HEAD").trim();
+    // The PR head commits a malformed .devloops (a genuine parse failure,
+    // not a legitimate absence of the file).
+    await writeFile(path.join(dir, ".devloops"), "gates: [unterminated", "utf8");
+    g("add", "-A");
+    g("commit", "-qm", "malformed head config");
+    const headSha = g("rev-parse", "HEAD").trim();
+    g("checkout", "-q", baseSha); // invoking checkout: valid config on disk
+
+    const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-1975");
+    await mkdir(ledgerDir, { recursive: true });
+    await writeFile(
+      path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
+      `${JSON.stringify({
+        gate: "pre_approval_gate", headSha, findings: [],
+        provenance: {
+          distinctReviewers: 1,
+          perAngle: [
+            { angle: "dry", reviewer: "review-a" },
+            { angle: "invoking-mandatory", reviewer: "review-a" },
+            { angle: "pr-checklist", reviewer: "review-a" },
+          ],
+        },
+      })}\n`,
+      "utf8",
+    );
+
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+    const marker = { visible: true, headSha, executionMode: "fanout_fanin" };
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: 1975, currentHeadSha: headSha,
+      draftGateMarker: { visible: false }, preApprovalGateMarker: marker,
+      config, cwd: dir, hasFullLabel: false,
+    });
+    const gate = enforcement.gates.find((entry) => entry.name === "pre_approval_gate");
+    // Fell back to the invoking checkout's config — the head's malformed
+    // .devloops never gets to silently widen or drop the mandatory-angle set.
+    assert.ok(gate.mandatoryAngles.includes("invoking-mandatory"), JSON.stringify(gate.mandatoryAngles));
+    assert.ok(gate.provenance, "a ledger conformant with the fallback (invoking) config still validates");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildFanoutEnforcement: a broken BASE layer (.pi/dev-loop/defaults) on the invoking checkout does not force a fallback away from a validly-parsed HEAD .devloops override", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-head-config-base-layer-broken-"));
+  try {
+    const g = (...args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+    g("init", "-q");
+    g("config", "user.email", "t@t.t");
+    g("config", "user.name", "t");
+    g("config", "commit.gpgsign", "false");
+    await writeFile(
+      path.join(dir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  requireFanoutEvidence: true",
+        "  preApproval:",
+        "    angles:",
+        "      - dry",
+        "      - name: base-mandatory",
+        "        mandatory: true",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    g("add", "-A");
+    g("commit", "-qm", "base (valid config)");
+    const baseSha = g("rev-parse", "HEAD").trim();
+    await writeFile(
+      path.join(dir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  requireFanoutEvidence: true",
+        "  preApproval:",
+        "    angles:",
+        "      - dry",
+        "      - name: head-mandatory",
+        "        mandatory: true",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    g("add", "-A");
+    g("commit", "-qm", "head (valid, distinct mandatory angle)");
+    const headSha = g("rev-parse", "HEAD").trim();
+    g("checkout", "-q", baseSha); // invoking checkout: base .devloops on disk
+
+    // The invoking checkout's own BASE layer (.pi/dev-loop/defaults) is
+    // malformed — unrelated to, and independent from, the HEAD .devloops
+    // override's own validity. This is read from `repoRoot` on disk in BOTH
+    // the invoking config load and the head-resolved config load, so it
+    // cannot be "fixed" by falling back; falling back on it would only
+    // discard the validly-parsed HEAD override.
+    await mkdir(path.join(dir, ".pi", "dev-loop"), { recursive: true });
+    await writeFile(path.join(dir, ".pi", "dev-loop", "defaults.yaml"), "gates: [unterminated", "utf8");
+
+    const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-1977");
+    await mkdir(ledgerDir, { recursive: true });
+    await writeFile(
+      path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
+      `${JSON.stringify({
+        gate: "pre_approval_gate", headSha, findings: [],
+        provenance: {
+          distinctReviewers: 1,
+          perAngle: [
+            { angle: "dry", reviewer: "review-a" },
+            { angle: "head-mandatory", reviewer: "review-a" },
+            { angle: "pr-checklist", reviewer: "review-a" },
+          ],
+        },
+      })}\n`,
+      "utf8",
+    );
+
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+    const marker = { visible: true, headSha, executionMode: "fanout_fanin" };
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: 1977, currentHeadSha: headSha,
+      draftGateMarker: { visible: false }, preApprovalGateMarker: marker,
+      config, cwd: dir, hasFullLabel: false,
+    });
+    const gate = enforcement.gates.find((entry) => entry.name === "pre_approval_gate");
+    // Resolved from the HEAD .devloops, not the invoking (base) checkout's —
+    // the broken base layer must not have triggered a fallback.
+    assert.ok(gate.mandatoryAngles.includes("head-mandatory"), JSON.stringify(gate.mandatoryAngles));
+    assert.ok(!gate.mandatoryAngles.includes("base-mandatory"), JSON.stringify(gate.mandatoryAngles));
+    assert.ok(gate.provenance, "a ledger conformant with the HEAD config still validates");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildFanoutEnforcement (#1972): a PR head commit that resolves but never committed a .devloops resolves HEAD DEFAULTS, not the invoking checkout's own on-disk .devloops", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-head-config-no-devloops-"));
+  try {
+    const g = (...args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+    g("init", "-q");
+    g("config", "user.email", "t@t.t");
+    g("config", "user.name", "t");
+    g("config", "commit.gpgsign", "false");
+    // The HEAD commit never carries a .devloops at any extension.
+    await writeFile(path.join(dir, "README.md"), "no devloops here\n", "utf8");
+    g("add", "-A");
+    g("commit", "-qm", "head commit with no .devloops");
+    const headSha = g("rev-parse", "HEAD").trim();
+
+    // The invoking checkout's OWN on-disk .devloops (untracked — never
+    // committed) carries a mandatory angle with a name distinct from any
+    // head default, so a resolved "invoking-mandatory" would prove a
+    // wrongful fallback to the invoking checkout instead of HEAD defaults.
+    await writeFile(
+      path.join(dir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  requireFanoutEvidence: true",
+        "  preApproval:",
+        "    angles:",
+        "      - dry",
+        "      - name: invoking-mandatory",
+        "        mandatory: true",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+    const marker = { visible: true, headSha, executionMode: "fanout_fanin" };
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: 1976, currentHeadSha: headSha,
+      draftGateMarker: { visible: false }, preApprovalGateMarker: marker,
+      config, cwd: dir, hasFullLabel: false,
+    });
+    const gate = enforcement.gates.find((entry) => entry.name === "pre_approval_gate");
+    // Resolved from HEAD DEFAULTS (extensionDefaults' built-in mandatory
+    // "pr-checklist"), never the invoking checkout's own "invoking-mandatory"
+    // — proving `raw: null` (head resolves, no committed .devloops) took the
+    // defaults branch instead of silently falling back to the invoking
+    // config the way an unresolvable head SHA would.
+    assert.ok(gate.mandatoryAngles.includes("pr-checklist"), JSON.stringify(gate.mandatoryAngles));
+    assert.ok(!gate.mandatoryAngles.includes("invoking-mandatory"), JSON.stringify(gate.mandatoryAngles));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildFanoutEnforcement: gate ACTIVATION stays sourced from the invoking config, not the PR head's own .devloops", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-activation-invoking-"));
+  try {
+    const g = (...args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+    g("init", "-q");
+    g("config", "user.email", "t@t.t");
+    g("config", "user.name", "t");
+    g("config", "commit.gpgsign", "false");
+    const baseDevloops = [
+      "version: 1",
+      "gates:",
+      "  requireFanoutEvidence: true",
+      "  preApproval:",
+      "    required: true",
+      "",
+    ].join("\n");
+    await writeFile(path.join(dir, ".devloops"), baseDevloops, "utf8");
+    g("add", "-A");
+    g("commit", "-qm", "base (gate required)");
+    const baseSha = g("rev-parse", "HEAD").trim();
+    // The PR's own HEAD commit turns the gate OFF — this must not be able to
+    // remove the gate from enforcement when the invoking checkout still
+    // requires it.
+    const headDevloops = [
+      "version: 1",
+      "gates:",
+      "  requireFanoutEvidence: true",
+      "  preApproval:",
+      "    required: false",
+      "",
+    ].join("\n");
+    await writeFile(path.join(dir, ".devloops"), headDevloops, "utf8");
+    g("add", "-A");
+    g("commit", "-qm", "head (gate turned off in its own config)");
+    const headSha = g("rev-parse", "HEAD").trim();
+    g("checkout", "-q", baseSha); // invoking checkout: gate still required on disk
+
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+    const marker = { visible: true, headSha, executionMode: "fanout_fanin" };
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: 1978, currentHeadSha: headSha,
+      draftGateMarker: { visible: false }, preApprovalGateMarker: marker,
+      config, cwd: dir, hasFullLabel: false,
+    });
+    // The gate must still be present/enforced: activation reads the invoking
+    // config's `required: true`, never the head's own `required: false`.
+    const gate = enforcement.gates.find((entry) => entry.name === "pre_approval_gate");
+    assert.ok(gate, `pre_approval_gate must stay enforced; got gates: ${JSON.stringify(enforcement.gates.map((e) => e.name))}`);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildFanoutEnforcement: a read failure on a .devloops that genuinely exists at the PR head falls back to invokingConfig, never head defaults", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-head-config-read-failure-"));
+  try {
+    const g = (...args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+    g("init", "-q");
+    g("config", "user.email", "t@t.t");
+    g("config", "user.name", "t");
+    g("config", "commit.gpgsign", "false");
+    await writeFile(
+      path.join(dir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  requireFanoutEvidence: true",
+        "  preApproval:",
+        "    angles:",
+        "      - dry",
+        "      - name: invoking-mandatory",
+        "        mandatory: true",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    g("add", "-A");
+    g("commit", "-qm", "base");
+    // The PR HEAD's .devloops genuinely EXISTS at this ref but is oversized —
+    // larger than readHeadDevloopsSource's generous maxBuffer — so `git show`
+    // fails on a real read error, not on path absence. This must fail CLOSED
+    // (fall back to invokingConfig), never fall through to the head-defaults
+    // (`raw: null`) branch the way a genuinely-absent `.devloops` would.
+    const oversizedDevloops = `${[
+      "version: 1",
+      "gates:",
+      "  requireFanoutEvidence: true",
+      "  preApproval:",
+      "    angles:",
+      "      - dry",
+      "      - name: head-mandatory",
+      "        mandatory: true",
+    ].join("\n")}\n# padding: ${"x".repeat(9 * 1024 * 1024)}\n`;
+    await writeFile(path.join(dir, ".devloops"), oversizedDevloops, "utf8");
+    g("add", "-A");
+    g("commit", "-qm", "head (oversized .devloops)");
+    const headSha = g("rev-parse", "HEAD").trim();
+    g("checkout", "-q", "HEAD~1"); // invoking checkout: base config on disk
+
+    const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-1979");
+    await mkdir(ledgerDir, { recursive: true });
+    await writeFile(
+      path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
+      `${JSON.stringify({
+        gate: "pre_approval_gate", headSha, findings: [],
+        provenance: {
+          distinctReviewers: 1,
+          perAngle: [
+            { angle: "dry", reviewer: "review-a" },
+            { angle: "invoking-mandatory", reviewer: "review-a" },
+            { angle: "pr-checklist", reviewer: "review-a" },
+          ],
+        },
+      })}\n`,
+      "utf8",
+    );
+
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+    const marker = { visible: true, headSha, executionMode: "fanout_fanin" };
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: 1979, currentHeadSha: headSha,
+      draftGateMarker: { visible: false }, preApprovalGateMarker: marker,
+      config, cwd: dir, hasFullLabel: false,
+    });
+    const gate = enforcement.gates.find((entry) => entry.name === "pre_approval_gate");
+    // Fell back to the invoking checkout's mandatory angle — never the
+    // unreadable head override's own distinct mandatory angle.
+    assert.ok(gate.mandatoryAngles.includes("invoking-mandatory"), JSON.stringify(gate.mandatoryAngles));
+    assert.ok(!gate.mandatoryAngles.includes("head-mandatory"), JSON.stringify(gate.mandatoryAngles));
+    assert.ok(gate.provenance, "a ledger conformant with the fallback (invoking) config still validates");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("detect-checkpoint-evidence fails pre-merge with unresolved human review threads", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-gate-human-unresolved-"));
 

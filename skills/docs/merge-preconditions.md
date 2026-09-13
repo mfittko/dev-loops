@@ -208,6 +208,37 @@ via the SAME `ledgerExists` predicate the merge-time check uses. So the durable
 write is unbypassable locally, and CI never claims green on a layer it genuinely
 cannot see.
 
+### Angle-pool / fanout-groups / mandatory-angle config resolves from the PR HEAD, not the invoking checkout (#1972)
+
+The ledger BYTES for the layer above (`tmp/gate-findings/<slug>/pr-<n>/<gate>-<head>.json`)
+are read from ANY checkout (`resolveLedgerCheckouts` — main plus every worktree),
+so a ledger written in the PR's own worktree is found even when the pre-merge
+check runs from a different checkout. But the CONFIG that governs what counts
+as a valid fan-out — the angle pool, `gates.fanout.groups`, and each gate's
+mandatory angles (`resolveGateConfig`/`resolveGateAngleContract`/`resolveFanoutGroups`
+in `packages/core/src/config/config.mjs`) — is a separate layer, and it resolves
+from the **PR HEAD commit's committed `.devloops`**, not the invoking checkout's
+disk file. `buildFanoutEnforcement` in `scripts/github/detect-checkpoint-evidence.mjs`
+reads that layer via `git show <headSha>:.devloops` (trying the same
+bare/`.yaml`/`.yml`/`.json` precedence the disk loader uses) and re-parses it
+with `loadDevLoopConfig`'s `devloopsOverride` option, so a fan-out that ran
+conformantly under a PR's own angle rename / regroup / pool edit validates from
+ANY checkout — including a pre-merge `main` that predates the change — instead
+of false-failing against the invoking checkout's stale angle names. `git`
+worktrees of one repo share a single object store, so this works from any
+checkout as long as the head commit was fetched into any of them; extension
+defaults and `.pi/dev-loop/defaults` still come from the invoking checkout's
+disk, only the `.devloops` primary-override layer is re-sourced from the head.
+
+Resolution falls back to the invoking checkout's own config — never to a
+looser or skipped check — when the head commit itself isn't resolvable locally
+(never fetched anywhere sharing this `.git`) or its `.devloops` fails to
+parse/validate; both fallback paths preserve exactly today's (pre-#1972)
+enforcement. A genuinely non-conformant fan-out still fails closed under the
+resolved config either way — this only changes WHICH config is authoritative
+for the angle layer, never whether fan-out evidence/provenance/angle coverage
+is enforced.
+
 ### Evidence writes and `gh pr merge` MUST be separate tool calls (#1172)
 
 The PreToolUse Bash gate evaluates `gh pr merge` **before** the Bash tool call executes. A compound

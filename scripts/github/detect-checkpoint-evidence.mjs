@@ -18,6 +18,7 @@ import {
 // request-copilot-review.mjs) is covered by construction rather than needing
 // its own per-caller filter.
 import { access, readFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { fetchGithubReviewThreadsPayload } from "./capture-review-threads.mjs";
@@ -603,6 +604,110 @@ async function readLedgerProvenanceInAny(checkouts, ledgerPath, criteria = {}) {
   }
   return firstNonNull;
 }
+// A committed `.devloops` is a small hand-authored config file; 8 MiB is
+// already many times larger than any legitimate one, so bounding `git show`
+// here only guards against a runaway/corrupt blob, never a real config.
+const HEAD_DEVLOOPS_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Read the PR head commit's committed `.devloops` (bare, then `.yaml`/`.yml`/
+ * `.json`, matching loadDevLoopConfig's own disk precedence) via `git show`.
+ * Git worktrees of the same repo share one object store, so this succeeds
+ * from ANY checkout as long as the head commit was fetched into ANY of
+ * them — no need to loop over `resolveLedgerCheckouts` the way ledger BYTE
+ * reads do (those are gitignored tmp/ files, not git objects).
+ * @returns {{ ok: true, raw: string|null, path: string } | { ok: false }}
+ *   `ok: false` means either the head COMMIT itself isn't resolvable locally
+ *   (never fetched anywhere sharing this .git) OR a `.devloops` that DOES
+ *   exist at this ref failed to read for some other reason (oversized blob,
+ *   object-store error) — either way the caller must fall back to the
+ *   invoking checkout's config, never silently take head DEFAULTS in place of
+ *   an override that actually exists. `raw: null` (`ok: true`) means the
+ *   commit resolves and every extension was confirmed genuinely ABSENT at
+ *   this ref — a legitimate "PR head has no primary override" state, not a
+ *   failure.
+ */
+function readHeadDevloopsSource(repoRoot, headSha) {
+  for (const ext of ["", ".yaml", ".yml", ".json"]) {
+    const relPath = `.devloops${ext}`;
+    const ref = `${headSha}:${relPath}`;
+    try {
+      // Existence probe FIRST, separate from the content read below, so a
+      // read failure on a path that genuinely exists is never confused with
+      // the path simply not existing at this extension/ref.
+      execFileSync("git", ["cat-file", "-e", ref], { cwd: repoRoot, stdio: ["ignore", "ignore", "ignore"] });
+    } catch {
+      // Genuinely absent at this extension for this ref — try the next.
+      continue;
+    }
+    try {
+      const raw = execFileSync("git", ["show", ref], {
+        cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+        maxBuffer: HEAD_DEVLOOPS_MAX_BUFFER_BYTES,
+      });
+      return { ok: true, raw, path: relPath };
+    } catch {
+      // The path exists at this ref but reading it failed (e.g. it exceeds
+      // maxBuffer, or another object-store error) — this is NOT absence, so
+      // it must fail CLOSED (never fall through to a later extension, and
+      // never reach the raw:null/head-defaults branch below), forcing the
+      // caller to fall back to invokingConfig instead of silently loosening
+      // enforcement to head defaults.
+      return { ok: false };
+    }
+  }
+  try {
+    execFileSync("git", ["cat-file", "-e", `${headSha}^{commit}`], {
+      cwd: repoRoot, stdio: ["ignore", "ignore", "ignore"],
+    });
+    return { ok: true, raw: null, path: ".devloops" };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/**
+ * Resolve the config that governs the angle-pool / fanout-groups /
+ * mandatory-angle layer: the PR HEAD commit's committed `.devloops`, not the
+ * invoking checkout's. A fan-out that ran conformantly under
+ * its own (possibly renamed/regrouped) config must validate from ANY
+ * checkout, including a pre-merge main that predates the change — the ledger
+ * BYTES already read from any checkout (readLedgerProvenanceInAny), but the
+ * angle-contract config they're checked against was still the invoking
+ * checkout's, producing false out-of-pool/missing-mandatory violations.
+ *
+ * extensionDefaults and `.pi/dev-loop/defaults` still come from `repoRoot` on
+ * disk — only the `.devloops` primary-override layer is re-sourced from the
+ * head commit. Falls back to `invokingConfig` (today's behavior, never
+ * looser, never a silent enforcement skip) when the head commit isn't
+ * resolvable locally or its `.devloops` fails to parse/validate.
+ */
+async function resolveAngleLayerConfig({ invokingConfig, repoRoot, headSha }) {
+  if (typeof headSha !== "string" || headSha.trim().length === 0) {
+    return invokingConfig;
+  }
+  const source = readHeadDevloopsSource(repoRoot, headSha);
+  if (!source.ok) {
+    return invokingConfig; // head commit unresolvable locally -> fall back.
+  }
+  const { config: headConfig, errors } = await loadDevLoopConfig({
+    repoRoot,
+    devloopsOverride: { raw: source.raw, path: source.path },
+  });
+  // Only fall back on a HEAD-ATTRIBUTABLE error: the `devloops` layer is the
+  // head override itself, and `merged` is the final validation, which can
+  // fail BECAUSE of the head override's content — both must still trigger
+  // the fallback. `extensionDefaults`/`defaults` errors are read from this
+  // same repoRoot's disk in both the head-resolved and invoking config, so a
+  // broken base layer there cannot be fixed by falling back and must not
+  // discard an otherwise-valid head override.
+  const headAttributable = (error) => error.layer === "devloops" || error.layer === "merged";
+  if (Array.isArray(errors) && errors.some(headAttributable)) {
+    return invokingConfig; // head .devloops present but unparseable/invalid -> fall back.
+  }
+  return headConfig;
+}
+
 /**
  * Build the fan-out evidence enforcement descriptor.
  *
@@ -647,6 +752,26 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   // false), preserving today's rejection.
   const lightThreshold = resolveLightMode(config);
   const lightMode = lightThreshold != null;
+  const checkouts = resolveLedgerCheckouts(cwd);
+  // checkouts[0] is always resolveRepoRoot(cwd) (resolveLedgerCheckouts adds it
+  // first, unconditionally, and never throws — it falls back to cwd on git
+  // failure) — reuse it instead of a second `git rev-parse --show-toplevel`.
+  const repoRoot = checkouts[0];
+  // Angle-pool / fanout-groups / mandatory-angle layer authority: the PR
+  // HEAD's committed config, not this invoking checkout's — see
+  // resolveAngleLayerConfig. ONE resolution, reused for every resolver below
+  // (resolveGateConfig, resolveGateAngleContract, resolveFanoutGroups,
+  // including the per-candidate resolution inside readLedgerProvenanceInAny)
+  // so they can never drift apart on which config governs the angle layer.
+  const angleConfig = await resolveAngleLayerConfig({ invokingConfig: config, repoRoot, headSha: currentHeadSha });
+  // Gate ACTIVATION (`.required`) stays sourced from the INVOKING checkout's
+  // config, never the head-sourced angleConfig: a PR that sets its own
+  // `gates.preApproval.required: false` must not be able to remove a gate
+  // from fanoutEnforcement.gates (and thereby skip its ledger/provenance/
+  // angle checks) when the checkout that is actually enforcing this PR still
+  // requires it. Only the angle-CONTRACT resolvers below (resolveGateAngleContract,
+  // resolveFanoutGroups) use angleConfig — activation and angle-contract are
+  // deliberately split across two different config sources.
   const draftGateConfig = resolveGateConfig(config, "draft");
   const preApprovalGateConfig = resolveGateConfig(config, "preApproval");
   // Shared angle-contract resolver (exclude-filtered mandatory angles +
@@ -654,7 +779,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   // field names here (`mandatoryAngles`/`anglePool`) are exactly what
   // buildPreMergeGateCheck reads off each gate entry.
   const buildAngleFields = (gateKey) => {
-    const { mandatoryAngles, pool } = resolveGateAngleContract(config, gateKey);
+    const { mandatoryAngles, pool } = resolveGateAngleContract(angleConfig, gateKey);
     return { mandatoryAngles, anglePool: pool };
   };
   const GATE_ANGLE_CONFIG = {
@@ -666,11 +791,6 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
     { name: "pre_approval_gate", marker: preApprovalGateMarker, required: preApprovalGateConfig.required },
   ].filter((spec) => spec.required && spec.marker.visible);
   const gates = [];
-  const checkouts = resolveLedgerCheckouts(cwd);
-  // checkouts[0] is always resolveRepoRoot(cwd) (resolveLedgerCheckouts adds it
-  // first, unconditionally, and never throws — it falls back to cwd on git
-  // failure) — reuse it instead of a second `git rev-parse --show-toplevel`.
-  const repoRoot = checkouts[0];
   for (const spec of gateSpecs) {
     const headSha = spec.marker.headSha ?? currentHeadSha;
     const ledgerPath = buildLogPath({ repo, pr, gate: spec.name, headSha, tmpRoot: "tmp" });
@@ -693,7 +813,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
     const angleFields = GATE_ANGLE_CONFIG[spec.name];
     const provenance = readProvenance
       ? await readLedgerProvenanceInAny(checkouts, ledgerPath, {
-        requireProvenance, rejectForeignAngles, ...angleFields, config, gateKey: spec.name, hasFullLabel,
+        requireProvenance, rejectForeignAngles, ...angleFields, config: angleConfig, gateKey: spec.name, hasFullLabel,
       })
       : null;
     gates.push({
@@ -709,7 +829,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
       // re-validates the cardinality floor and the pairing exception against
       // this, so both agree with what readLedgerProvenanceInAny already used
       // to pick this ledger.
-      resolvedGroups: resolveFanoutGroups(config, GATE_CONFIG_KEY[spec.name] ?? spec.name, freshAngleNames(provenance?.perAngle), { fullLabel: hasFullLabel }),
+      resolvedGroups: resolveFanoutGroups(angleConfig, GATE_CONFIG_KEY[spec.name] ?? spec.name, freshAngleNames(provenance?.perAngle), { fullLabel: hasFullLabel }),
       ...angleFields,
     });
   }

@@ -1435,6 +1435,91 @@ describe("loader — graceful degradation", () => {
 });
 
 // ============================================================================
+// loadDevLoopConfig — devloopsOverride (#1972): sources the devloops (primary
+// override) layer from a raw string (e.g. a PR head commit's `.devloops` read
+// via git) instead of reading `<repoRoot>/.devloops*` off disk.
+// ============================================================================
+
+describe("loadDevLoopConfig — devloopsOverride (#1972)", () => {
+  test("#1972: raw sources the devloops layer instead of repoRoot's on-disk .devloops", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-override-layering-"));
+    try {
+      // On-disk .devloops differs from the raw override below — proves the
+      // override, not disk, is what gets merged.
+      await writeFile(
+        path.join(tmpDir, ".devloops"),
+        "version: 1\nworkflow:\n  requireRetrospective: true\n",
+      );
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const result = await loadDevLoopConfig({
+        repoRoot: tmpDir,
+        devloopsOverride: { raw: "version: 1\ngates:\n  requireFanoutEvidence: false\n" },
+      });
+      assert.deepEqual(result.errors, []);
+      // The raw override's value (false) wins over the built-in default (true).
+      assert.equal(result.config.gates.requireFanoutEvidence, false);
+      // The on-disk .devloops's requireRetrospective: true was never read —
+      // the merged config stays at the built-in default (false).
+      assert.equal(result.config.workflow.requireRetrospective, false);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("#1972: raw: null skips the devloops layer entirely, even with a .devloops on disk", async () => {
+    const tmpDirWithDisk = await mkdtemp(path.join(os.tmpdir(), "devloop-config-override-null-disk-"));
+    const tmpDirNoDevloops = await mkdtemp(path.join(os.tmpdir(), "devloop-config-override-null-bare-"));
+    try {
+      // A .devloops exists on disk at repoRoot and would change the config if read.
+      await writeFile(
+        path.join(tmpDirWithDisk, ".devloops"),
+        "version: 1\nworkflow:\n  requireRetrospective: true\n",
+      );
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const overridden = await loadDevLoopConfig({
+        repoRoot: tmpDirWithDisk,
+        devloopsOverride: { raw: null },
+      });
+      // A genuinely bare repoRoot (no .devloops, no override option at all).
+      const bare = await loadDevLoopConfig({ repoRoot: tmpDirNoDevloops });
+
+      assert.deepEqual(overridden.errors, []);
+      // Merged config stays at extensionDefaults+defaults — identical to the
+      // no-.devloops-at-all case — despite the on-disk file existing.
+      assert.deepEqual(overridden.config, bare.config);
+      assert.equal(overridden.config.workflow.requireRetrospective, false);
+    } finally {
+      await rm(tmpDirWithDisk, { recursive: true, force: true });
+      await rm(tmpDirNoDevloops, { recursive: true, force: true });
+    }
+  });
+
+  test("#1972: malformed raw YAML records a structured devloops-layer error instead of throwing", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-override-malformed-"));
+    try {
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      let result;
+      await assert.doesNotReject(async () => {
+        result = await loadDevLoopConfig({
+          repoRoot: tmpDir,
+          devloopsOverride: { raw: "gates: [unterminated" },
+        });
+      });
+      assert.ok(Array.isArray(result.errors) && result.errors.length > 0, "malformed raw override should populate errors");
+      assert.ok(
+        result.errors.some((e) => e.layer === "devloops"),
+        "the recorded error should be attributed to the devloops layer",
+      );
+      // Never throws, and still returns a usable (extensionDefaults+defaults) config.
+      assert.ok(result.config);
+      assert.equal(result.config.version, 1);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ============================================================================
 // Loader — precedence tests (M1–M6)
 // ============================================================================
 
