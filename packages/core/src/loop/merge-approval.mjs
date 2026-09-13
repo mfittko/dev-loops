@@ -221,7 +221,6 @@ export function evaluateMergePreconditions({
   // resolveSizeBudgetHumanApprovalRequired as a non-boolean so it fails closed,
   // rather than being coerced to "T1 untouched".
   touchesT1 = null,
-  humanReviewDecision = null,
   unresolvedChangesRequestedCount = null,
   currentHeadSha = null,
   reviews = [],
@@ -271,7 +270,7 @@ export function evaluateMergePreconditions({
   const freshApproval = verifyFreshHumanApproval({ approvedBy: humanApprovedBy, currentHeadSha, reviews, comments });
 
   if (resolveSizeBudgetHumanApprovalRequired({ sizeOutcome, touchesT1, humanApprovalSatisfied: freshApproval.satisfied, unresolvedChangesRequestedCount }) === true) {
-    failures.push({ precondition: "size_budget_human_approval", reason: "size-budget requires a human APPROVED review with zero unresolved CHANGES_REQUESTED for this escalated/T1 PR" });
+    failures.push({ precondition: "size_budget_human_approval", reason: "size-budget requires a human APPROVED review OR a head-pinned \"approve merge <headSha>\" operator comment, with zero unresolved CHANGES_REQUESTED, for this escalated/T1 PR" });
   }
 
   const mergeClass = resolveMergeClass({ sizeOutcome, touchesT1, stableRelease });
