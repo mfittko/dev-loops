@@ -669,7 +669,15 @@ async function resolveAngleLayerConfig({ invokingConfig, repoRoot, headSha }) {
     repoRoot,
     devloopsOverride: { raw: source.raw, path: source.path },
   });
-  if (Array.isArray(errors) && errors.length > 0) {
+  // Only fall back on a HEAD-ATTRIBUTABLE error: the `devloops` layer is the
+  // head override itself, and `merged` is the final validation, which can
+  // fail BECAUSE of the head override's content — both must still trigger
+  // the fallback. `extensionDefaults`/`defaults` errors are read from this
+  // same repoRoot's disk in both the head-resolved and invoking config, so a
+  // broken base layer there cannot be fixed by falling back and must not
+  // discard an otherwise-valid head override.
+  const headAttributable = (error) => error.layer === "devloops" || error.layer === "merged";
+  if (Array.isArray(errors) && errors.some(headAttributable)) {
     return invokingConfig; // head .devloops present but unparseable/invalid -> fall back.
   }
   return headConfig;

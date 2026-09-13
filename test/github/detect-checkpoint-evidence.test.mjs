@@ -2538,6 +2538,97 @@ test("buildFanoutEnforcement (#1972, AC4): angle-layer config falls back to the 
   }
 });
 
+test("buildFanoutEnforcement: a broken BASE layer (.pi/dev-loop/defaults) on the invoking checkout does not force a fallback away from a validly-parsed HEAD .devloops override", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-head-config-base-layer-broken-"));
+  try {
+    const g = (...args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+    g("init", "-q");
+    g("config", "user.email", "t@t.t");
+    g("config", "user.name", "t");
+    g("config", "commit.gpgsign", "false");
+    await writeFile(
+      path.join(dir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  requireFanoutEvidence: true",
+        "  preApproval:",
+        "    angles:",
+        "      - dry",
+        "      - name: base-mandatory",
+        "        mandatory: true",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    g("add", "-A");
+    g("commit", "-qm", "base (valid config)");
+    const baseSha = g("rev-parse", "HEAD").trim();
+    await writeFile(
+      path.join(dir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  requireFanoutEvidence: true",
+        "  preApproval:",
+        "    angles:",
+        "      - dry",
+        "      - name: head-mandatory",
+        "        mandatory: true",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    g("add", "-A");
+    g("commit", "-qm", "head (valid, distinct mandatory angle)");
+    const headSha = g("rev-parse", "HEAD").trim();
+    g("checkout", "-q", baseSha); // invoking checkout: base .devloops on disk
+
+    // The invoking checkout's own BASE layer (.pi/dev-loop/defaults) is
+    // malformed — unrelated to, and independent from, the HEAD .devloops
+    // override's own validity. This is read from `repoRoot` on disk in BOTH
+    // the invoking config load and the head-resolved config load, so it
+    // cannot be "fixed" by falling back; falling back on it would only
+    // discard the validly-parsed HEAD override.
+    await mkdir(path.join(dir, ".pi", "dev-loop"), { recursive: true });
+    await writeFile(path.join(dir, ".pi", "dev-loop", "defaults.yaml"), "gates: [unterminated", "utf8");
+
+    const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-1977");
+    await mkdir(ledgerDir, { recursive: true });
+    await writeFile(
+      path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
+      `${JSON.stringify({
+        gate: "pre_approval_gate", headSha, findings: [],
+        provenance: {
+          distinctReviewers: 1,
+          perAngle: [
+            { angle: "dry", reviewer: "review-a" },
+            { angle: "head-mandatory", reviewer: "review-a" },
+            { angle: "pr-checklist", reviewer: "review-a" },
+          ],
+        },
+      })}\n`,
+      "utf8",
+    );
+
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+    const marker = { visible: true, headSha, executionMode: "fanout_fanin" };
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: 1977, currentHeadSha: headSha,
+      draftGateMarker: { visible: false }, preApprovalGateMarker: marker,
+      config, cwd: dir, hasFullLabel: false,
+    });
+    const gate = enforcement.gates.find((entry) => entry.name === "pre_approval_gate");
+    // Resolved from the HEAD .devloops, not the invoking (base) checkout's —
+    // the broken base layer must not have triggered a fallback.
+    assert.ok(gate.mandatoryAngles.includes("head-mandatory"), JSON.stringify(gate.mandatoryAngles));
+    assert.ok(!gate.mandatoryAngles.includes("base-mandatory"), JSON.stringify(gate.mandatoryAngles));
+    assert.ok(gate.provenance, "a ledger conformant with the HEAD config still validates");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("buildFanoutEnforcement (#1972): a PR head commit that resolves but never committed a .devloops resolves HEAD DEFAULTS, not the invoking checkout's own on-disk .devloops", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-head-config-no-devloops-"));
   try {
