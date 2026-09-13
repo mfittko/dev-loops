@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
+import { runNode as runNodeHelper, writeGhStub as writeGhStubHelper, initSizeBudgetFixtureRepo } from "../_helpers.mjs";
 
 import { buildCreatePrArgs, detectClosingKeyword, extractClosingIssueNumber, resolveBaseDefault } from "../../scripts/github/create-pr.mjs";
 import { resolveBaseBranch } from "@dev-loops/core/config";
@@ -1331,6 +1331,61 @@ test("create-pr --issue refuses a wrong SECOND closing reference even when the f
     assert.match(stderrPayload.error, /CLOSING-REF-BRANCH-MISMATCH/);
     assert.match(stderrPayload.error, /#2071/);
     assert.equal((await readGhCalls(ghLogPath)).length, 0);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr refuses before gh when the diff adds an issue-citing runtime comment (LOCAL-COMMENT-DISCIPLINE preflight)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-comment-discipline-block-"));
+  try {
+    await initSizeBudgetFixtureRepo(tempDir, {
+      headFiles: [
+        { path: "scripts/sample.mjs", content: "// see #2171 for context\nexport const x = 1;\n" },
+      ],
+    });
+    const { env, counterPath, ghLogPath } = await writeGhStub(tempDir, []);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--base", "main",
+      "--head", "feature",
+      "--title", "T",
+      "--body", "no closing keyword",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 1);
+    const stderrPayload = JSON.parse(result.stderr);
+    assert.match(stderrPayload.error, /LOCAL-COMMENT-DISCIPLINE/);
+    assert.match(stderrPayload.error, /scripts\/sample\.mjs/);
+    assert.equal((await readFile(counterPath, "utf8")).trim(), "0");
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr admits a diff whose issue-citing comment carries the comment-discipline:allow escape marker", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-comment-discipline-allow-"));
+  try {
+    await initSizeBudgetFixtureRepo(tempDir, {
+      headFiles: [
+        { path: "scripts/sample.mjs", content: "// keep: load-bearing note comment-discipline:allow #2171\nexport const x = 1;\n" },
+      ],
+    });
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: "https://github.com/owner/repo/pull/1\n" },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--base", "main",
+      "--head", "feature",
+      "--title", "T",
+      "--body", "no closing keyword",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout, "https://github.com/owner/repo/pull/1\n");
+    assert.equal((await readGhCalls(ghLogPath)).length, 1);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

@@ -14,6 +14,7 @@ import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { main as addQueueItemMain } from "../projects/add-queue-item.mjs";
 import { loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
 import { detectLinkedIssuePr } from "./detect-linked-issue-pr.mjs";
+import { evaluateCommentDiscipline } from "../loop/check-comment-discipline.mjs";
 const USAGE = `Usage: create-pr.mjs [gh pr create args...]
 Canonical PR-creation wrapper around \`gh pr create\`. Every PR opened through this
 tool is ALWAYS a draft and is self-assigned by default. Never call raw \`gh pr create\`.
@@ -452,6 +453,31 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
     });
     if (refusal) {
       throw parseError(refusal);
+    }
+  }
+  // LOCAL-COMMENT-DISCIPLINE preflight: refuse before gh is invoked when the
+  // diff about to become the PR adds a runtime comment the shared evaluator
+  // (also used by the ready boundary) would block. Base is normalized to
+  // `origin/<bare>` to match the ready boundary's diff base exactly. An
+  // unresolvable base (non-git dir, no such remote ref) skips this preflight
+  // and defers to that boundary as the fail-closed backstop, mirroring the
+  // resolveCurrentBranch() swallow-on-git-error pattern above.
+  const baseForDiff = hasBase ? getFlagValue(forwardedArgv, BASE_FLAG_PATTERN) : baseDefault;
+  if (typeof baseForDiff === "string" && baseForDiff.trim().length > 0) {
+    const bareBase = baseForDiff.trim().replace(/^origin\//u, "");
+    let commentDiscipline = null;
+    try {
+      commentDiscipline = await evaluateCommentDiscipline({
+        base: `origin/${bareBase}`,
+        head: "HEAD",
+        repoRoot: runtime.cwd ?? process.cwd(),
+        env: runtime.env ?? process.env,
+      });
+    } catch {
+      commentDiscipline = null;
+    }
+    if (commentDiscipline?.outcome === "block") {
+      throw parseError(`comment discipline blocked before PR creation (LOCAL-COMMENT-DISCIPLINE): ${commentDiscipline.reasons.join("; ")}`);
     }
   }
   // Issue-less lightweight: caller signals lightweight AND an explicit body
