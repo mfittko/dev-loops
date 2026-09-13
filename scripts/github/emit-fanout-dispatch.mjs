@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { gateScopePrefix, normalizeGate } from "./_gate-names.mjs";
 import { HEAD_SHA_RE, VALID_SCOPE_RE } from "./record-dispatch-prompt-layout.mjs";
-import { buildGateContextPath } from "./write-gate-context.mjs";
+import { buildGateContextPath, buildGateEmitPlanPath } from "./write-gate-context.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
 import { loadDevLoopConfig, resolveFanoutEffectiveConcurrency } from "@dev-loops/core/config";
 
@@ -60,7 +60,7 @@ Optional:
                                must match the write-gate-context.mjs call).
 Output (stdout, JSON):
   { "ok": true, "gate": "...", "headSha": "...", "repo": "...", "pr": "...",
-    "count": <n>, "maxConcurrent": <n>, "units": [ { "scope": "...", "angles": ["..."], "group": <name|null>, "promptPath": "..." } ] }
+    "pending": <true|false>, "count": <n>, "maxConcurrent": <n>, "units": [ { "scope": "...", "angles": ["..."], "group": <name|null>, "promptPath": "..." } ] }
   Wave the EMITTED units at most \`maxConcurrent\` at a time (1 when
   gates.fanout.sequential is set). Do NOT use the artifact's fanout.wavePlan to
   bound this step: that plan is computed over the UNSPLIT resolveFanoutGroups
@@ -68,6 +68,15 @@ Output (stdout, JSON):
   A fail-closed refusal (exit 1) emits { "ok": false, "error": "..." } on STDOUT
   (via the shared jq-output emitter); a usage/parse error (exit 2) emits
   { "ok": false, "error": "...", "hint"?: "run with --help for usage" } on STDERR.
+  On success this step ALSO persists its emitted round plan to the keyed
+  <gate>-<headSha>.emit-plan.json sibling of the gate-context bundle
+  (buildGateEmitPlanPath, GATE-EXEC-FANOUT-DISPATCH-EMIT) — body = the emitter's
+  own result object — so a consumer reads THAT keyed path and never hand-rolls
+  a fixed-path stdout capture that concurrent gates would clobber; the keyed
+  plan is REMOVED at the start of the run, so any refusal or error leaves NO
+  plan file on disk even when an earlier successful run at the same key wrote
+  one; a failed persist exits 2 (a persist failure is an IO failure, not a
+  plan-semantics refusal).
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Emitted one composed prompt per resolved dispatch unit
@@ -186,7 +195,7 @@ function resolveFlagValue(argv, flag) {
   return val;
 }
 
-export async function main(argv = process.argv.slice(2), { tmpRootDefault = path.join(process.cwd(), "tmp") } = {}) {
+export async function main(argv = process.argv.slice(2), { tmpRootDefault = path.join(process.cwd(), "tmp"), persistPlan = writeFile } = {}) {
   if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(`${USAGE}\n`);
     return 0;
@@ -220,14 +229,6 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   }
   const tmpRoot = tmpRootArg ?? tmpRootDefault;
   const pendingOnly = argv.includes("--pending");
-  const jqArg = resolveFlagValue(argv, "--jq");
-  if (jqArg === "") {
-    process.stderr.write(`${formatCliError(parseError("Invalid --jq value: must be non-empty."))}\n`);
-    return 2;
-  }
-  const jq = jqArg === null ? undefined : jqArg;
-  const silent = argv.includes("--silent") || argv.includes("-s");
-  const finish = (payload, ok) => emitResult(payload, { jq, silent, ok });
 
   let contextPath;
   try {
@@ -236,6 +237,36 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     process.stderr.write(`${formatCliError(err)}\n`);
     return 2;
   }
+
+  // GATE-EXEC-FANOUT-DISPATCH-EMIT: clear the keyed
+  // <gate>-<headSha>.emit-plan.json sibling (buildGateEmitPlanPath) at the
+  // very START of the emission flow — BEFORE the gate-context artifact is
+  // read/parsed — so literally every non-success exit after this point
+  // (missing artifact, malformed/unparseable JSON, no fanout plan, zero
+  // units, any per-unit refusal) leaves it ABSENT. Without this, a successful
+  // earlier run at the same gate/head key survives a failed re-run, and a
+  // later fan-in (which key-checks that file) can accept the stale plan as
+  // this round's — the exact stale-plan hazard the key guard trusts this
+  // path's freshness for. ENOENT on the rm is fine (no prior plan exists).
+  // The success-only WRITE at the end of main is unchanged — this removes,
+  // it does not pre-persist anything.
+  try {
+    await rm(buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot }), { force: true });
+  } catch (err) {
+    process.stderr.write(`${formatCliError(err)}\n`);
+    return 2;
+  }
+
+  // The round key is now known and its prior plan is gone, so every remaining
+  // refusal — including an explicitly empty --jq value — leaves no stale plan.
+  const jqArg = resolveFlagValue(argv, "--jq");
+  if (jqArg === "") {
+    process.stderr.write(`${formatCliError(parseError("Invalid --jq value: must be non-empty."))}\n`);
+    return 2;
+  }
+  const jq = jqArg === null ? undefined : jqArg;
+  const silent = argv.includes("--silent") || argv.includes("-s");
+  const finish = (payload, ok) => emitResult(payload, { jq, silent, ok });
 
   let artifact;
   try {
@@ -248,10 +279,21 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     return 2;
   }
 
+  // --jq syntax preflight (Copilot review round 4): runs AFTER the keyed-plan
+  // removal above (so an invalid filter still leaves the keyed plan ABSENT —
+  // a prior successful run's stale plan must never survive a failed re-run)
+  // but BEFORE any unit is composed and BEFORE the success-only plan persist,
+  // so a syntactically invalid filter can never exit 2 with a freshly written
+  // keyed plan on disk. emitResult's own data-dependent jq errors (e.g. `length`
+  // on a scalar) stay at emit time, unchanged.
+  const jqSyntaxError = preflightJqFilter(jq);
+  if (jqSyntaxError !== undefined) return jqSyntaxError;
+
   const fanout = artifact?.fanout;
   if (!fanout || typeof fanout !== "object") {
     return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — gate-context artifact at ${JSON.stringify(contextPath)} carries no fanout dispatch plan — re-run write-gate-context.mjs (a thin briefing with no --base emits no fanout plan)` }, false);
   }
+
   // --pending falls back to `groups` ONLY when pendingGroups is genuinely ABSENT
   // (an older artifact). A PRESENT-but-non-array pendingGroups is a malformed
   // plan and refuses — silently falling back would mask a broken plan and
@@ -336,7 +378,71 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     emitted.push({ scope, angles, group: angles.length > 1 ? unit.name : null, promptPath: result.promptPath });
   }
 
-  return finish({ ok: true, gate, headSha, repo, pr, count: emitted.length, maxConcurrent, units: emitted }, true);
+  // GATE-EXEC-FANOUT-DISPATCH-EMIT: success-only persist of the emitted round
+  // plan at this point — every refusal/error return above already left NO plan
+  // file (the start-of-flow rm removed any prior plan at this key before the
+  // artifact was even read, so "leaves NO plan file" holds even across
+  // re-runs). A re-run at the same key overwrites deterministically (the same
+  // round). Two gates at one head write distinct files by path construction.
+  // The persist is unconditional on the
+  // success path (--pending/--jq/--silent shape stdout only); the --jq filter
+  // is syntax-preflighted BEFORE this write, so a post-persist jq failure is
+  // limited to data-dependent evaluation errors against a successfully emitted
+  // round. A failed persist
+  // is an IO failure and takes the module's formatCliError/exit-2 tier, matching
+  // the suffix-write catch block directly above — exit 1 stays reserved for
+  // plan-semantics refusals.
+  //
+  // Final-emission failure (Copilot review round 5): a data-invalid but
+  // syntactically valid filter (e.g. `.count | length` — a number is not a
+  // valid `length` input) makes finish() exit 2 AFTER the plan was persisted,
+  // and a throw is the same tier. That leaves a key-valid plan from a FAILED
+  // invocation that a later fan-in key-check would accept as this round's —
+  // the exact stale-plan hazard the start-of-flow rm protects every earlier
+  // refusal against. Remove the plan (ENOENT-tolerant force rm) on either
+  // failure shape, then propagate the exit-2/throw unchanged. Only the final
+  // success emit runs after the persist, so guarding here (rather than around
+  // each earlier finish call, all of which run before the persist) is the one
+  // complete seam.
+  const payload = { ok: true, gate, headSha, repo, pr, pending: pendingOnly, count: emitted.length, maxConcurrent, units: emitted };
+  const planPath = buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot });
+  try {
+    await mkdir(path.dirname(planPath), { recursive: true });
+    await persistPlan(planPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  } catch (err) {
+    try {
+      await rm(planPath, { force: true });
+    } catch {
+      // Best-effort clear only — never mask the original persist failure.
+    }
+    process.stderr.write(`${formatCliError(err)}\n`);
+    return 2;
+  }
+  try {
+    const result = finish(payload, true);
+    // finish() returning 2 is emitResult's data-dependent jq-error path (exit
+    // 2, distinct from the ok predicate's 0/1): the just-persisted plan came
+    // from this FAILED emission and must not survive for a later fan-in to
+    // consume. ENOENT-tolerant force rm; a clear failure never masks the
+    // exit-2.
+    if (result === 2) {
+      try {
+        await rm(planPath, { force: true });
+      } catch {
+        // Best-effort clear only — never mask the exit-2.
+      }
+    }
+    return result;
+  } catch (err) {
+    // A throw from the final emission is the same failure tier: the persisted
+    // plan must not survive it. Best-effort clear; never mask the throw.
+    try {
+      await rm(planPath, { force: true });
+    } catch {
+      // Best-effort clear only — never mask the original emit failure.
+    }
+    throw err;
+  }
 }
 
 if (isDirectCliRun(import.meta.url)) {

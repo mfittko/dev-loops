@@ -9,11 +9,13 @@ import {
   checkProvenanceAngleCoverage,
   parseProvenanceJson,
   parseWriteGateFindingsLogCliArgs,
+  verifyEmitPlanProvenance,
   writeGateFindingsLog,
 } from "../../scripts/github/write-gate-findings-log.mjs";
 import { runNode as runNodeHelper } from "../_helpers.mjs";
 
 const writeGateFindingsLogScript = path.resolve("scripts/github/write-gate-findings-log.mjs");
+const emitFanoutDispatchScript = path.resolve("scripts/github/emit-fanout-dispatch.mjs");
 
 // #1592: several fixtures below deliberately keep pre-rename severity
 // spellings ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
@@ -75,6 +77,137 @@ test("parseWriteGateFindingsLogCliArgs parses all required args", () => {
     tmpRoot: "tmp",
     specAuthority: undefined,
   });
+});
+
+test("parseWriteGateFindingsLogCliArgs keeps --emit-plan optional and requires provenance when supplied", () => {
+  assert.throws(() => parseWriteGateFindingsLogCliArgs([
+    "--repo", "owner/repo",
+    "--pr", "42",
+    "--gate", "draft_gate",
+    "--head-sha", "abc1234567890abcdef000000000000000000000",
+    "--verdict", "clean",
+    "--findings", "[]",
+    "--emit-plan", "/tmp/plan.json",
+  ]), /--emit-plan requires --provenance/);
+
+  const withoutPlan = parseWriteGateFindingsLogCliArgs([
+    "--repo", "owner/repo",
+    "--pr", "42",
+    "--gate", "draft_gate",
+    "--head-sha", "abc1234567890abcdef000000000000000000000",
+    "--verdict", "clean",
+    "--findings", "[]",
+  ]);
+  assert.equal(withoutPlan.emitPlan, undefined);
+});
+
+test("carry-forward uses the real emitter's pending plan for fresh-only provenance", async () => {
+  await withAngleContractRepo(async (repoRoot) => {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const tmpRoot = path.join(repoRoot, "tmp");
+    const contextDir = path.join(tmpRoot, "gate-context", "owner-repo", "pr-42");
+    await mkdir(contextDir, { recursive: true });
+    await writeFile(path.join(contextDir, `draft_gate-${headSha}.briefing-prefix.txt`), "# prefix\n", "utf8");
+    await writeFile(path.join(contextDir, `draft_gate-${headSha}.briefing-volatile.txt`), "# volatile\n", "utf8");
+    await writeFile(path.join(contextDir, `draft_gate-${headSha}.json`), JSON.stringify({
+      fanout: {
+        groups: [
+          { name: "scope", angles: ["scope"] },
+          { name: "coverage", angles: ["coverage"] },
+          { name: "pr-description", angles: ["pr-description"] },
+        ],
+        pendingGroups: [
+          { name: "scope", angles: ["scope"] },
+          { name: "pr-description", angles: ["pr-description"] },
+        ],
+      },
+    }), "utf8");
+    const emitted = await runNodeHelper(emitFanoutDispatchScript, [
+      "--repo", "owner/repo",
+      "--pr", "42",
+      "--gate", "draft_gate",
+      "--head-sha", headSha,
+      "--pending",
+    ], { cwd: repoRoot });
+    assert.equal(emitted.code, 0, emitted.stderr);
+    const planPath = path.join(contextDir, `draft_gate-${headSha}.emit-plan.json`);
+    assert.deepEqual(JSON.parse(await readFile(planPath, "utf8")).units.map((unit) => unit.angles), [["scope"], ["pr-description"]]);
+    const result = await writeGateFindingsLog({
+      repo: "owner/repo",
+      pr: 42,
+      gate: "draft_gate",
+      headSha,
+      verdict: "clean",
+      findings: "[]",
+      provenance: JSON.stringify({
+        distinctReviewers: 2,
+        perAngle: [
+          { angle: "scope", reviewer: "review-a" },
+          { angle: "pr-description", reviewer: "review-b" },
+          { angle: "coverage", reviewer: "review-c", carriedFromHead: "b".repeat(40) },
+        ],
+      }),
+      emitPlan: planPath,
+      tmpRoot,
+    }, { repoRoot });
+    assert.equal(result.ok, true);
+    assert.equal(result.log.provenance.perAngle.length, 3);
+  });
+});
+
+test("verifyEmitPlanProvenance rejects fresh-angle drift instead of treating the plan as provenance", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-emit-plan-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const planPath = path.join(repoRoot, "draft.emit-plan.json");
+    await writeFile(planPath, JSON.stringify({
+      ok: true,
+      repo: "owner/repo",
+      pr: 42,
+      gate: "draft_gate",
+      headSha,
+      count: 1,
+      units: [{ angles: ["scope"], group: null }],
+    }), "utf8");
+    await assert.rejects(
+      () => verifyEmitPlanProvenance(planPath, {
+        distinctReviewers: 1,
+        perAngle: [{ angle: "coverage", reviewer: "review-a" }],
+      }, { repo: "owner/repo", pr: 42, gate: "draft_gate", headSha }, { repoRoot }),
+      /does not correspond to --emit-plan fresh angles \(missing: scope; extra: coverage\)/,
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("verifyEmitPlanProvenance rejects multiple reviewer identities for one emitted group", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-emit-group-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const planPath = path.join(repoRoot, "draft.emit-plan.json");
+    await writeFile(planPath, JSON.stringify({
+      ok: true,
+      repo: "owner/repo",
+      pr: 42,
+      gate: "draft_gate",
+      headSha,
+      count: 1,
+      units: [{ angles: ["scope", "pr-description"], group: "process" }],
+    }), "utf8");
+    await assert.rejects(
+      () => verifyEmitPlanProvenance(planPath, {
+        distinctReviewers: 2,
+        perAngle: [
+          { angle: "scope", reviewer: "review-a", group: "process" },
+          { angle: "pr-description", reviewer: "review-b", group: "process" },
+        ],
+      }, { repo: "owner/repo", pr: 42, gate: "draft_gate", headSha }, { repoRoot }),
+      /multiple reviewer identities for --emit-plan unit 0/,
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
 });
 
 test("parseWriteGateFindingsLogCliArgs accepts custom tmp-root", () => {

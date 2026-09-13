@@ -58,7 +58,7 @@ import { enforceCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-teleme
 import { enforcePrimerEvidence } from "@dev-loops/core/loop/primer-evidence";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 
-const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate|review>] [--out <path>] [--ledger-out <path>] [--pr-checklist clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>] [--expected-dispatch-units <n>] [--tmp-root <path>]
+const USAGE = `Usage: consolidate-fanin.mjs --findings-dir <dir> [--head-sha <sha>] [--gate <draft_gate|pre_approval_gate|review>] [--out <path>] [--ledger-out <path>] [--pr-checklist clean] [--carried-angles <json> --carry-forward-plan <json>] [--repo-root <path>] [--expected-dispatch-units <n>] [--tmp-root <path>] [--emit-plan <path>]
 Consolidate the per-angle *.json findings artifacts a gate-review fan-out wrote into
 --findings-dir into the JSON shapes write-gate-findings-log.mjs, post-gate-findings.mjs
 (--findings / --findings-file), and upsert-checkpoint-verdict.mjs (--findings-json) accept.
@@ -238,6 +238,19 @@ Optional:
                                  measured create-then-read sequence, or when the aggregate/token
                                  report contradicts the recorded events. Absent the flag, the fan-in
                                  proceeds unchanged (recording telemetry is progressive/optional).
+  --emit-plan <path>            emit-fanout-dispatch.mjs's keyed emit-plan artifact
+                                 (<gate>-<headSha>.emit-plan.json, GATE-EXEC-FANOUT-DISPATCH-EMIT) as a
+                                 path. Optional; when given, the fan-in verifies the plan's embedded
+                                 round key (gate, headSha) against the round being consolidated and
+                                 FAILS CLOSED (exit 1, "cannot verify emit-plan key" / "is stamped for ...")
+                                 on a mismatch, a missing/malformed key field, or an unreadable/non-JSON
+                                 plan — BEFORE any --out/--ledger-out write. A rejected invocation
+                                 writes no new output and preserves pre-existing caller-owned files
+                                 at those paths; callers MUST honor the non-zero exit and MUST NOT
+                                 infer success from path existence. REQUIRES --gate and
+                                 --head-sha (the round the plan's key is verified against). A guard
+                                 only: the plan is never a findings or provenance source — the
+                                 gate-context bundle's fanout.groups stays authoritative.
   --tmp-root <path>              The tmp/ directory holding the reviewer sentinels and per-gate briefing-prefix
                                  records read by the briefing-prefix verification (default:
                                  process.cwd()/tmp). Sentinels are read directly from this directory
@@ -319,7 +332,12 @@ Exit codes:
      round recorded zero reviewer sentinels — the #1868 records-floor) — #1618,
      #1841, #1868, or (with --resolved-angles
      and a "clean" verdict) a resolved angle with neither a per-angle artifact
-     nor a proven carried-forward entry
+     nor a proven carried-forward entry, or (with --emit-plan) a plan whose
+     embedded (gate, headSha) key does not match the round being consolidated,
+     an --emit-plan given without --gate/--head-sha, or an
+     unreadable/non-JSON/missing-key --emit-plan artifact
+     (the rejected invocation writes no new output and preserves pre-existing
+     caller-owned files; callers must honor exit 1)
   2  Invalid --jq filter`.trim();
 
 const parseError = buildParseError(USAGE);
@@ -411,6 +429,66 @@ function normalizeHeadShaValue(value) {
   if (typeof value !== "string") return null;
   const normalized = value.trim().toLowerCase();
   return CARRIED_FROM_HEAD_RE.test(normalized) ? normalized : null;
+}
+
+// Fail-closed key guard for the optional --emit-plan input
+// (GATE-EXEC-FANOUT-DISPATCH-EMIT: emit-fanout-dispatch.mjs's keyed
+// <gate>-<headSha>.emit-plan.json artifact). The plan's embedded round key
+// (gate, headSha) must match the round being consolidated, or the plan is
+// stale/foreign and must not be consumed — a clobbered or wrong-gate plan
+// silently corrupts provenance while looking exactly like a success. Gate
+// compare is trim+lowercase (single mismatch error per field); headSha reuses
+// normalizeHeadShaValue (GATE-EXEC-ARTIFACT-HEAD-STAMP trim+lowercase
+// semantics) so a case-different stamp still matches. Both gates are validated
+// against VALID_GATES before comparing (non-strings fail closed; no String()
+// coercion — a programmatic gate: null must never stringify into a plan stamped
+// gate: "null", Copilot review round 4). Runs INSIDE
+// consolidateGateFanin — not only in the parser — so a direct programmatic
+// caller cannot bypass the check. Unreadable/invalid-JSON/missing-key errors
+// all carry the "cannot verify emit-plan key" prefix; a mismatch carries the
+// "is stamped for ... but this round consolidates ..." family the
+// --cache-telemetry guard uses. A guard only: nothing from the plan flows
+// into any output.
+async function verifyEmitPlanKey(planPath, { gate, headSha }) {
+  // The round's --gate must be a canonical supported gate (string membership in
+  // VALID_GATES, no String() coercion) BEFORE any compare: a direct
+  // programmatic call can pass gate: null/123, and String() coercion would
+  // stringify null into "null" — which a malformed plan stamped gate: "null"
+  // would then match, passing the key check with an invalid round
+  // (Copilot review round 4). undefined still means the flag was never given.
+  if (gate === undefined || headSha === undefined) {
+    throw new Error("GATE-EXEC-EMIT-PLAN-KEY: --emit-plan requires both --gate and --head-sha to verify the plan's embedded key against this round");
+  }
+  if (typeof gate !== "string" || !VALID_GATES.has(gate.trim().toLowerCase())) {
+    throw new Error(`--emit-plan requires a canonical supported gate (one of: ${[...VALID_GATES].join(", ")}) to verify the plan's embedded key against, got ${JSON.stringify(gate)}`);
+  }
+  let text;
+  try {
+    text = await readFile(planPath, "utf8");
+  } catch (err) {
+    throw new Error(`cannot verify emit-plan key: --emit-plan "${planPath}" could not be read: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  let plan;
+  try {
+    plan = JSON.parse(text);
+  } catch {
+    throw new Error(`cannot verify emit-plan key: --emit-plan "${planPath}" is not valid JSON`);
+  }
+  const planGate = typeof plan?.gate === "string" ? plan.gate.trim().toLowerCase() : "";
+  if (planGate.length === 0 || !VALID_GATES.has(planGate)) {
+    throw new Error(`cannot verify emit-plan key: --emit-plan "${planPath}" is missing a canonical string "gate" field (one of: ${[...VALID_GATES].join(", ")}; emit-fanout-dispatch.mjs's own result object carries one), got ${JSON.stringify(plan?.gate)}`);
+  }
+  const planHeadSha = normalizeHeadShaValue(plan?.headSha);
+  if (planHeadSha === null) {
+    throw new Error(`cannot verify emit-plan key: --emit-plan "${planPath}" carries no valid "headSha" field (a 7-64 char hex SHA, emit-fanout-dispatch.mjs's own result object carries one), got ${JSON.stringify(plan?.headSha)}`);
+  }
+  const roundGate = gate.trim().toLowerCase();
+  if (planGate !== roundGate) {
+    throw new Error(`--emit-plan "${planPath}" is stamped for gate "${planGate}" but this round consolidates gate ${roundGate} — a stale or foreign emit plan must not be consumed for a different round (fail-closed)`);
+  }
+  if (planHeadSha !== headSha) {
+    throw new Error(`--emit-plan "${planPath}" is stamped for head "${planHeadSha}" but this round consolidates head ${headSha} — a stale or foreign emit plan must not be consumed for a different round (fail-closed)`);
+  }
 }
 
 // Validate + normalize (in place) a "carried" entries array's per-entry shape:
@@ -510,6 +588,7 @@ export function parseConsolidateFaninCliArgs(argv) {
     expectedDispatchUnits: undefined,
     primerEvidence: undefined,
     cacheTelemetry: undefined,
+    emitPlan: undefined,
     primerPlan: undefined,
     tmpRoot: undefined,
     specAuthority: undefined,
@@ -530,6 +609,7 @@ export function parseConsolidateFaninCliArgs(argv) {
       "repo-root": { type: "string" },
       "expected-dispatch-units": { type: "string" },
       "primer-evidence": { type: "string" },
+      "emit-plan": { type: "string" },
       "primer-plan": { type: "string" },
       "tmp-root": { type: "string" },
       "spec-authority": { type: "string" },
@@ -685,6 +765,14 @@ export function parseConsolidateFaninCliArgs(argv) {
       options.cacheTelemetry = p;
       continue;
     }
+    if (token.name === "emit-plan") {
+      const p = requireTokenValue(token, parseError).trim();
+      if (p.length === 0) {
+        throw parseError("--emit-plan requires a non-empty path");
+      }
+      options.emitPlan = p;
+      continue;
+    }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
@@ -699,6 +787,11 @@ export function parseConsolidateFaninCliArgs(argv) {
   if ((options.primerEvidence === undefined) !== (options.primerPlan === undefined)) {
     throw parseError("--primer-evidence and --primer-plan must be given together: a primer-evidence artifact cannot be enforced against no plan, and a plan without its recorded evidence would silently skip the gate");
   }
+  // --emit-plan pairing is NOT checked here: the pair requirement lives in
+  // consolidateGateFanin's own guard (verifyEmitPlanKey), which runs on BOTH
+  // entry paths and gives CLI and programmatic callers the same refusal.
+  // Validation writes no new output and preserves pre-existing caller-owned
+  // paths; callers must honor the non-zero exit rather than path existence.
   // --carried-angles is proof-carrying, not a bare trust-me list: a mandatory
   // angle or a fabricated name could otherwise mint a clean per-angle entry
   // with no reviewer ever having run. It requires --carry-forward-plan (the
@@ -919,6 +1012,18 @@ export async function consolidateGateFanin(options) {
       throw new Error(`--head-sha must be a 7-64 char hex SHA string, got ${JSON.stringify(options.headSha)}`);
     }
     options = { ...options, headSha };
+  }
+  // --emit-plan key guard (GATE-EXEC-FANOUT-DISPATCH-EMIT): placed after the
+  // headSha re-normalization (so the plan's stamp is compared against the
+  // normalized round head) and BEFORE the --findings-dir read, so a rejected
+  // invocation writes no --out/--ledger-out and fails fastest. Validation does
+  // not delete caller-owned files that predate this invocation.
+  if (options.emitPlan !== undefined) {
+    await verifyEmitPlanKey(options.emitPlan, { gate: options.gate, headSha: options.headSha });
+    // The guard already proved this is a canonical string gate. Normalize it
+    // for downstream guarded consumers without changing the omission
+    // programmatic path, whose legacy pass-through behavior is preserved.
+    options = { ...options, gate: options.gate.trim().toLowerCase() };
   }
   const dir = options.findingsDir;
   let entries;

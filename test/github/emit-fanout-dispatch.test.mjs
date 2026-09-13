@@ -4,7 +4,8 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, sanitizeScopeSegment } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, main, sanitizeScopeSegment } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { buildGateEmitPlanPath } from "../../scripts/github/write-gate-context.mjs";
 
 const emitCliPath = path.resolve("scripts/github/emit-fanout-dispatch.mjs");
 
@@ -40,13 +41,13 @@ const FANOUT = {
   pendingGroups: [{ name: "contradiction-lens", angles: ["contradiction-lens"] }],
 };
 
-async function seedBundle(tmpDir, { fanout = FANOUT, withPrefix = true } = {}) {
+async function seedBundle(tmpDir, { fanout = FANOUT, withPrefix = true, gate = GATE } = {}) {
   const dir = path.join(tmpDir, "tmp", "gate-context", "o-r", "pr-7");
   await mkdir(dir, { recursive: true });
-  if (withPrefix) await writeFile(path.join(dir, `${GATE}-${HEAD_SHA}.briefing-prefix.txt`), PREFIX_BYTES, "utf8");
-  await writeFile(path.join(dir, `${GATE}-${HEAD_SHA}.briefing-volatile.txt`), VOLATILE_BYTES, "utf8");
+  if (withPrefix) await writeFile(path.join(dir, `${gate}-${HEAD_SHA}.briefing-prefix.txt`), PREFIX_BYTES, "utf8");
+  await writeFile(path.join(dir, `${gate}-${HEAD_SHA}.briefing-volatile.txt`), VOLATILE_BYTES, "utf8");
   const artifact = fanout === null ? {} : { fanout };
-  await writeFile(path.join(dir, `${GATE}-${HEAD_SHA}.json`), JSON.stringify(artifact), "utf8");
+  await writeFile(path.join(dir, `${gate}-${HEAD_SHA}.json`), JSON.stringify(artifact), "utf8");
   return dir;
 }
 
@@ -115,18 +116,272 @@ test("--pending emits only the pendingGroups subset", async () => {
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.count, 1);
     assert.equal(payload.units[0].angles[0], "contradiction-lens");
+    assert.equal(payload.pending, true);
+    // the persisted keyed plan body carries the same pending: true round marker
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    const persisted = JSON.parse(await readFile(planPath, "utf8"));
+    assert.equal(persisted.pending, true);
+  });
+});
+
+// GATE-EXEC-FANOUT-DISPATCH-EMIT: a successful run persists the emitted round
+// plan to the keyed <gate>-<headSha>.emit-plan.json sibling of the gate-context
+// bundle (buildGateEmitPlanPath), body = the emitter's own result object — never a
+// fixed-path stdout capture that concurrent gates would clobber.
+test("a successful run persists the keyed emit-plan artifact with the full result body", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const stdoutPayload = JSON.parse(result.stdout);
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    const persisted = JSON.parse(await readFile(planPath, "utf8"));
+    assert.equal(persisted.ok, true);
+    assert.equal(persisted.gate, GATE);
+    assert.equal(persisted.headSha, HEAD_SHA);
+    assert.equal(persisted.repo, REPO);
+    assert.equal(persisted.pr, PR);
+    assert.equal(persisted.pending, false);
+    assert.equal(persisted.count, stdoutPayload.count);
+    assert.equal(persisted.maxConcurrent, stdoutPayload.maxConcurrent);
+    assert.deepEqual(persisted.units, stdoutPayload.units);
+    for (const unit of persisted.units) {
+      assert.deepEqual(Object.keys(unit).sort(), ["angles", "group", "promptPath", "scope"].sort());
+    }
+  });
+});
+
+test("a failed emit-plan write removes a partially-created final artifact", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    const status = await main(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      {
+        tmpRootDefault: tmpRoot,
+        persistPlan: async (file, data) => {
+          await writeFile(file, data.slice(0, 16), "utf8");
+          throw Object.assign(new Error("simulated partial write"), { code: "ENOSPC" });
+        },
+      },
+    );
+    assert.equal(status, 2);
+    await assert.rejects(() => readFile(planPath, "utf8"), { code: "ENOENT" });
+  });
+});
+
+// Two gates at the same head/repo/pr write DISTINCT keyed plan files; the
+// review plan stays byte-identical after the draft_gate emitter runs — the
+// concurrent-emitter clobbering hazard the keyed artifact exists to remove.
+test("two gates at the same head persist distinct, mutually-intact emit plans", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir, { gate: "review" });
+    await seedBundle(tmpDir, { gate: "draft_gate" });
+    const review = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", "review", "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(review.status, 0, review.stderr);
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const reviewPlanPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: "review", headSha: HEAD_SHA, tmpRoot });
+    const reviewPlanBefore = await readFile(reviewPlanPath, "utf8");
+
+    const draft = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", "draft_gate", "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(draft.status, 0, draft.stderr);
+    const draftPlanPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: "draft_gate", headSha: HEAD_SHA, tmpRoot });
+    assert.notEqual(draftPlanPath, reviewPlanPath);
+    assert.equal(JSON.parse(await readFile(reviewPlanPath, "utf8")).gate, "review");
+    assert.equal(JSON.parse(await readFile(draftPlanPath, "utf8")).gate, "draft_gate");
+    // The review plan is intact (byte-identical) after the draft_gate run.
+    assert.equal(await readFile(reviewPlanPath, "utf8"), reviewPlanBefore);
+  });
+});
+
+// Success-only placement: a refusal run (zero units) must leave NO plan file —
+// never a half-persisted round.
+test("a refusal run writes NO emit-plan artifact", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir, { fanout: { groups: [] } });
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 1, result.stderr);
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    await assert.rejects(() => readFile(planPath, "utf8"), { code: "ENOENT" });
+  });
+});
+
+// Stale-plan regression (Copilot review, emit-fanout-dispatch.mjs:350): an
+// earlier SUCCESSFUL run at the same (repo, pr, gate, head) key persists the
+// keyed plan; a later failed emission at that key used to leave that stale
+// plan on disk, and a downstream fan-in key-checks exactly that path — the
+// stale plan passes the key guard even though the current emission never
+// completed. The emitter must REMOVE the keyed plan BEFORE the emission loop,
+// so every refusal/error return leaves it absent.
+test("a failed re-run REMOVES a pre-existing keyed emit-plan from an earlier successful run", async () => {
+  await withTmpDir(async (tmpDir) => {
+    // 1. A successful run persists the keyed plan.
+    await seedBundle(tmpDir);
+    const okRun = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(okRun.status, 0, okRun.stderr);
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    assert.equal(JSON.parse(await readFile(planPath, "utf8")).ok, true);
+
+    // 2. A refusal at the SAME key (zero units — one of the exit-1 returns
+    //    between the plan removal and the success-only persist).
+    await seedBundle(tmpDir, { fanout: { groups: [] } });
+    const refused = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(refused.status, 1, refused.stderr);
+
+    // 3. The earlier round's keyed plan is GONE — the stale plan cannot pass a
+    //    downstream fan-in key check as this round's plan.
+    await assert.rejects(() => readFile(planPath, "utf8"), { code: "ENOENT" });
+  });
+});
+
+// Early-refusal regression (Copilot review, emit-fanout-dispatch.mjs:276): the
+// same contract must hold when the gate-context artifact carries NO fanout plan
+// at all — the plan-removal runs before any validation/refusal return, so the
+// no-fanout-plan refusal (an EARLIER return than the zero-units one) also
+// removes a pre-existing keyed plan from an earlier successful run.
+test("the no-fanout-plan EARLY refusal REMOVES a pre-existing keyed emit-plan too", async () => {
+  await withTmpDir(async (tmpDir) => {
+    // 1. A successful run persists the keyed plan.
+    await seedBundle(tmpDir);
+    const okRun = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(okRun.status, 0, okRun.stderr);
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    assert.equal(JSON.parse(await readFile(planPath, "utf8")).ok, true);
+
+    // 2. The EARLY refusal at the SAME key — artifact with no fanout plan at
+    //    all (fanout: null seeds an empty artifact object).
+    await seedBundle(tmpDir, { fanout: null });
+    const refused = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(refused.status, 1, refused.stderr);
+    assert.match(JSON.parse(refused.stdout).error, /carries no fanout dispatch plan/);
+
+    // 3. The earlier round's keyed plan is GONE even on the early refusal path.
+    await assert.rejects(() => readFile(planPath, "utf8"), { code: "ENOENT" });
+  });
+});
+
+// Missing-artifact regression (Copilot review round 3): the keyed-plan removal
+// must run BEFORE the gate-context artifact read/parse, so the
+// missing-artifact refusal — the EARLIEST exit in the flow — cannot leave a
+// stale keyed plan from an earlier successful run at the same key.
+test("the missing-artifact refusal REMOVES a pre-existing keyed emit-plan too", async () => {
+  await withTmpDir(async (tmpDir) => {
+    // 1. A successful run persists the keyed plan.
+    await seedBundle(tmpDir);
+    const okRun = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(okRun.status, 0, okRun.stderr);
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    assert.equal(JSON.parse(await readFile(planPath, "utf8")).ok, true);
+
+    // 2. Remove the context artifact entirely, then re-run at the SAME key —
+    //    the emitter refuses with "no gate-context artifact" before reading it.
+    const artifactPath = path.join(tmpDir, "tmp", "gate-context", "o-r", "pr-7", `${GATE}-${HEAD_SHA}.json`);
+    await rm(artifactPath, { force: true });
+    const refused = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(refused.status, 1, refused.stderr);
+    assert.match(JSON.parse(refused.stdout).error, /no gate-context artifact/);
+
+    // 3. The earlier round's keyed plan is GONE even on the missing-artifact path.
+    await assert.rejects(() => readFile(planPath, "utf8"), { code: "ENOENT" });
+  });
+});
+
+// Malformed-artifact regression (Copilot review round 3): the same contract
+// holds when the gate-context artifact exists but is NOT valid JSON — the
+// JSON.parse throw exits (2) before any plan validation, and the keyed plan
+// from an earlier successful run must already be removed by then.
+test("the malformed (non-JSON) artifact refusal REMOVES a pre-existing keyed emit-plan too", async () => {
+  await withTmpDir(async (tmpDir) => {
+    // 1. A successful run persists the keyed plan.
+    await seedBundle(tmpDir);
+    const okRun = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(okRun.status, 0, okRun.stderr);
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    assert.equal(JSON.parse(await readFile(planPath, "utf8")).ok, true);
+
+    // 2. Corrupt the artifact to non-JSON, then re-run at the SAME key — the
+    //    JSON.parse throw takes the exit-2 path.
+    const artifactPath = path.join(tmpDir, "tmp", "gate-context", "o-r", "pr-7", `${GATE}-${HEAD_SHA}.json`);
+    await writeFile(artifactPath, "{not valid json", "utf8");
+    const refused = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(refused.status, 2, refused.stderr);
+
+    // 3. The earlier round's keyed plan is GONE even on the malformed-artifact path.
+    await assert.rejects(() => readFile(planPath, "utf8"), { code: "ENOENT" });
   });
 });
 
 test("--pending falls back to groups only when pendingGroups is ABSENT", async () => {
   await withTmpDir(async (tmpDir) => {
-    await seedBundle(tmpDir, { fanout: { groups: [{ name: "coverage", angles: ["coverage"] }] } });
+    await seedBundle(tmpDir, {
+      fanout: {
+        groups: [
+          { name: "coverage", angles: ["coverage"] },
+          { name: "consistency", angles: ["consistency"] },
+        ],
+      },
+    });
     const result = runEmitCli(
       ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--pending"],
       { cwd: tmpDir },
     );
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(JSON.parse(result.stdout).count, 1);
+    assert.equal(JSON.parse(result.stdout).count, 2);
+    // the fallback stamps pending: true over the full-group units in the
+    // persisted keyed plan body — documented actual fallback semantics
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    const persisted = JSON.parse(await readFile(planPath, "utf8"));
+    assert.equal(persisted.pending, true);
+    assert.equal(persisted.units.length, 2);
+    assert.deepEqual(
+      persisted.units.flatMap((unit) => unit.angles).sort(),
+      ["consistency", "coverage"],
+    );
   });
 });
 
@@ -288,6 +543,114 @@ test("expandDispatchUnits: configured group stays shared, everything else splits
     { name: "b", angles: ["b"] },
     { name: "solo", angles: ["solo"] },
   ]);
+});
+
+// Invalid---jq regression (Copilot review round 4, emit-fanout-dispatch.mjs): the
+// keyed plan was persisted BEFORE finish(payload, true) evaluated the --jq
+// filter, so an invalid filter (exit 2) left a keyed plan from a FAILED
+// emitter invocation that a later fan-in would accept. The --jq syntax
+// preflight now runs BEFORE the success-only persist (and after the
+// start-of-flow plan removal), so an invalid filter exits 2 with the keyed
+// plan ABSENT even when a prior successful run at the same key seeded one.
+test("a pre-valid --jq filter does not affect a successful run", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--jq", ".count"],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), "4");
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    assert.equal(JSON.parse(await readFile(planPath, "utf8")).ok, true);
+  });
+});
+
+test("an invalid --jq filter exits 2 and leaves the keyed plan ABSENT after a prior successful run", async () => {
+  await withTmpDir(async (tmpDir) => {
+    // 1. A successful run persists the keyed plan (seeds the stale plan).
+    await seedBundle(tmpDir);
+    const okRun = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(okRun.status, 0, okRun.stderr);
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    assert.equal(JSON.parse(await readFile(planPath, "utf8")).ok, true);
+
+    // 2. Re-run at the SAME key with a syntactically INVALID --jq filter —
+    //    the preflight exits 2 after the start-of-flow plan removal.
+    const refused = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--jq", "[unclosed"],
+      { cwd: tmpDir },
+    );
+    assert.equal(refused.status, 2, refused.stderr);
+    assert.match(JSON.parse(refused.stderr).error, /--jq/);
+
+    // 3. The keyed plan is ABSENT — no plan from a failed emitter invocation.
+    await assert.rejects(() => readFile(planPath, "utf8"), { code: "ENOENT" });
+  });
+});
+
+test("an empty --jq value removes a prior same-key emit plan before refusing", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const okRun = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(okRun.status, 0, okRun.stderr);
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(tmpDir, "tmp") });
+    assert.equal(JSON.parse(await readFile(planPath, "utf8")).ok, true);
+
+    const refused = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--jq", ""],
+      { cwd: tmpDir },
+    );
+    assert.equal(refused.status, 2, refused.stderr);
+    assert.match(JSON.parse(refused.stderr).error, /--jq/);
+    await assert.rejects(() => readFile(planPath, "utf8"), { code: "ENOENT" });
+  });
+});
+
+// Data-invalid --jq regression (Copilot review round 5,
+// emit-fanout-dispatch.mjs final-emission path): a filter that is
+// SYNTACTICALLY valid but fails against the payload's DATA (`.count | length`
+// — a number is not a valid `length` input) passes the syntax preflight and
+// evaluates only at finish(), AFTER the success-only persist. Before the fix,
+// that exit 2 left the just-persisted keyed plan on disk — a key-valid plan
+// from a FAILED invocation that a later fan-in key-check would accept. The
+// final-emission failure path must remove the plan, then propagate the
+// exit 2.
+test("a data-invalid --jq filter exits 2 AFTER the persist and REMOVES the keyed plan", async () => {
+  await withTmpDir(async (tmpDir) => {
+    // 1. A successful run persists the keyed plan (seeds a valid plan).
+    await seedBundle(tmpDir);
+    const okRun = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(okRun.status, 0, okRun.stderr);
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    assert.equal(JSON.parse(await readFile(planPath, "utf8")).ok, true);
+
+    // 2. Re-run at the SAME key with a data-invalid (syntax-valid) --jq filter:
+    //    it passes the preflight, the plan is re-persisted, finish() evaluates
+    //    the filter against the payload and exits 2.
+    const failed = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--jq", ".count | length"],
+      { cwd: tmpDir },
+    );
+    assert.equal(failed.status, 2, failed.stderr);
+    assert.match(JSON.parse(failed.stderr).error, /--jq/);
+
+    // 3. The keyed plan is ABSENT — the persisted plan from the FAILED
+    //    invocation did not survive the exit-2 emission failure.
+    await assert.rejects(() => readFile(planPath, "utf8"), { code: "ENOENT" });
+  });
 });
 
 test("expandDispatchUnits: a configured-name unit with one resolved angle is a singleton, not a shared group", () => {
