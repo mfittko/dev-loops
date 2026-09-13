@@ -2538,6 +2538,60 @@ test("buildFanoutEnforcement (#1972, AC4): angle-layer config falls back to the 
   }
 });
 
+test("buildFanoutEnforcement (#1972): a PR head commit that resolves but never committed a .devloops resolves HEAD DEFAULTS, not the invoking checkout's own on-disk .devloops", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-head-config-no-devloops-"));
+  try {
+    const g = (...args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+    g("init", "-q");
+    g("config", "user.email", "t@t.t");
+    g("config", "user.name", "t");
+    g("config", "commit.gpgsign", "false");
+    // The HEAD commit never carries a .devloops at any extension.
+    await writeFile(path.join(dir, "README.md"), "no devloops here\n", "utf8");
+    g("add", "-A");
+    g("commit", "-qm", "head commit with no .devloops");
+    const headSha = g("rev-parse", "HEAD").trim();
+
+    // The invoking checkout's OWN on-disk .devloops (untracked — never
+    // committed) carries a mandatory angle with a name distinct from any
+    // head default, so a resolved "invoking-mandatory" would prove a
+    // wrongful fallback to the invoking checkout instead of HEAD defaults.
+    await writeFile(
+      path.join(dir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  requireFanoutEvidence: true",
+        "  preApproval:",
+        "    angles:",
+        "      - dry",
+        "      - name: invoking-mandatory",
+        "        mandatory: true",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+    const marker = { visible: true, headSha, executionMode: "fanout_fanin" };
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: 1976, currentHeadSha: headSha,
+      draftGateMarker: { visible: false }, preApprovalGateMarker: marker,
+      config, cwd: dir, hasFullLabel: false,
+    });
+    const gate = enforcement.gates.find((entry) => entry.name === "pre_approval_gate");
+    // Resolved from HEAD DEFAULTS (extensionDefaults' built-in mandatory
+    // "pr-checklist"), never the invoking checkout's own "invoking-mandatory"
+    // — proving `raw: null` (head resolves, no committed .devloops) took the
+    // defaults branch instead of silently falling back to the invoking
+    // config the way an unresolvable head SHA would.
+    assert.ok(gate.mandatoryAngles.includes("pr-checklist"), JSON.stringify(gate.mandatoryAngles));
+    assert.ok(!gate.mandatoryAngles.includes("invoking-mandatory"), JSON.stringify(gate.mandatoryAngles));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("detect-checkpoint-evidence fails pre-merge with unresolved human review threads", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-gate-human-unresolved-"));
 
