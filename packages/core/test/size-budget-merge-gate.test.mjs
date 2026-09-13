@@ -78,6 +78,55 @@ test("resolveSizeBudgetHumanApprovalRequired: absent/unreadable size evidence fa
   );
 });
 
+test("resolveSizeBudgetHumanApprovalRequired: absent size + humanApprovalSatisfied true + 0 unresolved CR is NOT required (a fresh approval clears the gate even when size evidence is absent)", () => {
+  assert.equal(
+    resolveSizeBudgetHumanApprovalRequired({
+      sizeOutcome: null,
+      touchesT1: null,
+      humanApprovalSatisfied: true,
+      unresolvedChangesRequestedCount: 0,
+    }),
+    false,
+  );
+});
+
+test("resolveSizeBudgetHumanApprovalRequired: absent size + reviewDecision APPROVED + 0 unresolved CR is NOT required", () => {
+  assert.equal(
+    resolveSizeBudgetHumanApprovalRequired({
+      sizeOutcome: undefined,
+      touchesT1: undefined,
+      reviewDecision: "APPROVED",
+      unresolvedChangesRequestedCount: 0,
+    }),
+    false,
+  );
+});
+
+test("resolveSizeBudgetHumanApprovalRequired: absent size + no approval is still required (the restructure must not fail open)", () => {
+  assert.equal(
+    resolveSizeBudgetHumanApprovalRequired({
+      sizeOutcome: null,
+      touchesT1: null,
+      humanApprovalSatisfied: false,
+      reviewDecision: null,
+      unresolvedChangesRequestedCount: 0,
+    }),
+    true,
+  );
+});
+
+test("resolveSizeBudgetHumanApprovalRequired: absent size + humanApprovalSatisfied true + 1 unresolved CR is still required (fail closed on the absent-size path too)", () => {
+  assert.equal(
+    resolveSizeBudgetHumanApprovalRequired({
+      sizeOutcome: null,
+      touchesT1: null,
+      humanApprovalSatisfied: true,
+      unresolvedChangesRequestedCount: 1,
+    }),
+    true,
+  );
+});
+
 test("resolveSizeBudgetHumanApprovalRequired: human APPROVED + zero unresolved CHANGES_REQUESTED + escalate is NOT required", () => {
   assert.equal(
     resolveSizeBudgetHumanApprovalRequired({

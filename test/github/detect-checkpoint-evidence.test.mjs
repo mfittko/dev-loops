@@ -529,6 +529,12 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
               "Verdict: clean",
               "Findings summary: no issues found",
               "Next action: await final human approval",
+              // pass/non-T1 so this clean pre_approval_gate verdict carries no
+              // size-imposed human-approval requirement (this test is not
+              // exercising the size-budget merge gate).
+              "Size-budget outcome: pass",
+              "Size-budget T1 slice: not touched",
+              "Size-budget waiver: none",
             ].join("\n"),
             updated_at: "2026-05-29T22:00:00Z",
             html_url: "https://github.com/owner/repo/pull/17#issuecomment-43",
@@ -557,6 +563,11 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
     assert.equal(result.stderr, "");
     const parsed = JSON.parse(result.stdout);
     parsed.staleRunner = { ...parsed.staleRunner, filePath: "<stale-runner-file-path>", activeRun: "<active-run-or-null>", status: parsed.staleRunner.status === "fresh_runner" || parsed.staleRunner.status === "no_owner_record" ? "<stale-status>" : parsed.staleRunner.status };
+    // reviews/comments are the size-budget merge gate's raw input facts, not
+    // this test's concern (comment summarization) — asserted directly by the
+    // buildPreMergeGateCheck size-gate tests instead.
+    delete parsed.reviews;
+    delete parsed.comments;
     assert.deepEqual(parsed, {
       ok: true,
       repo: "owner/repo",
@@ -584,9 +595,9 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
         verdict: "clean",
         findingsSummary: "no issues found",
         nextAction: "await final human approval",
-        sizeOutcome: null,
-        sizeTouchesT1: null,
-        sizeWaiverGranted: null,
+        sizeOutcome: "pass",
+        sizeTouchesT1: false,
+        sizeWaiverGranted: false,
         sizeWaiverApprovedBy: null,
         commentId: 43,
         commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-43",
@@ -619,9 +630,9 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
         nextAction: "await final human approval",
         executionMode: null,
         inlineReason: null,
-        sizeOutcome: null,
-        sizeTouchesT1: null,
-        sizeWaiverGranted: null,
+        sizeOutcome: "pass",
+        sizeTouchesT1: false,
+        sizeWaiverGranted: false,
         sizeWaiverApprovedBy: null,
         contractComplete: true,
         commentId: 43,
@@ -845,6 +856,9 @@ test("detect-checkpoint-evidence always passes pre-merge check with clean draft 
               "Verdict: clean",
               "Findings summary: no issues found",
               "Next action: await final human approval",
+              "Size-budget outcome: pass",
+              "Size-budget T1 slice: not touched",
+              "Size-budget waiver: none",
             ].join("\n"),
             updated_at: "2026-05-29T22:00:00Z",
             html_url: "https://github.com/owner/repo/pull/17#issuecomment-71",
@@ -1107,7 +1121,7 @@ test("buildPreMergeGateCheck fails with non-zero unresolved thread count", () =>
   const evidence = {
     currentHeadSha: "abc1234",
     draftGate: { visible: true, verdict: "clean" },
-    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: "abc1234" },
+    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: "abc1234", sizeOutcome: "pass", sizeTouchesT1: false },
   };
 
   const result = buildPreMergeGateCheck(evidence, 3);
@@ -1121,7 +1135,7 @@ test("buildPreMergeGateCheck fails with sentinel -1 (API fetch failure)", () => 
   const evidence = {
     currentHeadSha: "abc1234",
     draftGate: { visible: true, verdict: "clean" },
-    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: "abc1234" },
+    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: "abc1234", sizeOutcome: "pass", sizeTouchesT1: false },
   };
 
   const result = buildPreMergeGateCheck(evidence, -1);
@@ -1135,7 +1149,7 @@ test("buildPreMergeGateCheck passes with zero unresolved threads", () => {
   const evidence = {
     currentHeadSha: "abc1234",
     draftGate: { visible: true, verdict: "clean" },
-    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: "abc1234" },
+    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: "abc1234", sizeOutcome: "pass", sizeTouchesT1: false },
   };
 
   const result = buildPreMergeGateCheck(evidence, 0);
@@ -1147,9 +1161,108 @@ function cleanEvidence() {
   return {
     currentHeadSha: "abc1234",
     draftGate: { visible: true, verdict: "clean" },
-    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: "abc1234" },
+    // pass/non-T1 by default so this "everything is clean" fixture carries no
+    // size-imposed approval requirement; individual size-gate tests below
+    // override sizeOutcome/sizeTouchesT1 to exercise the escalated/absent paths.
+    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: "abc1234", sizeOutcome: "pass", sizeTouchesT1: false },
   };
 }
+
+// --- Size-budget merge gate consultation (AC2, AC3, AC4, AC5) ---
+
+test("buildPreMergeGateCheck: escalate sizeOutcome with no human APPROVED review fails (AC2, AC3)", () => {
+  const evidence = cleanEvidence();
+  evidence.preApprovalGateMarker.sizeOutcome = "escalate";
+  const result = buildPreMergeGateCheck(evidence, 0, null);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("size-budget requires a human APPROVED review")),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck: escalate sizeOutcome with a human APPROVED review and 0 unresolved CHANGES_REQUESTED passes (AC3)", () => {
+  const evidence = cleanEvidence();
+  evidence.preApprovalGateMarker.sizeOutcome = "escalate";
+  evidence.reviews = [{ login: "alice", state: "APPROVED", commit_id: "abc1234" }];
+  const result = buildPreMergeGateCheck(evidence, 0, null);
+  assert.equal(result.ok, true, JSON.stringify(result.failures));
+});
+
+test("buildPreMergeGateCheck: sizeTouchesT1 true with no APPROVED review fails, even on a pass outcome (remaps sizeTouchesT1 -> touchesT1) (AC2, AC3)", () => {
+  const evidence = cleanEvidence();
+  evidence.preApprovalGateMarker.sizeTouchesT1 = true;
+  const result = buildPreMergeGateCheck(evidence, 0, null);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("size-budget requires a human APPROVED review")),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck: pass sizeOutcome + sizeTouchesT1 false passes without any human review (AC3 no false positive)", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null);
+  assert.equal(result.ok, true, JSON.stringify(result.failures));
+});
+
+test("buildPreMergeGateCheck: null sizeOutcome/sizeTouchesT1 (absent size evidence) fails closed (AC4)", () => {
+  const evidence = cleanEvidence();
+  evidence.preApprovalGateMarker.sizeOutcome = null;
+  evidence.preApprovalGateMarker.sizeTouchesT1 = null;
+  const result = buildPreMergeGateCheck(evidence, 0, null);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("size-budget requires a human APPROVED review")),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck: ill-typed sizeOutcome/sizeTouchesT1 fails closed (AC4)", () => {
+  const evidence = cleanEvidence();
+  evidence.preApprovalGateMarker.sizeOutcome = "not-a-real-outcome";
+  evidence.preApprovalGateMarker.sizeTouchesT1 = "yes";
+  const result = buildPreMergeGateCheck(evidence, 0, null);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("size-budget requires a human APPROVED review")),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck: an unresolved human CHANGES_REQUESTED alongside an APPROVED still fails (AC2 unresolved-CR guard)", () => {
+  const evidence = cleanEvidence();
+  evidence.preApprovalGateMarker.sizeOutcome = "escalate";
+  evidence.reviews = [
+    { login: "alice", state: "APPROVED", commit_id: "abc1234" },
+    { login: "bob", state: "CHANGES_REQUESTED", commit_id: "abc1234" },
+  ];
+  const result = buildPreMergeGateCheck(evidence, 0, null);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("size-budget requires a human APPROVED review")),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck: a solo-owner PR clears the gate via a head-pinned \"approve merge <headSha>\" comment even with no APPROVED review (AC5)", () => {
+  const evidence = cleanEvidence();
+  evidence.preApprovalGateMarker.sizeOutcome = "escalate";
+  evidence.comments = [{ login: "carol", body: "approve merge abc1234", type: "User" }];
+  const result = buildPreMergeGateCheck(evidence, 0, null);
+  assert.equal(result.ok, true, JSON.stringify(result.failures));
+});
+
+test("buildPreMergeGateCheck: a bot-authored \"approve merge <headSha>\" comment never satisfies the gate (AC5 fail-closed)", () => {
+  const evidence = cleanEvidence();
+  evidence.preApprovalGateMarker.sizeOutcome = "escalate";
+  evidence.comments = [{ login: "some-bot[bot]", body: "approve merge abc1234", type: "Bot" }];
+  const result = buildPreMergeGateCheck(evidence, 0, null);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("size-budget requires a human APPROVED review")),
+    JSON.stringify(result.failures),
+  );
+});
 
 test("buildPreMergeGateCheck with no/disabled enforcement descriptor ignores executionMode", () => {
   // No fanoutEnforcement argument (or { required: false }) => enforcement skipped.
@@ -1590,7 +1703,7 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7): a real l
     const result = buildPreMergeGateCheck({
       currentHeadSha: headSha,
       draftGate: { visible: true, verdict: "clean" },
-      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha },
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha, sizeOutcome: "pass", sizeTouchesT1: false },
     }, 0, null, enforcement);
     assert.equal(result.ok, true, JSON.stringify(result.failures));
   } finally {
@@ -1730,7 +1843,7 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7, #1601): t
     const result = buildPreMergeGateCheck({
       currentHeadSha: headSha,
       draftGate: { visible: true, verdict: "clean" },
-      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha },
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha, sizeOutcome: "pass", sizeTouchesT1: false },
     }, 0, null, enforcement);
     // #1601 (ADR 0048): gate:full dispatches grouped, so the configured
     // "process" group stays valid and the shared reviewer passes provenance.
@@ -2224,7 +2337,7 @@ test("buildFanoutEnforcement (#1174) re-derives scope fail-closed and sets scope
     const accepted = buildPreMergeGateCheck({
       currentHeadSha: headSha,
       draftGate: { visible: true, verdict: "clean" },
-      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha },
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha, sizeOutcome: "pass", sizeTouchesT1: false },
     }, 0, null, enforcement);
     assert.equal(accepted.ok, true, JSON.stringify(accepted.failures));
 
@@ -2337,7 +2450,7 @@ test("buildFanoutEnforcement (#1972, AC2): a rename-class .devloops PR validates
     const result = buildPreMergeGateCheck({
       currentHeadSha: headSha,
       draftGate: { visible: true, verdict: "clean" },
-      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha },
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha, sizeOutcome: "pass", sizeTouchesT1: false },
     }, 0, null, enforcement);
     assert.equal(result.ok, true, JSON.stringify(result.failures));
   } finally {
@@ -2925,6 +3038,9 @@ test("detect-checkpoint-evidence passes pre-merge when all human review threads 
               "Verdict: clean",
               "Findings summary: no issues found",
               "Next action: await final human approval",
+              "Size-budget outcome: pass",
+              "Size-budget T1 slice: not touched",
+              "Size-budget waiver: none",
             ].join("\n"),
             updated_at: "2026-05-29T22:00:00Z",
             html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
@@ -3043,6 +3159,9 @@ test("detect-checkpoint-evidence finds gate comment posted as PR review (root ca
         "**Findings summary:** no issues found",
         "",
         "**Next action:** await final human approval",
+        "**Size-budget outcome:** pass",
+        "**Size-budget T1 slice:** not touched",
+        "**Size-budget waiver:** none",
       ].join("\n"),
       // PR reviews use submitted_at instead of created_at/updated_at
       submitted_at: "2026-05-30T23:25:00Z",
@@ -3236,6 +3355,9 @@ test("detect-checkpoint-evidence: a genuine verdict comment whose findings summa
         "**Reviewed head SHA:** `abc1234`",
         "**Verdict:** clean",
         "**Execution mode:** inline_single_agent — tiny change",
+        "**Size-budget outcome:** pass",
+        "**Size-budget T1 slice:** not touched",
+        "**Size-budget waiver:** none",
         "",
         `**Findings summary:** ${quotedSummary}`,
         "",
@@ -3323,6 +3445,13 @@ function gateMarkerComment({ gate, headSha, nextAction, executionMode, inlineRea
       `**Reviewed head SHA:** \`${headSha}\``,
       "**Verdict:** clean",
       modeLine,
+      // pass/non-T1 by default so this fixture's clean pre_approval_gate
+      // verdict carries no size-imposed human-approval requirement — the
+      // fan-out/execution-mode tests this feeds are not exercising the
+      // size-budget merge gate.
+      "**Size-budget outcome:** pass",
+      "**Size-budget T1 slice:** not touched",
+      "**Size-budget waiver:** none",
       "",
       "**Findings summary:** no issues found",
       "",
@@ -3583,7 +3712,7 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck PASSES on an auto-chunked 
     const result = buildPreMergeGateCheck({
       currentHeadSha: headSha,
       draftGate: { visible: true, verdict: "clean" },
-      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha },
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha, sizeOutcome: "pass", sizeTouchesT1: false },
     }, 0, null, enforcement);
     assert.equal(result.ok, true, JSON.stringify(result.failures));
   } finally {

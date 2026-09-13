@@ -14,13 +14,20 @@ const runNode = (args = [], options = {}) => runNodeHelper(scriptPath, args, {
 });
 
 function cleanGateBody(gate, headSha) {
-  return [
+  const lines = [
     "Gate review: " + gate,
     "Reviewed head SHA: " + headSha,
     "Verdict: clean",
     "Findings summary: no issues found",
     "Next action: " + (gate === "draft_gate" ? "mark ready for review" : "await final human approval"),
-  ].join("\n");
+  ];
+  // pass/non-T1 on the pre_approval_gate so the size-budget merge gate imposes
+  // no requirement here — these fixtures exercise gate-authored-thread
+  // resolution, not the size gate.
+  if (gate === "pre_approval_gate") {
+    lines.push("Size-budget outcome: pass", "Size-budget T1 slice: not touched", "Size-budget waiver: none");
+  }
+  return lines.join("\n");
 }
 
 // #1585: the draftGateSatisfied field + pre-merge evidence check fold in the

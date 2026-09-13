@@ -262,6 +262,17 @@ supplied, and are read back as `null` (not a parse failure) when the verdict bod
 none of them — the pre-size-budget comment shape stays valid evidence for every other rule
 in this document.
 
+These fields remain OPTIONAL at the CLI layer (`upsert-checkpoint-verdict.mjs` never
+requires `--size-budget-json`), but the standard `pre_approval_gate` gate-verdict
+procedure ([Copilot PR Followup](../copilot-pr-followup/SKILL.md)) supplies it on every
+post, so a verdict produced through that procedure always carries populated fields. A
+verdict read back with all three `null` (the flag omitted, or a pre-existing verdict
+posted before this field set existed) is absent size evidence, which the size-budget
+merge gate — consulted live by `buildPreMergeGateCheck`
+(`scripts/github/detect-checkpoint-evidence.mjs`) on the authoritative pre-merge path, in
+addition to `evaluateMergePreconditions`/the lifecycle state machine — reads as "human
+approval required", never as a silent pass.
+
 ## Verdict definitions
 
 <!-- rule: GATE-COMMENT-VERDICT-VALUES -->

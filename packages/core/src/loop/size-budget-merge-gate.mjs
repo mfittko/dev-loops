@@ -29,12 +29,15 @@ const VALID_SIZE_OUTCOMES = new Set(["pass", "escalate", "block"]);
  * Resolve whether an escalated/T1 PR's merge must wait for a human APPROVED
  * review with zero unresolved CHANGES_REQUESTED.
  *
- * FAILS CLOSED: an unreadable `sizeOutcome`, a non-boolean `touchesT1`, an
- * absent approval (`humanApprovalSatisfied` not `true` AND `reviewDecision`
- * not exactly `"APPROVED"`), or a non-zero/unreadable
- * `unresolvedChangesRequestedCount` all require human approval (return
- * `true`). A `pass` outcome that never touches the T1 tier returns `false`
- * (no size-imposed requirement).
+ * FAILS CLOSED: an unreadable `sizeOutcome` or a non-boolean `touchesT1` is
+ * treated the SAME as an escalated/T1 outcome — it still routes through the
+ * approval check below rather than returning early, so a fresh approval can
+ * clear the gate even when size evidence is absent. An absent approval
+ * (`humanApprovalSatisfied` not `true` AND `reviewDecision` not exactly
+ * `"APPROVED"`), or a non-zero/unreadable `unresolvedChangesRequestedCount`,
+ * both still require human approval (return `true`) on every path, including
+ * the absent-evidence one. A `pass` outcome that never touches the T1 tier
+ * returns `false` (no size-imposed requirement).
  *
  * `humanApprovalSatisfied` is the PRODUCTION approval signal (the shared
  * resolver's boolean output — see the paragraph below); `reviewDecision ===
@@ -81,10 +84,14 @@ export function resolveSizeBudgetHumanApprovalRequired({
   humanApprovalSatisfied,
   unresolvedChangesRequestedCount,
 } = {}) {
-  if (!VALID_SIZE_OUTCOMES.has(sizeOutcome)) return true; // size evidence absent/unreadable
-  if (typeof touchesT1 !== "boolean") return true; // T1-touch signal missing/unreadable
-
-  const requiresEscalatedReview = sizeOutcome === "escalate" || sizeOutcome === "block" || touchesT1 === true;
+  // Absent/unreadable size evidence folds into the escalated-review path
+  // instead of returning early, so it STILL reaches the approval check below
+  // — an early return here would make a fresh human approval unsatisfiable
+  // whenever size evidence is missing (the deadlock class this gate must
+  // never reintroduce).
+  const sizeEvidenceUsable = VALID_SIZE_OUTCOMES.has(sizeOutcome) && typeof touchesT1 === "boolean";
+  const requiresEscalatedReview =
+    !sizeEvidenceUsable || sizeOutcome === "escalate" || sizeOutcome === "block" || touchesT1 === true;
   if (!requiresEscalatedReview) return false; // pass, T1 untouched — no size-imposed requirement
 
   // ponytail: reviewDecision === "APPROVED" is kept only as the back-compat

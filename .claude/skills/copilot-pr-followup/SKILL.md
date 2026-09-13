@@ -360,6 +360,22 @@ When passing `--findings-severity-counts` for an inline round, substitute the co
 
 `--force --force-reason` on `upsert-checkpoint-verdict.mjs` is a narrow operator-authorized CI override for the helper itself, not the default gate path. Use it only when the helper refuses gate entry solely because the current head is `blocked_needs_user_decision` with `ciStatus="failure"`, and only after the user explicitly authorizes ignoring that current-head CI failure for this one gate-comment upsert. It does **not** bypass stale-head checks, unresolved-thread / unsettled-review refusal, non-draft `draft_gate` refusal, merge conflicts, or other legality checks.
 
+For a `pre_approval_gate` verdict, ALWAYS compute the size budget first and thread it into the upsert via `--size-budget-json`:
+
+```sh
+node <resolved-skill-scripts>/loop/check-size-budget.mjs --base origin/<base-branch> > <size-budget-json-path>
+node <resolved-skill-scripts>/github/upsert-checkpoint-verdict.mjs \
+  --repo <owner/name> \
+  --pr <number> \
+  --gate pre_approval_gate \
+  --head-sha <current_head_sha> \
+  --verdict <clean|findings_present|blocked> \
+  ... \
+  --size-budget-json <size-budget-json-path>
+```
+
+Reuse `check-size-budget.mjs` verbatim — never recompute its `computeSizeBudget`/`evaluatePrSizeBudget` logic by hand. Omitting `--size-budget-json` posts the verdict with the size-budget outcome/T1-slice/waiver fields left `null`; the size-budget merge gate (`@dev-loops/core/loop/size-budget-merge-gate`, consulted live by `buildPreMergeGateCheck` on the authoritative pre-merge path) reads null size evidence as "human approval required", never as a silent pass — so skipping this step turns an otherwise-clean PR into one that fails closed at merge time.
+
 ### Gate fan-out/fan-in procedure (agent-orchestrated)
 
 Every sanctioned fan-out round passes the emitter's keyed plan to BOTH Phase 3

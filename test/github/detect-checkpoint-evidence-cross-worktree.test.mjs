@@ -104,7 +104,9 @@ function cleanEvidenceFor(headSha) {
   return {
     currentHeadSha: headSha,
     draftGate: { visible: true, verdict: "clean" },
-    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha },
+    // pass/non-T1 so the size-budget merge gate imposes no requirement here —
+    // this fixture is exercising fan-out provenance, not the size gate.
+    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha, sizeOutcome: "pass", sizeTouchesT1: false },
   };
 }
 
