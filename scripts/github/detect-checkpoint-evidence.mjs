@@ -604,6 +604,11 @@ async function readLedgerProvenanceInAny(checkouts, ledgerPath, criteria = {}) {
   }
   return firstNonNull;
 }
+// A committed `.devloops` is a small hand-authored config file; 8 MiB is
+// already many times larger than any legitimate one, so bounding `git show`
+// here only guards against a runaway/corrupt blob, never a real config.
+const HEAD_DEVLOOPS_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
+
 /**
  * Read the PR head commit's committed `.devloops` (bare, then `.yaml`/`.yml`/
  * `.json`, matching loadDevLoopConfig's own disk precedence) via `git show`.
@@ -612,23 +617,43 @@ async function readLedgerProvenanceInAny(checkouts, ledgerPath, criteria = {}) {
  * them — no need to loop over `resolveLedgerCheckouts` the way ledger BYTE
  * reads do (those are gitignored tmp/ files, not git objects).
  * @returns {{ ok: true, raw: string|null, path: string } | { ok: false }}
- *   `ok: false` means the head COMMIT itself isn't resolvable locally (never
- *   fetched anywhere sharing this .git) — the caller must fall back to the
- *   invoking checkout's config. `raw: null` (`ok: true`) means the commit
- *   resolves but has no `.devloops` at any extension — a legitimate "PR head
- *   has no primary override" state, not a failure.
+ *   `ok: false` means either the head COMMIT itself isn't resolvable locally
+ *   (never fetched anywhere sharing this .git) OR a `.devloops` that DOES
+ *   exist at this ref failed to read for some other reason (oversized blob,
+ *   object-store error) — either way the caller must fall back to the
+ *   invoking checkout's config, never silently take head DEFAULTS in place of
+ *   an override that actually exists. `raw: null` (`ok: true`) means the
+ *   commit resolves and every extension was confirmed genuinely ABSENT at
+ *   this ref — a legitimate "PR head has no primary override" state, not a
+ *   failure.
  */
 function readHeadDevloopsSource(repoRoot, headSha) {
   for (const ext of ["", ".yaml", ".yml", ".json"]) {
     const relPath = `.devloops${ext}`;
+    const ref = `${headSha}:${relPath}`;
     try {
-      const raw = execFileSync("git", ["show", `${headSha}:${relPath}`], {
+      // Existence probe FIRST, separate from the content read below, so a
+      // read failure on a path that genuinely exists is never confused with
+      // the path simply not existing at this extension/ref.
+      execFileSync("git", ["cat-file", "-e", ref], { cwd: repoRoot, stdio: ["ignore", "ignore", "ignore"] });
+    } catch {
+      // Genuinely absent at this extension for this ref — try the next.
+      continue;
+    }
+    try {
+      const raw = execFileSync("git", ["show", ref], {
         cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+        maxBuffer: HEAD_DEVLOOPS_MAX_BUFFER_BYTES,
       });
       return { ok: true, raw, path: relPath };
     } catch {
-      // Absent at this extension (or path never existed at this ref) — try
-      // the next, or fall through to the commit-resolvability probe below.
+      // The path exists at this ref but reading it failed (e.g. it exceeds
+      // maxBuffer, or another object-store error) — this is NOT absence, so
+      // it must fail CLOSED (never fall through to a later extension, and
+      // never reach the raw:null/head-defaults branch below), forcing the
+      // caller to fall back to invokingConfig instead of silently loosening
+      // enforcement to head defaults.
+      return { ok: false };
     }
   }
   try {
@@ -739,8 +764,16 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   // including the per-candidate resolution inside readLedgerProvenanceInAny)
   // so they can never drift apart on which config governs the angle layer.
   const angleConfig = await resolveAngleLayerConfig({ invokingConfig: config, repoRoot, headSha: currentHeadSha });
-  const draftGateConfig = resolveGateConfig(angleConfig, "draft");
-  const preApprovalGateConfig = resolveGateConfig(angleConfig, "preApproval");
+  // Gate ACTIVATION (`.required`) stays sourced from the INVOKING checkout's
+  // config, never the head-sourced angleConfig: a PR that sets its own
+  // `gates.preApproval.required: false` must not be able to remove a gate
+  // from fanoutEnforcement.gates (and thereby skip its ledger/provenance/
+  // angle checks) when the checkout that is actually enforcing this PR still
+  // requires it. Only the angle-CONTRACT resolvers below (resolveGateAngleContract,
+  // resolveFanoutGroups) use angleConfig — activation and angle-contract are
+  // deliberately split across two different config sources.
+  const draftGateConfig = resolveGateConfig(config, "draft");
+  const preApprovalGateConfig = resolveGateConfig(config, "preApproval");
   // Shared angle-contract resolver (exclude-filtered mandatory angles +
   // additive-aware pool) — the same contract the write paths enforce. The
   // field names here (`mandatoryAngles`/`anglePool`) are exactly what

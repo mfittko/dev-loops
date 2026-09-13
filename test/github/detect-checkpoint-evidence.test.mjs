@@ -2683,6 +2683,141 @@ test("buildFanoutEnforcement (#1972): a PR head commit that resolves but never c
   }
 });
 
+test("buildFanoutEnforcement: gate ACTIVATION stays sourced from the invoking config, not the PR head's own .devloops", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-activation-invoking-"));
+  try {
+    const g = (...args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+    g("init", "-q");
+    g("config", "user.email", "t@t.t");
+    g("config", "user.name", "t");
+    g("config", "commit.gpgsign", "false");
+    const baseDevloops = [
+      "version: 1",
+      "gates:",
+      "  requireFanoutEvidence: true",
+      "  preApproval:",
+      "    required: true",
+      "",
+    ].join("\n");
+    await writeFile(path.join(dir, ".devloops"), baseDevloops, "utf8");
+    g("add", "-A");
+    g("commit", "-qm", "base (gate required)");
+    const baseSha = g("rev-parse", "HEAD").trim();
+    // The PR's own HEAD commit turns the gate OFF — this must not be able to
+    // remove the gate from enforcement when the invoking checkout still
+    // requires it.
+    const headDevloops = [
+      "version: 1",
+      "gates:",
+      "  requireFanoutEvidence: true",
+      "  preApproval:",
+      "    required: false",
+      "",
+    ].join("\n");
+    await writeFile(path.join(dir, ".devloops"), headDevloops, "utf8");
+    g("add", "-A");
+    g("commit", "-qm", "head (gate turned off in its own config)");
+    const headSha = g("rev-parse", "HEAD").trim();
+    g("checkout", "-q", baseSha); // invoking checkout: gate still required on disk
+
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+    const marker = { visible: true, headSha, executionMode: "fanout_fanin" };
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: 1978, currentHeadSha: headSha,
+      draftGateMarker: { visible: false }, preApprovalGateMarker: marker,
+      config, cwd: dir, hasFullLabel: false,
+    });
+    // The gate must still be present/enforced: activation reads the invoking
+    // config's `required: true`, never the head's own `required: false`.
+    const gate = enforcement.gates.find((entry) => entry.name === "pre_approval_gate");
+    assert.ok(gate, `pre_approval_gate must stay enforced; got gates: ${JSON.stringify(enforcement.gates.map((e) => e.name))}`);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildFanoutEnforcement: a read failure on a .devloops that genuinely exists at the PR head falls back to invokingConfig, never head defaults", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-head-config-read-failure-"));
+  try {
+    const g = (...args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+    g("init", "-q");
+    g("config", "user.email", "t@t.t");
+    g("config", "user.name", "t");
+    g("config", "commit.gpgsign", "false");
+    await writeFile(
+      path.join(dir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  requireFanoutEvidence: true",
+        "  preApproval:",
+        "    angles:",
+        "      - dry",
+        "      - name: invoking-mandatory",
+        "        mandatory: true",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    g("add", "-A");
+    g("commit", "-qm", "base");
+    // The PR HEAD's .devloops genuinely EXISTS at this ref but is oversized —
+    // larger than readHeadDevloopsSource's generous maxBuffer — so `git show`
+    // fails on a real read error, not on path absence. This must fail CLOSED
+    // (fall back to invokingConfig), never fall through to the head-defaults
+    // (`raw: null`) branch the way a genuinely-absent `.devloops` would.
+    const oversizedDevloops = `${[
+      "version: 1",
+      "gates:",
+      "  requireFanoutEvidence: true",
+      "  preApproval:",
+      "    angles:",
+      "      - dry",
+      "      - name: head-mandatory",
+      "        mandatory: true",
+    ].join("\n")}\n# padding: ${"x".repeat(9 * 1024 * 1024)}\n`;
+    await writeFile(path.join(dir, ".devloops"), oversizedDevloops, "utf8");
+    g("add", "-A");
+    g("commit", "-qm", "head (oversized .devloops)");
+    const headSha = g("rev-parse", "HEAD").trim();
+    g("checkout", "-q", "HEAD~1"); // invoking checkout: base config on disk
+
+    const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-1979");
+    await mkdir(ledgerDir, { recursive: true });
+    await writeFile(
+      path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
+      `${JSON.stringify({
+        gate: "pre_approval_gate", headSha, findings: [],
+        provenance: {
+          distinctReviewers: 1,
+          perAngle: [
+            { angle: "dry", reviewer: "review-a" },
+            { angle: "invoking-mandatory", reviewer: "review-a" },
+            { angle: "pr-checklist", reviewer: "review-a" },
+          ],
+        },
+      })}\n`,
+      "utf8",
+    );
+
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+    const marker = { visible: true, headSha, executionMode: "fanout_fanin" };
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: 1979, currentHeadSha: headSha,
+      draftGateMarker: { visible: false }, preApprovalGateMarker: marker,
+      config, cwd: dir, hasFullLabel: false,
+    });
+    const gate = enforcement.gates.find((entry) => entry.name === "pre_approval_gate");
+    // Fell back to the invoking checkout's mandatory angle — never the
+    // unreadable head override's own distinct mandatory angle.
+    assert.ok(gate.mandatoryAngles.includes("invoking-mandatory"), JSON.stringify(gate.mandatoryAngles));
+    assert.ok(!gate.mandatoryAngles.includes("head-mandatory"), JSON.stringify(gate.mandatoryAngles));
+    assert.ok(gate.provenance, "a ledger conformant with the fallback (invoking) config still validates");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("detect-checkpoint-evidence fails pre-merge with unresolved human review threads", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-gate-human-unresolved-"));
 
