@@ -330,7 +330,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     // The concurrency bound the coordinator MUST wave the EMITTED (split) units
     // by — the artifact's fanout.wavePlan is computed over the UNSPLIT
     // resolveFanoutGroups units and no longer matches this step's unit set.
-    maxConcurrent = resolveFanoutEffectiveConcurrency(config);
+    maxConcurrent = resolveFanoutEffectiveConcurrency(config, process.env);
   } catch (err) {
     process.stderr.write(`${formatCliError(err)}\n`);
     return 2;

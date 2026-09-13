@@ -1717,7 +1717,7 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // serial posture.
   const sequential = resolveFanoutSequential(config);
   const maxConcurrent = resolveFanoutMaxConcurrent(config);
-  const effectiveConcurrency = resolveFanoutEffectiveConcurrency(config);
+  const effectiveConcurrency = resolveFanoutEffectiveConcurrency(config, process.env);
   const wavePlan = scheduleFanoutWaves(groups, effectiveConcurrency);
   // Mirrors consolidate-fanin.mjs's own --carried-angles mandatory-angle
   // refusal: a name whose review surface always re-runs (a configured

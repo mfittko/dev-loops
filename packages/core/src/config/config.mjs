@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { classifyFile } from "../analysis/diff-analyzer.mjs";
 import { isDevLoopConfigSourcePath } from "../loop/gate-carry-forward.mjs";
+import { isClaudeHarness } from "../loop/run-context.mjs";
 import { trimmedOrNull } from "../loop/normalize.mjs";
 
 // ============================================================================
@@ -1934,14 +1935,29 @@ export function resolveFanoutSequential(config) {
 }
 
 /**
+ * Claude-harness-scoped cap on effective fan-out concurrency (#1971). The
+ * shipped cross-harness `gates.fanout.maxConcurrent` default (4) plus the
+ * driver's own call still 429s a single-driver Claude session; other
+ * harnesses (pi, unknown) are unaffected — see `resolveFanoutEffectiveConcurrency`.
+ */
+export const CLAUDE_MAX_EFFECTIVE_CONCURRENT = 2;
+
+/**
  * Resolve the effective fan-out concurrency (dispatch units per wave): 1 when
- * `gates.fanout.sequential` is set, else `resolveFanoutMaxConcurrent`.
+ * `gates.fanout.sequential` is set, else `resolveFanoutMaxConcurrent`. Under the
+ * Claude harness (`isClaudeHarness(env)`, #1971) that value is additionally
+ * clamped to `CLAUDE_MAX_EFFECTIVE_CONCURRENT` so a single-driver Claude
+ * session's per-wave burst (driver + dispatch units) stays within its rate
+ * limit without lowering the shipped cross-harness default (schema/config
+ * surface unchanged) or requiring an operator-imposed throttle. Every other
+ * harness (pi, unknown, no env) returns the configured value unchanged.
  * @param {DevLoopConfig} config
+ * @param {Record<string, string|undefined>} [env] — defaults to `process.env`
  * @returns {number}
  */
-export function resolveFanoutEffectiveConcurrency(config) {
-  if (resolveFanoutSequential(config)) return 1;
-  return resolveFanoutMaxConcurrent(config);
+export function resolveFanoutEffectiveConcurrency(config, env = process.env) {
+  const base = resolveFanoutSequential(config) ? 1 : resolveFanoutMaxConcurrent(config);
+  return isClaudeHarness(env) ? Math.min(base, CLAUDE_MAX_EFFECTIVE_CONCURRENT) : base;
 }
 
 /**

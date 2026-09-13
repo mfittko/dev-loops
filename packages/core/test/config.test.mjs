@@ -41,6 +41,7 @@ import {
   DEFAULT_MAX_ANGLES_PER_GROUP,
   DEFAULT_FANOUT_MAX_CONCURRENT,
   DEFAULT_FANOUT_SEQUENTIAL,
+  CLAUDE_MAX_EFFECTIVE_CONCURRENT,
   resolveGateAngleScope,
   resolveEffectiveCopilotRoundCap,
   GATE_FULL_LABEL,
@@ -4269,16 +4270,43 @@ test("resolveFanoutSequential / resolveFanoutEffectiveConcurrency: serial bound 
   // Shipped default is false → other harnesses/repos keep maxConcurrent behavior (no regression).
   assert.equal(resolveFanoutSequential({ version: 1 }), false);
   assert.equal(DEFAULT_FANOUT_SEQUENTIAL, false);
-  assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }), 4);
+  // Pin env to {} so these assertions stay deterministic regardless of the ambient harness
+  // (resolveFanoutEffectiveConcurrency defaults env to process.env; the Claude-harness clamp is
+  // exercised explicitly, with { CLAUDECODE: "1" }, in the #1971 block below).
+  assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }, {}), 4);
   // Effective concurrency follows maxConcurrent when not sequential.
-  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 2 } } }), 2);
-  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { sequential: false, maxConcurrent: 3 } } }), 3);
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 2 } } }, {}), 2);
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { sequential: false, maxConcurrent: 3 } } }, {}), 3);
   // sequential forces one unit per wave regardless of maxConcurrent.
   assert.equal(resolveFanoutSequential({ gates: { fanout: { sequential: true } } }), true);
-  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { sequential: true } } }), 1);
-  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { sequential: true, maxConcurrent: 8 } } }), 1);
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { sequential: true } } }, {}), 1);
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { sequential: true, maxConcurrent: 8 } } }, {}), 1);
   // A non-boolean truthy value is NOT honored (strict === true).
   assert.equal(resolveFanoutSequential({ gates: { fanout: { sequential: "yes" } } }), false);
+});
+
+test("resolveFanoutEffectiveConcurrency: Claude-harness-scoped concurrency clamp (#1971)", () => {
+  assert.equal(CLAUDE_MAX_EFFECTIVE_CONCURRENT, 2);
+  // 1. Claude harness, default config → clamped to 2, not the shipped default (4).
+  assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }, { CLAUDECODE: "1" }), 2);
+  // 2. Claude harness, .devloops-style maxConcurrent: 3 → still clamped to 2.
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 3 } } }, { CLAUDECODE: "1" }), 2);
+  // 3. Claude harness, maxConcurrent: 1 → stays 1 (min(1, 2)).
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 1 } } }, { CLAUDECODE: "1" }), 1);
+  // 4. Claude harness, sequential: true → stays 1 (sequential already forces one unit per wave).
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { sequential: true } } }, { CLAUDECODE: "1" }), 1);
+  // 5. Non-Claude env → returns the configured value unchanged (cross-harness non-regression).
+  assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }, {}), 4);
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 3 } } }, { CLAUDECODE: "0" }), 3);
+  // 6. No env passed on a non-Claude process → unchanged base value.
+  const originalClaudecode = process.env.CLAUDECODE;
+  delete process.env.CLAUDECODE;
+  try {
+    assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }), 4);
+  } finally {
+    if (originalClaudecode === undefined) delete process.env.CLAUDECODE;
+    else process.env.CLAUDECODE = originalClaudecode;
+  }
 });
 
 test("gates.fanout.groups schema validation: duplicate group names are rejected", async () => {

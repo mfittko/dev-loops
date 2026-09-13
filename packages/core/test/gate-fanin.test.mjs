@@ -17,6 +17,7 @@ import {
   freshAngleNames,
   scheduleFanoutWaves,
   backoffMaxConcurrent,
+  planDispatchRetry,
   reviewerBudgetPreflight,
   normalizeSeverity,
   applyJudgeDispositions,
@@ -927,6 +928,16 @@ describe("scheduleFanoutWaves (#1601 — bounded-concurrency wave plan via sched
     const groups = units(["a", "b", "c", "d"]);
     assert.deepEqual(scheduleFanoutWaves(groups, 3), scheduleFanoutWaves(groups, 3));
   });
+
+  // AC1 wave-plan bound (#1971): under the Claude-clamped effective concurrency
+  // (2), even a worst-case angle pool's wave plan never exceeds 2 dispatch
+  // units per wave.
+  test("wave-plan bound under the Claude-clamped effective concurrency (#1971)", () => {
+    const groups = units(["a", "b", "c", "d", "e", "f", "g"]);
+    const waves = scheduleFanoutWaves(groups, 2);
+    assert.ok(waves.every((w) => w.length <= 2));
+    assert.equal(waves.length, 4);
+  });
 });
 
 describe("backoffMaxConcurrent (#1601 — adaptive 429 backoff)", () => {
@@ -951,6 +962,42 @@ describe("backoffMaxConcurrent (#1601 — adaptive 429 backoff)", () => {
     const backed = scheduleFanoutWaves(groups, backoffMaxConcurrent(4));
     assert.equal(original.length, 1); // one wave of 4
     assert.equal(backed.length, 2); // two waves of 2 after backoff
+  });
+});
+
+describe("planDispatchRetry (#1971 — GATE-EXEC-DISPATCH-RETRY-BACKOFF as a pure, testable policy)", () => {
+  test("transient 429: retries the same unit on the 30s/60s/120s schedule", () => {
+    assert.deepEqual(planDispatchRetry(0, "429"), { retry: true, delayMs: 30000, reduceConcurrency: false });
+    assert.deepEqual(planDispatchRetry(1, "429"), { retry: true, delayMs: 60000, reduceConcurrency: false });
+    assert.deepEqual(planDispatchRetry(2, "429"), { retry: true, delayMs: 120000, reduceConcurrency: true });
+  });
+
+  test("transient 5xx is classified the same as 429", () => {
+    assert.deepEqual(planDispatchRetry(0, "500"), { retry: true, delayMs: 30000, reduceConcurrency: false });
+    assert.deepEqual(planDispatchRetry(1, "503"), { retry: true, delayMs: 60000, reduceConcurrency: false });
+    assert.deepEqual(planDispatchRetry(2, "5xx"), { retry: true, delayMs: 120000, reduceConcurrency: true });
+  });
+
+  test("active batch reduces only after ~3 failed attempts on a unit, and the round is never aborted on a transient failure", () => {
+    // Attempts 0 and 1 keep the full batch (reduceConcurrency: false); only the
+    // 3rd exhausted attempt (index 2) signals the halve — the halving itself is
+    // deferred to backoffMaxConcurrent, this policy only signals when to call it.
+    assert.equal(planDispatchRetry(0, "429").reduceConcurrency, false);
+    assert.equal(planDispatchRetry(1, "429").reduceConcurrency, false);
+    assert.equal(planDispatchRetry(2, "429").reduceConcurrency, true);
+    // Never a terminal abort on a transient failure — retry stays true throughout,
+    // including beyond the 3rd attempt (the conductor keeps retrying at the
+    // reduced batch, per GATE-EXEC-DISPATCH-RETRY-BACKOFF).
+    for (const attempt of [0, 1, 2, 3, 10]) {
+      const plan = planDispatchRetry(attempt, "429");
+      assert.equal(plan.retry, true);
+      assert.equal("escalate" in plan, false);
+    }
+  });
+
+  test("a hard 4xx (e.g. 402) never retries into the same wall — escalates instead", () => {
+    assert.deepEqual(planDispatchRetry(0, "402"), { retry: false, escalate: true });
+    assert.deepEqual(planDispatchRetry(2, "404"), { retry: false, escalate: true });
   });
 });
 
