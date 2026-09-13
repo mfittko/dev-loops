@@ -346,8 +346,10 @@ merge-authorization rule.
   IN ADDITION TO `resolveEffectiveMergeAuthorized`: when it is required, the lifecycle
   parks at `pre_approval_gate` (the existing human-approval handoff) instead of
   advancing to `merge`, even under a standing authorization. The agent must not merge
-  such a PR — including via the sanctioned wrapper — until a human review satisfies it,
-  and it must never run a raw `gh pr merge`. The wrapper `scripts/github/merge-pr.mjs`
+  such a PR — including via the sanctioned wrapper — until valid human approval
+  satisfies it (a head-pinned `APPROVED` review OR a head-pinned `approve merge
+  <headSha>` operator comment, per the shared resolver above), and it must never run
+  a raw `gh pr merge`. The wrapper `scripts/github/merge-pr.mjs`
   itself refuses (precondition `size_budget_human_approval`) until that human approval
   is present.
 

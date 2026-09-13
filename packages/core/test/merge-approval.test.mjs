@@ -266,3 +266,19 @@ test("evaluateMergePreconditions: escalated PR with a fresh operator comment mar
   assert.equal(res.ok, true, JSON.stringify(res.failures));
   assert.equal(res.mergeClass, MERGE_CLASS.ESCALATED);
 });
+
+test("evaluateMergePreconditions: escalated PR with a head-pinned APPROVED review (no comment) passes via the review branch alone", () => {
+  // Proves the review-object branch of verifyFreshHumanApproval is selected and
+  // forwarded through the shared resolver to BOTH preconditions independently of
+  // the comment-marker path — a regression that ignored a head-pinned APPROVED
+  // review would still pass this without this case (AC3 through production).
+  const res = evaluateMergePreconditions(greenFacts({
+    sizeOutcome: "escalate",
+    touchesT1: false,
+    standingAuthorized: false,
+    comments: [],
+    reviews: [{ user: { login: "mfittko" }, state: "APPROVED", commit_id: HEAD }],
+  }));
+  assert.equal(res.ok, true, JSON.stringify(res.failures));
+  assert.equal(res.approvalVia, "approved_review");
+});

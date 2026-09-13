@@ -21,11 +21,18 @@ const VALID_SIZE_OUTCOMES = new Set(["pass", "escalate", "block"]);
  * Resolve whether an escalated/T1 PR's merge must wait for a human APPROVED
  * review with zero unresolved CHANGES_REQUESTED.
  *
- * FAILS CLOSED: an unreadable `sizeOutcome`, a non-boolean `touchesT1`, a
- * `reviewDecision` that is not exactly `"APPROVED"`, or a non-zero/unreadable
+ * FAILS CLOSED: an unreadable `sizeOutcome`, a non-boolean `touchesT1`, an
+ * absent approval (`humanApprovalSatisfied` not `true` AND `reviewDecision`
+ * not exactly `"APPROVED"`), or a non-zero/unreadable
  * `unresolvedChangesRequestedCount` all require human approval (return
  * `true`). A `pass` outcome that never touches the T1 tier returns `false`
  * (no size-imposed requirement).
+ *
+ * `humanApprovalSatisfied` is the PRODUCTION approval signal (the shared
+ * resolver's boolean output — see the paragraph below); `reviewDecision ===
+ * "APPROVED"` is kept only as a compatibility fallback for callers with no
+ * comment context. A caller wiring this gate MUST feed `humanApprovalSatisfied`
+ * when it has one; do not reimplement approval from `reviewDecision` alone.
  *
  * `sizeOutcome === "block"` is treated at least as strictly as `"escalate"`:
  * the issue's own wording names only "escalated or T1", but a block outcome
