@@ -1703,10 +1703,10 @@ function normalizeCarriedAnglesArg(carriedAngles) {
  * @param {import("@dev-loops/core/config").DevLoopConfig|null} config
  * @param {"draft"|"preApproval"} configGate
  * @param {string[]} resolvedAngles
- * @param {{ fullLabel?: boolean, availableReviewers?: number|null, completedAngles?: Iterable<string>, carriedAngles?: Iterable<string> }} [options]
+ * @param {{ fullLabel?: boolean, availableReviewers?: number|null, completedAngles?: Iterable<string>, carriedAngles?: Iterable<string>, env?: Record<string, string|undefined> }} [options] — `env` defaults to `process.env`; injectable so a caller-boundary test can pin the harness deterministically instead of depending on the ambient environment.
  * @returns {{ groups: { name: string, angles: string[] }[], wavePlan: { name: string, angles: string[] }[][], maxAnglesPerGroup: number, maxConcurrent: number, preflight: object, pendingGroups: { name: string, angles: string[] }[], pendingWavePlan: { name: string, angles: string[] }[][] }}
  */
-export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false, availableReviewers = null, completedAngles = null, carriedAngles = null } = {}) {
+export function resolveFanoutDispatch(config, configGate, resolvedAngles, { fullLabel = false, availableReviewers = null, completedAngles = null, carriedAngles = null, env = process.env } = {}) {
   const groups = resolveFanoutGroups(config, configGate, resolvedAngles, { fullLabel });
   const maxAnglesPerGroup = resolveMaxAnglesPerGroup(config);
   // Serial (one-at-a-time) dispatch of heavy reviewers when
@@ -1717,7 +1717,7 @@ export function resolveFanoutDispatch(config, configGate, resolvedAngles, { full
   // serial posture.
   const sequential = resolveFanoutSequential(config);
   const maxConcurrent = resolveFanoutMaxConcurrent(config);
-  const effectiveConcurrency = resolveFanoutEffectiveConcurrency(config, process.env);
+  const effectiveConcurrency = resolveFanoutEffectiveConcurrency(config, env);
   const wavePlan = scheduleFanoutWaves(groups, effectiveConcurrency);
   // Mirrors consolidate-fanin.mjs's own --carried-angles mandatory-angle
   // refusal: a name whose review surface always re-runs (a configured
