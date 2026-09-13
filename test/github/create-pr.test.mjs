@@ -1390,3 +1390,34 @@ test("create-pr admits a diff whose issue-citing comment carries the comment-dis
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("create-pr skips the LOCAL-COMMENT-DISCIPLINE preflight (only) when --base has no matching origin ref, still creating the PR", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-comment-discipline-unresolvable-base-"));
+  try {
+    // A real git repo (not a non-git temp dir) whose only remote-tracking ref
+    // is origin/main; --base names a branch with no origin/<base> ref at all,
+    // so the preflight's resolvability check (not a blanket catch) is what
+    // skips it — everything else about a resolvable base still fails closed.
+    await initSizeBudgetFixtureRepo(tempDir, {
+      headFiles: [
+        { path: "scripts/sample.mjs", content: "// see #2171 for context\nexport const x = 1;\n" },
+      ],
+    });
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: "https://github.com/owner/repo/pull/1\n" },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--base", "no-such-remote-branch",
+      "--head", "feature",
+      "--title", "T",
+      "--body", "no closing keyword",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout, "https://github.com/owner/repo/pull/1\n");
+    assert.equal((await readGhCalls(ghLogPath)).length, 1);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
