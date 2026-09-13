@@ -37,7 +37,7 @@ import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { resolveLedgerCheckouts, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { verifyFreshHumanApproval } from "@dev-loops/core/loop/merge-approval";
-import { countUnresolvedHumanChangesRequested, resolveHumanReviewDecision, resolveSizeBudgetHumanApprovalRequired } from "@dev-loops/core/loop/size-budget-merge-gate";
+import { countUnresolvedHumanChangesRequested, resolveSizeBudgetHumanApprovalRequired } from "@dev-loops/core/loop/size-budget-merge-gate";
 const USAGE = `Usage: detect-checkpoint-evidence.mjs --repo <owner/name> --pr <number>
 Fetch the live PR head SHA and visible PR issue comments, then summarize the
 latest valid draft-gate and pre-approval checkpoint verdict comments. Always fail
@@ -399,7 +399,6 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
     if (resolveSizeBudgetHumanApprovalRequired({
       sizeOutcome: preApproval.sizeOutcome,
       touchesT1: preApproval.sizeTouchesT1,
-      reviewDecision: resolveHumanReviewDecision(reviews),
       humanApprovalSatisfied: anyFreshHumanApproval({ currentHeadSha: evidence.currentHeadSha, reviews, comments }),
       unresolvedChangesRequestedCount: countUnresolvedHumanChangesRequested(reviews),
     })) {
@@ -933,8 +932,8 @@ export async function detectCheckpointEvidence(options, { env = process.env, ghC
   let prReviews = [];
   // Flat { login, state, commit_id, type } facts for the size-budget merge
   // gate below — the SAME shape merge-pr.mjs's own evaluateMergePreconditions
-  // call feeds resolveHumanReviewDecision/countUnresolvedHumanChangesRequested/
-  // verifyFreshHumanApproval, kept separate from prReviews above (which is
+  // call feeds countUnresolvedHumanChangesRequested/verifyFreshHumanApproval,
+  // kept separate from prReviews above (which is
   // normalized for the gate-review-comment marker summarizers instead).
   let reviewFacts = [];
   try {

@@ -1264,6 +1264,18 @@ test("buildPreMergeGateCheck: a bot-authored \"approve merge <headSha>\" comment
   );
 });
 
+test("buildPreMergeGateCheck: a stale-head APPROVED review (commit_id != currentHeadSha) never clears the size gate (AC2/AC3 fail-closed)", () => {
+  const evidence = cleanEvidence();
+  evidence.preApprovalGateMarker.sizeOutcome = "escalate";
+  evidence.reviews = [{ login: "alice", state: "APPROVED", commit_id: "stale0000" }];
+  const result = buildPreMergeGateCheck(evidence, 0, null);
+  assert.equal(result.ok, false, JSON.stringify(result.failures));
+  assert.ok(
+    result.failures.some((f) => f.includes("size-budget requires a human APPROVED review")),
+    JSON.stringify(result.failures),
+  );
+});
+
 test("buildPreMergeGateCheck with no/disabled enforcement descriptor ignores executionMode", () => {
   // No fanoutEnforcement argument (or { required: false }) => enforcement skipped.
   const result = buildPreMergeGateCheck(cleanEvidence(), 0, null);
