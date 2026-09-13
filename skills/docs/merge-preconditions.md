@@ -327,11 +327,13 @@ merge-authorization rule.
 - "Valid human approval" is the same shared, head-pinned resolver the `merge_approval`
   gate uses (`verifyFreshHumanApproval`, `@dev-loops/core/loop/merge-approval` — see
   the **Fresh per-merge approval** bullet above), fed in as `humanApprovalSatisfied`:
-  a genuine `APPROVED` review by a human login on the current head SHA, OR — the
-  solo-owner path, since GitHub forbids approving your own PR — a head-pinned
-  operator comment marker `approve merge <headSha>` authored by a human login.
-  Either path already excludes a Copilot/bot author and a stale (non-head-SHA)
-  approval, so Copilot's own approval can never satisfy this gate.
+  a genuine `APPROVED` review by the designated approver (the `--human-approved-by
+  <login>` passed to the merge wrapper) on the current head SHA, OR — the solo-owner
+  path, since GitHub forbids approving your own PR — a head-pinned operator comment
+  marker `approve merge <headSha>` authored by that same `<login>`. A review or
+  comment from any OTHER login does not satisfy it, and either path already excludes
+  a Copilot/bot author and a stale (non-head-SHA) approval, so Copilot's own approval
+  can never satisfy this gate.
   `resolveHumanReviewDecision` (same module, `reviewDecision === "APPROVED"`) is
   kept only as a back-compat fallback for the queue-driver caller, which has no
   comment context; the production `merge-pr.mjs` wiring
