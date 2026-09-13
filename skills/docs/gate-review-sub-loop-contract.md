@@ -574,12 +574,21 @@ in the gate-context artifact (`write-gate-context.mjs` → `artifact.fanout.wave
 conductor dispatches wave-by-wave — awaiting a free slot (wave completion) before launching
 the next — instead of fire-all-then-retry. **Serial heavy-reviewer bound (issue #1726):**
 when `gates.fanout.sequential` is set (true), effective concurrency is **one dispatch unit per
-wave** — the wave plan is built with `resolveFanoutEffectiveConcurrency(config)`
+wave** — the wave plan is built with `resolveFanoutEffectiveConcurrency(config, env)`
 (`@dev-loops/core/config`, returns 1 when sequential else `resolveFanoutMaxConcurrent`),
 emitted as `artifact.fanout.effectiveConcurrency`, so each heavy reviewer completes and writes
 its evidence artifact before the next starts (the mechanism that keeps genuine fan-out from
 SIGTERMing N heavy reviewers at once under child-safe parallel overload; distinct reviewers,
 real fan-in/ledger, and provenance are unchanged — never a collapse to inline single-agent).
+**Claude-harness-scoped concurrency clamp (issue #1971):** under the Claude harness
+(`isClaudeHarness(env)`, `env` defaulting to `process.env`), `resolveFanoutEffectiveConcurrency`
+additionally clamps its result to `CLAUDE_MAX_EFFECTIVE_CONCURRENT` (2) — a single-driver Claude
+session's own model call plus an uncapped wave burst trips that session's rate limit (HTTP 429),
+so the DEFAULT per-wave burst on Claude is bounded to driver + 2 with no operator-imposed
+throttle (no lowered `maxConcurrent`, no `sequential: true`) required. This is Claude-scoped
+only: the shipped cross-harness `gates.fanout.maxConcurrent` default (4) and this repo's
+`.devloops` override (3) are unchanged, and every other harness (pi, unknown, no env) still
+resolves the configured value unchanged — the clamp affects only the value Claude sessions see.
 When a reviewer dispatch 429s despite the cap, the
 conductor halves the active batch (`backoffMaxConcurrent`), recomputes the wave plan, and
 retries before escalating to foreground one-at-a-time fallback; the backoff is recorded in
@@ -1066,16 +1075,23 @@ attributes any finding to it; it is spared only when the delta provably cannot a
 <!-- rule: GATE-EXEC-DISPATCH-RETRY-BACKOFF -->
 `GATE-EXEC-DISPATCH-RETRY-BACKOFF`: A dispatch that fails on a transient provider error (429
 rate-limit, 5xx) MUST be retried on the SAME dispatch unit with exponential backoff
-(30s/60s/120s) rather than abandoned or re-planned — safe because a reviewer's findings
-artifact is an idempotent single-write at a deterministic path
-(`GATE-EXEC-COLLECTABLE-DISPATCH`), so retrying the same unit can never double-write or
-corrupt fan-in. Only after ~3 failed attempts on a unit does the conductor reduce concurrency
-(halve the active batch via `backoffMaxConcurrent`, above) rather than keep retrying at full
-concurrency. A hard 4xx (e.g. `402 Insufficient Balance`) is never transient: the conductor
-MUST escalate to the supervisor/operator immediately instead of retrying into the same wall.
-Provider choice for the retry (or any later dispatch) is a PER-DISPATCH decision —
-`STICKY-PROVIDER-PIN` in [Anti-patterns](./anti-patterns.md) forbids pinning later dispatches
-to a fallback provider once a transient failure's cap window has passed.
+(30s/60s/120s) rather than abandoned or re-planned, so the run continues instead of the whole
+drive dying and needing an orchestrator resume — safe because a reviewer's findings artifact is
+an idempotent single-write at a deterministic path (`GATE-EXEC-COLLECTABLE-DISPATCH`), so
+retrying the same unit can never double-write or corrupt fan-in. The retry-before-abort ordering
+and the transient-vs-hard classification are encoded, testable policy, not prose the conductor
+re-derives each time: the pure helper `planDispatchRetry(attempt, errorClass)`
+(`@dev-loops/core/loop/gate-fanin`) returns the same 30s/60s/120s decision for a 429 or any 5xx,
+and the conductor MUST consult it rather than reinvent the schedule. Only after ~3 failed
+attempts on a unit (`planDispatchRetry`'s `reduceConcurrency: true`) does the conductor reduce
+concurrency (halve the active batch via `backoffMaxConcurrent`, above) rather than keep retrying
+at full concurrency — the round MUST NOT be aborted on a transient failure. A hard 4xx (e.g.
+`402 Insufficient Balance`) is never transient (`planDispatchRetry` returns
+`{ retry: false, escalate: true }`): the conductor MUST escalate to the supervisor/operator
+immediately instead of retrying into the same wall. Provider choice for the retry (or any later
+dispatch) is a PER-DISPATCH decision — `STICKY-PROVIDER-PIN` in
+[Anti-patterns](./anti-patterns.md) forbids pinning later dispatches to a fallback provider once
+a transient failure's cap window has passed.
 
 <!-- rule: GATE-EXEC-END-OF-RUN-CONTRACT -->
 `GATE-EXEC-END-OF-RUN-CONTRACT`: Once a PR has merged, the ONLY remaining steps are the

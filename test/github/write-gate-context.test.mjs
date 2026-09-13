@@ -5041,7 +5041,10 @@ test("CLI main: an explicit --angles override still resolves angleScopes from lo
 
 test("#1601 resolveFanoutDispatch: auto-chunks ungrouped angles + emits a bounded-concurrency wave plan", () => {
   const config = { version: 1, gates: { fanout: { maxAnglesPerGroup: 2, maxConcurrent: 2 } } };
-  const plan = resolveFanoutDispatch(config, "draft", ["a", "b", "c", "d", "e"], { fullLabel: false });
+  // env pinned non-Claude (#1971): the wave shape below asserts the CONFIGURED
+  // cap, not the Claude-harness-clamped one — pin it so this test's outcome
+  // does not depend on the ambient harness it happens to run under.
+  const plan = resolveFanoutDispatch(config, "draft", ["a", "b", "c", "d", "e"], { fullLabel: false, env: {} });
   assert.deepEqual(plan.groups, [
     { name: "group:a+b", angles: ["a", "b"] },
     { name: "group:c+d", angles: ["c", "d"] },
@@ -5058,7 +5061,8 @@ test("#1601 resolveFanoutDispatch: auto-chunks ungrouped angles + emits a bounde
 
 test("#1601 resolveFanoutDispatch: gate:full dispatches grouped (no per-angle restoration)", () => {
   const config = { version: 1, gates: { fanout: { groups: [{ name: "g", angles: ["a", "b"] }] } } };
-  const plan = resolveFanoutDispatch(config, "draft", ["a", "b", "c"], { fullLabel: true });
+  // env pinned non-Claude (#1971) — see the wave-shape rationale above.
+  const plan = resolveFanoutDispatch(config, "draft", ["a", "b", "c"], { fullLabel: true, env: {} });
   // gate:full → configured group matched first, leftover "c" auto-chunked (singleton).
   assert.deepEqual(plan.groups, [
     { name: "g", angles: ["a", "b"] },
@@ -5071,7 +5075,8 @@ test("#1601 resolveFanoutDispatch: gate:full dispatches grouped (no per-angle re
 });
 
 test("#1601 resolveFanoutDispatch: null config degrades to built-in defaults (auto-chunk singletons, cap 4)", () => {
-  const plan = resolveFanoutDispatch(null, "draft", ["a", "b"], {});
+  // env pinned non-Claude (#1971) — see the wave-shape rationale above.
+  const plan = resolveFanoutDispatch(null, "draft", ["a", "b"], { env: {} });
   // no configured groups, default N=3 → one chunk of 2.
   assert.deepEqual(plan.groups, [{ name: "group:a+b", angles: ["a", "b"] }]);
   assert.equal(plan.maxAnglesPerGroup, 3);
@@ -5080,7 +5085,8 @@ test("#1601 resolveFanoutDispatch: null config degrades to built-in defaults (au
 });
 
 test("#1601 buildGateContextArtifact records the fanout dispatch plan when supplied", () => {
-  const plan = resolveFanoutDispatch({ version: 1, gates: { fanout: { maxConcurrent: 1 } } }, "draft", ["a", "b"], {});
+  // env pinned non-Claude (#1971) — see the wave-shape rationale above.
+  const plan = resolveFanoutDispatch({ version: 1, gates: { fanout: { maxConcurrent: 1 } } }, "draft", ["a", "b"], { env: {} });
   const artifact = buildGateContextArtifact({
     repo: "a/b", pr: 5, gate: "draft_gate", headSha: "abc1234",
     angles: ["a", "b"],
@@ -5100,6 +5106,31 @@ test("#1601 buildGateContextArtifact omits fanout when no dispatch plan is suppl
     angles: ["scope"],
   });
   assert.equal("fanout" in artifact, false);
+});
+
+// ---------------------------------------------------------------------------
+// #1971 — caller-boundary coverage for the Claude-harness concurrency clamp:
+// resolveFanoutDispatch is the in-process seam both write-gate-context.mjs
+// callers route through, so pinning its injectable `env` option here proves
+// the clamp actually reaches the emitted wave plan at the caller boundary,
+// not just at resolveFanoutEffectiveConcurrency's own unit tests.
+// ---------------------------------------------------------------------------
+
+test("#1971 resolveFanoutDispatch: Claude-harness env clamps the emitted wave plan to CLAUDE_MAX_EFFECTIVE_CONCURRENT regardless of the configured cap", () => {
+  const config = { version: 1, gates: { fanout: { maxAnglesPerGroup: 1, maxConcurrent: 4 } } };
+  const plan = resolveFanoutDispatch(config, "draft", ["a", "b", "c", "d"], { fullLabel: false, env: { CLAUDECODE: "1" } });
+  assert.equal(plan.maxConcurrent, 4); // configured cap is unchanged...
+  assert.equal(plan.effectiveConcurrency, 2); // ...but the emitted wave plan is clamped.
+  assert.equal(plan.wavePlan.length, 2);
+  assert.ok(plan.wavePlan.every((w) => w.length <= 2));
+});
+
+test("#1971 resolveFanoutDispatch: non-Claude env keeps the configured concurrency (no clamp)", () => {
+  const config = { version: 1, gates: { fanout: { maxAnglesPerGroup: 1, maxConcurrent: 4 } } };
+  const plan = resolveFanoutDispatch(config, "draft", ["a", "b", "c", "d"], { fullLabel: false, env: {} });
+  assert.equal(plan.effectiveConcurrency, 4);
+  assert.equal(plan.wavePlan.length, 1);
+  assert.equal(plan.wavePlan[0].length, 4);
 });
 
 test("#1507 resolveFanoutDispatch emits a reviewer-budget preflight (unknown budget proceeds)", () => {
@@ -5350,7 +5381,8 @@ test("#1635 resolveFanoutDispatch excludes a carried group and round-trips carri
 });
 
 test("#1726 gates.fanout.sequential serializes the wave plan and records sequential/effectiveConcurrency in the fanout artifact", () => {
-  const plan = resolveFanoutDispatch({ version: 1, gates: { fanout: { mode: "per-angle", sequential: true, maxConcurrent: 8, maxAnglesPerGroup: 1 } } }, "draft", ["a", "b", "c"], {});
+  // env pinned non-Claude (#1971) — see the wave-shape rationale above.
+  const plan = resolveFanoutDispatch({ version: 1, gates: { fanout: { mode: "per-angle", sequential: true, maxConcurrent: 8, maxAnglesPerGroup: 1 } } }, "draft", ["a", "b", "c"], { env: {} });
   // per-angle → one dispatch unit per angle; serial forces one unit per wave.
   assert.equal(plan.sequential, true);
   assert.equal(plan.maxConcurrent, 8);
@@ -5369,7 +5401,8 @@ test("#1726 gates.fanout.sequential serializes the wave plan and records sequent
 });
 
 test("#1726 sequential:false keeps the maxConcurrent wave plan (no serialization)", () => {
-  const plan = resolveFanoutDispatch({ version: 1, gates: { fanout: { mode: "per-angle", sequential: false, maxConcurrent: 2 } } }, "draft", ["a", "b", "c"], {});
+  // env pinned non-Claude (#1971) — see the wave-shape rationale above.
+  const plan = resolveFanoutDispatch({ version: 1, gates: { fanout: { mode: "per-angle", sequential: false, maxConcurrent: 2 } } }, "draft", ["a", "b", "c"], { env: {} });
   assert.equal(plan.sequential, false);
   assert.equal(plan.effectiveConcurrency, 2);
   // 3 units, cap 2 → 2 waves [2, 1].

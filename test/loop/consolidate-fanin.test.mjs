@@ -244,6 +244,44 @@ test("consolidateGateFanin consolidates 3 angle artifacts into the shapes downst
   );
 });
 
+// AC2 DoD (#1971): the idempotent single-write guarantee GATE-EXEC-COLLECTABLE-
+// DISPATCH already provides — a retried dispatch OVERWRITES its per-angle
+// findings artifact at the same deterministic path rather than minting a
+// second file — so a retry can never double-count at fan-in. This confirms
+// the existing guarantee (no product change): writing an angle's artifact,
+// then overwriting the SAME path with a different (retry) result, still
+// consolidates to exactly one entry for that angle, carrying the LATEST
+// (overwritten) content.
+test("consolidateGateFanin: a retry that overwrites the same per-angle artifact path yields exactly one entry for that angle (#1971)", async () => {
+  await withFindingsDir(
+    {
+      "scope.json": {
+        angle: "scope",
+        verdict: "findings_present",
+        findings: [{ severity: "must-fix", summary: "first attempt (pre-429)" }],
+      },
+    },
+    async (dir) => {
+      // Simulate the retry: the SAME dispatch unit's artifact path is
+      // overwritten in place with the post-retry result — never a second file.
+      await writeFile(
+        path.join(dir, "scope.json"),
+        JSON.stringify({
+          angle: "scope",
+          verdict: "findings_present",
+          findings: [{ severity: "must-fix", summary: "retried attempt (post-429)" }],
+        }),
+        "utf8",
+      );
+      const result = await consolidateGateFanin({ findingsDir: dir });
+      const scopeEntries = result.angles.filter((a) => a.angle === "scope");
+      assert.equal(scopeEntries.length, 1, "no double-count: exactly one entry for the retried angle");
+      assert.equal(result.findings.length, 1);
+      assert.equal(result.findings[0].summary, "retried attempt (post-429)");
+    },
+  );
+});
+
 // Regression: the under-budget result shape is unchanged by the render-budget
 // split — same keys, same values, and critically NO "commentBudgetExceeded"
 // field at all (not even `false`) for a round that fits. Asserted against the

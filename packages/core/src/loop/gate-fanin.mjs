@@ -68,6 +68,51 @@ export function backoffMaxConcurrent(maxConcurrent) {
   return Math.max(1, Math.floor(cap / 2));
 }
 
+/** 30s/60s/120s same-unit retry schedule (`GATE-EXEC-DISPATCH-RETRY-BACKOFF`). */
+const DISPATCH_RETRY_BACKOFF_SCHEDULE_MS = Object.freeze([30_000, 60_000, 120_000]);
+
+/**
+ * True when `errorClass` names a transient provider error (429 rate-limit or
+ * any 5xx), the class `GATE-EXEC-DISPATCH-RETRY-BACKOFF` retries — as opposed
+ * to a hard 4xx (e.g. `402`), which never is.
+ * @param {string|number} errorClass
+ * @returns {boolean}
+ */
+function isTransientDispatchErrorClass(errorClass) {
+  const s = String(errorClass ?? "").trim();
+  return s === "429" || /^5\d\d$/.test(s) || s.toLowerCase() === "5xx";
+}
+
+/**
+ * Pure retry-decision policy for `GATE-EXEC-DISPATCH-RETRY-BACKOFF`: whether a
+ * failed dispatch retries the SAME unit, and when a batch reduction is due.
+ *
+ * A transient failure (429 / 5xx) always retries — the round is never aborted
+ * on a transient error, safe because a retry overwrites the same idempotent
+ * per-angle findings artifact path (`GATE-EXEC-COLLECTABLE-DISPATCH`), never
+ * minting a second one. `delayMs` follows the 30s/60s/120s schedule (holding
+ * at 120s past the 3rd attempt); `reduceConcurrency` flips true starting at
+ * the 3rd exhausted attempt (`attempt` index 2), signaling the caller to halve
+ * the active batch via `backoffMaxConcurrent` — this function only signals
+ * WHEN, the halving itself stays `backoffMaxConcurrent`'s job.
+ *
+ * A hard 4xx (e.g. `402 Insufficient Balance`) is never transient: it escalates
+ * to the supervisor/operator immediately instead of retrying into the same wall.
+ *
+ * @param {number} attempt — 0-based count of prior failed attempts on this unit
+ * @param {string|number} errorClass — e.g. `"429"`, `"500"`, `"5xx"`, `"402"`
+ * @returns {{ retry: true, delayMs: number, reduceConcurrency: boolean } | { retry: false, escalate: true }}
+ */
+export function planDispatchRetry(attempt, errorClass) {
+  if (!isTransientDispatchErrorClass(errorClass)) {
+    return { retry: false, escalate: true };
+  }
+  const n = Number.isInteger(attempt) && attempt >= 0 ? attempt : 0;
+  const lastIndex = DISPATCH_RETRY_BACKOFF_SCHEDULE_MS.length - 1;
+  const delayMs = DISPATCH_RETRY_BACKOFF_SCHEDULE_MS[Math.min(n, lastIndex)];
+  return { retry: true, delayMs, reduceConcurrency: n >= lastIndex };
+}
+
 /**
  * Reviewer-budget preflight for a gate fan-out.
  *
