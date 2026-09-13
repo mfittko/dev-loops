@@ -194,7 +194,6 @@ function greenFacts(overrides = {}) {
     gateEvidence: { ok: true, failures: [] },
     sizeOutcome: "pass",
     touchesT1: false,
-    humanReviewDecision: null,
     unresolvedChangesRequestedCount: 0,
     currentHeadSha: HEAD,
     reviews: [],
@@ -224,7 +223,7 @@ test("evaluateMergePreconditions: each missing precondition is named individuall
     [{ title: null }, "title_markers"],
     [{ title: "   " }, "title_markers"],
     [{ gateEvidence: { ok: false, failures: ["missing visible clean draft_gate comment"] } }, "gate_evidence"],
-    [{ sizeOutcome: "escalate", humanReviewDecision: null, standingAuthorized: true }, "size_budget_human_approval"],
+    [{ sizeOutcome: "escalate", standingAuthorized: true }, "size_budget_human_approval"],
     [{ standingAuthorized: false }, "merge_approval"],
   ];
   for (const [override, expected] of cases) {
@@ -240,15 +239,46 @@ test("evaluateMergePreconditions: escalated PR with only standing auth is refuse
   assert.ok(res.failures.some((f) => f.precondition === "merge_approval"));
 });
 
+test("evaluateMergePreconditions: merge_approval and size_budget_human_approval draw from the same shared resolver — both fail without the comment, both pass with it (AC5)", () => {
+  const escalatedNoReview = { sizeOutcome: "escalate", touchesT1: false, standingAuthorized: false, reviews: [] };
+
+  const withoutComment = evaluateMergePreconditions(greenFacts({ ...escalatedNoReview, comments: [] }));
+  assert.equal(withoutComment.ok, false);
+  assert.ok(withoutComment.failures.some((f) => f.precondition === "merge_approval"));
+  assert.ok(withoutComment.failures.some((f) => f.precondition === "size_budget_human_approval"));
+
+  const withComment = evaluateMergePreconditions(greenFacts({
+    ...escalatedNoReview,
+    comments: [{ user: { login: "mfittko" }, body: `approve merge ${HEAD}` }],
+  }));
+  assert.equal(withComment.ok, true, JSON.stringify(withComment.failures));
+  assert.equal(withComment.approvalVia, "comment_marker");
+});
+
 test("evaluateMergePreconditions: escalated PR with a fresh operator comment marker passes", () => {
   const res = evaluateMergePreconditions(greenFacts({
     stableRelease: true,
     standingAuthorized: false,
     comments: [{ user: { login: "mfittko" }, body: `approve merge ${HEAD}` }],
     // Size-budget gate is a distinct precondition; give it a human APPROVED review too.
-    humanReviewDecision: "APPROVED",
     reviews: [{ user: { login: "alice" }, state: "APPROVED", commit_id: HEAD }],
   }));
   assert.equal(res.ok, true, JSON.stringify(res.failures));
   assert.equal(res.mergeClass, MERGE_CLASS.ESCALATED);
+});
+
+test("evaluateMergePreconditions: escalated PR with a head-pinned APPROVED review (no comment) passes via the review branch alone", () => {
+  // Proves the review-object branch of verifyFreshHumanApproval is selected and
+  // forwarded through the shared resolver to BOTH preconditions independently of
+  // the comment-marker path — a regression that ignored a head-pinned APPROVED
+  // review would still pass this without this case (AC3 through production).
+  const res = evaluateMergePreconditions(greenFacts({
+    sizeOutcome: "escalate",
+    touchesT1: false,
+    standingAuthorized: false,
+    comments: [],
+    reviews: [{ user: { login: "mfittko" }, state: "APPROVED", commit_id: HEAD }],
+  }));
+  assert.equal(res.ok, true, JSON.stringify(res.failures));
+  assert.equal(res.approvalVia, "approved_review");
 });

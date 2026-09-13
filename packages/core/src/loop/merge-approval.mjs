@@ -221,7 +221,6 @@ export function evaluateMergePreconditions({
   // resolveSizeBudgetHumanApprovalRequired as a non-boolean so it fails closed,
   // rather than being coerced to "T1 untouched".
   touchesT1 = null,
-  humanReviewDecision = null,
   unresolvedChangesRequestedCount = null,
   currentHeadSha = null,
   reviews = [],
@@ -263,12 +262,18 @@ export function evaluateMergePreconditions({
     failures.push({ precondition: "gate_evidence", reason });
   }
 
-  if (resolveSizeBudgetHumanApprovalRequired({ sizeOutcome, touchesT1, reviewDecision: humanReviewDecision, unresolvedChangesRequestedCount }) === true) {
-    failures.push({ precondition: "size_budget_human_approval", reason: "size-budget requires a human APPROVED review with zero unresolved CHANGES_REQUESTED for this escalated/T1 PR" });
+  // Computed once, ahead of the size gate, so both preconditions draw "valid
+  // human approval" from the one shared resolver instead of two divergent
+  // checks (verifyFreshHumanApproval already owns the comment token, head
+  // pinning, and bot exclusion; the size gate no longer re-derives it from
+  // reviewDecision alone).
+  const freshApproval = verifyFreshHumanApproval({ approvedBy: humanApprovedBy, currentHeadSha, reviews, comments });
+
+  if (resolveSizeBudgetHumanApprovalRequired({ sizeOutcome, touchesT1, humanApprovalSatisfied: freshApproval.satisfied, unresolvedChangesRequestedCount }) === true) {
+    failures.push({ precondition: "size_budget_human_approval", reason: "size-budget requires a human APPROVED review OR a head-pinned \"approve merge <headSha>\" operator comment, with zero unresolved CHANGES_REQUESTED, for this escalated/T1 PR" });
   }
 
   const mergeClass = resolveMergeClass({ sizeOutcome, touchesT1, stableRelease });
-  const freshApproval = verifyFreshHumanApproval({ approvedBy: humanApprovedBy, currentHeadSha, reviews, comments });
   const decision = resolveMergeApprovalDecision({ mergeClass, standingAuthorized, freshApproval });
   if (!decision.authorized) {
     failures.push({ precondition: "merge_approval", reason: decision.reason });

@@ -165,6 +165,45 @@ test("stable-release merge with a fresh head-pinned operator comment marker succ
   assert.equal(result.approvalVia, "comment_marker");
 });
 
+test("solo-owner escalated PR: zero review objects + a head-pinned approve-merge comment satisfies both size_budget_human_approval and merge_approval (AC1, AC4)", async () => {
+  const { runtime } = makeRuntime({
+    evidence: { ok: true, sizeOutcome: "escalate", touchesT1: false, failures: [] },
+    reviews: [],
+    comments: [{ user: { login: "mfittko" }, body: `approve merge ${HEAD}` }],
+  });
+  const result = await mergePr(baseOptions({ standingAuthorization: false }), runtime);
+  assert.equal(result.ok, true);
+  assert.equal(result.mergeClass, "escalated");
+  assert.equal(result.approvalVia, "comment_marker");
+});
+
+test("solo-owner escalated PR: a comment pinned to a superseded head refuses both size_budget_human_approval and merge_approval (AC2, AC4)", async () => {
+  const staleHead = "b".repeat(40);
+  const { runtime, calls } = makeRuntime({
+    evidence: { ok: true, sizeOutcome: "escalate", touchesT1: false, failures: [] },
+    reviews: [],
+    comments: [{ user: { login: "mfittko" }, body: `approve merge ${staleHead}` }],
+  });
+  let threw = null;
+  try { await mergePr(baseOptions({ standingAuthorization: false }), runtime); } catch (e) { threw = e; }
+  assert.ok(threw);
+  assert.ok(threw.mergePrFailure.failures.some((f) => f.precondition === "size_budget_human_approval"));
+  assert.ok(threw.mergePrFailure.failures.some((f) => f.precondition === "merge_approval"));
+  assert.equal(calls.runChild.length, 0);
+});
+
+test("an unresolved human CHANGES_REQUESTED still blocks size_budget_human_approval despite a valid head-pinned approve-merge comment (AC2)", async () => {
+  const { runtime } = makeRuntime({
+    evidence: { ok: true, sizeOutcome: "escalate", touchesT1: false, failures: [] },
+    reviews: [{ user: { login: "bob" }, state: "CHANGES_REQUESTED", commit_id: HEAD }],
+    comments: [{ user: { login: "mfittko" }, body: `approve merge ${HEAD}` }],
+  });
+  let threw = null;
+  try { await mergePr(baseOptions({ standingAuthorization: false }), runtime); } catch (e) { threw = e; }
+  assert.ok(threw);
+  assert.ok(threw.mergePrFailure.failures.some((f) => f.precondition === "size_budget_human_approval"));
+});
+
 test("a non-zero or signal-killed `gh pr merge` throws instead of reporting a false success", async () => {
   for (const code of [1, null]) { // non-zero exit; signal-kill (runChild resolves { code: null })
     const { runtime } = makeRuntime();

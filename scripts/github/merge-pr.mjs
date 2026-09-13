@@ -7,7 +7,7 @@ import { parsePrNumber, requireTokenValue, runChild as defaultRunChild } from ".
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson as defaultGhJson } from "@dev-loops/core/github/gh";
 import { loadDevLoopConfig, resolveEffectiveMergeAuthorizedFromLoad, resolveHumanMergeOnly } from "@dev-loops/core/config";
-import { resolveHumanReviewDecision, countUnresolvedHumanChangesRequested } from "@dev-loops/core/loop/size-budget-merge-gate";
+import { countUnresolvedHumanChangesRequested } from "@dev-loops/core/loop/size-budget-merge-gate";
 import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { evaluateMergePreconditions, resolveCiGreenFromRollup, isValidGithubLogin } from "@dev-loops/core/loop/merge-approval";
 import { flattenPaginatedSlurp } from "./post-gate-findings.mjs";
@@ -249,7 +249,6 @@ export async function mergePr(options, runtime = {}) {
     },
     sizeOutcome: evidence.sizeOutcome,
     touchesT1: evidence.touchesT1,
-    humanReviewDecision: resolveHumanReviewDecision(rawReviews),
     unresolvedChangesRequestedCount: countUnresolvedHumanChangesRequested(rawReviews),
     currentHeadSha,
     reviews: rawReviews,

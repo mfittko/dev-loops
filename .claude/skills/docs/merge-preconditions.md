@@ -314,7 +314,7 @@ explicit instruction can unlock.
 
 An escalated or T1 PR (the `gates.size` outcome recorded on the `pre_approval_gate`
 verdict — see [Checkpoint Verdict Comment Contract](./gate-review-comment-contract.md))
-needs a **human APPROVED review** and **zero unresolved CHANGES_REQUESTED** before
+needs a **valid human approval** and **zero unresolved CHANGES_REQUESTED** before
 merge, regardless of any standing merge authorization above. A Copilot-clean verdict
 alone is never sufficient for these PRs — pairing with, not replacing, the ordinary
 merge-authorization rule.
@@ -324,12 +324,21 @@ merge-authorization rule.
   recorded size-budget `outcome` is `escalate` or `block`, OR the PR touches the T1
   tier (a T1 file is in the diff) — a plain `pass` outcome with no T1 slice carries no
   size-imposed requirement at all.
-- "Human APPROVED" is derived from the raw PR reviews (`resolveHumanReviewDecision`,
-  same module), NOT GitHub's own aggregate `reviewDecision` field: a review authored
-  by the Copilot bot login is excluded before the decision is computed, so Copilot's
-  own approval can never satisfy this gate. Any other login's latest submitted review
-  being `APPROVED`, with no other human login's latest review left at
-  `CHANGES_REQUESTED`, satisfies it.
+- "Valid human approval" is the same shared, head-pinned resolver the `merge_approval`
+  gate uses (`verifyFreshHumanApproval`, `@dev-loops/core/loop/merge-approval` — see
+  the **Fresh per-merge approval** bullet above), fed in as `humanApprovalSatisfied`:
+  a genuine `APPROVED` review by the designated approver (the `--human-approved-by
+  <login>` passed to the merge wrapper) on the current head SHA, OR — the solo-owner
+  path, since GitHub forbids approving your own PR — a head-pinned operator comment
+  marker `approve merge <headSha>` authored by that same `<login>`. A review or
+  comment from any OTHER login does not satisfy it, and either path already excludes
+  a Copilot/bot author and a stale (non-head-SHA) approval, so Copilot's own approval
+  can never satisfy this gate.
+  `resolveHumanReviewDecision` (same module, `reviewDecision === "APPROVED"`) is
+  kept only as a back-compat fallback for the queue-driver caller, which has no
+  comment context; the production `merge-pr.mjs` wiring
+  (`evaluateMergePreconditions`) always feeds `humanApprovalSatisfied` from the
+  shared resolver instead.
 - **Fail-closed**: absent or unreadable size-budget evidence (a `pre_approval_gate`
   verdict posted without the `**Size-budget outcome/T1 slice**` fields — see
   `detect-checkpoint-evidence.mjs`), an unreadable T1-touch signal, an unknown review
@@ -339,8 +348,10 @@ merge-authorization rule.
   IN ADDITION TO `resolveEffectiveMergeAuthorized`: when it is required, the lifecycle
   parks at `pre_approval_gate` (the existing human-approval handoff) instead of
   advancing to `merge`, even under a standing authorization. The agent must not merge
-  such a PR — including via the sanctioned wrapper — until a human review satisfies it,
-  and it must never run a raw `gh pr merge`. The wrapper `scripts/github/merge-pr.mjs`
+  such a PR — including via the sanctioned wrapper — until valid human approval
+  satisfies it (a head-pinned `APPROVED` review OR a head-pinned `approve merge
+  <headSha>` operator comment, per the shared resolver above), and it must never run
+  a raw `gh pr merge`. The wrapper `scripts/github/merge-pr.mjs`
   itself refuses (precondition `size_budget_human_approval`) until that human approval
   is present.
 
