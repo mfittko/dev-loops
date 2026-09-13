@@ -1935,7 +1935,8 @@ export function resolveFanoutSequential(config) {
 }
 
 /**
- * Claude-harness-scoped cap on effective fan-out concurrency (#1971). The
+ * Claude-harness-scoped cap on effective fan-out concurrency (per ADR
+ * docs/decisions/0069-claude-harness-fanout-concurrency-clamp.md). The
  * shipped cross-harness `gates.fanout.maxConcurrent` default (4) plus the
  * driver's own call still 429s a single-driver Claude session; other
  * harnesses (pi, unknown) are unaffected — see `resolveFanoutEffectiveConcurrency`.
@@ -1945,7 +1946,7 @@ export const CLAUDE_MAX_EFFECTIVE_CONCURRENT = 2;
 /**
  * Resolve the effective fan-out concurrency (dispatch units per wave): 1 when
  * `gates.fanout.sequential` is set, else `resolveFanoutMaxConcurrent`. Under the
- * Claude harness (`isClaudeHarness(env)`, #1971) that value is additionally
+ * Claude harness (`isClaudeHarness(env)`) that value is additionally
  * clamped to `CLAUDE_MAX_EFFECTIVE_CONCURRENT` so a single-driver Claude
  * session's per-wave burst (driver + dispatch units) stays within its rate
  * limit without lowering the shipped cross-harness default (schema/config
