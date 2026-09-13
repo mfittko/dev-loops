@@ -1243,10 +1243,10 @@ test("consolidateGateFanin fails closed on a programmatic non-string round gate 
 // normalized — so a programmatic gate: "REVIEW" (or padded " review ") passed
 // the key check yet every downstream `options.gate === ...` comparison
 // (the cache-telemetry gate binding, the gate config resolution, the result's
-// gate echo) saw a raw string that never equals "review". The guard now
-// normalizes options.gate BEFORE any downstream use; a non-canonical gate
-// string fails closed with the same VALID_GATES membership check, no
-// coercion.
+// gate echo) saw a raw string that never equals "review". When emitPlan is
+// present, the guard now normalizes options.gate before downstream use and
+// rejects non-canonical strings without coercion. Omission keeps the legacy
+// pass-through behavior covered below.
 test("consolidateGateFanin normalizes a programmatic gate: 'REVIEW' and processes the round as review, not preApproval", async () => {
   await withFindingsDir(
     { "scope.json": { angle: "scope", verdict: "clean", findings: [], headSha: TELEMETRY_HEAD } },
@@ -1299,7 +1299,7 @@ test("consolidateGateFanin normalizes a programmatic gate: 'REVIEW' and processe
   );
 });
 
-test("consolidateGateFanin accepts a padded programmatic gate ('  review  ') and fails closed on a non-canonical gate string", async () => {
+test("consolidateGateFanin normalizes guarded gates but preserves gate pass-through when emitPlan is omitted", async () => {
   await withFindingsDir(
     { "coverage.json": { angle: "coverage", verdict: "clean", findings: [], headSha: EMIT_HEAD } },
     async (dir) => {
@@ -1315,12 +1315,16 @@ test("consolidateGateFanin accepts a padded programmatic gate ('  review  ') and
         });
         assert.equal(result.ok, true);
         assert.equal(result.gate, "review");
-        // A non-canonical gate STRING (not undefined/non-string) fails closed —
-        // same VALID_GATES membership check, no coercion.
+        // The guarded path still rejects a non-canonical gate.
         await assert.rejects(
-          consolidateGateFanin({ findingsDir: dir, gate: "bogus" }),
-          (err) => err.message.includes("--gate must be a canonical supported gate") && err.message.includes("bogus"),
+          consolidateGateFanin({ findingsDir: dir, emitPlan: planPath, gate: "bogus", headSha: EMIT_HEAD }),
+          (err) => err.message.includes("--emit-plan requires a canonical supported gate") && err.message.includes("bogus"),
         );
+        // Without the optional guard, preserve the legacy programmatic path
+        // exactly: the caller's gate string is passed through unchanged.
+        const legacy = await consolidateGateFanin({ findingsDir: dir, gate: "bogus" });
+        assert.equal(legacy.ok, true);
+        assert.equal(legacy.gate, "bogus");
       } finally {
         await rm(planDir, { recursive: true, force: true }).catch(() => {});
       }

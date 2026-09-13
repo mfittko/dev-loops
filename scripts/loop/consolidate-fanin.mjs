@@ -1020,26 +1020,9 @@ export async function consolidateGateFanin(options) {
   // not delete caller-owned files that predate this invocation.
   if (options.emitPlan !== undefined) {
     await verifyEmitPlanKey(options.emitPlan, { gate: options.gate, headSha: options.headSha });
-  }
-  // Round-gate normalization (Copilot review round 5): a direct programmatic
-  // caller bypasses parseConsolidateFaninCliArgs (whose --gate parsing admits
-  // only canonical gates), and verifyEmitPlanKey normalizes the round gate only
-  // for its own key compare — so a gate: "REVIEW" (or padded " review ") passed
-  // the emit-plan guard yet every downstream `options.gate === "review"`
-  // comparison misclassified the round as preApproval (losing review's
-  // mandatoryAngles = [] contract). Normalize options.gate (trim + lowercase)
-  // BEFORE any downstream use; reject a non-canonical gate with the same
-  // no-coercion VALID_GATES membership check the guard applies, so a
-  // programmatic gate: null/123/"bogus" fails closed here too (emit-plan
-  // callers still get the guard's own "--emit-plan requires ..." wording —
-  // the guard runs first and owns that rejection). Placed AFTER the guard so
-  // the guard's pair/canonical checks stay the first
-  // fail-closed seam; every downstream consumer (cache-telemetry compare,
-  // gate config resolution, the result's gate echo) sees the normalized value.
-  if (options.gate !== undefined) {
-    if (typeof options.gate !== "string" || !VALID_GATES.has(options.gate.trim().toLowerCase())) {
-      throw new Error(`--gate must be a canonical supported gate (one of: ${[...VALID_GATES].join(", ")}) to consolidate this round, got ${JSON.stringify(options.gate)}`);
-    }
+    // The guard already proved this is a canonical string gate. Normalize it
+    // for downstream guarded consumers without changing the omission
+    // programmatic path, whose legacy pass-through behavior is preserved.
     options = { ...options, gate: options.gate.trim().toLowerCase() };
   }
   const dir = options.findingsDir;

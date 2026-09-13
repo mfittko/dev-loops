@@ -594,6 +594,27 @@ test("an invalid --jq filter exits 2 and leaves the keyed plan ABSENT after a pr
   });
 });
 
+test("an empty --jq value removes a prior same-key emit plan before refusing", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const okRun = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(okRun.status, 0, okRun.stderr);
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(tmpDir, "tmp") });
+    assert.equal(JSON.parse(await readFile(planPath, "utf8")).ok, true);
+
+    const refused = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--jq", ""],
+      { cwd: tmpDir },
+    );
+    assert.equal(refused.status, 2, refused.stderr);
+    assert.match(JSON.parse(refused.stderr).error, /--jq/);
+    await assert.rejects(() => readFile(planPath, "utf8"), { code: "ENOENT" });
+  });
+});
+
 // Data-invalid --jq regression (Copilot review round 5,
 // emit-fanout-dispatch.mjs final-emission path): a filter that is
 // SYNTACTICALLY valid but fails against the payload's DATA (`.count | length`

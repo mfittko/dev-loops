@@ -229,14 +229,6 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   }
   const tmpRoot = tmpRootArg ?? tmpRootDefault;
   const pendingOnly = argv.includes("--pending");
-  const jqArg = resolveFlagValue(argv, "--jq");
-  if (jqArg === "") {
-    process.stderr.write(`${formatCliError(parseError("Invalid --jq value: must be non-empty."))}\n`);
-    return 2;
-  }
-  const jq = jqArg === null ? undefined : jqArg;
-  const silent = argv.includes("--silent") || argv.includes("-s");
-  const finish = (payload, ok) => emitResult(payload, { jq, silent, ok });
 
   let contextPath;
   try {
@@ -264,6 +256,17 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     process.stderr.write(`${formatCliError(err)}\n`);
     return 2;
   }
+
+  // The round key is now known and its prior plan is gone, so every remaining
+  // refusal — including an explicitly empty --jq value — leaves no stale plan.
+  const jqArg = resolveFlagValue(argv, "--jq");
+  if (jqArg === "") {
+    process.stderr.write(`${formatCliError(parseError("Invalid --jq value: must be non-empty."))}\n`);
+    return 2;
+  }
+  const jq = jqArg === null ? undefined : jqArg;
+  const silent = argv.includes("--silent") || argv.includes("-s");
+  const finish = (payload, ok) => emitResult(payload, { jq, silent, ok });
 
   let artifact;
   try {
