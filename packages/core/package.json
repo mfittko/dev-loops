@@ -31,6 +31,7 @@
     "./loop/async-start-contract": "./src/loop/async-start-contract.mjs",
     "./loop/agent-stall": "./src/loop/agent-stall.mjs",
     "./loop/bash-command-classify": "./src/loop/bash-command-classify.mjs",
+    "./loop/child-launch-bound": "./src/loop/child-launch-bound.mjs",
     "./loop/conductor-routing": "./src/loop/conductor-routing.mjs",
     "./loop/copilot-ci-status": "./src/loop/copilot-ci-status.mjs",
     "./loop/copilot-loop-iterations": "./src/loop/copilot-loop-iterations.mjs",
