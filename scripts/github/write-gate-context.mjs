@@ -1662,8 +1662,9 @@ function truncatePriorDispositionField(value) {
  * BOUNDED, deterministically: at most {@link PRIOR_DISPOSITIONS_MAX_ENTRIES}
  * entries are rendered, kept in the prior log's own order (never re-sorted or
  * sampled), with any overflow summarized in one terse "+K more ... omitted"
- * line; each free-form field (`summary`, `judgeRationale`) is truncated to
- * {@link PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH} chars. A large or corrupted
+ * line; every rendered field (`angle`, `severity`, `summary`,
+ * `judgeRationale`) is truncated to {@link PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH}
+ * chars. A large or corrupted
  * prior findings-log can therefore never make this block — or the reviewer
  * prompt it feeds — unboundedly large.
  *
@@ -1699,11 +1700,13 @@ export function renderBriefingVolatile({ gate, headSha, loggedAt, validationPost
     const kept = dispositions.slice(0, PRIOR_DISPOSITIONS_MAX_ENTRIES);
     const omittedCount = dispositions.length - kept.length;
     for (const entry of kept) {
+      const angle = truncatePriorDispositionField(entry.angle);
+      const severity = truncatePriorDispositionField(entry.severity);
       const summary = truncatePriorDispositionField(entry.summary);
       const rationale = typeof entry.judgeRationale === "string" && entry.judgeRationale.length > 0
         ? ` — judge: ${truncatePriorDispositionField(entry.judgeRationale)}`
         : "";
-      lines.push(`- ${entry.fingerprint} [${entry.angle}] ${entry.severity}: ${summary}${rationale}`);
+      lines.push(`- ${entry.fingerprint} [${angle}] ${severity}: ${summary}${rationale}`);
     }
     if (omittedCount > 0) {
       lines.push(`- +${omittedCount} more prior dispositions omitted`);

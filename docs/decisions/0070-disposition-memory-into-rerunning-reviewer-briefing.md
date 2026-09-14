@@ -56,14 +56,18 @@ absent prior log. Four choices shape the mechanism:
    reuses the existing `fingerprintFinding`, `baseAngleName`, and
    `buildLogPath` helpers rather than introducing a parallel identity or
    path-resolution scheme.
-4. **Fail-closed same-head/eligibility guards, fail-open only past them.**
-   `--prev-head` is rejected outright when it names the SAME head as
-   `--head-sha` (checked in both prefix directions, so a full 64-char head and
-   its 40-char prefix are also caught as same-head), and a prior log whose
-   `verdict` is not `clean`/`findings_present` (e.g. `blocked`, or missing) is
-   treated as ineligible — same as an absent prior log. These two guards are
-   the fail-closed boundary; every failure past that boundary (unreadable,
-   malformed, identity-mismatched) is fail-open, per (2) above.
+4. **One fail-closed boundary, fail-open past it.** The only fail-closed
+   boundary is a parse-time guard: `--prev-head` is rejected outright when it
+   names the SAME head as `--head-sha` (checked in both prefix directions, so
+   a full 64-char head and its 40-char prefix are also caught as same-head),
+   aborting the CLI before any read is attempted. Everything past that
+   boundary — an unreadable or malformed prior log, an identity mismatch
+   (wrong `headSha`/`repo`/`pr`/`gate` recorded at the `--prev-head` path),
+   and a prior log whose `verdict` is not `clean`/`findings_present` (e.g.
+   `blocked`, or missing) — is fail-open, per (2) above: `writeGateContext`
+   throws for each of these inside the same try/catch, which the write
+   itself never sees, so the round proceeds with a byte-identical volatile
+   tail to an absent prior log; the hint is closed, not the write.
 
 ## Consequences
 

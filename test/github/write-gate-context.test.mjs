@@ -6425,6 +6425,33 @@ test("renderBriefingVolatile: a free-form field longer than PRIOR_DISPOSITIONS_M
   assert.equal(text, textAgain);
 });
 
+test("renderBriefingVolatile: an angle/severity longer than PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH is truncated with an ellipsis marker, deterministically", () => {
+  const longAngle = "a".repeat(PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH + 500);
+  const longSeverity = "v".repeat(PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH + 500);
+  const text = renderBriefingVolatile({
+    gate: "draft_gate",
+    headSha: "abc1234567890",
+    loggedAt: "2026-01-01T00:00:00.000Z",
+    priorDispositions: [
+      { fingerprint: "0123456789abcdef", angle: longAngle, severity: longSeverity, summary: "short summary", judgeRationale: "short rationale" },
+    ],
+  });
+  assert.doesNotMatch(text, new RegExp(longAngle));
+  assert.doesNotMatch(text, new RegExp(longSeverity));
+  assert.match(text, new RegExp(`a{${PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH}}…`));
+  assert.match(text, new RegExp(`v{${PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH}}…`));
+  // Deterministic: rendering twice from the same input yields byte-identical output.
+  const textAgain = renderBriefingVolatile({
+    gate: "draft_gate",
+    headSha: "abc1234567890",
+    loggedAt: "2026-01-01T00:00:00.000Z",
+    priorDispositions: [
+      { fingerprint: "0123456789abcdef", angle: longAngle, severity: longSeverity, summary: "short summary", judgeRationale: "short rationale" },
+    ],
+  });
+  assert.equal(text, textAgain);
+});
+
 test("writeGateContext --prev-head (programmatic): an oversized prior findings-log renders a deterministically capped disposition block, not an unbounded one (Copilot round 2)", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prior-dispositions-oversized-"));
   try {
