@@ -2559,9 +2559,10 @@ export function resolveReviewProportionality(config, gate, {
  * @param {boolean} [options.hasFullLabel] — `gate:full` label present on the PR (bypasses tier resolution)
  * @param {boolean} [options.checkFloors] — opt into the GATE-EXEC-PROPORTIONALITY floor check above
  * @param {{ outcome?: "pass"|"escalate"|"block", tierLogicLoc?: { t1?: number } }|null} [options.sizeOutcome] — only consulted when `checkFloors` is true
+ * @param {string[]} [options.explicitAngles] — caller-supplied verbatim override (e.g. CLI `--angles`); wins over tier/dynamic resolution but NEVER over a fired floor above (a fired floor's full pool, mandatory angles included via resolveGateAngles, is returned instead)
  * @returns {{ recommendedAngles: string[] | null, skippedAngles: string[], reasons: Record<string,string>, fallbackToAll: boolean, dynamicAnglesActive: boolean, addedAngles: string[], addedReasons: Record<string,string> }}
  */
-export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabel = false, checkFloors = false, sizeOutcome } = {}) {
+export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabel = false, checkFloors = false, sizeOutcome, explicitAngles } = {}) {
   // Tier scope facts: changedFiles/filesChanged from T0, linesChanged from T1's
   // real added+deleted count (analyzeDiff's inferred-category path reports a
   // fake 0 for an unambiguous docs-only diff — see analyzeT1/analyzeDiff).
@@ -2598,6 +2599,21 @@ export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabe
         addedReasons: {},
       };
     }
+  }
+  // A fired floor above always wins (its full pool already includes the
+  // mandatory floor via resolveGateAngles) — an explicit --angles override is
+  // only honored once no floor fired, matching its documented "verbatim,
+  // dynamic resolution bypassed" contract.
+  if (Array.isArray(explicitAngles)) {
+    return {
+      recommendedAngles: explicitAngles,
+      skippedAngles: [],
+      reasons: {},
+      fallbackToAll: false,
+      dynamicAnglesActive: false,
+      addedAngles: [],
+      addedReasons: {},
+    };
   }
   const tierResult = resolveGateTier(config, gate, { changedFiles, filesChanged, linesChanged, hasFullLabel });
   if (tierResult.tier) {

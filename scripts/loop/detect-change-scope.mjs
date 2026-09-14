@@ -76,8 +76,13 @@ export function parseGitDiffStat(output) {
   }
   return { filesChanged: fileCount, linesChanged: insertions + deletions };
 }
+// Isolated from ambient GIT_DIR/GIT_WORK_TREE (gitEnvWithoutDirOverrides) and
+// diff-config drift (DIFF_ISOLATION_FLAGS), matching detectMergeBaseChangedFiles:
+// an inherited GIT_DIR/GIT_WORK_TREE would otherwise resolve this diff against a
+// DIFFERENT repo than `cwd`, letting a poisoned env under-report scope and
+// fail-OPEN the light-mode size cap this function feeds.
 function detectScope({ base, head, cwd } = {}) {
-  let diffArgs = ["diff", "--stat"];
+  let diffArgs = [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--stat"];
   if (base && head) {
     diffArgs.push(`${base}..${head}`);
   } else if (base) {
@@ -87,7 +92,7 @@ function detectScope({ base, head, cwd } = {}) {
   }
   let output;
   try {
-    output = execFileSync("git", diffArgs, { encoding: "utf8", maxBuffer: 1_000_000, cwd: cwd || undefined });
+    output = execFileSync("git", diffArgs, { encoding: "utf8", maxBuffer: 1_000_000, cwd: cwd || undefined, env: gitEnvWithoutDirOverrides() });
   } catch (err) {
     return { ok: false, filesChanged: 0, linesChanged: 0, error: err instanceof Error ? err.message : String(err) };
   }
@@ -105,6 +110,11 @@ function isEligibleForLightMode(scope, threshold) {
  * so callers that gate on scope (e.g. the light-mode pre-merge acceptance) reject
  * rather than silently treating an unmeasurable diff as under threshold. Reuses
  * the same `parseGitDiffStat` scope resolution as `detectScope`.
+ *
+ * Isolated from ambient `GIT_DIR`/`GIT_WORK_TREE` and diff-config drift the
+ * same way `detectMergeBaseChangedFiles` is (see its doc comment) — this feeds
+ * the merge-gate hard size cap, so a poisoned env under-reporting scope here
+ * would fail-OPEN that cap exactly like an unisolated changed-file read would.
  */
 function detectMergeBaseScope({ base, head, cwd } = {}) {
   if (!base || !head) {
@@ -112,7 +122,11 @@ function detectMergeBaseScope({ base, head, cwd } = {}) {
   }
   let output;
   try {
-    output = execFileSync("git", ["diff", "--stat", `${base}...${head}`], { encoding: "utf8", maxBuffer: 1_000_000, cwd: cwd || undefined });
+    output = execFileSync(
+      "git",
+      [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--stat", `${base}...${head}`],
+      { encoding: "utf8", maxBuffer: 1_000_000, cwd: cwd || undefined, env: gitEnvWithoutDirOverrides() },
+    );
   } catch (err) {
     return { ok: false, filesChanged: 0, linesChanged: 0, error: err instanceof Error ? err.message : String(err) };
   }

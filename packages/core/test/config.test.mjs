@@ -5733,6 +5733,28 @@ describe("resolveGateAnglesDynamic", () => {
     });
     assert.deepEqual(new Set(result.recommendedAngles), new Set(["pr-description", "docs", "link-check", "correctness"]));
   });
+
+  test("checkFloors:true + explicitAngles — a fired risk-path floor forces the full pool over the explicit override (non-overridable floor)", async () => {
+    const config = tieredRiskyConfig();
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: `M\t${riskyDocPath}`, diffOutput: oneLineDiffOutput(riskyDocPath) },
+      checkFloors: true,
+      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      explicitAngles: ["docs"],
+    });
+    assert.deepEqual(new Set(result.recommendedAngles), new Set(["pr-description", "docs", "link-check", "correctness"]));
+  });
+
+  test("checkFloors:true + explicitAngles — no floor fired keeps the explicit override verbatim", async () => {
+    const config = tieredRiskyConfig();
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: `M\t${nonRiskyDocPath}`, diffOutput: oneLineDiffOutput(nonRiskyDocPath) },
+      checkFloors: true,
+      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+      explicitAngles: ["docs"],
+    });
+    assert.deepEqual(result.recommendedAngles, ["docs"]);
+  });
 });
 describe("resolveGateTier (issue #1550 — diff-class angle tiers)", () => {
   function draftConfigWithTiers(tiers) {

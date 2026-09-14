@@ -63,6 +63,42 @@ test("detectMergeBaseScope reports the merge-base diff scope for the head", asyn
   }
 });
 
+test("detectMergeBaseScope ignores an ambient GIT_DIR/GIT_WORK_TREE pointing at a DIFFERENT repo", async () => {
+  const realRepo = await makeRepo();
+  const poisonRepo = await makeRepo();
+  const savedGitDir = process.env.GIT_DIR;
+  const savedGitWorkTree = process.env.GIT_WORK_TREE;
+  try {
+    // Poison repo: a clean, empty history — if the env override leaked
+    // through, the diff would resolve HERE and report zero changed files,
+    // fail-OPENing the merge-gate hard size cap this scope feeds.
+    await writeFile(path.join(poisonRepo, "clean.txt"), "clean\n", "utf8");
+    git(poisonRepo, "add", "-A");
+    git(poisonRepo, "commit", "-qm", "poison base");
+
+    // Real repo: the actual diff we want measured.
+    await writeFile(path.join(realRepo, "a.txt"), "one\n", "utf8");
+    git(realRepo, "add", "-A");
+    git(realRepo, "commit", "-qm", "base");
+    const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: realRepo, encoding: "utf8" }).trim();
+    await writeFile(path.join(realRepo, "risky.txt"), "two\n", "utf8");
+    git(realRepo, "add", "-A");
+    git(realRepo, "commit", "-qm", "head");
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: realRepo, encoding: "utf8" }).trim();
+
+    process.env.GIT_DIR = path.join(poisonRepo, ".git");
+    process.env.GIT_WORK_TREE = poisonRepo;
+    const result = detectMergeBaseScope({ base, head, cwd: realRepo });
+    assert.equal(result.ok, true);
+    assert.equal(result.filesChanged, 1, "must measure the real repo's diff, not the poisoned/clean one");
+  } finally {
+    if (savedGitDir === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = savedGitDir;
+    if (savedGitWorkTree === undefined) delete process.env.GIT_WORK_TREE; else process.env.GIT_WORK_TREE = savedGitWorkTree;
+    await rm(realRepo, { recursive: true, force: true });
+    await rm(poisonRepo, { recursive: true, force: true });
+  }
+});
+
 // GATE-EXEC-PROPORTIONALITY: detectMergeBaseChangedFiles feeds the risk-path
 // floor at merge-gate re-verify time and MUST diff the `cwd` repo regardless
 // of an ambient GIT_DIR/GIT_WORK_TREE — a poisoned env pointing at a

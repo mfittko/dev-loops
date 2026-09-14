@@ -3228,12 +3228,16 @@ export async function main(
 
     // Angle resolution: when --angles is omitted, resolve dynamically from the
     // loaded config (.devloops) + the captured --base diff — the SAME path the
-    // programmatic buildGateContext API uses (resolveGateAnglesDynamic). This
-    // keeps the CLI consistent with the API: dynamic angle resolution trims to the
-    // mandatory floor + diff-selected candidates when a diff is present, and
-    // falls back to the static configured pool otherwise. When --angles IS
-    // supplied, it is a verbatim override (dynamic resolution bypassed).
-    if (!Array.isArray(options.angles)) {
+    // programmatic buildGateContext API uses (resolveGateAnglesDynamic). When
+    // --angles IS supplied, it is used as an explicit selector, BUT the
+    // GATE-EXEC-PROPORTIONALITY floors and the mandatory-angle floor are
+    // non-overridable: draft/preApproval always run explicit angles through
+    // resolveGateAnglesDynamic's explicitAngles handling below, which forces
+    // the full untriered pool over a fired floor and unions in any mandatory
+    // angle the explicit set omitted. review has no floor contract and keeps
+    // its dedicated union resolver, verbatim-override included, unchanged.
+    const explicitAngleReview = options.gate === "review" && Array.isArray(options.angles);
+    if (!explicitAngleReview) {
       // The gate:full label must not depend on the operator remembering
       // --full-label: derive it from the live PR when the flag is absent, and
       // fail CLOSED (treat as labelled → untriered set) when the read fails.
@@ -3274,7 +3278,13 @@ export async function main(
           );
         }
         const configKey = mapGateToConfigKey(options.gate);
-        resolverResult = await resolveGateAnglesDynamic(config, configKey, { diff, hasFullLabel: options.fullLabel === true, checkFloors: Boolean(options.base), sizeOutcome });
+        resolverResult = await resolveGateAnglesDynamic(config, configKey, {
+          diff,
+          hasFullLabel: options.fullLabel === true,
+          checkFloors: Boolean(options.base),
+          sizeOutcome,
+          explicitAngles: Array.isArray(options.angles) ? options.angles : undefined,
+        });
       }
       const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
       if (resolvedAngles.length === 0) {
@@ -3283,13 +3293,14 @@ export async function main(
         );
       }
       options.angles = resolvedAngles;
-      // Resolver-derived rationale is authoritative here: a caller cannot supply
-      // meaningful rationale for angles it did not name (angles were just
-      // resolved dynamically above), so any --rationale the caller passed is
-      // ignored rather than persisted as a stale mismatch.
+      // Resolver-derived rationale is authoritative here: it reflects whatever
+      // the resolver actually decided (dynamic selection, a floor override, or
+      // an explicit set plus any mandatory-floor addition), which a caller's
+      // own --rationale cannot describe — so any --rationale supplied is
+      // ignored in favor of it.
       if (options.rationale.length > 0) {
         process.stderr.write(
-          "[write-gate-context] warning: --rationale was supplied without --angles; ignoring it in favor of the resolver-derived rationale (angles were resolved from config rather than supplied via --angles).\n",
+          "[write-gate-context] warning: --rationale is ignored in favor of the resolver-derived rationale (angle resolution — dynamic, floor-forced, or an explicit --angles set — always determines rationale).\n",
         );
       }
       options.rationale = rationale;
