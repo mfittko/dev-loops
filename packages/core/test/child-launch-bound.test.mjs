@@ -20,21 +20,28 @@ function poisonedTrap() {
   };
 }
 
-/** Deterministic adapter fixture recording the launch/query call sequence + counts. */
+/**
+ * Deterministic adapter fixture recording the launch/query call sequence,
+ * counts, and the exact request argument each received (so a test can assert
+ * both calls carried the failed request's identity, not a substituted one).
+ */
 function makeAdapter({ launchResult, supported = [] }) {
   const calls = { attemptLaunch: 0, querySupportedModels: 0 };
+  const requests = { attemptLaunch: null, querySupportedModels: null };
   const trap = poisonedTrap();
   return {
     trap,
     calls,
+    requests,
     attemptLaunch: (request) => {
       calls.attemptLaunch += 1;
+      requests.attemptLaunch = request;
       void trap; // never touched, only held for assertion
       return typeof launchResult === "function" ? launchResult(request) : launchResult;
     },
     querySupportedModels: (request) => {
       calls.querySupportedModels += 1;
-      void request;
+      requests.querySupportedModels = request;
       return { supported };
     },
   };
@@ -85,7 +92,7 @@ describe("enforceChildLaunchBound — malformed request fails closed", () => {
   });
 });
 
-for (const harness of ["pi", "claude"]) {
+for (const harness of ["pi", "claude", "codex"]) {
   describe(`enforceChildLaunchBound — cross-harness parity (harness=${harness})`, () => {
     test("happy path: launch succeeds, inventory never queried, no blocker", () => {
       const adapter = makeAdapter({ launchResult: { ok: true, launch: { pid: 123 } } });
@@ -106,16 +113,20 @@ for (const harness of ["pi", "claude"]) {
       assert.equal(result.verdict, "blocked");
       assert.equal(result.reason, "child_model_unsupported");
       assert.equal(result.modelSupported, false);
-      assert.deepEqual(result.request, { run: request.run, roleOrAngle: request.roleOrAngle, model: request.model, harness });
+      const normalized = { run: request.run, roleOrAngle: request.roleOrAngle, model: request.model, harness };
+      assert.deepEqual(result.request, normalized);
       assert.deepEqual(result.events, [{ type: "launch_attempt" }, { type: "inventory_query" }]);
+      // The inventory query is for the SAME failed (run, roleOrAngle, model)
+      // request that was launched — not a substituted or partial one.
+      assert.deepEqual(adapter.requests.attemptLaunch, normalized);
+      assert.deepEqual(adapter.requests.querySupportedModels, normalized);
     });
   });
 }
 
-describe("enforceChildLaunchBound — unknown harness fails closed (Codex is not a dev-loop harness)", () => {
+describe("enforceChildLaunchBound — unknown harness fails closed", () => {
   test("throws on an unrecognized harness value", () => {
     const adapter = makeAdapter({ launchResult: { ok: true, launch: {} } });
-    assert.throws(() => enforceChildLaunchBound({ request: baseRequest({ harness: "codex" }), ...adapter }), TypeError);
     assert.throws(() => enforceChildLaunchBound({ request: baseRequest({ harness: "bogus" }), ...adapter }), TypeError);
   });
 });

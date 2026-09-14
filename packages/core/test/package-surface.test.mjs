@@ -13,6 +13,7 @@ test("packages/core exports the sanctioned runtime boundary and de-exports unuse
   assert.equal(packageJson.exports["./github/repo-slug"], "./src/github/repo-slug.mjs");
   assert.equal(packageJson.exports["./github/review-threads"], "./src/github/review-threads.mjs");
   assert.equal(packageJson.exports["./loop/async-start-contract"], "./src/loop/async-start-contract.mjs");
+  assert.equal(packageJson.exports["./loop/child-launch-bound"], "./src/loop/child-launch-bound.mjs");
   assert.equal(packageJson.exports["./loop/conductor-routing"], "./src/loop/conductor-routing.mjs");
   assert.equal(packageJson.exports["./loop/copilot-ci-status"], "./src/loop/copilot-ci-status.mjs");
   assert.equal(packageJson.exports["./loop/copilot-loop-iterations"], "./src/loop/copilot-loop-iterations.mjs");

@@ -11,8 +11,14 @@
  * harness adapter, reads a file, or performs I/O of its own.
  */
 
-/** Dev-loop harnesses this bound recognizes; any other value fails closed. */
-const HARNESS_VALUES = Object.freeze(["pi", "claude"]);
+/**
+ * Dev-loop harnesses this bound recognizes; any other value fails closed.
+ * This primitive only carries the harness label through the request/blocker
+ * — it does not branch on it or depend on per-harness capability data (e.g.
+ * HARNESS_DEFAULT_CAPABILITIES), so it stays agnostic across pi, claude, and
+ * codex.
+ */
+const HARNESS_VALUES = Object.freeze(["pi", "claude", "codex"]);
 
 /** @param {unknown} value @returns {boolean} */
 function isNonEmptyString(value) {
@@ -23,7 +29,7 @@ function isNonEmptyString(value) {
  * Validate + normalize the child-launch request. Fails closed (TypeError) on
  * any malformed/empty field, at the trust boundary of this function.
  * @param {object} request
- * @returns {{run:string, roleOrAngle:string, model:string, harness:"pi"|"claude"}}
+ * @returns {{run:string, roleOrAngle:string, model:string, harness:"pi"|"claude"|"codex"}}
  */
 function validateRequest(request) {
   if (!request || typeof request !== "object") {
@@ -39,7 +45,7 @@ function validateRequest(request) {
   return { run: run.trim(), roleOrAngle: roleOrAngle.trim(), model: model.trim(), harness };
 }
 
-// ponytail: querySupportedModels may return { supported: [...] }, a bare
+// Note: querySupportedModels may return { supported: [...] }, a bare
 // array, or a Set — normalizing all three into one Set here keeps the
 // caller-facing contract flexible without adding a second exported shape.
 /** @param {{supported?: unknown}|unknown[]|Set<string>} result @returns {Set<string>} */
@@ -55,14 +61,32 @@ function toSupportedSet(result) {
 /**
  * Enforce the bounded, deterministic child-launch fail-fast protocol.
  *
+ * Scope: this bounds ONE invocation — one launch attempt plus at most one
+ * inventory query for that same call. It holds no state across calls, so
+ * cross-call terminality (never re-launching the same `(run, roleOrAngle,
+ * model)` after a prior call already returned a blocked verdict) is the
+ * caller's/coordinator's contract, not something a persisted token here
+ * enforces.
+ *
+ * Deadline contract: `deadlineMs` is a MEASUREMENT bound, not a per-call
+ * timeout. The function times the elapsed wall-clock span of the one launch
+ * attempt plus (on failure) the one inventory query, and reports
+ * `withinDeadline` fail-closed (`elapsedMs <= deadlineMs`) — it never cancels
+ * or races `attemptLaunch`/`querySupportedModels` against the clock. The
+ * <=60s guarantee holds only because each injected operation is a single
+ * bounded call, never a retry loop, inside this function; enforcing a hard
+ * per-operation timeout/cancellation on a slow `attemptLaunch` or
+ * `querySupportedModels` implementation is the caller's operation-budget
+ * responsibility and is intentionally out of scope for this pure primitive.
+ *
  * @param {object} options
- * @param {{run:string, roleOrAngle:string, model:string, harness:"pi"|"claude"}} options.request
+ * @param {{run:string, roleOrAngle:string, model:string, harness:"pi"|"claude"|"codex"}} options.request
  * @param {(request:object)=>({ok:true,launch:*}|{ok:false,reason:string})} options.attemptLaunch
  *   Called AT MOST ONCE.
  * @param {(request:object)=>({supported:string[]}|string[]|Set<string>)} options.querySupportedModels
  *   Called AT MOST ONCE, and only after a failed launch.
  * @param {()=>number} [options.now] - injectable clock, default Date.now.
- * @param {number} [options.deadlineMs] - default 60000.
+ * @param {number} [options.deadlineMs] - measurement bound in ms, default 60000.
  * @returns {object} `{ ok: true, launch, events, elapsedMs }` on success, or
  *   the durable blocker `{ ok: false, verdict: "blocked", reason, request,
  *   modelSupported, elapsedMs, withinDeadline, events }` on failure.
@@ -102,7 +126,8 @@ export function enforceChildLaunchBound({ request, attemptLaunch, querySupported
       : "child_launch_failed_model_supported";
 
   const elapsedMs = now() - start;
-  // Fail-closed on a slow adapter: still return the blocker rather than throw.
+  // Measurement, not enforcement: a slow adapter still returns the blocker
+  // (fail-closed) rather than being cancelled or retried against the clock.
   const withinDeadline = elapsedMs <= deadlineMs;
 
   return {
