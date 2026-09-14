@@ -167,6 +167,12 @@ function validateConsumed(consumed) {
  */
 function normalizeCompletedAngles(completedAngles) {
   if (completedAngles == null) return new Set();
+  if (typeof completedAngles === "string") {
+    // A bare string is iterable (per-character) but must never be accepted
+    // as a set of completed angles — fail closed instead of silently
+    // iterating characters.
+    throw new TypeError("enforceReviewerUnitBound requires completedAngles to be an iterable of angle names, not a bare string");
+  }
   if (typeof completedAngles[Symbol.iterator] !== "function") {
     throw new TypeError("enforceReviewerUnitBound requires completedAngles to be an iterable of angle names");
   }

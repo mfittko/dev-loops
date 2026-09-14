@@ -229,6 +229,26 @@ describe("enforceReviewerUnitBound — malformed consumed fails closed", () => {
   test("propagates validateReviewerUnit's TypeError for a malformed unit", () => {
     assert.throws(() => enforceReviewerUnitBound({ unit: baseUnit({ run: "" }), consumed: { modelTurns: 0, toolCalls: 0 } }), TypeError);
   });
+
+  test("throws TypeError on a bare-string completedAngles instead of iterating per-character", () => {
+    assert.throws(
+      () => enforceReviewerUnitBound({ unit: baseUnit(), consumed: { modelTurns: 0, toolCalls: 0 }, completedAngles: "coverage" }),
+      TypeError,
+    );
+  });
+
+  test("still accepts undefined and an array of angle names as completedAngles (positive control)", () => {
+    const undefinedResult = enforceReviewerUnitBound({ unit: baseUnit(), consumed: { modelTurns: 0, toolCalls: 0 }, completedAngles: undefined });
+    assert.equal(undefinedResult.ok, false);
+    assert.equal(undefinedResult.reason, "reviewer_coverage_incomplete");
+
+    const arrayResult = enforceReviewerUnitBound({
+      unit: baseUnit(),
+      consumed: { modelTurns: 0, toolCalls: 0 },
+      completedAngles: ["coverage", "security"],
+    });
+    assert.equal(arrayResult.ok, true);
+  });
 });
 
 describe("enforceReviewerUnitBound — head attribution", () => {
