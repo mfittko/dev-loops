@@ -203,6 +203,45 @@ test("decideBashGate fails closed when the managed slug is unresolvable and a se
   assert.equal(d.decision, "deny");
 });
 
+// --- standalone `&` (async/background operator) must also be a segment boundary, closing the
+// same shielding gap the `&&` tests above cover (Copilot review follow-up, #2193) ---
+
+test("decideBashGate denies a later managed gh pr merge segment behind a proven-foreign leading one joined by &", () => {
+  const d = decideBashGate({
+    command: "gh pr merge --repo other/x 1 & gh pr merge 2",
+    repoSlug: TARGET,
+    inManagedContext: true,
+    managedRepoSlug: TARGET,
+    gatePassed: false,
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /gh pr merge is forbidden/);
+});
+
+test("decideBashGate denies a later managed gh pr ready segment behind a proven-foreign leading one joined by &", () => {
+  const d = decideBashGate({
+    command: "gh pr ready --repo other/x 1 & gh pr ready 2",
+    repoSlug: TARGET,
+    inManagedContext: true,
+    managedRepoSlug: TARGET,
+    gatePassed: false,
+  });
+  assert.equal(d.decision, "deny");
+});
+
+test("decideBashGate passes through when every &-joined gh pr merge segment is proven foreign", () => {
+  assert.equal(
+    decideBashGate({
+      command: "gh pr merge --repo other/x 1 & gh pr merge --repo other/y 2",
+      repoSlug: TARGET,
+      inManagedContext: true,
+      managedRepoSlug: TARGET,
+      gatePassed: false,
+    }).decision,
+    "allow",
+  );
+});
+
 test("decideBashGate denies raw gh pr create in the target repo", () => {
   const d = decideBashGate({ command: "gh pr create --title x --body y", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET });
   assert.equal(d.decision, "deny");

@@ -30,7 +30,7 @@ export const FLAGS_THAT_TAKE_VALUE = new Set(["-r", "--repo"]);
  * strings — so a segment must break on them too, else `echo hi\ngh pr create` evades
  * the gate. Used by all segment-splitting sites (DRY).
  */
-const SHELL_SEGMENT_SEPARATOR = /\s*(?:&&|\|\||;|\||\n|\r)\s*/;
+const SHELL_SEGMENT_SEPARATOR = /\s*(?:&&|\|\||;|\||&|\n|\r)\s*/;
 
 /**
  * Strip a single balanced surrounding quote pair (`'…'` or `"…"`) from a shell arg value.

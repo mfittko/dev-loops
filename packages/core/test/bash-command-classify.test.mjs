@@ -165,6 +165,27 @@ test("extractRepoFlagsFromGhPrMergeSegments returns every merge segment's --repo
   assert.deepEqual(extractRepoFlagsFromGhPrMergeSegments("echo hi"), []);
 });
 
+test("extractRepoFlagsFromGhPrMergeSegments treats a standalone & as a segment boundary (#2193)", () => {
+  // A lone `&` (async/background operator) must split into two segments, same as `&&` — a
+  // proven-foreign leading segment must not shield a later managed one via `&`.
+  assert.deepEqual(
+    extractRepoFlagsFromGhPrMergeSegments("gh pr merge --repo other/x 1 & gh pr merge 2"),
+    [
+      { segment: "gh pr merge --repo other/x 1", explicitRepo: "other/x" },
+      { segment: "gh pr merge 2", explicitRepo: null },
+    ],
+  );
+  // `&&` must still be consumed as ONE two-character boundary, not tokenized into two lone `&`
+  // boundaries (which would otherwise produce a spurious empty segment between them).
+  assert.deepEqual(
+    extractRepoFlagsFromGhPrMergeSegments("gh pr merge --repo other/x 1 && gh pr merge 2"),
+    [
+      { segment: "gh pr merge --repo other/x 1", explicitRepo: "other/x" },
+      { segment: "gh pr merge 2", explicitRepo: null },
+    ],
+  );
+});
+
 test("extractRepoFlagsFromGhPrReadySegments returns every ready segment's --repo", () => {
   assert.deepEqual(
     extractRepoFlagsFromGhPrReadySegments("gh pr ready --repo other/x 1 && gh pr ready 2"),
