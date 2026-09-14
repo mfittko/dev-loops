@@ -2738,13 +2738,13 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
     ? resolveReviewGateAngles(input.config, {
         // Pass through verbatim — undefined means "never queried GitHub"
         // (e.g. --prefix-file mode) and must reach the resolver as undefined,
-        // not be coerced to false, so it fails closed (keeps
-        // acceptance-criteria) rather than fail-open (drops it).
+        // not be coerced to false, so it fails closed (keeps every angle)
+        // rather than fail-open (drops them).
         hasClosingIssue: input.hasClosingIssue,
         // hasAcChecklist reflects "AC checklist exists" (see
         // detectRefinementHasAcChecklist above) — not "review predicate
         // passes" — so an issue-less PR with a real checklist but no
-        // Non-goals still keeps the acceptance-criteria angle.
+        // Non-goals still keeps every spec-of-record-dependent angle.
         hasAcChecklist: detectRefinementHasAcChecklist(input.prBody ?? ""),
       })
     : await resolveGateAnglesDynamic(input.config, configKey, {
