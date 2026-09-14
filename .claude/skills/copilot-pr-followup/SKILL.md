@@ -364,6 +364,14 @@ For a `pre_approval_gate` verdict, ALWAYS compute the size budget first and thre
 
 ```sh
 node <resolved-skill-scripts>/loop/check-size-budget.mjs --base origin/<base-branch> --head <current_head_sha> > <size-budget-json-path>
+check_size_budget_status=$?
+# check-size-budget.mjs exits 0 (pass) or 1 (escalate|block) for a VALID
+# outcome — both leave <size-budget-json-path> populated. Only exit 2 means
+# an arg/runtime error with no usable JSON, so abort on that alone.
+if [ "$check_size_budget_status" -eq 2 ]; then
+  echo "check-size-budget.mjs failed (exit 2); aborting before upsert" >&2
+  exit 2
+fi
 node <resolved-skill-scripts>/github/upsert-checkpoint-verdict.mjs \
   --repo <owner/name> \
   --pr <number> \

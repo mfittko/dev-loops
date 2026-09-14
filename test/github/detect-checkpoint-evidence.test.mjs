@@ -547,6 +547,10 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
         ])}\n`,
       },
       {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+        stdout: "[]\n",
+      },
+      {
         assertArgs: ["api", "graphql"],
         stdout: JSON.stringify({
           data: { repository: { pullRequest: { reviewThreads: { nodes: [
@@ -643,6 +647,9 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
         updatedAt: "2026-05-29T22:00:00Z",
       },
       draftGateSatisfied: true,
+      // A small flag (never raw review/comment data) — false here because the
+      // reviews fetch above succeeds.
+      reviewsReadFailed: false,
       fanoutEnforcement: { required: false, gates: [] },
       preMergeGateCheck: {
         ok: true,
@@ -1265,6 +1272,31 @@ test("buildPreMergeGateCheck: a bot-authored \"approve merge <headSha>\" comment
     result.failures.some((f) => f.includes("size-budget requires a human APPROVED review")),
     JSON.stringify(result.failures),
   );
+});
+
+test("buildPreMergeGateCheck: a reviews-read failure fails closed even with a head-pinned \"approve merge <headSha>\" comment (escalated/T1, #2181 fail-open regression)", () => {
+  // Without the reviewsReadFailed fail-closed handling, an unreadable review
+  // stream reads as "zero reviews" — countUnresolvedHumanChangesRequested([])
+  // is 0, so a genuine unresolved CHANGES_REQUESTED on that unreadable stream
+  // could never be seen, and the comment-marker approval alone would clear
+  // an escalated/T1 gate it must not clear.
+  const evidence = cleanEvidence();
+  evidence.preApprovalGateMarker.sizeOutcome = "escalate";
+  evidence.reviewsReadFailed = true;
+  evidence.comments = [{ login: "carol", body: "approve merge abc1234", type: "User" }];
+  const result = buildPreMergeGateCheck(evidence, 0, null);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("PR reviews could not be read")),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck: reviewsReadFailed adds no failure when the size outcome carries no approval requirement (pass, non-T1)", () => {
+  const evidence = cleanEvidence();
+  evidence.reviewsReadFailed = true;
+  const result = buildPreMergeGateCheck(evidence, 0, null);
+  assert.equal(result.ok, true, JSON.stringify(result.failures));
 });
 
 test("buildPreMergeGateCheck: a stale-head APPROVED review (commit_id != currentHeadSha) never clears the size gate (AC2/AC3 fail-closed)", () => {
@@ -3232,6 +3264,168 @@ test("detect-checkpoint-evidence finds gate comment posted as PR review (root ca
     // The pre-approval gate evidence is visible with the correct head SHA
     assert.equal(payload.preApprovalGate.visible, true);
     assert.equal(payload.preApprovalGate.verdict, "clean");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// A PENDING (unsubmitted draft) review must never shadow an already-
+// submitted APPROVED review from the SAME login: the size-budget gate's
+// "last entry per login wins" resolvers (verifyFreshHumanApproval,
+// countUnresolvedHumanChangesRequested) treat the raw reviews stream as
+// already ordered oldest-first, so a PENDING draft opened after a real
+// APPROVED review must be filtered out before it ever reaches them —
+// otherwise it reads as "no longer approved" and wrongly blocks a
+// legitimately approved escalated/T1 merge.
+test("detect-checkpoint-evidence: a head-pinned APPROVED review followed by a later PENDING review from the same login still clears the size-budget gate", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-pending-review-shadow-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    const env = await writeGhStub(tempDir, [
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: `${JSON.stringify([
+          {
+            id: 60,
+            body: [
+              "Gate review: draft_gate",
+              "Reviewed head SHA: abc1234",
+              "Verdict: clean",
+              "Findings summary: no issues found",
+              "Next action: mark ready for review",
+            ].join("\n"),
+            updated_at: "2026-05-29T21:00:00Z",
+            html_url: "https://github.com/owner/repo/pull/17#issuecomment-60",
+          },
+          {
+            id: 61,
+            body: [
+              "Gate review: pre_approval_gate",
+              "Reviewed head SHA: abc1234",
+              "Verdict: clean",
+              "Findings summary: no issues found",
+              "Next action: await final human approval",
+              "Size-budget outcome: escalate",
+              "Size-budget T1 slice: not touched",
+              "Size-budget waiver: none",
+            ].join("\n"),
+            updated_at: "2026-05-29T22:00:00Z",
+            html_url: "https://github.com/owner/repo/pull/17#issuecomment-61",
+          },
+        ])}\n`,
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+        stdout: `${JSON.stringify([
+          {
+            id: 900,
+            user: { login: "alice", type: "User" },
+            state: "APPROVED",
+            commit_id: "abc1234",
+            submitted_at: "2026-05-29T22:30:00Z",
+            body: "looks good",
+          },
+          // A later PENDING draft review from the SAME login — must not
+          // shadow the APPROVED review above.
+          {
+            id: 901,
+            user: { login: "alice", type: "User" },
+            state: "PENDING",
+            commit_id: null,
+            submitted_at: null,
+            body: "",
+          },
+        ])}\n`,
+      },
+      {
+        assertArgs: ["api", "graphql"],
+        stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) + "\n",
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.preMergeGateCheck.ok, true, JSON.stringify(payload.preMergeGateCheck));
+    assert.deepEqual(payload.preMergeGateCheck.failures, []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// A reviews-API read failure must never be consumed as "zero reviews" by the
+// size-budget merge gate: an escalated/T1 PR with an unreadable review
+// stream must stay blocked even when a head-pinned "approve merge <headSha>"
+// operator comment is present, because the unreadable stream could hide a
+// real unresolved CHANGES_REQUESTED.
+test("detect-checkpoint-evidence: a reviews-read failure blocks an escalated size-budget gate even with an approve-merge comment present", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-reviews-read-failure-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    const env = await writeGhStub(tempDir, [
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: `${JSON.stringify([
+          {
+            id: 60,
+            body: [
+              "Gate review: draft_gate",
+              "Reviewed head SHA: abc1234",
+              "Verdict: clean",
+              "Findings summary: no issues found",
+              "Next action: mark ready for review",
+            ].join("\n"),
+            updated_at: "2026-05-29T21:00:00Z",
+            html_url: "https://github.com/owner/repo/pull/17#issuecomment-60",
+          },
+          {
+            id: 61,
+            body: [
+              "Gate review: pre_approval_gate",
+              "Reviewed head SHA: abc1234",
+              "Verdict: clean",
+              "Findings summary: no issues found",
+              "Next action: await final human approval",
+              "Size-budget outcome: escalate",
+              "Size-budget T1 slice: not touched",
+              "Size-budget waiver: none",
+            ].join("\n"),
+            updated_at: "2026-05-29T22:00:00Z",
+            html_url: "https://github.com/owner/repo/pull/17#issuecomment-61",
+          },
+          {
+            id: 62,
+            body: "approve merge abc1234",
+            updated_at: "2026-05-29T23:00:00Z",
+            user: { login: "carol", type: "User" },
+          },
+        ])}\n`,
+      },
+      {
+        // The reviews API read itself fails (e.g. transient GitHub error).
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+        stderr: "gh: transient error\n",
+        exitCode: 1,
+      },
+      {
+        assertArgs: ["api", "graphql"],
+        stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) + "\n",
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.preMergeGateCheck.ok, false);
+    assert.ok(
+      payload.preMergeGateCheck.failures.some((f) => f.includes("PR reviews could not be read")),
+      JSON.stringify(payload.preMergeGateCheck.failures),
+    );
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
