@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import type { ExtensionHarnessAdapter, HarnessContext, HarnessExecResult } from './harness-types.ts';
 import {
   TARGET_REPO_SLUG,
@@ -8,6 +10,10 @@ import {
   extractPrNumberFromGhPrReady,
   extractRepoFlagFromGhPrReady,
   extractPrNumberFromGhPrMergeAnywhere,
+  extractRepoFlagFromGhPrMergeAnywhere,
+  deriveInManagedRepo,
+  explicitRepoProvenForeign,
+  DEVLOOPS_CONFIG_VARIANTS,
 } from '@dev-loops/core/loop/bash-command-classify';
 import { parseMainWorktreePath } from '@dev-loops/core/loop/worktree-guard';
 import {
@@ -56,6 +62,7 @@ const PR_READY_GATE_TIMEOUT_MS = 30_000;
 type RepoContext = {
   repoRoot: string | null;
   repoSlug: string | null;
+  inManagedContext: boolean;
 };
 
 type RunCommandArgs = {
@@ -121,25 +128,28 @@ async function defaultResolveRepoContext(exec: ExtensionHarnessAdapter['exec'], 
     timeout: REPO_RESOLUTION_TIMEOUT_MS,
   });
   if (rootResult.code !== 0) {
-    return { repoRoot: null, repoSlug: null };
+    return { repoRoot: null, repoSlug: null, inManagedContext: false };
   }
 
   const repoRoot = trimToNull(rootResult.stdout);
   if (!repoRoot) {
-    return { repoRoot: null, repoSlug: null };
+    return { repoRoot: null, repoSlug: null, inManagedContext: false };
   }
+
+  const inManagedContext = DEVLOOPS_CONFIG_VARIANTS.some((ext) => fs.existsSync(path.join(repoRoot, `.devloops${ext}`)));
 
   const remoteResult = await exec('git config --get remote.origin.url', {
     cwd: repoRoot,
     timeout: REPO_RESOLUTION_TIMEOUT_MS,
   });
   if (remoteResult.code !== 0) {
-    return { repoRoot, repoSlug: null };
+    return { repoRoot, repoSlug: null, inManagedContext };
   }
 
   return {
     repoRoot,
     repoSlug: normalizeGitHubRepoSlug(remoteResult.stdout ?? ''),
+    inManagedContext,
   };
 }
 
@@ -440,17 +450,22 @@ export function createPostMergeUpdateHook(options: CreatePostMergeUpdateHookOpti
       }
       // Intercept gh pr ready before any other checks
       if (isGhPrReadyCommand(event.command)) {
-        // Check if the command explicitly targets a different repo via -R/--repo
-        const explicitRepo = extractRepoFlagFromGhPrReady(event.command);
-        if (explicitRepo && explicitRepo.toLowerCase() !== TARGET_REPO_SLUG.toLowerCase()) {
-          // Explicitly targeting a different repo — pass through
+        const repoContext = await resolveRepoContextSafe(resolveRepoContext, event.cwd);
+        if (!repoContext?.repoRoot) {
           return undefined;
         }
-
-        const repoContext = await resolveRepoContextSafe(resolveRepoContext, event.cwd);
-        if (!repoContext?.repoRoot || repoContext.repoSlug !== TARGET_REPO_SLUG) {
-          // Not our target repo — pass through to default handling
-          return undefined;
+        const managedRepoSlug = repoContext.inManagedContext ? repoContext.repoSlug : null;
+        const explicitRepo = extractRepoFlagFromGhPrReady(event.command);
+        if (explicitRepo && explicitRepoProvenForeign(explicitRepo, managedRepoSlug)) {
+          return undefined; // provably foreign target — pass through
+        }
+        const inManagedRepo = deriveInManagedRepo({
+          inManagedContext: repoContext.inManagedContext,
+          managedRepoSlug,
+          repoSlug: repoContext.repoSlug,
+        });
+        if (!inManagedRepo) {
+          return undefined; // not a managed repo — pass through
         }
 
         const prNumber = extractPrNumberFromGhPrReady(event.command);
@@ -529,7 +544,20 @@ export function createPostMergeUpdateHook(options: CreatePostMergeUpdateHookOpti
       }
 
       const repoContext = await resolveRepoContextSafe(resolveRepoContext, event.cwd);
-      if (!repoContext?.repoRoot || repoContext.repoSlug !== TARGET_REPO_SLUG) {
+      if (!repoContext?.repoRoot) {
+        return undefined;
+      }
+      const managedRepoSlug = repoContext.inManagedContext ? repoContext.repoSlug : null;
+      const explicitRepo = extractRepoFlagFromGhPrMergeAnywhere(event.command);
+      if (explicitRepo && explicitRepoProvenForeign(explicitRepo, managedRepoSlug)) {
+        return undefined; // provably foreign target — pass through
+      }
+      const inManagedRepo = deriveInManagedRepo({
+        inManagedContext: repoContext.inManagedContext,
+        managedRepoSlug,
+        repoSlug: repoContext.repoSlug,
+      });
+      if (!inManagedRepo) {
         return undefined;
       }
 

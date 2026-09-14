@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   TARGET_REPO_SLUG,
+  deriveInManagedRepo,
+  explicitRepoProvenForeign,
   normalizeGitHubRepoSlug,
   isMergeCapableCommand,
   isGhPrReadyCommand,
@@ -674,4 +679,72 @@ test("the managed-slug absolute path match is case-insensitive", () => {
     commandContainsReplyResolveBypass("gh api -X POST repos/Acme/Widgets/pulls/5/comments/10/replies -f body=hi", CONSUMER_SLUG),
     true,
   );
+});
+
+// --- deriveInManagedRepo / explicitRepoProvenForeign (#2194) ---
+// Shared managed-repo-identity predicate ported from the Claude Bash-hook guard
+// (`decideBashGate` in `hook-decisions.mjs`) to the Pi harness's post-merge-update guards, so
+// both harnesses resolve the managed repo dynamically instead of relying on a hardcoded slug.
+
+test("deriveInManagedRepo truth table", () => {
+  // managed context + matching slug -> true
+  assert.equal(
+    deriveInManagedRepo({ inManagedContext: true, managedRepoSlug: CONSUMER_SLUG, repoSlug: CONSUMER_SLUG }),
+    true,
+  );
+  // managed context + unresolvable managed slug -> true (fail closed: identity unknown never
+  // disables the guard suite)
+  assert.equal(
+    deriveInManagedRepo({ inManagedContext: true, managedRepoSlug: null, repoSlug: CONSUMER_SLUG }),
+    true,
+  );
+  // managed context + differing slug -> false
+  assert.equal(
+    deriveInManagedRepo({ inManagedContext: true, managedRepoSlug: CONSUMER_SLUG, repoSlug: "other/repo" }),
+    false,
+  );
+  // not a managed context at all -> false, regardless of slugs
+  assert.equal(
+    deriveInManagedRepo({ inManagedContext: false, managedRepoSlug: CONSUMER_SLUG, repoSlug: CONSUMER_SLUG }),
+    false,
+  );
+  // case/whitespace normalized
+  assert.equal(
+    deriveInManagedRepo({ inManagedContext: true, managedRepoSlug: CONSUMER_SLUG, repoSlug: " ACME/Widgets " }),
+    true,
+  );
+});
+
+test("explicitRepoProvenForeign truth table", () => {
+  // both resolve and differ -> true (provably foreign)
+  assert.equal(explicitRepoProvenForeign("other/repo", CONSUMER_SLUG), true);
+  // managed slug unresolvable -> false (never proves foreign-ness; fail closed)
+  assert.equal(explicitRepoProvenForeign("other/repo", null), false);
+  // equal -> false
+  assert.equal(explicitRepoProvenForeign(CONSUMER_SLUG, CONSUMER_SLUG), false);
+  // no explicit repo given -> false
+  assert.equal(explicitRepoProvenForeign(null, CONSUMER_SLUG), false);
+});
+
+test("decideBashGate (hook-decisions.mjs) resolves inManagedRepo via the shared deriveInManagedRepo predicate", () => {
+  // Parity guard: the Claude Bash-hook guard and this Pi-harness helper must agree on the same
+  // managed-repo-identity resolution rather than drifting into two divergent implementations.
+  const hookDecisionsSource = fs.readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/claude/hook-decisions.mjs"),
+    "utf8",
+  );
+  assert.match(hookDecisionsSource, /deriveInManagedRepo/, "hook-decisions.mjs must import/use deriveInManagedRepo from the shared module");
+
+  // Same input table, both call sites: `decideBashGate` composes `deriveInManagedRepo` the same
+  // way the Pi harness does (verified indirectly — decideBashGate's own gate behavior when
+  // gatePassed:false already covers inManagedRepo's effect end to end in claude-hook-decisions.test.mjs).
+  const table = [
+    { inManagedContext: true, managedRepoSlug: CONSUMER_SLUG, repoSlug: CONSUMER_SLUG, expected: true },
+    { inManagedContext: true, managedRepoSlug: null, repoSlug: CONSUMER_SLUG, expected: true },
+    { inManagedContext: true, managedRepoSlug: CONSUMER_SLUG, repoSlug: "other/repo", expected: false },
+    { inManagedContext: false, managedRepoSlug: CONSUMER_SLUG, repoSlug: CONSUMER_SLUG, expected: false },
+  ];
+  for (const { expected, ...params } of table) {
+    assert.equal(deriveInManagedRepo(params), expected);
+  }
 });

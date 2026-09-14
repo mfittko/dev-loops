@@ -10,16 +10,53 @@
  */
 
 /**
- * The dev-loops repo itself. Retained for the Pi extension's
- * (`extension/post-merge-update.ts`) dev-loops-repo self-update scoping AND its own `gh pr ready`
- * / `gh pr merge` guard gating, both of which are still anchored to this one repo, not to
- * whatever repo the harness happens to run in — porting the Claude hook's dynamic
- * `inManagedRepo` resolution to the Pi harness is a separate, out-of-scope follow-up. This is
- * NOT the Claude Bash-hook guard predicate: `decideBashGate` (`hook-decisions.mjs`) resolves the
- * managed repo dynamically per invocation (`inManagedRepo`) instead of comparing against this
- * hardcoded slug, so every guard also applies in a dev-loops-managed consumer repo.
+ * The dev-loops repo itself. Retained ONLY for the Pi extension's
+ * (`extension/post-merge-update.ts`) dev-loops-repo SELF-UPDATE scoping (`markPendingUpdate` /
+ * `queueIfEligible`), which is legitimately anchored to this one repo, not to whatever repo the
+ * harness happens to run in. Both harness guard suites — the Claude PreToolUse Bash gate
+ * (`decideBashGate` in `hook-decisions.mjs`) and the Pi extension's `gh pr ready`/`gh pr merge`
+ * guards (`post-merge-update.ts`) — now resolve the managed repo dynamically via
+ * `deriveInManagedRepo` below instead of comparing against this hardcoded slug, so every guard
+ * also applies in a dev-loops-managed consumer repo.
  */
 export const TARGET_REPO_SLUG = "mfittko/dev-loops";
+
+/** `.devloops` config file extensions checked (in order) to decide whether a repo root is
+ * dev-loops-managed. Shared by every harness that resolves `inManagedContext` from the
+ * filesystem (`fs.existsSync(path.join(repoRoot, \`.devloops${ext}\`))`). */
+export const DEVLOOPS_CONFIG_VARIANTS = ["", ".yaml", ".yml", ".json"];
+
+/**
+ * Whether the current repo counts as "managed" for guard-gating purposes: inside a
+ * dev-loops-managed context (a `.devloops` config exists at its root) AND, when the managed
+ * repo's identity resolves, the cwd repo IS that managed repo. FAIL CLOSED: inside a managed
+ * context whose identity can't be resolved (`managedRepoSlug` null), the guard suite still
+ * applies rather than silently allowing everything.
+ * @param {Object} [params]
+ * @param {boolean} [params.inManagedContext] - Whether a `.devloops` config exists at the repo root.
+ * @param {string|null} [params.managedRepoSlug] - Resolved owner/name of the managed repo, or null.
+ * @param {string|null} [params.repoSlug] - Resolved owner/name of the cwd repo, or null.
+ * @returns {boolean}
+ */
+export function deriveInManagedRepo({ inManagedContext = false, managedRepoSlug = null, repoSlug = null } = {}) {
+  const managedSlug = (managedRepoSlug ?? "").trim().toLowerCase() || null;
+  const cwdSlug = (repoSlug ?? "").trim().toLowerCase() || null;
+  return Boolean(inManagedContext) && (managedSlug === null || cwdSlug === managedSlug);
+}
+
+/**
+ * Whether an explicit `--repo`/`-R` (or `GH_REPO=`) target is PROVABLY a different repo than the
+ * managed one — both slugs must resolve and differ. An unresolvable managed slug never proves
+ * foreign-ness (fail closed: the guard stays active rather than waving an explicit flag through).
+ * @param {string|null} explicitRepo
+ * @param {string|null} managedRepoSlug
+ * @returns {boolean}
+ */
+export function explicitRepoProvenForeign(explicitRepo, managedRepoSlug) {
+  const managedSlug = (managedRepoSlug ?? "").trim().toLowerCase() || null;
+  const explicit = (explicitRepo ?? "").trim().toLowerCase() || null;
+  return managedSlug !== null && explicit !== null && explicit !== managedSlug;
+}
 
 /** Flags known to take a value argument for `gh pr ready` (not boolean flags). */
 export const FLAGS_THAT_TAKE_VALUE = new Set(["-r", "--repo"]);

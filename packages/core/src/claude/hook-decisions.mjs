@@ -12,6 +12,7 @@
 import { resolveRunId } from "../loop/run-context.mjs";
 import { isUnderWorktreePath } from "../loop/worktree-guard.mjs";
 import {
+  deriveInManagedRepo,
   commandContainsGhPrReady,
   commandContainsGhPrMerge,
   commandContainsGhPrCreate,
@@ -114,7 +115,7 @@ export function decideBashGate({
   // everything — an unresolvable identity must never disable the guard suite.
   const managedSlug = (managedRepoSlug ?? "").trim().toLowerCase() || null;
   const cwdSlug = (repoSlug ?? "").trim().toLowerCase() || null;
-  const inManagedRepo = inManagedContext && (managedSlug === null || cwdSlug === managedSlug);
+  const inManagedRepo = deriveInManagedRepo({ inManagedContext, managedRepoSlug, repoSlug });
 
   // OPS-NO-INLINE-INTERPRETER: inline interpreters (`node -e`/`--eval`/`-p`, `python3 -c`,
   // heredocs fed to node/python) are barred actor-independently on the target repo — the rule bars
