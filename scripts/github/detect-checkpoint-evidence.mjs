@@ -31,10 +31,14 @@ import { FANOUT_UNAVAILABLE_MESSAGE, GATE_CONFIG_KEY, checkFanoutAngleCoverage, 
 import { detectMergeBaseScope, isEligibleForLightMode } from "../loop/detect-change-scope.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { normalizePrReviewsPayload, prReviewsApiArgs, prReviewsApiPath } from "./_gate-finding-surface.mjs";
+import { flattenPaginatedSlurp } from "./post-gate-findings.mjs";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { resolveLedgerCheckouts, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { verifyFreshHumanApproval } from "@dev-loops/core/loop/merge-approval";
+import { countUnresolvedHumanChangesRequested, resolveSizeBudgetHumanApprovalRequired } from "@dev-loops/core/loop/size-budget-merge-gate";
+import { SUBMITTED_REVIEW_STATES } from "@dev-loops/core/github/copilot-helpers";
 const USAGE = `Usage: detect-checkpoint-evidence.mjs --repo <owner/name> --pr <number>
 Fetch the live PR head SHA and visible PR issue comments, then summarize the
 latest valid draft-gate and pre-approval checkpoint verdict comments. Always fail
@@ -317,6 +321,30 @@ function normalizeGateMarkerSummary(summary) {
   };
 }
 /**
+ * True when at least one non-bot human login present in `reviews`/`comments`
+ * has a fresh, head-pinned approval per the sanctioned resolver
+ * `verifyFreshHumanApproval` (merge-approval.mjs): a head-pinned APPROVED
+ * review OR a head-pinned "approve merge <headSha>" comment authored by that
+ * SAME login. `buildPreMergeGateCheck` has no single named approver to check
+ * (unlike merge-pr.mjs's `--human-approved-by`), so this tries every distinct
+ * human login the two streams surface against the one existing resolver
+ * rather than reimplementing its bot-exclusion/head-pinning/marker rules.
+ */
+function anyFreshHumanApproval({ currentHeadSha, reviews, comments }) {
+  const candidateLogins = new Set();
+  for (const entry of reviews) {
+    if (typeof entry?.login === "string" && entry.login.length > 0) candidateLogins.add(entry.login);
+  }
+  for (const entry of comments) {
+    if (typeof entry?.login === "string" && entry.login.length > 0) candidateLogins.add(entry.login);
+  }
+  for (const login of candidateLogins) {
+    if (verifyFreshHumanApproval({ approvedBy: login, currentHeadSha, reviews, comments }).satisfied) return true;
+  }
+  return false;
+}
+
+/**
  * Decide whether a gate's execution mode satisfies fan-out evidence
  * enforcement (fanout_fanin, or a light-mode-accepted inline verdict),
  * independent of the ledger/provenance/angle-coverage layer below it. Returns
@@ -348,13 +376,48 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
     failures.push("missing visible clean draft_gate comment");
   }
   const preApproval = evidence.preApprovalGateMarker;
-  if (!(
+  const preApprovalEstablished =
     preApproval.visible
     && preApproval.contractComplete
     && preApproval.verdict === "clean"
-    && preApproval.headSha === evidence.currentHeadSha
-  )) {
+    && preApproval.headSha === evidence.currentHeadSha;
+  if (!preApprovalEstablished) {
     failures.push("missing visible clean current-head pre_approval_gate comment");
+  }
+  // Size-budget merge gate (resolveSizeBudgetHumanApprovalRequired), consulted
+  // LIVE on this authoritative pre-merge path — but only once the base
+  // pre_approval_gate verdict is itself established: an absent/stale verdict
+  // already fails closed above (not_established/violation), so a redundant
+  // size failure would add no signal. sizeTouchesT1 is remapped to touchesT1
+  // (see size-budget-merge-gate.mjs's own naming note). The human approval
+  // signal accepts EITHER a human APPROVED review OR a head-pinned
+  // "approve merge <headSha>" operator comment — see anyFreshHumanApproval
+  // above — so a solo-owner PR (which GitHub forbids from self-APPROVED) is
+  // never unsatisfiable.
+  if (preApprovalEstablished) {
+    const reviews = Array.isArray(evidence.reviews) ? evidence.reviews : [];
+    const comments = Array.isArray(evidence.comments) ? evidence.comments : [];
+    // A reviews-read failure (evidence.reviewsReadFailed) must never be
+    // consumed here as "zero reviews" — an unreadable stream could hide a
+    // real unresolved CHANGES_REQUESTED. Force a non-zero count so the
+    // resolver below fails closed (still requires approval) regardless of
+    // any comment-marker approval, without touching how a genuine zero
+    // reads when reviews WERE read successfully.
+    const unresolvedChangesRequestedCount = evidence.reviewsReadFailed === true
+      ? Number.POSITIVE_INFINITY
+      : countUnresolvedHumanChangesRequested(reviews);
+    if (resolveSizeBudgetHumanApprovalRequired({
+      sizeOutcome: preApproval.sizeOutcome,
+      touchesT1: preApproval.sizeTouchesT1,
+      humanApprovalSatisfied: anyFreshHumanApproval({ currentHeadSha: evidence.currentHeadSha, reviews, comments }),
+      unresolvedChangesRequestedCount,
+    })) {
+      failures.push(
+        evidence.reviewsReadFailed === true
+          ? "size-budget merge gate cannot verify human approval/unresolved CHANGES_REQUESTED state for this escalated/T1 PR: PR reviews could not be read (fail closed)"
+          : "size-budget requires a human APPROVED review OR a head-pinned \"approve merge <headSha>\" operator comment, with zero unresolved CHANGES_REQUESTED, for this escalated/T1 PR",
+      );
+    }
   }
   // Fail-closed fan-out evidence enforcement (gates.requireFanoutEvidence, ON by
   // default / opt-out). When disabled or config-unavailable, fanoutEnforcement is
@@ -835,7 +898,15 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   }
   return { required: true, requireProvenance, rejectForeignAngles, lightMode, hasFullLabel, gates };
 }
-export async function detectCheckpointEvidence(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, cwd = process.cwd() } = {}) {
+// Internal gatherer — carries the raw reviews/comments facts (comments carry
+// FULL PR comment bodies) that buildPreMergeGateCheck needs. NOT exported:
+// the only caller allowed to see those raw fields is this module's own
+// main() below, which builds preMergeGateCheck from them and then discards
+// them before emitting output. The exported detectCheckpointEvidence
+// wrapper below strips them so no OTHER caller (e.g.
+// detect-pr-gate-coordination-state.mjs, which durably stores the whole
+// returned object) can re-expose them.
+async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghCommand = "gh", runChild = defaultRunChild, cwd = process.cwd() } = {}) {
   const runnerOwnership = await ensureAsyncRunnerOwnership({
     repo: options.repo,
     pr: options.pr,
@@ -879,16 +950,42 @@ export async function detectCheckpointEvidence(options, { env = process.env, ghC
   // fallback poster's output. Both feed the same summarizers, so a verdict is
   // counted once wherever it lives.
   let prReviews = [];
+  // Flat { login, state, commit_id, type } facts for the size-budget merge
+  // gate below — the SAME shape merge-pr.mjs's own evaluateMergePreconditions
+  // call feeds countUnresolvedHumanChangesRequested/verifyFreshHumanApproval,
+  // kept separate from prReviews above (which is
+  // normalized for the gate-review-comment marker summarizers instead). Only
+  // SUBMITTED_REVIEW_STATES survive — a PENDING (unsubmitted draft) review
+  // must never shadow an already-submitted APPROVED review from the same
+  // login in the "last entry per login wins" resolvers below.
+  let reviewFacts = [];
+  // Distinct from "reviews fetched, zero reviews": a genuine read failure
+  // must never be consumed by the size-budget merge gate as "zero blocking
+  // reviews" (see buildPreMergeGateCheck below). Every other evidence
+  // consumer (draftGate/preApprovalGate comment summarizers) still treats a
+  // fetch failure as non-fatal, unchanged.
+  let reviewsReadFailed = false;
   try {
     const reviewsRaw = await runGhJson(
       prReviewsApiArgs(options.repo, options.pr),
       { env, ghCommand, runChild, restFallback: () => restGetPaginatedJson(prReviewsApiPath(options.repo, options.pr), env) },
     );
     prReviews = normalizePrReviewsPayload(reviewsRaw);
+    reviewFacts = flattenPaginatedSlurp(reviewsRaw)
+      .filter((r) => SUBMITTED_REVIEW_STATES.has(r?.state))
+      .map((r) => ({
+        login: r?.user?.login ?? null, state: r?.state ?? null, commit_id: r?.commit_id ?? null, type: r?.user?.type ?? null,
+      }));
   } catch {
-    // Graceful fallback: PR reviews fetch failure is non-fatal.
-    // We continue with issue comments only.
+    // Graceful fallback for the comment/verdict summarizers below: PR reviews
+    // fetch failure is non-fatal there, and they continue with issue comments
+    // only. The size-budget merge-authorization consumption is different —
+    // see reviewsReadFailed above.
+    reviewsReadFailed = true;
   }
+  const commentFacts = commentsPayload.map((c) => ({
+    login: c?.user?.login ?? null, body: c?.body ?? "", type: c?.user?.type ?? null,
+  }));
   // Machine-artifact bodies are filtered inside the two summarizers below, not
   // here — see the import comment above.
   const allComments = [...commentsPayload, ...prReviews];
@@ -950,6 +1047,19 @@ export async function detectCheckpointEvidence(options, { env = process.env, ghC
     draftGateMarker,
     preApprovalGateMarker,
     draftGateSatisfied: commentSummary.draft_gate?.verdict === "clean" && typeof commentSummary.draft_gate?.headSha === "string",
+    // Additive: reviews/comments in the flat shape the size-budget merge gate
+    // needs (buildPreMergeGateCheck below). Never consumed by the gate-review-
+    // comment marker summarizers above — those use prReviews/allComments. Kept
+    // on THIS internal object only — the exported detectCheckpointEvidence
+    // wrapper strips them before returning (see the comment on
+    // gatherCheckpointEvidenceRaw above).
+    reviews: reviewFacts,
+    comments: commentFacts,
+    // A small flag (not raw data) — safe to keep on every projection,
+    // including the exported wrapper's public result, so
+    // buildPreMergeGateCheck's fail-closed handling is reachable without
+    // threading the raw reviews array through it.
+    reviewsReadFailed,
     fanoutEnforcement,
     ...(runnerOwnership.status !== "skipped_no_async_run_id" ? { runnerOwnership } : {}),
     staleRunner: {
@@ -961,6 +1071,20 @@ export async function detectCheckpointEvidence(options, { env = process.env, ghC
       filePath: staleRunnerDetection.filePath,
     },
   };
+}
+/**
+ * Public entry point. Same facts as {@link gatherCheckpointEvidenceRaw} minus
+ * the raw `reviews`/`comments` arrays (comments carry full PR comment
+ * bodies) — those are size-budget-gate input facts consumed only inside this
+ * module's own main() via buildPreMergeGateCheck, and must never be a
+ * durable field on the object handed to callers outside this file (e.g.
+ * detect-pr-gate-coordination-state.mjs, which stores this whole result
+ * under `gateEvidence`) — kept off every public projection regardless of how
+ * many comments the PR has accumulated.
+ */
+export async function detectCheckpointEvidence(options, ctx) {
+  const { reviews: _reviews, comments: _comments, ...publicResult } = await gatherCheckpointEvidenceRaw(options, ctx);
+  return publicResult;
 }
 async function main() {
   let options;
@@ -976,7 +1100,11 @@ async function main() {
     return;
   }
   try {
-    const result = await detectCheckpointEvidence(options);
+    // Deliberately the internal raw gatherer, not the exported
+    // detectCheckpointEvidence wrapper: this main() needs the raw
+    // reviews/comments facts for buildPreMergeGateCheck below, and strips
+    // them itself before emitting output (see serializableResult below).
+    const result = await gatherCheckpointEvidenceRaw(options);
     let unresolvedThreadCount = -1;
     let unresolvedGateThreadCount = -1;
     try {
@@ -1007,7 +1135,14 @@ async function main() {
     };
     const preMergeGateCheck = buildPreMergeGateCheck(result, unresolvedThreadCount, staleRunnerCheck, result.fanoutEnforcement, { skipFanoutLedgerCheck: options.skipFanoutLedgerCheck === true });
     const evidenceState = deriveEvidenceState(result, preMergeGateCheck);
-    const output = { ...result, preMergeGateCheck, staleRunnerCheck, evidenceState };
+    // reviews/comments are raw size-budget-gate input facts (comments carry
+    // FULL PR comment bodies) consumed internally by buildPreMergeGateCheck
+    // above; they are never read from the CLI's own JSON output by any
+    // consumer (merge-pr.mjs reads only preMergeGateCheck.failures), so they
+    // are excluded here to keep emitted output bounded regardless of how many
+    // comments the PR has accumulated.
+    const { reviews: _reviews, comments: _comments, ...serializableResult } = result;
+    const output = { ...serializableResult, preMergeGateCheck, staleRunnerCheck, evidenceState };
     if (!preMergeGateCheck.ok) {
       process.stderr.write(`${JSON.stringify({
         ok: false,

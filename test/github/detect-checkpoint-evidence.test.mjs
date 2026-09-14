@@ -529,6 +529,12 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
               "Verdict: clean",
               "Findings summary: no issues found",
               "Next action: await final human approval",
+              // pass/non-T1 so this clean pre_approval_gate verdict carries no
+              // size-imposed human-approval requirement (this test is not
+              // exercising the size-budget merge gate).
+              "Size-budget outcome: pass",
+              "Size-budget T1 slice: not touched",
+              "Size-budget waiver: none",
             ].join("\n"),
             updated_at: "2026-05-29T22:00:00Z",
             html_url: "https://github.com/owner/repo/pull/17#issuecomment-43",
@@ -539,6 +545,10 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
             updated_at: "2026-05-29T23:00:00Z",
           },
         ])}\n`,
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+        stdout: "[]\n",
       },
       {
         assertArgs: ["api", "graphql"],
@@ -557,6 +567,14 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
     assert.equal(result.stderr, "");
     const parsed = JSON.parse(result.stdout);
     parsed.staleRunner = { ...parsed.staleRunner, filePath: "<stale-runner-file-path>", activeRun: "<active-run-or-null>", status: parsed.staleRunner.status === "fresh_runner" || parsed.staleRunner.status === "no_owner_record" ? "<stale-status>" : parsed.staleRunner.status };
+    // reviews/comments are the size-budget merge gate's raw input facts
+    // (comments carry full PR comment bodies); they are consumed internally
+    // by buildPreMergeGateCheck but never serialized into the emitted CLI
+    // output (kept bounded regardless of how many comments the PR has), so
+    // they must be absent here — asserted directly by the buildPreMergeGateCheck
+    // size-gate tests instead.
+    assert.equal(parsed.reviews, undefined, "reviews must not be serialized into the CLI output");
+    assert.equal(parsed.comments, undefined, "comments (raw comment bodies) must not be serialized into the CLI output");
     assert.deepEqual(parsed, {
       ok: true,
       repo: "owner/repo",
@@ -584,9 +602,9 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
         verdict: "clean",
         findingsSummary: "no issues found",
         nextAction: "await final human approval",
-        sizeOutcome: null,
-        sizeTouchesT1: null,
-        sizeWaiverGranted: null,
+        sizeOutcome: "pass",
+        sizeTouchesT1: false,
+        sizeWaiverGranted: false,
         sizeWaiverApprovedBy: null,
         commentId: 43,
         commentUrl: "https://github.com/owner/repo/pull/17#issuecomment-43",
@@ -619,9 +637,9 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
         nextAction: "await final human approval",
         executionMode: null,
         inlineReason: null,
-        sizeOutcome: null,
-        sizeTouchesT1: null,
-        sizeWaiverGranted: null,
+        sizeOutcome: "pass",
+        sizeTouchesT1: false,
+        sizeWaiverGranted: false,
         sizeWaiverApprovedBy: null,
         contractComplete: true,
         commentId: 43,
@@ -629,6 +647,9 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
         updatedAt: "2026-05-29T22:00:00Z",
       },
       draftGateSatisfied: true,
+      // A small flag (never raw review/comment data) — false here because the
+      // reviews fetch above succeeds.
+      reviewsReadFailed: false,
       fanoutEnforcement: { required: false, gates: [] },
       preMergeGateCheck: {
         ok: true,
@@ -845,6 +866,9 @@ test("detect-checkpoint-evidence always passes pre-merge check with clean draft 
               "Verdict: clean",
               "Findings summary: no issues found",
               "Next action: await final human approval",
+              "Size-budget outcome: pass",
+              "Size-budget T1 slice: not touched",
+              "Size-budget waiver: none",
             ].join("\n"),
             updated_at: "2026-05-29T22:00:00Z",
             html_url: "https://github.com/owner/repo/pull/17#issuecomment-71",
@@ -1107,7 +1131,7 @@ test("buildPreMergeGateCheck fails with non-zero unresolved thread count", () =>
   const evidence = {
     currentHeadSha: "abc1234",
     draftGate: { visible: true, verdict: "clean" },
-    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: "abc1234" },
+    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: "abc1234", sizeOutcome: "pass", sizeTouchesT1: false },
   };
 
   const result = buildPreMergeGateCheck(evidence, 3);
@@ -1121,7 +1145,7 @@ test("buildPreMergeGateCheck fails with sentinel -1 (API fetch failure)", () => 
   const evidence = {
     currentHeadSha: "abc1234",
     draftGate: { visible: true, verdict: "clean" },
-    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: "abc1234" },
+    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: "abc1234", sizeOutcome: "pass", sizeTouchesT1: false },
   };
 
   const result = buildPreMergeGateCheck(evidence, -1);
@@ -1135,7 +1159,7 @@ test("buildPreMergeGateCheck passes with zero unresolved threads", () => {
   const evidence = {
     currentHeadSha: "abc1234",
     draftGate: { visible: true, verdict: "clean" },
-    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: "abc1234" },
+    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: "abc1234", sizeOutcome: "pass", sizeTouchesT1: false },
   };
 
   const result = buildPreMergeGateCheck(evidence, 0);
@@ -1147,9 +1171,145 @@ function cleanEvidence() {
   return {
     currentHeadSha: "abc1234",
     draftGate: { visible: true, verdict: "clean" },
-    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: "abc1234" },
+    // pass/non-T1 by default so this "everything is clean" fixture carries no
+    // size-imposed approval requirement; individual size-gate tests below
+    // override sizeOutcome/sizeTouchesT1 to exercise the escalated/absent paths.
+    preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: "abc1234", sizeOutcome: "pass", sizeTouchesT1: false },
   };
 }
+
+// --- Size-budget merge gate consultation (AC2, AC3, AC4, AC5) ---
+
+test("buildPreMergeGateCheck: escalate sizeOutcome with no human APPROVED review fails (AC2, AC3)", () => {
+  const evidence = cleanEvidence();
+  evidence.preApprovalGateMarker.sizeOutcome = "escalate";
+  const result = buildPreMergeGateCheck(evidence, 0, null);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("size-budget requires a human APPROVED review")),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck: escalate sizeOutcome with a human APPROVED review and 0 unresolved CHANGES_REQUESTED passes (AC3)", () => {
+  const evidence = cleanEvidence();
+  evidence.preApprovalGateMarker.sizeOutcome = "escalate";
+  evidence.reviews = [{ login: "alice", state: "APPROVED", commit_id: "abc1234" }];
+  const result = buildPreMergeGateCheck(evidence, 0, null);
+  assert.equal(result.ok, true, JSON.stringify(result.failures));
+});
+
+test("buildPreMergeGateCheck: sizeTouchesT1 true with no APPROVED review fails, even on a pass outcome (remaps sizeTouchesT1 -> touchesT1) (AC2, AC3)", () => {
+  const evidence = cleanEvidence();
+  evidence.preApprovalGateMarker.sizeTouchesT1 = true;
+  const result = buildPreMergeGateCheck(evidence, 0, null);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("size-budget requires a human APPROVED review")),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck: pass sizeOutcome + sizeTouchesT1 false passes without any human review (AC3 no false positive)", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), 0, null);
+  assert.equal(result.ok, true, JSON.stringify(result.failures));
+});
+
+test("buildPreMergeGateCheck: null sizeOutcome/sizeTouchesT1 (absent size evidence) fails closed (AC4)", () => {
+  const evidence = cleanEvidence();
+  evidence.preApprovalGateMarker.sizeOutcome = null;
+  evidence.preApprovalGateMarker.sizeTouchesT1 = null;
+  const result = buildPreMergeGateCheck(evidence, 0, null);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("size-budget requires a human APPROVED review")),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck: ill-typed sizeOutcome/sizeTouchesT1 fails closed (AC4)", () => {
+  const evidence = cleanEvidence();
+  evidence.preApprovalGateMarker.sizeOutcome = "not-a-real-outcome";
+  evidence.preApprovalGateMarker.sizeTouchesT1 = "yes";
+  const result = buildPreMergeGateCheck(evidence, 0, null);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("size-budget requires a human APPROVED review")),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck: an unresolved human CHANGES_REQUESTED alongside an APPROVED still fails (AC2 unresolved-CR guard)", () => {
+  const evidence = cleanEvidence();
+  evidence.preApprovalGateMarker.sizeOutcome = "escalate";
+  evidence.reviews = [
+    { login: "alice", state: "APPROVED", commit_id: "abc1234" },
+    { login: "bob", state: "CHANGES_REQUESTED", commit_id: "abc1234" },
+  ];
+  const result = buildPreMergeGateCheck(evidence, 0, null);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("size-budget requires a human APPROVED review")),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck: a solo-owner PR clears the gate via a head-pinned \"approve merge <headSha>\" comment even with no APPROVED review (AC5)", () => {
+  const evidence = cleanEvidence();
+  evidence.preApprovalGateMarker.sizeOutcome = "escalate";
+  evidence.comments = [{ login: "carol", body: "approve merge abc1234", type: "User" }];
+  const result = buildPreMergeGateCheck(evidence, 0, null);
+  assert.equal(result.ok, true, JSON.stringify(result.failures));
+});
+
+test("buildPreMergeGateCheck: a bot-authored \"approve merge <headSha>\" comment never satisfies the gate (AC5 fail-closed)", () => {
+  const evidence = cleanEvidence();
+  evidence.preApprovalGateMarker.sizeOutcome = "escalate";
+  evidence.comments = [{ login: "some-bot[bot]", body: "approve merge abc1234", type: "Bot" }];
+  const result = buildPreMergeGateCheck(evidence, 0, null);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("size-budget requires a human APPROVED review")),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck: a reviews-read failure fails closed even with a head-pinned \"approve merge <headSha>\" comment (escalated/T1, #2181 fail-open regression)", () => {
+  // Without the reviewsReadFailed fail-closed handling, an unreadable review
+  // stream reads as "zero reviews" — countUnresolvedHumanChangesRequested([])
+  // is 0, so a genuine unresolved CHANGES_REQUESTED on that unreadable stream
+  // could never be seen, and the comment-marker approval alone would clear
+  // an escalated/T1 gate it must not clear.
+  const evidence = cleanEvidence();
+  evidence.preApprovalGateMarker.sizeOutcome = "escalate";
+  evidence.reviewsReadFailed = true;
+  evidence.comments = [{ login: "carol", body: "approve merge abc1234", type: "User" }];
+  const result = buildPreMergeGateCheck(evidence, 0, null);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("PR reviews could not be read")),
+    JSON.stringify(result.failures),
+  );
+});
+
+test("buildPreMergeGateCheck: reviewsReadFailed adds no failure when the size outcome carries no approval requirement (pass, non-T1)", () => {
+  const evidence = cleanEvidence();
+  evidence.reviewsReadFailed = true;
+  const result = buildPreMergeGateCheck(evidence, 0, null);
+  assert.equal(result.ok, true, JSON.stringify(result.failures));
+});
+
+test("buildPreMergeGateCheck: a stale-head APPROVED review (commit_id != currentHeadSha) never clears the size gate (AC2/AC3 fail-closed)", () => {
+  const evidence = cleanEvidence();
+  evidence.preApprovalGateMarker.sizeOutcome = "escalate";
+  evidence.reviews = [{ login: "alice", state: "APPROVED", commit_id: "stale0000" }];
+  const result = buildPreMergeGateCheck(evidence, 0, null);
+  assert.equal(result.ok, false, JSON.stringify(result.failures));
+  assert.ok(
+    result.failures.some((f) => f.includes("size-budget requires a human APPROVED review")),
+    JSON.stringify(result.failures),
+  );
+});
 
 test("buildPreMergeGateCheck with no/disabled enforcement descriptor ignores executionMode", () => {
   // No fanoutEnforcement argument (or { required: false }) => enforcement skipped.
@@ -1590,7 +1750,7 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7): a real l
     const result = buildPreMergeGateCheck({
       currentHeadSha: headSha,
       draftGate: { visible: true, verdict: "clean" },
-      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha },
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha, sizeOutcome: "pass", sizeTouchesT1: false },
     }, 0, null, enforcement);
     assert.equal(result.ok, true, JSON.stringify(result.failures));
   } finally {
@@ -1730,7 +1890,7 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7, #1601): t
     const result = buildPreMergeGateCheck({
       currentHeadSha: headSha,
       draftGate: { visible: true, verdict: "clean" },
-      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha },
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha, sizeOutcome: "pass", sizeTouchesT1: false },
     }, 0, null, enforcement);
     // #1601 (ADR 0048): gate:full dispatches grouped, so the configured
     // "process" group stays valid and the shared reviewer passes provenance.
@@ -2224,7 +2384,7 @@ test("buildFanoutEnforcement (#1174) re-derives scope fail-closed and sets scope
     const accepted = buildPreMergeGateCheck({
       currentHeadSha: headSha,
       draftGate: { visible: true, verdict: "clean" },
-      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha },
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha, sizeOutcome: "pass", sizeTouchesT1: false },
     }, 0, null, enforcement);
     assert.equal(accepted.ok, true, JSON.stringify(accepted.failures));
 
@@ -2337,7 +2497,7 @@ test("buildFanoutEnforcement (#1972, AC2): a rename-class .devloops PR validates
     const result = buildPreMergeGateCheck({
       currentHeadSha: headSha,
       draftGate: { visible: true, verdict: "clean" },
-      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha },
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha, sizeOutcome: "pass", sizeTouchesT1: false },
     }, 0, null, enforcement);
     assert.equal(result.ok, true, JSON.stringify(result.failures));
   } finally {
@@ -2925,6 +3085,9 @@ test("detect-checkpoint-evidence passes pre-merge when all human review threads 
               "Verdict: clean",
               "Findings summary: no issues found",
               "Next action: await final human approval",
+              "Size-budget outcome: pass",
+              "Size-budget T1 slice: not touched",
+              "Size-budget waiver: none",
             ].join("\n"),
             updated_at: "2026-05-29T22:00:00Z",
             html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
@@ -3043,6 +3206,9 @@ test("detect-checkpoint-evidence finds gate comment posted as PR review (root ca
         "**Findings summary:** no issues found",
         "",
         "**Next action:** await final human approval",
+        "**Size-budget outcome:** pass",
+        "**Size-budget T1 slice:** not touched",
+        "**Size-budget waiver:** none",
       ].join("\n"),
       // PR reviews use submitted_at instead of created_at/updated_at
       submitted_at: "2026-05-30T23:25:00Z",
@@ -3098,6 +3264,168 @@ test("detect-checkpoint-evidence finds gate comment posted as PR review (root ca
     // The pre-approval gate evidence is visible with the correct head SHA
     assert.equal(payload.preApprovalGate.visible, true);
     assert.equal(payload.preApprovalGate.verdict, "clean");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// A PENDING (unsubmitted draft) review must never shadow an already-
+// submitted APPROVED review from the SAME login: the size-budget gate's
+// "last entry per login wins" resolvers (verifyFreshHumanApproval,
+// countUnresolvedHumanChangesRequested) treat the raw reviews stream as
+// already ordered oldest-first, so a PENDING draft opened after a real
+// APPROVED review must be filtered out before it ever reaches them —
+// otherwise it reads as "no longer approved" and wrongly blocks a
+// legitimately approved escalated/T1 merge.
+test("detect-checkpoint-evidence: a head-pinned APPROVED review followed by a later PENDING review from the same login still clears the size-budget gate", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-pending-review-shadow-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    const env = await writeGhStub(tempDir, [
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: `${JSON.stringify([
+          {
+            id: 60,
+            body: [
+              "Gate review: draft_gate",
+              "Reviewed head SHA: abc1234",
+              "Verdict: clean",
+              "Findings summary: no issues found",
+              "Next action: mark ready for review",
+            ].join("\n"),
+            updated_at: "2026-05-29T21:00:00Z",
+            html_url: "https://github.com/owner/repo/pull/17#issuecomment-60",
+          },
+          {
+            id: 61,
+            body: [
+              "Gate review: pre_approval_gate",
+              "Reviewed head SHA: abc1234",
+              "Verdict: clean",
+              "Findings summary: no issues found",
+              "Next action: await final human approval",
+              "Size-budget outcome: escalate",
+              "Size-budget T1 slice: not touched",
+              "Size-budget waiver: none",
+            ].join("\n"),
+            updated_at: "2026-05-29T22:00:00Z",
+            html_url: "https://github.com/owner/repo/pull/17#issuecomment-61",
+          },
+        ])}\n`,
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+        stdout: `${JSON.stringify([
+          {
+            id: 900,
+            user: { login: "alice", type: "User" },
+            state: "APPROVED",
+            commit_id: "abc1234",
+            submitted_at: "2026-05-29T22:30:00Z",
+            body: "looks good",
+          },
+          // A later PENDING draft review from the SAME login — must not
+          // shadow the APPROVED review above.
+          {
+            id: 901,
+            user: { login: "alice", type: "User" },
+            state: "PENDING",
+            commit_id: null,
+            submitted_at: null,
+            body: "",
+          },
+        ])}\n`,
+      },
+      {
+        assertArgs: ["api", "graphql"],
+        stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) + "\n",
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.preMergeGateCheck.ok, true, JSON.stringify(payload.preMergeGateCheck));
+    assert.deepEqual(payload.preMergeGateCheck.failures, []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// A reviews-API read failure must never be consumed as "zero reviews" by the
+// size-budget merge gate: an escalated/T1 PR with an unreadable review
+// stream must stay blocked even when a head-pinned "approve merge <headSha>"
+// operator comment is present, because the unreadable stream could hide a
+// real unresolved CHANGES_REQUESTED.
+test("detect-checkpoint-evidence: a reviews-read failure blocks an escalated size-budget gate even with an approve-merge comment present", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-reviews-read-failure-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    const env = await writeGhStub(tempDir, [
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: `${JSON.stringify([
+          {
+            id: 60,
+            body: [
+              "Gate review: draft_gate",
+              "Reviewed head SHA: abc1234",
+              "Verdict: clean",
+              "Findings summary: no issues found",
+              "Next action: mark ready for review",
+            ].join("\n"),
+            updated_at: "2026-05-29T21:00:00Z",
+            html_url: "https://github.com/owner/repo/pull/17#issuecomment-60",
+          },
+          {
+            id: 61,
+            body: [
+              "Gate review: pre_approval_gate",
+              "Reviewed head SHA: abc1234",
+              "Verdict: clean",
+              "Findings summary: no issues found",
+              "Next action: await final human approval",
+              "Size-budget outcome: escalate",
+              "Size-budget T1 slice: not touched",
+              "Size-budget waiver: none",
+            ].join("\n"),
+            updated_at: "2026-05-29T22:00:00Z",
+            html_url: "https://github.com/owner/repo/pull/17#issuecomment-61",
+          },
+          {
+            id: 62,
+            body: "approve merge abc1234",
+            updated_at: "2026-05-29T23:00:00Z",
+            user: { login: "carol", type: "User" },
+          },
+        ])}\n`,
+      },
+      {
+        // The reviews API read itself fails (e.g. transient GitHub error).
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+        stderr: "gh: transient error\n",
+        exitCode: 1,
+      },
+      {
+        assertArgs: ["api", "graphql"],
+        stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }) + "\n",
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.preMergeGateCheck.ok, false);
+    assert.ok(
+      payload.preMergeGateCheck.failures.some((f) => f.includes("PR reviews could not be read")),
+      JSON.stringify(payload.preMergeGateCheck.failures),
+    );
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -3236,6 +3564,9 @@ test("detect-checkpoint-evidence: a genuine verdict comment whose findings summa
         "**Reviewed head SHA:** `abc1234`",
         "**Verdict:** clean",
         "**Execution mode:** inline_single_agent — tiny change",
+        "**Size-budget outcome:** pass",
+        "**Size-budget T1 slice:** not touched",
+        "**Size-budget waiver:** none",
         "",
         `**Findings summary:** ${quotedSummary}`,
         "",
@@ -3323,6 +3654,13 @@ function gateMarkerComment({ gate, headSha, nextAction, executionMode, inlineRea
       `**Reviewed head SHA:** \`${headSha}\``,
       "**Verdict:** clean",
       modeLine,
+      // pass/non-T1 by default so this fixture's clean pre_approval_gate
+      // verdict carries no size-imposed human-approval requirement — the
+      // fan-out/execution-mode tests this feeds are not exercising the
+      // size-budget merge gate.
+      "**Size-budget outcome:** pass",
+      "**Size-budget T1 slice:** not touched",
+      "**Size-budget waiver:** none",
       "",
       "**Findings summary:** no issues found",
       "",
@@ -3583,7 +3921,7 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck PASSES on an auto-chunked 
     const result = buildPreMergeGateCheck({
       currentHeadSha: headSha,
       draftGate: { visible: true, verdict: "clean" },
-      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha },
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha, sizeOutcome: "pass", sizeTouchesT1: false },
     }, 0, null, enforcement);
     assert.equal(result.ok, true, JSON.stringify(result.failures));
   } finally {
