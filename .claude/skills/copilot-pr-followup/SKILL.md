@@ -363,11 +363,17 @@ When passing `--findings-severity-counts` for an inline round, substitute the co
 For a `pre_approval_gate` verdict, ALWAYS compute the size budget first and thread it into the upsert via `--size-budget-json`:
 
 ```sh
-node <resolved-skill-scripts>/loop/check-size-budget.mjs --base origin/<base-branch> --head <current_head_sha> > <size-budget-json-path>
-check_size_budget_status=$?
 # check-size-budget.mjs exits 0 (pass) or 1 (escalate|block) for a VALID
 # outcome — both leave <size-budget-json-path> populated. Only exit 2 means
-# an arg/runtime error with no usable JSON, so abort on that alone.
+# an arg/runtime error with no usable JSON, so abort on that alone. Capture
+# the exit status via the `if` condition, not a bare `$?` after the command:
+# under `set -e` a bare command followed by `status=$?` never reaches the
+# capture, because the shell exits on the command's own nonzero status first.
+if node <resolved-skill-scripts>/loop/check-size-budget.mjs --base origin/<base-branch> --head <current_head_sha> > <size-budget-json-path>; then
+  check_size_budget_status=0
+else
+  check_size_budget_status=$?
+fi
 if [ "$check_size_budget_status" -eq 2 ]; then
   echo "check-size-budget.mjs failed (exit 2); aborting before upsert" >&2
   exit 2
