@@ -19,7 +19,7 @@
  *     the base and head content of a changed `skills/docs/*.md` file. A
  *     changed rule-bearing file whose base+head content cannot BOTH be read
  *     fails closed (unresolvable-rule-scan) rather than silently passing.
- *  4. devloops-proportionality (#1984): a changed repo-root `.devloops` whose
+ *  4. devloops-proportionality: a changed repo-root `.devloops` whose
  *     GATE-EXEC-PROPORTIONALITY fields (`localImplementation.lightMode.`
  *     `maxFiles`/`maxLines`/`riskPaths`) differ between base and head — added,
  *     modified, or removed. These fields set review rigor for this repo, so
@@ -101,7 +101,7 @@ export const GATE_CONFIG_PATH = "packages/core/src/config/extension-defaults.yam
 // .devloops.yaml/.yml/.json variants some CLI helpers also probe are not this
 // repo's own convention and are out of scope here).
 export const DEVLOOPS_CONFIG_PATH = ".devloops";
-// GATE-EXEC-PROPORTIONALITY fields (#1984): the cap (maxFiles/maxLines) and
+// GATE-EXEC-PROPORTIONALITY fields: the cap (maxFiles/maxLines) and
 // risk-path denylist ADDITION live here. Any base-vs-head value change on one
 // of these dotted paths is decision-shaped — see the class-4 doc comment above.
 export const DEVLOOPS_PROPORTIONALITY_FIELD_PATHS = Object.freeze([
@@ -275,7 +275,7 @@ export function computeAdrTripwire({
     }
   }
 
-  // devloops-proportionality scan (#1984): a changed repo-root .devloops whose
+  // devloops-proportionality scan: a changed repo-root .devloops whose
   // GATE-EXEC-PROPORTIONALITY fields differ between base and head — added,
   // modified, or removed (an absent side reads as "no fields set", `{}`, not
   // a parse failure; only genuinely unparsable YAML fails closed).
@@ -422,7 +422,7 @@ function assertPlausibleRef(ref, label) {
  * runs `git fetch` — the caller's flow is responsible for the refs being
  * present locally. Reads `git show` content for every changed skills/docs
  * markdown file (rule-modality reversals) and a changed repo-root `.devloops`
- * (proportionality field changes, #1984) at both refs.
+ * (proportionality field changes, GATE-EXEC-PROPORTIONALITY) at both refs.
  */
 export async function evaluateAdrTripwire({
   base,
