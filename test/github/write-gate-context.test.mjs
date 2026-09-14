@@ -716,6 +716,70 @@ test("resolveReviewGateAngles is a no-op when acceptance-criteria was never in t
   assert.deepEqual(result.skippedAngles, []);
 });
 
+// #2201: provablyNoSpecOfRecord also drops the process angles that depend on
+// a spec of record (pr-checklist, pr-description, gate-evidence), not just
+// acceptance-criteria — REVIEW GATE ONLY, mirroring the acceptance-criteria
+// drop above with the same "no spec-of-record" rationale.
+test("resolveReviewGateAngles DROPS pr-checklist, pr-description, and gate-evidence (alongside acceptance-criteria) when the PR has no spec-of-record", () => {
+  const config = reviewAnglesConfig({
+    draftAngles: ["correctness", "acceptance-criteria", "pr-checklist"],
+    preApprovalAngles: ["pr-description", "gate-evidence", "docs"],
+  });
+  const result = resolveReviewGateAngles(config, { hasClosingIssue: false, hasAcChecklist: false });
+  assert.deepEqual(result.recommendedAngles, ["correctness", "docs"]);
+  assert.deepEqual(
+    [...result.skippedAngles].sort(),
+    ["acceptance-criteria", "gate-evidence", "pr-checklist", "pr-description"],
+  );
+  assert.deepEqual(result.reasons, {
+    "acceptance-criteria": "no spec-of-record",
+    "pr-checklist": "no spec-of-record",
+    "pr-description": "no spec-of-record",
+    "gate-evidence": "no spec-of-record",
+  });
+});
+
+test("resolveReviewGateAngles KEEPS pr-checklist, pr-description, and gate-evidence when the PR closes an issue", () => {
+  const config = reviewAnglesConfig({
+    draftAngles: ["correctness", "acceptance-criteria", "pr-checklist"],
+    preApprovalAngles: ["pr-description", "gate-evidence"],
+  });
+  const result = resolveReviewGateAngles(config, { hasClosingIssue: true, hasAcChecklist: false });
+  assert.deepEqual(result.recommendedAngles, ["correctness", "acceptance-criteria", "pr-checklist", "pr-description", "gate-evidence"]);
+  assert.deepEqual(result.skippedAngles, []);
+  assert.deepEqual(result.reasons, {});
+});
+
+test("resolveReviewGateAngles KEEPS pr-checklist, pr-description, and gate-evidence when the PR's own body carries an AC checklist", () => {
+  const config = reviewAnglesConfig({
+    draftAngles: ["correctness", "acceptance-criteria", "pr-checklist"],
+    preApprovalAngles: ["pr-description", "gate-evidence"],
+  });
+  const result = resolveReviewGateAngles(config, { hasClosingIssue: false, hasAcChecklist: true });
+  assert.deepEqual(result.recommendedAngles, ["correctness", "acceptance-criteria", "pr-checklist", "pr-description", "gate-evidence"]);
+  assert.deepEqual(result.skippedAngles, []);
+  assert.deepEqual(result.reasons, {});
+});
+
+test("resolveReviewGateAngles KEEPS pr-checklist, pr-description, and gate-evidence (fail-closed) when hasClosingIssue is UNKNOWN", () => {
+  const config = reviewAnglesConfig({
+    draftAngles: ["correctness", "acceptance-criteria", "pr-checklist"],
+    preApprovalAngles: ["pr-description", "gate-evidence"],
+  });
+  const result = resolveReviewGateAngles(config, { hasClosingIssue: undefined, hasAcChecklist: false });
+  assert.deepEqual(result.recommendedAngles, ["correctness", "acceptance-criteria", "pr-checklist", "pr-description", "gate-evidence"]);
+  assert.deepEqual(result.skippedAngles, []);
+  assert.deepEqual(result.reasons, {});
+});
+
+test("resolveReviewGateAngles records no spurious skip entries when none of the spec-of-record-dependent process angles are in the union", () => {
+  const config = reviewAnglesConfig({ draftAngles: ["correctness"], preApprovalAngles: ["docs"] });
+  const result = resolveReviewGateAngles(config, { hasClosingIssue: false, hasAcChecklist: false });
+  assert.deepEqual(result.recommendedAngles, ["correctness", "docs"]);
+  assert.deepEqual(result.skippedAngles, []);
+  assert.deepEqual(result.reasons, {});
+});
+
 // End-to-end wiring check (buildGateContext, not just the pure resolver above):
 // gate: "review" resolves the SAME union+drop shape through the actual artifact
 // builder — no resolveGateAnglesDynamic tiering, no config-key crash.

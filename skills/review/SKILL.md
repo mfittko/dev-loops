@@ -66,9 +66,11 @@ repeat phases those gates run:
    pre-approval get. Angle resolution for `review` is NOT dynamic/tiered: it is
    the deterministic UNION of `draft`'s and `preApproval`'s configured angle
    sets (`resolveReviewGateAngles` in `write-gate-context.mjs`). The
-   `acceptance-criteria` angle is DROPPED (with a recorded rationale entry,
-   reason `"no spec-of-record"`) only when the PR closes no issue AND its own
-   body carries no AC checklist; it is KEPT when either is true.
+   spec-of-record-dependent angles — `acceptance-criteria`, `pr-checklist`,
+   `pr-description`, and `gate-evidence` — are each DROPPED (with a recorded
+   rationale entry, reason `"no spec-of-record"`) only when the PR closes no
+   issue AND its own body carries no AC checklist; all are KEPT when either
+   is true.
 2. **Phase 1.5 — cache primer.** Same `GATE-EXEC-PRIME` contract as any other
    gate fan-out — prime the shared prefix before releasing the rest of the
    fan-out.

@@ -88,20 +88,23 @@ export function mapGateToConfigKey(gate) {
   throw new Error(`Unknown gate: ${JSON.stringify(gate)} (expected draft_gate or pre_approval_gate)`);
 }
 
+const SPEC_OF_RECORD_DEPENDENT_ANGLES = ["acceptance-criteria", "pr-checklist", "pr-description", "gate-evidence"];
+
 /**
  * `review` angle resolution — a standalone gate with no config key of
  * its own: its resolved angle set is the UNION of both gates' configured
  * angle sets (resolveGateAngles, the STATIC pool — dynamic/tiered subtractive
  * resolution is deliberately not applied to review), never resolveGateAnglesDynamic.
  *
- * `acceptance-criteria` is dropped from that union only when both facts are
- * DEFINITIVELY known false — the PR closes no issue AND its own body carries
- * no AC checklist; it is kept when either is true (a linked issue is presumed
- * to carry the real spec even unclassified; a PR with its own AC checklist is
- * its own spec-of-record). `hasClosingIssue` is `undefined` (not `false`)
- * when the caller never queried GitHub (e.g. `--prefix-file` mode) — an
- * unknown fact must never be coerced to "false", so this fails CLOSED and
- * keeps acceptance-criteria.
+ * `acceptance-criteria`, `pr-checklist`, `pr-description`, and `gate-evidence`
+ * — the angles that depend on a spec of record — are dropped from that union
+ * only when both facts are DEFINITIVELY known false — the PR closes no issue
+ * AND its own body carries no AC checklist; they are kept when either is
+ * true (a linked issue is presumed to carry the real spec even unclassified;
+ * a PR with its own AC checklist is its own spec-of-record). `hasClosingIssue`
+ * is `undefined` (not `false`) when the caller never queried GitHub (e.g.
+ * `--prefix-file` mode) — an unknown fact must never be coerced to "false",
+ * so this fails CLOSED and keeps every angle.
  *
  * @param {import("@dev-loops/core/config").DevLoopConfig} config
  * @param {{ hasClosingIssue: boolean|undefined, hasAcChecklist: boolean|undefined }} facts
@@ -113,11 +116,13 @@ export function resolveReviewGateAngles(config, { hasClosingIssue, hasAcChecklis
     ...(resolveGateAngles(config, "preApproval") ?? []),
   ])];
   const provablyNoSpecOfRecord = hasClosingIssue === false && hasAcChecklist === false;
-  const dropAcceptanceCriteria = provablyNoSpecOfRecord && union.includes("acceptance-criteria");
+  const anglesToDrop = provablyNoSpecOfRecord
+    ? SPEC_OF_RECORD_DEPENDENT_ANGLES.filter((a) => union.includes(a))
+    : [];
   return {
-    recommendedAngles: dropAcceptanceCriteria ? union.filter((a) => a !== "acceptance-criteria") : union,
-    skippedAngles: dropAcceptanceCriteria ? ["acceptance-criteria"] : [],
-    reasons: dropAcceptanceCriteria ? { "acceptance-criteria": "no spec-of-record" } : {},
+    recommendedAngles: union.filter((a) => !anglesToDrop.includes(a)),
+    skippedAngles: anglesToDrop,
+    reasons: Object.fromEntries(anglesToDrop.map((a) => [a, "no spec-of-record"])),
     fallbackToAll: false,
     dynamicAnglesActive: false,
     addedAngles: [],
@@ -2733,13 +2738,13 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
     ? resolveReviewGateAngles(input.config, {
         // Pass through verbatim — undefined means "never queried GitHub"
         // (e.g. --prefix-file mode) and must reach the resolver as undefined,
-        // not be coerced to false, so it fails closed (keeps
-        // acceptance-criteria) rather than fail-open (drops it).
+        // not be coerced to false, so it fails closed (keeps every angle)
+        // rather than fail-open (drops them).
         hasClosingIssue: input.hasClosingIssue,
         // hasAcChecklist reflects "AC checklist exists" (see
         // detectRefinementHasAcChecklist above) — not "review predicate
         // passes" — so an issue-less PR with a real checklist but no
-        // Non-goals still keeps the acceptance-criteria angle.
+        // Non-goals still keeps every spec-of-record-dependent angle.
         hasAcChecklist: detectRefinementHasAcChecklist(input.prBody ?? ""),
       })
     : await resolveGateAnglesDynamic(input.config, configKey, {
