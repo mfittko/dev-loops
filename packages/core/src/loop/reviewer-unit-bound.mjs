@@ -33,22 +33,45 @@ export const REVIEWER_UNIT_BUDGET = Object.freeze({
  * Operation kinds a reviewer unit is never allowed to perform, verbatim from
  * the issue AC enumeration. Default-deny governs everything else that is not
  * explicitly on the allow-list in assertReviewerOperationAllowed.
+ *
+ * Exported as a frozen ARRAY, not a Set: `Object.freeze(new Set(...))`
+ * freezes only the Set's own properties, not its contents — `.add`/
+ * `.delete`/`.clear` still work on a frozen Set and the mutation persists on
+ * this module-singleton export. A frozen array has no such escape hatch.
  */
-export const PROHIBITED_REVIEWER_OPERATIONS = Object.freeze(
-  new Set([
-    "poll_pr_state",
-    "poll_ci_state",
-    "poll_copilot_state",
-    "network_status_probe",
-    "rerun_validation",
-    "inspect_orchestration_runtime",
-    "review_unassigned_angle",
-  ]),
-);
+export const PROHIBITED_REVIEWER_OPERATIONS = Object.freeze([
+  "poll_pr_state",
+  "poll_ci_state",
+  "poll_copilot_state",
+  "network_status_probe",
+  "rerun_validation",
+  "inspect_orchestration_runtime",
+  "review_unassigned_angle",
+]);
+
+/** Private O(1)-membership mirror of PROHIBITED_REVIEWER_OPERATIONS. */
+const PROHIBITED_REVIEWER_OPERATIONS_SET = new Set(PROHIBITED_REVIEWER_OPERATIONS);
 
 /** @param {unknown} value @returns {boolean} */
 function isNonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+/**
+ * Recursively freeze a plain object/array value's own nested plain
+ * objects/arrays. A shallow Object.freeze leaves nested values mutable;
+ * the gate context must be genuinely immutable, not just its top level.
+ * @param {unknown} value
+ * @returns {unknown} the same value, deep-frozen.
+ */
+function deepFreeze(value) {
+  if (value === null || typeof value !== "object" || Object.isFrozen(value)) {
+    return value;
+  }
+  for (const key of Object.keys(value)) {
+    deepFreeze(value[key]);
+  }
+  return Object.freeze(value);
 }
 
 /**
@@ -95,10 +118,11 @@ export function validateReviewerUnit(unit) {
 
   // Freeze the gate context so the reviewer cannot mutate the current-head
   // identity it was handed; freeze the returned unit + angles for the same
-  // reason.
+  // reason. The freeze is deep — a shallow freeze would leave a nested
+  // gateContext value (e.g. provenance) mutable.
   return Object.freeze({
     run: run.trim(),
-    gateContext: Object.freeze({ ...gateContext }),
+    gateContext: deepFreeze({ ...gateContext }),
     angles: Object.freeze(normalizedAngles),
   });
 }
@@ -117,13 +141,18 @@ export function assertReviewerOperationAllowed(operation, { assignedAngles = [] 
   }
   const { kind } = operation;
 
-  if (PROHIBITED_REVIEWER_OPERATIONS.has(kind)) {
+  if (PROHIBITED_REVIEWER_OPERATIONS_SET.has(kind)) {
     throw new Error(`reviewer operation prohibited: ${kind}`);
   }
 
   if (kind === "review_angle") {
     const angle = operation.angle;
-    const assignedLower = new Set(assignedAngles.map((a) => String(a).trim().toLowerCase()));
+    // A non-string assignedAngles entry (e.g. a bare number) must never
+    // coerce into a matching authorization — skip it instead of
+    // String()-coercing, so it can never default-deny-bypass an angle.
+    const assignedLower = new Set(
+      assignedAngles.filter((a) => isNonEmptyString(a)).map((a) => a.trim().toLowerCase()),
+    );
     if (!isNonEmptyString(angle) || !assignedLower.has(angle.trim().toLowerCase())) {
       throw new Error(`review_unassigned_angle: ${JSON.stringify(angle ?? null)} is not assigned to this reviewer unit`);
     }
@@ -139,8 +168,8 @@ export function assertReviewerOperationAllowed(operation, { assignedAngles = [] 
 }
 
 /** @param {unknown} value @returns {boolean} */
-function isFiniteNonNegative(value) {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+function isNonNegativeInteger(value) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
 /**
@@ -152,11 +181,13 @@ function validateConsumed(consumed) {
     throw new TypeError("enforceReviewerUnitBound requires consumed to be an object with modelTurns and toolCalls");
   }
   const { modelTurns, toolCalls } = consumed;
-  if (!isFiniteNonNegative(modelTurns)) {
-    throw new TypeError("consumed.modelTurns must be a finite number >= 0");
+  // modelTurns/toolCalls are discrete counters — a fractional value (e.g.
+  // 44.5) is never a genuine count and must fail closed, not round/truncate.
+  if (!isNonNegativeInteger(modelTurns)) {
+    throw new TypeError("consumed.modelTurns must be a non-negative integer");
   }
-  if (!isFiniteNonNegative(toolCalls)) {
-    throw new TypeError("consumed.toolCalls must be a finite number >= 0");
+  if (!isNonNegativeInteger(toolCalls)) {
+    throw new TypeError("consumed.toolCalls must be a non-negative integer");
   }
   return { modelTurns, toolCalls };
 }
@@ -211,13 +242,16 @@ export function enforceReviewerUnitBound({ unit, consumed, completedAngles } = {
 
   if (budgetExceeded) {
     // Fail-closed revoke: even a nominally "complete" run cannot be reported
-    // clean once it ran over budget — nothing under exhaustion is
-    // trustworthily reviewed.
+    // clean once it ran over budget, so the verdict is always "blocked" —
+    // never a silent pass — regardless of angle coverage. unreviewedAngles
+    // still names the genuinely-remaining angles (not the full assigned
+    // set): the "never reported clean" guarantee comes from the blocked
+    // verdict itself, not from inflating this list.
     return {
       ok: false,
       verdict: "blocked",
       reason: "reviewer_budget_exhausted",
-      unreviewedAngles: [...assignedAngles],
+      unreviewedAngles,
       headSha: normalizedUnit.gateContext.headSha,
       unit: normalizedUnit,
       consumed: normalizedConsumed,

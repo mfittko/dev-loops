@@ -24,6 +24,7 @@ test("packages/core exports the sanctioned runtime boundary and de-exports unuse
   assert.equal(packageJson.exports["./loop/public-dev-loop-routing"], "./src/loop/public-dev-loop-routing.mjs");
   assert.equal(packageJson.exports["./loop/retrospective-checkpoint"], undefined);
   assert.equal(packageJson.exports["./loop/reviewer-loop-state"], "./src/loop/reviewer-loop-state.mjs");
+  assert.equal(packageJson.exports["./loop/reviewer-unit-bound"], "./src/loop/reviewer-unit-bound.mjs");
   assert.equal(packageJson.exports["./loop/run-inspection"], "./src/loop/run-inspection.mjs");
   assert.equal(packageJson.exports["./loop/steering"], "./src/loop/steering.mjs");
   assert.equal(packageJson.exports["./loop/timeout-policy"], "./src/loop/timeout-policy.mjs");

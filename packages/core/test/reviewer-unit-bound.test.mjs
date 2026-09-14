@@ -31,11 +31,23 @@ const EXPECTED_PROHIBITED_KINDS = [
 ];
 
 describe("reviewer-unit-bound — explicit-enumeration conformance", () => {
-  test("PROHIBITED_REVIEWER_OPERATIONS contains exactly the 7 named kinds", () => {
-    assert.equal(PROHIBITED_REVIEWER_OPERATIONS.size, EXPECTED_PROHIBITED_KINDS.length);
-    for (const kind of EXPECTED_PROHIBITED_KINDS) {
-      assert.equal(PROHIBITED_REVIEWER_OPERATIONS.has(kind), true, `expected prohibited set to contain ${kind}`);
-    }
+  test("PROHIBITED_REVIEWER_OPERATIONS is a frozen array containing exactly the 7 named kinds", () => {
+    assert.equal(Array.isArray(PROHIBITED_REVIEWER_OPERATIONS), true);
+    assert.deepEqual(PROHIBITED_REVIEWER_OPERATIONS, EXPECTED_PROHIBITED_KINDS);
+    assert.equal(Object.isFrozen(PROHIBITED_REVIEWER_OPERATIONS), true);
+  });
+
+  test("PROHIBITED_REVIEWER_OPERATIONS rejects a mutation attempt (frozen array, not a mutable Set)", () => {
+    assert.throws(() => {
+      "use strict";
+      PROHIBITED_REVIEWER_OPERATIONS.push("new_kind");
+    }, TypeError);
+    assert.throws(() => {
+      "use strict";
+      PROHIBITED_REVIEWER_OPERATIONS[0] = "mutated";
+    }, TypeError);
+    assert.equal(PROHIBITED_REVIEWER_OPERATIONS.length, EXPECTED_PROHIBITED_KINDS.length);
+    assert.deepEqual(PROHIBITED_REVIEWER_OPERATIONS, EXPECTED_PROHIBITED_KINDS);
   });
 
   test("REVIEWER_UNIT_BUDGET equals the fixed budget", () => {
@@ -112,6 +124,16 @@ describe("validateReviewerUnit — immutable gate context", () => {
     assert.equal(unit.run, "run-1");
     assert.deepEqual(unit.angles, ["coverage", "security"]);
   });
+
+  test("deep-freezes nested gateContext values, not just the top level", () => {
+    const unit = validateReviewerUnit(baseUnit({ gateContext: { headSha: "x", provenance: { a: 1 } } }));
+    assert.equal(Object.isFrozen(unit.gateContext.provenance), true);
+    assert.throws(() => {
+      "use strict";
+      unit.gateContext.provenance.a = 2;
+    }, TypeError);
+    assert.equal(unit.gateContext.provenance.a, 1);
+  });
 });
 
 describe("assertReviewerOperationAllowed — prohibited-probe traps (table-driven)", () => {
@@ -134,6 +156,13 @@ describe("assertReviewerOperationAllowed — prohibited-probe traps (table-drive
   test("review_angle with no angle field throws review_unassigned_angle", () => {
     assert.throws(
       () => assertReviewerOperationAllowed({ kind: "review_angle" }, { assignedAngles: ["coverage"] }),
+      (error) => error instanceof Error && error.message.includes("review_unassigned_angle"),
+    );
+  });
+
+  test("a non-string assignedAngles entry can never authorize a stringified match (default-deny bypass)", () => {
+    assert.throws(
+      () => assertReviewerOperationAllowed({ kind: "review_angle", angle: "123" }, { assignedAngles: [123] }),
       (error) => error instanceof Error && error.message.includes("review_unassigned_angle"),
     );
   });
@@ -166,7 +195,7 @@ describe("assertReviewerOperationAllowed — prohibited-probe traps (table-drive
 
 for (const harness of ["pi", "claude", "codex"]) {
   describe(`enforceReviewerUnitBound — cross-harness parity (harness=${harness})`, () => {
-    test("budget exhaustion (toolCalls) on a singleton unit blocks even with the angle completed", () => {
+    test("budget exhaustion (toolCalls) on a singleton unit blocks even with the angle completed, naming zero remaining angles", () => {
       const unit = baseUnit({ angles: ["coverage"], gateContext: { headSha: "sha-1", harness } });
       const result = enforceReviewerUnitBound({
         unit,
@@ -176,12 +205,15 @@ for (const harness of ["pi", "claude", "codex"]) {
       assert.equal(result.ok, false);
       assert.equal(result.verdict, "blocked");
       assert.equal(result.reason, "reviewer_budget_exhausted");
-      assert.deepEqual(result.unreviewedAngles, ["coverage"]);
+      // Blocked-verdict is what guarantees "never reported clean" here — the
+      // one assigned angle really was completed, so unreviewedAngles names
+      // the exact (empty) remaining set, not the full assigned set.
+      assert.deepEqual(result.unreviewedAngles, []);
       assert.equal(result.headSha, "sha-1");
     });
 
-    test("budget exhaustion (modelTurns) alone blocks", () => {
-      const unit = baseUnit({ angles: ["coverage"], gateContext: { headSha: "sha-2", harness } });
+    test("budget exhaustion (modelTurns) alone blocks, naming only the genuinely-remaining angle", () => {
+      const unit = baseUnit({ angles: ["coverage", "security"], gateContext: { headSha: "sha-2", harness } });
       const result = enforceReviewerUnitBound({
         unit,
         consumed: { modelTurns: 46, toolCalls: 0 },
@@ -189,6 +221,7 @@ for (const harness of ["pi", "claude", "codex"]) {
       });
       assert.equal(result.ok, false);
       assert.equal(result.reason, "reviewer_budget_exhausted");
+      assert.deepEqual(result.unreviewedAngles, ["security"]);
     });
 
     test("incomplete coverage within budget blocks naming exactly the missing angle", () => {
@@ -215,21 +248,58 @@ for (const harness of ["pi", "claude", "codex"]) {
       assert.deepEqual(result.reviewedAngles, ["coverage", "security"]);
     });
 
-    test("identical results (deepEqual + byte-identical JSON) across harnesses given the same body", () => {
+  });
+}
+
+describe("enforceReviewerUnitBound — cross-harness parity: byte-identical normalized result", () => {
+  /**
+   * Strip the one input field the harness loop deliberately varies
+   * (gateContext.harness) so the comparison is over the REST of the result —
+   * not just a handful of hand-picked fields.
+   */
+  function normalizeAcrossHarness(result) {
+    const { unit, ...restResult } = result;
+    const { gateContext, ...restUnit } = unit;
+    const { harness, ...restGateContext } = gateContext;
+    return { ...restResult, unit: { ...restUnit, gateContext: restGateContext } };
+  }
+
+  test("the same logical input run across pi/claude/codex yields deepEqual + byte-identical (JSON.stringify) results against a single baseline", () => {
+    const results = ["pi", "claude", "codex"].map((harness) => {
       const unit = baseUnit({ angles: ["coverage", "security"], gateContext: { headSha: "sha-parity", harness } });
-      const result = enforceReviewerUnitBound({
+      return enforceReviewerUnitBound({
         unit,
         consumed: { modelTurns: 5, toolCalls: 5 },
         completedAngles: ["coverage", "security"],
       });
-      const stripped = JSON.parse(JSON.stringify(result));
-      const strippedGateContext = { headSha: stripped.unit.gateContext.headSha };
-      assert.deepEqual(strippedGateContext, { headSha: "sha-parity" });
-      assert.deepEqual(stripped.reviewedAngles, ["coverage", "security"]);
-      assert.equal(JSON.stringify(stripped.consumed), JSON.stringify({ modelTurns: 5, toolCalls: 5 }));
     });
+
+    const [baseline, ...rest] = results.map(normalizeAcrossHarness);
+    const baselineJson = JSON.stringify(baseline);
+    for (const candidate of rest) {
+      assert.deepEqual(candidate, baseline);
+      assert.equal(JSON.stringify(candidate), baselineJson);
+    }
   });
-}
+
+  test("the same logical BLOCKED input run across pi/claude/codex yields deepEqual + byte-identical results against a single baseline", () => {
+    const results = ["pi", "claude", "codex"].map((harness) => {
+      const unit = baseUnit({ angles: ["coverage", "security"], gateContext: { headSha: "sha-parity-blocked", harness } });
+      return enforceReviewerUnitBound({
+        unit,
+        consumed: { modelTurns: 1, toolCalls: 51 },
+        completedAngles: ["coverage"],
+      });
+    });
+
+    const [baseline, ...rest] = results.map(normalizeAcrossHarness);
+    const baselineJson = JSON.stringify(baseline);
+    for (const candidate of rest) {
+      assert.deepEqual(candidate, baseline);
+      assert.equal(JSON.stringify(candidate), baselineJson);
+    }
+  });
+});
 
 describe("enforceReviewerUnitBound — malformed consumed fails closed", () => {
   test("throws TypeError on a missing/non-object consumed", () => {
@@ -240,6 +310,11 @@ describe("enforceReviewerUnitBound — malformed consumed fails closed", () => {
     assert.throws(() => enforceReviewerUnitBound({ unit: baseUnit(), consumed: { modelTurns: -1, toolCalls: 0 } }), TypeError);
     assert.throws(() => enforceReviewerUnitBound({ unit: baseUnit(), consumed: { modelTurns: 0, toolCalls: Infinity } }), TypeError);
     assert.throws(() => enforceReviewerUnitBound({ unit: baseUnit(), consumed: { modelTurns: "1", toolCalls: 0 } }), TypeError);
+  });
+
+  test("throws TypeError on a fractional modelTurns or toolCalls (discrete counters, not fractional)", () => {
+    assert.throws(() => enforceReviewerUnitBound({ unit: baseUnit(), consumed: { modelTurns: 44.5, toolCalls: 0 } }), TypeError);
+    assert.throws(() => enforceReviewerUnitBound({ unit: baseUnit(), consumed: { modelTurns: 0, toolCalls: 0.1 } }), TypeError);
   });
 
   test("propagates validateReviewerUnit's TypeError for a malformed unit", () => {
