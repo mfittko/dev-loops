@@ -9,8 +9,11 @@
 //      `package.json` has `name === "dev-loops"` and a sibling `scripts/` dir — wins
 //      UNCONDITIONALLY, even over a newer auto-installed package, so a dogfooder's live edits
 //      always run without a reinstall or release.
-//   2. the plugin's auto-installed `dev-loops` package at `<pluginRoot>/node_modules/dev-loops`.
-//   3. neither resolves → hard-stop (exit 3). Never shells out to the GitHub CLI as a fallback;
+//   2. a live source checkout, detected by walking up from this launcher's own real (symlink-
+//      resolved) binary path — covers a source-checkout copy of this binary invoked via a
+//      PATH-style symlink from an unrelated CWD that has no checkout ancestor of its own.
+//   3. the plugin's auto-installed `dev-loops` package at `<pluginRoot>/node_modules/dev-loops`.
+//   4. none resolve → hard-stop (exit 3). Never shells out to the GitHub CLI as a fallback;
 //      never reads `CLAUDE_PLUGIN_ROOT` (empirically unset in the Claude Code runtime).
 //
 // Only `node:` builtins — this file cannot import the dev-loops core runtime package (unresolvable
@@ -19,7 +22,7 @@
 // Usage: dev-loops-run <pkg-relative-path> [args…]
 //   dev-loops-run scripts/loop/watch-cycle.mjs --pr 5
 //   dev-loops-run cli/index.mjs gate judge-pass --pr 5
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -42,15 +45,24 @@ function findCheckout(start) {
   }
 }
 
+function findCheckoutFromBinary() {
+  try {
+    return findCheckout(path.dirname(realpathSync(process.argv[1])));
+  } catch {
+    return null;
+  }
+}
+
 const rel = process.argv[2];
 if (!rel) { console.error("dev-loops-run: missing script argument"); process.exit(2); }
-const checkout = findCheckout(process.cwd());
+const checkout = findCheckout(process.cwd()) ?? findCheckoutFromBinary();
 const installed = path.join(pluginRoot, "node_modules", "dev-loops");
 const resolvedRoot = checkout ?? (existsSync(installed) ? installed : null);
 if (!resolvedRoot) {
   console.error(
     `dev-loops-run: cannot resolve dev-loops toolchain for '${rel}': no source checkout ` +
-    `(CWD walk-up from ${process.cwd()}) and no installed package at ${installed}`,
+    `(CWD walk-up from ${process.cwd()}), no source checkout (binary-location walk-up from ` +
+    `${process.argv[1]}), and no installed package at ${installed}`,
   );
   process.exit(3);
 }

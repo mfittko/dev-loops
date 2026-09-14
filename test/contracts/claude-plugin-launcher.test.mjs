@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -94,6 +94,74 @@ test("checkout-wins: a live checkout runs over a NEWER installed package, no rei
     assert.match(r2.stdout, /FROM_CHECKOUT_V2/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("binary-location: a source-checkout binary invoked via a PATH symlink from an unrelated cwd resolves the checkout it lives in", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "dev-loops-run-binloc-"));
+  try {
+    const checkout = path.join(root, "checkout");
+    mkdirSync(path.join(checkout, "scripts"), { recursive: true });
+    writeFileSync(path.join(checkout, "package.json"), JSON.stringify({ name: "dev-loops", version: "0.0.1-local" }));
+    writeScript(path.join(checkout, "scripts/probe.mjs"), "FROM_BINARY_CHECKOUT");
+
+    const launcherInCheckout = path.join(checkout, ".claude/bin/dev-loops-run");
+    mkdirSync(path.dirname(launcherInCheckout), { recursive: true });
+    copyFileSync(launcherSource, launcherInCheckout);
+    chmodSync(launcherInCheckout, 0o755);
+
+    const pathDir = mkdtempSync(path.join(tmpdir(), "dev-loops-run-pathdir-"));
+    const symlink = path.join(pathDir, "dev-loops-run");
+    let launcherToRun = launcherInCheckout;
+    try {
+      symlinkSync(launcherInCheckout, symlink);
+      launcherToRun = symlink;
+    } catch {
+      // Symlinks unavailable in this environment — still exercise the resolution logic by
+      // spawning the real binary path directly.
+    }
+
+    const consumerCwd = mkdtempSync(path.join(tmpdir(), "dev-loops-run-binloc-cwd-"));
+    try {
+      const r = runLauncher(launcherToRun, ["scripts/probe.mjs"], consumerCwd);
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /FROM_BINARY_CHECKOUT/);
+    } finally {
+      rmSync(consumerCwd, { recursive: true, force: true });
+      rmSync(pathDir, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("binary-location: CWD-checkout precedence still wins over the binary-location checkout", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "dev-loops-run-precedence-"));
+  try {
+    // Checkout A: the CWD lives here.
+    const checkoutA = path.join(root, "checkout-a");
+    mkdirSync(path.join(checkoutA, "scripts"), { recursive: true });
+    writeFileSync(path.join(checkoutA, "package.json"), JSON.stringify({ name: "dev-loops", version: "0.0.1-a" }));
+    writeScript(path.join(checkoutA, "scripts/probe.mjs"), "FROM_CHECKOUT_A");
+    const cwd = path.join(checkoutA, "nested");
+    mkdirSync(cwd, { recursive: true });
+
+    // Checkout B: the launcher physically lives here.
+    const checkoutB = path.join(root, "checkout-b");
+    mkdirSync(path.join(checkoutB, "scripts"), { recursive: true });
+    writeFileSync(path.join(checkoutB, "package.json"), JSON.stringify({ name: "dev-loops", version: "0.0.1-b" }));
+    writeScript(path.join(checkoutB, "scripts/probe.mjs"), "FROM_CHECKOUT_B");
+    const launcherInB = path.join(checkoutB, ".claude/bin/dev-loops-run");
+    mkdirSync(path.dirname(launcherInB), { recursive: true });
+    copyFileSync(launcherSource, launcherInB);
+    chmodSync(launcherInB, 0o755);
+
+    const r = runLauncher(launcherInB, ["scripts/probe.mjs"], cwd);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /FROM_CHECKOUT_A/);
+    assert.equal(/FROM_CHECKOUT_B/.test(r.stdout), false, "CWD checkout must win over the binary-location checkout");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

@@ -115,9 +115,10 @@ export function rewriteGeneratedRepoDocLinks(body) {
 }
 
 /**
- * Name of the resolver launcher committed at `.claude/bin/dev-loops-run`. It self-locates
- * a source checkout (cwd walk-up, unconditional priority) or the plugin's auto-installed
- * `dev-loops` package, and hard-stops (never falls back to raw `gh`) when neither resolves.
+ * Name of the resolver launcher committed at `.claude/bin/dev-loops-run`. It self-locates a
+ * source checkout by walking up from `process.cwd()` (unconditional priority), else by walking
+ * up from the launcher's own real binary location, else falls back to the plugin's auto-installed
+ * `dev-loops` package, and hard-stops (never falls back to raw `gh`) when none resolve.
  */
 export const WRAPPER_LAUNCHER = "dev-loops-run";
 
