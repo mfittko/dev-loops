@@ -152,7 +152,16 @@ const runNode = async (args = [], options = {}) => {
     return true;
   };
   try {
-    const result = await upsertCheckpointVerdict(options_, { env, ghCommand: "gh", repoRoot, runChild });
+    const result = await upsertCheckpointVerdict(options_, {
+      env,
+      ghCommand: "gh",
+      repoRoot,
+      runChild,
+      // Injection seam for the pre_approval_gate size-budget auto-derive path
+      // (#2185): a test may pass a fake evaluatePrSizeBudget to assert the
+      // derived fields without a real git diff.
+      ...(options.evaluatePrSizeBudget ? { evaluatePrSizeBudget: options.evaluatePrSizeBudget } : {}),
+    });
     process.stderr.write = originalWrite;
     const inlineWarning = buildInlineExecutionWarning(options_.executionMode, options_.inlineReason);
     if (inlineWarning && !options_.silent) {
@@ -1206,6 +1215,184 @@ test("upsert-checkpoint-verdict --size-budget-json fails closed on a malformed .
   }, { prefix: "dev-loops-upsert-size-budget-waiverbad-" });
 });
 
+// #2185 regression coverage: pre_approval_gate auto-derives the size budget
+// in-process (via the injected evaluatePrSizeBudget) when --size-budget-json
+// is omitted, so a pre-approval verdict never posts with null size evidence
+// (the pre-#2185 fail-open-to-hard-block hole at the merge gate).
+// 5 completed Copilot reviews against fanoutDisabledRepoRoot's pinned
+// maxCopilotRounds: 2 (see the file's `before()` hook) drives coordination
+// into the round-cap fallback, allowing pre_approval_gate entry — the same
+// fixture the "round-cap fallback note" test above uses.
+const PRE_APPROVAL_READY_REVIEWS = [1, 2, 3, 4, 5].map((i) => ({
+  author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
+  submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
+}));
+test("upsert-checkpoint-verdict auto-derives the size budget for pre_approval_gate when --size-budget-json is omitted (#2185)", async () => {
+  await withTempDir(async (tempDir) => {
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: false,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        reviews: PRE_APPROVAL_READY_REVIEWS,
+      }).map((entry) => ({ ...entry, matchByClaims: true })),
+      {
+        matchByClaims: true,
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"],
+        stdout: '{"baseRefOid":"0000000000000000000000000000000000000000","labels":[]}\n',
+      },
+      {
+        matchByClaims: true,
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: [
+          "**Size-budget outcome:** pass",
+          "**Size-budget T1 slice:** not touched",
+        ],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
+      },
+    ]);
+
+    // Fake evaluatePrSizeBudget: a pass/non-T1 budget, mirroring
+    // computeSizeBudget's real output shape — proves the auto-derive path
+    // reuses the injected evaluatePrSizeBudget rather than a second
+    // implementation.
+    let baseSeen = null;
+    const evaluatePrSizeBudget = async ({ base }) => {
+      baseSeen = base;
+      return { outcome: "pass", t1SliceLoc: 0, waiver: { t1Valid: false, defaultValid: false } };
+    };
+
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--pr", "17",
+      "--gate", "pre_approval_gate",
+      "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean",
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--findings-summary", "no issues found",
+      "--next-action", "await final human approval",
+    ], { env, evaluatePrSizeBudget });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(baseSeen, "0000000000000000000000000000000000000000");
+  }, { prefix: "dev-loops-upsert-size-budget-autoderive-" });
+});
+
+test("upsert-checkpoint-verdict pre_approval_gate size-budget auto-derive fails closed when the base ref is unresolved (#2185)", async () => {
+  await withTempDir(async (tempDir) => {
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: false,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        reviews: PRE_APPROVAL_READY_REVIEWS,
+      }).map((entry) => ({ ...entry, matchByClaims: true })),
+      {
+        matchByClaims: true,
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"],
+        // No baseRefOid on the payload — the auto-derive must refuse rather
+        // than post a null-size-evidence verdict.
+        stdout: '{"labels":[]}\n',
+      },
+    ]);
+
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--pr", "17",
+      "--gate", "pre_approval_gate",
+      "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean",
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--findings-summary", "no issues found",
+      "--next-action", "await final human approval",
+    ], { env });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /the PR's base ref is unresolved/);
+    assert.match(result.stderr, /--size-budget-json/);
+  }, { prefix: "dev-loops-upsert-size-budget-autoderive-unresolved-" });
+});
+
+test("upsert-checkpoint-verdict --size-budget-json still overrides pre_approval_gate's auto-derive (AC3 back-compat, #2185)", async () => {
+  await withTempDir(async (tempDir) => {
+    const sizeBudgetPath = path.join(tempDir, "size-budget.json");
+    await writeFile(sizeBudgetPath, JSON.stringify({
+      outcome: "escalate",
+      t1SliceLoc: 12,
+      waiver: { t1Valid: false, defaultValid: false },
+    }), "utf8");
+
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: false,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        reviews: PRE_APPROVAL_READY_REVIEWS,
+      }).map((entry) => ({ ...entry, matchByClaims: true })),
+      {
+        matchByClaims: true,
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: [
+          "**Size-budget outcome:** escalate",
+          "**Size-budget T1 slice:** touched",
+        ],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
+      },
+    ]);
+
+    // Proves the explicit override SKIPS the auto-derive call path entirely
+    // (a call here fails the test).
+    const evaluatePrSizeBudget = async () => {
+      throw new Error("evaluatePrSizeBudget must not be called when --size-budget-json is supplied");
+    };
+
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--pr", "17",
+      "--gate", "pre_approval_gate",
+      "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean",
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--findings-summary", "no issues found",
+      "--next-action", "await final human approval",
+      "--size-budget-json", sizeBudgetPath,
+    ], { env, evaluatePrSizeBudget });
+
+    assert.equal(result.code, 0, result.stderr);
+  }, { prefix: "dev-loops-upsert-size-budget-explicit-override-" });
+});
+
+test("upsert-checkpoint-verdict draft_gate without --size-budget-json still posts no size fields (no auto-derive, #2185)", async () => {
+  await withTempDir(async (tempDir) => {
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }).map((entry) => ({ ...entry, matchByClaims: true })),
+      {
+        matchByClaims: true,
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinNotIncludes: ["**Size-budget outcome:**"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
+      },
+    ]);
+
+    // The size-budget merge gate only reads pre_approval evidence — the
+    // auto-derive is scoped to --gate pre_approval_gate only, so draft_gate
+    // must never call evaluatePrSizeBudget.
+    const evaluatePrSizeBudget = async () => {
+      throw new Error("evaluatePrSizeBudget must not be called for draft_gate");
+    };
+
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--pr", "17",
+      "--gate", "draft_gate",
+      "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean",
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--findings-summary", "no issues found",
+      "--next-action", "mark ready for review",
+    ], { env, evaluatePrSizeBudget });
+
+    assert.equal(result.code, 0, result.stderr);
+  }, { prefix: "dev-loops-upsert-size-budget-draftgate-noauto-" });
+});
+
 test("upsert-checkpoint-verdict embeds --findings-file content with preserved newlines", async () => {
   await withTempDir(async (tempDir) => {
     const findingsPath = path.join(tempDir, "findings.md");
@@ -1539,7 +1726,12 @@ test("upsert-checkpoint-verdict rejects pre_approval_gate when PR is still draft
 test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-approval evidence", async () => {
   await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, [
+      // pre_approval_gate now auto-derives the size budget (#2185); switch this
+      // fixture to content-matched claims so the extra --json baseRefOid,labels
+      // call (and any incidental detectInternalOnly overflow call) resolve by
+      // content instead of position.
       {
+        matchByClaims: true,
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
         stdout: JSON.stringify({
           number: 17,
@@ -1585,6 +1777,10 @@ test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-appro
           html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
           updated_at: "2026-05-31T19:55:00Z",
         }]])}\n`,
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"],
+        stdout: '{"baseRefOid":"0000000000000000000000000000000000000000","labels":[]}\n',
       },
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
@@ -1636,7 +1832,11 @@ test("upsert-checkpoint-verdict appends the round-cap fallback note to pre-appro
 test("upsert-checkpoint-verdict truncates verbose findings summary before comment creation", async () => {
   await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, [
+      // pre_approval_gate now auto-derives the size budget (#2185); switch this
+      // fixture to content-matched claims so the extra --json baseRefOid,labels
+      // call resolves by content instead of position.
       {
+        matchByClaims: true,
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
         stdout: '{"number":17,"state":"OPEN","isDraft":false,"headRefOid":"abc1234000000000000000000000000000000000","reviews":[{"author":{"login":"copilot-pull-request-reviewer"},"state":"COMMENTED","submittedAt":"2026-05-31T20:00:00Z","commit":{"oid":"abc1234000000000000000000000000000000000"}}],"statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}]}\n',
       },
@@ -1669,6 +1869,10 @@ test("upsert-checkpoint-verdict truncates verbose findings summary before commen
           html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
           updated_at: "2026-05-31T19:55:00Z",
         }]])}\n`,
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"],
+        stdout: '{"baseRefOid":"0000000000000000000000000000000000000000","labels":[]}\n',
       },
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
@@ -4035,8 +4239,12 @@ test("upsert-checkpoint-verdict skips Copilot convergence requirement for intern
         reviews: [],
         issueComments: [cleanDraftGateComment],
       }),
-      // Call 6: PR reviews fetch — no gate comment posted as a review
+      // Call 6: PR reviews fetch — no gate comment posted as a review. Flagged
+      // matchByClaims so this whole fixture resolves by content (pre_approval_gate
+      // now also auto-derives the size budget, #2185, adding an extra
+      // --json baseRefOid,labels call that positional matching would misalign).
       {
+        matchByClaims: true,
         assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
         stdout: "[]\n",
       },
@@ -4044,6 +4252,11 @@ test("upsert-checkpoint-verdict skips Copilot convergence requirement for intern
       {
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"],
         stdout: "scripts/github/my-internal-script.mjs\n",
+      },
+      // Call: pre_approval_gate size-budget auto-derive base-ref resolution (#2185)
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"],
+        stdout: '{"baseRefOid":"0000000000000000000000000000000000000000","labels":[]}\n',
       },
       // Call 8: create the pre_approval_gate comment
       {
@@ -5485,7 +5698,11 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
       "utf8",
     );
     const env = await writeGhStub(tempDir, [
+      // pre_approval_gate now auto-derives the size budget (#2185); switch this
+      // fixture to content-matched claims so the extra --json baseRefOid,labels
+      // call resolves by content instead of position.
       {
+        matchByClaims: true,
         assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
         stdout: JSON.stringify({
           number: 17,
@@ -5531,6 +5748,10 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
           html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
           updated_at: "2026-05-31T19:55:00Z",
         }]])}\n`,
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"],
+        stdout: '{"baseRefOid":"0000000000000000000000000000000000000000","labels":[]}\n',
       },
       {
         assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],

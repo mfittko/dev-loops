@@ -45,6 +45,7 @@ import { fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { stampSpecAuthorityIdentity } from "@dev-loops/core/loop/spec-authority";
 import { readSpecAuthorityIdentity } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
+import { evaluatePrSizeBudget as realEvaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
 // The `review` gate's submit-mode vocabulary, scoped to --gate review only.
 // Mapped to the GitHub create-review `event` value in
@@ -76,6 +77,44 @@ function resolveReviewSubmitEvent(mode) {
 // Mirrors check-size-budget.mjs's computeSizeBudget outcome enum exactly —
 // this file never recomputes the outcome, only validates/renders it.
 const SIZE_BUDGET_OUTCOMES = new Set(["pass", "escalate", "block"]);
+// Shared validate+derive for computeSizeBudget's output shape
+// (`{ outcome, t1SliceLoc, waiver: { t1Valid, defaultValid, approvedBy } }`) —
+// the ONE code path both the explicit --size-budget-json override and the
+// pre_approval_gate auto-derive path (evaluatePrSizeBudget, #2185) run
+// through, so neither can drift from the other's fail-closed checks.
+// `sourceLabel` names the origin in every thrown message.
+function applySizeBudgetFields(options, sizeBudget, sourceLabel) {
+  if (!SIZE_BUDGET_OUTCOMES.has(sizeBudget?.outcome)) {
+    throw parseError(`${sourceLabel} must carry a .outcome of "pass", "escalate", or "block"`);
+  }
+  // Fail closed on the T1-touch signal, mirroring the .outcome check above:
+  // a missing/non-numeric/negative/non-finite .t1SliceLoc must abort BEFORE
+  // any verdict posts, not silently derive `sizeTouchesT1: false` — that
+  // false would persist as a definite, readable "not touched" and defeat
+  // resolveSizeBudgetHumanApprovalRequired's (size-budget-merge-gate.mjs)
+  // fail-closed-on-absent-evidence contract downstream.
+  const t1SliceLoc = sizeBudget.t1SliceLoc;
+  if (typeof t1SliceLoc !== "number" || !Number.isFinite(t1SliceLoc) || t1SliceLoc < 0) {
+    throw parseError(`${sourceLabel} must carry a finite, non-negative numeric .t1SliceLoc`);
+  }
+  // Same fail-closed treatment for the waiver fields this CLI derives: a
+  // partially-readable/malformed .waiver must abort rather than fold into
+  // a benign `sizeWaiverGranted: false` ("no waiver"). check-size-budget.mjs
+  // always emits a `.waiver` object with boolean `.t1Valid`/`.defaultValid`
+  // (see computeSizeBudget), so a genuine producer's output always passes
+  // this check; only a truncated/hand-edited/malformed JSON trips it.
+  const waiver = sizeBudget.waiver;
+  if (waiver === null || typeof waiver !== "object" || typeof waiver.t1Valid !== "boolean" || typeof waiver.defaultValid !== "boolean") {
+    throw parseError(`${sourceLabel} must carry a .waiver object with boolean .t1Valid and .defaultValid`);
+  }
+  options.sizeOutcome = sizeBudget.outcome;
+  options.sizeTouchesT1 = t1SliceLoc > 0;
+  const waiverGranted = waiver.t1Valid === true || waiver.defaultValid === true;
+  options.sizeWaiverGranted = waiverGranted;
+  options.sizeWaiverApprovedBy = waiverGranted && typeof waiver.approvedBy === "string" && waiver.approvedBy.trim().length > 0
+    ? waiver.approvedBy.trim()
+    : null;
+}
 const DEFAULT_EXECUTION_MODE = "inline_single_agent";
 const MAX_GATE_COMMENT_TEXT_LENGTH = 2000;
 const MAX_GATE_COMMENT_EXCERPT_LENGTH = 120;
@@ -314,19 +353,31 @@ Optional:
                                             body-filed finding text (the
                                             no-ids-in-comments guard refuses any
                                             other bare #<digits>).
-  --size-budget-json <path>                 Path to check-size-budget.mjs's (or
-                                            evaluatePrSizeBudget's) JSON output —
-                                            never recomputed here. Records the PR's
+  --size-budget-json <path>                 EXPLICIT OVERRIDE: path to
+                                            check-size-budget.mjs's (or
+                                            evaluatePrSizeBudget's) JSON
+                                            output — used verbatim, never
+                                            recomputed here. Records the PR's
                                             size-budget outcome, whether any T1 file
                                             is in the diff (t1SliceLoc > 0), and
                                             waiver state on the posted verdict
                                             (**Size-budget outcome/T1 slice/waiver**
-                                            lines). Omit it and those lines are not
-                                            rendered at all — a verdict without them
-                                            reads back as size evidence ABSENT,
-                                            which the size-budget merge gate
+                                            lines). For --gate pre_approval_gate,
+                                            omitting this flag no longer omits
+                                            those lines (#2185): the size budget is
+                                            auto-derived in-process via the same
+                                            evaluatePrSizeBudget against the PR's
+                                            base ref. --gate draft_gate/review never
+                                            auto-derive and still render no size
+                                            evidence when the flag is omitted, which
+                                            the size-budget merge gate
                                             (@dev-loops/core/loop/size-budget-merge-gate)
                                             fails closed on, never as a silent pass.
+                                            A pre_approval_gate call whose base ref
+                                            cannot be resolved fails closed with an
+                                            actionable error rather than posting
+                                            null size evidence; pass this flag
+                                            explicitly to bypass auto-derive.
   --spec-authority <path>                   JSON { specDigest, headSha, contentDigest,
                                             checkedCriteria } (issue 2008 / ADR 0061 AC1).
                                             When supplied, stamps the RETURNED result
@@ -2033,7 +2084,7 @@ async function applyGateFullLabel({ repo, pr }, { env, ghCommand, runChild = def
   }
 }
 
-export async function upsertCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild } = {}) {
+export async function upsertCheckpointVerdict(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild, evaluatePrSizeBudget = realEvaluatePrSizeBudget } = {}) {
   const gh = { env, ghCommand, repoRoot, runChild };
   // Optional --spec-authority stamps the RETURNED result (this script's
   // durable verdict record — it posts no file of its own) with the pinned
@@ -2578,12 +2629,21 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       ),
     );
   }
-  // Size-budget fields (phase 3 of the fail-closed PR size budget): reuses check-size-budget.mjs's
-  // (or evaluatePrSizeBudget's) OWN JSON output verbatim — never recomputed
-  // here. Optional: omitting --size-budget-json posts a verdict with no size
-  // evidence at all (the fields simply are not rendered), which the
-  // size-budget merge gate reads as "human approval required" downstream,
-  // never as a silent pass.
+  // Size-budget fields (phase 3 of the fail-closed PR size budget). Two
+  // sources, both validated/derived through the ONE applySizeBudgetFields
+  // helper above:
+  //  1. --size-budget-json (explicit override, AC3 back-compat): reuses
+  //     check-size-budget.mjs's (or evaluatePrSizeBudget's) OWN JSON output
+  //     verbatim — never recomputed here.
+  //  2. pre_approval_gate auto-derive (#2185): when the flag is omitted for
+  //     a pre_approval_gate verdict, this calls the SAME evaluatePrSizeBudget
+  //     (@dev-loops/core/loop/check-size-budget.mjs — the one shared reader
+  //     detect-checkpoint-evidence/write-gate-context/resolve-gate-dispatch
+  //     already call) in-process, so a pre-approval verdict can no longer
+  //     post with null size evidence and hard-block the merge gate downstream
+  //     (the pre-#2185 fail-open-to-hard-block hole). draft_gate and review
+  //     verdicts never auto-derive — the size merge gate only reads
+  //     pre_approval evidence, so only that gate needs it.
   if (options.sizeBudgetJson) {
     let sizeBudgetContent;
     try {
@@ -2597,36 +2657,33 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     } catch (err) {
       throw parseError(`--size-budget-json "${options.sizeBudgetJson}" is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
     }
-    if (!SIZE_BUDGET_OUTCOMES.has(sizeBudget?.outcome)) {
-      throw parseError(`--size-budget-json "${options.sizeBudgetJson}" must carry a .outcome of "pass", "escalate", or "block"`);
+    applySizeBudgetFields(options, sizeBudget, `--size-budget-json "${options.sizeBudgetJson}"`);
+  } else if (options.gate === "pre_approval_gate") {
+    let baseRef = null;
+    try {
+      const prFacts = await runGhJson(
+        ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "baseRefOid,labels"],
+        { env, ghCommand, runChild },
+      );
+      baseRef = typeof prFacts?.baseRefOid === "string" && prFacts.baseRefOid.trim().length > 0
+        ? prFacts.baseRefOid.trim()
+        : null;
+    } catch (err) {
+      throw parseError(
+        `Cannot auto-derive the size budget for pre_approval_gate @ ${canonicalHeadSha}: the PR's base ref is unresolved ` +
+        `(gh pr view --json baseRefOid failed: ${err instanceof Error ? err.message : String(err)}). ` +
+        `Pass --size-budget-json explicitly with a precomputed check-size-budget.mjs result instead.`,
+      );
     }
-    // Fail closed on the T1-touch signal, mirroring the .outcome check above:
-    // a missing/non-numeric/negative/non-finite .t1SliceLoc must abort BEFORE
-    // any verdict posts, not silently derive `sizeTouchesT1: false` — that
-    // false would persist as a definite, readable "not touched" and defeat
-    // resolveSizeBudgetHumanApprovalRequired's (size-budget-merge-gate.mjs)
-    // fail-closed-on-absent-evidence contract downstream.
-    const t1SliceLoc = sizeBudget.t1SliceLoc;
-    if (typeof t1SliceLoc !== "number" || !Number.isFinite(t1SliceLoc) || t1SliceLoc < 0) {
-      throw parseError(`--size-budget-json "${options.sizeBudgetJson}" must carry a finite, non-negative numeric .t1SliceLoc`);
+    if (!baseRef) {
+      throw parseError(
+        `Cannot auto-derive the size budget for pre_approval_gate @ ${canonicalHeadSha}: the PR's base ref is unresolved ` +
+        `(gh pr view returned no baseRefOid). ` +
+        `Pass --size-budget-json explicitly with a precomputed check-size-budget.mjs result instead.`,
+      );
     }
-    // Same fail-closed treatment for the waiver fields this CLI derives: a
-    // partially-readable/malformed .waiver must abort rather than fold into
-    // a benign `sizeWaiverGranted: false` ("no waiver"). check-size-budget.mjs
-    // always emits a `.waiver` object with boolean `.t1Valid`/`.defaultValid`
-    // (see computeSizeBudget), so a genuine producer's output always passes
-    // this check; only a truncated/hand-edited/malformed JSON trips it.
-    const waiver = sizeBudget.waiver;
-    if (waiver === null || typeof waiver !== "object" || typeof waiver.t1Valid !== "boolean" || typeof waiver.defaultValid !== "boolean") {
-      throw parseError(`--size-budget-json "${options.sizeBudgetJson}" must carry a .waiver object with boolean .t1Valid and .defaultValid`);
-    }
-    options.sizeOutcome = sizeBudget.outcome;
-    options.sizeTouchesT1 = t1SliceLoc > 0;
-    const waiverGranted = waiver.t1Valid === true || waiver.defaultValid === true;
-    options.sizeWaiverGranted = waiverGranted;
-    options.sizeWaiverApprovedBy = waiverGranted && typeof waiver.approvedBy === "string" && waiver.approvedBy.trim().length > 0
-      ? waiver.approvedBy.trim()
-      : null;
+    const sizeBudget = await evaluatePrSizeBudget({ base: baseRef, head: canonicalHeadSha, repoRoot });
+    applySizeBudgetFields(options, sizeBudget, `auto-derived size budget (evaluatePrSizeBudget, base ${baseRef})`);
   }
   // The findings-summary the comment is compared/round-tripped against. With a
   // structured render this is the single-line digest (what the marker parser
