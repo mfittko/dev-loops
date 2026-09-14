@@ -2456,20 +2456,14 @@ export function resolveGateTier(config, gate, { changedFiles, filesChanged, line
  * (`size_outcome_*`, `size_outcome_unavailable`), missing changed-file
  * evidence (`changed_files_unavailable`), or an unclassifiable diff
  * (`resolveGateTier`'s `unclassifiable_file`) — ALWAYS forces `full_fanout`
- * with the FULL untriered angle pool, even when a diff-class tier also
- * happens to match: proportionality scales cost, never the floor, so a
- * risky/unclassifiable diff never receives a tier-reduced angle set. The hard
- * size cap (`over_threshold`) is different: it ALWAYS forces `full_fanout`
- * MODE (distinct-reviewer-per-angle dispatch, never the light single-combined
- * path), but it does NOT force the full untriered pool — see the size-cap
- * exclusion note below. Tier reduction ("small/non-risky diff → a matched
- * tier's reduced angle set, still dispatched full fan-out") applies whenever
- * no RISK-signal floor fired (the size cap alone does not disqualify a tier
- * match) — this is the pre-existing, orthogonal diff-class-tier mechanism,
- * untouched for a `gate:full`-labelled PR (resolveGateTier self-bypasses) or
- * a repo that simply has light mode disabled (`light_mode_disabled` is not a
- * floor: every round there was already full-fanout-with-tier-reduction before
- * this floor mechanism existed).
+ * with the FULL untriered angle pool, never a matched tier's reduced set. The
+ * hard size cap (`over_threshold`) differs: it ALWAYS forces `full_fanout`
+ * MODE (distinct-reviewer-per-angle, never the light single-combined path)
+ * but does NOT force the full untriered pool — a merely-over-cap-but-tier-
+ * classifiable diff keeps its diff-class-tier-reduced angle set (the
+ * pre-existing, orthogonal mechanism), untouched for a `gate:full`-labelled
+ * PR (resolveGateTier self-bypasses) or a repo with light mode disabled
+ * (`light_mode_disabled` is not a floor).
  *
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"} gate
