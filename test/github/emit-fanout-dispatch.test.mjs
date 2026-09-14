@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, main, sanitizeScopeSegment } from "../../scripts/github/emit-fanout-dispatch.mjs";
-import { buildGateEmitPlanPath } from "../../scripts/github/write-gate-context.mjs";
+import { buildGateEmitPlanPath, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 
 const emitCliPath = path.resolve("scripts/github/emit-fanout-dispatch.mjs");
 
@@ -156,6 +156,46 @@ test("--pending emits only the pendingGroups subset", async () => {
     const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
     const persisted = JSON.parse(await readFile(planPath, "utf8"));
     assert.equal(persisted.pending, true);
+  });
+});
+
+// AC1 (issue 2175): end-to-end pipeline pin — write-gate-context.mjs's own
+// --carried-angles narrows fanout.pendingGroups (resolveFanoutDispatch), and
+// --pending here emits ONLY the changed-input angles' units into the
+// persisted keyed emit-plan. Angles auto-chunk (unconfigured groups) into
+// units of <= maxAnglesPerGroup (default 3): "correctness"/"coverage"/"docs"
+// chunk together and "determinism" chunks alone. Carrying the WHOLE first
+// chunk forward (a narrow bump whose delta provably never touched their
+// surface) excludes it entirely from pendingGroups; "determinism" (the
+// changed-input angle) is the only unit left to dispatch.
+test("end-to-end: write-gate-context.mjs's --carried-angles narrows pendingGroups, and --pending emits only the changed-input angle's unit", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const angles = ["correctness", "coverage", "docs", "determinism"];
+    const carriedAngles = ["correctness", "coverage", "docs"];
+    const options = parseWriteGateContextCliArgs([
+      "--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA,
+      "--angles", JSON.stringify(angles),
+      "--carried-angles", JSON.stringify(carriedAngles),
+    ]);
+    // parseWriteGateContextCliArgs only parses flags — the fanout dispatch
+    // plan is resolved by main() from the loaded config; drive it directly
+    // here (same seam main() itself calls) so this stays a pure programmatic
+    // pipeline test with no GitHub reads.
+    options.fanoutDispatch = resolveFanoutDispatch({ version: 1 }, mapGateToConfigKey(GATE), angles, { carriedAngles });
+    await writeGateContext(options, { repoRoot: tmpDir });
+
+    const tmpRoot = path.join(tmpDir, "tmp");
+    const exitCode = await main(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--pending"],
+      { tmpRootDefault: tmpRoot },
+    );
+    assert.equal(exitCode, 0);
+
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    const persisted = JSON.parse(await readFile(planPath, "utf8"));
+    assert.equal(persisted.pending, true);
+    const emittedAngles = persisted.units.flatMap((u) => u.angles).sort();
+    assert.deepEqual(emittedAngles, ["determinism"], "only the changed-input angle's unit is emitted — the carried angles never re-dispatch");
   });
 });
 

@@ -1690,6 +1690,19 @@ ledger via `write-gate-findings-log.mjs --judge-verdict <path> --spec-authority 
 ledger and the posted findings comment show what was consciously not acted on and why
 (`GATE-EXEC-POST-BEFORE-FIX`'s single-surface verdict review renders the judge suffix).
 
+**Disposition memory into a re-running reviewer's briefing (issue 2175).** On a head-bump
+re-gate, `write-gate-context.mjs --prev-head <A>` (mirrors `resolve-angle-carry-forward.mjs`'s
+own `--prev-head` vocabulary) reads head A's durable findings-log and seeds every
+`reject`/`defer`-disposed finding attributed to an angle re-running THIS round (an angle in
+`--angles` not named in `--carried-angles` — a carried angle's reviewer never re-runs, so it
+gets no hint) into the rendered volatile tail as a bounded "Prior-round dispositions (do not
+re-raise a rejected finding at a shifted severity)" block (fingerprint, angle, severity,
+summary, `judgeRationale`). An `act` (still-open) disposition is deliberately excluded — it is
+live findings territory, not do-not-re-raise memory. This is purely additive and FAILS OPEN:
+an absent (first round), unreadable, or malformed prior log renders a byte-identical volatile
+tail to omitting the flag; it never blocks the write, suppresses a finding, or converts a
+`reject` into an approval — it only hints a reviewer away from re-litigating settled ground.
+
 **Spec-context seam (default-on, issue 2008 / ADR 0061).** Before fan-out dispatch (so its output
 is available to every writer for the whole round, including Phase 3's fan-in ledger), the
 conductor always runs `scripts/loop/spec-context.mjs` to derive the run's spec/digest identities
