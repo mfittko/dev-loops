@@ -80,7 +80,7 @@ const SIZE_BUDGET_OUTCOMES = new Set(["pass", "escalate", "block"]);
 // Shared validate+derive for computeSizeBudget's output shape
 // (`{ outcome, t1SliceLoc, waiver: { t1Valid, defaultValid, approvedBy } }`) —
 // the ONE code path both the explicit --size-budget-json override and the
-// pre_approval_gate auto-derive path (evaluatePrSizeBudget, #2185) run
+// pre_approval_gate auto-derive path (evaluatePrSizeBudget) run
 // through, so neither can drift from the other's fail-closed checks.
 // `sourceLabel` names the origin in every thrown message.
 function applySizeBudgetFields(options, sizeBudget, sourceLabel) {
@@ -364,7 +364,7 @@ Optional:
                                             (**Size-budget outcome/T1 slice/waiver**
                                             lines). For --gate pre_approval_gate,
                                             omitting this flag no longer omits
-                                            those lines (#2185): the size budget is
+                                            those lines: the size budget is
                                             auto-derived in-process via the same
                                             evaluatePrSizeBudget against the PR's
                                             base ref. --gate draft_gate/review never
@@ -2635,13 +2635,13 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   //  1. --size-budget-json (explicit override, AC3 back-compat): reuses
   //     check-size-budget.mjs's (or evaluatePrSizeBudget's) OWN JSON output
   //     verbatim — never recomputed here.
-  //  2. pre_approval_gate auto-derive (#2185): when the flag is omitted for
+  //  2. pre_approval_gate auto-derive: when the flag is omitted for
   //     a pre_approval_gate verdict, this calls the SAME evaluatePrSizeBudget
   //     (@dev-loops/core/loop/check-size-budget.mjs — the one shared reader
   //     detect-checkpoint-evidence/write-gate-context/resolve-gate-dispatch
   //     already call) in-process, so a pre-approval verdict can no longer
   //     post with null size evidence and hard-block the merge gate downstream
-  //     (the pre-#2185 fail-open-to-hard-block hole). draft_gate and review
+  //     (the prior fail-open-to-hard-block hole). draft_gate and review
   //     verdicts never auto-derive — the size merge gate only reads
   //     pre_approval evidence, so only that gate needs it.
   if (options.sizeBudgetJson) {
