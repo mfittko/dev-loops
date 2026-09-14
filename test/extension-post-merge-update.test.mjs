@@ -980,6 +980,53 @@ test("real .devloops-presence bridge stays off (gh pr ready passes through) when
   }
 });
 
+test("defaultResolveRepoContext fails closed when the remote-url lookup rejects in a managed context", async () => {
+  // Regression (#2194 Copilot round-2): a rejected/thrown `exec` (timeout, spawn failure) on
+  // `git config --get remote.origin.url` must not bubble past `defaultResolveRepoContext` — that
+  // would make `resolveRepoContextSafe` return `null` for the WHOLE context (repoRoot included),
+  // which fails OPEN (onUserBash passes the command through) even though repoRoot and
+  // inManagedContext were already resolved. It must instead return
+  // `{ repoRoot, repoSlug: null, inManagedContext }` so the guard still applies.
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-remote-lookup-reject-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "{}\n");
+    const gateCalls = [];
+    const exec = async (command, options = {}) => {
+      if (command === "git rev-parse --show-toplevel") {
+        return { code: 0, stdout: `${tempDir}\n`, stderr: "", killed: false };
+      }
+      if (command === "git config --get remote.origin.url") {
+        throw new Error("spawn ETIMEDOUT");
+      }
+      if (command.startsWith("node scripts/loop/pre-pr-ready-gate.mjs")) {
+        gateCalls.push({ command, cwd: options.cwd });
+        return { code: 1, stdout: "", stderr: JSON.stringify({ ok: false, error: "no clean draft_gate evidence" }), killed: false };
+      }
+      return { code: 0, stdout: "ok", stderr: "", killed: false };
+    };
+    const hook = createPostMergeUpdateHook({ exec });
+    const { ctx } = createUiCalls();
+
+    const result = await hook.onUserBash({ command: "gh pr ready 42", cwd: tempDir }, ctx);
+
+    assert.equal(
+      gateCalls.length,
+      1,
+      "a rejected remote-url lookup in a managed context must still run the draft-gate guard (fail closed), not pass through",
+    );
+    assert.deepEqual(result, {
+      result: {
+        output: "gh pr ready blocked: no clean draft_gate evidence",
+        exitCode: 1,
+        cancelled: false,
+        truncated: false,
+      },
+    });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("AC3b: a non-managed cwd (no .devloops config) always passes gh pr ready/merge through", async () => {
   const readyCalls = [];
   const readyHook = createPostMergeUpdateHook({

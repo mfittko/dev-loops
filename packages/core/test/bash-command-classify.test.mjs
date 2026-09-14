@@ -746,6 +746,11 @@ test("explicitRepoProvenForeign truth table", () => {
   assert.equal(explicitRepoProvenForeign(CONSUMER_SLUG, CONSUMER_SLUG), false);
   // no explicit repo given -> false
   assert.equal(explicitRepoProvenForeign(null, CONSUMER_SLUG), false);
+  // managed slug is not a clean owner/name identity (bypassed the normalizer) -> false
+  // (can't prove the explicit repo is foreign against an unclean identity; fail closed).
+  // The "both resolve and differ -> true" and "equal -> false" clean-slug cases are
+  // already covered above.
+  assert.equal(explicitRepoProvenForeign("other/repo", "acme/widgets;id"), false);
 });
 
 test("decideBashGate (hook-decisions.mjs) resolves inManagedRepo via the shared deriveInManagedRepo predicate", () => {

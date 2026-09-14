@@ -139,10 +139,20 @@ async function defaultResolveRepoContext(exec: ExtensionHarnessAdapter['exec'], 
 
   const inManagedContext = DEVLOOPS_CONFIG_VARIANTS.some((ext) => fs.existsSync(path.join(repoRoot, `.devloops${ext}`)));
 
-  const remoteResult = await exec('git config --get remote.origin.url', {
-    cwd: repoRoot,
-    timeout: REPO_RESOLUTION_TIMEOUT_MS,
-  });
+  // A thrown/rejected `exec` here (timeout, spawn failure) must not bubble past this
+  // function: `repoRoot`/`inManagedContext` are already known-good, and losing them
+  // to a caught-upstream `null` would fail OPEN (resolveRepoContextSafe returns null,
+  // callers pass the command through). Fail closed instead: repoSlug null, same as
+  // the handled non-zero-exit branch below.
+  let remoteResult: RunCommandResult;
+  try {
+    remoteResult = await exec('git config --get remote.origin.url', {
+      cwd: repoRoot,
+      timeout: REPO_RESOLUTION_TIMEOUT_MS,
+    });
+  } catch {
+    return { repoRoot, repoSlug: null, inManagedContext };
+  }
   if (remoteResult.code !== 0) {
     return { repoRoot, repoSlug: null, inManagedContext };
   }

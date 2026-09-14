@@ -55,7 +55,17 @@ export function deriveInManagedRepo({ inManagedContext = false, managedRepoSlug 
 export function explicitRepoProvenForeign(explicitRepo, managedRepoSlug) {
   const managedSlug = (managedRepoSlug ?? "").trim().toLowerCase() || null;
   const explicit = (explicitRepo ?? "").trim().toLowerCase() || null;
-  return managedSlug !== null && explicit !== null && explicit !== managedSlug;
+  if (managedSlug === null || explicit === null) {
+    return false;
+  }
+  // Both sides must be clean owner/name identities before we can prove foreign: a
+  // managed slug that bypassed the normalizer (e.g. a hostile `acme/widgets;id` test
+  // double) can't be trusted to prove anything about the explicit `--repo` — fail
+  // closed (the managed-repo guard still applies) rather than wave it through.
+  if (!isCleanRepoSlug(managedSlug) || !isCleanRepoSlug(explicit)) {
+    return false;
+  }
+  return explicit !== managedSlug;
 }
 
 /** Flags known to take a value argument for `gh pr ready` (not boolean flags). */
