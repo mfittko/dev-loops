@@ -225,6 +225,45 @@ describe("enforceChildLaunchBound — fail-closed revoke path", () => {
   });
 });
 
+describe("enforceChildLaunchBound — launch failure detail preserved", () => {
+  test("blocker carries the original failed launch result verbatim alongside the mapped reason", () => {
+    const request = baseRequest();
+    const failedLaunch = { ok: false, reason: "provider_timeout", error: { code: "ETIMEDOUT", message: "provider did not respond" } };
+    const adapter = makeAdapter({ launchResult: failedLaunch, supported: [request.model] });
+    const result = enforceChildLaunchBound({ request, attemptLaunch: adapter.attemptLaunch, querySupportedModels: adapter.querySupportedModels });
+    assert.equal(result.reason, "child_launch_failed_model_supported");
+    assert.deepEqual(result.launchFailureDetail, failedLaunch);
+  });
+});
+
+describe("enforceChildLaunchBound — supported-set inventory shapes", () => {
+  test("a bare array inventory resolves modelSupported true for a listed model", () => {
+    const request = baseRequest();
+    const adapter = makeAdapter({ launchResult: { ok: false, reason: "unsupported" } });
+    adapter.querySupportedModels = () => [request.model];
+    const result = enforceChildLaunchBound({ request, attemptLaunch: adapter.attemptLaunch, querySupportedModels: adapter.querySupportedModels });
+    assert.equal(result.modelSupported, true);
+  });
+
+  test("a Set inventory resolves modelSupported true for a listed model", () => {
+    const request = baseRequest();
+    const adapter = makeAdapter({ launchResult: { ok: false, reason: "unsupported" } });
+    adapter.querySupportedModels = () => new Set([request.model]);
+    const result = enforceChildLaunchBound({ request, attemptLaunch: adapter.attemptLaunch, querySupportedModels: adapter.querySupportedModels });
+    assert.equal(result.modelSupported, true);
+  });
+
+  test("a malformed/non-list inventory fails closed: modelSupported false, blocked", () => {
+    const request = baseRequest();
+    const adapter = makeAdapter({ launchResult: { ok: false, reason: "unsupported" } });
+    adapter.querySupportedModels = () => "not-a-list";
+    const result = enforceChildLaunchBound({ request, attemptLaunch: adapter.attemptLaunch, querySupportedModels: adapter.querySupportedModels });
+    assert.equal(result.ok, false);
+    assert.equal(result.verdict, "blocked");
+    assert.equal(result.modelSupported, false);
+  });
+});
+
 describe("enforceChildLaunchBound — elapsed bound", () => {
   test("a fast clock yields withinDeadline true", () => {
     let t = 1000;
@@ -255,5 +294,18 @@ describe("enforceChildLaunchBound — elapsed bound", () => {
     const adapter = makeAdapter({ launchResult: { ok: true, launch: {} } });
     const result = enforceChildLaunchBound({ request: baseRequest(), attemptLaunch: adapter.attemptLaunch, querySupportedModels: adapter.querySupportedModels, now });
     assert.equal(result.elapsedMs, 0);
+  });
+
+  test("a slow SUCCESSFUL launch still reports withinDeadline false", () => {
+    let calls = 0;
+    const now = () => {
+      calls += 1;
+      return calls === 1 ? 0 : 120000;
+    };
+    const adapter = makeAdapter({ launchResult: { ok: true, launch: { pid: 1 } } });
+    const result = enforceChildLaunchBound({ request: baseRequest(), attemptLaunch: adapter.attemptLaunch, querySupportedModels: adapter.querySupportedModels, now, deadlineMs: 60000 });
+    assert.equal(result.ok, true);
+    assert.equal(result.elapsedMs, 120000);
+    assert.equal(result.withinDeadline, false);
   });
 });

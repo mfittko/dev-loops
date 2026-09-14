@@ -87,9 +87,12 @@ function toSupportedSet(result) {
  *   Called AT MOST ONCE, and only after a failed launch.
  * @param {()=>number} [options.now] - injectable clock, default Date.now.
  * @param {number} [options.deadlineMs] - measurement bound in ms, default 60000.
- * @returns {object} `{ ok: true, launch, events, elapsedMs }` on success, or
- *   the durable blocker `{ ok: false, verdict: "blocked", reason, request,
- *   modelSupported, elapsedMs, withinDeadline, events }` on failure.
+ * @returns {object} `{ ok: true, launch, events, elapsedMs, withinDeadline }`
+ *   on success, or the durable blocker `{ ok: false, verdict: "blocked",
+ *   reason, launchFailureDetail, request, modelSupported, elapsedMs,
+ *   withinDeadline, events }` on failure. `launchFailureDetail` is the failed
+ *   `attemptLaunch` result verbatim (its own reason plus any error/message it
+ *   carried), preserved alongside the normalized `reason`.
  */
 export function enforceChildLaunchBound({ request, attemptLaunch, querySupportedModels, now = () => Date.now(), deadlineMs = 60000 } = {}) {
   const normalizedRequest = validateRequest(request);
@@ -109,7 +112,8 @@ export function enforceChildLaunchBound({ request, attemptLaunch, querySupported
 
   if (launchResult && launchResult.ok === true) {
     // Success: never query the inventory, never attempt a second launch.
-    return { ok: true, launch: launchResult.launch, events, elapsedMs: now() - start };
+    const elapsedMs = now() - start;
+    return { ok: true, launch: launchResult.launch, events, elapsedMs, withinDeadline: elapsedMs <= deadlineMs };
   }
 
   // Launch failed: query the harness's supported-model inventory EXACTLY
@@ -124,6 +128,10 @@ export function enforceChildLaunchBound({ request, attemptLaunch, querySupported
     : !modelSupported
       ? "child_model_unsupported"
       : "child_launch_failed_model_supported";
+  // Verbatim passthrough of the failed launch result (its own reason plus any
+  // error/message/detail it carried) — never inspected or altered — so a
+  // caller can see the exact failure detail alongside the normalized reason.
+  const launchFailureDetail = launchResult && typeof launchResult === "object" ? launchResult : null;
 
   const elapsedMs = now() - start;
   // Measurement, not enforcement: a slow adapter still returns the blocker
@@ -134,6 +142,7 @@ export function enforceChildLaunchBound({ request, attemptLaunch, querySupported
     ok: false,
     verdict: "blocked",
     reason,
+    launchFailureDetail,
     request: normalizedRequest,
     modelSupported,
     elapsedMs,
