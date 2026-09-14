@@ -34,10 +34,13 @@ import {
   parseChangedFiles,
   parseWriteGateContextCliArgs,
   PR_BODY_ABSENT_SENTINEL,
+  PRIOR_DISPOSITIONS_MAX_ENTRIES,
+  PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH,
   rationaleFromResolver,
   readCompletedAnglesForHead,
   resolveFanoutDispatch,
   resolvePrSpecContext,
+  resolvePriorDispositions,
   readGateContext,
   renderBriefingPrefix,
   renderBriefingVolatile,
@@ -45,6 +48,7 @@ import {
   resolveReviewGateAngles,
   writeGateContext,
 } from "../../scripts/github/write-gate-context.mjs";
+import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
 
 // #1653: chmod-based refusal tests (scanError/readError) rely on filesystem
 // permissions that root bypasses — skip with a recorded reason under root so
@@ -5292,6 +5296,10 @@ test("#1635 parseWriteGateContextCliArgs rejects a malformed --carried-angles", 
   assert.throws(() => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--carried-angles", '["a", 1]']), /JSON array of non-empty angle-name strings/);
 });
 
+test("parseWriteGateContextCliArgs rejects a short --prev-head that is not a FULL head commit SHA", () => {
+  assert.throws(() => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--prev-head", "abc1234"]), /--prev-head must be the FULL head commit SHA/);
+});
+
 test("#1635 resolveFanoutDispatch refuses a --carried-angles name that can never legitimately carry forward (mirrors consolidate-fanin.mjs's own mandatory-angle refusal)", () => {
   const config = draftConfig({ dynamicAngles: false, mandatoryAngles: ["gate-evidence"] });
   // A configured mandatory angle always re-runs; honoring it as carried would
@@ -6332,6 +6340,440 @@ test("renderBriefingVolatile: a validationPosture containing a newline is reject
     validationPosture: "npm run verify",
   });
   assert.match(text, /validationPosture: npm run verify/);
+});
+
+// --- AC3 (issue 2175): head-bump re-gate disposition memory ---
+
+test("renderBriefingVolatile: absent/empty priorDispositions renders byte-identical to today (no hint block)", () => {
+  const base = { gate: "draft_gate", headSha: "abc1234567890", loggedAt: "2026-01-01T00:00:00.000Z", validationPosture: "npm run verify" };
+  const withoutParam = renderBriefingVolatile(base);
+  const withEmptyArray = renderBriefingVolatile({ ...base, priorDispositions: [] });
+  assert.equal(withoutParam, withEmptyArray);
+  assert.doesNotMatch(withoutParam, /Prior-round dispositions/);
+});
+
+test("renderBriefingVolatile: a non-empty priorDispositions renders a bounded, attributed hint block after the key/value lines", () => {
+  const text = renderBriefingVolatile({
+    gate: "draft_gate",
+    headSha: "abc1234567890",
+    loggedAt: "2026-01-01T00:00:00.000Z",
+    validationPosture: "npm run verify",
+    priorDispositions: [
+      { fingerprint: "0123456789abcdef", angle: "correctness", severity: "medium", summary: "off-by-one in the loop bound", judgeRationale: "already litigated last round" },
+    ],
+  });
+  assert.match(text, /Prior-round dispositions \(do not re-raise a rejected finding at a shifted severity\):/);
+  assert.match(text, /0123456789abcdef/);
+  assert.match(text, /\[correctness\]/);
+  assert.match(text, /medium/);
+  assert.match(text, /off-by-one in the loop bound/);
+  assert.match(text, /already litigated last round/);
+  // Renders AFTER the existing key/value lines (validationPosture line comes first).
+  assert.ok(text.indexOf("validationPosture:") < text.indexOf("Prior-round dispositions"));
+});
+
+test("renderBriefingVolatile: an oversized priorDispositions array is capped at PRIOR_DISPOSITIONS_MAX_ENTRIES, in the input's own order, with a terse overflow line (Copilot round 2)", () => {
+  const totalEntries = PRIOR_DISPOSITIONS_MAX_ENTRIES + 7;
+  const dispositions = Array.from({ length: totalEntries }, (_, i) => ({
+    fingerprint: `fingerprint-${i}`,
+    angle: "correctness",
+    severity: "medium",
+    summary: `entry-${i}`,
+  }));
+  const text = renderBriefingVolatile({
+    gate: "draft_gate",
+    headSha: "abc1234567890",
+    loggedAt: "2026-01-01T00:00:00.000Z",
+    priorDispositions: dispositions,
+  });
+  // Exactly the first PRIOR_DISPOSITIONS_MAX_ENTRIES entries render, in the
+  // input's own order — never re-sorted or sampled.
+  for (let i = 0; i < PRIOR_DISPOSITIONS_MAX_ENTRIES; i++) {
+    assert.match(text, new RegExp(`entry-${i}\\b`));
+  }
+  for (let i = PRIOR_DISPOSITIONS_MAX_ENTRIES; i < totalEntries; i++) {
+    assert.doesNotMatch(text, new RegExp(`entry-${i}\\b`));
+  }
+  const overflow = totalEntries - PRIOR_DISPOSITIONS_MAX_ENTRIES;
+  assert.match(text, new RegExp(`\\+${overflow} more prior dispositions omitted`));
+});
+
+test("renderBriefingVolatile: a free-form field longer than PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH is truncated with an ellipsis marker, deterministically (Copilot round 2)", () => {
+  const longSummary = "s".repeat(PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH + 500);
+  const longRationale = "r".repeat(PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH + 500);
+  const text = renderBriefingVolatile({
+    gate: "draft_gate",
+    headSha: "abc1234567890",
+    loggedAt: "2026-01-01T00:00:00.000Z",
+    priorDispositions: [
+      { fingerprint: "0123456789abcdef", angle: "correctness", severity: "medium", summary: longSummary, judgeRationale: longRationale },
+    ],
+  });
+  assert.doesNotMatch(text, new RegExp(longSummary));
+  assert.doesNotMatch(text, new RegExp(longRationale));
+  assert.match(text, new RegExp(`s{${PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH}}…`));
+  assert.match(text, new RegExp(`r{${PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH}}…`));
+  // Deterministic: rendering twice from the same input yields byte-identical output.
+  const textAgain = renderBriefingVolatile({
+    gate: "draft_gate",
+    headSha: "abc1234567890",
+    loggedAt: "2026-01-01T00:00:00.000Z",
+    priorDispositions: [
+      { fingerprint: "0123456789abcdef", angle: "correctness", severity: "medium", summary: longSummary, judgeRationale: longRationale },
+    ],
+  });
+  assert.equal(text, textAgain);
+});
+
+test("renderBriefingVolatile: an angle/severity longer than PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH is truncated with an ellipsis marker, deterministically", () => {
+  const longAngle = "a".repeat(PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH + 500);
+  const longSeverity = "v".repeat(PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH + 500);
+  const text = renderBriefingVolatile({
+    gate: "draft_gate",
+    headSha: "abc1234567890",
+    loggedAt: "2026-01-01T00:00:00.000Z",
+    priorDispositions: [
+      { fingerprint: "0123456789abcdef", angle: longAngle, severity: longSeverity, summary: "short summary", judgeRationale: "short rationale" },
+    ],
+  });
+  assert.doesNotMatch(text, new RegExp(longAngle));
+  assert.doesNotMatch(text, new RegExp(longSeverity));
+  assert.match(text, new RegExp(`a{${PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH}}…`));
+  assert.match(text, new RegExp(`v{${PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH}}…`));
+  // Deterministic: rendering twice from the same input yields byte-identical output.
+  const textAgain = renderBriefingVolatile({
+    gate: "draft_gate",
+    headSha: "abc1234567890",
+    loggedAt: "2026-01-01T00:00:00.000Z",
+    priorDispositions: [
+      { fingerprint: "0123456789abcdef", angle: longAngle, severity: longSeverity, summary: "short summary", judgeRationale: "short rationale" },
+    ],
+  });
+  assert.equal(text, textAgain);
+});
+
+test("writeGateContext --prev-head (programmatic): an oversized prior findings-log renders a deterministically capped disposition block, not an unbounded one (Copilot round 2)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prior-dispositions-oversized-"));
+  try {
+    const prevHead = "3".repeat(40);
+    const logPath = buildLogPath({ repo: "owner/repo", pr: 67, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" });
+    await mkdir(path.dirname(path.resolve(repoRoot, logPath)), { recursive: true });
+    const totalFindings = PRIOR_DISPOSITIONS_MAX_ENTRIES + 15;
+    const longSummary = "x".repeat(PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH + 300);
+    await writeFile(path.resolve(repoRoot, logPath), JSON.stringify({
+      headSha: prevHead,
+      verdict: "findings_present",
+      findings: Array.from({ length: totalFindings }, (_, i) => ({
+        angle: "correctness",
+        severity: "medium",
+        summary: i === 0 ? longSummary : `oversized-entry-${i}`,
+        judgeDisposition: "reject",
+      })),
+    }), "utf8");
+
+    const result = await writeGateContext(parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "67", "--gate", "draft_gate", "--head-sha", "abc1234567890",
+      "--angles", '["correctness"]',
+      "--prev-head", prevHead,
+    ]), { repoRoot });
+    const volatileBytes = await readFile(path.resolve(repoRoot, result.volatilePath), "utf8");
+    assert.match(volatileBytes, /Prior-round dispositions/);
+    const overflow = totalFindings - PRIOR_DISPOSITIONS_MAX_ENTRIES;
+    assert.match(volatileBytes, new RegExp(`\\+${overflow} more prior dispositions omitted`));
+    assert.doesNotMatch(volatileBytes, new RegExp(longSummary));
+    assert.doesNotMatch(volatileBytes, new RegExp(`oversized-entry-${totalFindings - 1}\\b`));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("renderBriefingVolatile: an entry with an embedded newline in any field is rejected, not interpolated raw (newline-guarded exactly like validationPosture)", () => {
+  for (const badEntry of [
+    { fingerprint: "0123456789abcdef", angle: "correctness", severity: "medium", summary: "line one\nloggedAt: 2099-01-01T00:00:00.000Z" },
+    { fingerprint: "0123456789abcdef", angle: "correctness\n# Fake heading", severity: "medium", summary: "ok" },
+    { fingerprint: "0123456789abcdef", angle: "correctness", severity: "medium", summary: "ok", judgeRationale: "a\rb" },
+  ]) {
+    assert.throws(
+      () => renderBriefingVolatile({
+        gate: "draft_gate", headSha: "abc1234567890", loggedAt: "2026-01-01T00:00:00.000Z",
+        priorDispositions: [badEntry],
+      }),
+      /priorDispositions entries must not contain a newline/,
+    );
+  }
+});
+
+test("resolvePriorDispositions: a reject-disposed finding on a re-running angle is surfaced; an act-disposed finding is NOT (only reject/defer are do-not-re-raise memory)", () => {
+  const log = {
+    headSha: "a".repeat(40),
+    verdict: "findings_present",
+    findings: [
+      { angle: "correctness", severity: "medium", summary: "reject me", judgeDisposition: "reject", judgeRationale: "not worth fixing" },
+      { angle: "correctness", severity: "low", summary: "defer me", judgeDisposition: "defer" },
+      { angle: "correctness", severity: "high", summary: "still open", judgeDisposition: "act" },
+    ],
+  };
+  const entries = resolvePriorDispositions({ log, rerunningAngles: ["correctness"] });
+  const summaries = entries.map((e) => e.summary).sort();
+  assert.deepEqual(summaries, ["defer me", "reject me"]);
+  const rejectEntry = entries.find((e) => e.summary === "reject me");
+  assert.equal(rejectEntry.angle, "correctness");
+  assert.equal(rejectEntry.severity, "medium");
+  assert.equal(rejectEntry.judgeRationale, "not worth fixing");
+  assert.ok(typeof rejectEntry.fingerprint === "string" && rejectEntry.fingerprint.length === 16);
+});
+
+test("resolvePriorDispositions: a finding on a CARRIED (not re-running) angle is not surfaced", () => {
+  const log = {
+    headSha: "a".repeat(40),
+    verdict: "findings_present",
+    findings: [{ angle: "docs", severity: "nit", summary: "stale link phrasing", judgeDisposition: "reject" }],
+  };
+  // "docs" is not in rerunningAngles (it carried forward this round) — no
+  // hint is surfaced for a reviewer that never re-runs.
+  assert.deepEqual(resolvePriorDispositions({ log, rerunningAngles: ["correctness"] }), []);
+});
+
+test("resolvePriorDispositions: absent/malformed prior log fails open to an empty array, never throws", () => {
+  assert.deepEqual(resolvePriorDispositions({ log: null, rerunningAngles: ["correctness"] }), []);
+  assert.deepEqual(resolvePriorDispositions({ log: undefined, rerunningAngles: ["correctness"] }), []);
+  assert.deepEqual(resolvePriorDispositions({ log: "not an object", rerunningAngles: ["correctness"] }), []);
+  assert.deepEqual(resolvePriorDispositions({ log: { headSha: "a".repeat(40), verdict: "findings_present" }, rerunningAngles: ["correctness"] }), []);
+  assert.deepEqual(resolvePriorDispositions({ log: { findings: "not an array" }, rerunningAngles: ["correctness"] }), []);
+});
+
+test("resolvePriorDispositions: one malformed finding (embedded newline) is skipped individually — it never suppresses a sibling genuine entry", () => {
+  const log = {
+    headSha: "a".repeat(40),
+    verdict: "findings_present",
+    findings: [
+      { angle: "correctness", severity: "medium", summary: "line one\nloggedAt: forged", judgeDisposition: "reject" },
+      { angle: "correctness", severity: "low", summary: "genuine entry", judgeDisposition: "reject" },
+    ],
+  };
+  const entries = resolvePriorDispositions({ log, rerunningAngles: ["correctness"] });
+  assert.deepEqual(entries.map((e) => e.summary), ["genuine entry"]);
+});
+
+test("resolvePriorDispositions: a delta-suffixed re-review finding attributes to its BASE angle (mirrors buildCarryForwardPlan's own attribution)", () => {
+  const log = {
+    headSha: "a".repeat(40),
+    verdict: "findings_present",
+    findings: [{ angle: "coverage-delta-at-deadbeef", severity: "nice-to-have", summary: "still rejected", judgeDisposition: "reject" }],
+  };
+  const entries = resolvePriorDispositions({ log, rerunningAngles: ["coverage"] });
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].angle, "coverage-delta-at-deadbeef");
+});
+
+test("writeGateContext --prev-head (programmatic): a prior reject-disposed finding for a RE-RUNNING angle is seeded into the volatile tail", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prior-dispositions-"));
+  try {
+    const prevHead = "a".repeat(40);
+    const logPath = buildLogPath({ repo: "owner/repo", pr: 61, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" });
+    await mkdir(path.dirname(path.resolve(repoRoot, logPath)), { recursive: true });
+    await writeFile(path.resolve(repoRoot, logPath), JSON.stringify({
+      headSha: prevHead,
+      verdict: "findings_present",
+      findings: [
+        { angle: "correctness", severity: "medium", summary: "prior rejected nit", judgeDisposition: "reject", judgeRationale: "already covered" },
+        { angle: "docs", severity: "low", summary: "prior docs finding", judgeDisposition: "reject" },
+      ],
+    }), "utf8");
+
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "61", "--gate", "draft_gate", "--head-sha", "abc1234567890",
+      "--angles", '["correctness", "docs"]',
+      "--carried-angles", '["docs"]',
+      "--prev-head", prevHead,
+    ]);
+    const result = await writeGateContext(options, { repoRoot });
+    const volatileBytes = await readFile(path.resolve(repoRoot, result.volatilePath), "utf8");
+    assert.match(volatileBytes, /Prior-round dispositions/);
+    assert.match(volatileBytes, /prior rejected nit/);
+    // "docs" carried forward this round (never re-runs) — its prior finding
+    // must not be seeded even though it too was rejected.
+    assert.doesNotMatch(volatileBytes, /prior docs finding/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext --prev-head (programmatic): first round (no --prev-head) leaves the volatile tail byte-identical to omitting the flag entirely", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prior-dispositions-absent-"));
+  try {
+    const baseArgv = [
+      "--repo", "owner/repo", "--pr", "62", "--gate", "draft_gate", "--head-sha", "abc1234567890",
+      "--angles", '["correctness"]',
+    ];
+    // loggedAt is a genuine per-write timestamp (new Date().toISOString()),
+    // never itself claimed deterministic — normalize it out so this test pins
+    // ONLY what --prev-head's absence-handling is responsible for.
+    const stripLoggedAt = (text) => text.replace(/^loggedAt: .*$/m, "loggedAt: <normalized>");
+    const withoutFlag = await writeGateContext(parseWriteGateContextCliArgs(baseArgv), { repoRoot });
+    const bytesWithoutFlag = stripLoggedAt(await readFile(path.resolve(repoRoot, withoutFlag.volatilePath), "utf8"));
+
+    // A syntactically valid --prev-head with NO log on disk at that head
+    // (first round) must fail OPEN — same rendered bytes as omitting the flag.
+    const withAbsentPrevHead = await writeGateContext(
+      parseWriteGateContextCliArgs([...baseArgv, "--prev-head", "b".repeat(40)]),
+      { repoRoot },
+    );
+    const bytesWithAbsentPrevHead = stripLoggedAt(await readFile(path.resolve(repoRoot, withAbsentPrevHead.volatilePath), "utf8"));
+    assert.equal(bytesWithAbsentPrevHead, bytesWithoutFlag);
+    assert.doesNotMatch(bytesWithAbsentPrevHead, /Prior-round dispositions/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext --prev-head (programmatic): a malformed prior log (invalid JSON) never crashes the write — it just omits the hint block", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prior-dispositions-malformed-"));
+  try {
+    const prevHead = "c".repeat(40);
+    const logPath = buildLogPath({ repo: "owner/repo", pr: 63, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" });
+    await mkdir(path.dirname(path.resolve(repoRoot, logPath)), { recursive: true });
+    await writeFile(path.resolve(repoRoot, logPath), "{ not valid json", "utf8");
+
+    const result = await writeGateContext(parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "63", "--gate", "draft_gate", "--head-sha", "abc1234567890",
+      "--angles", '["correctness"]',
+      "--prev-head", prevHead,
+    ]), { repoRoot });
+    const volatileBytes = await readFile(path.resolve(repoRoot, result.volatilePath), "utf8");
+    assert.doesNotMatch(volatileBytes, /Prior-round dispositions/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext --prev-head (programmatic): an act-disposed prior finding is NOT presented as already rejected", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prior-dispositions-act-"));
+  try {
+    const prevHead = "d".repeat(40);
+    const logPath = buildLogPath({ repo: "owner/repo", pr: 64, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" });
+    await mkdir(path.dirname(path.resolve(repoRoot, logPath)), { recursive: true });
+    await writeFile(path.resolve(repoRoot, logPath), JSON.stringify({
+      headSha: prevHead,
+      verdict: "findings_present",
+      findings: [{ angle: "correctness", severity: "high", summary: "still open, still act", judgeDisposition: "act" }],
+    }), "utf8");
+
+    const result = await writeGateContext(parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "64", "--gate", "draft_gate", "--head-sha", "abc1234567890",
+      "--angles", '["correctness"]',
+      "--prev-head", prevHead,
+    ]), { repoRoot });
+    const volatileBytes = await readFile(path.resolve(repoRoot, result.volatilePath), "utf8");
+    assert.doesNotMatch(volatileBytes, /Prior-round dispositions/);
+    assert.doesNotMatch(volatileBytes, /still open, still act/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext --prev-head (programmatic): a prior log whose OWN headSha does not match --prev-head (identity mismatch) never crashes the write — it just omits the hint block", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prior-dispositions-mismatch-"));
+  try {
+    const prevHead = "e".repeat(40);
+    const logPath = buildLogPath({ repo: "owner/repo", pr: 65, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" });
+    await mkdir(path.dirname(path.resolve(repoRoot, logPath)), { recursive: true });
+    // A stale/misplaced ledger sitting at the --prev-head-keyed path but
+    // recording a DIFFERENT head's own identity — must not be trusted.
+    await writeFile(path.resolve(repoRoot, logPath), JSON.stringify({
+      headSha: "f".repeat(40),
+      verdict: "findings_present",
+      findings: [{ angle: "correctness", severity: "medium", summary: "foreign round finding", judgeDisposition: "reject" }],
+    }), "utf8");
+
+    const result = await writeGateContext(parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "65", "--gate", "draft_gate", "--head-sha", "abc1234567890",
+      "--angles", '["correctness"]',
+      "--prev-head", prevHead,
+    ]), { repoRoot });
+    const volatileBytes = await readFile(path.resolve(repoRoot, result.volatilePath), "utf8");
+    assert.doesNotMatch(volatileBytes, /Prior-round dispositions/);
+    assert.doesNotMatch(volatileBytes, /foreign round finding/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext --prev-head (programmatic): a prior log with verdict \"blocked\" (or a missing verdict) is not carry-eligible — no disposition hint even though its findings carry reject/defer (Copilot round 2)", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prior-dispositions-ineligible-verdict-"));
+  try {
+    const blockedHead = "1".repeat(40);
+    const blockedLogPath = buildLogPath({ repo: "owner/repo", pr: 66, gate: "draft_gate", headSha: blockedHead, tmpRoot: "tmp" });
+    await mkdir(path.dirname(path.resolve(repoRoot, blockedLogPath)), { recursive: true });
+    await writeFile(path.resolve(repoRoot, blockedLogPath), JSON.stringify({
+      headSha: blockedHead,
+      verdict: "blocked",
+      findings: [{ angle: "correctness", severity: "medium", summary: "reject under a blocked round", judgeDisposition: "reject" }],
+    }), "utf8");
+    const blockedResult = await writeGateContext(parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "66", "--gate", "draft_gate", "--head-sha", "abc1234567890",
+      "--angles", '["correctness"]',
+      "--prev-head", blockedHead,
+    ]), { repoRoot });
+    const blockedBytes = await readFile(path.resolve(repoRoot, blockedResult.volatilePath), "utf8");
+    assert.doesNotMatch(blockedBytes, /Prior-round dispositions/);
+    assert.doesNotMatch(blockedBytes, /reject under a blocked round/);
+
+    const noVerdictHead = "2".repeat(40);
+    const noVerdictLogPath = buildLogPath({ repo: "owner/repo", pr: 66, gate: "draft_gate", headSha: noVerdictHead, tmpRoot: "tmp" });
+    await mkdir(path.dirname(path.resolve(repoRoot, noVerdictLogPath)), { recursive: true });
+    // No `verdict` field at all — a truncated/hand-edited/malformed-but-
+    // syntactically-valid ledger.
+    await writeFile(path.resolve(repoRoot, noVerdictLogPath), JSON.stringify({
+      headSha: noVerdictHead,
+      findings: [{ angle: "correctness", severity: "medium", summary: "reject under a missing verdict", judgeDisposition: "reject" }],
+    }), "utf8");
+    const noVerdictResult = await writeGateContext(parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "66", "--gate", "draft_gate", "--head-sha", "abc1234567890",
+      "--angles", '["correctness"]',
+      "--prev-head", noVerdictHead,
+    ]), { repoRoot });
+    const noVerdictBytes = await readFile(path.resolve(repoRoot, noVerdictResult.volatilePath), "utf8");
+    assert.doesNotMatch(noVerdictBytes, /Prior-round dispositions/);
+    assert.doesNotMatch(noVerdictBytes, /reject under a missing verdict/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("parseWriteGateContextCliArgs rejects --prev-head equal to --head-sha (same-head), including a --head-sha prefix of the full --prev-head SHA", () => {
+  const fullSha = "a".repeat(40);
+  assert.throws(
+    () => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", fullSha, "--prev-head", fullSha]),
+    /--prev-head equals --head-sha/,
+  );
+  // --head-sha accepts an abbreviated spelling of the same commit.
+  assert.throws(
+    () => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", fullSha.slice(0, 7), "--prev-head", fullSha]),
+    /--prev-head equals --head-sha/,
+  );
+});
+
+test("parseWriteGateContextCliArgs rejects same-head in BOTH prefix directions, including a mixed-length 64/40-char full SHA pair (Copilot round 2)", () => {
+  const fullSha64 = "a".repeat(64);
+  const prefix40 = fullSha64.slice(0, 40);
+  // Direction already covered above: --head-sha (short) is a prefix of the
+  // full --prev-head. This pins the OTHER direction the one-way startsWith
+  // check missed: --head-sha is the LONGER (full 64-char) string and
+  // --prev-head is a full-length (40-char) string that happens to be a
+  // literal prefix of it — normalizeFullHeadSha accepts both 40- and
+  // 64-char OIDs, so this is a legitimate --prev-head spelling, and the
+  // guard must still catch it as same-head.
+  assert.throws(
+    () => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", fullSha64, "--prev-head", prefix40]),
+    /--prev-head equals --head-sha/,
+  );
+  // A genuinely different 40-char --prev-head that is NOT a prefix of the
+  // 64-char --head-sha must still be accepted (no over-rejection).
+  const differentPrevHead = "b".repeat(40);
+  assert.doesNotThrow(
+    () => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", fullSha64, "--prev-head", differentPrevHead]),
+  );
 });
 
 test("#1866 review-gate wiring: an issue-less PR body with a real AC checklist but NO Non-goals keeps the acceptance-criteria angle (real buildGateContext wiring)", async () => {

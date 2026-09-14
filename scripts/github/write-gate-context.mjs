@@ -46,6 +46,9 @@ import { GATE_NAMES, gateScopePrefix, normalizeGate as normalizeGateShared, norm
 import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "./_carried-angles.mjs";
 import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
+import { buildLogPath } from "./write-gate-findings-log.mjs";
+import { fingerprintFinding } from "./_gate-finding-surface.mjs";
 
 /**
  * Up-front gate-ORDERING tripwire (pure): a `pre_approval_gate` must come AFTER
@@ -208,6 +211,7 @@ Optional:
   --full-label                   The PR carries the gate:full label: dynamic angle resolution skips diff-class tier reduction (resolveGateTier returns gate_full_label) and resolves the untriered angle set. Only meaningful when --angles is omitted. When this flag is absent (and --prefix-file is not in use), the label is derived from the live PR via a labels read; a failed read fails closed to the untriered set. Under --prefix-file the CLI never touches GitHub, so the label cannot be derived and an omitted flag likewise fails closed to the untriered set (pass --angles to force a specific set there).
   --available-reviewers <n>      Harness remaining reviewer budget for the #1507 reviewer-budget preflight (non-negative integer). When supplied, the artifact's fanout.preflight reports whether the budget covers this round's dispatch units; on a shortfall, fanout.preflight.dispatch is false and the conductor MUST NOT spawn any reviewer (the shortfall is a resumable state — the artifact records it). Omit when the harness does not expose a budget; the preflight then proceeds (no shortfall can be proven).
   --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean head (mirrors consolidate-fanin.mjs's own --carried-angles vocabulary, minus its --carry-forward-plan proof check — the caller here IS the fail-closed carry-forward seam, resolve-angle-carry-forward.mjs, never a guess). Like consolidate-fanin.mjs's own mandatory-angle refusal, a name whose review surface always re-runs (a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE evidence/security/description angle) fails closed (exit 1) rather than being honored. A dispatch group whose angles are all carried-or-already-complete (already-complete: a clean per-angle artifact already stamped for this head, scanned automatically — see readCompletedAnglesForHead) is excluded from fanout.preflight.requiredReviewers and pendingGroups, so a head-bump re-gate does not over-count angles Phase 1.2 is about to carry. A wrong/stale value can only shrink the dispatch plan, never grow it past the true group count — it can under-dispatch, never over-spend the budget or fabricate findings for an angle that DID run: the configured-mandatory coverage check and the fail-closed merge check's clean current-head merge marker requirement catch an under-dispatched round ONLY when the wrongly-carried angle is a CONFIGURED mandatory angle — neither ever unions the hardcoded ALWAYS_INCLUDE set, so a wrong value naming only a non-mandatory, non-ALWAYS_INCLUDE angle under-dispatches with no mechanical refusal, visible only in the ledger's own carried-angle provenance (an ALWAYS_INCLUDE name is already refused at this CLI's own entry, above). Omit for today's full-count behavior (nothing excluded).
+  --prev-head <sha>              FULL head commit SHA (40 or 64 hex chars) of the prior round's durable gate findings-log (mirrors resolve-angle-carry-forward.mjs's own --prev-head vocabulary). When supplied, every prior reject/defer-disposed finding attributed to an angle re-running THIS round (an angle in --angles not named in --carried-angles) is seeded into the rendered volatile tail as a "do not re-raise" hint (AC3, skills/docs/gate-review-sub-loop-contract.md). Fails OPEN, never crashes the briefing: an absent, unreadable, or malformed prior log simply omits the hint block (byte-identical volatile tail to omitting this flag) — it never blocks the write, suppresses a finding, or converts a reject into an approval. Omit for today's behavior (no hint block).
   --tmp-root <path>              Root tmp directory (default: tmp/)
 
 ${JQ_OUTPUT_USAGE}
@@ -337,6 +341,7 @@ export function parseWriteGateContextCliArgs(argv) {
       "full-label": { type: "boolean" },
       "available-reviewers": { type: "string" },
       "carried-angles": { type: "string" },
+      "prev-head": { type: "string" },
       "tmp-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -363,6 +368,7 @@ export function parseWriteGateContextCliArgs(argv) {
     fullLabel: false,
     availableReviewers: null,
     carriedAngles: null,
+    prevHead: null,
     tmpRoot: "tmp",
   };
   for (const token of tokens) {
@@ -505,6 +511,17 @@ export function parseWriteGateContextCliArgs(argv) {
       options.carriedAngles = parseCarriedAnglesJsonArray(raw, parseError);
       continue;
     }
+    if (token.name === "prev-head") {
+      // FULL SHA only — mirrors resolve-angle-carry-forward.mjs's own
+      // --prev-head vocabulary: the prior findings-log path is keyed by the
+      // full SHA, so a prefix would resolve a path that can never exist.
+      const sha = normalizeFullHeadSha(requireTokenValue(token, parseError));
+      if (!sha) {
+        throw parseError("--prev-head must be the FULL head commit SHA (40 or 64 hex chars), not a short prefix — the prior findings-log path is keyed by the full SHA");
+      }
+      options.prevHead = sha;
+      continue;
+    }
     if (token.name === "tmp-root") {
       options.tmpRoot = requireTokenValue(token, parseError).trim();
       continue;
@@ -516,6 +533,23 @@ export function parseWriteGateContextCliArgs(argv) {
     .filter((k) => options[k] === undefined);
   if (missing.length > 0) {
     throw parseError(`Missing required arguments: ${missing.join(", ")}`);
+  }
+  // FAIL-CLOSED (mirrors resolve-angle-carry-forward.mjs's own same-head
+  // rejection): a same-head "prior" would read THIS round's own findings-log
+  // and seed it back as prior-round disposition memory. --head-sha accepts an
+  // abbreviated 7-64 hex spelling of the same commit, so a plain === would
+  // miss an abbreviated --head-sha; startsWith the SHORTER string against the
+  // LONGER one catches that direction. --prev-head is always the FULL SHA
+  // (enforced above) but may be spelled with either the 40-hex (SHA-1) or
+  // 64-hex (SHA-256) full digest — normalizeFullHeadSha accepts both — so a
+  // 64-char --head-sha and a 40-char --prev-head that is a literal prefix of
+  // it (or the reverse) is ALSO same-head and must be caught: check both
+  // prefix directions, not just prevHead.startsWith(headSha).
+  if (
+    typeof options.prevHead === "string"
+    && (options.prevHead.startsWith(options.headSha) || options.headSha.startsWith(options.prevHead))
+  ) {
+    throw parseError("--prev-head equals --head-sha — a same-head prior read would seed this round's own findings-log as prior-round disposition memory; omit --prev-head instead");
   }
   return options;
 }
@@ -1557,6 +1591,33 @@ export function renderScopedBriefingVariant(scope, {
  */
 export const REQUEST_PLAN_BLOCK_BOUNDARIES = Object.freeze(["shared_prefix", "cache_boundary", "volatile_tail"]);
 
+// ponytail: the prior-round-dispositions block below is documented as
+// "bounded" (AC3, issue 2175) — these two constants ARE the bound. A
+// corrupted/adversarial prior ledger with thousands of findings, or a single
+// finding with an arbitrarily long free-form summary/judgeRationale, must
+// never make a reviewer prompt unboundedly large. Deterministic (no
+// content-dependent truncation choice, no random sampling): the first
+// PRIOR_DISPOSITIONS_MAX_ENTRIES entries in the prior log's OWN order are
+// kept, every free-form field is truncated at
+// PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH chars with an ellipsis marker, and any
+// overflow past the entry cap is summarized in one terse line rather than
+// silently dropped.
+export const PRIOR_DISPOSITIONS_MAX_ENTRIES = 20;
+export const PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH = 200;
+
+/**
+ * Truncate a free-form field to {@link PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH}
+ * chars, appending an ellipsis marker when truncated. Applied AFTER the
+ * newline guard below, so the marker itself is always plain, single-line
+ * text — it can never smuggle in a forged line.
+ * @param {string} value
+ * @returns {string}
+ */
+function truncatePriorDispositionField(value) {
+  if (value.length <= PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH) return value;
+  return `${value.slice(0, PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH)}…`;
+}
+
 /**
  * Render the materialized VOLATILE tail block (GATE-EXEC-BRIEFING-PREFIX's
  * counterpart): round-level values that sit AFTER the cache boundary the
@@ -1586,11 +1647,41 @@ export const REQUEST_PLAN_BLOCK_BOUNDARIES = Object.freeze(["shared_prefix", "ca
  * `loggedAt:`, a fake `#` heading). Fails closed on a newline rather than
  * escaping it — an escape character is itself forgeable text.
  *
+ * AC3 (issue 2175, head-bump re-gate disposition memory): `priorDispositions`
+ * — each `{ fingerprint, angle, severity, summary, judgeRationale? }` — is an
+ * OPTIONAL, ADDITIVE block rendered after the key/value lines above. Absent
+ * or empty, the rendered bytes are byte-identical to today. Every string
+ * field is newline-guarded exactly like `validationPosture` (same forged-line
+ * hazard); this function's caller ({@link writeGateContext}'s `--prev-head`
+ * handling) is expected to have already filtered out any malformed prior
+ * finding rather than let one reach here, so this guard should never fire in
+ * practice — it exists as the same defense-in-depth `validationPosture`
+ * already has. This block only ever ADDS a "do not re-raise" hint; it never
+ * suppresses a finding or converts a reject into an approval.
+ *
+ * BOUNDED, deterministically: at most {@link PRIOR_DISPOSITIONS_MAX_ENTRIES}
+ * entries are rendered, kept in the prior log's own order (never re-sorted or
+ * sampled), with any overflow summarized in one terse "+K more ... omitted"
+ * line; every rendered field (`angle`, `severity`, `summary`,
+ * `judgeRationale`) is truncated to {@link PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH}
+ * chars. A large or corrupted
+ * prior findings-log can therefore never make this block — or the reviewer
+ * prompt it feeds — unboundedly large.
+ *
  * @param {string|null} [input.validationPosture] — must not contain a newline
+ * @param {Array<{fingerprint: string, angle: string, severity: string, summary: string, judgeRationale?: string}>} [input.priorDispositions] — reject/defer-disposed findings from the prior head, attributed to an angle re-running this round
  */
-export function renderBriefingVolatile({ gate, headSha, loggedAt, validationPosture = null }) {
+export function renderBriefingVolatile({ gate, headSha, loggedAt, validationPosture = null, priorDispositions = [] }) {
   if (validationPosture != null && /[\r\n]/.test(validationPosture)) {
     throw new Error("renderBriefingVolatile: validationPosture must not contain a newline — an embedded newline could forge additional key: value lines in this line-structured file");
+  }
+  const dispositions = Array.isArray(priorDispositions) ? priorDispositions : [];
+  for (const entry of dispositions) {
+    for (const field of [entry?.fingerprint, entry?.angle, entry?.severity, entry?.summary, entry?.judgeRationale]) {
+      if (typeof field === "string" && /[\r\n]/.test(field)) {
+        throw new Error("renderBriefingVolatile: priorDispositions entries must not contain a newline — an embedded newline could forge additional lines in this line-structured file");
+      }
+    }
   }
   const lines = [];
   lines.push("# Gate Review Briefing — volatile tail (after the cache boundary)");
@@ -1600,7 +1691,89 @@ export function renderBriefingVolatile({ gate, headSha, loggedAt, validationPost
   lines.push(`loggedAt: ${loggedAt}`);
   lines.push(`validationPosture: ${validationPosture ?? "(none)"}`);
   lines.push("");
+  if (dispositions.length > 0) {
+    lines.push("Prior-round dispositions (do not re-raise a rejected finding at a shifted severity):");
+    // Bounded, deterministic: keep the first PRIOR_DISPOSITIONS_MAX_ENTRIES in
+    // the prior log's own order — never re-sorted, never sampled — and
+    // truncate each free-form field so one adversarial/corrupted entry cannot
+    // make this block (or the reviewer prompt it feeds) unboundedly large.
+    const kept = dispositions.slice(0, PRIOR_DISPOSITIONS_MAX_ENTRIES);
+    const omittedCount = dispositions.length - kept.length;
+    for (const entry of kept) {
+      const angle = truncatePriorDispositionField(entry.angle);
+      const severity = truncatePriorDispositionField(entry.severity);
+      const summary = truncatePriorDispositionField(entry.summary);
+      const rationale = typeof entry.judgeRationale === "string" && entry.judgeRationale.length > 0
+        ? ` — judge: ${truncatePriorDispositionField(entry.judgeRationale)}`
+        : "";
+      lines.push(`- ${entry.fingerprint} [${angle}] ${severity}: ${summary}${rationale}`);
+    }
+    if (omittedCount > 0) {
+      lines.push(`- +${omittedCount} more prior dispositions omitted`);
+    }
+    lines.push("");
+  }
   return lines.join("\n") + "\n";
+}
+
+/**
+ * AC3 (issue 2175): pure extraction of the "do not re-raise" hint entries
+ * from a prior gate findings-log — the `reject`/`defer`-disposed findings
+ * (`applyJudgeDispositions`'s `judgeDisposition`, @dev-loops/core/loop/gate-fanin)
+ * attributed to an angle re-running THIS round. An `act` (still-open)
+ * disposition is deliberately excluded: it is not "already rejected" memory,
+ * it is still live and belongs in the fresh findings a reviewer files, not in
+ * a do-not-re-raise hint.
+ *
+ * FAIL-OPEN, never throws: `log` may be `null`/malformed (absent or
+ * unreadable prior findings-log, e.g. first round) — returns `[]`. A
+ * malformed INDIVIDUAL finding (non-string angle/severity/summary, an
+ * embedded newline that would forge a line in the volatile tail's
+ * line-structured file, or a fingerprintFinding failure) is skipped
+ * individually rather than aborting the whole extraction — one bad entry
+ * must never suppress every other genuine hint.
+ *
+ * Attribution mirrors {@link buildCarryForwardPlan}'s own base-angle match
+ * (`baseAngleName` + case-insensitive): a finding recorded under a
+ * `<angle>-delta-at-...` re-review entry still attributes to its base angle.
+ *
+ * @param {object} input
+ * @param {object|null} input.log — the prior findings-log JSON (or null/absent)
+ * @param {string[]} input.rerunningAngles — this round's angle names that are
+ *   actually re-running (NOT carried forward) — only findings attributed to one
+ *   of these are surfaced; a carried angle's reviewer never re-runs, so it has
+ *   no context to seed.
+ * @returns {Array<{fingerprint: string, angle: string, severity: string, summary: string, judgeRationale?: string}>}
+ */
+export function resolvePriorDispositions({ log, rerunningAngles }) {
+  if (!log || typeof log !== "object" || !Array.isArray(log.findings)) return [];
+  const rerunningBase = new Set(
+    (Array.isArray(rerunningAngles) ? rerunningAngles : [])
+      .filter((a) => typeof a === "string" && a.trim().length > 0)
+      .map((a) => baseAngleName(a.trim()).toLowerCase()),
+  );
+  if (rerunningBase.size === 0) return [];
+  const entries = [];
+  for (const finding of log.findings) {
+    if (!finding || typeof finding !== "object") continue;
+    const disposition = typeof finding.judgeDisposition === "string" ? finding.judgeDisposition.trim() : "";
+    if (disposition !== "reject" && disposition !== "defer") continue;
+    const angle = typeof finding.angle === "string" ? finding.angle.trim() : "";
+    const severity = typeof finding.severity === "string" ? finding.severity.trim() : "";
+    const summary = typeof finding.summary === "string" ? finding.summary.trim() : "";
+    if (angle.length === 0 || severity.length === 0 || summary.length === 0) continue;
+    if (!rerunningBase.has(baseAngleName(angle).toLowerCase())) continue;
+    const judgeRationale = typeof finding.judgeRationale === "string" ? finding.judgeRationale.trim() : "";
+    if ([angle, severity, summary, judgeRationale].some((v) => /[\r\n]/.test(v))) continue;
+    let fingerprint;
+    try {
+      fingerprint = fingerprintFinding(finding);
+    } catch {
+      continue;
+    }
+    entries.push({ fingerprint, angle, severity, summary, ...(judgeRationale.length > 0 ? { judgeRationale } : {}) });
+  }
+  return entries;
 }
 
 /**
@@ -2390,6 +2563,72 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   }
   await writeFile(fullPrefixPath, prefixBytes);
 
+  // AC3 (issue 2175, head-bump re-gate disposition memory): when --prev-head
+  // is supplied, seed the angles re-running THIS round (options.angles minus
+  // options.carriedAngles) with the prior head's reject/defer-disposed
+  // findings. FAIL OPEN: an absent (first round), unreadable, malformed, or
+  // identity-mismatched (wrong headSha/repo/pr/gate) prior log never blocks
+  // this write — it only omits the "do not re-raise" hint, byte-identical to
+  // omitting --prev-head. Never suppresses a finding, never converts a reject
+  // into an approval — see {@link resolvePriorDispositions}.
+  let priorDispositions = [];
+  if (typeof options.prevHead === "string" && options.prevHead.length > 0) {
+    try {
+      const priorLogPath = buildLogPath({
+        repo: options.repo,
+        pr: options.pr,
+        gate: options.gate,
+        headSha: options.prevHead,
+        tmpRoot: options.tmpRoot || "tmp",
+      });
+      const priorLog = JSON.parse(await readFile(path.resolve(repoRoot, priorLogPath), "utf8"));
+      // FAIL-CLOSED identity check (mirrors resolve-angle-carry-forward.mjs's
+      // own recordedHead guard): the log PATH is keyed by --prev-head, but a
+      // stale or misplaced ledger sitting at that path could carry a
+      // different round's own repo/pr/gate/headSha. Thrown here, not
+      // reconciled — the surrounding try/catch below already treats any
+      // reader error as "no usable prior round" (omit the hint, byte-
+      // identical to absent --prev-head), so this never crashes the write.
+      const recordedHead = typeof priorLog?.headSha === "string" ? priorLog.headSha.trim().toLowerCase() : null;
+      const recordedRepo = typeof priorLog?.repo === "string" ? priorLog.repo.trim().toLowerCase() : null;
+      const recordedGate = typeof priorLog?.gate === "string" ? priorLog.gate.trim().toLowerCase() : null;
+      const recordedPr = priorLog?.pr;
+      const identityMismatch =
+        recordedHead !== options.prevHead
+        || (recordedRepo !== null && recordedRepo !== options.repo.trim().toLowerCase())
+        || (recordedGate !== null && recordedGate !== options.gate.trim().toLowerCase())
+        || (recordedPr !== undefined && recordedPr !== null && Number(recordedPr) !== Number(options.pr));
+      if (identityMismatch) {
+        throw new Error(`prior gate findings-log at ${priorLogPath} does not match this invocation's identity — refusing to carry its dispositions (fail-closed)`);
+      }
+      // FAIL-CLOSED verdict-eligibility check (mirrors resolve-angle-carry-
+      // forward.mjs's own carry-forward-eligible guard): only a `clean` or
+      // `findings_present` prior verdict is a genuinely CLOSED round whose
+      // reject/defer dispositions are trustworthy "already litigated"
+      // memory. A `blocked`/other/missing verdict is not a settled round —
+      // e.g. a truncated write, an aborted round, or a hand-edited ledger —
+      // and its findings' judgeDisposition fields carry no such guarantee.
+      // Thrown here, caught by the surrounding try/catch as "no usable prior
+      // round" (omit the hint), never fabricates disposition memory from an
+      // ineligible log.
+      const recordedVerdict = typeof priorLog?.verdict === "string" ? priorLog.verdict.trim() : "";
+      if (recordedVerdict !== "clean" && recordedVerdict !== "findings_present") {
+        throw new Error(`prior gate findings-log at ${priorLogPath} has verdict ${JSON.stringify(priorLog?.verdict ?? null)}, not carry-eligible (clean or findings_present) — refusing to carry its dispositions (fail-closed)`);
+      }
+      const carriedSet = new Set(
+        (Array.isArray(options.carriedAngles) ? options.carriedAngles : [])
+          .filter((a) => typeof a === "string")
+          .map((a) => a.trim().toLowerCase()),
+      );
+      const rerunningAngles = (Array.isArray(options.angles) ? options.angles : [])
+        .filter((a) => typeof a === "string" && !carriedSet.has(a.trim().toLowerCase()));
+      priorDispositions = resolvePriorDispositions({ log: priorLog, rerunningAngles });
+    } catch {
+      // Absent/unreadable/malformed-JSON prior log — fail open (see doc above).
+      priorDispositions = [];
+    }
+  }
+
   // Volatile tail: physically separate from the stable prefix above.
   // acceptanceCriteria is deliberately NOT threaded here — see
   // {@link renderBriefingVolatile} for the rule. No separate unlink: writeFile
@@ -2400,6 +2639,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     headSha: options.headSha,
     loggedAt: artifact.loggedAt,
     validationPosture: options.validationPosture ?? null,
+    priorDispositions,
   });
   // No mkdir here: fullVolatilePath, fullRequestPlanPath, and fullPath all
   // resolve into the SAME directory as fullPrefixPath (mkdir'd once, above,

@@ -435,6 +435,43 @@ test("CLI fails closed when --head-sha does not match the worktree HEAD (wrong w
   }
 });
 
+// AC4 (issue 2175): a genuine FIRST round has no prior findings-log at all —
+// there is nothing to carry forward, so the CLI must fail closed rather than
+// silently treating "no log" as "carry everything" or "carry nothing
+// findings-wise". A caller reading this refusal threads NO --carried-angles
+// into write-gate-context.mjs, so the round fans out in full — the same
+// full-fan-out floor the "no prior verdict" cases already prove at the pure
+// buildCarryForwardPlan layer, pinned here at the CLI's own file-read layer.
+test("CLI fails closed (exit 1, prior gate findings-log not found) on a first round with no prior findings-log at all", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "carry-forward-first-round-"));
+  try {
+    git(repoRoot, ["init", "-q"]);
+    git(repoRoot, ["config", "user.email", "test@example.com"]);
+    git(repoRoot, ["config", "user.name", "Test"]);
+    await writeFile(path.join(repoRoot, ".devloops.yaml"), "version: 1\ngates:\n  draft: {}\n", "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "base"]);
+    const prevHead = git(repoRoot, ["rev-parse", "HEAD"]).trim().toLowerCase();
+    await mkdir(path.join(repoRoot, "docs"), { recursive: true });
+    await writeFile(path.join(repoRoot, "docs/guide.md"), "# Guide\n", "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "delta"]);
+    const headSha = git(repoRoot, ["rev-parse", "HEAD"]).trim().toLowerCase();
+
+    // Deliberately NO findings-log written at buildLogPath(prevHead, ...) —
+    // the first round has no prior verdict to carry forward.
+    const { stdout, stderr, exitCode } = await runMainRaw([
+      "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
+    ], { repoRoot });
+    assert.equal(exitCode, 1, "must fail closed");
+    assert.equal(stdout, "", "no carry-forward plan is emitted when there is no prior log to carry from");
+    assert.match(stderr, /"ok":false/);
+    assert.match(stderr, /not found/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("parseResolveAngleCarryForwardCliArgs requires the core args", () => {
   assert.throws(() => parseResolveAngleCarryForwardCliArgs(["--repo", "o/n"]), /Missing required arguments/);
   const fullPrevHead = "a".repeat(40);

@@ -1690,6 +1690,26 @@ ledger via `write-gate-findings-log.mjs --judge-verdict <path> --spec-authority 
 ledger and the posted findings comment show what was consciously not acted on and why
 (`GATE-EXEC-POST-BEFORE-FIX`'s single-surface verdict review renders the judge suffix).
 
+**Disposition memory into a re-running reviewer's briefing (issue 2175).** On a head-bump
+re-gate, `write-gate-context.mjs --prev-head <A>` (mirrors `resolve-angle-carry-forward.mjs`'s
+own `--prev-head` vocabulary) reads head A's durable findings-log and seeds every
+`reject`/`defer`-disposed finding attributed to an angle re-running THIS round (an angle in
+`--angles` not named in `--carried-angles` — a carried angle's reviewer never re-runs, so it
+gets no hint) into the rendered volatile tail as a "Prior-round dispositions (do not
+re-raise a rejected finding at a shifted severity)" block (fingerprint, angle, severity,
+summary, `judgeRationale`), deterministically bounded to a fixed max-entry count (kept in the
+prior log's own order) with each free-form field truncated to a fixed max length and a terse
+"+K more prior dispositions omitted" line on overflow — a large or corrupted prior log can
+never make a reviewer prompt unboundedly large. An `act` (still-open) disposition is
+deliberately excluded — it is live findings territory, not do-not-re-raise memory. `--prev-head`
+is rejected outright (fail-closed) when it names the same head as `--head-sha`, checked in both
+prefix directions so a full 64-char head and its 40-char prefix are also caught. Past that
+guard the flag is purely additive and FAILS OPEN: an absent (first round), unreadable,
+malformed, identity-mismatched, or verdict-ineligible (not `clean`/`findings_present`) prior log
+renders a byte-identical volatile tail to omitting the flag; it never blocks the write,
+suppresses a finding, or converts a `reject` into an approval — it only hints a reviewer away
+from re-litigating settled ground.
+
 **Spec-context seam (default-on, issue 2008 / ADR 0061).** Before fan-out dispatch (so its output
 is available to every writer for the whole round, including Phase 3's fan-in ledger), the
 conductor always runs `scripts/loop/spec-context.mjs` to derive the run's spec/digest identities
@@ -1896,6 +1916,8 @@ existence, is what this rule cannot yet prove.
 The decision is a pure, deterministic, fail-closed seam — `resolveAngleCarryForward` / `resolveCarryForwardAngles` in `@dev-loops/core/loop/gate-carry-forward` — driven by the CLI `scripts/github/resolve-angle-carry-forward.mjs --repo <r> --pr <n> --gate <g> --prev-head <A> --head-sha <B> --spec-authority <identity-path>` (run from the worktree at head B; `--spec-authority` stamps the round's identity onto the carry-forward plan by default, issue 2008 / ADR 0061 AC1). It reads the prior findings-log for head A whose overall verdict is `clean` OR `findings_present`, computes the delta as the direct two-dot tree diff `git diff A..B` (never three-dot — a two-dot diff never omits a file that differs between the reviewed head A and B, so a non-fast-forward advance cannot carry an angle whose surface changed), and returns per angle `carryForward: true|false` with a reason.
 
 **Feeding the plan into the Phase 1 dispatch preflight (issue #1635).** After this seam runs, a conductor doing a head-bump re-gate MAY rebuild the Phase 1 context artifact for the new head so its `fanout.preflight` reflects the reduced dispatch: pass the carried angle names (`plan.carried[].angle`) to `write-gate-context.mjs --carried-angles <json>`. Rebuilding is not automatic — Phase 1 runs before Phase 1.2 in the sub-loop's own ordering, so the artifact this seam's result feeds into already exists by Phase 1.2's own point in the sequence, built without this flag; a conductor must explicitly rebuild it afterward to pick up this flag and reflect the carried angles (see Phase 3's `--expected-dispatch-units` note above for what a rebuilt vs. never-rebuilt artifact each mean for that count). That flag's vocabulary mirrors `consolidate-fanin.mjs`'s own same-named `--carried-angles` (a JSON array of angle-name strings), but the two are NOT interchangeable: `consolidate-fanin.mjs`'s flag is PAIR-REQUIRED with `--carry-forward-plan` as independent proof before it upserts a clean entry into the Phase 3 ledger (see Phase 3's `--carried-angles`/`--carry-forward-plan` proof contract above), while `write-gate-context.mjs`'s flag takes no such proof argument — the caller IS this fail-closed seam's own result, never a guess, so there is nothing left to cross-check — and it only narrows the Phase 1/2 dispatch plan (`fanout.preflight.requiredReviewers`/`pendingGroups`), never the ledger. It still refuses (exit 1) a name whose review surface always re-runs — a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE angle — mirroring `consolidate-fanin.mjs`'s own mandatory-angle refusal for the same reason (an unmapped/unknown angle name, unlike at that sibling seam, is not rejected here — this seam has no plan proof to cross-check it against).
+
+**Threading disposition memory into the same rebuild (issue 2175).** On ANY head-bump re-gate rebuild of the Phase 1 context artifact where at least one angle re-runs, the conductor SHOULD also pass `--prev-head <A>` (the prior round's durable findings-log head) in that same `write-gate-context.mjs` invocation, so every re-running reviewer's briefing carries the prior round's `reject`/`defer` dispositions forward (see "Disposition memory into a re-running reviewer's briefing" above for the mechanics and fail-open guarantee). This is not limited to the partial-carry rebuild above (`--carried-angles` naming at least one carried angle): it also applies to the FULL-fallback outcome of the same carry-forward seam, where ambiguity or a fail-closed default (see below) forces `carried: []` and every angle re-runs — that rebuild still SHOULD pass `--prev-head <A>` even though it has no `--carried-angles` worth passing, so the disposition hint is not silently lost on the very rounds most likely to re-litigate settled findings.
 
 **Review-surface mapping.** An angle's review surface is the set of file "surface kinds" whose change could implicate it, derived from the single source of truth for change-category → angle relevance (`CATEGORY_ANGLE_MAP`) via each file's `classifyFile` kind (`code` | `docs` | `config` | `test` | `ci`):
 
