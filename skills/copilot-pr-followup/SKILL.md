@@ -376,7 +376,7 @@ When passing `--findings-severity-counts` for an inline round, substitute the co
 For a `pre_approval_gate` verdict, ALWAYS compute the size budget first and thread it into the upsert via `--size-budget-json`:
 
 ```sh
-node <resolved-skill-scripts>/loop/check-size-budget.mjs --base origin/<base-branch> > <size-budget-json-path>
+node <resolved-skill-scripts>/loop/check-size-budget.mjs --base origin/<base-branch> --head <current_head_sha> > <size-budget-json-path>
 node <resolved-skill-scripts>/github/upsert-checkpoint-verdict.mjs \
   --repo <owner/name> \
   --pr <number> \

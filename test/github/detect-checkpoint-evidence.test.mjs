@@ -563,11 +563,14 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
     assert.equal(result.stderr, "");
     const parsed = JSON.parse(result.stdout);
     parsed.staleRunner = { ...parsed.staleRunner, filePath: "<stale-runner-file-path>", activeRun: "<active-run-or-null>", status: parsed.staleRunner.status === "fresh_runner" || parsed.staleRunner.status === "no_owner_record" ? "<stale-status>" : parsed.staleRunner.status };
-    // reviews/comments are the size-budget merge gate's raw input facts, not
-    // this test's concern (comment summarization) — asserted directly by the
-    // buildPreMergeGateCheck size-gate tests instead.
-    delete parsed.reviews;
-    delete parsed.comments;
+    // reviews/comments are the size-budget merge gate's raw input facts
+    // (comments carry full PR comment bodies); they are consumed internally
+    // by buildPreMergeGateCheck but never serialized into the emitted CLI
+    // output (kept bounded regardless of how many comments the PR has), so
+    // they must be absent here — asserted directly by the buildPreMergeGateCheck
+    // size-gate tests instead.
+    assert.equal(parsed.reviews, undefined, "reviews must not be serialized into the CLI output");
+    assert.equal(parsed.comments, undefined, "comments (raw comment bodies) must not be serialized into the CLI output");
     assert.deepEqual(parsed, {
       ok: true,
       repo: "owner/repo",

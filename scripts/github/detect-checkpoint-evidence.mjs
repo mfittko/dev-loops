@@ -1075,7 +1075,14 @@ async function main() {
     };
     const preMergeGateCheck = buildPreMergeGateCheck(result, unresolvedThreadCount, staleRunnerCheck, result.fanoutEnforcement, { skipFanoutLedgerCheck: options.skipFanoutLedgerCheck === true });
     const evidenceState = deriveEvidenceState(result, preMergeGateCheck);
-    const output = { ...result, preMergeGateCheck, staleRunnerCheck, evidenceState };
+    // reviews/comments are raw size-budget-gate input facts (comments carry
+    // FULL PR comment bodies) consumed internally by buildPreMergeGateCheck
+    // above; they are never read from the CLI's own JSON output by any
+    // consumer (merge-pr.mjs reads only preMergeGateCheck.failures), so they
+    // are excluded here to keep emitted output bounded regardless of how many
+    // comments the PR has accumulated.
+    const { reviews: _reviews, comments: _comments, ...serializableResult } = result;
+    const output = { ...serializableResult, preMergeGateCheck, staleRunnerCheck, evidenceState };
     if (!preMergeGateCheck.ok) {
       process.stderr.write(`${JSON.stringify({
         ok: false,
