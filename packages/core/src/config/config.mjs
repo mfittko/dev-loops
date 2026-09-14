@@ -2482,8 +2482,8 @@ export function resolveReviewProportionality(config, gate, {
     unclassifiable: tier.reason === "unclassifiable_file",
   });
   // sizeCap (over_threshold) is deliberately EXCLUDED from the forced-full-
-  // pool set: it predates this issue's risk/ambiguity floors and pre-existing
-  // behavior (issue #1550's diff-class tiers) keeps a merely-over-the-tiny-
+  // pool set: it predates this change's risk/ambiguity floors and pre-existing
+  // behavior (the diff-class-tier mechanism) keeps a merely-over-the-tiny-
   // inline-cap-but-still-tier-classifiable diff on its reduced tier set — see
   // resolveGateTier's "small non-risky diff outside the inline cap but
   // matching a tier" contract. Only a genuine RISK signal (a risk-path touch,
