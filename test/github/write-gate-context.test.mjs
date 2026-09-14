@@ -5294,6 +5294,10 @@ test("#1635 parseWriteGateContextCliArgs rejects a malformed --carried-angles", 
   assert.throws(() => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--carried-angles", '["a", 1]']), /JSON array of non-empty angle-name strings/);
 });
 
+test("parseWriteGateContextCliArgs rejects a short --prev-head that is not a FULL head commit SHA", () => {
+  assert.throws(() => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234", "--prev-head", "abc1234"]), /--prev-head must be the FULL head commit SHA/);
+});
+
 test("#1635 resolveFanoutDispatch refuses a --carried-angles name that can never legitimately carry forward (mirrors consolidate-fanin.mjs's own mandatory-angle refusal)", () => {
   const config = draftConfig({ dynamicAngles: false, mandatoryAngles: ["gate-evidence"] });
   // A configured mandatory angle always re-runs; honoring it as carried would

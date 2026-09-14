@@ -62,6 +62,9 @@ choices shape the mechanism:
   live finding, and never overrides a reviewer's independent judgment — a
   reviewer can still re-raise a prior finding if new evidence warrants it.
 - The mechanism depends on the conductor actually threading `--prev-head`
-  into `write-gate-context.mjs` on a head-bump rebuild; wiring that call
-  site is a known follow-up and, until it lands, the seam sits dormant
-  (fail-open makes dormancy indistinguishable from a clean prior log).
+  into `write-gate-context.mjs` on a head-bump rebuild. This same PR wires
+  that call site: the head-bump re-gate procedure step that already
+  instructs the conductor to pass `--carried-angles` to that same rebuild
+  now also instructs it to pass `--prev-head <A>`, so AC3's disposition
+  memory is live via the documented conductor step, at parity with
+  `--carried-angles`, rather than sitting dormant.
