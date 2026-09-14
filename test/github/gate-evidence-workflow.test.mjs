@@ -10,7 +10,11 @@ import { LOOP_DERIVED_CI_CHECK_NAMES } from "@dev-loops/core/loop/copilot-ci-sta
 // stale-pending forever. The draft no-op guard must survive unchanged, and
 // head-staleness via `synchronize` is now intentionally NOT re-fired
 // (pre-merge-only, #1702): development pushes must not start/leave a
-// gate-evidence run; the check materializes at the verdict points. NOTE: GitHub Actions has NO
+// gate-evidence run; the check materializes at the verdict points. Pins #2189:
+// a head-pinned `approve merge <sha>` comment on an escalated/T1 PR must ALSO
+// re-fire (same OWNER/MEMBER/COLLABORATOR author guard) — otherwise a
+// pre-approval-era FAILURE status stands forever with no event left to clear
+// it. NOTE: GitHub Actions has NO
 // `pull_request_review_thread` workflow trigger (thread resolve/unresolve is a
 // webhook but not an `on:` event); using it makes the whole workflow file
 // server-side-invalid, so it must never be added.
@@ -41,7 +45,9 @@ test("gate-evidence workflow re-fires on review submission, review comments, and
   assert.deepEqual(triggers.pull_request_review_comment.types, ["created"]);
   // Legacy/fallback verdicts still land as issue comments, with the same
   // created/edited split. An identical same-head rerun noops with no event.
-  assert.deepEqual(triggers.issue_comment.types, ["created", "edited"]);
+  // `deleted` re-fires when an approve-merge approval comment is deleted
+  // (retraction), so a stale SUCCESS never stands (fail-closed).
+  assert.deepEqual(triggers.issue_comment.types, ["created", "edited", "deleted"]);
 
   // Guard against a recurrence of the invalid `pull_request_review_thread` trigger
   // (and any other non-existent event) that GitHub's parser rejects wholesale.
@@ -84,16 +90,35 @@ test("gate-evidence workflow re-fires on review submission, review comments, and
     "gate-evidence-${{ github.event.pull_request.number || github.event.issue.number }}",
   );
   // pull_request/review events skip drafts via the payload; issue_comment runs
-  // start only for PR comments carrying the gate-comment marker (draft state is
-  // resolved in-job, since issue_comment payloads have no pull_request object).
+  // start only for PR comments carrying the gate-comment marker OR the
+  // head-pinned approve-merge marker (#2189) (draft state is resolved in-job,
+  // since issue_comment payloads have no pull_request object).
   // Exact-composition pin: substring checks alone would let a boolean rewrite
   // (e.g. an || that opens the guard) slip through.
+  const collapsedIf = job.if.replace(/\s+/gu, " ").trim();
   assert.equal(
-    job.if.replace(/\s+/gu, " ").trim(),
+    collapsedIf,
     "(github.event_name != 'issue_comment' && github.event.pull_request.draft == false) || " +
       "(github.event_name == 'issue_comment' && github.event.issue.pull_request && " +
-      "startsWith(github.event.comment.body, '### Gate review:') && " +
+      "(startsWith(github.event.comment.body, '### Gate review:') || " +
+      "startsWith(github.event.comment.body, 'approve merge ') || " +
+      "startsWith(github.event.changes.body.from, 'approve merge ')) && " +
       "contains(fromJSON('[\"OWNER\", \"MEMBER\", \"COLLABORATOR\"]'), github.event.comment.author_association))",
+  );
+  // #2189: the approve-merge marker must be a re-fire trigger, not just the
+  // gate-comment marker — otherwise an approved escalated/T1 PR's stale
+  // pre-approval FAILURE never gets a fresh evaluation.
+  assert.ok(
+    collapsedIf.includes("startsWith(github.event.comment.body, 'approve merge ')"),
+    "approve-merge marker must be a gate-evidence re-fire trigger (#2189)",
+  );
+  // RETRACTION must also re-fire: an edit-away (new body no longer matches,
+  // but `changes.body.from` carries the prior approve-merge body) must start
+  // a run, or a retracted approval leaves the stale pre-retraction SUCCESS
+  // standing (fail-open).
+  assert.ok(
+    collapsedIf.includes("startsWith(github.event.changes.body.from, 'approve merge ')"),
+    "edit-away retraction of an approve-merge marker must re-fire gate-evidence (fail-closed)",
   );
   assert.equal(workflow.permissions.statuses, "write");
 });
