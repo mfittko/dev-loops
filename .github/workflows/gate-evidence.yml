@@ -24,13 +24,15 @@ permissions:
 jobs:
   gate-evidence-runner:
     # pull_request/review events: skip drafts via the payload. issue_comment:
-    # only PR comments carrying the gate-comment marker start a run (draft is
-    # resolved by the Resolve-PR-facts step, since the payload has no PR object).
+    # only PR comments carrying the gate-comment marker OR the head-pinned
+    # approve-merge marker start a run (draft is resolved by the
+    # Resolve-PR-facts step, since the payload has no PR object).
     if: >-
       (github.event_name != 'issue_comment' && github.event.pull_request.draft == false) ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request &&
-       startsWith(github.event.comment.body, '### Gate review:') &&
+       (startsWith(github.event.comment.body, '### Gate review:') ||
+        startsWith(github.event.comment.body, 'approve merge ')) &&
        contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
     # One evaluation per PR at a time; a superseded in-flight run is cancelled —
     # the newer run reflects newer comment/thread state and posts the status.
