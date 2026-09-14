@@ -18,6 +18,8 @@ import {
   extractRepoFlagFromGhPrMergeAnywhere,
   extractRepoFlagFromGhPrCreateAnywhere,
   extractRepoFlagsFromGhPrCreateSegments,
+  extractRepoFlagsFromGhPrMergeSegments,
+  extractRepoFlagsFromGhPrReadySegments,
   commandContainsRawExternalWrite,
   extractRepoFlagsFromExternalWriteSegments,
   commandContainsGitStash,
@@ -145,6 +147,38 @@ test("extractRepoFlagsFromGhPrCreateSegments returns every create segment's --re
     [{ segment: "gh pr create --repo=a/b", explicitRepo: "a/b" }],
   );
   assert.deepEqual(extractRepoFlagsFromGhPrCreateSegments("echo hi"), []);
+});
+
+test("extractRepoFlagsFromGhPrMergeSegments returns every merge segment's --repo", () => {
+  assert.deepEqual(
+    extractRepoFlagsFromGhPrMergeSegments("gh pr merge --repo other/x 1 && gh pr merge 2"),
+    [
+      { segment: "gh pr merge --repo other/x 1", explicitRepo: "other/x" },
+      { segment: "gh pr merge 2", explicitRepo: null },
+    ],
+  );
+  // --help segments are excluded; non-merge segments ignored.
+  assert.deepEqual(
+    extractRepoFlagsFromGhPrMergeSegments("git push && gh pr merge --help && gh pr merge --repo=a/b 3"),
+    [{ segment: "gh pr merge --repo=a/b 3", explicitRepo: "a/b" }],
+  );
+  assert.deepEqual(extractRepoFlagsFromGhPrMergeSegments("echo hi"), []);
+});
+
+test("extractRepoFlagsFromGhPrReadySegments returns every ready segment's --repo", () => {
+  assert.deepEqual(
+    extractRepoFlagsFromGhPrReadySegments("gh pr ready --repo other/x 1 && gh pr ready 2"),
+    [
+      { segment: "gh pr ready --repo other/x 1", explicitRepo: "other/x" },
+      { segment: "gh pr ready 2", explicitRepo: null },
+    ],
+  );
+  // --help segments are excluded; non-ready segments ignored.
+  assert.deepEqual(
+    extractRepoFlagsFromGhPrReadySegments("git push && gh pr ready --help && gh pr ready --repo=a/b 3"),
+    [{ segment: "gh pr ready --repo=a/b 3", explicitRepo: "a/b" }],
+  );
+  assert.deepEqual(extractRepoFlagsFromGhPrReadySegments("echo hi"), []);
 });
 
 test("commandContainsRawExternalWrite detects raw issue/pr create+comment in any segment", () => {

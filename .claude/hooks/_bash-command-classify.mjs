@@ -496,6 +496,25 @@ export function extractRepoFlagsFromGhPrCreateSegments(command) {
   return extractRepoFlagsFromGhSubcmdVerbSegments(command, "pr", "create");
 }
 
+/**
+ * Return `{ segment, explicitRepo }` for every `gh pr merge` segment (ignoring --help/-h) —
+ * PreToolUse gate scope check use only, so a proven-foreign leading segment can't shield a later
+ * managed one. Mirrors `extractRepoFlagsFromGhPrCreateSegments`.
+ * @param {string} command @returns {{ segment: string, explicitRepo: string|null }[]}
+ */
+export function extractRepoFlagsFromGhPrMergeSegments(command) {
+  return extractRepoFlagsFromGhSubcmdVerbSegments(command, "pr", "merge");
+}
+
+/**
+ * Return `{ segment, explicitRepo }` for every `gh pr ready` segment (ignoring --help/-h) —
+ * PreToolUse gate scope check use only. Mirrors `extractRepoFlagsFromGhPrCreateSegments`.
+ * @param {string} command @returns {{ segment: string, explicitRepo: string|null }[]}
+ */
+export function extractRepoFlagsFromGhPrReadySegments(command) {
+  return extractRepoFlagsFromGhSubcmdVerbSegments(command, "pr", "ready");
+}
+
 /** @param {string} command @returns {number|null} */
 export function extractPrNumberFromGhPrMerge(command) {
   return extractPrNumberFromGhPrVerb(command, "merge");

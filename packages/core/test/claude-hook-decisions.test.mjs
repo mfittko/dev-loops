@@ -151,6 +151,58 @@ test("decideBashGate passes through an explicit non-target --repo", () => {
   );
 });
 
+// --- per-segment scoping: a proven-foreign leading segment must not shield a later managed
+// gh pr merge/ready segment (#2193) ---
+
+test("decideBashGate denies a later managed gh pr merge segment behind a proven-foreign leading one", () => {
+  const d = decideBashGate({
+    command: "gh pr merge --repo other/x 1 && gh pr merge 2",
+    repoSlug: TARGET,
+    inManagedContext: true,
+    managedRepoSlug: TARGET,
+    gatePassed: false,
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /gh pr merge is forbidden/);
+});
+
+test("decideBashGate denies a later managed gh pr ready segment behind a proven-foreign leading one", () => {
+  const d = decideBashGate({
+    command: "gh pr ready --repo other/x 1 && gh pr ready 2",
+    repoSlug: TARGET,
+    inManagedContext: true,
+    managedRepoSlug: TARGET,
+    gatePassed: false,
+  });
+  assert.equal(d.decision, "deny");
+});
+
+test("decideBashGate passes through when every gh pr merge segment is proven foreign", () => {
+  assert.equal(
+    decideBashGate({
+      command: "gh pr merge --repo other/x 1 && gh pr merge --repo other/y 2",
+      repoSlug: TARGET,
+      inManagedContext: true,
+      managedRepoSlug: TARGET,
+      gatePassed: false,
+    }).decision,
+    "allow",
+  );
+});
+
+test("decideBashGate fails closed when the managed slug is unresolvable and a segment lacks an explicit repo", () => {
+  // A foreign-looking first segment must not shield a later managed one when the managed slug
+  // can't be resolved — that segment can't be proven foreign, so the whole command stays gated.
+  const d = decideBashGate({
+    command: "gh pr merge --repo other/x 1 && gh pr merge 2",
+    repoSlug: null,
+    inManagedContext: true,
+    managedRepoSlug: null,
+    gatePassed: false,
+  });
+  assert.equal(d.decision, "deny");
+});
+
 test("decideBashGate denies raw gh pr create in the target repo", () => {
   const d = decideBashGate({ command: "gh pr create --title x --body y", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET });
   assert.equal(d.decision, "deny");
