@@ -76,6 +76,15 @@ describe("validateReviewerUnit — malformed unit fails closed", () => {
     assert.throws(() => validateReviewerUnit(baseUnit({ angles: [] })), TypeError);
   });
 
+  test("throws TypeError on a non-array angles", () => {
+    assert.throws(() => validateReviewerUnit(baseUnit({ angles: "coverage" })), TypeError);
+  });
+
+  test("throws TypeError on an angle that is not a non-empty string", () => {
+    assert.throws(() => validateReviewerUnit(baseUnit({ angles: ["coverage", ""] })), TypeError);
+    assert.throws(() => validateReviewerUnit(baseUnit({ angles: [123] })), TypeError);
+  });
+
   test("throws TypeError on duplicate angles (case-insensitive)", () => {
     assert.throws(() => validateReviewerUnit(baseUnit({ angles: ["coverage", "Coverage"] })), TypeError);
   });
@@ -118,6 +127,13 @@ describe("assertReviewerOperationAllowed — prohibited-probe traps (table-drive
   test("review_angle with an unassigned angle throws review_unassigned_angle", () => {
     assert.throws(
       () => assertReviewerOperationAllowed({ kind: "review_angle", angle: "performance" }, { assignedAngles: ["coverage"] }),
+      (error) => error instanceof Error && error.message.includes("review_unassigned_angle"),
+    );
+  });
+
+  test("review_angle with no angle field throws review_unassigned_angle", () => {
+    assert.throws(
+      () => assertReviewerOperationAllowed({ kind: "review_angle" }, { assignedAngles: ["coverage"] }),
       (error) => error instanceof Error && error.message.includes("review_unassigned_angle"),
     );
   });
@@ -233,6 +249,17 @@ describe("enforceReviewerUnitBound — malformed consumed fails closed", () => {
   test("throws TypeError on a bare-string completedAngles instead of iterating per-character", () => {
     assert.throws(
       () => enforceReviewerUnitBound({ unit: baseUnit(), consumed: { modelTurns: 0, toolCalls: 0 }, completedAngles: "coverage" }),
+      TypeError,
+    );
+  });
+
+  test("throws TypeError on a non-iterable completedAngles (number or plain object)", () => {
+    assert.throws(
+      () => enforceReviewerUnitBound({ unit: baseUnit(), consumed: { modelTurns: 0, toolCalls: 0 }, completedAngles: 123 }),
+      TypeError,
+    );
+    assert.throws(
+      () => enforceReviewerUnitBound({ unit: baseUnit(), consumed: { modelTurns: 0, toolCalls: 0 }, completedAngles: {} }),
       TypeError,
     );
   });

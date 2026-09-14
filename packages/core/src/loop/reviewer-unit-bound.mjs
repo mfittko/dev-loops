@@ -1,6 +1,6 @@
 /**
  * reviewer-unit-bound.mjs — dev-loop execution-cap bounded scoped-reviewer
- * dispatch unit (execution-cap epic, slice 2 of 4). Mirrors
+ * dispatch unit. Mirrors
  * ./child-launch-bound.mjs's style: a bounded, deterministic primitive that
  * caps a reviewer unit at a small assigned-angle set, denies every operation
  * outside a narrow allow-list by default, and always produces a durable
