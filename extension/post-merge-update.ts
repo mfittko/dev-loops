@@ -13,6 +13,7 @@ import {
   extractRepoFlagFromGhPrMergeAnywhere,
   deriveInManagedRepo,
   explicitRepoProvenForeign,
+  isCleanRepoSlug,
   DEVLOOPS_CONFIG_VARIANTS,
 } from '@dev-loops/core/loop/bash-command-classify';
 import { parseMainWorktreePath } from '@dev-loops/core/loop/worktree-guard';
@@ -473,6 +474,23 @@ export function createPostMergeUpdateHook(options: CreatePostMergeUpdateHookOpti
           return {
             result: {
               output: 'gh pr ready blocked: could not determine PR number from command. Include the PR number explicitly.',
+              exitCode: 1,
+              cancelled: false,
+              truncated: false,
+            },
+          };
+        }
+
+        // Defense-in-depth: `repoContext.repoSlug` reaches a `bash -lc` interpolation below.
+        // `normalizeGitHubRepoSlug` already guarantees it is either a clean `owner/name` or null,
+        // but a non-null value that is NOT a clean slug (e.g. an injected test double, or a future
+        // resolver bypassing the normalizer) must fail closed here rather than be interpolated.
+        // `null` is left to the existing fail-closed path below (it renders as the literal, inert
+        // string "null", not a shell metacharacter).
+        if (repoContext.repoSlug && !isCleanRepoSlug(repoContext.repoSlug)) {
+          return {
+            result: {
+              output: 'gh pr ready blocked: resolved repo identity is not a valid owner/name — refusing to run the draft-gate check.',
               exitCode: 1,
               cancelled: false,
               truncated: false,

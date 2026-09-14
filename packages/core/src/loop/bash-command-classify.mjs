@@ -114,7 +114,31 @@ export function trimToNull(value) {
 }
 
 /**
+ * Strict GitHub owner/name identity shape: each of the two path segments is
+ * `[A-Za-z0-9._-]+` — the character set GitHub itself allows in an owner or repo name. A slug
+ * outside this shape (a shell metacharacter, whitespace, path traversal, or an extra `/` segment)
+ * can never be a real GitHub identity.
+ */
+const CLEAN_REPO_SLUG_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+
+/**
+ * Whether `slug` is a clean `owner/name` GitHub identity (see `CLEAN_REPO_SLUG_RE`). Exported so a
+ * sink that interpolates a repo slug into a shell command string (e.g. the Pi extension's
+ * `gateCommand` in `extension/post-merge-update.ts`) can defense-in-depth guard the interpolation,
+ * on top of `normalizeGitHubRepoSlug` already enforcing this shape at the source.
+ * @param {string|null|undefined} slug @returns {boolean}
+ */
+export function isCleanRepoSlug(slug) {
+  return typeof slug === "string" && CLEAN_REPO_SLUG_RE.test(slug);
+}
+
+/**
  * Normalize a git remote URL into an `owner/name` slug (lowercased), or null.
+ * A hostile remote (e.g. `git@github.com:acme/widgets;id`) never yields a slug carrying the
+ * injected metacharacters — the extracted candidate must match `CLEAN_REPO_SLUG_RE` or this
+ * returns null instead, so every caller (both harnesses' managed-repo scope checks, and any sink
+ * that interpolates the slug into a shell command) sees either a real GitHub identity or null,
+ * never shell-metacharacter-bearing text.
  * @param {string} remoteUrl
  * @returns {string|null}
  */
@@ -137,7 +161,8 @@ export function normalizeGitHubRepoSlug(remoteUrl) {
     if (!match) {
       continue;
     }
-    return trimToNull(match[1])?.toLowerCase() ?? null;
+    const slug = trimToNull(match[1])?.toLowerCase() ?? null;
+    return isCleanRepoSlug(slug) ? slug : null;
   }
 
   return null;

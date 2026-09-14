@@ -9,6 +9,7 @@ import {
   deriveInManagedRepo,
   explicitRepoProvenForeign,
   normalizeGitHubRepoSlug,
+  isCleanRepoSlug,
   isMergeCapableCommand,
   isGhPrReadyCommand,
   extractPrNumberFromGhPrReady,
@@ -54,6 +55,27 @@ test("normalizeGitHubRepoSlug handles ssh/https/http/git/git+ssh forms", () => {
   assert.equal(normalizeGitHubRepoSlug("ssh://git@github.com/mfittko/dev-loops.git"), "mfittko/dev-loops");
   assert.equal(normalizeGitHubRepoSlug("git:github.com/MFITTKO/Dev-Loops"), "mfittko/dev-loops");
   assert.equal(normalizeGitHubRepoSlug("not a url"), null);
+});
+
+test("normalizeGitHubRepoSlug rejects a slug carrying shell metacharacters (fail closed)", () => {
+  // A hostile `remote.origin.url` (e.g. an attacker-controlled fork/mirror) must never yield a
+  // slug that reaches a shell-command interpolation site carrying injected metacharacters.
+  assert.equal(normalizeGitHubRepoSlug("git@github.com:acme/widgets;id"), null);
+  assert.equal(normalizeGitHubRepoSlug("git@github.com:a/b|c"), null);
+  assert.equal(normalizeGitHubRepoSlug("git@github.com:a/b$(x)"), null);
+  assert.equal(normalizeGitHubRepoSlug("git@github.com:a/b`x`"), null);
+  assert.equal(normalizeGitHubRepoSlug("git@github.com:acme/wid gets"), null);
+  // A normal slug still normalizes cleanly.
+  assert.equal(normalizeGitHubRepoSlug("git@github.com:acme/widgets.git"), "acme/widgets");
+});
+
+test("isCleanRepoSlug enforces the strict owner/name charset", () => {
+  assert.equal(isCleanRepoSlug("acme/widgets"), true);
+  assert.equal(isCleanRepoSlug("acme.widgets-1/widgets_2.x"), true);
+  assert.equal(isCleanRepoSlug("acme/widgets;id"), false);
+  assert.equal(isCleanRepoSlug("acme/widgets/extra"), false);
+  assert.equal(isCleanRepoSlug("acme/../widgets"), false);
+  assert.equal(isCleanRepoSlug(null), false);
 });
 
 test("isGhPrReadyCommand recognizes gh pr ready and ignores --help", () => {

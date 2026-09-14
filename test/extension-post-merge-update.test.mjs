@@ -845,6 +845,40 @@ test("AC2 (fail-closed): gh pr ready stays gated in a managed repo whose identit
     },
   });
   assert.equal(calls.length, 1, "guard ran the gate script rather than passing through");
+
+  // `gh pr merge` has its own explicit-repo/managed-context path (separate from the `gh pr ready`
+  // branch above) and could independently regress to pass-through for an unresolvable identity.
+  // Same fixture (repoSlug: null, inManagedContext: true): the merge guard must still intercept.
+  calls.length = 0;
+  const mergeResult = await hook.onUserBash({ command: "gh pr merge 42", cwd: "/repo" }, ctx);
+  assert.notEqual(mergeResult, undefined, "merge guard intercepted rather than passing through under unresolvable identity");
+  assert.equal(calls.length, 1, "merge guard ran through runCommand rather than passing through");
+  assert.equal(calls[0].command, "gh pr merge 42");
+});
+
+test("AC2b (defense-in-depth): gh pr ready refuses to interpolate a non-clean repoSlug into the gate command", async () => {
+  // `normalizeGitHubRepoSlug` already guarantees a clean slug or null, but a test double / future
+  // resolver bypassing it must not reach the shell-command interpolation site either.
+  const calls = [];
+  const hook = createPostMergeUpdateHook({
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: "acme/widgets;id", inManagedContext: true }),
+    runCommand: async ({ command, cwd }) => {
+      calls.push({ command, cwd });
+      return { code: 0, stdout: "ok", stderr: "", killed: false };
+    },
+  });
+  const { ctx } = createUiCalls();
+
+  const result = await hook.onUserBash({ command: "gh pr ready 42", cwd: "/repo" }, ctx);
+  assert.deepEqual(result, {
+    result: {
+      output: "gh pr ready blocked: resolved repo identity is not a valid owner/name — refusing to run the draft-gate check.",
+      exitCode: 1,
+      cancelled: false,
+      truncated: false,
+    },
+  });
+  assert.equal(calls.length, 0, "guard refused to run any command with a non-clean slug");
 });
 
 test("AC3a: an explicit --repo proven foreign to the managed slug passes through", async () => {
