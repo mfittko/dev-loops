@@ -40,6 +40,36 @@ function makeAdapter({ launchResult, supported = [] }) {
   };
 }
 
+/**
+ * Build one options object exposing the two sanctioned dependencies
+ * (attemptLaunch, querySupportedModels) alongside the four forbidden
+ * operations, all as spies. `log` records every sanctioned-dependency call
+ * in order (the complete recorded interaction); `forbiddenCalls` counts each
+ * forbidden op so the test can assert it stayed at 0 rather than merely
+ * asserting the op throws if touched.
+ */
+function makeSpyDependencies({ launchResult, supported = [] }) {
+  const log = [];
+  const forbiddenCalls = { retry: 0, fallback: 0, substituteModel: 0, inspectSource: 0 };
+  return {
+    log,
+    forbiddenCalls,
+    attemptLaunch: (request) => {
+      log.push("attemptLaunch");
+      return typeof launchResult === "function" ? launchResult(request) : launchResult;
+    },
+    querySupportedModels: (request) => {
+      log.push("querySupportedModels");
+      void request;
+      return { supported };
+    },
+    retry: () => { forbiddenCalls.retry += 1; },
+    fallback: () => { forbiddenCalls.fallback += 1; },
+    substituteModel: () => { forbiddenCalls.substituteModel += 1; },
+    inspectSource: () => { forbiddenCalls.inspectSource += 1; },
+  };
+}
+
 describe("enforceChildLaunchBound — malformed request fails closed", () => {
   test("throws TypeError on empty run/roleOrAngle/model", () => {
     const adapter = makeAdapter({ launchResult: { ok: true, launch: {} } });
@@ -125,22 +155,43 @@ describe("enforceChildLaunchBound — budget traps: at-most-once call counts, no
     assert.equal(adapter.calls.querySupportedModels, 0);
   });
 
-  test("a poisoned trap object handed alongside the request is never invoked", () => {
-    const trap = poisonedTrap();
+  test("success path: only attemptLaunch is invoked; forbidden ops (retry/fallback/substituteModel/inspectSource) are never called", () => {
+    const spies = makeSpyDependencies({ launchResult: { ok: true, launch: { pid: 1 } } });
+    const result = enforceChildLaunchBound({
+      request: baseRequest(),
+      attemptLaunch: spies.attemptLaunch,
+      querySupportedModels: spies.querySupportedModels,
+      retry: spies.retry,
+      fallback: spies.fallback,
+      substituteModel: spies.substituteModel,
+      inspectSource: spies.inspectSource,
+    });
+    assert.equal(result.ok, true);
+    // The complete recorded interaction is exactly the sanctioned sequence.
+    assert.deepEqual(spies.log, ["attemptLaunch"]);
+    // The forbidden operations, handed alongside the real deps, are never called.
+    assert.deepEqual(spies.forbiddenCalls, { retry: 0, fallback: 0, substituteModel: 0, inspectSource: 0 });
+  });
+
+  test("failure path: attemptLaunch then querySupportedModels only; forbidden ops never called; request.model unchanged", () => {
     const request = baseRequest();
-    const attemptLaunch = (req) => {
-      assert.equal(req.model, request.model);
-      return { ok: false, reason: "unsupported" };
-    };
-    const querySupportedModels = () => ({ supported: [] });
-    // The trap is passed alongside the real deps; the primitive must never call it.
-    const result = enforceChildLaunchBound({ request, attemptLaunch, querySupportedModels, trap });
+    const spies = makeSpyDependencies({ launchResult: { ok: false, reason: "unsupported" }, supported: [] });
+    const result = enforceChildLaunchBound({
+      request,
+      attemptLaunch: spies.attemptLaunch,
+      querySupportedModels: spies.querySupportedModels,
+      retry: spies.retry,
+      fallback: spies.fallback,
+      substituteModel: spies.substituteModel,
+      inspectSource: spies.inspectSource,
+    });
     assert.equal(result.ok, false);
-    // Sanity: the trap's methods are still throwing landmines, untouched.
-    assert.throws(() => trap.retry());
-    assert.throws(() => trap.fallback());
-    assert.throws(() => trap.substituteModel());
-    assert.throws(() => trap.inspectSource());
+    // The complete recorded interaction is exactly the sanctioned sequence.
+    assert.deepEqual(spies.log, ["attemptLaunch", "querySupportedModels"]);
+    // The forbidden operations, handed alongside the real deps, are never called.
+    assert.deepEqual(spies.forbiddenCalls, { retry: 0, fallback: 0, substituteModel: 0, inspectSource: 0 });
+    // The returned request.model is unchanged — no silent substitution.
+    assert.equal(result.request.model, request.model);
   });
 });
 
