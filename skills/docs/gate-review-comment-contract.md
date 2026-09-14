@@ -247,8 +247,13 @@ A clean `pre_approval_gate` comment does **not** retroactively replace the requi
 `GATE-COMMENT-SIZE-BUDGET-FIELDS`: `GATE-COMMENT-REQUIRED-FIELDS` above covers only the
 fields every verdict body MUST carry. The size-budget merge gate
 ([Size-budget merge gate](./merge-preconditions.md#size-budget-merge-gate-issue-1480)) adds
-three further fields that are OPTIONAL — rendered only when a `pre_approval_gate` verdict
-is posted with size-budget evidence (`--size-budget-json`), omitted entirely otherwise. An
+three further fields that are OPTIONAL at the CLI layer. A `pre_approval_gate` verdict
+renders them whether `--size-budget-json` is supplied explicitly or omitted: omitting it
+auto-derives the size budget in-process (`evaluatePrSizeBudget` against the PR's base ref)
+and fails closed with an actionable error, naming `--size-budget-json` as the escape hatch,
+if the base ref or diff cannot be resolved — so a `pre_approval_gate` verdict never posts
+with these fields absent. `draft_gate` and `review` verdicts do not auto-derive: they render
+the fields only when `--size-budget-json` is supplied, omitted entirely otherwise. An
 absent field reads as absent (`null`), never as a false negative:
 
 | Field | Rendered line | Values |
@@ -263,11 +268,14 @@ none of them — the pre-size-budget comment shape stays valid evidence for ever
 in this document.
 
 These fields remain OPTIONAL at the CLI layer (`upsert-checkpoint-verdict.mjs` never
-requires `--size-budget-json`), but the standard `pre_approval_gate` gate-verdict
-procedure ([Copilot PR Followup](../copilot-pr-followup/SKILL.md)) supplies it on every
-post, so a verdict produced through that procedure always carries populated fields. A
-verdict read back with all three `null` (the flag omitted, or a pre-existing verdict
-posted before this field set existed) is absent size evidence, which the size-budget
+requires `--size-budget-json`), and the standard `pre_approval_gate` gate-verdict
+procedure ([Copilot PR Followup](../copilot-pr-followup/SKILL.md)) supplies it explicitly on
+every post as the preferred path, so a verdict produced through that procedure always
+carries populated fields from the precomputed JSON. Even a `pre_approval_gate` verdict
+posted with the flag omitted carries populated fields, via the in-process auto-derive
+described above. A verdict read back with all three `null` — a `draft_gate`/`review`
+verdict posted without `--size-budget-json`, or a pre-existing `pre_approval_gate` verdict
+posted before this field set existed — is absent size evidence, which the size-budget
 merge gate — consulted live by `buildPreMergeGateCheck`
 (`scripts/github/detect-checkpoint-evidence.mjs`) on the authoritative pre-merge path, in
 addition to `evaluateMergePreconditions`/the lifecycle state machine — reads as "human

@@ -401,7 +401,7 @@ node <resolved-skill-scripts>/github/upsert-checkpoint-verdict.mjs \
   --size-budget-json <size-budget-json-path>
 ```
 
-Reuse `check-size-budget.mjs` verbatim — never recompute its `computeSizeBudget`/`evaluatePrSizeBudget` logic by hand. Omitting `--size-budget-json` posts the verdict with the size-budget outcome/T1-slice/waiver fields left `null`; the size-budget merge gate (`@dev-loops/core/loop/size-budget-merge-gate`, consulted live by `buildPreMergeGateCheck` on the authoritative pre-merge path) reads null size evidence as "human approval required", never as a silent pass — so skipping this step turns an otherwise-clean PR into one that fails closed at merge time.
+Reuse `check-size-budget.mjs` verbatim — never recompute its `computeSizeBudget`/`evaluatePrSizeBudget` logic by hand. Passing `--size-budget-json` explicitly is still the preferred path (it reuses the precomputed JSON verbatim instead of a second diff). Omitting it for a `pre_approval_gate` verdict no longer posts null size fields: `upsert-checkpoint-verdict.mjs` auto-derives the size budget in-process via `evaluatePrSizeBudget` against the PR's base ref, or fails closed with an actionable error (naming `--size-budget-json` as the escape hatch) if the base ref cannot be resolved or the diff cannot be computed. `draft_gate` and `review` verdicts never auto-derive and still post with the size-budget fields left `null` when the flag is omitted — the size-budget merge gate (`@dev-loops/core/loop/size-budget-merge-gate`, consulted live by `buildPreMergeGateCheck` on the authoritative pre-merge path) only reads `pre_approval_gate` evidence, so those two gates omitting the flag has no merge-gate effect.
 
 ### Gate fan-out/fan-in procedure (agent-orchestrated)
 
