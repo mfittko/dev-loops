@@ -572,11 +572,15 @@ test("commandContainsCopilotRequestBypass matches a consumer repo's own absolute
   );
 });
 
-test("a null managed slug matches ONLY the bare relative form, never an absolute repos/<slug>/ path", () => {
+test("a null managed slug (unresolvable identity) matches BOTH the bare relative form and an absolute repos/<any>/<any>/ path — fail closed, not fail open", () => {
   assert.equal(commandContainsSubIssueAdHocBypass("gh api -X POST issues/5/sub_issues -f child=6", null), true);
   assert.equal(
     commandContainsSubIssueAdHocBypass("gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6", null),
-    false,
+    true,
+  );
+  assert.equal(
+    commandContainsSubIssueAdHocBypass("gh api -X POST repos/any/repo/issues/5/sub_issues -f child=6", null),
+    true,
   );
   assert.equal(
     commandContainsReplyResolveBypass("gh api -X POST pulls/5/comments/10/replies -f body=hi", null),
@@ -584,12 +588,12 @@ test("a null managed slug matches ONLY the bare relative form, never an absolute
   );
   assert.equal(
     commandContainsReplyResolveBypass("gh api -X POST repos/acme/widgets/pulls/5/comments/10/replies -f body=hi", null),
-    false,
+    true,
   );
   assert.equal(commandContainsCopilotRequestBypass("gh api -X POST pulls/5/requested_reviewers", null), true);
   assert.equal(
     commandContainsCopilotRequestBypass("gh api -X POST repos/acme/widgets/pulls/5/requested_reviewers", null),
-    false,
+    true,
   );
 });
 

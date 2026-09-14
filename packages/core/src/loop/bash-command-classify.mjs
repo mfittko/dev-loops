@@ -9,11 +9,13 @@
  */
 
 /**
- * The dev-loops repo itself. Retained ONLY for the Pi extension's
- * (`extension/post-merge-update.ts`) dev-loops-repo self-update scoping — a use case that is
- * genuinely anchored to this one repo, not to whatever repo the harness happens to run in. This
- * is NOT the Claude Bash-hook guard predicate: `decideBashGate` (`hook-decisions.mjs`) resolves
- * the managed repo dynamically per invocation (`inManagedRepo`) instead of comparing against this
+ * The dev-loops repo itself. Retained for the Pi extension's
+ * (`extension/post-merge-update.ts`) dev-loops-repo self-update scoping AND its own `gh pr ready`
+ * / `gh pr merge` guard gating, both of which are still anchored to this one repo, not to
+ * whatever repo the harness happens to run in — porting the Claude hook's dynamic
+ * `inManagedRepo` resolution to the Pi harness is a separate, out-of-scope follow-up. This is
+ * NOT the Claude Bash-hook guard predicate: `decideBashGate` (`hook-decisions.mjs`) resolves the
+ * managed repo dynamically per invocation (`inManagedRepo`) instead of comparing against this
  * hardcoded slug, so every guard also applies in a dev-loops-managed consumer repo.
  */
 export const TARGET_REPO_SLUG = "mfittko/dev-loops";
@@ -585,13 +587,15 @@ export function extractGhApiEndpointSegments(command) {
  * absolute slug-embedded form (`repos/<managedSlug>/...`) when `managedSlug` resolves, plus the
  * bare relative form (`issues/...`), which gh api resolves against the cwd repo — the
  * decideBashGate call site gates the relative form on `inManagedRepo`. When `managedSlug` is null
- * (the managed repo's identity could not be resolved), only the relative anchor is emitted — an
- * absolute `repos/<slug>/...` path can't be matched against an unknown slug. The absolute arm
- * fully regex-escapes the slug (a `.` in a legitimate repo name must match literally, not as a
- * wildcard) and matches case-insensitively (GitHub repo identity is case-insensitive). */
+ * (the managed repo's identity could not be resolved in a managed context — AC4's fail-closed
+ * case), the absolute arm matches ANY owner/repo rather than a specific slug: identity is unknown,
+ * so an absolute write must be denied regardless of which repo it targets, not waved through for
+ * lack of a slug to compare against. The absolute arm fully regex-escapes a resolved slug (a `.`
+ * in a legitimate repo name must match literally, not as a wildcard) and matches
+ * case-insensitively (GitHub repo identity is case-insensitive). */
 function managedGhApiPathRegex(suffix, managedSlug) {
   if (!managedSlug) {
-    return new RegExp(`(?:^)${suffix}`, "i");
+    return new RegExp(`(?:repos/[^/]+/[^/]+/|^)${suffix}`, "i");
   }
   const slug = managedSlug.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
   return new RegExp(`(?:repos/${slug}/|^)${suffix}`, "i");
@@ -638,7 +642,7 @@ function ghApiSegmentHasWriteMethod(segment) {
  * segment AND an explicit write method, so a `gh api` read or another repo's `sub_issues` write
  * passes through (no false deny).
  * @param {string} command @param {string|null} [managedSlug] - Resolved managed-repo slug, or
- *   null when unresolvable (only the bare relative endpoint form matches then).
+ *   null when unresolvable (both the relative and any absolute repos/<owner>/<repo>/ form match then, fail closed).
  * @returns {boolean}
  */
 export function commandContainsSubIssueAdHocBypass(command, managedSlug = null) {
@@ -654,7 +658,7 @@ export function commandContainsSubIssueAdHocBypass(command, managedSlug = null) 
  * that must flow through `reply-resolve-review-thread(s).mjs`. Actor-independent: no reserved
  * direct reply path.
  * @param {string} command @param {string|null} [managedSlug] - Resolved managed-repo slug, or
- *   null when unresolvable (only the bare relative endpoint form matches then).
+ *   null when unresolvable (both the relative and any absolute repos/<owner>/<repo>/ form match then, fail closed).
  * @returns {boolean}
  */
 export function commandContainsReplyResolveBypass(command, managedSlug = null) {
@@ -680,7 +684,7 @@ export function commandContainsGraphqlResolveReviewThread(command) {
  * `.../pulls/<n>/requested_reviewers` on the dev-loops-managed repo — the ad-hoc Copilot review
  * request that must flow through `scripts/github/request-copilot-review.mjs`. Actor-independent.
  * @param {string} command @param {string|null} [managedSlug] - Resolved managed-repo slug, or
- *   null when unresolvable (only the bare relative endpoint form matches then).
+ *   null when unresolvable (both the relative and any absolute repos/<owner>/<repo>/ form match then, fail closed).
  * @returns {boolean}
  */
 export function commandContainsCopilotRequestBypass(command, managedSlug = null) {
