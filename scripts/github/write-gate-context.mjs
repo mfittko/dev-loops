@@ -88,6 +88,8 @@ export function mapGateToConfigKey(gate) {
   throw new Error(`Unknown gate: ${JSON.stringify(gate)} (expected draft_gate or pre_approval_gate)`);
 }
 
+const SPEC_OF_RECORD_DEPENDENT_ANGLES = ["acceptance-criteria", "pr-checklist", "pr-description", "gate-evidence"];
+
 /**
  * `review` angle resolution — a standalone gate with no config key of
  * its own: its resolved angle set is the UNION of both gates' configured
@@ -108,8 +110,6 @@ export function mapGateToConfigKey(gate) {
  * @param {{ hasClosingIssue: boolean|undefined, hasAcChecklist: boolean|undefined }} facts
  * @returns {{ recommendedAngles: string[], skippedAngles: string[], reasons: Record<string,string>, fallbackToAll: false, dynamicAnglesActive: false, addedAngles: string[], addedReasons: Record<string,string> }}
  */
-const SPEC_OF_RECORD_DEPENDENT_ANGLES = ["acceptance-criteria", "pr-checklist", "pr-description", "gate-evidence"];
-
 export function resolveReviewGateAngles(config, { hasClosingIssue, hasAcChecklist }) {
   const union = [...new Set([
     ...(resolveGateAngles(config, "draft") ?? []),
