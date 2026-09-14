@@ -1471,6 +1471,89 @@ test("CLI fails closed to the untriered set when the labels read errors", async 
   }
 });
 
+// GATE-EXEC-PROPORTIONALITY (checkFloors wiring): a docs-classified diff
+// under a shipped risk-path floor entry (docs/decisions/**) matches the same
+// "docs-only" tier makeDocsOnlyDiffRepo's sibling above exercises, but the
+// CLI's --base-derived floor check must force the FULL untriered pool
+// instead — never the tier's reduced set — even though hasFullLabel is a
+// genuine `false` attestation (no gate:full label).
+async function makeRiskPathDocsDiffRepo() {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-riskdocs-"));
+  initGitFixture(repoRoot, { commit: null });
+  await mkdir(path.join(repoRoot, "docs", "decisions"), { recursive: true });
+  await writeFile(path.join(repoRoot, "docs", "decisions", "0001-old.md"), "# Old\n", "utf8");
+  git(repoRoot, ["add", "-A"]);
+  git(repoRoot, ["commit", "-q", "-m", "base"]);
+  const baseSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+  await writeFile(path.join(repoRoot, "docs", "decisions", "0001-old.md"), "# New\nMore detail.\n", "utf8");
+  git(repoRoot, ["add", "-A"]);
+  git(repoRoot, ["commit", "-q", "-m", "risky docs"]);
+  const headSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+  return { repoRoot, baseSha, headSha };
+}
+
+test("CLI: a risk-path-touching diff that ALSO matches a configured tier persists the FULL untriered angle set (checkFloors wiring)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeRiskPathDocsDiffRepo();
+  try {
+    await writeDraftDevLoops(repoRoot, { tiers: DOCS_TIER });
+    await main([
+      "--repo", "owner/repo", "--pr", "62", "--gate", "draft_gate",
+      "--head-sha", headSha, "--base", baseSha,
+    ], { repoRoot, run: stubGhRunWithLabels([]) });
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 62, gate: "draft_gate", headSha,
+    }, { repoRoot });
+    assertUntriered(artifact, "a risk-path touch must force the full pool even though the diff matches a configured tier");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI: an explicit --angles override does NOT escape a fired risk-path floor (non-overridable floor)", async () => {
+  const { repoRoot, baseSha, headSha } = await makeRiskPathDocsDiffRepo();
+  try {
+    await writeDraftDevLoops(repoRoot, { tiers: DOCS_TIER });
+    await main([
+      "--repo", "owner/repo", "--pr", "64", "--gate", "draft_gate",
+      "--head-sha", headSha, "--base", baseSha,
+      // A caller-supplied subset that names neither the tier's angle nor the
+      // full pool's other angles — if honored verbatim, "coverage" and
+      // "correctness" would be absent from the persisted set.
+      "--angles", '["config-drift"]',
+    ], { repoRoot, run: stubGhRunWithLabels([]) });
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 64, gate: "draft_gate", headSha,
+    }, { repoRoot });
+    assert.notDeepEqual(artifact.resolvedAngles, ["config-drift"], "a fired risk-path floor must override the explicit --angles set");
+    for (const a of ["coverage", "correctness", "config-drift"]) {
+      assert.ok(artifact.resolvedAngles.includes(a), `${a} present in the floor-forced full pool`);
+    }
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI: an explicit --angles override IS honored verbatim when no floor fires", async () => {
+  const { repoRoot, baseSha, headSha } = await makeDocsOnlyDiffRepo();
+  try {
+    await writeDraftDevLoops(repoRoot, { tiers: DOCS_TIER });
+    await main([
+      "--repo", "owner/repo", "--pr", "65", "--gate", "draft_gate",
+      "--head-sha", headSha, "--base", baseSha,
+      "--angles", '["config-drift"]',
+    ], { repoRoot, run: stubGhRunWithLabels([]) });
+
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 65, gate: "draft_gate", headSha,
+    }, { repoRoot });
+    assert.deepEqual(artifact.resolvedAngles, ["config-drift"], "no floor fired: the explicit --angles set is used verbatim");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("parseWriteGateContextCliArgs: --angles is optional (omitted → undefined, no missing-arg error)", () => {
   const result = parseWriteGateContextCliArgs([
     "--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", "abc1234",

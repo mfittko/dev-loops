@@ -26,9 +26,10 @@ import { countUnresolvedGateAuthoredThreadsFromRawNodes } from "./_gate-finding-
 import { isGhBinaryMissing, restFetchPrView, restGetPaginatedJson } from "./_gh-rest-fallback.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
-import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance } from "@dev-loops/core/config";
+import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, isSizeOutcomeT1Clean, loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance, touchesRiskPath } from "@dev-loops/core/config";
 import { FANOUT_UNAVAILABLE_MESSAGE, GATE_CONFIG_KEY, checkFanoutAngleCoverage, countFreshDispatchUnits, fanoutReviewerPairingError, freshAngleNames, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
-import { detectMergeBaseScope, isEligibleForLightMode } from "../loop/detect-change-scope.mjs";
+import { detectMergeBaseChangedFiles, detectMergeBaseScope, isEligibleForLightMode } from "../loop/detect-change-scope.mjs";
+import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { normalizePrReviewsPayload, prReviewsApiArgs, prReviewsApiPath } from "./_gate-finding-surface.mjs";
 import { flattenPaginatedSlurp } from "./post-gate-findings.mjs";
@@ -792,6 +793,13 @@ async function resolveAngleLayerConfig({ invokingConfig, repoRoot, headSha }) {
  * lets the pre-merge check accept an inline single-agent verdict for a
  * small-scope PR instead of always rejecting inline evidence.
  */
+// isSizeOutcomeT1Clean: the ONE shared T1-clean predicate for the
+// GATE-EXEC-PROPORTIONALITY size-outcome floor now lives in
+// packages/core/src/config/config.mjs (imported above) so this merge gate and
+// resolveGateDispatchMode never drift onto two independently-maintained floor
+// implementations. Re-exported here for import-path back-compat.
+export { isSizeOutcomeT1Clean };
+
 export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGateMarker, preApprovalGateMarker, config, cwd, hasFullLabel = false, baseRef = null }) {
   // Fail open when config could not be loaded/validated. `== null` covers both
   // null and undefined; the loader only ever yields null on failure, but the
@@ -860,12 +868,33 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
     // Re-derive scope FAIL-CLOSED for inline verdicts only (the fan-out default
     // path pays no git I/O). scopeUnderThreshold is true ONLY when lightMode is
     // on, the PR has no gate:full label, a base ref is known, and the merge-base
-    // diff for the reviewed head is genuinely under threshold. Any git/scope
-    // failure leaves it false, so the inline verdict is rejected exactly as today.
+    // diff for the reviewed head is genuinely under threshold AND clears BOTH
+    // GATE-EXEC-PROPORTIONALITY floors below. Any git/scope/floor failure leaves
+    // it false, so the inline verdict is rejected exactly as today. The
+    // recorded `inlineReason` marker is audit-only here — every floor is
+    // RECOMPUTED from the actual merge-base diff, never trusted from the
+    // marker, mirroring requireFanoutProvenance's re-verify-from-evidence
+    // pattern: a recorded light-mode decision whose diff was not eligible
+    // fails closed regardless of what it claims.
     let scopeUnderThreshold = false;
     if (lightMode && !hasFullLabel && baseRef && spec.marker.executionMode === "inline_single_agent") {
       const scope = detectMergeBaseScope({ base: baseRef, head: headSha, cwd: repoRoot });
-      scopeUnderThreshold = scope.ok === true && isEligibleForLightMode(scope, lightThreshold);
+      const sizeCapOk = scope.ok === true && isEligibleForLightMode(scope, lightThreshold);
+      let riskPathOk = false;
+      if (sizeCapOk) {
+        const changedFilesResult = detectMergeBaseChangedFiles({ base: baseRef, head: headSha, cwd: repoRoot });
+        riskPathOk = changedFilesResult.ok === true && !touchesRiskPath(changedFilesResult.files, lightThreshold.riskPaths);
+      }
+      let sizeOutcomeOk = false;
+      if (riskPathOk) {
+        try {
+          const sizeOutcome = await evaluatePrSizeBudget({ base: baseRef, head: headSha, repoRoot });
+          sizeOutcomeOk = isSizeOutcomeT1Clean(sizeOutcome);
+        } catch {
+          sizeOutcomeOk = false; // fails CLOSED on a size-budget computation error
+        }
+      }
+      scopeUnderThreshold = sizeCapOk && riskPathOk && sizeOutcomeOk;
     }
     // Read ledger provenance for ANY fanout_fanin gate (not just when
     // requireProvenance is on): angle-coverage enforcement re-validates

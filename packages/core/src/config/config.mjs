@@ -9,6 +9,7 @@ import { classifyFile } from "../analysis/diff-analyzer.mjs";
 import { isDevLoopConfigSourcePath } from "../loop/gate-carry-forward.mjs";
 import { isClaudeHarness } from "../loop/run-context.mjs";
 import { trimmedOrNull } from "../loop/normalize.mjs";
+import { matchesDiffExcludeGlob } from "../loop/review-dispatch-plan.mjs";
 
 // ============================================================================
 // Sub-schemas
@@ -426,6 +427,12 @@ const LocalImplementationConfig = z.strictObject({
     // Composes with (does not replace) refinement.maxCopilotRounds — see
     // resolveEffectiveCopilotRoundCap.
     maxCopilotRounds: z.number().int().nonnegative().default(1).describe("Copilot round cap for light-dispatched PRs; composes as min(this, refinement.maxCopilotRounds)."),
+    // Purely ADDITIVE on top of the hard-coded RISK_PATH_DENYLIST_DEFAULT floor
+    // (resolveGateDispatchMode/touchesRiskPath) — this field can only ADD extra
+    // risk-path globs for a repo, never remove/replace the shipped floor, so a
+    // layer that sets its own lightMode block (as this repo's .devloops already
+    // does for maxFiles/maxLines) can never silently drop the floor.
+    riskPaths: z.array(z.string().trim().min(1)).describe("Repo-specific extra glob patterns that force full fan-out regardless of size, layered ON TOP of the shipped risk-path denylist floor (never replacing it).").optional(),
   }).optional(),
   /**
    * Opt into issue-less PR-first at ANY change scope. Decoupled from lightMode:
@@ -1879,6 +1886,11 @@ export function resolveLightMode(config) {
     maxLines: typeof cfg.maxLines === "number" && Number.isFinite(cfg.maxLines) && cfg.maxLines > 0
       ? cfg.maxLines
       : 200,
+    // Repo-specific ADDITIONS to the risk-path floor (see touchesRiskPath) —
+    // never the floor itself, which is hard-coded and always applied first.
+    riskPaths: Array.isArray(cfg.riskPaths)
+      ? cfg.riskPaths.filter((p) => typeof p === "string" && p.trim().length > 0)
+      : [],
   };
 }
 
@@ -1919,16 +1931,143 @@ export function resolveEffectiveCopilotRoundCap(config, { lightweight = false } 
 export const GATE_FULL_LABEL = "gate:full";
 
 /**
+ * Conservative, hard-coded risk-path denylist floor (GATE-EXEC-PROPORTIONALITY,
+ * gate-review-sub-loop-contract.md): a diff touching any of these trees forces
+ * full fan-out regardless of size. Hard-coded here — never sourced purely from
+ * `.devloops`/extension-defaults layers — so a config layer that replaces its
+ * own `localImplementation.lightMode` block (as this repo's own `.devloops`
+ * already does for maxFiles/maxLines) can only ADD extra globs
+ * (`lightMode.riskPaths`, unioned in by {@link touchesRiskPath}) and can never
+ * drop this floor. Mirrors `DEFAULT_DIFF_EXCLUDE_GLOBS`'s "shipped default
+ * always applied first, caller can only extend it" pattern
+ * (review-dispatch-plan.mjs). Every glob is deliberately OVER-inclusive per the
+ * "ambiguity resolves toward MORE review" rule — a borderline path SHOULD trip
+ * full fan-out, never quietly pass through:
+ *  - gate/review: the dispatch-decision and fan-out/fan-in review-sub-loop
+ *    machinery itself — a change here can move the very floor that decides
+ *    review depth, so it always gets full review.
+ *  - security/auth: any path naming auth/token/secret/credential, plus the
+ *    dedicated security-tooling tree.
+ *  - contract: normative contract docs and the ADR/test surfaces that back
+ *    them.
+ *  - hook: repo/CI hook wiring that runs on every commit or tool call.
+ *  - release: publish/tag machinery, release CI workflows, and package
+ *    publication metadata.
+ * Glob subset (see {@link matchesDiffExcludeGlob}): `**\/` matches
+ * zero-or-more whole path segments, a lone `**` matches any suffix, a single
+ * `*` matches within one path segment only.
+ */
+export const RISK_PATH_DENYLIST_DEFAULT = Object.freeze([
+  // gate / review — the proportionality mechanism's own implementation, plus
+  // any path named gate/review anywhere under scripts/ or packages/core/src/loop.
+  "packages/core/src/config/config.mjs",
+  "packages/core/src/config/extension-defaults.yaml",
+  "scripts/loop/check-size-budget.mjs",
+  "scripts/loop/check-adr-tripwire.mjs",
+  "scripts/loop/resolve-gate-dispatch.mjs",
+  "scripts/loop/detect-change-scope.mjs",
+  "scripts/github/detect-checkpoint-evidence.mjs",
+  "scripts/github/upsert-checkpoint-verdict.mjs",
+  "scripts/github/emit-fanout-dispatch.mjs",
+  "scripts/loop/consolidate-fanin.mjs",
+  "scripts/**/*gate*",
+  "scripts/**/*review*",
+  "packages/core/src/loop/*gate*",
+  "packages/core/src/loop/*gate*/**",
+  "packages/core/src/loop/*review*",
+  "packages/core/src/loop/*review*/**",
+  "skills/docs/gate-review-*",
+  // security / auth
+  "**/*auth*",
+  "**/*token*",
+  "**/*secret*",
+  "**/*credential*",
+  "scripts/security/**",
+  // contract
+  "skills/docs/*-contract.md",
+  "test/contracts/**",
+  "docs/decisions/**",
+  // hook
+  ".claude/hooks/**",
+  ".githooks/**",
+  "scripts/**/*hook*",
+  // release
+  "scripts/release/**",
+  "scripts/**/*release*",
+  "scripts/**/*publish*",
+  ".github/workflows/*release*",
+  ".github/workflows/*publish*",
+  "package.json",
+  "**/package.json",
+]);
+
+/**
+ * Pure risk-path predicate: does ANY changed file match the shipped
+ * {@link RISK_PATH_DENYLIST_DEFAULT} floor or a repo's additive
+ * `localImplementation.lightMode.riskPaths` globs? Fails CLOSED (returns
+ * `true`) when `changedFiles` is not a readable array — absence of evidence is
+ * never triviality.
+ * @param {unknown} changedFiles — repo-relative paths, or anything non-array (ambiguous)
+ * @param {string[]} [extraDenylist] — additive globs from config; never replaces the floor
+ * @returns {boolean}
+ */
+export function touchesRiskPath(changedFiles, extraDenylist = []) {
+  if (!Array.isArray(changedFiles)) return true;
+  const denylist = [...RISK_PATH_DENYLIST_DEFAULT, ...(Array.isArray(extraDenylist) ? extraDenylist : [])];
+  return changedFiles.some((f) => {
+    const posix = String(f).replace(/\\/g, "/");
+    return denylist.some((pattern) => matchesDiffExcludeGlob(posix, pattern));
+  });
+}
+
+/**
+ * Pure predicate: is a check-size-budget.mjs sizeOutcome genuinely T1-clean —
+ * a `pass` outcome AND a finite, non-negative T1-tier slice equal to 0 (the
+ * clean value)? `undefined > 0` and `NaN > 0` both evaluate false, so a bare
+ * `!(t1 > 0)` comparison would read malformed/absent T1 evidence (a missing
+ * `tierLogicLoc`, a non-numeric `t1`) as clean and admit the light path on
+ * unreadable evidence. This requires a genuine NUMBER, never a truthiness
+ * check, so malformed evidence fails CLOSED exactly like a real
+ * size-budget computation error. The ONE shared predicate for this floor
+ * (GATE-EXEC-PROPORTIONALITY): `resolveGateDispatchMode` below and the
+ * size-budget merge gate (scripts/github/detect-checkpoint-evidence.mjs) both
+ * call it, so they never drift onto two independently-maintained floor
+ * implementations — mirroring how {@link touchesRiskPath} is the one shared
+ * risk-path predicate.
+ * @param {{ outcome?: string, tierLogicLoc?: { t1?: number } }|null|undefined} sizeOutcome
+ * @returns {boolean}
+ */
+export function isSizeOutcomeT1Clean(sizeOutcome) {
+  if (sizeOutcome == null || typeof sizeOutcome !== "object") return false;
+  if (sizeOutcome.outcome !== "pass") return false;
+  const t1 = sizeOutcome.tierLogicLoc?.t1;
+  return typeof t1 === "number" && Number.isFinite(t1) && t1 === 0;
+}
+
+/**
  * Decide whether a gate runs as a single-agent inline check or full fan-out,
  * from light-mode config + authoritative PR facts.
  *
  * Precedence (first match wins):
- *   1. `gate:full` label present            → full_fanout
- *   2. light mode disabled / no threshold    → full_fanout
- *   3. scope over threshold (files OR lines) → full_fanout
- *   4. inline finding severity in the gate's blockCleanOnFindingSeverities set
- *                                            → full_fanout (escalated)
- *   5. otherwise                             → inline
+ *   1. `gate:full` label present              → full_fanout
+ *   2. light mode disabled / no threshold      → full_fanout
+ *   3. scope over threshold (files OR lines)   → full_fanout
+ *   4. `changedFiles` unavailable (ambiguous)  → full_fanout
+ *   5. a changed file touches a risk path      → full_fanout
+ *   6. `sizeOutcome` unavailable (ambiguous)    → full_fanout
+ *   7. size-outcome escalate/block             → full_fanout
+ *   8. size-outcome touches the T1 risk tier   → full_fanout
+ *   9. inline finding severity in the gate's blockCleanOnFindingSeverities set
+ *                                              → full_fanout (escalated)
+ *   10. otherwise                              → inline
+ *
+ * Steps 4-8 are the GATE-EXEC-PROPORTIONALITY non-overridable floors
+ * (gate-review-sub-loop-contract.md): they run only once the cheap file/line
+ * cap (step 3) has already passed, so an already-over-cap diff costs the
+ * caller nothing extra. A caller that omits `changedFiles`/`sizeOutcome` for
+ * an otherwise-under-cap diff fails CLOSED (full fan-out) rather than silently
+ * treating missing evidence as trivial — no flag/waiver/prompt can lower these
+ * floors.
  *
  * Pre-check omits `inlineFindingSeverities` (decides whether to run the inline
  * pass at all); escalation passes the inline pass's severities. Absent/partial
@@ -1938,11 +2077,13 @@ export const GATE_FULL_LABEL = "gate:full";
  * @param {"draft"|"preApproval"} gate
  * @param {object} facts
  * @param {{ filesChanged?: number, linesChanged?: number }} [facts.scope] PR scope; absent/partial fields fail safe to full_fanout
+ * @param {string[]} [facts.changedFiles] repo-relative changed-file paths; absent/non-array fails safe to full_fanout
+ * @param {{ outcome?: "pass"|"escalate"|"block", tierLogicLoc?: { t1?: number } }|null} [facts.sizeOutcome] check-size-budget.mjs's computeSizeBudget outcome; absent/null fails safe to full_fanout
  * @param {boolean} [facts.hasFullLabel]           `gate:full` label present on the PR
  * @param {string[]} [facts.inlineFindingSeverities] severities from the inline pass (escalation phase)
- * @returns {{ mode: "inline"|"full_fanout", reason: string, threshold: {maxFiles:number,maxLines:number}|null }}
+ * @returns {{ mode: "inline"|"full_fanout", reason: string, threshold: ({maxFiles:number,maxLines:number,riskPaths:string[]})|null }}
  */
-export function resolveGateDispatchMode(config, gate, { scope, hasFullLabel = false, inlineFindingSeverities } = {}) {
+export function resolveGateDispatchMode(config, gate, { scope, changedFiles, sizeOutcome, hasFullLabel = false, inlineFindingSeverities } = {}) {
   if (hasFullLabel) {
     return { mode: "full_fanout", reason: "gate_full_label", threshold: null };
   }
@@ -1954,6 +2095,31 @@ export function resolveGateDispatchMode(config, gate, { scope, hasFullLabel = fa
   const linesChanged = Number(scope?.linesChanged ?? Infinity);
   if (filesChanged > threshold.maxFiles || linesChanged > threshold.maxLines) {
     return { mode: "full_fanout", reason: "over_threshold", threshold };
+  }
+  if (!Array.isArray(changedFiles)) {
+    return { mode: "full_fanout", reason: "changed_files_unavailable", threshold };
+  }
+  if (touchesRiskPath(changedFiles, threshold.riskPaths)) {
+    return { mode: "full_fanout", reason: "risk_path_touch", threshold };
+  }
+  if (sizeOutcome == null || typeof sizeOutcome !== "object") {
+    return { mode: "full_fanout", reason: "size_outcome_unavailable", threshold };
+  }
+  if (sizeOutcome.outcome !== "pass") {
+    const outcomeLabel = typeof sizeOutcome.outcome === "string" && sizeOutcome.outcome.length > 0 ? sizeOutcome.outcome : "unknown";
+    return { mode: "full_fanout", reason: `size_outcome_${outcomeLabel}`, threshold };
+  }
+  // GATE-EXEC-PROPORTIONALITY: delegate the pass+T1-clean decision to the one
+  // shared predicate (isSizeOutcomeT1Clean, above) so this resolver and the
+  // size-budget merge gate never drift onto two independently-maintained
+  // floor implementations. A malformed/partial T1 value (missing, NaN,
+  // negative, non-numeric) is ambiguity, not triviality, so it fails CLOSED to
+  // `size_outcome_unavailable` exactly like a missing sizeOutcome altogether —
+  // never a naive `t1 > 0` truthiness read.
+  if (!isSizeOutcomeT1Clean(sizeOutcome)) {
+    const t1 = sizeOutcome.tierLogicLoc?.t1;
+    const reason = typeof t1 === "number" && Number.isFinite(t1) && t1 > 0 ? "size_outcome_t1" : "size_outcome_unavailable";
+    return { mode: "full_fanout", reason, threshold };
   }
   if (Array.isArray(inlineFindingSeverities) && inlineFindingSeverities.length > 0) {
     // Both sides normalize legacy spellings so a "defer" finding still
@@ -2273,6 +2439,95 @@ export function resolveGateTier(config, gate, { changedFiles, filesChanged, line
 }
 
 /**
+ * The primer-owned deterministic review-proportionality plan
+ * (GATE-EXEC-PROPORTIONALITY, gate-review-sub-loop-contract.md): a single,
+ * pure composition of the existing decision functions so "the plan" (angle
+ * set + execution mode + grouping) is one testable, persistable object.
+ * Delegates entirely to {@link resolveGateDispatchMode} (mode, including the
+ * non-overridable size-cap/risk-path/size-outcome/ambiguity floors),
+ * {@link resolveGateTier} (angle set AND diff-classification), and
+ * {@link resolveFanoutGroups} (dispatch-unit grouping). No git I/O, no logic
+ * of its own beyond the floor-vs-tier precedence below: this is the ONE place
+ * the primer (emit) and the merge gate (re-verify) compose mode + angles +
+ * grouping, so they can never drift onto two different floor implementations.
+ *
+ * Floor-vs-tier precedence: a fired RISK-signal floor — the risk-path
+ * denylist (`risk_path_touch`), a non-clean/ambiguous size-budget outcome
+ * (`size_outcome_*`, `size_outcome_unavailable`), missing changed-file
+ * evidence (`changed_files_unavailable`), or an unclassifiable diff
+ * (`resolveGateTier`'s `unclassifiable_file`) — ALWAYS forces `full_fanout`
+ * with the FULL untriered angle pool, never a matched tier's reduced set. The
+ * hard size cap (`over_threshold`) differs: it ALWAYS forces `full_fanout`
+ * MODE (distinct-reviewer-per-angle, never the light single-combined path)
+ * but does NOT force the full untriered pool — a merely-over-cap-but-tier-
+ * classifiable diff keeps its diff-class-tier-reduced angle set (the
+ * pre-existing, orthogonal mechanism), untouched for a `gate:full`-labelled
+ * PR (resolveGateTier self-bypasses) or a repo with light mode disabled
+ * (`light_mode_disabled` is not a floor).
+ *
+ * @param {DevLoopConfig} config
+ * @param {"draft"|"preApproval"} gate
+ * @param {object} facts
+ * @param {{ filesChanged?: number, linesChanged?: number }} [facts.scope]
+ * @param {string[]} [facts.changedFiles]
+ * @param {{ outcome?: "pass"|"escalate"|"block", tierLogicLoc?: { t1?: number } }|null} [facts.sizeOutcome]
+ * @param {boolean} [facts.hasFullLabel]
+ * @param {string[]} [facts.inlineFindingSeverities]
+ * @returns {{ mode: "inline"|"full_fanout", angles: string[]|null, groups: { name: string, angles: string[] }[], reason: string, floors: { sizeCap: boolean, riskPath: boolean, sizeOutcome: boolean, ambiguity: boolean, unclassifiable: boolean } }}
+ */
+export function resolveReviewProportionality(config, gate, {
+  scope,
+  changedFiles,
+  sizeOutcome,
+  hasFullLabel = false,
+  inlineFindingSeverities,
+} = {}) {
+  const dispatch = resolveGateDispatchMode(config, gate, { scope, changedFiles, sizeOutcome, hasFullLabel, inlineFindingSeverities });
+  const tier = resolveGateTier(config, gate, {
+    changedFiles,
+    filesChanged: scope?.filesChanged,
+    linesChanged: scope?.linesChanged,
+    hasFullLabel,
+  });
+  const floors = Object.freeze({
+    sizeCap: dispatch.reason === "over_threshold",
+    riskPath: dispatch.reason === "risk_path_touch",
+    sizeOutcome: typeof dispatch.reason === "string" && dispatch.reason.startsWith("size_outcome_") && dispatch.reason !== "size_outcome_unavailable",
+    ambiguity: dispatch.reason === "changed_files_unavailable" || dispatch.reason === "size_outcome_unavailable",
+    // resolveGateDispatchMode has no diff-classification awareness of its own
+    // (only resolveGateTier classifies files); an unclassifiable diff is
+    // ambiguity too and must not silently reach inline just because the
+    // dispatch-mode facts alone looked trivial.
+    unclassifiable: tier.reason === "unclassifiable_file",
+  });
+  // sizeCap (over_threshold) is deliberately EXCLUDED from the forced-full-
+  // pool set: it predates this change's risk/ambiguity floors and pre-existing
+  // behavior (the diff-class-tier mechanism) keeps a merely-over-the-tiny-
+  // inline-cap-but-still-tier-classifiable diff on its reduced tier set — see
+  // resolveGateTier's "small non-risky diff outside the inline cap but
+  // matching a tier" contract. Only a genuine RISK signal (a risk-path touch,
+  // a non-clean/ambiguous size-budget outcome, or an unclassifiable diff)
+  // forces the full untriered pool.
+  const dispatchFloorFired = floors.riskPath || floors.sizeOutcome || floors.ambiguity;
+  const floored = dispatchFloorFired || floors.unclassifiable;
+  const mode = floored ? "full_fanout" : dispatch.mode;
+  const reason = floored && !dispatchFloorFired ? "unclassifiable_diff" : dispatch.reason;
+  // The mandatory-angle floor is present either way: a tier match already
+  // unions mandatoryAngles in (resolveGateTier), and the no-tier fallback
+  // (resolveGateAngles) does the same union — see AC-4 "mandatory angles
+  // combined, never dropped".
+  const angles = floored ? resolveGateAngles(config, gate) : (tier.angles ?? resolveGateAngles(config, gate));
+  const groups = resolveFanoutGroups(config, gate, angles ?? [], { fullLabel: hasFullLabel });
+  return Object.freeze({
+    mode,
+    angles,
+    groups,
+    reason,
+    floors,
+  });
+}
+
+/**
  * Resolve gate angles dynamically when `dynamicAngles` is enabled.
  *
  * Diff analysis (../analysis/*) filters the configured angle list to angles
@@ -2285,14 +2540,29 @@ export function resolveGateTier(config, gate, { changedFiles, filesChanged, line
  * that tier's angle set (unioned with mandatory) directly and skips the
  * subtractive/additive machinery.
  *
+ * GATE-EXEC-PROPORTIONALITY floor-awareness (opt-in via `checkFloors`): when
+ * the caller supplies `checkFloors: true` (and, when available, `sizeOutcome`
+ * from check-size-budget.mjs), this delegates to {@link
+ * resolveReviewProportionality} — the SAME composer resolve-gate-dispatch.mjs
+ * uses — over the SAME diff-derived changed-file/scope facts, so a diff whose
+ * dispatch decision is floored (risk-path touch, a non-clean/ambiguous
+ * size-budget outcome, or an unclassifiable diff) NEVER keeps a tier's
+ * reduced (or dynamically-pruned) angle set here: it gets the full untriered
+ * pool, exactly like the primer's own dispatch-decision step. Omitted
+ * (default), this resolves exactly as before — a caller that does not have
+ * size-budget evidence to hand is unaffected.
+ *
  * @param {import("./types.js").DevLoopConfig} config
  * @param {"draft"|"preApproval"} gate
  * @param {object} [options]
  * @param {{ nameStatusOutput: string, diffOutput?: string }} [options.diff]
  * @param {boolean} [options.hasFullLabel] — `gate:full` label present on the PR (bypasses tier resolution)
+ * @param {boolean} [options.checkFloors] — opt into the GATE-EXEC-PROPORTIONALITY floor check above
+ * @param {{ outcome?: "pass"|"escalate"|"block", tierLogicLoc?: { t1?: number } }|null} [options.sizeOutcome] — only consulted when `checkFloors` is true
+ * @param {string[]} [options.explicitAngles] — caller-supplied verbatim override (e.g. CLI `--angles`); wins over tier/dynamic resolution but NEVER over a fired floor above (a fired floor's full pool, mandatory angles included via resolveGateAngles, is returned instead)
  * @returns {{ recommendedAngles: string[] | null, skippedAngles: string[], reasons: Record<string,string>, fallbackToAll: boolean, dynamicAnglesActive: boolean, addedAngles: string[], addedReasons: Record<string,string> }}
  */
-export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabel = false } = {}) {
+export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabel = false, checkFloors = false, sizeOutcome, explicitAngles } = {}) {
   // Tier scope facts: changedFiles/filesChanged from T0, linesChanged from T1's
   // real added+deleted count (analyzeDiff's inferred-category path reports a
   // fake 0 for an unambiguous docs-only diff — see analyzeT1/analyzeDiff).
@@ -2310,6 +2580,40 @@ export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabe
       const lineStats = analyzeT1(diff.diffOutput, t0).lineStats;
       linesChanged = lineStats.added + lineStats.deleted;
     }
+  }
+  if (checkFloors) {
+    const plan = resolveReviewProportionality(config, gate, {
+      scope: { filesChanged, linesChanged },
+      changedFiles,
+      sizeOutcome,
+      hasFullLabel,
+    });
+    if (plan.floors.riskPath || plan.floors.sizeOutcome || plan.floors.ambiguity || plan.floors.unclassifiable) {
+      return {
+        recommendedAngles: plan.angles ?? [],
+        skippedAngles: [],
+        reasons: {},
+        fallbackToAll: false,
+        dynamicAnglesActive: false,
+        addedAngles: [],
+        addedReasons: {},
+      };
+    }
+  }
+  // A fired floor above always wins (its full pool already includes the
+  // mandatory floor via resolveGateAngles) — an explicit --angles override is
+  // only honored once no floor fired, matching its documented "verbatim,
+  // dynamic resolution bypassed" contract.
+  if (Array.isArray(explicitAngles)) {
+    return {
+      recommendedAngles: explicitAngles,
+      skippedAngles: [],
+      reasons: {},
+      fallbackToAll: false,
+      dynamicAnglesActive: false,
+      addedAngles: [],
+      addedReasons: {},
+    };
   }
   const tierResult = resolveGateTier(config, gate, { changedFiles, filesChanged, linesChanged, hasFullLabel });
   if (tierResult.tier) {

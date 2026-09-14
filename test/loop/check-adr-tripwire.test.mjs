@@ -11,6 +11,7 @@ import { Writable } from "node:stream";
 import {
   ADR_PATH_RE,
   CONTRACT_DOC_RE,
+  DEVLOOPS_CONFIG_PATH,
   computeAdrTripwire,
   extractRuleModalities,
   evaluateAdrTripwire,
@@ -139,6 +140,124 @@ test("gate-config touch without ADR or waiver blocks", () => {
   });
   assert.equal(r.outcome, "block");
   assert.deepEqual(r.triggers, [{ type: "gate-config", path: GATE_CONFIG }]);
+});
+
+// ── devloops-proportionality (#1984) ──────────────────────────────────────
+
+const BASE_DEVLOOPS = "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 2\n    maxLines: 20\n";
+const HEAD_DEVLOOPS_LOOSENED = "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 10\n    maxLines: 500\n";
+const HEAD_DEVLOOPS_UNCHANGED = BASE_DEVLOOPS;
+
+test("a .devloops maxFiles/maxLines change without ADR or waiver blocks (add direction)", () => {
+  const r = computeAdrTripwire({
+    nameStatusOutput: ns(["A\t" + DEVLOOPS_CONFIG_PATH]),
+    baseContents: {},
+    headContents: { [DEVLOOPS_CONFIG_PATH]: HEAD_DEVLOOPS_LOOSENED },
+    prBody: "",
+  });
+  assert.equal(r.outcome, "block");
+  assert.ok(r.triggers.some((t) => t.type === "devloops-proportionality" && t.path === DEVLOOPS_CONFIG_PATH));
+});
+
+test("a .devloops maxFiles/maxLines change without ADR or waiver blocks (modify direction)", () => {
+  const r = computeAdrTripwire({
+    nameStatusOutput: ns(["M\t" + DEVLOOPS_CONFIG_PATH]),
+    baseContents: { [DEVLOOPS_CONFIG_PATH]: BASE_DEVLOOPS },
+    headContents: { [DEVLOOPS_CONFIG_PATH]: HEAD_DEVLOOPS_LOOSENED },
+    prBody: "",
+  });
+  assert.equal(r.outcome, "block");
+  const trigger = r.triggers.find((t) => t.type === "devloops-proportionality");
+  assert.ok(trigger, JSON.stringify(r.triggers));
+  assert.ok(trigger.fields.includes("localImplementation.lightMode.maxFiles"));
+  assert.ok(trigger.fields.includes("localImplementation.lightMode.maxLines"));
+});
+
+test("a .devloops riskPaths addition without ADR or waiver blocks", () => {
+  const r = computeAdrTripwire({
+    nameStatusOutput: ns(["M\t" + DEVLOOPS_CONFIG_PATH]),
+    baseContents: { [DEVLOOPS_CONFIG_PATH]: BASE_DEVLOOPS },
+    headContents: { [DEVLOOPS_CONFIG_PATH]: "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 2\n    maxLines: 20\n    riskPaths: [\"my-app/**\"]\n" },
+    prBody: "",
+  });
+  assert.equal(r.outcome, "block");
+  const trigger = r.triggers.find((t) => t.type === "devloops-proportionality");
+  assert.deepEqual(trigger.fields, ["localImplementation.lightMode.riskPaths"]);
+});
+
+test("an ADR record satisfies a .devloops proportionality-field change", () => {
+  const r = computeAdrTripwire({
+    nameStatusOutput: ns(["M\t" + DEVLOOPS_CONFIG_PATH, "A\t" + ADR_FILE]),
+    baseContents: { [DEVLOOPS_CONFIG_PATH]: BASE_DEVLOOPS },
+    headContents: { [DEVLOOPS_CONFIG_PATH]: HEAD_DEVLOOPS_LOOSENED },
+    prBody: "",
+  });
+  assert.equal(r.outcome, "pass");
+  assert.equal(r.satisfiedBy, "adr");
+});
+
+test("a waiver marker with a reason satisfies a .devloops proportionality-field change", () => {
+  const r = computeAdrTripwire({
+    nameStatusOutput: ns(["M\t" + DEVLOOPS_CONFIG_PATH]),
+    baseContents: { [DEVLOOPS_CONFIG_PATH]: BASE_DEVLOOPS },
+    headContents: { [DEVLOOPS_CONFIG_PATH]: HEAD_DEVLOOPS_LOOSENED },
+    prBody: "adr-tripwire:allow deliberately widening the micro-PR cap for this repo",
+  });
+  assert.equal(r.outcome, "pass");
+  assert.equal(r.satisfiedBy, "waiver");
+});
+
+// loadDevLoopConfig also honors the .devloops.yaml/.yml/.json variants
+// (config.mjs's own probe order) — a proportionality-field change authored in
+// one of those must trip the SAME trigger as the bare `.devloops` filename,
+// or a repo could bypass the ADR requirement just by picking a different
+// extension.
+for (const variant of [".devloops.yaml", ".devloops.yml", ".devloops.json"]) {
+  test(`a ${variant} maxFiles/maxLines change without ADR or waiver blocks (config-source family)`, () => {
+    const r = computeAdrTripwire({
+      nameStatusOutput: ns(["M\t" + variant]),
+      baseContents: { [variant]: BASE_DEVLOOPS },
+      headContents: { [variant]: HEAD_DEVLOOPS_LOOSENED },
+      prBody: "",
+    });
+    assert.equal(r.outcome, "block");
+    const trigger = r.triggers.find((t) => t.type === "devloops-proportionality");
+    assert.ok(trigger, JSON.stringify(r.triggers));
+    assert.equal(trigger.path, variant);
+  });
+}
+
+test("a .devloops touch with NO proportionality-field change does not trip the tripwire", () => {
+  const r = computeAdrTripwire({
+    nameStatusOutput: ns(["M\t" + DEVLOOPS_CONFIG_PATH]),
+    baseContents: { [DEVLOOPS_CONFIG_PATH]: BASE_DEVLOOPS },
+    headContents: { [DEVLOOPS_CONFIG_PATH]: HEAD_DEVLOOPS_UNCHANGED + "\nqueue:\n  maxParallel: 5\n" },
+    prBody: "",
+  });
+  assert.equal(r.outcome, "pass");
+  assert.deepEqual(r.triggers, []);
+});
+
+test("a .devloops deletion that drops a configured cap is a proportionality change (removal direction)", () => {
+  const r = computeAdrTripwire({
+    nameStatusOutput: ns(["D\t" + DEVLOOPS_CONFIG_PATH]),
+    baseContents: { [DEVLOOPS_CONFIG_PATH]: BASE_DEVLOOPS },
+    headContents: {},
+    prBody: "",
+  });
+  assert.equal(r.outcome, "block");
+  assert.ok(r.triggers.some((t) => t.type === "devloops-proportionality"));
+});
+
+test("a changed .devloops with unparsable YAML fails closed (unresolvable-devloops-scan)", () => {
+  const r = computeAdrTripwire({
+    nameStatusOutput: ns(["M\t" + DEVLOOPS_CONFIG_PATH]),
+    baseContents: { [DEVLOOPS_CONFIG_PATH]: BASE_DEVLOOPS },
+    headContents: { [DEVLOOPS_CONFIG_PATH]: "version: 1\n  : this is not valid yaml: [" },
+    prBody: "",
+  });
+  assert.equal(r.outcome, "block");
+  assert.ok(r.triggers.some((t) => t.type === "unresolvable-devloops-scan"));
 });
 
 test("rule-modality reversal MUST→SHOULD and SHOULD→MUST both block (AC 1)", () => {
@@ -447,6 +566,48 @@ test("runCli: block outcome exits 1 and reports ok:false", async () => {
     assert.equal(payload.ok, false);
     assert.equal(payload.outcome, "block");
     assert.equal(payload.error, "adr_tripwire_block");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// evaluateAdrTripwire: real git fixture, end-to-end (#1984) — proves the
+// git-side wrapper actually captures .devloops content at both refs, not
+// just the pure computeAdrTripwire unit tests above.
+// ---------------------------------------------------------------------------
+
+test("evaluateAdrTripwire (#1984): a real .devloops cap change blocks without an ADR/waiver", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "adr-devloops-"));
+  try {
+    const fixture = path.join(tmp, "repo");
+    await mkdir(fixture, { recursive: true });
+    execSync("git init -q -b main && git config user.email t@t && git config user.name t", { cwd: fixture, stdio: "ignore" });
+    await writeFile(path.join(fixture, DEVLOOPS_CONFIG_PATH), BASE_DEVLOOPS);
+    execSync("git add . && git commit -qm base && git branch base", { cwd: fixture, stdio: "ignore" });
+    await writeFile(path.join(fixture, DEVLOOPS_CONFIG_PATH), HEAD_DEVLOOPS_LOOSENED);
+    execSync("git add . && git commit -qm head", { cwd: fixture, stdio: "ignore" });
+    const r = await evaluateAdrTripwire({ base: "base", head: "HEAD", repoRoot: fixture });
+    assert.equal(r.outcome, "block");
+    assert.ok(r.triggers.some((t) => t.type === "devloops-proportionality"));
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("evaluateAdrTripwire (#1984): a real .devloops.yaml cap change blocks without an ADR/waiver (config-source family)", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "adr-devloops-yaml-"));
+  try {
+    const fixture = path.join(tmp, "repo");
+    await mkdir(fixture, { recursive: true });
+    execSync("git init -q -b main && git config user.email t@t && git config user.name t", { cwd: fixture, stdio: "ignore" });
+    await writeFile(path.join(fixture, ".devloops.yaml"), BASE_DEVLOOPS);
+    execSync("git add . && git commit -qm base && git branch base", { cwd: fixture, stdio: "ignore" });
+    await writeFile(path.join(fixture, ".devloops.yaml"), HEAD_DEVLOOPS_LOOSENED);
+    execSync("git add . && git commit -qm head", { cwd: fixture, stdio: "ignore" });
+    const r = await evaluateAdrTripwire({ base: "base", head: "HEAD", repoRoot: fixture });
+    assert.equal(r.outcome, "block");
+    assert.ok(r.triggers.some((t) => t.type === "devloops-proportionality" && t.path === ".devloops.yaml"));
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }

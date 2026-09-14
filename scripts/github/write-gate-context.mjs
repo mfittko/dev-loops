@@ -29,6 +29,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 
 import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAngles, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
+import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { baseAngleName, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
 import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities } from "@dev-loops/core/loop/review-dispatch-plan";
@@ -2744,6 +2745,14 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
     : await resolveGateAnglesDynamic(input.config, configKey, {
         diff: input.diff,
         hasFullLabel: input.hasFullLabel !== false,
+        // GATE-EXEC-PROPORTIONALITY: opt-in pass-through, mirroring the CLI's
+        // own --base-derived floor check (below). A caller that already has
+        // sizeOutcome evidence to hand (e.g. it also ran check-size-budget.mjs
+        // for this same diff) can request the SAME floor-vs-tier precedence the
+        // primer's dispatch decision uses; omitted, this resolves exactly as
+        // before.
+        checkFloors: input.checkFloors === true,
+        sizeOutcome: input.sizeOutcome,
       });
   const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
 
@@ -3183,6 +3192,23 @@ export async function main(
       process.stderr.write("[write-gate-context] warning: no --base given; emitting a THIN briefing (scope.diffPath=null, scope.changedFiles=[], no adjacentCode). Pass --base <ref> for the full build-once bundle.\n");
       options.diffSource = "none";
     }
+    // GATE-EXEC-PROPORTIONALITY: with a genuine --base diff to hand, also read
+    // this same diff's size-budget outcome so angle resolution below can opt
+    // into the composer's floor-vs-tier precedence (resolveReviewProportionality,
+    // via resolveGateAnglesDynamic's checkFloors) — a risk-path touch or a
+    // non-clean/ambiguous size-budget outcome must never leave this artifact
+    // carrying a tier-reduced angle set. A --prefix-file/no-base thin briefing
+    // has no diff to evaluate a size outcome against; checkFloors stays off
+    // there (unaffected — the no-diff path already resolves the full static
+    // pool regardless).
+    let sizeOutcome = null;
+    if (options.base) {
+      try {
+        sizeOutcome = await evaluatePrSizeBudget({ base: options.base, head: "HEAD", repoRoot });
+      } catch {
+        sizeOutcome = null; // fails CLOSED — checkFloors treats null as ambiguous
+      }
+    }
     // Load the dev-loop config once: used both for dynamic angle resolution
     // (when --angles is omitted) and, regardless of --angles, to resolve each
     // angle's concrete review model for the dispatch-plan artifact
@@ -3202,12 +3228,16 @@ export async function main(
 
     // Angle resolution: when --angles is omitted, resolve dynamically from the
     // loaded config (.devloops) + the captured --base diff — the SAME path the
-    // programmatic buildGateContext API uses (resolveGateAnglesDynamic). This
-    // keeps the CLI consistent with the API: dynamic angle resolution trims to the
-    // mandatory floor + diff-selected candidates when a diff is present, and
-    // falls back to the static configured pool otherwise. When --angles IS
-    // supplied, it is a verbatim override (dynamic resolution bypassed).
-    if (!Array.isArray(options.angles)) {
+    // programmatic buildGateContext API uses (resolveGateAnglesDynamic). When
+    // --angles IS supplied, it is used as an explicit selector, BUT the
+    // GATE-EXEC-PROPORTIONALITY floors and the mandatory-angle floor are
+    // non-overridable: draft/preApproval always run explicit angles through
+    // resolveGateAnglesDynamic's explicitAngles handling below, which forces
+    // the full untriered pool over a fired floor and unions in any mandatory
+    // angle the explicit set omitted. review has no floor contract and keeps
+    // its dedicated union resolver, verbatim-override included, unchanged.
+    const explicitAngleReview = options.gate === "review" && Array.isArray(options.angles);
+    if (!explicitAngleReview) {
       // The gate:full label must not depend on the operator remembering
       // --full-label: derive it from the live PR when the flag is absent, and
       // fail CLOSED (treat as labelled → untriered set) when the read fails.
@@ -3248,7 +3278,13 @@ export async function main(
           );
         }
         const configKey = mapGateToConfigKey(options.gate);
-        resolverResult = await resolveGateAnglesDynamic(config, configKey, { diff, hasFullLabel: options.fullLabel === true });
+        resolverResult = await resolveGateAnglesDynamic(config, configKey, {
+          diff,
+          hasFullLabel: options.fullLabel === true,
+          checkFloors: Boolean(options.base),
+          sizeOutcome,
+          explicitAngles: Array.isArray(options.angles) ? options.angles : undefined,
+        });
       }
       const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
       if (resolvedAngles.length === 0) {
@@ -3257,13 +3293,14 @@ export async function main(
         );
       }
       options.angles = resolvedAngles;
-      // Resolver-derived rationale is authoritative here: a caller cannot supply
-      // meaningful rationale for angles it did not name (angles were just
-      // resolved dynamically above), so any --rationale the caller passed is
-      // ignored rather than persisted as a stale mismatch.
+      // Resolver-derived rationale is authoritative here: it reflects whatever
+      // the resolver actually decided (dynamic selection, a floor override, or
+      // an explicit set plus any mandatory-floor addition), which a caller's
+      // own --rationale cannot describe — so any --rationale supplied is
+      // ignored in favor of it.
       if (options.rationale.length > 0) {
         process.stderr.write(
-          "[write-gate-context] warning: --rationale was supplied without --angles; ignoring it in favor of the resolver-derived rationale (angles were resolved from config rather than supplied via --angles).\n",
+          "[write-gate-context] warning: --rationale is ignored in favor of the resolver-derived rationale (angle resolution — dynamic, floor-forced, or an explicit --angles set — always determines rationale).\n",
         );
       }
       options.rationale = rationale;
