@@ -45,7 +45,9 @@ test("gate-evidence workflow re-fires on review submission, review comments, and
   assert.deepEqual(triggers.pull_request_review_comment.types, ["created"]);
   // Legacy/fallback verdicts still land as issue comments, with the same
   // created/edited split. An identical same-head rerun noops with no event.
-  assert.deepEqual(triggers.issue_comment.types, ["created", "edited"]);
+  // `deleted` re-fires when an approve-merge approval comment is deleted
+  // (retraction), so a stale SUCCESS never stands (fail-closed).
+  assert.deepEqual(triggers.issue_comment.types, ["created", "edited", "deleted"]);
 
   // Guard against a recurrence of the invalid `pull_request_review_thread` trigger
   // (and any other non-existent event) that GitHub's parser rejects wholesale.
@@ -99,7 +101,8 @@ test("gate-evidence workflow re-fires on review submission, review comments, and
     "(github.event_name != 'issue_comment' && github.event.pull_request.draft == false) || " +
       "(github.event_name == 'issue_comment' && github.event.issue.pull_request && " +
       "(startsWith(github.event.comment.body, '### Gate review:') || " +
-      "startsWith(github.event.comment.body, 'approve merge ')) && " +
+      "startsWith(github.event.comment.body, 'approve merge ') || " +
+      "startsWith(github.event.changes.body.from, 'approve merge ')) && " +
       "contains(fromJSON('[\"OWNER\", \"MEMBER\", \"COLLABORATOR\"]'), github.event.comment.author_association))",
   );
   // #2189: the approve-merge marker must be a re-fire trigger, not just the
@@ -108,6 +111,14 @@ test("gate-evidence workflow re-fires on review submission, review comments, and
   assert.ok(
     collapsedIf.includes("startsWith(github.event.comment.body, 'approve merge ')"),
     "approve-merge marker must be a gate-evidence re-fire trigger (#2189)",
+  );
+  // RETRACTION must also re-fire: an edit-away (new body no longer matches,
+  // but `changes.body.from` carries the prior approve-merge body) must start
+  // a run, or a retracted approval leaves the stale pre-retraction SUCCESS
+  // standing (fail-open).
+  assert.ok(
+    collapsedIf.includes("startsWith(github.event.changes.body.from, 'approve merge ')"),
+    "edit-away retraction of an approve-merge marker must re-fire gate-evidence (fail-closed)",
   );
   assert.equal(workflow.permissions.statuses, "write");
 });

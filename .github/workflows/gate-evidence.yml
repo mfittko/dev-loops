@@ -13,7 +13,7 @@ on:
   pull_request_review_comment:
     types: [created]
   issue_comment:
-    types: [created, edited]
+    types: [created, edited, deleted]
 
 permissions:
   contents: read
@@ -26,13 +26,20 @@ jobs:
     # pull_request/review events: skip drafts via the payload. issue_comment:
     # only PR comments carrying the gate-comment marker OR the head-pinned
     # approve-merge marker start a run (draft is resolved by the
-    # Resolve-PR-facts step, since the payload has no PR object).
+    # Resolve-PR-facts step, since the payload has no PR object). An
+    # approve-merge marker starting a run also covers its RETRACTION: an
+    # edit-away (new body no longer matches, but `changes.body.from` still
+    # carries the prior marker body) and a deletion (the `deleted` action,
+    # where `comment.body` still carries the deleted body) both re-fire so a
+    # retracted approval re-evaluates the head instead of leaving a stale
+    # status — fail-closed.
     if: >-
       (github.event_name != 'issue_comment' && github.event.pull_request.draft == false) ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request &&
        (startsWith(github.event.comment.body, '### Gate review:') ||
-        startsWith(github.event.comment.body, 'approve merge ')) &&
+        startsWith(github.event.comment.body, 'approve merge ') ||
+        startsWith(github.event.changes.body.from, 'approve merge ')) &&
        contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
     # One evaluation per PR at a time; a superseded in-flight run is cancelled —
     # the newer run reflects newer comment/thread state and posts the status.
