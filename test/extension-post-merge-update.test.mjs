@@ -2,7 +2,7 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
 
 import registerExtension from "../extension/index.ts";
 import {
@@ -873,6 +873,77 @@ test("AC3a: an explicit --repo proven foreign to the managed slug passes through
   const mergeResult = await mergeHook.onUserBash({ command: "gh pr merge 42 --repo other/repo", cwd: "/repo" }, ctx);
   assert.equal(mergeResult, undefined);
   assert.equal(mergeCalls.length, 0);
+});
+
+// --- real .devloops-presence bridge (defaultResolveRepoContext), no resolveRepoContext stub ---
+// The AC1-AC4 tests above all inject a fake `resolveRepoContext`, so the real bridge that
+// computes `inManagedContext` via `fs.existsSync(path.join(repoRoot, '.devloops'))` is never
+// exercised. These two tests drive `createPostMergeUpdateHook({ exec })` with only `exec`
+// stubbed (git plumbing), so `defaultResolveRepoContext` runs for real against a temp dir.
+
+function createFakeGitExec(repoRoot, { remoteUrl = "git@github.com:acme/widgets.git" } = {}) {
+  const calls = [];
+  const exec = async (command, options = {}) => {
+    calls.push({ command, cwd: options.cwd });
+    if (command === "git rev-parse --show-toplevel") {
+      return { code: 0, stdout: `${repoRoot}\n`, stderr: "", killed: false };
+    }
+    if (command === "git config --get remote.origin.url") {
+      return { code: 0, stdout: `${remoteUrl}\n`, stderr: "", killed: false };
+    }
+    if (command.startsWith("node scripts/loop/pre-pr-ready-gate.mjs")) {
+      return { code: 1, stdout: "", stderr: JSON.stringify({ ok: false, error: "no clean draft_gate evidence" }), killed: false };
+    }
+    return { code: 0, stdout: "ok", stderr: "", killed: false };
+  };
+  return { exec, calls };
+}
+
+test("real .devloops-presence bridge activates the gh pr ready guard when .devloops exists (no resolveRepoContext stub)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-managed-bridge-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "{}\n");
+    const { exec, calls } = createFakeGitExec(tempDir);
+    const hook = createPostMergeUpdateHook({ exec });
+    const { ctx } = createUiCalls();
+
+    const result = await hook.onUserBash({ command: "gh pr ready 42", cwd: tempDir }, ctx);
+
+    assert.ok(
+      calls.some((c) => c.command.startsWith("node scripts/loop/pre-pr-ready-gate.mjs")),
+      "the real .devloops-presence bridge must resolve inManagedContext true and run the draft-gate guard",
+    );
+    assert.deepEqual(result, {
+      result: {
+        output: "gh pr ready blocked: no clean draft_gate evidence",
+        exitCode: 1,
+        cancelled: false,
+        truncated: false,
+      },
+    });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("real .devloops-presence bridge stays off (gh pr ready passes through) when no .devloops file exists", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-unmanaged-bridge-"));
+  try {
+    const { exec, calls } = createFakeGitExec(tempDir);
+    const hook = createPostMergeUpdateHook({ exec });
+    const { ctx } = createUiCalls();
+
+    const result = await hook.onUserBash({ command: "gh pr ready 42", cwd: tempDir }, ctx);
+
+    assert.equal(result, undefined, "no .devloops file means inManagedContext false, pass through");
+    assert.equal(
+      calls.some((c) => c.command.startsWith("node scripts/loop/pre-pr-ready-gate.mjs")),
+      false,
+      "the guard must not run the draft-gate script when the bridge resolves inManagedContext false",
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("AC3b: a non-managed cwd (no .devloops config) always passes gh pr ready/merge through", async () => {

@@ -115,7 +115,6 @@ export function decideBashGate({
   // every guard below still applies (inManagedRepo stays true) rather than silently allowing
   // everything — an unresolvable identity must never disable the guard suite.
   const managedSlug = (managedRepoSlug ?? "").trim().toLowerCase() || null;
-  const cwdSlug = (repoSlug ?? "").trim().toLowerCase() || null;
   const inManagedRepo = deriveInManagedRepo({ inManagedContext, managedRepoSlug, repoSlug });
 
   // OPS-NO-INLINE-INTERPRETER: inline interpreters (`node -e`/`--eval`/`-p`, `python3 -c`,
