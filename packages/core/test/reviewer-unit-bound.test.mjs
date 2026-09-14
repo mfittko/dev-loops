@@ -134,6 +134,32 @@ describe("validateReviewerUnit — immutable gate context", () => {
     }, TypeError);
     assert.equal(unit.gateContext.provenance.a, 1);
   });
+
+  test("never mutates the caller's gateContext: the caller's nested object stays unfrozen while the returned clone is deep-frozen", () => {
+    const originalProvenance = { a: 1 };
+    const callerGateContext = { headSha: "h", provenance: originalProvenance };
+    const unit = validateReviewerUnit(baseUnit({ gateContext: callerGateContext }));
+
+    // The caller's own objects are untouched (no shallow-spread side effect).
+    assert.equal(Object.isFrozen(callerGateContext), false);
+    assert.equal(Object.isFrozen(originalProvenance), false);
+    assert.equal(unit.gateContext.provenance === originalProvenance, false);
+
+    // The returned clone is deeply frozen and immutable.
+    assert.equal(Object.isFrozen(unit.gateContext.provenance), true);
+    assert.throws(() => {
+      "use strict";
+      unit.gateContext.provenance.a = 2;
+    }, TypeError);
+    assert.equal(unit.gateContext.provenance.a, 1);
+    assert.equal(originalProvenance.a, 1);
+  });
+
+  test("preserves headSha on the frozen clone even when gateContext carries other fields", () => {
+    const unit = validateReviewerUnit(baseUnit({ gateContext: { headSha: "sha-clone", other: "value" } }));
+    assert.equal(unit.gateContext.headSha, "sha-clone");
+    assert.equal(unit.gateContext.other, "value");
+  });
 });
 
 describe("assertReviewerOperationAllowed — prohibited-probe traps (table-driven)", () => {

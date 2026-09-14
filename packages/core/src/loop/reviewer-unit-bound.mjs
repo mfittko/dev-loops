@@ -61,15 +61,22 @@ function isNonEmptyString(value) {
  * Recursively freeze a plain object/array value's own nested plain
  * objects/arrays. A shallow Object.freeze leaves nested values mutable;
  * the gate context must be genuinely immutable, not just its top level.
+ *
+ * Recurses into children even when the current container is already frozen
+ * (an already-frozen container can still hold mutable grandchildren — an
+ * early return on Object.isFrozen would skip them). A WeakSet cycle guard
+ * prevents infinite recursion on a cyclic object graph.
  * @param {unknown} value
+ * @param {WeakSet<object>} [seen]
  * @returns {unknown} the same value, deep-frozen.
  */
-function deepFreeze(value) {
-  if (value === null || typeof value !== "object" || Object.isFrozen(value)) {
+function deepFreeze(value, seen = new WeakSet()) {
+  if (value === null || typeof value !== "object" || seen.has(value)) {
     return value;
   }
+  seen.add(value);
   for (const key of Object.keys(value)) {
-    deepFreeze(value[key]);
+    deepFreeze(value[key], seen);
   }
   return Object.freeze(value);
 }
@@ -119,10 +126,24 @@ export function validateReviewerUnit(unit) {
   // Freeze the gate context so the reviewer cannot mutate the current-head
   // identity it was handed; freeze the returned unit + angles for the same
   // reason. The freeze is deep — a shallow freeze would leave a nested
-  // gateContext value (e.g. provenance) mutable.
+  // gateContext value (e.g. provenance) mutable. Deep-CLONE before freezing:
+  // a shallow `{ ...gateContext }` spread shares nested objects with the
+  // caller, so deepFreeze would freeze the CALLER's own objects in place —
+  // an observable side effect on this otherwise-pure validator. A gate
+  // context is plain data; if it is not structured-cloneable that is a
+  // malformed non-data context, and throwing here is the correct fail-closed
+  // behavior (surfaces as an uncaught DataCloneError, same fail-closed
+  // posture as every other malformed-input branch in this module).
+  const clonedGateContext = structuredClone(gateContext);
+  // structuredClone (like object spread) copies only own-enumerable
+  // properties, so an inherited/non-enumerable headSha would validate above
+  // yet be absent from the clone. Re-assert the validated value explicitly
+  // so the frozen context always carries it.
+  clonedGateContext.headSha = gateContext.headSha;
+
   return Object.freeze({
     run: run.trim(),
-    gateContext: deepFreeze({ ...gateContext }),
+    gateContext: deepFreeze(clonedGateContext),
     angles: Object.freeze(normalizedAngles),
   });
 }
