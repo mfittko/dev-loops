@@ -2,7 +2,7 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
 
 import registerExtension from "../extension/index.ts";
 import {
@@ -79,7 +79,7 @@ test("isMergeCapableCommand only matches bounded merge commands", () => {
 test("successful bash-tool gh pr merge queues and flushes one post-merge update on agent_end", async () => {
   const calls = [];
   const hook = createPostMergeUpdateHook({
-    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG }),
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
     runCommand: async ({ command, cwd }) => {
       calls.push({ command, cwd });
       return { code: 0, stdout: "updated", stderr: "", killed: false };
@@ -122,7 +122,7 @@ test("successful bash-tool gh pr merge queues and flushes one post-merge update 
 test("successful user_bash git merge queues and flushes one update", async () => {
   const calls = [];
   const hook = createPostMergeUpdateHook({
-    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG }),
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
     runCommand: async ({ command, cwd }) => {
       calls.push({ command, cwd });
       if (command === "git merge origin/main") {
@@ -158,7 +158,7 @@ test("successful user_bash git merge queues and flushes one update", async () =>
 test("failed merge commands do not trigger the post-merge update", async () => {
   const calls = [];
   const hook = createPostMergeUpdateHook({
-    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG }),
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
     runCommand: async ({ command, cwd }) => {
       calls.push({ command, cwd });
       return { code: 1, stdout: "", stderr: "merge failed", killed: false };
@@ -298,7 +298,7 @@ test("malformed or foreign-harness events pass through safely without throwing",
   const hook = createPostMergeUpdateHook({
     resolveRepoContext: async (cwd) => {
       resolveCalls += 1;
-      return { repoRoot: cwd, repoSlug: TARGET_REPO_SLUG };
+      return { repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true };
     },
     runCommand: async () => ({ code: 0, stdout: "", stderr: "", killed: false }),
   });
@@ -320,7 +320,7 @@ test("malformed or foreign-harness events pass through safely without throwing",
 test("multiple merge signals in one turn still run only one update", async () => {
   const calls = [];
   const hook = createPostMergeUpdateHook({
-    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG }),
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
     runCommand: async ({ command, cwd }) => {
       calls.push({ command, cwd });
       return { code: 0, stdout: "ok", stderr: "", killed: false };
@@ -346,7 +346,7 @@ test("multiple merge signals in one turn still run only one update", async () =>
 
 test("update failure is warning-only and leaves the session healthy", async () => {
   const hook = createPostMergeUpdateHook({
-    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG }),
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
     runCommand: async () => ({ code: 1, stdout: "", stderr: "permission denied", killed: false }),
   });
   const { ctx, notifications } = createUiCalls();
@@ -369,7 +369,7 @@ test("update failure is warning-only and leaves the session healthy", async () =
 
 test("killed post-merge updates surface a clear warning message", async () => {
   const hook = createPostMergeUpdateHook({
-    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG }),
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
     runCommand: async () => ({ code: 0, stdout: "", stderr: "", killed: true }),
   });
   const { ctx, notifications } = createUiCalls();
@@ -390,7 +390,7 @@ test("killed post-merge updates surface a clear warning message", async () => {
 test("onAgentEnd fast-forwards the resolved main checkout to origin/main (#1596)", async () => {
   const calls = [];
   const hook = createPostMergeUpdateHook({
-    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG }),
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
     runCommand: async ({ command, cwd }) => {
       calls.push({ command, cwd });
       if (command === "git worktree list") {
@@ -426,7 +426,7 @@ test("onAgentEnd fast-forwards the resolved main checkout to origin/main (#1596)
 test("a non-fast-forwardable main checkout warns and does not block", async () => {
   const calls = [];
   const hook = createPostMergeUpdateHook({
-    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG }),
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
     runCommand: async ({ command, cwd }) => {
       calls.push({ command, cwd });
       if (command === "git worktree list") {
@@ -464,7 +464,7 @@ test("session_start resets post-merge hook state and extension registers lifecyc
   try {
     const pi = createPiDouble();
     const hook = createPostMergeUpdateHook({
-      resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG }),
+      resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
       runCommand: async () => ({ code: 0, stdout: "", stderr: "", killed: false }),
     });
     registerExtension(pi, { postMergeUpdateHook: hook });
@@ -553,7 +553,7 @@ test("extractRepoFlagFromGhPrReady handles -R with --repo in same segment", () =
 test("gh pr ready later in a shell chain passes through", async () => {
   const calls = [];
   const hook = createPostMergeUpdateHook({
-    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG }),
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
     runCommand: async ({ command, cwd }) => {
       calls.push({ command, cwd });
       return { code: 0, stdout: "ok", stderr: "", killed: false };
@@ -569,7 +569,7 @@ test("gh pr ready later in a shell chain passes through", async () => {
 test("gh pr ready passes through when -R targets non-target repo", async () => {
   const calls = [];
   const hook = createPostMergeUpdateHook({
-    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG }),
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
     runCommand: async ({ command, cwd }) => {
       calls.push({ command, cwd });
       return { code: 0, stdout: "ok", stderr: "", killed: false };
@@ -586,7 +586,7 @@ test("gh pr ready passes through when -R targets non-target repo", async () => {
 test("gh pr ready passes through when --repo targets non-target repo", async () => {
   const calls = [];
   const hook = createPostMergeUpdateHook({
-    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG }),
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
     runCommand: async ({ command, cwd }) => {
       calls.push({ command, cwd });
       return { code: 0, stdout: "ok", stderr: "", killed: false };
@@ -602,7 +602,7 @@ test("gh pr ready passes through when --repo targets non-target repo", async () 
 test("gh pr ready still intercepts when -R targets same repo (case-insensitive)", async () => {
   const calls = [];
   const hook = createPostMergeUpdateHook({
-    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG }),
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
     runCommand: async ({ command, cwd }) => {
       calls.push({ command, cwd });
       // Gate script passes
@@ -621,7 +621,7 @@ test("gh pr ready still intercepts when -R targets same repo (case-insensitive)"
   // Case-insensitive match
   const calls2 = [];
   const hook2 = createPostMergeUpdateHook({
-    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG }),
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
     runCommand: async ({ command, cwd }) => {
       calls2.push({ command, cwd });
       if (command.startsWith("node scripts/loop/pre-pr-ready-gate.mjs")) {
@@ -638,7 +638,7 @@ test("gh pr ready still intercepts when -R targets same repo (case-insensitive)"
 test("gh pr ready blocks when draft-gate script fails", async () => {
   const calls = [];
   const hook = createPostMergeUpdateHook({
-    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG }),
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
     runCommand: async ({ command, cwd }) => {
       calls.push({ command, cwd });
       if (command.startsWith("node scripts/loop/pre-pr-ready-gate.mjs")) {
@@ -665,7 +665,7 @@ test("gh pr ready blocks when draft-gate script fails", async () => {
 test("gh pr ready allows when draft-gate script passes", async () => {
   const calls = [];
   const hook = createPostMergeUpdateHook({
-    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG }),
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
     runCommand: async ({ command, cwd }) => {
       calls.push({ command, cwd });
       if (command.startsWith("node scripts/loop/pre-pr-ready-gate.mjs")) {
@@ -696,7 +696,7 @@ test("gh pr ready allows when draft-gate script passes", async () => {
 test("gh pr ready without PR number blocks immediately", async () => {
   const calls = [];
   const hook = createPostMergeUpdateHook({
-    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG }),
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
     runCommand: async ({ command, cwd }) => {
       calls.push({ command, cwd });
       return { code: 0, stdout: "ok", stderr: "", killed: false };
@@ -735,7 +735,7 @@ test("gh pr ready in non-target repo passes through", async () => {
 test("gh pr ready guard failures from script errors surface gracefully", async () => {
   const calls = [];
   const hook = createPostMergeUpdateHook({
-    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG }),
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
     runCommand: async ({ command, cwd }) => {
       calls.push({ command, cwd });
       throw new Error("script not found");
@@ -757,7 +757,7 @@ test("gh pr ready guard failures from script errors surface gracefully", async (
 test("gh pr ready intercept does not affect gh pr merge or other commands", async () => {
   const calls = [];
   const hook = createPostMergeUpdateHook({
-    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG }),
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
     runCommand: async ({ command, cwd }) => {
       calls.push({ command, cwd });
       if (command === "gh pr merge 373 --squash --delete-branch") {
@@ -779,4 +779,278 @@ test("gh pr ready intercept does not affect gh pr merge or other commands", asyn
   });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].command, "gh pr merge 373 --squash --delete-branch");
+});
+
+// --- managed-repo identity resolved dynamically (fail closed, #2194) ---
+// Ports the Claude Bash-hook guard's dynamic `inManagedRepo` resolution
+// (`deriveInManagedRepo`) to this Pi harness's `gh pr ready`/`gh pr merge` guards, so a
+// dev-loops-managed CONSUMER repo (non-dev-loops slug) is no longer a fail-open blind spot.
+
+test("AC1: gh pr ready is gated and gh pr merge is intercepted in a managed consumer repo (non-dev-loops slug)", async () => {
+  const calls = [];
+  const hook = createPostMergeUpdateHook({
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: "acme/widgets", inManagedContext: true }),
+    runCommand: async ({ command, cwd }) => {
+      calls.push({ command, cwd });
+      if (command.startsWith("node scripts/loop/pre-pr-ready-gate.mjs")) {
+        return { code: 1, stdout: "", stderr: JSON.stringify({ ok: false, error: "no clean draft_gate evidence" }), killed: false };
+      }
+      if (command === "gh pr merge 42 --squash --delete-branch") {
+        return { code: 0, stdout: "Merged", stderr: "", killed: false };
+      }
+      return { code: 0, stdout: "ok", stderr: "", killed: false };
+    },
+  });
+  const { ctx } = createUiCalls();
+
+  const readyResult = await hook.onUserBash({ command: "gh pr ready 42", cwd: "/repo" }, ctx);
+  assert.deepEqual(readyResult, {
+    result: {
+      output: "gh pr ready blocked: no clean draft_gate evidence",
+      exitCode: 1,
+      cancelled: false,
+      truncated: false,
+    },
+  });
+  assert.ok(calls[0].command.startsWith("node scripts/loop/pre-pr-ready-gate.mjs"));
+
+  calls.length = 0;
+  const mergeResult = await hook.onUserBash({ command: "gh pr merge 42 --squash --delete-branch", cwd: "/repo" }, ctx);
+  assert.deepEqual(mergeResult, {
+    result: { output: "Merged", exitCode: 0, cancelled: false, truncated: false },
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].command, "gh pr merge 42 --squash --delete-branch");
+  assert.equal(hook.getState().pendingPostMergeActionsRoot, "/repo", "merge was intercepted and queued");
+});
+
+test("AC2 (fail-closed): gh pr ready stays gated in a managed repo whose identity is unresolvable", async () => {
+  const calls = [];
+  const hook = createPostMergeUpdateHook({
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: null, inManagedContext: true }),
+    runCommand: async ({ command, cwd }) => {
+      calls.push({ command, cwd });
+      return { code: 1, stdout: "", stderr: JSON.stringify({ ok: false, error: "no clean draft_gate evidence" }), killed: false };
+    },
+  });
+  const { ctx } = createUiCalls();
+
+  const result = await hook.onUserBash({ command: "gh pr ready 42", cwd: "/repo" }, ctx);
+  assert.deepEqual(result, {
+    result: {
+      output: "gh pr ready blocked: no clean draft_gate evidence",
+      exitCode: 1,
+      cancelled: false,
+      truncated: false,
+    },
+  });
+  assert.equal(calls.length, 1, "guard ran the gate script rather than passing through");
+
+  // `gh pr merge` has its own explicit-repo/managed-context path (separate from the `gh pr ready`
+  // branch above) and could independently regress to pass-through for an unresolvable identity.
+  // Same fixture (repoSlug: null, inManagedContext: true): the merge guard must still intercept.
+  calls.length = 0;
+  const mergeResult = await hook.onUserBash({ command: "gh pr merge 42", cwd: "/repo" }, ctx);
+  assert.notEqual(mergeResult, undefined, "merge guard intercepted rather than passing through under unresolvable identity");
+  assert.equal(calls.length, 1, "merge guard ran through runCommand rather than passing through");
+  assert.equal(calls[0].command, "gh pr merge 42");
+});
+
+test("AC2b (defense-in-depth): gh pr ready refuses to interpolate a non-clean repoSlug into the gate command", async () => {
+  // `normalizeGitHubRepoSlug` already guarantees a clean slug or null, but a test double / future
+  // resolver bypassing it must not reach the shell-command interpolation site either.
+  const calls = [];
+  const hook = createPostMergeUpdateHook({
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: "acme/widgets;id", inManagedContext: true }),
+    runCommand: async ({ command, cwd }) => {
+      calls.push({ command, cwd });
+      return { code: 0, stdout: "ok", stderr: "", killed: false };
+    },
+  });
+  const { ctx } = createUiCalls();
+
+  const result = await hook.onUserBash({ command: "gh pr ready 42", cwd: "/repo" }, ctx);
+  assert.deepEqual(result, {
+    result: {
+      output: "gh pr ready blocked: resolved repo identity is not a valid owner/name — refusing to run the draft-gate check.",
+      exitCode: 1,
+      cancelled: false,
+      truncated: false,
+    },
+  });
+  assert.equal(calls.length, 0, "guard refused to run any command with a non-clean slug");
+});
+
+test("AC3a: an explicit --repo proven foreign to the managed slug passes through", async () => {
+  const readyCalls = [];
+  const readyHook = createPostMergeUpdateHook({
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: "acme/widgets", inManagedContext: true }),
+    runCommand: async ({ command, cwd }) => {
+      readyCalls.push({ command, cwd });
+      return { code: 0, stdout: "ok", stderr: "", killed: false };
+    },
+  });
+  const { ctx } = createUiCalls();
+
+  const readyResult = await readyHook.onUserBash({ command: "gh pr ready 42 --repo other/repo", cwd: "/repo" }, ctx);
+  assert.equal(readyResult, undefined);
+  assert.equal(readyCalls.length, 0);
+
+  const mergeCalls = [];
+  const mergeHook = createPostMergeUpdateHook({
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: "acme/widgets", inManagedContext: true }),
+    runCommand: async ({ command, cwd }) => {
+      mergeCalls.push({ command, cwd });
+      return { code: 0, stdout: "ok", stderr: "", killed: false };
+    },
+  });
+  const mergeResult = await mergeHook.onUserBash({ command: "gh pr merge 42 --repo other/repo", cwd: "/repo" }, ctx);
+  assert.equal(mergeResult, undefined);
+  assert.equal(mergeCalls.length, 0);
+});
+
+// --- real .devloops-presence bridge (defaultResolveRepoContext), no resolveRepoContext stub ---
+// The AC1-AC4 tests above all inject a fake `resolveRepoContext`, so the real bridge that
+// computes `inManagedContext` via `fs.existsSync(path.join(repoRoot, '.devloops'))` is never
+// exercised. These two tests drive `createPostMergeUpdateHook({ exec })` with only `exec`
+// stubbed (git plumbing), so `defaultResolveRepoContext` runs for real against a temp dir.
+
+function createFakeGitExec(repoRoot, { remoteUrl = "git@github.com:acme/widgets.git" } = {}) {
+  const calls = [];
+  const exec = async (command, options = {}) => {
+    calls.push({ command, cwd: options.cwd });
+    if (command === "git rev-parse --show-toplevel") {
+      return { code: 0, stdout: `${repoRoot}\n`, stderr: "", killed: false };
+    }
+    if (command === "git config --get remote.origin.url") {
+      return { code: 0, stdout: `${remoteUrl}\n`, stderr: "", killed: false };
+    }
+    if (command.startsWith("node scripts/loop/pre-pr-ready-gate.mjs")) {
+      return { code: 1, stdout: "", stderr: JSON.stringify({ ok: false, error: "no clean draft_gate evidence" }), killed: false };
+    }
+    return { code: 0, stdout: "ok", stderr: "", killed: false };
+  };
+  return { exec, calls };
+}
+
+test("real .devloops-presence bridge activates the gh pr ready guard when .devloops exists (no resolveRepoContext stub)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-managed-bridge-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "{}\n");
+    const { exec, calls } = createFakeGitExec(tempDir);
+    const hook = createPostMergeUpdateHook({ exec });
+    const { ctx } = createUiCalls();
+
+    const result = await hook.onUserBash({ command: "gh pr ready 42", cwd: tempDir }, ctx);
+
+    assert.ok(
+      calls.some((c) => c.command.startsWith("node scripts/loop/pre-pr-ready-gate.mjs")),
+      "the real .devloops-presence bridge must resolve inManagedContext true and run the draft-gate guard",
+    );
+    assert.deepEqual(result, {
+      result: {
+        output: "gh pr ready blocked: no clean draft_gate evidence",
+        exitCode: 1,
+        cancelled: false,
+        truncated: false,
+      },
+    });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("real .devloops-presence bridge stays off (gh pr ready passes through) when no .devloops file exists", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-unmanaged-bridge-"));
+  try {
+    const { exec, calls } = createFakeGitExec(tempDir);
+    const hook = createPostMergeUpdateHook({ exec });
+    const { ctx } = createUiCalls();
+
+    const result = await hook.onUserBash({ command: "gh pr ready 42", cwd: tempDir }, ctx);
+
+    assert.equal(result, undefined, "no .devloops file means inManagedContext false, pass through");
+    assert.equal(
+      calls.some((c) => c.command.startsWith("node scripts/loop/pre-pr-ready-gate.mjs")),
+      false,
+      "the guard must not run the draft-gate script when the bridge resolves inManagedContext false",
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("defaultResolveRepoContext fails closed when the remote-url lookup rejects in a managed context", async () => {
+  // Regression (#2194 Copilot round-2): a rejected/thrown `exec` (timeout, spawn failure) on
+  // `git config --get remote.origin.url` must not bubble past `defaultResolveRepoContext` — that
+  // would make `resolveRepoContextSafe` return `null` for the WHOLE context (repoRoot included),
+  // which fails OPEN (onUserBash passes the command through) even though repoRoot and
+  // inManagedContext were already resolved. It must instead return
+  // `{ repoRoot, repoSlug: null, inManagedContext }` so the guard still applies.
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-remote-lookup-reject-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "{}\n");
+    const gateCalls = [];
+    const exec = async (command, options = {}) => {
+      if (command === "git rev-parse --show-toplevel") {
+        return { code: 0, stdout: `${tempDir}\n`, stderr: "", killed: false };
+      }
+      if (command === "git config --get remote.origin.url") {
+        throw new Error("spawn ETIMEDOUT");
+      }
+      if (command.startsWith("node scripts/loop/pre-pr-ready-gate.mjs")) {
+        gateCalls.push({ command, cwd: options.cwd });
+        return { code: 1, stdout: "", stderr: JSON.stringify({ ok: false, error: "no clean draft_gate evidence" }), killed: false };
+      }
+      return { code: 0, stdout: "ok", stderr: "", killed: false };
+    };
+    const hook = createPostMergeUpdateHook({ exec });
+    const { ctx } = createUiCalls();
+
+    const result = await hook.onUserBash({ command: "gh pr ready 42", cwd: tempDir }, ctx);
+
+    assert.equal(
+      gateCalls.length,
+      1,
+      "a rejected remote-url lookup in a managed context must still run the draft-gate guard (fail closed), not pass through",
+    );
+    assert.deepEqual(result, {
+      result: {
+        output: "gh pr ready blocked: no clean draft_gate evidence",
+        exitCode: 1,
+        cancelled: false,
+        truncated: false,
+      },
+    });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("AC3b: a non-managed cwd (no .devloops config) always passes gh pr ready/merge through", async () => {
+  const readyCalls = [];
+  const readyHook = createPostMergeUpdateHook({
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: "acme/widgets", inManagedContext: false }),
+    runCommand: async ({ command, cwd }) => {
+      readyCalls.push({ command, cwd });
+      return { code: 0, stdout: "ok", stderr: "", killed: false };
+    },
+  });
+  const { ctx } = createUiCalls();
+
+  const readyResult = await readyHook.onUserBash({ command: "gh pr ready 42", cwd: "/repo" }, ctx);
+  assert.equal(readyResult, undefined);
+  assert.equal(readyCalls.length, 0);
+
+  const mergeCalls = [];
+  const mergeHook = createPostMergeUpdateHook({
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: "acme/widgets", inManagedContext: false }),
+    runCommand: async ({ command, cwd }) => {
+      mergeCalls.push({ command, cwd });
+      return { code: 0, stdout: "ok", stderr: "", killed: false };
+    },
+  });
+  const mergeResult = await mergeHook.onUserBash({ command: "gh pr merge 42", cwd: "/repo" }, ctx);
+  assert.equal(mergeResult, undefined);
+  assert.equal(mergeCalls.length, 0);
 });

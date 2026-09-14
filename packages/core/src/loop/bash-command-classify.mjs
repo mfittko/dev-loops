@@ -9,16 +9,63 @@
  */
 
 /**
- * The dev-loops repo itself. Retained for the Pi extension's
- * (`extension/post-merge-update.ts`) dev-loops-repo self-update scoping AND its own `gh pr ready`
- * / `gh pr merge` guard gating, both of which are still anchored to this one repo, not to
- * whatever repo the harness happens to run in — porting the Claude hook's dynamic
- * `inManagedRepo` resolution to the Pi harness is a separate, out-of-scope follow-up. This is
- * NOT the Claude Bash-hook guard predicate: `decideBashGate` (`hook-decisions.mjs`) resolves the
- * managed repo dynamically per invocation (`inManagedRepo`) instead of comparing against this
- * hardcoded slug, so every guard also applies in a dev-loops-managed consumer repo.
+ * The dev-loops repo itself. Retained ONLY for the Pi extension's
+ * (`extension/post-merge-update.ts`) dev-loops-repo SELF-UPDATE scoping (`markPendingUpdate` /
+ * `queueIfEligible`), which is legitimately anchored to this one repo, not to whatever repo the
+ * harness happens to run in. Both harness guard suites — the Claude PreToolUse Bash gate
+ * (`decideBashGate` in `hook-decisions.mjs`) and the Pi extension's `gh pr ready`/`gh pr merge`
+ * guards (`post-merge-update.ts`) — now resolve the managed repo dynamically via
+ * `deriveInManagedRepo` below instead of comparing against this hardcoded slug, so every guard
+ * also applies in a dev-loops-managed consumer repo.
  */
 export const TARGET_REPO_SLUG = "mfittko/dev-loops";
+
+/** `.devloops` config file extensions checked (in order) to decide whether a repo root is
+ * dev-loops-managed. Shared by every harness that resolves `inManagedContext` from the
+ * filesystem (`fs.existsSync(path.join(repoRoot, \`.devloops${ext}\`))`). */
+export const DEVLOOPS_CONFIG_VARIANTS = ["", ".yaml", ".yml", ".json"];
+
+/**
+ * Whether the current repo counts as "managed" for guard-gating purposes: inside a
+ * dev-loops-managed context (a `.devloops` config exists at its root) AND, when the managed
+ * repo's identity resolves, the cwd repo IS that managed repo. FAIL CLOSED: inside a managed
+ * context whose identity can't be resolved (`managedRepoSlug` null), the guard suite still
+ * applies rather than silently allowing everything.
+ * @param {Object} [params]
+ * @param {boolean} [params.inManagedContext] - Whether a `.devloops` config exists at the repo root.
+ * @param {string|null} [params.managedRepoSlug] - Resolved owner/name of the managed repo, or null.
+ * @param {string|null} [params.repoSlug] - Resolved owner/name of the cwd repo, or null.
+ * @returns {boolean}
+ */
+export function deriveInManagedRepo({ inManagedContext = false, managedRepoSlug = null, repoSlug = null } = {}) {
+  const managedSlug = (managedRepoSlug ?? "").trim().toLowerCase() || null;
+  const cwdSlug = (repoSlug ?? "").trim().toLowerCase() || null;
+  return Boolean(inManagedContext) && (managedSlug === null || cwdSlug === managedSlug);
+}
+
+/**
+ * Whether an explicit `--repo`/`-R` (or `GH_REPO=`) target is PROVABLY a different repo than the
+ * managed one — both slugs must resolve and differ. An unresolvable managed slug never proves
+ * foreign-ness (fail closed: the guard stays active rather than waving an explicit flag through).
+ * @param {string|null} explicitRepo
+ * @param {string|null} managedRepoSlug
+ * @returns {boolean}
+ */
+export function explicitRepoProvenForeign(explicitRepo, managedRepoSlug) {
+  const managedSlug = (managedRepoSlug ?? "").trim().toLowerCase() || null;
+  const explicit = (explicitRepo ?? "").trim().toLowerCase() || null;
+  if (managedSlug === null || explicit === null) {
+    return false;
+  }
+  // Both sides must be clean owner/name identities before we can prove foreign: a
+  // managed slug that bypassed the normalizer (e.g. a hostile `acme/widgets;id` test
+  // double) can't be trusted to prove anything about the explicit `--repo` — fail
+  // closed (the managed-repo guard still applies) rather than wave it through.
+  if (!isCleanRepoSlug(managedSlug) || !isCleanRepoSlug(explicit)) {
+    return false;
+  }
+  return explicit !== managedSlug;
+}
 
 /** Flags known to take a value argument for `gh pr ready` (not boolean flags). */
 export const FLAGS_THAT_TAKE_VALUE = new Set(["-r", "--repo"]);
@@ -77,7 +124,31 @@ export function trimToNull(value) {
 }
 
 /**
+ * Strict GitHub owner/name identity shape: each of the two path segments is
+ * `[A-Za-z0-9._-]+` — the character set GitHub itself allows in an owner or repo name. A slug
+ * outside this shape (a shell metacharacter, whitespace, path traversal, or an extra `/` segment)
+ * can never be a real GitHub identity.
+ */
+const CLEAN_REPO_SLUG_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+
+/**
+ * Whether `slug` is a clean `owner/name` GitHub identity (see `CLEAN_REPO_SLUG_RE`). Exported so a
+ * sink that interpolates a repo slug into a shell command string (e.g. the Pi extension's
+ * `gateCommand` in `extension/post-merge-update.ts`) can defense-in-depth guard the interpolation,
+ * on top of `normalizeGitHubRepoSlug` already enforcing this shape at the source.
+ * @param {string|null|undefined} slug @returns {boolean}
+ */
+export function isCleanRepoSlug(slug) {
+  return typeof slug === "string" && CLEAN_REPO_SLUG_RE.test(slug);
+}
+
+/**
  * Normalize a git remote URL into an `owner/name` slug (lowercased), or null.
+ * A hostile remote (e.g. `git@github.com:acme/widgets;id`) never yields a slug carrying the
+ * injected metacharacters — the extracted candidate must match `CLEAN_REPO_SLUG_RE` or this
+ * returns null instead, so every caller (both harnesses' managed-repo scope checks, and any sink
+ * that interpolates the slug into a shell command) sees either a real GitHub identity or null,
+ * never shell-metacharacter-bearing text.
  * @param {string} remoteUrl
  * @returns {string|null}
  */
@@ -100,7 +171,8 @@ export function normalizeGitHubRepoSlug(remoteUrl) {
     if (!match) {
       continue;
     }
-    return trimToNull(match[1])?.toLowerCase() ?? null;
+    const slug = trimToNull(match[1])?.toLowerCase() ?? null;
+    return isCleanRepoSlug(slug) ? slug : null;
   }
 
   return null;
