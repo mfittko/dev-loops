@@ -32,7 +32,6 @@ import {
   commandContainsCopilotSummonComment,
   commandContainsDetachedWaitTool,
   commandContainsInlineInterpreter,
-  TARGET_REPO_SLUG,
 } from "./_bash-command-classify.mjs";
 
 /**
@@ -80,6 +79,11 @@ export const DEV_LOOP_AGENT_TYPE = "dev-loop";
  * @param {Object} params
  * @param {string} params.command - The Bash command string.
  * @param {string|null} [params.repoSlug] - Resolved owner/name of the cwd repo (null if unknown).
+ * @param {string|null} [params.managedRepoSlug] - Resolved owner/name of the dev-loops-managed
+ *   repo (the repo `inManagedContext` refers to), or null when the identity can't be resolved.
+ * @param {boolean} [params.inManagedContext] - Whether the current repo is dev-loops-managed (a
+ *   `.devloops` config exists at its root). Replaces the old hardcoded-slug `TARGET_REPO_SLUG`
+ *   comparison so the guard suite applies in any managed consumer repo, not only mfittko/dev-loops.
  * @param {boolean} [params.gatePassed] - Whether the relevant gate evidence exists for the PR.
  * @param {string|null} [params.gateError] - Error detail when the gate guard could not run.
  * @param {string|null} [params.agentType] - Claude `agent_type` from the hook payload; non-null
@@ -90,19 +94,34 @@ export const DEV_LOOP_AGENT_TYPE = "dev-loop";
  *   subagent-only deny would enforce nothing.
  * @returns {HookDecision}
  */
-export function decideBashGate({ command, repoSlug = null, gatePassed = false, gateError = null, agentType = null, humanMergeOnly = false }) {
+export function decideBashGate({
+  command,
+  repoSlug = null,
+  managedRepoSlug = null,
+  inManagedContext = false,
+  gatePassed = false,
+  gateError = null,
+  agentType = null,
+  humanMergeOnly = false,
+}) {
   if (typeof command !== "string") {
     return ALLOW;
   }
   // Normalize (trim + case-fold) so a divergent slug (surrounding whitespace, casing) does not
-  // silently fail OPEN and disable every guard that depends on inTargetRepo.
-  const inTargetRepo = (repoSlug ?? "").trim().toLowerCase() === TARGET_REPO_SLUG.trim().toLowerCase();
+  // silently fail OPEN. A repo is dev-loops-managed when inManagedContext is true (a .devloops
+  // config exists at its root); the managed slug is that repo's resolved identity, which may be
+  // unresolvable (null). FAIL CLOSED: inside a managed context whose identity can't be resolved,
+  // every guard below still applies (inManagedRepo stays true) rather than silently allowing
+  // everything — an unresolvable identity must never disable the guard suite.
+  const managedSlug = (managedRepoSlug ?? "").trim().toLowerCase() || null;
+  const cwdSlug = (repoSlug ?? "").trim().toLowerCase() || null;
+  const inManagedRepo = inManagedContext && (managedSlug === null || cwdSlug === managedSlug);
 
   // OPS-NO-INLINE-INTERPRETER: inline interpreters (`node -e`/`--eval`/`-p`, `python3 -c`,
   // heredocs fed to node/python) are barred actor-independently on the target repo — the rule bars
   // "Coordinator and agent flows"; sanctioned output parsing uses `--jq`/`--silent`, never an
   // inline interpreter.
-  if (inTargetRepo && commandContainsInlineInterpreter(command)) {
+  if (inManagedRepo && commandContainsInlineInterpreter(command)) {
     return {
       decision: "deny",
       reason:
@@ -117,7 +136,7 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   // form identifies the target repo; the bare relative form (`gh api issues/5/sub_issues`) resolves
   // against the cwd repo, so it is in scope only when running in the target repo (mirrors the
   // explicit-`--repo`/cwd-target posture).
-  if (inTargetRepo && commandContainsSubIssueAdHocBypass(command)) {
+  if (inManagedRepo && commandContainsSubIssueAdHocBypass(command, managedSlug)) {
     return {
       decision: "deny",
       reason:
@@ -130,7 +149,7 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   // to pulls/<n>/comments/<m>/replies, or a `gh api graphql` resolveReviewThread mutation (the Rest
   // path names the target repo; the graphql form has no path-host repo, so it is scoped to the cwd
   // repo). Actor-independent: reply through reply-resolve-review-thread(s).mjs.
-  if (inTargetRepo && (commandContainsReplyResolveBypass(command) || commandContainsGraphqlResolveReviewThread(command))) {
+  if (inManagedRepo && (commandContainsReplyResolveBypass(command, managedSlug) || commandContainsGraphqlResolveReviewThread(command))) {
     return {
       decision: "deny",
       reason:
@@ -143,7 +162,7 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   // COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY: ad-hoc Copilot review requests — raw `gh api` writes
   // to pulls/<n>/requested_reviewers, or a bare `/copilot` / `/copilot re-review` comment summon on the
   // target repo. Actor-independent: request Copilot via scripts/github/request-copilot-review.mjs.
-  if (inTargetRepo && (commandContainsCopilotRequestBypass(command) || commandContainsCopilotSummonComment(command))) {
+  if (inManagedRepo && (commandContainsCopilotRequestBypass(command, managedSlug) || commandContainsCopilotSummonComment(command))) {
     return {
       decision: "deny",
       reason:
@@ -157,7 +176,7 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   // `.git` directory — a stash from one worktree can pop into another's. Block it outright on the
   // target repo; see skills/docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout for the
   // stash-free alternative (git diff / a patch file / a scratch checkout).
-  if (commandContainsGitStash(command) && inTargetRepo) {
+  if (commandContainsGitStash(command) && inManagedRepo) {
     return {
       decision: "deny",
       reason:
@@ -170,14 +189,19 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   // `gh issue edit`/`gh pr comment` on the target repo from a subagent, so external writes flow through the
   // sanctioned node wrappers. The main-agent/operator path (agentType null) is unaffected.
   if (typeof agentType === "string" && commandContainsRawExternalWrite(command)) {
-    const cwdTargets = (repoSlug ?? "").toLowerCase() === TARGET_REPO_SLUG.toLowerCase();
+    // The cwd repo IS the managed/target repo exactly when inManagedRepo.
+    const cwdTargets = inManagedRepo;
     // Scope PER segment, mirroring the `gh pr create` block: in scope when no explicit --repo and
-    // cwd is the target, or an explicit --repo/-R equals the target. An explicit non-target --repo
-    // passes through. DENY if ANY external-write segment is in scope.
+    // cwd is the target, or an explicit --repo/-R equals the managed slug. An explicit repo that is
+    // PROVEN foreign (managedSlug resolves and differs) passes through; otherwise (managedSlug
+    // unresolvable) we cannot prove the explicit repo is foreign, so a managed context fails closed
+    // (in scope). DENY if ANY external-write segment is in scope.
     const anyWriteInScope = extractRepoFlagsFromExternalWriteSegments(command).some((seg) =>
       seg.explicitRepo == null
         ? cwdTargets
-        : seg.explicitRepo.toLowerCase() === TARGET_REPO_SLUG.toLowerCase(),
+        : managedSlug !== null
+          ? seg.explicitRepo.toLowerCase() === managedSlug
+          : inManagedContext,
     );
     if (anyWriteInScope) {
       return {
@@ -203,7 +227,7 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   // refused actor-independently — the main agent is the actor that performs GitHub writes, so only an
   // actor-independent deny enforces the human-merge invariant (an agent-scoped deny would enforce
   // nothing on the main-agent write path).
-  if (humanMergeOnly && isMerge && inTargetRepo) {
+  if (humanMergeOnly && isMerge && inManagedRepo) {
     return {
       decision: "deny",
       reason:
@@ -218,7 +242,7 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
     // rule is classified `agent` (behavioral guidance for the dev-loop driving agent); the main
     // agent/operator retains manual wait tooling. The main agent's own sanctioned wait path is still
     // the deterministic tools.
-    if (typeof agentType === "string" && inTargetRepo && commandContainsDetachedWaitTool(command)) {
+    if (typeof agentType === "string" && inManagedRepo && commandContainsDetachedWaitTool(command)) {
       return {
         decision: "deny",
         reason:
@@ -235,16 +259,21 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   // exists yet): PR creation must flow through the canonical wrapper, which always drafts and
   // self-assigns. This closes the draft-first hole where raw `gh pr create` opens a ready PR.
   if (isCreate) {
-    const cwdTargets = (repoSlug ?? "").toLowerCase() === TARGET_REPO_SLUG.toLowerCase();
+    // The cwd repo IS the managed/target repo exactly when inManagedRepo.
+    const cwdTargets = inManagedRepo;
     // Evaluate scope PER create segment, not just the first: a create is in scope when it
     // explicitly targets the repo, or (with no explicit --repo) the cwd is the repo. An explicit
-    // `--repo <target>` is denied regardless of cwd. DENY if ANY create segment is in
-    // scope — otherwise a leading out-of-scope create (`gh pr create --repo other/repo`) would
-    // short-circuit and shield a later in-scope raw create (`&& gh pr create --fill`).
+    // `--repo <target>` is denied regardless of cwd — unless it is PROVEN foreign (managedSlug
+    // resolves and differs); when managedSlug is unresolvable we cannot prove foreignness, so a
+    // managed context fails closed (in scope). DENY if ANY create segment is in scope — otherwise a
+    // leading out-of-scope create (`gh pr create --repo other/repo`) would short-circuit and shield
+    // a later in-scope raw create (`&& gh pr create --fill`).
     const anyCreateInScope = extractRepoFlagsFromGhPrCreateSegments(command).some((seg) =>
       seg.explicitRepo == null
         ? cwdTargets
-        : seg.explicitRepo.toLowerCase() === TARGET_REPO_SLUG.toLowerCase(),
+        : managedSlug !== null
+          ? seg.explicitRepo.toLowerCase() === managedSlug
+          : inManagedContext,
     );
     if (anyCreateInScope) {
       return {
@@ -266,15 +295,18 @@ export function decideBashGate({ command, repoSlug = null, gatePassed = false, g
   // When both verbs appear in a compound command, apply the stricter merge gate — if it passes,
   // the draft_gate (a subset of the pre-merge evidence check) is also satisfied.
   const verb = isMerge ? "gh pr merge" : "gh pr ready";
-  // An explicit `--repo other/repo` that is not the target → not our concern, pass through.
+  // An explicit `--repo other/repo` PROVEN not the managed repo → not our concern, pass through.
+  // Only pass through when the managed slug resolves and the explicit repo demonstrably differs —
+  // an unresolvable managed slug means we cannot prove the explicit repo is foreign, so it stays
+  // gated (fail closed).
   const explicitRepo = isMerge
     ? extractRepoFlagFromGhPrMergeAnywhere(command)
     : extractRepoFlagFromGhPrReadyAnywhere(command);
-  if (explicitRepo && explicitRepo.toLowerCase() !== TARGET_REPO_SLUG.toLowerCase()) {
+  if (explicitRepo && managedSlug !== null && explicitRepo.toLowerCase() !== managedSlug) {
     return ALLOW;
   }
-  // Only gate within the target repo (case-insensitive — callers may pass an un-lowercased slug).
-  if ((repoSlug ?? "").toLowerCase() !== TARGET_REPO_SLUG.toLowerCase()) {
+  // Only gate within the managed repo.
+  if (!inManagedRepo) {
     return ALLOW;
   }
 

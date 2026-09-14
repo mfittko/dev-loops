@@ -9,7 +9,14 @@
  * Pure and side-effect free.
  */
 
-/** The repository these gate guards apply to. */
+/**
+ * The dev-loops repo itself. Retained ONLY for the Pi extension's
+ * (`extension/post-merge-update.ts`) dev-loops-repo self-update scoping — a use case that is
+ * genuinely anchored to this one repo, not to whatever repo the harness happens to run in. This
+ * is NOT the Claude Bash-hook guard predicate: `decideBashGate` (`hook-decisions.mjs`) resolves
+ * the managed repo dynamically per invocation (`inManagedRepo`) instead of comparing against this
+ * hardcoded slug, so every guard also applies in a dev-loops-managed consumer repo.
+ */
 export const TARGET_REPO_SLUG = "mfittko/dev-loops";
 
 /** Flags known to take a value argument for `gh pr ready` (not boolean flags). */
@@ -575,12 +582,17 @@ export function extractGhApiEndpointSegments(command) {
   return out;
 }
 
-/** The `gh api` segments whose endpoint is the target repo's URL path. Matches the absolute
- * slug-embedded form (`repos/mfittko/dev-loops/...`) and the bare relative form (`issues/...`),
- * which gh api resolves against the cwd repo — the decideBashGate call site gates the relative form
- * on `inTargetRepo`. */
-function targetGhApiPathRegex(suffix) {
-  const slug = TARGET_REPO_SLUG.replace("/", "\\/");
+/** The `gh api` segments whose endpoint is the dev-loops-managed repo's URL path. Matches the
+ * absolute slug-embedded form (`repos/<managedSlug>/...`) when `managedSlug` resolves, plus the
+ * bare relative form (`issues/...`), which gh api resolves against the cwd repo — the
+ * decideBashGate call site gates the relative form on `inManagedRepo`. When `managedSlug` is null
+ * (the managed repo's identity could not be resolved), only the relative anchor is emitted — an
+ * absolute `repos/<slug>/...` path can't be matched against an unknown slug. */
+function managedGhApiPathRegex(suffix, managedSlug) {
+  if (!managedSlug) {
+    return new RegExp(`(?:^)${suffix}`);
+  }
+  const slug = managedSlug.replace(/\//g, "\\/");
   return new RegExp(`(?:repos/${slug}/|^)${suffix}`);
 }
 
@@ -618,15 +630,18 @@ function ghApiSegmentHasWriteMethod(segment) {
 }
 
 /**
- * SUBISSUE-NO-ADHOC-BYPASS: raw `gh api` WRITE to `.../issues/<n>/sub_issues[/priority]` on the target
- * repo — the ad-hoc sub-issue mutation that must flow through the sanctioned `manage-sub-issues`
- * wrapper instead. Actor-independent (the issue's decided policy): the main agent gets no reserved
- * direct path to sub-issue writes. Anchored on the target repo's URL path segment AND an explicit write
- * method, so a `gh api` read or another repo's `sub_issues` write passes through (no false deny).
- * @param {string} command @returns {boolean}
+ * SUBISSUE-NO-ADHOC-BYPASS: raw `gh api` WRITE to `.../issues/<n>/sub_issues[/priority]` on the
+ * dev-loops-managed repo — the ad-hoc sub-issue mutation that must flow through the sanctioned
+ * `manage-sub-issues` wrapper instead. Actor-independent (the issue's decided policy): the main
+ * agent gets no reserved direct path to sub-issue writes. Anchored on the managed repo's URL path
+ * segment AND an explicit write method, so a `gh api` read or another repo's `sub_issues` write
+ * passes through (no false deny).
+ * @param {string} command @param {string|null} [managedSlug] - Resolved managed-repo slug, or
+ *   null when unresolvable (only the bare relative endpoint form matches then).
+ * @returns {boolean}
  */
-export function commandContainsSubIssueAdHocBypass(command) {
-  const re = targetGhApiPathRegex(`issues/\\d+/sub_issues(?:/priority)?(?:\\s|$)`);
+export function commandContainsSubIssueAdHocBypass(command, managedSlug = null) {
+  const re = managedGhApiPathRegex(`issues/\\d+/sub_issues(?:/priority)?(?:\\s|$)`, managedSlug);
   return extractGhApiEndpointSegments(command).some(
     ({ segment, endpoint }) => Boolean(endpoint) && re.test(normalizeGhApiEndpoint(endpoint)) && ghApiSegmentHasWriteMethod(segment),
   );
@@ -634,12 +649,15 @@ export function commandContainsSubIssueAdHocBypass(command) {
 
 /**
  * COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER (REST half): raw `gh api` POST to
- * `.../pulls/<n>/comments/<m>/replies` on the target repo — the ad-hoc thread reply that must flow
- * through `reply-resolve-review-thread(s).mjs`. Actor-independent: no reserved direct reply path.
- * @param {string} command @returns {boolean}
+ * `.../pulls/<n>/comments/<m>/replies` on the dev-loops-managed repo — the ad-hoc thread reply
+ * that must flow through `reply-resolve-review-thread(s).mjs`. Actor-independent: no reserved
+ * direct reply path.
+ * @param {string} command @param {string|null} [managedSlug] - Resolved managed-repo slug, or
+ *   null when unresolvable (only the bare relative endpoint form matches then).
+ * @returns {boolean}
  */
-export function commandContainsReplyResolveBypass(command) {
-  const re = targetGhApiPathRegex(`pulls/\\d+/comments/\\d+/replies(?:\\s|$)`);
+export function commandContainsReplyResolveBypass(command, managedSlug = null) {
+  const re = managedGhApiPathRegex(`pulls/\\d+/comments/\\d+/replies(?:\\s|$)`, managedSlug);
   return extractGhApiEndpointSegments(command).some(
     ({ segment, endpoint }) => Boolean(endpoint) && re.test(normalizeGhApiEndpoint(endpoint)) && ghApiSegmentHasWriteMethod(segment),
   );
@@ -658,12 +676,14 @@ export function commandContainsGraphqlResolveReviewThread(command) {
 
 /**
  * COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY (REST half): raw `gh api` write to
- * `.../pulls/<n>/requested_reviewers` on the target repo — the ad-hoc Copilot review request that must
- * flow through `scripts/github/request-copilot-review.mjs`. Actor-independent.
- * @param {string} command @returns {boolean}
+ * `.../pulls/<n>/requested_reviewers` on the dev-loops-managed repo — the ad-hoc Copilot review
+ * request that must flow through `scripts/github/request-copilot-review.mjs`. Actor-independent.
+ * @param {string} command @param {string|null} [managedSlug] - Resolved managed-repo slug, or
+ *   null when unresolvable (only the bare relative endpoint form matches then).
+ * @returns {boolean}
  */
-export function commandContainsCopilotRequestBypass(command) {
-  const re = targetGhApiPathRegex(`pulls/\\d+/requested_reviewers(?:\\s|$)`);
+export function commandContainsCopilotRequestBypass(command, managedSlug = null) {
+  const re = managedGhApiPathRegex(`pulls/\\d+/requested_reviewers(?:\\s|$)`, managedSlug);
   return extractGhApiEndpointSegments(command).some(
     ({ segment, endpoint }) => Boolean(endpoint) && re.test(normalizeGhApiEndpoint(endpoint)) && ghApiSegmentHasWriteMethod(segment),
   );

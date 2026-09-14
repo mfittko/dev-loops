@@ -35,6 +35,10 @@ test("TARGET_REPO_SLUG is the dev-loops repo", () => {
   assert.equal(TARGET_REPO_SLUG, "mfittko/dev-loops");
 });
 
+// Fixture managed slug for the `commandContains{SubIssueAdHocBypass,ReplyResolveBypass,
+// CopilotRequestBypass}` tests below — mirrors what the hook resolves as `managedRepoSlug`.
+const MANAGED_SLUG = "mfittko/dev-loops";
+
 test("normalizeGitHubRepoSlug handles ssh/https/http/git/git+ssh forms", () => {
   assert.equal(normalizeGitHubRepoSlug("git@github.com:mfittko/dev-loops.git"), "mfittko/dev-loops");
   assert.equal(normalizeGitHubRepoSlug("https://github.com/mfittko/dev-loops"), "mfittko/dev-loops");
@@ -362,51 +366,51 @@ test("extractGhApiEndpointSegments tolerates env/wrapper/path prefixes and does 
 });
 
 test("commandContainsSubIssueAdHocBypass detects target-repo sub_issues WRITES incl. /priority, scoped to the target repo", () => {
-  assert.equal(commandContainsSubIssueAdHocBypass("gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6"), true);
-  assert.equal(commandContainsSubIssueAdHocBypass("gh api repos/mfittko/dev-loops/issues/5/sub_issues/priority -X POST -f child=6"), true);
-  assert.equal(commandContainsSubIssueAdHocBypass("echo ok && gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6"), true);
-  assert.equal(commandContainsSubIssueAdHocBypass("gh api --method PUT repos/mfittko/dev-loops/issues/5/sub_issues/priority"), true);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6", MANAGED_SLUG), true);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api repos/mfittko/dev-loops/issues/5/sub_issues/priority -X POST -f child=6", MANAGED_SLUG), true);
+  assert.equal(commandContainsSubIssueAdHocBypass("echo ok && gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6", MANAGED_SLUG), true);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api --method PUT repos/mfittko/dev-loops/issues/5/sub_issues/priority", MANAGED_SLUG), true);
   // other repo's sub_issues write passes through (scoped to target repo path)
-  assert.equal(commandContainsSubIssueAdHocBypass("gh api -X POST repos/other/repo/issues/5/sub_issues -f child=6"), false);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api -X POST repos/other/repo/issues/5/sub_issues -f child=6", MANAGED_SLUG), false);
   // value flags placed before the endpoint must still route to the real endpoint and be denied
-  assert.equal(commandContainsSubIssueAdHocBypass("gh api --jq .data repos/mfittko/dev-loops/issues/5/sub_issues -X POST -f child=6"), true);
-  assert.equal(commandContainsSubIssueAdHocBypass("gh api --hostname github.com repos/mfittko/dev-loops/issues/5/sub_issues -X POST -f child=6"), true);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api --jq .data repos/mfittko/dev-loops/issues/5/sub_issues -X POST -f child=6", MANAGED_SLUG), true);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api --hostname github.com repos/mfittko/dev-loops/issues/5/sub_issues -X POST -f child=6", MANAGED_SLUG), true);
   // absolute-URL endpoint form (gh api accepts https://api.github.com/...) is normalized and denied
-  assert.equal(commandContainsSubIssueAdHocBypass("gh api -X POST https://api.github.com/repos/mfittko/dev-loops/issues/5/sub_issues -f child=6"), true);
-  assert.equal(commandContainsSubIssueAdHocBypass("gh api --jq .data repos/other/repo/issues/5/sub_issues -X POST"), false);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api -X POST https://api.github.com/repos/mfittko/dev-loops/issues/5/sub_issues -f child=6", MANAGED_SLUG), true);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api --jq .data repos/other/repo/issues/5/sub_issues -X POST", MANAGED_SLUG), false);
   // a READ of the sub_issues list is not the ad-hoc write bypass
-  assert.equal(commandContainsSubIssueAdHocBypass("gh api repos/mfittko/dev-loops/issues/5/sub_issues"), false);
-  assert.equal(commandContainsSubIssueAdHocBypass("gh api repos/mfittko/dev-loops/issues/5/sub_issues -X GET"), false);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api repos/mfittko/dev-loops/issues/5/sub_issues", MANAGED_SLUG), false);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api repos/mfittko/dev-loops/issues/5/sub_issues -X GET", MANAGED_SLUG), false);
   // the sanctioned wrapper never matches (first token is `node`)
-  assert.equal(commandContainsSubIssueAdHocBypass("node scripts/github/manage-sub-issues.mjs --repo x"), false);
+  assert.equal(commandContainsSubIssueAdHocBypass("node scripts/github/manage-sub-issues.mjs --repo x", MANAGED_SLUG), false);
   // gh api's bare relative endpoint form (resolved against the cwd repo) and explicit --repo targeting
-  assert.equal(commandContainsSubIssueAdHocBypass("gh api issues/5/sub_issues -X POST -f child=6"), true);
-  assert.equal(commandContainsSubIssueAdHocBypass("gh api --repo mfittko/dev-loops issues/5/sub_issues -X POST -f child=6"), true);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api issues/5/sub_issues -X POST -f child=6", MANAGED_SLUG), true);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api --repo mfittko/dev-loops issues/5/sub_issues -X POST -f child=6", MANAGED_SLUG), true);
   // a quoted endpoint is stripped of its quotes before the write-path regex matches
-  assert.equal(commandContainsSubIssueAdHocBypass('gh api "repos/mfittko/dev-loops/issues/5/sub_issues" -X POST -f child=6'), true);
-  assert.equal(commandContainsSubIssueAdHocBypass("gh api issues/5/sub_issues -X GET"), false);
+  assert.equal(commandContainsSubIssueAdHocBypass('gh api "repos/mfittko/dev-loops/issues/5/sub_issues" -X POST -f child=6', MANAGED_SLUG), true);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api issues/5/sub_issues -X GET", MANAGED_SLUG), false);
   // trailing-slash endpoint forms (GitHub serves the same resource) are normalized and denied
-  assert.equal(commandContainsSubIssueAdHocBypass("gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues/ -f child=6"), true);
-  assert.equal(commandContainsSubIssueAdHocBypass("gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues/priority/ -f child=6"), true);
-  assert.equal(commandContainsSubIssueAdHocBypass("gh api issues/5/sub_issues/ -X POST -f child=6"), true);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues/ -f child=6", MANAGED_SLUG), true);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues/priority/ -f child=6", MANAGED_SLUG), true);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api issues/5/sub_issues/ -X POST -f child=6", MANAGED_SLUG), true);
   // a mid-command boolean `-h` (help) must not swallow the endpoint and bypass the write deny
-  assert.equal(commandContainsSubIssueAdHocBypass("gh api -h issues/5/sub_issues -X POST -f child=6"), true);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api -h issues/5/sub_issues -X POST -f child=6", MANAGED_SLUG), true);
   // a method-looking token inside a FIELD VALUE is data, not an explicit write method (no deny)
-  assert.equal(commandContainsSubIssueAdHocBypass("gh api repos/mfittko/dev-loops/issues/5/sub_issues -F 'body=--method DELETE'"), false);
-  assert.equal(commandContainsSubIssueAdHocBypass("gh api repos/mfittko/dev-loops/issues/5/sub_issues -f body='--method POST'"), false);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api repos/mfittko/dev-loops/issues/5/sub_issues -F 'body=--method DELETE'", MANAGED_SLUG), false);
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api repos/mfittko/dev-loops/issues/5/sub_issues -f body='--method POST'", MANAGED_SLUG), false);
 });
 
 test("commandContainsReplyResolveBypass detects target-repo replies POSTs (write method required)", () => {
-  assert.equal(commandContainsReplyResolveBypass("gh api -X POST repos/mfittko/dev-loops/pulls/5/comments/10/replies -f body=hi"), true);
-  assert.equal(commandContainsReplyResolveBypass("gh api -X POST repos/mfittko/dev-loops/pulls/5/comments/10/replies"), true);
+  assert.equal(commandContainsReplyResolveBypass("gh api -X POST repos/mfittko/dev-loops/pulls/5/comments/10/replies -f body=hi", MANAGED_SLUG), true);
+  assert.equal(commandContainsReplyResolveBypass("gh api -X POST repos/mfittko/dev-loops/pulls/5/comments/10/replies", MANAGED_SLUG), true);
   // a GET of the replies list is a read, not the ad-hoc reply bypass
-  assert.equal(commandContainsReplyResolveBypass("gh api repos/mfittko/dev-loops/pulls/5/comments/10/replies"), false);
-  assert.equal(commandContainsReplyResolveBypass("gh api -X POST repos/other/repo/pulls/5/comments/10/replies"), false);
+  assert.equal(commandContainsReplyResolveBypass("gh api repos/mfittko/dev-loops/pulls/5/comments/10/replies", MANAGED_SLUG), false);
+  assert.equal(commandContainsReplyResolveBypass("gh api -X POST repos/other/repo/pulls/5/comments/10/replies", MANAGED_SLUG), false);
   // absolute-URL endpoint form is normalized and denied
-  assert.equal(commandContainsReplyResolveBypass("gh api -X POST https://api.github.com/repos/mfittko/dev-loops/pulls/5/comments/10/replies -f body=hi"), true);
-  assert.equal(commandContainsReplyResolveBypass("node scripts/github/reply-resolve-review-thread.mjs --thread 5"), false);
+  assert.equal(commandContainsReplyResolveBypass("gh api -X POST https://api.github.com/repos/mfittko/dev-loops/pulls/5/comments/10/replies -f body=hi", MANAGED_SLUG), true);
+  assert.equal(commandContainsReplyResolveBypass("node scripts/github/reply-resolve-review-thread.mjs --thread 5", MANAGED_SLUG), false);
   // trailing-slash endpoint form is normalized and denied
-  assert.equal(commandContainsReplyResolveBypass("gh api -X POST repos/mfittko/dev-loops/pulls/5/comments/10/replies/ -f body=hi"), true);
+  assert.equal(commandContainsReplyResolveBypass("gh api -X POST repos/mfittko/dev-loops/pulls/5/comments/10/replies/ -f body=hi", MANAGED_SLUG), true);
 });
 
 test("commandContainsGraphqlResolveReviewThread detects resolveReviewThread on the graphql endpoint", () => {
@@ -417,22 +421,22 @@ test("commandContainsGraphqlResolveReviewThread detects resolveReviewThread on t
 });
 
 test("commandContainsCopilotRequestBypass detects target-repo requested_reviewers WRITES (write method required)", () => {
-  assert.equal(commandContainsCopilotRequestBypass("gh api -X POST repos/mfittko/dev-loops/pulls/5/requested_reviewers -f reviewers[]=copilot-swe-agent"), true);
-  assert.equal(commandContainsCopilotRequestBypass("gh api -X POST repos/mfittko/dev-loops/pulls/5/requested_reviewers"), true);
+  assert.equal(commandContainsCopilotRequestBypass("gh api -X POST repos/mfittko/dev-loops/pulls/5/requested_reviewers -f reviewers[]=copilot-swe-agent", MANAGED_SLUG), true);
+  assert.equal(commandContainsCopilotRequestBypass("gh api -X POST repos/mfittko/dev-loops/pulls/5/requested_reviewers", MANAGED_SLUG), true);
   // a GET of requested_reviewers is a read; the sanctioned read is gh pr view --json reviewRequests
-  assert.equal(commandContainsCopilotRequestBypass("gh api repos/mfittko/dev-loops/pulls/5/requested_reviewers"), false);
-  assert.equal(commandContainsCopilotRequestBypass("gh api -X POST repos/other/repo/pulls/5/requested_reviewers"), false);
+  assert.equal(commandContainsCopilotRequestBypass("gh api repos/mfittko/dev-loops/pulls/5/requested_reviewers", MANAGED_SLUG), false);
+  assert.equal(commandContainsCopilotRequestBypass("gh api -X POST repos/other/repo/pulls/5/requested_reviewers", MANAGED_SLUG), false);
   // value flag -q/--jq before the endpoint must still route to the real endpoint and be denied
-  assert.equal(commandContainsCopilotRequestBypass("gh api -X POST -q '.node_id' repos/mfittko/dev-loops/pulls/5/requested_reviewers"), true);
+  assert.equal(commandContainsCopilotRequestBypass("gh api -X POST -q '.node_id' repos/mfittko/dev-loops/pulls/5/requested_reviewers", MANAGED_SLUG), true);
   // absolute-URL endpoint form is normalized and denied
-  assert.equal(commandContainsCopilotRequestBypass("gh api -X POST https://api.github.com/repos/mfittko/dev-loops/pulls/5/requested_reviewers"), true);
-  assert.equal(commandContainsCopilotRequestBypass("node scripts/github/request-copilot-review.mjs --pr 5"), false);
+  assert.equal(commandContainsCopilotRequestBypass("gh api -X POST https://api.github.com/repos/mfittko/dev-loops/pulls/5/requested_reviewers", MANAGED_SLUG), true); // secret-scan:allow public GitHub API URL fixture, not a credential
+  assert.equal(commandContainsCopilotRequestBypass("node scripts/github/request-copilot-review.mjs --pr 5", MANAGED_SLUG), false);
   // attached-form and --repo-targeted shapes gh's flag parser accepts must still be detected
-  assert.equal(commandContainsCopilotRequestBypass("gh api --method=POST repos/mfittko/dev-loops/pulls/5/requested_reviewers"), true);
-  assert.equal(commandContainsCopilotRequestBypass("gh api -XPOST repos/mfittko/dev-loops/pulls/5/requested_reviewers"), true);
-  assert.equal(commandContainsCopilotRequestBypass("gh api --repo mfittko/dev-loops pulls/5/requested_reviewers -X POST"), true);
+  assert.equal(commandContainsCopilotRequestBypass("gh api --method=POST repos/mfittko/dev-loops/pulls/5/requested_reviewers", MANAGED_SLUG), true);
+  assert.equal(commandContainsCopilotRequestBypass("gh api -XPOST repos/mfittko/dev-loops/pulls/5/requested_reviewers", MANAGED_SLUG), true);
+  assert.equal(commandContainsCopilotRequestBypass("gh api --repo mfittko/dev-loops pulls/5/requested_reviewers -X POST", MANAGED_SLUG), true);
   // trailing-slash endpoint form is normalized and denied
-  assert.equal(commandContainsCopilotRequestBypass("gh api -X POST repos/mfittko/dev-loops/pulls/5/requested_reviewers/ -f reviewers[]=x"), true);
+  assert.equal(commandContainsCopilotRequestBypass("gh api -X POST repos/mfittko/dev-loops/pulls/5/requested_reviewers/ -f reviewers[]=x", MANAGED_SLUG), true);
 });
 
 test("commandContainsCopilotSummonComment detects bare /copilot summons in gh pr comment bodies", () => {
@@ -512,4 +516,79 @@ test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, an
   assert.equal(commandContainsInlineInterpreter('node --require ./setup.js -e "console.log(1)"'), true);
   assert.equal(commandContainsInlineInterpreter('node -r ./x.js --eval "1+1"'), true);
   assert.equal(commandContainsInlineInterpreter('node --import ./m.mjs -p "1+1"'), true);
+});
+
+// ---------------------------------------------------------------------------
+// managed-repo (non-mfittko) scoping of the three gh-api bypass classifiers (#2187)
+// ---------------------------------------------------------------------------
+
+const CONSUMER_SLUG = "acme/widgets";
+
+test("commandContainsSubIssueAdHocBypass matches a consumer repo's own absolute and relative forms", () => {
+  assert.equal(
+    commandContainsSubIssueAdHocBypass("gh api -X POST repos/acme/widgets/issues/5/sub_issues -f child=6", CONSUMER_SLUG),
+    true,
+  );
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api -X POST issues/5/sub_issues -f child=6", CONSUMER_SLUG), true);
+  // a foreign repo's absolute path does not match the consumer's managed slug
+  assert.equal(
+    commandContainsSubIssueAdHocBypass("gh api -X POST repos/other/repo/issues/5/sub_issues -f child=6", CONSUMER_SLUG),
+    false,
+  );
+  // mfittko/dev-loops's own absolute path is foreign to this managed slug
+  assert.equal(
+    commandContainsSubIssueAdHocBypass("gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6", CONSUMER_SLUG),
+    false,
+  );
+});
+
+test("commandContainsReplyResolveBypass matches a consumer repo's own absolute and relative forms", () => {
+  assert.equal(
+    commandContainsReplyResolveBypass("gh api -X POST repos/acme/widgets/pulls/5/comments/10/replies -f body=hi", CONSUMER_SLUG),
+    true,
+  );
+  assert.equal(
+    commandContainsReplyResolveBypass("gh api -X POST pulls/5/comments/10/replies -f body=hi", CONSUMER_SLUG),
+    true,
+  );
+  assert.equal(
+    commandContainsReplyResolveBypass("gh api -X POST repos/other/repo/pulls/5/comments/10/replies", CONSUMER_SLUG),
+    false,
+  );
+});
+
+test("commandContainsCopilotRequestBypass matches a consumer repo's own absolute and relative forms", () => {
+  assert.equal(
+    commandContainsCopilotRequestBypass("gh api -X POST repos/acme/widgets/pulls/5/requested_reviewers", CONSUMER_SLUG),
+    true,
+  );
+  assert.equal(
+    commandContainsCopilotRequestBypass("gh api -X POST pulls/5/requested_reviewers", CONSUMER_SLUG),
+    true,
+  );
+  assert.equal(
+    commandContainsCopilotRequestBypass("gh api -X POST repos/other/repo/pulls/5/requested_reviewers", CONSUMER_SLUG),
+    false,
+  );
+});
+
+test("a null managed slug matches ONLY the bare relative form, never an absolute repos/<slug>/ path", () => {
+  assert.equal(commandContainsSubIssueAdHocBypass("gh api -X POST issues/5/sub_issues -f child=6", null), true);
+  assert.equal(
+    commandContainsSubIssueAdHocBypass("gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6", null),
+    false,
+  );
+  assert.equal(
+    commandContainsReplyResolveBypass("gh api -X POST pulls/5/comments/10/replies -f body=hi", null),
+    true,
+  );
+  assert.equal(
+    commandContainsReplyResolveBypass("gh api -X POST repos/acme/widgets/pulls/5/comments/10/replies -f body=hi", null),
+    false,
+  );
+  assert.equal(commandContainsCopilotRequestBypass("gh api -X POST pulls/5/requested_reviewers", null), true);
+  assert.equal(
+    commandContainsCopilotRequestBypass("gh api -X POST repos/acme/widgets/pulls/5/requested_reviewers", null),
+    false,
+  );
 });
