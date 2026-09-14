@@ -328,6 +328,11 @@
       "enforcement": "runtime"
     },
     {
+      "id": "GATE-EXEC-PROPORTIONALITY",
+      "enforcement": "doc",
+      "enforcementNote": "the composite floors it describes are individually enforced: resolveGateDispatchMode's risk_path_touch/size_outcome_* reasons (packages/core/src/config/config.mjs), detect-checkpoint-evidence.mjs's scopeUnderThreshold re-derivation, and check-adr-tripwire.mjs's devloops-proportionality trigger"
+    },
+    {
       "id": "GATE-EXEC-CACHE-TELEMETRY",
       "enforcement": "runtime",
       "enforcementNote": "fan-in validates the recorded before/after cache-telemetry evidence via packages/core/src/loop/cache-telemetry-evidence.mjs validateCacheTelemetryEvidence"

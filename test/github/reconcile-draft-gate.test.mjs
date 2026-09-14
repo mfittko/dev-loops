@@ -877,11 +877,14 @@ test("reconcile-draft-gate succeeds for a light-mode under-threshold PR under ac
       "    maxFiles: 3",
       "    maxLines: 200",
     ].join("\n") + "\n", "utf8");
-    await writeFile(path.join(tempDir, "a.txt"), "one\n", "utf8");
+    // a.md (docs), never a.txt (unclassified) — the #1984 size-outcome floor
+    // now also re-verifies at merge time, and an unclassified-only diff would
+    // block on "substantially unclassified" regardless of its trivial size.
+    await writeFile(path.join(tempDir, "a.md"), "one\n", "utf8");
     g("add", "-A");
     g("commit", "-qm", "base");
     const baseRef = g("rev-parse", "HEAD").trim();
-    await writeFile(path.join(tempDir, "a.txt"), "one\ntwo\n", "utf8");
+    await writeFile(path.join(tempDir, "a.md"), "one\ntwo\n", "utf8");
     g("add", "-A");
     g("commit", "-qm", "head");
     const headSha = g("rev-parse", "HEAD").trim();

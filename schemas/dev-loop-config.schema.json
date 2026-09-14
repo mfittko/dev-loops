@@ -1046,6 +1046,14 @@
               "description": "Copilot round cap for light-dispatched PRs; composes as min(this, refinement.maxCopilotRounds).",
               "type": "integer",
               "minimum": 0
+            },
+            "riskPaths": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "Repo-specific extra glob patterns that force full fan-out regardless of size, layered ON TOP of the shipped risk-path denylist floor (never replacing it)."
             }
           },
           "required": [

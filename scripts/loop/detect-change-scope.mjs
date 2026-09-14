@@ -117,6 +117,26 @@ function detectMergeBaseScope({ base, head, cwd } = {}) {
   }
   return { ok: true, ...parseGitDiffStat(output) };
 }
+/**
+ * List changed files for the SAME merge-base (three-dot `base...head`) diff
+ * {@link detectMergeBaseScope} measures — the companion fact the
+ * GATE-EXEC-PROPORTIONALITY risk-path floor needs at merge-gate re-verify
+ * time (detect-checkpoint-evidence.mjs). Fails CLOSED: `{ ok: false, files: null }`
+ * on a missing base/head or any git failure, never a silently-empty list.
+ */
+function detectMergeBaseChangedFiles({ base, head, cwd } = {}) {
+  if (!base || !head) {
+    return { ok: false, files: null, error: "base and head are required for merge-base changed-files detection" };
+  }
+  let output;
+  try {
+    output = execFileSync("git", ["diff", "--name-only", `${base}...${head}`], { encoding: "utf8", maxBuffer: 10_000_000, cwd: cwd || undefined });
+  } catch (err) {
+    return { ok: false, files: null, error: err instanceof Error ? err.message : String(err) };
+  }
+  const files = output.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+  return { ok: true, files };
+}
 async function main() {
   const opts = parseCliArgs(process.argv.slice(2));
   const scope = detectScope(opts);
@@ -153,4 +173,4 @@ if (isDirectRun) {
     process.exitCode = 1;
   });
 }
-export { detectScope, detectMergeBaseScope, isEligibleForLightMode };
+export { detectScope, detectMergeBaseScope, detectMergeBaseChangedFiles, isEligibleForLightMode };
