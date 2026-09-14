@@ -18,7 +18,7 @@ import {
   upsertCheckpointVerdict,
 } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
-import { buildFanoutEnforcement, evaluateInlineFanoutMode } from "../../scripts/github/detect-checkpoint-evidence.mjs";
+import { buildFanoutEnforcement, buildPreMergeGateCheck, deriveEvidenceState, EVIDENCE_STATE, evaluateInlineFanoutMode } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { renderFallbackGateReviewCommentBody } from "../../skills/dev-loop/scripts/post-gate-verdict-fallback.mjs";
@@ -167,7 +167,7 @@ const runNode = async (args = [], options = {}) => {
     if (inlineWarning && !options_.silent) {
       stderrChunks.push(`${inlineWarning}\n`);
     }
-    return { code: 0, stdout: `${JSON.stringify(result)}\n`, stderr: stderrChunks.join(""), ghCallCount };
+    return { code: 0, stdout: `${JSON.stringify(result)}\n`, stderr: stderrChunks.join(""), ghCallCount, calls };
   } catch (error) {
     process.stderr.write = originalWrite;
     return {
@@ -175,6 +175,7 @@ const runNode = async (args = [], options = {}) => {
       stdout: "",
       stderr: `${stderrChunks.join("")}${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })}\n`,
       ghCallCount,
+      calls,
     };
   }
 };
@@ -1254,10 +1255,15 @@ test("upsert-checkpoint-verdict auto-derives the size budget for pre_approval_ga
     // Fake evaluatePrSizeBudget: a pass/non-T1 budget, mirroring
     // computeSizeBudget's real output shape — proves the auto-derive path
     // reuses the injected evaluatePrSizeBudget rather than a second
-    // implementation.
+    // implementation, AND reuses the repo/head-sha the command already holds
+    // (AC2) rather than recomputing or mis-threading either.
     let baseSeen = null;
-    const evaluatePrSizeBudget = async ({ base }) => {
+    let headSeen = null;
+    let repoRootSeen = null;
+    const evaluatePrSizeBudget = async ({ base, head, repoRoot }) => {
       baseSeen = base;
+      headSeen = head;
+      repoRootSeen = repoRoot;
       return { outcome: "pass", t1SliceLoc: 0, waiver: { t1Valid: false, defaultValid: false } };
     };
 
@@ -1274,7 +1280,85 @@ test("upsert-checkpoint-verdict auto-derives the size budget for pre_approval_ga
 
     assert.equal(result.code, 0, result.stderr);
     assert.equal(baseSeen, "0000000000000000000000000000000000000000");
+    assert.equal(headSeen, "abc1234000000000000000000000000000000000");
+    assert.equal(repoRootSeen, fanoutDisabledRepoRoot);
   }, { prefix: "dev-loops-upsert-size-budget-autoderive-" });
+});
+
+// Issue #2185 AC4 (authoritative issue text, not just this PR's narrowed
+// producer-side coverage): a flagless pre_approval_gate verdict must yield
+// detect-checkpoint-evidence evidenceState=satisfied for a pass/non-T1 PR.
+// Drives the exact body the auto-derive path posts (captured off the wire,
+// not hand-written) through parseGateReviewCommentBody + buildPreMergeGateCheck
+// + deriveEvidenceState — the same functions detect-checkpoint-evidence.mjs
+// itself calls — proving the producer and consumer sides actually chain.
+test("upsert-checkpoint-verdict auto-derived pre_approval_gate body reads back as detect-checkpoint-evidence evidenceState=satisfied (#2185 AC4)", async () => {
+  await withTempDir(async (tempDir) => {
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: false,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        reviews: PRE_APPROVAL_READY_REVIEWS,
+      }).map((entry) => ({ ...entry, matchByClaims: true })),
+      {
+        matchByClaims: true,
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"],
+        stdout: '{"baseRefOid":"0000000000000000000000000000000000000000","labels":[]}\n',
+      },
+      {
+        matchByClaims: true,
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
+      },
+    ]);
+
+    const evaluatePrSizeBudget = async () => (
+      { outcome: "pass", t1SliceLoc: 0, waiver: { t1Valid: false, defaultValid: false } }
+    );
+
+    const headSha = "abc1234000000000000000000000000000000000";
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--pr", "17",
+      "--gate", "pre_approval_gate",
+      "--head-sha", headSha,
+      "--verdict", "clean",
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--findings-summary", "no issues found",
+      "--next-action", "await final human approval",
+    ], { env, evaluatePrSizeBudget });
+    assert.equal(result.code, 0, result.stderr);
+
+    // Recover the exact body auto-derive posted (not a hand-written fixture).
+    const postCall = result.calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews"));
+    assert.ok(postCall, "expected the review-create POST call to be captured");
+    const postedBody = JSON.parse(postCall.stdinText).body;
+
+    const parsed = parseGateReviewCommentBody(postedBody);
+    assert.equal(parsed.sizeOutcome, "pass");
+    assert.equal(parsed.sizeTouchesT1, false);
+
+    // The exact evidence shape detect-checkpoint-evidence.mjs's
+    // buildPreMergeGateCheck/deriveEvidenceState consult (see
+    // scripts/github/detect-checkpoint-evidence.mjs summarizeGateReviewComments
+    // callers) — draft_gate already clean, pre_approval_gate now carrying the
+    // auto-derived, wire-captured body's parsed fields.
+    const evidence = {
+      currentHeadSha: headSha,
+      draftGate: { visible: true, verdict: "clean" },
+      preApprovalGateMarker: {
+        visible: true,
+        contractComplete: true,
+        verdict: parsed.verdict,
+        headSha: parsed.headSha,
+        sizeOutcome: parsed.sizeOutcome,
+        sizeTouchesT1: parsed.sizeTouchesT1,
+      },
+    };
+    const preMergeGateCheck = buildPreMergeGateCheck(evidence, 0, null);
+    assert.equal(preMergeGateCheck.ok, true, JSON.stringify(preMergeGateCheck.failures));
+    assert.equal(deriveEvidenceState(evidence, preMergeGateCheck), EVIDENCE_STATE.SATISFIED);
+  }, { prefix: "dev-loops-upsert-size-budget-autoderive-detect-" });
 });
 
 test("upsert-checkpoint-verdict pre_approval_gate size-budget auto-derive fails closed when the base ref is unresolved (#2185)", async () => {

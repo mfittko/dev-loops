@@ -2637,10 +2637,11 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   //     verbatim — never recomputed here.
   //  2. pre_approval_gate auto-derive: when the flag is omitted for
   //     a pre_approval_gate verdict, this calls the SAME evaluatePrSizeBudget
-  //     (@dev-loops/core/loop/check-size-budget.mjs — the one shared reader
+  //     (scripts/loop/check-size-budget.mjs — the one shared reader
   //     detect-checkpoint-evidence/write-gate-context/resolve-gate-dispatch
-  //     already call) in-process, so a pre-approval verdict can no longer
-  //     post with null size evidence and hard-block the merge gate downstream
+  //     already call, each via a relative import) in-process, so a
+  //     pre-approval verdict can no longer post with null size evidence and
+  //     hard-block the merge gate downstream
   //     (the prior fail-open-to-hard-block hole). draft_gate and review
   //     verdicts never auto-derive — the size merge gate only reads
   //     pre_approval evidence, so only that gate needs it.
@@ -2682,7 +2683,16 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         `Pass --size-budget-json explicitly with a precomputed check-size-budget.mjs result instead.`,
       );
     }
-    const sizeBudget = await evaluatePrSizeBudget({ base: baseRef, head: canonicalHeadSha, repoRoot });
+    let sizeBudget;
+    try {
+      sizeBudget = await evaluatePrSizeBudget({ base: baseRef, head: canonicalHeadSha, repoRoot });
+    } catch (err) {
+      throw parseError(
+        `Cannot auto-derive the size budget for pre_approval_gate @ ${canonicalHeadSha}: computing the diff against base ` +
+        `${baseRef} failed (${err instanceof Error ? err.message : String(err)}). ` +
+        `Pass --size-budget-json explicitly with a precomputed check-size-budget.mjs result instead.`,
+      );
+    }
     applySizeBudgetFields(options, sizeBudget, `auto-derived size budget (evaluatePrSizeBudget, base ${baseRef})`);
   }
   // The findings-summary the comment is compared/round-tripped against. With a

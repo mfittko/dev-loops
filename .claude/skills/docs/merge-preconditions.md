@@ -390,14 +390,18 @@ merge-authorization rule.
   a raw `gh pr merge`. The wrapper `scripts/github/merge-pr.mjs`
   itself refuses (precondition `size_budget_human_approval`) until that human approval
   is present.
-- **The `pre_approval_gate` verdict carries POPULATED size fields, never null, on the
-  standard gate-verdict path**: the gate-verdict procedure in
-  [Copilot PR Followup](../copilot-pr-followup/SKILL.md) computes the size budget via
-  `check-size-budget.mjs` and threads its JSON output into
-  `upsert-checkpoint-verdict.mjs pre_approval_gate` via `--size-budget-json` on every
-  post. A verdict posted without it (an agent skipping the step, or a verdict posted
-  before this field set existed) reads back with `sizeOutcome`/`sizeTouchesT1` `null`
-  — absent size evidence, which fails closed per the bullet above.
+- **The `pre_approval_gate` verdict carries POPULATED size fields, never null**: the
+  gate-verdict procedure in [Copilot PR Followup](../copilot-pr-followup/SKILL.md)
+  computes the size budget via `check-size-budget.mjs` and threads its JSON output into
+  `upsert-checkpoint-verdict.mjs pre_approval_gate` via `--size-budget-json` as the
+  preferred path on every post. `upsert-checkpoint-verdict.mjs` itself never posts a
+  `pre_approval_gate` verdict with these fields null: when `--size-budget-json` is
+  omitted, it auto-derives the size budget in-process (`evaluatePrSizeBudget` against
+  the PR's base ref) or fails closed with an actionable error before posting anything,
+  naming `--size-budget-json` as the escape hatch, if the base ref or diff cannot be
+  resolved. Only a pre-existing verdict posted before this field set existed reads back
+  with `sizeOutcome`/`sizeTouchesT1` `null` — absent size evidence, which fails closed
+  per the bullet above.
 - **This gate is also consulted LIVE on the authoritative pre-merge CI path**, not only
   inside `evaluateMergePreconditions`/the lifecycle state machine: `buildPreMergeGateCheck`
   in `scripts/github/detect-checkpoint-evidence.mjs` — the function the `gate-evidence`
