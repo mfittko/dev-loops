@@ -30,7 +30,7 @@ export const FLAGS_THAT_TAKE_VALUE = new Set(["-r", "--repo"]);
  * strings — so a segment must break on them too, else `echo hi\ngh pr create` evades
  * the gate. Used by all segment-splitting sites (DRY).
  */
-const SHELL_SEGMENT_SEPARATOR = /\s*(?:&&|\|\||;|\||\n|\r)\s*/;
+const SHELL_SEGMENT_SEPARATOR = /\s*(?:&&|\|\||;|\||&|\n|\r)\s*/;
 
 /**
  * Strip a single balanced surrounding quote pair (`'…'` or `"…"`) from a shell arg value.
@@ -493,6 +493,25 @@ export function extractRepoFlagFromGhPrCreateAnywhere(command) {
  */
 export function extractRepoFlagsFromGhPrCreateSegments(command) {
   return extractRepoFlagsFromGhSubcmdVerbSegments(command, "pr", "create");
+}
+
+/**
+ * Return `{ segment, explicitRepo }` for every `gh pr merge` segment (ignoring --help/-h) —
+ * PreToolUse gate scope check use only, so a proven-foreign leading segment can't shield a later
+ * managed one. Mirrors `extractRepoFlagsFromGhPrCreateSegments`.
+ * @param {string} command @returns {{ segment: string, explicitRepo: string|null }[]}
+ */
+export function extractRepoFlagsFromGhPrMergeSegments(command) {
+  return extractRepoFlagsFromGhSubcmdVerbSegments(command, "pr", "merge");
+}
+
+/**
+ * Return `{ segment, explicitRepo }` for every `gh pr ready` segment (ignoring --help/-h) —
+ * PreToolUse gate scope check use only. Mirrors `extractRepoFlagsFromGhPrCreateSegments`.
+ * @param {string} command @returns {{ segment: string, explicitRepo: string|null }[]}
+ */
+export function extractRepoFlagsFromGhPrReadySegments(command) {
+  return extractRepoFlagsFromGhSubcmdVerbSegments(command, "pr", "ready");
 }
 
 /** @param {string} command @returns {number|null} */

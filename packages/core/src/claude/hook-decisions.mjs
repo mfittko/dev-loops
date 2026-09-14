@@ -16,10 +16,10 @@ import {
   commandContainsGhPrMerge,
   commandContainsGhPrCreate,
   extractPrNumberFromGhPrReadyAnywhere,
-  extractRepoFlagFromGhPrReadyAnywhere,
   extractPrNumberFromGhPrMergeAnywhere,
-  extractRepoFlagFromGhPrMergeAnywhere,
   extractRepoFlagsFromGhPrCreateSegments,
+  extractRepoFlagsFromGhPrMergeSegments,
+  extractRepoFlagsFromGhPrReadySegments,
   commandContainsRawExternalWrite,
   extractRepoFlagsFromExternalWriteSegments,
   commandContainsGitStash,
@@ -294,14 +294,24 @@ export function decideBashGate({
   // When both verbs appear in a compound command, apply the stricter merge gate — if it passes,
   // the draft_gate (a subset of the pre-merge evidence check) is also satisfied.
   const verb = isMerge ? "gh pr merge" : "gh pr ready";
-  // An explicit `--repo other/repo` PROVEN not the managed repo → not our concern, pass through.
-  // Only pass through when the managed slug resolves and the explicit repo demonstrably differs —
-  // an unresolvable managed slug means we cannot prove the explicit repo is foreign, so it stays
-  // gated (fail closed).
-  const explicitRepo = isMerge
-    ? extractRepoFlagFromGhPrMergeAnywhere(command)
-    : extractRepoFlagFromGhPrReadyAnywhere(command);
-  if (explicitRepo && managedSlug !== null && explicitRepo.toLowerCase() !== managedSlug) {
+  // Pass through only when EVERY gated verb segment is PROVEN foreign (explicit repo, managed slug
+  // resolves, and demonstrably differs). A segment with no explicit repo, or an unresolvable managed
+  // slug, is NOT proven foreign — fail closed (preserves the fail-closed default). Mirrors the
+  // per-segment `.some()` scoping on the create/external-write paths: a proven-foreign FIRST segment
+  // must not shield a later managed segment (`gh pr merge --repo other/x 1 && gh pr merge 2`).
+  const gatedVerbSegments = [
+    ...(isMerge ? extractRepoFlagsFromGhPrMergeSegments(command) : []),
+    ...(isReady ? extractRepoFlagsFromGhPrReadySegments(command) : []),
+  ];
+  const allSegmentsProvenForeign =
+    gatedVerbSegments.length > 0 &&
+    gatedVerbSegments.every(
+      (seg) =>
+        seg.explicitRepo != null &&
+        managedSlug !== null &&
+        seg.explicitRepo.toLowerCase() !== managedSlug,
+    );
+  if (allSegmentsProvenForeign) {
     return ALLOW;
   }
   // Only gate within the managed repo.
