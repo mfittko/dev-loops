@@ -29,8 +29,12 @@ Add a `--prev-head <A>` seam to `write-gate-context.mjs` (mirroring
 head A's durable findings-log and seeds prior dispositions into the rendered
 volatile tail as a bounded "Prior-round dispositions (do not re-raise a
 rejected finding at a shifted severity)" block, one entry per carried
-finding (fingerprint, angle, severity, summary, `judgeRationale`). Three
-choices shape the mechanism:
+finding (fingerprint, angle, severity, summary, `judgeRationale`), capped
+deterministically at a fixed max-entry count with per-field truncation and a
+terse overflow line so a large or corrupted prior log cannot make a reviewer
+prompt unboundedly large. Only a `clean`/`findings_present` prior verdict is
+eligible to seed a hint — any other/missing verdict is treated the same as an
+absent prior log. Four choices shape the mechanism:
 
 1. **Only `reject`/`defer` seeded; `act` excluded.** An `act` disposition is
    still-open, live-findings territory — surfacing it as "prior" would
@@ -52,6 +56,14 @@ choices shape the mechanism:
    reuses the existing `fingerprintFinding`, `baseAngleName`, and
    `buildLogPath` helpers rather than introducing a parallel identity or
    path-resolution scheme.
+4. **Fail-closed same-head/eligibility guards, fail-open only past them.**
+   `--prev-head` is rejected outright when it names the SAME head as
+   `--head-sha` (checked in both prefix directions, so a full 64-char head and
+   its 40-char prefix are also caught as same-head), and a prior log whose
+   `verdict` is not `clean`/`findings_present` (e.g. `blocked`, or missing) is
+   treated as ineligible — same as an absent prior log. These two guards are
+   the fail-closed boundary; every failure past that boundary (unreadable,
+   malformed, identity-mismatched) is fail-open, per (2) above.
 
 ## Consequences
 

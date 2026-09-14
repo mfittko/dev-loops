@@ -537,9 +537,18 @@ export function parseWriteGateContextCliArgs(argv) {
   // FAIL-CLOSED (mirrors resolve-angle-carry-forward.mjs's own same-head
   // rejection): a same-head "prior" would read THIS round's own findings-log
   // and seed it back as prior-round disposition memory. --head-sha accepts an
-  // abbreviated 7-64 hex spelling of the same commit, so startsWith (not
-  // ===) — --prev-head is always the full SHA (enforced above).
-  if (typeof options.prevHead === "string" && options.prevHead.startsWith(options.headSha)) {
+  // abbreviated 7-64 hex spelling of the same commit, so a plain === would
+  // miss an abbreviated --head-sha; startsWith the SHORTER string against the
+  // LONGER one catches that direction. --prev-head is always the FULL SHA
+  // (enforced above) but may be spelled with either the 40-hex (SHA-1) or
+  // 64-hex (SHA-256) full digest — normalizeFullHeadSha accepts both — so a
+  // 64-char --head-sha and a 40-char --prev-head that is a literal prefix of
+  // it (or the reverse) is ALSO same-head and must be caught: check both
+  // prefix directions, not just prevHead.startsWith(headSha).
+  if (
+    typeof options.prevHead === "string"
+    && (options.prevHead.startsWith(options.headSha) || options.headSha.startsWith(options.prevHead))
+  ) {
     throw parseError("--prev-head equals --head-sha — a same-head prior read would seed this round's own findings-log as prior-round disposition memory; omit --prev-head instead");
   }
   return options;
@@ -1582,6 +1591,33 @@ export function renderScopedBriefingVariant(scope, {
  */
 export const REQUEST_PLAN_BLOCK_BOUNDARIES = Object.freeze(["shared_prefix", "cache_boundary", "volatile_tail"]);
 
+// ponytail: the prior-round-dispositions block below is documented as
+// "bounded" (AC3, issue 2175) — these two constants ARE the bound. A
+// corrupted/adversarial prior ledger with thousands of findings, or a single
+// finding with an arbitrarily long free-form summary/judgeRationale, must
+// never make a reviewer prompt unboundedly large. Deterministic (no
+// content-dependent truncation choice, no random sampling): the first
+// PRIOR_DISPOSITIONS_MAX_ENTRIES entries in the prior log's OWN order are
+// kept, every free-form field is truncated at
+// PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH chars with an ellipsis marker, and any
+// overflow past the entry cap is summarized in one terse line rather than
+// silently dropped.
+export const PRIOR_DISPOSITIONS_MAX_ENTRIES = 20;
+export const PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH = 200;
+
+/**
+ * Truncate a free-form field to {@link PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH}
+ * chars, appending an ellipsis marker when truncated. Applied AFTER the
+ * newline guard below, so the marker itself is always plain, single-line
+ * text — it can never smuggle in a forged line.
+ * @param {string} value
+ * @returns {string}
+ */
+function truncatePriorDispositionField(value) {
+  if (value.length <= PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH) return value;
+  return `${value.slice(0, PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH)}…`;
+}
+
 /**
  * Render the materialized VOLATILE tail block (GATE-EXEC-BRIEFING-PREFIX's
  * counterpart): round-level values that sit AFTER the cache boundary the
@@ -1623,6 +1659,14 @@ export const REQUEST_PLAN_BLOCK_BOUNDARIES = Object.freeze(["shared_prefix", "ca
  * already has. This block only ever ADDS a "do not re-raise" hint; it never
  * suppresses a finding or converts a reject into an approval.
  *
+ * BOUNDED, deterministically: at most {@link PRIOR_DISPOSITIONS_MAX_ENTRIES}
+ * entries are rendered, kept in the prior log's own order (never re-sorted or
+ * sampled), with any overflow summarized in one terse "+K more ... omitted"
+ * line; each free-form field (`summary`, `judgeRationale`) is truncated to
+ * {@link PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH} chars. A large or corrupted
+ * prior findings-log can therefore never make this block — or the reviewer
+ * prompt it feeds — unboundedly large.
+ *
  * @param {string|null} [input.validationPosture] — must not contain a newline
  * @param {Array<{fingerprint: string, angle: string, severity: string, summary: string, judgeRationale?: string}>} [input.priorDispositions] — reject/defer-disposed findings from the prior head, attributed to an angle re-running this round
  */
@@ -1648,11 +1692,21 @@ export function renderBriefingVolatile({ gate, headSha, loggedAt, validationPost
   lines.push("");
   if (dispositions.length > 0) {
     lines.push("Prior-round dispositions (do not re-raise a rejected finding at a shifted severity):");
-    for (const entry of dispositions) {
+    // Bounded, deterministic: keep the first PRIOR_DISPOSITIONS_MAX_ENTRIES in
+    // the prior log's own order — never re-sorted, never sampled — and
+    // truncate each free-form field so one adversarial/corrupted entry cannot
+    // make this block (or the reviewer prompt it feeds) unboundedly large.
+    const kept = dispositions.slice(0, PRIOR_DISPOSITIONS_MAX_ENTRIES);
+    const omittedCount = dispositions.length - kept.length;
+    for (const entry of kept) {
+      const summary = truncatePriorDispositionField(entry.summary);
       const rationale = typeof entry.judgeRationale === "string" && entry.judgeRationale.length > 0
-        ? ` — judge: ${entry.judgeRationale}`
+        ? ` — judge: ${truncatePriorDispositionField(entry.judgeRationale)}`
         : "";
-      lines.push(`- ${entry.fingerprint} [${entry.angle}] ${entry.severity}: ${entry.summary}${rationale}`);
+      lines.push(`- ${entry.fingerprint} [${entry.angle}] ${entry.severity}: ${summary}${rationale}`);
+    }
+    if (omittedCount > 0) {
+      lines.push(`- +${omittedCount} more prior dispositions omitted`);
     }
     lines.push("");
   }
@@ -2543,6 +2597,20 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
         || (recordedPr !== undefined && recordedPr !== null && Number(recordedPr) !== Number(options.pr));
       if (identityMismatch) {
         throw new Error(`prior gate findings-log at ${priorLogPath} does not match this invocation's identity — refusing to carry its dispositions (fail-closed)`);
+      }
+      // FAIL-CLOSED verdict-eligibility check (mirrors resolve-angle-carry-
+      // forward.mjs's own carry-forward-eligible guard): only a `clean` or
+      // `findings_present` prior verdict is a genuinely CLOSED round whose
+      // reject/defer dispositions are trustworthy "already litigated"
+      // memory. A `blocked`/other/missing verdict is not a settled round —
+      // e.g. a truncated write, an aborted round, or a hand-edited ledger —
+      // and its findings' judgeDisposition fields carry no such guarantee.
+      // Thrown here, caught by the surrounding try/catch as "no usable prior
+      // round" (omit the hint), never fabricates disposition memory from an
+      // ineligible log.
+      const recordedVerdict = typeof priorLog?.verdict === "string" ? priorLog.verdict.trim() : "";
+      if (recordedVerdict !== "clean" && recordedVerdict !== "findings_present") {
+        throw new Error(`prior gate findings-log at ${priorLogPath} has verdict ${JSON.stringify(priorLog?.verdict ?? null)}, not carry-eligible (clean or findings_present) — refusing to carry its dispositions (fail-closed)`);
       }
       const carriedSet = new Set(
         (Array.isArray(options.carriedAngles) ? options.carriedAngles : [])
