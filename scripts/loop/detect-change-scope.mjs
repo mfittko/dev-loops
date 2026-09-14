@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { DIFF_ISOLATION_FLAGS, gitEnvWithoutDirOverrides } from "../github/write-gate-context.mjs";
 
 const USAGE = `Usage: detect-change-scope.mjs [--base <ref>] [--head <ref>]
 Detect change scope from git diff for light-mode eligibility.
@@ -123,6 +124,13 @@ function detectMergeBaseScope({ base, head, cwd } = {}) {
  * GATE-EXEC-PROPORTIONALITY risk-path floor needs at merge-gate re-verify
  * time (detect-checkpoint-evidence.mjs). Fails CLOSED: `{ ok: false, files: null }`
  * on a missing base/head or any git failure, never a silently-empty list.
+ *
+ * Isolated from ambient `GIT_DIR`/`GIT_WORK_TREE` (`gitEnvWithoutDirOverrides`)
+ * and diff-config drift (`DIFF_ISOLATION_FLAGS`), matching the worktree-bound
+ * reads in write-gate-context.mjs: an inherited `GIT_DIR`/`GIT_WORK_TREE`
+ * would otherwise resolve this diff against a DIFFERENT repo than `cwd`, so a
+ * poisoned env could return a clean path list and fail-OPEN the risk-path
+ * floor this function feeds.
  */
 function detectMergeBaseChangedFiles({ base, head, cwd } = {}) {
   if (!base || !head) {
@@ -130,7 +138,11 @@ function detectMergeBaseChangedFiles({ base, head, cwd } = {}) {
   }
   let output;
   try {
-    output = execFileSync("git", ["diff", "--name-only", `${base}...${head}`], { encoding: "utf8", maxBuffer: 10_000_000, cwd: cwd || undefined });
+    output = execFileSync(
+      "git",
+      [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--name-only", `${base}...${head}`],
+      { encoding: "utf8", maxBuffer: 10_000_000, cwd: cwd || undefined, env: gitEnvWithoutDirOverrides() },
+    );
   } catch (err) {
     return { ok: false, files: null, error: err instanceof Error ? err.message : String(err) };
   }

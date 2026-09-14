@@ -190,7 +190,7 @@ and the [review-proportionality non-overridable floors](./gate-review-sub-loop-c
 layered on top of it — the risk-path and size-outcome floors are recomputed from the
 merge-base diff via plain `git`/`check-size-budget.mjs` reads, so this re-verify runs
 even under `--skip-fanout-ledger-check`, which only scopes down the worktree-local
-ledger/provenance layer, not this one), via `--skip-fanout-ledger-check`. It does
+ledger/provenance layer, not this one). It does
 **not** re-verify the deeper fan-out
 findings-log ledger/provenance layer (`gates.requireFanoutEvidence` /
 `requireFanoutProvenance`): that evidence lives in a gitignored, worktree-local

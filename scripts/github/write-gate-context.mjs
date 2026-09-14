@@ -29,6 +29,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 
 import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAngles, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
+import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { baseAngleName, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
 import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities } from "@dev-loops/core/loop/review-dispatch-plan";
@@ -2744,6 +2745,14 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
     : await resolveGateAnglesDynamic(input.config, configKey, {
         diff: input.diff,
         hasFullLabel: input.hasFullLabel !== false,
+        // GATE-EXEC-PROPORTIONALITY: opt-in pass-through, mirroring the CLI's
+        // own --base-derived floor check (below). A caller that already has
+        // sizeOutcome evidence to hand (e.g. it also ran check-size-budget.mjs
+        // for this same diff) can request the SAME floor-vs-tier precedence the
+        // primer's dispatch decision uses; omitted, this resolves exactly as
+        // before.
+        checkFloors: input.checkFloors === true,
+        sizeOutcome: input.sizeOutcome,
       });
   const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
 
@@ -3183,6 +3192,23 @@ export async function main(
       process.stderr.write("[write-gate-context] warning: no --base given; emitting a THIN briefing (scope.diffPath=null, scope.changedFiles=[], no adjacentCode). Pass --base <ref> for the full build-once bundle.\n");
       options.diffSource = "none";
     }
+    // GATE-EXEC-PROPORTIONALITY: with a genuine --base diff to hand, also read
+    // this same diff's size-budget outcome so angle resolution below can opt
+    // into the composer's floor-vs-tier precedence (resolveReviewProportionality,
+    // via resolveGateAnglesDynamic's checkFloors) — a risk-path touch or a
+    // non-clean/ambiguous size-budget outcome must never leave this artifact
+    // carrying a tier-reduced angle set. A --prefix-file/no-base thin briefing
+    // has no diff to evaluate a size outcome against; checkFloors stays off
+    // there (unaffected — the no-diff path already resolves the full static
+    // pool regardless).
+    let sizeOutcome = null;
+    if (options.base) {
+      try {
+        sizeOutcome = await evaluatePrSizeBudget({ base: options.base, head: "HEAD", repoRoot });
+      } catch {
+        sizeOutcome = null; // fails CLOSED — checkFloors treats null as ambiguous
+      }
+    }
     // Load the dev-loop config once: used both for dynamic angle resolution
     // (when --angles is omitted) and, regardless of --angles, to resolve each
     // angle's concrete review model for the dispatch-plan artifact
@@ -3248,7 +3274,7 @@ export async function main(
           );
         }
         const configKey = mapGateToConfigKey(options.gate);
-        resolverResult = await resolveGateAnglesDynamic(config, configKey, { diff, hasFullLabel: options.fullLabel === true });
+        resolverResult = await resolveGateAnglesDynamic(config, configKey, { diff, hasFullLabel: options.fullLabel === true, checkFloors: Boolean(options.base), sizeOutcome });
       }
       const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
       if (resolvedAngles.length === 0) {

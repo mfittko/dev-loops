@@ -2404,13 +2404,22 @@ WITHOUT lowering what is checked: trivial → single combined reviewer
 (`inline_single_agent`, above); small/non-risky → a reduced angle set via a matched
 [diff-class tier](#diff-class-angle-tiers), still dispatched `fanout_fanin`;
 large/risky → the full angle pool, full fan-out. The plan is a pure composition of the
-existing decision functions — `resolveGateDispatchMode` (mode) and `resolveGateTier`
-(angle set) — exposed as ONE testable object via `resolveReviewProportionality`
-(`@dev-loops/core/config`). It performs no I/O itself; the caller
-(`resolve-gate-dispatch.mjs`) supplies the diff-derived facts. The chosen mode/reason
-is recorded in gate evidence via the existing `--inline-reason` marker (above) — the
-mechanism is unchanged, only the set of reasons a decision can carry is extended (see
-below).
+existing decision functions — `resolveGateDispatchMode` (mode), `resolveGateTier`
+(angle set AND diff classification), and `resolveFanoutGroups` (dispatch-unit
+grouping) — exposed as ONE testable object (`{ mode, angles, groups, reason, floors }`)
+via `resolveReviewProportionality` (`@dev-loops/core/config`). It performs no I/O
+itself; `resolve-gate-dispatch.mjs` (the primer's dispatch-decision step) is its ONE
+production caller and supplies the diff-derived facts. Whenever ANY non-overridable
+floor fires, the composer's `angles` is the FULL untriered pool, never a matched
+tier's reduced set — see the floor-vs-tier precedence in the function's own doc
+comment. `resolveGateAnglesDynamic` (the resolver `write-gate-context.mjs` calls to
+persist the round's angle set) can opt into this SAME precedence via its
+`checkFloors`/`sizeOutcome` parameters, so a round whose dispatch decision was floored
+never independently persists a tier-reduced angle set through the OTHER angle-
+resolution path — both call sites are wired to the one composer, never two parallel
+floor implementations. The chosen mode/reason is recorded in gate evidence via the
+existing `--inline-reason` marker (above) — the mechanism is unchanged, only the set
+of reasons a decision can carry is extended (see below).
 
 **Non-overridable floors.** Proportionality scales cost, never the floor: no flag,
 waiver, prompt, or LLM judgment can lower any of these, and ambiguity resolves toward
@@ -2432,6 +2441,12 @@ absence-of-evidence-of-risk):
   `size_outcome_t1`: the diff's `check-size-budget.mjs` outcome (reused as-is, no new
   computation) is not a clean `pass`, or its T1-tier slice is nonzero. Unreadable
   size-budget evidence (`size_outcome_unavailable`) fails the same way.
+- **Unclassifiable diff** — `unclassifiable_diff`: `resolveGateDispatchMode` alone has
+  no diff-classification awareness (only `resolveGateTier` does), so the composer
+  additionally forces the full pool whenever `resolveGateTier` reports
+  `unclassifiable_file` (a changed file `classifyFile` cannot categorize) — an
+  unclassifiable diff is ambiguity too, and must never silently reach inline just
+  because the raw dispatch-mode facts alone looked trivial.
 - **Mandatory-angle floor** — unchanged (above): mandatory angles are always unioned
   into the resolved angle set (`resolveGateAngles`/`resolveGateTier`), whether the
   round is fan-out or inline; on the inline path they are COMBINED under the one

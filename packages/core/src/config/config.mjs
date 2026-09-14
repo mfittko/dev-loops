@@ -1961,12 +1961,15 @@ export const RISK_PATH_DENYLIST_DEFAULT = Object.freeze([
   // gate / review — the proportionality mechanism's own implementation, plus
   // any path named gate/review anywhere under scripts/ or packages/core/src/loop.
   "packages/core/src/config/config.mjs",
+  "packages/core/src/config/extension-defaults.yaml",
   "scripts/loop/check-size-budget.mjs",
   "scripts/loop/check-adr-tripwire.mjs",
   "scripts/loop/resolve-gate-dispatch.mjs",
   "scripts/loop/detect-change-scope.mjs",
   "scripts/github/detect-checkpoint-evidence.mjs",
   "scripts/github/upsert-checkpoint-verdict.mjs",
+  "scripts/github/emit-fanout-dispatch.mjs",
+  "scripts/loop/consolidate-fanin.mjs",
   "scripts/**/*gate*",
   "scripts/**/*review*",
   "packages/core/src/loop/*gate*",
@@ -2082,7 +2085,18 @@ export function resolveGateDispatchMode(config, gate, { scope, changedFiles, siz
     const outcomeLabel = typeof sizeOutcome.outcome === "string" && sizeOutcome.outcome.length > 0 ? sizeOutcome.outcome : "unknown";
     return { mode: "full_fanout", reason: `size_outcome_${outcomeLabel}`, threshold };
   }
-  if (typeof sizeOutcome.tierLogicLoc?.t1 === "number" && sizeOutcome.tierLogicLoc.t1 > 0) {
+  // GATE-EXEC-PROPORTIONALITY: a clean `pass` outcome is only trustworthy when
+  // its T1-tier slice is a genuine, finite, non-negative NUMBER — `undefined >
+  // 0` and `NaN > 0` both evaluate false, so a naive `> 0` check would let a
+  // malformed/partial sizeOutcome (e.g. `{ outcome: "pass" }` with no
+  // `tierLogicLoc`) silently read as "T1 clean" and reach inline. Absence of a
+  // readable T1 value is ambiguity, not triviality, so it fails CLOSED to
+  // `size_outcome_unavailable` exactly like a missing sizeOutcome altogether.
+  const t1 = sizeOutcome.tierLogicLoc?.t1;
+  if (typeof t1 !== "number" || !Number.isFinite(t1) || t1 < 0) {
+    return { mode: "full_fanout", reason: "size_outcome_unavailable", threshold };
+  }
+  if (t1 > 0) {
     return { mode: "full_fanout", reason: "size_outcome_t1", threshold };
   }
   if (Array.isArray(inlineFindingSeverities) && inlineFindingSeverities.length > 0) {
@@ -2406,14 +2420,31 @@ export function resolveGateTier(config, gate, { changedFiles, filesChanged, line
  * The primer-owned deterministic review-proportionality plan
  * (GATE-EXEC-PROPORTIONALITY, gate-review-sub-loop-contract.md): a single,
  * pure composition of the existing decision functions so "the plan" (angle
- * set + execution mode) is one testable object. Delegates entirely to
- * {@link resolveGateDispatchMode} (mode, including the non-overridable floors)
- * and {@link resolveGateTier} (angle set, mandatory angles always unioned in
- * whether or not a tier matched — see {@link resolveGateAngles}'s fallback).
- * No git I/O, no logic of its own: this is a naming/composition convenience
- * over the two single-source-of-truth resolvers, kept in ONE place so the
- * primer (emit) and the merge gate (re-verify) can never drift onto two
- * different floor implementations.
+ * set + execution mode + grouping) is one testable, persistable object.
+ * Delegates entirely to {@link resolveGateDispatchMode} (mode, including the
+ * non-overridable size-cap/risk-path/size-outcome/ambiguity floors),
+ * {@link resolveGateTier} (angle set AND diff-classification), and
+ * {@link resolveFanoutGroups} (dispatch-unit grouping). No git I/O, no logic
+ * of its own beyond the floor-vs-tier precedence below: this is the ONE place
+ * the primer (emit) and the merge gate (re-verify) compose mode + angles +
+ * grouping, so they can never drift onto two different floor implementations.
+ *
+ * Floor-vs-tier precedence: a fired non-overridable floor — the hard size cap
+ * (`over_threshold`), the risk-path denylist (`risk_path_touch`), a
+ * non-clean/ambiguous size-budget outcome (`size_outcome_*`,
+ * `size_outcome_unavailable`), missing changed-file evidence
+ * (`changed_files_unavailable`), or an unclassifiable diff
+ * (`resolveGateTier`'s `unclassifiable_file`) — ALWAYS forces `full_fanout`
+ * with the FULL untriered angle pool, even when a diff-class tier also
+ * happens to match: proportionality scales cost, never the floor, so a
+ * risky/unclassifiable diff never receives a tier-reduced angle set. Tier
+ * reduction ("small/non-risky diff → a matched tier's reduced angle set,
+ * still dispatched full fan-out") applies only when no floor fired — this is
+ * the pre-existing, orthogonal diff-class-tier mechanism, untouched for a
+ * `gate:full`-labelled PR (resolveGateTier self-bypasses) or a repo that
+ * simply has light mode disabled (`light_mode_disabled` is not a floor: every
+ * round there was already full-fanout-with-tier-reduction before this floor
+ * mechanism existed).
  *
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"} gate
@@ -2423,7 +2454,7 @@ export function resolveGateTier(config, gate, { changedFiles, filesChanged, line
  * @param {{ outcome?: "pass"|"escalate"|"block", tierLogicLoc?: { t1?: number } }|null} [facts.sizeOutcome]
  * @param {boolean} [facts.hasFullLabel]
  * @param {string[]} [facts.inlineFindingSeverities]
- * @returns {{ mode: "inline"|"full_fanout", angles: string[]|null, reason: string, floors: { sizeCap: boolean, riskPath: boolean, sizeOutcome: boolean, ambiguity: boolean } }}
+ * @returns {{ mode: "inline"|"full_fanout", angles: string[]|null, groups: { name: string, angles: string[] }[], reason: string, floors: { sizeCap: boolean, riskPath: boolean, sizeOutcome: boolean, ambiguity: boolean, unclassifiable: boolean } }}
  */
 export function resolveReviewProportionality(config, gate, {
   scope,
@@ -2439,21 +2470,41 @@ export function resolveReviewProportionality(config, gate, {
     linesChanged: scope?.linesChanged,
     hasFullLabel,
   });
+  const floors = Object.freeze({
+    sizeCap: dispatch.reason === "over_threshold",
+    riskPath: dispatch.reason === "risk_path_touch",
+    sizeOutcome: typeof dispatch.reason === "string" && dispatch.reason.startsWith("size_outcome_") && dispatch.reason !== "size_outcome_unavailable",
+    ambiguity: dispatch.reason === "changed_files_unavailable" || dispatch.reason === "size_outcome_unavailable",
+    // resolveGateDispatchMode has no diff-classification awareness of its own
+    // (only resolveGateTier classifies files); an unclassifiable diff is
+    // ambiguity too and must not silently reach inline just because the
+    // dispatch-mode facts alone looked trivial.
+    unclassifiable: tier.reason === "unclassifiable_file",
+  });
+  // sizeCap (over_threshold) is deliberately EXCLUDED from the forced-full-
+  // pool set: it predates this issue's risk/ambiguity floors and pre-existing
+  // behavior (issue #1550's diff-class tiers) keeps a merely-over-the-tiny-
+  // inline-cap-but-still-tier-classifiable diff on its reduced tier set — see
+  // resolveGateTier's "small non-risky diff outside the inline cap but
+  // matching a tier" contract. Only a genuine RISK signal (a risk-path touch,
+  // a non-clean/ambiguous size-budget outcome, or an unclassifiable diff)
+  // forces the full untriered pool.
+  const dispatchFloorFired = floors.riskPath || floors.sizeOutcome || floors.ambiguity;
+  const floored = dispatchFloorFired || floors.unclassifiable;
+  const mode = floored ? "full_fanout" : dispatch.mode;
+  const reason = floored && !dispatchFloorFired ? "unclassifiable_diff" : dispatch.reason;
   // The mandatory-angle floor is present either way: a tier match already
   // unions mandatoryAngles in (resolveGateTier), and the no-tier fallback
   // (resolveGateAngles) does the same union — see AC-4 "mandatory angles
   // combined, never dropped".
-  const angles = tier.angles ?? resolveGateAngles(config, gate);
+  const angles = floored ? resolveGateAngles(config, gate) : (tier.angles ?? resolveGateAngles(config, gate));
+  const groups = resolveFanoutGroups(config, gate, angles ?? [], { fullLabel: hasFullLabel });
   return Object.freeze({
-    mode: dispatch.mode,
+    mode,
     angles,
-    reason: dispatch.reason,
-    floors: Object.freeze({
-      sizeCap: dispatch.reason === "over_threshold",
-      riskPath: dispatch.reason === "risk_path_touch",
-      sizeOutcome: typeof dispatch.reason === "string" && dispatch.reason.startsWith("size_outcome_") && dispatch.reason !== "size_outcome_unavailable",
-      ambiguity: dispatch.reason === "changed_files_unavailable" || dispatch.reason === "size_outcome_unavailable",
-    }),
+    groups,
+    reason,
+    floors,
   });
 }
 
@@ -2470,14 +2521,28 @@ export function resolveReviewProportionality(config, gate, {
  * that tier's angle set (unioned with mandatory) directly and skips the
  * subtractive/additive machinery.
  *
+ * GATE-EXEC-PROPORTIONALITY floor-awareness (opt-in via `checkFloors`): when
+ * the caller supplies `checkFloors: true` (and, when available, `sizeOutcome`
+ * from check-size-budget.mjs), this delegates to {@link
+ * resolveReviewProportionality} — the SAME composer resolve-gate-dispatch.mjs
+ * uses — over the SAME diff-derived changed-file/scope facts, so a diff whose
+ * dispatch decision is floored (risk-path touch, a non-clean/ambiguous
+ * size-budget outcome, or an unclassifiable diff) NEVER keeps a tier's
+ * reduced (or dynamically-pruned) angle set here: it gets the full untriered
+ * pool, exactly like the primer's own dispatch-decision step. Omitted
+ * (default), this resolves exactly as before — a caller that does not have
+ * size-budget evidence to hand is unaffected.
+ *
  * @param {import("./types.js").DevLoopConfig} config
  * @param {"draft"|"preApproval"} gate
  * @param {object} [options]
  * @param {{ nameStatusOutput: string, diffOutput?: string }} [options.diff]
  * @param {boolean} [options.hasFullLabel] — `gate:full` label present on the PR (bypasses tier resolution)
+ * @param {boolean} [options.checkFloors] — opt into the GATE-EXEC-PROPORTIONALITY floor check above
+ * @param {{ outcome?: "pass"|"escalate"|"block", tierLogicLoc?: { t1?: number } }|null} [options.sizeOutcome] — only consulted when `checkFloors` is true
  * @returns {{ recommendedAngles: string[] | null, skippedAngles: string[], reasons: Record<string,string>, fallbackToAll: boolean, dynamicAnglesActive: boolean, addedAngles: string[], addedReasons: Record<string,string> }}
  */
-export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabel = false } = {}) {
+export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabel = false, checkFloors = false, sizeOutcome } = {}) {
   // Tier scope facts: changedFiles/filesChanged from T0, linesChanged from T1's
   // real added+deleted count (analyzeDiff's inferred-category path reports a
   // fake 0 for an unambiguous docs-only diff — see analyzeT1/analyzeDiff).
@@ -2494,6 +2559,25 @@ export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabe
     if (diff.diffOutput) {
       const lineStats = analyzeT1(diff.diffOutput, t0).lineStats;
       linesChanged = lineStats.added + lineStats.deleted;
+    }
+  }
+  if (checkFloors) {
+    const plan = resolveReviewProportionality(config, gate, {
+      scope: { filesChanged, linesChanged },
+      changedFiles,
+      sizeOutcome,
+      hasFullLabel,
+    });
+    if (plan.floors.riskPath || plan.floors.sizeOutcome || plan.floors.ambiguity || plan.floors.unclassifiable) {
+      return {
+        recommendedAngles: plan.angles ?? [],
+        skippedAngles: [],
+        reasons: {},
+        fallbackToAll: false,
+        dynamicAnglesActive: false,
+        addedAngles: [],
+        addedReasons: {},
+      };
     }
   }
   const tierResult = resolveGateTier(config, gate, { changedFiles, filesChanged, linesChanged, hasFullLabel });

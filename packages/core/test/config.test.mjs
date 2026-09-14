@@ -4164,6 +4164,15 @@ describe("touchesRiskPath (risk-path denylist floor)", () => {
   test("the shipped denylist is frozen (cannot be mutated at the call site)", () => {
     assert.ok(Object.isFrozen(RISK_PATH_DENYLIST_DEFAULT));
   });
+
+  test("the central dispatch/fan-in emit + consolidate scripts trip the floor (neither matches scripts/**/*gate*|*review*)", () => {
+    assert.equal(touchesRiskPath(["scripts/github/emit-fanout-dispatch.mjs"]), true);
+    assert.equal(touchesRiskPath(["scripts/loop/consolidate-fanin.mjs"]), true);
+  });
+
+  test("the shipped gate-angle-definitions source (extension-defaults.yaml) trips the floor", () => {
+    assert.equal(touchesRiskPath(["packages/core/src/config/extension-defaults.yaml"]), true);
+  });
 });
 
 describe("resolveGateDispatchMode: risk-path and size-outcome floors (#1984)", () => {
@@ -4223,6 +4232,26 @@ describe("resolveGateDispatchMode: risk-path and size-outcome floors (#1984)", (
     });
     assert.equal(result.mode, "full_fanout");
     assert.equal(result.reason, "size_outcome_t1");
+  });
+
+  test("malformed T1 evidence (missing tierLogicLoc) fails CLOSED to full_fanout instead of silently reading as T1-clean", () => {
+    const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
+      scope: { filesChanged: 1, linesChanged: 1 },
+      changedFiles: ["README.md"],
+      sizeOutcome: { outcome: "pass" },
+    });
+    assert.equal(result.mode, "full_fanout");
+    assert.equal(result.reason, "size_outcome_unavailable");
+  });
+
+  test("malformed T1 evidence (non-numeric t1) fails CLOSED to full_fanout instead of silently reading as T1-clean", () => {
+    const result = resolveGateDispatchMode(lightConfig(), "preApproval", {
+      scope: { filesChanged: 1, linesChanged: 1 },
+      changedFiles: ["README.md"],
+      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: NaN } },
+    });
+    assert.equal(result.mode, "full_fanout");
+    assert.equal(result.reason, "size_outcome_unavailable");
   });
 
   test("a passing, non-T1, non-risk-path diff under the size cap stays inline", () => {
@@ -4365,6 +4394,72 @@ describe("resolveReviewProportionality (#1984 — primer-owned deterministic pla
       hasFullLabel: false,
     });
     assert.equal(plan.mode, "full_fanout");
+  });
+
+  test("a risky diff that ALSO matches a tier yields the FULL untriered angle set, never the tier's reduced set (risk-path)", () => {
+    const config = preApprovalTierConfig();
+    const plan = resolveReviewProportionality(config, "preApproval", {
+      // Trivially small AND classifies as "docs" (would match the docs tier),
+      // but ALSO touches the risk-path denylist — the floor must win.
+      scope: { filesChanged: 1, linesChanged: 1 },
+      changedFiles: ["docs/decisions/0001-example.md"],
+      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+    });
+    assert.equal(plan.mode, "full_fanout");
+    assert.equal(plan.reason, "risk_path_touch");
+    assert.deepStrictEqual(new Set(plan.angles), new Set(["yagni", "contradiction-lens", "correctness", "renderer-security", "link-check"]));
+  });
+
+  test("a risky diff that ALSO matches a tier yields the FULL untriered angle set, never the tier's reduced set (size-outcome)", () => {
+    const config = preApprovalTierConfig();
+    const plan = resolveReviewProportionality(config, "preApproval", {
+      scope: { filesChanged: 1, linesChanged: 1 },
+      changedFiles: ["docs/guide.md"],
+      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 5 } },
+    });
+    assert.equal(plan.mode, "full_fanout");
+    assert.equal(plan.reason, "size_outcome_t1");
+    assert.deepStrictEqual(new Set(plan.angles), new Set(["yagni", "contradiction-lens", "correctness", "renderer-security", "link-check"]));
+  });
+
+  test("over-cap alone (no other risk signal) still honors a matched tier's REDUCED set — pre-existing diff-class-tier behavior is unaffected", () => {
+    const config = preApprovalTierConfig();
+    const plan = resolveReviewProportionality(config, "preApproval", {
+      scope: { filesChanged: 5, linesChanged: 50 },
+      changedFiles: ["docs/a.md", "docs/b.md"],
+      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+    });
+    assert.equal(plan.mode, "full_fanout");
+    assert.equal(plan.reason, "over_threshold");
+    assert.deepStrictEqual(new Set(plan.angles), new Set(["link-check", "yagni", "contradiction-lens"]));
+  });
+
+  test("an unclassifiable diff forces full_fanout with the full pool even though the raw dispatch-mode facts alone look trivial", () => {
+    const config = preApprovalTierConfig();
+    const plan = resolveReviewProportionality(config, "preApproval", {
+      scope: { filesChanged: 1, linesChanged: 1 },
+      // No file extension → classifyFile reports "unknown" → resolveGateTier
+      // returns unclassifiable_file — resolveGateDispatchMode alone has no
+      // classification awareness and would otherwise stay inline.
+      changedFiles: ["Makefile"],
+      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+    });
+    assert.equal(plan.mode, "full_fanout");
+    assert.equal(plan.reason, "unclassifiable_diff");
+    assert.equal(plan.floors.unclassifiable, true);
+    assert.deepStrictEqual(new Set(plan.angles), new Set(["yagni", "contradiction-lens", "correctness", "renderer-security", "link-check"]));
+  });
+
+  test("the plan carries grouping (angle set + execution mode + grouping, per GATE-EXEC-PROPORTIONALITY)", () => {
+    const config = preApprovalTierConfig();
+    const plan = resolveReviewProportionality(config, "preApproval", {
+      scope: { filesChanged: 1, linesChanged: 1 },
+      changedFiles: ["README.md"],
+      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+    });
+    assert.ok(Array.isArray(plan.groups));
+    const grouped = new Set(plan.groups.flatMap((g) => g.angles));
+    assert.deepStrictEqual(grouped, new Set(plan.angles));
   });
 });
 
@@ -5518,6 +5613,72 @@ describe("resolveGateAnglesDynamic", () => {
     assert.equal(result.fallbackToAll, true);
     assert.deepEqual(result.recommendedAngles, ["scope", "coverage", "docs", "deep", "kiss"]);
     assert.deepEqual(result.skippedAngles, []);
+  });
+
+  // ── checkFloors (GATE-EXEC-PROPORTIONALITY wiring): resolveGateAnglesDynamic
+  // opts into the SAME composer resolve-gate-dispatch.mjs uses, over the SAME
+  // diff-derived facts, so write-gate-context.mjs's angle resolution can never
+  // independently drift onto a tier-reduced set for a floored diff. ─────────
+
+  function tieredRiskyConfig() {
+    return {
+      version: 1,
+      localImplementation: { lightMode: { enabled: true, maxFiles: 5, maxLines: 100 } },
+      gates: {
+        draft: {
+          angles: ["docs", "link-check", "correctness", { name: "pr-description", mandatory: true }],
+          tiers: [{ name: "docs-only", match: { kinds: ["docs"] }, angles: ["docs"] }],
+        },
+      },
+    };
+  }
+
+  // A one-line change to a DOCS-classified, RISK-PATH-matched file
+  // (docs/decisions/** is a shipped risk-path floor entry), small enough to
+  // stay well under the light-mode cap — linesChanged must be a genuine small
+  // finite number (not the Infinity a missing diffOutput would produce) so
+  // over_threshold never masks the specific floor each test means to exercise.
+  const oneLineDiffOutput = (path) => `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old\n+new\n`;
+  const riskyDocPath = "docs/decisions/0001-example.md";
+  const nonRiskyDocPath = "docs/guide.md";
+
+  test("checkFloors omitted (default): a risky diff that matches a tier STILL gets the tier's reduced set (today's behavior, unaffected)", async () => {
+    const config = tieredRiskyConfig();
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: `M\t${riskyDocPath}`, diffOutput: oneLineDiffOutput(riskyDocPath) },
+    });
+    assert.deepEqual(new Set(result.recommendedAngles), new Set(["pr-description", "docs"]));
+  });
+
+  test("checkFloors:true — a risk-path-touching diff that ALSO matches a tier resolves the FULL untriered pool instead", async () => {
+    const config = tieredRiskyConfig();
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: `M\t${riskyDocPath}`, diffOutput: oneLineDiffOutput(riskyDocPath) },
+      checkFloors: true,
+      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+    });
+    assert.equal(result.dynamicAnglesActive, false);
+    assert.deepEqual(new Set(result.recommendedAngles), new Set(["pr-description", "docs", "link-check", "correctness"]));
+  });
+
+  test("checkFloors:true — a non-risky, tier-matching diff still gets the tier's reduced set (floor did not fire)", async () => {
+    const config = tieredRiskyConfig();
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: `M\t${nonRiskyDocPath}`, diffOutput: oneLineDiffOutput(nonRiskyDocPath) },
+      checkFloors: true,
+      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+    });
+    assert.deepEqual(new Set(result.recommendedAngles), new Set(["pr-description", "docs"]));
+  });
+
+  test("checkFloors:true — a malformed sizeOutcome (ambiguous) forces the full pool even for a small, non-risk-path diff", async () => {
+    const config = tieredRiskyConfig();
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: `M\t${nonRiskyDocPath}`, diffOutput: oneLineDiffOutput(nonRiskyDocPath) },
+      checkFloors: true,
+      sizeOutcome: null,
+    });
+    assert.deepEqual(new Set(result.recommendedAngles), new Set(["pr-description", "docs", "link-check", "correctness"]));
   });
 });
 describe("resolveGateTier (issue #1550 — diff-class angle tiers)", () => {

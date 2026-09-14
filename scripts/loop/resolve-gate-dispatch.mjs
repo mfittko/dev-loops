@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import {
   loadDevLoopConfig,
-  resolveGateDispatchMode,
+  resolveReviewProportionality,
   resolveLightMode,
   GATE_FULL_LABEL,
 } from "@dev-loops/core/config";
@@ -15,10 +15,13 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-
 import { formatCliError } from "../_core-helpers.mjs";
 
 const USAGE = `Usage: resolve-gate-dispatch.mjs --gate <draft|preApproval> [--base <ref>] [--head <ref>] [--full-label] [--inline-severities <csv>]
-Decide inline vs full fan-out for a gate from lightMode config + PR facts
-(GATE-EXEC-PROPORTIONALITY): under the size cap, ALSO fails closed to full
-fan-out when the diff touches a risk path or its size-budget outcome is not a
-clean, non-T1 pass — see gate-review-sub-loop-contract.md.
+Compute the primer-owned deterministic review-proportionality plan
+(GATE-EXEC-PROPORTIONALITY, resolveReviewProportionality): mode (inline vs
+full fan-out) + resolved angle set + fan-out grouping, from lightMode config +
+PR facts. Under the size cap, ALSO fails closed to full fan-out (with the
+FULL untriered angle set, never a tier-reduced one) when the diff touches a
+risk path, its size-budget outcome is not a clean non-T1 pass, or the diff is
+unclassifiable — see gate-review-sub-loop-contract.md.
 Options:
   --gate <draft|preApproval>   Gate to resolve dispatch for (required)
   --base <ref>                 Base ref for scope detection (default: HEAD~1)
@@ -27,10 +30,10 @@ Options:
   --inline-severities <csv>    Comma-separated severities from the inline pass (escalation phase)
   --help, -h                   Show this help
 Output (stdout, JSON):
-  { "ok": true, "gate": "draft", "scope": { "ok": true, "filesChanged": 1, "linesChanged": 5 }, "mode": "inline", "reason": "under_threshold", "threshold": { "maxFiles": 2, "maxLines": 20, "riskPaths": [] } }
-  { "ok": true, "gate": "draft", "scope": { "ok": true, "filesChanged": 9, "linesChanged": 300 }, "mode": "full_fanout", "reason": "over_threshold", "threshold": { "maxFiles": 2, "maxLines": 20, "riskPaths": [] } }
-  { "ok": true, "gate": "draft", "scope": { "ok": true, ... }, "mode": "full_fanout", "reason": "risk_path_touch", "threshold": {...} }
-  { "ok": true, "gate": "draft", "scope": { "ok": true, ... }, "mode": "full_fanout", "reason": "size_outcome_escalate"|"size_outcome_block"|"size_outcome_t1", "threshold": {...} }
+  { "ok": true, "gate": "draft", "scope": { "ok": true, "filesChanged": 1, "linesChanged": 5 }, "mode": "inline", "reason": "under_threshold", "threshold": { "maxFiles": 2, "maxLines": 20, "riskPaths": [] }, "angles": [...], "groups": [...], "floors": { "sizeCap": false, "riskPath": false, "sizeOutcome": false, "ambiguity": false, "unclassifiable": false } }
+  { "ok": true, "gate": "draft", "scope": { "ok": true, "filesChanged": 9, "linesChanged": 300 }, "mode": "full_fanout", "reason": "over_threshold", "threshold": { "maxFiles": 2, "maxLines": 20, "riskPaths": [] }, "angles": [...], "groups": [...], "floors": {...} }
+  { "ok": true, "gate": "draft", "scope": { "ok": true, ... }, "mode": "full_fanout", "reason": "risk_path_touch", "threshold": {...}, "angles": [...], "groups": [...], "floors": {...} }
+  { "ok": true, "gate": "draft", "scope": { "ok": true, ... }, "mode": "full_fanout", "reason": "size_outcome_escalate"|"size_outcome_block"|"size_outcome_t1"|"size_outcome_unavailable"|"unclassifiable_diff", "threshold": {...}, "angles": [...], "groups": [...], "floors": {...} }
   { "ok": true, "gate": "draft", "scope": { "ok": false, ... }, "mode": "full_fanout", "reason": "scope_detection_failed", "threshold": null }
 Error output (stderr, JSON, the shared CLI error format — see formatCliError):
   { "ok": false, "error": "...", "hint"?: "run with --help for usage" }
@@ -144,19 +147,41 @@ export async function run(argv) {
       }, { jq: opts.jq, silent: opts.silent });
       return;
     }
-    // The GATE-EXEC-PROPORTIONALITY floors (risk-path, size-outcome) only ever
-    // change an already-under-cap decision (an over-cap diff is full_fanout
-    // regardless of them) — so the extra diff/size-budget reads below run ONLY
-    // on a diff that is at least a plausible inline candidate, keeping the
-    // over-cap path's I/O cost unchanged.
     const threshold = !opts.hasFullLabel ? resolveLightMode(config) : null;
     const isCandidate = threshold != null
       && Number(scope.filesChanged) <= threshold.maxFiles
       && Number(scope.linesChanged) <= threshold.maxLines;
-    let changedFiles;
+    // The changed-file list feeds BOTH the risk-path floor AND resolveGateTier's
+    // diff-classification (which the composer needs for its angle set — an
+    // over-cap diff can still legitimately match a reduced tier, and an
+    // unclassifiable diff must force the full pool regardless of cap state) —
+    // so it is always read, unlike the heavier size-budget evaluation below.
+    const changedFiles = detectChangedFiles({ base: opts.base, head: opts.head, cwd: process.cwd() });
+    // The size-budget outcome only ever changes an already-under-cap decision
+    // (an over-cap diff is full_fanout regardless of it), so this heavier read
+    // runs ONLY on a diff that is at least a plausible inline candidate,
+    // keeping the over-cap path's extra I/O cost bounded to one cheap diff.
+    // KNOWN, bounded range asymmetry: `changedFiles` above is the two-dot
+    // `base..head` diff (diffRange, matching detectScope/`scope` exactly).
+    // evaluatePrSizeBudget below is the SHARED size-budget reader
+    // (check-size-budget.mjs) and always diffs `base...head` (the three-dot
+    // merge-base form) — its own contract, reused as-is everywhere else it is
+    // called (never re-derived here) rather than duplicating its diff-capture
+    // internals for a narrower two-dot variant. When `base` has moved forward
+    // independently of `head` (commits landed on base's branch after this
+    // round's diff started), the two ranges genuinely describe different
+    // diffs and this round's plan CAN disagree with itself (e.g. angles
+    // resolved against one range, mode against the other). This is bounded,
+    // not fail-open: the merge-gate re-verify (detect-checkpoint-evidence.mjs)
+    // NEVER trusts this round's recorded plan — it independently RECOMPUTES
+    // every floor from its OWN merge-base diff at merge time — so a
+    // primer/merge-gate range mismatch here can only cost an extra
+    // reject-and-redo round-trip, never let a genuinely risky diff merge on a
+    // stale or lenient primer decision. A future unification would read both
+    // facts from ONE captured diff object (mirroring write-gate-context.mjs's
+    // build-once bundle) rather than two independent git reads.
     let sizeOutcome = null;
     if (isCandidate) {
-      changedFiles = detectChangedFiles({ base: opts.base, head: opts.head, cwd: process.cwd() });
       try {
         sizeOutcome = await evaluatePrSizeBudget({
           base: opts.base ?? "HEAD~1",
@@ -164,10 +189,15 @@ export async function run(argv) {
           repoRoot: process.cwd(),
         });
       } catch {
-        sizeOutcome = null; // fails CLOSED — resolveGateDispatchMode treats null as ambiguous
+        sizeOutcome = null; // fails CLOSED — the composer treats null as ambiguous
       }
     }
-    const decision = resolveGateDispatchMode(config, opts.gate, {
+    // GATE-EXEC-PROPORTIONALITY: the composer is the ONE place mode, angle
+    // set, and grouping are combined — resolveGateDispatchMode alone (the
+    // mode-only decision) is never called directly here, so this CLI's
+    // emitted plan and write-gate-context.mjs's persisted angle set can never
+    // independently drift onto two different floor implementations.
+    const decision = resolveReviewProportionality(config, opts.gate, {
       scope,
       changedFiles,
       sizeOutcome,
@@ -175,7 +205,7 @@ export async function run(argv) {
       inlineFindingSeverities: opts.inlineFindingSeverities,
     });
     process.exitCode = emitResult(
-      { ok: true, gate: opts.gate, scope, ...decision },
+      { ok: true, gate: opts.gate, scope, mode: decision.mode, reason: decision.reason, threshold, angles: decision.angles, groups: decision.groups, floors: decision.floors },
       { jq: opts.jq, silent: opts.silent },
     );
   } catch (err) {

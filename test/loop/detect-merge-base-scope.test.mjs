@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
-import { detectMergeBaseScope } from "../../scripts/loop/detect-change-scope.mjs";
+import { detectMergeBaseChangedFiles, detectMergeBaseScope } from "../../scripts/loop/detect-change-scope.mjs";
 
 // #1174: the merge-base scope re-derivation used to accept a light inline verdict
 // at merge time. It MUST fail CLOSED — any missing input or git failure yields
@@ -60,5 +60,71 @@ test("detectMergeBaseScope reports the merge-base diff scope for the head", asyn
     assert.equal(result.linesChanged, 1);
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// GATE-EXEC-PROPORTIONALITY: detectMergeBaseChangedFiles feeds the risk-path
+// floor at merge-gate re-verify time and MUST diff the `cwd` repo regardless
+// of an ambient GIT_DIR/GIT_WORK_TREE — a poisoned env pointing at a
+// DIFFERENT repo must never silently resolve that other repo's (possibly
+// clean) path list, which would fail-OPEN the floor.
+
+test("detectMergeBaseChangedFiles fails closed without base or head", () => {
+  assert.equal(detectMergeBaseChangedFiles({ base: null, head: "HEAD" }).ok, false);
+  assert.equal(detectMergeBaseChangedFiles({ base: "HEAD", head: null }).ok, false);
+  assert.equal(detectMergeBaseChangedFiles({}).ok, false);
+});
+
+test("detectMergeBaseChangedFiles reports the merge-base diff's changed files for the head", async () => {
+  const dir = await makeRepo();
+  try {
+    await writeFile(path.join(dir, "a.txt"), "one\n", "utf8");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-qm", "base");
+    const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+    await writeFile(path.join(dir, "b.txt"), "two\n", "utf8");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-qm", "head");
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+    const result = detectMergeBaseChangedFiles({ base, head, cwd: dir });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.files, ["b.txt"]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("detectMergeBaseChangedFiles ignores an ambient GIT_DIR/GIT_WORK_TREE pointing at a DIFFERENT repo", async () => {
+  const realRepo = await makeRepo();
+  const poisonRepo = await makeRepo();
+  const savedGitDir = process.env.GIT_DIR;
+  const savedGitWorkTree = process.env.GIT_WORK_TREE;
+  try {
+    // Poison repo: a clean, empty history — if the env override leaked
+    // through, the diff would resolve HERE and report zero changed files.
+    await writeFile(path.join(poisonRepo, "clean.txt"), "clean\n", "utf8");
+    git(poisonRepo, "add", "-A");
+    git(poisonRepo, "commit", "-qm", "poison base");
+
+    // Real repo: the actual diff we want measured.
+    await writeFile(path.join(realRepo, "a.txt"), "one\n", "utf8");
+    git(realRepo, "add", "-A");
+    git(realRepo, "commit", "-qm", "base");
+    const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: realRepo, encoding: "utf8" }).trim();
+    await writeFile(path.join(realRepo, "risky.txt"), "two\n", "utf8");
+    git(realRepo, "add", "-A");
+    git(realRepo, "commit", "-qm", "head");
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: realRepo, encoding: "utf8" }).trim();
+
+    process.env.GIT_DIR = path.join(poisonRepo, ".git");
+    process.env.GIT_WORK_TREE = poisonRepo;
+    const result = detectMergeBaseChangedFiles({ base, head, cwd: realRepo });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.files, ["risky.txt"]);
+  } finally {
+    if (savedGitDir === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = savedGitDir;
+    if (savedGitWorkTree === undefined) delete process.env.GIT_WORK_TREE; else process.env.GIT_WORK_TREE = savedGitWorkTree;
+    await rm(realRepo, { recursive: true, force: true });
+    await rm(poisonRepo, { recursive: true, force: true });
   }
 });

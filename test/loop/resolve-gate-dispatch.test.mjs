@@ -111,6 +111,83 @@ test("a diff touching a risk path forces full_fanout even though it is tiny and 
   }
 });
 
+test("the emitted plan carries angles + groups + floors (GATE-EXEC-PROPORTIONALITY, primer-owned deterministic plan)", async () => {
+  const { tmp, fixture } = await makeFixture({
+    devloops: LIGHT_DEVLOOPS,
+    headFiles: { "docs/note.md": "A trivial docs change.\n" },
+  });
+  try {
+    const result = runDispatch(fixture);
+    assert.equal(result.mode, "inline");
+    assert.ok(Array.isArray(result.angles));
+    assert.ok(Array.isArray(result.groups));
+    assert.equal(typeof result.floors, "object");
+    assert.equal(result.floors.riskPath, false);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("a risky diff that ALSO matches a configured tier resolves the FULL untriered angle set, not the tier's reduced set", async () => {
+  const devloops = `${LIGHT_DEVLOOPS}gates:\n  draft:\n    tiers:\n      - name: docs\n        match:\n          kinds: [docs]\n        angles: [link-check]\n`;
+  // Non-risky control: a docs diff OUTSIDE any risk path matches the "docs"
+  // tier and gets its REDUCED angle set (mandatory pr-description + docs).
+  const control = await makeFixture({ devloops, headFiles: { "docs/note.md": "A tiny doc.\n" } });
+  // Risky case: the SAME docs-classified diff, but under scripts/**/*gate* —
+  // matches the same tier by kind, yet also trips the risk-path floor.
+  const risky = await makeFixture({ devloops, headFiles: { "scripts/loop/gate-note.md": "A tiny doc.\n" } });
+  try {
+    // Non-risky, under-cap, tier-matched diff: no floor fires, so mode may be
+    // "inline" (nothing fires) — only the ANGLE SET (the tier's reduced set)
+    // matters for this comparison, not the mode.
+    const controlResult = runDispatch(control.fixture);
+    const riskyResult = runDispatch(risky.fixture);
+    assert.equal(riskyResult.mode, "full_fanout");
+    assert.equal(riskyResult.reason, "risk_path_touch");
+    // The floored angle set is a strict superset of the tier's reduced set —
+    // proof the full untriered pool was used, not the tier's reduction.
+    assert.ok(riskyResult.angles.length > controlResult.angles.length, JSON.stringify({ risky: riskyResult.angles, control: controlResult.angles }));
+    for (const angle of controlResult.angles) {
+      assert.ok(riskyResult.angles.includes(angle), `expected floored angle set to still include tier angle ${angle}`);
+    }
+  } finally {
+    await rm(control.tmp, { recursive: true, force: true });
+    await rm(risky.tmp, { recursive: true, force: true });
+  }
+});
+
+// KNOWN, bounded range asymmetry (resolve-gate-dispatch.mjs's own doc
+// comment): risk-path/scope facts read the two-dot `base..head` diff while
+// the size-budget outcome reads the shared three-dot `base...head` merge-base
+// diff. When `base` has moved forward independently of `head`, the two
+// ranges genuinely describe different diffs. This must never crash or emit a
+// self-contradictory result — the tool still returns ONE coherent decision
+// even when its own two internal reads disagree on the underlying diff.
+test("a diverged base (base advanced independently of head) still resolves one coherent, non-crashing plan", async () => {
+  const { tmp, fixture } = await makeFixture({
+    devloops: LIGHT_DEVLOOPS,
+    headFiles: { "docs/note.md": "A trivial docs change.\n" },
+  });
+  try {
+    // Advance `base` past its original position with an UNRELATED commit —
+    // the two-dot base..head diff now also reflects base's own drift
+    // reversed, while the three-dot base...head (size-budget) diff does not.
+    execSync("git checkout -q base", { cwd: fixture, stdio: "ignore" });
+    await mkdir(path.join(fixture, "unrelated"), { recursive: true });
+    await writeFile(path.join(fixture, "unrelated", "extra.md"), "unrelated base-only content\n");
+    execSync("git add . && git commit -qm 'base drifts forward'", { cwd: fixture, stdio: "ignore" });
+    execSync("git checkout -q -", { cwd: fixture, stdio: "ignore" }); // back to head's commit
+
+    const result = runDispatch(fixture);
+    assert.equal(result.ok, true);
+    assert.ok(["inline", "full_fanout"].includes(result.mode));
+    assert.equal(typeof result.reason, "string");
+    assert.ok(Array.isArray(result.angles) || result.angles === null);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test("over-cap still short-circuits to over_threshold before the new floors are consulted", async () => {
   const { tmp, fixture } = await makeFixture({
     devloops: "version: 1\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 1\n    maxLines: 1\n",

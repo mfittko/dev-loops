@@ -39,6 +39,7 @@ import {
   buildFanoutEnforcement,
   detectCheckpointEvidence,
   deriveEvidenceState,
+  isSizeOutcomeT1Clean,
   EVIDENCE_STATE,
 } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { fetchGithubReviewThreadsPayload } from "../../scripts/github/capture-review-threads.mjs";
@@ -2332,6 +2333,21 @@ test("buildPreMergeGateCheck (#1174) non-regression: fanout gates unaffected by 
   });
   assert.equal(provFail.ok, false);
   assert.ok(provFail.failures.some((f) => f.includes("requireFanoutProvenance")), JSON.stringify(provFail.failures));
+});
+
+test("isSizeOutcomeT1Clean (GATE-EXEC-PROPORTIONALITY): malformed/absent T1 evidence fails CLOSED, never silently reads as clean", () => {
+  assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", tierLogicLoc: { t1: 0 } }), true);
+  // Missing tierLogicLoc entirely — `undefined > 0` is false, so a naive
+  // `!(t1 > 0)` check would wrongly accept this as clean.
+  assert.equal(isSizeOutcomeT1Clean({ outcome: "pass" }), false);
+  // Non-numeric t1 — `NaN > 0` is also false.
+  assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", tierLogicLoc: { t1: NaN } }), false);
+  assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", tierLogicLoc: { t1: "0" } }), false);
+  assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", tierLogicLoc: { t1: -1 } }), false);
+  assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", tierLogicLoc: { t1: 5 } }), false);
+  assert.equal(isSizeOutcomeT1Clean({ outcome: "escalate", tierLogicLoc: { t1: 0 } }), false);
+  assert.equal(isSizeOutcomeT1Clean(null), false);
+  assert.equal(isSizeOutcomeT1Clean(undefined), false);
 });
 
 test("buildFanoutEnforcement (#1174) re-derives scope fail-closed and sets scopeUnderThreshold for light inline verdicts", async () => {

@@ -793,6 +793,25 @@ async function resolveAngleLayerConfig({ invokingConfig, repoRoot, headSha }) {
  * lets the pre-merge check accept an inline single-agent verdict for a
  * small-scope PR instead of always rejecting inline evidence.
  */
+/**
+ * Pure predicate: is a check-size-budget.mjs sizeOutcome genuinely T1-clean —
+ * a `pass` outcome AND a finite, non-negative T1-tier slice equal to 0 (the
+ * clean value)? `undefined > 0` and `NaN > 0` both evaluate false, so a bare
+ * `!(t1 > 0)` comparison would read malformed/absent T1 evidence (a missing
+ * `tierLogicLoc`, a non-numeric `t1`) as clean and admit the light path on
+ * unreadable evidence. This requires a genuine NUMBER, never a truthiness
+ * check, so malformed evidence fails CLOSED exactly like a real
+ * size-budget computation error.
+ * @param {{ outcome?: string, tierLogicLoc?: { t1?: number } }|null|undefined} sizeOutcome
+ * @returns {boolean}
+ */
+export function isSizeOutcomeT1Clean(sizeOutcome) {
+  if (sizeOutcome == null || typeof sizeOutcome !== "object") return false;
+  if (sizeOutcome.outcome !== "pass") return false;
+  const t1 = sizeOutcome.tierLogicLoc?.t1;
+  return typeof t1 === "number" && Number.isFinite(t1) && t1 === 0;
+}
+
 export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGateMarker, preApprovalGateMarker, config, cwd, hasFullLabel = false, baseRef = null }) {
   // Fail open when config could not be loaded/validated. `== null` covers both
   // null and undefined; the loader only ever yields null on failure, but the
@@ -882,7 +901,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
       if (riskPathOk) {
         try {
           const sizeOutcome = await evaluatePrSizeBudget({ base: baseRef, head: headSha, repoRoot });
-          sizeOutcomeOk = sizeOutcome.outcome === "pass" && !(sizeOutcome.tierLogicLoc?.t1 > 0);
+          sizeOutcomeOk = isSizeOutcomeT1Clean(sizeOutcome);
         } catch {
           sizeOutcomeOk = false; // fails CLOSED on a size-budget computation error
         }
