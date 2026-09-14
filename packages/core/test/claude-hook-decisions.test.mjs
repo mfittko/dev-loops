@@ -10,32 +10,32 @@ const TARGET = "mfittko/dev-loops";
 // ---------------------------------------------------------------------------
 
 test("decideBashGate allows non-gated commands", () => {
-  assert.equal(decideBashGate({ command: "npm test", repoSlug: TARGET }).decision, "allow");
-  assert.equal(decideBashGate({ command: "gh pr view 1", repoSlug: TARGET }).decision, "allow");
+  assert.equal(decideBashGate({ command: "npm test", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");
+  assert.equal(decideBashGate({ command: "gh pr view 1", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");
 });
 
 test("decideBashGate denies git stash on the target repo (refs/stash is shared across worktrees)", () => {
-  const d = decideBashGate({ command: "git stash", repoSlug: TARGET });
+  const d = decideBashGate({ command: "git stash", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /git stash blocked/);
   assert.match(d.reason, /refs\/stash is shared/);
 });
 
 test("decideBashGate allows git stash off the target repo", () => {
-  assert.equal(decideBashGate({ command: "git stash pop", repoSlug: "someone/else" }).decision, "allow");
-  assert.equal(decideBashGate({ command: "git stash pop", repoSlug: null }).decision, "allow");
+  assert.equal(decideBashGate({ command: "git stash pop", repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");
+  assert.equal(decideBashGate({ command: "git stash pop", repoSlug: null, inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");
 });
 
 test("decideBashGate denies git stash behind env-assignment/wrapper/path/git-option prefixes", () => {
-  assert.equal(decideBashGate({ command: "GIT_DIR=.git git stash", repoSlug: TARGET }).decision, "deny");
-  assert.equal(decideBashGate({ command: "command git stash", repoSlug: TARGET }).decision, "deny");
-  assert.equal(decideBashGate({ command: "/usr/bin/git stash", repoSlug: TARGET }).decision, "deny");
-  assert.equal(decideBashGate({ command: "git -C /tmp stash", repoSlug: TARGET }).decision, "deny");
-  assert.equal(decideBashGate({ command: "git -c foo=bar stash pop", repoSlug: TARGET }).decision, "deny");
+  assert.equal(decideBashGate({ command: "GIT_DIR=.git git stash", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision, "deny");
+  assert.equal(decideBashGate({ command: "command git stash", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision, "deny");
+  assert.equal(decideBashGate({ command: "/usr/bin/git stash", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision, "deny");
+  assert.equal(decideBashGate({ command: "git -C /tmp stash", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision, "deny");
+  assert.equal(decideBashGate({ command: "git -c foo=bar stash pop", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision, "deny");
 });
 
 test("decideBashGate denies ungated gh pr ready in the target repo", () => {
-  const d = decideBashGate({ command: "gh pr ready 17", repoSlug: TARGET, gatePassed: false });
+  const d = decideBashGate({ command: "gh pr ready 17", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, gatePassed: false });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /no visible clean draft_gate/);
   assert.match(d.reason, /#17/);
@@ -44,7 +44,7 @@ test("decideBashGate denies ungated gh pr ready in the target repo", () => {
 // Raw `gh pr merge` is forbidden outright — only the wrapper is sanctioned. A direct
 // merge must never bypass the wrapper's mandatory approver / merge-class / fresh-approval checks.
 test("decideBashGate denies a raw gh pr merge in the target repo", () => {
-  const d = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, gatePassed: false });
+  const d = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, gatePassed: false });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /gh pr merge is forbidden/);
   assert.match(d.reason, /--pr 1\b/);
@@ -53,7 +53,7 @@ test("decideBashGate denies a raw gh pr merge in the target repo", () => {
 // issue #1939: raw `gh pr merge` is forbidden — the interception deny directs the caller to the
 // sanctioned wrapper so a flagged raw merge names its replacement.
 test("decideBashGate deny for a raw merge points to the merge-pr.mjs wrapper", () => {
-  const d = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, gatePassed: false });
+  const d = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, gatePassed: false });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /scripts\/github\/merge-pr\.mjs/);
   assert.match(d.reason, /--human-approved-by/);
@@ -64,7 +64,7 @@ test("decideBashGate deny for a raw merge points to the merge-pr.mjs wrapper", (
 test("decideBashGate hints the write/merge split when the compound command also writes gate evidence", () => {
   const d = decideBashGate({
     command: "node scripts/loop/write-gate-findings-log.mjs --pr 1 && gh pr merge 1 --squash",
-    repoSlug: TARGET,
+    repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET,
     gatePassed: false,
   });
   assert.equal(d.decision, "deny");
@@ -73,7 +73,7 @@ test("decideBashGate hints the write/merge split when the compound command also 
 
   const d2 = decideBashGate({
     command: "node scripts/github/upsert-checkpoint-verdict.mjs --pr 1 && gh pr merge 1",
-    repoSlug: TARGET,
+    repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET,
     gatePassed: false,
   });
   assert.equal(d2.decision, "deny");
@@ -81,14 +81,14 @@ test("decideBashGate hints the write/merge split when the compound command also 
 });
 
 test("decideBashGate keeps the standard message for a bare gh pr merge (no evidence write)", () => {
-  const d = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, gatePassed: false });
+  const d = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, gatePassed: false });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /gh pr merge is forbidden/);
   assert.doesNotMatch(d.reason, /hooks evaluate before the command runs/);
 });
 
 test("decideBashGate denies a raw gh pr merge even when pre-merge evidence passed (forbidden outright)", () => {
-  const d = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, gatePassed: true });
+  const d = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, gatePassed: true });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /gh pr merge is forbidden/);
   assert.match(d.reason, /merge-pr\.mjs/);
@@ -96,63 +96,63 @@ test("decideBashGate denies a raw gh pr merge even when pre-merge evidence passe
 
 test("decideBashGate passes through gh pr merge for a non-target --repo", () => {
   assert.equal(
-    decideBashGate({ command: "gh pr merge --repo other/repo 1", repoSlug: TARGET, gatePassed: false }).decision,
+    decideBashGate({ command: "gh pr merge --repo other/repo 1", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, gatePassed: false }).decision,
     "allow",
   );
 });
 
 test("decideBashGate passes through gh pr merge outside the target repo", () => {
   assert.equal(
-    decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: "someone/else", gatePassed: false }).decision,
+    decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET, gatePassed: false }).decision,
     "allow",
   );
 });
 
 // Copilot review findings: compound command bypasses must be blocked.
 test("decideBashGate denies gh pr merge in a later compound segment", () => {
-  const d = decideBashGate({ command: "echo ok && gh pr merge 1 --squash", repoSlug: TARGET, gatePassed: false });
+  const d = decideBashGate({ command: "echo ok && gh pr merge 1 --squash", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, gatePassed: false });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /gh pr merge is forbidden/);
 });
 
 test("decideBashGate applies the stricter merge gate when both ready and merge appear", () => {
   // gh pr ready && gh pr merge — the merge verb (forbidden outright) is the stricter deny.
-  const d = decideBashGate({ command: "gh pr ready 1 && gh pr merge 1", repoSlug: TARGET, gatePassed: false });
+  const d = decideBashGate({ command: "gh pr ready 1 && gh pr merge 1", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, gatePassed: false });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /gh pr merge is forbidden/);
 });
 
 test("decideBashGate denies gh pr merge when PR number cannot be determined", () => {
-  const d = decideBashGate({ command: "gh pr merge --squash", repoSlug: TARGET, gatePassed: false });
+  const d = decideBashGate({ command: "gh pr merge --squash", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, gatePassed: false });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /could not determine the PR number/);
 });
 
 test("decideBashGate denies a raw gh pr merge and still surfaces a gate error", () => {
-  const d = decideBashGate({ command: "gh pr merge 42", repoSlug: TARGET, gateError: "could not run the gate guard script" });
+  const d = decideBashGate({ command: "gh pr merge 42", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, gateError: "could not run the gate guard script" });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /gh pr merge is forbidden/);
   assert.match(d.reason, /gate evidence check also failed/);
 });
 
 test("decideBashGate allows gh pr ready when the draft gate passed", () => {
-  assert.equal(decideBashGate({ command: "gh pr ready 17", repoSlug: TARGET, gatePassed: true }).decision, "allow");
+  assert.equal(decideBashGate({ command: "gh pr ready 17", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, gatePassed: true }).decision, "allow");
 });
 
 test("decideBashGate passes through when not in the target repo", () => {
-  assert.equal(decideBashGate({ command: "gh pr ready 17", repoSlug: "someone/else", gatePassed: false }).decision, "allow");
-  assert.equal(decideBashGate({ command: "gh pr ready 17", repoSlug: null, gatePassed: false }).decision, "allow");
+  assert.equal(decideBashGate({ command: "gh pr ready 17", repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET, gatePassed: false }).decision, "allow");
+  assert.equal(decideBashGate({ command: "gh pr ready 17", repoSlug: null, inManagedContext: true, managedRepoSlug: TARGET, gatePassed: false }).decision, "allow");
 });
 
 test("decideBashGate passes through an explicit non-target --repo", () => {
   assert.equal(
-    decideBashGate({ command: "gh pr ready --repo other/repo 1", repoSlug: TARGET, gatePassed: false }).decision,
+    decideBashGate({ command: "gh pr ready --repo other/repo 1", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, gatePassed: false }).decision,
     "allow",
   );
 });
 
 test("decideBashGate denies raw gh pr create in the target repo", () => {
-  const d = decideBashGate({ command: "gh pr create --title x --body y", repoSlug: TARGET });
+  const d = decideBashGate({ command: "gh pr create --title x --body y", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /gh pr create blocked/);
   assert.match(d.reason, /create-pr\.mjs/);
@@ -160,50 +160,50 @@ test("decideBashGate denies raw gh pr create in the target repo", () => {
 
 test("decideBashGate denies raw gh pr create --draft too (wrapper is the only path)", () => {
   // Even an explicit --draft must route through the wrapper (it also self-assigns).
-  const d = decideBashGate({ command: "gh pr create --draft --fill", repoSlug: TARGET });
+  const d = decideBashGate({ command: "gh pr create --draft --fill", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET });
   assert.equal(d.decision, "deny");
 });
 
 test("decideBashGate denies gh pr create in a later compound segment", () => {
-  const d = decideBashGate({ command: "git push && gh pr create --fill", repoSlug: TARGET });
+  const d = decideBashGate({ command: "git push && gh pr create --fill", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /gh pr create blocked/);
 });
 
 test("decideBashGate denies gh pr create hidden behind newline/env/wrapper/path bypasses", () => {
-  assert.equal(decideBashGate({ command: "echo hi\ngh pr create --fill", repoSlug: TARGET }).decision, "deny");
-  assert.equal(decideBashGate({ command: "GH_TOKEN=x gh pr create --fill", repoSlug: TARGET }).decision, "deny");
-  assert.equal(decideBashGate({ command: "command gh pr create", repoSlug: TARGET }).decision, "deny");
-  assert.equal(decideBashGate({ command: "/usr/bin/gh pr create", repoSlug: TARGET }).decision, "deny");
+  assert.equal(decideBashGate({ command: "echo hi\ngh pr create --fill", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision, "deny");
+  assert.equal(decideBashGate({ command: "GH_TOKEN=x gh pr create --fill", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision, "deny");
+  assert.equal(decideBashGate({ command: "command gh pr create", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision, "deny");
+  assert.equal(decideBashGate({ command: "/usr/bin/gh pr create", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision, "deny");
   // shared root cause: ready reached via a newline is also gated
-  assert.equal(decideBashGate({ command: "echo hi\ngh pr ready 5", repoSlug: TARGET, gatePassed: false }).decision, "deny");
+  assert.equal(decideBashGate({ command: "echo hi\ngh pr ready 5", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, gatePassed: false }).decision, "deny");
 });
 
 test("decideBashGate allows the create-pr.mjs wrapper (not a raw gh pr create)", () => {
   assert.equal(
-    decideBashGate({ command: "node scripts/github/create-pr.mjs --title x --fill", repoSlug: TARGET }).decision,
+    decideBashGate({ command: "node scripts/github/create-pr.mjs --title x --fill", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision,
     "allow",
   );
   // wrapper still passes through even with a leading env assignment
   assert.equal(
-    decideBashGate({ command: "GH_TOKEN=x node scripts/github/create-pr.mjs --fill", repoSlug: TARGET }).decision,
+    decideBashGate({ command: "GH_TOKEN=x node scripts/github/create-pr.mjs --fill", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision,
     "allow",
   );
 });
 
 test("decideBashGate passes through gh pr create outside the target repo", () => {
-  assert.equal(decideBashGate({ command: "gh pr create --fill", repoSlug: "someone/else" }).decision, "allow");
-  assert.equal(decideBashGate({ command: "gh pr create --fill", repoSlug: null }).decision, "allow");
+  assert.equal(decideBashGate({ command: "gh pr create --fill", repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");
+  assert.equal(decideBashGate({ command: "gh pr create --fill", repoSlug: null, inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");
 });
 
 test("decideBashGate passes through gh pr create with an explicit non-target --repo", () => {
   assert.equal(
-    decideBashGate({ command: "gh pr create --repo other/repo --fill", repoSlug: TARGET }).decision,
+    decideBashGate({ command: "gh pr create --repo other/repo --fill", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision,
     "allow",
   );
   // From any cwd, an explicit non-target repo stays out of our concern.
   assert.equal(
-    decideBashGate({ command: "gh pr create --repo other/repo --fill", repoSlug: null }).decision,
+    decideBashGate({ command: "gh pr create --repo other/repo --fill", repoSlug: null, inManagedContext: true, managedRepoSlug: TARGET }).decision,
     "allow",
   );
 });
@@ -211,29 +211,29 @@ test("decideBashGate passes through gh pr create with an explicit non-target --r
 test("decideBashGate denies gh pr create --repo targeting the repo regardless of cwd (#1047)", () => {
   // Explicit --repo at the target still opens a ready PR bypassing the draft-first wrapper,
   // even run from outside the repo (repoSlug null or a non-target repo).
-  const outside = decideBashGate({ command: `gh pr create --repo ${TARGET} --fill`, repoSlug: null });
+  const outside = decideBashGate({ command: `gh pr create --repo ${TARGET} --fill`, repoSlug: null, inManagedContext: true, managedRepoSlug: TARGET });
   assert.equal(outside.decision, "deny");
   assert.match(outside.reason, /gh pr create blocked/);
   assert.equal(
-    decideBashGate({ command: `gh pr create --repo ${TARGET} --fill`, repoSlug: "someone/else" }).decision,
+    decideBashGate({ command: `gh pr create --repo ${TARGET} --fill`, repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET }).decision,
     "deny",
   );
 });
 
 test("decideBashGate evaluates each gh pr create segment's scope (multi-create bypass)", () => {
   // The bypass: a leading out-of-scope create must not shield a later in-scope raw create.
-  const bypass = decideBashGate({ command: "gh pr create --repo other/repo && gh pr create --fill", repoSlug: TARGET });
+  const bypass = decideBashGate({ command: "gh pr create --repo other/repo && gh pr create --fill", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET });
   assert.equal(bypass.decision, "deny");
   assert.match(bypass.reason, /gh pr create blocked/);
   // Reverse order — the in-scope create leads — also denies.
   assert.equal(
-    decideBashGate({ command: "gh pr create --fill && gh pr create --repo other/repo", repoSlug: TARGET }).decision,
+    decideBashGate({ command: "gh pr create --fill && gh pr create --repo other/repo", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision,
     "deny",
   );
   // Every create segment carries an explicit non-target --repo → none in scope even when
   // cwd is the target, so this passes through (locks the per-segment semantics).
   assert.equal(
-    decideBashGate({ command: "gh pr create --repo other/repo && gh pr create --repo another/repo", repoSlug: TARGET }).decision,
+    decideBashGate({ command: "gh pr create --repo other/repo && gh pr create --repo another/repo", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision,
     "allow",
   );
 });
@@ -243,65 +243,65 @@ test("decideBashGate evaluates each gh pr create segment's scope (multi-create b
 const SUB = "dev-loop"; // any non-null agent_type = subagent context
 
 test("decideBashGate denies raw gh issue create from a subagent on the target repo", () => {
-  const d = decideBashGate({ command: "gh issue create --title x --body y", repoSlug: TARGET, agentType: SUB });
+  const d = decideBashGate({ command: "gh issue create --title x --body y", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: SUB });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /Ad-hoc GitHub issue\/PR creation/);
 });
 
 test("decideBashGate ALLOWS raw gh issue create from the MAIN agent (agentType null) — AC3", () => {
-  assert.equal(decideBashGate({ command: "gh issue create --title x --body y", repoSlug: TARGET }).decision, "allow");
+  assert.equal(decideBashGate({ command: "gh issue create --title x --body y", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");
   assert.equal(
-    decideBashGate({ command: "gh issue create --title x", repoSlug: TARGET, agentType: null }).decision,
+    decideBashGate({ command: "gh issue create --title x", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null }).decision,
     "allow",
   );
 });
 
 test("decideBashGate denies raw gh issue/pr comment from a subagent on the target repo", () => {
   assert.equal(
-    decideBashGate({ command: "gh issue comment 5 --body hi", repoSlug: TARGET, agentType: SUB }).decision,
+    decideBashGate({ command: "gh issue comment 5 --body hi", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: SUB }).decision,
     "deny",
   );
   assert.equal(
-    decideBashGate({ command: "gh pr comment 5 --body hi", repoSlug: TARGET, agentType: SUB }).decision,
+    decideBashGate({ command: "gh pr comment 5 --body hi", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: SUB }).decision,
     "deny",
   );
 });
 
 test("decideBashGate denies raw gh issue edit from a subagent on the target repo", () => {
   assert.equal(
-    decideBashGate({ command: "gh issue edit 5 --body-file x", repoSlug: TARGET, agentType: SUB }).decision,
+    decideBashGate({ command: "gh issue edit 5 --body-file x", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: SUB }).decision,
     "deny",
   );
 });
 
 test("decideBashGate ALLOWS raw gh issue edit from the MAIN agent (agentType null)", () => {
   assert.equal(
-    decideBashGate({ command: "gh issue edit 5 --body-file x", repoSlug: TARGET, agentType: null }).decision,
+    decideBashGate({ command: "gh issue edit 5 --body-file x", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null }).decision,
     "allow",
   );
 });
 
 test("decideBashGate allows subagent gh issue edit with an explicit non-target --repo", () => {
   assert.equal(
-    decideBashGate({ command: "gh issue edit 5 --repo other/repo --body-file x", repoSlug: TARGET, agentType: SUB }).decision,
+    decideBashGate({ command: "gh issue edit 5 --repo other/repo --body-file x", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: SUB }).decision,
     "allow",
   );
 });
 
 test("decideBashGate allows subagent gh issue create with an explicit non-target --repo", () => {
   assert.equal(
-    decideBashGate({ command: "gh issue create --repo other/repo --title x", repoSlug: TARGET, agentType: SUB }).decision,
+    decideBashGate({ command: "gh issue create --repo other/repo --title x", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: SUB }).decision,
     "allow",
   );
 });
 
 test("decideBashGate denies subagent gh issue create --repo targeting the repo regardless of cwd", () => {
   assert.equal(
-    decideBashGate({ command: `gh issue create --repo ${TARGET} --title x`, repoSlug: null, agentType: SUB }).decision,
+    decideBashGate({ command: `gh issue create --repo ${TARGET} --title x`, repoSlug: null, inManagedContext: true, managedRepoSlug: TARGET, agentType: SUB }).decision,
     "deny",
   );
   assert.equal(
-    decideBashGate({ command: `gh issue create --repo ${TARGET} --title x`, repoSlug: "someone/else", agentType: SUB }).decision,
+    decideBashGate({ command: `gh issue create --repo ${TARGET} --title x`, repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET, agentType: SUB }).decision,
     "deny",
   );
 });
@@ -309,16 +309,16 @@ test("decideBashGate denies subagent gh issue create --repo targeting the repo r
 test("decideBashGate denies subagent gh issue create redirected via inline GH_REPO= to the target (#1074)", () => {
   // GH_REPO= (no --repo flag) targets the repo → the off-cwd redirect hole is closed.
   assert.equal(
-    decideBashGate({ command: `GH_REPO=${TARGET} gh issue create --title x`, repoSlug: "someone/else", agentType: SUB }).decision,
+    decideBashGate({ command: `GH_REPO=${TARGET} gh issue create --title x`, repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET, agentType: SUB }).decision,
     "deny",
   );
   assert.equal(
-    decideBashGate({ command: `GH_REPO=${TARGET} gh issue create --title x`, repoSlug: null, agentType: SUB }).decision,
+    decideBashGate({ command: `GH_REPO=${TARGET} gh issue create --title x`, repoSlug: null, inManagedContext: true, managedRepoSlug: TARGET, agentType: SUB }).decision,
     "deny",
   );
   // quoted GH_REPO value is normalized before the scope compare.
   assert.equal(
-    decideBashGate({ command: `GH_REPO='${TARGET}' gh issue create --title x`, repoSlug: "someone/else", agentType: SUB }).decision,
+    decideBashGate({ command: `GH_REPO='${TARGET}' gh issue create --title x`, repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET, agentType: SUB }).decision,
     "deny",
   );
 });
@@ -326,81 +326,81 @@ test("decideBashGate denies subagent gh issue create redirected via inline GH_RE
 test("decideBashGate: explicit --repo wins over GH_REPO; non-target GH_REPO passes through (#1074)", () => {
   // flag precedence: --repo other/repo overrides GH_REPO=target → off-target → allow.
   assert.equal(
-    decideBashGate({ command: `GH_REPO=${TARGET} gh issue create --repo other/repo --title x`, repoSlug: "someone/else", agentType: SUB }).decision,
+    decideBashGate({ command: `GH_REPO=${TARGET} gh issue create --repo other/repo --title x`, repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET, agentType: SUB }).decision,
     "allow",
   );
   // GH_REPO=non-target from a non-target cwd → off-target → allow.
   assert.equal(
-    decideBashGate({ command: "GH_REPO=other/repo gh issue create --title x", repoSlug: "someone/else", agentType: SUB }).decision,
+    decideBashGate({ command: "GH_REPO=other/repo gh issue create --title x", repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET, agentType: SUB }).decision,
     "allow",
   );
 });
 
 test("decideBashGate allows the comment-issue.mjs wrapper even from a subagent", () => {
   assert.equal(
-    decideBashGate({ command: "node scripts/github/comment-issue.mjs 5 --body hi", repoSlug: TARGET, agentType: SUB }).decision,
+    decideBashGate({ command: "node scripts/github/comment-issue.mjs 5 --body hi", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: SUB }).decision,
     "allow",
   );
   assert.equal(
-    decideBashGate({ command: "node scripts/github/upsert-checkpoint-verdict.mjs --pr 5", repoSlug: TARGET, agentType: SUB }).decision,
+    decideBashGate({ command: "node scripts/github/upsert-checkpoint-verdict.mjs --pr 5", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: SUB }).decision,
     "allow",
   );
 });
 
 test("decideBashGate denies subagent external write hidden behind compound/newline/env bypasses", () => {
   assert.equal(
-    decideBashGate({ command: "git push && gh issue create --title x", repoSlug: TARGET, agentType: SUB }).decision,
+    decideBashGate({ command: "git push && gh issue create --title x", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: SUB }).decision,
     "deny",
   );
   assert.equal(
-    decideBashGate({ command: "echo hi\ngh issue create --title x", repoSlug: TARGET, agentType: SUB }).decision,
+    decideBashGate({ command: "echo hi\ngh issue create --title x", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: SUB }).decision,
     "deny",
   );
   assert.equal(
-    decideBashGate({ command: "GH_TOKEN=x gh issue comment 5 --body hi", repoSlug: TARGET, agentType: SUB }).decision,
+    decideBashGate({ command: "GH_TOKEN=x gh issue comment 5 --body hi", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: SUB }).decision,
     "deny",
   );
 });
 
 test("decideBashGate passes through subagent external write off-target / no target --repo", () => {
   assert.equal(
-    decideBashGate({ command: "gh issue create --title x", repoSlug: "someone/else", agentType: SUB }).decision,
+    decideBashGate({ command: "gh issue create --title x", repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET, agentType: SUB }).decision,
     "allow",
   );
   assert.equal(
-    decideBashGate({ command: "gh issue create --title x", repoSlug: null, agentType: SUB }).decision,
+    decideBashGate({ command: "gh issue create --title x", repoSlug: null, inManagedContext: true, managedRepoSlug: TARGET, agentType: SUB }).decision,
     "allow",
   );
 });
 
 test("decideBashGate does not let a leading out-of-scope external write shield a later in-scope one", () => {
   assert.equal(
-    decideBashGate({ command: "gh issue create --repo other/repo && gh issue comment 5 --body hi", repoSlug: TARGET, agentType: SUB }).decision,
+    decideBashGate({ command: "gh issue create --repo other/repo && gh issue comment 5 --body hi", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: SUB }).decision,
     "deny",
   );
 });
 
 test("decideBashGate treats an EMPTY-STRING agent_type as subagent context (non-null) — denies on target (#1074)", () => {
   assert.equal(
-    decideBashGate({ command: "gh issue create --title x --body y", repoSlug: TARGET, agentType: "" }).decision,
+    decideBashGate({ command: "gh issue create --title x --body y", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: "" }).decision,
     "deny",
   );
 });
 
 test("decideBashGate denies subagent gh issue create with a QUOTED target --repo (#1074)", () => {
   assert.equal(
-    decideBashGate({ command: `gh issue create --repo '${TARGET}' --title x`, repoSlug: null, agentType: SUB }).decision,
+    decideBashGate({ command: `gh issue create --repo '${TARGET}' --title x`, repoSlug: null, inManagedContext: true, managedRepoSlug: TARGET, agentType: SUB }).decision,
     "deny",
   );
   assert.equal(
-    decideBashGate({ command: `gh issue create --repo "${TARGET}" --title x`, repoSlug: null, agentType: SUB }).decision,
+    decideBashGate({ command: `gh issue create --repo "${TARGET}" --title x`, repoSlug: null, inManagedContext: true, managedRepoSlug: TARGET, agentType: SUB }).decision,
     "deny",
   );
 });
 
 test("decideBashGate denies gh pr create with a QUOTED target --repo (#1074)", () => {
   assert.equal(
-    decideBashGate({ command: `gh pr create --repo '${TARGET}' --fill`, repoSlug: null }).decision,
+    decideBashGate({ command: `gh pr create --repo '${TARGET}' --fill`, repoSlug: null, inManagedContext: true, managedRepoSlug: TARGET }).decision,
     "deny",
   );
 });
@@ -412,7 +412,7 @@ test("decideBashGate does not let an out-of-scope gh pr create short-circuit rea
   assert.equal(
     decideBashGate({
       command: "gh pr create --repo other/repo && gh pr merge 5",
-      repoSlug: TARGET,
+      repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET,
       gatePassed: false,
     }).decision,
     "deny",
@@ -420,26 +420,26 @@ test("decideBashGate does not let an out-of-scope gh pr create short-circuit rea
   assert.equal(
     decideBashGate({
       command: "gh pr create --repo other/repo && gh pr ready 5",
-      repoSlug: TARGET,
+      repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET,
       gatePassed: false,
     }).decision,
     "deny",
   );
   // A pure out-of-scope create alone still passes through.
   assert.equal(
-    decideBashGate({ command: "gh pr create --repo other/repo", repoSlug: TARGET }).decision,
+    decideBashGate({ command: "gh pr create --repo other/repo", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision,
     "allow",
   );
 });
 
 test("decideBashGate denies when PR number cannot be determined", () => {
-  const d = decideBashGate({ command: "gh pr ready", repoSlug: TARGET, gatePassed: false });
+  const d = decideBashGate({ command: "gh pr ready", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, gatePassed: false });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /could not determine the PR number/);
 });
 
 test("decideBashGate denies with a guard-failure reason when the gate could not run", () => {
-  const d = decideBashGate({ command: "gh pr ready 5", repoSlug: TARGET, gateError: "could not run the draft-gate guard script" });
+  const d = decideBashGate({ command: "gh pr ready 5", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, gateError: "could not run the draft-gate guard script" });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /draft-gate evidence check failed/);
 });
@@ -645,63 +645,63 @@ test("decideSubagentStopGuard adds a one-more truncation summary at 51 dirty pat
 // ---------------------------------------------------------------------------
 
 test("decideBashGate denies inline interpreters actor-independently on the target repo (OPS-NO-INLINE-INTERPRETER)", () => {
-  const d = decideBashGate({ command: 'node -e "console.log(1)"', repoSlug: TARGET });
+  const d = decideBashGate({ command: 'node -e "console.log(1)"', repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /OPS-NO-INLINE-INTERPRETER/);
   // actor-independent: denied from the main agent too (agentType null)
-  const dMain = decideBashGate({ command: "python3 -c 'print(1)'", repoSlug: TARGET, agentType: null });
+  const dMain = decideBashGate({ command: "python3 -c 'print(1)'", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null });
   assert.equal(dMain.decision, "deny");
   assert.match(dMain.reason, /OPS-NO-INLINE-INTERPRETER/);
 });
 
 test("decideBashGate allows sanctioned node/python script invocations and off-target inline interpreters", () => {
-  assert.equal(decideBashGate({ command: "node scripts/github/comment-issue.mjs 5", repoSlug: TARGET }).decision, "allow");
-  assert.equal(decideBashGate({ command: 'node -e "console.log(1)"', repoSlug: "someone/else" }).decision, "allow");
+  assert.equal(decideBashGate({ command: "node scripts/github/comment-issue.mjs 5", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");
+  assert.equal(decideBashGate({ command: 'node -e "console.log(1)"', repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");
 });
 
 test("decideBashGate denies sub_issues ad-hoc writes naming SUBISSUE-NO-ADHOC-BYPASS (actor-independent)", () => {
-  const d = decideBashGate({ command: "gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6", repoSlug: TARGET, agentType: null });
+  const d = decideBashGate({ command: "gh api -X POST repos/mfittko/dev-loops/issues/5/sub_issues -f child=6", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /SUBISSUE-NO-ADHOC-BYPASS/);
   // a read passes; the sanctioned wrapper passes
-  assert.equal(decideBashGate({ command: "gh api repos/mfittko/dev-loops/issues/5/sub_issues", repoSlug: TARGET }).decision, "allow");
-  assert.equal(decideBashGate({ command: "node scripts/github/manage-sub-issues.mjs --repo x", repoSlug: TARGET }).decision, "allow");
+  assert.equal(decideBashGate({ command: "gh api repos/mfittko/dev-loops/issues/5/sub_issues", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");
+  assert.equal(decideBashGate({ command: "node scripts/github/manage-sub-issues.mjs --repo x", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");
 });
 
 test("decideBashGate denies thread-reply bypasses naming COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER", () => {
-  const rest = decideBashGate({ command: "gh api -X POST repos/mfittko/dev-loops/pulls/5/comments/10/replies -f body=hi", repoSlug: TARGET, agentType: null });
+  const rest = decideBashGate({ command: "gh api -X POST repos/mfittko/dev-loops/pulls/5/comments/10/replies -f body=hi", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null });
   assert.equal(rest.decision, "deny");
   assert.match(rest.reason, /COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER/);
-  const gql = decideBashGate({ command: "gh api graphql -f query='mutation { resolveReviewThread }'", repoSlug: TARGET, agentType: null });
+  const gql = decideBashGate({ command: "gh api graphql -f query='mutation { resolveReviewThread }'", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null });
   assert.equal(gql.decision, "deny");
   assert.match(gql.reason, /COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER/);
   // graphql resolveReviewThread is scoped to the target repo (cwd)
-  assert.equal(decideBashGate({ command: "gh api graphql -f query='mutation { resolveReviewThread }'", repoSlug: "someone/else", agentType: null }).decision, "allow");
-  assert.equal(decideBashGate({ command: "node scripts/github/reply-resolve-review-thread.mjs --thread 5", repoSlug: TARGET }).decision, "allow");
+  assert.equal(decideBashGate({ command: "gh api graphql -f query='mutation { resolveReviewThread }'", repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET, agentType: null }).decision, "allow");
+  assert.equal(decideBashGate({ command: "node scripts/github/reply-resolve-review-thread.mjs --thread 5", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");
 });
 
 test("decideBashGate denies Copilot review-request bypasses naming COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY", () => {
-  const api = decideBashGate({ command: "gh api -X POST repos/mfittko/dev-loops/pulls/5/requested_reviewers -f reviewers[]=copilot-swe-agent", repoSlug: TARGET, agentType: null });
+  const api = decideBashGate({ command: "gh api -X POST repos/mfittko/dev-loops/pulls/5/requested_reviewers -f reviewers[]=copilot-swe-agent", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null });
   assert.equal(api.decision, "deny");
   assert.match(api.reason, /COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY/);
   // a bare /copilot comment summon is refused even from the main agent (actor-independent)
-  const summon = decideBashGate({ command: 'gh pr comment 5 --body "/copilot re-review"', repoSlug: TARGET, agentType: null });
+  const summon = decideBashGate({ command: 'gh pr comment 5 --body "/copilot re-review"', repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null });
   assert.equal(summon.decision, "deny");
   assert.match(summon.reason, /COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY/);
-  assert.equal(decideBashGate({ command: "node scripts/github/request-copilot-review.mjs --pr 5", repoSlug: TARGET }).decision, "allow");
+  assert.equal(decideBashGate({ command: "node scripts/github/request-copilot-review.mjs --pr 5", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET }).decision, "allow");
 });
 
 test("decideBashGate denies detached wait tools only from a subagent (COPILOT-FOLLOWUP-WAIT-TOOLS)", () => {
-  const sub = decideBashGate({ command: "nohup node scripts/foo.mjs > /tmp/x.log 2>&1 &", repoSlug: TARGET, agentType: "dev-loop" });
+  const sub = decideBashGate({ command: "nohup node scripts/foo.mjs > /tmp/x.log 2>&1 &", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: "dev-loop" });
   assert.equal(sub.decision, "deny");
   assert.match(sub.reason, /COPILOT-FOLLOWUP-WAIT-TOOLS/);
   // main agent retains manual wait tooling (behavioral, subagent-only rule)
-  assert.equal(decideBashGate({ command: "nohup node scripts/foo.mjs > /tmp/x.log 2>&1 &", repoSlug: TARGET, agentType: null }).decision, "allow");
+  assert.equal(decideBashGate({ command: "nohup node scripts/foo.mjs > /tmp/x.log 2>&1 &", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null }).decision, "allow");
   // off-target subagent passes through
-  assert.equal(decideBashGate({ command: "nohup node scripts/foo.mjs &", repoSlug: "someone/else", agentType: "dev-loop" }).decision, "allow");
+  assert.equal(decideBashGate({ command: "nohup node scripts/foo.mjs &", repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET, agentType: "dev-loop" }).decision, "allow");
   // the refusal body is not corrupted by a stray concat operator: it names the full deterministic
   // tool set and the banned detach forms (regression for the #1622 gate hardening round)
-  const reason = decideBashGate({ command: "nohup node scripts/foo.mjs &", repoSlug: TARGET, agentType: "dev-loop" }).reason;
+  const reason = decideBashGate({ command: "nohup node scripts/foo.mjs &", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: "dev-loop" }).reason;
   assert.match(reason, /gh run watch/);
   assert.match(reason, /nohup\/disown\/tmux\/screen/);
   assert.doesNotMatch(reason, /NaN/);
@@ -709,29 +709,160 @@ test("decideBashGate denies detached wait tools only from a subagent (COPILOT-FO
 
 test("decideBashGate gates relative-endpoint gh api writes to the target repo", () => {
   // bare relative endpoint (resolved against the cwd repo) is denied in the target repo
-  const d = decideBashGate({ command: "gh api -X POST issues/5/sub_issues -f child=6", repoSlug: TARGET, agentType: null });
+  const d = decideBashGate({ command: "gh api -X POST issues/5/sub_issues -f child=6", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /SUBISSUE-NO-ADHOC-BYPASS/);
   // the same relative write outside the target repo is NOT this repo's bypass
-  assert.equal(decideBashGate({ command: "gh api -X POST issues/5/sub_issues -f child=6", repoSlug: "someone/else", agentType: null }).decision, "allow");
+  assert.equal(decideBashGate({ command: "gh api -X POST issues/5/sub_issues -f child=6", repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET, agentType: null }).decision, "allow");
   // --repo-targeted relative writes to the target repo are denied
-  assert.equal(decideBashGate({ command: "gh api --repo mfittko/dev-loops pulls/5/requested_reviewers -X POST", repoSlug: TARGET, agentType: null }).decision, "deny");
+  assert.equal(decideBashGate({ command: "gh api --repo mfittko/dev-loops pulls/5/requested_reviewers -X POST", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null }).decision, "deny");
 });
 
 test("decideBashGate refuses gh pr merge under humanMergeOnly, actor-independently (STOP-HUMAN-MERGE-001)", () => {
-  const d = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, humanMergeOnly: true, gatePassed: true, agentType: null });
+  const d = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, humanMergeOnly: true, gatePassed: true, agentType: null });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /STOP-HUMAN-MERGE-001/);
   // refusal holds regardless of gate evidence (the human-merge invariant overrides)
-  const dNoEvidence = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, humanMergeOnly: true, gatePassed: false, agentType: null });
+  const dNoEvidence = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, humanMergeOnly: true, gatePassed: false, agentType: null });
   assert.equal(dNoEvidence.decision, "deny");
   assert.match(dNoEvidence.reason, /STOP-HUMAN-MERGE-001/);
   // without humanMergeOnly a raw merge is still forbidden outright (route through the wrapper)
-  const dNoHumanOnly = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, humanMergeOnly: false, gatePassed: true, agentType: null });
+  const dNoHumanOnly = decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, humanMergeOnly: false, gatePassed: true, agentType: null });
   assert.equal(dNoHumanOnly.decision, "deny");
   assert.match(dNoHumanOnly.reason, /gh pr merge is forbidden/);
   // non-target repo is unaffected by this repo's humanMergeOnly invariant
-  assert.equal(decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: "someone/else", humanMergeOnly: true, gatePassed: true, agentType: null }).decision, "allow");
+  assert.equal(decideBashGate({ command: "gh pr merge 1 --squash", repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET, humanMergeOnly: true, gatePassed: true, agentType: null }).decision, "allow");
+});
+
+// ---------------------------------------------------------------------------
+// decideBashGate — managed-repo predicate (#2187): the guard suite must apply in ANY
+// dev-loops-managed consumer repo, not just the hardcoded mfittko/dev-loops slug, and must fail
+// CLOSED (guards still apply) when the managed identity can't be resolved inside a managed context.
+// ---------------------------------------------------------------------------
+
+const CONSUMER = "acme/widgets";
+const CONSUMER_CTX = { inManagedContext: true, managedRepoSlug: CONSUMER, repoSlug: CONSUMER };
+
+test("decideBashGate denies a raw gh pr merge in a non-mfittko managed repo (RAW-GH-PR-MERGE-BYPASS)", () => {
+  const d = decideBashGate({ command: "gh pr merge 5", ...CONSUMER_CTX });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /gh pr merge is forbidden/);
+});
+
+test("decideBashGate denies gh pr ready without gate evidence in a non-mfittko managed repo", () => {
+  const d = decideBashGate({ command: "gh pr ready 5", ...CONSUMER_CTX, gatePassed: false });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /no visible clean draft_gate/);
+});
+
+test("decideBashGate refuses gh pr merge under humanMergeOnly in a non-mfittko managed repo (STOP-HUMAN-MERGE-001)", () => {
+  const d = decideBashGate({ command: "gh pr merge 5", ...CONSUMER_CTX, humanMergeOnly: true, gatePassed: true });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /STOP-HUMAN-MERGE-001/);
+});
+
+test("decideBashGate denies an inline interpreter in a non-mfittko managed repo (OPS-NO-INLINE-INTERPRETER)", () => {
+  const d = decideBashGate({ command: 'node -e "console.log(1)"', ...CONSUMER_CTX });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /OPS-NO-INLINE-INTERPRETER/);
+});
+
+test("decideBashGate denies sub-issue ad-hoc writes (absolute + bare relative) in a non-mfittko managed repo", () => {
+  const abs = decideBashGate({ command: "gh api -X POST repos/acme/widgets/issues/5/sub_issues -f child=6", ...CONSUMER_CTX });
+  assert.equal(abs.decision, "deny");
+  assert.match(abs.reason, /SUBISSUE-NO-ADHOC-BYPASS/);
+  const rel = decideBashGate({ command: "gh api -X POST issues/5/sub_issues -f child=6", ...CONSUMER_CTX });
+  assert.equal(rel.decision, "deny");
+  assert.match(rel.reason, /SUBISSUE-NO-ADHOC-BYPASS/);
+});
+
+test("decideBashGate denies reply-resolve bypasses in a non-mfittko managed repo", () => {
+  const d = decideBashGate({
+    command: "gh api -X POST repos/acme/widgets/pulls/5/comments/9/replies -f body=hi",
+    ...CONSUMER_CTX,
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER/);
+});
+
+test("decideBashGate denies Copilot review-request bypasses in a non-mfittko managed repo", () => {
+  const d = decideBashGate({
+    command: "gh api -X POST repos/acme/widgets/pulls/5/requested_reviewers -f reviewers[]=copilot-swe-agent",
+    ...CONSUMER_CTX,
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY/);
+});
+
+test("decideBashGate denies git stash in a non-mfittko managed repo", () => {
+  const d = decideBashGate({ command: "git stash", ...CONSUMER_CTX });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /git stash blocked/);
+});
+
+test("decideBashGate denies a detached wait tool from the dev-loop agent in a non-mfittko managed repo", () => {
+  const d = decideBashGate({ command: "nohup sleep 1 &", ...CONSUMER_CTX, agentType: "dev-loop" });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /COPILOT-FOLLOWUP-WAIT-TOOLS/);
+});
+
+test("decideBashGate passes an explicit non-managed --repo through, even in a managed context (AC3)", () => {
+  assert.equal(
+    decideBashGate({ command: "gh pr merge --repo other/repo 5", ...CONSUMER_CTX }).decision,
+    "allow",
+  );
+});
+
+test("decideBashGate does not match a foreign repo's absolute sub-issue path against the managed slug (AC3)", () => {
+  assert.equal(
+    decideBashGate({ command: "gh api -X POST repos/other/repo/issues/5/sub_issues -f child=6", ...CONSUMER_CTX }).decision,
+    "allow",
+  );
+});
+
+test("decideBashGate fails closed when the managed context's identity is unresolvable (AC4)", () => {
+  const ambiguous = { inManagedContext: true, managedRepoSlug: null, repoSlug: null };
+  assert.equal(decideBashGate({ command: "gh pr merge 5", ...ambiguous }).decision, "deny");
+  assert.equal(decideBashGate({ command: "gh pr ready 5", ...ambiguous, gatePassed: false }).decision, "deny");
+  assert.equal(decideBashGate({ command: 'node -e "x"', ...ambiguous }).decision, "deny");
+});
+
+test("decideBashGate allows everything in a non-managed context (dev-loops does not manage this repo)", () => {
+  const unmanaged = { inManagedContext: false, managedRepoSlug: null, repoSlug: CONSUMER };
+  assert.equal(decideBashGate({ command: "gh pr merge 5", ...unmanaged }).decision, "allow");
+  assert.equal(decideBashGate({ command: "gh pr ready 5", ...unmanaged, gatePassed: false }).decision, "allow");
+  assert.equal(
+    decideBashGate({ command: "gh pr merge 5", ...unmanaged, humanMergeOnly: true, gatePassed: true }).decision,
+    "allow",
+  );
+  assert.equal(decideBashGate({ command: 'node -e "x"', ...unmanaged }).decision, "allow");
+  assert.equal(
+    decideBashGate({ command: "gh api -X POST repos/acme/widgets/issues/5/sub_issues -f child=6", ...unmanaged }).decision,
+    "allow",
+  );
+  assert.equal(
+    decideBashGate({ command: "gh api -X POST issues/5/sub_issues -f child=6", ...unmanaged }).decision,
+    "allow",
+  );
+  assert.equal(
+    decideBashGate({
+      command: "gh api -X POST repos/acme/widgets/pulls/5/comments/9/replies -f body=hi",
+      ...unmanaged,
+    }).decision,
+    "allow",
+  );
+  assert.equal(
+    decideBashGate({
+      command: "gh api -X POST repos/acme/widgets/pulls/5/requested_reviewers -f reviewers[]=copilot-swe-agent",
+      ...unmanaged,
+    }).decision,
+    "allow",
+  );
+  assert.equal(decideBashGate({ command: "git stash", ...unmanaged }).decision, "allow");
+  assert.equal(
+    decideBashGate({ command: "nohup sleep 1 &", ...unmanaged, agentType: "dev-loop" }).decision,
+    "allow",
+  );
 });
 
 // ---------------------------------------------------------------------------

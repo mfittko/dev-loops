@@ -225,6 +225,55 @@ test("bash-gate hook denies a raw gh api sub_issues write in the target repo (e2
   assert.match(json.hookSpecificOutput.permissionDecisionReason, /manage-sub-issues/);
 });
 
+// A throwaway git repo (outside this repo's own worktree) carrying only a `.devloops` config
+// file variant — enough for `git rev-parse --show-toplevel` to resolve without a remote (the
+// managed-context check never needs repoSlug).
+function makeManagedConfigRepo(configFilename) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bash-gate-devloops-variant-"));
+  spawnSync("git", ["init", "-q"], { cwd: dir, encoding: "utf8" });
+  if (configFilename) {
+    fs.writeFileSync(path.join(dir, configFilename), "schemaVersion: 1\n", "utf8");
+  }
+  return dir;
+}
+
+test("bash-gate hook recognizes every .devloops config variant (bare/.yaml/.yml/.json) as a managed repo — denies git stash (e2e, config-variant fail-closed gap)", () => {
+  // Mirrors the config loader's own variant list (config.mjs's `["", ".yaml", ".yml", ".json"]`
+  // loop). git stash is a clean signal here: `inManagedRepo` (and thus the deny) is gated purely
+  // on `inManagedContext`, with no repoSlug/network dependency to stub.
+  for (const ext of ["", ".yaml", ".yml", ".json"]) {
+    const dir = makeManagedConfigRepo(`.devloops${ext}`);
+    try {
+      const { code, json } = runHook("pre-tool-use-bash-gate.mjs", {
+        tool_name: "Bash",
+        tool_input: { command: "git stash" },
+        cwd: dir,
+      });
+      assert.equal(code, 0);
+      assert.ok(json, `.devloops${ext} must be recognized as a managed-repo config (git stash must be denied)`);
+      assert.equal(json.hookSpecificOutput.permissionDecision, "deny");
+      assert.match(json.hookSpecificOutput.permissionDecisionReason, /git stash blocked/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("bash-gate hook allows git stash in a repo with no .devloops config at all (unmanaged, pass-through)", () => {
+  const dir = makeManagedConfigRepo(null);
+  try {
+    const { code, json } = runHook("pre-tool-use-bash-gate.mjs", {
+      tool_name: "Bash",
+      tool_input: { command: "git stash" },
+      cwd: dir,
+    });
+    assert.equal(code, 0);
+    assert.equal(json, null, "an unmanaged repo (no .devloops config present) must not gate git stash");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("write-guard hook fails open when enforcement is disabled (default)", () => {
   const { code, json } = runHook("pre-tool-use-write-guard.mjs", {
     tool_name: "Write",

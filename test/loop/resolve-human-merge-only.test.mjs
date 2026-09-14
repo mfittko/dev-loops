@@ -33,6 +33,8 @@ test("resolve-human-merge-only prints exactly what the repo config's resolveHuma
   const d = decideBashGate({
     command: "gh pr merge 1 --squash",
     repoSlug: "mfittko/dev-loops",
+    inManagedContext: true,
+    managedRepoSlug: "mfittko/dev-loops",
     gatePassed: true,
     agentType: null,
     humanMergeOnly: r.stdout.trim() === "true",

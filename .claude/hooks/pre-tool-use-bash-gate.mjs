@@ -16,6 +16,7 @@
  *     repo's one `.git` directory (skills/docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout).
  */
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 
 import { decideBashGate } from "./_hook-decisions.mjs";
@@ -35,7 +36,6 @@ import {
   extractPrNumberFromGhPrReadyAnywhere,
   extractPrNumberFromGhPrMergeAnywhere,
   normalizeGitHubRepoSlug,
-  TARGET_REPO_SLUG,
 } from "./_bash-command-classify.mjs";
 
 import { readHookInput, emitDeny, emitAllow } from "./_hook-io.mjs";
@@ -45,27 +45,6 @@ const command = input?.tool_input?.command;
 // Claude exposes `agent_type` only inside a subagent; null in the main agent. Scopes the
 // external-write guard (raw `gh issue create` etc. is blocked only from a subagent).
 const agentType = typeof input?.agent_type === "string" ? input.agent_type : null;
-const isReady = typeof command === "string" && commandContainsGhPrReady(command);
-const isMerge = typeof command === "string" && commandContainsGhPrMerge(command);
-const isCreate = typeof command === "string" && commandContainsGhPrCreate(command);
-const isExternalWrite = typeof command === "string" && commandContainsRawExternalWrite(command);
-const isStash = typeof command === "string" && commandContainsGitStash(command);
-// The six-guard-rule predicates (#1622) — each is decided (with scope + actor policy) inside
-// decideBashGate, so the hook must not short-circuit to allow before deciding them.
-const isInline = typeof command === "string" && commandContainsInlineInterpreter(command);
-const isSubIssue = typeof command === "string" && commandContainsSubIssueAdHocBypass(command);
-const isReplyResolve =
-  typeof command === "string" &&
-  (commandContainsReplyResolveBypass(command) || commandContainsGraphqlResolveReviewThread(command));
-const isRequestApi = typeof command === "string" && commandContainsCopilotRequestBypass(command);
-const isCopilotSummon = typeof command === "string" && commandContainsCopilotSummonComment(command);
-const isWaitTool = typeof command === "string" && commandContainsDetachedWaitTool(command);
-if (
-  !isReady && !isMerge && !isCreate && !isExternalWrite && !isStash &&
-  !isInline && !isSubIssue && !isReplyResolve && !isRequestApi && !isCopilotSummon && !isWaitTool
-) {
-  emitAllow();
-}
 
 const cwd = typeof input?.cwd === "string" && input.cwd ? input.cwd : process.cwd();
 
@@ -82,10 +61,49 @@ try {
   // Not a git repo / no remote — repoSlug stays null; decider passes through.
 }
 
+// A repo is dev-loops-managed when a `.devloops` config exists at its root (the dev-loops-driven
+// context) — replaces the old hardcoded-slug (`repoSlug === TARGET_REPO_SLUG`) comparison so the
+// guard suite applies in any managed consumer repo, not only mfittko/dev-loops. The config loader
+// (packages/core/src/config/config.mjs) accepts a bare `.devloops` file OR any of the
+// `.yaml`/`.yml`/`.json` extensions; this hook is self-contained (cannot import @dev-loops/core),
+// so the same small variant list is replicated inline rather than hardcoding the bare filename —
+// a consumer configured via `.devloops.yaml` alone must still be recognized as managed, or every
+// guard below fails open for it.
+const DEVLOOPS_CONFIG_VARIANTS = ["", ".yaml", ".yml", ".json"];
+const inManagedContext =
+  repoRoot != null && DEVLOOPS_CONFIG_VARIANTS.some((ext) => fs.existsSync(path.join(repoRoot, `.devloops${ext}`)));
+const managedRepoSlug = inManagedContext ? repoSlug : null;
+
+// The quick pre-check booleans below must be computed AFTER managedRepoSlug resolves: the three
+// gh-api classifiers match the managed repo's absolute `repos/<slug>/...` path form only when
+// given that slug, so computing them before resolution (with an implicit null slug) would miss an
+// absolute-path match and wrongly short-circuit to allow.
+const isReady = typeof command === "string" && commandContainsGhPrReady(command);
+const isMerge = typeof command === "string" && commandContainsGhPrMerge(command);
+const isCreate = typeof command === "string" && commandContainsGhPrCreate(command);
+const isExternalWrite = typeof command === "string" && commandContainsRawExternalWrite(command);
+const isStash = typeof command === "string" && commandContainsGitStash(command);
+// The six-guard-rule predicates (#1622) — each is decided (with scope + actor policy) inside
+// decideBashGate, so the hook must not short-circuit to allow before deciding them.
+const isInline = typeof command === "string" && commandContainsInlineInterpreter(command);
+const isSubIssue = typeof command === "string" && commandContainsSubIssueAdHocBypass(command, managedRepoSlug);
+const isReplyResolve =
+  typeof command === "string" &&
+  (commandContainsReplyResolveBypass(command, managedRepoSlug) || commandContainsGraphqlResolveReviewThread(command));
+const isRequestApi = typeof command === "string" && commandContainsCopilotRequestBypass(command, managedRepoSlug);
+const isCopilotSummon = typeof command === "string" && commandContainsCopilotSummonComment(command);
+const isWaitTool = typeof command === "string" && commandContainsDetachedWaitTool(command);
+if (
+  !isReady && !isMerge && !isCreate && !isExternalWrite && !isStash &&
+  !isInline && !isSubIssue && !isReplyResolve && !isRequestApi && !isCopilotSummon && !isWaitTool
+) {
+  emitAllow();
+}
+
 let gatePassed = false;
 let gateError = null;
 let humanMergeOnly = false;
-if (repoSlug === TARGET_REPO_SLUG) {
+if (inManagedContext) {
   // When both verbs appear (compound command), apply the stricter merge gate.
   const pr = isMerge ? extractPrNumberFromGhPrMergeAnywhere(command) : extractPrNumberFromGhPrReadyAnywhere(command);
   // STOP-HUMAN-MERGE-001 (#1622): resolve the repo's effective `autonomy.humanMergeOnly` via the
@@ -101,7 +119,10 @@ if (repoSlug === TARGET_REPO_SLUG) {
       humanMergeOnly = false;
     }
   }
-  if (pr !== null && repoRoot) {
+  // The gate scripts need `--repo <slug>`; when repoSlug is unresolved, skip running them and
+  // leave gatePassed=false — the decider then denies ready/merge fail-closed rather than running
+  // an ambiguous-repo evidence check.
+  if (pr !== null && repoRoot && repoSlug) {
     // Each gate script is overridable for deterministic testing (stub instead of the
     // network-touching real guard). `gh pr ready` → draft-gate only; `gh pr merge` → the full
     // pre-merge evidence check (draft_gate + pre_approval_gate).
@@ -125,7 +146,16 @@ if (repoSlug === TARGET_REPO_SLUG) {
   }
 }
 
-const decision = decideBashGate({ command, repoSlug, gatePassed, gateError, agentType, humanMergeOnly });
+const decision = decideBashGate({
+  command,
+  repoSlug,
+  managedRepoSlug,
+  inManagedContext,
+  gatePassed,
+  gateError,
+  agentType,
+  humanMergeOnly,
+});
 if (decision.decision === "deny") {
   emitDeny(decision.reason);
 }
