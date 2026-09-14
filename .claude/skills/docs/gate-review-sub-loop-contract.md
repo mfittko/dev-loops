@@ -2409,9 +2409,13 @@ existing decision functions — `resolveGateDispatchMode` (mode), `resolveGateTi
 grouping) — exposed as ONE testable object (`{ mode, angles, groups, reason, floors }`)
 via `resolveReviewProportionality` (`@dev-loops/core/config`). It performs no I/O
 itself; `resolve-gate-dispatch.mjs` (the primer's dispatch-decision step) is its ONE
-production caller and supplies the diff-derived facts. Whenever ANY non-overridable
-floor fires, the composer's `angles` is the FULL untriered pool, never a matched
-tier's reduced set — see the floor-vs-tier precedence in the function's own doc
+production caller and supplies the diff-derived facts. Whenever a RISK-signal floor
+fires — a risk-path touch, a non-clean/ambiguous size-budget outcome, missing
+changed-file evidence, or an unclassifiable diff — the composer's `angles` is the
+FULL untriered pool, never a matched tier's reduced set. The hard size cap alone
+(`over_threshold`) forces `full_fanout` DISPATCH (distinct-reviewer-per-angle, never
+the light single-combined path) but KEEPS the diff-class-tier-reduced angle set —
+see the floor-vs-tier precedence in the function's own doc
 comment. `resolveGateAnglesDynamic` (the resolver `write-gate-context.mjs` calls to
 persist the round's angle set) can opt into this SAME precedence via its
 `checkFloors`/`sizeOutcome` parameters, so a round whose dispatch decision was floored
@@ -2427,7 +2431,13 @@ MORE review (the light path is reachable only on PROVABLE triviality, never on
 absence-of-evidence-of-risk):
 
 - **Hard size cap** — `over_threshold` (unchanged, above): the diff exceeds
-  `localImplementation.lightMode.maxFiles`/`maxLines`.
+  `localImplementation.lightMode.maxFiles`/`maxLines`. This floor forces `full_fanout`
+  DISPATCH (distinct-reviewer-per-angle, never the light single-combined path) — it
+  does NOT ADDITIONALLY force the full untriered angle pool: the diff-class-tier
+  mechanism still applies, so an over-cap-but-tier-classifiable diff dispatches full
+  fan-out over its matched tier's reduced angle set (the mandatory-angle floor, below,
+  still always applies). The floors below are RISK signals; they additionally force
+  the full untriered angle pool on top of `full_fanout` dispatch.
 - **Risk-path denylist** — `risk_path_touch`: the diff touches a shipped,
   hard-coded, union-of-layers glob floor (`RISK_PATH_DENYLIST_DEFAULT`,
   `packages/core/src/config/config.mjs`) covering the gate/review, security/auth,

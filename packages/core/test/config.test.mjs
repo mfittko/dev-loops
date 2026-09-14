@@ -34,6 +34,7 @@ import {
   resolveIssuelessEnabled,
   resolveGateDispatchMode,
   resolveReviewProportionality,
+  isSizeOutcomeT1Clean,
   touchesRiskPath,
   RISK_PATH_DENYLIST_DEFAULT,
   resolveFanoutGroups,
@@ -4293,6 +4294,58 @@ describe("resolveGateDispatchMode: risk-path and size-outcome floors (#1984)", (
     });
     assert.equal(result.mode, "full_fanout");
     assert.equal(result.reason, "risk_path_touch");
+  });
+});
+
+describe("isSizeOutcomeT1Clean (GATE-EXEC-PROPORTIONALITY): the ONE shared size-outcome T1-clean predicate", () => {
+  test("pass + finite/non-negative/numeric T1 === 0 is clean", () => {
+    assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", tierLogicLoc: { t1: 0 } }), true);
+  });
+
+  test("missing sizeOutcome fails CLOSED (not clean)", () => {
+    assert.equal(isSizeOutcomeT1Clean(null), false);
+    assert.equal(isSizeOutcomeT1Clean(undefined), false);
+  });
+
+  test("non-pass outcome fails CLOSED (not clean)", () => {
+    assert.equal(isSizeOutcomeT1Clean({ outcome: "escalate", tierLogicLoc: { t1: 0 } }), false);
+  });
+
+  test("missing/partial tierLogicLoc fails CLOSED (not clean), never silently reads as T1-clean", () => {
+    assert.equal(isSizeOutcomeT1Clean({ outcome: "pass" }), false);
+    assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", tierLogicLoc: {} }), false);
+  });
+
+  test("non-finite (NaN) T1 fails CLOSED (not clean)", () => {
+    assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", tierLogicLoc: { t1: NaN } }), false);
+  });
+
+  test("non-numeric T1 fails CLOSED (not clean) — no truthiness coercion", () => {
+    assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", tierLogicLoc: { t1: "0" } }), false);
+  });
+
+  test("negative T1 fails CLOSED (not clean)", () => {
+    assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", tierLogicLoc: { t1: -1 } }), false);
+  });
+
+  test("positive T1 is not clean (nonzero T1-tier slice)", () => {
+    assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", tierLogicLoc: { t1: 5 } }), false);
+  });
+
+  test("resolveGateDispatchMode delegates to this same predicate: a clean T1 stays inline, a dirty one full-fans-out", () => {
+    const cleanResult = resolveGateDispatchMode(lightConfig(), "preApproval", {
+      scope: { filesChanged: 1, linesChanged: 1 },
+      changedFiles: ["README.md"],
+      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+    });
+    assert.equal(cleanResult.mode, "inline");
+    const dirtyResult = resolveGateDispatchMode(lightConfig(), "preApproval", {
+      scope: { filesChanged: 1, linesChanged: 1 },
+      changedFiles: ["README.md"],
+      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 5 } },
+    });
+    assert.equal(dirtyResult.mode, "full_fanout");
+    assert.equal(dirtyResult.reason, "size_outcome_t1");
   });
 });
 

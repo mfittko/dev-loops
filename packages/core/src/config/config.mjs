@@ -2021,6 +2021,30 @@ export function touchesRiskPath(changedFiles, extraDenylist = []) {
 }
 
 /**
+ * Pure predicate: is a check-size-budget.mjs sizeOutcome genuinely T1-clean —
+ * a `pass` outcome AND a finite, non-negative T1-tier slice equal to 0 (the
+ * clean value)? `undefined > 0` and `NaN > 0` both evaluate false, so a bare
+ * `!(t1 > 0)` comparison would read malformed/absent T1 evidence (a missing
+ * `tierLogicLoc`, a non-numeric `t1`) as clean and admit the light path on
+ * unreadable evidence. This requires a genuine NUMBER, never a truthiness
+ * check, so malformed evidence fails CLOSED exactly like a real
+ * size-budget computation error. The ONE shared predicate for this floor
+ * (GATE-EXEC-PROPORTIONALITY): `resolveGateDispatchMode` below and the
+ * size-budget merge gate (scripts/github/detect-checkpoint-evidence.mjs) both
+ * call it, so they never drift onto two independently-maintained floor
+ * implementations — mirroring how {@link touchesRiskPath} is the one shared
+ * risk-path predicate.
+ * @param {{ outcome?: string, tierLogicLoc?: { t1?: number } }|null|undefined} sizeOutcome
+ * @returns {boolean}
+ */
+export function isSizeOutcomeT1Clean(sizeOutcome) {
+  if (sizeOutcome == null || typeof sizeOutcome !== "object") return false;
+  if (sizeOutcome.outcome !== "pass") return false;
+  const t1 = sizeOutcome.tierLogicLoc?.t1;
+  return typeof t1 === "number" && Number.isFinite(t1) && t1 === 0;
+}
+
+/**
  * Decide whether a gate runs as a single-agent inline check or full fan-out,
  * from light-mode config + authoritative PR facts.
  *
@@ -2085,19 +2109,17 @@ export function resolveGateDispatchMode(config, gate, { scope, changedFiles, siz
     const outcomeLabel = typeof sizeOutcome.outcome === "string" && sizeOutcome.outcome.length > 0 ? sizeOutcome.outcome : "unknown";
     return { mode: "full_fanout", reason: `size_outcome_${outcomeLabel}`, threshold };
   }
-  // GATE-EXEC-PROPORTIONALITY: a clean `pass` outcome is only trustworthy when
-  // its T1-tier slice is a genuine, finite, non-negative NUMBER — `undefined >
-  // 0` and `NaN > 0` both evaluate false, so a naive `> 0` check would let a
-  // malformed/partial sizeOutcome (e.g. `{ outcome: "pass" }` with no
-  // `tierLogicLoc`) silently read as "T1 clean" and reach inline. Absence of a
-  // readable T1 value is ambiguity, not triviality, so it fails CLOSED to
-  // `size_outcome_unavailable` exactly like a missing sizeOutcome altogether.
-  const t1 = sizeOutcome.tierLogicLoc?.t1;
-  if (typeof t1 !== "number" || !Number.isFinite(t1) || t1 < 0) {
-    return { mode: "full_fanout", reason: "size_outcome_unavailable", threshold };
-  }
-  if (t1 > 0) {
-    return { mode: "full_fanout", reason: "size_outcome_t1", threshold };
+  // GATE-EXEC-PROPORTIONALITY: delegate the pass+T1-clean decision to the one
+  // shared predicate (isSizeOutcomeT1Clean, above) so this resolver and the
+  // size-budget merge gate never drift onto two independently-maintained
+  // floor implementations. A malformed/partial T1 value (missing, NaN,
+  // negative, non-numeric) is ambiguity, not triviality, so it fails CLOSED to
+  // `size_outcome_unavailable` exactly like a missing sizeOutcome altogether —
+  // never a naive `t1 > 0` truthiness read.
+  if (!isSizeOutcomeT1Clean(sizeOutcome)) {
+    const t1 = sizeOutcome.tierLogicLoc?.t1;
+    const reason = typeof t1 === "number" && Number.isFinite(t1) && t1 > 0 ? "size_outcome_t1" : "size_outcome_unavailable";
+    return { mode: "full_fanout", reason, threshold };
   }
   if (Array.isArray(inlineFindingSeverities) && inlineFindingSeverities.length > 0) {
     // Both sides normalize legacy spellings so a "defer" finding still
@@ -2429,22 +2451,25 @@ export function resolveGateTier(config, gate, { changedFiles, filesChanged, line
  * the primer (emit) and the merge gate (re-verify) compose mode + angles +
  * grouping, so they can never drift onto two different floor implementations.
  *
- * Floor-vs-tier precedence: a fired non-overridable floor — the hard size cap
- * (`over_threshold`), the risk-path denylist (`risk_path_touch`), a
- * non-clean/ambiguous size-budget outcome (`size_outcome_*`,
- * `size_outcome_unavailable`), missing changed-file evidence
- * (`changed_files_unavailable`), or an unclassifiable diff
+ * Floor-vs-tier precedence: a fired RISK-signal floor — the risk-path
+ * denylist (`risk_path_touch`), a non-clean/ambiguous size-budget outcome
+ * (`size_outcome_*`, `size_outcome_unavailable`), missing changed-file
+ * evidence (`changed_files_unavailable`), or an unclassifiable diff
  * (`resolveGateTier`'s `unclassifiable_file`) — ALWAYS forces `full_fanout`
  * with the FULL untriered angle pool, even when a diff-class tier also
  * happens to match: proportionality scales cost, never the floor, so a
- * risky/unclassifiable diff never receives a tier-reduced angle set. Tier
- * reduction ("small/non-risky diff → a matched tier's reduced angle set,
- * still dispatched full fan-out") applies only when no floor fired — this is
- * the pre-existing, orthogonal diff-class-tier mechanism, untouched for a
- * `gate:full`-labelled PR (resolveGateTier self-bypasses) or a repo that
- * simply has light mode disabled (`light_mode_disabled` is not a floor: every
- * round there was already full-fanout-with-tier-reduction before this floor
- * mechanism existed).
+ * risky/unclassifiable diff never receives a tier-reduced angle set. The hard
+ * size cap (`over_threshold`) is different: it ALWAYS forces `full_fanout`
+ * MODE (distinct-reviewer-per-angle dispatch, never the light single-combined
+ * path), but it does NOT force the full untriered pool — see the size-cap
+ * exclusion note below. Tier reduction ("small/non-risky diff → a matched
+ * tier's reduced angle set, still dispatched full fan-out") applies whenever
+ * no RISK-signal floor fired (the size cap alone does not disqualify a tier
+ * match) — this is the pre-existing, orthogonal diff-class-tier mechanism,
+ * untouched for a `gate:full`-labelled PR (resolveGateTier self-bypasses) or
+ * a repo that simply has light mode disabled (`light_mode_disabled` is not a
+ * floor: every round there was already full-fanout-with-tier-reduction before
+ * this floor mechanism existed).
  *
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"} gate
