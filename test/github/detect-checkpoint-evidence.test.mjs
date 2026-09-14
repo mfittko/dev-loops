@@ -39,6 +39,7 @@ import {
   buildFanoutEnforcement,
   detectCheckpointEvidence,
   deriveEvidenceState,
+  isSizeOutcomeT1Clean,
   EVIDENCE_STATE,
 } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { fetchGithubReviewThreadsPayload } from "../../scripts/github/capture-review-threads.mjs";
@@ -2334,6 +2335,21 @@ test("buildPreMergeGateCheck (#1174) non-regression: fanout gates unaffected by 
   assert.ok(provFail.failures.some((f) => f.includes("requireFanoutProvenance")), JSON.stringify(provFail.failures));
 });
 
+test("isSizeOutcomeT1Clean (GATE-EXEC-PROPORTIONALITY): malformed/absent T1 evidence fails CLOSED, never silently reads as clean", () => {
+  assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", tierLogicLoc: { t1: 0 } }), true);
+  // Missing tierLogicLoc entirely — `undefined > 0` is false, so a naive
+  // `!(t1 > 0)` check would wrongly accept this as clean.
+  assert.equal(isSizeOutcomeT1Clean({ outcome: "pass" }), false);
+  // Non-numeric t1 — `NaN > 0` is also false.
+  assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", tierLogicLoc: { t1: NaN } }), false);
+  assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", tierLogicLoc: { t1: "0" } }), false);
+  assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", tierLogicLoc: { t1: -1 } }), false);
+  assert.equal(isSizeOutcomeT1Clean({ outcome: "pass", tierLogicLoc: { t1: 5 } }), false);
+  assert.equal(isSizeOutcomeT1Clean({ outcome: "escalate", tierLogicLoc: { t1: 0 } }), false);
+  assert.equal(isSizeOutcomeT1Clean(null), false);
+  assert.equal(isSizeOutcomeT1Clean(undefined), false);
+});
+
 test("buildFanoutEnforcement (#1174) re-derives scope fail-closed and sets scopeUnderThreshold for light inline verdicts", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-light-"));
   try {
@@ -2342,12 +2358,19 @@ test("buildFanoutEnforcement (#1174) re-derives scope fail-closed and sets scope
     g("config", "user.email", "t@t.t");
     g("config", "user.name", "t");
     g("config", "commit.gpgsign", "false");
-    await writeFile(path.join(dir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 3\n    maxLines: 200\n", "utf8");
-    await writeFile(path.join(dir, "a.txt"), "one\n", "utf8");
+    await writeFile(
+      path.join(dir, ".devloops"),
+      "version: 1\ngates:\n  requireFanoutEvidence: true\n  preApproval:\n    angles:\n      - name: yagni\n        mandatory: true\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 3\n    maxLines: 200\n",
+      "utf8",
+    );
+    // a.md (docs), never a.txt (unclassified) — the #1984 size-outcome floor
+    // now also re-verifies at merge time, and an unclassified-only diff would
+    // block on "substantially unclassified" regardless of its trivial size.
+    await writeFile(path.join(dir, "a.md"), "one\n", "utf8");
     g("add", "-A");
     g("commit", "-qm", "base");
     const baseRef = g("rev-parse", "HEAD").trim();
-    await writeFile(path.join(dir, "a.txt"), "one\ntwo\n", "utf8");
+    await writeFile(path.join(dir, "a.md"), "one\ntwo\n", "utf8");
     g("add", "-A");
     g("commit", "-qm", "head");
     const headSha = g("rev-parse", "HEAD").trim();
@@ -2381,6 +2404,13 @@ test("buildFanoutEnforcement (#1174) re-derives scope fail-closed and sets scope
       assert.equal(gate.inlineReason, "under_threshold");
       assert.equal(gate.ledgerExists, true, gate.name);
     }
+    // #1984 AC-4: a light-path round's evidence carries the gate's mandatory
+    // angles (mandatoryAngles/anglePool, GATE_ANGLE_CONFIG) even for an
+    // accepted inline_single_agent verdict — the mandatory floor is never
+    // absent from the merge-gate's own view of the round, whether or not the
+    // gate ran fanout_fanin.
+    const preApprovalGate = enforcement.gates.find((g) => g.name === "pre_approval_gate");
+    assert.ok(preApprovalGate.mandatoryAngles.includes("yagni"), JSON.stringify(preApprovalGate.mandatoryAngles));
     const accepted = buildPreMergeGateCheck({
       currentHeadSha: headSha,
       draftGate: { visible: true, verdict: "clean" },
@@ -2401,6 +2431,125 @@ test("buildFanoutEnforcement (#1174) re-derives scope fail-closed and sets scope
       baseRef,
     });
     for (const gate of labelled.gates) {
+      assert.equal(gate.scopeUnderThreshold, false, gate.name);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #1984 (GATE-EXEC-PROPORTIONALITY): the merge gate RE-VERIFIES the recorded
+// light-mode decision against the actual diff — a mislabelled-trivial verdict
+// (risk-path touch, or a nonzero T1-tier size-outcome slice) is REJECTED even
+// though it is genuinely tiny and under the file/line cap, and even though the
+// marker itself claims `inlineReason: "under_threshold"`. The recorded reason
+// is audit-only; every floor is recomputed from the diff.
+// ---------------------------------------------------------------------------
+
+test("buildFanoutEnforcement (#1984): a tiny diff touching a risk path is REJECTED at merge-gate re-verify despite a mislabelled 'trivial' inline marker", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-riskpath-"));
+  try {
+    const g = (...args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+    g("init", "-q");
+    g("config", "user.email", "t@t.t");
+    g("config", "user.name", "t");
+    g("config", "commit.gpgsign", "false");
+    await writeFile(path.join(dir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 3\n    maxLines: 200\n", "utf8");
+    await mkdir(path.join(dir, "scripts", "loop"), { recursive: true });
+    await writeFile(path.join(dir, "base.md"), "base\n", "utf8");
+    g("add", "-A");
+    g("commit", "-qm", "base");
+    const baseRef = g("rev-parse", "HEAD").trim();
+    // ONE line, ONE file — genuinely under the maxFiles:3/maxLines:200 cap —
+    // but the path itself is a shipped risk-path floor entry (scripts/**/*gate*).
+    await writeFile(path.join(dir, "scripts", "loop", "some-gate-helper.mjs"), "export const x = 1;\n", "utf8");
+    g("add", "-A");
+    g("commit", "-qm", "head");
+    const headSha = g("rev-parse", "HEAD").trim();
+
+    const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-18");
+    await mkdir(ledgerDir, { recursive: true });
+    for (const gate of ["draft_gate", "pre_approval_gate"]) {
+      await writeFile(path.join(ledgerDir, `${gate}-${headSha}.json`), JSON.stringify({ gate, headSha, findings: [] }) + "\n", "utf8");
+    }
+
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+    // Mislabelled: the marker itself claims a clean under-threshold inline pass.
+    const marker = (headOverride) => ({ visible: true, headSha: headOverride, executionMode: "inline_single_agent", inlineReason: "under_threshold" });
+
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo",
+      pr: 18,
+      currentHeadSha: headSha,
+      draftGateMarker: marker(headSha),
+      preApprovalGateMarker: marker(headSha),
+      config,
+      cwd: dir,
+      hasFullLabel: false,
+      baseRef,
+    });
+    for (const gate of enforcement.gates) {
+      assert.equal(gate.scopeUnderThreshold, false, gate.name);
+    }
+    const result = buildPreMergeGateCheck({
+      currentHeadSha: headSha,
+      draftGate: { visible: true, verdict: "clean" },
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha, sizeOutcome: "pass", sizeTouchesT1: false },
+    }, 0, null, enforcement);
+    assert.equal(result.ok, false);
+    assert.ok(result.failures.some((f) => f.includes("inline_single_agent")), JSON.stringify(result.failures));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("buildFanoutEnforcement (#1984): a tiny diff whose size-budget outcome touches the T1 risk tier is REJECTED at merge-gate re-verify", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-t1-"));
+  try {
+    const g = (...args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+    g("init", "-q");
+    g("config", "user.email", "t@t.t");
+    g("config", "user.name", "t");
+    g("config", "commit.gpgsign", "false");
+    await writeFile(
+      path.join(dir, ".devloops"),
+      "version: 1\ngates:\n  requireFanoutEvidence: true\n  size:\n    tiers:\n      t1:\n        patterns: [\"risky/**\"]\nlocalImplementation:\n  lightMode:\n    enabled: true\n    maxFiles: 3\n    maxLines: 200\n",
+      "utf8",
+    );
+    await mkdir(path.join(dir, "risky"), { recursive: true });
+    await writeFile(path.join(dir, "base.md"), "base\n", "utf8");
+    g("add", "-A");
+    g("commit", "-qm", "base");
+    const baseRef = g("rev-parse", "HEAD").trim();
+    // ONE line in a configured T1-tier path — not a shipped risk-path floor
+    // entry, genuinely tiny, but the size-outcome T1 floor still fires.
+    await writeFile(path.join(dir, "risky", "billing.mjs"), "export const charge = () => 1;\n", "utf8");
+    g("add", "-A");
+    g("commit", "-qm", "head");
+    const headSha = g("rev-parse", "HEAD").trim();
+
+    const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-19");
+    await mkdir(ledgerDir, { recursive: true });
+    for (const gate of ["draft_gate", "pre_approval_gate"]) {
+      await writeFile(path.join(ledgerDir, `${gate}-${headSha}.json`), JSON.stringify({ gate, headSha, findings: [] }) + "\n", "utf8");
+    }
+
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+    const marker = (headOverride) => ({ visible: true, headSha: headOverride, executionMode: "inline_single_agent", inlineReason: "under_threshold" });
+
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo",
+      pr: 19,
+      currentHeadSha: headSha,
+      draftGateMarker: marker(headSha),
+      preApprovalGateMarker: marker(headSha),
+      config,
+      cwd: dir,
+      hasFullLabel: false,
+      baseRef,
+    });
+    for (const gate of enforcement.gates) {
       assert.equal(gate.scopeUnderThreshold, false, gate.name);
     }
   } finally {

@@ -2394,6 +2394,94 @@ scope-bounded and carries no multi-reviewer provenance, so it is exempt. Any inl
 verdict that is over threshold, labelled `gate:full`, produced while `lightMode` is
 disabled, or whose scope is underivable remains rejected exactly as before.
 
+### Review-proportionality dispatch plan (non-overridable floors)
+
+<!-- rule: GATE-EXEC-PROPORTIONALITY -->
+`GATE-EXEC-PROPORTIONALITY`: The primer OWNS a deterministic, mandatory, auditable
+dispatch plan computed from the diff for every gate round — the angle set AND the
+execution mode/grouping — and it scales reviewer COST to the change's size and risk
+WITHOUT lowering what is checked: trivial → single combined reviewer
+(`inline_single_agent`, above); small/non-risky → a reduced angle set via a matched
+[diff-class tier](#diff-class-angle-tiers), still dispatched `fanout_fanin`;
+large/risky → the full angle pool, full fan-out. The plan is a pure composition of the
+existing decision functions — `resolveGateDispatchMode` (mode), `resolveGateTier`
+(angle set AND diff classification), and `resolveFanoutGroups` (dispatch-unit
+grouping) — exposed as ONE testable object (`{ mode, angles, groups, reason, floors }`)
+via `resolveReviewProportionality` (`@dev-loops/core/config`). It performs no I/O
+itself; `resolve-gate-dispatch.mjs` (the primer's dispatch-decision step) is its ONE
+production caller and supplies the diff-derived facts. Whenever a RISK-signal floor
+fires — a risk-path touch, a non-clean/ambiguous size-budget outcome, missing
+changed-file evidence, or an unclassifiable diff — the composer's `angles` is the
+FULL untriered pool, never a matched tier's reduced set. The hard size cap alone
+(`over_threshold`) forces `full_fanout` DISPATCH (distinct-reviewer-per-angle, never
+the light single-combined path) but KEEPS the diff-class-tier-reduced angle set —
+see the floor-vs-tier precedence in the function's own doc
+comment. `resolveGateAnglesDynamic` (the resolver `write-gate-context.mjs` calls to
+persist the round's angle set) can opt into this SAME precedence via its
+`checkFloors`/`sizeOutcome` parameters, so a round whose dispatch decision was floored
+never independently persists a tier-reduced angle set through the OTHER angle-
+resolution path — both call sites are wired to the one composer, never two parallel
+floor implementations. The chosen mode/reason is recorded in gate evidence via the
+existing `--inline-reason` marker (above) — the mechanism is unchanged, only the set
+of reasons a decision can carry is extended (see below).
+
+**Non-overridable floors.** Proportionality scales cost, never the floor: no flag,
+waiver, prompt, or LLM judgment can lower any of these, and ambiguity resolves toward
+MORE review (the light path is reachable only on PROVABLE triviality, never on
+absence-of-evidence-of-risk):
+
+- **Hard size cap** — `over_threshold` (unchanged, above): the diff exceeds
+  `localImplementation.lightMode.maxFiles`/`maxLines`. This floor forces `full_fanout`
+  DISPATCH (distinct-reviewer-per-angle, never the light single-combined path) — it
+  does NOT ADDITIONALLY force the full untriered angle pool: the diff-class-tier
+  mechanism still applies, so an over-cap-but-tier-classifiable diff dispatches full
+  fan-out over its matched tier's reduced angle set (the mandatory-angle floor, below,
+  still always applies). The floors below are RISK signals; they additionally force
+  the full untriered angle pool on top of `full_fanout` dispatch.
+- **Risk-path denylist** — `risk_path_touch`: the diff touches a shipped,
+  hard-coded, union-of-layers glob floor (`RISK_PATH_DENYLIST_DEFAULT`,
+  `packages/core/src/config/config.mjs`) covering the gate/review, security/auth,
+  contract, hook, and release trees, biased deliberately OVER-inclusive — see that
+  constant's own doc comment for the exact glob list and per-category rationale
+  rather than restating it here (single source of truth). A repo MAY only ADD extra
+  globs on top via `localImplementation.lightMode.riskPaths`; it can never remove a
+  shipped entry. Changed-file evidence that is itself unreadable/absent
+  (`changed_files_unavailable`) fails the same way — full fan-out, never inline.
+- **Size-budget outcome** — `size_outcome_escalate` / `size_outcome_block` /
+  `size_outcome_t1`: the diff's `check-size-budget.mjs` outcome (reused as-is, no new
+  computation) is not a clean `pass`, or its T1-tier slice is nonzero. Unreadable
+  size-budget evidence (`size_outcome_unavailable`) fails the same way.
+- **Unclassifiable diff** — `unclassifiable_diff`: `resolveGateDispatchMode` alone has
+  no diff-classification awareness (only `resolveGateTier` does), so the composer
+  additionally forces the full pool whenever `resolveGateTier` reports
+  `unclassifiable_file` (a changed file `classifyFile` cannot categorize) — an
+  unclassifiable diff is ambiguity too, and must never silently reach inline just
+  because the raw dispatch-mode facts alone looked trivial.
+- **Mandatory-angle floor** — unchanged (above): mandatory angles are always unioned
+  into the resolved angle set (`resolveGateAngles`/`resolveGateTier`), whether the
+  round is fan-out or inline; on the inline path they are COMBINED under the one
+  reviewer, never dropped.
+- **No silent loosening** — the cap and the risk-path ADDITION field
+  (`localImplementation.lightMode.maxFiles`/`maxLines`/`riskPaths`) live in
+  `.devloops`; a base-vs-head change to any of them (add, modify, or remove) trips
+  the ADR tripwire (`check-adr-tripwire.mjs`'s `devloops-proportionality` trigger) —
+  see [ADR-WORTHY-PERSIST](./decision-record-contract.md). The shipped
+  `RISK_PATH_DENYLIST_DEFAULT` floor itself is a hard-coded JS constant precisely so
+  no config layer — shipped or repo-local — can ever silently drop it; a change to
+  it is an ordinary source-code review, not a config toggle.
+
+**Merge-gate re-verify.** A recorded light-mode decision whose diff was not eligible
+fails closed at merge time, the same way `requireFanoutProvenance` re-verifies
+fan-out evidence rather than trusting it: `detect-checkpoint-evidence.mjs`'s
+`scopeUnderThreshold` re-derivation (above) now ALSO recomputes both new floors from
+the actual merge-base diff — `touchesRiskPath` over the merge-base changed-file list,
+and `evaluatePrSizeBudget` over the merge-base diff — and accepts the inline verdict
+only when the size cap AND the risk-path floor AND the size-outcome floor ALL pass.
+The recorded `inlineReason` marker is **audit-only** here: it is never trusted for
+accept/reject, only recomputed evidence is. A verdict claiming `under_threshold` whose
+actual merge-base diff touches a risk path, or whose size-budget outcome is not a
+clean non-T1 `pass`, is rejected exactly as an over-cap diff already is.
+
 ### Diff-class angle tiers
 
 <!-- rule: GATE-EXEC-DIFF-CLASS-TIER -->

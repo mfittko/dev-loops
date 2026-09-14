@@ -185,8 +185,13 @@ practice:
 
 The server-side check verifies the same visible, comment-derived verdict fields
 the client-side tooling does (including the light-mode inline exception,
-[Gate Review Sub-Loop Contract](./gate-review-sub-loop-contract.md#light-mode-inline-acceptance-under-threshold-micro-prs)),
-via `--skip-fanout-ledger-check`. It does **not** re-verify the deeper fan-out
+[Gate Review Sub-Loop Contract](./gate-review-sub-loop-contract.md#light-mode-inline-acceptance-under-threshold-micro-prs),
+and the [review-proportionality non-overridable floors](./gate-review-sub-loop-contract.md#review-proportionality-dispatch-plan-non-overridable-floors)
+layered on top of it — the risk-path and size-outcome floors are recomputed from the
+merge-base diff via plain `git`/`check-size-budget.mjs` reads, so this re-verify runs
+even under `--skip-fanout-ledger-check`, which only scopes down the worktree-local
+ledger/provenance layer, not this one). It does
+**not** re-verify the deeper fan-out
 findings-log ledger/provenance layer (`gates.requireFanoutEvidence` /
 `requireFanoutProvenance`): that evidence lives in a gitignored, worktree-local
 `tmp/` file only the machine that ran the review has on disk, so a stateless CI

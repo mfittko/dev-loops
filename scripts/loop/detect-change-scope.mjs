@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { DIFF_ISOLATION_FLAGS, gitEnvWithoutDirOverrides } from "../github/write-gate-context.mjs";
 
 const USAGE = `Usage: detect-change-scope.mjs [--base <ref>] [--head <ref>]
 Detect change scope from git diff for light-mode eligibility.
@@ -75,8 +76,13 @@ export function parseGitDiffStat(output) {
   }
   return { filesChanged: fileCount, linesChanged: insertions + deletions };
 }
+// Isolated from ambient GIT_DIR/GIT_WORK_TREE (gitEnvWithoutDirOverrides) and
+// diff-config drift (DIFF_ISOLATION_FLAGS), matching detectMergeBaseChangedFiles:
+// an inherited GIT_DIR/GIT_WORK_TREE would otherwise resolve this diff against a
+// DIFFERENT repo than `cwd`, letting a poisoned env under-report scope and
+// fail-OPEN the light-mode size cap this function feeds.
 function detectScope({ base, head, cwd } = {}) {
-  let diffArgs = ["diff", "--stat"];
+  let diffArgs = [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--stat"];
   if (base && head) {
     diffArgs.push(`${base}..${head}`);
   } else if (base) {
@@ -86,7 +92,7 @@ function detectScope({ base, head, cwd } = {}) {
   }
   let output;
   try {
-    output = execFileSync("git", diffArgs, { encoding: "utf8", maxBuffer: 1_000_000, cwd: cwd || undefined });
+    output = execFileSync("git", diffArgs, { encoding: "utf8", maxBuffer: 1_000_000, cwd: cwd || undefined, env: gitEnvWithoutDirOverrides() });
   } catch (err) {
     return { ok: false, filesChanged: 0, linesChanged: 0, error: err instanceof Error ? err.message : String(err) };
   }
@@ -104,6 +110,11 @@ function isEligibleForLightMode(scope, threshold) {
  * so callers that gate on scope (e.g. the light-mode pre-merge acceptance) reject
  * rather than silently treating an unmeasurable diff as under threshold. Reuses
  * the same `parseGitDiffStat` scope resolution as `detectScope`.
+ *
+ * Isolated from ambient `GIT_DIR`/`GIT_WORK_TREE` and diff-config drift the
+ * same way `detectMergeBaseChangedFiles` is (see its doc comment) — this feeds
+ * the merge-gate hard size cap, so a poisoned env under-reporting scope here
+ * would fail-OPEN that cap exactly like an unisolated changed-file read would.
  */
 function detectMergeBaseScope({ base, head, cwd } = {}) {
   if (!base || !head) {
@@ -111,11 +122,46 @@ function detectMergeBaseScope({ base, head, cwd } = {}) {
   }
   let output;
   try {
-    output = execFileSync("git", ["diff", "--stat", `${base}...${head}`], { encoding: "utf8", maxBuffer: 1_000_000, cwd: cwd || undefined });
+    output = execFileSync(
+      "git",
+      [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--stat", `${base}...${head}`],
+      { encoding: "utf8", maxBuffer: 1_000_000, cwd: cwd || undefined, env: gitEnvWithoutDirOverrides() },
+    );
   } catch (err) {
     return { ok: false, filesChanged: 0, linesChanged: 0, error: err instanceof Error ? err.message : String(err) };
   }
   return { ok: true, ...parseGitDiffStat(output) };
+}
+/**
+ * List changed files for the SAME merge-base (three-dot `base...head`) diff
+ * {@link detectMergeBaseScope} measures — the companion fact the
+ * GATE-EXEC-PROPORTIONALITY risk-path floor needs at merge-gate re-verify
+ * time (detect-checkpoint-evidence.mjs). Fails CLOSED: `{ ok: false, files: null }`
+ * on a missing base/head or any git failure, never a silently-empty list.
+ *
+ * Isolated from ambient `GIT_DIR`/`GIT_WORK_TREE` (`gitEnvWithoutDirOverrides`)
+ * and diff-config drift (`DIFF_ISOLATION_FLAGS`), matching the worktree-bound
+ * reads in write-gate-context.mjs: an inherited `GIT_DIR`/`GIT_WORK_TREE`
+ * would otherwise resolve this diff against a DIFFERENT repo than `cwd`, so a
+ * poisoned env could return a clean path list and fail-OPEN the risk-path
+ * floor this function feeds.
+ */
+function detectMergeBaseChangedFiles({ base, head, cwd } = {}) {
+  if (!base || !head) {
+    return { ok: false, files: null, error: "base and head are required for merge-base changed-files detection" };
+  }
+  let output;
+  try {
+    output = execFileSync(
+      "git",
+      [...DIFF_ISOLATION_FLAGS, "diff", "--no-ext-diff", "--name-only", `${base}...${head}`],
+      { encoding: "utf8", maxBuffer: 10_000_000, cwd: cwd || undefined, env: gitEnvWithoutDirOverrides() },
+    );
+  } catch (err) {
+    return { ok: false, files: null, error: err instanceof Error ? err.message : String(err) };
+  }
+  const files = output.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+  return { ok: true, files };
 }
 async function main() {
   const opts = parseCliArgs(process.argv.slice(2));
@@ -153,4 +199,4 @@ if (isDirectRun) {
     process.exitCode = 1;
   });
 }
-export { detectScope, detectMergeBaseScope, isEligibleForLightMode };
+export { detectScope, detectMergeBaseScope, detectMergeBaseChangedFiles, isEligibleForLightMode };

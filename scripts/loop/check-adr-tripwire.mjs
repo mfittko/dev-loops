@@ -19,6 +19,15 @@
  *     the base and head content of a changed `skills/docs/*.md` file. A
  *     changed rule-bearing file whose base+head content cannot BOTH be read
  *     fails closed (unresolvable-rule-scan) rather than silently passing.
+ *  4. devloops-proportionality: a changed repo-root devloops config source
+ *     (`.devloops` or its `.yaml`/`.yml`/`.json` variant — the same family
+ *     loadDevLoopConfig itself probes, see DEVLOOPS_CONFIG_PATHS) whose
+ *     GATE-EXEC-PROPORTIONALITY fields (`localImplementation.lightMode.`
+ *     `maxFiles`/`maxLines`/`riskPaths`) differ between base and head — added,
+ *     modified, or removed. These fields set review rigor for this repo, so
+ *     ANY change (looser OR stricter) is decision-shaped. A changed devloops
+ *     config source whose base+head content cannot BOTH be parsed as YAML
+ *     fails closed (unresolvable-devloops-scan) rather than silently passing.
  *
  * Satisfaction: the diff adds or updates a `docs/decisions/NNNN-*.md` record,
  * or the PR body carries a one-line waiver marker
@@ -36,6 +45,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
+import { parse as parseYaml } from "yaml";
 
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { requireTokenValue } from "../_cli-primitives.mjs";
@@ -45,10 +55,13 @@ const USAGE = `Usage: check-adr-tripwire.mjs --base <ref> [--head <ref>] [--pr-b
 
 Fail-closed ADR tripwire for decision-shaped PRs (issue #1867): a diff
 touching a decision-shaped surface — skills/docs/*-contract.md, the shared
-gate config extension-defaults.yaml, or a rule-modality (MUST/SHOULD/MAY)
-reversal on an existing <!-- rule: ID --> — must also add or update a
-docs/decisions/NNNN-*.md record, or the PR body must carry the one-line
-waiver marker 'adr-tripwire:allow <reason>'. Emits pass | block.
+gate config extension-defaults.yaml, a rule-modality (MUST/SHOULD/MAY)
+reversal on an existing <!-- rule: ID -->, or a changed devloops config
+source (.devloops or its .yaml/.yml/.json variant)
+GATE-EXEC-PROPORTIONALITY field (localImplementation.lightMode.maxFiles/
+maxLines/riskPaths) — must also add or update a docs/decisions/NNNN-*.md
+record, or the PR body must carry the one-line waiver marker
+'adr-tripwire:allow <reason>'. Emits pass | block.
 
 Required:
   --base <ref>          Git ref to diff against (git diff <ref>...<head>)
@@ -69,7 +82,7 @@ Output (stdout, JSON):
                                // 0 on pass, 2 on a usage error (fail-closed)
     "outcome": "pass"|"block",
     "satisfiedBy": "adr"|"waiver"|null,
-    "triggers": [{ "type": "contract-doc"|"gate-config"|"rule-modality-reversal"|"unresolvable-rule-scan", "path": "...", ... }],
+    "triggers": [{ "type": "contract-doc"|"gate-config"|"rule-modality-reversal"|"unresolvable-rule-scan"|"devloops-proportionality"|"unresolvable-devloops-scan", "path": "...", ... }],
     "adrFiles": ["docs/decisions/0052-..."],
     "waiver": { "requested": false, "valid": false, "reason": null },
     "reasons": []
@@ -86,12 +99,56 @@ const parseError = buildParseError(USAGE);
 export const ADR_PATH_RE = /^docs\/decisions\/\d{4}-[a-z0-9-]+\.md$/u;
 export const CONTRACT_DOC_RE = /^skills\/docs\/[A-Za-z0-9._-]*-contract\.md$/u;
 export const GATE_CONFIG_PATH = "packages/core/src/config/extension-defaults.yaml";
+// The repo-root devloops config-source family — every filename
+// loadDevLoopConfig (packages/core/src/config/config.mjs) itself probes, in
+// its own probe order: the bare `.devloops` and its `.yaml`/`.yml`/`.json`
+// variants. A proportionality-field change landing in ANY one of these is
+// exactly as decision-shaped as a change to the bare filename — scanning only
+// the bare name would let a repo bypass the ADR requirement by simply
+// authoring `.devloops.yaml` instead.
+export const DEVLOOPS_CONFIG_PATHS = Object.freeze([".devloops", ".devloops.yaml", ".devloops.yml", ".devloops.json"]);
+const DEVLOOPS_CONFIG_PATHS_SET = new Set(DEVLOOPS_CONFIG_PATHS);
+// Back-compat alias for the single canonical (bare) filename — still the
+// path recorded on a matched trigger/scan entry.
+export const DEVLOOPS_CONFIG_PATH = DEVLOOPS_CONFIG_PATHS[0];
+// GATE-EXEC-PROPORTIONALITY fields: the cap (maxFiles/maxLines) and
+// risk-path denylist ADDITION live here. Any base-vs-head value change on one
+// of these dotted paths is decision-shaped — see the class-4 doc comment above.
+export const DEVLOOPS_PROPORTIONALITY_FIELD_PATHS = Object.freeze([
+  ["localImplementation", "lightMode", "maxFiles"],
+  ["localImplementation", "lightMode", "maxLines"],
+  ["localImplementation", "lightMode", "riskPaths"],
+]);
 export const WAIVER_MARKER = "adr-tripwire:allow";
 const WAIVER_RE = /^\s*adr-tripwire:allow[ \t]+(\S.*?)\s*$/u;
 
 /** True when the path is a markdown doc under skills/docs (rule-marker scan surface). */
 function isSkillsDocsMarkdown(p) {
   return p.startsWith("skills/docs/") && p.endsWith(".md");
+}
+
+/** Deep-get a dotted field path from a parsed object; undefined when any segment is absent or the value isn't traversable. */
+function getFieldPath(obj, segments) {
+  let cur = obj;
+  for (const seg of segments) {
+    if (cur == null || typeof cur !== "object") return undefined;
+    cur = cur[seg];
+  }
+  return cur;
+}
+
+/**
+ * Extract the GATE-EXEC-PROPORTIONALITY field values from parsed `.devloops`
+ * content, as a stable dotted-key record so two extractions can be compared
+ * by value regardless of object key order. Absent fields read as `null`
+ * (distinct from `undefined`, which JSON/stable comparisons could drop).
+ */
+function extractProportionalityFields(parsed) {
+  const out = {};
+  for (const segments of DEVLOOPS_PROPORTIONALITY_FIELD_PATHS) {
+    out[segments.join(".")] = getFieldPath(parsed, segments) ?? null;
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -228,6 +285,37 @@ export function computeAdrTripwire({
     }
   }
 
+  // devloops-proportionality scan: a changed repo-root .devloops whose
+  // GATE-EXEC-PROPORTIONALITY fields differ between base and head — added,
+  // modified, or removed (an absent side reads as "no fields set", `{}`, not
+  // a parse failure; only genuinely unparsable YAML fails closed).
+  for (const file of files) {
+    if (!DEVLOOPS_CONFIG_PATHS_SET.has(file.path) && !(file.origPath && DEVLOOPS_CONFIG_PATHS_SET.has(file.origPath))) continue;
+    const baseRaw = (file.origPath && DEVLOOPS_CONFIG_PATHS_SET.has(file.origPath) ? baseContents[file.origPath] : undefined) ?? baseContents[file.path] ?? null;
+    const headRaw = DEVLOOPS_CONFIG_PATHS_SET.has(file.path) ? (headContents[file.path] ?? null) : null;
+    let baseParsed = {};
+    let headParsed = {};
+    let unresolvable = false;
+    if (baseRaw != null) {
+      try { baseParsed = parseYaml(baseRaw) ?? {}; } catch { unresolvable = true; }
+    }
+    if (headRaw != null) {
+      try { headParsed = parseYaml(headRaw) ?? {}; } catch { unresolvable = true; }
+    }
+    if (unresolvable) {
+      triggers.push({ type: "unresolvable-devloops-scan", path: file.path });
+      continue;
+    }
+    const baseFields = extractProportionalityFields(baseParsed);
+    const headFields = extractProportionalityFields(headParsed);
+    const changedFields = Object.keys(baseFields).filter(
+      (k) => JSON.stringify(baseFields[k]) !== JSON.stringify(headFields[k]),
+    );
+    if (changedFields.length > 0) {
+      triggers.push({ type: "devloops-proportionality", path: file.path, fields: changedFields });
+    }
+  }
+
   // Rule-modality reversal scan over changed skills/docs markdown. Only
   // changed rule-BEARING content matters; an unscannable rule-bearing file
   // (missing base AND head content, or one side absent while the other
@@ -312,6 +400,8 @@ export function computeAdrTripwire({
     if (t.type === "rule-modality-reversal") return `${t.path}: rule ${t.ruleId} modality reversed ${t.from}→${t.to}`;
     if (t.type === "gate-config") return `${t.path}: shared gate config touched`;
     if (t.type === "unresolvable-rule-scan") return `${t.path}: rule-bearing doc changed but base+head content not both readable (fail-closed)`;
+    if (t.type === "devloops-proportionality") return `${t.path}: GATE-EXEC-PROPORTIONALITY field(s) changed (${t.fields.join(", ")})`;
+    if (t.type === "unresolvable-devloops-scan") return `${t.path}: changed but base+head content not both parsable as YAML (fail-closed)`;
     return `${t.path}: decision-shaped contract doc touched`;
   });
   reasons.push(
@@ -341,7 +431,8 @@ function assertPlausibleRef(ref, label) {
  * Evaluate the tripwire against a locally-resolvable base...head diff. Never
  * runs `git fetch` — the caller's flow is responsible for the refs being
  * present locally. Reads `git show` content for every changed skills/docs
- * markdown file at both refs so rule-modality reversals are detectable.
+ * markdown file (rule-modality reversals) and a changed repo-root `.devloops`
+ * (proportionality field changes, GATE-EXEC-PROPORTIONALITY) at both refs.
  */
 export async function evaluateAdrTripwire({
   base,
@@ -361,7 +452,9 @@ export async function evaluateAdrTripwire({
   const baseContents = {};
   const headContents = {};
   for (const file of files) {
-    if (!isSkillsDocsMarkdown(file.path) && !(file.origPath && isSkillsDocsMarkdown(file.origPath))) continue;
+    const isScannedSurface = isSkillsDocsMarkdown(file.path) || (file.origPath && isSkillsDocsMarkdown(file.origPath))
+      || DEVLOOPS_CONFIG_PATHS_SET.has(file.path) || (file.origPath && DEVLOOPS_CONFIG_PATHS_SET.has(file.origPath));
+    if (!isScannedSurface) continue;
     if (file.origPath) {
       try { baseContents[file.origPath] = runGit(["show", `${base}:${file.origPath}`], { repoRoot, env: gitEnv }); } catch { /* absent at base */ }
     } else {
