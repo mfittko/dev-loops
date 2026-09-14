@@ -586,13 +586,15 @@ export function extractGhApiEndpointSegments(command) {
  * bare relative form (`issues/...`), which gh api resolves against the cwd repo — the
  * decideBashGate call site gates the relative form on `inManagedRepo`. When `managedSlug` is null
  * (the managed repo's identity could not be resolved), only the relative anchor is emitted — an
- * absolute `repos/<slug>/...` path can't be matched against an unknown slug. */
+ * absolute `repos/<slug>/...` path can't be matched against an unknown slug. The absolute arm
+ * fully regex-escapes the slug (a `.` in a legitimate repo name must match literally, not as a
+ * wildcard) and matches case-insensitively (GitHub repo identity is case-insensitive). */
 function managedGhApiPathRegex(suffix, managedSlug) {
   if (!managedSlug) {
-    return new RegExp(`(?:^)${suffix}`);
+    return new RegExp(`(?:^)${suffix}`, "i");
   }
-  const slug = managedSlug.replace(/\//g, "\\/");
-  return new RegExp(`(?:repos/${slug}/|^)${suffix}`);
+  const slug = managedSlug.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+  return new RegExp(`(?:repos/${slug}/|^)${suffix}`, "i");
 }
 
 /** Strip a `scheme://host` prefix from an absolute gh api URL endpoint (`https://api.github.com/...`),

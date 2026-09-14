@@ -592,3 +592,27 @@ test("a null managed slug matches ONLY the bare relative form, never an absolute
     false,
   );
 });
+
+test("a `.` in the managed slug is escaped literally, not treated as a regex wildcard", () => {
+  const DOTTED_SLUG = "acme/my.repo";
+  assert.equal(
+    commandContainsSubIssueAdHocBypass("gh api -X POST repos/acme/my.repo/issues/5/sub_issues -f child=6", DOTTED_SLUG),
+    true,
+  );
+  // a foreign repo whose name merely fits the `.` wildcard must not match
+  assert.equal(
+    commandContainsSubIssueAdHocBypass("gh api -X POST repos/acme/myXrepo/issues/5/sub_issues -f child=6", DOTTED_SLUG),
+    false,
+  );
+});
+
+test("the managed-slug absolute path match is case-insensitive", () => {
+  assert.equal(
+    commandContainsSubIssueAdHocBypass("gh api -X POST repos/Acme/Widgets/issues/5/sub_issues -f child=6", CONSUMER_SLUG),
+    true,
+  );
+  assert.equal(
+    commandContainsReplyResolveBypass("gh api -X POST repos/Acme/Widgets/pulls/5/comments/10/replies -f body=hi", CONSUMER_SLUG),
+    true,
+  );
+});
