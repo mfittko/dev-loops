@@ -6555,6 +6555,46 @@ test("writeGateContext --prev-head (programmatic): an act-disposed prior finding
   }
 });
 
+test("writeGateContext --prev-head (programmatic): a prior log whose OWN headSha does not match --prev-head (identity mismatch) never crashes the write — it just omits the hint block", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prior-dispositions-mismatch-"));
+  try {
+    const prevHead = "e".repeat(40);
+    const logPath = buildLogPath({ repo: "owner/repo", pr: 65, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" });
+    await mkdir(path.dirname(path.resolve(repoRoot, logPath)), { recursive: true });
+    // A stale/misplaced ledger sitting at the --prev-head-keyed path but
+    // recording a DIFFERENT head's own identity — must not be trusted.
+    await writeFile(path.resolve(repoRoot, logPath), JSON.stringify({
+      headSha: "f".repeat(40),
+      verdict: "findings_present",
+      findings: [{ angle: "correctness", severity: "medium", summary: "foreign round finding", judgeDisposition: "reject" }],
+    }), "utf8");
+
+    const result = await writeGateContext(parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "65", "--gate", "draft_gate", "--head-sha", "abc1234567890",
+      "--angles", '["correctness"]',
+      "--prev-head", prevHead,
+    ]), { repoRoot });
+    const volatileBytes = await readFile(path.resolve(repoRoot, result.volatilePath), "utf8");
+    assert.doesNotMatch(volatileBytes, /Prior-round dispositions/);
+    assert.doesNotMatch(volatileBytes, /foreign round finding/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("parseWriteGateContextCliArgs rejects --prev-head equal to --head-sha (same-head), including a --head-sha prefix of the full --prev-head SHA", () => {
+  const fullSha = "a".repeat(40);
+  assert.throws(
+    () => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", fullSha, "--prev-head", fullSha]),
+    /--prev-head equals --head-sha/,
+  );
+  // --head-sha accepts an abbreviated spelling of the same commit.
+  assert.throws(
+    () => parseWriteGateContextCliArgs(["--repo", "a/b", "--pr", "1", "--gate", "draft_gate", "--head-sha", fullSha.slice(0, 7), "--prev-head", fullSha]),
+    /--prev-head equals --head-sha/,
+  );
+});
+
 test("#1866 review-gate wiring: an issue-less PR body with a real AC checklist but NO Non-goals keeps the acceptance-criteria angle (real buildGateContext wiring)", async () => {
   // The #1866 refinement predicate requires an explicit Non-goals section, so
   // a bare .hasACs read would be false for this body and the review-gate

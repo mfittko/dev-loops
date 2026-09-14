@@ -534,6 +534,14 @@ export function parseWriteGateContextCliArgs(argv) {
   if (missing.length > 0) {
     throw parseError(`Missing required arguments: ${missing.join(", ")}`);
   }
+  // FAIL-CLOSED (mirrors resolve-angle-carry-forward.mjs's own same-head
+  // rejection): a same-head "prior" would read THIS round's own findings-log
+  // and seed it back as prior-round disposition memory. --head-sha accepts an
+  // abbreviated 7-64 hex spelling of the same commit, so startsWith (not
+  // ===) — --prev-head is always the full SHA (enforced above).
+  if (typeof options.prevHead === "string" && options.prevHead.startsWith(options.headSha)) {
+    throw parseError("--prev-head equals --head-sha — a same-head prior read would seed this round's own findings-log as prior-round disposition memory; omit --prev-head instead");
+  }
   return options;
 }
 
@@ -2501,11 +2509,11 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // AC3 (issue 2175, head-bump re-gate disposition memory): when --prev-head
   // is supplied, seed the angles re-running THIS round (options.angles minus
   // options.carriedAngles) with the prior head's reject/defer-disposed
-  // findings. FAIL OPEN: an absent (first round), unreadable, or malformed
-  // prior log never blocks this write — it only omits the "do not re-raise"
-  // hint, byte-identical to omitting --prev-head. Never suppresses a
-  // finding, never converts a reject into an approval — see
-  // {@link resolvePriorDispositions}.
+  // findings. FAIL OPEN: an absent (first round), unreadable, malformed, or
+  // identity-mismatched (wrong headSha/repo/pr/gate) prior log never blocks
+  // this write — it only omits the "do not re-raise" hint, byte-identical to
+  // omitting --prev-head. Never suppresses a finding, never converts a reject
+  // into an approval — see {@link resolvePriorDispositions}.
   let priorDispositions = [];
   if (typeof options.prevHead === "string" && options.prevHead.length > 0) {
     try {
@@ -2517,6 +2525,25 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
         tmpRoot: options.tmpRoot || "tmp",
       });
       const priorLog = JSON.parse(await readFile(path.resolve(repoRoot, priorLogPath), "utf8"));
+      // FAIL-CLOSED identity check (mirrors resolve-angle-carry-forward.mjs's
+      // own recordedHead guard): the log PATH is keyed by --prev-head, but a
+      // stale or misplaced ledger sitting at that path could carry a
+      // different round's own repo/pr/gate/headSha. Thrown here, not
+      // reconciled — the surrounding try/catch below already treats any
+      // reader error as "no usable prior round" (omit the hint, byte-
+      // identical to absent --prev-head), so this never crashes the write.
+      const recordedHead = typeof priorLog?.headSha === "string" ? priorLog.headSha.trim().toLowerCase() : null;
+      const recordedRepo = typeof priorLog?.repo === "string" ? priorLog.repo.trim().toLowerCase() : null;
+      const recordedGate = typeof priorLog?.gate === "string" ? priorLog.gate.trim().toLowerCase() : null;
+      const recordedPr = priorLog?.pr;
+      const identityMismatch =
+        recordedHead !== options.prevHead
+        || (recordedRepo !== null && recordedRepo !== options.repo.trim().toLowerCase())
+        || (recordedGate !== null && recordedGate !== options.gate.trim().toLowerCase())
+        || (recordedPr !== undefined && recordedPr !== null && Number(recordedPr) !== Number(options.pr));
+      if (identityMismatch) {
+        throw new Error(`prior gate findings-log at ${priorLogPath} does not match this invocation's identity — refusing to carry its dispositions (fail-closed)`);
+      }
       const carriedSet = new Set(
         (Array.isArray(options.carriedAngles) ? options.carriedAngles : [])
           .filter((a) => typeof a === "string")
