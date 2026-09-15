@@ -420,8 +420,9 @@ export function runJudgePass(findings, judgeVerdict, headSha) {
   // clustering ran, and re-deriving the key from truncated text can merge
   // two distinct remediations that only share a long truncated prefix —
   // silently discarding the lossless grouping. Fall back to clusterFindings
-  // only for legacy/unstamped input (a ledger written before #2156, or a
-  // findings array assembled by a caller that never stamped clusterId).
+  // only for legacy/unstamped input (a ledger written before consolidate-fanin
+  // stamped clusterId, or a findings array assembled by a caller that never
+  // stamped it).
   const everyFindingStamped = applied.findings.every((f) => Number.isInteger(f?.clusterId));
   const clusters = everyFindingStamped
     ? clustersFromStampedIds(applied.findings)
