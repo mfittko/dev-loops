@@ -15,6 +15,7 @@ test("finding the flow supports keyboard navigation and keeps links usable", asy
   try {
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.goto(url);
+    await expect(page.locator("#ui-findings img")).toHaveJSProperty("naturalWidth", 1280);
     await page.keyboard.press("ArrowRight");
     await page.waitForFunction(() => scrollY > innerHeight / 2);
     await page.keyboard.press("Home");

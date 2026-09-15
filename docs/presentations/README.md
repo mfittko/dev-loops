@@ -16,7 +16,8 @@ only headline changes back to any `.md` that exists.
 | The State Graph Is the Surface | [`state-graph-surface.html`](state-graph-surface.html) | How authoritative state, bounded loops, evidence, and human authority compose into one control surface. |
 | Finding the flow | [`finding-the-flow.html`](finding-the-flow.html) | A company-wide talk about enforced workflows, recovery, and reliable AI agents, using dev-loops as a case study. |
 
-Finding the flow is a local presentation draft with [speaker notes](finding-the-flow-speaker-notes.md)
+Finding the flow is a 35-slide local presentation draft for a 60-minute session
+(50 minutes including an exercise, plus 10 minutes for questions), with [speaker notes](finding-the-flow-speaker-notes.md)
 and [primary-source research](finding-the-flow-research.md). Open its HTML directly;
 it is not added to the Pages build. Its shared browser checks run with
 `bun run test:playwright:finding-the-flow-deck`.
