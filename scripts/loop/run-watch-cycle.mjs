@@ -13,8 +13,9 @@ import { detectCopilotSessionActivity } from "./detect-copilot-session-activity.
 import { ensureAsyncRunnerOwnership, recordWatchClaim as defaultRecordWatchClaim } from "./_pr-runner-coordination.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { resolveStaleRunnerMaxAgeMs } from "./_stale-runner-detection.mjs";
-import { resolveRunId } from "@dev-loops/core/loop/run-context";
+import { isClaudeHarness, resolveRunId } from "@dev-loops/core/loop/run-context";
 import { assertNoOverlappingObserver, resolveWatchOwnership } from "@dev-loops/core/loop/watcher-exclusivity";
+import { buildExecutionUnitRecord } from "@dev-loops/core/loop/execution-record";
 import { parseArgs } from "node:util";
 import {
   EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY,
@@ -460,6 +461,40 @@ function attachWatcherExclusivityBlock(result, gate) {
   result.terminal = false;
   return result;
 }
+// One compact execution-unit telemetry record (issue 2157 slice b2) built
+// from the cycle's OWN real owner/verdict/disposition data — never a
+// hand-built bag. A watch cycle performs no model turn, so every
+// provider-token dimension is honestly unavailable, never zero/estimated;
+// `turns: 0` is still a genuine measured local zero.
+export function buildWatchCycleExecutionRecord({
+  owner,
+  cycleDisposition,
+  headSha,
+  harness = "pi",
+  localToolTimeMs = 0,
+  toolCalls = 0,
+}) {
+  const noModelTurnReason = "watch cycle performs no model turn; no provider tokens consumed";
+  return buildExecutionUnitRecord({
+    harness,
+    role: "watch_cycle",
+    identity: { headSha, unitId: owner?.runId ?? "single-runner" },
+    promptBytes: 0,
+    contextBytes: 0,
+    turns: 0,
+    toolCalls,
+    providerTokens: {
+      input: null,
+      output: null,
+      cacheRead: null,
+      reasons: { input: noModelTurnReason, output: noModelTurnReason, cacheRead: noModelTurnReason },
+    },
+    localToolTimeMs,
+    childWallTimeMs: null,
+    waitOwner: owner?.runId ?? null,
+    outcome: cycleDisposition,
+  });
+}
 export async function runWatchCycle(
   options,
   {
@@ -488,6 +523,9 @@ export async function runWatchCycle(
   const headSha = typeof handoff.snapshot?.currentHeadSha === "string" && handoff.snapshot.currentHeadSha.trim().length > 0
     ? handoff.snapshot.currentHeadSha.trim()
     : null;
+  // Sourced from the existing run-context harness-detection seam, not a new
+  // per-harness branch in this loop (issue 2157 slice b2).
+  const harness = isClaudeHarness(env) ? "claude" : "pi";
   const result = {
     ok: true,
     handoffAction: handoff.action,
@@ -512,6 +550,16 @@ export async function runWatchCycle(
   if (handoff.watchTimeoutPolicy !== undefined) {
     result.watchTimeoutPolicy = handoff.watchTimeoutPolicy;
   }
+  // Best-effort telemetry attach: a malformed/absent head must never break
+  // the cycle itself, only the (optional) record.
+  const attachExecutionRecord = (owner) => {
+    if (!headSha) return;
+    try {
+      result.executionRecord = buildWatchCycleExecutionRecord({ owner: owner ?? null, cycleDisposition: result.cycleDisposition, headSha, harness });
+    } catch {
+      // ponytail: telemetry is best-effort, never load-bearing for the cycle.
+    }
+  };
   // Provider-agnostic CI wait: a waiting_for_ci boundary would otherwise
   // dead-end at action:"stop". Route it to the helper-owned CI watcher
   // (CircleCI / GH Actions / external commit-status), not gh run watch.
@@ -530,6 +578,7 @@ export async function runWatchCycle(
     };
     const ciGate = await gateExclusivity("ci", headSha);
     if (ciGate.engaged && !ciGate.ok) {
+      attachExecutionRecord(ciGate.owner ?? null);
       return attachWatcherExclusivityBlock(result, ciGate);
     }
     const ciWatch = await watchCiStatusImpl(ciWatchArgs, { env, ghCommand, runChild });
@@ -558,6 +607,7 @@ export async function runWatchCycle(
       ciWatchArgs,
       ciWatchStatus: ciWatch.status,
     });
+    attachExecutionRecord(ciGate.owner ?? null);
     return result;
   }
   if (handoff.action !== "watch") {
@@ -568,6 +618,7 @@ export async function runWatchCycle(
       watchStatus: result.watchStatus,
       cycleDisposition: result.cycleDisposition,
     });
+    attachExecutionRecord(null);
     return result;
   }
   if (result.watchTimeoutPolicy === undefined) {
@@ -593,6 +644,7 @@ export async function runWatchCycle(
     ) {
       const wfGate = await gateExclusivity("workflow_run", headSha);
       if (wfGate.engaged && !wfGate.ok) {
+        attachExecutionRecord(wfGate.owner ?? null);
         return attachWatcherExclusivityBlock(result, wfGate);
       }
       const workflowWatchResult = await runWatchHoldingLease(
@@ -616,6 +668,7 @@ export async function runWatchCycle(
   }
   const copilotGate = await gateExclusivity("copilot_review", headSha);
   if (copilotGate.engaged && !copilotGate.ok) {
+    attachExecutionRecord(copilotGate.owner ?? null);
     return attachWatcherExclusivityBlock(result, copilotGate);
   }
   const watchOptions = {
@@ -650,6 +703,7 @@ export async function runWatchCycle(
         })
       : null,
   });
+  attachExecutionRecord(copilotGate.owner ?? null);
   return result;
 }
 // Human-readable concise summary covering loop state, Copilot round count,

@@ -1,0 +1,90 @@
+{
+  "description": "Before/after execution-record replay fixture (issue 2157 slice b2, AC3): the same 5-role dev-loop pipeline (coordinator_phase, reviewer_unit, judge_round, fixer_pass, watch_cycle) run once BEFORE bounded-primitive-aware dispatch and once AFTER, on the same claude harness. Primitive-shaped snapshots only (unit/consumed inputs) — the test drives every real primitive itself, never a pre-built record.",
+  "harness": "claude",
+  "runs": {
+    "before": {
+      "label": "before (unbounded discovery pass)",
+      "headSha": "1111111111111111111111111111111111111111",
+      "units": {
+        "coordinator_phase": {
+          "run": "run-before-coordinator",
+          "consumed": { "modelTurns": 38, "toolCalls": 48, "outputTokens": 19500 },
+          "promptBytes": 42000, "contextBytes": 8000, "localToolTimeMs": 5400,
+          "providerTokens": { "input": 21000, "output": 19500, "cacheRead": 0 },
+          "childWallTimeMs": 900
+        },
+        "reviewer_unit": {
+          "run": "run-before-reviewer",
+          "angles": ["correctness", "security"],
+          "consumed": { "modelTurns": 40, "toolCalls": 44 },
+          "completedAngles": ["correctness", "security"],
+          "promptBytes": 30000, "contextBytes": 6000, "localToolTimeMs": 4100,
+          "providerTokens": { "input": 15000, "output": 12000, "cacheRead": 4000 },
+          "childWallTimeMs": 700
+        },
+        "judge_round": {
+          "run": "run-before-judge",
+          "consumed": { "modelTurns": 11, "toolCalls": 14, "inputTokens": 95000, "outputTokens": 9500 },
+          "promptBytes": 18000, "contextBytes": 4000, "localToolTimeMs": 1200,
+          "providerTokens": { "input": 95000, "output": 9500, "cacheRead": 5000 },
+          "childWallTimeMs": 300
+        },
+        "fixer_pass": {
+          "run": "run-before-fixer",
+          "consumed": { "modelTurns": 42, "toolCalls": 48, "pushesThisGateRound": 1 },
+          "promptBytes": 27000, "contextBytes": 5000, "localToolTimeMs": 3900,
+          "providerTokens": { "input": 20000, "output": 18000, "cacheRead": 0 },
+          "childWallTimeMs": 650
+        },
+        "watch_cycle": {
+          "owner": { "runId": "run-before-watch" },
+          "cycleDisposition": "needs_followup",
+          "toolCalls": 3,
+          "localToolTimeMs": 150
+        }
+      }
+    },
+    "after": {
+      "label": "after (execution-cap-bounded dispatch)",
+      "headSha": "2222222222222222222222222222222222222222",
+      "units": {
+        "coordinator_phase": {
+          "run": "run-after-coordinator",
+          "consumed": { "modelTurns": 15, "toolCalls": 18, "outputTokens": 6000 },
+          "promptBytes": 16000, "contextBytes": 3000, "localToolTimeMs": 2100,
+          "providerTokens": { "input": 8000, "output": 6000, "cacheRead": 4000 },
+          "childWallTimeMs": 350
+        },
+        "reviewer_unit": {
+          "run": "run-after-reviewer",
+          "angles": ["correctness", "security"],
+          "consumed": { "modelTurns": 18, "toolCalls": 20 },
+          "completedAngles": ["correctness", "security"],
+          "promptBytes": 12000, "contextBytes": 2500, "localToolTimeMs": 1600,
+          "providerTokens": { "input": 6000, "output": 5000, "cacheRead": 6000 },
+          "childWallTimeMs": 280
+        },
+        "judge_round": {
+          "run": "run-after-judge",
+          "consumed": { "modelTurns": 6, "toolCalls": 8, "inputTokens": 40000, "outputTokens": 3000 },
+          "promptBytes": 9000, "contextBytes": 2000, "localToolTimeMs": 500,
+          "providerTokens": { "input": 40000, "output": 3000, "cacheRead": 12000 },
+          "childWallTimeMs": 140
+        },
+        "fixer_pass": {
+          "run": "run-after-fixer",
+          "consumed": { "modelTurns": 20, "toolCalls": 22, "pushesThisGateRound": 1 },
+          "promptBytes": 13000, "contextBytes": 2500, "localToolTimeMs": 1700,
+          "providerTokens": { "input": 9000, "output": 7000, "cacheRead": 5000 },
+          "childWallTimeMs": 300
+        },
+        "watch_cycle": {
+          "owner": null,
+          "cycleDisposition": "pending",
+          "toolCalls": 1,
+          "localToolTimeMs": 60
+        }
+      }
+    }
+  }
+}

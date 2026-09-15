@@ -1230,3 +1230,32 @@ test("watcher-exclusivity copilot path has no post-watch re-gate (only the pre-w
   assert.equal(calls, 1, "only the pre-watch exclusivity gate call happens on the copilot path");
   assert.equal(result.watcherExclusivity ?? null, null, "no post-watch transition marker is produced on the copilot path");
 });
+
+test("execution-record telemetry (issue 2157 slice b2): a real watch_cycle record is attached, sourced from the cycle's own owner/disposition", async () => {
+  const headSha = "a".repeat(40);
+  const result = await runWatchCycle(
+    { repo: "owner/repo", pr: 17 },
+    {
+      env: RUN_ID_ENV,
+      runHandoffImpl: copilotWatchHandoffWithHead(headSha),
+      recordWatchClaimImpl: async ({ head, waitKind }) => ({ ok: true, status: "watch_claim_recorded", watch: { head, waitKind, updatedAt: new Date().toISOString() } }),
+      watchCopilotReviewImpl: async (options) => ({ ok: true, status: "timeout", repo: options.repo, pr: options.pr, attempts: 1, newComments: [], newReviews: [], newIssueComments: [] }),
+    },
+  );
+  assert.equal(result.executionRecord.role, "watch_cycle");
+  assert.equal(result.executionRecord.headSha, headSha);
+  assert.equal(result.executionRecord.unitId, "run-1");
+  assert.equal(result.executionRecord.waitOwner, "run-1");
+  assert.equal(result.executionRecord.outcome, result.cycleDisposition);
+  assert.equal(result.executionRecord.metrics.turns, 0);
+  assert.equal(result.executionRecord.providerTokens.input.available, false);
+  assert.match(result.executionRecord.providerTokens.input.reason, /performs no model turn/);
+});
+
+test("execution-record telemetry is skipped, not thrown, when the cycle has no usable head (never breaks the cycle)", async () => {
+  const result = await runWatchCycle(
+    { repo: "owner/repo", pr: 17 },
+    { env: RUN_ID_ENV, runHandoffImpl: copilotWatchHandoffWithHead(null) },
+  );
+  assert.equal(result.executionRecord, undefined);
+});
