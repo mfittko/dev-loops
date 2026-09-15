@@ -25,7 +25,52 @@ test("flags an unsanitized remote-slug interpolated into a bash -lc sink (the re
 test("flags the gateCommand shape when the isCleanRepoSlug guard is absent", () => {
   const out = scan("const gateCommand = `${SCRIPT} --repo ${repoContext.repoSlug} --pr ${prNumber}`;");
   assert.equal(out.outcome, "block");
-  assert.equal(out.findings[0].token, "repoSlug");
+  assert.equal(out.findings[0].token, "repoContext.repoSlug");
+});
+
+test("flags an unguarded value that collides on its last dotted segment with a guarded value (token-collision)", () => {
+  // isCleanRepoSlug(safe.repoSlug) proves ONLY `safe.repoSlug` clean; `evil.repoSlug` is a
+  // different value that happens to share the last segment `repoSlug` and must still be flagged.
+  const out = scan(`
+    if (!isCleanRepoSlug(safe.repoSlug)) return fail();
+    const cmd = \`bash -lc "gate --repo \${evil.repoSlug}"\`;
+  `);
+  assert.equal(out.outcome, "block");
+  assert.equal(out.findings[0].token, "evil.repoSlug");
+});
+
+test("flags a transform-through interpolation of an unguarded slug value (.trim())", () => {
+  const out = scan("const cmd = `bash -lc \"gate --repo ${slug.trim()}\"`;");
+  assert.equal(out.outcome, "block");
+  assert.equal(out.findings[0].token, "slug");
+});
+
+test("flags a transform-through interpolation of an unguarded slug value (String(slug))", () => {
+  const out = scan("const cmd = `bash -lc \"gate --repo ${String(slug)}\"`;");
+  assert.equal(out.outcome, "block");
+  assert.equal(out.findings[0].token, "slug");
+});
+
+test("flags a transform-through interpolation of an unguarded remote-url value (.split/.replace chain)", () => {
+  const out = scan(
+    "const cmd = `bash -lc \"gate --repo ${remoteUrl.split(':')[1].replace('.git','')}\"`;",
+  );
+  assert.equal(out.outcome, "block");
+  assert.equal(out.findings[0].token, "remoteUrl");
+});
+
+test("passes a transform of a guarded slug value (full-path match survives a trailing transform call)", () => {
+  const out = scan(`
+    if (!isCleanRepoSlug(slug)) return fail();
+    const cmd = \`bash -lc "gate --repo \${slug.trim()}"\`;
+  `);
+  assert.equal(out.outcome, "pass");
+});
+
+test("flags a direct-sink argument with no bash marker and no *command binding (SINK_CTX_RE)", () => {
+  const out = scan("execSync(`gate --repo ${slug} --pr 7`);");
+  assert.equal(out.outcome, "block");
+  assert.equal(out.findings[0].token, "slug");
 });
 
 test("passes the real gateCommand shape when guarded by isCleanRepoSlug in the same file (current tree)", () => {

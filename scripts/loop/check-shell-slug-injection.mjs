@@ -11,14 +11,16 @@
  * judgment" this is the mechanical complement to the reviewer-calibration lens.
  *
  * A finding is raised when ALL hold for one template literal:
- *  1. it interpolates a slug/remote-derived expression (last identifier segment
- *     matches SLUG_TOKEN_RE), and
+ *  1. it interpolates a slug/remote-derived expression — any identifier-path in the
+ *     interpolation has a segment matching SLUG_TOKEN_RE (so a transform like
+ *     `slug.trim()` or `remoteUrl.split(':')[1]` still counts, keyed on the dotted
+ *     path through that segment, e.g. `slug`, `remoteUrl`), and
  *  2. it is shell-command-shaped (contains a `bash -lc` marker, or is assigned
  *     to / passed as a `*command`/`*cmd` value, or is a direct argument to an
  *     exec/spawn/runCommand sink), and
- *  3. the interpolated value is NOT proven clean in the same file — no
- *     `isCleanRepoSlug(<that value>)` guard and not assigned from
- *     `normalizeGitHubRepoSlug(...)`.
+ *  3. that full dotted path is NOT proven clean in the same file — no
+ *     `isCleanRepoSlug(<that same full path>)` guard and no
+ *     `normalizeGitHubRepoSlug(...)` assignment target with that full path.
  *
  * An arg-vector value (`spawn(cmd, ['--repo', slug])`) is never interpolated
  * into a shell string, so it never trips condition 2 — the safe alternative.
@@ -54,12 +56,25 @@ export const SAFE_ALTERNATIVE =
   "guard the value with isCleanRepoSlug(...) (fail closed on a non-clean slug) before interpolating, " +
   "or pass it as an argument-vector element (e.g. spawn(cmd, ['--repo', slug])) instead of a shell string";
 
-/** Last dotted segment of the first identifier in an interpolation expression. */
-function slugTokenOf(expr) {
-  const first = expr.trim().match(/[A-Za-z_$][\w$.]*/u)?.[0];
-  if (!first) return null;
-  const seg = first.split(".").pop();
-  return SLUG_TOKEN_RE.test(seg) ? seg : null;
+// Every identifier-path (dotted chain) in an interpolation expression, e.g.
+// `slug.trim()` -> "slug.trim", `remoteUrl.split(':')[1]` -> "remoteUrl.split".
+const IDENTIFIER_PATH_RE = /[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*/gu;
+
+/**
+ * Every "slug value path" in an interpolation expression: for each dotted
+ * identifier-path with a segment matching SLUG_TOKEN_RE, the prefix from the
+ * start through the first matching segment (so a trailing transform call like
+ * `.trim()` or `.toLowerCase()` does not change the value identity used for
+ * the guard-set lookup).
+ */
+function slugValuePathsOf(expr) {
+  const out = [];
+  for (const m of expr.matchAll(IDENTIFIER_PATH_RE)) {
+    const segs = m[0].split(".");
+    const idx = segs.findIndex((seg) => SLUG_TOKEN_RE.test(seg));
+    if (idx !== -1) out.push(segs.slice(0, idx + 1).join("."));
+  }
+  return out;
 }
 
 /**
@@ -89,10 +104,14 @@ export function extractTemplateLiterals(text) {
   return out;
 }
 
+// Full dotted paths proven clean in the file (isCleanRepoSlug(<path>) argument, or a
+// normalizeGitHubRepoSlug(...) assignment target) — keyed on the whole path, not just
+// its last segment, so an unrelated value sharing a last segment (e.g. `evil.repoSlug`
+// next to a guarded `safe.repoSlug`) is never wrongly exempted.
 function guardedTokens(text) {
   const tokens = new Set();
-  for (const m of text.matchAll(GUARD_CALL_RE)) tokens.add(m[1].split(".").pop());
-  for (const m of text.matchAll(NORMALIZE_ASSIGN_RE)) tokens.add(m[1].split(".").pop());
+  for (const m of text.matchAll(GUARD_CALL_RE)) tokens.add(m[1]);
+  for (const m of text.matchAll(NORMALIZE_ASSIGN_RE)) tokens.add(m[1]);
   return tokens;
 }
 
@@ -117,13 +136,15 @@ export function computeShellSlugInjection(files) {
         SHELL_LITERAL_RE.test(raw) || COMMAND_NAME_CTX_RE.test(before) || SINK_CTX_RE.test(before);
       if (!shellShaped) continue;
       for (const interp of raw.matchAll(/\$\{([^}]*)\}/gu)) {
-        const token = slugTokenOf(interp[1]);
-        if (!token || guards.has(token)) continue;
+        const slugPaths = slugValuePathsOf(interp[1]);
+        if (slugPaths.length === 0) continue;
+        const unguarded = slugPaths.find((p) => !guards.has(p));
+        if (!unguarded) continue; // every slug value path in this interpolation is proven clean
         findings.push({
           path: filePath,
           line: lineOf(text, start),
           expr: interp[1].trim().slice(0, 80),
-          token,
+          token: unguarded,
         });
         break; // one finding per literal is enough to fail it
       }
@@ -158,7 +179,10 @@ function isRuntimeSourceFile(rel) {
 
 function walk(absDir, repoRoot, out) {
   if (!fs.existsSync(absDir)) return out;
-  for (const entry of fs.readdirSync(absDir, { withFileTypes: true })) {
+  const entries = fs
+    .readdirSync(absDir, { withFileTypes: true })
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  for (const entry of entries) {
     const abs = path.join(absDir, entry.name);
     const rel = path.relative(repoRoot, abs);
     if (entry.isDirectory()) {
