@@ -974,14 +974,17 @@ test("buildAngleNamingSuffix carries the bounded reviewer contract: budget, proh
   assert.match(suffix, /cannot finish reviewing every assigned angle/);
   // The escape hatch is a directly invokable command, not just a pointer to
   // the script: it names --run/--head-sha/--angles/--completed-angles/
-  // --model-turns/--tool-calls/--findings-dir using values the reviewer
-  // already has (self-reported consumption, and the head SHA / findings
-  // directory named earlier in the briefing).
-  assert.match(suffix, /--run </);
-  assert.match(suffix, /--head-sha </);
-  assert.match(suffix, /--angles "dry,kiss"/);
-  assert.match(suffix, /--completed-angles </);
-  assert.match(suffix, /--model-turns </);
-  assert.match(suffix, /--tool-calls </);
+  // --model-turns/--tool-calls/--findings-dir, but every value is a
+  // PLACEHOLDER the reviewer fills in — never a concrete angle name (or any
+  // other concrete value) interpolated into the shell-command text, since an
+  // angle name is only required to be a non-empty string and could otherwise
+  // carry shell metacharacters into a copy-pasted command.
+  assert.match(suffix, /--run <reviewed head sha>/);
+  assert.match(suffix, /--head-sha <reviewed head sha>/);
+  assert.match(suffix, /--angles <your assigned angles, comma-separated>/);
+  assert.match(suffix, /--completed-angles <angles you finished>/);
+  assert.match(suffix, /--model-turns <model turns you used>/);
+  assert.match(suffix, /--tool-calls <tool calls you used>/);
   assert.match(suffix, /--findings-dir </);
+  assert.doesNotMatch(suffix, /--angles "dry,kiss"/);
 });

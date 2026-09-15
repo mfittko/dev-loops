@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -177,14 +177,17 @@ test("f) a produced blocked artifact directory cannot consolidate clean via cons
   });
 });
 
-// Copilot review: sanitizeScopeSegment is lossy ("a/b" and "a-b" both
-// sanitize to "a-b"), and every reviewer unit in a grouped round shares ONE
-// --findings-dir. Before the content-hash filename suffix, two distinct
-// angles that sanitize-collide raced to the SAME filename within a bump-loop
-// that was only ever scoped to a single invocation — a later unit's blocked
-// emission for a differently-spelled but same-sanitized angle silently
-// clobbered an earlier unit's, losing a blocked angle from fan-in.
-test("g) sanitize-colliding angles produce two distinct artifact files, neither clobbering the other", async () => {
+// Copilot review (thread 2, issue 2155): the blocked artifact now writes to
+// the CANONICAL per-angle path `<angle>.json` (sanitizeScopeSegment-d for
+// filesystem safety only) — the SAME path the scoped reviewer's own normal
+// artifact for that angle uses (see agents/review.agent.md's write-path
+// invariant). Two distinct angles that sanitize-collide (e.g. "a/b" and
+// "a-b" both sanitize to "a-b") landing in the SAME file is therefore a
+// PRE-EXISTING property of the whole per-angle artifact scheme — every
+// reviewer artifact uses `<angle>.json` — not something this producer
+// introduces; consolidate-fanin.mjs keys on the artifact's own `angle`
+// field and fails closed on a genuine same-angle duplicate regardless.
+test("g) sanitize-colliding angles land in the SAME canonical file (last write wins), matching the reviewer's own per-angle scheme", async () => {
   await withTmpDir(async (tmpDir) => {
     const findingsDir = path.join(tmpDir, "findings");
     const code = await main([
@@ -195,9 +198,45 @@ test("g) sanitize-colliding angles produce two distinct artifact files, neither 
     ]);
     assert.equal(code, 0);
     const entries = await readdir(findingsDir);
-    assert.equal(entries.length, 2, "two distinct files, not one clobbered by the other");
-    assert.equal(new Set(entries).size, 2);
+    assert.deepEqual(entries, ["a-b.json"]);
     const artifacts = await readArtifacts(findingsDir);
-    assert.deepEqual(artifacts.map((a) => a.angle).sort(), ["a-b", "a/b"]);
+    assert.equal(artifacts.length, 1);
+    assert.equal(artifacts[0].angle, "a-b", "later angle in the list wins the shared canonical filename");
+  });
+});
+
+// Copilot review (thread 2, issue 2155): on a sanctioned same-head retry, the
+// reviewer writes its own normal `<angle>.json` artifact for the
+// previously-blocked angle into the SAME --findings-dir. Because the blocked
+// producer now uses that same canonical filename, the normal artifact
+// OVERWRITES the stale blocked one — no coexisting second file, no ambiguous
+// same-angle duplicate — so fan-in is not permanently stuck blocked.
+test("h) a same-head retry's normal artifact supersedes the stale blocked artifact for the same angle", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const findingsDir = path.join(tmpDir, "findings");
+    const code = await main([
+      "--run", RUN, "--head-sha", HEAD_SHA,
+      "--angles", "coverage",
+      "--model-turns", "10", "--tool-calls", "51",
+      "--findings-dir", findingsDir,
+    ]);
+    assert.equal(code, 0);
+    let artifacts = await readArtifacts(findingsDir);
+    assert.equal(artifacts.length, 1);
+    assert.equal(artifacts[0].verdict, "blocked");
+
+    // The retry: the scoped reviewer writes its own normal clean artifact for
+    // the same angle at the canonical <angle>.json path.
+    await writeFile(
+      path.join(findingsDir, "coverage.json"),
+      `${JSON.stringify({ angle: "coverage", verdict: "clean", headSha: HEAD_SHA, findings: [] }, null, 2)}\n`,
+      "utf8",
+    );
+
+    artifacts = await readArtifacts(findingsDir);
+    assert.equal(artifacts.length, 1, "exactly one artifact remains for the angle");
+    assert.equal(artifacts[0].verdict, "clean", "the normal artifact supersedes the stale blocked one");
+    const result = consolidateFanin({ angleResults: artifacts });
+    assert.notEqual(result.verdict, "blocked");
   });
 });

@@ -9,7 +9,6 @@
  * any "blocked" per-angle artifact — this is the only sanctioned producer of
  * one.
  */
-import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
@@ -156,18 +155,18 @@ export async function main(argv = process.argv.slice(2), { mkdirFn = mkdir, writ
 
   const written = [];
   for (const angle of anglesToBlock) {
+    // CANONICAL per-angle path: the SAME `<angle>.json` filename (only
+    // sanitizeScopeSegment-d for filesystem safety) the scoped reviewer's own
+    // normal artifact uses — see agents/review.agent.md's write-path
+    // invariant. A same-head retry's normal artifact for this angle then
+    // OVERWRITES this blocked one instead of coexisting beside a second,
+    // hash-suffixed file; fan-in would otherwise see two artifacts for one
+    // angle and fail closed ambiguously forever. Two DISTINCT angles that
+    // happen to sanitize to the same filename is a pre-existing property of
+    // the whole per-angle artifact scheme (every reviewer artifact uses
+    // `<angle>.json`), not introduced here — out of scope for this producer.
     const base = sanitizeScopeSegment(angle) || "angle";
-    // ponytail: content-hash suffix (first 8 hex chars of sha256(angle))
-    // guarantees cross-unit uniqueness. sanitizeScopeSegment is lossy (e.g.
-    // "a/b" and "a-b" both sanitize to "a-b"), and every reviewer unit in a
-    // grouped round shares ONE --findings-dir, so a sanitized-only filename
-    // can let a later unit's blocked emission clobber an earlier unit's —
-    // silently losing a blocked angle from fan-in. Keying on the angle's
-    // exact string instead of a per-invocation bump counter makes distinct
-    // angles land in distinct files even across separate invocations, and
-    // re-emitting the SAME angle stays idempotent (overwrites only its own
-    // artifact).
-    const filename = `${base}-${createHash("sha256").update(angle, "utf8").digest("hex").slice(0, 8)}.json`;
+    const filename = `${base}.json`;
     const filePath = path.join(findingsDir, filename);
     const body = {
       angle,

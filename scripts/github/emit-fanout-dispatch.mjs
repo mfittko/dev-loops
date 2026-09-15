@@ -159,18 +159,19 @@ const PROHIBITED_OPERATION_INSTRUCTIONS = {
  * from the primitive, never hard-coded, so this text can't drift from
  * reviewer-unit-bound.mjs. It never inlines persona text — reviewer
  * composition is the review agent's job. Pure: generates no new unit/scope
- * names, only references unit.angles/unit.name; the exact escape-hatch
- * invocation it names reuses --head-sha and --angles the reviewer already has
- * from the briefing prefix above this suffix (`head: <sha>` and the
- * `<findings-dir>/<angle>.json` write-path line) and from its own
- * self-reported coverage/consumption, never a value this function invents.
+ * names, only references unit.angles/unit.name. The escape-hatch invocation
+ * it names is described with PLACEHOLDERS the reviewer fills from values it
+ * already has (self-reported coverage/consumption, and the head SHA /
+ * findings directory named earlier in the briefing) — it never interpolates
+ * a concrete angle name (or any other concrete value) into the shell-command
+ * text, since an angle name is only required to be a non-empty string and
+ * could otherwise carry shell metacharacters into a copy-pasted command.
  * @param {{ name: string, angles: string[] }} unit
  * @returns {string}
  */
 export function buildAngleNamingSuffix(unit) {
   const angles = Array.isArray(unit?.angles) ? unit.angles : [];
   const list = angles.join(", ");
-  const anglesCsv = angles.join(",");
   const single = angles.length === 1;
   const header = single
     ? `## Your review angle: ${list}`
@@ -185,7 +186,7 @@ export function buildAngleNamingSuffix(unit) {
 Budget: at most ${REVIEWER_UNIT_BUDGET.maxModelTurns} model turns and ${REVIEWER_UNIT_BUDGET.maxToolCalls} tool calls for this unit.
 Scope: review ONLY the angle(s) named above — reviewing an unassigned angle is prohibited.
 Prohibited: ${prohibited}.
-If you exceed this budget (more than ${REVIEWER_UNIT_BUDGET.maxModelTurns} model turns or ${REVIEWER_UNIT_BUDGET.maxToolCalls} tool calls) OR cannot finish reviewing every assigned angle within it, do NOT report clean — emit a durable blocked result via: node scripts/github/emit-reviewer-blocked.mjs --run <the head SHA from "head:" in the briefing above> --head-sha <the same head SHA> --angles "${anglesCsv}" --completed-angles <angle(s) you actually finished, comma-separated, or omit if none> --model-turns <model turns you consumed> --tool-calls <tool calls you consumed> --findings-dir <the findings directory from the briefing's "Findings write-path invariant" line above>.`;
+If you exceed this budget (more than ${REVIEWER_UNIT_BUDGET.maxModelTurns} model turns or ${REVIEWER_UNIT_BUDGET.maxToolCalls} tool calls) OR cannot finish reviewing every assigned angle within it, do NOT report clean — emit a durable blocked result via: node scripts/github/emit-reviewer-blocked.mjs --run <reviewed head sha> --head-sha <reviewed head sha> --angles <your assigned angles, comma-separated> --completed-angles <angles you finished> --model-turns <model turns you used> --tool-calls <tool calls you used> --findings-dir <the per-angle findings directory named in the briefing prefix above>.`;
   return `${header}\n\n${body}\n\n${contract}\n`;
 }
 
