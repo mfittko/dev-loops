@@ -8,7 +8,7 @@ import { HEAD_SHA_RE, VALID_SCOPE_RE } from "./record-dispatch-prompt-layout.mjs
 import { buildGateContextPath, buildGateEmitPlanPath } from "./write-gate-context.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
 import { loadDevLoopConfig, resolveFanoutEffectiveConcurrency } from "@dev-loops/core/config";
-import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
+import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 
 const USAGE = `Usage: emit-fanout-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--pending] [--tmp-root <path>] [--help]
 The SANCTIONED one-shot gate fan-out dispatch step: given a gate +
@@ -131,12 +131,41 @@ export function sanitizeScopeSegment(value) {
     .replace(/-+$/, "");
 }
 
+// Human phrasing for each PROHIBITED_REVIEWER_OPERATIONS kind. The RENDERED
+// SET is still driven off the array (buildAngleNamingSuffix below maps over
+// it), so an unmapped kind still renders (via the fallback) rather than
+// silently vanishing from the prompt — this dict only supplies wording, never
+// which kinds appear.
+const PROHIBITED_OPERATION_INSTRUCTIONS = {
+  poll_pr_state: "do not poll PR state",
+  poll_ci_state: "do not poll CI state",
+  poll_copilot_state: "do not poll Copilot state",
+  network_status_probe: "do not invoke network status probes",
+  rerun_validation: "do not rerun validation",
+  inspect_orchestration_runtime: "do not inspect orchestration runtime internals",
+  review_unassigned_angle: "do not review unassigned angles",
+};
+
 /**
  * The deterministic angle-suffix for a dispatch unit: it NAMES the unit's
- * angle(s) and instructs the reviewer to self-resolve each angle's persona/focus
- * via resolveReviewerRole and review adversarially per its scoped-mode contract.
- * It never inlines persona text — reviewer composition is the review agent's job.
- * Pure.
+ * angle(s), instructs the reviewer to self-resolve each angle's persona/focus
+ * via resolveReviewerRole and review adversarially per its scoped-mode contract,
+ * and carries the bounded reviewer contract (REVIEWER_UNIT_BUDGET, assigned-
+ * angles-only scope, PROHIBITED_REVIEWER_OPERATIONS, and the escape hatch for
+ * BOTH ways a unit can fail its bound — budget exhaustion or incomplete angle
+ * coverage, mirroring enforceReviewerUnitBound's own two REVOKE conditions in
+ * reviewer-unit-bound.mjs) so a reviewer never has to consult the primitive
+ * directly to learn its own bound. The budget/prohibited numbers are read
+ * from the primitive, never hard-coded, so this text can't drift from
+ * reviewer-unit-bound.mjs. It never inlines persona text — reviewer
+ * composition is the review agent's job. Pure: generates no new unit/scope
+ * names, only references unit.angles/unit.name. The escape-hatch invocation
+ * it names is described with PLACEHOLDERS the reviewer fills from values it
+ * already has (self-reported coverage/consumption, and the head SHA /
+ * findings directory named earlier in the briefing) — it never interpolates
+ * a concrete angle name (or any other concrete value) into the shell-command
+ * text, since an angle name is only required to be a non-empty string and
+ * could otherwise carry shell metacharacters into a copy-pasted command.
  * @param {{ name: string, angles: string[] }} unit
  * @returns {string}
  */
@@ -150,7 +179,15 @@ export function buildAngleNamingSuffix(unit) {
   const body = single
     ? `Self-resolve this angle's persona and focus prompt via resolveReviewerRole(config, "${angles[0]}") from @dev-loops/core/config, then review adversarially per your scoped angle-review mode. Write one findings artifact for this angle at its per-angle path.`
     : `For EACH angle above, self-resolve its persona and focus prompt via resolveReviewerRole(config, <angle>) from @dev-loops/core/config, then review adversarially per your scoped angle-review mode. Write one findings artifact PER ANGLE at its per-angle path — one artifact per angle, never one merged artifact for the unit.`;
-  return `${header}\n\n${body}\n`;
+  const prohibited = PROHIBITED_REVIEWER_OPERATIONS
+    .map((kind) => PROHIBITED_OPERATION_INSTRUCTIONS[kind] ?? `do not perform ${kind}`)
+    .join("; ");
+  const contract = `## Bounded reviewer contract
+Budget: at most ${REVIEWER_UNIT_BUDGET.maxModelTurns} model turns and ${REVIEWER_UNIT_BUDGET.maxToolCalls} tool calls for this unit.
+Scope: review ONLY the angle(s) named above — reviewing an unassigned angle is prohibited.
+Prohibited: ${prohibited}.
+If you exceed this budget (more than ${REVIEWER_UNIT_BUDGET.maxModelTurns} model turns or ${REVIEWER_UNIT_BUDGET.maxToolCalls} tool calls) OR cannot finish reviewing every assigned angle within it, do NOT report clean — emit a durable blocked result via: node scripts/github/emit-reviewer-blocked.mjs --run <reviewed head sha> --head-sha <reviewed head sha> --angles <your assigned angles, comma-separated> --completed-angles <angles you finished> --model-turns <model turns you used> --tool-calls <tool calls you used> --findings-dir <the per-angle findings directory named in the briefing prefix above>.`;
+  return `${header}\n\n${body}\n\n${contract}\n`;
 }
 
 /**
