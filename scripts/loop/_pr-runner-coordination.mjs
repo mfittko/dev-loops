@@ -3,6 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { parseRepoSlugParts } from "@dev-loops/core/github/repo-slug";
 import { resolveRunId } from "@dev-loops/core/loop/run-context";
+import { WATCH_KINDS } from "@dev-loops/core/loop/watcher-exclusivity";
 import {
   loadStateFile as loadSharedStateFile,
   saveStateFile as saveSharedStateFile,
@@ -18,6 +19,8 @@ export const RUNNER_OWNERSHIP_ERROR = Object.freeze({
   OWNERSHIP_MISSING: "ownership_missing",
   RUN_ID_REQUIRED: "run_id_required",
   EXIT_SIGNAL_RECORDED: "exit_signal_recorded",
+  WATCH_HEAD_REQUIRED: "watch_head_required",
+  WATCH_KIND_INVALID: "watch_kind_invalid",
 });
 function normalizeRepoSlug(repo) {
   const { owner, name } = parseRepoSlugParts(repo, {
@@ -166,6 +169,22 @@ export function createRunnerCoordinationState({ repo, pr, runId = null, now = ne
     exitSignals: [],
   };
 }
+/**
+ * Normalize the optional per-run watch claim recorded on `activeRun.watch` by
+ * {@link recordWatchClaim}: the (head, wait-kind) boundary this run is the sole
+ * sanctioned owner of. Additive/optional — a lease written before this field
+ * existed (or with a malformed watch) normalizes to `null`. Every field must be
+ * present and valid or the whole claim is dropped (fail-closed: a partial claim
+ * never masquerades as ownership evidence).
+ */
+function normalizeWatch(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const head = typeof raw.head === "string" && raw.head.trim().length > 0 ? raw.head.trim() : null;
+  const waitKind = WATCH_KINDS.includes(raw.waitKind) ? raw.waitKind : null;
+  const updatedAt = typeof raw.updatedAt === "string" && raw.updatedAt.trim().length > 0 ? raw.updatedAt.trim() : null;
+  if (head === null || waitKind === null || updatedAt === null) return null;
+  return { head, waitKind, updatedAt };
+}
 function normalizeExitSignals(raw) {
   if (!Array.isArray(raw)) return [];
   const out = [];
@@ -211,6 +230,7 @@ export function normalizeRunnerCoordinationState(raw, { repo, pr } = {}) {
       runId: normalizeRunId(raw.activeRun.runId),
       claimedAt: typeof raw.activeRun.claimedAt === "string" ? raw.activeRun.claimedAt : null,
       updatedAt: typeof raw.activeRun.updatedAt === "string" ? raw.activeRun.updatedAt : null,
+      watch: normalizeWatch(raw.activeRun.watch),
     }
     : null;
   const previousRun = raw.previousRun && typeof raw.previousRun === "object"
@@ -231,6 +251,7 @@ export function normalizeRunnerCoordinationState(raw, { repo, pr } = {}) {
         runId: activeRun.runId,
         claimedAt: activeRun.claimedAt,
         updatedAt: activeRun.updatedAt,
+        ...(activeRun.watch ? { watch: activeRun.watch } : {}),
       }
       : null,
     previousRun: previousRun?.runId
@@ -534,6 +555,124 @@ export async function assertRunnerOwnership({
     message: state.activeRun?.runId
       ? `PR ${normalizedRepo}#${normalizedPr} is now owned by run ${state.activeRun.runId}; run ${normalizedRunId} must stop.`
       : `PR ${normalizedRepo}#${normalizedPr} no longer has an active runner ownership record; run ${normalizedRunId} must stop.`,
+  });
+}
+/**
+ * Record this run's claimed (head, wait-kind) watch boundary onto the active
+ * runner-coordination lease, so the boundary has exactly one sanctioned
+ * external-wait owner (watcher-exclusivity live enforcement, issue 2157).
+ *
+ * Fails closed exactly like the write path of {@link assertRunnerOwnership}: the
+ * claim is only written when THIS run is the current active owner. No record,
+ * no active run, or an active run owned by another run all return an
+ * `ownership_*` conflict and write nothing — a run that does not own the PR
+ * lease can never register itself as the boundary's watch owner.
+ *
+ * On success `activeRun.watch = { head, waitKind, updatedAt }` and
+ * `activeRun.updatedAt` is refreshed (the write doubles as a heartbeat). The
+ * returned `watch` is the exact evidence a caller feeds to
+ * `resolveWatchOwnership` as `evidence.owner` (with runId + `<repo>#<pr>` target)
+ * before starting the single sanctioned watcher.
+ */
+export async function recordWatchClaim({
+  repo,
+  pr,
+  runId,
+  head,
+  waitKind,
+  cwd = process.cwd(),
+  filePath = null,
+  now = new Date().toISOString(),
+} = {}) {
+  const normalizedRepo = normalizeRepoSlug(repo);
+  const normalizedPr = normalizePr(pr);
+  const normalizedRunId = normalizeRunId(runId);
+  const resolvedPath = filePath ?? defaultRunnerCoordinationFilePathForTarget({ repo: normalizedRepo, pr: normalizedPr }, cwd);
+  if (normalizedRunId === null) {
+    return buildConflict({
+      error: RUNNER_OWNERSHIP_ERROR.RUN_ID_REQUIRED,
+      repo: normalizedRepo,
+      pr: normalizedPr,
+      runId: null,
+      activeRun: null,
+      filePath: resolvedPath,
+      message: "Recording a watch claim requires a non-empty run id.",
+    });
+  }
+  const normalizedHead = typeof head === "string" ? head.trim() : "";
+  if (normalizedHead.length === 0) {
+    return buildConflict({
+      error: RUNNER_OWNERSHIP_ERROR.WATCH_HEAD_REQUIRED,
+      repo: normalizedRepo,
+      pr: normalizedPr,
+      runId: normalizedRunId,
+      activeRun: null,
+      filePath: resolvedPath,
+      message: "Recording a watch claim requires a non-empty head.",
+    });
+  }
+  if (!WATCH_KINDS.includes(waitKind)) {
+    return buildConflict({
+      error: RUNNER_OWNERSHIP_ERROR.WATCH_KIND_INVALID,
+      repo: normalizedRepo,
+      pr: normalizedPr,
+      runId: normalizedRunId,
+      activeRun: null,
+      filePath: resolvedPath,
+      message: `Watch claim waitKind must be one of ${WATCH_KINDS.join(", ")}, got ${JSON.stringify(waitKind)}.`,
+    });
+  }
+  return withRunnerStateFileLock(resolvedPath, async () => {
+    const raw = await loadRunnerStateFile(resolvedPath);
+    if (raw === null) {
+      return buildConflict({
+        error: RUNNER_OWNERSHIP_ERROR.OWNERSHIP_MISSING,
+        repo: normalizedRepo,
+        pr: normalizedPr,
+        runId: normalizedRunId,
+        activeRun: null,
+        filePath: resolvedPath,
+        message: `Cannot record watch claim: PR ${normalizedRepo}#${normalizedPr} has no runner coordination record.`,
+      });
+    }
+    const state = normalizeRunnerCoordinationState(raw, { repo: normalizedRepo, pr: normalizedPr });
+    if (state.activeRun === null || state.activeRun.runId !== normalizedRunId) {
+      return buildConflict({
+        error: RUNNER_OWNERSHIP_ERROR.OWNERSHIP_LOST,
+        repo: normalizedRepo,
+        pr: normalizedPr,
+        runId: normalizedRunId,
+        activeRun: state.activeRun,
+        filePath: resolvedPath,
+        exitSignals: state.exitSignals,
+        message: state.activeRun?.runId
+          ? `Cannot record watch claim: PR ${normalizedRepo}#${normalizedPr} is owned by ${state.activeRun.runId}, not ${normalizedRunId}.`
+          : `Cannot record watch claim: PR ${normalizedRepo}#${normalizedPr} has no active owner.`,
+      });
+    }
+    const watch = { head: normalizedHead, waitKind, updatedAt: now };
+    const nextState = {
+      ...state,
+      activeRun: {
+        ...state.activeRun,
+        updatedAt: now,
+        watch,
+      },
+      history: [...state.history, { type: "watch_claim", runId: normalizedRunId, head: normalizedHead, waitKind, at: now }],
+    };
+    await saveRunnerStateFile(resolvedPath, nextState);
+    return {
+      ok: true,
+      status: "watch_claim_recorded",
+      repo: normalizedRepo,
+      pr: normalizedPr,
+      runId: normalizedRunId,
+      activeRun: nextState.activeRun,
+      watch,
+      previousRun: nextState.previousRun,
+      exitSignals: nextState.exitSignals,
+      filePath: resolvedPath,
+    };
   });
 }
 export async function releaseRunnerOwnership({
