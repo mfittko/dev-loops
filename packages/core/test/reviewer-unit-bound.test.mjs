@@ -84,6 +84,27 @@ describe("validateReviewerUnit — malformed unit fails closed", () => {
     assert.throws(() => validateReviewerUnit(baseUnit({ gateContext: { headSha: "" } })), TypeError);
   });
 
+  test("accepts a recognized gateContext.harness", () => {
+    const unit = validateReviewerUnit(baseUnit({ gateContext: { headSha: "sha", harness: "pi" } }));
+    assert.equal(unit.gateContext.harness, "pi");
+  });
+
+  test("throws TypeError on an unrecognized gateContext.harness", () => {
+    assert.throws(() => validateReviewerUnit(baseUnit({ gateContext: { headSha: "sha", harness: "borg" } })), TypeError);
+  });
+
+  test("allows an absent gateContext.harness (optional field)", () => {
+    const unit = validateReviewerUnit(baseUnit({ gateContext: { headSha: "sha" } }));
+    assert.equal(unit.gateContext.harness, undefined);
+  });
+
+  test("throws TypeError on a non-structured-cloneable gateContext", () => {
+    assert.throws(
+      () => validateReviewerUnit(baseUnit({ gateContext: { headSha: "x", fn: () => {} } })),
+      TypeError,
+    );
+  });
+
   test("throws TypeError on empty angles", () => {
     assert.throws(() => validateReviewerUnit(baseUnit({ angles: [] })), TypeError);
   });

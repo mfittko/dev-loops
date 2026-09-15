@@ -101,6 +101,12 @@ export function validateReviewerUnit(unit) {
   if (!isNonEmptyString(gateContext.headSha)) {
     throw new TypeError("unit.gateContext.headSha must be a non-empty string");
   }
+  // harness is optional (absent is allowed), but when present it must be a
+  // recognized dev-loop harness — mirrors child-launch-bound.mjs's own
+  // harness enforcement instead of silently carrying an unrecognized label.
+  if (gateContext.harness != null && !HARNESS_VALUES.includes(gateContext.harness)) {
+    throw new TypeError(`unit.gateContext.harness must be one of ${HARNESS_VALUES.join(", ")}, got ${JSON.stringify(gateContext.harness)}`);
+  }
   if (!Array.isArray(angles) || angles.length === 0) {
     throw new TypeError("unit.angles must be a non-empty array of angle names");
   }
@@ -131,10 +137,16 @@ export function validateReviewerUnit(unit) {
   // caller, so deepFreeze would freeze the CALLER's own objects in place —
   // an observable side effect on this otherwise-pure validator. A gate
   // context is plain data; if it is not structured-cloneable that is a
-  // malformed non-data context, and throwing here is the correct fail-closed
-  // behavior (surfaces as an uncaught DataCloneError, same fail-closed
-  // posture as every other malformed-input branch in this module).
-  const clonedGateContext = structuredClone(gateContext);
+  // malformed non-data context, and throwing a TypeError here (not letting
+  // structuredClone's own DataCloneError escape) keeps the fail-closed
+  // posture consistent with every other malformed-input branch in this
+  // module.
+  let clonedGateContext;
+  try {
+    clonedGateContext = structuredClone(gateContext);
+  } catch {
+    throw new TypeError("unit.gateContext must be structured-cloneable (plain data, no functions/symbols/etc.)");
+  }
   // structuredClone (like object spread) copies only own-enumerable
   // properties, so an inherited/non-enumerable headSha would validate above
   // yet be absent from the clone. Re-assert the validated value explicitly
@@ -258,6 +270,18 @@ export function enforceReviewerUnitBound({ unit, consumed, completedAngles } = {
   const assignedAngles = normalizedUnit.angles;
   const unreviewedAngles = assignedAngles.filter((angle) => !completedSet.has(angle.toLowerCase()));
 
+  /** @param {string} reason @param {string[]} angles @returns {object} the durable blocker. */
+  const blockedResult = (reason, angles) => ({
+    ok: false,
+    verdict: "blocked",
+    reason,
+    unreviewedAngles: angles,
+    headSha: normalizedUnit.gateContext.headSha,
+    unit: normalizedUnit,
+    consumed: normalizedConsumed,
+    budget: REVIEWER_UNIT_BUDGET,
+  });
+
   const budgetExceeded = normalizedConsumed.modelTurns > REVIEWER_UNIT_BUDGET.maxModelTurns
     || normalizedConsumed.toolCalls > REVIEWER_UNIT_BUDGET.maxToolCalls;
 
@@ -268,29 +292,11 @@ export function enforceReviewerUnitBound({ unit, consumed, completedAngles } = {
     // still names the genuinely-remaining angles (not the full assigned
     // set): the "never reported clean" guarantee comes from the blocked
     // verdict itself, not from inflating this list.
-    return {
-      ok: false,
-      verdict: "blocked",
-      reason: "reviewer_budget_exhausted",
-      unreviewedAngles,
-      headSha: normalizedUnit.gateContext.headSha,
-      unit: normalizedUnit,
-      consumed: normalizedConsumed,
-      budget: REVIEWER_UNIT_BUDGET,
-    };
+    return blockedResult("reviewer_budget_exhausted", unreviewedAngles);
   }
 
   if (unreviewedAngles.length > 0) {
-    return {
-      ok: false,
-      verdict: "blocked",
-      reason: "reviewer_coverage_incomplete",
-      unreviewedAngles,
-      headSha: normalizedUnit.gateContext.headSha,
-      unit: normalizedUnit,
-      consumed: normalizedConsumed,
-      budget: REVIEWER_UNIT_BUDGET,
-    };
+    return blockedResult("reviewer_coverage_incomplete", unreviewedAngles);
   }
 
   return {
