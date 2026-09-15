@@ -316,7 +316,7 @@ export function parseWatchCycleCliArgs(argv) {
   }
   return options;
 }
-// Live watcher-exclusivity gate (issue 2157): BEFORE a watcher starts, prove
+// Live watcher-exclusivity gate: BEFORE a watcher starts, prove
 // THIS run is the sole owner of the (target, head, wait-kind) boundary. With no
 // async run id the harness is single-runner by construction, so the gate
 // permits without touching the lease (`engaged:false`) — this keeps every
@@ -461,7 +461,7 @@ function attachWatcherExclusivityBlock(result, gate) {
   result.terminal = false;
   return result;
 }
-// One compact execution-unit telemetry record (issue 2157 slice b2) built
+// One compact execution-unit telemetry record built
 // from the cycle's OWN real owner/verdict/disposition data — never a
 // hand-built bag. A watch cycle performs no model turn, so every
 // provider-token dimension is honestly unavailable, never zero/estimated;
@@ -524,7 +524,7 @@ export async function runWatchCycle(
     ? handoff.snapshot.currentHeadSha.trim()
     : null;
   // Sourced from the existing run-context harness-detection seam, not a new
-  // per-harness branch in this loop (issue 2157 slice b2).
+  // per-harness branch in this loop.
   const harness = isClaudeHarness(env) ? "claude" : "pi";
   const result = {
     ok: true,

@@ -1,12 +1,12 @@
 /**
- * execution-record.mjs — compact per-execution-unit telemetry record (issue
- * 2157, epic 2153 slice b2 of 4/4).
+ * execution-record.mjs — compact per-execution-unit telemetry record, the
+ * dev-loop execution-cap effort's final telemetry slice.
  *
- * Slices a/a2/b1 bounded the dev-loop's execution units (child launch,
- * reviewer unit, role budget) and enforced single watcher ownership. None of
- * them measure what a unit actually cost. This module adds one compact,
- * honesty-gated telemetry RECORD per execution unit (coordinator phase,
- * reviewer unit, judge round, fixer pass, watch cycle).
+ * Earlier execution-cap slices bounded the dev-loop's execution units (child
+ * launch, reviewer unit, role budget) and enforced single watcher ownership.
+ * None of them measure what a unit actually cost. This module adds one
+ * compact, honesty-gated telemetry RECORD per execution unit (coordinator
+ * phase, reviewer unit, judge round, fixer pass, watch cycle).
  *
  * Modeled on ./cache-telemetry-evidence.mjs: LOCAL/harness-observable
  * metrics (prompt/context bytes, turns, tool calls, local tool time) are
@@ -39,8 +39,9 @@ export const EXECUTION_UNIT_ROLES = Object.freeze([
  * Per-harness provider-token-telemetry capability. Conservative honest
  * defaults: `claude` observes provider token usage; `pi` and `codex` do not
  * — we have no ground truth that either exposes per-unit provider token
- * usage, so a record for them must never claim a measured token value
- * (#2157 non-goal). Kept separate from review-dispatch-plan's own harness
+ * usage, so a record for them must never claim a measured token value (the
+ * dev-loop execution-cap telemetry non-goal: never claim telemetry a harness
+ * does not expose). Kept separate from review-dispatch-plan's own harness
  * capability map on purpose (different concern: cache reuse vs. per-unit cost).
  */
 export const TELEMETRY_HARNESS_PROFILES = Object.freeze({
