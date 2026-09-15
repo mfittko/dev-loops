@@ -13,6 +13,7 @@ const NOW = 1_000_000_000;
 const STALE_AFTER_MS = 1_800_000;
 const FRESH_OWNER = {
   runId: "run-1",
+  target: "owner/repo#17",
   head: "abc123",
   waitKind: "copilot_review",
   updatedAt: new Date(NOW - 1000).toISOString(),
@@ -67,6 +68,20 @@ describe("resolveWatchOwnership fail-closed validation", () => {
     );
   });
 
+  test("rejects a malformed evidence owner missing target", () => {
+    assert.throws(
+      () => resolveWatchOwnership(withEvidence({ ...FRESH_OWNER, target: undefined })),
+      /evidence\.owner\.target/,
+    );
+  });
+
+  test("rejects a malformed evidence owner with an empty target", () => {
+    assert.throws(
+      () => resolveWatchOwnership(withEvidence({ ...FRESH_OWNER, target: "" })),
+      /evidence\.owner\.target/,
+    );
+  });
+
   test("rejects a malformed evidence owner missing head", () => {
     assert.throws(
       () => resolveWatchOwnership(withEvidence({ ...FRESH_OWNER, head: "" })),
@@ -88,16 +103,30 @@ describe("resolveWatchOwnership fail-closed validation", () => {
     );
   });
 
+  test("rejects a malformed transition missing target", () => {
+    assert.throws(
+      () => resolveWatchOwnership(withEvidence(FRESH_OWNER, { head: "abc123", waitKind: "copilot_review", status: "changed" })),
+      /evidence\.transition\.target/,
+    );
+  });
+
+  test("rejects a malformed transition with an empty target", () => {
+    assert.throws(
+      () => resolveWatchOwnership(withEvidence(FRESH_OWNER, { target: "", head: "abc123", waitKind: "copilot_review", status: "changed" })),
+      /evidence\.transition\.target/,
+    );
+  });
+
   test("rejects a malformed transition missing status", () => {
     assert.throws(
-      () => resolveWatchOwnership(withEvidence(FRESH_OWNER, { head: "abc123", waitKind: "copilot_review", status: "" })),
+      () => resolveWatchOwnership(withEvidence(FRESH_OWNER, { target: "owner/repo#17", head: "abc123", waitKind: "copilot_review", status: "" })),
       /evidence\.transition\.status/,
     );
   });
 
   test("rejects a malformed transition with a bad waitKind", () => {
     assert.throws(
-      () => resolveWatchOwnership(withEvidence(FRESH_OWNER, { head: "abc123", waitKind: "poll", status: "changed" })),
+      () => resolveWatchOwnership(withEvidence(FRESH_OWNER, { target: "owner/repo#17", head: "abc123", waitKind: "poll", status: "changed" })),
       /evidence\.transition\.waitKind/,
     );
   });
@@ -118,7 +147,7 @@ describe("resolveWatchOwnership owned_waiting", () => {
 describe("resolveWatchOwnership transition_ready", () => {
   for (const status of ["changed", "completed"]) {
     test(`fresh owner + matching transition status "${status}" authorizes phase advance`, () => {
-      const verdict = resolveWatchOwnership(withEvidence(FRESH_OWNER, { head: "abc123", waitKind: "copilot_review", status }));
+      const verdict = resolveWatchOwnership(withEvidence(FRESH_OWNER, { target: "owner/repo#17", head: "abc123", waitKind: "copilot_review", status }));
       assert.equal(verdict.ok, true);
       assert.equal(verdict.status, "transition_ready");
       assert.equal(verdict.advancePhaseAuthorized, true);
@@ -128,7 +157,7 @@ describe("resolveWatchOwnership transition_ready", () => {
 
   for (const status of ["timeout", "idle", "pending"]) {
     test(`fresh owner + matching transition status "${status}" stays owned_waiting (no advance)`, () => {
-      const verdict = resolveWatchOwnership(withEvidence(FRESH_OWNER, { head: "abc123", waitKind: "copilot_review", status }));
+      const verdict = resolveWatchOwnership(withEvidence(FRESH_OWNER, { target: "owner/repo#17", head: "abc123", waitKind: "copilot_review", status }));
       assert.equal(verdict.ok, true);
       assert.equal(verdict.status, "owned_waiting");
       assert.equal(verdict.advancePhaseAuthorized, false);
@@ -145,6 +174,13 @@ describe("resolveWatchOwnership blocked branches", () => {
     assert.equal(verdict.secondObserverAuthorized, false);
     assert.equal(verdict.advancePhaseAuthorized, false);
     assert.equal(verdict.waitTimeoutPolicy, EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY);
+  });
+
+  test("owner target mismatch blocks (head+waitKind matching)", () => {
+    const verdict = resolveWatchOwnership(withEvidence({ ...FRESH_OWNER, target: "owner/repo#99" }, null));
+    assert.equal(verdict.verdict, "blocked");
+    assert.equal(verdict.reason, "owner_target_mismatch");
+    assert.equal(verdict.secondObserverAuthorized, false);
   });
 
   test("owner head mismatch blocks", () => {
@@ -177,14 +213,21 @@ describe("resolveWatchOwnership blocked branches", () => {
   });
 
   test("malformed transition (head mismatch) with a fresh matching owner blocks", () => {
-    const verdict = resolveWatchOwnership(withEvidence(FRESH_OWNER, { head: "differenthead", waitKind: "copilot_review", status: "changed" }));
+    const verdict = resolveWatchOwnership(withEvidence(FRESH_OWNER, { target: "owner/repo#17", head: "differenthead", waitKind: "copilot_review", status: "changed" }));
     assert.equal(verdict.verdict, "blocked");
     assert.equal(verdict.reason, "stale_or_malformed_transition");
     assert.equal(verdict.secondObserverAuthorized, false);
   });
 
   test("malformed transition (unknown status) with a fresh matching owner blocks", () => {
-    const verdict = resolveWatchOwnership(withEvidence(FRESH_OWNER, { head: "abc123", waitKind: "copilot_review", status: "mystery" }));
+    const verdict = resolveWatchOwnership(withEvidence(FRESH_OWNER, { target: "owner/repo#17", head: "abc123", waitKind: "copilot_review", status: "mystery" }));
+    assert.equal(verdict.verdict, "blocked");
+    assert.equal(verdict.reason, "stale_or_malformed_transition");
+    assert.equal(verdict.secondObserverAuthorized, false);
+  });
+
+  test("transition target mismatch with a fresh matching owner blocks stale_or_malformed_transition", () => {
+    const verdict = resolveWatchOwnership(withEvidence(FRESH_OWNER, { target: "owner/repo#99", head: "abc123", waitKind: "copilot_review", status: "changed" }));
     assert.equal(verdict.verdict, "blocked");
     assert.equal(verdict.reason, "stale_or_malformed_transition");
     assert.equal(verdict.secondObserverAuthorized, false);
@@ -194,7 +237,7 @@ describe("resolveWatchOwnership blocked branches", () => {
     const copilotReviewBoundary = { target: "owner/repo#17", head: "abc123", waitKind: "copilot_review" };
     const verdict = resolveWatchOwnership({
       boundary: copilotReviewBoundary,
-      evidence: { owner: FRESH_OWNER, transition: { head: "abc123", waitKind: "ci", status: "changed" } },
+      evidence: { owner: FRESH_OWNER, transition: { target: "owner/repo#17", head: "abc123", waitKind: "ci", status: "changed" } },
       now: NOW,
       staleAfterMs: STALE_AFTER_MS,
     });
@@ -235,7 +278,7 @@ describe("resolveWatchOwnership fail-closed type guards", () => {
 
   test("rejects an empty transition.head", () => {
     assert.throws(
-      () => resolveWatchOwnership(withEvidence(FRESH_OWNER, { head: "", waitKind: "copilot_review", status: "changed" })),
+      () => resolveWatchOwnership(withEvidence(FRESH_OWNER, { target: "owner/repo#17", head: "", waitKind: "copilot_review", status: "changed" })),
       /evidence\.transition\.head/,
     );
   });
@@ -244,7 +287,7 @@ describe("resolveWatchOwnership fail-closed type guards", () => {
 describe("resolveWatchOwnership invariant: never a second observer", () => {
   test("secondObserverAuthorized is false across owned_waiting, transition_ready, and blocked", () => {
     const ownedWaiting = resolveWatchOwnership(withEvidence(FRESH_OWNER, null));
-    const transitionReady = resolveWatchOwnership(withEvidence(FRESH_OWNER, { head: "abc123", waitKind: "copilot_review", status: "changed" }));
+    const transitionReady = resolveWatchOwnership(withEvidence(FRESH_OWNER, { target: "owner/repo#17", head: "abc123", waitKind: "copilot_review", status: "changed" }));
     const blocked = resolveWatchOwnership(withEvidence(null, null));
     assert.equal(ownedWaiting.secondObserverAuthorized, false);
     assert.equal(transitionReady.secondObserverAuthorized, false);
@@ -289,5 +332,17 @@ describe("assertNoOverlappingObserver", () => {
 
   test("throws TypeError for an empty operation.kind", () => {
     assert.throws(() => assertNoOverlappingObserver({ kind: "" }), TypeError);
+  });
+
+  test("throws TypeError for a null operation", () => {
+    assert.throws(() => assertNoOverlappingObserver(null), TypeError);
+  });
+
+  test("throws TypeError for a string operation", () => {
+    assert.throws(() => assertNoOverlappingObserver("start_watcher"), TypeError);
+  });
+
+  test("throws TypeError for a number operation", () => {
+    assert.throws(() => assertNoOverlappingObserver(42), TypeError);
   });
 });

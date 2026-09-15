@@ -11,11 +11,18 @@
  * observer of an in-flight external wait (Copilot review, CI, workflow run).
  * `secondObserverAuthorized` is `false` in every branch of
  * `resolveWatchOwnership` — there is no verdict shape that authorizes the
- * caller to start its own competing watch/probe loop. Exactly one runner
- * (the lease owner recorded in the evidence) observes a given
- * (target, head, wait-kind); every other caller either finds itself already
- * IS that owner (the caller and the lease owner are the same runner reading
- * back its own lease) or is blocked.
+ * caller to start its own competing watch/probe loop. The owner and
+ * transition evidence each carry a `target` field, compared against
+ * `boundary.target` alongside `head` and `waitKind`, so the resolver
+ * genuinely keys on the full (target, head, wait-kind) triple instead of
+ * accepting evidence for a different target.
+ *
+ * This resolver is caller-AGNOSTIC: it reports the single-owner verdict over
+ * SUPPLIED evidence and does not authenticate the calling runner. It cannot
+ * tell whether the process invoking it IS the recorded lease owner — that
+ * caller-identity check (verifying the calling runner matches
+ * `evidence.owner`, and gating the wait before it starts) is the consumer's
+ * responsibility and is deferred to the slice-b live wiring.
  *
  * Pure and offline: no runtime/harness adapter import, no file reads, no
  * network, no state held across calls. This primitive is a post-hoc verdict
@@ -104,7 +111,7 @@ function validateBoundary(boundary) {
  * Validate + normalize `evidence.owner`. `null` (no active owner) is valid;
  * a present owner must carry every required field.
  * @param {unknown} owner
- * @returns {{runId:string, head:string, waitKind:string, updatedAt:string}|null}
+ * @returns {{runId:string, target:string, head:string, waitKind:string, updatedAt:string}|null}
  */
 function validateOwner(owner) {
   if (owner === null || owner === undefined) return null;
@@ -113,6 +120,9 @@ function validateOwner(owner) {
   }
   if (!isNonEmptyString(owner.runId)) {
     throw new TypeError("evidence.owner.runId must be a non-empty string");
+  }
+  if (!isNonEmptyString(owner.target)) {
+    throw new TypeError("evidence.owner.target must be a non-empty string");
   }
   if (!isNonEmptyString(owner.head)) {
     throw new TypeError("evidence.owner.head must be a non-empty string");
@@ -125,6 +135,7 @@ function validateOwner(owner) {
   }
   return {
     runId: owner.runId.trim(),
+    target: owner.target.trim(),
     head: owner.head.trim(),
     waitKind: owner.waitKind,
     updatedAt: owner.updatedAt.trim(),
@@ -136,12 +147,15 @@ function validateOwner(owner) {
  * observed yet) is valid; a present transition must carry every required
  * field.
  * @param {unknown} transition
- * @returns {{head:string, waitKind:string, status:string}|null}
+ * @returns {{target:string, head:string, waitKind:string, status:string}|null}
  */
 function validateTransition(transition) {
   if (transition === null || transition === undefined) return null;
   if (typeof transition !== "object") {
     throw new TypeError("evidence.transition must be null or an object");
+  }
+  if (!isNonEmptyString(transition.target)) {
+    throw new TypeError("evidence.transition.target must be a non-empty string");
   }
   if (!isNonEmptyString(transition.head)) {
     throw new TypeError("evidence.transition.head must be a non-empty string");
@@ -152,7 +166,12 @@ function validateTransition(transition) {
   if (!isNonEmptyString(transition.status)) {
     throw new TypeError("evidence.transition.status must be a non-empty string");
   }
-  return { head: transition.head.trim(), waitKind: transition.waitKind, status: transition.status.trim() };
+  return {
+    target: transition.target.trim(),
+    head: transition.head.trim(),
+    waitKind: transition.waitKind,
+    status: transition.status.trim(),
+  };
 }
 
 /** @param {string} a @param {string} b @returns {boolean} case-insensitive, trimmed equality. */
@@ -206,6 +225,9 @@ export function resolveWatchOwnership({ boundary, evidence, now, staleAfterMs } 
   if (owner === null) {
     return blocked("no_active_owner");
   }
+  if (!sameNormalized(owner.target, normalizedBoundary.target)) {
+    return blocked("owner_target_mismatch");
+  }
   if (!sameNormalized(owner.head, normalizedBoundary.head)) {
     return blocked("owner_head_mismatch");
   }
@@ -229,7 +251,11 @@ export function resolveWatchOwnership({ boundary, evidence, now, staleAfterMs } 
   if (transition === null) {
     return ownedWaiting();
   }
-  if (!sameNormalized(transition.head, normalizedBoundary.head) || transition.waitKind !== normalizedBoundary.waitKind) {
+  if (
+    !sameNormalized(transition.target, normalizedBoundary.target) ||
+    !sameNormalized(transition.head, normalizedBoundary.head) ||
+    transition.waitKind !== normalizedBoundary.waitKind
+  ) {
     return blocked("stale_or_malformed_transition");
   }
   if (ADVANCING_TRANSITION_STATUSES.has(transition.status)) {
