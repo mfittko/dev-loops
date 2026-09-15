@@ -348,6 +348,12 @@ export function defineDeckSuite({
 // The deck registry. Each deck is data — adding a deck is one entry here plus a
 // thin spec that calls defineDeckSuite(DECK_REGISTRY.<key>).
 export const DECK_REGISTRY = {
+  "finding-the-flow-deck": {
+    sliceId: "finding-the-flow-deck",
+    deck: "finding-the-flow.html",
+    mobileCapture: { id: "recovery", stateName: "Recovery paths" },
+    sectionIds: ["hero", "problem", "map", "lineage", "example", "guard", "recovery", "freshness", "freedom", "dev-loop", "evidence", "authority", "limits", "measure", "close", "reading"],
+  },
   "intro-deck": {
     sliceId: "intro-deck",
     deck: "introducing-dev-loops.html",

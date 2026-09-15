@@ -14,6 +14,12 @@ only headline changes back to any `.md` that exists.
 | Introducing dev-loops | [`introducing-dev-loops.html`](introducing-dev-loops.html) | The concept, the data behind it, and how to run the loop on your own project. |
 | dev-loops: A Deep Dive | [`dev-loops-deep-dive.html`](dev-loops-deep-dive.html) | Explicit handoffs on a state graph (Part 1) and measuring the waiting between actions (Part 2). |
 | The State Graph Is the Surface | [`state-graph-surface.html`](state-graph-surface.html) | How authoritative state, bounded loops, evidence, and human authority compose into one control surface. |
+| Finding the flow | [`finding-the-flow.html`](finding-the-flow.html) | A company-wide talk about enforced workflows, recovery, and reliable AI agents, using dev-loops as a case study. |
+
+Finding the flow is a local presentation draft with [speaker notes](finding-the-flow-speaker-notes.md)
+and [primary-source research](finding-the-flow-research.md). Open its HTML directly;
+it is not added to the Pages build. Its shared browser checks run with
+`bun run test:playwright:finding-the-flow-deck`.
 
 Headline companion: [`state-graph-surface-presentation.md`](state-graph-surface-presentation.md).
 
