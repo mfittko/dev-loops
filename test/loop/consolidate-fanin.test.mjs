@@ -302,7 +302,7 @@ test("consolidateGateFanin under-budget output is byte-identical to the pre-spli
           verdict: "findings_present",
           findings: [{ severity: "high", summary: "x", disposition: "accepted-for-fix" }],
         }],
-        findings: [{ severity: "high", angle: "scope", summary: "x", disposition: "accepted-for-fix" }],
+        findings: [{ severity: "high", angle: "scope", summary: "x", disposition: "accepted-for-fix", clusterId: 0 }],
         severityCounts: { high: 1, medium: 0, low: 0, question: 0, nit: 0 },
         overallVerdict: "findings_present",
       });

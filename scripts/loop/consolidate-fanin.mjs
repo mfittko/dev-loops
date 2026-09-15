@@ -54,6 +54,7 @@ import { verifyDispatchPromptLayoutForHead } from "../github/verify-dispatch-pro
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkResolvedAngleEvidence, consolidateFanin, normalizeSeverity, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
+import { clusterFindings } from "@dev-loops/core/loop/finding-cluster";
 import { enforceCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
 import { enforcePrimerEvidence } from "@dev-loops/core/loop/primer-evidence";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
@@ -1442,6 +1443,17 @@ export async function consolidateGateFanin(options) {
   // per-finding shape upsert-checkpoint-verdict.mjs's --findings-json accepts —
   // the same array satisfies both consumer contracts.
   const findings = toFindingsLogShape(consolidated.findings);
+  // Stamp each ledger finding with an additive `clusterId` (its cluster's
+  // representative index) so a downstream judge pass can dedupe repeated
+  // reports of the same root cause without recomputing the key itself.
+  // Additive only — every existing field above is untouched. When --head-sha
+  // was not given, clusterFindings fails open (each finding its own
+  // singleton), which is the correct behavior here too: nothing to key on.
+  for (const cluster of clusterFindings(findings, { headSha: options.headSha }).clusters) {
+    for (const memberIndex of cluster.memberIndices) {
+      findings[memberIndex].clusterId = cluster.representativeIndex;
+    }
+  }
   // The nested per-angle shape upsert-checkpoint-verdict.mjs's --findings-json
   // natively accepts: one section per source artifact, including clean
   // angles with an empty findings array, so an all-clean fan-out and

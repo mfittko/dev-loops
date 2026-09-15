@@ -8,6 +8,12 @@ import {
   validateJudgeVerdict,
 } from "@dev-loops/core/loop/gate-fanin";
 import {
+  assertCleanImpliesNoAct,
+  clusterFindings,
+  dedupeActListByCluster,
+  projectClusterDisposition,
+} from "@dev-loops/core/loop/finding-cluster";
+import {
   SPEC_AUTHORITY_OUTCOMES,
   buildRevisionIdentity,
   resolveAffectedCriteria,
@@ -398,13 +404,23 @@ export function runJudgePass(findings, judgeVerdict, headSha) {
   // undisposed finding (the coverage check lives in that shared pure seam),
   // so runJudgePass inherits fail-closed coverage without restating it here.
   const applied = applyJudgeDispositions(findings, judgeVerdict);
-  const enriched = applied.findings;
+  // Cluster duplicate root-cause findings (fan-in may have stamped a
+  // `clusterId`; clusterFindings recomputes deterministically from the same
+  // finding data either way) and project the representative member's judge
+  // disposition onto every other member — one judge decision per root cause,
+  // not one per reviewer that happened to report it. `counts`/`act` below are
+  // derived from the PROJECTED array, so a duplicate a judge only actually
+  // disposed once (via its representative) is never left undisposed on a
+  // sibling member.
+  const clusters = clusterFindings(applied.findings, { headSha: validated.headSha }).clusters;
+  const enriched = projectClusterDisposition(applied.findings, clusters);
   return {
     enriched,
     act: enriched.filter((f) => f.judgeDisposition === "act"),
     scopeDrift: applied.scopeDrift,
     counts: countByDisposition(enriched),
     headSha: validated.headSha,
+    clusters,
   };
 }
 
@@ -817,6 +833,19 @@ export async function judgePassCli(
       }
     : undefined;
 
+  // Dedupe the fixer act list to at most one remediation per acted cluster:
+  // several reviewers reporting the SAME root cause must not become several
+  // fixer remediations. This is a --out-only reduction — result.act /
+  // result.counts above (and the ledger below) still carry every acted
+  // finding, one per reviewer report.
+  const dedupedAct = dedupeActListByCluster(result.act, result.clusters, result.enriched);
+
+  // A "clean" ledger verdict is invalid the moment any finding was acted on.
+  // Fail closed here, BEFORE the ledger's overallVerdict is written, using
+  // the RAW (un-deduped) act count — any acted finding, clustered or not,
+  // prevents clean.
+  assertCleanImpliesNoAct(overallVerdict, result.counts.act);
+
   const written = new Set();
   if (options.ledgerOut) {
     const ledgerPath = path.resolve(resolvedRoot, options.ledgerOut);
@@ -842,7 +871,7 @@ export async function judgePassCli(
       // -contract.md). AC1's durable fixer-facing record of the pinned
       // revision identity is carried by the STAMPED --ledger-out above, never
       // by --out.
-      await writeFile(outPath, JSON.stringify(result.act, null, 2) + "\n");
+      await writeFile(outPath, JSON.stringify(dedupedAct, null, 2) + "\n");
     }
   }
 

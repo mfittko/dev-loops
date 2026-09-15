@@ -117,6 +117,37 @@ test("runJudgePass fails closed when the verdict does not dispose every finding 
   assert.throws(() => runJudgePass(findings, v, HEAD), /does not dispose 1 finding\(s\) \(indexes: 1\)/);
 });
 
+// issue 2156: duplicate root-cause findings (same file:line:recommendation at
+// this head) are clustered so the judge's disposition on one member projects
+// onto every other member reporting the same root cause.
+function locatedFinding(over = {}) {
+  return finding({ file: "src/x.mjs", line: 10, recommendation: "add a null guard", ...over });
+}
+
+test("runJudgePass projects the representative's judge disposition onto every duplicate-root-cause member (#2156)", () => {
+  const findings = ledger(
+    locatedFinding({ angle: "correctness", summary: "null deref (angle A)" }),
+    locatedFinding({ angle: "security", summary: "null deref (angle B)" }),
+    finding({ summary: "distinct finding" }),
+  );
+  const v = verdict({
+    dispositions: [
+      { index: 0, disposition: "act", rationale: "fixes AC-1", criterion: "AC-1" },
+      { index: 1, disposition: "reject", rationale: "duplicate, judge saw it independently" },
+      { index: 2, disposition: "defer", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } },
+    ],
+  });
+  const result = runJudgePass(findings, v, HEAD);
+  // Both cluster members carry the REPRESENTATIVE's (index 0) disposition.
+  assert.equal(result.enriched[0].judgeDisposition, "act");
+  assert.equal(result.enriched[1].judgeDisposition, "act");
+  assert.equal(result.enriched[1].judgeRationale, "fixes AC-1");
+  assert.equal(result.enriched[1].judgeCriterion, "AC-1");
+  assert.equal(result.enriched[2].judgeDisposition, "defer");
+  assert.equal(result.counts.act, 2, "the raw tally counts every acted finding, one per reviewer report");
+  assert.equal(result.act.length, 2);
+});
+
 test("validateCliArgs accepts a full invocation and canonicalizes the gate", () => {
   const opts = parseJudgePassCliArgs([
     "--repo", "mfittko/dev-loops",
@@ -213,6 +244,93 @@ test("judgePassCli resolves a relative findings-file against repo-root (#1658)",
   assert.equal(payload.actCount, 1);
   assert.deepEqual(JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8")).length, 1);
   assert.equal(JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8")).findings[0].judgeDisposition, "act");
+});
+
+test("judgePassCli --out is deduped to one remediation per acted cluster; --ledger-out keeps every acted finding (#2156)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-dedup-"));
+  await writeFile(
+    path.join(tmpDir, "ledger.json"),
+    JSON.stringify({
+      overallVerdict: "findings_present",
+      findings: [
+        locatedFinding({ angle: "correctness", summary: "null deref (angle A)" }),
+        locatedFinding({ angle: "security", summary: "null deref (angle B)" }),
+        finding({ summary: "distinct finding" }),
+        finding({ severity: "low", summary: "out of scope for this PR", disposition: "deferred" }),
+      ],
+    }),
+  );
+  await writeFile(
+    path.join(tmpDir, "judge-verdict.json"),
+    JSON.stringify(
+      verdict({
+        dispositions: [
+          { index: 0, disposition: "act", rationale: "fixes AC-1", criterion: "AC-1" },
+          { index: 1, disposition: "reject", rationale: "duplicate" },
+          { index: 2, disposition: "act", rationale: "also in scope" },
+          { index: 3, disposition: "defer", rationale: "valid but out of scope", followUpDraft: { title: "t", body: "b" } },
+        ],
+      }),
+    ),
+  );
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  const payload = await judgePassCli(
+    {
+      repo: "mfittko/dev-loops",
+      pr: "1",
+      gate: "draft_gate",
+      headSha: HEAD,
+      findingsFile: "./ledger.json",
+      judgeVerdict: "./judge-verdict.json",
+      out: "./act.json",
+      ledgerOut: "./enriched.json",
+    },
+    { repoRoot: tmpDir },
+  );
+  assert.equal(payload.ok, true);
+  // Raw tally: both duplicate-cluster members (0, 1 via projection) plus the
+  // distinct finding (2) were all acted on — one entry per reviewer report.
+  assert.equal(payload.actCount, 3);
+  const writtenAct = JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8"));
+  // Deduped fixer act list: exactly one entry per acted root cause.
+  assert.equal(writtenAct.length, 2);
+  assert.equal(writtenAct[0].summary, "null deref (angle A)");
+  assert.equal(writtenAct[1].summary, "distinct finding");
+  const enrichedLedger = JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8"));
+  // The durable ledger is NOT deduped — every acted finding is still present.
+  assert.equal(enrichedLedger.findings.filter((f) => f.judgeDisposition === "act").length, 3);
+});
+
+test("judgePassCli fails closed when a clean ledger verdict is paired with a nonzero judge act count (#2156)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-clean-act-"));
+  await writeFile(
+    path.join(tmpDir, "ledger.json"),
+    // A "clean" overallVerdict (e.g. no blocking-severity finding) can still
+    // carry a low-severity finding the judge later decides to act on — that
+    // combination must never be written as a clean verdict.
+    JSON.stringify({ overallVerdict: "clean", findings: [finding({ severity: "low", disposition: "deferred" })] }),
+  );
+  await writeFile(
+    path.join(tmpDir, "judge-verdict.json"),
+    JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", rationale: "actually needs fixing now" }] })),
+  );
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  await assert.rejects(
+    judgePassCli(
+      {
+        repo: "mfittko/dev-loops",
+        pr: "1",
+        gate: "draft_gate",
+        headSha: HEAD,
+        findingsFile: "./ledger.json",
+        judgeVerdict: "./judge-verdict.json",
+        out: "./act.json",
+        ledgerOut: "./enriched.json",
+      },
+      { repoRoot: tmpDir },
+    ),
+    /clean verdict is invalid with a nonzero act count/,
+  );
 });
 
 // #1807: a `defer` disposition creates (or appends to) the PR's ONE tracked
