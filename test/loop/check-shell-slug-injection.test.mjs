@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { test } from "bun:test";
 
 import {
   computeShellSlugInjection,
+  evaluateShellSlugInjection,
   extractTemplateLiterals,
   SAFE_ALTERNATIVE,
 } from "../../scripts/loop/check-shell-slug-injection.mjs";
@@ -109,4 +113,55 @@ test("extractTemplateLiterals keeps a ${…} span with an inner brace intact", (
   assert.equal(lits.length, 2);
   assert.ok(lits[0].raw.includes("f({x:1})"));
   assert.equal(lits[1].raw, "`plain`");
+});
+
+test("a guard mention living only inside a comment does not exempt a real sink (fail-open regression)", () => {
+  const out = scan(`
+    // isCleanRepoSlug(slug) — looks guarded, but this line is only a comment
+    /* normalizeGitHubRepoSlug(slug) */
+    const cmd = \`bash -lc "gate --repo \${slug}"\`;
+  `);
+  assert.equal(out.outcome, "block");
+  assert.equal(out.findings[0].token, "slug");
+});
+
+test("a URL template literal (// inside a string) survives comment stripping intact", () => {
+  const out = scan(
+    "const url = `https://registry.npmjs.org/dev-loops/-/dev-loops-${version}.tgz`; // trailing comment",
+  );
+  assert.equal(out.outcome, "pass");
+});
+
+test("does not flag an argv-vector API (spawn/execFile are not shell-string sinks)", () => {
+  const out = scan("execFileSync(`gate --repo ${slug}`, []);");
+  assert.equal(out.outcome, "pass");
+});
+
+test("does not flag the positional runCommand(cmd, args) argv API", () => {
+  const out = scan("await runCommand(`gate --repo ${slug}`, []);");
+  assert.equal(out.outcome, "pass");
+});
+
+test("still flags the object-form runCommand({ command: ... }) shell sink", () => {
+  const out = scan("await runCommand({ command: `gate --repo ${slug}` });");
+  assert.equal(out.outcome, "block");
+  assert.equal(out.findings[0].token, "slug");
+});
+
+test("evaluateShellSlugInjection blocks a hostile file under a scanned root and names it", () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), "shell-slug-injection-"));
+  try {
+    mkdirSync(path.join(tmp, "scripts"), { recursive: true });
+    mkdirSync(path.join(tmp, "test"), { recursive: true });
+    const hostile = 'const cmd = `bash -lc "gate --repo ${slug}"`;\n';
+    writeFileSync(path.join(tmp, "scripts", "foo.mjs"), hostile);
+    // Excluded by TEST_FILE_RE (under test/) — proves the exclusion, not just the traversal.
+    writeFileSync(path.join(tmp, "test", "foo.mjs"), hostile);
+    const out = evaluateShellSlugInjection({ repoRoot: tmp });
+    assert.equal(out.outcome, "block");
+    assert.ok(out.findings.some((f) => f.path === "scripts/foo.mjs"));
+    assert.ok(!out.findings.some((f) => f.path.startsWith("test/")));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });

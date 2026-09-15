@@ -46,9 +46,14 @@ const SHELL_LITERAL_RE = /\b(?:bash|sh)\b[^`]*?-l?c\b|(?:^|\s)-lc\b/u;
 // The literal is assigned to / is the value of a `*command`/`*cmd` binding.
 const COMMAND_NAME_CTX_RE = /[A-Za-z_$][\w$]*(?:[Cc]ommand|[Cc]md)\s*[:=]\s*(?:await\s+)?$/u;
 
-// The literal is a direct argument to a shell-exec sink.
-const SINK_CTX_RE =
-  /\b(?:exec|execSync|execFile|execFileSync|spawn|spawnSync|runCommand)\s*\(\s*(?:\{\s*command\s*:\s*)?$/u;
+// The literal is a direct argument to a shell-exec sink: `exec`/`execSync` (child_process
+// runs the string through a shell) or the object-form `runCommand({ command: ... })` used by
+// extension/post-merge-update.ts. `spawn`/`spawnSync`/`execFile`/`execFileSync` and the
+// positional `runCommand(cmd, args)` (packages/core/src/cli/primitives.mjs) are argv APIs —
+// the safe alternative this guard steers toward — and are deliberately NOT sinks here.
+// ponytail: `spawn(cmd, args, {shell:true})` opts back into a shell and is unflagged; a
+// fail-safe ceiling, not a taint tracker for an options bag.
+const SINK_CTX_RE = /\b(?:exec|execSync)\s*\(\s*$|\brunCommand\s*\(\s*\{\s*command\s*:\s*$/u;
 
 // A value proven clean in the file: passed to the charset validator, or bound
 // from the normalizer (which returns a clean `owner/name` or null).
@@ -121,6 +126,57 @@ function guardedTokens(text) {
   return tokens;
 }
 
+// Line-preserving comment stripper: blanks `//` and `/* */` comment bytes to spaces
+// (every newline kept in place, string/template literals left untouched) so a guard or
+// sink mention living only in a comment can never populate the guard set or fake a
+// sink match — the fail-open class. Ports the non-line-preserving stripSourceComments in
+// scripts/docs/validate-rule-ownership.mjs. Quote-aware (unlike that port) because this
+// module's own scan roots have live template literals containing `https://...` — a naive
+// scanner would read that `//` as a comment and blank the rest of the line, including the
+// literal's own closing backtick, corrupting extractTemplateLiterals' balance scan.
+// ponytail: a guard/sink mention inside a STRING literal (not a comment) is still a
+// residual, contrived ceiling — closing it needs a string-aware taint lexer (the
+// no-taint-framework non-goal rules that out).
+function stripComments(text) {
+  let out = "";
+  let quote = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote) {
+      if (c === "\\") {
+        out += c;
+        i++;
+        if (i < text.length) out += text[i];
+        continue;
+      }
+      out += c;
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === "`") {
+      quote = c;
+      out += c;
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "/") {
+      let j = i;
+      while (j < text.length && text[j] !== "\n") { out += " "; j++; }
+      i = j - 1;
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2);
+      const stop = end === -1 ? text.length : end + 2;
+      let j = i;
+      for (; j < stop; j++) out += text[j] === "\n" ? "\n" : " ";
+      i = j - 1;
+      continue;
+    }
+    out += c;
+  }
+  return out;
+}
+
 function lineOf(text, index) {
   let line = 1;
   for (let i = 0; i < index && i < text.length; i++) if (text[i] === "\n") line++;
@@ -134,7 +190,11 @@ function lineOf(text, index) {
  */
 export function computeShellSlugInjection(files) {
   const findings = [];
-  for (const { path: filePath, text } of files) {
+  for (const { path: filePath, text: rawText } of files) {
+    // Scan comment-stripped text throughout (guard extraction, sink/shell-shape context,
+    // template extraction, line numbers) — see stripComments. Length and newlines are
+    // preserved 1:1 with rawText, so every index/line computed below stays accurate.
+    const text = stripComments(rawText);
     const guards = guardedTokens(text);
     for (const { raw, start } of extractTemplateLiterals(text)) {
       const before = text.slice(Math.max(0, start - 100), start);
