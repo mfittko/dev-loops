@@ -39,6 +39,10 @@ Optional:
                                  distinctReviewers must be <= the distinct reviewers recorded in perAngle (perAngle non-empty when distinctReviewers > 0)
                                  no two fresh (non-carried) angles may share one reviewer identity, and every fresh angle must record one (reviewer or dispatchId) — one scoped reviewer per angle (use inline_single_agent + --inline-reason for a sanctioned single-reviewer run)
                                  EXCEPTION: fresh angles sharing a reviewer may all declare the same "group" name (grouped fan-out dispatch); differing or missing group names still fail closed
+                                 Omitted, a "provenance" object embedded in the --findings/--findings-file wrapper
+                                 (consolidate-fanin.mjs's --ledger-out on a fully-carried round: zero fresh angles)
+                                 is used instead, validated through this SAME check — a malformed wrapper provenance
+                                 fails closed identically. Absent both, the log is written with no provenance, as before.
   --emit-plan <path>             Optional keyed emit-fanout-dispatch plan. When supplied, requires --provenance and fails closed unless that caller-supplied provenance matches the plan's round key and emitted fresh units exactly. The plan is a guard only; it never supplies provenance or findings. Omitted preserves current behavior.
   --full-label                   The PR carries the gate:full label: dispatch groups resolve to one angle per unit, so any reviewer identity shared across fresh angles is rejected regardless of a declared "group" (mirrors write-gate-context.mjs's --full-label). Only meaningful when --provenance is supplied. Omitted (default false) keeps current behavior.
   --judge-verdict <path>         Path to the judge agent's verdict artifact (JSON). When supplied, the findings are
@@ -555,7 +559,7 @@ export function buildLogPath({ repo, pr, gate, headSha, tmpRoot }) {
   return path.join(tmpRoot, "gate-findings", repoSlug, `pr-${pr}`, `${gate}-${headSha}.json`);
 }
 export async function writeGateFindingsLog(options, { repoRoot = process.cwd() } = {}) {
-  const { findings: rawFindings, overallVerdict } = await resolveFindings(options);
+  const { findings: rawFindings, overallVerdict, provenance: wrapperProvenance } = await resolveFindings(options);
   // When a judge verdict artifact is supplied, enrich the findings with the
   // judge's relevance-based dispositions (GATE-EXEC-JUDGE-PHASE) before writing the ledger:
   // applyJudgeDispositions fails closed on a malformed verdict, an
@@ -618,24 +622,41 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       );
     }
   }
-  let provenance;
-  if (options.provenance === undefined) {
-    provenance = undefined;
-  } else {
-    // Resolve this round's dispatch groups before validating pairing, so a
-    // claimed `group` is cross-checked against the gate's configured
-    // grouping table (see fanoutReviewerPairingError), not just self-attested.
-    // A raw-JSON parse failure here is swallowed; the real error resurfaces
-    // inside parseProvenanceJson below.
+  // Resolve + validate a candidate provenance JSON STRING through the exact
+  // same path an explicit --provenance takes: resolve this round's dispatch
+  // groups first (so a claimed `group` is cross-checked against the gate's
+  // configured grouping table — see fanoutReviewerPairingError — not just
+  // self-attested; a raw-JSON parse failure here is swallowed, the real error
+  // resurfaces inside parseProvenanceJson), then run parseProvenanceJson
+  // itself. Shared by the explicit --provenance path and the wrapper-supplied
+  // fallback below so a malformed wrapper provenance fails closed identically
+  // to a malformed --provenance flag — never a parallel validator.
+  const resolveAndValidateProvenance = async (rawProvenanceJson) => {
     let resolvedGroups = null;
     try {
-      const rawPerAngle = JSON.parse(options.provenance)?.perAngle;
+      const rawPerAngle = JSON.parse(rawProvenanceJson)?.perAngle;
       const { config } = await loadDevLoopConfig({ repoRoot });
       resolvedGroups = resolveFanoutGroups(config, GATE_CONFIG_KEY[options.gate] ?? options.gate, freshAngleNames(rawPerAngle), { fullLabel: options.fullLabel === true });
     } catch {
       resolvedGroups = null;
     }
-    provenance = parseProvenanceJson(options.provenance, resolvedGroups);
+    return parseProvenanceJson(rawProvenanceJson, resolvedGroups);
+  };
+  let provenance;
+  if (options.provenance !== undefined) {
+    provenance = await resolveAndValidateProvenance(options.provenance);
+  } else if (wrapperProvenance !== undefined && wrapperProvenance !== null) {
+    // No explicit --provenance flag, but the --findings/--findings-file
+    // wrapper (consolidate-fanin.mjs's --ledger-out on a fully-carried round)
+    // carries its own derived "provenance" — persist THAT into the durable
+    // ledger instead of leaving it byte-identical to a bare-array write.
+    // Re-serialized through JSON.stringify so it runs through the identical
+    // parseProvenanceJson validation core an explicit --provenance would: a
+    // malformed wrapper provenance fails closed the same way. An explicit
+    // --provenance flag (above) always takes precedence over this.
+    provenance = await resolveAndValidateProvenance(JSON.stringify(wrapperProvenance));
+  } else {
+    provenance = undefined;
   }
   if (options.emitPlan !== undefined) {
     await verifyEmitPlanProvenance(options.emitPlan, provenance, {

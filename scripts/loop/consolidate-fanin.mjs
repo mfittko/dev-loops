@@ -53,7 +53,7 @@ import { verifyBriefingPrefixesForHead } from "../github/verify-briefing-prefixe
 import { verifyDispatchPromptLayoutForHead } from "../github/verify-dispatch-prompt-layout.mjs";
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
-import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkResolvedAngleEvidence, consolidateFanin, normalizeSeverity, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
+import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkResolvedAngleEvidence, consolidateFanin, countDistinctReviewers, normalizeSeverity, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 import { clusterFindings } from "@dev-loops/core/loop/finding-cluster";
 import { enforceCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
 import { enforcePrimerEvidence } from "@dev-loops/core/loop/primer-evidence";
@@ -110,6 +110,17 @@ Optional:
                                  threads it through) and on to upsert-checkpoint-verdict.mjs's
                                  enforcement (#1616) without an orchestrator hand-off — a value the
                                  orchestrator re-types as --verdict reproduces the same defect.
+                                 On a fully carried round (every angle came from --carried-angles,
+                                 zero fresh --findings-dir artifacts), the wrapper also carries a
+                                 derived "provenance" object ({ distinctReviewers, perAngle }, each
+                                 perAngle entry's reviewer/dispatchId/model taken straight from its
+                                 --carry-forward-plan entry) — write-gate-findings-log.mjs persists
+                                 it into the durable ledger when the caller supplies no --provenance
+                                 of its own, so the ledger's fan-out provenance stays in parity with
+                                 the posted verdict comment on a clean/carried re-gate. Omitted (no
+                                 "provenance" key) on any round with even one fresh artifact — a
+                                 fresh angle's reviewer identity is never visible to this CLI, so it
+                                 is never fabricated.
                                  Rejected at parse time (exit 1) when
                                  it resolves to the same path as --out — one write would otherwise
                                  destroy the other. Neither --out nor --ledger-out may resolve to a
@@ -1350,6 +1361,14 @@ export async function consolidateGateFanin(options) {
   //      producer's own rule can never drift apart.
   //   2. --carry-forward-plan's own "carried" list — the proof that this
   //      angle really was resolved as carried, not just typed in.
+  //
+  // Also populated below (keyed on the exact trimmed angle): each carried
+  // entry's own reviewer/dispatchId/model, straight off its
+  // --carry-forward-plan entry (resolve-angle-carry-forward.mjs's own
+  // producer already copies these from the PRIOR ledger's provenance.perAngle
+  // — see its "Preserve the FULL reviewer identity per angle" comment). Feeds
+  // deriveFullyCarriedProvenance below; empty when --carried-angles is absent.
+  const carriedReviewerIdentityByAngle = new Map();
   if (options.carriedAngles !== undefined) {
     if (!mandatoryAngles) {
       throw new Error("--carried-angles requires --gate — the gate's configured mandatory angles must be checked before any angle is carried (fail-closed)");
@@ -1410,8 +1429,41 @@ export async function consolidateGateFanin(options) {
       const carriedVerdict = planEntry.prevVerdict === "findings_present" ? "findings_present" : "clean";
       const carriedFindings = carriedVerdict === "findings_present" ? planEntry.findings : [];
       rawArtifacts.push({ angle: trimmedAngle, verdict: carriedVerdict, findings: carriedFindings, carriedFromHead: planEntry.carriedFromHead });
+      carriedReviewerIdentityByAngle.set(trimmedAngle, {
+        reviewer: typeof planEntry.reviewer === "string" && planEntry.reviewer.trim().length > 0 ? planEntry.reviewer.trim() : undefined,
+        dispatchId: typeof planEntry.dispatchId === "string" && planEntry.dispatchId.trim().length > 0 ? planEntry.dispatchId.trim() : undefined,
+        model: typeof planEntry.model === "string" && planEntry.model.trim().length > 0 ? planEntry.model.trim() : undefined,
+      });
     }
   }
+
+  // Fully-carried-round provenance derivation: consolidateFanin never sees a
+  // FRESH angle's reviewer identity (the per-angle findings artifact schema
+  // carries none), so provenance is only reliably derivable when EVERY angle
+  // this round resolved is a carried angle — zero fresh dispatch, a clean
+  // re-gate whose Phase 2 dispatched no reviewer at all. A round mixing even
+  // one fresh artifact omits this (returns null) and leaves the conductor's
+  // own --provenance the sole source, same as before this change — pure
+  // additive no-op for every other round shape.
+  const derivedProvenance = rawArtifacts.length > 0 && rawArtifacts.every((a) => typeof a.carriedFromHead === "string")
+    ? (() => {
+        const perAngle = rawArtifacts.map((a) => {
+          const identity = carriedReviewerIdentityByAngle.get(a.angle.trim()) ?? {};
+          return {
+            angle: a.angle.trim(),
+            carriedFromHead: a.carriedFromHead,
+            carriedVerdict: a.verdict.trim(),
+            ...(identity.reviewer !== undefined ? { reviewer: identity.reviewer } : {}),
+            ...(identity.dispatchId !== undefined ? { dispatchId: identity.dispatchId } : {}),
+            ...(identity.model !== undefined ? { model: identity.model } : {}),
+          };
+        });
+        // distinctReviewers is computed FROM this same perAngle array, so the
+        // pair is internally consistent by construction (write-gate-findings-
+        // log.mjs's provenanceConsistencyError re-checks it downstream anyway).
+        return { distinctReviewers: countDistinctReviewers(perAngle), perAngle };
+      })()
+    : null;
 
   const angles = rawArtifacts.map((a) => ({
     angle: a.angle.trim(),
@@ -1553,7 +1605,17 @@ export async function consolidateGateFanin(options) {
       options.specAuthority !== undefined ? path.resolve(options.repoRoot ?? process.cwd(), options.specAuthority) : undefined,
       parseError,
     );
-    const ledgerRecord = stampOptionalSpecAuthority({ overallVerdict: consolidated.verdict, findings }, specAuthorityIdentity);
+    // derivedProvenance is embedded here, additively, so a fully-carried
+    // round's --ledger-out wrapper already carries provenance parity with the
+    // posted verdict comment — write-gate-findings-log.mjs's wrapper
+    // provenance threading persists it into the durable ledger even when the
+    // caller supplies no --provenance of its own.
+    const ledgerRecord = stampOptionalSpecAuthority(
+      derivedProvenance !== null
+        ? { overallVerdict: consolidated.verdict, findings, provenance: derivedProvenance }
+        : { overallVerdict: consolidated.verdict, findings },
+      specAuthorityIdentity,
+    );
     await writeFile(options.ledgerOut, `${JSON.stringify(ledgerRecord, null, 2)}\n`, "utf8");
   }
 

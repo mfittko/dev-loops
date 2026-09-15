@@ -18,7 +18,7 @@
 // `now`; pass a fixed value through it. Enforced mechanically by
 // test/github/deterministic-fixture-time.test.mjs.
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -47,6 +47,8 @@ import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination
 import { execFileSync } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
+import { consolidateGateFanin } from "../../scripts/loop/consolidate-fanin.mjs";
+import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 
 const scriptPath = path.resolve("scripts/github/detect-checkpoint-evidence.mjs");
 
@@ -1831,6 +1833,132 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7): the SAME
     );
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// AC4 regression (issue 2202): a zero-findings, FULLY-CARRIED re-gate — every
+// resolved angle came from --carried-angles, zero fresh --findings-dir
+// artifacts — driven through the REAL producer chain (consolidateGateFanin's
+// own --ledger-out wrapper, then writeGateFindingsLog with NO --provenance)
+// must land a durable ledger that already carries provenance, so local
+// detect-checkpoint-evidence agrees with the posted-comment surface with no
+// manual backfill. pr-checklist is disabled here (mandatory angles always
+// re-run fresh — see angleReviewSurface's ALWAYS_INCLUDE/alwaysRerun rule —
+// so a MANDATORY angle can never be part of a fully-carried round); "dry" and
+// "docs" are plain (non-mandatory) preApproval pool angles, both carried.
+test("AC4: a fully-carried clean re-gate's REAL --ledger-out wrapper carries derived provenance, and writeGateFindingsLog + detect-checkpoint-evidence (no --skip-fanout-ledger-check) read it as satisfied with no manual backfill", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fully-carried-regate-"));
+  const findingsDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fully-carried-findings-dir-"));
+  try {
+    await writeFile(
+      path.join(repoRoot, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  requireFanoutEvidence: true",
+        "  requireFanoutProvenance: true",
+        "  draft:",
+        "    required: false",
+        "  preApproval:",
+        "    angles:",
+        "      - name: pr-checklist",
+        "        enabled: false",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const priorHeadSha = "d".repeat(40);
+    const headSha = "e".repeat(40);
+    const carryForwardPlan = {
+      carried: [
+        { angle: "dry", carriedFromHead: priorHeadSha, reviewer: "review-a", prevVerdict: "clean" },
+        { angle: "docs", carriedFromHead: priorHeadSha, reviewer: "review-b", prevVerdict: "clean" },
+      ],
+    };
+    const ledgerOut = path.join(repoRoot, "consolidated-ledger.json");
+
+    // 1. Real producer: consolidate-fanin's own consolidateGateFanin, an
+    // empty --findings-dir (zero fresh artifacts) + --carried-angles/
+    // --carry-forward-plan for both carried angles.
+    const consolidateResult = await consolidateGateFanin({
+      findingsDir,
+      gate: "pre_approval_gate",
+      headSha,
+      repoRoot,
+      carriedAngles: ["dry", "docs"],
+      carryForwardPlan: carryForwardPlan.carried,
+      ledgerOut,
+    });
+    assert.equal(consolidateResult.overallVerdict, "clean");
+    const wrapper = JSON.parse(await readFile(ledgerOut, "utf8"));
+    assert.equal(wrapper.overallVerdict, "clean");
+    assert.ok(wrapper.provenance, "a fully-carried round's --ledger-out wrapper must derive provenance");
+    assert.equal(wrapper.provenance.distinctReviewers, 2);
+    assert.deepEqual(
+      wrapper.provenance.perAngle.map((a) => a.angle).sort(),
+      ["docs", "dry"],
+    );
+
+    // 2. Real producer: write-gate-findings-log's own writeGateFindingsLog,
+    // reading that SAME --ledger-out wrapper via --findings-file, with NO
+    // --provenance flag of its own.
+    const writeResult = await writeGateFindingsLog({
+      repo: "owner/repo",
+      pr: 99,
+      gate: "pre_approval_gate",
+      headSha,
+      verdict: "clean",
+      findingsFile: ledgerOut,
+    }, { repoRoot });
+    assert.equal(writeResult.ok, true);
+
+    // AC1/AC3: the durable, on-disk ledger (not just the in-memory result)
+    // carries provenance with no manual backfill step.
+    const onDiskLedger = JSON.parse(await readFile(path.resolve(repoRoot, writeResult.path), "utf8"));
+    assert.ok(onDiskLedger.provenance, "the durable findings-log ledger must carry provenance on a fully-carried clean re-gate");
+    assert.equal(onDiskLedger.provenance.distinctReviewers, 2);
+
+    // 3. detect-checkpoint-evidence's own exported fan-out/pre-merge/
+    // evidence-state functions, reading that SAME on-disk ledger — no
+    // { skipFanoutLedgerCheck: true } passed (the --skip-fanout-ledger-check
+    // CLI flag's own default is false).
+    const { config } = await loadDevLoopConfig({ repoRoot });
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo",
+      pr: 99,
+      currentHeadSha: headSha,
+      draftGateMarker: { visible: false },
+      preApprovalGateMarker: { visible: true, headSha, executionMode: "fanout_fanin" },
+      config,
+      cwd: repoRoot,
+      hasFullLabel: false,
+    });
+    assert.equal(enforcement.requireProvenance, true);
+    const gate = enforcement.gates.find((g) => g.name === "pre_approval_gate");
+    assert.ok(gate.provenance, "requireFanoutProvenance must read the derived provenance straight off the durable ledger");
+    assert.equal(gate.provenance.distinctReviewers, 2);
+
+    const preMergeGateCheck = buildPreMergeGateCheck({
+      currentHeadSha: headSha,
+      draftGate: { visible: true, verdict: "clean" },
+      preApprovalGateMarker: {
+        visible: true, contractComplete: true, verdict: "clean", headSha,
+        sizeOutcome: "pass", sizeTouchesT1: false,
+      },
+    }, 0, null, enforcement);
+    assert.equal(preMergeGateCheck.ok, true, JSON.stringify(preMergeGateCheck.failures));
+
+    const evidenceState = deriveEvidenceState(
+      {
+        draftGate: { visible: true, verdict: "clean" },
+        preApprovalGateMarker: { visible: true, verdict: "clean", contractComplete: true },
+      },
+      preMergeGateCheck,
+    );
+    assert.equal(evidenceState, EVIDENCE_STATE.SATISFIED);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+    await rm(findingsDir, { recursive: true, force: true });
   }
 });
 

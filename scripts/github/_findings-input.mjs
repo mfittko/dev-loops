@@ -15,30 +15,34 @@ import { readFile } from "node:fs/promises";
 // defect shape (#1616) a caller-passed `--verdict` reproduces. A bare array
 // (the legacy shape, and any hand-authored `--findings` input) is still
 // accepted: `overallVerdict` is simply absent, and the consumer keeps today's
-// behavior. Returns `{ findings, overallVerdict }` — `findings` is the value
-// the caller's `validate` callback receives (always the array, unwrapped);
-// `overallVerdict` is passed through UNVALIDATED (the consumer that records it
-// validates it; the consumer that ignores it drops it).
+// behavior. Returns `{ findings, overallVerdict, provenance }` — `findings` is
+// the value the caller's `validate` callback receives (always the array,
+// unwrapped); `overallVerdict`/`provenance` are passed through UNVALIDATED
+// (the consumer that records either one validates it; a consumer that ignores
+// one drops it). `provenance` mirrors consolidate-fanin.mjs's own derived
+// wrapper field (a fully-carried round only) — absent on a bare-array/legacy
+// input, same as `overallVerdict`.
 function unwrapFindingsPayload(parsed) {
   if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && Array.isArray(parsed.findings)) {
-    return { findings: parsed.findings, overallVerdict: parsed.overallVerdict };
+    return { findings: parsed.findings, overallVerdict: parsed.overallVerdict, provenance: parsed.provenance };
   }
-  return { findings: parsed, overallVerdict: undefined };
+  return { findings: parsed, overallVerdict: undefined, provenance: undefined };
 }
 
 /**
  * Resolve a findings array from either `--findings` (inline JSON) or
  * `--findings-file` (a path to the same JSON) — mutually exclusive, identical
  * read/parse handling either way. The parsed value is validated/normalized by
- * the caller-supplied `validate` callback. Returns `{ findings, overallVerdict }`
- * so a consolidator-produced wrapper object (`{ overallVerdict, findings }`,
- * written by consolidate-fanin.mjs's `--ledger-out`) threads its computed
- * verdict through to the consumer alongside the findings array; a bare array
- * input leaves `overallVerdict` undefined.
+ * the caller-supplied `validate` callback. Returns
+ * `{ findings, overallVerdict, provenance }` so a consolidator-produced
+ * wrapper object (`{ overallVerdict, findings, provenance? }`, written by
+ * consolidate-fanin.mjs's `--ledger-out`) threads its computed verdict AND
+ * (on a fully-carried round) its derived provenance through to the consumer
+ * alongside the findings array; a bare array input leaves both undefined.
  *
  * @param {{ findings?: string, findingsFile?: string }} options
  * @param {{ parseError: (message: string) => Error, validate: (parsed: unknown, flagLabel: string) => unknown[] }} deps
- * @returns {Promise<{ findings: unknown[], overallVerdict?: unknown }>}
+ * @returns {Promise<{ findings: unknown[], overallVerdict?: unknown, provenance?: unknown }>}
  */
 export async function resolveFindingsInput(options, { parseError, validate }) {
   if (options.findings !== undefined && options.findingsFile !== undefined) {
@@ -69,6 +73,6 @@ export async function resolveFindingsInput(options, { parseError, validate }) {
     }
     flagLabel = "--findings";
   }
-  const { findings: payload, overallVerdict } = unwrapFindingsPayload(parsed);
-  return { findings: validate(payload, flagLabel), overallVerdict };
+  const { findings: payload, overallVerdict, provenance } = unwrapFindingsPayload(parsed);
+  return { findings: validate(payload, flagLabel), overallVerdict, provenance };
 }
