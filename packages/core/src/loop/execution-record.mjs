@@ -72,6 +72,23 @@ function isNonNegativeInteger(value) {
 function isNonNegativeFiniteNumber(value) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
+/**
+ * Own-property-only harness profile lookup. A plain `[]` read plus
+ * truthiness would let an inherited name (`toString`, `constructor`,
+ * `__proto__`) resolve to a non-nullish value from Object.prototype and
+ * bypass the "unknown harness" fail-closed check — this gates strictly on
+ * the three real harness keys.
+ * @param {unknown} harness @returns {object|undefined}
+ */
+function getHarnessProfile(harness) {
+  return typeof harness === "string" && Object.hasOwn(TELEMETRY_HARNESS_PROFILES, harness)
+    ? TELEMETRY_HARNESS_PROFILES[harness]
+    : undefined;
+}
+/** @param {unknown} value @returns {boolean} rejects an empty string, a path separator, or a ".." traversal segment — a fail-closed guard for any value interpolated into a filesystem path. */
+function isSafePathSegment(value) {
+  return typeof value === "string" && value.trim().length > 0 && !value.includes("/") && !value.includes("\\") && !value.includes("..");
+}
 
 /**
  * Recursively freeze a plain object/array's own nested plain objects/arrays.
@@ -193,7 +210,7 @@ export function buildExecutionUnitRecord({
     localToolTimeMs,
   });
 
-  const observable = TELEMETRY_HARNESS_PROFILES[harness].providerTokens === "available";
+  const observable = getHarnessProfile(harness)?.providerTokens === "available";
   const reasons = providerTokens.reasons ?? {};
   const providerTokensNorm = Object.freeze({
     input: resolveProviderTokenDimension({ harness, dim: "input", value: providerTokens.input ?? null, reason: reasons.input, role, observable }),
@@ -256,7 +273,7 @@ export function validateExecutionUnitRecord({ record } = {}) {
   if (!EXECUTION_UNIT_ROLES.includes(record.role)) {
     failures.push({ check: "role", reason: `role must be one of ${EXECUTION_UNIT_ROLES.join(", ")}, got ${JSON.stringify(record.role)}` });
   }
-  const profile = TELEMETRY_HARNESS_PROFILES[record.harness];
+  const profile = getHarnessProfile(record.harness);
   if (!profile) {
     failures.push({ check: "harness", reason: `harness must be one of ${HARNESS_VALUES.join(", ")}, got ${JSON.stringify(record.harness)}` });
   }
@@ -305,6 +322,30 @@ export function validateExecutionUnitRecord({ record } = {}) {
   checkHonestyGatedDim("providerTokens.cacheRead", record.providerTokens?.cacheRead, { gateOnProfile: true });
   checkHonestyGatedDim("childWallTimeMs", record.childWallTimeMs, {});
 
+  // Re-derive availability from the already-validated per-dimension records
+  // (never trust a stored availability object on its own) — deleting or
+  // forging this field must fail closed rather than silently pass.
+  const expectedAvailability = {
+    providerTokensInput: record.providerTokens?.input,
+    providerTokensOutput: record.providerTokens?.output,
+    providerTokensCacheRead: record.providerTokens?.cacheRead,
+    childWallTimeMs: record.childWallTimeMs,
+  };
+  for (const [key, dim] of Object.entries(expectedAvailability)) {
+    const avail = record.availability?.[key];
+    if (!avail || typeof avail !== "object" || typeof avail.available !== "boolean") {
+      failures.push({ check: `availability.${key}`, reason: `availability.${key} must be an object with a boolean available field` });
+      continue;
+    }
+    const expectedAvailable = dim && typeof dim === "object" ? dim.available : undefined;
+    const expectedReason = dim && typeof dim === "object" ? dim.reason : undefined;
+    if (avail.available !== expectedAvailable) {
+      failures.push({ check: `availability.${key}`, reason: `availability.${key}.available=${JSON.stringify(avail.available)} does not match the re-derived ${key} availability (expected ${JSON.stringify(expectedAvailable)})` });
+    } else if (avail.reason !== expectedReason) {
+      failures.push({ check: `availability.${key}`, reason: `availability.${key}.reason=${JSON.stringify(avail.reason)} does not match the re-derived ${key} reason (expected ${JSON.stringify(expectedReason)})` });
+    }
+  }
+
   if (record.waitOwner !== null && !isNonEmptyString(record.waitOwner)) {
     failures.push({ check: "wait_owner", reason: `waitOwner must be a non-empty string or null, got ${JSON.stringify(record.waitOwner)}` });
   }
@@ -344,11 +385,13 @@ export function enforceExecutionUnitRecord({ record } = {}) {
  */
 export function executionRecordPath({ dir, role, headSha, unitId } = {}) {
   if (typeof dir !== "string" || dir.length === 0) throw new Error("executionRecordPath requires a dir");
-  if (!EXECUTION_UNIT_ROLES.includes(role)) {
+  if (!EXECUTION_UNIT_ROLES.includes(role) || !isSafePathSegment(role)) {
     throw new Error(`executionRecordPath requires role to be one of ${EXECUTION_UNIT_ROLES.join(", ")}`);
   }
-  if (!isHexHeadSha(headSha)) throw new Error("executionRecordPath requires a hex headSha");
-  if (!isNonEmptyString(unitId)) throw new Error("executionRecordPath requires a non-empty unitId");
+  if (!isHexHeadSha(headSha) || !isSafePathSegment(headSha)) throw new Error("executionRecordPath requires a hex headSha");
+  if (!isSafePathSegment(unitId)) {
+    throw new Error("executionRecordPath requires a non-empty unitId without path separators or '..' segments");
+  }
   return path.join(dir, `${role}-${String(unitId).trim()}-${headSha.trim().toLowerCase()}.execution-record.json`);
 }
 

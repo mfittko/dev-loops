@@ -1259,3 +1259,53 @@ test("execution-record telemetry is skipped, not thrown, when the cycle has no u
   );
   assert.equal(result.executionRecord, undefined);
 });
+
+test("execution-record telemetry: toolCalls counts the real gh/network calls the cycle issues, never a hardcoded zero", async () => {
+  const headSha = "b".repeat(40);
+  const result = await runWatchCycle(
+    { repo: "owner/repo", pr: 17 },
+    {
+      env: RUN_ID_ENV,
+      runChild: async () => ({ code: 0, stdout: "{}", stderr: "" }),
+      runHandoffImpl: async (options, ctx) => {
+        await ctx.runChild("gh", ["pr", "view"], ctx.env);
+        await ctx.runChild("gh", ["pr", "view", "--json", "headRefOid"], ctx.env);
+        return copilotWatchHandoffWithHead(headSha)();
+      },
+      recordWatchClaimImpl: async ({ head, waitKind }) => ({ ok: true, status: "watch_claim_recorded", watch: { head, waitKind, updatedAt: new Date().toISOString() } }),
+      watchCopilotReviewImpl: async (options) => ({ ok: true, status: "timeout", repo: options.repo, pr: options.pr, attempts: 1, newComments: [], newReviews: [], newIssueComments: [] }),
+    },
+  );
+  assert.equal(result.executionRecord.metrics.toolCalls, 2, "toolCalls must reflect the gh calls actually issued via the shared runChild seam, never a hardcoded zero");
+  assert.equal(typeof result.executionRecord.metrics.localToolTimeMs, "number");
+  assert.ok(result.executionRecord.metrics.localToolTimeMs >= 0);
+});
+
+test("execution-record telemetry: a blocked CI gate attaches a record whose outcome matches the final pending disposition, not the initial terminal guess", async () => {
+  const headSha = "c".repeat(40);
+  const result = await runWatchCycle(
+    { repo: "owner/repo", pr: 17 },
+    {
+      env: RUN_ID_ENV,
+      runHandoffImpl: async () => ({
+        ok: true,
+        action: "stop",
+        state: "waiting_for_ci",
+        allowedTransitions: [],
+        nextAction: "Wait for CI",
+        snapshot: { repo: "owner/repo", pr: 17, currentHeadSha: headSha },
+        loopDisposition: "pending",
+        terminal: false,
+      }),
+      recordWatchClaimImpl: async () => ({ ok: false, error: "ownership_lost", message: "owned by run-2" }),
+      watchCiStatusImpl: async () => { throw new Error("must not start a second CI watcher while another run owns the boundary"); },
+    },
+  );
+  assert.equal(result.cycleDisposition, "pending");
+  assert.equal(
+    result.executionRecord.outcome,
+    "pending",
+    "the record's outcome must reflect the FINAL disposition (pending) set by the exclusivity block, not the initial terminal guess made before the gate resolved",
+  );
+  assert.equal(result.executionRecord.outcome, result.cycleDisposition);
+});

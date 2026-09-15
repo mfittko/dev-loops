@@ -181,6 +181,33 @@ describe("validateExecutionUnitRecord / enforceExecutionUnitRecord", () => {
     const forged = { ...record, providerTokens: { ...record.providerTokens, input: { available: false, value: 5, reason: "x" } } };
     assert.equal(validateExecutionUnitRecord({ record: forged }).ok, false);
   });
+
+  test("FAIL CLOSED: an inherited-property harness name (own-property gate) is rejected, not truthily resolved via the profile map", () => {
+    const record = buildExecutionUnitRecord(baseInput());
+    for (const harness of ["toString", "constructor", "__proto__", "hasOwnProperty"]) {
+      const forged = { ...record, harness };
+      const result = validateExecutionUnitRecord({ record: forged });
+      assert.equal(result.ok, false, `harness=${harness} must fail validation`);
+      assert.ok(result.failures.some((f) => f.check === "harness"), `harness=${harness} must report a harness check failure`);
+    }
+  });
+
+  test("HONESTY GATE: an availability field deleted from an otherwise-valid record fails validation", () => {
+    const record = buildExecutionUnitRecord(baseInput());
+    const { availability, ...withoutAvailability } = record;
+    assert.equal(validateExecutionUnitRecord({ record: withoutAvailability }).ok, false);
+  });
+
+  test("HONESTY GATE: a forged availability that contradicts the re-derived per-dimension availability fails validation", () => {
+    const record = buildExecutionUnitRecord(baseInput({ harness: "pi", providerTokens: { input: null, output: null, cacheRead: null } }));
+    const forged = {
+      ...record,
+      availability: { ...record.availability, providerTokensInput: { available: true, reason: null } },
+    };
+    const result = validateExecutionUnitRecord({ record: forged });
+    assert.equal(result.ok, false);
+    assert.ok(result.failures.some((f) => f.check === "availability.providerTokensInput"));
+  });
 });
 
 describe("executionRecordPath / writeExecutionUnitRecord", () => {
@@ -194,6 +221,16 @@ describe("executionRecordPath / writeExecutionUnitRecord", () => {
     assert.throws(() => executionRecordPath({ dir: "/tmp/x", role: "nope", headSha: HEAD_SHA, unitId: "u" }));
     assert.throws(() => executionRecordPath({ dir: "/tmp/x", role: "watch_cycle", headSha: "nope", unitId: "u" }));
     assert.throws(() => executionRecordPath({ dir: "/tmp/x", role: "watch_cycle", headSha: HEAD_SHA, unitId: "" }));
+  });
+
+  test("FAIL CLOSED: a traversal-shaped unitId is rejected, never joined into the output path", () => {
+    for (const unitId of ["../../outside", "..", "a/../../b", "foo/bar", "foo\\bar"]) {
+      assert.throws(
+        () => executionRecordPath({ dir: "/tmp/x", role: "watch_cycle", headSha: HEAD_SHA, unitId }),
+        /unitId/,
+        `unitId=${JSON.stringify(unitId)} must be rejected`,
+      );
+    }
   });
 
   test("writes a pretty-printed record with a trailing newline to its deterministic path", async () => {

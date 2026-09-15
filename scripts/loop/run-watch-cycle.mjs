@@ -471,8 +471,8 @@ export function buildWatchCycleExecutionRecord({
   cycleDisposition,
   headSha,
   harness = "pi",
-  localToolTimeMs = 0,
-  toolCalls = 0,
+  localToolTimeMs,
+  toolCalls,
 }) {
   const noModelTurnReason = "watch cycle performs no model turn; no provider tokens consumed";
   return buildExecutionUnitRecord({
@@ -519,7 +519,15 @@ export async function runWatchCycle(
     { repo: options.repo, pr: options.pr, head, waitKind, env, cwd: leaseCwd },
     { recordWatchClaimImpl, nowMs, staleAfterMs: exclusivityStaleAfterMs },
   );
-  const handoff = await runHandoffImpl(options, { env, ghCommand, runChild });
+  // Counts the actual gh/network calls this cycle issues through the shared
+  // runChild seam — buildWatchCycleExecutionRecord's toolCalls must report
+  // the real count, never a hardcoded telemetry zero.
+  let toolCallCount = 0;
+  const countedRunChild = (...args) => {
+    toolCallCount += 1;
+    return runChild(...args);
+  };
+  const handoff = await runHandoffImpl(options, { env, ghCommand, runChild: countedRunChild });
   const headSha = typeof handoff.snapshot?.currentHeadSha === "string" && handoff.snapshot.currentHeadSha.trim().length > 0
     ? handoff.snapshot.currentHeadSha.trim()
     : null;
@@ -555,7 +563,17 @@ export async function runWatchCycle(
   const attachExecutionRecord = (owner) => {
     if (!headSha) return;
     try {
-      result.executionRecord = buildWatchCycleExecutionRecord({ owner: owner ?? null, cycleDisposition: result.cycleDisposition, headSha, harness });
+      result.executionRecord = buildWatchCycleExecutionRecord({
+        owner: owner ?? null,
+        cycleDisposition: result.cycleDisposition,
+        headSha,
+        harness,
+        toolCalls: toolCallCount,
+        // Cycle's own wall span (entry to emit) — the cycle does real work
+        // (handoff/watch probes) even though it runs no model turn, so this
+        // must be measured, never a hardcoded zero.
+        localToolTimeMs: Date.now() - nowMs,
+      });
     } catch {
       // ponytail: telemetry is best-effort, never load-bearing for the cycle.
     }
@@ -578,10 +596,11 @@ export async function runWatchCycle(
     };
     const ciGate = await gateExclusivity("ci", headSha);
     if (ciGate.engaged && !ciGate.ok) {
+      attachWatcherExclusivityBlock(result, ciGate);
       attachExecutionRecord(ciGate.owner ?? null);
-      return attachWatcherExclusivityBlock(result, ciGate);
+      return result;
     }
-    const ciWatch = await watchCiStatusImpl(ciWatchArgs, { env, ghCommand, runChild });
+    const ciWatch = await watchCiStatusImpl(ciWatchArgs, { env, ghCommand, runChild: countedRunChild });
     result.ciWatchArgs = ciWatchArgs;
     result.ciWatch = ciWatch;
     result.watchStatus = ciWatch.status;
@@ -629,13 +648,13 @@ export async function runWatchCycle(
   );
   let workflowRunWatch = null;
   if (detectSessionActivity) {
-    const headBranch = await fetchPrHeadBranchImpl({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
+    const headBranch = await fetchPrHeadBranchImpl({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild: countedRunChild });
     const session = await detectCopilotSessionActivityImpl(
       {
         repo: options.repo,
         branch: headBranch,
       },
-      { env, ghCommand, runChild },
+      { env, ghCommand, runChild: countedRunChild },
     );
     result.sessionActivity = session;
     if (
@@ -644,8 +663,9 @@ export async function runWatchCycle(
     ) {
       const wfGate = await gateExclusivity("workflow_run", headSha);
       if (wfGate.engaged && !wfGate.ok) {
+        attachWatcherExclusivityBlock(result, wfGate);
         attachExecutionRecord(wfGate.owner ?? null);
-        return attachWatcherExclusivityBlock(result, wfGate);
+        return result;
       }
       const workflowWatchResult = await runWatchHoldingLease(
         () => watchWorkflowRunImpl(
@@ -668,14 +688,15 @@ export async function runWatchCycle(
   }
   const copilotGate = await gateExclusivity("copilot_review", headSha);
   if (copilotGate.engaged && !copilotGate.ok) {
+    attachWatcherExclusivityBlock(result, copilotGate);
     attachExecutionRecord(copilotGate.owner ?? null);
-    return attachWatcherExclusivityBlock(result, copilotGate);
+    return result;
   }
   const watchOptions = {
     ...handoff.watchArgs,
     timeoutMs: persistentWatchTimeoutMs,
   };
-  const watch = await watchCopilotReviewImpl(watchOptions, { env, ghCommand, runChild });
+  const watch = await watchCopilotReviewImpl(watchOptions, { env, ghCommand, runChild: countedRunChild });
   result.watchArgs = watchOptions;
   result.watchStatus = watch.status;
   result.watch = watch;
