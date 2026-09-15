@@ -1,14 +1,18 @@
 /**
  * role-budget-bound.mjs — dev-loop execution-cap bounded role-budget
  * primitive. Mirrors ./reviewer-unit-bound.mjs's style: a bounded,
- * deterministic primitive that caps a judge-round or fixer-pass role unit at
- * a fixed per-role execution budget and always produces a durable blocked
- * record — never a silent pass — when the unit runs over budget.
+ * deterministic primitive that caps a judge-round, fixer-pass, or
+ * coordinator-phase role unit at a fixed per-role execution budget and
+ * always produces a durable blocked record — never a silent pass — when the
+ * unit runs over budget.
  *
  * Consolidated from the execution-cap epic's deferred per-role budgets.
+ * Coordinator phase: 40 model turns / 50 tool calls / 20,000 output tokens.
  *
  * Pure and offline: no runtime/harness adapter import, no file reads, no
- * network, no state held across calls.
+ * network, no state held across calls. This primitive is a post-hoc verdict
+ * over a `consumed` snapshot — it does not sequence or time the caller's
+ * before/after measurement; that stays the caller's concern.
  */
 
 /**
@@ -19,13 +23,14 @@
  */
 export const HARNESS_VALUES = Object.freeze(["pi", "claude", "codex"]);
 
-/** The two roles this primitive caps. */
-export const ROLE_VALUES = Object.freeze(["judge_round", "fixer_pass"]);
+/** The three roles this primitive caps. */
+export const ROLE_VALUES = Object.freeze(["judge_round", "fixer_pass", "coordinator_phase"]);
 
 /**
  * The fixed per-role execution budgets. Judge-round: 12 model turns / 15
  * tool calls / 100k input tokens / 10k output tokens. Fixer-pass: 45 model
- * turns / 50 tool calls / at most 1 push per gate round.
+ * turns / 50 tool calls / at most 1 push per gate round. Coordinator-phase:
+ * 40 model turns / 50 tool calls / 20,000 output tokens.
  */
 export const ROLE_BUDGETS = Object.freeze({
   judge_round: Object.freeze({
@@ -38,6 +43,11 @@ export const ROLE_BUDGETS = Object.freeze({
     maxModelTurns: 45,
     maxToolCalls: 50,
     maxPushesPerGateRound: 1,
+  }),
+  coordinator_phase: Object.freeze({
+    maxModelTurns: 40,
+    maxToolCalls: 50,
+    maxOutputTokens: 20000,
   }),
 });
 
@@ -58,6 +68,11 @@ const ROLE_DIMENSION_BUDGET_KEYS = Object.freeze({
     modelTurns: "maxModelTurns",
     toolCalls: "maxToolCalls",
     pushesThisGateRound: "maxPushesPerGateRound",
+  }),
+  coordinator_phase: Object.freeze({
+    modelTurns: "maxModelTurns",
+    toolCalls: "maxToolCalls",
+    outputTokens: "maxOutputTokens",
   }),
 });
 
@@ -161,7 +176,7 @@ function isNonNegativeInteger(value) {
  * requires — a dimension belonging to the OTHER role, if present, is never
  * read (it is silently ignored, not accepted as satisfying this role's own
  * requirement).
- * @param {"judge_round"|"fixer_pass"} role
+ * @param {"judge_round"|"fixer_pass"|"coordinator_phase"} role
  * @param {object} consumed
  * @returns {object} normalized consumed, containing only this role's dimensions.
  */
@@ -190,7 +205,7 @@ function validateConsumedForRole(role, consumed) {
  * pass) when any dimension exceeds its budget max.
  *
  * @param {object} options
- * @param {{role:"judge_round"|"fixer_pass", run:string, gateContext:object}} options.unit
+ * @param {{role:"judge_round"|"fixer_pass"|"coordinator_phase", run:string, gateContext:object}} options.unit
  * @param {object} options.consumed
  * @returns {object} `{ ok: true, role, unit, consumed, budget }` on success,
  *   or the durable blocker `{ ok: false, verdict: "blocked", reason,
