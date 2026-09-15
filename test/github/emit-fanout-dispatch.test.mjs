@@ -944,8 +944,12 @@ test("buildAngleNamingSuffix names angles and instructs self-resolution, never i
 // Issue 2155 AC row 2 (slice b): the emitted suffix also carries the bounded
 // reviewer contract — budget numbers derived from REVIEWER_UNIT_BUDGET (never
 // hard-coded), an instruction for every PROHIBITED_REVIEWER_OPERATIONS kind,
-// the assigned-angles-only scope rule, and the blocked escape hatch.
-test("buildAngleNamingSuffix carries the bounded reviewer contract: budget, prohibited probes, scope, blocked escape hatch", () => {
+// the assigned-angles-only scope rule, and the blocked escape hatch, which
+// covers BOTH ways a unit can fail its bound (budget exhaustion AND
+// incomplete angle coverage — Copilot follow-up: the producer also writes a
+// blocked artifact for reviewer_coverage_incomplete, not only budget
+// exhaustion), named as a directly invokable command.
+test("buildAngleNamingSuffix carries the bounded reviewer contract: budget, prohibited probes, scope, blocked escape hatch for both bound failures", () => {
   assert.equal(REVIEWER_UNIT_BUDGET.maxModelTurns, 45);
   assert.equal(REVIEWER_UNIT_BUDGET.maxToolCalls, 50);
   const suffix = buildAngleNamingSuffix({ name: "design-simplicity", angles: ["dry", "kiss"] });
@@ -964,4 +968,20 @@ test("buildAngleNamingSuffix carries the bounded reviewer contract: budget, proh
   for (const phrase of expectedProhibitedPhrases) assert.match(suffix, phrase);
   assert.match(suffix, /review ONLY the angle\(s\) named above/);
   assert.match(suffix, /emit-reviewer-blocked\.mjs/);
+  // Broadened wording: not limited to budget exhaustion — also covers being
+  // unable to finish every assigned angle (reviewer_coverage_incomplete).
+  assert.match(suffix, /exceed this budget/);
+  assert.match(suffix, /cannot finish reviewing every assigned angle/);
+  // The escape hatch is a directly invokable command, not just a pointer to
+  // the script: it names --run/--head-sha/--angles/--completed-angles/
+  // --model-turns/--tool-calls/--findings-dir using values the reviewer
+  // already has (self-reported consumption, and the head SHA / findings
+  // directory named earlier in the briefing).
+  assert.match(suffix, /--run </);
+  assert.match(suffix, /--head-sha </);
+  assert.match(suffix, /--angles "dry,kiss"/);
+  assert.match(suffix, /--completed-angles </);
+  assert.match(suffix, /--model-turns </);
+  assert.match(suffix, /--tool-calls </);
+  assert.match(suffix, /--findings-dir </);
 });

@@ -38,9 +38,31 @@ test("--help exits 0", async () => {
   assert.equal(code, 0);
 });
 
-test("requires --run/--head-sha/--angles/--model-turns/--tool-calls/--findings-dir", async () => {
+test("requires --head-sha/--angles/--model-turns/--tool-calls/--findings-dir (--run is optional)", async () => {
   assert.equal(await main([]), 2);
   assert.equal(await main(["--run", RUN, "--head-sha", HEAD_SHA]), 2);
+});
+
+test("--run is optional: an explicit empty value is still rejected", async () => {
+  assert.equal(await main(["--run", "--head-sha", HEAD_SHA, "--angles", "a", "--model-turns", "0", "--tool-calls", "0", "--findings-dir", "unused"]), 2);
+});
+
+test("--run defaults to --head-sha when omitted, and the resulting blocked artifact still writes correctly", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const findingsDir = path.join(tmpDir, "findings");
+    const code = await main([
+      "--head-sha", HEAD_SHA,
+      "--angles", "a,b", "--completed-angles", "a",
+      "--model-turns", "10", "--tool-calls", "51",
+      "--findings-dir", findingsDir,
+    ]);
+    assert.equal(code, 0);
+    const artifacts = await readArtifacts(findingsDir);
+    assert.equal(artifacts.length, 1);
+    assert.equal(artifacts[0].angle, "b");
+    assert.equal(artifacts[0].headSha, HEAD_SHA);
+    assert.equal(artifacts[0].reason, "reviewer_budget_exhausted");
+  });
 });
 
 test("a) budget exhausted with partial coverage writes blocked artifacts for EXACTLY the unreviewed angles", async () => {
@@ -131,7 +153,8 @@ test("e) cross-harness parity: pi/claude/codex produce byte-identical artifact b
         "--harness", harness,
       ]);
       assert.equal(code, 0);
-      bodies[harness] = await readFile(path.join(findingsDir, "b.json"), "utf8");
+      const [entry] = await readdir(findingsDir);
+      bodies[harness] = await readFile(path.join(findingsDir, entry), "utf8");
     }
     assert.equal(bodies.pi, bodies.claude);
     assert.equal(bodies.claude, bodies.codex);
@@ -151,5 +174,30 @@ test("f) a produced blocked artifact directory cannot consolidate clean via cons
     const angleResults = await readArtifacts(findingsDir);
     const result = consolidateFanin({ angleResults });
     assert.equal(result.verdict, "blocked");
+  });
+});
+
+// Copilot review: sanitizeScopeSegment is lossy ("a/b" and "a-b" both
+// sanitize to "a-b"), and every reviewer unit in a grouped round shares ONE
+// --findings-dir. Before the content-hash filename suffix, two distinct
+// angles that sanitize-collide raced to the SAME filename within a bump-loop
+// that was only ever scoped to a single invocation — a later unit's blocked
+// emission for a differently-spelled but same-sanitized angle silently
+// clobbered an earlier unit's, losing a blocked angle from fan-in.
+test("g) sanitize-colliding angles produce two distinct artifact files, neither clobbering the other", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const findingsDir = path.join(tmpDir, "findings");
+    const code = await main([
+      "--run", RUN, "--head-sha", HEAD_SHA,
+      "--angles", "a/b,a-b",
+      "--model-turns", "10", "--tool-calls", "51",
+      "--findings-dir", findingsDir,
+    ]);
+    assert.equal(code, 0);
+    const entries = await readdir(findingsDir);
+    assert.equal(entries.length, 2, "two distinct files, not one clobbered by the other");
+    assert.equal(new Set(entries).size, 2);
+    const artifacts = await readArtifacts(findingsDir);
+    assert.deepEqual(artifacts.map((a) => a.angle).sort(), ["a-b", "a/b"]);
   });
 });

@@ -151,18 +151,26 @@ const PROHIBITED_OPERATION_INSTRUCTIONS = {
  * angle(s), instructs the reviewer to self-resolve each angle's persona/focus
  * via resolveReviewerRole and review adversarially per its scoped-mode contract,
  * and carries the bounded reviewer contract (REVIEWER_UNIT_BUDGET, assigned-
- * angles-only scope, PROHIBITED_REVIEWER_OPERATIONS, budget-exhaustion escape
- * hatch) so a reviewer never has to consult the primitive directly to learn its
- * own bound. The budget/prohibited numbers are read from the primitive, never
- * hard-coded, so this text can't drift from reviewer-unit-bound.mjs. It never
- * inlines persona text — reviewer composition is the review agent's job. Pure:
- * generates no new unit/scope names, only references unit.angles/unit.name.
+ * angles-only scope, PROHIBITED_REVIEWER_OPERATIONS, and the escape hatch for
+ * BOTH ways a unit can fail its bound — budget exhaustion or incomplete angle
+ * coverage, mirroring enforceReviewerUnitBound's own two REVOKE conditions in
+ * reviewer-unit-bound.mjs) so a reviewer never has to consult the primitive
+ * directly to learn its own bound. The budget/prohibited numbers are read
+ * from the primitive, never hard-coded, so this text can't drift from
+ * reviewer-unit-bound.mjs. It never inlines persona text — reviewer
+ * composition is the review agent's job. Pure: generates no new unit/scope
+ * names, only references unit.angles/unit.name; the exact escape-hatch
+ * invocation it names reuses --head-sha and --angles the reviewer already has
+ * from the briefing prefix above this suffix (`head: <sha>` and the
+ * `<findings-dir>/<angle>.json` write-path line) and from its own
+ * self-reported coverage/consumption, never a value this function invents.
  * @param {{ name: string, angles: string[] }} unit
  * @returns {string}
  */
 export function buildAngleNamingSuffix(unit) {
   const angles = Array.isArray(unit?.angles) ? unit.angles : [];
   const list = angles.join(", ");
+  const anglesCsv = angles.join(",");
   const single = angles.length === 1;
   const header = single
     ? `## Your review angle: ${list}`
@@ -177,7 +185,7 @@ export function buildAngleNamingSuffix(unit) {
 Budget: at most ${REVIEWER_UNIT_BUDGET.maxModelTurns} model turns and ${REVIEWER_UNIT_BUDGET.maxToolCalls} tool calls for this unit.
 Scope: review ONLY the angle(s) named above — reviewing an unassigned angle is prohibited.
 Prohibited: ${prohibited}.
-If you exhaust the budget before covering every assigned angle, do NOT report clean — emit a durable blocked result naming the exact unreviewed angles via scripts/github/emit-reviewer-blocked.mjs.`;
+If you exceed this budget (more than ${REVIEWER_UNIT_BUDGET.maxModelTurns} model turns or ${REVIEWER_UNIT_BUDGET.maxToolCalls} tool calls) OR cannot finish reviewing every assigned angle within it, do NOT report clean — emit a durable blocked result via: node scripts/github/emit-reviewer-blocked.mjs --run <the head SHA from "head:" in the briefing above> --head-sha <the same head SHA> --angles "${anglesCsv}" --completed-angles <angle(s) you actually finished, comma-separated, or omit if none> --model-turns <model turns you consumed> --tool-calls <tool calls you consumed> --findings-dir <the findings directory from the briefing's "Findings write-path invariant" line above>.`;
   return `${header}\n\n${body}\n\n${contract}\n`;
 }
 
