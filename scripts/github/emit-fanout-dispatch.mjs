@@ -8,6 +8,7 @@ import { HEAD_SHA_RE, VALID_SCOPE_RE } from "./record-dispatch-prompt-layout.mjs
 import { buildGateContextPath, buildGateEmitPlanPath } from "./write-gate-context.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
 import { loadDevLoopConfig, resolveFanoutEffectiveConcurrency } from "@dev-loops/core/config";
+import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 
 const USAGE = `Usage: emit-fanout-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--pending] [--tmp-root <path>] [--help]
 The SANCTIONED one-shot gate fan-out dispatch step: given a gate +
@@ -20,14 +21,19 @@ coordinator never re-derives persona/prompt composition and never spelunks
 print-gates.mjs.
 
 Dispatch-unit rule: only a CONFIGURED gates.fanout.groups group shares one
-reviewer. Every angle NOT in a configured group gets its OWN distinct reviewer —
-including angles resolveFanoutGroups auto-chunked into a leftover \`group:...\`
+reviewer, and never more than REVIEWER_UNIT_MAX_ANGLES (3) angles per reviewer.
+A configured group LARGER than that cap deterministically splits into ordered
+≤3-angle sub-units (\`<name>-part1\`, \`<name>-part2\`, ...) — angle order
+preserved, nothing dropped/duplicated/merged. Every angle NOT in a configured
+group gets its OWN distinct reviewer — including angles resolveFanoutGroups
+auto-chunked into a leftover \`group:...\`
 unit, which this step SPLITS back into per-angle singletons. A coordinator can
 therefore never seed a shared reviewer for an ad-hoc auto-chunk unit the
 configured table never named (a requireFanoutProvenance breach). A configured
-group's reviewer records that group's name as its
-provenance \`group\`, matching the merge guard's own resolveFanoutGroups
-re-derivation (detect-checkpoint-evidence.mjs); a singleton records no group.
+group's (or split sub-unit's) reviewer records a non-null provenance \`group\`;
+each sub-unit's angles stay members of the SAME configured group, so the merge
+guard's resolveFanoutGroups re-derivation (detect-checkpoint-evidence.mjs) still
+pairs them honestly. A singleton records no group.
 
 The per-unit angle-suffix this emits only NAMES the unit's angle(s) and instructs
 the reviewer to self-resolve each angle's persona/prompt (resolveReviewerRole) —
@@ -179,7 +185,27 @@ export function expandDispatchUnits(units, configuredGroupNames) {
     const angles = normalizeUnitAngles(unit);
     const isConfiguredGroup = angles.length > 1 && typeof unit?.name === "string" && configuredGroupNames.has(unit.name);
     if (isConfiguredGroup) {
-      out.push({ name: unit.name, angles });
+      // Cap each dispatch unit at REVIEWER_UNIT_MAX_ANGLES assigned angles (the
+      // reviewer-unit-bound primitive's contract). A configured group within
+      // the cap keeps its exact name (unchanged behaviour). A configured group
+      // LARGER than the cap deterministically splits into ordered ≤cap sub-units
+      // — angle order preserved, no angle dropped, duplicated, or merged. Each
+      // sub-unit gets a distinct `<name>-part<n>` name so its reviewer scope
+      // (dispatchUnitScope) never collides with a sibling's; a multi-angle
+      // sub-unit still records a non-null provenance group, and every sub-unit's
+      // angles remain members of the SAME configured group, so the fan-in
+      // pairing check (fanoutReviewerPairingError, re-derived against the
+      // configured table) stays honest. maxConcurrent already counts EMITTED
+      // dispatch units, so a split simply yields more units per wave — never
+      // more angles per unit.
+      if (angles.length <= REVIEWER_UNIT_MAX_ANGLES) {
+        out.push({ name: unit.name, angles });
+      } else {
+        for (let i = 0; i < angles.length; i += REVIEWER_UNIT_MAX_ANGLES) {
+          const chunk = angles.slice(i, i + REVIEWER_UNIT_MAX_ANGLES);
+          out.push({ name: `${unit.name}-part${i / REVIEWER_UNIT_MAX_ANGLES + 1}`, angles: chunk });
+        }
+      }
     } else {
       for (const angle of angles) out.push({ name: angle, angles: [angle] });
     }

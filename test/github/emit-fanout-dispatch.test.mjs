@@ -6,6 +6,7 @@ import path from "node:path";
 import { test } from "bun:test";
 import { buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, main, sanitizeScopeSegment } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { buildGateEmitPlanPath, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
+import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 
 const emitCliPath = path.resolve("scripts/github/emit-fanout-dispatch.mjs");
 
@@ -616,6 +617,53 @@ test("expandDispatchUnits: configured group stays shared, everything else splits
     { name: "a", angles: ["a"] },
     { name: "b", angles: ["b"] },
     { name: "solo", angles: ["solo"] },
+  ]);
+});
+
+test("expandDispatchUnits: a configured group AT the angle cap stays one shared unit", () => {
+  const configured = new Set(["backend"]);
+  const out = expandDispatchUnits([{ name: "backend", angles: ["a", "b", "c"] }], configured);
+  assert.equal(REVIEWER_UNIT_MAX_ANGLES, 3);
+  assert.deepEqual(out, [{ name: "backend", angles: ["a", "b", "c"] }]);
+});
+
+test("expandDispatchUnits: a configured group OVER the cap splits into ordered ≤cap sub-units (even remainder)", () => {
+  const configured = new Set(["backend"]);
+  const out = expandDispatchUnits([{ name: "backend", angles: ["a", "b", "c", "d", "e"] }], configured);
+  assert.deepEqual(out, [
+    { name: "backend-part1", angles: ["a", "b", "c"] },
+    { name: "backend-part2", angles: ["d", "e"] },
+  ]);
+});
+
+test("expandDispatchUnits: an over-cap group whose remainder is one angle yields a trailing singleton sub-unit", () => {
+  const configured = new Set(["backend"]);
+  const out = expandDispatchUnits([{ name: "backend", angles: ["a", "b", "c", "d"] }], configured);
+  assert.deepEqual(out, [
+    { name: "backend-part1", angles: ["a", "b", "c"] },
+    { name: "backend-part2", angles: ["d"] },
+  ]);
+});
+
+test("expandDispatchUnits: split never drops, duplicates, or reorders angles, and every unit is within the cap", () => {
+  const configured = new Set(["big"]);
+  const angles = ["a", "b", "c", "d", "e", "f", "g"]; // 7 → 3 + 3 + 1
+  const out = expandDispatchUnits([{ name: "big", angles }], configured);
+  // No angle dropped/duplicated/merged: concatenation equals the input, in order.
+  assert.deepEqual(out.flatMap((u) => u.angles), angles);
+  // Every emitted unit is bounded by the reviewer-unit angle cap.
+  for (const u of out) assert.ok(u.angles.length <= REVIEWER_UNIT_MAX_ANGLES, `unit ${u.name} exceeds cap`);
+  assert.equal(out.length, 3);
+});
+
+test("dispatchUnitScope: split sub-units of one group derive DISTINCT scopes (no collision)", () => {
+  const configured = new Set(["backend"]);
+  const out = expandDispatchUnits([{ name: "backend", angles: ["a", "b", "c", "d", "e"] }], configured);
+  const scopes = out.map((u) => dispatchUnitScope("pre_approval_gate", u));
+  assert.equal(new Set(scopes).size, scopes.length);
+  assert.deepEqual(scopes, [
+    "pre-approval-gate-group-backend-part1",
+    "pre-approval-gate-group-backend-part2",
   ]);
 });
 
