@@ -82,6 +82,7 @@
     "./loop/steering": "./src/loop/steering.mjs",
     "./loop/timeout-policy": "./src/loop/timeout-policy.mjs",
     "./loop/tracker-pr-state": "./src/loop/tracker-pr-state.mjs",
+    "./loop/watcher-exclusivity": "./src/loop/watcher-exclusivity.mjs",
     "./loop/ui-e2e-scoping": "./src/loop/ui-e2e-scoping.mjs",
     "./loop/ui-review-provision": "./src/loop/ui-review-provision.mjs",
     "./loop/ui-review-drive": "./src/loop/ui-review-drive.mjs",
