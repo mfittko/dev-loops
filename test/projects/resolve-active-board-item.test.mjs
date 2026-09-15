@@ -775,8 +775,11 @@ process.stderr.write("shim: unexpected gh argv: " + JSON.stringify(argv)); proce
       chmodSync(ghPath, 0o755);
       // Inject only env (never runChild): the default runChild passes env to
       // spawn, so a PATH scoped to the shim reaches the child without mutating
-      // this process's own environment.
-      const shimEnv = { ...process.env, PATH: `${binDir}${nodePath.delimiter}${process.env.PATH ?? ""}` };
+      // this process's own environment. DEV_LOOPS_GH_STUB attests to the
+      // test-mode write guard (issue #2216) that gh is stubbed at the process
+      // boundary — this run intentionally reaches the claim's `issue edit` write
+      // via the DEFAULT (live) runChild against the PATH shim.
+      const shimEnv = { ...process.env, PATH: `${binDir}${nodePath.delimiter}${process.env.PATH ?? ""}`, DEV_LOOPS_GH_STUB: "1" };
       let out = "";
       let err = "";
       const prev = process.exitCode;

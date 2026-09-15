@@ -8,6 +8,7 @@ import {
   resolveExpectedIssueFromPrContext,
   resolveClosingRefMismatch,
 } from "@dev-loops/core/github/closing-ref-guard";
+import { assertGithubWriteStubbedInTestMode } from "@dev-loops/core/github/test-mode-write-guard";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -295,6 +296,7 @@ export async function editPr(
   options,
   { env = process.env, ghCommand = "gh", run = runChild, fetchPrContext = defaultFetchPrContext } = {},
 ) {
+  assertGithubWriteStubbedInTestMode(run, "pr edit/close", { env });
   // CLOSING-REF-BRANCH-MISMATCH: when the edit sets a body carrying a
   // `Closes`/`Fixes` reference, refuse it when that reference disagrees with the
   // issue the PR is expected to close (resolved from its branch slug, else its
