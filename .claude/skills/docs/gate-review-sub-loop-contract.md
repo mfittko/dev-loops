@@ -2030,8 +2030,11 @@ node scripts/github/write-gate-findings-log.mjs \
   --spec-authority <identity-path> \
   --emit-plan <emit-plan-path> \
   --provenance <json> \
+  --execution-mode fanout_fanin \
   --findings-file <path>   # or inline: --findings '[{"severity":"high","angle":"scope","summary":"...","files":["path.mjs"],"line":42,"disposition":"accepted-for-fix"}]'
 ```
+
+The conductor's fan-out round passes `--execution-mode fanout_fanin` on this call, activating the CLI's own write-time provenance fail-closed guard (distinct from `detect-checkpoint-evidence.mjs`'s read-time `requireFanoutProvenance` check described above).
 
 `--findings-file` reads the same JSON from a file (identical validation) —
 use it for any non-trivial ledger so the array never rides a shell string;
