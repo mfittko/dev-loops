@@ -137,6 +137,23 @@ test("does not flag an argv-vector API (spawn/execFile are not shell-string sink
   assert.equal(out.outcome, "pass");
 });
 
+test("flags spawn() with an interpolated slug when the call carries shell: true", () => {
+  const out = scan("spawn(`tool-${slug}`, [], { shell: true });");
+  assert.equal(out.outcome, "block");
+  assert.equal(out.findings[0].token, "slug");
+});
+
+test("does not flag spawn() with an interpolated slug when there is no shell option (argv form)", () => {
+  const out = scan("spawn(`tool-${slug}`, ['--repo', slug]);");
+  assert.equal(out.outcome, "pass");
+});
+
+test("flags spawnSync() with an interpolated slug when the call carries shell: true", () => {
+  const out = scan("spawnSync(`x-${repoSlug}`, [], {shell:true});");
+  assert.equal(out.outcome, "block");
+  assert.equal(out.findings[0].token, "repoSlug");
+});
+
 test("does not flag the positional runCommand(cmd, args) argv API", () => {
   const out = scan("await runCommand(`gate --repo ${slug}`, []);");
   assert.equal(out.outcome, "pass");
@@ -148,19 +165,19 @@ test("still flags the object-form runCommand({ command: ... }) shell sink", () =
   assert.equal(out.findings[0].token, "slug");
 });
 
-test("evaluateShellSlugInjection blocks a hostile file under a scanned root and names it", () => {
+test("evaluateShellSlugInjection blocks a hostile file under a scanned root, and excludes a .test.mjs sibling under that same scanned root", () => {
   const tmp = mkdtempSync(path.join(tmpdir(), "shell-slug-injection-"));
   try {
     mkdirSync(path.join(tmp, "scripts"), { recursive: true });
-    mkdirSync(path.join(tmp, "test"), { recursive: true });
     const hostile = 'const cmd = `bash -lc "gate --repo ${slug}"`;\n';
     writeFileSync(path.join(tmp, "scripts", "foo.mjs"), hostile);
-    // Excluded by TEST_FILE_RE (under test/) — proves the exclusion, not just the traversal.
-    writeFileSync(path.join(tmp, "test", "foo.mjs"), hostile);
+    // Lives under a scanned root (scripts/) so TEST_FILE_RE is genuinely exercised on it,
+    // not vacuously skipped by RUNTIME_ROOTS — excluded on the `.test.mjs` suffix alone.
+    writeFileSync(path.join(tmp, "scripts", "foo.test.mjs"), hostile);
     const out = evaluateShellSlugInjection({ repoRoot: tmp });
     assert.equal(out.outcome, "block");
     assert.ok(out.findings.some((f) => f.path === "scripts/foo.mjs"));
-    assert.ok(!out.findings.some((f) => f.path.startsWith("test/")));
+    assert.ok(!out.findings.some((f) => f.path === "scripts/foo.test.mjs"));
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

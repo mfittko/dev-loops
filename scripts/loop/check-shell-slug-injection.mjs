@@ -46,14 +46,24 @@ const SHELL_LITERAL_RE = /\b(?:bash|sh)\b[^`]*?-l?c\b|(?:^|\s)-lc\b/u;
 // The literal is assigned to / is the value of a `*command`/`*cmd` binding.
 const COMMAND_NAME_CTX_RE = /[A-Za-z_$][\w$]*(?:[Cc]ommand|[Cc]md)\s*[:=]\s*(?:await\s+)?$/u;
 
-// The literal is a direct argument to a shell-exec sink: `exec`/`execSync` (child_process
+// The literal is a direct argument to an always-shell sink: `exec`/`execSync` (child_process
 // runs the string through a shell) or the object-form `runCommand({ command: ... })` used by
-// extension/post-merge-update.ts. `spawn`/`spawnSync`/`execFile`/`execFileSync` and the
-// positional `runCommand(cmd, args)` (packages/core/src/cli/primitives.mjs) are argv APIs —
-// the safe alternative this guard steers toward — and are deliberately NOT sinks here.
-// ponytail: `spawn(cmd, args, {shell:true})` opts back into a shell and is unflagged; a
-// fail-safe ceiling, not a taint tracker for an options bag.
+// extension/post-merge-update.ts. The positional `runCommand(cmd, args)`
+// (packages/core/src/cli/primitives.mjs) is an argv API — the safe alternative this guard
+// steers toward — and is deliberately NOT a sink here.
 const SINK_CTX_RE = /\b(?:exec|execSync)\s*\(\s*$|\brunCommand\s*\(\s*\{\s*command\s*:\s*$/u;
+
+// `spawn`/`spawnSync`/`execFile`/`execFileSync` are argv APIs — safe by default — UNLESS the
+// call opts back into a shell via an options-bag `shell: true`, which routes the first argument
+// through a shell like `exec` does. Bounded lexical check: match the call context immediately
+// before the literal, then scan a fixed forward window from the literal's end for a
+// `shell: true` marker (not full options-bag parsing).
+const SPAWN_ARGV_SINK_CTX_RE = /\b(?:spawn|spawnSync|execFile|execFileSync)\s*\(\s*$/u;
+const SHELL_TRUE_RE = /\bshell\s*:\s*true\b/u;
+// ponytail: fixed 200-char lookahead, not a matched-paren scan to the statement end — a
+// `shell: true` option placed further away in an unusually long call is missed. It only ever
+// under-detects, never flags a safe argv-only spawn call.
+const SHELL_OPTION_WINDOW = 200;
 
 // A value proven clean in the file: passed to the charset validator, or bound
 // from the normalizer (which returns a clean `owner/name` or null).
@@ -119,6 +129,11 @@ export function extractTemplateLiterals(text) {
 // ponytail: file-scoped, not flow/scope-scoped — a `slug` guarded in one function
 // exempts a same-named `slug` in another function of the same file. Closing that needs
 // scope analysis (the no-taint-framework non-goal); it only ever under-detects.
+// ponytail: a fake guard call written INSIDE a `${...}` interpolation (e.g. a shell comment
+// `${/* isCleanRepoSlug(slug) */ ''}`) still reads as a real guard call here, since stripComments
+// leaves template-literal contents untouched by design (see its own doc comment). Closing this
+// needs interpolation-context-aware lexing, which the no-taint-framework non-goal rules out; it
+// requires a deliberate self-spoof to trigger.
 function guardedTokens(text) {
   const tokens = new Set();
   for (const m of text.matchAll(GUARD_CALL_RE)) tokens.add(m[1]);
@@ -198,8 +213,13 @@ export function computeShellSlugInjection(files) {
     const guards = guardedTokens(text);
     for (const { raw, start } of extractTemplateLiterals(text)) {
       const before = text.slice(Math.max(0, start - 100), start);
+      const end = start + raw.length;
       const shellShaped =
-        SHELL_LITERAL_RE.test(raw) || COMMAND_NAME_CTX_RE.test(before) || SINK_CTX_RE.test(before);
+        SHELL_LITERAL_RE.test(raw) ||
+        COMMAND_NAME_CTX_RE.test(before) ||
+        SINK_CTX_RE.test(before) ||
+        (SPAWN_ARGV_SINK_CTX_RE.test(before) &&
+          SHELL_TRUE_RE.test(text.slice(end, end + SHELL_OPTION_WINDOW)));
       if (!shellShaped) continue;
       // ponytail: `[^}]*` stops at the first `}`, so a slug after an inner `}` within one
       // interpolation is missed (a contrived command shape); it only ever under-detects.
@@ -252,7 +272,9 @@ function walk(absDir, repoRoot, out) {
     .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   for (const entry of entries) {
     const abs = path.join(absDir, entry.name);
-    const rel = path.relative(repoRoot, abs);
+    // POSIX-normalize: path.relative emits the platform separator, but the exclusion/source
+    // regexes and findings paths below are all `/`-shaped. No-op on darwin/linux.
+    const rel = path.relative(repoRoot, abs).split(path.sep).join("/");
     if (entry.isDirectory()) {
       if (!EXCLUDED_DIR_RE.test(`${rel}/`)) walk(abs, repoRoot, out);
     } else if (isRuntimeSourceFile(rel)) {
