@@ -106,6 +106,46 @@ export function clusterFindings(findings, options = {}) {
 }
 
 /**
+ * Reconstruct the clusters array from findings a producer already stamped
+ * with `clusterId` — the LOSSLESS identity consolidate-fanin.mjs computes
+ * (via {@link clusterFindings}) on pre-truncation finding text and stamps
+ * onto each ledger finding as `finding.clusterId = cluster.representativeIndex`.
+ * A consumer reading the ledger back (e.g. judge-pass.mjs) must group by this
+ * stamp rather than re-running {@link clusterFindings} on the ledger's own
+ * `recommendation`/`file` text, which the ledger pipeline TRUNCATES after
+ * clustering — re-deriving from truncated text can merge findings that only
+ * share a long truncated prefix, silently discarding the lossless grouping.
+ *
+ * Every finding must carry an integer `clusterId` (fails closed otherwise —
+ * a caller unsure every finding is stamped should fall back to
+ * {@link clusterFindings} instead of calling this). Deterministic: clusters
+ * are ordered by `representativeIndex` ascending, and each cluster's
+ * `memberIndices` are ascending (findings are visited index-ascending).
+ *
+ * @param {Array<{clusterId?: unknown}>} findings
+ * @returns {Array<{key: null, keyable: true, memberIndices: number[], representativeIndex: number}>}
+ */
+export function clustersFromStampedIds(findings) {
+  if (!Array.isArray(findings)) {
+    throw new TypeError("clustersFromStampedIds requires findings to be an array");
+  }
+  const byClusterId = new Map();
+  findings.forEach((finding, index) => {
+    const clusterId = finding?.clusterId;
+    if (!Number.isInteger(clusterId)) {
+      throw new TypeError(`clustersFromStampedIds requires every finding to carry an integer clusterId (index ${index} does not)`);
+    }
+    let cluster = byClusterId.get(clusterId);
+    if (!cluster) {
+      cluster = { key: null, keyable: true, memberIndices: [], representativeIndex: clusterId };
+      byClusterId.set(clusterId, cluster);
+    }
+    cluster.memberIndices.push(index);
+  });
+  return [...byClusterId.values()].sort((a, b) => a.representativeIndex - b.representativeIndex);
+}
+
+/**
  * Project every multi-member cluster's REPRESENTATIVE judge disposition
  * (`judgeDisposition`/`judgeRationale`/`judgeCriterion`/`followUpDraft`) onto
  * every member of that cluster — one judge decision per root cause, applied
@@ -138,6 +178,14 @@ export function projectClusterDisposition(enrichedFindings, clusters) {
       if (!Number.isInteger(memberIndex) || memberIndex < 0 || memberIndex >= result.length) {
         throw new RangeError(`projectClusterDisposition: cluster memberIndices references out-of-range index ${memberIndex} (${result.length} findings)`);
       }
+    }
+    if (cluster.memberIndices.length === 0) {
+      throw new RangeError("projectClusterDisposition: a cluster must have at least one member (memberIndices is empty)");
+    }
+    if (!cluster.memberIndices.includes(cluster.representativeIndex)) {
+      throw new RangeError(
+        `projectClusterDisposition: cluster representativeIndex ${cluster.representativeIndex} is not one of its own memberIndices [${cluster.memberIndices.join(", ")}]`
+      );
     }
     if (cluster.memberIndices.length <= 1) continue; // singleton: shape validated above, nothing to project.
     const representative = result[cluster.representativeIndex];

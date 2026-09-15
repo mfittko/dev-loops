@@ -4,6 +4,7 @@ import { describe, test } from "bun:test";
 import {
   assertCleanImpliesNoAct,
   clusterFindings,
+  clustersFromStampedIds,
   computeRootCauseKey,
   dedupeActListByCluster,
   projectClusterDisposition,
@@ -227,6 +228,65 @@ describe("clusterFindings", () => {
   });
 });
 
+describe("clustersFromStampedIds", () => {
+  test("reconstructs the same shape clusterFindings would produce for the equivalent lossless grouping", () => {
+    const findings = [
+      locatedFinding({ summary: "reported by angle A" }),
+      locatedFinding({ summary: "reported by angle B", angle: "security" }),
+      locatedFinding({ summary: "unrelated", file: "other.mjs" }),
+    ];
+    const { clusters: expected } = clusterFindings(findings, { headSha: HEAD });
+    // Stamp each finding with its cluster's representativeIndex, exactly as
+    // consolidate-fanin.mjs does.
+    const stamped = findings.map((f, index) => {
+      const owner = expected.find((c) => c.memberIndices.includes(index));
+      return { ...f, clusterId: owner.representativeIndex };
+    });
+    const reconstructed = clustersFromStampedIds(stamped);
+    assert.deepEqual(
+      reconstructed.map((c) => ({ memberIndices: c.memberIndices, representativeIndex: c.representativeIndex })),
+      expected.map((c) => ({ memberIndices: c.memberIndices, representativeIndex: c.representativeIndex })),
+    );
+  });
+
+  test("a multi-member group (two findings sharing a clusterId) yields one cluster with both memberIndices and the shared representativeIndex", () => {
+    const stamped = [
+      locatedFinding({ clusterId: 0 }),
+      locatedFinding({ angle: "security", clusterId: 0 }),
+      locatedFinding({ angle: "performance", file: "other.mjs", clusterId: 2 }),
+    ];
+    const clusters = clustersFromStampedIds(stamped);
+    assert.equal(clusters.length, 2);
+    assert.deepEqual(clusters[0], { key: null, keyable: true, memberIndices: [0, 1], representativeIndex: 0 });
+    assert.deepEqual(clusters[1], { key: null, keyable: true, memberIndices: [2], representativeIndex: 2 });
+  });
+
+  test("deterministic order: clusters ordered by representativeIndex ascending, memberIndices ascending", () => {
+    const stamped = [
+      locatedFinding({ file: "b.mjs", clusterId: 3 }),
+      locatedFinding({ file: "a.mjs", clusterId: 1 }),
+      locatedFinding({ file: "b.mjs", clusterId: 3 }),
+      locatedFinding({ file: "a.mjs", clusterId: 1 }),
+    ];
+    const clusters = clustersFromStampedIds(stamped);
+    const representativeIndices = clusters.map((c) => c.representativeIndex);
+    assert.deepEqual(representativeIndices, [...representativeIndices].sort((a, b) => a - b));
+    for (const cluster of clusters) {
+      assert.deepEqual(cluster.memberIndices, [...cluster.memberIndices].sort((a, b) => a - b));
+    }
+  });
+
+  test("throws when findings is not an array", () => {
+    assert.throws(() => clustersFromStampedIds(null), TypeError);
+    assert.throws(() => clustersFromStampedIds("nope"), TypeError);
+  });
+
+  test("throws when any finding is missing an integer clusterId", () => {
+    assert.throws(() => clustersFromStampedIds([locatedFinding({ clusterId: 0 }), locatedFinding()]), TypeError);
+    assert.throws(() => clustersFromStampedIds([locatedFinding({ clusterId: "0" })]), TypeError);
+  });
+});
+
 function disposedFinding(finding, judgeDisposition, extra = {}) {
   return { ...finding, judgeDisposition, judgeRationale: `rationale for ${judgeDisposition}`, ...extra };
 }
@@ -302,6 +362,20 @@ describe("projectClusterDisposition", () => {
   test("FIX C: a SINGLETON cluster with an out-of-range memberIndex still throws (no fast-path skip)", () => {
     assert.throws(
       () => projectClusterDisposition([{}], [{ memberIndices: [99], representativeIndex: 0 }]),
+      RangeError,
+    );
+  });
+
+  test("throws on an empty memberIndices (a cluster must have at least one member)", () => {
+    assert.throws(
+      () => projectClusterDisposition([{}], [{ memberIndices: [], representativeIndex: 0 }]),
+      RangeError,
+    );
+  });
+
+  test("throws when representativeIndex is not one of memberIndices", () => {
+    assert.throws(
+      () => projectClusterDisposition([{}, {}], [{ memberIndices: [1], representativeIndex: 0 }]),
       RangeError,
     );
   });

@@ -10,6 +10,7 @@ import {
 import {
   assertCleanImpliesNoAct,
   clusterFindings,
+  clustersFromStampedIds,
   dedupeActListByCluster,
   projectClusterDisposition,
 } from "@dev-loops/core/loop/finding-cluster";
@@ -404,15 +405,27 @@ export function runJudgePass(findings, judgeVerdict, headSha) {
   // undisposed finding (the coverage check lives in that shared pure seam),
   // so runJudgePass inherits fail-closed coverage without restating it here.
   const applied = applyJudgeDispositions(findings, judgeVerdict);
-  // Cluster duplicate root-cause findings (fan-in may have stamped a
-  // `clusterId`; clusterFindings recomputes deterministically from the same
-  // finding data either way) and project the representative member's judge
-  // disposition onto every other member — one judge decision per root cause,
-  // not one per reviewer that happened to report it. `counts`/`act` below are
-  // derived from the PROJECTED array, so a duplicate a judge only actually
-  // disposed once (via its representative) is never left undisposed on a
-  // sibling member.
-  const clusters = clusterFindings(applied.findings, { headSha: validated.headSha }).clusters;
+  // Cluster duplicate root-cause findings, then project the representative
+  // member's judge disposition onto every other member — one judge decision
+  // per root cause, not one per reviewer that happened to report it.
+  // `counts`/`act` below are derived from the PROJECTED array, so a duplicate
+  // a judge only actually disposed once (via its representative) is never
+  // left undisposed on a sibling member.
+  //
+  // When consolidate-fanin.mjs already stamped every finding with a
+  // `clusterId` (the LOSSLESS identity it computed on pre-truncation finding
+  // text), consume that stamp via clustersFromStampedIds rather than
+  // re-running clusterFindings here: `applied.findings`' `recommendation`/
+  // `file` text was TRUNCATED by the ledger pipeline after that lossless
+  // clustering ran, and re-deriving the key from truncated text can merge
+  // two distinct remediations that only share a long truncated prefix —
+  // silently discarding the lossless grouping. Fall back to clusterFindings
+  // only for legacy/unstamped input (a ledger written before #2156, or a
+  // findings array assembled by a caller that never stamped clusterId).
+  const everyFindingStamped = applied.findings.every((f) => Number.isInteger(f?.clusterId));
+  const clusters = everyFindingStamped
+    ? clustersFromStampedIds(applied.findings)
+    : clusterFindings(applied.findings, { headSha: validated.headSha }).clusters;
   const enriched = projectClusterDisposition(applied.findings, clusters);
   return {
     enriched,

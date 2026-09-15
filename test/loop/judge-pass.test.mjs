@@ -11,6 +11,7 @@ import {
   validateCliArgs,
 } from "../../scripts/loop/judge-pass.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
+import { dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
 
 const HEAD = "0123456789abcdef";
 const HEAD_8 = HEAD.slice(0, 8);
@@ -147,6 +148,53 @@ test("runJudgePass projects the representative's judge disposition onto every du
   assert.equal(result.enriched[2].judgeDisposition, "defer");
   assert.equal(result.counts.act, 2, "the raw tally counts every acted finding, one per reviewer report");
   assert.equal(result.act.length, 2);
+});
+
+// FIX 1 (#2156, Copilot round 2): applied.findings' recommendation/file text
+// may already have been TRUNCATED by the ledger pipeline (consolidate-fanin
+// truncates AFTER it clusters on lossless pre-truncation text and stamps
+// `clusterId`). runJudgePass must consume that stamp, not recompute the
+// cluster key from the (possibly truncated) ledger text.
+test("runJudgePass consumes the stamped clusterId rather than recomputing from (truncated) recommendation text (#2156 FIX 1)", () => {
+  const findings = ledger(
+    // Same stamped clusterId (0), but DIFFERENT recommendation text — as if
+    // truncation diverged their tails after the lossless cluster was formed.
+    // A recompute would treat these as two separate root causes; consuming
+    // the stamp still collapses them into one cluster.
+    locatedFinding({ angle: "correctness", summary: "null deref (angle A)", recommendation: "add a null guard AAA", clusterId: 0 }),
+    locatedFinding({ angle: "security", summary: "null deref (angle B)", recommendation: "add a null guard BBB", clusterId: 0 }),
+    // IDENTICAL recommendation text but DISTINCT stamped clusterIds — a
+    // recompute would wrongly merge these; consuming the stamp keeps them
+    // separate clusters.
+    locatedFinding({ angle: "performance", summary: "distinct root cause C", recommendation: "shared truncated tail", clusterId: 2 }),
+    locatedFinding({ angle: "style", summary: "distinct root cause D", recommendation: "shared truncated tail", clusterId: 3 }),
+  );
+  const v = verdict({
+    dispositions: [
+      { index: 0, disposition: "act", rationale: "fixes AC-1", criterion: "AC-1" },
+      { index: 1, disposition: "act", rationale: "fixes AC-1 too" },
+      { index: 2, disposition: "act", rationale: "fixes AC-2" },
+      { index: 3, disposition: "act", rationale: "fixes AC-2 too" },
+    ],
+  });
+  const result = runJudgePass(findings, v, HEAD);
+  // Three clusters: {0,1} (shared stamp, different text), {2}, {3} (distinct
+  // stamps, identical text) — grouped strictly by the stamped clusterId.
+  assert.equal(result.clusters.length, 3);
+  const clusterOf = (index) => result.clusters.find((c) => c.memberIndices.includes(index));
+  assert.deepEqual(clusterOf(0).memberIndices, [0, 1]);
+  assert.deepEqual(clusterOf(2).memberIndices, [2]);
+  assert.deepEqual(clusterOf(3).memberIndices, [3]);
+  // Raw tally still counts every acted finding, one per reviewer report.
+  assert.equal(result.act.length, 4);
+  const deduped = dedupeActListByCluster(result.act, result.clusters, result.enriched);
+  // Same stamped clusterId (0/1) collapses to ONE remediation; distinct
+  // stamped clusterIds (2, 3) stay TWO — regardless of the (truncated)
+  // recommendation text.
+  assert.equal(deduped.length, 3);
+  assert.equal(deduped[0].summary, "null deref (angle A)");
+  assert.equal(deduped[1].summary, "distinct root cause C");
+  assert.equal(deduped[2].summary, "distinct root cause D");
 });
 
 test("validateCliArgs accepts a full invocation and canonicalizes the gate", () => {
