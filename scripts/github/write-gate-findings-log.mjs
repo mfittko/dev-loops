@@ -39,6 +39,19 @@ Optional:
                                  distinctReviewers must be <= the distinct reviewers recorded in perAngle (perAngle non-empty when distinctReviewers > 0)
                                  no two fresh (non-carried) angles may share one reviewer identity, and every fresh angle must record one (reviewer or dispatchId) — one scoped reviewer per angle (use inline_single_agent + --inline-reason for a sanctioned single-reviewer run)
                                  EXCEPTION: fresh angles sharing a reviewer may all declare the same "group" name (grouped fan-out dispatch); differing or missing group names still fail closed
+                                 Omitted, a "provenance" object embedded in the --findings/--findings-file wrapper
+                                 (any caller-supplied { overallVerdict, findings, provenance? } object, e.g. from
+                                 consolidate-fanin.mjs's --ledger-out) is used instead, validated through this SAME
+                                 check — a malformed wrapper provenance fails closed identically. Absent both, the log
+                                 is written with no provenance, as before, UNLESS --execution-mode fanout_fanin is also
+                                 given for a gate that configures a mandatory angle — see --execution-mode below.
+  --execution-mode <fanout_fanin|inline_single_agent>
+                                 How this round was executed (mirrors upsert-checkpoint-verdict.mjs's own
+                                 --execution-mode). Defaults to inline_single_agent. A fanout_fanin write
+                                 for a gate that configures mandatory angles (gates.<gate>.angles entries
+                                 with mandatory: true) FAILS CLOSED (throws, writes no ledger) when neither
+                                 an explicit --provenance nor a wrapper-supplied one is present. inline_single_agent
+                                 writes stay exempt and byte-identical to before.
   --emit-plan <path>             Optional keyed emit-fanout-dispatch plan. When supplied, requires --provenance and fails closed unless that caller-supplied provenance matches the plan's round key and emitted fresh units exactly. The plan is a guard only; it never supplies provenance or findings. Omitted preserves current behavior.
   --full-label                   The PR carries the gate:full label: dispatch groups resolve to one angle per unit, so any reviewer identity shared across fresh angles is rejected regardless of a declared "group" (mirrors write-gate-context.mjs's --full-label). Only meaningful when --provenance is supplied. Omitted (default false) keeps current behavior.
   --judge-verdict <path>         Path to the judge agent's verdict artifact (JSON). When supplied, the findings are
@@ -61,6 +74,17 @@ function parseError(message) {
 }
 const normalizeGate = normalizeGateShared;
 const normalizeVerdict = normalizeVerdictShared;
+// Mirrors upsert-checkpoint-verdict.mjs's own GATE_EXECUTION_MODES/
+// DEFAULT_EXECUTION_MODE vocabulary so the fanout/inline distinction resolves
+// the SAME way in both CLIs. Not imported from there (a two-line vocabulary,
+// not worth a shared module) — see the write-time provenance guard below,
+// the one behavior this vocabulary drives in this file.
+const GATE_EXECUTION_MODES = new Set(["fanout_fanin", "inline_single_agent"]);
+const DEFAULT_EXECUTION_MODE = "inline_single_agent";
+function normalizeExecutionMode(value) {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return GATE_EXECUTION_MODES.has(normalized) ? normalized : null;
+}
 // Exported so other tools (e.g. upsert-checkpoint-verdict.mjs) derive their
 // own subset from this one copy instead of hand-copying it out of sync.
 // "needs-answer" is the disposition a "question" finding gets (see
@@ -421,6 +445,7 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
       findings: { type: "string" },
       "findings-file": { type: "string" },
       provenance: { type: "string" },
+      "execution-mode": { type: "string" },
       "emit-plan": { type: "string" },
       "full-label": { type: "boolean" },
       "judge-verdict": { type: "string" },
@@ -441,6 +466,7 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
     findings: undefined,
     findingsFile: undefined,
     fullLabel: false,
+    executionMode: undefined,
     tmpRoot: "tmp",
     specAuthority: undefined,
   };
@@ -496,6 +522,12 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
       options.provenance = requireTokenValue(token, parseError);
       continue;
     }
+    if (token.name === "execution-mode") {
+      const mode = normalizeExecutionMode(requireTokenValue(token, parseError));
+      if (!mode) throw parseError("--execution-mode must be one of: fanout_fanin, inline_single_agent");
+      options.executionMode = mode;
+      continue;
+    }
     if (token.name === "emit-plan") {
       const emitPlan = requireTokenValue(token, parseError).trim();
       if (emitPlan.length === 0) throw parseError("--emit-plan requires a non-empty path");
@@ -525,6 +557,9 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
     throw parseError(`Unknown argument: ${token.rawName}`);
   }
+  // Default execution mode to inline_single_agent when omitted, same default
+  // as upsert-checkpoint-verdict.mjs's own --execution-mode.
+  options.executionMode = options.executionMode ?? DEFAULT_EXECUTION_MODE;
   const missing = ["repo", "pr", "gate", "headSha", "verdict"]
     .filter(k => options[k] === undefined);
   if (missing.length > 0) {
@@ -555,7 +590,7 @@ export function buildLogPath({ repo, pr, gate, headSha, tmpRoot }) {
   return path.join(tmpRoot, "gate-findings", repoSlug, `pr-${pr}`, `${gate}-${headSha}.json`);
 }
 export async function writeGateFindingsLog(options, { repoRoot = process.cwd() } = {}) {
-  const { findings: rawFindings, overallVerdict } = await resolveFindings(options);
+  const { findings: rawFindings, overallVerdict, provenance: wrapperProvenance } = await resolveFindings(options);
   // When a judge verdict artifact is supplied, enrich the findings with the
   // judge's relevance-based dispositions (GATE-EXEC-JUDGE-PHASE) before writing the ledger:
   // applyJudgeDispositions fails closed on a malformed verdict, an
@@ -618,24 +653,61 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       );
     }
   }
-  let provenance;
-  if (options.provenance === undefined) {
-    provenance = undefined;
-  } else {
-    // Resolve this round's dispatch groups before validating pairing, so a
-    // claimed `group` is cross-checked against the gate's configured
-    // grouping table (see fanoutReviewerPairingError), not just self-attested.
-    // A raw-JSON parse failure here is swallowed; the real error resurfaces
-    // inside parseProvenanceJson below.
+  // Resolve + validate a candidate provenance JSON STRING through the exact
+  // same path an explicit --provenance takes: resolve this round's dispatch
+  // groups first (so a claimed `group` is cross-checked against the gate's
+  // configured grouping table — see fanoutReviewerPairingError — not just
+  // self-attested; a raw-JSON parse failure here is swallowed, the real error
+  // resurfaces inside parseProvenanceJson), then run parseProvenanceJson
+  // itself. Shared by the explicit --provenance path and the wrapper-supplied
+  // fallback below so a malformed wrapper provenance fails closed identically
+  // to a malformed --provenance flag — never a parallel validator.
+  const resolveAndValidateProvenance = async (rawProvenanceJson) => {
     let resolvedGroups = null;
     try {
-      const rawPerAngle = JSON.parse(options.provenance)?.perAngle;
+      const rawPerAngle = JSON.parse(rawProvenanceJson)?.perAngle;
       const { config } = await loadDevLoopConfig({ repoRoot });
       resolvedGroups = resolveFanoutGroups(config, GATE_CONFIG_KEY[options.gate] ?? options.gate, freshAngleNames(rawPerAngle), { fullLabel: options.fullLabel === true });
     } catch {
       resolvedGroups = null;
     }
-    provenance = parseProvenanceJson(options.provenance, resolvedGroups);
+    return parseProvenanceJson(rawProvenanceJson, resolvedGroups);
+  };
+  let provenance;
+  if (options.provenance !== undefined) {
+    provenance = await resolveAndValidateProvenance(options.provenance);
+  } else if (wrapperProvenance !== undefined && wrapperProvenance !== null) {
+    // No explicit --provenance flag, but the --findings/--findings-file
+    // wrapper itself carries a "provenance" field (caller-supplied, e.g. the
+    // conductor's own hand-composed --ledger-out wrapper) — persist THAT into
+    // the durable ledger instead of leaving it byte-identical to a bare-array
+    // write. Re-serialized through JSON.stringify so it runs through the identical
+    // parseProvenanceJson validation core an explicit --provenance would: a
+    // malformed wrapper provenance fails closed the same way. An explicit
+    // --provenance flag (above) always takes precedence over this.
+    provenance = await resolveAndValidateProvenance(JSON.stringify(wrapperProvenance));
+  } else {
+    provenance = undefined;
+  }
+  // Write-time fail-closed guard: a fanout_fanin write for a gate that
+  // configures mandatory angles must never persist a durable ledger with no
+  // provenance (neither an explicit --provenance nor a wrapper-supplied
+  // one) — omitting it here is exactly the omitting-conductor bug this guard
+  // closes, since it would otherwise silently diverge from the posted
+  // verdict comment's own provenance. inline_single_agent stays exempt (it
+  // legitimately carries no provenance, byte-identical to before), and a
+  // gate with no mandatory angles configured has no coverage obligation to
+  // prove either way.
+  const executionMode = options.executionMode ?? DEFAULT_EXECUTION_MODE;
+  if (executionMode === "fanout_fanin" && provenance === undefined) {
+    const gateKey = GATE_CONFIG_KEY[options.gate];
+    const { config } = await loadDevLoopConfig({ repoRoot });
+    const { mandatoryAngles } = resolveGateAngleContract(config, gateKey);
+    if (mandatoryAngles.length > 0) {
+      throw parseError(
+        `Cannot write a fanout_fanin findings log for ${options.gate} (pr ${options.pr}, head ${options.headSha}): gates.${gateKey}.angles configures mandatory angle(s) (${mandatoryAngles.join(", ")}) whose coverage this ledger must prove, but no provenance was supplied. Pass --provenance <json> covering the mandatory angles, or write through a --findings/--findings-file wrapper that already carries its own "provenance".`,
+      );
+    }
   }
   if (options.emitPlan !== undefined) {
     await verifyEmitPlanProvenance(options.emitPlan, provenance, {

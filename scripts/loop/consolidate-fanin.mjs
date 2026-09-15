@@ -1553,7 +1553,10 @@ export async function consolidateGateFanin(options) {
       options.specAuthority !== undefined ? path.resolve(options.repoRoot ?? process.cwd(), options.specAuthority) : undefined,
       parseError,
     );
-    const ledgerRecord = stampOptionalSpecAuthority({ overallVerdict: consolidated.verdict, findings }, specAuthorityIdentity);
+    const ledgerRecord = stampOptionalSpecAuthority(
+      { overallVerdict: consolidated.verdict, findings },
+      specAuthorityIdentity,
+    );
     await writeFile(options.ledgerOut, `${JSON.stringify(ledgerRecord, null, 2)}\n`, "utf8");
   }
 
