@@ -13,6 +13,14 @@
  * behavior change; no general network sandbox). It only asserts, when a test is
  * running, that the write is stubbed by one of the two sanctioned seams:
  *
+ * Test mode is derived from the EXECUTING PROCESS's own env (`process.env`),
+ * never from the write-target `env` a caller passes in. A caller can build a
+ * sparse `env` (e.g. `{ GH_TOKEN }` with no `NODE_ENV`) to shape the `gh`
+ * child's environment; if that sparse env decided test mode, it could turn
+ * the guard off from under a test simply by omitting `NODE_ENV`. Reading the
+ * real process env instead makes that impossible: a caller-supplied env can
+ * never disable the guard.
+ *
  *   (a) In-process DI seam: the helper's `run`/`runChild` was replaced with a
  *       stub (e.g. `makeGhMock`), so it is no longer the live child-exec seam.
  *   (b) Process-boundary seam: a subprocess test installed a fake `gh` on PATH
@@ -42,19 +50,25 @@ export function isLiveExecutor(run) {
 }
 
 /**
- * Assert a GitHub write is stubbed when running under a test. No-op unless
- * `env.NODE_ENV === "test"`. Throws (code `GH_WRITE_UNSTUBBED_IN_TEST`) when the
- * write would reach the live path with neither sanctioned stub seam present.
+ * Assert a GitHub write is stubbed when running under a test. No-op unless the
+ * EXECUTING PROCESS is in test mode (`processEnv.NODE_ENV === "test"`) — never
+ * decided by the caller-supplied write-target `env`, so a sparse `env` (e.g.
+ * missing `NODE_ENV`) cannot bypass the guard. Throws (code
+ * `GH_WRITE_UNSTUBBED_IN_TEST`) when the write would reach the live path with
+ * neither sanctioned stub seam present.
  *
  * @param {unknown} run - the helper's `run`/`runChild` seam (omit for spawn-only
  *   helpers with no in-process seam).
  * @param {string} op - human-readable op name, e.g. `"issue create"`.
- * @param {{ env?: NodeJS.ProcessEnv }} [opts]
+ * @param {{ env?: NodeJS.ProcessEnv, processEnv?: NodeJS.ProcessEnv }} [opts]
+ *   `env` is the write-target env (consulted only for the stub attestation);
+ *   `processEnv` (defaults to `process.env`, injectable for tests) is the
+ *   real executing process's env and is the sole source of test-mode.
  */
-export function assertGithubWriteStubbedInTestMode(run, op, { env = process.env } = {}) {
-  if (env?.NODE_ENV !== "test") return; // production / non-test: never guards
+export function assertGithubWriteStubbedInTestMode(run, op, { env = process.env, processEnv = process.env } = {}) {
+  if (processEnv?.NODE_ENV !== "test") return; // production / non-test: never guards
   if (!isLiveExecutor(run)) return; // (a) in-process DI stub injected
-  if (env?.[GH_STUB_ATTESTATION_ENV]) return; // (b) process-boundary gh stub
+  if (processEnv?.[GH_STUB_ATTESTATION_ENV] || env?.[GH_STUB_ATTESTATION_ENV]) return; // (b) process-boundary gh stub
   throw Object.assign(
     new Error(
       `GitHub write helper "${op}" was called in test mode without an injected stub — ` +

@@ -21,12 +21,15 @@ const okEditOrComment = async () => ({ code: 0, stdout: "https://github.com/owne
 // ── pure guard unit ────────────────────────────────────────────────────────
 
 test("guard is a no-op outside test mode (never changes production behavior)", () => {
-  // liveRunChild + no attestation, but NODE_ENV is not "test" → no throw.
+  // liveRunChild + no attestation, but the EXECUTING PROCESS's NODE_ENV is not
+  // "test" → no throw. Test mode is decided by processEnv, not env.
   assert.doesNotThrow(() =>
-    assertGithubWriteStubbedInTestMode(liveRunChild, "issue create", { env: { NODE_ENV: "production" } }),
+    assertGithubWriteStubbedInTestMode(liveRunChild, "issue create", {
+      processEnv: { NODE_ENV: "production" },
+    }),
   );
   assert.doesNotThrow(() =>
-    assertGithubWriteStubbedInTestMode(undefined, "pr create", { env: {} }),
+    assertGithubWriteStubbedInTestMode(undefined, "pr create", { processEnv: {} }),
   );
 });
 
@@ -41,7 +44,7 @@ function captureThrow(fn) {
 
 test("guard fails closed: test mode + live executor + no stub attestation", () => {
   const err = captureThrow(() =>
-    assertGithubWriteStubbedInTestMode(liveRunChild, "issue create", { env: { NODE_ENV: "test" } }),
+    assertGithubWriteStubbedInTestMode(liveRunChild, "issue create", { processEnv: { NODE_ENV: "test" } }),
   );
   assert.equal(err.code, "GH_WRITE_UNSTUBBED_IN_TEST");
   assert.match(err.message, /issue create/);
@@ -50,22 +53,36 @@ test("guard fails closed: test mode + live executor + no stub attestation", () =
 
 test("guard fails closed for a spawn-only helper (run omitted / null)", () => {
   const err = captureThrow(() =>
-    assertGithubWriteStubbedInTestMode(undefined, "pr create", { env: { NODE_ENV: "test" } }),
+    assertGithubWriteStubbedInTestMode(undefined, "pr create", { processEnv: { NODE_ENV: "test" } }),
   );
   assert.equal(err.code, "GH_WRITE_UNSTUBBED_IN_TEST");
 });
 
 test("guard passes with an in-process DI stub injected (run !== live executor)", () => {
   assert.doesNotThrow(() =>
-    assertGithubWriteStubbedInTestMode(async () => ({}), "issue create", { env: { NODE_ENV: "test" } }),
+    assertGithubWriteStubbedInTestMode(async () => ({}), "issue create", { processEnv: { NODE_ENV: "test" } }),
   );
 });
 
 test("guard passes with a process-boundary gh-stub attestation", () => {
   assert.doesNotThrow(() =>
     assertGithubWriteStubbedInTestMode(liveRunChild, "pr create", {
-      env: { NODE_ENV: "test", [GH_STUB_ATTESTATION_ENV]: "1" },
+      processEnv: { NODE_ENV: "test" },
+      env: { [GH_STUB_ATTESTATION_ENV]: "1" },
     }),
+  );
+});
+
+// ── fail-open regression (issue 2216) ────────────────────────────────────
+// A caller-supplied write-target `env` must NEVER be able to disable the
+// guard by simply omitting NODE_ENV. Simulate `createGithubTrackerAdapter`
+// passing a sparse env (GH_TOKEN, no NODE_ENV) to the live default `run` —
+// the real process IS under test (ambient bun NODE_ENV=test), so the guard
+// must still fire even though `env` says nothing about test mode.
+test("fail-open closed: sparse caller env without NODE_ENV still guards (createIssue)", async () => {
+  await assert.rejects(
+    () => createIssue({ repo: "owner/repo", title: "t", body: "b" }, { env: { GH_TOKEN: "x" } }),
+    (err) => err.code === "GH_WRITE_UNSTUBBED_IN_TEST",
   );
 });
 
