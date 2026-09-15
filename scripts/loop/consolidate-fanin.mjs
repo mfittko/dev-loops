@@ -54,6 +54,7 @@ import { verifyDispatchPromptLayoutForHead } from "../github/verify-dispatch-pro
 import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig } from "@dev-loops/core/config";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { FANIN_SYNTHETIC_ANGLES, SEVERITY_ORDER, VALID_SEVERITIES, baseAngleName, checkResolvedAngleEvidence, consolidateFanin, normalizeSeverity, toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
+import { clusterFindings } from "@dev-loops/core/loop/finding-cluster";
 import { enforceCacheTelemetryEvidence } from "@dev-loops/core/loop/cache-telemetry-evidence";
 import { enforcePrimerEvidence } from "@dev-loops/core/loop/primer-evidence";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
@@ -1420,6 +1421,19 @@ export async function consolidateGateFanin(options) {
   }));
 
   const consolidated = consolidateFanin({ angleResults: rawArtifacts, blockCleanOnFindingSeverities });
+  // Cluster on the LOSSLESS, pre-truncation finding data — before the
+  // neutralize+truncate loop below bounds each finding's summary/
+  // recommendation/file. Two distinct remediations that merely SHARE a long
+  // prefix (or two distinct paths sharing a long common prefix) must not
+  // collide into one root-cause key just because truncation made their
+  // TAILS identical; clustering off the untruncated text avoids that
+  // over-clustering. `clusters` is positional (index-aligned to
+  // `consolidated.findings`), and that order is preserved 1:1 into
+  // `toFindingsLogShape`'s output below, so it stays valid to stamp with
+  // after truncation. When --head-sha was not given, clusterFindings fails
+  // open (each finding its own singleton), which is correct here too:
+  // nothing to key on.
+  const { clusters } = clusterFindings(consolidated.findings, { headSha: options.headSha });
   // Neutralize + bound each finding's free-text fields before they reach
   // either output shape. This is the ONE canonical pipeline seam: both the
   // flat ledger (toFindingsLogShape below) and the nested findingsJson (--out)
@@ -1442,6 +1456,16 @@ export async function consolidateGateFanin(options) {
   // per-finding shape upsert-checkpoint-verdict.mjs's --findings-json accepts —
   // the same array satisfies both consumer contracts.
   const findings = toFindingsLogShape(consolidated.findings);
+  // Stamp each ledger finding with an additive `clusterId` (its cluster's
+  // representative index) so a downstream judge pass can dedupe repeated
+  // reports of the same root cause without recomputing the key itself.
+  // Additive only — every existing field above is untouched. Clusters were
+  // computed above, before truncation, off the lossless finding text.
+  for (const cluster of clusters) {
+    for (const memberIndex of cluster.memberIndices) {
+      findings[memberIndex].clusterId = cluster.representativeIndex;
+    }
+  }
   // The nested per-angle shape upsert-checkpoint-verdict.mjs's --findings-json
   // natively accepts: one section per source artifact, including clean
   // angles with an empty findings array, so an all-clean fan-out and

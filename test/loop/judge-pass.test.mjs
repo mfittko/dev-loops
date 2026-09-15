@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +11,7 @@ import {
   validateCliArgs,
 } from "../../scripts/loop/judge-pass.mjs";
 import { fingerprintFinding } from "../../scripts/github/_gate-finding-surface.mjs";
+import { dedupeActListByCluster } from "@dev-loops/core/loop/finding-cluster";
 
 const HEAD = "0123456789abcdef";
 const HEAD_8 = HEAD.slice(0, 8);
@@ -117,6 +119,84 @@ test("runJudgePass fails closed when the verdict does not dispose every finding 
   assert.throws(() => runJudgePass(findings, v, HEAD), /does not dispose 1 finding\(s\) \(indexes: 1\)/);
 });
 
+// issue 2156: duplicate root-cause findings (same file:line:recommendation at
+// this head) are clustered so the judge's disposition on one member projects
+// onto every other member reporting the same root cause.
+function locatedFinding(over = {}) {
+  return finding({ file: "src/x.mjs", line: 10, recommendation: "add a null guard", ...over });
+}
+
+test("runJudgePass projects the representative's judge disposition onto every duplicate-root-cause member (#2156)", () => {
+  const findings = ledger(
+    locatedFinding({ angle: "correctness", summary: "null deref (angle A)" }),
+    locatedFinding({ angle: "security", summary: "null deref (angle B)" }),
+    finding({ summary: "distinct finding" }),
+  );
+  const v = verdict({
+    dispositions: [
+      { index: 0, disposition: "act", rationale: "fixes AC-1", criterion: "AC-1" },
+      { index: 1, disposition: "reject", rationale: "duplicate, judge saw it independently" },
+      { index: 2, disposition: "defer", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } },
+    ],
+  });
+  const result = runJudgePass(findings, v, HEAD);
+  // Both cluster members carry the REPRESENTATIVE's (index 0) disposition.
+  assert.equal(result.enriched[0].judgeDisposition, "act");
+  assert.equal(result.enriched[1].judgeDisposition, "act");
+  assert.equal(result.enriched[1].judgeRationale, "fixes AC-1");
+  assert.equal(result.enriched[1].judgeCriterion, "AC-1");
+  assert.equal(result.enriched[2].judgeDisposition, "defer");
+  assert.equal(result.counts.act, 2, "the raw tally counts every acted finding, one per reviewer report");
+  assert.equal(result.act.length, 2);
+});
+
+// FIX 1 (#2156, Copilot round 2): applied.findings' recommendation/file text
+// may already have been TRUNCATED by the ledger pipeline (consolidate-fanin
+// truncates AFTER it clusters on lossless pre-truncation text and stamps
+// `clusterId`). runJudgePass must consume that stamp, not recompute the
+// cluster key from the (possibly truncated) ledger text.
+test("runJudgePass consumes the stamped clusterId rather than recomputing from (truncated) recommendation text (#2156 FIX 1)", () => {
+  const findings = ledger(
+    // Same stamped clusterId (0), but DIFFERENT recommendation text — as if
+    // truncation diverged their tails after the lossless cluster was formed.
+    // A recompute would treat these as two separate root causes; consuming
+    // the stamp still collapses them into one cluster.
+    locatedFinding({ angle: "correctness", summary: "null deref (angle A)", recommendation: "add a null guard AAA", clusterId: 0 }),
+    locatedFinding({ angle: "security", summary: "null deref (angle B)", recommendation: "add a null guard BBB", clusterId: 0 }),
+    // IDENTICAL recommendation text but DISTINCT stamped clusterIds — a
+    // recompute would wrongly merge these; consuming the stamp keeps them
+    // separate clusters.
+    locatedFinding({ angle: "performance", summary: "distinct root cause C", recommendation: "shared truncated tail", clusterId: 2 }),
+    locatedFinding({ angle: "style", summary: "distinct root cause D", recommendation: "shared truncated tail", clusterId: 3 }),
+  );
+  const v = verdict({
+    dispositions: [
+      { index: 0, disposition: "act", rationale: "fixes AC-1", criterion: "AC-1" },
+      { index: 1, disposition: "act", rationale: "fixes AC-1 too" },
+      { index: 2, disposition: "act", rationale: "fixes AC-2" },
+      { index: 3, disposition: "act", rationale: "fixes AC-2 too" },
+    ],
+  });
+  const result = runJudgePass(findings, v, HEAD);
+  // Three clusters: {0,1} (shared stamp, different text), {2}, {3} (distinct
+  // stamps, identical text) — grouped strictly by the stamped clusterId.
+  assert.equal(result.clusters.length, 3);
+  const clusterOf = (index) => result.clusters.find((c) => c.memberIndices.includes(index));
+  assert.deepEqual(clusterOf(0).memberIndices, [0, 1]);
+  assert.deepEqual(clusterOf(2).memberIndices, [2]);
+  assert.deepEqual(clusterOf(3).memberIndices, [3]);
+  // Raw tally still counts every acted finding, one per reviewer report.
+  assert.equal(result.act.length, 4);
+  const deduped = dedupeActListByCluster(result.act, result.clusters, result.enriched);
+  // Same stamped clusterId (0/1) collapses to ONE remediation; distinct
+  // stamped clusterIds (2, 3) stay TWO — regardless of the (truncated)
+  // recommendation text.
+  assert.equal(deduped.length, 3);
+  assert.equal(deduped[0].summary, "null deref (angle A)");
+  assert.equal(deduped[1].summary, "distinct root cause C");
+  assert.equal(deduped[2].summary, "distinct root cause D");
+});
+
 test("validateCliArgs accepts a full invocation and canonicalizes the gate", () => {
   const opts = parseJudgePassCliArgs([
     "--repo", "mfittko/dev-loops",
@@ -213,6 +293,155 @@ test("judgePassCli resolves a relative findings-file against repo-root (#1658)",
   assert.equal(payload.actCount, 1);
   assert.deepEqual(JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8")).length, 1);
   assert.equal(JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8")).findings[0].judgeDisposition, "act");
+});
+
+test("judgePassCli --out is deduped to one remediation per acted cluster; --ledger-out keeps every acted finding (#2156)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-dedup-"));
+  await writeFile(
+    path.join(tmpDir, "ledger.json"),
+    JSON.stringify({
+      overallVerdict: "findings_present",
+      findings: [
+        locatedFinding({ angle: "correctness", summary: "null deref (angle A)" }),
+        locatedFinding({ angle: "security", summary: "null deref (angle B)" }),
+        finding({ summary: "distinct finding" }),
+        finding({ severity: "low", summary: "out of scope for this PR", disposition: "deferred" }),
+      ],
+    }),
+  );
+  await writeFile(
+    path.join(tmpDir, "judge-verdict.json"),
+    JSON.stringify(
+      verdict({
+        dispositions: [
+          { index: 0, disposition: "act", rationale: "fixes AC-1", criterion: "AC-1" },
+          { index: 1, disposition: "reject", rationale: "duplicate" },
+          { index: 2, disposition: "act", rationale: "also in scope" },
+          { index: 3, disposition: "defer", rationale: "valid but out of scope", followUpDraft: { title: "t", body: "b" } },
+        ],
+      }),
+    ),
+  );
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  // Index 3 defers with a followUpDraft, which drives applyFollowUpIssues; stub
+  // the issue deps (as the sibling tests do) so it never hits the real GitHub
+  // API — unstubbed it fails closed in CI and would file a real issue locally.
+  const { createIssue, commentIssue, listIssues } = stubIssueDeps();
+  const payload = await judgePassCli(
+    {
+      repo: "mfittko/dev-loops",
+      pr: "1",
+      gate: "draft_gate",
+      headSha: HEAD,
+      findingsFile: "./ledger.json",
+      judgeVerdict: "./judge-verdict.json",
+      out: "./act.json",
+      ledgerOut: "./enriched.json",
+    },
+    { repoRoot: tmpDir, createIssue, commentIssue, listIssues },
+  );
+  assert.equal(payload.ok, true);
+  // Raw tally: both duplicate-cluster members (0, 1 via projection) plus the
+  // distinct finding (2) were all acted on — one entry per reviewer report.
+  assert.equal(payload.actCount, 3);
+  const writtenAct = JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8"));
+  // Deduped fixer act list: exactly one entry per acted root cause.
+  assert.equal(writtenAct.length, 2);
+  assert.equal(writtenAct[0].summary, "null deref (angle A)");
+  assert.equal(writtenAct[1].summary, "distinct finding");
+  const enrichedLedger = JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8"));
+  // The durable ledger is NOT deduped — every acted finding is still present.
+  assert.equal(enrichedLedger.findings.filter((f) => f.judgeDisposition === "act").length, 3);
+});
+
+test("judgePassCli fails closed when a clean ledger verdict is paired with a nonzero judge act count (#2156)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-clean-act-"));
+  await writeFile(
+    path.join(tmpDir, "ledger.json"),
+    // A "clean" overallVerdict (e.g. no blocking-severity finding) can still
+    // carry a low-severity finding the judge later decides to act on — that
+    // combination must never be written as a clean verdict.
+    JSON.stringify({ overallVerdict: "clean", findings: [finding({ severity: "low", disposition: "deferred" })] }),
+  );
+  await writeFile(
+    path.join(tmpDir, "judge-verdict.json"),
+    JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", rationale: "actually needs fixing now" }] })),
+  );
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  await assert.rejects(
+    judgePassCli(
+      {
+        repo: "mfittko/dev-loops",
+        pr: "1",
+        gate: "draft_gate",
+        headSha: HEAD,
+        findingsFile: "./ledger.json",
+        judgeVerdict: "./judge-verdict.json",
+        out: "./act.json",
+        ledgerOut: "./enriched.json",
+      },
+      { repoRoot: tmpDir },
+    ),
+    /clean verdict is invalid with a nonzero act count/,
+  );
+});
+
+// FIX D (#2156): the clean+act invariant must fail BEFORE any durable side
+// effect — neither the approvals record nor a follow-up GitHub issue may be
+// written/created for a round that is about to be rejected. Combines a clean
+// ledger + nonzero act count (as above) with BOTH side-effect seams engaged
+// (--approvals-out via --spec-file, and a deferred finding that would
+// otherwise drive applyFollowUpIssues) to prove the ordering, not just the
+// throw.
+test("judgePassCli: rejecting a clean+act round creates no follow-up issue and writes no approvals record (#2156)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-clean-act-no-side-effects-"));
+  const { specDigest, contentDigest, criterionIds } = await specDigests();
+  const findings = [finding(), finding({ severity: "low", summary: "would-be follow-up", disposition: "deferred" })];
+  // A "clean" overallVerdict paired with an act-disposed finding (index 0) —
+  // the invalid combination. Index 1 defers with a followUpDraft, which
+  // would (pre-fix) reach applyFollowUpIssues before the assertion threw.
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "clean", findings }));
+  await writeFile(
+    path.join(tmpDir, "judge-verdict.json"),
+    JSON.stringify(verdict({
+      dispositions: [
+        { index: 0, disposition: "act", rationale: "actually needs fixing now" },
+        { index: 1, disposition: "defer", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } },
+      ],
+    })),
+  );
+  await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
+  await writeFile(
+    path.join(tmpDir, "spec-authority.json"),
+    JSON.stringify({ specDigest, headSha: HEAD, contentDigest, decisions: [
+      { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" },
+      { index: 1, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" },
+    ] }),
+  );
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  const { createIssue, commentIssue, listIssues, createCalls, commentCalls } = stubIssueDeps();
+  const approvalsPath = path.join(tmpDir, "approvals.json");
+  await assert.rejects(
+    judgePassCli(
+      {
+        repo: "mfittko/dev-loops",
+        pr: "2000",
+        gate: "pre_approval_gate",
+        headSha: HEAD,
+        findingsFile: "./ledger.json",
+        judgeVerdict: "./judge-verdict.json",
+        specFile: "./spec.json",
+        contentDigest,
+        specAuthorityVerdict: "./spec-authority.json",
+        approvalsOut: "./approvals.json",
+      },
+      { repoRoot: tmpDir, createIssue, commentIssue, listIssues },
+    ),
+    /clean verdict is invalid with a nonzero act count/,
+  );
+  assert.equal(createCalls.length, 0, "no follow-up issue created before the round is rejected");
+  assert.equal(commentCalls.length, 0, "no follow-up issue comment posted before the round is rejected");
+  assert.equal(existsSync(approvalsPath), false, "no approvals record written before the round is rejected");
 });
 
 // #1807: a `defer` disposition creates (or appends to) the PR's ONE tracked

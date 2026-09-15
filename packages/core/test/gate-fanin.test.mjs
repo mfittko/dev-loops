@@ -30,6 +30,11 @@ import {
   resolveFindingFile,
   hasLocatableShape,
 } from "../src/loop/gate-fanin.mjs";
+import {
+  assertCleanImpliesNoAct,
+  clusterFindings,
+  dedupeActListByCluster,
+} from "../src/loop/finding-cluster.mjs";
 
 // SEVERITY_ORDER, VALID_SEVERITIES, and NON_DEFECT_SEVERITIES must be frozen
 // like this file's other exported vocabulary constants (GATE_CONFIG_KEY,
@@ -1432,6 +1437,64 @@ describe("applyJudgeDispositions (#1525)", () => {
     const verdict = judgeVerdict([]);
     const { findings } = applyJudgeDispositions([], verdict);
     assert.deepEqual(findings, []);
+  });
+});
+
+describe("consolidateFanin + finding-cluster (issue 2156 — fan-in clustering / clean-implies-no-act / deduped act list)", () => {
+  const HEAD = "deadbeef01";
+
+  // Two angles independently reporting the SAME root cause (identical
+  // file:line + recommendation) at the round's head.
+  const angleResults = [
+    {
+      angle: "correctness",
+      verdict: "findings_present",
+      headSha: HEAD,
+      findings: [{ severity: "must-fix", summary: "null deref", file: "src/x.mjs", line: 10, recommendation: "add a null guard" }],
+    },
+    {
+      angle: "security",
+      verdict: "findings_present",
+      headSha: HEAD,
+      findings: [{ severity: "must-fix", summary: "same null deref, different angle", file: "src/x.mjs", line: 10, recommendation: "add a null guard" }],
+    },
+    {
+      angle: "performance",
+      verdict: "findings_present",
+      headSha: HEAD,
+      findings: [{ severity: "must-fix", summary: "unrelated defect", file: "src/y.mjs", line: 1, recommendation: "cache the result" }],
+    },
+  ];
+
+  test("mixed act/defer/reject: clusterFindings groups the duplicate root cause and leaves the distinct one separate", () => {
+    const { findings } = consolidateFanin({ angleResults });
+    const { ok, clusters } = clusterFindings(findings, { headSha: HEAD });
+    assert.equal(ok, true);
+    assert.equal(clusters.length, 2, "3 findings, 2 distinct root causes");
+    assert.deepEqual(clusters[0].memberIndices, [0, 1]);
+    assert.deepEqual(clusters[1].memberIndices, [2]);
+  });
+
+  test("dedupeActListByCluster yields the EXACT deduped fixer act list — one remediation per acted cluster", () => {
+    const { findings } = consolidateFanin({ angleResults });
+    const { clusters } = clusterFindings(findings, { headSha: HEAD });
+    // Every finding acted on (mixed act/defer/reject in a larger round is
+    // exercised in judge-pass.test.mjs's own wiring test; this asserts the
+    // pure dedup contract in isolation against a real consolidateFanin shape).
+    const act = findings; // all 3 are "high"-blocking, i.e. accepted-for-fix
+    const deduped = dedupeActListByCluster(act, clusters, findings);
+    assert.equal(act.length, 3);
+    assert.equal(deduped.length, 2, "the duplicate root cause collapses to its representative");
+    assert.deepEqual(deduped, [findings[0], findings[2]]);
+  });
+
+  test("assertCleanImpliesNoAct rejects a clean verdict paired with a nonzero act count", () => {
+    assert.throws(() => assertCleanImpliesNoAct("clean", 1), /clean verdict is invalid/);
+  });
+
+  test("assertCleanImpliesNoAct accepts a clean verdict with a zero act count and a findings_present verdict with any act count", () => {
+    assert.equal(assertCleanImpliesNoAct("clean", 0), "clean");
+    assert.equal(assertCleanImpliesNoAct("findings_present", 3), "findings_present");
   });
 });
 
