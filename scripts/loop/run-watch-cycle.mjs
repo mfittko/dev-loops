@@ -510,6 +510,7 @@ export async function runWatchCycle(
     ensureOwnershipImpl = ensureAsyncRunnerOwnership,
     recordWatchClaimImpl = defaultRecordWatchClaim,
     detectSessionActivity = false,
+    spawnImpl = spawn,
   } = {},
 ) {
   const leaseCwd = resolveRepoRoot(process.cwd());
@@ -526,6 +527,16 @@ export async function runWatchCycle(
   const countedRunChild = (...args) => {
     toolCallCount += 1;
     return runChild(...args);
+  };
+  // watchWorkflowRun spawns `gh run watch` directly (it needs a persistent
+  // streaming child with timeout-triggered SIGTERM, which the buffered
+  // runChild seam above does not support), so it is counted through its own
+  // spawnImpl seam instead of countedRunChild. Same toolCallCount, same
+  // buildWatchCycleExecutionRecord read below — this spawn must not be
+  // under-reported just because it uses a different seam.
+  const countedSpawn = (...args) => {
+    toolCallCount += 1;
+    return spawnImpl(...args);
   };
   const handoff = await runHandoffImpl(options, { env, ghCommand, runChild: countedRunChild });
   const headSha = typeof handoff.snapshot?.currentHeadSha === "string" && handoff.snapshot.currentHeadSha.trim().length > 0
@@ -674,7 +685,7 @@ export async function runWatchCycle(
             runId: session.runId,
             timeoutMs: persistentWatchTimeoutMs,
           },
-          { env, ghCommand },
+          { env, ghCommand, spawnImpl: countedSpawn },
         ),
         { repo: options.repo, pr: options.pr, env, cwd: leaseCwd, ensureOwnershipImpl },
       );

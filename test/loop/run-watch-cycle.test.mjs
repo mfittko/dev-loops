@@ -1281,6 +1281,59 @@ test("execution-record telemetry: toolCalls counts the real gh/network calls the
   assert.ok(result.executionRecord.metrics.localToolTimeMs >= 0);
 });
 
+test("execution-record telemetry: toolCalls counts the workflow-run watcher's `gh run watch` spawn on the session-activity branch, not just the runChild seam", async () => {
+  // Round-2 Copilot finding: watchWorkflowRun spawns `gh run watch` directly
+  // (it needs a persistent streaming child with timeout-triggered SIGTERM,
+  // which the buffered runChild seam cannot provide), so it must be counted
+  // through its own spawnImpl seam. This exercises the real watchWorkflowRun
+  // (not a watchWorkflowRunImpl stub) to prove the spawn itself is counted.
+  const headSha = "d".repeat(40);
+  const spawnCalls = [];
+  const spawnImpl = (...args) => {
+    spawnCalls.push(args);
+    const child = new EventEmitter();
+    child.stderr = new PassThrough();
+    child.kill = () => true;
+    // Resolve the watch on the next microtask, after watchWorkflowRun has
+    // synchronously attached its "close" listener within this same call.
+    queueMicrotask(() => child.emit("close", 0));
+    return child;
+  };
+
+  const result = await runWatchCycle(
+    { repo: "owner/repo", pr: 17 },
+    {
+      env: RUN_ID_ENV,
+      runHandoffImpl: copilotWatchHandoffWithHead(headSha),
+      detectSessionActivity: true,
+      spawnImpl,
+      fetchPrHeadBranchImpl: async () => "copilot/session-branch",
+      detectCopilotSessionActivityImpl: async () => ({
+        ok: true,
+        activity: "active",
+        runId: 444,
+        runName: "Addressing comment on PR owner/repo#17",
+        runStatus: "in_progress",
+        runConclusion: null,
+        runCreatedAt: "2026-05-27T13:08:48Z",
+        branch: "copilot/session-branch",
+        confidence: "high",
+      }),
+      recordWatchClaimImpl: async ({ head, waitKind }) => ({ ok: true, status: "watch_claim_recorded", watch: { head, waitKind, updatedAt: new Date().toISOString() } }),
+      watchCopilotReviewImpl: async (options) => ({ ok: true, status: "timeout", repo: options.repo, pr: options.pr, attempts: 1, newComments: [], newReviews: [], newIssueComments: [] }),
+    },
+  );
+
+  assert.equal(spawnCalls.length, 1, "the real watchWorkflowRun must have spawned `gh run watch` exactly once");
+  assert.equal(spawnCalls[0][1][0], "run", "the counted spawn must be the `gh run watch` call, not some other process");
+  assert.equal(spawnCalls[0][1][1], "watch");
+  assert.equal(
+    result.executionRecord.metrics.toolCalls,
+    1,
+    "toolCalls must include the workflow-run watcher's gh run watch spawn, not under-count it to zero",
+  );
+});
+
 test("execution-record telemetry: a blocked CI gate attaches a record whose outcome matches the final pending disposition, not the initial terminal guess", async () => {
   const headSha = "c".repeat(40);
   const result = await runWatchCycle(
