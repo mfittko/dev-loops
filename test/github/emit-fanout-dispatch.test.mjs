@@ -4,8 +4,10 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, main, sanitizeScopeSegment } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, main, sanitizeScopeSegment, splitSubUnitName } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { buildGateEmitPlanPath, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
+import { loadDevLoopConfig } from "@dev-loops/core/config";
+import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 
 const emitCliPath = path.resolve("scripts/github/emit-fanout-dispatch.mjs");
 
@@ -102,6 +104,82 @@ test("shares a reviewer only for a configured group; splits an auto-chunk unit i
       for (const angle of unit.angles) assert.match(composed, new RegExp(angle));
       assert.match(composed, /resolveReviewerRole/);
     }
+  });
+});
+
+// End-to-end split-path regression (#2155 wiring slice a, Copilot follow-up):
+// a CONFIGURED group of 5 angles (over REVIEWER_UNIT_MAX_ANGLES) must come out
+// of the REAL emitter (main(), not just expandDispatchUnits in isolation) as
+// ceil(5/3)=2 split sub-units, alongside the other configured/singleton units
+// unaffected by the cap.
+//
+// Round-2 Copilot follow-up: the earlier fixture hand-authored a "group" of 5
+// angles (dry/kiss/srp/ocp/lsp) under the name "design-simplicity" directly
+// in the gate-context artifact's fanout.groups — but the SHIPPED
+// extension-defaults.yaml's real "design-simplicity" group is dry/kiss/yagni/
+// deep (srp/ocp/lsp live in "design-solid"), and seedBundle writes fanout
+// straight onto the artifact, bypassing resolveFanoutGroups entirely. That
+// fixture only proved main() can split an already-resolved, hand-rolled plan
+// — never that a genuinely CONFIGURED over-cap group survives resolveFanoutGroups
+// (the config->groups resolution step) before the split. This test instead
+// writes a REAL .devloops declaring a fanout group of 5 real angle names,
+// loads it with loadDevLoopConfig, and produces the gate-context bundle via
+// writeGateContext + resolveFanoutDispatch (which calls resolveFanoutGroups)
+// — the SAME production seam write-gate-context.mjs's CLI drives — before
+// running the emitter against that genuinely-resolved bundle.
+async function seedRealConfiguredGroupBundle(tmpDir) {
+  await writeFile(
+    path.join(tmpDir, ".devloops"),
+    [
+      "version: 1",
+      "gates:",
+      "  fanout:",
+      "    groups:",
+      "      - name: design-solid",
+      "        angles: [srp, soc, ocp, lsp, isp]",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const { config } = await loadDevLoopConfig({ repoRoot: tmpDir });
+  const angles = ["srp", "soc", "ocp", "lsp", "isp", "contradiction-lens"];
+  const options = parseWriteGateContextCliArgs([
+    "--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA,
+    "--angles", JSON.stringify(angles),
+  ]);
+  options.config = config;
+  // The exact seam write-gate-context.mjs's main() calls: resolveFanoutDispatch
+  // wraps resolveFanoutGroups(config, configGate, resolvedAngles), so the
+  // group/leftover split below is the REAL config resolution, not a fixture.
+  options.fanoutDispatch = resolveFanoutDispatch(config, mapGateToConfigKey(GATE), angles, {});
+  await writeGateContext(options, { repoRoot: tmpDir });
+}
+
+test("main(): a configured group OVER the angle cap splits into ceil(N/3) sub-units end-to-end, from a REAL resolveFanoutGroups-routed config", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedRealConfiguredGroupBundle(tmpDir);
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    // ceil(5/3)=2 split sub-units + 1 singleton (contradiction-lens)
+    assert.equal(payload.count, 3);
+    for (const unit of payload.units) {
+      assert.ok(unit.angles.length <= REVIEWER_UNIT_MAX_ANGLES, `unit ${unit.scope} exceeds the cap`);
+    }
+    // No angle dropped, duplicated, reordered, or merged across the emitted units.
+    const orderedAngles = payload.units.flatMap((u) => u.angles).filter((a) => a !== "contradiction-lens");
+    assert.deepEqual(orderedAngles, ["srp", "soc", "ocp", "lsp", "isp"]);
+    // Every split MULTI-angle sub-unit records the CONFIGURED group name as
+    // provenance — not its own synthetic `-partN` scope-distinguishing name
+    // (the "provenance documentation" fix: FIX 1).
+    const splitUnits = payload.units.filter((u) => u.angles.length > 1);
+    // 5 angles / cap 3 → part1 (3 angles) + part2 (2 angles), both multi-angle.
+    assert.equal(splitUnits.length, 2);
+    for (const u of splitUnits) assert.equal(u.group, "design-solid");
   });
 });
 
@@ -598,8 +676,8 @@ test("trims padded angle names so the dispatched angle and scope carry no whites
 
 test("expandDispatchUnits: trims padded angles", () => {
   assert.deepEqual(expandDispatchUnits([{ name: "u", angles: [" a ", "b "] }], new Set()), [
-    { name: "a", angles: ["a"] },
-    { name: "b", angles: ["b"] },
+    { name: "a", angles: ["a"], group: null },
+    { name: "b", angles: ["b"], group: null },
   ]);
 });
 
@@ -612,11 +690,123 @@ test("expandDispatchUnits: configured group stays shared, everything else splits
   ];
   const out = expandDispatchUnits(units, configured);
   assert.deepEqual(out, [
-    { name: "design-simplicity", angles: ["dry", "kiss"] },
-    { name: "a", angles: ["a"] },
-    { name: "b", angles: ["b"] },
-    { name: "solo", angles: ["solo"] },
+    { name: "design-simplicity", angles: ["dry", "kiss"], group: "design-simplicity" },
+    { name: "a", angles: ["a"], group: null },
+    { name: "b", angles: ["b"], group: null },
+    { name: "solo", angles: ["solo"], group: null },
   ]);
+});
+
+test("expandDispatchUnits: a configured group AT the angle cap stays one shared unit", () => {
+  const configured = new Set(["backend"]);
+  const out = expandDispatchUnits([{ name: "backend", angles: ["a", "b", "c"] }], configured);
+  assert.equal(REVIEWER_UNIT_MAX_ANGLES, 3);
+  assert.deepEqual(out, [{ name: "backend", angles: ["a", "b", "c"], group: "backend" }]);
+});
+
+test("expandDispatchUnits: a configured group OVER the cap splits into ordered ≤cap sub-units (even remainder)", () => {
+  const configured = new Set(["backend"]);
+  const out = expandDispatchUnits([{ name: "backend", angles: ["a", "b", "c", "d", "e"] }], configured);
+  assert.deepEqual(out, [
+    { name: "backend-part1", angles: ["a", "b", "c"], group: "backend" },
+    { name: "backend-part2", angles: ["d", "e"], group: "backend" },
+  ]);
+});
+
+test("expandDispatchUnits: an over-cap group whose remainder is one angle yields a trailing singleton sub-unit", () => {
+  const configured = new Set(["backend"]);
+  const out = expandDispatchUnits([{ name: "backend", angles: ["a", "b", "c", "d"] }], configured);
+  assert.deepEqual(out, [
+    { name: "backend-part1", angles: ["a", "b", "c"], group: "backend" },
+    { name: "backend-part2", angles: ["d"], group: "backend" },
+  ]);
+});
+
+test("expandDispatchUnits: split never drops, duplicates, or reorders angles, and every unit is within the cap", () => {
+  const configured = new Set(["big"]);
+  const angles = ["a", "b", "c", "d", "e", "f", "g"]; // 7 → 3 + 3 + 1
+  const out = expandDispatchUnits([{ name: "big", angles }], configured);
+  // No angle dropped/duplicated/merged: concatenation equals the input, in order.
+  assert.deepEqual(out.flatMap((u) => u.angles), angles);
+  // Every emitted unit is bounded by the reviewer-unit angle cap.
+  for (const u of out) assert.ok(u.angles.length <= REVIEWER_UNIT_MAX_ANGLES, `unit ${u.name} exceeds cap`);
+  assert.equal(out.length, 3);
+});
+
+// Unresolved review thread (critical): a config with a group "backend" (4
+// angles, splits into "backend-part1"/"backend-part2") AND a SEPARATELY
+// configured group literally named "backend-part1" makes two dispatch units
+// derive the same scope, failing the whole round at the seenScopes guard.
+// splitSubUnitName disambiguates the split sub-unit's name against every
+// configured group name BEFORE dispatchUnitScope ever sees it; seenScopes
+// stays the backstop for any residual collision it cannot predict (e.g. an
+// upstream-composed name).
+test("splitSubUnitName disambiguates a split sub-unit's name against a configured group name", () => {
+  const configured = new Set(["backend", "backend-part1"]);
+  assert.equal(splitSubUnitName("backend", 1, configured), "backend-part1-x1");
+  assert.equal(splitSubUnitName("backend", 2, configured), "backend-part2");
+});
+
+test("splitSubUnitName is a no-op when the candidate name is not itself configured", () => {
+  const configured = new Set(["backend"]);
+  assert.equal(splitSubUnitName("backend", 1, configured), "backend-part1");
+});
+
+test("expandDispatchUnits: split sub-unit name avoids colliding with a separately-configured group name", () => {
+  const configured = new Set(["backend", "backend-part1"]);
+  const out = expandDispatchUnits([{ name: "backend", angles: ["a", "b", "c", "d"] }], configured);
+  assert.deepEqual(out, [
+    { name: "backend-part1-x1", angles: ["a", "b", "c"], group: "backend" },
+    { name: "backend-part2", angles: ["d"], group: "backend" },
+  ]);
+  // Distinct dispatch scopes — the seenScopes guard never has to fire.
+  const scopes = out.map((u) => dispatchUnitScope("pre_approval_gate", u));
+  assert.equal(new Set(scopes).size, scopes.length);
+});
+
+test("dispatchUnitScope: split sub-units of one group derive DISTINCT scopes (no collision)", () => {
+  const configured = new Set(["backend"]);
+  const out = expandDispatchUnits([{ name: "backend", angles: ["a", "b", "c", "d", "e"] }], configured);
+  const scopes = out.map((u) => dispatchUnitScope("pre_approval_gate", u));
+  assert.equal(new Set(scopes).size, scopes.length);
+  assert.deepEqual(scopes, [
+    "pre-approval-gate-group-backend-part1",
+    "pre-approval-gate-group-backend-part2",
+  ]);
+});
+
+// Round-2 Copilot follow-up (critical, PRRT_kwDOScHU786iZMYI): splitSubUnitName
+// compared the generated `<name>-partN` candidate against the RAW configured
+// group names, but dispatchUnitScope derives a multi-angle unit's scope as
+// `group-${sanitizeScopeSegment(name)}` — so the collision that actually
+// matters is on the SANITIZED form. A config with an over-cap "backend" group
+// (4 angles) and a SEPARATELY configured "backend_part1" group (underscore,
+// not hyphen) makes the generated "backend-part1" sub-unit and the configured
+// "backend_part1" group BOTH sanitize to "group-backend-part1" — a raw-name
+// comparison never sees this because the two strings differ. splitSubUnitName
+// must disambiguate against sanitizeScopeSegment(name) over every configured
+// name, not the raw name.
+test("splitSubUnitName disambiguates against the SANITIZED form of a configured group name (underscore vs hyphen)", () => {
+  const configured = new Set(["backend", "backend_part1"]);
+  // Raw "backend-part1" is NOT itself a configured name, but it sanitizes to
+  // the same segment as the configured "backend_part1" — must still bump.
+  assert.equal(splitSubUnitName("backend", 1, configured), "backend-part1-x1");
+  assert.equal(splitSubUnitName("backend", 2, configured), "backend-part2");
+});
+
+test("expandDispatchUnits: a split sub-unit's scope never collides with a separately-configured group's SANITIZED scope (backend / backend_part1)", () => {
+  const configured = new Set(["backend", "backend_part1"]);
+  const out = expandDispatchUnits([{ name: "backend", angles: ["a", "b", "c", "d"] }], configured);
+  assert.deepEqual(out, [
+    { name: "backend-part1-x1", angles: ["a", "b", "c"], group: "backend" },
+    { name: "backend-part2", angles: ["d"], group: "backend" },
+  ]);
+  const splitScope = dispatchUnitScope("pre_approval_gate", out[0]);
+  const configuredGroupScope = dispatchUnitScope("pre_approval_gate", { name: "backend_part1", angles: ["x", "y"] });
+  assert.notEqual(splitScope, configuredGroupScope, "the split sub-unit's scope must not collide with the configured backend_part1 group's scope");
+  // seenScopes never has to fire — every derived scope is already distinct.
+  const scopes = out.map((u) => dispatchUnitScope("pre_approval_gate", u));
+  assert.equal(new Set(scopes).size, scopes.length);
 });
 
 // Invalid---jq regression (Copilot review round 4, emit-fanout-dispatch.mjs): the
@@ -729,7 +919,7 @@ test("a data-invalid --jq filter exits 2 AFTER the persist and REMOVES the keyed
 
 test("expandDispatchUnits: a configured-name unit with one resolved angle is a singleton, not a shared group", () => {
   const out = expandDispatchUnits([{ name: "design-simplicity", angles: ["dry"] }], new Set(["design-simplicity"]));
-  assert.deepEqual(out, [{ name: "dry", angles: ["dry"] }]);
+  assert.deepEqual(out, [{ name: "dry", angles: ["dry"], group: null }]);
 });
 
 test("dispatchUnitScope: singleton uses the angle name; multi-angle sanitizes the unit name", () => {
