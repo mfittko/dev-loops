@@ -21,9 +21,9 @@ coordinator never re-derives persona/prompt composition and never spelunks
 print-gates.mjs.
 
 Dispatch-unit rule: only a CONFIGURED gates.fanout.groups group shares one
-reviewer, and never more than REVIEWER_UNIT_MAX_ANGLES (3) angles per reviewer.
+reviewer, and never more than REVIEWER_UNIT_MAX_ANGLES (${REVIEWER_UNIT_MAX_ANGLES}) angles per reviewer.
 A configured group LARGER than that cap deterministically splits into ordered
-≤3-angle sub-units (\`<name>-part1\`, \`<name>-part2\`, ...) — angle order
+≤${REVIEWER_UNIT_MAX_ANGLES}-angle sub-units (\`<name>-part1\`, \`<name>-part2\`, ...) — angle order
 preserved, nothing dropped/duplicated/merged. Every angle NOT in a configured
 group gets its OWN distinct reviewer — including angles resolveFanoutGroups
 auto-chunked into a leftover \`group:...\`
@@ -155,19 +155,26 @@ export function buildAngleNamingSuffix(unit) {
 
 /**
  * Generate a split sub-unit's scope-distinguishing name: `${baseName}-part${n}`,
- * disambiguated against `configuredGroupNames` — while the candidate is itself
- * a configured group's name (e.g. splitting "backend" would otherwise collide
- * with a separately-configured "backend-part1" group), append a further
- * suffix until it is not. Deterministic, pure.
+ * disambiguated against `configuredGroupNames` on their SANITIZED form — the
+ * same sanitizeScopeSegment dispatchUnitScope applies when deriving a
+ * multi-angle unit's scope. Comparing raw names is not enough: a
+ * separately-configured "backend_part1" group sanitizes to the SAME
+ * "group-backend-part1" scope as a generated "backend-part1" sub-unit even
+ * though the raw strings differ, so the collision must be caught here too —
+ * while the candidate's sanitized form is itself a configured group's
+ * sanitized name, append a further suffix until it is not. The dispatch
+ * loop's seenScopes guard below remains the final backstop for any residual
+ * collision this cannot see. Deterministic, pure.
  * @param {string} baseName configured group name being split
  * @param {number} n 1-based split index
  * @param {Set<string>} configuredGroupNames configured gates.fanout.groups names
  * @returns {string}
  */
 export function splitSubUnitName(baseName, n, configuredGroupNames) {
+  const sanitizedConfiguredNames = new Set(Array.from(configuredGroupNames, (name) => sanitizeScopeSegment(name)));
   let candidate = `${baseName}-part${n}`;
   let bump = 0;
-  while (configuredGroupNames.has(candidate)) {
+  while (sanitizedConfiguredNames.has(sanitizeScopeSegment(candidate))) {
     bump += 1;
     candidate = `${baseName}-part${n}-x${bump}`;
   }
