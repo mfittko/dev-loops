@@ -357,32 +357,32 @@ async function gateWatcherExclusivity(
   });
   return { engaged: true, ok: verdict.ok, reason: verdict.ok ? verdict.status : verdict.reason, verdict, owner, target, waitKind };
 }
-// Map an observed watcher result to the resolver's transition status, or null
-// when the observation does not correspond to a resolver transition. A settled
-// (terminal success/failure) CI wait maps to `completed`; a fresh push (status
-// "changed") stays "changed"; quiet outcomes are non-advancing. Only the `ci`
-// and `copilot_review` boundaries feed a post-watch transition verdict (see
-// resolveWatchTransitionVerdict's call sites); the `workflow_run` boundary is
-// gated pre-watch but its watch result carries no transition, so it is not
-// handled here.
-function watchResultToTransitionStatus(waitKind, watchResult) {
+// Map an observed CI watcher result to the resolver's transition status, or
+// null when the observation does not correspond to a resolver transition. A
+// settled (terminal success/failure) wait maps to `completed`; a fresh push
+// (status "changed") stays "changed"; quiet outcomes are non-advancing. Only
+// the `ci` boundary feeds a post-watch transition verdict (see
+// resolveWatchTransitionVerdict's call sites): `copilot_review` watch results
+// carry no headSha, so a current-head-validated post-watch transition there
+// would fall back to the pre-watch owned head and fabricate a validated
+// advance; `workflow_run` is gated pre-watch but its watch result carries no
+// transition. Neither is handled here.
+function watchResultToTransitionStatus(watchResult) {
+  // A watcher result is only a valid observation when ok === true. A malformed
+  // result (e.g. { ok:false, status:"success", settled:true }) must never map
+  // to a transition (fail-closed: non-advancing, not a silent success).
+  if (watchResult?.ok !== true) return null;
   const status = watchResult?.status;
-  if (waitKind === "ci") {
-    if (watchResult?.settled === true) {
-      // settled must be corroborated by a terminal status (success/failure);
-      // a malformed { settled:true, status:"pending" } observation must NOT
-      // authorize a completed transition (fail-closed: no transition, not a
-      // silent idle fallback).
-      return status === "success" || status === "failure" ? "completed" : null;
-    }
-    if (status === "changed") return "changed";
-    if (status === "timeout") return "timeout";
-    if (status === "pending" || status === "stuck") return "idle";
-    return null;
+  if (watchResult?.settled === true) {
+    // settled must be corroborated by a terminal status (success/failure);
+    // a malformed { settled:true, status:"pending" } observation must NOT
+    // authorize a completed transition (fail-closed: no transition, not a
+    // silent idle fallback).
+    return status === "success" || status === "failure" ? "completed" : null;
   }
-  // copilot_review
   if (status === "changed") return "changed";
-  if (status === "idle" || status === "timeout") return status;
+  if (status === "timeout") return "timeout";
+  if (status === "pending" || status === "stuck") return "idle";
   return null;
 }
 // After a watcher returns, resolve the phase-advance verdict from the
@@ -393,7 +393,7 @@ function watchResultToTransitionStatus(waitKind, watchResult) {
 // observation has no resolver transition.
 function resolveWatchTransitionVerdict({ gate, waitKind, watchResult, nowMs, staleAfterMs }) {
   if (!gate?.engaged || !gate.ok || !gate.owner) return null;
-  const transitionStatus = watchResultToTransitionStatus(waitKind, watchResult);
+  const transitionStatus = watchResultToTransitionStatus(watchResult);
   if (transitionStatus === null) return null;
   const head = typeof watchResult?.headSha === "string" && watchResult.headSha.trim().length > 0
     ? watchResult.headSha.trim()
@@ -423,7 +423,7 @@ function resolveWatchTransitionVerdict({ gate, waitKind, watchResult, nowMs, sta
 // loss during the wait always blocks the advance.
 async function resolvePostWatchTransition({ waitKind, watchResult, gate, gateExclusivityImpl, nowMs, staleAfterMs }) {
   if (!gate?.engaged || !gate.ok || !gate.owner) return null;
-  const transitionStatus = watchResultToTransitionStatus(waitKind, watchResult);
+  const transitionStatus = watchResultToTransitionStatus(watchResult);
   if (transitionStatus === null) return null;
   const postGate = await gateExclusivityImpl(waitKind, gate.owner.head);
   if (!postGate.ok) {
@@ -440,7 +440,14 @@ async function resolvePostWatchTransition({ waitKind, watchResult, gate, gateExc
 // phase. The coordinator stays in a healthy wait on the existing owner's
 // evidence (the existing timeout policy governs escalation), so the cycle stays
 // pending/non-terminal with a marker explaining why no second watcher started.
+// The waiting_for_ci early-blocked path reaches this before any handoff
+// watchTimeoutPolicy is populated (that path's handoff action is "stop"), so
+// this always ensures the coordinator's healthy-wait/escalation timeout
+// policy is present on a blocked result rather than silently absent.
 function attachWatcherExclusivityBlock(result, gate) {
+  if (result.watchTimeoutPolicy === undefined) {
+    result.watchTimeoutPolicy = EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY;
+  }
   result.watcherExclusivity = {
     blocked: true,
     reason: gate.reason,
@@ -619,17 +626,12 @@ export async function runWatchCycle(
   result.watchArgs = watchOptions;
   result.watchStatus = watch.status;
   result.watch = watch;
-  const copilotTransition = await resolvePostWatchTransition({
-    gate: copilotGate,
-    waitKind: "copilot_review",
-    watchResult: watch,
-    gateExclusivityImpl: gateExclusivity,
-    nowMs,
-    staleAfterMs: exclusivityStaleAfterMs,
-  });
-  if (copilotTransition !== null) {
-    result.watcherExclusivity = { blocked: copilotTransition.verdict?.ok === false, waitKind: "copilot_review", target: copilotGate.target, ...copilotTransition };
-  }
+  // No post-watch transition marker for copilot_review: watchCopilotReview
+  // reports no headSha, so a current-head-validated transition here would
+  // fall back to the pre-watch owned head and fabricate a validated advance
+  // (Copilot review finding). The pre-watch exclusivity gate above is the
+  // only enforcement boundary on this path; AC 3 (current-head-validated
+  // post-watch transition) is CI-only.
   result.cycleDisposition = watch.status === "changed" ? "needs_followup" : "pending";
   result.terminal = false;
   result.contractTrace = buildWatchCycleContractTrace({

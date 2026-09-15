@@ -14,6 +14,7 @@ import {
   watchWorkflowRun,
 } from "../../scripts/loop/run-watch-cycle.mjs";
 import { runHandoff } from "../../scripts/loop/copilot-pr-handoff.mjs";
+import { EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY } from "@dev-loops/core/loop/timeout-policy";
 
 // Config-hermeticity (issue #2055): the integration tests that exercise the real
 // runHandoff resolve the Copilot round cap from a fixture repoRoot mirroring the
@@ -928,6 +929,7 @@ test("watcher-exclusivity gate blocks the copilot watch when another run owns th
   assert.match(result.watcherExclusivity.prohibition, /prohibited under watcher exclusivity: start_watcher/);
   assert.equal(result.cycleDisposition, "pending");
   assert.equal(result.terminal, false);
+  assert.deepEqual(result.watchTimeoutPolicy, EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY, "a blocked exclusivity result still carries the healthy-wait timeout policy for coordinator escalation");
 });
 
 test("watcher-exclusivity gate blocks the copilot watch when the head is unresolved", async () => {
@@ -946,8 +948,13 @@ test("watcher-exclusivity gate blocks the copilot watch when the head is unresol
   assert.equal(result.watcherExclusivity.reason, "missing_head");
 });
 
-test("watcher-exclusivity gate permits the copilot watch when this run owns the boundary and carries the transition", async () => {
+test("watcher-exclusivity gate permits the copilot watch when this run owns the boundary and produces no false-advance transition marker", async () => {
+  // copilot_review watch results carry no headSha, so a post-watch
+  // current-head-validated transition would fall back to the pre-watch owned
+  // head and fabricate a validated advance. The copilot path therefore only
+  // enforces the pre-watch gate and never emits a watcherExclusivity marker.
   let recordedWaitKind = null;
+  let watcherCalled = false;
   const result = await runWatchCycle(
     { repo: "owner/repo", pr: 17 },
     {
@@ -957,14 +964,16 @@ test("watcher-exclusivity gate permits the copilot watch when this run owns the 
         recordedWaitKind = waitKind;
         return { ok: true, status: "watch_claim_recorded", watch: { head, waitKind, updatedAt: new Date().toISOString() } };
       },
-      watchCopilotReviewImpl: async (options) => ({ ok: true, status: "changed", repo: options.repo, pr: options.pr, attempts: 1, newComments: [{ id: "c1" }], newReviews: [], newIssueComments: [] }),
+      watchCopilotReviewImpl: async (options) => {
+        watcherCalled = true;
+        return { ok: true, status: "changed", repo: options.repo, pr: options.pr, attempts: 1, newComments: [{ id: "c1" }], newReviews: [], newIssueComments: [] };
+      },
     },
   );
   assert.equal(recordedWaitKind, "copilot_review");
+  assert.equal(watcherCalled, true, "the copilot watch ran once this run owned the boundary");
   assert.equal(result.watchStatus, "changed");
-  assert.equal(result.watcherExclusivity.blocked, false);
-  assert.equal(result.watcherExclusivity.transitionStatus, "changed");
-  assert.equal(result.watcherExclusivity.advancePhaseAuthorized, true);
+  assert.equal(result.watcherExclusivity ?? null, null, "no post-watch transition marker on the copilot path (no watcher-reported head to validate against)");
 });
 
 test("watcher-exclusivity CI settled success maps to the resolver's completed transition, carrying the watcher head", async () => {
@@ -1146,6 +1155,29 @@ test("watcher-exclusivity CI settled:true with a non-terminal status never autho
   assert.equal(result.watcherExclusivity ?? null, null, "no completed transition marker for a malformed settled:true/status:pending observation");
 });
 
+test("watcher-exclusivity CI result with ok:false never authorizes a completed transition even when status/settled look terminal (fail-closed)", async () => {
+  const result = await runWatchCycle(
+    { repo: "owner/repo", pr: 17 },
+    {
+      env: RUN_ID_ENV,
+      runHandoffImpl: async () => ({
+        ok: true,
+        action: "stop",
+        state: "waiting_for_ci",
+        allowedTransitions: [],
+        nextAction: "Wait for CI",
+        snapshot: { repo: "owner/repo", pr: 17, currentHeadSha: "abc123" },
+        loopDisposition: "pending",
+        terminal: false,
+      }),
+      recordWatchClaimImpl: async ({ head, waitKind }) => ({ ok: true, status: "watch_claim_recorded", watch: { head, waitKind, updatedAt: new Date().toISOString() } }),
+      // Malformed/failure observation: ok:false but status/settled look terminal.
+      watchCiStatusImpl: async () => ({ ok: false, status: "success", settled: true, ciStatus: "success", failedChecks: [], headSha: "abc123", attempts: 3 }),
+    },
+  );
+  assert.equal(result.watcherExclusivity ?? null, null, "no completed transition marker when the watcher result is not ok, regardless of status/settled");
+});
+
 test("watcher-exclusivity post-watch re-gate blocks the transition when this run's lease is lost during the wait (CI)", async () => {
   let calls = 0;
   const result = await runWatchCycle(
@@ -1177,7 +1209,11 @@ test("watcher-exclusivity post-watch re-gate blocks the transition when this run
   assert.equal(result.watcherExclusivity.advancePhaseAuthorized, false, "a lease lost during the wait must never authorize a phase advance");
 });
 
-test("watcher-exclusivity post-watch re-gate blocks the transition when this run's lease is lost during the wait (copilot review)", async () => {
+test("watcher-exclusivity copilot path has no post-watch re-gate (only the pre-watch gate enforces this boundary)", async () => {
+  // Slice b1 scope: the copilot_review boundary is gated pre-watch only (see
+  // AC 3, which restricts the current-head-validated post-watch transition to
+  // CI). A lease lost mid-wait on this path is not detected here; continuous
+  // exclusivity enforcement across the wait is tracked for slice b2.
   let calls = 0;
   const result = await runWatchCycle(
     { repo: "owner/repo", pr: 17 },
@@ -1186,15 +1222,11 @@ test("watcher-exclusivity post-watch re-gate blocks the transition when this run
       runHandoffImpl: copilotWatchHandoffWithHead("abc123"),
       recordWatchClaimImpl: async ({ head, waitKind }) => {
         calls += 1;
-        if (calls === 1) {
-          return { ok: true, status: "watch_claim_recorded", watch: { head, waitKind, updatedAt: new Date().toISOString() } };
-        }
-        return { ok: false, error: "ownership_lost", message: "owned by run-2" };
+        return { ok: true, status: "watch_claim_recorded", watch: { head, waitKind, updatedAt: new Date().toISOString() } };
       },
       watchCopilotReviewImpl: async (options) => ({ ok: true, status: "changed", repo: options.repo, pr: options.pr, attempts: 1, newComments: [{ id: "c1" }], newReviews: [], newIssueComments: [] }),
     },
   );
-  assert.equal(calls, 2, "expected a pre-watch and a post-watch exclusivity gate call");
-  assert.equal(result.watcherExclusivity.blocked, true);
-  assert.equal(result.watcherExclusivity.advancePhaseAuthorized, false, "a lease lost during the wait must never authorize a phase advance");
+  assert.equal(calls, 1, "only the pre-watch exclusivity gate call happens on the copilot path");
+  assert.equal(result.watcherExclusivity ?? null, null, "no post-watch transition marker is produced on the copilot path");
 });
