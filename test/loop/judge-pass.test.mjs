@@ -274,6 +274,10 @@ test("judgePassCli --out is deduped to one remediation per acted cluster; --ledg
     ),
   );
   const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  // Index 3 defers with a followUpDraft, which drives applyFollowUpIssues; stub
+  // the issue deps (as the sibling tests do) so it never hits the real GitHub
+  // API — unstubbed it fails closed in CI and would file a real issue locally.
+  const { createIssue, commentIssue, listIssues } = stubIssueDeps();
   const payload = await judgePassCli(
     {
       repo: "mfittko/dev-loops",
@@ -285,7 +289,7 @@ test("judgePassCli --out is deduped to one remediation per acted cluster; --ledg
       out: "./act.json",
       ledgerOut: "./enriched.json",
     },
-    { repoRoot: tmpDir },
+    { repoRoot: tmpDir, createIssue, commentIssue, listIssues },
   );
   assert.equal(payload.ok, true);
   // Raw tally: both duplicate-cluster members (0, 1 via projection) plus the
