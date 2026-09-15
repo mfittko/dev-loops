@@ -11,11 +11,15 @@
  * Modeled on ./cache-telemetry-evidence.mjs: LOCAL/harness-observable
  * metrics (prompt/context bytes, turns, tool calls, local tool time) are
  * always measured — a genuine local zero is a real zero. PROVIDER-owned
- * metrics (input/output/cache-read tokens, child wall time) are
- * honesty-gated: a harness that cannot observe a dimension must report it
- * `{ available:false, reason }`, NEVER a coerced/estimated zero, and — the
- * core fidelity guard — must never be handed a numeric value for a
- * dimension its profile marks unavailable (fail closed).
+ * metrics (input/output/cache-read tokens) are honesty-gated: a harness
+ * that cannot observe a dimension must report it `{ available:false,
+ * reason }`, NEVER a coerced/estimated zero, and — the core fidelity guard
+ * — must never be handed a numeric value for a dimension its profile marks
+ * unavailable (fail closed). Child wall time (childWallTimeMs) is a
+ * wall-clock measurement, not provider telemetry: any harness may report
+ * it, regardless of its provider-token profile — measured when a finite
+ * non-negative value is supplied, else `{ available:false, reason }`,
+ * never a coerced zero.
  *
  * Pure and offline: no GitHub, no clock, no file reads except the writer.
  */
