@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { main } from "../../scripts/github/emit-coordinator-phase-blocked.mjs";
 import { ROLE_BUDGETS } from "@dev-loops/core/loop/role-budget-bound";
+import { sanitizeScopeSegment } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { consolidateFanin } from "@dev-loops/core/loop/gate-fanin";
+
+const BLOCKER_FILENAME = "coordinator-phase--blocked.json";
 
 const HEAD_SHA = "d".repeat(40);
 const RUN = "run-1";
@@ -237,8 +241,79 @@ test("mkdirFn/writeFileFn injection: writes exactly one artifact without touchin
   assert.equal(mkdirCalls.length, 1);
   assert.equal(mkdirCalls[0].dir, "/virtual/findings");
   assert.equal(writeCalls.length, 1);
-  assert.equal(writeCalls[0].filePath, path.join("/virtual/findings", "coordinator-phase.json"));
+  assert.equal(writeCalls[0].filePath, path.join("/virtual/findings", BLOCKER_FILENAME));
   const body = JSON.parse(writeCalls[0].contents);
   assert.equal(body.angle, "coordinator-phase");
   assert.equal(body.verdict, "blocked");
+});
+
+// Copilot review (thread on scripts/github/emit-coordinator-phase-blocked.mjs,
+// issue 2157): "coordinator_phase" is a SYNTHETIC identity with no legitimate
+// same-angle reviewer, so its blocked artifact must not share the reviewer
+// per-angle filename namespace — a reviewer angle literally named (or
+// sanitizing to) "coordinator-phase" must never collide with it in either
+// direction.
+test("the reserved blocker filename is outside sanitizeScopeSegment's output image for any angle name", () => {
+  const candidates = [
+    "coordinator-phase",
+    "coordinator_phase",
+    "coordinator phase",
+    "Coordinator Phase",
+    "coordinator--phase",
+    "COORDINATOR-PHASE",
+    "coordinator/phase",
+    "!!coordinator__phase!!",
+    "a", "b", "coverage", "security", "gate-evidence",
+  ];
+  for (const angle of candidates) {
+    const base = sanitizeScopeSegment(angle) || "angle";
+    assert.notEqual(`${base}.json`, BLOCKER_FILENAME, `angle ${JSON.stringify(angle)} must not sanitize into the reserved blocker filename`);
+    // sanitizeScopeSegment collapses every run of non-alphanumeric chars to a
+    // SINGLE hyphen — its output can never contain "--", which is exactly
+    // what makes the reserved filename (which embeds "--") disjoint from
+    // every possible angle's sanitized output, not just the sampled ones.
+    assert.equal(base.includes("--"), false, `sanitizeScopeSegment(${JSON.stringify(angle)}) must never contain "--"`);
+  }
+});
+
+test("a pre-existing non-blocker file at the reserved path fails closed (exit 2) and is not overwritten", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const findingsDir = path.join(tmpDir, "findings");
+    await mkdir(findingsDir, { recursive: true });
+    const filePath = path.join(findingsDir, BLOCKER_FILENAME);
+    const foreignBody = { angle: "coordinator-phase", verdict: "clean", findings: [], headSha: HEAD_SHA };
+    await writeFile(filePath, JSON.stringify(foreignBody), "utf8");
+    const argv = baseArgs({ "--model-turns": String(BUDGET.maxModelTurns + 1), "--findings-dir": findingsDir });
+    const code = await main(argv);
+    assert.equal(code, 2);
+    // Untouched: the foreign artifact must survive the refused write.
+    const stillThere = JSON.parse(await readFile(filePath, "utf8"));
+    assert.deepEqual(stillThere, foreignBody);
+  });
+});
+
+test("a same-head retry overwrites this producer's own prior blocker at the reserved path", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const findingsDir = path.join(tmpDir, "findings");
+    const firstArgv = baseArgs({ "--model-turns": String(BUDGET.maxModelTurns + 1), "--findings-dir": findingsDir });
+    assert.equal(await main(firstArgv), 0);
+    const secondArgv = baseArgs({ "--tool-calls": String(BUDGET.maxToolCalls + 1), "--findings-dir": findingsDir });
+    assert.equal(await main(secondArgv), 0);
+    const entries = await readdir(findingsDir);
+    assert.deepEqual(entries, [BLOCKER_FILENAME]);
+    const artifacts = await readArtifacts(findingsDir);
+    assert.equal(artifacts.length, 1);
+    assert.deepEqual(artifacts[0].exceededDimensions, ["toolCalls"]);
+  });
+});
+
+test("consolidateFanin still treats the written coordinator-phase blocker as blocking", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const findingsDir = path.join(tmpDir, "findings");
+    const argv = baseArgs({ "--model-turns": String(BUDGET.maxModelTurns + 1), "--findings-dir": findingsDir });
+    assert.equal(await main(argv), 0);
+    const angleResults = await readArtifacts(findingsDir);
+    const result = consolidateFanin({ angleResults });
+    assert.equal(result.verdict, "blocked");
+  });
 });
