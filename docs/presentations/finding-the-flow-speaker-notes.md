@@ -9,7 +9,7 @@ Audience: company-wide; no programming knowledge assumed. Timing: 48 minutes of 
 | Section | Slides | Time |
 | --- | --- | --- |
 | Foundations: steps, state, guards | 1–6 | 6:45 |
-| Customer graph: four traces and recovery | 7–13 | 11:00 |
+| Worked traces, spec changes and recovery | 7–13 | 11:00 |
 | Bounded freedom and parallel checks | 14–16 | 5:00 |
 | dev-loops: routing, job cards and nested reviews | 17–22 | 9:30 |
 | Actual UI sub-loop used for this deck | 23–25 | 4:30 |
@@ -18,7 +18,7 @@ Audience: company-wide; no programming knowledge assumed. Timing: 48 minutes of 
 | Limits, evaluation, close | 32–34 | 3:15 |
 | Questions, with sources on screen | 35 | 10:00 |
 
-Walk the highlighted arrows rather than reading every label. The customer diagrams show the same process over four states. Their values and retry budgets are illustrative, not production logs. The public router's five fields are a useful vocabulary; actual decisions also depend on validated evidence and settings.
+Walk the highlighted arrows rather than reading every label. The customer diagrams show three states of the same process; slide 11 applies invalidation to an authorized acceptance-criteria change in dev-loops. Values and retry budgets are illustrative, not production logs. The public router's five fields are a useful vocabulary; actual decisions also depend on validated evidence and settings.
 
 ## Pitch
 
@@ -120,13 +120,17 @@ Distinguish a known external wait from unknown process state. We may know a chec
 
 Keep recovery bounded and avoid inventing a fixed retry count as a universal recommendation. AWS's retry guidance supports budgets, backoff, and care around overloaded services.
 
-## 11. A changed draft loses its clearance — 1:00
+## 11. The criteria changed. The clearance didn't carry. — 1:00
 
-A was checked and approved. The agent improves the wording and saves B. The work might be better, but the stored approval still names A.
+Acceptance criteria (ACs) say what the work must satisfy. Move from the customer example to an actual dev-loops rule: during development, a person authorizes a material change from criteria v1 to v2 and records that decision on the canonical tracker artifact.
 
-The guard compares the current work version to the approved version. It finds a mismatch and sends B through validation and approval. This is invalidation: earlier evidence is retained as history, but it no longer permits advancement of changed work.
+The developer agent may propose a change or escalate an ambiguity. It cannot authorize a rewrite, weakening, or reinterpretation of those criteria to make its implementation pass. Human authorization permits the spec change; it does not supply fresh implementation clearance.
 
-This diagram isolates the edit boundary instead of drawing every route at once. A production process can sometimes reuse evidence for demonstrably unaffected parts, but that needs an explicit policy and coverage model. Our illustration conservatively rechecks the whole draft.
+The new authoritative criteria produce a new `specDigest`, independently of the code's `headSha` and `contentDigest`. The code can be unchanged while every approval, disposition, fixer authorization, carry-forward decision, and gate result derived from the old spec becomes stale. Keep the implementation and re-evaluate it against v2; do not imply the code is discarded or that rewriting it is automatically necessary.
+
+This differs from an implementation-only change under the same spec. There, affected or unproven criterion approvals become stale; unaffected approvals can carry only with positive proof that their spec text and covered implementation surface are unchanged. Formatting-only edits preserving the normalized authoritative spec are not material AC changes.
+
+Source: [Immutable spec-authority contract](https://github.com/mfittko/dev-loops/blob/9b5f988e/skills/docs/spec-authority-contract.md), “Human-only spec change,” and `resolveCriterionInvalidation` in `packages/core/src/loop/spec-authority.mjs` (lines 512–553). A changed spec digest returns the full prior-approved set as stale and no carried criteria. This is a named enforcement seam and authority contract, not a claim that arbitrary tool credentials are physically incapable of editing tracker text. <!-- secret-scan:allow source link pinned to inspected repository commit -->
 
 ## 12. No evidence. No permission to advance. — 1:30
 
@@ -248,7 +252,7 @@ After required evidence is complete, the mandatory judge phase produces scope/re
 Sources: `packages/core/src/loop/gate-fanin.mjs`, `checkFanoutAngleCoverage`, `checkResolvedAngleEvidence`, the sanctioned fan-in CLI, and the gate-review sub-loop contract. The diagram summarizes the intended composition; these checks do not make reviewer judgments infallible.
 
 
-## 23. We just used a UI sub-loop — 2:00
+## 23. How this presentation was built — 2:00
 
 This example is this presentation during preparation. The implementing agent authored the HTML and ran the shared browser suite. The parent agent inspected screenshots and returned visual findings. No separately dispatched designer or visual-reviewer agent is being claimed.
 
