@@ -960,6 +960,139 @@ test("runWatchCycle attaches a blocked no_active_owner watchExclusivity verdict 
   assert.equal(result.watchExclusivity.secondObserverAuthorized, false);
 });
 
+test("runWatchCycle attaches ci watchExclusivity boundary.waitKind on a waiting_for_ci boundary", async () => {
+  const result = await runWatchCycle(
+    { repo: "owner/repo", pr: 17 },
+    {
+      runHandoffImpl: async () => ({
+        ok: true,
+        action: "stop",
+        state: "waiting_for_ci",
+        allowedTransitions: ["ready_to_rerequest_review"],
+        nextAction: "Wait for CI checks to complete or become available",
+        snapshot: { repo: "owner/repo", pr: 17, ciStatus: "pending", currentHeadSha: "sha-fresh" },
+        loopDisposition: "pending",
+        terminal: false,
+        runnerOwnership: {
+          activeRun: { runId: "run-1", claimedAt: new Date(Date.now() - 5000).toISOString(), updatedAt: new Date(Date.now() - 1000).toISOString() },
+        },
+      }),
+      watchCiStatusImpl: async () => ({ ok: true, status: "timeout", settled: false, ciStatus: "pending", failedChecks: [], headSha: "sha-fresh", attempts: 3 }),
+    },
+  );
+
+  assert.ok(result.watchExclusivity);
+  assert.equal(result.watchExclusivity.status, "owned_waiting");
+  assert.equal(result.watchExclusivity.owner?.waitKind ?? result.watchExclusivity.boundary?.waitKind, "ci");
+});
+
+test("runWatchCycle skips watchExclusivity when the handoff snapshot omits currentHeadSha", async () => {
+  const result = await runWatchCycle(
+    { repo: "owner/repo", pr: 17 },
+    {
+      runHandoffImpl: async () => ({
+        ok: true,
+        action: "watch",
+        state: "waiting_for_copilot_review",
+        allowedTransitions: ["unresolved_feedback_present"],
+        nextAction: "Wait for Copilot review via scripts/github/probe-copilot-review.mjs",
+        snapshot: { repo: "owner/repo", pr: 17 },
+        loopDisposition: "pending",
+        terminal: false,
+        watchArgs: { repo: "owner/repo", pr: 17, pollIntervalMs: 60_000, timeoutMs: 1_800_000 },
+        runnerOwnership: {
+          activeRun: { runId: "run-1", claimedAt: new Date(Date.now() - 5000).toISOString(), updatedAt: new Date(Date.now() - 1000).toISOString() },
+        },
+      }),
+      watchCopilotReviewImpl: async (options) => ({
+        ok: true,
+        status: "timeout",
+        repo: options.repo,
+        pr: options.pr,
+        attempts: 30,
+        newComments: [],
+        newReviews: [],
+        newIssueComments: [],
+      }),
+    },
+  );
+
+  assert.equal(result.watchExclusivity, undefined);
+});
+
+test("runWatchCycle falls back to activeRun.claimedAt when updatedAt is absent", async () => {
+  const result = await runWatchCycle(
+    { repo: "owner/repo", pr: 17 },
+    {
+      runHandoffImpl: async () => ({
+        ok: true,
+        action: "watch",
+        state: "waiting_for_copilot_review",
+        allowedTransitions: ["unresolved_feedback_present"],
+        nextAction: "Wait for Copilot review via scripts/github/probe-copilot-review.mjs",
+        snapshot: { repo: "owner/repo", pr: 17, currentHeadSha: "sha-fresh" },
+        loopDisposition: "pending",
+        terminal: false,
+        watchArgs: { repo: "owner/repo", pr: 17, pollIntervalMs: 60_000, timeoutMs: 1_800_000 },
+        runnerOwnership: {
+          activeRun: { runId: "run-1", claimedAt: new Date(Date.now() - 1000).toISOString() },
+        },
+      }),
+      watchCopilotReviewImpl: async (options) => ({
+        ok: true,
+        status: "timeout",
+        repo: options.repo,
+        pr: options.pr,
+        attempts: 30,
+        newComments: [],
+        newReviews: [],
+        newIssueComments: [],
+      }),
+    },
+  );
+
+  assert.ok(result.watchExclusivity);
+  assert.equal(result.watchExclusivity.status, "owned_waiting");
+});
+
+test("runWatchCycle fails closed to a blocked malformed_owner_evidence verdict instead of throwing on an unparseable lease timestamp", async () => {
+  const result = await runWatchCycle(
+    { repo: "owner/repo", pr: 17 },
+    {
+      runHandoffImpl: async () => ({
+        ok: true,
+        action: "watch",
+        state: "waiting_for_copilot_review",
+        allowedTransitions: ["unresolved_feedback_present"],
+        nextAction: "Wait for Copilot review via scripts/github/probe-copilot-review.mjs",
+        snapshot: { repo: "owner/repo", pr: 17, currentHeadSha: "sha-fresh" },
+        loopDisposition: "pending",
+        terminal: false,
+        watchArgs: { repo: "owner/repo", pr: 17, pollIntervalMs: 60_000, timeoutMs: 1_800_000 },
+        runnerOwnership: {
+          activeRun: { runId: "run-1", updatedAt: "not-a-date" },
+        },
+      }),
+      watchCopilotReviewImpl: async (options) => ({
+        ok: true,
+        status: "timeout",
+        repo: options.repo,
+        pr: options.pr,
+        attempts: 30,
+        newComments: [],
+        newReviews: [],
+        newIssueComments: [],
+      }),
+    },
+  );
+
+  assert.ok(result.watchExclusivity);
+  assert.equal(result.watchExclusivity.verdict, "blocked");
+  assert.equal(result.watchExclusivity.reason, "malformed_owner_evidence");
+  assert.equal(result.watchExclusivity.secondObserverAuthorized, false);
+  assert.equal(result.watchExclusivity.advancePhaseAuthorized, false);
+});
+
 test("run-watch-cycle parses --concise/--summary, --jq, --silent flags", () => {
   assert.equal(parseWatchCycleCliArgs(["--repo", "o/r", "--pr", "1", "--concise"]).concise, true);
   assert.equal(parseWatchCycleCliArgs(["--repo", "o/r", "--pr", "1", "--summary"]).concise, true);

@@ -189,6 +189,56 @@ describe("resolveWatchOwnership blocked branches", () => {
     assert.equal(verdict.reason, "stale_or_malformed_transition");
     assert.equal(verdict.secondObserverAuthorized, false);
   });
+
+  test("transition wait-kind mismatch with a fresh matching owner blocks stale_or_malformed_transition", () => {
+    const copilotReviewBoundary = { target: "owner/repo#17", head: "abc123", waitKind: "copilot_review" };
+    const verdict = resolveWatchOwnership({
+      boundary: copilotReviewBoundary,
+      evidence: { owner: FRESH_OWNER, transition: { head: "abc123", waitKind: "ci", status: "changed" } },
+      now: NOW,
+      staleAfterMs: STALE_AFTER_MS,
+    });
+    assert.equal(verdict.verdict, "blocked");
+    assert.equal(verdict.reason, "stale_or_malformed_transition");
+    assert.equal(verdict.secondObserverAuthorized, false);
+  });
+});
+
+describe("resolveWatchOwnership fail-closed type guards", () => {
+  test("rejects a non-object evidence (string)", () => {
+    assert.throws(
+      () => resolveWatchOwnership({ boundary: BOUNDARY, evidence: "nope", now: NOW, staleAfterMs: STALE_AFTER_MS }),
+      TypeError,
+    );
+  });
+
+  test("rejects a non-object evidence (number)", () => {
+    assert.throws(
+      () => resolveWatchOwnership({ boundary: BOUNDARY, evidence: 42, now: NOW, staleAfterMs: STALE_AFTER_MS }),
+      TypeError,
+    );
+  });
+
+  test("rejects a non-object, non-null evidence.owner", () => {
+    assert.throws(
+      () => resolveWatchOwnership({ boundary: BOUNDARY, evidence: { owner: "run-1" }, now: NOW, staleAfterMs: STALE_AFTER_MS }),
+      /evidence\.owner must be null or an object/,
+    );
+  });
+
+  test("rejects a non-object, non-null evidence.transition", () => {
+    assert.throws(
+      () => resolveWatchOwnership(withEvidence(FRESH_OWNER, "changed")),
+      /evidence\.transition must be null or an object/,
+    );
+  });
+
+  test("rejects an empty transition.head", () => {
+    assert.throws(
+      () => resolveWatchOwnership(withEvidence(FRESH_OWNER, { head: "", waitKind: "copilot_review", status: "changed" })),
+      /evidence\.transition\.head/,
+    );
+  });
 });
 
 describe("resolveWatchOwnership invariant: never a second observer", () => {

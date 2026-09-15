@@ -155,12 +155,28 @@ function buildWatchExclusivity({ handoff, options, waitKind, watchStatus, env })
   const transition = typeof watchStatus === "string" && watchStatus.trim().length > 0
     ? { head, waitKind, status: watchStatus }
     : null;
-  return resolveWatchOwnership({
-    boundary: { target: `${options.repo}#${options.pr}`, head, waitKind },
-    evidence: { owner, transition },
-    now: Date.now(),
-    staleAfterMs: resolveStaleRunnerMaxAgeMs({}, env),
-  });
+  const boundary = { target: `${options.repo}#${options.pr}`, head, waitKind };
+  try {
+    return resolveWatchOwnership({
+      boundary,
+      evidence: { owner, transition },
+      now: Date.now(),
+      staleAfterMs: resolveStaleRunnerMaxAgeMs({}, env),
+    });
+  } catch {
+    // Malformed lease evidence (e.g. a present-but-unparseable updatedAt
+    // timestamp) fails closed to blocked, never crashes the cycle.
+    return Object.freeze({
+      ok: false,
+      verdict: "blocked",
+      reason: "malformed_owner_evidence",
+      boundary,
+      secondObserverAuthorized: false,
+      advancePhaseAuthorized: false,
+      probeAuthorized: false,
+      waitTimeoutPolicy: EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY,
+    });
+  }
 }
 function determineWatchTimeout(defaultTimeoutMs) {
   return enforceExternalHealthyWaitTimeout({
