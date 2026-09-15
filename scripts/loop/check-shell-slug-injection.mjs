@@ -31,9 +31,12 @@
 import fs from "node:fs";
 import path from "node:path";
 
-// Last identifier segment naming a remote-derived / repo-slug value. `repoSlug`,
+// An identifier segment naming a remote-derived / repo-slug value. `repoSlug`,
 // `managedSlug`, `slug`, `remoteUrl`, `originUrl` all match; `prNumber`,
-// `SCRIPT`, `verb` do not. Candidacy only — a value proven clean is exempted below.
+// `SCRIPT`, `verb` do not. `slugValuePathsOf` tests EVERY segment of every
+// identifier-path in an interpolation against this, so an inline transform
+// (`${slug.trim()}`, `${remoteUrl.split(':')[1]}`) is still caught. Candidacy
+// only — a value proven clean is exempted below.
 const SLUG_TOKEN_RE = /(?:slug|remoteurl|remoteoriginurl|originurl)$/iu;
 
 // A shell-exec marker inside the literal itself: `bash -lc`, `sh -c`, or a bare
@@ -108,6 +111,9 @@ export function extractTemplateLiterals(text) {
 // normalizeGitHubRepoSlug(...) assignment target) — keyed on the whole path, not just
 // its last segment, so an unrelated value sharing a last segment (e.g. `evil.repoSlug`
 // next to a guarded `safe.repoSlug`) is never wrongly exempted.
+// ponytail: file-scoped, not flow/scope-scoped — a `slug` guarded in one function
+// exempts a same-named `slug` in another function of the same file. Closing that needs
+// scope analysis (the no-taint-framework non-goal); it only ever under-detects.
 function guardedTokens(text) {
   const tokens = new Set();
   for (const m of text.matchAll(GUARD_CALL_RE)) tokens.add(m[1]);
@@ -135,6 +141,8 @@ export function computeShellSlugInjection(files) {
       const shellShaped =
         SHELL_LITERAL_RE.test(raw) || COMMAND_NAME_CTX_RE.test(before) || SINK_CTX_RE.test(before);
       if (!shellShaped) continue;
+      // ponytail: `[^}]*` stops at the first `}`, so a slug after an inner `}` within one
+      // interpolation is missed (a contrived command shape); it only ever under-detects.
       for (const interp of raw.matchAll(/\$\{([^}]*)\}/gu)) {
         const slugPaths = slugValuePathsOf(interp[1]);
         if (slugPaths.length === 0) continue;
