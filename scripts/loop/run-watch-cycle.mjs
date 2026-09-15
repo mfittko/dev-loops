@@ -368,7 +368,13 @@ async function gateWatcherExclusivity(
 function watchResultToTransitionStatus(waitKind, watchResult) {
   const status = watchResult?.status;
   if (waitKind === "ci") {
-    if (watchResult?.settled === true) return "completed";
+    if (watchResult?.settled === true) {
+      // settled must be corroborated by a terminal status (success/failure);
+      // a malformed { settled:true, status:"pending" } observation must NOT
+      // authorize a completed transition (fail-closed: no transition, not a
+      // silent idle fallback).
+      return status === "success" || status === "failure" ? "completed" : null;
+    }
     if (status === "changed") return "changed";
     if (status === "timeout") return "timeout";
     if (status === "pending" || status === "stuck") return "idle";
@@ -407,6 +413,28 @@ function resolveWatchTransitionVerdict({ gate, waitKind, watchResult, nowMs, sta
     advancePhaseAuthorized: verdict.advancePhaseAuthorized === true,
     verdict,
   };
+}
+// A blocking watch can run long enough that this run's lease is taken over or
+// lost mid-wait; the pre-watch `gate` snapshot alone would then authorize a
+// phase advance on stale ownership evidence. Re-validate ownership for the
+// same (waitKind, head) boundary via the existing gateExclusivity helper
+// (which calls recordWatchClaimImpl, fail-closed if this run no longer owns
+// the boundary) before resolving the transition verdict, so a takeover/lease
+// loss during the wait always blocks the advance.
+async function resolvePostWatchTransition({ waitKind, watchResult, gate, gateExclusivityImpl, nowMs, staleAfterMs }) {
+  if (!gate?.engaged || !gate.ok || !gate.owner) return null;
+  const transitionStatus = watchResultToTransitionStatus(waitKind, watchResult);
+  if (transitionStatus === null) return null;
+  const postGate = await gateExclusivityImpl(waitKind, gate.owner.head);
+  if (!postGate.ok) {
+    return {
+      transitionStatus,
+      head: gate.owner.head,
+      advancePhaseAuthorized: false,
+      verdict: { ok: false, reason: postGate.reason ?? "post_watch_ownership_lost" },
+    };
+  }
+  return resolveWatchTransitionVerdict({ gate: postGate, waitKind, watchResult, nowMs, staleAfterMs });
 }
 // A blocked exclusivity gate never starts a watcher and never advances the
 // phase. The coordinator stays in a healthy wait on the existing owner's
@@ -501,15 +529,16 @@ export async function runWatchCycle(
     result.ciWatchArgs = ciWatchArgs;
     result.ciWatch = ciWatch;
     result.watchStatus = ciWatch.status;
-    const ciTransition = resolveWatchTransitionVerdict({
+    const ciTransition = await resolvePostWatchTransition({
       gate: ciGate,
       waitKind: "ci",
       watchResult: ciWatch,
+      gateExclusivityImpl: gateExclusivity,
       nowMs,
       staleAfterMs: exclusivityStaleAfterMs,
     });
     if (ciTransition !== null) {
-      result.watcherExclusivity = { blocked: false, waitKind: "ci", target: ciGate.target, ...ciTransition };
+      result.watcherExclusivity = { blocked: ciTransition.verdict?.ok === false, waitKind: "ci", target: ciGate.target, ...ciTransition };
     }
     // success/failure/changed all need authoritative re-detection (follow-up);
     // a quiet timeout stays a healthy pending wait.
@@ -590,15 +619,16 @@ export async function runWatchCycle(
   result.watchArgs = watchOptions;
   result.watchStatus = watch.status;
   result.watch = watch;
-  const copilotTransition = resolveWatchTransitionVerdict({
+  const copilotTransition = await resolvePostWatchTransition({
     gate: copilotGate,
     waitKind: "copilot_review",
     watchResult: watch,
+    gateExclusivityImpl: gateExclusivity,
     nowMs,
     staleAfterMs: exclusivityStaleAfterMs,
   });
   if (copilotTransition !== null) {
-    result.watcherExclusivity = { blocked: false, waitKind: "copilot_review", target: copilotGate.target, ...copilotTransition };
+    result.watcherExclusivity = { blocked: copilotTransition.verdict?.ok === false, waitKind: "copilot_review", target: copilotGate.target, ...copilotTransition };
   }
   result.cycleDisposition = watch.status === "changed" ? "needs_followup" : "pending";
   result.terminal = false;

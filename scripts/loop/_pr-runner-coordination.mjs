@@ -181,7 +181,11 @@ function normalizeWatch(raw) {
   if (!raw || typeof raw !== "object") return null;
   const head = typeof raw.head === "string" && raw.head.trim().length > 0 ? raw.head.trim() : null;
   const waitKind = WATCH_KINDS.includes(raw.waitKind) ? raw.waitKind : null;
-  const updatedAt = typeof raw.updatedAt === "string" && raw.updatedAt.trim().length > 0 ? raw.updatedAt.trim() : null;
+  const rawUpdatedAt = typeof raw.updatedAt === "string" && raw.updatedAt.trim().length > 0 ? raw.updatedAt.trim() : null;
+  // resolveWatchOwnership requires a Date.parse-able owner.updatedAt (see
+  // validateOwner in watcher-exclusivity.mjs); an unparseable timestamp here
+  // fails closed like every other partial/malformed watch field.
+  const updatedAt = rawUpdatedAt !== null && !Number.isNaN(Date.parse(rawUpdatedAt)) ? rawUpdatedAt : null;
   if (head === null || waitKind === null || updatedAt === null) return null;
   return { head, waitKind, updatedAt };
 }

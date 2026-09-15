@@ -1095,6 +1095,7 @@ test("watcher-exclusivity blocks phase advance when the watcher-reported head di
   assert.equal(result.watcherExclusivity.transitionStatus, "completed");
   assert.equal(result.watcherExclusivity.head, "def456");
   assert.equal(result.watcherExclusivity.advancePhaseAuthorized, false, "a head divergence re-baselines instead of advancing");
+  assert.equal(result.watcherExclusivity.blocked, true, "a blocked resolver verdict must surface as blocked:true on the transition marker");
 });
 
 test("watcher-exclusivity CI settled FAILURE also maps to the resolver's completed transition", async () => {
@@ -1119,4 +1120,81 @@ test("watcher-exclusivity CI settled FAILURE also maps to the resolver's complet
   assert.equal(result.watchStatus, "failure");
   assert.equal(result.watcherExclusivity.transitionStatus, "completed");
   assert.equal(result.watcherExclusivity.advancePhaseAuthorized, true);
+});
+
+test("watcher-exclusivity CI settled:true with a non-terminal status never authorizes a completed transition (fail-closed)", async () => {
+  const result = await runWatchCycle(
+    { repo: "owner/repo", pr: 17 },
+    {
+      env: RUN_ID_ENV,
+      runHandoffImpl: async () => ({
+        ok: true,
+        action: "stop",
+        state: "waiting_for_ci",
+        allowedTransitions: [],
+        nextAction: "Wait for CI",
+        snapshot: { repo: "owner/repo", pr: 17, currentHeadSha: "abc123" },
+        loopDisposition: "pending",
+        terminal: false,
+      }),
+      recordWatchClaimImpl: async ({ head, waitKind }) => ({ ok: true, status: "watch_claim_recorded", watch: { head, waitKind, updatedAt: new Date().toISOString() } }),
+      // Malformed observation: settled:true but a non-terminal status.
+      watchCiStatusImpl: async () => ({ ok: true, status: "pending", settled: true, ciStatus: "pending", failedChecks: [], headSha: "abc123", attempts: 3 }),
+    },
+  );
+  assert.equal(result.watchStatus, "pending");
+  assert.equal(result.watcherExclusivity ?? null, null, "no completed transition marker for a malformed settled:true/status:pending observation");
+});
+
+test("watcher-exclusivity post-watch re-gate blocks the transition when this run's lease is lost during the wait (CI)", async () => {
+  let calls = 0;
+  const result = await runWatchCycle(
+    { repo: "owner/repo", pr: 17 },
+    {
+      env: RUN_ID_ENV,
+      runHandoffImpl: async () => ({
+        ok: true,
+        action: "stop",
+        state: "waiting_for_ci",
+        allowedTransitions: [],
+        nextAction: "Wait for CI",
+        snapshot: { repo: "owner/repo", pr: 17, currentHeadSha: "abc123" },
+        loopDisposition: "pending",
+        terminal: false,
+      }),
+      recordWatchClaimImpl: async ({ head, waitKind }) => {
+        calls += 1;
+        if (calls === 1) {
+          return { ok: true, status: "watch_claim_recorded", watch: { head, waitKind, updatedAt: new Date().toISOString() } };
+        }
+        return { ok: false, error: "ownership_lost", message: "owned by run-2" };
+      },
+      watchCiStatusImpl: async () => ({ ok: true, status: "success", settled: true, ciStatus: "success", failedChecks: [], headSha: "abc123", attempts: 3 }),
+    },
+  );
+  assert.equal(calls, 2, "expected a pre-watch and a post-watch exclusivity gate call");
+  assert.equal(result.watcherExclusivity.blocked, true);
+  assert.equal(result.watcherExclusivity.advancePhaseAuthorized, false, "a lease lost during the wait must never authorize a phase advance");
+});
+
+test("watcher-exclusivity post-watch re-gate blocks the transition when this run's lease is lost during the wait (copilot review)", async () => {
+  let calls = 0;
+  const result = await runWatchCycle(
+    { repo: "owner/repo", pr: 17 },
+    {
+      env: RUN_ID_ENV,
+      runHandoffImpl: copilotWatchHandoffWithHead("abc123"),
+      recordWatchClaimImpl: async ({ head, waitKind }) => {
+        calls += 1;
+        if (calls === 1) {
+          return { ok: true, status: "watch_claim_recorded", watch: { head, waitKind, updatedAt: new Date().toISOString() } };
+        }
+        return { ok: false, error: "ownership_lost", message: "owned by run-2" };
+      },
+      watchCopilotReviewImpl: async (options) => ({ ok: true, status: "changed", repo: options.repo, pr: options.pr, attempts: 1, newComments: [{ id: "c1" }], newReviews: [], newIssueComments: [] }),
+    },
+  );
+  assert.equal(calls, 2, "expected a pre-watch and a post-watch exclusivity gate call");
+  assert.equal(result.watcherExclusivity.blocked, true);
+  assert.equal(result.watcherExclusivity.advancePhaseAuthorized, false, "a lease lost during the wait must never authorize a phase advance");
 });

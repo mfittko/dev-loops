@@ -11,6 +11,7 @@ import {
   summarizeLoopInterpretation,
   isCopilotRoundCapReached,
   toSharedRequestStatus,
+  buildSnapshotFromPrFacts,
 } from "../src/loop/copilot-loop-state.mjs";
 
 // ---------------------------------------------------------------------------
@@ -32,6 +33,7 @@ test("normalizeSnapshot returns safe defaults for an empty object", () => {
     prDraft: false,
     prMerged: false,
     prClosed: false,
+    currentHeadSha: null,
     copilotReviewRequestStatus: "none",
     copilotReviewPresent: false,
     copilotReviewOnCurrentHead: false,
@@ -1560,4 +1562,24 @@ test("interpretLoopState converges exactly as before when copilotBodyFeedbackUnr
   const summary = summarizeLoopInterpretation(result);
   assert.equal(summary.loopDisposition, DISPOSITION.CLEAN_CONVERGED);
   assert.equal(summary.terminal, true);
+});
+
+// ---------------------------------------------------------------------------
+// buildSnapshotFromPrFacts: currentHeadSha threading (issue 2157 fix 1)
+// ---------------------------------------------------------------------------
+
+test("buildSnapshotFromPrFacts threads prData.headRefOid into snapshot.currentHeadSha", () => {
+  const snapshot = buildSnapshotFromPrFacts({
+    prData: { headRefOid: "abc123", number: 17, state: "OPEN", isDraft: false },
+    prNumber: 17,
+  });
+  assert.equal(snapshot.currentHeadSha, "abc123");
+});
+
+test("buildSnapshotFromPrFacts yields currentHeadSha null when headRefOid is missing or blank", () => {
+  const missing = buildSnapshotFromPrFacts({ prData: { number: 17, state: "OPEN" }, prNumber: 17 });
+  assert.equal(missing.currentHeadSha, null);
+
+  const blank = buildSnapshotFromPrFacts({ prData: { headRefOid: "   ", number: 17, state: "OPEN" }, prNumber: 17 });
+  assert.equal(blank.currentHeadSha, null);
 });

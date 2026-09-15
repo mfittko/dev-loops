@@ -969,6 +969,32 @@ test("recordWatchClaim rejects a missing head and an invalid waitKind", async ()
   }
 });
 
+test("a persisted watch with an unparseable updatedAt normalizes to null (fail-closed, issue 2157 fix 3)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+  try {
+    const filePath = defaultRunnerCoordinationFilePathForTarget({ repo: "owner/repo", pr: 17 }, tempDir);
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, JSON.stringify({
+      schemaVersion: 2,
+      target: { repo: "owner/repo", pr: 17 },
+      activeRun: {
+        runId: "run-1",
+        claimedAt: "2026-06-05T08:00:00.000Z",
+        updatedAt: "2026-06-05T08:05:00.000Z",
+        watch: { head: "abc123", waitKind: "copilot_review", updatedAt: "not-a-date" },
+      },
+      previousRun: null,
+      history: [],
+      exitSignals: [],
+    }));
+    const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
+    assert.equal(loaded.state.activeRun.runId, "run-1", "the rest of activeRun stays intact");
+    assert.equal(loaded.state.activeRun.watch ?? null, null, "an unparseable watch.updatedAt drops the whole watch, not just the bad field");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("recordWatchClaim requires a non-empty run id", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
   try {

@@ -206,6 +206,9 @@ export function buildSnapshotFromPrFacts({
   // that never threads an explicit ciStatus (e.g. gate-coordination detection)
   // still never treats it as a blocking CI failure.
   const rollupDerivation = deriveLoopCiStatusFromRollup(prData?.statusCheckRollup);
+  const currentHeadSha = typeof prData?.headRefOid === "string" && prData.headRefOid.trim().length > 0
+    ? prData.headRefOid.trim()
+    : null;
 
   return normalizeSnapshot({
     prExists: true,
@@ -213,6 +216,7 @@ export function buildSnapshotFromPrFacts({
     prDraft: Boolean(prData?.isDraft),
     prMerged,
     prClosed,
+    currentHeadSha,
     copilotReviewRequestStatus,
     copilotReviewPresent,
     copilotReviewOnCurrentHead,
@@ -271,6 +275,9 @@ export function normalizeSnapshot(raw) {
     prDraft: Boolean(raw.prDraft),
     prMerged: Boolean(raw.prMerged),
     prClosed: Boolean(raw.prClosed),
+    currentHeadSha: typeof raw.currentHeadSha === "string" && raw.currentHeadSha.trim().length > 0
+      ? raw.currentHeadSha.trim()
+      : null,
     copilotReviewRequestStatus: VALID_REVIEW_REQUEST_STATUSES.has(raw.copilotReviewRequestStatus)
       ? raw.copilotReviewRequestStatus
       : "none",
