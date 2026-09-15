@@ -10,6 +10,8 @@
  * array/objects.
  */
 
+import { resolveFindingFile } from "./gate-fanin.mjs";
+
 // NUL separates the three key components so a value inside one component
 // (e.g. a recommendation that happens to contain a colon or digits matching
 // another component) can never be misread as spanning a boundary.
@@ -26,7 +28,7 @@ function isNonEmptyString(value) {
  * ANY of the three components is UNKEYABLE and returns null — it is never
  * grouped with another finding, keyable or not.
  *
- * @param {{file?: unknown, line?: unknown, recommendation?: unknown}} finding
+ * @param {{file?: unknown, files?: unknown, line?: unknown, recommendation?: unknown}} finding
  * @param {{headSha?: unknown}} [options] — the round's reviewed head; a
  *   finding never carries its own head, so this is always caller-supplied.
  * @returns {string|null}
@@ -34,15 +36,15 @@ function isNonEmptyString(value) {
 export function computeRootCauseKey(finding, { headSha } = {}) {
   if (!finding || typeof finding !== "object") return null;
   if (!isNonEmptyString(headSha)) return null;
-  const file = finding.file;
+  const file = resolveFindingFile(finding);
   if (!isNonEmptyString(file)) return null;
   const line = finding.line;
-  if (!Number.isFinite(line)) return null;
+  if (!Number.isInteger(line) || line < 1) return null;
   const recommendation = finding.recommendation;
   if (!isNonEmptyString(recommendation)) return null;
 
   const normalizedRecommendation = recommendation.trim().toLowerCase().replace(/\s+/g, " ");
-  return [headSha.trim(), `${file.trim()}:${line}`, normalizedRecommendation].join(ROOT_CAUSE_KEY_SEPARATOR);
+  return [headSha.trim(), `${file}:${line}`, normalizedRecommendation].join(ROOT_CAUSE_KEY_SEPARATOR);
 }
 
 /**
@@ -129,15 +131,17 @@ export function projectClusterDisposition(enrichedFindings, clusters) {
     if (!cluster || !Array.isArray(cluster.memberIndices) || !Number.isInteger(cluster.representativeIndex)) {
       throw new TypeError("projectClusterDisposition requires every cluster to carry memberIndices[] and a representativeIndex");
     }
-    if (cluster.memberIndices.length <= 1) continue; // singleton: nothing to project.
     if (cluster.representativeIndex < 0 || cluster.representativeIndex >= result.length) {
       throw new RangeError(`projectClusterDisposition: cluster representativeIndex ${cluster.representativeIndex} is out of range (${result.length} findings)`);
     }
-    const representative = result[cluster.representativeIndex];
     for (const memberIndex of cluster.memberIndices) {
       if (!Number.isInteger(memberIndex) || memberIndex < 0 || memberIndex >= result.length) {
         throw new RangeError(`projectClusterDisposition: cluster memberIndices references out-of-range index ${memberIndex} (${result.length} findings)`);
       }
+    }
+    if (cluster.memberIndices.length <= 1) continue; // singleton: shape validated above, nothing to project.
+    const representative = result[cluster.representativeIndex];
+    for (const memberIndex of cluster.memberIndices) {
       const target = result[memberIndex];
       target.judgeDisposition = representative.judgeDisposition;
       target.judgeRationale = representative.judgeRationale;

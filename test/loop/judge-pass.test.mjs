@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -335,6 +336,64 @@ test("judgePassCli fails closed when a clean ledger verdict is paired with a non
     ),
     /clean verdict is invalid with a nonzero act count/,
   );
+});
+
+// FIX D (#2156): the clean+act invariant must fail BEFORE any durable side
+// effect — neither the approvals record nor a follow-up GitHub issue may be
+// written/created for a round that is about to be rejected. Combines a clean
+// ledger + nonzero act count (as above) with BOTH side-effect seams engaged
+// (--approvals-out via --spec-file, and a deferred finding that would
+// otherwise drive applyFollowUpIssues) to prove the ordering, not just the
+// throw.
+test("judgePassCli: rejecting a clean+act round creates no follow-up issue and writes no approvals record (#2156)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-clean-act-no-side-effects-"));
+  const { specDigest, contentDigest, criterionIds } = await specDigests();
+  const findings = [finding(), finding({ severity: "low", summary: "would-be follow-up", disposition: "deferred" })];
+  // A "clean" overallVerdict paired with an act-disposed finding (index 0) —
+  // the invalid combination. Index 1 defers with a followUpDraft, which
+  // would (pre-fix) reach applyFollowUpIssues before the assertion threw.
+  await writeFile(path.join(tmpDir, "ledger.json"), JSON.stringify({ overallVerdict: "clean", findings }));
+  await writeFile(
+    path.join(tmpDir, "judge-verdict.json"),
+    JSON.stringify(verdict({
+      dispositions: [
+        { index: 0, disposition: "act", rationale: "actually needs fixing now" },
+        { index: 1, disposition: "defer", rationale: "follow-up", followUpDraft: { title: "t", body: "b" } },
+      ],
+    })),
+  );
+  await writeFile(path.join(tmpDir, "spec.json"), JSON.stringify(SPEC_FIXTURE));
+  await writeFile(
+    path.join(tmpDir, "spec-authority.json"),
+    JSON.stringify({ specDigest, headSha: HEAD, contentDigest, decisions: [
+      { index: 0, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" },
+      { index: 1, outcome: "valid_compliant", specDigest, headSha: HEAD, contentDigest, checkedCriteria: criterionIds, rationale: "ok", authorizedRemediation: "x" },
+    ] }),
+  );
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  const { createIssue, commentIssue, listIssues, createCalls, commentCalls } = stubIssueDeps();
+  const approvalsPath = path.join(tmpDir, "approvals.json");
+  await assert.rejects(
+    judgePassCli(
+      {
+        repo: "mfittko/dev-loops",
+        pr: "2000",
+        gate: "pre_approval_gate",
+        headSha: HEAD,
+        findingsFile: "./ledger.json",
+        judgeVerdict: "./judge-verdict.json",
+        specFile: "./spec.json",
+        contentDigest,
+        specAuthorityVerdict: "./spec-authority.json",
+        approvalsOut: "./approvals.json",
+      },
+      { repoRoot: tmpDir, createIssue, commentIssue, listIssues },
+    ),
+    /clean verdict is invalid with a nonzero act count/,
+  );
+  assert.equal(createCalls.length, 0, "no follow-up issue created before the round is rejected");
+  assert.equal(commentCalls.length, 0, "no follow-up issue comment posted before the round is rejected");
+  assert.equal(existsSync(approvalsPath), false, "no approvals record written before the round is rejected");
 });
 
 // #1807: a `defer` disposition creates (or appends to) the PR's ONE tracked

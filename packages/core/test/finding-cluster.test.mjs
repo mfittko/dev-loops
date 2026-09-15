@@ -74,12 +74,34 @@ describe("computeRootCauseKey", () => {
   });
 
   test("the NUL separator prevents a component-boundary collision a plain-string join would allow", () => {
-    // Without a NUL separator, "file:1" + "x" and "file" + "1x" could collide
-    // under a naive delimiter-free or colon-joined concatenation.
-    const a = computeRootCauseKey({ file: "file", line: 1, recommendation: "x" }, { headSha: HEAD });
-    const b = computeRootCauseKey({ file: "file", line: 11, recommendation: "" }, { headSha: HEAD }); // unkeyable (empty recommendation)
-    assert.equal(b, null);
-    assert.ok(a !== null);
+    // Without a NUL separator, "file:1" + "23abc" (location + recommendation)
+    // and "file:12" + "3abc" would concatenate to the SAME string
+    // ("file:123abc") under a naive delimiter-free join. The NUL separator
+    // keeps the component boundary intact, so these two genuinely distinct
+    // findings must key DIFFERENTLY.
+    const a = computeRootCauseKey({ file: "file", line: 1, recommendation: "23abc" }, { headSha: HEAD });
+    const b = computeRootCauseKey({ file: "file", line: 12, recommendation: "3abc" }, { headSha: HEAD });
+    assert.ok(a !== null && b !== null);
+    assert.notEqual(a, b);
+    // String.fromCharCode(0), not a literal escape, so the NUL separator
+    // never lands in this file's own source bytes (git would misclassify
+    // the file as binary — see 40631c49).
+    const NUL = String.fromCharCode(0);
+    assert.ok(a.includes(NUL));
+    assert.ok(b.includes(NUL));
+  });
+
+  test("FIX A regression: the real ledger shape (files: [path]) resolves to the same key as the singular file shape", () => {
+    const singular = computeRootCauseKey({ file: "a.mjs", line: 3, recommendation: "guard null" }, { headSha: HEAD });
+    const arrayShaped = computeRootCauseKey({ files: ["a.mjs"], line: 3, recommendation: "guard null" }, { headSha: HEAD });
+    assert.ok(singular !== null);
+    assert.equal(arrayShaped, singular);
+  });
+
+  test("FIX B: a non-positive-integer line (0, negative, fractional) is unkeyable", () => {
+    assert.equal(computeRootCauseKey(locatedFinding({ line: 0 }), { headSha: HEAD }), null);
+    assert.equal(computeRootCauseKey(locatedFinding({ line: -1 }), { headSha: HEAD }), null);
+    assert.equal(computeRootCauseKey(locatedFinding({ line: 1.5 }), { headSha: HEAD }), null);
   });
 });
 
@@ -172,6 +194,20 @@ describe("clusterFindings", () => {
     assert.equal(JSON.stringify(findings), before);
   });
 
+  test("FIX A regression: the real ledger shape (files: [path], no singular file) groups duplicates into one cluster", () => {
+    // toFindingsLogShape's canonical output shape — `files` is an array, not
+    // a singular `file`. Without FIX A this was all unkeyable singletons.
+    const findings = [
+      { angle: "correctness", severity: "high", summary: "a", files: ["src/thing.mjs"], line: 42, recommendation: "guard the null case" },
+      { angle: "security", severity: "high", summary: "b", files: ["src/thing.mjs"], line: 42, recommendation: "guard the null case" },
+    ];
+    const { ok, clusters } = clusterFindings(findings, { headSha: HEAD });
+    assert.equal(ok, true);
+    assert.equal(clusters.length, 1);
+    assert.deepEqual(clusters[0].memberIndices, [0, 1]);
+    assert.equal(clusters[0].keyable, true);
+  });
+
   test("complete provenance survives clustering: angle, criterion, location, and the round head are all still recoverable per member", () => {
     const findings = [
       locatedFinding({ angle: "correctness", judgeCriterion: "AC-1" }),
@@ -254,6 +290,20 @@ describe("projectClusterDisposition", () => {
       RangeError,
     );
     assert.throws(() => projectClusterDisposition([{}], [{ memberIndices: "nope", representativeIndex: 0 }]), TypeError);
+  });
+
+  test("FIX C: a SINGLETON cluster with an out-of-range representativeIndex still throws (no fast-path skip)", () => {
+    assert.throws(
+      () => projectClusterDisposition([{}], [{ memberIndices: [0], representativeIndex: 5 }]),
+      RangeError,
+    );
+  });
+
+  test("FIX C: a SINGLETON cluster with an out-of-range memberIndex still throws (no fast-path skip)", () => {
+    assert.throws(
+      () => projectClusterDisposition([{}], [{ memberIndices: [99], representativeIndex: 0 }]),
+      RangeError,
+    );
   });
 });
 

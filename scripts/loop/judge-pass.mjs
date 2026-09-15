@@ -800,6 +800,12 @@ export async function judgePassCli(
     result.counts = countByDisposition(result.enriched);
   }
 
+  // A "clean" ledger verdict is invalid the moment any finding was acted on.
+  // Fail closed here, BEFORE any durable side effect (the approvals record or
+  // a follow-up GitHub issue) is written, using the RAW (un-deduped) act
+  // count — any acted finding, clustered or not, prevents clean.
+  assertCleanImpliesNoAct(overallVerdict, result.counts.act);
+
   // Persist the durable approval record AFTER the act list is finalized, so a
   // round with remaining act findings approves nothing (re-entry stays honest).
   if (specAuthority && options.approvalsOut) {
@@ -839,12 +845,6 @@ export async function judgePassCli(
   // result.counts above (and the ledger below) still carry every acted
   // finding, one per reviewer report.
   const dedupedAct = dedupeActListByCluster(result.act, result.clusters, result.enriched);
-
-  // A "clean" ledger verdict is invalid the moment any finding was acted on.
-  // Fail closed here, BEFORE the ledger's overallVerdict is written, using
-  // the RAW (un-deduped) act count — any acted finding, clustered or not,
-  // prevents clean.
-  assertCleanImpliesNoAct(overallVerdict, result.counts.act);
 
   const written = new Set();
   if (options.ledgerOut) {

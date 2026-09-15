@@ -310,6 +310,45 @@ test("consolidateGateFanin under-budget output is byte-identical to the pre-spli
   );
 });
 
+// FIX E + multi-member clusterId wiring: two angles reporting the SAME root
+// cause (identical file/line/recommendation) get the SAME clusterId (the
+// representative's index), and a third, distinct finding gets its own.
+test("consolidateGateFanin: two findings sharing file/line/recommendation get the same clusterId; a distinct one gets its own", async () => {
+  const headSha = "abc1234567890abcdef000000000000000000000";
+  await withFindingsDir(
+    {
+      "dry.json": {
+        angle: "dry",
+        verdict: "findings_present",
+        headSha,
+        findings: [{ severity: "must-fix", summary: "reported by dry", file: "src/a.mjs", line: 12, recommendation: "guard the null case" }],
+      },
+      "kiss.json": {
+        angle: "kiss",
+        verdict: "findings_present",
+        headSha,
+        findings: [
+          { severity: "must-fix", summary: "reported by kiss", file: "src/a.mjs", line: 12, recommendation: "guard the null case" },
+          { severity: "must-fix", summary: "unrelated defect", file: "src/b.mjs", line: 3, recommendation: "fix the other thing" },
+        ],
+      },
+    },
+    async (dir) => {
+      const result = await consolidateGateFanin({ findingsDir: dir, headSha });
+      assert.equal(result.findings.length, 3);
+      const byAngle = Object.fromEntries(result.findings.map((f) => [`${f.angle}:${f.summary}`, f]));
+      const dry = byAngle["dry:reported by dry"];
+      const kiss = byAngle["kiss:reported by kiss"];
+      const distinct = byAngle["kiss:unrelated defect"];
+      assert.ok(dry && kiss && distinct);
+      // Same root cause -> same clusterId (the representative's index).
+      assert.equal(dry.clusterId, kiss.clusterId);
+      // A genuinely distinct finding gets its own clusterId.
+      assert.notEqual(distinct.clusterId, dry.clusterId);
+    },
+  );
+});
+
 test("consolidateGateFanin writes --out as the nested findingsJson shape", async () => {
   await withFindingsDir(
     {

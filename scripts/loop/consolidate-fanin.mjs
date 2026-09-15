@@ -1421,6 +1421,19 @@ export async function consolidateGateFanin(options) {
   }));
 
   const consolidated = consolidateFanin({ angleResults: rawArtifacts, blockCleanOnFindingSeverities });
+  // Cluster on the LOSSLESS, pre-truncation finding data — before the
+  // neutralize+truncate loop below bounds each finding's summary/
+  // recommendation/file. Two distinct remediations that merely SHARE a long
+  // prefix (or two distinct paths sharing a long common prefix) must not
+  // collide into one root-cause key just because truncation made their
+  // TAILS identical; clustering off the untruncated text avoids that
+  // over-clustering. `clusters` is positional (index-aligned to
+  // `consolidated.findings`), and that order is preserved 1:1 into
+  // `toFindingsLogShape`'s output below, so it stays valid to stamp with
+  // after truncation. When --head-sha was not given, clusterFindings fails
+  // open (each finding its own singleton), which is correct here too:
+  // nothing to key on.
+  const { clusters } = clusterFindings(consolidated.findings, { headSha: options.headSha });
   // Neutralize + bound each finding's free-text fields before they reach
   // either output shape. This is the ONE canonical pipeline seam: both the
   // flat ledger (toFindingsLogShape below) and the nested findingsJson (--out)
@@ -1446,10 +1459,9 @@ export async function consolidateGateFanin(options) {
   // Stamp each ledger finding with an additive `clusterId` (its cluster's
   // representative index) so a downstream judge pass can dedupe repeated
   // reports of the same root cause without recomputing the key itself.
-  // Additive only — every existing field above is untouched. When --head-sha
-  // was not given, clusterFindings fails open (each finding its own
-  // singleton), which is the correct behavior here too: nothing to key on.
-  for (const cluster of clusterFindings(findings, { headSha: options.headSha }).clusters) {
+  // Additive only — every existing field above is untouched. Clusters were
+  // computed above, before truncation, off the lossless finding text.
+  for (const cluster of clusters) {
     for (const memberIndex of cluster.memberIndices) {
       findings[memberIndex].clusterId = cluster.representativeIndex;
     }
