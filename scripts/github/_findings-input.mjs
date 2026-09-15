@@ -19,9 +19,9 @@ import { readFile } from "node:fs/promises";
 // the value the caller's `validate` callback receives (always the array,
 // unwrapped); `overallVerdict`/`provenance` are passed through UNVALIDATED
 // (the consumer that records either one validates it; a consumer that ignores
-// one drops it). `provenance` mirrors consolidate-fanin.mjs's own derived
-// wrapper field (a fully-carried round only) — absent on a bare-array/legacy
-// input, same as `overallVerdict`.
+// one drops it). `provenance` is whatever the wrapper object itself carries
+// under that key (a caller-supplied field, not derived here) — absent on a
+// bare-array/legacy input, same as `overallVerdict`.
 function unwrapFindingsPayload(parsed) {
   if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && Array.isArray(parsed.findings)) {
     return { findings: parsed.findings, overallVerdict: parsed.overallVerdict, provenance: parsed.provenance };
@@ -36,9 +36,10 @@ function unwrapFindingsPayload(parsed) {
  * the caller-supplied `validate` callback. Returns
  * `{ findings, overallVerdict, provenance }` so a consolidator-produced
  * wrapper object (`{ overallVerdict, findings, provenance? }`, written by
- * consolidate-fanin.mjs's `--ledger-out`) threads its computed verdict AND
- * (on a fully-carried round) its derived provenance through to the consumer
- * alongside the findings array; a bare array input leaves both undefined.
+ * consolidate-fanin.mjs's `--ledger-out`, or hand-authored by any other
+ * caller) threads its computed verdict and its own `provenance` field
+ * through to the consumer alongside the findings array; a bare array input
+ * leaves both undefined.
  *
  * @param {{ findings?: string, findingsFile?: string }} options
  * @param {{ parseError: (message: string) => Error, validate: (parsed: unknown, flagLabel: string) => unknown[] }} deps

@@ -1836,19 +1836,27 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7): the SAME
   }
 });
 
-// AC4 regression (issue 2202): a zero-findings, FULLY-CARRIED re-gate — every
-// resolved angle came from --carried-angles, zero fresh --findings-dir
-// artifacts — driven through the REAL producer chain (consolidateGateFanin's
-// own --ledger-out wrapper, then writeGateFindingsLog with NO --provenance)
-// must land a durable ledger that already carries provenance, so local
-// detect-checkpoint-evidence agrees with the posted-comment surface with no
-// manual backfill. pr-checklist is disabled here (mandatory angles always
-// re-run fresh — see angleReviewSurface's ALWAYS_INCLUDE/alwaysRerun rule —
-// so a MANDATORY angle can never be part of a fully-carried round); "dry" and
-// "docs" are plain (non-mandatory) preApproval pool angles, both carried.
-test("AC4: a fully-carried clean re-gate's REAL --ledger-out wrapper carries derived provenance, and writeGateFindingsLog + detect-checkpoint-evidence (no --skip-fanout-ledger-check) read it as satisfied with no manual backfill", async () => {
-  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fully-carried-regate-"));
-  const findingsDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fully-carried-findings-dir-"));
+// AC4 regression (issue 2202): a REAL MIXED clean re-gate — one FRESH
+// mandatory-angle artifact ("pr-checklist", which always re-runs — see
+// angleReviewSurface's ALWAYS_INCLUDE/alwaysRerun rule, a mandatory angle can
+// never be carried) plus two carried angles ("dry"/"docs") — is the shape
+// every real merge-gate re-gate actually takes: a draft_gate/pre_approval_gate
+// always configures at least one always-rerun angle, so a real clean re-gate
+// is NEVER fully-carried. Driven through the REAL producer chain
+// (consolidateGateFanin's own --ledger-out wrapper, which this mixed round
+// leaves with NO derived provenance — the fully-carried derive branch is
+// removed — then writeGateFindingsLog). Case A: a fanout_fanin write with no
+// provenance (neither explicit nor wrapper-supplied) on this mandatory-angle
+// gate now FAILS CLOSED (the write-time guard this test protects — reverting
+// it turns this assert.rejects into a silent ok:true ledger write with no
+// provenance, reproducing the omitting-conductor bug). Case B: the SAME write
+// WITH an explicit --provenance covering both the fresh and carried angles
+// succeeds, and detect-checkpoint-evidence (no --skip-fanout-ledger-check)
+// reads the on-disk ledger as satisfied — parity with the posted-comment
+// surface, with no manual backfill.
+test("AC4: a real MIXED (fresh + carried) clean re-gate's fanout_fanin ledger write fails closed with no provenance, and succeeds with explicit provenance covering both", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-mixed-regate-"));
+  const findingsDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-mixed-regate-findings-dir-"));
   try {
     await writeFile(
       path.join(repoRoot, ".devloops"),
@@ -1862,7 +1870,9 @@ test("AC4: a fully-carried clean re-gate's REAL --ledger-out wrapper carries der
         "  preApproval:",
         "    angles:",
         "      - name: pr-checklist",
-        "        enabled: false",
+        "        mandatory: true",
+        "      - name: dry",
+        "      - name: docs",
         "",
       ].join("\n"),
       "utf8",
@@ -1875,11 +1885,19 @@ test("AC4: a fully-carried clean re-gate's REAL --ledger-out wrapper carries der
         { angle: "docs", carriedFromHead: priorHeadSha, reviewer: "review-b", prevVerdict: "clean" },
       ],
     };
+    // The mandatory angle's own FRESH artifact — stamped with this round's
+    // head (GATE-EXEC-ARTIFACT-HEAD-STAMP; a carried angle is the only
+    // exemption, and a mandatory angle can never be carried).
+    await writeFile(
+      path.join(findingsDir, "pr-checklist.json"),
+      JSON.stringify({ angle: "pr-checklist", verdict: "clean", findings: [], headSha }),
+      "utf8",
+    );
     const ledgerOut = path.join(repoRoot, "consolidated-ledger.json");
 
-    // 1. Real producer: consolidate-fanin's own consolidateGateFanin, an
-    // empty --findings-dir (zero fresh artifacts) + --carried-angles/
-    // --carry-forward-plan for both carried angles.
+    // 1. Real producer: consolidate-fanin's own consolidateGateFanin, ONE
+    // fresh --findings-dir artifact (pr-checklist) + --carried-angles/
+    // --carry-forward-plan for the other two.
     const consolidateResult = await consolidateGateFanin({
       findingsDir,
       gate: "pre_approval_gate",
@@ -1892,16 +1910,28 @@ test("AC4: a fully-carried clean re-gate's REAL --ledger-out wrapper carries der
     assert.equal(consolidateResult.overallVerdict, "clean");
     const wrapper = JSON.parse(await readFile(ledgerOut, "utf8"));
     assert.equal(wrapper.overallVerdict, "clean");
-    assert.ok(wrapper.provenance, "a fully-carried round's --ledger-out wrapper must derive provenance");
-    assert.equal(wrapper.provenance.distinctReviewers, 2);
-    assert.deepEqual(
-      wrapper.provenance.perAngle.map((a) => a.angle).sort(),
-      ["docs", "dry"],
+    assert.equal(wrapper.provenance, undefined, "the fully-carried derive branch is removed: a mixed round's --ledger-out wrapper carries no derived provenance");
+
+    // 2a. Case A (the bug this guard closes): write-gate-findings-log's own
+    // writeGateFindingsLog, --execution-mode fanout_fanin, reading that SAME
+    // wrapper via --findings-file, with NO --provenance of its own — FAILS
+    // CLOSED. Reverting the write-time guard turns this into ok:true with no
+    // provenance persisted.
+    await assert.rejects(
+      () => writeGateFindingsLog({
+        repo: "owner/repo",
+        pr: 99,
+        gate: "pre_approval_gate",
+        headSha,
+        verdict: "clean",
+        findingsFile: ledgerOut,
+        executionMode: "fanout_fanin",
+      }, { repoRoot }),
+      /mandatory angle.*no provenance was supplied/,
     );
 
-    // 2. Real producer: write-gate-findings-log's own writeGateFindingsLog,
-    // reading that SAME --ledger-out wrapper via --findings-file, with NO
-    // --provenance flag of its own.
+    // 2b. Case B: the SAME write, this time WITH explicit --provenance
+    // covering the fresh mandatory angle AND both carried angles — succeeds.
     const writeResult = await writeGateFindingsLog({
       repo: "owner/repo",
       pr: 99,
@@ -1909,14 +1939,23 @@ test("AC4: a fully-carried clean re-gate's REAL --ledger-out wrapper carries der
       headSha,
       verdict: "clean",
       findingsFile: ledgerOut,
+      executionMode: "fanout_fanin",
+      provenance: JSON.stringify({
+        distinctReviewers: 3,
+        perAngle: [
+          { angle: "pr-checklist", reviewer: "review-c" },
+          { angle: "dry", reviewer: "review-a", carriedFromHead: priorHeadSha, carriedVerdict: "clean" },
+          { angle: "docs", reviewer: "review-b", carriedFromHead: priorHeadSha, carriedVerdict: "clean" },
+        ],
+      }),
     }, { repoRoot });
     assert.equal(writeResult.ok, true);
 
     // AC1/AC3: the durable, on-disk ledger (not just the in-memory result)
-    // carries provenance with no manual backfill step.
+    // carries the supplied provenance, parity with the posted verdict comment.
     const onDiskLedger = JSON.parse(await readFile(path.resolve(repoRoot, writeResult.path), "utf8"));
-    assert.ok(onDiskLedger.provenance, "the durable findings-log ledger must carry provenance on a fully-carried clean re-gate");
-    assert.equal(onDiskLedger.provenance.distinctReviewers, 2);
+    assert.ok(onDiskLedger.provenance, "the durable findings-log ledger must carry provenance on a mixed clean re-gate");
+    assert.equal(onDiskLedger.provenance.distinctReviewers, 3);
 
     // 3. detect-checkpoint-evidence's own exported fan-out/pre-merge/
     // evidence-state functions, reading that SAME on-disk ledger — no
@@ -1935,8 +1974,8 @@ test("AC4: a fully-carried clean re-gate's REAL --ledger-out wrapper carries der
     });
     assert.equal(enforcement.requireProvenance, true);
     const gate = enforcement.gates.find((g) => g.name === "pre_approval_gate");
-    assert.ok(gate.provenance, "requireFanoutProvenance must read the derived provenance straight off the durable ledger");
-    assert.equal(gate.provenance.distinctReviewers, 2);
+    assert.ok(gate.provenance, "requireFanoutProvenance must read the supplied provenance straight off the durable ledger");
+    assert.equal(gate.provenance.distinctReviewers, 3);
 
     const preMergeGateCheck = buildPreMergeGateCheck({
       currentHeadSha: headSha,

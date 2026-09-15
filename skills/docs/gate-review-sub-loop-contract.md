@@ -1530,11 +1530,20 @@ obligation on the agent — when the gate configures mandatory angles,
 gate with no mandatory angles configured is unaffected (vacuously covered
 either way). `detect-checkpoint-evidence.mjs`'s independent read-time
 enforcement (below) remains the backstop on the merge path regardless.
-`write-gate-findings-log.mjs` only runs its own write-time provenance/
-mandatory-angle check when `--provenance` is actually supplied or a
-`--findings`/`--findings-file` wrapper carries its own provenance,
-`gates.requireFanoutProvenance` (which would make that flag required) defaults
-to `false`. `detect-checkpoint-evidence.mjs` enforces mandatory-angle coverage
+`write-gate-findings-log.mjs` validates the recorded provenance's angle
+coverage whenever `--provenance` is actually supplied or a `--findings`/
+`--findings-file` wrapper carries its own provenance; `gates.requireFanoutProvenance`
+(which would make that flag required for angle coverage) defaults to `false`.
+Independent of that opt-in, `write-gate-findings-log.mjs` also carries its OWN
+write-time fail-closed guard, unconditional for a gate that configures a
+mandatory angle: an `--execution-mode fanout_fanin` write (mirroring
+`upsert-checkpoint-verdict.mjs`'s own flag; the CLI's default is
+`inline_single_agent`, which stays exempt) with NEITHER an explicit
+`--provenance` NOR a wrapper-supplied one THROWS and writes no ledger, naming
+the gate and its configured mandatory angle(s) — a real merge-gate round is
+always mixed (fresh mandatory + carried angles), so this is the guard that
+actually makes the omitting-conductor failure mode impossible, not merely a
+best-effort opt-in. `detect-checkpoint-evidence.mjs` enforces mandatory-angle coverage
 from the ledger's recorded provenance BY DEFAULT for any `fanout_fanin`
 verdict where the gate configures mandatory angles — a ledger with absent or
 invalid provenance fails closed there regardless of `requireFanoutProvenance`.

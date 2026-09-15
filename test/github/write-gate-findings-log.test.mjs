@@ -74,6 +74,7 @@ test("parseWriteGateFindingsLogCliArgs parses all required args", () => {
     findings: '[{"severity":"must-fix","angle":"scope","summary":"bad scope"}]',
     findingsFile: undefined,
     fullLabel: false,
+    executionMode: "inline_single_agent",
     tmpRoot: "tmp",
     specAuthority: undefined,
   });
@@ -1699,6 +1700,88 @@ test("writeGateFindingsLog prefers an explicit --provenance over a wrapper-suppl
       await rm(tmpDir, { recursive: true, force: true });
     }
   });
+});
+
+// --- Write-time fail-closed provenance guard (issue #2202: a fanout_fanin
+// write for a gate that configures a mandatory angle must never persist a
+// ledger with no provenance) ---
+
+test("writeGateFindingsLog fails closed on a fanout_fanin write with no provenance for a gate that configures a mandatory angle", async () => {
+  await withAngleContractRepo(async (repoRoot) => {
+    await assert.rejects(
+      () => writeGateFindingsLog({
+        repo: "owner/repo",
+        pr: 12,
+        gate: "draft_gate",
+        headSha: "abc1234567890abcdef000000000000000000001",
+        verdict: "clean",
+        findings: "[]",
+        executionMode: "fanout_fanin",
+      }, { repoRoot }),
+      /mandatory angle.*pr-description.*no provenance was supplied/s,
+    );
+  });
+});
+
+test("writeGateFindingsLog stays exempt (byte-identical) for an inline_single_agent write on a gate with mandatory angles, with no provenance", async () => {
+  await withAngleContractRepo(async (repoRoot) => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-inline-exempt-"));
+    try {
+      // executionMode omitted: defaults to inline_single_agent, exempt from
+      // the write-time provenance guard.
+      const result = await writeGateFindingsLog({
+        repo: "owner/repo",
+        pr: 12,
+        gate: "draft_gate",
+        headSha: "abc1234567890abcdef000000000000000000001",
+        verdict: "clean",
+        findings: "[]",
+        tmpRoot: tmpDir,
+      }, { repoRoot });
+      assert.equal(result.ok, true);
+      const parsed = JSON.parse(await readFile(result.path, "utf8"));
+      assert.equal(parsed.provenance, undefined);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test("writeGateFindingsLog stays unaffected on a fanout_fanin write with no provenance for a gate that configures no mandatory angle", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-findings-no-mandatory-"));
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-no-mandatory-out-"));
+  try {
+    // The shipped extension defaults always mark draft_gate's "pr-description"
+    // angle mandatory; disable it explicitly (same pattern the angle-contract
+    // fixtures above use) so this gate truly configures NO mandatory angle.
+    await writeFile(
+      path.join(repoRoot, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  draft:",
+        "    angles:",
+        "      - name: pr-description",
+        "        enabled: false",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const result = await writeGateFindingsLog({
+      repo: "owner/repo",
+      pr: 12,
+      gate: "draft_gate",
+      headSha: "abc1234567890abcdef000000000000000000002",
+      verdict: "clean",
+      findings: "[]",
+      executionMode: "fanout_fanin",
+      tmpRoot: tmpDir,
+    }, { repoRoot });
+    assert.equal(result.ok, true);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+    await rm(tmpDir, { recursive: true, force: true });
+  }
 });
 
 // --- Angle-coverage enforcement (#1196: mandatory angles + pool membership) ---
