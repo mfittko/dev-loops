@@ -71,6 +71,7 @@
     "./loop/primer-evidence": "./src/loop/primer-evidence.mjs",
     "./loop/review-dispatch-plan": "./src/loop/review-dispatch-plan.mjs",
     "./loop/reviewer-loop-state": "./src/loop/reviewer-loop-state.mjs",
+    "./loop/role-budget-bound": "./src/loop/role-budget-bound.mjs",
     "./loop/run-context": "./src/loop/run-context.mjs",
     "./loop/run-inspection": "./src/loop/run-inspection.mjs",
     "./loop/run-post-merge-actions": "./src/loop/run-post-merge-actions.mjs",
