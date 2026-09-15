@@ -7,7 +7,7 @@ import { test } from "bun:test";
 import { buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, main, sanitizeScopeSegment, splitSubUnitName } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { buildGateEmitPlanPath, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
-import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
+import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 
 const emitCliPath = path.resolve("scripts/github/emit-fanout-dispatch.mjs");
 
@@ -939,4 +939,29 @@ test("buildAngleNamingSuffix names angles and instructs self-resolution, never i
   const group = buildAngleNamingSuffix({ name: "design-simplicity", angles: ["dry", "kiss"] });
   assert.match(group, /dry, kiss/);
   assert.match(group, /one findings artifact PER ANGLE/);
+});
+
+// Issue 2155 AC row 2 (slice b): the emitted suffix also carries the bounded
+// reviewer contract — budget numbers derived from REVIEWER_UNIT_BUDGET (never
+// hard-coded), an instruction for every PROHIBITED_REVIEWER_OPERATIONS kind,
+// the assigned-angles-only scope rule, and the blocked escape hatch.
+test("buildAngleNamingSuffix carries the bounded reviewer contract: budget, prohibited probes, scope, blocked escape hatch", () => {
+  assert.equal(REVIEWER_UNIT_BUDGET.maxModelTurns, 45);
+  assert.equal(REVIEWER_UNIT_BUDGET.maxToolCalls, 50);
+  const suffix = buildAngleNamingSuffix({ name: "design-simplicity", angles: ["dry", "kiss"] });
+  assert.match(suffix, new RegExp(String(REVIEWER_UNIT_BUDGET.maxModelTurns)));
+  assert.match(suffix, new RegExp(String(REVIEWER_UNIT_BUDGET.maxToolCalls)));
+  assert.equal(PROHIBITED_REVIEWER_OPERATIONS.length, 7);
+  const expectedProhibitedPhrases = [
+    /poll PR state/,
+    /poll CI state/,
+    /poll Copilot state/,
+    /network status probes/,
+    /rerun validation/,
+    /orchestration runtime/,
+    /unassigned angles/,
+  ];
+  for (const phrase of expectedProhibitedPhrases) assert.match(suffix, phrase);
+  assert.match(suffix, /review ONLY the angle\(s\) named above/);
+  assert.match(suffix, /emit-reviewer-blocked\.mjs/);
 });
