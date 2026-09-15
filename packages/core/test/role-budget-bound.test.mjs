@@ -21,9 +21,10 @@ function baseUnit(role, overrides = {}) {
 const ROLE_CONSUMED_DIMENSIONS = {
   judge_round: ["modelTurns", "toolCalls", "inputTokens", "outputTokens"],
   fixer_pass: ["modelTurns", "toolCalls", "pushesThisGateRound"],
+  coordinator_phase: ["modelTurns", "toolCalls", "outputTokens"],
 };
 
-/** @param {"judge_round"|"fixer_pass"} role @returns {object} consumed at exactly the budget max for every dimension. */
+/** @param {"judge_round"|"fixer_pass"|"coordinator_phase"} role @returns {object} consumed at exactly the budget max for every dimension. */
 function atMaxConsumed(role) {
   const budget = ROLE_BUDGETS[role];
   if (role === "judge_round") {
@@ -31,6 +32,13 @@ function atMaxConsumed(role) {
       modelTurns: budget.maxModelTurns,
       toolCalls: budget.maxToolCalls,
       inputTokens: budget.maxInputTokens,
+      outputTokens: budget.maxOutputTokens,
+    };
+  }
+  if (role === "coordinator_phase") {
+    return {
+      modelTurns: budget.maxModelTurns,
+      toolCalls: budget.maxToolCalls,
       outputTokens: budget.maxOutputTokens,
     };
   }
@@ -42,8 +50,8 @@ function atMaxConsumed(role) {
 }
 
 describe("role-budget-bound — explicit-enumeration conformance", () => {
-  test("ROLE_VALUES matches the two roles", () => {
-    assert.deepEqual(ROLE_VALUES, ["judge_round", "fixer_pass"]);
+  test("ROLE_VALUES matches the three roles", () => {
+    assert.deepEqual(ROLE_VALUES, ["judge_round", "fixer_pass", "coordinator_phase"]);
     assert.equal(Object.isFrozen(ROLE_VALUES), true);
   });
 
@@ -56,10 +64,12 @@ describe("role-budget-bound — explicit-enumeration conformance", () => {
     assert.deepEqual(ROLE_BUDGETS, {
       judge_round: { maxModelTurns: 12, maxToolCalls: 15, maxInputTokens: 100000, maxOutputTokens: 10000 },
       fixer_pass: { maxModelTurns: 45, maxToolCalls: 50, maxPushesPerGateRound: 1 },
+      coordinator_phase: { maxModelTurns: 40, maxToolCalls: 50, maxOutputTokens: 20000 },
     });
     assert.equal(Object.isFrozen(ROLE_BUDGETS), true);
     assert.equal(Object.isFrozen(ROLE_BUDGETS.judge_round), true);
     assert.equal(Object.isFrozen(ROLE_BUDGETS.fixer_pass), true);
+    assert.equal(Object.isFrozen(ROLE_BUDGETS.coordinator_phase), true);
   });
 
   test("ROLE_VALUES/HARNESS_VALUES/ROLE_BUDGETS reject a mutation attempt (frozen, does not take effect)", () => {
@@ -75,7 +85,7 @@ describe("role-budget-bound — explicit-enumeration conformance", () => {
       "use strict";
       ROLE_BUDGETS.judge_round.maxModelTurns = 999;
     }, TypeError);
-    assert.deepEqual(ROLE_VALUES, ["judge_round", "fixer_pass"]);
+    assert.deepEqual(ROLE_VALUES, ["judge_round", "fixer_pass", "coordinator_phase"]);
     assert.deepEqual(HARNESS_VALUES, ["pi", "claude", "codex"]);
     assert.equal(ROLE_BUDGETS.judge_round.maxModelTurns, 12);
   });
@@ -270,6 +280,34 @@ describe("enforceRoleBudget — blocked at first-disallowed, one dimension over"
     assert.equal(result.ok, false);
     assert.equal(result.reason, "fixer_pass_budget_exhausted");
     assert.deepEqual(result.exceededDimensions, ["pushesThisGateRound"]);
+  });
+
+  test("coordinator_phase: one over on modelTurns blocks naming modelTurns", () => {
+    const unit = baseUnit("coordinator_phase", { gateContext: { headSha: "sha-c1" } });
+    const consumed = { ...atMaxConsumed("coordinator_phase"), modelTurns: ROLE_BUDGETS.coordinator_phase.maxModelTurns + 1 };
+    const result = enforceRoleBudget({ unit, consumed });
+    assert.equal(result.ok, false);
+    assert.equal(result.verdict, "blocked");
+    assert.equal(result.reason, "coordinator_phase_budget_exhausted");
+    assert.deepEqual(result.exceededDimensions, ["modelTurns"]);
+  });
+
+  test("coordinator_phase: one over on toolCalls blocks naming toolCalls", () => {
+    const unit = baseUnit("coordinator_phase", { gateContext: { headSha: "sha-c2" } });
+    const consumed = { ...atMaxConsumed("coordinator_phase"), toolCalls: ROLE_BUDGETS.coordinator_phase.maxToolCalls + 1 };
+    const result = enforceRoleBudget({ unit, consumed });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "coordinator_phase_budget_exhausted");
+    assert.deepEqual(result.exceededDimensions, ["toolCalls"]);
+  });
+
+  test("coordinator_phase: one over on outputTokens blocks naming outputTokens", () => {
+    const unit = baseUnit("coordinator_phase", { gateContext: { headSha: "sha-c3" } });
+    const consumed = { ...atMaxConsumed("coordinator_phase"), outputTokens: ROLE_BUDGETS.coordinator_phase.maxOutputTokens + 1 };
+    const result = enforceRoleBudget({ unit, consumed });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "coordinator_phase_budget_exhausted");
+    assert.deepEqual(result.exceededDimensions, ["outputTokens"]);
   });
 
   test("multiple dimensions over at once are all named in exceededDimensions (judge_round)", () => {

@@ -270,6 +270,45 @@ test("request-copilot-review suppresses same-head clean re-request by default", 
   assert.equal(calls.length, 3);
 });
 
+test("request-copilot-review does NOT suppress when Copilot's current-head body still signals changes (issue 2228 deadlock)", async () => {
+  // Regression: a submitted COMMENTED review on the current head whose BODY
+  // still carries the "🟡 changes recommended" marker, with all inline threads
+  // resolved. gate-coordination reads that body as unresolved feedback, so a
+  // fresh Copilot review is needed to clear it. Before the fix, request-copilot-review
+  // ignored the body signal, computed sameHeadCleanConverged=true, and suppressed
+  // the re-request — deadlocking the two helpers. The body finding must now flow
+  // into the convergence snapshot so suppression lifts and the re-request proceeds.
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: '{"isDraft":false,"state":"OPEN","number":17,"headRefOid":"newsha","reviews":[{"id":"r-1","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"newsha"},"body":"### 🟡 Changes recommended\\n\\nCritical gaps remain."}],"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n',
+      },
+      {
+        assertArgs: ["api", "graphql"],
+        stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n',
+      },
+      {
+        stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
+      },
+      {
+        stdout: '{"users":[{"login":"copilot-pull-request-reviewer[bot]"}],"teams":[]}\n',
+      },
+      {
+        stdout: '{"headRefOid":"newsha","reviews":[{"id":"r-1","state":"COMMENTED","author":{"login":"copilot-pull-request-reviewer[bot]"},"commit":{"oid":"newsha"},"body":"### 🟡 Changes recommended"}]}\n',
+      },
+    ]);
+
+  // The stale advisory body lifts suppression: it must NOT report same-head clean.
+  assert.notEqual(result.status, "suppressed_same_head_clean");
+  assert.equal(result.ok, true);
+  // It proceeds to actually re-request Copilot (the "given path"), consuming a round.
+  assert.ok(calls.some((c) => c.args.includes("reviewers[]=copilot-pull-request-reviewer[bot]")));
+});
+
 
 test("request-copilot-review treats pending review as already-requested even when a submitted current-head review exists", async () => {
   const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [

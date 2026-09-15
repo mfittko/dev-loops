@@ -214,6 +214,7 @@ function parseReviewsPayload(text, { draftGateResetAtMs = null } = {}) {
     hasCopilotSubmittedReviewOnCurrentHead: reviewSummary.hasSubmittedReviewOnCurrentHead,
     latestSubmittedReviewOnCurrentHeadAt: reviewSummary.latestSubmittedReviewOnCurrentHeadAt ?? null,
     completedCopilotReviewRounds: reviewSummary.completedCopilotReviewRounds,
+    hasBodyFindingOnCurrentHead: reviewSummary.hasBodyFindingOnCurrentHead,
   };
 }
 async function fetchRequestedReviewers({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
@@ -385,6 +386,7 @@ async function fetchCopilotReviewState(options, runtime) {
     hasSubmittedReviewOnCurrentHead: reviews.hasCopilotSubmittedReviewOnCurrentHead,
     latestSubmittedReviewOnCurrentHeadAt: reviews.latestSubmittedReviewOnCurrentHeadAt ?? null,
     completedCopilotReviewRounds: reviews.completedCopilotReviewRounds,
+    hasBodyFindingOnCurrentHead: reviews.hasBodyFindingOnCurrentHead ?? false,
   };
 }
 async function detectSameHeadCleanConvergence(options, runtime, priorReviewState = {}, refinementConfig = {}) {
@@ -395,6 +397,7 @@ async function detectSameHeadCleanConvergence(options, runtime, priorReviewState
     hasPendingReviewOnCurrentHead = false,
     hasSubmittedReviewOnCurrentHead = false,
     latestSubmittedReviewOnCurrentHeadAt = null,
+    hasBodyFindingOnCurrentHead = false,
   } = priorReviewState;
   if (typeof options.sameHeadCleanConverged === "boolean") {
     return options.sameHeadCleanConverged;
@@ -426,6 +429,7 @@ async function detectSameHeadCleanConvergence(options, runtime, priorReviewState
       unresolvedThreadCount: parsedThreads.summary.unresolvedThreads,
       actionableThreadCount: parsedThreads.summary.actionableThreads,
       copilotReviewRoundCount: priorReviewState.completedCopilotReviewRounds ?? 0,
+      copilotBodyFeedbackUnresolved: hasBodyFindingOnCurrentHead,
     });
     const interpretation = interpretLoopState(snapshot, refinementConfig);
     return interpretation.sameHeadCleanConverged;
@@ -445,6 +449,7 @@ async function detectRoundCapAutoRerequestEligibility(options, runtime, priorRev
     hasPendingReviewOnCurrentHead = false,
     hasSubmittedReviewOnCurrentHead = false,
     latestSubmittedReviewOnCurrentHeadAt = null,
+    hasBodyFindingOnCurrentHead = false,
   } = priorReviewState;
   if (prData === null) {
     return { eligible: false, interpretation: null };
@@ -473,6 +478,7 @@ async function detectRoundCapAutoRerequestEligibility(options, runtime, priorRev
       unresolvedThreadCount: parsedThreads.summary.unresolvedThreads,
       actionableThreadCount: parsedThreads.summary.actionableThreads,
       copilotReviewRoundCount: priorReviewState.completedCopilotReviewRounds ?? 0,
+      copilotBodyFeedbackUnresolved: hasBodyFindingOnCurrentHead,
     });
     const interpretation = interpretLoopState(snapshot, refinementConfig);
     return {
