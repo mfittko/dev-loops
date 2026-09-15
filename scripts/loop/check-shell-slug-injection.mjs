@@ -15,9 +15,10 @@
  *     interpolation has a segment matching SLUG_TOKEN_RE (so a transform like
  *     `slug.trim()` or `remoteUrl.split(':')[1]` still counts, keyed on the dotted
  *     path through that segment, e.g. `slug`, `remoteUrl`), and
- *  2. it is shell-command-shaped (contains a `bash -lc` marker, or is assigned
- *     to / passed as a `*command`/`*cmd` value, or is a direct argument to an
- *     exec/spawn/runCommand sink), and
+ *  2. it is shell-command-shaped (a `bash -lc` marker, a `*command`/`*cmd`
+ *     binding, a direct `exec`/`execSync` argument, an object-form
+ *     `runCommand({command})`, or a `spawn`/`spawnSync`/`execFile`/`execFileSync`
+ *     call carrying `shell: true`; a plain argv spawn is NOT a sink), and
  *  3. that full dotted path is NOT proven clean in the same file — no
  *     `isCleanRepoSlug(<that same full path>)` guard and no
  *     `normalizeGitHubRepoSlug(...)` assignment target with that full path.
@@ -61,8 +62,10 @@ const SINK_CTX_RE = /\b(?:exec|execSync)\s*\(\s*$|\brunCommand\s*\(\s*\{\s*comma
 const SPAWN_ARGV_SINK_CTX_RE = /\b(?:spawn|spawnSync|execFile|execFileSync)\s*\(\s*$/u;
 const SHELL_TRUE_RE = /\bshell\s*:\s*true\b/u;
 // ponytail: fixed 200-char lookahead, not a matched-paren scan to the statement end — a
-// `shell: true` option placed further away in an unusually long call is missed. It only ever
-// under-detects, never flags a safe argv-only spawn call.
+// `shell: true` option placed further away in an unusually long call is missed. Also, this arm
+// treats only the COMMAND (first) argument as the shell sink; a slug reached only through the
+// args array under `shell: true` (`spawn('run-gate', [`--repo=${slug}`], { shell: true })`) is
+// not caught. Both only ever under-detect, never flag a safe argv-only spawn call.
 const SHELL_OPTION_WINDOW = 200;
 
 // A value proven clean in the file: passed to the charset validator, or bound
@@ -101,6 +104,10 @@ function slugValuePathsOf(expr) {
  * literal early. ponytail: nested template literals inside an interpolation are
  * out of scope (command builders do not nest); a lone backtick in a `${}` would
  * end the scan span, which only ever loses a finding, never invents one.
+ * ponytail: only template literals are scanned — a string-concatenation shell
+ * command (`execSync('gate --repo=' + slug)`) is not examined. It only ever
+ * under-detects; catching it needs concat-expression parsing beyond this
+ * narrow lexical check, and the reviewer lens is the complement for it.
  */
 export function extractTemplateLiterals(text) {
   const out = [];
