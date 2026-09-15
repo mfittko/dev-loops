@@ -1646,6 +1646,61 @@ test("writeGateFindingsLog rejects malformed provenance", async () => {
   }, /distinctReviewers must be a non-negative integer/);
 });
 
+// --- Wrapper-supplied provenance fallback (issue #2202: consolidate-fanin's
+// --ledger-out wrapper derives provenance on a fully-carried clean re-gate) ---
+
+test("writeGateFindingsLog fails closed on a malformed wrapper-supplied provenance (no explicit --provenance)", async () => {
+  await assert.rejects(async () => {
+    await writeGateFindingsLog({
+      repo: "a/b",
+      pr: 1,
+      gate: "draft_gate",
+      headSha: "abc1234500000000000000000000000000000000",
+      verdict: "clean",
+      findings: JSON.stringify({ findings: [], provenance: { distinctReviewers: -1, perAngle: [] } }),
+    });
+  }, /distinctReviewers must be a non-negative integer/);
+});
+
+test("writeGateFindingsLog prefers an explicit --provenance over a wrapper-supplied provenance", async () => {
+  await withAngleContractRepo(async (repoRoot) => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-wrapper-prov-"));
+    try {
+      const result = await writeGateFindingsLog({
+        repo: "owner/repo",
+        pr: 9,
+        gate: "draft_gate",
+        headSha: "abc1234567890abcdef000000000000000000000",
+        verdict: "clean",
+        findings: JSON.stringify({
+          findings: [],
+          provenance: {
+            distinctReviewers: 3,
+            perAngle: [
+              { angle: "scope", reviewer: "wrapper-a" },
+              { angle: "coverage", reviewer: "wrapper-b" },
+              { angle: "pr-description", reviewer: "wrapper-c" },
+            ],
+          },
+        }),
+        provenance: JSON.stringify({
+          distinctReviewers: 3,
+          perAngle: [
+            { angle: "scope", reviewer: "explicit-a" },
+            { angle: "coverage", reviewer: "explicit-b" },
+            { angle: "pr-description", reviewer: "explicit-c" },
+          ],
+        }),
+        tmpRoot: tmpDir,
+      }, { repoRoot });
+      const parsed = JSON.parse(await readFile(result.path, "utf8"));
+      assert.deepEqual(parsed.provenance.perAngle.map((a) => a.reviewer), ["explicit-a", "explicit-b", "explicit-c"]);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
 // --- Angle-coverage enforcement (#1196: mandatory angles + pool membership) ---
 
 test("checkProvenanceAngleCoverage rejects a missing mandatory angle (fail-closed, AC1)", async () => {

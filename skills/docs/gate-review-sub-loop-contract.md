@@ -1531,7 +1531,8 @@ gate with no mandatory angles configured is unaffected (vacuously covered
 either way). `detect-checkpoint-evidence.mjs`'s independent read-time
 enforcement (below) remains the backstop on the merge path regardless.
 `write-gate-findings-log.mjs` only runs its own write-time provenance/
-mandatory-angle check when `--provenance` is actually supplied,
+mandatory-angle check when `--provenance` is actually supplied or a
+`--findings`/`--findings-file` wrapper carries its own provenance,
 `gates.requireFanoutProvenance` (which would make that flag required) defaults
 to `false`. `detect-checkpoint-evidence.mjs` enforces mandatory-angle coverage
 from the ledger's recorded provenance BY DEFAULT for any `fanout_fanin`
