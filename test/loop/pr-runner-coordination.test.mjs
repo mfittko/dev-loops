@@ -15,6 +15,7 @@ import {
   ensureAsyncRunnerOwnership,
   loadRunnerCoordinationState,
   recordExitSignalForRunner,
+  recordWatchClaim,
   releaseAsyncRunnerOwnership,
   releaseRunClaimsOnExit,
   releaseRunnerOwnership,
@@ -891,6 +892,116 @@ test("history stays bounded across many heartbeats and keeps the newest entries"
     assert.ok(loaded.state.history.length <= RUNNER_COORDINATION_HISTORY_LIMIT);
     const newest = loaded.state.history.at(-1);
     assert.equal(newest.type, "heartbeat");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// --- recordWatchClaim (watcher-exclusivity live enforcement, issue 2157) ---
+
+test("recordWatchClaim records head+waitKind onto the active owner and refreshes updatedAt", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-1", cwd: tempDir, now: "2026-06-05T08:00:00.000Z" });
+    const claim = await recordWatchClaim({
+      repo: "owner/repo",
+      pr: 17,
+      runId: "run-1",
+      head: "abc123",
+      waitKind: "copilot_review",
+      cwd: tempDir,
+      now: "2026-06-05T08:05:00.000Z",
+    });
+    assert.equal(claim.ok, true);
+    assert.equal(claim.status, "watch_claim_recorded");
+    assert.deepEqual(claim.watch, { head: "abc123", waitKind: "copilot_review", updatedAt: "2026-06-05T08:05:00.000Z" });
+    assert.equal(claim.activeRun.updatedAt, "2026-06-05T08:05:00.000Z");
+
+    // Persisted and preserved through normalization on reload.
+    const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
+    assert.deepEqual(loaded.state.activeRun.watch, { head: "abc123", waitKind: "copilot_review", updatedAt: "2026-06-05T08:05:00.000Z" });
+    const newest = loaded.state.history[loaded.state.history.length - 1];
+    assert.equal(newest.type, "watch_claim");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("recordWatchClaim fails closed when another run owns the lease (no second observer)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-1", cwd: tempDir, now: "2026-06-05T08:00:00.000Z" });
+    const foreign = await recordWatchClaim({ repo: "owner/repo", pr: 17, runId: "run-2", head: "abc123", waitKind: "ci", cwd: tempDir });
+    assert.equal(foreign.ok, false);
+    assert.equal(foreign.error, "ownership_lost");
+    assert.equal(foreign.activeRun.runId, "run-1");
+    // The foreign run's claim was NOT written.
+    const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
+    assert.equal(loaded.state.activeRun.watch ?? null, null);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("recordWatchClaim fails closed when there is no coordination record", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+  try {
+    const missing = await recordWatchClaim({ repo: "owner/repo", pr: 17, runId: "run-1", head: "abc123", waitKind: "ci", cwd: tempDir });
+    assert.equal(missing.ok, false);
+    assert.equal(missing.error, "ownership_missing");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("recordWatchClaim rejects a missing head and an invalid waitKind", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-1", cwd: tempDir });
+    const noHead = await recordWatchClaim({ repo: "owner/repo", pr: 17, runId: "run-1", head: "  ", waitKind: "ci", cwd: tempDir });
+    assert.equal(noHead.ok, false);
+    assert.equal(noHead.error, "watch_head_required");
+    const badKind = await recordWatchClaim({ repo: "owner/repo", pr: 17, runId: "run-1", head: "abc123", waitKind: "poll", cwd: tempDir });
+    assert.equal(badKind.ok, false);
+    assert.equal(badKind.error, "watch_kind_invalid");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("a persisted watch with an unparseable updatedAt normalizes to null (fail-closed, issue 2157 fix 3)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+  try {
+    const filePath = defaultRunnerCoordinationFilePathForTarget({ repo: "owner/repo", pr: 17 }, tempDir);
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, JSON.stringify({
+      schemaVersion: 2,
+      target: { repo: "owner/repo", pr: 17 },
+      activeRun: {
+        runId: "run-1",
+        claimedAt: "2026-06-05T08:00:00.000Z",
+        updatedAt: "2026-06-05T08:05:00.000Z",
+        watch: { head: "abc123", waitKind: "copilot_review", updatedAt: "not-a-date" },
+      },
+      previousRun: null,
+      history: [],
+      exitSignals: [],
+    }));
+    const loaded = await loadRunnerCoordinationState({ repo: "owner/repo", pr: 17, cwd: tempDir });
+    assert.equal(loaded.state.activeRun.runId, "run-1", "the rest of activeRun stays intact");
+    assert.equal(loaded.state.activeRun.watch ?? null, null, "an unparseable watch.updatedAt drops the whole watch, not just the bad field");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("recordWatchClaim requires a non-empty run id", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-1", cwd: tempDir });
+    const noRun = await recordWatchClaim({ repo: "owner/repo", pr: 17, runId: "", head: "abc123", waitKind: "ci", cwd: tempDir });
+    assert.equal(noRun.ok, false);
+    assert.equal(noRun.error, "run_id_required");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

@@ -10,9 +10,11 @@ import { runHandoff } from "./copilot-pr-handoff.mjs";
 import { STATE } from "@dev-loops/core/loop/copilot-loop-state";
 import { DEFAULT_POLL_INTERVAL_MS } from "@dev-loops/core/loop/policy-constants";
 import { detectCopilotSessionActivity } from "./detect-copilot-session-activity.mjs";
-import { ensureAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
+import { ensureAsyncRunnerOwnership, recordWatchClaim as defaultRecordWatchClaim } from "./_pr-runner-coordination.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { resolveStaleRunnerMaxAgeMs } from "./_stale-runner-detection.mjs";
+import { resolveRunId } from "@dev-loops/core/loop/run-context";
+import { assertNoOverlappingObserver, resolveWatchOwnership } from "@dev-loops/core/loop/watcher-exclusivity";
 import { parseArgs } from "node:util";
 import {
   EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY,
@@ -313,6 +315,151 @@ export function parseWatchCycleCliArgs(argv) {
   }
   return options;
 }
+// Live watcher-exclusivity gate (issue 2157): BEFORE a watcher starts, prove
+// THIS run is the sole owner of the (target, head, wait-kind) boundary. With no
+// async run id the harness is single-runner by construction, so the gate
+// permits without touching the lease (`engaged:false`) — this keeps every
+// non-async watch path byte-identical to before. With a run id present, record
+// this run's watch claim (fails closed unless this run owns the PR lease) and
+// resolve the ownership verdict; a claim failure means another run owns the
+// boundary, so starting a watcher here is a prohibited second-observer op
+// (`assertNoOverlappingObserver`). A blocked verdict never authorizes a second
+// observer — the coordinator waits on the owner's evidence instead.
+async function gateWatcherExclusivity(
+  { repo, pr, head, waitKind, env, cwd },
+  { recordWatchClaimImpl = defaultRecordWatchClaim, nowMs = Date.now(), staleAfterMs } = {},
+) {
+  const runId = resolveRunId(env);
+  if (runId === null) {
+    return { engaged: false, ok: true, reason: "no_lease_single_runner" };
+  }
+  const target = `${repo}#${pr}`;
+  if (typeof head !== "string" || head.trim().length === 0) {
+    return { engaged: true, ok: false, reason: "missing_head", target, waitKind };
+  }
+  const claim = await recordWatchClaimImpl({ repo, pr, runId, head: head.trim(), waitKind, cwd });
+  if (!claim.ok) {
+    // Not the boundary owner — a watcher here would be a second observer.
+    let prohibition = null;
+    try {
+      assertNoOverlappingObserver({ kind: "start_watcher" });
+    } catch (error) {
+      prohibition = error instanceof Error ? error.message : String(error);
+    }
+    return { engaged: true, ok: false, reason: claim.error ?? "watch_claim_failed", detail: claim.message, prohibition, target, waitKind };
+  }
+  const owner = { runId, target, head: claim.watch.head, waitKind: claim.watch.waitKind, updatedAt: claim.watch.updatedAt };
+  const verdict = resolveWatchOwnership({
+    boundary: { target, head: claim.watch.head, waitKind },
+    evidence: { owner, transition: null },
+    now: nowMs,
+    staleAfterMs,
+  });
+  return { engaged: true, ok: verdict.ok, reason: verdict.ok ? verdict.status : verdict.reason, verdict, owner, target, waitKind };
+}
+// Map an observed CI watcher result to the resolver's transition status, or
+// null when the observation does not correspond to a resolver transition. A
+// settled (terminal success/failure) wait maps to `completed`; a fresh push
+// (status "changed") stays "changed"; quiet outcomes are non-advancing. Only
+// the `ci` boundary feeds a post-watch transition verdict (see
+// resolveWatchTransitionVerdict's call sites): `copilot_review` watch results
+// carry no headSha, so a current-head-validated post-watch transition there
+// would fall back to the pre-watch owned head and fabricate a validated
+// advance; `workflow_run` is gated pre-watch but its watch result carries no
+// transition. Neither is handled here.
+function watchResultToTransitionStatus(watchResult) {
+  // A watcher result is only a valid observation when ok === true. A malformed
+  // result (e.g. { ok:false, status:"success", settled:true }) must never map
+  // to a transition (fail-closed: non-advancing, not a silent success).
+  if (watchResult?.ok !== true) return null;
+  const status = watchResult?.status;
+  if (watchResult?.settled === true) {
+    // settled must be corroborated by a terminal status (success/failure);
+    // a malformed { settled:true, status:"pending" } observation must NOT
+    // authorize a completed transition (fail-closed: no transition, not a
+    // silent idle fallback).
+    return status === "success" || status === "failure" ? "completed" : null;
+  }
+  if (status === "changed") return "changed";
+  if (status === "timeout") return "timeout";
+  if (status === "pending" || status === "stuck") return "idle";
+  return null;
+}
+// After a watcher returns, resolve the phase-advance verdict from the
+// watcher-reported transition, carrying the watcher-reported head through. When
+// that head differs from the owned boundary head (a fresh push during the wait)
+// the resolver blocks — current-head validation, re-baseline instead of
+// advancing. Returns null when the gate did not engage (single-runner) or the
+// observation has no resolver transition.
+function resolveWatchTransitionVerdict({ gate, waitKind, watchResult, nowMs, staleAfterMs }) {
+  if (!gate?.engaged || !gate.ok || !gate.owner) return null;
+  const transitionStatus = watchResultToTransitionStatus(watchResult);
+  if (transitionStatus === null) return null;
+  const head = typeof watchResult?.headSha === "string" && watchResult.headSha.trim().length > 0
+    ? watchResult.headSha.trim()
+    : gate.owner.head;
+  const verdict = resolveWatchOwnership({
+    boundary: { target: gate.target, head: gate.owner.head, waitKind },
+    evidence: {
+      owner: gate.owner,
+      transition: { target: gate.target, head, waitKind, status: transitionStatus },
+    },
+    now: nowMs,
+    staleAfterMs,
+  });
+  return {
+    transitionStatus,
+    head,
+    advancePhaseAuthorized: verdict.advancePhaseAuthorized === true,
+    verdict,
+  };
+}
+// A blocking watch can run long enough that this run's lease is taken over or
+// lost mid-wait; the pre-watch `gate` snapshot alone would then authorize a
+// phase advance on stale ownership evidence. Re-validate ownership for the
+// same (waitKind, head) boundary via the existing gateExclusivity helper
+// (which calls recordWatchClaimImpl, fail-closed if this run no longer owns
+// the boundary) before resolving the transition verdict, so a takeover/lease
+// loss during the wait always blocks the advance.
+async function resolvePostWatchTransition({ waitKind, watchResult, gate, gateExclusivityImpl, nowMs, staleAfterMs }) {
+  if (!gate?.engaged || !gate.ok || !gate.owner) return null;
+  const transitionStatus = watchResultToTransitionStatus(watchResult);
+  if (transitionStatus === null) return null;
+  const postGate = await gateExclusivityImpl(waitKind, gate.owner.head);
+  if (!postGate.ok) {
+    return {
+      transitionStatus,
+      head: gate.owner.head,
+      advancePhaseAuthorized: false,
+      verdict: { ok: false, reason: postGate.reason ?? "post_watch_ownership_lost" },
+    };
+  }
+  return resolveWatchTransitionVerdict({ gate: postGate, waitKind, watchResult, nowMs, staleAfterMs });
+}
+// A blocked exclusivity gate never starts a watcher and never advances the
+// phase. The coordinator stays in a healthy wait on the existing owner's
+// evidence (the existing timeout policy governs escalation), so the cycle stays
+// pending/non-terminal with a marker explaining why no second watcher started.
+// The waiting_for_ci early-blocked path reaches this before any handoff
+// watchTimeoutPolicy is populated (that path's handoff action is "stop"), so
+// this always ensures the coordinator's healthy-wait/escalation timeout
+// policy is present on a blocked result rather than silently absent.
+function attachWatcherExclusivityBlock(result, gate) {
+  if (result.watchTimeoutPolicy === undefined) {
+    result.watchTimeoutPolicy = EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY;
+  }
+  result.watcherExclusivity = {
+    blocked: true,
+    reason: gate.reason,
+    target: gate.target,
+    waitKind: gate.waitKind,
+    ...(gate.detail ? { detail: gate.detail } : {}),
+    ...(gate.prohibition ? { prohibition: gate.prohibition } : {}),
+  };
+  result.cycleDisposition = "pending";
+  result.terminal = false;
+  return result;
+}
 export async function runWatchCycle(
   options,
   {
@@ -326,11 +473,21 @@ export async function runWatchCycle(
     fetchPrHeadBranchImpl = fetchPrHeadBranch,
     watchWorkflowRunImpl = watchWorkflowRun,
     ensureOwnershipImpl = ensureAsyncRunnerOwnership,
+    recordWatchClaimImpl = defaultRecordWatchClaim,
     detectSessionActivity = false,
   } = {},
 ) {
   const leaseCwd = resolveRepoRoot(process.cwd());
+  const nowMs = Date.now();
+  const exclusivityStaleAfterMs = resolveStaleRunnerMaxAgeMs({}, env);
+  const gateExclusivity = (waitKind, head) => gateWatcherExclusivity(
+    { repo: options.repo, pr: options.pr, head, waitKind, env, cwd: leaseCwd },
+    { recordWatchClaimImpl, nowMs, staleAfterMs: exclusivityStaleAfterMs },
+  );
   const handoff = await runHandoffImpl(options, { env, ghCommand, runChild });
+  const headSha = typeof handoff.snapshot?.currentHeadSha === "string" && handoff.snapshot.currentHeadSha.trim().length > 0
+    ? handoff.snapshot.currentHeadSha.trim()
+    : null;
   const result = {
     ok: true,
     handoffAction: handoff.action,
@@ -371,10 +528,25 @@ export async function runWatchCycle(
       pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
       timeoutMs: ciTimeoutMs,
     };
+    const ciGate = await gateExclusivity("ci", headSha);
+    if (ciGate.engaged && !ciGate.ok) {
+      return attachWatcherExclusivityBlock(result, ciGate);
+    }
     const ciWatch = await watchCiStatusImpl(ciWatchArgs, { env, ghCommand, runChild });
     result.ciWatchArgs = ciWatchArgs;
     result.ciWatch = ciWatch;
     result.watchStatus = ciWatch.status;
+    const ciTransition = await resolvePostWatchTransition({
+      gate: ciGate,
+      waitKind: "ci",
+      watchResult: ciWatch,
+      gateExclusivityImpl: gateExclusivity,
+      nowMs,
+      staleAfterMs: exclusivityStaleAfterMs,
+    });
+    if (ciTransition !== null) {
+      result.watcherExclusivity = { blocked: ciTransition.verdict?.ok === false, waitKind: "ci", target: ciGate.target, ...ciTransition };
+    }
     // success/failure/changed all need authoritative re-detection (follow-up);
     // a quiet timeout stays a healthy pending wait.
     result.cycleDisposition = ciWatch.status === "timeout" ? "pending" : "needs_followup";
@@ -419,6 +591,10 @@ export async function runWatchCycle(
       session.activity === "active"
       && Number.isInteger(session.runId)
     ) {
+      const wfGate = await gateExclusivity("workflow_run", headSha);
+      if (wfGate.engaged && !wfGate.ok) {
+        return attachWatcherExclusivityBlock(result, wfGate);
+      }
       const workflowWatchResult = await runWatchHoldingLease(
         () => watchWorkflowRunImpl(
           {
@@ -438,6 +614,10 @@ export async function runWatchCycle(
       };
     }
   }
+  const copilotGate = await gateExclusivity("copilot_review", headSha);
+  if (copilotGate.engaged && !copilotGate.ok) {
+    return attachWatcherExclusivityBlock(result, copilotGate);
+  }
   const watchOptions = {
     ...handoff.watchArgs,
     timeoutMs: persistentWatchTimeoutMs,
@@ -446,6 +626,12 @@ export async function runWatchCycle(
   result.watchArgs = watchOptions;
   result.watchStatus = watch.status;
   result.watch = watch;
+  // No post-watch transition marker for copilot_review: watchCopilotReview
+  // reports no headSha, so a current-head-validated transition here would
+  // fall back to the pre-watch owned head and fabricate a validated advance
+  // (Copilot review finding). The pre-watch exclusivity gate above is the
+  // only enforcement boundary on this path; AC 3 (current-head-validated
+  // post-watch transition) is CI-only.
   result.cycleDisposition = watch.status === "changed" ? "needs_followup" : "pending";
   result.terminal = false;
   result.contractTrace = buildWatchCycleContractTrace({
