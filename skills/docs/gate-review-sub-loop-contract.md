@@ -1362,6 +1362,25 @@ passes. This enforces the Section D honesty invariant: a harness
 whose cache reuse is not measurable must never be reported as a verified `1
 write + N reads` result.
 
+<!-- rule: GATE-EXEC-EXECUTION-RECORD -->
+`GATE-EXEC-EXECUTION-RECORD`: a compact per-execution-unit telemetry record
+(`@dev-loops/core/loop/execution-record` `buildExecutionUnitRecord`, covering
+`coordinator_phase`/`reviewer_unit`/`judge_round`/`fixer_pass`/`watch_cycle`)
+MUST be validated via `validateExecutionUnitRecord` and FAILS CLOSED —
+`enforceExecutionUnitRecord` throws — when the record is missing/malformed,
+when a provider-token dimension (input/output/cache-read tokens) is claimed
+`available:true` for a harness whose telemetry-capability profile marks it
+unavailable, or when the record's own `hasUnavailableProviderMetric`
+convenience flag contradicts the re-derived per-dimension availability. This
+is the same Section-D-style honesty invariant `GATE-EXEC-CACHE-TELEMETRY`
+enforces for cache reuse, applied to per-unit cost telemetry instead: a
+harness that cannot observe a metric must never report it as a measured
+value, only `{available:false, reason}`. `scripts/loop/run-watch-cycle.mjs`
+is the one live producer today (`buildWatchCycleExecutionRecord`, attached
+to `result.executionRecord`); this is progressive/optional telemetry, not
+yet a mandatory fan-in input — a cycle/round that records no artifact is not
+newly blocked.
+
 <!-- rule: GATE-EXEC-EMIT-PLAN-KEY -->
 `GATE-EXEC-EMIT-PLAN-KEY`: when `consolidate-fanin.mjs` is invoked with the
 optional `--emit-plan <path>` (the emitter's keyed `<gate>-<headSha>.emit-plan.json`
