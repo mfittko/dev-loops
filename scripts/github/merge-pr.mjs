@@ -10,6 +10,7 @@ import { loadDevLoopConfig, resolveEffectiveMergeAuthorizedFromLoad, resolveHuma
 import { countUnresolvedHumanChangesRequested } from "@dev-loops/core/loop/size-budget-merge-gate";
 import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { evaluateMergePreconditions, resolveCiGreenFromRollup, isValidGithubLogin } from "@dev-loops/core/loop/merge-approval";
+import { assertGithubWriteStubbedInTestMode } from "@dev-loops/core/github/test-mode-write-guard";
 import { flattenPaginatedSlurp } from "./post-gate-findings.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -181,6 +182,8 @@ export async function mergePr(options, runtime = {}) {
     detectEvidence = defaultDetectEvidence,
     loadConfig = loadDevLoopConfig,
   } = runtime;
+
+  assertGithubWriteStubbedInTestMode(runChild, "pr merge", { env });
 
   const prView = await ghJson(
     ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "mergeable,mergeStateStatus,title,headRefOid,url,statusCheckRollup"],

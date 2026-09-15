@@ -4,6 +4,7 @@ import { runChild as defaultRunChild } from "../cli/primitives.mjs";
 import { parseJsonText } from "./review-threads.mjs";
 import { parseRepoSlug } from "./repo-slug.mjs";
 import { guardCommentBodyNoIssuePrIds } from "./comment-id-guard.mjs";
+import { assertGithubWriteStubbedInTestMode } from "./test-mode-write-guard.mjs";
 
 /**
  * Core `gh issue` operations, extracted from the thin CLI wrappers under
@@ -88,6 +89,7 @@ export async function resolveCreateBody(options) {
 }
 
 export async function createIssue(options, { env = process.env, ghCommand = "gh", run = defaultRunChild } = {}) {
+  assertGithubWriteStubbedInTestMode(run, "issue create", { env });
   const body = await resolveCreateBody(options);
   if (typeof body !== "string" || body.trim().length === 0) {
     const source = options.bodyFile !== undefined ? `--body-file ${options.bodyFile}` : "--body";
@@ -182,6 +184,7 @@ export function buildStateChangeArgs(options) {
 }
 
 export async function editIssue(options, { env = process.env, ghCommand = "gh", run = defaultRunChild } = {}) {
+  assertGithubWriteStubbedInTestMode(run, "issue edit/close", { env });
   const { args, edited } = await buildEditArgs(options);
   // Skip the edit call entirely when --state is the only change requested —
   // `gh issue edit` with no field flags errors ("no changed fields").
@@ -227,6 +230,7 @@ export async function resolveCommentBody(options) {
 }
 
 export async function commentIssue(options, { env = process.env, ghCommand = "gh", run = defaultRunChild } = {}) {
+  assertGithubWriteStubbedInTestMode(run, "issue comment", { env });
   const body = await resolveCommentBody(options);
   // ISSUE/PR-ID GUARD (#1731): a generated comment body must never emit a raw
   // issue/PR id (fail-closed unless explicitly allowlisted). `allowedRefs` is

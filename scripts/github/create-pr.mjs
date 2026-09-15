@@ -13,6 +13,7 @@ import { loadDevLoopConfig, resolveBaseBranch } from "@dev-loops/core/config";
 import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { main as addQueueItemMain } from "../projects/add-queue-item.mjs";
 import { loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-board-sync";
+import { assertGithubWriteStubbedInTestMode } from "@dev-loops/core/github/test-mode-write-guard";
 import { detectLinkedIssuePr } from "./detect-linked-issue-pr.mjs";
 import { evaluateCommentDiscipline } from "../loop/check-comment-discipline.mjs";
 const USAGE = `Usage: create-pr.mjs [gh pr create args...]
@@ -339,6 +340,10 @@ export async function resolveBaseDefault(cwd, { loadConfig = loadDevLoopConfig }
 // changing what a caller/terminal sees. Only enabled for the issue-less lightweight
 // path; every other caller keeps the plain "inherit" byte-identical behavior.
 export function spawnCreatePr(ghArgs, { ghCommand = "gh", env = process.env } = {}, { captureStdout = false } = {}) {
+  // Spawn-based helper: no in-process `run` seam, so pass undefined (treated as
+  // the live executor). In test mode this fails closed unless gh is stubbed at
+  // the process boundary (writeGhStub sets DEV_LOOPS_GH_STUB).
+  assertGithubWriteStubbedInTestMode(undefined, "pr create", { env });
   return new Promise((resolve, reject) => {
     // `gh pr create` never reads stdin (body comes from --body/--body-file), so
     // the captured path ignores it rather than inheriting: inheriting a

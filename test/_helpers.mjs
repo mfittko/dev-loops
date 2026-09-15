@@ -517,6 +517,10 @@ export async function writeGhStub(tempDir, entries = [], {
   const env = {
     ...runIdFreeEnv(),
     PATH: [tempDir, process.env.PATH ?? ""].filter(Boolean).join(path.delimiter),
+    // Attest to the test-mode GitHub-write guard (issue #2216) that `gh` is
+    // stubbed at the process boundary, so a subprocess that reaches a write
+    // helper with the live in-process seam is not blocked as unstubbed.
+    DEV_LOOPS_GH_STUB: "1",
     GH_SEQUENCE_PATH: sequencePath,
     GH_STUB_MODE: matchMode,
     GH_REPEAT_LAST_ON_OVERFLOW: repeatLastOnOverflow ? "1" : "0",
