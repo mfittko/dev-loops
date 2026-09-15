@@ -968,3 +968,15 @@ test("recordWatchClaim rejects a missing head and an invalid waitKind", async ()
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test("recordWatchClaim requires a non-empty run id", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-runner-coordination-"));
+  try {
+    await claimRunnerOwnership({ repo: "owner/repo", pr: 17, runId: "run-1", cwd: tempDir });
+    const noRun = await recordWatchClaim({ repo: "owner/repo", pr: 17, runId: "", head: "abc123", waitKind: "ci", cwd: tempDir });
+    assert.equal(noRun.ok, false);
+    assert.equal(noRun.error, "run_id_required");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});

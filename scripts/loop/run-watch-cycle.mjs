@@ -360,7 +360,11 @@ async function gateWatcherExclusivity(
 // Map an observed watcher result to the resolver's transition status, or null
 // when the observation does not correspond to a resolver transition. A settled
 // (terminal success/failure) CI wait maps to `completed`; a fresh push (status
-// "changed") stays "changed"; quiet outcomes are non-advancing.
+// "changed") stays "changed"; quiet outcomes are non-advancing. Only the `ci`
+// and `copilot_review` boundaries feed a post-watch transition verdict (see
+// resolveWatchTransitionVerdict's call sites); the `workflow_run` boundary is
+// gated pre-watch but its watch result carries no transition, so it is not
+// handled here.
 function watchResultToTransitionStatus(waitKind, watchResult) {
   const status = watchResult?.status;
   if (waitKind === "ci") {
@@ -368,11 +372,6 @@ function watchResultToTransitionStatus(waitKind, watchResult) {
     if (status === "changed") return "changed";
     if (status === "timeout") return "timeout";
     if (status === "pending" || status === "stuck") return "idle";
-    return null;
-  }
-  if (waitKind === "workflow_run") {
-    if (status === "completed") return "completed";
-    if (status === "timed_out") return "timeout";
     return null;
   }
   // copilot_review

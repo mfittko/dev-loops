@@ -1008,3 +1008,115 @@ test("watcher-exclusivity gate is a no-op with no async run id (single-runner ha
   assert.equal(result.watchStatus, "idle");
   assert.equal(result.watcherExclusivity ?? null, null, "no exclusivity marker when the gate did not engage");
 });
+
+// --- watcher-exclusivity: workflow_run boundary + head-divergence + CI failure ---
+
+function sessionActiveWatchHandoff() {
+  return {
+    ok: true,
+    action: "watch",
+    state: "waiting_for_copilot_review",
+    allowedTransitions: [],
+    nextAction: "Wait for Copilot review via scripts/github/probe-copilot-review.mjs",
+    snapshot: { repo: "owner/repo", pr: 17, currentHeadSha: "abc123" },
+    loopDisposition: "pending",
+    terminal: false,
+    watchArgs: { repo: "owner/repo", pr: 17, pollIntervalMs: 60_000, timeoutMs: 1_800_000 },
+  };
+}
+
+test("watcher-exclusivity gates the workflow_run boundary: a foreign owner blocks before the workflow watch starts", async () => {
+  let workflowWatchCalled = false;
+  const result = await runWatchCycle(
+    { repo: "owner/repo", pr: 17 },
+    {
+      env: RUN_ID_ENV,
+      detectSessionActivity: true,
+      runHandoffImpl: async () => sessionActiveWatchHandoff(),
+      fetchPrHeadBranchImpl: async () => "feature-branch",
+      detectCopilotSessionActivityImpl: async () => ({ activity: "active", runId: 4242 }),
+      recordWatchClaimImpl: async ({ waitKind }) => ({ ok: false, error: "ownership_lost", message: `owned by run-2 (${waitKind})` }),
+      watchWorkflowRunImpl: async () => { workflowWatchCalled = true; return { status: "completed" }; },
+      ensureOwnershipImpl: async () => ({ ok: true, status: "owner_confirmed" }),
+      watchCopilotReviewImpl: async () => { throw new Error("copilot watch must not start after a workflow_run block"); },
+    },
+  );
+  assert.equal(workflowWatchCalled, false, "no workflow_run watcher started while another run owns the boundary");
+  assert.equal(result.watcherExclusivity.blocked, true);
+  assert.equal(result.watcherExclusivity.waitKind, "workflow_run");
+  assert.match(result.watcherExclusivity.prohibition, /prohibited under watcher exclusivity: start_watcher/);
+});
+
+test("watcher-exclusivity permits the workflow_run boundary when this run owns it", async () => {
+  let workflowWatchCalled = false;
+  const recordedKinds = [];
+  const result = await runWatchCycle(
+    { repo: "owner/repo", pr: 17 },
+    {
+      env: RUN_ID_ENV,
+      detectSessionActivity: true,
+      runHandoffImpl: async () => sessionActiveWatchHandoff(),
+      fetchPrHeadBranchImpl: async () => "feature-branch",
+      detectCopilotSessionActivityImpl: async () => ({ activity: "active", runId: 4242 }),
+      recordWatchClaimImpl: async ({ head, waitKind }) => {
+        recordedKinds.push(waitKind);
+        return { ok: true, status: "watch_claim_recorded", watch: { head, waitKind, updatedAt: new Date().toISOString() } };
+      },
+      watchWorkflowRunImpl: async () => { workflowWatchCalled = true; return { status: "completed" }; },
+      ensureOwnershipImpl: async () => ({ ok: true, status: "owner_confirmed" }),
+      watchCopilotReviewImpl: async (options) => ({ ok: true, status: "idle", repo: options.repo, pr: options.pr, attempts: 1, newComments: [], newReviews: [], newIssueComments: [] }),
+    },
+  );
+  assert.equal(workflowWatchCalled, true, "workflow_run watcher started once this run owns the boundary");
+  assert.ok(recordedKinds.includes("workflow_run"), "the workflow_run boundary was claimed before its watch");
+  assert.equal(result.watchStatus, "idle");
+});
+
+test("watcher-exclusivity blocks phase advance when the watcher-reported head diverges from the owned boundary head (re-baseline)", async () => {
+  const result = await runWatchCycle(
+    { repo: "owner/repo", pr: 17 },
+    {
+      env: RUN_ID_ENV,
+      runHandoffImpl: async () => ({
+        ok: true,
+        action: "stop",
+        state: "waiting_for_ci",
+        allowedTransitions: [],
+        nextAction: "Wait for CI",
+        snapshot: { repo: "owner/repo", pr: 17, currentHeadSha: "abc123" },
+        loopDisposition: "pending",
+        terminal: false,
+      }),
+      recordWatchClaimImpl: async ({ head, waitKind }) => ({ ok: true, status: "watch_claim_recorded", watch: { head, waitKind, updatedAt: new Date().toISOString() } }),
+      // A fresh push landed during the wait: the watcher reports a DIFFERENT head.
+      watchCiStatusImpl: async () => ({ ok: true, status: "success", settled: true, ciStatus: "success", failedChecks: [], headSha: "def456", attempts: 3 }),
+    },
+  );
+  assert.equal(result.watcherExclusivity.transitionStatus, "completed");
+  assert.equal(result.watcherExclusivity.head, "def456");
+  assert.equal(result.watcherExclusivity.advancePhaseAuthorized, false, "a head divergence re-baselines instead of advancing");
+});
+
+test("watcher-exclusivity CI settled FAILURE also maps to the resolver's completed transition", async () => {
+  const result = await runWatchCycle(
+    { repo: "owner/repo", pr: 17 },
+    {
+      env: RUN_ID_ENV,
+      runHandoffImpl: async () => ({
+        ok: true,
+        action: "stop",
+        state: "waiting_for_ci",
+        allowedTransitions: [],
+        nextAction: "Wait for CI",
+        snapshot: { repo: "owner/repo", pr: 17, currentHeadSha: "abc123" },
+        loopDisposition: "pending",
+        terminal: false,
+      }),
+      recordWatchClaimImpl: async ({ head, waitKind }) => ({ ok: true, status: "watch_claim_recorded", watch: { head, waitKind, updatedAt: new Date().toISOString() } }),
+      watchCiStatusImpl: async () => ({ ok: true, status: "failure", settled: true, ciStatus: "failure", failedChecks: [{ name: "build" }], headSha: "abc123", attempts: 3 }),
+    },
+  );
+  assert.equal(result.watchStatus, "failure");
+  assert.equal(result.watcherExclusivity.transitionStatus, "completed");
+  assert.equal(result.watcherExclusivity.advancePhaseAuthorized, true);
+});
