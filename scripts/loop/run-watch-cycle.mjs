@@ -18,6 +18,7 @@ import {
   EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY,
   enforceExternalHealthyWaitTimeout,
 } from "@dev-loops/core/loop/timeout-policy";
+import { resolveWatchOwnership } from "@dev-loops/core/loop/watcher-exclusivity";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 const REMOVED_FLAGS = new Set([
   "--force-rerequest-review",
@@ -138,6 +139,27 @@ export async function watchWorkflowRun(
       }
       resolve({ status: "completed" });
     });
+  });
+}
+// Watcher-exclusivity resolver over the EXISTING lease (runnerOwnership) and
+// watch-status evidence already computed by this cycle — no new lease read,
+// no new artifact. Skipped (undefined) when the current head is unknown, so
+// a missing snapshot head never throws.
+function buildWatchExclusivity({ handoff, options, waitKind, watchStatus, env }) {
+  const head = handoff.snapshot?.currentHeadSha;
+  if (typeof head !== "string" || head.trim().length === 0) return undefined;
+  const activeRun = handoff.runnerOwnership?.activeRun;
+  const owner = activeRun?.runId
+    ? { runId: activeRun.runId, head, waitKind, updatedAt: activeRun.updatedAt ?? activeRun.claimedAt }
+    : null;
+  const transition = typeof watchStatus === "string" && watchStatus.trim().length > 0
+    ? { head, waitKind, status: watchStatus }
+    : null;
+  return resolveWatchOwnership({
+    boundary: { target: `${options.repo}#${options.pr}`, head, waitKind },
+    evidence: { owner, transition },
+    now: Date.now(),
+    staleAfterMs: resolveStaleRunnerMaxAgeMs({}, env),
   });
 }
 function determineWatchTimeout(defaultTimeoutMs) {
@@ -379,6 +401,8 @@ export async function runWatchCycle(
     // a quiet timeout stays a healthy pending wait.
     result.cycleDisposition = ciWatch.status === "timeout" ? "pending" : "needs_followup";
     result.terminal = false;
+    const ciWatchExclusivity = buildWatchExclusivity({ handoff, options, waitKind: "ci", watchStatus: ciWatch.status, env });
+    if (ciWatchExclusivity !== undefined) result.watchExclusivity = ciWatchExclusivity;
     result.contractTrace = buildWatchCycleContractTrace({
       handoff,
       watchTimeoutPolicy: result.watchTimeoutPolicy ?? null,
@@ -448,6 +472,8 @@ export async function runWatchCycle(
   result.watch = watch;
   result.cycleDisposition = watch.status === "changed" ? "needs_followup" : "pending";
   result.terminal = false;
+  const copilotWatchExclusivity = buildWatchExclusivity({ handoff, options, waitKind: "copilot_review", watchStatus: watch.status, env });
+  if (copilotWatchExclusivity !== undefined) result.watchExclusivity = copilotWatchExclusivity;
   result.contractTrace = buildWatchCycleContractTrace({
     handoff,
     watchArgs: watchOptions,
