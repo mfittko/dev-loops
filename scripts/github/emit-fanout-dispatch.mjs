@@ -154,6 +154,27 @@ export function buildAngleNamingSuffix(unit) {
 }
 
 /**
+ * Generate a split sub-unit's scope-distinguishing name: `${baseName}-part${n}`,
+ * disambiguated against `configuredGroupNames` — while the candidate is itself
+ * a configured group's name (e.g. splitting "backend" would otherwise collide
+ * with a separately-configured "backend-part1" group), append a further
+ * suffix until it is not. Deterministic, pure.
+ * @param {string} baseName configured group name being split
+ * @param {number} n 1-based split index
+ * @param {Set<string>} configuredGroupNames configured gates.fanout.groups names
+ * @returns {string}
+ */
+export function splitSubUnitName(baseName, n, configuredGroupNames) {
+  let candidate = `${baseName}-part${n}`;
+  let bump = 0;
+  while (configuredGroupNames.has(candidate)) {
+    bump += 1;
+    candidate = `${baseName}-part${n}-x${bump}`;
+  }
+  return candidate;
+}
+
+/**
  * Expand resolveFanoutGroups units into the dispatch units this step actually
  * seeds reviewers for: only a CONFIGURED gates.fanout.groups group (a
  * multi-angle unit whose name is in `configuredGroupNames`) shares one reviewer;
@@ -162,10 +183,14 @@ export function buildAngleNamingSuffix(unit) {
  * singleton reviewer. This is the "angles not in a configured group get their
  * own distinct reviewer" rule: a coordinator can never seed a shared reviewer
  * for an ad-hoc auto-chunk unit the configured table never named (a
- * requireFanoutProvenance breach). Angle order is preserved. Pure.
+ * requireFanoutProvenance breach). Angle order is preserved. Every emitted unit
+ * carries a `group`: the configured group name for a unit derived from a
+ * configured group (whole or split sub-unit), null for an ungrouped singleton
+ * — this is provenance, distinct from `name` (which scopes the reviewer and,
+ * for a split sub-unit, is disambiguated via splitSubUnitName). Pure.
  * @param {{ name: string, angles: string[] }[]} units resolveFanoutGroups output
  * @param {Set<string>} configuredGroupNames configured gates.fanout.groups names
- * @returns {{ name: string, angles: string[] }[]}
+ * @returns {{ name: string, angles: string[], group: string|null }[]}
  */
 /**
  * The single normalization for a unit's angle list: keep non-empty string
@@ -190,24 +215,27 @@ export function expandDispatchUnits(units, configuredGroupNames) {
       // the cap keeps its exact name (unchanged behaviour). A configured group
       // LARGER than the cap deterministically splits into ordered ≤cap sub-units
       // — angle order preserved, no angle dropped, duplicated, or merged. Each
-      // sub-unit gets a distinct `<name>-part<n>` name so its reviewer scope
-      // (dispatchUnitScope) never collides with a sibling's; a multi-angle
-      // sub-unit still records a non-null provenance group, and every sub-unit's
-      // angles remain members of the SAME configured group, so the fan-in
-      // pairing check (fanoutReviewerPairingError, re-derived against the
-      // configured table) stays honest. maxConcurrent already counts EMITTED
-      // dispatch units, so a split simply yields more units per wave — never
-      // more angles per unit.
+      // sub-unit gets a distinct, collision-disambiguated `<name>-part<n>` name
+      // (splitSubUnitName) so its reviewer scope (dispatchUnitScope) never
+      // collides with a sibling's — the dispatch loop's seenScopes guard below
+      // remains the final backstop for any residual collision this cannot see.
+      // Every sub-unit records the CONFIGURED group name (not its own split
+      // name) as `group` — matching the contract's provenance rule — and stays
+      // a member of the SAME configured group, so the fan-in pairing check
+      // (fanoutReviewerPairingError, re-derived against the configured table)
+      // stays honest. maxConcurrent already counts EMITTED dispatch units, so a
+      // split simply yields more units per wave — never more angles per unit.
       if (angles.length <= REVIEWER_UNIT_MAX_ANGLES) {
-        out.push({ name: unit.name, angles });
+        out.push({ name: unit.name, angles, group: unit.name });
       } else {
         for (let i = 0; i < angles.length; i += REVIEWER_UNIT_MAX_ANGLES) {
           const chunk = angles.slice(i, i + REVIEWER_UNIT_MAX_ANGLES);
-          out.push({ name: `${unit.name}-part${i / REVIEWER_UNIT_MAX_ANGLES + 1}`, angles: chunk });
+          const n = i / REVIEWER_UNIT_MAX_ANGLES + 1;
+          out.push({ name: splitSubUnitName(unit.name, n, configuredGroupNames), angles: chunk, group: unit.name });
         }
       }
     } else {
-      for (const angle of angles) out.push({ name: angle, angles: [angle] });
+      for (const angle of angles) out.push({ name: angle, angles: [angle], group: null });
     }
   }
   return out;
@@ -401,7 +429,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     if (!result.composed || !result.recorded) {
       return finish({ ok: false, error: `failed to compose reviewer prompt for unit ${JSON.stringify(unit?.name)} (scope ${scope}): ${result.reason}` }, false);
     }
-    emitted.push({ scope, angles, group: angles.length > 1 ? unit.name : null, promptPath: result.promptPath });
+    emitted.push({ scope, angles, group: angles.length > 1 ? unit.group : null, promptPath: result.promptPath });
   }
 
   // GATE-EXEC-FANOUT-DISPATCH-EMIT: success-only persist of the emitted round
