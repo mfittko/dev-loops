@@ -8,6 +8,14 @@ Dispositions: `pending`, `in progress`, `changed`, `unchanged`, `generated`, `no
 
 Phases: 1 = Copilot follow-up and directly coupled references/tests; 2 = other routed entrypoints and their workflow contracts; 3 = remaining shared documentation, references, templates and script comments/help. Only phase 1 is active. All phases use the same cleanup PR unless the human changes the scope.
 
+## Parked checkpoint — 2026-09-16
+
+Paused at the user's request; resume only when requested, not automatically on Saturday. PR2237 remains draft and unmerged. Latest implementation/test commit pushed before this note: `cef3de0b` on `issue-2236`. Its full verification passed 9,293 tests across 390 files, plus docs/workflows; doc guard passed 354 with one skip.
+
+Preserved uncommitted work in `tmp/worktrees/dev-loops/issue-2236`: `skills/docs/copilot-ci-status-contract.md` and its canonically regenerated `.claude/skills/docs/copilot-ci-status-contract.md` mirror. This draft condenses repeated check-exclusion explanations; zero-suite exception, inputs, outputs and precedence are unchanged. Its 82 focused CI/prober/workflow tests passed. Independent post-edit semantic review, docs/assets checks, measurement update and full verification are pending; the preceding full-suite result does not cover this draft. This checkpoint note is committed separately, without staging those two files.
+
+On explicit resume: fetch origin, refresh canonical startup/envelope and issue2236 spec, preserve the two-file diff, review it against `cef3de0b`, finish its semantic scenarios and checks, then commit/push the coherent slice. Continue phase1 afterward; remaining 77-file inventory is not complete. Next candidates include the issue-intake persistence prose pins and the safe proportionality-floor explanation block. The ambiguity register remains unresolved, including carry eligibility, zero-unit dispatch, grouping, fixer identity and lineage/context requirements; no new policy choice is authorized by parking. No review workers or validation jobs remain intentionally running.
+
 ## File inventory
 
 | File | Phase | Disposition | Evidence / remaining work |
