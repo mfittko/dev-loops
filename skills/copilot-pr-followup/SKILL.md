@@ -94,7 +94,7 @@ Verify all material claims against source, tests, configuration, and CI.
 
 ## Skill asset path resolution
 
-When this skill refers to helper paths such as `scripts/...` or `docs/...`, resolve them from the actual skill installation layout you are running, not from the active target repository checkout.
+Resolve helper and contract paths from the running skill's installation layout, not the target repository.
 
 Use this rule:
 - if the skill is installed as a normalized standalone copy, the required bundled contract docs live under the shared `../docs/` directory next to the installed skill directories. <!-- rule: ASSET-PATH-INSTALLED-NO-ASSUME --> `ASSET-PATH-INSTALLED-NO-ASSUME`: Agents MUST NOT assume helper scripts are bundled unless that installed layout actually contains them.
@@ -107,12 +107,12 @@ Required bundled runtime contract docs for installed copies of this skill:
 - [Issue Intake Procedure](../docs/issue-intake-procedure.md)
 - [Copilot Loop Operations](../docs/copilot-loop-operations.md)
 
-Read those bundled `../docs/` files from the installed skill layout instead of assuming the source repository checkout is present. If any required bundled contract doc is missing from the installed skill layout, treat that as a packaging/installer bug.
+Read the bundled `../docs/` files. A missing required contract is a packaging/installer bug; do not assume a source checkout is available.
 <!-- rule: ASSET-PATH-SOURCE-NO-REPO-LOCAL --> `ASSET-PATH-SOURCE-NO-REPO-LOCAL`: Agents MUST NOT assume `scripts/...` is repo-local to the target codebase they are operating on.
 
 ### Stale-installed-CLI: prefer worktree-source verdict/ledger tooling (#1661)
 
-A stale installed dev-loops CLI (e.g. rc.1) lacks the gate-evidence CI exclusion that newer source (rc.4+) has, so posting a `pre_approval_gate` verdict through the stale script blocks on `WAITING_FOR_CI`. To keep the canonical gate path green regardless of install state, resolve where the verdict/ledger tooling should run from FIRST via the deterministic helper (issue #1661):
+Before running verdict/ledger tooling, resolve its source with this helper. An older installed CLI can lack the gate-evidence CI exclusion and block a `pre_approval_gate` verdict on `WAITING_FOR_CI`.
 
 ```sh
 node <resolved-skill-scripts>/loop/resolve-verdict-ledger-source.mjs --jq .preferredSource
@@ -122,13 +122,19 @@ node <resolved-skill-scripts>/loop/resolve-verdict-ledger-source.mjs --jq .prefe
 - When `preferredSource` is `installed`, run them from the resolved skill-scripts layout (installed) as usual.
 - The helper compares the installed dev-loops CLI version against the current source/worktree version (bounded candidate detection); it never changes the gate-evidence CI-exclusion logic itself (`#1661` non-goal) and fails soft to the canonical installed layout when a version cannot be read.
 
-This is the canonical fix surface for `#1661`: prefer worktree-source scripts for verdict/ledger tooling when the installed CLI is stale, with no change to the gate path's own behavior.
+This selection changes the tooling source, not gate behavior.
 
 ### Source files under review vs. helper-script paths
 
-The rule above governs HELPER SCRIPT paths invoked as tooling (`scripts/...` you RUN). It does **not** govern SKILL/DOC SOURCE FILES you REVIEW as content. A gate reviewer citing a skill/doc file (e.g. `skills/<name>/SKILL.md`, `skills/docs/...`, `docs/...`) in a finding is reviewing the PR's content, not invoking tooling — and installed copies of those source files lag the PR under review. Reading an installed copy (`.pi/skills/<name>/SKILL.md`, `~/.pi/agent/...`) produces false high-severity findings against text the PR already fixed (#1603).
+Helper-script resolution applies to tooling you run. For skill/doc content under review (`skills/<name>/SKILL.md`, `skills/docs/...`, `docs/...`), installed copies can lag the PR and produce findings against text already fixed.
 
-When reviewing a PR that modifies skill/doc source, read those source files from the worktree checkout under review (relative paths from the worktree cwd named on the briefing prefix's `worktree:` line), never from the installed layouts above. Cross-check any line you plan to cite in a finding against `git show HEAD:<path>` (the worktree source at the reviewed head) before reporting — a citation absent from that source is a stale-installed-copy false positive. Helper SCRIPT paths invoked as tooling (not reviewed as content) still resolve from the installed skill layout per the rule above. The canonical `GATE-EXEC-SOURCE-READ-WORKTREE` rule and its briefing-prefix wiring live in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md).
+When reviewing skill/doc source:
+
+1. Read from the worktree under review, using the cwd on the briefing prefix's `worktree:` line. Never review an installed copy.
+2. Before citing a line, check it against `git show HEAD:<path>` at the reviewed head. If it is absent, the installed-copy citation is stale.
+3. Continue to resolve helper scripts you run from the installation layout above.
+
+`GATE-EXEC-SOURCE-READ-WORKTREE` and its briefing-prefix wiring are owned by [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md).
 
 ## Authority and safety rules
 
