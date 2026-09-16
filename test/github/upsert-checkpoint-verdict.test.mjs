@@ -9459,3 +9459,83 @@ test("#2030: --new-round is scoped to --gate review only", () => {
   const parsed = parseUpsertCheckpointVerdictCliArgs([...base, "--gate", "review", "--new-round"]);
   assert.equal(parsed.newRound, true);
 });
+
+test("#2257: a new draft_gate verdict folds prior same-gate verdict reviews as OUTDATED, current head and other gate untouched", async () => {
+  await withTempDir(async () => {
+    const CUR = "def5678000000000000000000000000000000000";
+    const PRIOR = "abc1234000000000000000000000000000000000";
+    // A prior draft_gate verdict at a DIFFERENT head triggers the supersede sweep.
+    const priorVerdictComment = {
+      id: 99,
+      body: [
+        "### Gate review: `draft_gate`",
+        "",
+        `**Reviewed head SHA:** \`${PRIOR}\``,
+        "**Verdict:** findings_present",
+        "",
+        "**Findings summary:** prior round",
+        "",
+        "**Next action:** fix",
+      ].join("\n"),
+      html_url: "https://github.com/owner/repo/pull/17#issuecomment-99",
+      updated_at: "2026-05-30T17:00:00Z",
+    };
+    const reviewBody = (gate, head) => `### Gate review: \`${gate}\`\n**Reviewed head SHA:** \`${head}\``;
+    // Claims mode: match by content, not call position, so the sweep's two extra
+    // calls are matched wherever in the sequence they land.
+    const claim = (entry) => ({ ...entry, matchByClaims: true });
+    const { runChild, calls } = makeGhMock([
+      ...buildGateCoordinationEntries({
+        headSha: CUR,
+        isDraft: true,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        issueComments: [priorVerdictComment],
+      }).map(claim),
+      claim({
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":102,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-102"}\n',
+      }),
+      // The supersede sweep's reviews-list query (uniquely carries reviews(first:100)).
+      claim({
+        assertArgContains: ["reviews(first:100)"],
+        stdout: JSON.stringify({ data: { repository: { pullRequest: { reviews: { nodes: [
+          { id: "PRR_super", isMinimized: false, body: reviewBody("draft_gate", PRIOR) },
+          { id: "PRR_cur", isMinimized: false, body: reviewBody("draft_gate", CUR) },
+          { id: "PRR_pre", isMinimized: false, body: reviewBody("pre_approval_gate", PRIOR) },
+          { id: "PRR_min", isMinimized: true, body: reviewBody("draft_gate", "9".repeat(40)) },
+        ] } } } } }) + "\n",
+      }),
+      // The minimize mutation for the one superseded draft_gate review.
+      claim({
+        assertArgContains: ["minimizeComment"],
+        assertArgs: ["id=PRR_super"],
+        stdout: '{"data":{"minimizeComment":{"minimizedComment":{"isMinimized":true}}}}\n',
+      }),
+    ]);
+
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: CUR,
+      verdict: "clean",
+      findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "nice-to-have": 0 },
+      findingsSummary: "no issues found",
+      nextAction: "mark ready for review",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: fanoutDisabledRepoRoot });
+
+    assert.equal(result.action, "created");
+    // The sweep ran cleanly end to end: no fail-open warning.
+    assert.equal(result.minimizeWarning, undefined);
+    // Exactly the superseded prior review was minimized — not the current head,
+    // not the other gate, not the already-minimized one.
+    const minimizeCalls = calls.filter((c) => c.args.some((a) => a.startsWith("id=")));
+    assert.equal(minimizeCalls.length, 1);
+    assert.ok(minimizeCalls[0].args.includes("id=PRR_super"));
+    assert.ok(!calls.some((c) => c.args.includes("id=PRR_cur")));
+    assert.ok(!calls.some((c) => c.args.includes("id=PRR_pre")));
+    assert.ok(!calls.some((c) => c.args.includes("id=PRR_min")));
+  }, { prefix: "dev-loops-upsert-2257-minimize-" });
+});

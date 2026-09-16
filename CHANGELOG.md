@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Added
+
+- **A new gate verdict now folds the prior rounds' superseded verdict reviews as Outdated (issue [2257](https://github.com/mfittko/dev-loops/issues/2257)).** Each gate round posts a `### Gate review: <gate>` summary review at that round's head, so a multi-round `draft_gate`/`pre_approval_gate` left one stale `findings_present` verdict per prior head expanded in the PR conversation — observed at four stacked draft-gate verdicts on one PR before a manual sweep. `upsert-checkpoint-verdict.mjs` now, after creating a new same-gate verdict, minimizes that gate's prior verdict reviews recorded at earlier heads via GitHub's `minimizeComment(classifier: OUTDATED)`. The sweep runs only when the poster already holds evidence of a prior same-gate verdict at a different head (never on a first verdict, so it adds no call to a fresh PR), never touches the just-posted current-head verdict or the other gate's verdicts, skips already-minimized reviews, and is bounded by a cap (default 50) that reports an overflow rather than fanning out unbounded. It is best-effort and fail-open: a `PullRequestReview` body is Minimizable, minimizing collapses rather than deletes (reversible, audit trail intact), and any failure — rate limit, permissions, a single failed minimize — is swallowed into a `minimizeWarning` on the result and never fails the verdict post. The identification prefers the machine `dev-loops:gate-findings-review <gate> <headSha>` marker and falls back to the visible `Gate review` header, so a round-less bare verdict post is recognized too. New module `scripts/github/_minimize-superseded-verdicts.mjs` (pure selector + fail-open IO runner), proven by `test/github/minimize-superseded-verdicts.test.mjs` (same-gate/prior-head selection, current-head and other-gate exclusion, already-minimized skip, cap/overflow, marker-vs-header parse, both fail-open paths) plus an end-to-end wiring test in `test/github/upsert-checkpoint-verdict.test.mjs` driving a created verdict with a different-head prior and asserting exactly the superseded review is minimized. Documented as `GATE-COMMENT-SUPERSEDE-OUTDATED` in `skills/docs/gate-review-comment-contract.md`; `.claude` mirror regenerated in lockstep.
+
 ## 1.0.3
 
 ### Added

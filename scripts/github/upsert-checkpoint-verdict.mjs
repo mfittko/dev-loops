@@ -9,7 +9,8 @@ import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { parseAllowedRefsCsv, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { ghJson as runGhJson } from "@dev-loops/core/github/gh";
+import { ghGraphql as runGhGraphql, ghJson as runGhJson } from "@dev-loops/core/github/gh";
+import { minimizeSupersededGateReviews } from "./_minimize-superseded-verdicts.mjs";
 import { loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { buildFanoutEnforcement, evaluateInlineFanoutMode } from "./detect-checkpoint-evidence.mjs";
 import { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
@@ -3104,6 +3105,24 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (escalateGateFullLabel) {
     await applyGateFullLabel({ repo: options.repo, pr: options.pr }, gh);
   }
+  // A new same-gate verdict just landed at this head, so the prior rounds' verdict
+  // reviews are superseded — fold them as OUTDATED per GATE-COMMENT-SUPERSEDE-OUTDATED
+  // (skills/docs/gate-review-comment-contract.md). Best-effort and
+  // fail-open: this never throws, and its warning never blocks the verdict result.
+  // Only run the enumerating GraphQL sweep when the poster already has evidence of
+  // a prior same-gate verdict at a different head (the created path guarantees any
+  // visible prior verdict is at a different head, since a same-head one would have
+  // taken the `existing` branch). This saves a call on a first-ever verdict.
+  const hasSupersededPrior = !isReviewGate && (
+    (gateEvidence?.strict?.visible === true && !!gateEvidence.strict.headSha && gateEvidence.strict.headSha !== canonicalHeadSha)
+    || (gateEvidence?.marker?.visible === true && !!gateEvidence.marker.headSha && gateEvidence.marker.headSha !== canonicalHeadSha)
+  );
+  const minimizeWarning = !hasSupersededPrior
+    ? null
+    : (await minimizeSupersededGateReviews(
+        { ...parseRepoSlug(options.repo), pr: options.pr, gate: options.gate, currentHeadSha: canonicalHeadSha },
+        { env, ghCommand, runChild, ghGraphqlImpl: runGhGraphql },
+      )).warning ?? null;
   return {
     ok: true,
     action: "created",
@@ -3123,6 +3142,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     ...(warning ? { warning } : {}),
     ...(findingsLedgerWarning ? { findingsLedgerWarning } : {}),
     ...(verificationWarning ? { verificationWarning } : {}),
+    ...(minimizeWarning ? { minimizeWarning } : {}),
     ...(escalateGateFullLabel ? { gateFullLabelApplied: true } : {}),
     ...(specAuthority ? { specAuthority } : {}),
   };
