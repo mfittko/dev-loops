@@ -4244,3 +4244,81 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck PASSES on an auto-chunked 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// Issue 2180 (Path A) / ADR 0048: the emitter (emit-fanout-dispatch.mjs's
+// expandDispatchUnits) now dispatches a sanctioned resolveFanoutGroups
+// auto-chunk bundle as ONE shared reviewer, exactly like a configured group.
+// Drive the ACTUAL emitter function over a REAL resolveFanoutGroups call
+// (not a hand-built resolvedGroups/provenance fixture) to build the ledger's
+// provenance, then prove that recorded provenance PASSES
+// requireFanoutProvenance at BOTH re-derivation sites this module owns: the
+// per-candidate ledger-selection path (readLedgerProvenanceInAny, ~line 646)
+// and the main enforcement-spec path (buildFanoutEnforcement's resolvedGroups,
+// ~line 924) — both are exercised by buildFanoutEnforcement +
+// buildPreMergeGateCheck here.
+test("buildFanoutEnforcement + buildPreMergeGateCheck PASSES a ledger built from the REAL emitter's expandDispatchUnits output for an auto-chunk bundle (issue 2180 / ADR 0048)", async () => {
+  const { expandDispatchUnits } = await import("../../scripts/github/emit-fanout-dispatch.mjs");
+  const { resolveFanoutGroups } = await import("@dev-loops/core/config");
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-fanout-emitter-autochunk-"));
+  try {
+    await writeFile(
+      path.join(dir, ".devloops"),
+      [
+        "version: 1",
+        "gates:",
+        "  requireFanoutEvidence: true",
+        "  requireFanoutProvenance: true",
+        "  preApproval:",
+        "    angles:",
+        "      - a",
+        "      - b",
+        "      - name: pr-checklist",
+        "        mandatory: true",
+        "  fanout:",
+        "    maxAnglesPerGroup: 2",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const { config } = await loadDevLoopConfig({ repoRoot: dir });
+    // The exact production seam: resolveFanoutGroups resolves this round's
+    // dispatch units (no configured gates.fanout.groups here, so "a"/"b"
+    // auto-chunk into ONE leftover bundle "group:a+b"), then
+    // expandDispatchUnits — the emitter's own dispatch-unit expander — turns
+    // that into the actual emitted { angles, group } shape a reviewer's
+    // provenance records.
+    const resolvedUnits = resolveFanoutGroups(config, "preApproval", ["a", "b", "pr-checklist"]);
+    const dispatchUnits = expandDispatchUnits(resolvedUnits, new Set());
+    // Exact-count sanity: one shared reviewer for the auto-chunk bundle, one
+    // singleton for pr-checklist — never one reviewer per angle.
+    assert.equal(dispatchUnits.length, 2);
+    const perAngle = dispatchUnits.flatMap((unit, i) =>
+      unit.angles.map((angle) => ({ angle, reviewer: `review-${i}`, group: unit.group })),
+    );
+    const headSha = "f".repeat(40);
+    const ledgerDir = path.join(dir, "tmp", "gate-findings", "owner-repo", "pr-32");
+    await mkdir(ledgerDir, { recursive: true });
+    await writeFile(
+      path.join(ledgerDir, `pre_approval_gate-${headSha}.json`),
+      `${JSON.stringify({
+        gate: "pre_approval_gate", headSha, findings: [],
+        provenance: { distinctReviewers: dispatchUnits.length, perAngle },
+      })}\n`,
+      "utf8",
+    );
+    const marker = { visible: true, headSha, executionMode: "fanout_fanin" };
+    const enforcement = await buildFanoutEnforcement({
+      repo: "owner/repo", pr: 32, currentHeadSha: headSha,
+      draftGateMarker: { visible: false }, preApprovalGateMarker: marker,
+      config, cwd: dir, hasFullLabel: false,
+    });
+    const result = buildPreMergeGateCheck({
+      currentHeadSha: headSha,
+      draftGate: { visible: true, verdict: "clean" },
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha, sizeOutcome: "pass", sizeTouchesT1: false },
+    }, 0, null, enforcement);
+    assert.equal(result.ok, true, JSON.stringify(result.failures));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

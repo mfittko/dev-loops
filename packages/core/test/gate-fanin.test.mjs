@@ -694,6 +694,61 @@ describe("fanoutReviewerPairingError (#1431 — one scoped reviewer per fresh an
       assert.match(error, /does not place all of them in one group/);
     });
 
+    // Issue 2180 (Path A) / ADR 0048: the emitter no longer splits a sanctioned
+    // resolveFanoutGroups auto-chunk bundle into per-angle singletons — it
+    // shares one reviewer for the whole bundle, same as a configured group.
+    // Prove the merge guard remains the fail-closed authority for that
+    // widened emitter behavior: a shared identity is honored ONLY when
+    // resolveFanoutGroups itself placed every covered angle in the SAME
+    // resolved unit — a fabricated group spanning angles the resolver split
+    // into DIFFERENT auto-chunk bundles still fails closed, so removing the
+    // emitter's singleton-split does not reopen the #2100/#2101 fail-open.
+    test("(issue 2180 / ADR 0048) accepts a shared identity for a REAL resolveFanoutGroups auto-chunk bundle (positive)", async () => {
+      const { resolveFanoutGroups } = await import("../src/config/config.mjs");
+      // No configured groups; default maxAnglesPerGroup (3) auto-chunks
+      // ["a", "b"] into ONE leftover bundle "group:a+b".
+      const config = { version: 1 };
+      const groups = resolveFanoutGroups(config, "preApproval", ["a", "b"]);
+      assert.deepEqual(groups, [{ name: "group:a+b", angles: ["a", "b"] }]);
+      const error = fanoutReviewerPairingError(
+        [
+          { angle: "a", reviewer: "x", group: "group:a+b" },
+          { angle: "b", reviewer: "x", group: "group:a+b" },
+        ],
+        groups,
+      );
+      assert.equal(error, null);
+    });
+
+    test("(issue 2180 / ADR 0048) rejects a fabricated group label spanning angles resolveFanoutGroups auto-chunked into DIFFERENT leftover bundles (adversarial fail-closed)", async () => {
+      const { resolveFanoutGroups } = await import("../src/config/config.mjs");
+      // maxAnglesPerGroup: 1 forces every leftover angle into its OWN
+      // single-angle bundle, so "a" and "b" resolve to DIFFERENT units.
+      const config = { version: 1, gates: { fanout: { maxAnglesPerGroup: 1 } } };
+      const groups = resolveFanoutGroups(config, "preApproval", ["a", "b"]);
+      assert.deepEqual(groups, [{ name: "a", angles: ["a"] }, { name: "b", angles: ["b"] }]);
+      const error = fanoutReviewerPairingError(
+        [
+          { angle: "a", reviewer: "x", group: "fabricated" },
+          { angle: "b", reviewer: "x", group: "fabricated" },
+        ],
+        groups,
+      );
+      assert.match(error, /does not place all of them in one group/);
+    });
+
+    test("(issue 2180 / ADR 0048) rejects a shared group claim spanning an angle resolveFanoutGroups never resolved (maps to null) (adversarial fail-closed)", () => {
+      const resolvedGroups = [{ name: "group:a+b", angles: ["a", "b"] }];
+      const error = fanoutReviewerPairingError(
+        [
+          { angle: "a", reviewer: "x", group: "group:a+b" },
+          { angle: "unresolved-angle", reviewer: "x", group: "group:a+b" },
+        ],
+        resolvedGroups,
+      );
+      assert.match(error, /does not place all of them in one group/);
+    });
+
     test("per-angle mode (resolveFanoutGroups emits one singleton unit per angle) rejects ANY shared identity across units, regardless of the declared group label — gate:full no longer collapses to singletons (ADR 0048)", () => {
       const perAngleModeGroups = [
         { name: "a", angles: ["a"] },

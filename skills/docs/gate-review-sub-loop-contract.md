@@ -764,12 +764,13 @@ the same atomic compose-and-record core the CLI uses). It emits one
 `{ scope, angles, group, promptPath }` per DISPATCH unit plus a `maxConcurrent` field; the
 conductor then dispatches one fresh-context `review` subagent per emitted unit, seeded with
 that unit's `promptPath` bytes verbatim, records each unit's `group` on Phase 3's `--provenance`
-(null for a singleton unit, the configured group name for a shared unit), and waves the emitted
+(null for a singleton unit, the resolved unit's own name — the configured group name, or the
+auto-chunk bundle's own name, for a shared unit), and waves the emitted
 units at most `maxConcurrent` at a time. The conductor MUST bound this step by the emitter's
 `maxConcurrent` (`resolveFanoutEffectiveConcurrency`, 1 when `gates.fanout.sequential`), NOT by
 `artifact.fanout.wavePlan`: that wave plan is computed over the UNSPLIT `resolveFanoutGroups`
-units and no longer matches this step's split unit set (an auto-chunk leftover the emitter
-splits into N singletons would over-dispatch a single wave slot). On success
+units and no longer matches this step's split unit set (an over-cap unit the emitter cap-splits
+into ceil(N/REVIEWER_UNIT_MAX_ANGLES) sub-units would over-dispatch a single wave slot). On success
 the emitter ALSO persists its emitted round plan to the keyed
 `<gate>-<headSha>.emit-plan.json` sibling of the gate-context bundle
 (`buildGateEmitPlanPath` in `write-gate-context.mjs`, the same
@@ -788,15 +789,24 @@ dispatch path, and it closes three failure modes prose discipline never held:
   — reviewer composition is resolved by the review agent + the neutral bundle
   (`GATE-EXEC-BUILD-ONCE-SEED`), and the fresh-context sentinel + briefing-prefix hash are
   enforced unchanged (`GATE-EXEC-BRIEFING-PREFIX`).
-- **Only configured groups share a reviewer.** The emitter shares one reviewer ONLY for a
-  configured `gates.fanout.groups` group (a multi-angle unit whose name is in the configured
-  table); it records that group's name as the reviewer's provenance `group`, matching the merge
-  guard's own `resolveFanoutGroups` re-derivation (`detect-checkpoint-evidence.mjs`). Every angle
-  NOT in a configured group gets its OWN distinct singleton reviewer (no shared group) — including
-  angles `resolveFanoutGroups` auto-chunked into a leftover `group:...` unit, which the emitter
-  SPLITS back into per-angle singletons. A conductor can therefore never seed a shared reviewer for
-  an ad-hoc auto-chunk unit the configured table never named — the `requireFanoutProvenance` breach
-  seen on #2100/#2101. Provenance / distinct-reviewer / grouped-dispatch / fail-closed invariants
+- **Every multi-angle resolved unit shares a reviewer — configured group or auto-chunk bundle
+  alike (ADR 0048 reconciles this emitter to it).** The emitter shares one reviewer
+  for ANY multi-angle `resolveFanoutGroups` unit: a configured `gates.fanout.groups` group, or an
+  ungrouped-leftover bundle `resolveFanoutGroups` auto-chunked into `group:...`. It records the
+  resolved unit's own name as the reviewer's provenance `group`, capped and split at
+  `REVIEWER_UNIT_MAX_ANGLES` (ordered `<name>-part1`/`-part2`/... sub-units, each still recording
+  the whole unit's name as `group`) exactly as an over-cap configured group already was. Only a
+  genuinely single-angle unit dispatches as a singleton (no shared group). `resolveFanoutGroups`
+  itself draws no dispatch-relevant distinction between a configured group and an auto-chunk
+  bundle (both are "this round's resolved dispatch units"), so the emitter no longer draws one
+  either. The merge guard (`fanoutReviewerPairingError` in `@dev-loops/core/loop/gate-fanin`) is
+  the fail-closed authority for this: it re-derives this round's grouping independently via its
+  own `resolveFanoutGroups` call (`detect-checkpoint-evidence.mjs`) and accepts a shared identity
+  ONLY when every angle it covers is a member of that SAME re-derived unit — configured or
+  auto-chunk — so a claimed group spanning angles the guard's own re-derivation places in
+  different units (or an angle the re-derivation never resolves at all) still fails closed. The
+  emitter no longer needs to be more conservative than the guard by splitting a sanctioned
+  auto-chunk bundle to singletons. Provenance / distinct-reviewer / grouped-dispatch / fail-closed invariants
   are preserved (a singleton covering one fresh angle is never pair-checked, and a configured
   group's shared reviewer matches the guard's re-derivation), and this does NOT change which
   angles/units `resolveFanoutGroups` resolves — only how the emitter dispatches them.
