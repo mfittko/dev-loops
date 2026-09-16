@@ -9,7 +9,9 @@ import { fileURLToPath } from "node:url";
 import {
   describeReadiness,
   executeDevLoopsCommand,
+  inspectResultSeverity,
   renderCheckLines,
+  renderInspectLines,
   summarizeChecks,
   DEV_LOOP_CHECK_IDS,
   SETUP_GUIDANCE,
@@ -354,8 +356,24 @@ const HELP_CATEGORY_LABELS = {
   issue: "Issue helpers",
   queue: "Queue board: run + management (add/list/reorder/move/sync-status/archive)",
   project: "Alias for queue (GitHub Projects queue helpers)",
-  inspect: "Inspection (Pi extension only)",
+  inspect: "Inspection: run snapshot + managed viewer lifecycle",
   refine: "Epic tree refinement verification",
+};
+
+// Viewer lifecycle actions run IN-PROCESS through the shared executor (the same
+// path the Pi extension uses) instead of being routed to a script, so they are
+// listed next to the routed `inspect` subcommands rather than inside the table.
+const INSPECT_LIFECYCLE_DESCRIPTIONS = {
+  open: "Start (or reuse) the managed viewer and open a browser",
+  resume: "Report/reattach to the managed viewer without starting one",
+  status: "Show managed viewer state (running/stopped/stale/conflict)",
+  stop: "Stop the managed viewer and clear its record",
+  restart: "Stop then start the managed viewer",
+};
+
+const EXTRA_SUBCOMMAND_HELP = {
+  inspect: Object.entries(INSPECT_LIFECYCLE_DESCRIPTIONS)
+    .map(([action, description]) => `    ${action.padEnd(16)} ${description} [--repo <owner/name>]`),
 };
 
 const TOP_LEVEL_HELP_CATEGORY_ORDER = ["gate", "loop", "pr", "issue", "queue", "project", "inspect", "refine"];
@@ -454,10 +472,13 @@ function buildSubcommandLines(category, { includeHeader = false } = {}) {
   const routes = SUBCOMMAND_ROUTES[category];
   if (!routes) return [];
   const descriptions = SUBCOMMAND_DESCRIPTIONS[category] ?? {};
-  const lines = Object.keys(routes).map((subcommand) => {
-    const description = descriptions[subcommand];
-    return description ? `    ${subcommand.padEnd(16)} ${description}` : `    ${subcommand}`;
-  });
+  const lines = [
+    ...Object.keys(routes).map((subcommand) => {
+      const description = descriptions[subcommand];
+      return description ? `    ${subcommand.padEnd(16)} ${description}` : `    ${subcommand}`;
+    }),
+    ...(EXTRA_SUBCOMMAND_HELP[category] ?? []),
+  ];
   if (!includeHeader) return lines;
   const label = HELP_CATEGORY_LABELS[category] ?? `${category} helpers`;
   return [`- dev-loops ${category} <sub> [...]    ${label}`, ...lines];
@@ -508,6 +529,11 @@ function buildCliUsageLines(action) {
       return ["Usage:", "- dev-loops --version"];
     case "hide":
       return ["Usage:", "- dev-loops hide", "`hide` is only supported without extra arguments, and only inside the Pi extension."];
+    case "inspect":
+      return [
+        "Usage:",
+        `- dev-loops inspect <${Object.keys(INSPECT_LIFECYCLE_DESCRIPTIONS).join("|")}> [--repo <owner/name>]`,
+      ];
     default:
       throw new Error(`Unknown CLI usage action: ${action}`);
   }
@@ -540,6 +566,16 @@ export function createCliRuntime({
     async commandExists(command) { return commandExists(command, { searchPath: effectiveSearchPath, platform: effectivePlatform, pathExt: effectivePathExt }); },
     async ghAuthOk() { return spawnResult("gh", ["auth", "status"], { cwd: effectiveCwd }).ok; },
     async insideGitRepo() { return spawnResult("git", ["rev-parse", "--is-inside-work-tree"], { cwd: effectiveCwd }).ok; },
+    // The managed viewer record is repo-root-relative, so `inspect` needs the
+    // toplevel — not cwd — to address the same viewer Pi's extension manages.
+    async getRepoRoot() {
+      const result = spawnResult("git", ["rev-parse", "--show-toplevel"], { cwd: effectiveCwd });
+      const repoRoot = result.stdout.trim();
+      if (!result.ok || repoRoot.length === 0) {
+        throw new Error("Run `dev-loops inspect` from inside a git repository checkout.");
+      }
+      return repoRoot;
+    },
     async getSubagentAvailability() {
       const ok = await commandExists("subagent", { searchPath: effectiveSearchPath, platform: effectivePlatform, pathExt: effectivePathExt });
       return { ok, availableDetail: "`subagent` command is available.", unavailableDetail: "Install or enable subagent support so `subagent` is available." };
@@ -599,6 +635,15 @@ function parseTopLevelCommand(argv) {
     if (args.some((a) => a === "--help" || a === "-h")) return { kind: "help" };
     if (args.length > 1) return { kind: "malformed", message: `\`${cmd}\` does not accept additional arguments.`, usageAction: cmd };
     return { kind: "action", action: cmd };
+  }
+
+  // Viewer lifecycle: handled in-process by the shared executor, so it is
+  // intercepted before script routing. `--help` still falls through to the
+  // `inspect` category help, which lists these actions.
+  if (cmd === "inspect"
+    && Object.prototype.hasOwnProperty.call(INSPECT_LIFECYCLE_DESCRIPTIONS, sub ?? "")
+    && !args.slice(1).some((a) => a === "--help" || a === "-h")) {
+    return { kind: "action", action: "inspect" };
   }
 
   // Subcommand routing
@@ -674,10 +719,16 @@ export async function runCli({
       // `gates` reads gate config via `@dev-loops/core/config` (through the
       // shared executor); every other top-level action (help/status/doctor) is
       // core-independent and must keep working in a deps-less checkout.
-      if (fromTop.action === "gates" && !isCoreResolvable()) {
+      // `inspect` is in the same class: its lifecycle manager reaches
+      // `@dev-loops/core` transitively (viewer CLI parsing -> repo-slug/gh).
+      if ((fromTop.action === "gates" || fromTop.action === "inspect") && !isCoreResolvable()) {
         return writeCoreUnresolvableError(stderr);
       }
       const activeRuntime = runtime ?? createCliRuntime({ cwd });
+      if (fromTop.action === "inspect" && !activeRuntime.uiLifecycle) {
+        const { createInspectRunViewerLifecycleManager } = await import("../scripts/loop/inspect-run-viewer/managed-instance.mjs");
+        activeRuntime.uiLifecycle = createInspectRunViewerLifecycleManager();
+      }
       const result = await executeDevLoopsCommand({ input: argv, surface: "cli", runtime: activeRuntime, stdout });
       switch (result.kind) {
         case "help": { writeLines(stdout, buildCliHelpLines()); return 0; }
@@ -710,6 +761,11 @@ export async function runCli({
           return 0;
         }
         case "unsupported": { writeLines(stderr, [result.message]); return 1; }
+        case "inspect_result": {
+          const failed = inspectResultSeverity(result) === "error";
+          writeLines(failed ? stderr : stdout, renderInspectLines(result.action, result));
+          return failed ? 1 : 0;
+        }
         case "gates": { return 0; }
         case "malformed": {
           const lines = [result.message, ...buildCliHelpLines()];

@@ -1,5 +1,5 @@
 import type { DevLoopCheck, DevLoopCheckId } from './checks.ts';
-import { describeReadiness, DEV_LOOP_CHECK_IDS, SETUP_GUIDANCE as BASE_SETUP_GUIDANCE, summarizeChecks, renderCheckLines } from '../lib/dev-loops-core.mjs';
+import { describeReadiness, DEV_LOOP_CHECK_IDS, renderInspectLines, SETUP_GUIDANCE as BASE_SETUP_GUIDANCE, summarizeChecks, renderCheckLines } from '../lib/dev-loops-core.mjs';
 
 export type DevLoopsAction = 'doctor' | 'help' | 'status' | 'hide';
 export type InspectAction = 'open' | 'resume' | 'status' | 'stop' | 'restart';
@@ -80,24 +80,9 @@ export function buildWidgetLines(action: Extract<DevLoopsAction, 'doctor' | 'sta
   ];
 }
 
+// Shared with the `dev-loops inspect` CLI surface: one renderer, two sinks.
 export function buildInspectLines(action: InspectAction, result: { state: string; url?: string | null; detail?: string | null; warning?: string | null; repo?: string | null }): string[] {
-  const lines = [
-    `inspect ${action}`,
-    `State: ${result.state}`,
-  ];
-  if (result.repo) {
-    lines.push(`Repo: ${result.repo}`);
-  }
-  if (result.url) {
-    lines.push(`URL: ${result.url}`);
-  }
-  if (result.detail) {
-    lines.push(`Detail: ${result.detail}`);
-  }
-  if (result.warning) {
-    lines.push(`Warning: ${result.warning}`);
-  }
-  return lines;
+  return renderInspectLines(action, result);
 }
 
 export function buildNotificationMessage(action: Extract<DevLoopsAction, 'doctor' | 'status'>, checks: DevLoopCheck[]): string {

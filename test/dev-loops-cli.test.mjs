@@ -248,6 +248,106 @@ test("loop category exposes every running-app stage subcommand (five ui-review s
   }
 });
 
+function createInspectRuntime(lifecycle) {
+  return createRuntime({
+    async getRepoRoot() {
+      return "/repo/root";
+    },
+    uiLifecycle: lifecycle,
+  });
+}
+
+test("CLI drives the inspect viewer lifecycle and renders the shared inspect lines", async () => {
+  const calls = [];
+  const stdout = createBufferStream();
+  const stderr = createBufferStream();
+
+  const exitCode = await runCli({
+    argv: ["inspect", "open", "--repo", "mfittko/dev-loops"],
+    runtime: createInspectRuntime({
+      async open(args) {
+        calls.push(args);
+        return {
+          state: "running",
+          url: "http://127.0.0.1:7777/?repo=mfittko%2Fdev-loops",
+          detail: "Started a managed inspect-run viewer.",
+          warning: null,
+        };
+      },
+    }),
+    stdout: stdout.stream,
+    stderr: stderr.stream,
+  });
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(calls, [{ repoRoot: "/repo/root", repo: "mfittko/dev-loops" }]);
+  assert.match(stdout.read(), /inspect open/);
+  assert.match(stdout.read(), /State: running/);
+  assert.match(stdout.read(), /URL: http:\/\/127\.0\.0\.1:7777/);
+  assert.equal(stderr.read(), "");
+});
+
+test("CLI exits non-zero and writes to stderr when an inspect lifecycle action fails", async () => {
+  const stdout = createBufferStream();
+  const stderr = createBufferStream();
+
+  const exitCode = await runCli({
+    argv: ["inspect", "restart"],
+    runtime: createInspectRuntime({
+      async restart() {
+        return {
+          state: "conflict_unmanaged_listener",
+          url: null,
+          detail: "Port 7777 is occupied by an unmanaged listener.",
+          warning: null,
+        };
+      },
+    }),
+    stdout: stdout.stream,
+    stderr: stderr.stream,
+  });
+
+  assert.equal(exitCode, 1);
+  assert.equal(stdout.read(), "");
+  assert.match(stderr.read(), /State: conflict_unmanaged_listener/);
+});
+
+test("CLI rejects unknown inspect actions with the inspect usage line", async () => {
+  const stdout = createBufferStream();
+  const stderr = createBufferStream();
+
+  const exitCode = await runCli({
+    argv: ["inspect", "launch"],
+    runtime: createInspectRuntime({}),
+    stdout: stdout.stream,
+    stderr: stderr.stream,
+  });
+
+  // `launch` is neither a routed subcommand nor a lifecycle action, so it falls
+  // through to the routed-category error instead of the lifecycle parser.
+  assert.equal(exitCode, 1);
+  assert.match(stderr.read(), /Unknown subcommand 'launch' for 'inspect'/);
+});
+
+test("inspect category help lists both routed subcommands and lifecycle actions", async () => {
+  const stdout = createBufferStream();
+  const stderr = createBufferStream();
+
+  const exitCode = await runCli({
+    argv: ["inspect", "--help"],
+    runtime: createRuntime(),
+    stdout: stdout.stream,
+    stderr: stderr.stream,
+  });
+
+  assert.equal(exitCode, 0);
+  const help = stdout.read();
+  assert.match(help, /run\s+Inspect run state/);
+  assert.match(help, /open\s+Start \(or reuse\) the managed viewer/);
+  assert.match(help, /stop\s+Stop the managed viewer/);
+  assert.equal(stderr.read(), "");
+});
+
 test("CLI help exposes project queue wrapper surface", async () => {
   const helpStdout = createBufferStream();
   const helpStderr = createBufferStream();
