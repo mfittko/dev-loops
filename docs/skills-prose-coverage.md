@@ -45,8 +45,8 @@ Phases: 1 = Copilot follow-up and directly coupled references/tests; 2 = other r
 | `skills/docs/conductor-routing-contract.md` | 3 | pending | Not yet reviewed. |
 | `skills/docs/confirmation-rules.md` | 3 | pending | Not yet reviewed. |
 | `skills/docs/contract-style-guide.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/copilot-ci-status-contract.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/copilot-loop-operations.md` | 1 | in progress | Source and coupled contracts under inspection. |
+| `skills/docs/copilot-ci-status-contract.md` | 1 | in progress | Full source read; obsolete CLI flag corrected in existing owner with prerequisites retained. Remaining prose pending. |
+| `skills/docs/copilot-loop-operations.md` | 1 | in progress | CI-exception call site points to its mandatory owner; remaining prose pending. |
 | `skills/docs/copilot-loop-state-graph.md` | 3 | pending | Not yet reviewed. |
 | `skills/docs/cross-harness-regression-contract.md` | 3 | pending | Not yet reviewed. |
 | `skills/docs/decision-record-contract.md` | 3 | pending | Not yet reviewed. |
@@ -96,14 +96,14 @@ Reviewed first slice: simplify the follow-up skill's startup/path-resolution pro
 
 Compare old/new instructions for actors, permissions, triggers, conditions, order, exceptions, stop rules, evidence and revision identity. Preserve frontmatter, rule IDs, command examples and the declared verbatim dispatch payload. Independently evaluate high-risk scenarios with no live writes. Replace incidental prose pins with existing structural/behavior seams; keep exact API/projection checks. Run docs, contract, generated-asset and default verification before draft handoff.
 
-## Open ambiguities
+## Ambiguity register
 
-- Fan-in count: source mentions `fanout.pendingGroups.length`, but the emitter can split leftover groups into additional reviewer units. Trace actual emitted/spawned-unit authority before editing.
-- CI evidence flag: follow-up describes `--local-validation-head-sha`; the wait procedure says the detector CLI removed it. Verify the supported interface before changing instructions.
+- Fan-in count: corrected to actual emitted/spawned units following the existing owner's explicit authority and emitter tests; unsplit `pendingGroups.length` was obsolete advice.
+- CI evidence flag: removed executable use of unsupported `--local-validation-head-sha`; the existing CI owner retains prerequisites and now states that ordinary CLI refresh cannot activate the exception. See the code-backed correction below.
 - Carry eligibility: the skill still says clean-only; the owner and current tools support carrying `findings_present` with unchanged findings. The contradictory passages remain unresolved.
 - Zero-unit rounds: the skill says an all-carried round dispatches no emitter, but sanctioned consumers require an emit plan and the emitter/writer reject an empty plan. No exception or new stop rule was invented.
 
-The detector's current `--help` lists no `--local-validation-head-sha` option. The dispatch emitter returns its expanded unit count, and its tests cover splits beyond the configured group count. These are evidence for reconciliation, not permission to silently redefine behavior. No semantic resolution or clean whole-phase verdict is recorded yet.
+The detector's current `--help` lists no `--local-validation-head-sha` option. The dispatch emitter returns its expanded unit count, and its tests cover splits beyond the configured group count. These evidence-backed description corrections do not resolve the remaining policy conflicts or establish whole-phase clearance.
 
 ## First-slice evidence
 
@@ -193,3 +193,11 @@ Repeated generator internals now point to their existing implementation; agent i
 Independent old/new review found no material loss across malicious fenced bodies, excluded files, one/two-hunk runs, impure/metadata-bearing hunks, scoped inputs, fallback, hash failures and absent-record scenarios. The 439 focused renderer/filter/verifier tests passed. No runtime feature or new tolerance was introduced.
 
 This slice removes 1,050 words / 6,893 bytes from source and its generated mirror. The source pair is now 37,824 / 289,481; the 24-file conservative set is 84,287 / 645,580. Whole-tree coverage remains partial. Full `bun run verify` passed: 9,292 tests across 390 files, no skips/failures, plus docs/workflows. The 92-asset parity check also passed.
+
+## Request-plan and obsolete CI-invocation slice
+
+Request-plan implementation detail now delegates to existing `buildReviewDispatchPlan`, `buildAngleRequestGroups`, model resolution and writer enforcement. Retained interpretation duties include Claude/Pi limitations, unobserved fingerprint inputs, hash formats, TTL defaults, scoped-prefix ordering, volatile/stable separation, validation before destructive writes, completion-marker ordering and the distinction between a plan and actual primer evidence. Independent scenarios found no changed decision for pending-name trimming, Pi models, omitted fingerprint inputs, scoped companions, malformed inputs or changed acceptance criteria. The original complete-set failure invariant remains explicit; same-prefix marker retention does not itself prove it. That existing implementation gap is not fixed or excused here.
+
+The CI correction preserves the old zero-suite, previous-green and same-head-local-verification prerequisites in the existing CI owner, with mandatory point-of-use reads from both callers. The detector parser rejects the removed flag, and `runCli` supplies only repo/PR to `autoDetectSnapshot`; ordinary CLI refresh cannot provide the local-validation SHA required by internal promotion. No runtime promotion was enabled. Independent scenarios confirmed that raw `none` cannot be self-certified, failure still routes to stop/fix, wrong-head or incomplete internal evidence cannot promote, and gate-evidence exclusion remains separate. This corrects an impossible invocation, not a permission boundary.
+
+The combined slice reduces the whole source tree by 622 words / 4,201 bytes. The source pair is 37,134 / 284,662; the 24-file conservative normal-draft set is 83,570 / 640,611. The CI owner is a conditional additional read for this exception: it is now 1,014 words / 8,105 bytes, versus 919 / 7,337 at the original base. Counting the same 24 files plus that whole owner in both versions gives 90,482 / 690,342 versus 84,584 / 648,716; the shorter callers alone would hide that owner's growth. Validation passed: 453 focused detector/builder/plan tests, 92-asset parity and full `bun run verify` (9,292 tests across 390 files, no skips/failures, plus docs/workflows).
