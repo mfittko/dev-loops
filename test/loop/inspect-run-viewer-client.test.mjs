@@ -325,6 +325,36 @@ test("createInspectionViewerAdapter shares one dot-signal fan-out between concur
   assert.equal(signalCalls, 4);
 });
 
+test("createInspectionViewerAdapter never caches a failed dot-signal fan-out", async () => {
+  let signalCalls = 0;
+  let failNextSignalQuery = true;
+  const adapter = createInspectionViewerAdapter({
+    inspectRunImpl: async () => ({ ok: true }),
+    runGhJsonImpl: async (args) => {
+      if (args.includes("changes_requested") || args.includes("failure") || args.includes("pending") || args.includes("approved")) {
+        signalCalls += 1;
+        if (failNextSignalQuery) {
+          failNextSignalQuery = false;
+          throw new Error("gh command failed: API rate limit exceeded");
+        }
+      }
+      return [];
+    },
+  });
+
+  // Without the eviction the rejected PROMISE stays cached for 5 minutes, so one
+  // transient failure keeps the `⚠️ PR lookup failed` sidebar up long after the
+  // limit cleared.
+  await assert.rejects(
+    adapter.listAssignedPullRequests({ repo: "owner/repo" }),
+    /API rate limit exceeded/,
+  );
+  signalCalls = 0;
+
+  await adapter.listAssignedPullRequests({ repo: "owner/repo" });
+  assert.equal(signalCalls, 4);
+});
+
 test("createInspectionViewerAdapter refreshes expired assigned PR cache entries", async () => {
   let nowMs = Date.parse("2026-05-21T00:00:00.000Z");
   let ghCalls = 0;

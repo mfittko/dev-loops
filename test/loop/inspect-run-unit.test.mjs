@@ -11,7 +11,7 @@ import {
   TRUST,
 } from "../../packages/core/src/loop/run-inspection.mjs";
 import { STATE as COPILOT_STATE } from "../../packages/core/src/loop/copilot-loop-state.mjs";
-import { parseInspectRunCliArgs } from "../../scripts/loop/inspect-run.mjs";
+import { inspectRunLoopIterations, parseInspectRunCliArgs } from "../../scripts/loop/inspect-run.mjs";
 import {
   makeCopilotEvidence,
   makeReviewerEvidence,
@@ -979,4 +979,20 @@ test("composeRunInspectionSnapshot: the fallback still honors a real unresolved-
   );
 
   assert.notEqual(withThreads.lifecyclePhase, withoutThreads.lifecyclePhase);
+});
+
+test("inspectRunLoopIterations answers the deferred fragment without a live GitHub fact capture", async () => {
+  // The only production path behind /round-metrics.html: both the adapter and
+  // the server tests inject over it, so nothing else executes it. A file-backed
+  // copilot input costs no `gh` call and still exercises the swallowed evidence
+  // load plus the delegation to resolveLoopIterationMetrics.
+  assert.deepEqual(
+    await inspectRunLoopIterations({ repo: "owner/repo", pr: 1, copilotInputPath: "/nonexistent" }),
+    { available: false, source: "github_pr_timeline", reason: "requires_live_github_facts" },
+  );
+
+  await assert.rejects(
+    inspectRunLoopIterations({ repo: "owner/repo/extra", pr: 1, copilotInputPath: "/nonexistent" }),
+    /--repo must match <owner\/name>/,
+  );
 });

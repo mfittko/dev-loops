@@ -348,6 +348,26 @@ test("inspect category help lists both routed subcommands and lifecycle actions"
   assert.equal(stderr.read(), "");
 });
 
+test("`inspect open --help` prints help instead of starting a managed viewer", async () => {
+  const stdout = createBufferStream();
+  const stderr = createBufferStream();
+
+  const exitCode = await runCli({
+    argv: ["inspect", "open", "--help"],
+    runtime: createInspectRuntime({
+      async open() {
+        throw new Error("lifecycle must not run for --help");
+      },
+    }),
+    stdout: stdout.stream,
+    stderr: stderr.stream,
+  });
+
+  assert.equal(exitCode, 0);
+  assert.match(stdout.read(), /open\s+Start \(or reuse\) the managed viewer/);
+  assert.equal(stderr.read(), "");
+});
+
 test("CLI help exposes project queue wrapper surface", async () => {
   const helpStdout = createBufferStream();
   const helpStderr = createBufferStream();

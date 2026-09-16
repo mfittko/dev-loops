@@ -182,13 +182,25 @@ test("inspectResultSeverity is fail-closed except for running and no-op stop/sta
   assert.equal(inspectResultSeverity({ action: "open", state: "running" }), "info");
   assert.equal(inspectResultSeverity({ action: "status", state: "stopped", record: null }), "info");
   assert.equal(
-    inspectResultSeverity({ action: "stop", state: "stopped", detail: "Stopped the managed inspect-run viewer." }),
+    inspectResultSeverity({ action: "stop", state: "stopped", record: null, detail: "Stopped the managed inspect-run viewer." }),
     "info",
   );
   assert.equal(inspectResultSeverity({ action: "open", state: "stopped", detail: "launch failed" }), "error");
   assert.equal(inspectResultSeverity({ action: "restart", state: "conflict_unmanaged_listener" }), "error");
   assert.equal(
-    inspectResultSeverity({ action: "stop", state: "stopped", detail: "A different managed viewer is running." }),
+    inspectResultSeverity({
+      action: "stop",
+      state: "stopped",
+      record: { pid: 4242, port: 7777 },
+      detail: "A different managed viewer is running.",
+    }),
+    "error",
+  );
+  // The catch paths in executeDevLoopsCommand emit a `stopped` result with no
+  // `record` and an arbitrary error message. Severity must not read that prose:
+  // a failure that happens to echo viewer wording still exits non-zero.
+  assert.equal(
+    inspectResultSeverity({ action: "stop", state: "stopped", detail: "Stopped the managed inspect-run viewer." }),
     "error",
   );
 });

@@ -5,6 +5,7 @@ import {
   buildInspectionMermaidGraph,
   renderInspectRunViewerHtml,
 } from "../../scripts/loop/inspect-run-viewer.mjs";
+import { renderInboxShellScript } from "../../scripts/loop/inspect-run-viewer/inbox.mjs";
 import { makeSnapshot } from "./inspect-run-viewer-test-helpers.mjs";
 test("renderInspectRunViewerHtml emits the round-metrics fragment URL as a JS string, not HTML-escaped", () => {
   const html = renderInspectRunViewerHtml({
@@ -1008,4 +1009,35 @@ test("renderInspectRunViewerHtml fail-closes the graph for unavailable snapshots
 
   assert.match(html, /Snapshot unavailable, so no state graph can be rendered yet/);
   assert.doesNotMatch(html, /class="mermaid-state-graph mermaid"/);
+});
+
+// The sidebar shell script is a string with no DOM behind it in this suite, so
+// it is executed against a minimal stub document instead of being pattern-matched.
+function runInboxShellScript({ hasError }) {
+  const empty = { dataset: {}, textContent: "", hidden: false };
+  const document = {
+    querySelector(selector) {
+      if (selector === "[data-inbox-empty]") {
+        return empty;
+      }
+      if (selector === "[data-inbox-error]") {
+        return hasError ? { tagName: "P" } : null;
+      }
+      return null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+  const source = renderInboxShellScript().replace(/^<script>/, "").replace(/<\/script>$/, "");
+  new Function("document", source)(document);
+  return empty;
+}
+
+test("renderInboxShellScript keeps the empty-inbox line hidden when the lookup failed", () => {
+  // A failed lookup already renders `⚠️ PR lookup failed: …`; claiming "No
+  // assigned PRs are visible in this view." underneath it is the exact message
+  // the failure line exists to replace.
+  assert.equal(runInboxShellScript({ hasError: true }).hidden, true);
+  assert.equal(runInboxShellScript({ hasError: false }).hidden, false);
 });
