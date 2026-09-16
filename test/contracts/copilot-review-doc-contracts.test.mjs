@@ -1,6 +1,11 @@
+import { resolveEffectiveCopilotRoundCap, resolveRefinementConfig } from "@dev-loops/core/config";
+
 import {
   assert,
+  assertOrder,
+  flat,
   fromRepoRoot,
+  hasClauseWith,
   parseFrontmatter,
   readRepo,
   readdir,
@@ -42,7 +47,10 @@ test("copilot review gates keep phase-specific angle ownership in one canonical 
     }
     assert.doesNotMatch(section, /Gate role:/i, `${label} should not introduce extra template-only fields that drift across gates`);
   }
-  const draftAnglePatterns = [/resolveGateAngles\(config, "draft"\)/i, /all configured draft gate angle families/i];
+  // Exact by design: these are API call literals, not prose. The per-gate
+  // resolver call is what keeps each gate's angle list config-driven and
+  // separate; the surrounding sentence is free to be reworded.
+  const draftAnglePatterns = [/resolveGateAngles\(config, "draft"\)/i];
   const preApprovalAnglePatterns = [/resolveGateAngles\(config, "preApproval"\)/];
   const devLoopDraftOwnedAnglesMatch = devLoopDraftGate.match(/Review angles:[\s\S]*?(?=\n- \*\*Pass criteria)/i);
   const devLoopDraftOwnedAngles = devLoopDraftOwnedAnglesMatch ? devLoopDraftOwnedAnglesMatch[0] : "";
@@ -120,12 +128,30 @@ test("copilot-pr-followup skill keeps async watch persistence explicit", async (
     readRepo("skills/docs/copilot-loop-state-graph.md"),
   ]);
   assert.match(skillContent, /dev-loops loop watch-cycle/i);
-  assert.match(skillContent, /zero-timeout `idle` probes are for explicit one-shot status\/reattach checks only/i);
-  assert.match(skillContent, /returning to `waiting_for_copilot_review` is a persistence boundary: resume the watcher instead of reporting completion/i);
-  assert.match(skillContent, /persistent async watch\/fix loop, not handoff-only behavior/i);
-  assert.match(skillContent, /if `cycleDisposition` is `pending` and `terminal` is `false`, the subagent exits on the wait boundary; the main session re-dispatches another watch boundary/i);
+  // Structural, not phrase-pinned: each persistence obligation is asserted as a
+  // co-occurrence of its own machine-readable tokens inside ONE clause, so a
+  // meaning-preserving rewrite passes while dropping the obligation fails.
+  assert.ok(
+    hasClauseWith(skillContent, /zero-timeout/i, /\bidle\b/i, /\bonly\b/i, /one-shot|status|reattach/i),
+    "skill must confine zero-timeout idle probes to explicit one-shot status/reattach checks",
+  );
+  assert.ok(
+    hasClauseWith(skillContent, /waiting_for_copilot_review/, /persistence boundary/i, /\b(?:resume|watcher)\b/i),
+    "skill must treat a return to waiting_for_copilot_review as a persistence boundary, not completion",
+  );
+  assert.ok(
+    hasClauseWith(skillContent, /run-watch-cycle\.mjs|watch\/fix loop/i, /\bnot\b/i, /handoff-only/i),
+    "skill must state the watch cycle is a persistent loop, not handoff-only behavior",
+  );
+  assert.ok(
+    hasClauseWith(skillContent, /cycleDisposition/, /pending/, /terminal/, /false/),
+    "skill must define the pending/non-terminal continuation branch by its cycleDisposition fields",
+  );
   assert.match(skillContent, /if the user explicitly asks for async handoff-only behavior/i);
-  assert.match(skillContent, /child async run exits[\s\S]*waiting_for_copilot_review[\s\S]*main session re-dispatches the same-PR follow-up path when feasible/i);
+  assert.ok(
+    hasClauseWith(skillContent, /child async run/i, /waiting_for_copilot_review/, /re-dispatch/i),
+    "skill must route an early child exit at a non-terminal state back to a same-PR re-dispatch",
+  );
   assert.match(scriptsReadme, /`cycleDisposition: "pending"` with `terminal: false` means stay attached and run another watch boundary rather than exiting as clean success/i);
   assert.match(scriptsReadme, /handoff-only behavior must be explicitly requested/i);
   assertRuleOwned("COPILOT-STATE-WATCH-PERSISTENCE", "skills/docs/copilot-loop-state-graph.md");
@@ -286,45 +312,47 @@ test("copilot-pr-followup skill hardens reply-resolve, gate sequencing, and merg
     /`gateBoundary=conflict_resolution`|`mergeStateStatus` is conflicted/i,
     "conflict-resolution subsection should key off the deterministic helper boundary",
   );
-  assert.match(
-    step7,
-    /fetch fresh `origin\/main`/i,
-    "conflict-resolution flow should refresh origin/main first",
+  // The conflict-resolution flow is checked STRUCTURALLY: the executable
+  // literals it must name, plus the ORDER of the steps that make it safe.
+  // Rewording any step is fine; dropping a step, or moving the authorization
+  // ask after the reconciliation, is not.
+  const conflictSection = step7.match(/### Conflict-resolution gate[\s\S]*?(?=\n### |$)/)?.[0] ?? "";
+  assert.ok(conflictSection.length > 0, "conflict-resolution section not found inside Step 7");
+  const conflictFlat = flat(conflictSection);
+  for (const literal of [
+    "detect-pr-gate-coordination-state.mjs",
+    "origin/main",
+    "git merge origin/main",
+    "pre_approval_gate",
+    "--force-with-lease",
+  ]) {
+    assert.ok(conflictSection.includes(literal), `conflict-resolution flow must name ${literal}`);
+  }
+  assert.ok(
+    hasClauseWith(conflictSection, /authoriz/i, /\bbefore\b/i),
+    "conflict-resolution flow must require explicit authorization before any reconciliation command",
   );
-  assert.match(
-    step7,
-    /ask for explicit authorization before any merge commit/i,
-    "conflict-resolution flow should require explicit reconciliation authorization",
+  assert.ok(
+    hasClauseWith(conflictSection, /auto-resolve|mechanical/i, /conflict/i, /simple|mechanical|in scope/i),
+    "conflict-resolution flow should allow auto-resolution only for simple, in-scope conflicts",
   );
-  assert.match(
-    step7,
-    /default to a merge commit \(`git merge origin\/main`\)/i,
-    "conflict-resolution flow should document the default merge commit path",
+  assert.ok(
+    hasClauseWith(conflictSection, /complex/i, /conflict/i, /report|surface|explicit/i),
+    "conflict-resolution flow should report complex conflicts rather than auto-resolve them",
   );
-  assert.match(
-    step7,
-    /auto-resolve simple conflicts/i,
-    "conflict-resolution flow should allow simple auto-resolution",
-  );
-  assert.match(
-    step7,
-    /report complex ones|report complex conflicts/i,
-    "conflict-resolution flow should surface complex conflicts for manual handling",
-  );
-  assert.match(
-    step7,
-    /rerun `detect-pr-gate-coordination-state\.mjs`/i,
-    "conflict-resolution flow should require gate re-detection",
-  );
-  assert.match(
-    step7,
-    /rerun `pre_approval_gate` for the new head/i,
-    "conflict-resolution flow should require a fresh pre-approval gate on the new head",
-  );
-  assert.match(
-    step7,
-    /wait for current-head CI again/i,
-    "conflict-resolution flow should require fresh CI on the new head",
+  // The re-gate and the CI wait are both scoped to the NEW head; markers that
+  // drop that scoping would be satisfied by the section's own earlier prose.
+  assertOrder(
+    conflictFlat,
+    [
+      /origin\/main/,
+      /authoriz/i,
+      /reconcile/i,
+      /rerun `detect-pr-gate-coordination-state\.mjs`/,
+      /`pre_approval_gate` for the new head/,
+      /current-head CI again/,
+    ],
+    "conflict-resolution flow",
   );
   const antiPatternsMatch = skillContent.match(/## Anti-patterns[\s\S]*?(?=\n## Recommended companion skills|$)/);
   const antiPatterns = antiPatternsMatch ? antiPatternsMatch[0] : "";
@@ -344,11 +372,36 @@ test("copilot-pr-followup skill caps Copilot re-review rounds via config and sna
   assert.ok(step7.length > 0, "copilot-pr-followup Step 7 section not found");
 
   assert.match(step7, /resolveRefinementConfig\(config, "maxCopilotRounds"\)/i);
-  assert.match(step7, /default config ships `maxCopilotRounds: 5`/i);
-  assert.match(step7, /completed Copilot review-round count/i);
-  assert.match(step7, /if completed review rounds have reached the resolved round cap/i);
-  assert.match(step7, /`deferred to follow-up` note/i);
-  assert.match(step7, /stop and report that the Copilot round limit was reached/i);
+  // Parity, not prose: whatever default the skill states must be the default
+  // the shipped config actually resolves. A config change that leaves the doc
+  // behind fails here; rewording the sentence does not.
+  const shippedDefaultCap = resolveRefinementConfig(null, "maxCopilotRounds");
+  const shippedLightweightCap = resolveEffectiveCopilotRoundCap(null, { lightweight: true });
+  assert.ok(
+    hasClauseWith(step7, /default/i, new RegExp(`maxCopilotRounds: ${shippedDefaultCap}\\b`)),
+    `skill must state the shipped default round cap (maxCopilotRounds: ${shippedDefaultCap})`,
+  );
+  assert.ok(
+    hasClauseWith(step7, /lightweight/i, new RegExp(`\\b${shippedLightweightCap}\\b`)),
+    `skill must state the shipped lightweight round cap (${shippedLightweightCap})`,
+  );
+  assert.match(step7, /resolveEffectiveCopilotRoundCap\(config, \{ lightweight: true \}\)/);
+  assert.ok(
+    hasClauseWith(step7, /completed.*review[- ]round count|review-round count/i),
+    "skill must source the current round count from the detector's completed-round count",
+  );
+  assert.ok(
+    hasClauseWith(step7, /reached/i, /round cap|round limit/i),
+    "skill must define the at-cap branch",
+  );
+  assert.ok(
+    hasClauseWith(step7, /deferred to follow-up/i),
+    "skill must require a deferred-to-follow-up note on remaining deferred threads at the cap",
+  );
+  assert.ok(
+    hasClauseWith(step7, /stop/i, /round (?:limit|cap)/i),
+    "skill must stop and report when the Copilot round limit is reached short of clean",
+  );
   assertRuleOwned("COPILOT-FOLLOWUP-ROUND-CAP", "skills/copilot-pr-followup/SKILL.md");
 });
 

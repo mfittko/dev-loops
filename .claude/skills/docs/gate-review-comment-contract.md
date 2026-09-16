@@ -311,7 +311,7 @@ is a consolidator bug to fix, not an operator decision to override.
 compares `--verdict` against the wrapper's `overallVerdict` — the
 consolidator's computed round verdict — whether or not `--judge-verdict` was
 also supplied. The judge only enriches findings with `act`/`defer`/`reject`
-dispositions (see [Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#phase-35--judge-relevance-disposition-1525));
+dispositions (see [Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#phase-35--judge-relevance-disposition));
 it never revises the round verdict, so a `--judge-verdict` run is held to the
 exact same contradiction check as a run without one.
 

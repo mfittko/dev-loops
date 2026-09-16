@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- **The shared contract-test prose helpers no longer degrade silently, so a doc check cannot decay into a tautology while still reporting green.** `hasClauseWith` (`test/imported-assets-helpers.mjs`) treated a whole markdown list as one sentence, because bullets carry no terminal punctuation — on the Copilot follow-up skill that produced a single 2,400-character pseudo-sentence in which tokens from unrelated bullets satisfied one co-occurrence check. It now segments on list-item, table-row, heading and blank-line boundaries before the sentence split. Both helpers also rejected nothing when handed a global or sticky marker: `String.match` drops `.index` under `/g`, so `assertOrder`'s cursor became `NaN`, the `index !== -1` guard passed on `NaN`, and every later marker searched from offset 0 with ordering enforcement silently off. Both now throw on a stateful marker, and `assertOrder` flattens its own input so a marker spanning a line wrap still matches. Covered by unpunctuated-bullet, table-row, `/g`, `/y` and line-wrap fixtures.
+- **The `review` agent's grouped-dispatch instruction pointed at a section that no longer holds the rule.** It routed readers to the Copilot follow-up skill's Phase 2 for `GATE-EXEC-BRIEFING-PREFIX`'s `--scope` naming rule; that rule is owned by the checkpoint review chain contract. The agent now points at the owner and names the `<gate>-group-<name>` form inline, so a grouped reviewer has it at the point of use.
+
 ## 1.0.3
 
 ### Added

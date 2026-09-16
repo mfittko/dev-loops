@@ -3,7 +3,9 @@ import { access } from "node:fs/promises";
 import {
   assert,
   assertMatchesAll,
+  flat,
   fromRepoRoot,
+  hasClauseWith,
   readRepo,
   test,
 } from "../imported-assets-helpers.mjs";
@@ -15,13 +17,15 @@ import {
 // doc, so every gate round re-dispatched every angle and the seam was never
 // invoked once.
 //
-// These assertions pin the ROUTING in place: the skill that drives the fan-out
-// must name the CLI, dispatch only the angles it leaves to re-run, record the
-// carried ones with their carried provenance, and treat a CLI refusal as
-// "re-run everything" rather than "re-run nothing". Each pattern group is
-// matched against the SPECIFIC numbered step it governs (extracted by its
-// heading), not the whole file — a bare header/Phase-3 mention of a token like
-// `carriedFromHead` must not satisfy a check that exists to pin Phase 1.2.
+// These assertions pin the ROUTING, not the wording. What each step must carry
+// is its executable surface (CLI name, flags, plan field names, owner rule ID)
+// plus a structural property of the instruction (e.g. the dispatch set is
+// defined by subtracting `carried`, and `mustRerun` is explicitly NOT the
+// dispatch input). A meaning-preserving rewrite of the surrounding prose must
+// keep passing; deleting the routing, the CLI, or the subtraction rule must
+// fail. The discrimination tests at the bottom of this file exercise both
+// directions against fixtures so the checkers cannot silently degrade into
+// tautologies.
 // ---------------------------------------------------------------------------
 
 const SKILL = "skills/copilot-pr-followup/SKILL.md";
@@ -39,96 +43,140 @@ const GATE_DRIVING_SKILLS = [
   SUB_LOOP_CONTRACT,
 ];
 
-// Each numbered procedure step in the fan-out/fan-in section is one long line
-// starting "N. **<heading>:**" (see the section this pins). Extract by heading
-// substring so a mutation that deletes the whole step (leaving only the header
-// or a sibling step's mention of the same token) cannot satisfy the check.
-function extractStepLine(content, heading, file) {
-  const line = content.split("\n").find((l) => l.includes(heading));
-  assert.ok(line, `${file}: expected to find the ${JSON.stringify(heading)} step`);
-  return line;
+/**
+ * Extract one numbered step of the fan-out/fan-in procedure by its bold
+ * heading, from the heading line through the line before the next top-level
+ * numbered step or the next `###` section.
+ *
+ * Structural, not layout-bound: the step may be one long line, a paragraph, or
+ * a heading plus sub-bullets. A step that is deleted entirely (leaving only a
+ * sibling step's mention of the same token) cannot satisfy a check, because the
+ * heading anchor is gone.
+ *
+ * Exported for the discrimination tests below.
+ */
+export function extractStep(content, heading, file = "<fixture>") {
+  const lines = content.split("\n");
+  const start = lines.findIndex((line) => line.includes(heading));
+  assert.ok(start !== -1, `${file}: expected to find the ${JSON.stringify(heading)} step`);
+  const rest = lines.slice(start + 1);
+  const endOffset = rest.findIndex((line) => /^\d+\.\s/.test(line) || /^#{1,3}\s/.test(line));
+  const body = endOffset === -1 ? rest : rest.slice(0, endOffset);
+  return [lines[start], ...body].join("\n");
 }
 
-// Phase 1.2 (Carry-forward): names the CLI, the SHA form it requires, the
-// subtract-not-substitute dispatch rule, and treats a refusal as full fan-out.
-const PHASE_1_2_ROUTING = [
-  /resolve-angle-carry-forward\.mjs/,
-  /--prev-head/,
-  /mustRerun/,
-  // …the dispatch set is the CURRENT head's resolved angles minus the carried
-  // ones, never the plan's own lists — the plan's universe is the PRIOR head's
-  // angle set, so an angle first resolved at this head appears in neither list
-  // and would otherwise go unreviewed.
-  /subtract, never substitute/,
-  /minus the plan's `carried` angles/,
-  // An abbreviated prev-head resolves no log file, so carry-forward would refuse
-  // forever without ever saying why.
-  /FULL 40-character form/,
-  // Carried angles keep the prior reviewer's identity and head, never a fake one.
-  /carriedFromHead/,
-  /never a fabricated fresh review/i,
-  // Round 1 has no prior head, so the step is explicitly skipped rather than
-  // left to fail-closed refusal by accident.
-  /Skip this step on a gate's first round/,
-  // The rule itself stays owned by the contract doc.
-  /GATE-EXEC-ANGLE-CARRY-FORWARD/,
-  // A refusal must widen the fan-out, not silence it.
-  /never treat exit 1 as "nothing to re-run"/,
-];
+// `flat` (reflow-insensitive text) and `hasClauseWith` (one clause satisfies
+// every pattern) are the shared prose-structure primitives from
+// ../imported-assets-helpers.mjs.
 
-// Phase 2 (Fan-out): must dispatch by SUBTRACTION — the current head's
-// resolved angle set minus the plan's carried angles, never the plan's
-// mustRerun field — this is the clause that makes the carry-forward plan
-// operative rather than advisory, pinned in its unambiguous form.
-const PHASE_2_ROUTING = [
-  /resolved angle set minus the plan's `carried` angles \(the Phase 1\.2 subtraction — never `mustRerun`\)/,
-];
+// Phase 1.2 (Carry-forward): the step must invoke the seam's CLI with the
+// identity inputs it needs, name the plan fields it returns, defer the rule
+// itself to its owner, and state the two fail-safe branches (full SHAs, and a
+// refusal widening the fan-out rather than silencing it).
+export function assertPhase12Routing(step, label) {
+  const text = flat(step);
+  // Executable surface: exact by design (CLI + flags + returned plan fields).
+  assertMatchesAll(text, [
+    /resolve-angle-carry-forward\.mjs/,
+    /--prev-head/,
+    /--head-sha/,
+    /\bcarried\b/,
+    /mustRerun/,
+    /carriedFromHead/,
+    /GATE-EXEC-ANGLE-CARRY-FORWARD/,
+  ], label);
+  // Structural: the SHA form is stated as full-length, in any phrasing.
+  assert.match(text, /40[- ]?(?:character|char|hex|digit)/i,
+    `${label}: must require the FULL 40-character SHA form for --prev-head/--head-sha`);
+  // Structural: the dispatch set is defined by SUBTRACTING carried angles.
+  assert.ok(
+    hasClauseWith(step, /\b(?:minus|subtract\w*|remov\w+|excluding|excluded)\b/i, /\bcarried\b/i),
+    `${label}: dispatch must be defined as the resolved angle set MINUS the carried angles`,
+  );
+  // Structural: mustRerun is explicitly not the dispatch input.
+  assert.ok(
+    hasClauseWith(step, /mustRerun/, /\b(?:never|not|informational|advisory)\b/i),
+    `${label}: mustRerun must be marked non-authoritative for dispatch`,
+  );
+  // Structural: a CLI refusal widens the fan-out (fail-safe direction).
+  assert.ok(
+    hasClauseWith(step, /\b(?:non-zero|exit 1|refus\w+)\b/i, /\b(?:every|all|full)\b/i, /\bangles?\b/i),
+    `${label}: a carry-forward refusal must fan out every resolved angle, never zero`,
+  );
+  // Structural: round 1 has no prior head and is skipped explicitly.
+  assert.match(text, /\bfirst round\b|\bno prior head\b/i,
+    `${label}: must say the step is skipped on a gate's first round (no prior head)`);
+}
+
+// Phase 2 (Fan-out): the emitter is the sanctioned dispatch step, and the
+// dispatch set is still the subtraction Phase 1.2 produced.
+export function assertPhase2Dispatch(step, label) {
+  const text = flat(step);
+  assertMatchesAll(text, [
+    /emit-fanout-dispatch\.mjs/,
+    /--pending/,
+    /promptPath/,
+    /maxConcurrent/,
+    /GATE-EXEC-FANOUT-DISPATCH-EMIT/,
+  ], label);
+  // Structural: the wave bound is the emitter's own field, never the wave plan.
+  assert.ok(
+    hasClauseWith(step, /wavePlan/, /\b(?:not|never)\b/i),
+    `${label}: must forbid bounding the fan-out by artifact.fanout.wavePlan`,
+  );
+  // Structural: the dispatch set is still Phase 1.2's subtraction — the carried
+  // subset decides whether `--pending` is passed, and `mustRerun` is never the
+  // dispatch input. A bare /carried/ token check would be satisfied by the
+  // `--carried-angles` flag name alone, so both halves are asserted.
+  assert.ok(
+    hasClauseWith(step, /\bcarried\b/i, /--pending|\bdispatch\b/i),
+    `${label}: must branch the emitter's --pending on the Phase 1.2 carried subset`,
+  );
+  assert.doesNotMatch(
+    text,
+    /dispatch[^.]{0,80}\bmustRerun\b/i,
+    `${label}: must not dispatch from the plan's mustRerun list`,
+  );
+}
 
 // Phase 3 (Fan-in): --provenance belongs to the LEDGER WRITE, not the comment
-// post — pinned on this line specifically so a reworded sentence that reattaches
-// the flag to the wrong command (the exact defect this pins) fails here. The
-// whole step is ONE line, so `[^\n]*` spans it end to end and cannot fail on a
-// reattached flag; anchor inside the backtick-delimited code span instead
-// (`[^`]*`), which stops at the first closing backtick and so cannot reach past
-// the ledger-write command into a later, separately-quoted mention.
-const PHASE_3_ROUTING = [
-  /write-gate-findings-log\.mjs[^`]*--provenance/,
-  /carriedFromHead/,
-];
-// --provenance must NOT be reachable, within one code span, from the comment-post
-// command — this is the exact defect round 3 fixed and pins it from reintroduction.
-const PHASE_3_PROVENANCE_NOT_ON_COMMENT_POST = /post-gate-findings\.mjs[^`]*--provenance/;
+// post. Anchored inside one backtick-delimited code span so a reattached flag
+// on the comment-post command is caught.
+const PROVENANCE_ON_LEDGER_WRITE = /write-gate-findings-log\.mjs[^`]*--provenance/;
+const PROVENANCE_ON_COMMENT_POST = /post-gate-findings\.mjs[^`]*--provenance/;
+
+export function assertPhase3Provenance(step, label) {
+  assertMatchesAll(step, [PROVENANCE_ON_LEDGER_WRITE, /carriedFromHead/], label);
+  assert.doesNotMatch(
+    step,
+    PROVENANCE_ON_COMMENT_POST,
+    `${label}: --provenance must not be attached to the post-gate-findings.mjs comment post`,
+  );
+}
 
 // The class of banned rule this PR removed: "re-run only ... (findings |
 // findings_present) ... previous pass/head/round". Broad enough to catch a
 // reworded reintroduction of the SAME scoping rule, not just the one literal
-// phrasing this PR happened to delete — a reviewer who restores the removed
-// sentence verbatim, or rewords it (e.g. "in subsequent cycles, re-run only the
-// angles that had findings in the previous pass"), must still be caught.
+// phrasing this PR happened to delete.
 const BARE_FINDINGS_ONLY_RERUN_CLASS =
   /\bonly\b[^.\n]{0,80}\b(?:findings_present|findings)\b[^.\n]{0,60}\bprevious\s+(?:pass|head|round)\b/i;
 
 test("copilot-pr-followup SKILL's Phase 1.2 step routes the fan-out through resolve-angle-carry-forward", async () => {
   const skill = await readRepo(SKILL);
-  const line = extractStepLine(skill, "**Carry-forward (Phase 1.2):**", SKILL);
-  assertMatchesAll(line, PHASE_1_2_ROUTING, `${SKILL} Phase 1.2 step`);
+  const step = extractStep(skill, "**Carry-forward (Phase 1.2):**", SKILL);
+  assertPhase12Routing(step, `${SKILL} Phase 1.2 step`);
 });
 
 test("copilot-pr-followup SKILL's Phase 2 step dispatches only the angles Phase 1.2 left to re-run", async () => {
   const skill = await readRepo(SKILL);
-  const line = extractStepLine(skill, "**Fan-out (Phase 2):**", SKILL);
-  assertMatchesAll(line, PHASE_2_ROUTING, `${SKILL} Phase 2 step`);
+  const step = extractStep(skill, "**Fan-out (Phase 2):**", SKILL);
+  assertPhase2Dispatch(step, `${SKILL} Phase 2 step`);
 });
 
 test("copilot-pr-followup SKILL's Phase 3 step attaches --provenance to the ledger write, not the comment post", async () => {
   const skill = await readRepo(SKILL);
-  const line = extractStepLine(skill, "**Fan-in (Phase 3):**", SKILL);
-  assertMatchesAll(line, PHASE_3_ROUTING, `${SKILL} Phase 3 step`);
-  assert.doesNotMatch(
-    line,
-    PHASE_3_PROVENANCE_NOT_ON_COMMENT_POST,
-    `${SKILL} Phase 3 step must not attach --provenance to the post-gate-findings.mjs comment post`,
-  );
+  const step = extractStep(skill, "**Fan-in (Phase 3):**", SKILL);
+  assertPhase3Provenance(step, `${SKILL} Phase 3 step`);
 });
 
 test("the carry-forward CLI the SKILL routes to exists", async () => {
@@ -179,44 +227,39 @@ test("local-implementation developer loop prescribes no gate angle retry scoping
 test("the sub-loop contract's carry-forward rule states carry-forward as the default posture, not just a MAY", async () => {
   // Pins the AC4 posture flip so it cannot silently revert to the old MAY
   // wording: carry-forward must be stated as the default decision procedure,
-  // with full re-dispatch named as the exception. Pinned on the source doc only;
+  // with full re-dispatch named as the exception. Whitespace-insensitive so a
+  // reflowed paragraph does not false-fail. Pinned on the source doc only;
   // claude-assets-reproducible.test.mjs proves the generated mirror matches it.
-  {
-    const file = SUB_LOOP_CONTRACT;
-    const content = await readRepo(file);
-    assert.match(
-      content,
-      /carried forward to the new head by default/,
-      `${file} must state carry-forward as the default posture`,
-    );
-    assert.match(
-      content,
-      /A full\s*\nre-dispatch of the entire resolved angle set is the EXCEPTION/,
-      `${file} must name full re-dispatch as the exception to the default`,
-    );
-  }
+  const file = SUB_LOOP_CONTRACT;
+  const content = flat(await readRepo(file));
+  assert.match(
+    content,
+    /carried forward to the new head by default/,
+    `${file} must state carry-forward as the default posture`,
+  );
+  assert.match(
+    content,
+    /A full re-dispatch of the entire resolved angle set is the EXCEPTION/,
+    `${file} must name full re-dispatch as the exception to the default`,
+  );
 });
 
 test("copilot-pr-followup SKILL's Phase 2 step injects the known-findings block after the angle prompt, never into the byte-identical prefix", async () => {
   // AC4's briefing half: the known-findings block is appended AFTER the
   // angle-specific prompt, not folded into GATE-EXEC-BRIEFING-PREFIX's
   // byte-identical prefix — folding it in would recompute the prefix hash on
-  // every gate close and break the sanctioned same-head-retry sentinel. Pinned
-  // on the source SKILL only; the generated mirror is covered by
-  // claude-assets-reproducible.test.mjs byte-reproducibility.
-  {
-    const file = SKILL;
-    const content = await readRepo(file);
-    assertMatchesAll(
-      content,
-      [
-        /known-findings block, appended AFTER this\s*\n\s*angle-specific prompt/,
-        /never into the byte-identical prefix `GATE-EXEC-BRIEFING-PREFIX`/,
-        /GATE-EXEC-FINDING-THREADS/,
-      ],
-      `${file} Phase 2 known-findings injection`,
-    );
-  }
+  // every gate close and break the sanctioned same-head-retry sentinel.
+  // Whitespace-insensitive: the obligation is the ordering, not the line breaks.
+  const content = flat(await readRepo(SKILL));
+  assertMatchesAll(
+    content,
+    [
+      /known-findings block, appended AFTER this angle-specific prompt/,
+      /never into the byte-identical prefix `GATE-EXEC-BRIEFING-PREFIX`/,
+      /GATE-EXEC-FINDING-THREADS/,
+    ],
+    `${SKILL} Phase 2 known-findings injection`,
+  );
 });
 
 test("detect-checkpoint-evidence.mjs has no gate-thread-specific second unresolved-thread counter", async () => {
@@ -229,4 +272,88 @@ test("detect-checkpoint-evidence.mjs has no gate-thread-specific second unresolv
     /gate[A-Za-z]*Thread[A-Za-z]*Count/,
     "detect-checkpoint-evidence.mjs must reconcile gate-authored threads through the single unresolvedThreadCount check, not a second gate-specific counter",
   );
+});
+
+// ---------------------------------------------------------------------------
+// Discrimination tests: prove the checkers above accept meaning-preserving
+// rewording and reject a structural violation. Without these, a checker that
+// decayed into a tautology (or into a wording pin) would look identical from
+// the outside.
+// ---------------------------------------------------------------------------
+
+// Same obligations as the shipped Phase 1.2 step, different words, different
+// line layout (sub-bullets instead of one long line) and different ordering.
+const PHASE_1_2_REWORDED = `2. **Carry-forward (Phase 1.2):** skip on a gate's first round, since there is no prior head.
+   - Invoke \`node scripts/github/resolve-angle-carry-forward.mjs --repo <r> --pr <n> --gate <g> --prev-head <A> --head-sha <B>\`.
+   - Give both SHAs in their full 40-character spelling; a shortened one resolves no log.
+   - The emitted plan carries \`carried\` and \`mustRerun\`. Build the dispatch set by removing the
+     \`carried\` angles from this head's resolved set. \`mustRerun\` is advisory and MUST NOT drive dispatch.
+   - Any non-zero exit means fan out all resolved angles, exactly as on a round with no prior head.
+   - Carried entries keep \`carriedFromHead\` and the prior reviewer identity; \`GATE-EXEC-ANGLE-CARRY-FORWARD\` owns the rule.
+3. **Next step**`;
+
+// Violations: each drops ONE structural obligation while keeping every token a
+// keyword-presence check would see.
+const PHASE_1_2_NO_SUBTRACTION = PHASE_1_2_REWORDED.replace(
+  /Build the dispatch set by removing the\s*\n\s*`carried` angles from this head's resolved set\. `mustRerun` is advisory and MUST NOT drive dispatch\./,
+  "Dispatch the angles the plan lists, using `carried` and `mustRerun` as the reviewer sees fit.",
+);
+const PHASE_1_2_REFUSAL_SILENCES = PHASE_1_2_REWORDED.replace(
+  "Any non-zero exit means fan out all resolved angles, exactly as on a round with no prior head.",
+  "Any non-zero exit means there is nothing to re-run; continue to the next phase.",
+);
+
+test("Phase 1.2 checker accepts a meaning-preserving rewrite of the same obligations", () => {
+  const step = extractStep(PHASE_1_2_REWORDED, "**Carry-forward (Phase 1.2):**");
+  assertPhase12Routing(step, "reworded fixture");
+});
+
+test("Phase 1.2 checker rejects a step that drops the subtract-not-substitute rule", () => {
+  const step = extractStep(PHASE_1_2_NO_SUBTRACTION, "**Carry-forward (Phase 1.2):**");
+  assert.throws(() => assertPhase12Routing(step, "violating fixture"));
+});
+
+test("Phase 1.2 checker rejects a step that turns a CLI refusal into 'nothing to re-run'", () => {
+  const step = extractStep(PHASE_1_2_REFUSAL_SILENCES, "**Carry-forward (Phase 1.2):**");
+  assert.throws(() => assertPhase12Routing(step, "violating fixture"));
+});
+
+test("extractStep bounds a step at the next numbered step, so a deleted step cannot borrow its sibling's text", () => {
+  const doc = `1. **Fan-in (Phase 3):** write the ledger with \`write-gate-findings-log.mjs --provenance '<json>'\` recording \`carriedFromHead\`.
+2. **Verdict (Phase 4):** post the verdict.`;
+  const phase3 = extractStep(doc, "**Fan-in (Phase 3):**");
+  assertPhase3Provenance(phase3, "fixture Phase 3");
+  const phase4 = extractStep(doc, "**Verdict (Phase 4):**");
+  assert.doesNotMatch(phase4, PROVENANCE_ON_LEDGER_WRITE, "step extraction must not leak the previous step's text");
+});
+
+// Phase 2 fixtures: the dispatch step reworded (passes) and the same step
+// rewritten to dispatch from `mustRerun` while still naming `--carried-angles`
+// (fails) — the exact degradation a bare token-presence check would let through.
+const PHASE_2_REWORDED = `4. **Fan-out (Phase 2):** run \`node scripts/github/emit-fanout-dispatch.mjs --repo <r> --pr <n> --gate <g> --head-sha <sha> [--pending]\` (\`GATE-EXEC-FANOUT-DISPATCH-EMIT\`).
+   - It returns one \`{ scope, angles, group, promptPath }\` per unit plus \`maxConcurrent\`.
+   - Rebuild the context with \`--carried-angles\` when Phase 1.2 carried a subset, then dispatch with \`--pending\`.
+   - Release units in waves of \`maxConcurrent\`; that bound is never \`artifact.fanout.wavePlan\`, which counts unsplit units.
+5. **Fan-in (Phase 3):**`;
+
+const PHASE_2_DISPATCHES_MUSTRERUN = PHASE_2_REWORDED.replace(
+  "Rebuild the context with `--carried-angles` when Phase 1.2 carried a subset, then dispatch with `--pending`.",
+  "Dispatch the plan's `mustRerun` angles; the `--carried-angles` names were already logged in Phase 1.2.",
+);
+
+test("Phase 2 checker accepts a meaning-preserving rewrite of the dispatch step", () => {
+  const step = extractStep(PHASE_2_REWORDED, "**Fan-out (Phase 2):**");
+  assertPhase2Dispatch(step, "reworded fixture");
+});
+
+test("Phase 2 checker rejects a step that dispatches from mustRerun", () => {
+  const step = extractStep(PHASE_2_DISPATCHES_MUSTRERUN, "**Fan-out (Phase 2):**");
+  assert.throws(() => assertPhase2Dispatch(step, "violating fixture"));
+});
+
+test("Phase 3 checker rejects --provenance reattached to the comment post", () => {
+  const violating = `1. **Fan-in (Phase 3):** record \`carriedFromHead\` and post via \`post-gate-findings.mjs --findings-file <p> --provenance '<json>'\` plus \`write-gate-findings-log.mjs --findings-file <p> --provenance '<json>'\`.
+2. **Verdict (Phase 4):** post the verdict.`;
+  const step = extractStep(violating, "**Fan-in (Phase 3):**");
+  assert.throws(() => assertPhase3Provenance(step, "violating fixture"));
 });

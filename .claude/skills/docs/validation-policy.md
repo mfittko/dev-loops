@@ -11,7 +11,7 @@ Canonical owner for validation requirements across all workflow families.
 
 | Gate | Validation required |
 |---|---|
-| `draft_gate` | CI green on current head (or `--local-validation-head-sha` if CI absent) |
+| `draft_gate` | CI green on current head (or the detector-derived `crediblyGreen` zero-suite exception when CI is absent) |
 | `pre_approval_gate` | CI green on current head + resolved review threads + clean re-review |
 
 ## Coverage requirements
