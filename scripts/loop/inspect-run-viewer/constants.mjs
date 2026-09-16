@@ -36,13 +36,15 @@ export const MERMAID_BROWSER_ASSET_PATH = path.join(
   "vendor",
   "mermaid.min.js",
 );
-export const DEFAULT_INBOX_UPDATED_WITHIN_DAYS = 7;
+// 3d keeps the default inbox small; each widening costs 5 `gh search` calls.
+export const DEFAULT_INBOX_UPDATED_WITHIN_DAYS = 3;
 export const DEFAULT_INBOX_PAGE_SIZE = 25;
 export const MAX_INBOX_RESULT_LIMIT = 100;
 export const DEFAULT_INBOX_PR_STATE = "open";
 export const DEFAULT_INBOX_MODE = "assignee";
 export const DEFAULT_INBOX_PAGE = 1;
 export const INBOX_UPDATED_FILTER_PRESETS = [
+  { label: "3d", value: 3 },
   { label: "7d", value: 7 },
   { label: "30d", value: 30 },
   { label: "90d", value: 90 },

@@ -226,7 +226,10 @@ async function loadSteeringState(steeringStateFile) {
   }
 }
 export async function inspectRun(options, { env = process.env, ghCommand = "gh" } = {}) {
-  const { repo, pr, steeringStateFile, copilotInputPath, reviewerInputPath } = options;
+  // `includeLoopIterations: false` skips the 6-call timeline/reviews/comments/
+  // commits/threads fan-out that only feeds the supplementary round metrics, so
+  // a caller that renders first and fills them in later (the viewer) can.
+  const { repo, pr, steeringStateFile, copilotInputPath, reviewerInputPath, includeLoopIterations = true } = options;
   parseRepoSlug(repo);
   const inspectedAt = new Date().toISOString();
   const evidenceSourceKinds = {
@@ -267,6 +270,12 @@ export async function inspectRun(options, { env = process.env, ghCommand = "gh" 
       available: false,
       source: "github_pr_timeline",
       reason: "no_pr",
+    };
+  } else if (includeLoopIterations === false) {
+    loopIterations = {
+      available: false,
+      source: "github_pr_timeline",
+      reason: "deferred_by_caller",
     };
   } else if (copilotInputPath === undefined && copilotEvidence !== null) {
     try {

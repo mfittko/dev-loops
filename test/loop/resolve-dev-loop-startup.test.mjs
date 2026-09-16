@@ -121,7 +121,9 @@ test("parseResolveDevLoopStartupCliArgs parses --input and --help", () => {
     spike: undefined,
     lightweight: false,
     uiReview: false,
+    reconcile: true,
   });
+  assert.equal(parseResolveDevLoopStartupCliArgs(["--pr", "7", "--no-reconcile"]).reconcile, false);
   assert.deepEqual(parseResolveDevLoopStartupCliArgs(["--help"]), {
     help: true,
     inputPath: undefined,
@@ -131,6 +133,7 @@ test("parseResolveDevLoopStartupCliArgs parses --input and --help", () => {
     spike: undefined,
     lightweight: false,
     uiReview: false,
+    reconcile: true,
   });
 });
 

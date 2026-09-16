@@ -1,13 +1,55 @@
 import { parseRepoSlugParts } from "@dev-loops/core/github/repo-slug";
 import { inspectRun } from "./inspect-run.mjs";
 import { ghJson } from "@dev-loops/core/github/gh";
+import { runChild } from "@dev-loops/core/cli/primitives";
 const ASSIGNED_PR_LIST_CACHE_TTL_MS = 15_000;
+// Inbox dot signals (review state, check state) move far more slowly than the
+// list, so they outlive the list cache and keep a list refresh at one call.
+const SIGNAL_KEY_CACHE_TTL_MS = 5 * 60 * 1000;
+// One snapshot costs ~20 `gh` subprocesses (copilot evidence + reviewer evidence
+// + the loop-iteration fan-out), and every page render, inbox click and
+// snapshot.json fetch asks for it again. Cache per target for the same window as
+// the inbox list; the shortest auto-reload period is 60s, so auto-reload never
+// serves a cached snapshot. `loadSnapshot(target, { refresh: true })` bypasses
+// it for the selected PR only.
+const SNAPSHOT_CACHE_TTL_MS = 15_000;
 const DEFAULT_UPDATED_WITHIN_DAYS = 7;
 const DEFAULT_RESULT_LIMIT = 25;
 const MAX_RESULT_LIMIT = 100;
 const DEFAULT_PR_STATE = "open";
 const DEFAULT_INBOX_MODE = "assignee";
 const DEFAULT_INBOX_SIGNAL = "waiting";
+export function isRateLimitError(error) {
+  return /rate limit/i.test(error instanceof Error ? error.message : String(error ?? ""));
+}
+
+// The failing `gh search` call surfaces no headers, and `gh api rate_limit`
+// reports a DIFFERENT budget than the one search spends (observed: 5000
+// remaining while a live response header said 0). So read the authoritative
+// `X-RateLimit-Reset` off a header-only probe of the same resource.
+export async function readRateLimitResetMs({ env = process.env, ghCommand = "gh", runChildImpl = runChild } = {}) {
+  try {
+    const result = await runChildImpl(ghCommand, ["api", "-i", "graphql", "-f", "query={viewer{login}}"], env);
+    const match = /^x-ratelimit-reset:\s*(\d+)\s*$/im.exec(`${result?.stdout ?? ""}${result?.stderr ?? ""}`);
+    if (match === null) {
+      return null;
+    }
+    const resetSeconds = Number(match[1]);
+    return Number.isFinite(resetSeconds) && resetSeconds > 0 ? resetSeconds * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+export function describeRetryAfter(resetMs, nowMs = Date.now()) {
+  if (typeof resetMs !== "number" || !Number.isFinite(resetMs) || resetMs <= nowMs) {
+    return null;
+  }
+  const minutes = Math.ceil((resetMs - nowMs) / 60_000);
+  const clock = new Date(resetMs).toISOString().slice(11, 16);
+  return `Retry in ~${minutes} min (resets at ${clock} UTC).`;
+}
+
 function malformedTargetError(message) {
   const error = new Error(message);
   error.code = "MALFORMED_TARGET";
@@ -196,7 +238,26 @@ export function normalizeInspectionTarget(target) {
     pr: parsePositivePr(target.pr),
   };
 }
-export function createInspectionViewerAdapter({ inspectRunImpl = inspectRun, runGhJsonImpl = ghJson, nowImpl = () => Date.now() } = {}) {
+// Options that change what a snapshot contains; everything else (e.g. `refresh`)
+// is transport-level and must not split the cache.
+function snapshotCacheKey(target, options) {
+  return JSON.stringify([
+    target.repo.toLowerCase(),
+    target.pr,
+    options.steeringStateFile ?? null,
+    options.copilotInputPath ?? null,
+    options.reviewerInputPath ?? null,
+    options.reviewerLogin ?? null,
+    options.ghCommand ?? null,
+    options.includeLoopIterations !== false,
+  ]);
+}
+export function createInspectionViewerAdapter({
+  inspectRunImpl = inspectRun,
+  runGhJsonImpl = ghJson,
+  nowImpl = () => Date.now(),
+  snapshotCacheTtlMs = SNAPSHOT_CACHE_TTL_MS,
+} = {}) {
   const runGhJson = (args, { env = process.env, ghCommand = "gh" } = {}) => runGhJsonImpl(args, { env, ghCommand });
   const toRepoSlug = (repository) => {
     if (repository === null || typeof repository !== "object") {
@@ -213,10 +274,37 @@ export function createInspectionViewerAdapter({ inspectRunImpl = inspectRun, run
     return `${ownerLogin}/${repoName}`;
   };
   const assignedPrListCache = new Map();
+  const signalKeyCache = new Map();
+  const snapshotCache = new Map();
   return {
     async loadSnapshot(target, options = {}) {
       const normalizedTarget = normalizeInspectionTarget(target);
-      return inspectRunImpl({ ...options, ...normalizedTarget });
+      const { refresh = false, ...inspectOptions } = options;
+      if (!(snapshotCacheTtlMs > 0)) {
+        return inspectRunImpl({ ...inspectOptions, ...normalizedTarget });
+      }
+      const nowMs = nowImpl();
+      const key = snapshotCacheKey(normalizedTarget, inspectOptions);
+      for (const [cachedKey, entry] of snapshotCache.entries()) {
+        if ((nowMs - entry.cachedAt) > snapshotCacheTtlMs) {
+          snapshotCache.delete(cachedKey);
+        }
+      }
+      // The cached value is the PROMISE, so concurrent callers (page render plus
+      // its snapshot.json fetch) share one `gh` fan-out instead of racing.
+      const cached = refresh ? undefined : snapshotCache.get(key);
+      if (cached) {
+        return cached.promise;
+      }
+      const promise = (async () => inspectRunImpl({ ...inspectOptions, ...normalizedTarget }))();
+      snapshotCache.set(key, { cachedAt: nowMs, promise });
+      // Never cache a failure: drop the entry so the next request retries live.
+      promise.catch(() => {
+        if (snapshotCache.get(key)?.promise === promise) {
+          snapshotCache.delete(key);
+        }
+      });
+      return promise;
     },
     async listAssignedPullRequests(options = {}) {
       const {
@@ -275,22 +363,39 @@ export function createInspectionViewerAdapter({ inspectRunImpl = inspectRun, run
         nowMs,
         ...overrides,
       });
-      const [payload, changesRequestedPayload, failingChecksPayload, pendingChecksPayload, approvedPayload] = await Promise.all([
+      // The 4 signal queries only tint the inbox dots and change far more slowly
+      // than the list itself, so they get their own long TTL: a list refresh
+      // costs 1 search call, not 5. Every `gh search` spends GraphQL points.
+      const signalCached = signalKeyCache.get(cacheKey);
+      const signalsFresh = signalCached && (nowMs - signalCached.cachedAt) <= SIGNAL_KEY_CACHE_TTL_MS;
+      const [payload, signalSets] = await Promise.all([
         runGhJson(baseQueryArgs, { env, ghCommand }),
-        runGhJson(queryArgsFor({ review: "changes_requested" }), { env, ghCommand }),
-        runGhJson(queryArgsFor({ checks: "failure" }), { env, ghCommand }),
-        runGhJson(queryArgsFor({ checks: "pending" }), { env, ghCommand }),
-        runGhJson(queryArgsFor({ review: "approved" }), { env, ghCommand }),
+        signalsFresh
+          ? Promise.resolve(signalCached.sets)
+          : Promise.all([
+            runGhJson(queryArgsFor({ review: "changes_requested" }), { env, ghCommand }),
+            runGhJson(queryArgsFor({ checks: "failure" }), { env, ghCommand }),
+            runGhJson(queryArgsFor({ checks: "pending" }), { env, ghCommand }),
+            runGhJson(queryArgsFor({ review: "approved" }), { env, ghCommand }),
+          ]).then(([changesRequested, failingChecks, pendingChecks, approved]) => {
+            const sets = {
+              attention: new Set([
+                ...createEntryKeySet(changesRequested, toRepoSlug),
+                ...createEntryKeySet(failingChecks, toRepoSlug),
+              ]),
+              pending: createEntryKeySet(pendingChecks, toRepoSlug),
+              ready: createEntryKeySet(approved, toRepoSlug),
+            };
+            signalKeyCache.set(cacheKey, { cachedAt: nowMs, sets });
+            return sets;
+          }),
       ]);
       if (!Array.isArray(payload)) {
         return [];
       }
-      const attentionKeys = new Set([
-        ...createEntryKeySet(changesRequestedPayload, toRepoSlug),
-        ...createEntryKeySet(failingChecksPayload, toRepoSlug),
-      ]);
-      const pendingKeys = createEntryKeySet(pendingChecksPayload, toRepoSlug);
-      const readyKeys = createEntryKeySet(approvedPayload, toRepoSlug);
+      const attentionKeys = signalSets.attention;
+      const pendingKeys = signalSets.pending;
+      const readyKeys = signalSets.ready;
       const normalized = [];
       for (const item of payload) {
         const itemRepo = toRepoSlug(item?.repository);

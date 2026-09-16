@@ -38,12 +38,69 @@ export {
   resetMermaidBrowserScriptCache,
 };
 
+// The handoff envelope needs a resolver spawn, so the panel loads on first open
+// instead of on every page render.
+function renderHandoffFragmentHref(target) {
+  const params = new URLSearchParams({ repo: target.repo, pr: String(target.pr) });
+  return `/handoff-envelope.html?${params.toString()}`;
+}
+
+// Round metrics are pulled right after first paint: the page is interactive
+// while the 6-call fan-out that produces them is still running.
+function renderRoundMetricsLazyScript(target) {
+  if (target === null) {
+    return "";
+  }
+  const params = new URLSearchParams({ repo: target.repo, pr: String(target.pr) });
+  return `<script>
+    (() => {
+      const slot = document.querySelector("[data-round-metrics-slot]");
+      if (!slot || !slot.querySelector("[data-round-metrics-status]")) { return; }
+      fetch("/round-metrics.html?${escapeHtml(params.toString())}", { headers: { accept: "text/html" } })
+        .then((response) => (response.ok ? response.text() : Promise.reject(new Error("status " + response.status))))
+        .then((html) => { slot.innerHTML = html; })
+        .catch((error) => {
+          const status = slot.querySelector("[data-round-metrics-status]");
+          if (status) { status.textContent = "Round metrics unavailable: " + error.message; }
+        });
+    })();
+  </script>`;
+}
+
+function renderHandoffLazyScript() {
+  return `<script>
+    (() => {
+      let loaded = false;
+      async function loadHandoffPanel() {
+        const container = document.querySelector("[data-handoff-lazy]");
+        if (loaded || !container) { return; }
+        loaded = true;
+        const status = container.querySelector("[data-handoff-status]");
+        if (status) { status.textContent = "Resolving the handoff envelope… (this can take a few seconds)"; }
+        try {
+          const response = await fetch(container.dataset.handoffSrc, { headers: { accept: "text/html" } });
+          if (!response.ok) { throw new Error("status " + response.status); }
+          container.innerHTML = await response.text();
+        } catch (error) {
+          loaded = false;
+          if (status) { status.textContent = "Could not resolve the handoff envelope: " + error.message + ". Reopen the tab to retry."; }
+        }
+      }
+      document.addEventListener("inspect-run-viewer:tabchange", (event) => {
+        if (event.detail && event.detail.tabName === "handoff") { loadHandoffPanel(); }
+      });
+    })();
+  </script>`;
+}
+
 export function renderInspectRunViewerHtml({
   repo = null,
   target = null,
   snapshot = null,
   handoffEnvelope = null,
   error = null,
+  // Rendered in the sidebar, next to the empty list it would otherwise look like.
+  inboxError = null,
   inboxItems = [],
   selectedTitle = null,
   scopeOptions = [],
@@ -90,6 +147,7 @@ export function renderInspectRunViewerHtml({
       .assigned-pr-inbox[data-sidebar-collapsed="true"] .assigned-pr-list,
       .assigned-pr-inbox[data-sidebar-collapsed="true"] .assigned-pr-empty,
       .assigned-pr-inbox[data-sidebar-collapsed="true"] .assigned-pr-pagination { display: none; }
+      .assigned-pr-error { border: 1px solid #e2b4b4; border-radius: 0.5rem; background: #fdf1f1; color: #8a2b2b; padding: 0.55rem 0.65rem; font-size: 0.82rem; line-height: 1.4; }
       .assigned-pr-inbox-header { display: flex; align-items: center; gap: 0.7rem; margin-bottom: 0.7rem; }
       .assigned-pr-inbox-header h2 { margin: 0; font-size: 1rem; line-height: 1.3; flex: 1; }
       .assigned-pr-controls { display: flex; flex-wrap: wrap; gap: 0.55rem 0.6rem; margin-bottom: 0.55rem; align-items: center; }
@@ -324,7 +382,7 @@ export function renderInspectRunViewerHtml({
   </head>
   <body>
     <div class="inspection-shell">
-      ${renderInboxSidebar(inboxItems, target, { scopeFilter, scopeOptions, updatedWithinDays: inboxUpdatedWithinDays, state: inboxState, mode: inboxMode, page: inboxPage, totalPages: inboxTotalPages })}
+      ${renderInboxSidebar(inboxItems, target, { scopeFilter, scopeOptions, updatedWithinDays: inboxUpdatedWithinDays, state: inboxState, mode: inboxMode, page: inboxPage, totalPages: inboxTotalPages, errorMessage: inboxError })}
       <main class="inspection-main">
         ${target === null
           ? `<section class="current-pr-state-banner" aria-label="${escapeHtml(scopeLabel)} PR inspection dashboard">
@@ -381,7 +439,11 @@ export function renderInspectRunViewerHtml({
               </section>
             </div>
             <div class="tab-content" id="tab-handoff" role="tabpanel" aria-labelledby="tab-btn-handoff">
-              ${renderHandoffEnvelopeSection(handoffEnvelope)}
+              ${handoffEnvelope === null && target !== null
+                ? `<div data-handoff-lazy data-handoff-src="${escapeHtml(renderHandoffFragmentHref(target))}">
+                <section class="viewer-card"><h3>Agent handoff</h3><p data-handoff-status>Loading the handoff envelope…</p></section>
+              </div>`
+                : renderHandoffEnvelopeSection(handoffEnvelope)}
             </div>`}
       </main>
     </div>
@@ -405,6 +467,8 @@ export function renderInspectRunViewerHtml({
         document.dispatchEvent(new CustomEvent('inspect-run-viewer:tabchange', { detail: { tabName } }));
       }
     </script>
+    ${renderHandoffLazyScript()}
+    ${renderRoundMetricsLazyScript(target)}
     ${graph === null ? "" : renderMermaidBootScript()}
   </body>
 </html>`;

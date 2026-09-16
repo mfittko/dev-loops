@@ -103,6 +103,11 @@ Optional modifier:
                  issue-less PR-first at ANY change scope (the whole eligibility
                  gate is skipped; gate dispatch still resolves review depth
                  from scope on its own).
+  --no-reconcile Skip the best-effort board self-heal that normally runs after
+                 the bundle is emitted. For read-only callers (e.g. the inspect
+                 viewer's handoff-envelope preview): the self-heal is a write
+                 path, and its in-flight gh fan-out keeps the process alive long
+                 after the bundle is on stdout.
 ${JQ_OUTPUT_USAGE}
 
 Exit codes:
@@ -203,6 +208,7 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
     spike: undefined,
     lightweight: false,
     uiReview: false,
+    reconcile: true,
   };
   const { tokens } = parseArgs({
     args: [...argv],
@@ -215,6 +221,7 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
       spike: { type: "string" },
       lightweight: { type: "boolean" },
       "ui-review": { type: "boolean" },
+      "no-reconcile": { type: "boolean" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
     allowPositionals: true,
@@ -258,6 +265,13 @@ export function parseResolveDevLoopStartupCliArgs(argv) {
     }
     if (token.name === "ui-review") {
       options.uiReview = true;
+      continue;
+    }
+    // Read-only callers (the inspect viewer's envelope preview) must not trigger
+    // the board self-heal: it is a WRITE path, and its in-flight `gh` fan-out
+    // keeps the process alive long after the bundle is on stdout.
+    if (token.name === "no-reconcile") {
+      options.reconcile = false;
       continue;
     }
     if (matchJqOutputToken(token, options, (t) => requireTokenValue(t, parseError))) continue;
@@ -1379,7 +1393,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   // configured board so it never shells out to gh in the no-.devloops unit tests;
   // never writes stdout, never changes exit code, never throws. Skips
   // --input/--plan-file/--spike modes.
-  if (options.issue !== undefined || options.pr !== undefined) {
+  if (options.reconcile !== false && (options.issue !== undefined || options.pr !== undefined)) {
     let reconcileRoot = sessionCwd;
     try {
       reconcileRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {

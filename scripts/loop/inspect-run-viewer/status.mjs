@@ -133,6 +133,25 @@ function buildCopilotLoopIterationEntries(snapshot) {
   ];
 }
 
+// `deferred_by_caller` means the page rendered without the loop-iteration
+// fan-out and the client fills this block in from the round-metrics fragment.
+export function renderLoopIterationMetrics(loopIterations) {
+  if (loopIterations?.available === false && loopIterations?.reason === "deferred_by_caller") {
+    return `<p class="viewer-deferred-metrics" data-round-metrics-status>Loading round metrics…</p>`;
+  }
+  if (!loopIterations) {
+    return renderCardEmptyState();
+  }
+  return renderStatGrid([
+    { label: "completed rounds", value: escapeHtml(String(loopIterations.completedCopilotReviewRounds ?? "not present")) },
+    { label: "pending rounds", value: escapeHtml(String(loopIterations.pendingCopilotReviewRounds ?? "not present")) },
+    { label: "Copilot comments", value: escapeHtml(String(loopIterations.copilotReviewComments ?? "not present")) },
+    { label: "unresolved threads", value: escapeHtml(String(loopIterations.unresolvedReviewThreads ?? "not present")) },
+    { label: "resolved threads", value: escapeHtml(String(loopIterations.resolvedReviewThreads ?? "not present")) },
+    { label: "fix commits", value: escapeHtml(String(loopIterations.fixCommitsAfterFeedback ?? "not present")) },
+  ], { columns: "viewer-stat-grid-3" });
+}
+
 export function renderOverviewSection(snapshot) {
   const summary = summarizeCurrentPrStatus(snapshot);
   const loopIterations = snapshot?.loopIterations;
@@ -151,16 +170,9 @@ export function renderOverviewSection(snapshot) {
   const metricsBody = `<div class="handoff-next-action viewer-next-action">
     <p><strong>${escapeHtml(summary.headline)}.</strong> ${escapeHtml(summary.nextAction)}</p>
   </div>
-  ${loopIterations
-    ? renderStatGrid([
-      { label: "completed rounds", value: escapeHtml(String(loopIterations.completedCopilotReviewRounds ?? "not present")) },
-      { label: "pending rounds", value: escapeHtml(String(loopIterations.pendingCopilotReviewRounds ?? "not present")) },
-      { label: "Copilot comments", value: escapeHtml(String(loopIterations.copilotReviewComments ?? "not present")) },
-      { label: "unresolved threads", value: escapeHtml(String(loopIterations.unresolvedReviewThreads ?? "not present")) },
-      { label: "resolved threads", value: escapeHtml(String(loopIterations.resolvedReviewThreads ?? "not present")) },
-      { label: "fix commits", value: escapeHtml(String(loopIterations.fixCommitsAfterFeedback ?? "not present")) },
-    ], { columns: "viewer-stat-grid-3" })
-    : renderCardEmptyState()}
+  <div data-round-metrics-slot>
+  ${renderLoopIterationMetrics(loopIterations)}
+  </div>
   <div class="viewer-card-list-grid">
     ${renderCardListBlock("markers.missing", snapshot?.markers?.missing)}
     ${renderCardListBlock("markers.stale", snapshot?.markers?.stale)}
@@ -594,7 +606,7 @@ export function renderCurrentStateBanner(snapshot, target, stateLabel, selectedT
       <select id="current-pr-state-auto-reload" class="current-pr-state-auto-reload-select" data-auto-reload-select aria-label="Auto-reload period">
         ${autoReloadOptions.map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`).join("")}
       </select>
-      <button type="button" class="viewer-action-button current-pr-state-reload" data-auto-reload-manual onclick="window.location.reload()" title="Reload snapshot" aria-label="Reload snapshot">🔄 Reload</button>
+      <button type="button" class="viewer-action-button current-pr-state-reload" data-auto-reload-manual onclick="{ const u = new URL(window.location.href); u.searchParams.set('refresh', '1'); window.location.assign(u.toString()); }" title="Reload snapshot (forces a live re-fetch of this PR)" aria-label="Reload snapshot">🔄 Reload</button>
     </div>
   </section>
   <script>
@@ -604,6 +616,18 @@ export function renderCurrentStateBanner(snapshot, target, stateLabel, selectedT
       const manualButton = document.querySelector("[data-auto-reload-manual]");
       if (!select || !manualButton) {
         return;
+      }
+
+      // Drop the refresh flag from the address bar after the forced load, so
+      // auto-reload ticks and plain F5 keep using the cached snapshot.
+      try {
+        const currentUrl = new URL(window.location.href);
+        if (currentUrl.searchParams.has("refresh")) {
+          currentUrl.searchParams.delete("refresh");
+          window.history.replaceState(null, "", currentUrl.pathname + currentUrl.search + currentUrl.hash);
+        }
+      } catch {
+        // History rewrite is cosmetic; a failure must not break auto-reload wiring.
       }
 
       let autoReloadTimer = null;

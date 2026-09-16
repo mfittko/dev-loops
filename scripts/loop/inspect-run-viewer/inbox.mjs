@@ -170,7 +170,7 @@ function renderInboxPagination({ selectedTarget = null, scopeFilter = null, upda
   </nav>`;
 }
 
-export function renderInboxSidebar(items, selectedTarget, { scopeFilter = null, scopeOptions = [], updatedWithinDays = DEFAULT_INBOX_UPDATED_WITHIN_DAYS, state = DEFAULT_INBOX_PR_STATE, mode = DEFAULT_INBOX_MODE, page = DEFAULT_INBOX_PAGE, totalPages = 1 } = {}) {
+export function renderInboxSidebar(items, selectedTarget, { scopeFilter = null, scopeOptions = [], updatedWithinDays = DEFAULT_INBOX_UPDATED_WITHIN_DAYS, state = DEFAULT_INBOX_PR_STATE, mode = DEFAULT_INBOX_MODE, page = DEFAULT_INBOX_PAGE, totalPages = 1, errorMessage = null } = {}) {
   const selectedKey = renderTargetKey(selectedTarget);
   const uniqueScopeOptions = ["All repos", ...dedupeRepoSlugOptions(scopeOptions)].sort((left, right) => {
     if (left === "All repos") {
@@ -250,6 +250,9 @@ export function renderInboxSidebar(items, selectedTarget, { scopeFilter = null, 
         </li>`;
   }).join("")}
     </ul>
+    ${errorMessage === null
+      ? ""
+      : `<p class="assigned-pr-empty assigned-pr-error" data-inbox-error role="alert">⚠️ PR lookup failed: ${escapeHtml(errorMessage)}</p>`}
     <p class="assigned-pr-empty" data-inbox-empty data-empty-default="No assigned PRs are visible in this view." data-empty-search="No assigned PRs match this search." hidden>No assigned PRs are visible in this view.</p>
     ${renderInboxPagination({ selectedTarget, scopeFilter, updatedWithinDays, state, mode, page, totalPages })}
   </aside>`;

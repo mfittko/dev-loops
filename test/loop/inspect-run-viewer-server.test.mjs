@@ -4,7 +4,96 @@ import { get } from "node:http";
 import { test } from "bun:test";
 
 import { createInspectRunViewerServer } from "../../scripts/loop/inspect-run-viewer.mjs";
+import { DEFAULT_INBOX_UPDATED_WITHIN_DAYS } from "../../scripts/loop/inspect-run-viewer/constants.mjs";
 import { makeSnapshot, requestOnce } from "./inspect-run-viewer-test-helpers.mjs";
+test("createInspectRunViewerServer answers /healthz without touching the adapter", async () => {
+  let adapterCalls = 0;
+  const adapter = {
+    async loadSnapshot() {
+      adapterCalls += 1;
+      return makeSnapshot({});
+    },
+    async listAssignedPullRequests() {
+      adapterCalls += 1;
+      return [];
+    },
+  };
+
+  const server = createInspectRunViewerServer({ host: "127.0.0.1", port: 0 }, { adapter });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const address = server.address();
+    const response = await requestOnce(`http://127.0.0.1:${address.port}/healthz`);
+    assert.equal(response.statusCode, 200);
+    assert.match(response.body, /ok/);
+    assert.equal(adapterCalls, 0, "liveness must not cost a GitHub round trip");
+  } finally {
+    server.close();
+    await once(server, "close");
+  }
+});
+
+test("createInspectRunViewerServer surfaces a failed inbox lookup instead of rendering an empty list", async () => {
+  const adapter = {
+    loadHandoffEnvelope: async () => null,
+    async loadSnapshot() {
+      return makeSnapshot({});
+    },
+    async listAssignedPullRequests() {
+      throw new Error("gh command failed: GraphQL: API rate limit already exceeded for user ID 1.");
+    },
+  };
+
+  const server = createInspectRunViewerServer({ host: "127.0.0.1", port: 0 }, { adapter });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const address = server.address();
+    const response = await requestOnce(`http://127.0.0.1:${address.port}/`);
+
+    assert.equal(response.statusCode, 200);
+    assert.match(response.body, /PR lookup failed: gh command failed: GraphQL: API rate limit already exceeded/);
+    assert.match(response.body, /data-inbox-error/);
+  } finally {
+    server.close();
+    await once(server, "close");
+  }
+});
+
+test("createInspectRunViewerServer defers the resolver-backed handoff envelope to its own fragment route", async () => {
+  let resolverCalls = 0;
+  const adapter = {
+    async loadSnapshot() {
+      return makeSnapshot({});
+    },
+    async listAssignedPullRequests() {
+      return [{ target: { repo: "owner/repo", pr: 55 }, title: "PR", updatedAt: null, signal: "waiting" }];
+    },
+    async loadHandoffEnvelope() {
+      resolverCalls += 1;
+      return null;
+    },
+  };
+
+  const server = createInspectRunViewerServer({ host: "127.0.0.1", port: 0 }, { adapter });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const address = server.address();
+    const fragment = await requestOnce(`http://127.0.0.1:${address.port}/handoff-envelope.html?repo=owner%2Frepo&pr=55`);
+    assert.equal(fragment.statusCode, 200);
+    assert.equal(fragment.headers["content-type"], "text/html; charset=utf-8");
+    assert.equal(resolverCalls, 1);
+  } finally {
+    server.close();
+    await once(server, "close");
+  }
+});
+
 test("createInspectRunViewerServer serves browser html from adapter snapshot without inline full snapshot dump", async () => {
   let loadCount = 0;
   const adapter = {
@@ -631,7 +720,7 @@ test("createInspectRunViewerServer reuses the all-repos inbox query for the defa
     assert.deepEqual(listCalls, [
       {
         repo: undefined,
-        updatedWithinDays: 7,
+        updatedWithinDays: DEFAULT_INBOX_UPDATED_WITHIN_DAYS,
         state: "open",
         mode: "assignee",
         limit: 100,
@@ -709,7 +798,7 @@ test("createInspectRunViewerServer constrains repo-scoped inbox discovery to the
     assert.deepEqual(listCalls, [
       {
         repo: "owner/repo",
-        updatedWithinDays: 7,
+        updatedWithinDays: DEFAULT_INBOX_UPDATED_WITHIN_DAYS,
         state: "open",
         mode: "assignee",
         limit: 100,

@@ -7,7 +7,10 @@ import { test } from "bun:test";
 
 import {
   createInspectionViewerAdapter,
+  describeRetryAfter,
+  isRateLimitError,
   parseGhJsonOutput,
+  readRateLimitResetMs,
 } from "../../scripts/loop/_inspect-run-viewer-adapter.mjs";
 import {
   buildInspectionMermaidGraph,
@@ -68,6 +71,94 @@ test("createInspectionViewerAdapter keeps normalized target authoritative over o
     pr: 55,
     reviewerLogin: "reviewer",
   });
+});
+
+test("rate-limit failures carry a retry-at hint read from the live reset header", async () => {
+  assert.equal(isRateLimitError(new Error("gh command failed: GraphQL: API rate limit already exceeded")), true);
+  assert.equal(isRateLimitError(new Error("gh command failed: not found")), false);
+
+  const resetMs = await readRateLimitResetMs({
+    runChildImpl: async () => ({
+      code: 0,
+      stdout: "HTTP/2.0 200 OK\r\nX-RateLimit-Resource: graphql\r\nX-RateLimit-Reset: 1789568063\r\n",
+      stderr: "",
+    }),
+  });
+  assert.equal(resetMs, 1789568063000);
+
+  assert.equal(
+    describeRetryAfter(1789568063000, 1789568063000 - (14 * 60_000)),
+    "Retry in ~14 min (resets at 14:14 UTC).",
+  );
+  // A reset already in the past yields no hint rather than a negative countdown.
+  assert.equal(describeRetryAfter(1789568063000, 1789568063000 + 1), null);
+  assert.equal(describeRetryAfter(null), null);
+
+  // A probe that cannot run degrades to "no hint", never throws.
+  assert.equal(await readRateLimitResetMs({ runChildImpl: async () => { throw new Error("gh missing"); } }), null);
+  assert.equal(await readRateLimitResetMs({ runChildImpl: async () => ({ code: 0, stdout: "no headers", stderr: "" }) }), null);
+});
+
+test("createInspectionViewerAdapter caches snapshots per target, coalesces concurrent loads, and honors refresh", async () => {
+  let nowMs = Date.parse("2026-05-21T00:00:00.000Z");
+  let inspectRunCalls = 0;
+  const adapter = createInspectionViewerAdapter({
+    nowImpl: () => nowMs,
+    inspectRunImpl: async () => {
+      inspectRunCalls += 1;
+      return { ok: true };
+    },
+  });
+  const target = { repo: "owner/repo", pr: 55 };
+
+  await Promise.all([adapter.loadSnapshot(target), adapter.loadSnapshot(target)]);
+  assert.equal(inspectRunCalls, 1, "concurrent loads of one target share a single gh fan-out");
+
+  await adapter.loadSnapshot(target);
+  assert.equal(inspectRunCalls, 1, "a repeat load inside the TTL is served from cache");
+
+  await adapter.loadSnapshot({ repo: "owner/repo", pr: 56 });
+  assert.equal(inspectRunCalls, 2, "a different PR is cached separately");
+
+  await adapter.loadSnapshot(target, { refresh: true });
+  assert.equal(inspectRunCalls, 3, "refresh bypasses the cache for the selected target only");
+
+  await adapter.loadSnapshot(target);
+  assert.equal(inspectRunCalls, 3, "the forced refresh repopulates the cache");
+
+  nowMs += 16_000;
+  await adapter.loadSnapshot(target);
+  assert.equal(inspectRunCalls, 4, "an expired entry refetches");
+});
+
+test("createInspectionViewerAdapter never caches a failed snapshot load", async () => {
+  let inspectRunCalls = 0;
+  const adapter = createInspectionViewerAdapter({
+    inspectRunImpl: async () => {
+      inspectRunCalls += 1;
+      throw new Error("gh exploded");
+    },
+  });
+  const target = { repo: "owner/repo", pr: 55 };
+
+  await assert.rejects(() => adapter.loadSnapshot(target), /gh exploded/);
+  await assert.rejects(() => adapter.loadSnapshot(target), /gh exploded/);
+  assert.equal(inspectRunCalls, 2);
+});
+
+test("createInspectionViewerAdapter caching can be disabled with snapshotCacheTtlMs 0", async () => {
+  let inspectRunCalls = 0;
+  const adapter = createInspectionViewerAdapter({
+    snapshotCacheTtlMs: 0,
+    inspectRunImpl: async () => {
+      inspectRunCalls += 1;
+      return { ok: true };
+    },
+  });
+
+  await adapter.loadSnapshot({ repo: "owner/repo", pr: 55 });
+  await adapter.loadSnapshot({ repo: "owner/repo", pr: 55 });
+  assert.equal(inspectRunCalls, 2);
 });
 
 test("createInspectionViewerAdapter omits --updated when updatedWithinDays is null", async () => {
@@ -134,9 +225,16 @@ test("createInspectionViewerAdapter refreshes expired assigned PR cache entries"
   await adapter.listAssignedPullRequests({ repo: "owner/repo" });
   assert.equal(ghCalls, 5);
 
+  // List TTL expired, signal TTL (5 min) still fresh: the refresh costs the one
+  // list query, not the full five.
   nowMs += 16_000;
   await adapter.listAssignedPullRequests({ repo: "owner/repo" });
-  assert.equal(ghCalls, 10);
+  assert.equal(ghCalls, 6);
+
+  // Past the signal TTL the four dot-signal queries refresh too.
+  nowMs += 5 * 60_000;
+  await adapter.listAssignedPullRequests({ repo: "owner/repo" });
+  assert.equal(ghCalls, 11);
 });
 
 test("createInspectionViewerAdapter lists assigned open PRs for the current user", async () => {
