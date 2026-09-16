@@ -497,8 +497,14 @@ export function createInspectRunViewerServer(options, deps = {}) {
       return;
     }
     try {
+      // Feature-detected like every other optional adapter method here: an
+      // injected adapter without this one (every pre-existing one) must render
+      // the route's own empty state, not a raw `... is not a function` string.
+      const loadLoopIterations = typeof adapter.loadLoopIterations === "function"
+        ? adapter.loadLoopIterations.bind(adapter)
+        : async () => null;
       const body = roundMetrics
-        ? renderLoopIterationMetrics(await adapter.loadLoopIterations(target, adapterOptions) ?? null)
+        ? renderLoopIterationMetrics(await loadLoopIterations(target, adapterOptions) ?? null)
         : renderHandoffEnvelopeSection(await resolveHandoffEnvelopeForFragment(target));
       writeText(response, 200, body, HTML_HEADERS);
     } catch (error) {
@@ -663,13 +669,21 @@ export function createInspectRunViewerServer(options, deps = {}) {
           // The reset moment does not move, so the probe is cached: a rate-limited
           // viewer must not spend a call per render asking about its own limit.
           if (isRateLimitError(inboxError)) {
+            // Cache the PROMISE, not the settled value: assigning only after the
+            // await let every concurrent render (two tabs auto-reloading on the
+            // same tick) start its own probe, each spending budget the operator
+            // has already run out of. Same promise-caching rule as every other
+            // cache here.
             if (rateLimitResetProbe === null || Date.now() > rateLimitResetProbe.expiresAt) {
-              rateLimitResetProbe = {
-                resetMs: await readRateLimitResetMsImpl({ ...adapterOptions }),
-                expiresAt: Date.now() + RATE_LIMIT_PROBE_TTL_MS,
-              };
+              const promise = readRateLimitResetMsImpl({ ...adapterOptions });
+              rateLimitResetProbe = { promise, expiresAt: Date.now() + RATE_LIMIT_PROBE_TTL_MS };
+              promise.catch(() => {
+                if (rateLimitResetProbe?.promise === promise) {
+                  rateLimitResetProbe = null;
+                }
+              });
             }
-            const retryHint = describeRetryAfter(rateLimitResetProbe.resetMs);
+            const retryHint = describeRetryAfter(await rateLimitResetProbe.promise);
             if (retryHint !== null) {
               inboxError = new Error(`${inboxError.message} ${retryHint}`);
             }

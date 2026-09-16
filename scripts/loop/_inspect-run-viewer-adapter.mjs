@@ -32,12 +32,41 @@ export function isRateLimitError(error) {
 // reports a DIFFERENT budget than the one search spends (observed: 5000
 // remaining while a live response header said 0). So read the authoritative
 // `X-RateLimit-Reset` off a header-only probe of the same resource.
-export async function readRateLimitResetMs({ env = process.env, ghCommand = "gh", runChildImpl = runChild } = {}) {
+// The failing inbox call is `gh search prs`, which spends the SEARCH budget, and
+// search resets on a per-minute cadence while graphql resets hourly. Probing the
+// wrong bucket produces a confidently wrong "retry in ~47 min" for a limit that
+// clears in seconds — worse guidance than the generic failure it replaced. So the
+// probe hits the search resource and REFUSES a reading whose own
+// `X-RateLimit-Resource` header does not say `search`.
+const RATE_LIMIT_PROBE_RESOURCE = "search";
+const RATE_LIMIT_PROBE_TIMEOUT_MS = 5_000;
+
+export async function readRateLimitResetMs({
+  env = process.env,
+  ghCommand = "gh",
+  runChildImpl = runChild,
+  timeoutMs = RATE_LIMIT_PROBE_TIMEOUT_MS,
+} = {}) {
   try {
-    const result = await runChildImpl(ghCommand, ["api", "-i", "graphql", "-f", "query={viewer{login}}"], env);
+    // This is awaited on the `GET /` request path, and `runChild` settles only on
+    // close/error — it registers no timer. A stalled TLS handshake to the API
+    // would hang the dashboard render until Node's 300s request timeout, with the
+    // child still resident. Bound it here; a probe that misses only costs the hint.
+    const result = await Promise.race([
+      runChildImpl(ghCommand, ["api", "-i", "search/issues?q=repo:github/gitignore+is:issue&per_page=1"], env),
+      new Promise((resolve) => { const timer = setTimeout(() => resolve(null), timeoutMs); timer.unref?.(); }),
+    ]);
+    if (result === null) {
+      return null;
+    }
     // Newline between the two streams: without it an unterminated stdout merges
     // its last line into stderr's first and the anchored match silently misses.
-    const match = /^x-ratelimit-reset:\s*(\d+)\s*$/im.exec(`${result?.stdout ?? ""}\n${result?.stderr ?? ""}`);
+    const headers = `${result?.stdout ?? ""}\n${result?.stderr ?? ""}`;
+    const resource = /^x-ratelimit-resource:\s*(\S+)\s*$/im.exec(headers)?.[1];
+    if (resource !== RATE_LIMIT_PROBE_RESOURCE) {
+      return null;
+    }
+    const match = /^x-ratelimit-reset:\s*(\d+)\s*$/im.exec(headers);
     if (match === null) {
       return null;
     }
@@ -48,8 +77,17 @@ export async function readRateLimitResetMs({ env = process.env, ghCommand = "gh"
   }
 }
 
+// A rate-limit window longer than a day is not a rate limit, it is a bad header.
+// The cap also keeps `new Date(resetMs).toISOString()` below the RangeError
+// threshold: an absurd reset value would otherwise throw from inside the request
+// handler and replace the whole dashboard with `Internal Server Error`.
+const MAX_RETRY_HINT_MS = 24 * 60 * 60 * 1000;
+
 export function describeRetryAfter(resetMs, nowMs = Date.now()) {
   if (typeof resetMs !== "number" || !Number.isFinite(resetMs) || resetMs <= nowMs) {
+    return null;
+  }
+  if ((resetMs - nowMs) > MAX_RETRY_HINT_MS) {
     return null;
   }
   const minutes = Math.ceil((resetMs - nowMs) / 60_000);

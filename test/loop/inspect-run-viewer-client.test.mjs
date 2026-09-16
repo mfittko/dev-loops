@@ -81,23 +81,58 @@ test("rate-limit failures carry a retry-at hint read from the live reset header"
   // the operator a retry time for it is wrong guidance.
   assert.equal(isRateLimitError(new Error('gh command failed: no results for "raise the rate limit doc"')), false);
 
+  // The failing inbox call spends the SEARCH budget, so only a reading that says
+  // it came from the search resource may drive the hint.
+  const probedArgs = [];
   const resetMs = await readRateLimitResetMs({
-    runChildImpl: async () => ({
-      code: 0,
-      stdout: "HTTP/2.0 200 OK\r\nX-RateLimit-Resource: graphql\r\nX-RateLimit-Reset: 1789568063\r\n",
-      stderr: "",
-    }),
+    runChildImpl: async (_command, args) => {
+      probedArgs.push(args);
+      return {
+        code: 0,
+        stdout: "HTTP/2.0 200 OK\r\nX-RateLimit-Resource: search\r\nX-RateLimit-Reset: 1789568063\r\n",
+        stderr: "",
+      };
+    },
   });
   assert.equal(resetMs, 1789568063000);
+  assert.match(probedArgs[0].join(" "), /search/, "the probe must hit the resource the failing call spends");
+
+  // graphql resets hourly while search resets per minute, so a graphql reading
+  // would tell the operator "~47 min" for a limit clearing in seconds.
+  assert.equal(
+    await readRateLimitResetMs({
+      runChildImpl: async () => ({
+        code: 0,
+        stdout: "HTTP/2.0 200 OK\r\nX-RateLimit-Resource: graphql\r\nX-RateLimit-Reset: 1789568063\r\n",
+        stderr: "",
+      }),
+    }),
+    null,
+  );
 
   // An unterminated stdout must not merge its last line into stderr's first and
   // silently break the anchored header match.
   assert.equal(
     await readRateLimitResetMs({
-      runChildImpl: async () => ({ code: 0, stdout: "HTTP/2.0 200 OK", stderr: "x-ratelimit-reset: 1789568063\n" }),
+      runChildImpl: async () => ({
+        code: 0,
+        stdout: "HTTP/2.0 200 OK\r\nx-ratelimit-resource: search",
+        stderr: "x-ratelimit-reset: 1789568063\n",
+      }),
     }),
     1789568063000,
   );
+
+  // A probe that never settles must not hang the request path it is awaited on.
+  assert.equal(
+    await readRateLimitResetMs({ timeoutMs: 20, runChildImpl: () => new Promise(() => {}) }),
+    null,
+  );
+
+  // A reset a year out is a bad header, not a rate limit, and must not reach
+  // `new Date(...).toISOString()` where an absurd value throws RangeError.
+  assert.equal(describeRetryAfter(Date.now() + (400 * 24 * 60 * 60 * 1000)), null);
+  assert.equal(describeRetryAfter(Number.MAX_SAFE_INTEGER), null);
 
   assert.equal(
     describeRetryAfter(1789568063000, 1789568063000 - (14 * 60_000)),
