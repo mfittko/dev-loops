@@ -835,6 +835,31 @@ test("expandDispatchUnits: split sub-unit name avoids colliding with a separatel
   assert.equal(new Set(scopes).size, scopes.length);
 });
 
+// Path A (issue 2180) coverage gap: splitSubUnitName now disambiguates
+// against collisionNames — configuredGroupNames PLUS every sibling unit
+// resolved THIS ROUND, not just the configured table. This exercises that
+// sibling-unit branch with an EMPTY configured set: an over-cap "backend"
+// unit (5 angles) splits, and its part1 sub-unit would naturally be named
+// "backend-part1" — colliding with a genuinely separate sibling singleton
+// unit already named "backend-part1" this round.
+test("expandDispatchUnits: split sub-unit name avoids colliding with a SIBLING unit's name (empty configured set)", () => {
+  const units = [
+    { name: "backend", angles: ["a", "b", "c", "d", "e"] },
+    { name: "backend-part1", angles: ["backend-part1"] },
+  ];
+  const out = expandDispatchUnits(units, new Set());
+  assert.deepEqual(out, [
+    { name: "backend-part1-x1", angles: ["a", "b", "c"], group: "backend" },
+    { name: "backend-part2", angles: ["d", "e"], group: "backend" },
+    { name: "backend-part1", angles: ["backend-part1"], group: null },
+  ]);
+  // No angle dropped/duplicated: coverage equals the input, in order.
+  assert.deepEqual(out.flatMap((u) => u.angles), ["a", "b", "c", "d", "e", "backend-part1"]);
+  // Distinct dispatch scopes — the split sub-unit never collides with the sibling singleton.
+  const scopes = out.map((u) => dispatchUnitScope("pre_approval_gate", u));
+  assert.equal(new Set(scopes).size, scopes.length);
+});
+
 test("dispatchUnitScope: split sub-units of one group derive DISTINCT scopes (no collision)", () => {
   const configured = new Set(["backend"]);
   const out = expandDispatchUnits([{ name: "backend", angles: ["a", "b", "c", "d", "e"] }], configured);

@@ -764,12 +764,13 @@ the same atomic compose-and-record core the CLI uses). It emits one
 `{ scope, angles, group, promptPath }` per DISPATCH unit plus a `maxConcurrent` field; the
 conductor then dispatches one fresh-context `review` subagent per emitted unit, seeded with
 that unit's `promptPath` bytes verbatim, records each unit's `group` on Phase 3's `--provenance`
-(null for a singleton unit, the configured group name for a shared unit), and waves the emitted
+(null for a singleton unit, the resolved unit's own name — the configured group name, or the
+auto-chunk bundle's own name, for a shared unit), and waves the emitted
 units at most `maxConcurrent` at a time. The conductor MUST bound this step by the emitter's
 `maxConcurrent` (`resolveFanoutEffectiveConcurrency`, 1 when `gates.fanout.sequential`), NOT by
 `artifact.fanout.wavePlan`: that wave plan is computed over the UNSPLIT `resolveFanoutGroups`
-units and no longer matches this step's split unit set (an auto-chunk leftover the emitter
-splits into N singletons would over-dispatch a single wave slot). On success
+units and no longer matches this step's split unit set (an over-cap unit the emitter cap-splits
+into ceil(N/REVIEWER_UNIT_MAX_ANGLES) sub-units would over-dispatch a single wave slot). On success
 the emitter ALSO persists its emitted round plan to the keyed
 `<gate>-<headSha>.emit-plan.json` sibling of the gate-context bundle
 (`buildGateEmitPlanPath` in `write-gate-context.mjs`, the same
