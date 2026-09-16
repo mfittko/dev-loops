@@ -124,8 +124,19 @@ export function assertPhase2Dispatch(step, label) {
     hasClauseWith(step, /wavePlan/, /\b(?:not|never)\b/i),
     `${label}: must forbid bounding the fan-out by artifact.fanout.wavePlan`,
   );
-  // Structural: the carried subset drives whether --pending is passed.
-  assert.match(text, /carried/i, `${label}: must branch on the Phase 1.2 carried subset`);
+  // Structural: the dispatch set is still Phase 1.2's subtraction — the carried
+  // subset decides whether `--pending` is passed, and `mustRerun` is never the
+  // dispatch input. A bare /carried/ token check would be satisfied by the
+  // `--carried-angles` flag name alone, so both halves are asserted.
+  assert.ok(
+    hasClauseWith(step, /\bcarried\b/i, /--pending|\bdispatch\b/i),
+    `${label}: must branch the emitter's --pending on the Phase 1.2 carried subset`,
+  );
+  assert.doesNotMatch(
+    text,
+    /dispatch[^.]{0,80}\bmustRerun\b/i,
+    `${label}: must not dispatch from the plan's mustRerun list`,
+  );
 }
 
 // Phase 3 (Fan-in): --provenance belongs to the LEDGER WRITE, not the comment
@@ -314,6 +325,30 @@ test("extractStep bounds a step at the next numbered step, so a deleted step can
   assertPhase3Provenance(phase3, "fixture Phase 3");
   const phase4 = extractStep(doc, "**Verdict (Phase 4):**");
   assert.doesNotMatch(phase4, PROVENANCE_ON_LEDGER_WRITE, "step extraction must not leak the previous step's text");
+});
+
+// Phase 2 fixtures: the dispatch step reworded (passes) and the same step
+// rewritten to dispatch from `mustRerun` while still naming `--carried-angles`
+// (fails) — the exact degradation a bare token-presence check would let through.
+const PHASE_2_REWORDED = `4. **Fan-out (Phase 2):** run \`node scripts/github/emit-fanout-dispatch.mjs --repo <r> --pr <n> --gate <g> --head-sha <sha> [--pending]\` (\`GATE-EXEC-FANOUT-DISPATCH-EMIT\`).
+   - It returns one \`{ scope, angles, group, promptPath }\` per unit plus \`maxConcurrent\`.
+   - Rebuild the context with \`--carried-angles\` when Phase 1.2 carried a subset, then dispatch with \`--pending\`.
+   - Release units in waves of \`maxConcurrent\`; that bound is never \`artifact.fanout.wavePlan\`, which counts unsplit units.
+5. **Fan-in (Phase 3):**`;
+
+const PHASE_2_DISPATCHES_MUSTRERUN = PHASE_2_REWORDED.replace(
+  "Rebuild the context with `--carried-angles` when Phase 1.2 carried a subset, then dispatch with `--pending`.",
+  "Dispatch the plan's `mustRerun` angles; the `--carried-angles` names were already logged in Phase 1.2.",
+);
+
+test("Phase 2 checker accepts a meaning-preserving rewrite of the dispatch step", () => {
+  const step = extractStep(PHASE_2_REWORDED, "**Fan-out (Phase 2):**");
+  assertPhase2Dispatch(step, "reworded fixture");
+});
+
+test("Phase 2 checker rejects a step that dispatches from mustRerun", () => {
+  const step = extractStep(PHASE_2_DISPATCHES_MUSTRERUN, "**Fan-out (Phase 2):**");
+  assert.throws(() => assertPhase2Dispatch(step, "violating fixture"));
 });
 
 test("Phase 3 checker rejects --provenance reattached to the comment post", () => {

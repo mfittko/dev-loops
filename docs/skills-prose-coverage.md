@@ -102,7 +102,7 @@ Generated `.claude/skills/` projections carry no inventory row of their own. The
 | `skills/docs/ui-smoke-harness.md` | pending | 3 | Shared contract/reference doc. |
 | `skills/docs/ui-validation-contract.md` | pending | 3 | Shared contract/reference doc. |
 | `skills/docs/validation-policy.md` | changed | 3 | Phase 1 ambiguity fix only: gate table named a removed CLI flag. Condensation still pending. |
-| `skills/docs/wait-watch-procedure.md` | changed | 3 | Phase 1: historic reference dropped from its already-correct removed-flag note. Condensation still pending. |
+| `skills/docs/wait-watch-procedure.md` | pending | 3 | Consulted in phase 1 as the correct owner of the removed-flag note; its own text needed no edit, so it carries no diff at this head. Condensation still pending. |
 | `skills/docs/workflow-handoff-contract.md` | pending | 3 | Shared contract/reference doc. |
 | `skills/docs/worktree-guidance.md` | pending | 3 | Shared contract/reference doc. |
 | `skills/final-approval/SKILL.md` | pending | 2 | Routed entrypoint skill. |
@@ -113,10 +113,12 @@ Generated `.claude/skills/` projections carry no inventory row of their own. The
 
 ## Phase 1 result
 
-Coverage after phase 1, over all 77 tracked files under `skills/`: 8 `changed`, 1 `unchanged`,
-10 `non-prose`, 58 `pending`. Nothing is `blocked`. Pending rows are visible coverage, never
-claimed coverage: phase 2 takes the other routed entrypoints and their workflow contracts,
-phase 3 the remaining shared docs, references and templates.
+Coverage after phase 1, over all 77 tracked files under `skills/`: 7 `changed`, 1 `unchanged`,
+10 `non-prose`, 59 `pending`. Nothing is `blocked`. Each count is derived from
+`git diff --name-only <B base>...HEAD -- skills/`, so a row can only claim `changed` when the
+file carries a diff at this head. Pending rows are visible coverage, never claimed coverage:
+phase 2 takes the other routed entrypoints and their workflow contracts, phase 3 the remaining
+shared docs, references and templates.
 
 ### Measurement
 
@@ -239,7 +241,7 @@ Generated `.claude/skills/` assets were regenerated through
 - Phase 2: the other routed entrypoint skills (`dev-loop`, `local-implementation`,
   `final-approval`, `review`, `ui-review`, `loop-grill`) and their workflow contracts, including
   the condensation of `gate-review-comment-contract.md` deferred out of phase 1.
-- Phase 3: the remaining shared docs, references and templates (58 files still `pending`), plus
+- Phase 3: the remaining shared docs, references and templates (59 files still `pending`), plus
   the final cross-harness validation pass.
 - Not attempted here: any change to runtime enforcement. Where an obligation has no enforcement
   seam it was kept in prose rather than dropped.

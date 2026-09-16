@@ -132,7 +132,7 @@ test("copilot-pr-followup skill keeps async watch persistence explicit", async (
   // co-occurrence of its own machine-readable tokens inside ONE clause, so a
   // meaning-preserving rewrite passes while dropping the obligation fails.
   assert.ok(
-    hasClauseWith(skillContent, /zero-timeout/i, /\bidle\b/i, /\bonly\b/i),
+    hasClauseWith(skillContent, /zero-timeout/i, /\bidle\b/i, /\bonly\b/i, /one-shot|status|reattach/i),
     "skill must confine zero-timeout idle probes to explicit one-shot status/reattach checks",
   );
   assert.ok(
@@ -333,16 +333,25 @@ test("copilot-pr-followup skill hardens reply-resolve, gate sequencing, and merg
     "conflict-resolution flow must require explicit authorization before any reconciliation command",
   );
   assert.ok(
-    hasClauseWith(conflictSection, /auto-resolve|mechanical/i, /conflict/i),
-    "conflict-resolution flow should allow simple auto-resolution",
+    hasClauseWith(conflictSection, /auto-resolve|mechanical/i, /conflict/i, /simple|mechanical|in scope/i),
+    "conflict-resolution flow should allow auto-resolution only for simple, in-scope conflicts",
   );
   assert.ok(
-    hasClauseWith(conflictSection, /complex/i, /conflict/i),
-    "conflict-resolution flow should surface complex conflicts for manual handling",
+    hasClauseWith(conflictSection, /complex/i, /conflict/i, /report|surface|explicit/i),
+    "conflict-resolution flow should report complex conflicts rather than auto-resolve them",
   );
+  // The re-gate and the CI wait are both scoped to the NEW head; markers that
+  // drop that scoping would be satisfied by the section's own earlier prose.
   assertOrder(
     conflictFlat,
-    [/origin\/main/, /authoriz/i, /reconcile/i, /detect-pr-gate-coordination-state\.mjs/, /pre_approval_gate/, /CI/],
+    [
+      /origin\/main/,
+      /authoriz/i,
+      /reconcile/i,
+      /rerun `detect-pr-gate-coordination-state\.mjs`/,
+      /`pre_approval_gate` for the new head/,
+      /current-head CI again/,
+    ],
     "conflict-resolution flow",
   );
   const antiPatternsMatch = skillContent.match(/## Anti-patterns[\s\S]*?(?=\n## Recommended companion skills|$)/);
