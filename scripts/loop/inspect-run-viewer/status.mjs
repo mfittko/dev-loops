@@ -176,11 +176,25 @@ export function renderLoopIterationMetrics(loopIterations) {
   ], { columns: "viewer-stat-grid-3" });
 }
 
+function renderPhaseList(phases) {
+  if (!Array.isArray(phases) || phases.length === 0) {
+    return escapeHtml("not present");
+  }
+  return phases.map((phase) => renderCodeValue(phase)).join(" ");
+}
+
 export function renderOverviewSection(snapshot) {
   const summary = summarizeCurrentPrStatus(snapshot);
   const loopIterations = snapshot?.loopIterations;
 
+  // The lifecycle phase is what answers "what happens next" — the outer state only
+  // names the LANE that owns the work, and that lane spans implementation through
+  // pre-approval (ADR 0073). The snapshot has carried the phase all along; it was
+  // reachable only from the Graph tab, so the default view left the operator to
+  // infer the next step from lane tokens.
   const stateBody = `${renderStatGrid([
+    { label: "lifecycle phase", value: renderCodeValue(snapshot?.lifecyclePhase) },
+    { label: "next phases", value: renderPhaseList(snapshot?.lifecycleAllowedTransitions) },
     { label: "status class", value: renderCodeValue(snapshot?.statusClass) },
     { label: "outer state", value: renderCodeValue(snapshot?.outerState) },
     { label: "outerAction", value: renderCodeValue(snapshot?.outerAction) },
@@ -246,12 +260,12 @@ export function renderCopilotLayerSection(layer, snapshot = null) {
   if (layer === null || layer === undefined) {
     return renderCard({
       kicker: "Layers",
-      title: "Copilot",
+      title: "PR follow-up lane",
       className: "handoff-card-tight",
       dataField: "copilot-layer",
       body: `${renderCardEmptyState()}
     <div class="viewer-card-subsection">
-      <h4>Copilot loop iterations</h4>
+      <h4>External review rounds (Copilot)</h4>
       ${loopIterationEntries ? renderKeyValueRows(loopIterationEntries, { compact: true }) : renderCardEmptyState()}
     </div>`,
     });
@@ -259,7 +273,7 @@ export function renderCopilotLayerSection(layer, snapshot = null) {
 
   return renderCard({
     kicker: "Layers",
-    title: "Copilot",
+    title: "PR follow-up lane",
     className: "handoff-card-tight",
     dataField: "copilot-layer",
     body: `${renderStatGrid([
@@ -270,7 +284,7 @@ export function renderCopilotLayerSection(layer, snapshot = null) {
     ], { columns: "viewer-stat-grid-2" })}
     ${renderCardListBlock("allowedTransitions", layer.allowedTransitions)}
     <div class="viewer-card-subsection">
-      <h4>Copilot loop iterations</h4>
+      <h4>External review rounds (Copilot)</h4>
       ${loopIterationEntries ? renderKeyValueRows(loopIterationEntries, { compact: true }) : renderCardEmptyState()}
     </div>`,
   });
@@ -478,7 +492,7 @@ export function summarizeCurrentPrStatus(snapshot) {
     };
   }
 
-  if (copilotState === "waiting_for_copilot_review") {
+  if (copilotState === "waiting_for_external_review") {
     return {
       headline: "Waiting for Copilot review",
       detail: "Copilot review has been requested and the PR is waiting for new review activity.",
@@ -521,8 +535,8 @@ export function summarizeCurrentPrStatus(snapshot) {
   // An idle reviewer lane is only the headline when routing is not pointing at
   // the Copilot lane; otherwise the Copilot lane owns the next action.
   if (reviewerState === "waiting_for_review_request"
-    && outerState !== OUTER_STATE.HANDOFF_TO_COPILOT_LOOP
-    && outerAction !== "reenter_copilot_loop") {
+    && outerState !== OUTER_STATE.HANDOFF_TO_VERIFICATION_LOOP
+    && outerAction !== "enter_verification_loop") {
     return {
       headline: "No review requested yet",
       detail: "The reviewer lane is idle: no review has been requested on this PR, so nothing is pending on a reviewer.",
@@ -590,16 +604,16 @@ export function summarizeCurrentPrStatus(snapshot) {
   // these only run for a lane state this viewer has no specific copy for, so
   // they quote the routing layer's own reason rather than asserting a follow-up
   // that may never have been requested.
-  if (outerState === OUTER_STATE.HANDOFF_TO_COPILOT_LOOP || outerAction === "reenter_copilot_loop") {
+  if (outerState === OUTER_STATE.HANDOFF_TO_VERIFICATION_LOOP || outerAction === "enter_verification_loop") {
     return {
       headline: "Copilot lane is next",
       detail: routingReason
-        ?? "The authoritative outer state is handoff_to_copilot_loop, so the next meaningful work is in the Copilot lane.",
+        ?? "The authoritative outer state is handoff_to_verification_loop, so the next meaningful work is in the Copilot lane.",
       nextAction: `Continue in the Copilot lane from ${humanizeStateToken(copilotState)}.`,
     };
   }
 
-  if (outerState === OUTER_STATE.HANDOFF_TO_REVIEWER_LOOP || outerAction === "reenter_reviewer_loop") {
+  if (outerState === OUTER_STATE.HANDOFF_TO_REVIEWER_LOOP || outerAction === "enter_reviewer_loop") {
     return {
       headline: "Reviewer lane is next",
       detail: routingReason
@@ -636,7 +650,7 @@ function summarizeCurrentPrMode(snapshot) {
     return { emoji: "✅", label: "Approved" };
   }
 
-  if (copilotState === "waiting_for_copilot_review"
+  if (copilotState === "waiting_for_external_review"
     || copilotState === "waiting_for_ci"
     || reviewerState === "waiting_for_author_followup"
     || reviewerState === "waiting_for_re_request"
@@ -646,10 +660,10 @@ function summarizeCurrentPrMode(snapshot) {
     return { emoji: "⏳", label: "Waiting state" };
   }
 
-  if (outerState === OUTER_STATE.HANDOFF_TO_COPILOT_LOOP
+  if (outerState === OUTER_STATE.HANDOFF_TO_VERIFICATION_LOOP
     || outerState === OUTER_STATE.HANDOFF_TO_REVIEWER_LOOP
-    || outerAction === "reenter_copilot_loop"
-    || outerAction === "reenter_reviewer_loop"
+    || outerAction === "enter_verification_loop"
+    || outerAction === "enter_reviewer_loop"
     || reviewerState === "review_requested"
     || reviewerState === "determine_review_plan"
     || reviewerState === "reviews_running"
@@ -820,16 +834,16 @@ export function deriveInboxSignalFromSnapshot(snapshot) {
     return "gate";
   }
 
-  if (copilotState === "waiting_for_copilot_review"
+  if (copilotState === "waiting_for_external_review"
     || reviewerState === "waiting_for_author_followup"
     || reviewerState === "waiting_for_re_request") {
     return "waiting";
   }
 
-  if (outerState === OUTER_STATE.HANDOFF_TO_COPILOT_LOOP
+  if (outerState === OUTER_STATE.HANDOFF_TO_VERIFICATION_LOOP
     || outerState === OUTER_STATE.HANDOFF_TO_REVIEWER_LOOP
-    || outerAction === "reenter_copilot_loop"
-    || outerAction === "reenter_reviewer_loop") {
+    || outerAction === "enter_verification_loop"
+    || outerAction === "enter_reviewer_loop") {
     return "attention";
   }
 

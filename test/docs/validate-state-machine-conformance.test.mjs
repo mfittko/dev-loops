@@ -207,7 +207,7 @@ test("pr-gate-coordination #1190: pre_approval_gate entry ordering is a verified
   const machine = getRegisteredMachines().find((m) => m.name === "pr-gate-coordination");
   const report = runMachineConformance(machine);
   const transition = report.conformance.results.find(
-    (r) => r.from === "waiting_for_copilot_review" && r.to === "final_local_preapproval_gate",
+    (r) => r.from === "waiting_for_external_review" && r.to === "final_local_preapproval_gate",
   );
   assert.ok(transition, "the pre_approval_gate entry-ordering transition must be present in the report");
   assert.equal(transition.status, "verified");
@@ -390,7 +390,7 @@ test("copilot-loop-state adversarial probe: unresolved feedback outranks an acti
   });
 
   assert.equal(interpretation.state, STATE.UNRESOLVED_FEEDBACK_PRESENT);
-  assert.notEqual(interpretation.state, STATE.WAITING_FOR_COPILOT_REVIEW);
+  assert.notEqual(interpretation.state, STATE.WAITING_FOR_EXTERNAL_REVIEW);
 
   const machine = getRegisteredMachines().find((m) => m.name === "copilot-loop-state");
   const safety = checkSafetyRules(

@@ -50,7 +50,7 @@ test("sanctioned-commands: the map is carried into the built handoff envelope", 
   // Minimal in-memory resolver output + stub adapter — no git/network.
   const resolverOutput = {
     bundle: {
-      selectedStrategy: "copilot_pr_followup",
+      selectedStrategy: "verification",
       executionMode: "bounded_handoff",
       nextAction: "Draft PR implementation.",
       requiredReads: ["skills/docs/public-dev-loop-contract.md"],

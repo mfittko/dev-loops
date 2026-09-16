@@ -186,7 +186,7 @@ its routed gates to operation classes.
 | `final_approval` gate | `atomic_post` | Always: vote/verdict posts are audit mutations. |
 | `local_implementation` editor-only slice | `edit` | Before commit/push; edits local to feature branch. |
 | `local_implementation` tests-only slice | `pre_flight` | Re-running tests is cheap and safe. |
-| `copilot_pr_followup` round iteration | `edit` | Per-Copilot-review round, before the next gate post. |
+| `copilot_verification` round iteration | `edit` | Per-Copilot-review round, before the next gate post. |
 
 This mapping belongs in the route-specific dispatch code that calls `subagent()`,
 so upstream does not need to know about `dev-loops` gates.

@@ -35,7 +35,7 @@ import { resolveAuthoritativeStartupResumeBundle } from "../src/loop/public-dev-
 function issueBundle(issue, opts = {}) {
   return {
     bundle: {
-      selectedStrategy: opts.strategy ?? INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP,
+      selectedStrategy: opts.strategy ?? INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION,
       executionMode: opts.executionMode ?? DEV_LOOP_EXECUTION_MODE.BOUNDED_HANDOFF,
       nextAction: opts.nextAction ?? "Draft PR implementation.",
       requiredReads: opts.requiredReads ?? ["skills/docs/public-dev-loop-contract.md"],
@@ -54,7 +54,7 @@ function issueBundle(issue, opts = {}) {
 function prBundle(pr, opts = {}) {
   return {
     bundle: {
-      selectedStrategy: opts.strategy ?? INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP,
+      selectedStrategy: opts.strategy ?? INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION,
       executionMode: opts.executionMode ?? DEV_LOOP_EXECUTION_MODE.BOUNDED_HANDOFF,
       nextAction: opts.nextAction ?? "Follow up on PR.",
       requiredReads: opts.requiredReads ?? ["skills/copilot-pr-followup/SKILL.md"],
@@ -226,7 +226,7 @@ test("shape: acceptance block has criteria, evidence, maxFinalizationTurns", () 
 // 2. Strategy/gate combo tests
 // ===========================================================================
 
-test("combo: copilot_pr_followup + draft (default sub-gate)", () => {
+test("combo: verification + draft (default sub-gate)", () => {
   const env = buildDevLoopHandoffEnvelope(
     issueBundle(42),
     defaultSettings,
@@ -239,7 +239,7 @@ test("combo: copilot_pr_followup + draft (default sub-gate)", () => {
   assert.equal(env.acceptance.maxFinalizationTurns, 4);
 });
 
-test("combo: copilot_pr_followup + draft (explicit sub-gate)", () => {
+test("combo: verification + draft (explicit sub-gate)", () => {
   const env = buildDevLoopHandoffEnvelope(
     issueBundle(42),
     defaultSettings,
@@ -249,7 +249,7 @@ test("combo: copilot_pr_followup + draft (explicit sub-gate)", () => {
   assert.equal(env.currentGate, "draft");
 });
 
-test("combo: copilot_pr_followup + watch", () => {
+test("combo: verification + watch", () => {
   const env = buildDevLoopHandoffEnvelope(
     issueBundle(42),
     defaultSettings,
@@ -262,7 +262,7 @@ test("combo: copilot_pr_followup + watch", () => {
   assert.equal(env.acceptance.maxFinalizationTurns, 2);
 });
 
-test("combo: copilot_pr_followup + pre-approval", () => {
+test("combo: verification + pre-approval", () => {
   const env = buildDevLoopHandoffEnvelope(
     issueBundle(42),
     defaultSettings,
@@ -378,7 +378,7 @@ test("combo: wait_watch", () => {
 
 test("unknown-combo: throws for strategy without registered template + bad gate", () => {
   assert.throws(() => {
-    lookupAcceptanceTemplate(INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP, "unknown_gate");
+    lookupAcceptanceTemplate(INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION, "unknown_gate");
   }, /no acceptance template/);
 });
 
@@ -501,7 +501,7 @@ test("validate: serialized terminal routing fields require the reconciliation ro
 test("fail-closed: missing executionMode throws", () => {
   assert.throws(() => {
     buildDevLoopHandoffEnvelope(
-      { bundle: { selectedStrategy: "copilot_pr_followup", nextAction: "x", activeArtifact: { kind: "issue", issue: 1 } } },
+      { bundle: { selectedStrategy: "verification", nextAction: "x", activeArtifact: { kind: "issue", issue: 1 } } },
       defaultSettings,
       {},
       defaultOptions
@@ -512,7 +512,7 @@ test("fail-closed: missing executionMode throws", () => {
 test("fail-closed: missing nextAction throws", () => {
   assert.throws(() => {
     buildDevLoopHandoffEnvelope(
-      { bundle: { selectedStrategy: "copilot_pr_followup", executionMode: "bounded_handoff", activeArtifact: { kind: "issue", issue: 1 } } },
+      { bundle: { selectedStrategy: "verification", executionMode: "bounded_handoff", activeArtifact: { kind: "issue", issue: 1 } } },
       defaultSettings,
       {},
       defaultOptions
@@ -545,7 +545,7 @@ test("fail-closed: invalid repo slug format throws", () => {
 test("fail-closed: missing target kind throws", () => {
   assert.throws(() => {
     buildDevLoopHandoffEnvelope(
-      { bundle: { selectedStrategy: "copilot_pr_followup", executionMode: "bounded_handoff", nextAction: "x", activeArtifact: {} } },
+      { bundle: { selectedStrategy: "verification", executionMode: "bounded_handoff", nextAction: "x", activeArtifact: {} } },
       defaultSettings,
       {},
       { repoSlug: "owner/repo" }
@@ -629,7 +629,7 @@ test("stop-rules: strategy defaults when settings has no autonomy", () => {
     defaultOptions
   );
 
-  assert.deepEqual(env.stopRules, STRATEGY_DEFAULT_STOP_RULES[INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP]);
+  assert.deepEqual(env.stopRules, STRATEGY_DEFAULT_STOP_RULES[INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION]);
 });
 
 test("stop-rules: local_implementation defaults to empty array", () => {
@@ -671,7 +671,7 @@ test("required-reads: populated from resolver output", () => {
 test("required-reads: empty array when resolver has no reads", () => {
   const raw = {
     bundle: {
-      selectedStrategy: INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP,
+      selectedStrategy: INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION,
       executionMode: DEV_LOOP_EXECUTION_MODE.BOUNDED_HANDOFF,
       nextAction: "Do stuff.",
       activeArtifact: { kind: DEV_LOOP_TARGET_KIND.ISSUE, issue: 42 },
@@ -685,7 +685,7 @@ test("required-reads: reads from resolverOutput top-level when wrapper shape pre
   const raw = {
     requiredReads: ["from-wrapper.md"],
     bundle: {
-      selectedStrategy: INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP,
+      selectedStrategy: INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION,
       executionMode: DEV_LOOP_EXECUTION_MODE.BOUNDED_HANDOFF,
       nextAction: "Do stuff.",
       activeArtifact: { kind: DEV_LOOP_TARGET_KIND.ISSUE, issue: 42 },
@@ -699,7 +699,7 @@ test("required-reads: reads from resolverOutput top-level when wrapper shape pre
 test("required-reads: falls back to bundle.requiredReads when no top-level reads", () => {
   const raw = {
     bundle: {
-      selectedStrategy: INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP,
+      selectedStrategy: INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION,
       executionMode: DEV_LOOP_EXECUTION_MODE.BOUNDED_HANDOFF,
       nextAction: "Do stuff.",
       activeArtifact: { kind: DEV_LOOP_TARGET_KIND.ISSUE, issue: 42 },
@@ -1023,7 +1023,7 @@ test("unit: normalizeGateState with null falls back safely", () => {
 // ===========================================================================
 
 test("unit: acceptanceKey format", () => {
-  assert.equal(acceptanceKey("copilot_pr_followup", "draft"), "copilot_pr_followup::draft");
+  assert.equal(acceptanceKey("verification", "draft"), "verification::draft");
 });
 
 // ===========================================================================
@@ -1063,11 +1063,11 @@ test("unit: flattenSlugSegment replaces path separators", () => {
 // 18. Verify all ACCEPTANCE_TEMPLATES combos registered
 // ===========================================================================
 
-test("templates: all copilot_pr_followup sub-gates registered", () => {
+test("templates: all verification sub-gates registered", () => {
   for (const sub of ["draft", "watch", "pre-approval"]) {
     assert.ok(
-      ACCEPTANCE_TEMPLATES.has(acceptanceKey(INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP, sub)),
-      `missing template for copilot_pr_followup::${sub}`
+      ACCEPTANCE_TEMPLATES.has(acceptanceKey(INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION, sub)),
+      `missing template for verification::${sub}`
     );
   }
 });
@@ -1454,7 +1454,7 @@ test("validate: errors include got values for diagnostics", () => {
 
 test("validate: accepts valid envelope from all strategies", () => {
   const strategies = [
-    { s: INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP, f: issueBundle },
+    { s: INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION, f: issueBundle },
     { s: INTERNAL_DEV_LOOP_STRATEGY.ISSUE_INTAKE, f: issueBundle },
     { s: INTERNAL_DEV_LOOP_STRATEGY.EXTERNAL_PR_FOLLOWUP, f: prBundle },
     { s: INTERNAL_DEV_LOOP_STRATEGY.REVIEWER_FIXER, f: prBundle },

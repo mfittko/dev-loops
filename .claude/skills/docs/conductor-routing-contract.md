@@ -126,7 +126,7 @@ combination reconciles first per `ROUTING-FAIL-CLOSED-RECONCILE`
 | Outcome | Meaning | Loop family |
 |---|---|---|
 | `continue_current_wait` | Orchestrator wait state; re-enter after bounded wait interval | `outer_loop` |
-| `handoff_to_copilot_loop` | Copilot inner loop should handle the next step | `copilot_loop` |
+| `handoff_to_verification_loop` | Copilot inner loop should handle the next step | `verification_loop` |
 | `handoff_to_reviewer_loop` | Reviewer inner loop should handle the next step | `reviewer_loop` |
 | `stay_with_current_live_owner` | A live owner already has control; no new handoff needed this cycle | `outer_loop` |
 | `stop_needs_human` | Blocked; requires human intervention before any loop can proceed | none |
@@ -142,7 +142,7 @@ stateless per cycle: each evaluation is independent, so every non-terminal outco
 followed, on the next cycle, by any of the 7 outcomes.
 
 - `continue_current_wait` -> any outer state
-- `handoff_to_copilot_loop` -> any outer state
+- `handoff_to_verification_loop` -> any outer state
 - `handoff_to_reviewer_loop` -> any outer state
 - `stay_with_current_live_owner` -> any outer state
 
@@ -190,15 +190,15 @@ The evaluator **MUST** apply the following first-match-wins priority order:
 | 5 | `copilotState === "blocked_needs_user_decision"` | `stop_needs_human` (`copilot_blocked`) |
 | 6 | `reviewerState === "blocked_needs_user_decision"` | `stop_needs_human` (`reviewer_blocked`) |
 | 7 | `copilotState === "pr_draft"` + `ownershipState === "live_owner"` | `stay_with_current_live_owner` |
-| 8 | `copilotState === "pr_draft"` | `handoff_to_copilot_loop` (`requiresLocalIsolation` passthrough when true) |
-| 9 | `copilotState === "waiting_for_copilot_review"` | `continue_current_wait` |
+| 8 | `copilotState === "pr_draft"` | `handoff_to_verification_loop` (`requiresLocalIsolation` passthrough when true) |
+| 9 | `copilotState === "waiting_for_external_review"` | `continue_current_wait` |
 | 10 | reviewer active state + `ownershipState === "live_owner"` | `stay_with_current_live_owner` |
 | 11 | reviewer active state | `handoff_to_reviewer_loop` (`requiresLocalIsolation` passthrough when true) |
 | 12 | copilot strong-active + `ownershipState === "live_owner"` | `stay_with_current_live_owner` |
-| 13 | copilot strong-active | `handoff_to_copilot_loop` (`requiresLocalIsolation` passthrough when true) |
+| 13 | copilot strong-active | `handoff_to_verification_loop` (`requiresLocalIsolation` passthrough when true) |
 | 14 | copilot wait state OR reviewer wait state | `continue_current_wait` |
 | 15 | copilot weak-active + `ownershipState === "live_owner"` | `stay_with_current_live_owner` |
-| 16 | copilot weak-active | `handoff_to_copilot_loop` |
+| 16 | copilot weak-active | `handoff_to_verification_loop` |
 | 17 | anything else | `needs_reconcile` |
 
 **Copilot strong-active states** (win over reviewer wait states): `unresolved_feedback_present`, `already_fixed_needs_reply_resolve`
@@ -212,9 +212,9 @@ The evaluator **MUST** apply the following first-match-wins priority order:
 <!-- rule: ROUTING-LOCAL-ISOLATION-PASSTHROUGH -->
 When `requiresLocalIsolation=true`, those local-execution states **MUST NOT** become terminal stop outcomes by themselves. The routing result **MUST** stay on the owning loop family and **MUST** carry `handoffEnvelope.requiresLocalIsolation=true` so the caller can re-enter from a safe isolated checkout/worktree.
 
-**Copilot/reviewer wait states** (owned by orchestrator): `waiting_for_copilot_review`, `waiting_for_ci` (copilot); `waiting_for_author_followup`, `waiting_for_re_request` (reviewer)
+**Copilot/reviewer wait states** (owned by orchestrator): `waiting_for_external_review`, `waiting_for_ci` (copilot); `waiting_for_author_followup`, `waiting_for_re_request` (reviewer)
 
-`waiting_for_copilot_review` is an explicit post-request settle gate for the current head: this routing contract keeps `continue_current_wait` semantics until that fresh Copilot pass has settled, even if reviewer-side state is otherwise active.
+`waiting_for_external_review` is an explicit post-request settle gate for the current head: this routing contract keeps `continue_current_wait` semantics until that fresh Copilot pass has settled, even if reviewer-side state is otherwise active.
 
 ---
 
@@ -245,7 +245,7 @@ required and optional fields listed above affect routing decisions.
 
 | Field | Value |
 |---|---|
-| `copilotState` | `"waiting_for_copilot_review"` |
+| `copilotState` | `"waiting_for_external_review"` |
 | `reviewerState` | `"waiting_for_review_request"` |
 | Expected `routingOutcome` | `"continue_current_wait"` |
 | `outerAction` (derived) | `"continue_wait"` |
@@ -259,7 +259,7 @@ required and optional fields listed above affect routing decisions.
 | `copilotState` | `"pr_ready_no_feedback"` |
 | `reviewerState` | `"review_requested"` |
 | Expected `routingOutcome` | `"handoff_to_reviewer_loop"` |
-| `outerAction` (derived) | `"reenter_reviewer_loop"` |
+| `outerAction` (derived) | `"enter_reviewer_loop"` |
 | `loopFamily` | `"reviewer_loop"` |
 | `entrypoint` | `"reviewer_loop_handler"` |
 
@@ -269,9 +269,9 @@ required and optional fields listed above affect routing decisions.
 |---|---|
 | `copilotState` | `"unresolved_feedback_present"` |
 | `reviewerState` | `"waiting_for_author_followup"` |
-| Expected `routingOutcome` | `"handoff_to_copilot_loop"` |
-| `outerAction` (derived) | `"reenter_copilot_loop"` |
-| `loopFamily` | `"copilot_loop"` |
+| Expected `routingOutcome` | `"handoff_to_verification_loop"` |
+| `outerAction` (derived) | `"enter_verification_loop"` |
+| `loopFamily` | `"verification_loop"` |
 | `entrypoint` | `"copilot_pr_handoff"` |
 
 ### 4. Blocked routes to stop_needs_human

@@ -231,7 +231,7 @@ test("resolve-dev-loop-startup honors maintainer-controlled asyncStartMode=allow
     }
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.ok, true);
-    assert.equal(parsed.selectedStrategy, "copilot_pr_followup");
+    assert.equal(parsed.selectedStrategy, "verification");
   });
 });
 

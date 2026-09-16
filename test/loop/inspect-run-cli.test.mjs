@@ -730,7 +730,7 @@ test("inspect-run CLI: checkpoint-only repo-qualified path stays advisory and to
       pr: 55,
       repo: "owner/repo",
       outerAction: "continue_wait",
-      copilotState: "waiting_for_copilot_review",
+      copilotState: "waiting_for_external_review",
       reviewerState: "waiting_for_author_followup",
       reviewerScope: "single_reviewer",
       reviewerLogin: "reviewer-user",
@@ -768,7 +768,7 @@ test("inspect-run CLI: checkpoint-only selection still picks the targeted repo w
       pr: 55,
       repo: "owner/repo-a",
       outerAction: "continue_wait",
-      copilotState: "waiting_for_copilot_review",
+      copilotState: "waiting_for_external_review",
       reviewerState: "waiting_for_author_followup",
       reason: null,
       timestamp: "2026-05-17T10:00:00Z",
@@ -825,7 +825,7 @@ test("inspect-run CLI: mixed live + checkpoint fallback stays advisory and top-l
       pr: 55,
       repo: "owner/repo",
       outerAction: "continue_wait",
-      copilotState: "waiting_for_copilot_review",
+      copilotState: "waiting_for_external_review",
       reviewerState: "waiting_for_author_followup",
       reason: null,
       timestamp: "2026-05-17T10:00:00Z",
@@ -849,7 +849,7 @@ test("inspect-run CLI: mixed live + checkpoint fallback stays advisory and top-l
     assert.equal(output.outerAction, "unknown");
     assert.equal(output.activeFamilyState, "unknown");
     assert.equal(output.statusClass, STATUS_CLASS.UNKNOWN);
-    assert.equal(output.layers.copilot.currentState, "waiting_for_copilot_review");
+    assert.equal(output.layers.copilot.currentState, "waiting_for_external_review");
     assert.equal(output.layers.reviewer.currentState, "waiting_for_author_followup");
     assert.equal(output.layers.reviewer.source, "checkpoint");
     assert.match(output.evidence.summary, /insufficient|advisory/i);
@@ -864,7 +864,7 @@ test("inspect-run CLI: matching legacy checkpoint fallback stays advisory when r
       pr: 55,
       repo: "owner/repo",
       outerAction: "continue_wait",
-      copilotState: "waiting_for_copilot_review",
+      copilotState: "waiting_for_external_review",
       reviewerState: "waiting_for_author_followup",
       reason: null,
       timestamp: "2026-05-17T10:00:00Z",
@@ -897,7 +897,7 @@ test("inspect-run CLI: prefers repo-qualified checkpoint when both new and legac
       pr: 55,
       repo: "owner/repo",
       outerAction: "continue_wait",
-      copilotState: "waiting_for_copilot_review",
+      copilotState: "waiting_for_external_review",
       reviewerState: "waiting_for_author_followup",
       reason: null,
       timestamp: "2026-05-17T10:00:00Z",
@@ -939,7 +939,7 @@ test("inspect-run CLI: ignores legacy fallback checkpoint when repo does not mat
       pr: 55,
       repo: "other/repo",
       outerAction: "continue_wait",
-      copilotState: "waiting_for_copilot_review",
+      copilotState: "waiting_for_external_review",
       reviewerState: "waiting_for_author_followup",
       reason: null,
       timestamp: "2026-05-17T10:00:00Z",

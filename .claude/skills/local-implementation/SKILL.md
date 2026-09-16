@@ -87,7 +87,7 @@ dev-loops-run cli/index.mjs loop ensure-worktree --repo-root <main> --issue <n>
 
 This validates worktree isolation (the checkout's `node_modules/@dev-loops/core` resolves to its own `packages/core`; `tmp/worktrees/` stays the recommended default but is no longer the enforced condition) and branch identity (current branch matches the working branch); `--check-subagents` only reports subagent availability and is advisory (fails-open, does not block the gate). If the gate fails, **stop and fix the violation** before proceeding — do not bypass it in normal workflow execution.
 
-This gate does **not** apply to other routed strategies (`copilot_pr_followup`, `external_pr_followup`, `reviewer_fixer`, `wait_watch`, `final_approval`, `issue_intake`); those strategies have their own execution rules and may edit code from any checkout as needed. The development-only bypass (`DEVLOOPS_PREFLIGHT_BYPASS=1`) exists for testing the gate itself and MUST NOT be used in production workflow runs — it is a testing convenience, not an operational escape hatch.
+This gate does **not** apply to other routed strategies (`copilot_verification`, `external_pr_followup`, `reviewer_fixer`, `wait_watch`, `final_approval`, `issue_intake`); those strategies have their own execution rules and may edit code from any checkout as needed. The development-only bypass (`DEVLOOPS_PREFLIGHT_BYPASS=1`) exists for testing the gate itself and MUST NOT be used in production workflow runs — it is a testing convenience, not an operational escape hatch.
 
 ## Narrow failure-triage fast path
 
@@ -483,7 +483,7 @@ The canonical contract is [Workflow Handoff Contract](../docs/workflow-handoff-c
 - a mandatory 8-step checklist (draft PR → draft_gate → ready → Copilot → resolve → pre_approval_gate → merge)
 - non-negotiable invariants (Copilot review loop between gates, `unresolvedThreadCount === 0`, visible gate comments)
 
-For all GitHub-first routed follow-up (`copilot_pr_followup`, `issue_intake`), the
+For all GitHub-first routed follow-up (`copilot_verification`, `issue_intake`), the
  `local-implementation` skill uses this template when delegating the full run to a subagent.
 Reference it by path, not by memory.
 

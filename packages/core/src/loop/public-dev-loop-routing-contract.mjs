@@ -76,7 +76,7 @@ export const DEV_LOOP_GATE = Object.freeze({
   ISSUE_INTAKE: "issue_intake",
   EXTERNAL_PR_FOLLOWUP: "external_pr_followup",
   REVIEWER_FIXER: "reviewer_fixer",
-  COPILOT_PR_FOLLOWUP: "copilot_pr_followup",
+  VERIFICATION: "verification",
   UI_REVIEW: "ui_review",
   FAIL_CLOSED_RECONCILE: "fail_closed_reconcile",
 });
@@ -84,7 +84,7 @@ export const DEV_LOOP_GATE = Object.freeze({
 export const INTERNAL_DEV_LOOP_STRATEGY = Object.freeze({
   LOCAL_IMPLEMENTATION: "local_implementation",
   ISSUE_INTAKE: "issue_intake",
-  COPILOT_PR_FOLLOWUP: "copilot_pr_followup",
+  VERIFICATION: "verification",
   EXTERNAL_PR_FOLLOWUP: "external_pr_followup",
   REVIEWER_FIXER: "reviewer_fixer",
   WAIT_WATCH: "wait_watch",
@@ -265,10 +265,10 @@ export const PUBLIC_DEV_LOOP_GATE_CONTRACT = Object.freeze([
     summary: "reviewer-owned or reviewer-next PR state routes to reviewer/fixer",
   }),
   Object.freeze({
-    gate: DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP,
+    gate: DEV_LOOP_GATE.VERIFICATION,
     routeKind: DEV_LOOP_ROUTE_KIND.ROUTE,
-    selectedStrategy: INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP,
-    summary: "Copilot-owned PR state routes to Copilot PR follow-up; an already-linked open PR stays the canonical artifact for that issue until reconciled",
+    selectedStrategy: INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION,
+    summary: "A PR the Copilot coding agent owns routes to the verification loop; an already-linked open PR stays the canonical artifact for that issue until reconciled",
   }),
   Object.freeze({
     gate: DEV_LOOP_GATE.UI_REVIEW,

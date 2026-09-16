@@ -117,7 +117,7 @@ test("detect-copilot-loop-state auto-detect returns unresolved_feedback_present 
 });
 
 
-test("detect-copilot-loop-state auto-detect returns waiting_for_copilot_review when Copilot is requested", async () => {
+test("detect-copilot-loop-state auto-detect returns waiting_for_external_review when Copilot is requested", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-auto-waiting-"));
 
   try {
@@ -151,7 +151,7 @@ test("detect-copilot-loop-state auto-detect returns waiting_for_copilot_review w
     assert.equal(result.code, 0);
 
     const output = JSON.parse(result.stdout);
-    assert.equal(output.state, "waiting_for_copilot_review");
+    assert.equal(output.state, "waiting_for_external_review");
     assert.equal(output.snapshot.copilotReviewRequestStatus, "requested");
     assert.equal(output.loopDisposition, "pending");
     assert.equal(output.terminal, false);
@@ -200,7 +200,7 @@ test("detect-copilot-loop-state auto-detect treats a pending Copilot review as i
     assert.equal(result.code, 0);
 
     const output = JSON.parse(result.stdout);
-    assert.equal(output.state, "waiting_for_copilot_review");
+    assert.equal(output.state, "waiting_for_external_review");
     assert.equal(output.snapshot.copilotReviewPresent, true);
     assert.equal(output.snapshot.copilotReviewRequestStatus, "requested");
   } finally {
@@ -992,7 +992,7 @@ test("detect-copilot-loop-state fails closed from old-head green to new-head fai
 });
 
 // ---------------------------------------------------------------------------
-// Regression: submitted Copilot review on current head exits waiting_for_copilot_review
+// Regression: submitted Copilot review on current head exits waiting_for_external_review
 // ---------------------------------------------------------------------------
 
 test("detect-copilot-loop-state uses head-scoped check-runs when commit status refresh is unavailable", async () => {
@@ -1448,7 +1448,7 @@ test("detect-copilot-loop-state keeps request active when timeline re-request is
     const output = JSON.parse(result.stdout);
     assert.equal(output.ok, true);
     assert.equal(output.snapshot.copilotReviewRequestStatus, "requested");
-    assert.equal(output.state, "waiting_for_copilot_review");
+    assert.equal(output.state, "waiting_for_external_review");
     assert.equal(output.loopDisposition, "pending");
     assert.equal(output.terminal, false);
   } finally {

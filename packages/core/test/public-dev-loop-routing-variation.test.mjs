@@ -73,9 +73,9 @@ test("mode=durable_auto steers execution mode for continue_current without chang
     targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
-  assert.equal(result.selectedGate, DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP);
+  assert.equal(result.selectedGate, DEV_LOOP_GATE.VERIFICATION);
   assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.ROUTE);
-  assert.equal(result.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP);
+  assert.equal(result.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION);
   assert.equal(result.executionMode, DEV_LOOP_EXECUTION_MODE.DURABLE_AUTO);
   assert.equal(result.publicEntrypoint, PUBLIC_DEV_LOOP_ENTRYPOINT);
 });
@@ -421,7 +421,7 @@ test("representative translation: 'auto dev loop' → mode=durable_auto with con
 
   assert.equal(result.publicEntrypoint, PUBLIC_DEV_LOOP_ENTRYPOINT);
   assert.equal(result.executionMode, DEV_LOOP_EXECUTION_MODE.DURABLE_AUTO);
-  assert.equal(result.selectedGate, DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP);
+  assert.equal(result.selectedGate, DEV_LOOP_GATE.VERIFICATION);
 });
 
 test("representative translation: 'auto dev loop on issue 112' → auto_continue_current on issue with durable_auto", () => {
@@ -611,7 +611,7 @@ test("retrospective checkpoint gating does not block inspect_state answers", () 
   });
 
   assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.INSPECT);
-  assert.equal(result.selectedGate, DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP);
+  assert.equal(result.selectedGate, DEV_LOOP_GATE.VERIFICATION);
 });
 
 test("authoritative startup/resume bundle applies retrospective gating when checkpoint is missing", () => {
@@ -653,7 +653,7 @@ test("authoritative startup/resume bundle preserves inspect semantics despite mi
 
   assert.equal(bundle.bundleKind, DEV_LOOP_STARTUP_RESUME_BUNDLE_KIND.RESOLVED);
   assert.equal(bundle.routeKind, DEV_LOOP_ROUTE_KIND.INSPECT);
-  assert.equal(bundle.selectedGate, DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP);
+  assert.equal(bundle.selectedGate, DEV_LOOP_GATE.VERIFICATION);
 });
 
 test("authoritative status fails closed when retrospective checkpoint input is invalid", () => {
@@ -750,13 +750,13 @@ test("authoritative startup/resume bundle carries refreshed wait-state trace con
     },
     artifactState: DEV_LOOP_ARTIFACT_STATE.OPEN,
     issueLinkageResolution: DEV_LOOP_ISSUE_LINKAGE_RESOLUTION.NOT_APPLICABLE,
-    loopState: "waiting_for_copilot_review",
+    loopState: "waiting_for_external_review",
   });
 
   assert.equal(bundle.bundleKind, DEV_LOOP_STARTUP_RESUME_BUNDLE_KIND.RESOLVED);
   assert.equal(bundle.contractTrace.decision.contractClassification, DEV_LOOP_CONTRACT_TRACE_CLASSIFICATION.HEALTHY_WAIT);
   assert.equal(bundle.contractTrace.stateRefresh.boundaryKind, "startup_resume_refresh");
-  assert.equal(bundle.contractTrace.stateRefresh.loopState, "waiting_for_copilot_review");
+  assert.equal(bundle.contractTrace.stateRefresh.loopState, "waiting_for_external_review");
   assert.equal(bundle.contractTrace.stateRefresh.artifactState, DEV_LOOP_ARTIFACT_STATE.OPEN);
 });
 
@@ -771,13 +771,13 @@ test("authoritative status carries resolved wait-state trace context", () => {
     },
     artifactState: DEV_LOOP_ARTIFACT_STATE.OPEN,
     issueLinkageResolution: DEV_LOOP_ISSUE_LINKAGE_RESOLUTION.NOT_APPLICABLE,
-    loopState: "waiting_for_copilot_review",
+    loopState: "waiting_for_external_review",
   });
 
   assert.equal(report.statusKind, DEV_LOOP_STATUS_REPORT_KIND.RESOLVED);
   assert.equal(report.contractTrace.decision.contractClassification, DEV_LOOP_CONTRACT_TRACE_CLASSIFICATION.HEALTHY_WAIT);
   assert.equal(report.contractTrace.stateRefresh.boundaryKind, "authoritative_status_refresh");
-  assert.equal(report.contractTrace.stateRefresh.loopState, "waiting_for_copilot_review");
+  assert.equal(report.contractTrace.stateRefresh.loopState, "waiting_for_external_review");
   assert.equal(report.contractTrace.stateRefresh.artifactState, DEV_LOOP_ARTIFACT_STATE.OPEN);
 });
 

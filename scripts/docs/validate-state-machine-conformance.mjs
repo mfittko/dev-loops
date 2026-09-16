@@ -59,6 +59,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { isDirectCliRun } from "../_core-helpers.mjs";
+import { normalizeLoopVocabularyToken } from "@dev-loops/core/loop/loop-vocabulary";
 import { evaluatePrGateCoordination, PR_CHECKPOINT, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
 import { DISPOSITION, interpretLoopState, STATE, TRANSITIONS } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluateConductorRouting, getAllowedOuterTransitions, OUTER_STATE, OUTER_TERMINAL_STATES } from "@dev-loops/core/loop/conductor-routing";
@@ -129,7 +130,14 @@ export function parseRequiredTransitions(markdown, { sectionHeading = "## Requir
       continue;
     }
     const rawKey = `${parts[0]}->${parts[1]}`;
-    const mapped = abstractRows.get(rawKey);
+    // ADR 0073: the abstract-row keys are written in the current vocabulary,
+    // while the doc may still spell a lane the legacy way until the prose half
+    // lands. Try the key as written first, then its normalized form.
+    const normalizedKey = rawKey.replace(/`([A-Za-z0-9_]+)`/g, (match, token) => {
+      const normalized = normalizeLoopVocabularyToken(token);
+      return normalized === token ? match : `\`${normalized}\``;
+    });
+    const mapped = abstractRows.get(rawKey) ?? abstractRows.get(normalizedKey);
     if (!mapped) throw new Error(`unmapped abstract transition row in doc: "${rawKey}" — add it to abstractRows`);
     transitions.push(...mapped);
   }
@@ -308,12 +316,12 @@ export function runMachineConformance(machine) {
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 // Abstract doc rows -> concrete graph edges. "any open non-terminal lifecycle
-// slice" is represented by waiting_for_copilot_review (the guard fires ahead of
+// slice" is represented by waiting_for_external_review (the guard fires ahead of
 // every lifecycle-state branch in the code, so one representative suffices);
 // "normal lifecycle re-entry state" re-enters the same representative slice.
 const PR_LIFECYCLE_ABSTRACT_ROWS = new Map([
-  ["any open non-terminal lifecycle slice->`merge_conflict_resolution`", [["waiting_for_copilot_review", "merge_conflict_resolution"]]],
-  ["`merge_conflict_resolution`->normal lifecycle re-entry state", [["merge_conflict_resolution", "waiting_for_copilot_review"]]],
+  ["any open non-terminal lifecycle slice->`merge_conflict_resolution`", [["waiting_for_external_review", "merge_conflict_resolution"]]],
+  ["`merge_conflict_resolution`->normal lifecycle re-entry state", [["merge_conflict_resolution", "waiting_for_external_review"]]],
 ]);
 
 const PR_LIFECYCLE_DOC_TRANSITIONS = parseRequiredTransitions(
@@ -323,8 +331,13 @@ const PR_LIFECYCLE_DOC_TRANSITIONS = parseRequiredTransitions(
 
 // Bind the parsed doc table 1:1 to the exported constant (order-insensitive).
 {
-  const docSet = new Set(PR_LIFECYCLE_DOC_TRANSITIONS.map(([a, b]) => `${a}->${b}`));
-  const codeSet = new Set(realEdges(PR_LIFECYCLE_TRANSITIONS).map(([a, b]) => `${a}->${b}`));
+  // ADR 0073 renames the lane vocabulary in code ahead of the prose half (the
+  // skill-prose PRs are in flight). Both sides are normalized so a doc still
+  // spelling a lane the old way compares equal, while a doc describing a
+  // DIFFERENT edge still fails closed.
+  const edgeKey = ([a, b]) => `${normalizeLoopVocabularyToken(a)}->${normalizeLoopVocabularyToken(b)}`;
+  const docSet = new Set(PR_LIFECYCLE_DOC_TRANSITIONS.map(edgeKey));
+  const codeSet = new Set(realEdges(PR_LIFECYCLE_TRANSITIONS).map(edgeKey));
   const onlyDoc = [...docSet].filter((k) => !codeSet.has(k));
   const onlyCode = [...codeSet].filter((k) => !docSet.has(k));
   if (onlyDoc.length > 0 || onlyCode.length > 0) {
@@ -392,8 +405,8 @@ verified("draft_local_remediation->draft_local_review_gate", () => {
   return { ok, detail: result, result };
 });
 
-// ready_state_needs_copilot_request -> waiting_for_copilot_review: explicit request/confirm succeeded.
-verified("ready_state_needs_copilot_request->waiting_for_copilot_review", () => {
+// ready_state_needs_copilot_request -> waiting_for_external_review: explicit request/confirm succeeded.
+verified("ready_state_needs_copilot_request->waiting_for_external_review", () => {
   const result = run({ prDraft: false, lifecycleState: STATE.PR_READY_NO_FEEDBACK, loopDisposition: DISPOSITION.ACTION_REQUIRED });
   const ok = result.gateBoundary === PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW
     && result.nextAction === PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW;
@@ -407,17 +420,17 @@ verified("ready_state_needs_copilot_request->stopped_needs_user_decision", () =>
   return { ok, detail: result, result };
 });
 
-// waiting_for_copilot_review -> merge_conflict_resolution: current-head merge state is conflicted.
+// waiting_for_external_review -> merge_conflict_resolution: current-head merge state is conflicted.
 // (Doc: "any open non-terminal lifecycle slice -> merge_conflict_resolution"; checked from this
 // representative non-terminal slice since the guard fires ahead of every lifecycle-state branch.)
-verified("waiting_for_copilot_review->merge_conflict_resolution", () => {
-  const result = run({ prDraft: false, lifecycleState: STATE.WAITING_FOR_COPILOT_REVIEW, mergeStateStatus: "DIRTY" });
+verified("waiting_for_external_review->merge_conflict_resolution", () => {
+  const result = run({ prDraft: false, lifecycleState: STATE.WAITING_FOR_EXTERNAL_REVIEW, mergeStateStatus: "DIRTY" });
   const ok = result.gateBoundary === PR_CHECKPOINT.CONFLICT_RESOLUTION
     && result.nextAction === PR_CHECKPOINT_ACTION.RESOLVE_MERGE_CONFLICTS;
   return { ok, detail: result, result };
 });
 
-// waiting_for_copilot_review -> final_local_preapproval_gate: the request/re-review cycle has settled
+// waiting_for_external_review -> final_local_preapproval_gate: the request/re-review cycle has settled
 // cleanly with no unresolved feedback and no further Copilot pass needed.
 //
 // Gate ENTRY requires an independent `copilotReviewRequestStatus` signal (not derived from
@@ -428,7 +441,7 @@ verified("waiting_for_copilot_review->merge_conflict_resolution", () => {
 // The detector-level reconciliation (`resolveCopilotReviewRequestStatus` in
 // `scripts/loop/_copilot-review-request-status.mjs`) is what produces the settled `none` for a
 // lingering `requested` status whose request predates the latest same-head submitted review.
-verified("waiting_for_copilot_review->final_local_preapproval_gate", () => {
+verified("waiting_for_external_review->final_local_preapproval_gate", () => {
   // Even a caller that reports sameHeadCleanConverged: true (e.g. a stale/racy
   // interpretation) must still be refused while a Copilot review request is
   // outstanding on the current head — the entry guard is independent of that flag.
@@ -540,10 +553,10 @@ verified("waiting_for_merge->terminal_slice_complete", () => {
 // reference machine — pr-gate-coordination only reacts to whichever STATE
 // it is handed, it does not compute the STATE-to-STATE progression itself.
 for (const key of [
-  "waiting_for_copilot_review->copilot_feedback_remediation",
+  "waiting_for_external_review->copilot_feedback_remediation",
   "copilot_feedback_remediation->copilot_reply_resolve_pending",
   "copilot_reply_resolve_pending->ready_state_needs_copilot_request",
-  "merge_conflict_resolution->waiting_for_copilot_review",
+  "merge_conflict_resolution->waiting_for_external_review",
 ]) {
   PR_GATE_TRANSITION_CHECKS.set(key, {
     status: "owned_elsewhere",
@@ -631,11 +644,11 @@ function routeOuter(input) {
 
 // One fixture per reachable outer state. Inputs are doc-described routing-policy
 // combinations (mostly the doc's Scenario matrix; CONTINUE_CURRENT_WAIT and
-// HANDOFF_TO_COPILOT_LOOP use equivalent doc-described input pairs where the
+// HANDOFF_TO_VERIFICATION_LOOP use equivalent doc-described input pairs where the
 // literal scenario rows were repurposed for other states) — no invented behavior.
 const OUTER_TO_FIXTURE = new Map([
-  [OUTER_STATE.CONTINUE_CURRENT_WAIT, () => routeOuter({ copilotState: "waiting_for_copilot_review", reviewerState: "waiting_for_author_followup" })],
-  [OUTER_STATE.HANDOFF_TO_COPILOT_LOOP, () => routeOuter({ copilotState: "pr_draft", reviewerState: "waiting_for_review_request" })],
+  [OUTER_STATE.CONTINUE_CURRENT_WAIT, () => routeOuter({ copilotState: "waiting_for_external_review", reviewerState: "waiting_for_author_followup" })],
+  [OUTER_STATE.HANDOFF_TO_VERIFICATION_LOOP, () => routeOuter({ copilotState: "pr_draft", reviewerState: "waiting_for_review_request" })],
   [OUTER_STATE.HANDOFF_TO_REVIEWER_LOOP, () => routeOuter({ copilotState: "pr_ready_no_feedback", reviewerState: "review_requested" })],
   [OUTER_STATE.STAY_WITH_CURRENT_LIVE_OWNER, () => routeOuter({ copilotState: "unresolved_feedback_present", reviewerState: "waiting_for_author_followup", ownershipState: "live_owner" })],
   [OUTER_STATE.STOP_NEEDS_HUMAN, () => routeOuter({ copilotState: "blocked_needs_user_decision", reviewerState: "waiting_for_review_request" })],
@@ -700,8 +713,11 @@ registerMachine(CONDUCTOR_ROUTING_MACHINE);
 // table (mirroring pr-gate-coordination's atlas binding) makes any dropped, mangled, or
 // deleted bullet throw loudly.
 function bindDocToCodeTable(machineName, docTransitions, codeEdges) {
-  const docSet = new Set(realEdges(docTransitions).map(([a, b]) => `${a}->${b}`));
-  const codeSet = new Set(codeEdges.map(([a, b]) => `${a}->${b}`));
+  // Both sides normalized per ADR 0073, so a doc still spelling a lane the
+  // legacy way compares equal while a genuinely different edge still fails.
+  const edgeKey = ([a, b]) => `${normalizeLoopVocabularyToken(a)}->${normalizeLoopVocabularyToken(b)}`;
+  const docSet = new Set(realEdges(docTransitions).map(edgeKey));
+  const codeSet = new Set(codeEdges.map(edgeKey));
   const onlyDoc = [...docSet].filter((k) => !codeSet.has(k));
   const onlyCode = [...codeSet].filter((k) => !docSet.has(k));
   if (onlyDoc.length > 0 || onlyCode.length > 0) {
@@ -720,15 +736,15 @@ function tableTerminalStates(table) {
   return Object.entries(table).filter(([, tos]) => tos.length === 0).map(([state]) => state);
 }
 
-const COPILOT_LOOP_STATE_DOC_TRANSITIONS = parseRequiredTransitions(
+const VERIFICATION_LOOP_STATE_DOC_TRANSITIONS = parseRequiredTransitions(
   readFileSync(path.join(REPO_ROOT, "skills", "docs", "copilot-loop-state-graph.md"), "utf8"),
 );
 
-bindDocToCodeTable("copilot-loop-state", COPILOT_LOOP_STATE_DOC_TRANSITIONS, tableEdges(TRANSITIONS));
+bindDocToCodeTable("copilot-loop-state", VERIFICATION_LOOP_STATE_DOC_TRANSITIONS, tableEdges(TRANSITIONS));
 
-const COPILOT_LOOP_STATE_TO_FIXTURE = new Map([
+const VERIFICATION_LOOP_STATE_TO_FIXTURE = new Map([
   [STATE.PR_READY_NO_FEEDBACK, () => ({ prExists: true, prDraft: false, copilotReviewRequestStatus: "none", copilotReviewPresent: false, unresolvedThreadCount: 0, ciStatus: "success" })],
-  [STATE.WAITING_FOR_COPILOT_REVIEW, () => ({ prExists: true, prDraft: false, copilotReviewRequestStatus: "requested", unresolvedThreadCount: 0 })],
+  [STATE.WAITING_FOR_EXTERNAL_REVIEW, () => ({ prExists: true, prDraft: false, copilotReviewRequestStatus: "requested", unresolvedThreadCount: 0 })],
   [STATE.UNRESOLVED_FEEDBACK_PRESENT, () => ({ prExists: true, prDraft: false, unresolvedThreadCount: 2, agentFixStatus: null })],
   [STATE.ALREADY_FIXED_NEEDS_REPLY_RESOLVE, () => ({ prExists: true, prDraft: false, unresolvedThreadCount: 2, agentFixStatus: "applied" })],
   [STATE.READY_TO_REREQUEST_REVIEW, () => ({ prExists: true, prDraft: false, copilotReviewPresent: true, unresolvedThreadCount: 0, ciStatus: "success", copilotReviewRequestStatus: "none" })],
@@ -738,11 +754,13 @@ const COPILOT_LOOP_STATE_TO_FIXTURE = new Map([
   [STATE.DONE, () => ({ prExists: true, prMerged: true })],
 ]);
 
-const COPILOT_LOOP_STATE_TRANSITION_CHECKS = new Map();
-for (const [from, to] of realEdges(COPILOT_LOOP_STATE_DOC_TRANSITIONS)) {
-  const buildFixture = COPILOT_LOOP_STATE_TO_FIXTURE.get(to);
+const VERIFICATION_LOOP_STATE_TRANSITION_CHECKS = new Map();
+for (const [from, to] of realEdges(VERIFICATION_LOOP_STATE_DOC_TRANSITIONS)) {
+  // The fixture map is keyed by the current vocabulary; the doc edge may still
+  // carry the legacy spelling until the prose half lands (ADR 0073).
+  const buildFixture = VERIFICATION_LOOP_STATE_TO_FIXTURE.get(normalizeLoopVocabularyToken(to));
   if (!buildFixture) throw new Error(`copilot-loop-state: no fixture registered for reachable state "${to}"`);
-  COPILOT_LOOP_STATE_TRANSITION_CHECKS.set(`${from}->${to}`, {
+  VERIFICATION_LOOP_STATE_TRANSITION_CHECKS.set(`${from}->${to}`, {
     status: "verified",
     verify: () => {
       const fixture = buildFixture();
@@ -761,13 +779,13 @@ for (const [from, to] of realEdges(COPILOT_LOOP_STATE_DOC_TRANSITIONS)) {
   });
 }
 
-const COPILOT_LOOP_STATE_MACHINE = {
+const VERIFICATION_LOOP_STATE_MACHINE = {
   name: "copilot-loop-state",
   states: Object.values(STATE),
   terminalStates: tableTerminalStates(TRANSITIONS),
   transitions: tableEdges(TRANSITIONS),
-  docTransitions: COPILOT_LOOP_STATE_DOC_TRANSITIONS,
-  transitionChecks: COPILOT_LOOP_STATE_TRANSITION_CHECKS,
+  docTransitions: VERIFICATION_LOOP_STATE_DOC_TRANSITIONS,
+  transitionChecks: VERIFICATION_LOOP_STATE_TRANSITION_CHECKS,
   safetyRules: [
     {
       // Analog of "fail-closed states never dispatch a Backlog pull" for this machine
@@ -782,7 +800,7 @@ const COPILOT_LOOP_STATE_MACHINE = {
   ],
 };
 
-registerMachine(COPILOT_LOOP_STATE_MACHINE);
+registerMachine(VERIFICATION_LOOP_STATE_MACHINE);
 
 // ---------------------------------------------------------------------------
 // Fourth machine: reviewer-loop-state.
@@ -1083,7 +1101,7 @@ const PUBLIC_DEV_LOOP_GATE_TO_FIXTURE = new Map([
   [DEV_LOOP_GATE.ISSUE_INTAKE, () => evaluatePublicDevLoopRouting({ intent: DEV_LOOP_PUBLIC_INTENT.START_ON_ISSUE, target: { kind: DEV_LOOP_TARGET_KIND.ISSUE, issue: 86 }, targetPreference: PUBLIC_DEV_LOOP_GITHUB_FIRST })],
   [DEV_LOOP_GATE.EXTERNAL_PR_FOLLOWUP, () => evaluatePublicDevLoopRouting({ intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_CURRENT, currentState: publicDevLoopPrState({ target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 91 }, ownership: DEV_LOOP_ACTOR.EXTERNAL_HUMAN, nextActor: DEV_LOOP_ACTOR.REVIEWER }), targetPreference: PUBLIC_DEV_LOOP_GITHUB_FIRST })],
   [DEV_LOOP_GATE.REVIEWER_FIXER, () => evaluatePublicDevLoopRouting({ intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_CURRENT, currentState: publicDevLoopPrState({ ownership: DEV_LOOP_ACTOR.REVIEWER, nextActor: DEV_LOOP_ACTOR.REVIEWER }), targetPreference: PUBLIC_DEV_LOOP_GITHUB_FIRST })],
-  [DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP, () => evaluatePublicDevLoopRouting({ intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_CURRENT, currentState: publicDevLoopPrState({}), targetPreference: PUBLIC_DEV_LOOP_GITHUB_FIRST })],
+  [DEV_LOOP_GATE.VERIFICATION, () => evaluatePublicDevLoopRouting({ intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_CURRENT, currentState: publicDevLoopPrState({}), targetPreference: PUBLIC_DEV_LOOP_GITHUB_FIRST })],
   [DEV_LOOP_GATE.UI_REVIEW, () => evaluatePublicDevLoopRouting({ intent: DEV_LOOP_PUBLIC_INTENT.REVIEW_PR_UI, target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 }, currentState: publicDevLoopPrState({}), targetPreference: PUBLIC_DEV_LOOP_GITHUB_FIRST })],
   [DEV_LOOP_GATE.FAIL_CLOSED_RECONCILE, () => evaluatePublicDevLoopRouting({ intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_ON_PR, target: { kind: DEV_LOOP_TARGET_KIND.PR, pr: 88 } })],
 ]);

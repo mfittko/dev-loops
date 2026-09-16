@@ -169,7 +169,7 @@ test("runWatchCycle uses emitted non-zero watchArgs for normal async waiting", a
       runHandoffImpl: async () => ({
         ok: true,
         action: "watch",
-        state: "waiting_for_copilot_review",
+        state: "waiting_for_external_review",
         allowedTransitions: ["unresolved_feedback_present"],
         nextAction: "Wait for Copilot review via scripts/github/probe-copilot-review.mjs",
         snapshot: { repo: "owner/repo", pr: 17 },
@@ -218,7 +218,7 @@ test("runWatchCycle uses emitted non-zero watchArgs for normal async waiting", a
   assert.equal(result.cycleDisposition, "pending");
   assert.equal(result.terminal, false);
   assert.equal(result.watchStatus, "timeout");
-  assert.equal(result.state, "waiting_for_copilot_review");
+  assert.equal(result.state, "waiting_for_external_review");
   assert.equal(result.requestWatchContract.routingState, "copilot_request_confirmed_waiting");
   assert.equal(result.contractTrace.waitStrategy.mode, "persistent_watch");
   assert.equal(result.contractTrace.waitStrategy.effectiveTimeoutMs, 1_800_000);
@@ -242,7 +242,7 @@ test("runWatchCycle rejects persistent watch budgets below the unattended extern
         runHandoffImpl: async () => ({
           ok: true,
           action: "watch",
-          state: "waiting_for_copilot_review",
+          state: "waiting_for_external_review",
           allowedTransitions: ["unresolved_feedback_present"],
           nextAction: "Wait for Copilot review via scripts/github/probe-copilot-review.mjs",
           snapshot: { repo: "owner/repo", pr: 17 },
@@ -273,7 +273,7 @@ test("runWatchCycle keeps shared loopDisposition and reports needs_followup in c
       runHandoffImpl: async () => ({
         ok: true,
         action: "watch",
-        state: "waiting_for_copilot_review",
+        state: "waiting_for_external_review",
         allowedTransitions: ["unresolved_feedback_present"],
         nextAction: "Wait for Copilot review via scripts/github/probe-copilot-review.mjs",
         snapshot: { repo: "owner/repo", pr: 17 },
@@ -487,7 +487,7 @@ test("runWatchCycle preserves blocked classification for stop states without inv
   assert.equal(result.contractTrace.stopReason.classification, "blocked");
 });
 
-test("runWatchCycle integration keeps initial request-review -> waiting_for_copilot_review non-terminal", async () => {
+test("runWatchCycle integration keeps initial request-review -> waiting_for_external_review non-terminal", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-watch-cycle-initial-request-"));
   let watcherOptions;
 
@@ -524,7 +524,7 @@ test("runWatchCycle integration keeps initial request-review -> waiting_for_copi
     );
 
     assert.equal(result.handoffAction, "watch");
-    assert.equal(result.state, "waiting_for_copilot_review");
+    assert.equal(result.state, "waiting_for_external_review");
     assert.equal(result.reviewRequestStatus, "requested");
     assert.equal(result.loopDisposition, "pending");
     assert.equal(result.terminal, false);
@@ -579,7 +579,7 @@ test("runWatchCycle integration keeps re-requested newer-head wait state non-ter
     );
 
     assert.equal(result.handoffAction, "watch");
-    assert.equal(result.state, "waiting_for_copilot_review");
+    assert.equal(result.state, "waiting_for_external_review");
     assert.equal(result.reviewRequestStatus, "requested");
     assert.equal(result.loopDisposition, "pending");
     assert.equal(result.terminal, false);
@@ -656,7 +656,7 @@ test("runWatchCycle integration bounds active Copilot workflow waits by the emit
       runHandoffImpl: async () => ({
         ok: true,
         action: "watch",
-        state: "waiting_for_copilot_review",
+        state: "waiting_for_external_review",
         allowedTransitions: ["unresolved_feedback_present"],
         nextAction: "Wait for Copilot review via scripts/github/probe-copilot-review.mjs",
         snapshot: { repo: "owner/repo", pr: 17 },
@@ -862,7 +862,7 @@ test("run-watch-cycle parses --concise/--summary, --jq, --silent flags", () => {
 test("formatWatchCycleConcise surfaces loop state, rounds, threads, CI, round-cap, next action, and new bodies", () => {
   const text = formatWatchCycleConcise({
     ok: true,
-    state: "waiting_for_copilot_review",
+    state: "waiting_for_external_review",
     handoffAction: "watch",
     roundCapCleanEligible: false,
     loopDisposition: "pending",
@@ -879,7 +879,7 @@ test("formatWatchCycleConcise surfaces loop state, rounds, threads, CI, round-ca
     },
     watch: { newComments: [{ body: "line 12 still wrong" }], newReviews: [], newIssueComments: [] },
   });
-  assert.match(text, /loop state:\s+waiting_for_copilot_review/);
+  assert.match(text, /loop state:\s+waiting_for_external_review/);
   assert.match(text, /copilot rounds:\s+3/);
   assert.match(text, /unresolved threads:\s+2/);
   assert.match(text, /actionable threads:\s+1/);
@@ -898,7 +898,7 @@ function copilotWatchHandoffWithHead(head) {
   return async () => ({
     ok: true,
     action: "watch",
-    state: "waiting_for_copilot_review",
+    state: "waiting_for_external_review",
     allowedTransitions: [],
     nextAction: "Wait for Copilot review via scripts/github/probe-copilot-review.mjs",
     snapshot: { repo: "owner/repo", pr: 17, ...(head === null ? {} : { currentHeadSha: head }) },
@@ -1024,7 +1024,7 @@ function sessionActiveWatchHandoff() {
   return {
     ok: true,
     action: "watch",
-    state: "waiting_for_copilot_review",
+    state: "waiting_for_external_review",
     allowedTransitions: [],
     nextAction: "Wait for Copilot review via scripts/github/probe-copilot-review.mjs",
     snapshot: { repo: "owner/repo", pr: 17, currentHeadSha: "abc123" },

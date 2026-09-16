@@ -122,10 +122,10 @@ test("webkit renders overview-first tabs, matches tab panels, and captures a scr
     await expect(graph).toHaveCSS("cursor", "grab");
     await expect(graph).toContainText(/Start/);
     await expect(graph).toContainText(/continue current wait/);
-    await expect(graph).toContainText(/waiting_for_copilot_review/);
+    await expect(graph).toContainText(/waiting_for_external_review/);
     await expect(graph).toContainText(/review_requested/);
-    await expect(page.getByText(/outer-loop family:\s*current\s*continue_current_wait; continue_current_wait; full authoritative state machine shown; continue_current_wait, handoff_to_copilot_loop, handoff_to_reviewer_loop, stay_with_current_live_owner, stop_needs_human, done_terminal, needs_reconcile/i)).toBeVisible();
-    await expect(page.getByText(/copilot layer:\s*current\s*waiting_for_copilot_review; waiting_for_copilot_review; full authoritative state machine shown; unresolved_feedback_present, ready_to_rerequest_review, waiting_for_ci/i)).toBeVisible();
+    await expect(page.getByText(/outer-loop family:\s*current\s*continue_current_wait; continue_current_wait; full authoritative state machine shown; continue_current_wait, handoff_to_verification_loop, handoff_to_reviewer_loop, stay_with_current_live_owner, stop_needs_human, done_terminal, needs_reconcile/i)).toBeVisible();
+    await expect(page.getByText(/copilot layer:\s*current\s*waiting_for_external_review; waiting_for_external_review; full authoritative state machine shown; unresolved_feedback_present, ready_to_rerequest_review, waiting_for_ci/i)).toBeVisible();
     const lifecycleLaneRender = await graph.evaluate((node) => {
       const svg = node.querySelector('svg');
       const laneTitles = [...svg.querySelectorAll('g.cluster text')]

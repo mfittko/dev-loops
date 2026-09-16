@@ -9,7 +9,7 @@ export function makeInspectionSnapshot(overrides = {}) {
     outerState: "continue_current_wait",
     allowedTransitions: [
       "continue_current_wait",
-      "handoff_to_copilot_loop",
+      "handoff_to_verification_loop",
       "handoff_to_reviewer_loop",
       "stay_with_current_live_owner",
       "stop_needs_human",
@@ -41,7 +41,7 @@ export function makeInspectionSnapshot(overrides = {}) {
     },
     layers: {
       copilot: {
-        currentState: "waiting_for_copilot_review",
+        currentState: "waiting_for_external_review",
         allowedTransitions: ["unresolved_feedback_present", "ready_to_rerequest_review", "waiting_for_ci"],
       },
       reviewer: {

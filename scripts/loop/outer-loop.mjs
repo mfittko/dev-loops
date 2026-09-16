@@ -54,13 +54,13 @@ Output (stdout, JSON):
     "conductorModel": "..."|null }
 Outer actions:
   continue_wait          Durable outer-loop wait state; re-run after bounded wait
-  reenter_copilot_loop   Copilot inner loop needs action
-  reenter_reviewer_loop  Reviewer inner loop needs action
+  enter_verification_loop   Copilot inner loop needs action
+  enter_reviewer_loop  Reviewer inner loop needs action
   stop                   Terminal, blocked, or reconcile-needed; do not proceed
   done                   PR is merged or closed; loop complete
 Stop reasons:
   pr_not_ready                         PR does not exist
-  copilot_blocked                      Copilot loop is blocked
+  copilot_blocked                      Verification loop is blocked
   reviewer_blocked                     Reviewer loop is blocked
   review_unavailable                   Copilot review is unavailable
   unsafe_local_branch_mismatch_requires_reconcile
@@ -200,7 +200,7 @@ async function fetchPrHeadIdentity({ repo, pr }, { env = process.env, ghCommand 
   return { branchName, headSha };
 }
 function requiresPrLocalIdentityGate(outerAction) {
-  return outerAction === "reenter_copilot_loop" || outerAction === "reenter_reviewer_loop";
+  return outerAction === "enter_verification_loop" || outerAction === "enter_reviewer_loop";
 }
 function evaluatePrLocalIdentity({
   localBranch,

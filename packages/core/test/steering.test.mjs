@@ -307,7 +307,7 @@ test("classifySafePoint returns IMMEDIATE for idle/waiting states", () => {
   for (const state of [
     STATE.PR_READY_NO_FEEDBACK,
     STATE.READY_TO_REREQUEST_REVIEW,
-    STATE.WAITING_FOR_COPILOT_REVIEW,
+    STATE.WAITING_FOR_EXTERNAL_REVIEW,
     STATE.WAITING_FOR_CI,
   ]) {
     assert.equal(classifySafePoint(state), SAFE_POINT_CATEGORY.IMMEDIATE, `expected IMMEDIATE for ${state}`);
@@ -367,7 +367,7 @@ test("submitSteering returns applied_now for hard_constraint at an IMMEDIATE saf
 test("submitSteering applies preference at a safe point", () => {
   const event = makeEvent({ kind: STEERING_KIND.PREFERENCE, seq: 1 });
   const state = makeState();
-  const { result } = submitSteering(event, state, STATE.WAITING_FOR_COPILOT_REVIEW);
+  const { result } = submitSteering(event, state, STATE.WAITING_FOR_EXTERNAL_REVIEW);
   assert.equal(result.result, STEERING_RESULT.APPLIED_NOW);
 });
 
@@ -381,7 +381,7 @@ test("submitSteering applies clarification at a safe point", () => {
 test("submitSteering applies stop_at_next_safe_gate at a safe point", () => {
   const event = makeEvent({ kind: STEERING_KIND.STOP_AT_NEXT_SAFE_GATE, seq: 1 });
   const state = makeState();
-  const { steeringState, result } = submitSteering(event, state, STATE.WAITING_FOR_COPILOT_REVIEW);
+  const { steeringState, result } = submitSteering(event, state, STATE.WAITING_FOR_EXTERNAL_REVIEW);
   assert.equal(result.result, STEERING_RESULT.APPLIED_NOW);
   assert.equal(steeringState.effectiveStack.length, 1);
   assert.equal(steeringState.effectiveStack[0].kind, STEERING_KIND.STOP_AT_NEXT_SAFE_GATE);
@@ -397,11 +397,11 @@ test("submitSteering treats repeat stop_at_next_safe_gate on an effective run as
   });
   const state = makeState();
 
-  const { steeringState: afterFirst } = submitSteering(first, state, STATE.WAITING_FOR_COPILOT_REVIEW);
+  const { steeringState: afterFirst } = submitSteering(first, state, STATE.WAITING_FOR_EXTERNAL_REVIEW);
   const { steeringState: afterRepeat, result } = submitSteering(
     repeat,
     afterFirst,
-    STATE.WAITING_FOR_COPILOT_REVIEW,
+    STATE.WAITING_FOR_EXTERNAL_REVIEW,
   );
 
   assert.equal(result.result, STEERING_RESULT.APPLIED_NOW);
@@ -739,8 +739,8 @@ test("getEffectiveConstraints separates preferences and clarifications", () => {
   const ep = makeEvent({ seq: 1, kind: STEERING_KIND.PREFERENCE, directive: "Prefer TypeScript" });
   const ec = makeEvent({ eventId: "e2", seq: 2, kind: STEERING_KIND.CLARIFICATION, directive: "Clarify scope" });
   let state = makeState();
-  const { steeringState: s1 } = submitSteering(ep, state, STATE.WAITING_FOR_COPILOT_REVIEW);
-  const { steeringState: s2 } = submitSteering(ec, s1, STATE.WAITING_FOR_COPILOT_REVIEW);
+  const { steeringState: s1 } = submitSteering(ep, state, STATE.WAITING_FOR_EXTERNAL_REVIEW);
+  const { steeringState: s2 } = submitSteering(ec, s1, STATE.WAITING_FOR_EXTERNAL_REVIEW);
   const constraints = getEffectiveConstraints(s2);
   assert.deepEqual(constraints.preferences, ["Prefer TypeScript"]);
   assert.deepEqual(constraints.clarifications, ["Clarify scope"]);
@@ -750,7 +750,7 @@ test("getEffectiveConstraints separates preferences and clarifications", () => {
 test("getEffectiveConstraints sets stopAtNextSafeGate when stop directive is effective", () => {
   const event = makeEvent({ seq: 1, kind: STEERING_KIND.STOP_AT_NEXT_SAFE_GATE });
   let state = makeState();
-  const { steeringState } = submitSteering(event, state, STATE.WAITING_FOR_COPILOT_REVIEW);
+  const { steeringState } = submitSteering(event, state, STATE.WAITING_FOR_EXTERNAL_REVIEW);
   const constraints = getEffectiveConstraints(steeringState);
   assert.equal(constraints.stopAtNextSafeGate, true);
 });
@@ -772,7 +772,7 @@ test("resolveEffectiveLoopState returns base interpretation when no steering is 
 test("resolveEffectiveLoopState overrides nextAction when stop_at_next_safe_gate is active at a safe point", () => {
   const event = makeEvent({ seq: 1, kind: STEERING_KIND.STOP_AT_NEXT_SAFE_GATE });
   let state = makeState();
-  const { steeringState: withStop } = submitSteering(event, state, STATE.WAITING_FOR_COPILOT_REVIEW);
+  const { steeringState: withStop } = submitSteering(event, state, STATE.WAITING_FOR_EXTERNAL_REVIEW);
 
   // Loop is at READY_TO_REREQUEST_REVIEW (an IMMEDIATE safe point)
   const snapshot = { prExists: true, prNumber: 1, copilotReviewPresent: true, unresolvedThreadCount: 0, ciStatus: "success" };
@@ -787,7 +787,7 @@ test("resolveEffectiveLoopState overrides nextAction when stop_at_next_safe_gate
 test("resolveEffectiveLoopState surfaces pending stop_at_next_safe_gate when loop is not yet at a safe point", () => {
   const event = makeEvent({ seq: 1, kind: STEERING_KIND.STOP_AT_NEXT_SAFE_GATE });
   let state = makeState();
-  const { steeringState: withStop } = submitSteering(event, state, STATE.WAITING_FOR_COPILOT_REVIEW);
+  const { steeringState: withStop } = submitSteering(event, state, STATE.WAITING_FOR_EXTERNAL_REVIEW);
 
   // Loop is actively computing — not a safe point
   const snapshot = { prExists: true, prNumber: 1, copilotReviewPresent: true, unresolvedThreadCount: 2, actionableThreadCount: 2 };
@@ -804,7 +804,7 @@ test("resolveEffectiveLoopState surfaces pending stop_at_next_safe_gate when loo
 test("resolveEffectiveLoopState surfaces terminal stop_at_next_safe_gate when the loop cannot resume", () => {
   const event = makeEvent({ seq: 1, kind: STEERING_KIND.STOP_AT_NEXT_SAFE_GATE });
   let state = makeState();
-  const { steeringState: withStop } = submitSteering(event, state, STATE.WAITING_FOR_COPILOT_REVIEW);
+  const { steeringState: withStop } = submitSteering(event, state, STATE.WAITING_FOR_EXTERNAL_REVIEW);
 
   const snapshot = {
     prExists: true,
@@ -822,7 +822,7 @@ test("resolveEffectiveLoopState surfaces terminal stop_at_next_safe_gate when th
 test("resolveEffectiveLoopState sets steeringApplied when hard constraint is effective", () => {
   const event = makeEvent({ seq: 1, kind: STEERING_KIND.HARD_CONSTRAINT, directive: "No new deps" });
   let state = makeState();
-  const { steeringState } = submitSteering(event, state, STATE.WAITING_FOR_COPILOT_REVIEW);
+  const { steeringState } = submitSteering(event, state, STATE.WAITING_FOR_EXTERNAL_REVIEW);
 
   const snapshot = { prExists: true, prNumber: 1, copilotReviewPresent: true, unresolvedThreadCount: 0, ciStatus: "success" };
   const result = resolveEffectiveLoopState(snapshot, steeringState);

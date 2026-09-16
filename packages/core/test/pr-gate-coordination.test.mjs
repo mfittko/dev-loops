@@ -932,7 +932,7 @@ test("interpretLoopState (handoff baseline) and evaluatePrGateCoordination (dete
 // Note the interpreter (handoff's base) deliberately routes a pending at-cap
 // request to ROUND_CAP_CLEAN_FALLBACK — it cannot see significance (that needs gh
 // compare I/O). copilot-pr-handoff.mjs therefore flips this to
-// waiting_for_copilot_review when a review is pending on the current head (proven
+// waiting_for_external_review when a review is pending on the current head (proven
 // by the "in-flight force-rerequest" integration tests). detect's evaluator, fed
 // the outstanding copilotReviewRequestStatus, waits for the pending review here.
 // Both gate pre-approval — no divergence.
@@ -953,7 +953,7 @@ test("interpretLoopState (handoff) and evaluatePrGateCoordination (detect) both 
 
   // handoff's base interpretation: the interpreter ignores the pending at-cap
   // request and resolves the clean fallback. runHandoff flips this to
-  // waiting_for_copilot_review (integration tests) so it never proceeds.
+  // waiting_for_external_review (integration tests) so it never proceeds.
   const handoffInterpretation = interpretLoopState(snapshot, refinementConfig);
   assert.equal(handoffInterpretation.state, STATE.ROUND_CAP_CLEAN_FALLBACK);
 
@@ -3056,7 +3056,7 @@ test("round_cap_reached grant shape with a WIP title blocks on the title marker,
 // round is permitted), so — same as ROUND_CAP_CLEAN_FALLBACK — it must not
 // re-block this grant. Fails pre-fix: without widening this guard's exemption
 // with isRoundCapReachedCleanGrant, both statuses get rewritten to
-// waiting_for_copilot_review, dead-ending the loop.
+// waiting_for_external_review, dead-ending the loop.
 for (const copilotReviewRequestStatus of ["requested", "already-requested"]) {
   test(`round_cap_reached + pre_approval_gate_window grant survives a lingering copilotReviewRequestStatus:${copilotReviewRequestStatus} (#1472)`, () => {
     const result = evaluatePrGateCoordination({

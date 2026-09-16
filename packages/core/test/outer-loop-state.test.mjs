@@ -16,7 +16,7 @@ import {
 function makeBaseInput(overrides = {}) {
   return {
     target: { repo: "owner/repo", pr: 42 },
-    copilotState: "waiting_for_copilot_review",
+    copilotState: "waiting_for_external_review",
     reviewerState: "waiting_for_review_request",
     ownershipState: undefined,
     sourceMode: "authoritative",
@@ -28,7 +28,7 @@ function makeBaseInput(overrides = {}) {
 test("outer-loop state exports exactly reuse routing outcomes", () => {
   assert.deepEqual(Object.values(OUTER_STATE).sort(), Object.values(ROUTING_OUTCOME).sort());
   assert.equal(OUTER_STATE.CONTINUE_CURRENT_WAIT, ROUTING_OUTCOME.CONTINUE_CURRENT_WAIT);
-  assert.equal(OUTER_STATE.HANDOFF_TO_COPILOT_LOOP, ROUTING_OUTCOME.HANDOFF_TO_COPILOT_LOOP);
+  assert.equal(OUTER_STATE.HANDOFF_TO_VERIFICATION_LOOP, ROUTING_OUTCOME.HANDOFF_TO_VERIFICATION_LOOP);
   assert.equal(OUTER_STATE.HANDOFF_TO_REVIEWER_LOOP, ROUTING_OUTCOME.HANDOFF_TO_REVIEWER_LOOP);
   assert.equal(OUTER_STATE.STAY_WITH_CURRENT_LIVE_OWNER, ROUTING_OUTCOME.STAY_WITH_CURRENT_LIVE_OWNER);
   assert.equal(OUTER_STATE.STOP_NEEDS_HUMAN, ROUTING_OUTCOME.STOP_NEEDS_HUMAN);
@@ -78,7 +78,7 @@ test("outer-loop next-action text stays defined for every authoritative outer st
 
 test("interpretOuterLoopState: continue_current_wait", () => {
   const result = interpretOuterLoopState(makeBaseInput({
-    copilotState: "waiting_for_copilot_review",
+    copilotState: "waiting_for_external_review",
     reviewerState: "waiting_for_review_request",
   }));
 
@@ -90,14 +90,14 @@ test("interpretOuterLoopState: continue_current_wait", () => {
   assert.deepEqual(result.allowedTransitions, Object.values(OUTER_STATE));
 });
 
-test("interpretOuterLoopState: handoff_to_copilot_loop", () => {
+test("interpretOuterLoopState: handoff_to_verification_loop", () => {
   const result = interpretOuterLoopState(makeBaseInput({
     copilotState: "ready_to_rerequest_review",
     reviewerState: "waiting_for_review_request",
   }));
 
-  assert.equal(result.state, OUTER_STATE.HANDOFF_TO_COPILOT_LOOP);
-  assert.equal(result.outerAction, "reenter_copilot_loop");
+  assert.equal(result.state, OUTER_STATE.HANDOFF_TO_VERIFICATION_LOOP);
+  assert.equal(result.outerAction, "enter_verification_loop");
   assert.equal(result.isTerminal, false);
 });
 
@@ -108,7 +108,7 @@ test("interpretOuterLoopState: handoff_to_reviewer_loop", () => {
   }));
 
   assert.equal(result.state, OUTER_STATE.HANDOFF_TO_REVIEWER_LOOP);
-  assert.equal(result.outerAction, "reenter_reviewer_loop");
+  assert.equal(result.outerAction, "enter_reviewer_loop");
   assert.equal(result.isTerminal, false);
 });
 
@@ -127,7 +127,7 @@ test("interpretOuterLoopState preserves stay_with_current_live_owner distinct fr
 
 test("interpretOuterLoopState preserves needs_reconcile distinct from stop_needs_human", () => {
   const result = interpretOuterLoopState(makeBaseInput({
-    copilotState: "waiting_for_copilot_review",
+    copilotState: "waiting_for_external_review",
     reviewerState: "waiting_for_review_request",
     ownershipState: "duplicate_local_owners",
   }));
@@ -168,12 +168,12 @@ test("interpretOuterLoopState: done_terminal", () => {
 
 test("interpretOuterLoopState reuses a precomputed routing result when provided", () => {
   const routing = {
-    routingOutcome: ROUTING_OUTCOME.HANDOFF_TO_COPILOT_LOOP,
-    outerAction: "reenter_copilot_loop",
+    routingOutcome: ROUTING_OUTCOME.HANDOFF_TO_VERIFICATION_LOOP,
+    outerAction: "enter_verification_loop",
     stopReason: null,
     handoffEnvelope: {
       targetIdentity: { repo: "owner/repo", pr: 42 },
-      loopFamily: "copilot_loop",
+      loopFamily: "verification_loop",
       entrypoint: "copilot_pr_handoff",
       reason: "copilot_needs_action",
       requiredArgs: { repo: "owner/repo", pr: 42 },
@@ -189,9 +189,9 @@ test("interpretOuterLoopState reuses a precomputed routing result when provided"
     routing,
   });
 
-  assert.equal(result.state, OUTER_STATE.HANDOFF_TO_COPILOT_LOOP);
-  assert.equal(result.routingOutcome, ROUTING_OUTCOME.HANDOFF_TO_COPILOT_LOOP);
-  assert.equal(result.outerAction, "reenter_copilot_loop");
+  assert.equal(result.state, OUTER_STATE.HANDOFF_TO_VERIFICATION_LOOP);
+  assert.equal(result.routingOutcome, ROUTING_OUTCOME.HANDOFF_TO_VERIFICATION_LOOP);
+  assert.equal(result.outerAction, "enter_verification_loop");
   assert.equal(result.stopReason, null);
   assert.equal(result.isTerminal, false);
   assert.deepEqual(result.allowedTransitions, Object.values(OUTER_STATE));

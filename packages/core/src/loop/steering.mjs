@@ -73,7 +73,7 @@ export function classifySafePoint(loopState) {
     // Idle / waiting on external state.
     case STATE.PR_READY_NO_FEEDBACK:
     case STATE.READY_TO_REREQUEST_REVIEW:
-    case STATE.WAITING_FOR_COPILOT_REVIEW:
+    case STATE.WAITING_FOR_EXTERNAL_REVIEW:
     case STATE.WAITING_FOR_CI:
       return SAFE_POINT_CATEGORY.IMMEDIATE;
 

@@ -45,7 +45,7 @@ test("RETROSPECTIVE_CHECKPOINT_STATE is frozen", () => {
 // ---------------------------------------------------------------------------
 
 test("RETROSPECTIVE_QUALIFYING_GATES includes the two required GitHub-first gates", () => {
-  assert.ok(RETROSPECTIVE_QUALIFYING_GATES.includes("copilot_pr_followup"));
+  assert.ok(RETROSPECTIVE_QUALIFYING_GATES.includes("verification"));
   assert.ok(RETROSPECTIVE_QUALIFYING_GATES.includes("issue_intake"));
 });
 
@@ -66,7 +66,7 @@ test("RETROSPECTIVE_QUALIFYING_GATES aligns with actual DEV_LOOP_GATE values", (
 // evaluateRetrospectiveGate — enforcement
 // ---------------------------------------------------------------------------
 
-// Build a minimal valid copilot_pr_followup routing result for gate tests.
+// Build a minimal valid verification routing result for gate tests.
 function makeCopilotPrFollowupResult() {
   return evaluatePublicDevLoopRouting({
     intent: DEV_LOOP_PUBLIC_INTENT.CONTINUE_ON_PR,
@@ -92,8 +92,8 @@ test("evaluateRetrospectiveGate: COMPLETE checkpoint passes through the proposed
   });
 
   assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.ROUTE);
-  assert.equal(result.selectedGate, DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP);
-  assert.equal(result.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP);
+  assert.equal(result.selectedGate, DEV_LOOP_GATE.VERIFICATION);
+  assert.equal(result.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION);
   assert.deepEqual(result, proposed);
 });
 
@@ -107,7 +107,7 @@ test("evaluateRetrospectiveGate: SKIPPED checkpoint passes through the proposed 
   });
 
   assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.ROUTE);
-  assert.equal(result.selectedGate, DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP);
+  assert.equal(result.selectedGate, DEV_LOOP_GATE.VERIFICATION);
   assert.deepEqual(result, proposed);
 });
 
@@ -125,7 +125,7 @@ test("evaluateRetrospectiveGate: NONE checkpoint passes through the proposed rou
 
 // ── Missing retrospective checkpoint: fails closed on start/resume ────────────
 
-test("evaluateRetrospectiveGate: MISSING checkpoint blocks a copilot_pr_followup start/resume and fails closed", () => {
+test("evaluateRetrospectiveGate: MISSING checkpoint blocks a verification start/resume and fails closed", () => {
   const proposed = makeCopilotPrFollowupResult();
   assert.equal(proposed.routeKind, DEV_LOOP_ROUTE_KIND.ROUTE);
 

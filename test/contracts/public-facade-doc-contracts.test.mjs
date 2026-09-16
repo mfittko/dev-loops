@@ -108,7 +108,7 @@ test("repo docs define dev-loop as the public façade and keep internal routed l
   assert.match(publicContract, /\/skill:dev-loop/i);
   assert.match(publicContract, /canonical current state/i);
   assert.match(publicContract, /issue_intake/i);
-  assert.match(publicContract, /copilot_pr_followup/i);
+  assert.match(publicContract, /(?:verification|copilot_verification)/i);
   assert.match(publicContract, /external_pr_followup/i);
   assert.match(publicContract, /Single-entrypoint convergence posture/i);
   assert.match(publicContract, /Surfaced-UX deprecation readiness bar/i);

@@ -59,7 +59,7 @@ test("outer-loop output includes conductorRouting field with routingOutcome and 
     const copilotInput = path.join(tempDir, "copilot.json");
     const reviewerInput = path.join(tempDir, "reviewer.json");
 
-    // Copilot review requested → waiting_for_copilot_review
+    // Copilot review requested → waiting_for_external_review
     await writeJson(copilotInput, {
       prExists: true,
       prNumber: 99,
@@ -108,7 +108,7 @@ test("outer-loop continue_wait → conductorRouting.routingOutcome=continue_curr
     const copilotInput = path.join(tempDir, "copilot.json");
     const reviewerInput = path.join(tempDir, "reviewer.json");
 
-    // Copilot review requested but not yet received → waiting_for_copilot_review
+    // Copilot review requested but not yet received → waiting_for_external_review
     await writeJson(copilotInput, {
       prExists: true,
       prNumber: 1,
@@ -197,7 +197,7 @@ test("outer-loop keeps waiting when copilot re-review is unsettled even if revie
   }
 });
 
-test("outer-loop reenter_copilot_loop → conductorRouting.routingOutcome=handoff_to_copilot_loop", async () => {
+test("outer-loop enter_verification_loop → conductorRouting.routingOutcome=handoff_to_verification_loop", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "conductor-routing-test-"));
   try {
     const env = await writeGitStub(tempDir);
@@ -236,16 +236,16 @@ test("outer-loop reenter_copilot_loop → conductorRouting.routingOutcome=handof
 
     assert.equal(code, 0);
     const result = JSON.parse(stdout);
-    assert.equal(result.outerAction, "reenter_copilot_loop");
-    assert.equal(result.conductorRouting.routingOutcome, "handoff_to_copilot_loop");
-    assert.equal(result.conductorRouting.handoffEnvelope.loopFamily, "copilot_loop");
+    assert.equal(result.outerAction, "enter_verification_loop");
+    assert.equal(result.conductorRouting.routingOutcome, "handoff_to_verification_loop");
+    assert.equal(result.conductorRouting.handoffEnvelope.loopFamily, "verification_loop");
     assert.equal(result.conductorRouting.handoffEnvelope.entrypoint, "copilot_pr_handoff");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
 });
 
-test("outer-loop reenter_reviewer_loop → conductorRouting.routingOutcome=handoff_to_reviewer_loop", async () => {
+test("outer-loop enter_reviewer_loop → conductorRouting.routingOutcome=handoff_to_reviewer_loop", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "conductor-routing-test-"));
   try {
     const env = await writeGitStub(tempDir);
@@ -285,7 +285,7 @@ test("outer-loop reenter_reviewer_loop → conductorRouting.routingOutcome=hando
 
     assert.equal(code, 0);
     const result = JSON.parse(stdout);
-    assert.equal(result.outerAction, "reenter_reviewer_loop");
+    assert.equal(result.outerAction, "enter_reviewer_loop");
     assert.equal(result.conductorRouting.routingOutcome, "handoff_to_reviewer_loop");
     assert.equal(result.conductorRouting.handoffEnvelope.loopFamily, "reviewer_loop");
     assert.equal(result.conductorRouting.handoffEnvelope.entrypoint, "reviewer_loop_handler");
@@ -397,7 +397,7 @@ test("outer-loop normalizes repo casing consistently across handoff envelope and
     const copilotInput = path.join(tempDir, "copilot.json");
     const reviewerInput = path.join(tempDir, "reviewer.json");
 
-    // Copilot review requested → waiting_for_copilot_review
+    // Copilot review requested → waiting_for_external_review
     await writeJson(copilotInput, {
       prExists: true,
       prNumber: 77,

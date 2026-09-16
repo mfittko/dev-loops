@@ -645,7 +645,7 @@ test("buildInspectionMermaidGraph fails closed for invalid next-state highlights
   const graph = buildInspectionMermaidGraph(makeSnapshot({
     layers: {
       copilot: {
-        currentState: "waiting_for_copilot_review",
+        currentState: "waiting_for_external_review",
         allowedTransitions: ["done"],
       },
       reviewer: {
@@ -667,7 +667,7 @@ test("buildInspectionMermaidGraph normalizes and de-duplicates transition tokens
   const snapshot = makeSnapshot({
     layers: {
       copilot: {
-        currentState: "waiting_for_copilot_review",
+        currentState: "waiting_for_external_review",
         allowedTransitions: [" waiting_for_ci ", "waiting_for_ci", " ready_to_rerequest_review "],
       },
       reviewer: {

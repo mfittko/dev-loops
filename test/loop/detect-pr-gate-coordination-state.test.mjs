@@ -2686,7 +2686,7 @@ test("detect-pr-gate-coordination-state routes to pre_approval_gate when a linge
 
     // The lingering requested status is reconciled to "none" (stale request
     // settled by the clean current-head review), so the interpreter reaches
-    // ready_to_rerequest_review (not waiting_for_copilot_review, which is what
+    // ready_to_rerequest_review (not waiting_for_external_review, which is what
     // an unreconciled "requested" status would produce).
     assert.equal(parsed.lifecycleState, "ready_to_rerequest_review");
 

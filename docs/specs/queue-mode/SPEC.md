@@ -70,7 +70,7 @@ dev-loop queue <number...> [--parallel] [--after <issue>...]
 for each entry in order:
   1. Resolve dependencies (block until dependsOn entries are done)
   2. Run dev-loop startup resolver → determine current state
-  3. Route to correct strategy (issue_intake, copilot_pr_followup, etc.)
+  3. Route to correct strategy (issue_intake, copilot_verification, etc.)
   4. Execute through gates: draft_gate → pre_approval_gate → merge
   5. Write retrospective checkpoint after merge
   6. If bug/workflow issue discovered during gates → auto-file issue → append to queue

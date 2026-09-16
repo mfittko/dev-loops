@@ -50,9 +50,9 @@ test("authoritative status resolution does not classify unresolved feedback as f
   });
 
   assert.equal(report.statusKind, DEV_LOOP_STATUS_REPORT_KIND.RESOLVED);
-  assert.equal(report.selectedGate, DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP);
+  assert.equal(report.selectedGate, DEV_LOOP_GATE.VERIFICATION);
   assert.equal(report.loopState, "unresolved_feedback_present");
-  assert.equal(report.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP);
+  assert.equal(report.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION);
 });
 
 test("authoritative status resolution consumes the startup/resume bundle output", () => {
@@ -298,7 +298,7 @@ test("authoritative status resolution keeps waiting linked issue states on the a
     },
     artifactState: DEV_LOOP_ARTIFACT_STATE.OPEN,
     issueLinkageResolution: DEV_LOOP_ISSUE_LINKAGE_RESOLUTION.RESOLVED_LINKED_PR,
-    loopState: "waiting_for_copilot_review",
+    loopState: "waiting_for_external_review",
   });
 
   assert.equal(report.statusKind, DEV_LOOP_STATUS_REPORT_KIND.RESOLVED);
@@ -358,9 +358,9 @@ test("authoritative status resolution reroutes stale bootstrap wait states when 
   });
 
   assert.equal(report.statusKind, DEV_LOOP_STATUS_REPORT_KIND.RESOLVED);
-  assert.equal(report.selectedGate, DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP);
+  assert.equal(report.selectedGate, DEV_LOOP_GATE.VERIFICATION);
   assert.equal(report.routeKind, DEV_LOOP_ROUTE_KIND.ROUTE);
-  assert.equal(report.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP);
+  assert.equal(report.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION);
   assert.equal(report.executionMode, DEV_LOOP_EXECUTION_MODE.DURABLE_AUTO);
   assert.equal(report.waitSemantics, DEV_LOOP_WAIT_SEMANTICS.DEFAULT);
   assert.equal(report.asyncRun?.runId, "run-182");
@@ -368,7 +368,7 @@ test("authoritative status resolution reroutes stale bootstrap wait states when 
   assert.equal(report.activeArtifact.issue, 177);
   assert.equal(report.activeArtifact.pr, 179);
   assert.equal(report.loopState, "linked_pr_ready_for_followup");
-  assert.match(report.nextAction, /Copilot PR follow-up/i);
+  assert.match(report.nextAction, /verification loop/i);
 });
 
 

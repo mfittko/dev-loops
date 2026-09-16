@@ -82,8 +82,8 @@ export const TRUST = Object.freeze({
  *
  * Mapping:
  *   continue_wait              → waiting
- *   reenter_copilot_loop       → active
- *   reenter_reviewer_loop      → active
+ *   enter_verification_loop       → active
+ *   enter_reviewer_loop      → active
  *   stop                       → blocked
  *   done                       → done
  *   anything else / undefined  → unknown
@@ -95,8 +95,8 @@ export function mapOuterActionToStatusClass(outerAction) {
   switch (outerAction) {
     case "continue_wait":
       return STATUS_CLASS.WAITING;
-    case "reenter_copilot_loop":
-    case "reenter_reviewer_loop":
+    case "enter_verification_loop":
+    case "enter_reviewer_loop":
       return STATUS_CLASS.ACTIVE;
     case "stop":
       return STATUS_CLASS.BLOCKED;
@@ -289,7 +289,7 @@ export function composeRunInspectionSnapshot({
   } else if (bothLiveOk && bothSourceKindsLive) {
     sourceMode = SOURCE_MODE.LIVE_DETECTOR_BACKED;
     trust = TRUST.AUTHORITATIVE;
-    evidenceAuthoritative.push("live Copilot loop detector", "live reviewer loop detector");
+    evidenceAuthoritative.push("live verification-loop detector", "live reviewer loop detector");
   } else if (inputSnapshotMode) {
     sourceMode = SOURCE_MODE.PARTIAL;
     trust = TRUST.DEGRADED;
@@ -302,7 +302,7 @@ export function composeRunInspectionSnapshot({
       trust = TRUST.UNAVAILABLE;
     }
     if (copilotLiveFailed) {
-      markers.missing.push("live Copilot loop state (detection failed)");
+      markers.missing.push("live verification-loop state (detection failed)");
     }
     if (reviewerLiveFailed) {
       markers.missing.push("live reviewer loop state (detection failed)");
@@ -312,10 +312,10 @@ export function composeRunInspectionSnapshot({
     sourceMode = SOURCE_MODE.PARTIAL;
     trust = TRUST.DEGRADED;
     if (copilotLiveOk) {
-      evidenceAuthoritative.push("live Copilot loop detector");
+      evidenceAuthoritative.push("live verification-loop detector");
     } else {
       if (copilotLiveFailed) {
-        markers.missing.push("live Copilot loop state (detection failed)");
+        markers.missing.push("live verification-loop state (detection failed)");
       }
       if (existingCheckpoint?.copilotState !== undefined) {
         markers.stale.push("copilot loop state (checkpoint-derived; live detection failed)");
@@ -430,8 +430,8 @@ export function composeRunInspectionSnapshot({
       evidenceSummary = "Live detectors agree the PR is complete.";
     } else if (effectiveOuterState === "continue_current_wait") {
       evidenceSummary = "Live detectors agree the orchestrator is in its durable wait state.";
-    } else if (effectiveOuterState === "handoff_to_copilot_loop") {
-      evidenceSummary = "Live detectors indicate the next meaningful work belongs to the Copilot loop.";
+    } else if (effectiveOuterState === "handoff_to_verification_loop") {
+      evidenceSummary = "Live detectors indicate the next meaningful work belongs to the verification loop.";
     } else if (effectiveOuterState === "handoff_to_reviewer_loop") {
       evidenceSummary = "Live detectors indicate the next meaningful work belongs to the reviewer loop.";
     } else if (effectiveOuterAction !== undefined) {

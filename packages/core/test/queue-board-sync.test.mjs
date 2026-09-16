@@ -220,7 +220,7 @@ test("boardColumnForLoopState maps pr_draft to In Progress (#2029)", () => {
 test("boardColumnForLoopState maps active/feedback states to In Progress (AC1)", () => {
   for (const state of [
     "pr_ready_no_feedback",
-    "waiting_for_copilot_review",
+    "waiting_for_external_review",
     "ready_to_rerequest_review",
     "local_implementation_active",
     "implementation",
@@ -268,7 +268,7 @@ test("boardColumnForLoopState honors a config-driven column name override (AC3)"
   };
   assert.equal(boardColumnForLoopState("issue_opened", mapping), "Todo");
   assert.equal(boardColumnForLoopState("pr_draft", mapping), "Doing");
-  assert.equal(boardColumnForLoopState("waiting_for_copilot_review", mapping), "Doing");
+  assert.equal(boardColumnForLoopState("waiting_for_external_review", mapping), "Doing");
   assert.equal(boardColumnForLoopState("merged", mapping), "Shipped");
 });
 
@@ -416,7 +416,7 @@ test("loadStateColumnMap is not vulnerable to prototype pollution via config key
 test("syncBoardStatus is a no-op when board config disabled, driven by mapping (AC2/AC6)", async () => {
   const dir = await makeRepo(null);
   try {
-    const column = boardColumnForLoopState("waiting_for_copilot_review", loadStateColumnMap(dir));
+    const column = boardColumnForLoopState("waiting_for_external_review", loadStateColumnMap(dir));
     const result = await syncBoardStatus("owner/repo", dir, 42, column, {});
     assert.equal(result.ok, true);
     assert.equal(result.skipped, true);

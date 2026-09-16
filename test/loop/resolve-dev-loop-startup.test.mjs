@@ -344,7 +344,7 @@ test("buildResolveDevLoopStartupResult maps linked Copilot follow-up to the PR f
   }, { env: resolverTestEnv(), cwd: os.tmpdir() });
 
   assert.equal(result.bundleKind, "resolved");
-  assert.equal(result.selectedStrategy, "copilot_pr_followup");
+  assert.equal(result.selectedStrategy, "verification");
   assert.deepEqual(result.requiredReads, [
     "skills/docs/public-dev-loop-contract.md",
     "skills/docs/retrospective-checkpoint-contract.md",
@@ -849,7 +849,7 @@ test("buildResolveDevLoopStartupResult allows async-required strategy with DEVLO
   );
 
   assert.equal(result.ok, true);
-  assert.equal(result.selectedStrategy, "copilot_pr_followup");
+  assert.equal(result.selectedStrategy, "verification");
 });
 
 test("buildResolveDevLoopStartupResult allows async-required strategy when asyncStartMode=allowed", () => {
@@ -870,7 +870,7 @@ test("buildResolveDevLoopStartupResult allows async-required strategy when async
   );
 
   assert.equal(result.ok, true);
-  assert.equal(result.selectedStrategy, "copilot_pr_followup");
+  assert.equal(result.selectedStrategy, "verification");
 });
 
 test("buildResolveDevLoopStartupResult does not enforce async-start on local_implementation", () => {
@@ -1210,7 +1210,7 @@ test("resolver does not block non-local_implementation strategies from main chec
 
     assert.equal(result.ok, true);
     assert.equal(result.bundleKind, "resolved");
-    assert.equal(result.selectedStrategy, "copilot_pr_followup");
+    assert.equal(result.selectedStrategy, "verification");
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -1463,7 +1463,7 @@ test("buildAutoResolvedInput detects Copilot authorship from linked PR author", 
     const parsed = JSON.parse(result.stdout);
     // Ownership should be copilot since the PR author is copilot-swe-agent
     assert.equal(parsed.bundleKind, "resolved");
-    assert.equal(parsed.selectedStrategy, "copilot_pr_followup");
+    assert.equal(parsed.selectedStrategy, "verification");
     assert.equal(parsed.canonicalStateSummary.ownership, "copilot");
     assert.equal(parsed.canonicalStateSummary.nextActor, "copilot");
     // PR target should be the linked PR number (transformed from issue+linkedPr)
@@ -1707,8 +1707,8 @@ test("--pr assigned to the viewer proceeds", async () => {
     assert.equal(parsed.ok, true);
     // Byte-unchanged plain --pr path (issue #1362): --ui-review must never
     // change the default routing outcome when the flag is absent.
-    assert.equal(parsed.selectedStrategy, "copilot_pr_followup");
-    assert.equal(parsed.canonicalStateSummary.loopState, "pr_followup_start");
+    assert.equal(parsed.selectedStrategy, "verification");
+    assert.equal(parsed.canonicalStateSummary.loopState, "verification_start");
   }, { prefix: "resolve-dev-loop-ownership-pr-me-" });
 });
 
@@ -2005,7 +2005,7 @@ test("STRATEGY_OWNERSHIP_GATE exempts only ui_review and wait_watch; every other
   for (const gatedStrategy of [
     "local_implementation",
     "issue_intake",
-    "copilot_pr_followup",
+    "verification",
     "external_pr_followup",
     "reviewer_fixer",
     "final_approval",
@@ -2061,7 +2061,7 @@ test("wait_watch (state-derived) is exempt: a waiting canonical state with an un
 test("wait_watch narrows initial reading and fresh re-entry restores destination contracts", async () => {
   const input = {
     artifactState: "open",
-    loopState: "waiting_for_copilot_review",
+    loopState: "waiting_for_external_review",
     currentState: {
       target: { kind: "pr", pr: 740 },
       ownership: "copilot", nextActor: "copilot",
@@ -2080,7 +2080,7 @@ test("wait_watch narrows initial reading and fresh re-entry restores destination
   assert.ok(words <= 23_531 / 2, `wait route loads ${words} words against the 23,531-word baseline`);
 
   for (const [status, nextActor, strategy] of [
-    ["active", "copilot", "copilot_pr_followup"],
+    ["active", "copilot", "verification"],
     ["active", "reviewer", "reviewer_fixer"],
     ["blocked", "user", "none"],
   ]) {
@@ -3322,11 +3322,11 @@ test("startup → build-envelope CLI end-to-end: a direct-only newer commit does
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout.trim());
     assert.equal(parsed.bundleKind, "resolved");
-    assert.equal(parsed.selectedStrategy, "copilot_pr_followup");
+    assert.equal(parsed.selectedStrategy, "verification");
     assert.equal(parsed.bundle.routeKind, "route");
-    assert.equal(parsed.bundle.selectedGate, "copilot_pr_followup");
-    assert.equal(parsed.bundle.selectedStrategy, "copilot_pr_followup");
-    assert.equal(parsed.canonicalStateSummary.loopState, "pr_followup_start");
+    assert.equal(parsed.bundle.selectedGate, "verification");
+    assert.equal(parsed.bundle.selectedStrategy, "verification");
+    assert.equal(parsed.canonicalStateSummary.loopState, "verification_start");
 
     const resolverPath = await writeTempJson(tempDir, "resolver-output.json", parsed);
     const envelopeResult = await runNodeHelper(cliPath, [

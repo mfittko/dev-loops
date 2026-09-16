@@ -311,7 +311,7 @@ test("runSubmit applies steering immediately at a safe loop state", async () => 
   });
 });
 
-test("runSubmit applies preference at waiting_for_copilot_review", async () => {
+test("runSubmit applies preference at waiting_for_external_review", async () => {
   await withTempDir(async (dir) => {
     const { stream, read } = makeStdout();
 
@@ -320,7 +320,7 @@ test("runSubmit applies preference at waiting_for_copilot_review", async () => {
       "--kind", "preference",
       "--directive", "Prefer TypeScript",
       "--seq", "1",
-      "--loop-state", "waiting_for_copilot_review",
+      "--loop-state", "waiting_for_external_review",
       "--state-file", path.join(dir, "state.json"),
     ], { stdout: stream, cwd: dir });
 
@@ -414,7 +414,7 @@ test("runSubmit operator mode returns an applied-now acknowledgement envelope fr
     assert.equal(output.acknowledgement.runId, "pr-55");
     assert.equal(output.acknowledgement.disposition, "applied_now");
     assert.equal(output.acknowledgement.resultCode, STEERING_RESULT.APPLIED_NOW);
-    assert.equal(output.acknowledgement.inspectedState, "waiting_for_copilot_review");
+    assert.equal(output.acknowledgement.inspectedState, "waiting_for_external_review");
     assert.equal(output.acknowledgement.safePointCategory, "immediate");
     assert.equal(output.acknowledgement.effectiveNow, true);
     assert.match(output.acknowledgement.readbackPath.inspection, /node scripts\/loop\/inspect-run\.mjs --repo "owner\/repo" --pr "55" --steering-state-file/);
@@ -481,7 +481,7 @@ test("runSubmit operator mode rejects checkpoint-only inspection snapshots and k
       pr: 55,
       repo: "owner/repo",
       outerAction: "continue_wait",
-      copilotState: "waiting_for_copilot_review",
+      copilotState: "waiting_for_external_review",
       reviewerState: "waiting_for_author_followup",
       reason: null,
       timestamp: "2026-05-20T12:00:00.000Z",
@@ -938,7 +938,7 @@ test("runSubmit preserves deterministic sequencing for repeat stop_at_next_safe_
       "--kind", "stop_at_next_safe_gate",
       "--directive", "Stop at the next safe gate",
       "--seq", "1",
-      "--loop-state", "waiting_for_copilot_review",
+      "--loop-state", "waiting_for_external_review",
       "--state-file", stateFile,
     ], { stdout: s1, cwd: dir });
     assert.equal(r1().result.result, STEERING_RESULT.APPLIED_NOW);
@@ -949,7 +949,7 @@ test("runSubmit preserves deterministic sequencing for repeat stop_at_next_safe_
       "--kind", "stop_at_next_safe_gate",
       "--directive", "Stop again",
       "--seq", "2",
-      "--loop-state", "waiting_for_copilot_review",
+      "--loop-state", "waiting_for_external_review",
       "--state-file", stateFile,
     ], { stdout: s2, cwd: dir });
 
@@ -973,7 +973,7 @@ test("runSubmit rejects out-of-order seq", async () => {
       "--kind", "preference",
       "--directive", "Prefer TS",
       "--seq", "5",
-      "--loop-state", "waiting_for_copilot_review",
+      "--loop-state", "waiting_for_external_review",
       "--state-file", stateFile,
     ], { stdout: s1, cwd: dir });
 
@@ -984,7 +984,7 @@ test("runSubmit rejects out-of-order seq", async () => {
       "--kind", "clarification",
       "--directive", "Some clarification",
       "--seq", "3",
-      "--loop-state", "waiting_for_copilot_review",
+      "--loop-state", "waiting_for_external_review",
       "--state-file", stateFile,
     ], { stdout: s2, cwd: dir });
 
@@ -1273,7 +1273,7 @@ test("runStatus shows current steering status after submissions", async () => {
       "--kind", "hard_constraint",
       "--directive", "No new deps",
       "--seq", "1",
-      "--loop-state", "waiting_for_copilot_review",
+      "--loop-state", "waiting_for_external_review",
       "--state-file", stateFile,
     ], { stdout: s1, cwd: dir });
 

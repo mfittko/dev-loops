@@ -13,7 +13,7 @@ function copilotWatchHandoff() {
   return {
     ok: true,
     action: "watch",
-    state: "waiting_for_copilot_review",
+    state: "waiting_for_external_review",
     allowedTransitions: [],
     nextAction: "Wait for Copilot review via scripts/github/probe-copilot-review.mjs",
     snapshot: { repo: "owner/repo", pr: 17 },

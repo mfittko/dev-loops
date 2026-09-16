@@ -70,11 +70,11 @@ When the startup resolver returns a fresh-start routing but an existing outer-lo
 dev-loop must check the checkpoint before treating the start as a fresh intake or follow-up:
 
 1. Read the outer-loop checkpoint (authored by `outer-loop.mjs`).
-2. If `outerAction` is `continue_wait`, `reenter_copilot_loop`, or `reenter_reviewer_loop`:
+2. If `outerAction` is `continue_wait`, `reenter_copilot_loop`, or `enter_reviewer_loop`:
    - Skip issue-intake normalization or fresh-intake routing.
    - Route directly to the existing PR's follow-up path (the PR number is in the
      checkpoint's `pr` field). For `reenter_copilot_loop`, enter the copilot-pr-followup
-     path. For `reenter_reviewer_loop`, enter the reviewer-loop path.
+     path. For `enter_reviewer_loop`, enter the reviewer-loop path.
    - Use the checkpoint's `copilotState` and `reviewerState` as last-known context for
      re-attachment, then re-baseline with fresh detectors (`copilot-pr-handoff.mjs`
      or `detect-copilot-loop-state.mjs`) before acting on the state.
@@ -102,11 +102,11 @@ Load only the route-specific internal skill required by `selectedStrategy`:
 | --- | --- |
 | `local_implementation` | [Local Implementation Skill](../local-implementation/SKILL.md) |
 | `issue_intake` | [Copilot PR Follow-up Skill](../copilot-pr-followup/SKILL.md) + [Copilot Loop Operations](../docs/copilot-loop-operations.md) + [Issue Intake Procedure](../docs/issue-intake-procedure.md) |
-| `copilot_pr_followup` | [Copilot PR Follow-up Skill](../copilot-pr-followup/SKILL.md) + [Copilot Loop Operations](../docs/copilot-loop-operations.md) |
-| `external_pr_followup` | same as `copilot_pr_followup` |
-| `reviewer_fixer` | same as `copilot_pr_followup` |
+| `copilot_verification` | [Copilot PR Follow-up Skill](../copilot-pr-followup/SKILL.md) + [Copilot Loop Operations](../docs/copilot-loop-operations.md) |
+| `external_pr_followup` | same as `copilot_verification` |
+| `reviewer_fixer` | same as `copilot_verification` |
 | `wait_watch` | [Wait / Watch Procedure](../docs/wait-watch-procedure.md) |
-| `final_approval` | same as `copilot_pr_followup` + [Final Approval Skill](../final-approval/SKILL.md) |
+| `final_approval` | same as `copilot_verification` + [Final Approval Skill](../final-approval/SKILL.md) |
 
 Do not preload route packs before the resolver selects the strategy.
 

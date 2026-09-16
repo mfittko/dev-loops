@@ -50,7 +50,7 @@ test("authoritative status resolution uses the canonically linked PR identity", 
   });
 
   assert.equal(report.statusKind, DEV_LOOP_STATUS_REPORT_KIND.RESOLVED);
-  assert.equal(report.selectedGate, DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP);
+  assert.equal(report.selectedGate, DEV_LOOP_GATE.VERIFICATION);
   assert.equal(report.activeArtifact.kind, DEV_LOOP_TARGET_KIND.PR);
   assert.equal(report.activeArtifact.issue, 89);
   assert.equal(report.activeArtifact.pr, 92);
@@ -75,7 +75,7 @@ test("authoritative startup/resume bundle resolves routed state with authoritati
   assert.equal(bundle.activeArtifact.issue, 89);
   assert.equal(bundle.activeArtifact.pr, 92);
   assert.equal(bundle.routeKind, DEV_LOOP_ROUTE_KIND.ROUTE);
-  assert.equal(bundle.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP);
+  assert.equal(bundle.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION);
   assert.equal(
     bundle.issueLinkageResolution,
     DEV_LOOP_ISSUE_LINKAGE_RESOLUTION.RESOLVED_LINKED_PR,
@@ -180,7 +180,7 @@ test("absent the ui-review intent, a copilot PR target still routes to copilot f
     currentState: prState,
     targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
-  assert.equal(routed.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP);
+  assert.equal(routed.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION);
 });
 
 test("authoritative startup/resume bundle fails closed when issue linkage is missing", () => {
@@ -440,13 +440,13 @@ test("authoritative startup/resume bundle reroutes stale bootstrap wait state wh
   assert.equal(waitingBundle.activeArtifact.pr, 178);
 
   assert.equal(readyBundle.bundleKind, DEV_LOOP_STARTUP_RESUME_BUNDLE_KIND.RESOLVED);
-  assert.equal(readyBundle.selectedGate, DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP);
+  assert.equal(readyBundle.selectedGate, DEV_LOOP_GATE.VERIFICATION);
   assert.equal(readyBundle.routeKind, DEV_LOOP_ROUTE_KIND.ROUTE);
-  assert.equal(readyBundle.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP);
+  assert.equal(readyBundle.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION);
   assert.equal(readyBundle.activeArtifact.kind, DEV_LOOP_TARGET_KIND.PR);
   assert.equal(readyBundle.activeArtifact.issue, 176);
   assert.equal(readyBundle.activeArtifact.pr, 178);
-  assert.match(readyBundle.nextAction, /Copilot PR follow-up strategy/i);
+  assert.match(readyBundle.nextAction, /Run the verification loop/i);
 });
 
 test("authoritative startup/resume bundle fails closed when linked-pr-ready refresh facts are contradictory", () => {
@@ -538,9 +538,9 @@ test("authoritative startup/resume bundle reroutes stale bootstrap wait states w
   });
 
   assert.equal(bundle.bundleKind, DEV_LOOP_STARTUP_RESUME_BUNDLE_KIND.RESOLVED);
-  assert.equal(bundle.selectedGate, DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP);
+  assert.equal(bundle.selectedGate, DEV_LOOP_GATE.VERIFICATION);
   assert.equal(bundle.routeKind, DEV_LOOP_ROUTE_KIND.ROUTE);
-  assert.equal(bundle.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP);
+  assert.equal(bundle.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION);
   assert.equal(bundle.executionMode, DEV_LOOP_EXECUTION_MODE.DURABLE_AUTO);
   assert.equal(bundle.waitSemantics, DEV_LOOP_WAIT_SEMANTICS.DEFAULT);
   assert.equal(bundle.asyncRun?.runId, "run-181");
@@ -550,7 +550,7 @@ test("authoritative startup/resume bundle reroutes stale bootstrap wait states w
   assert.equal(bundle.canonicalState.target.kind, DEV_LOOP_TARGET_KIND.PR);
   assert.equal(bundle.canonicalState.status, DEV_LOOP_STATUS.ACTIVE);
   assert.equal(bundle.loopState, "linked_pr_ready_for_followup");
-  assert.match(bundle.nextAction, /Copilot PR follow-up/i);
+  assert.match(bundle.nextAction, /verification loop/i);
 });
 
 test("authoritative startup/resume bundle fails closed when durable auto has no visible async run", () => {

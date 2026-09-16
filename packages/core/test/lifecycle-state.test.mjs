@@ -528,7 +528,7 @@ test("draft_gate maps to pr_ready_no_feedback", () => {
 test("feedback_resolution maps to review/fix inner states", () => {
   const inner = COPILOT_INNER_STATE_MAP[LIFECYCLE_STATE.FEEDBACK_RESOLUTION];
   assert.deepEqual([...inner].sort(), [
-    "waiting_for_copilot_review",
+    "waiting_for_external_review",
     "unresolved_feedback_present",
     "already_fixed_needs_reply_resolve",
     "ready_to_rerequest_review",
@@ -570,7 +570,7 @@ test("lifecyclePhaseForCopilotState returns correct phase for known inner states
   assert.equal(lifecyclePhaseForCopilotState("no_pr"), LIFECYCLE_STATE.IMPLEMENTATION);
   assert.equal(lifecyclePhaseForCopilotState("pr_draft"), LIFECYCLE_STATE.IMPLEMENTATION);
   assert.equal(lifecyclePhaseForCopilotState("pr_ready_no_feedback"), LIFECYCLE_STATE.DRAFT_GATE);
-  assert.equal(lifecyclePhaseForCopilotState("waiting_for_copilot_review"), LIFECYCLE_STATE.FEEDBACK_RESOLUTION);
+  assert.equal(lifecyclePhaseForCopilotState("waiting_for_external_review"), LIFECYCLE_STATE.FEEDBACK_RESOLUTION);
   assert.equal(lifecyclePhaseForCopilotState("unresolved_feedback_present"), LIFECYCLE_STATE.FEEDBACK_RESOLUTION);
   assert.equal(lifecyclePhaseForCopilotState("already_fixed_needs_reply_resolve"), LIFECYCLE_STATE.FEEDBACK_RESOLUTION);
   assert.equal(lifecyclePhaseForCopilotState("ready_to_rerequest_review"), LIFECYCLE_STATE.FEEDBACK_RESOLUTION);

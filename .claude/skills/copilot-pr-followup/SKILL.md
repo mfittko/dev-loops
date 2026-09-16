@@ -9,7 +9,7 @@ user-invocable: false
 
 # Copilot PR Follow-up
 
-Canonical owner for the internal `copilot_pr_followup` route behind the public `dev-loop` façade.
+Canonical owner for the internal `copilot_verification` route behind the public `dev-loop` façade.
 
 It is also the canonical internal owner of the shared post-PR mechanics used by this repo:
 PR discovery and interpretation, async watch behavior, fix / reply-resolve / re-request flow,
@@ -19,7 +19,7 @@ gate sequencing, final approval, and merge-ready preconditions.
 
 Use this skill whenever the public router lands on any PR-follow-up path that shares the same
 post-PR mechanics:
-- `copilot_pr_followup`
+- `copilot_verification`
 - `external_pr_followup`
 - `reviewer_fixer`
 - `wait_watch` uses the separate [Wait / Watch Procedure](../docs/wait-watch-procedure.md);
@@ -171,7 +171,7 @@ already has an outer-loop checkpoint, check whether the checkpoint implies an au
 3. If `outerAction` is `reenter_copilot_loop`:
    - The copilot inner loop needs action. Run `copilot-pr-handoff.mjs` to determine the
      exact next step and proceed.
-4. If `outerAction` is `reenter_reviewer_loop`:
+4. If `outerAction` is `enter_reviewer_loop`:
    - The reviewer inner loop needs action. Enter the reviewer-loop path.
 5. If `outerAction` is `stop`:
    - Report the `reason` field and ask for direction.

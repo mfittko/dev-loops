@@ -469,7 +469,7 @@ export function extractTermUses(content, file) {
   const scan = stripFences(content);
   for (const match of scan.matchAll(CODE_TOKEN_RE)) {
     const token = match[1];
-    if (defs.has(token) || /^(npm|node|gh|dev-loop|dev-loops|final_approval|wait_watch|issue_intake|copilot_pr_followup|autonomy|humanMergeOnly)$/.test(token)) {
+    if (defs.has(token) || /^(npm|node|gh|dev-loop|dev-loops|final_approval|wait_watch|issue_intake|verification|autonomy|humanMergeOnly)$/.test(token)) {
       continue;
     }
     if (/^(blocked|done|approval_ready|merge_ready|waiting|waiting_for_[a-z0-9_]+|needs_reconcile|[a-z]+_[a-z0-9_]*_gate)$/.test(token)) {

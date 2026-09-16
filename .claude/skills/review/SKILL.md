@@ -29,7 +29,7 @@ router recognizes a plain review request and dispatches straight here,
 before its own startup resolver (and the ownership gate it enforces) ever
 runs — a reviewer runs `review` against a PR owned by anyone, or by no one,
 with no ownership block and no fallback prompt. Every write-capable route
-(`copilot_pr_followup`, `reviewer_fixer`, `final_approval`, the full loop)
+(`copilot_verification`, `reviewer_fixer`, `final_approval`, the full loop)
 stays gated exactly as before; this exemption reaches only this read-only
 route.
 

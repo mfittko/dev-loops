@@ -325,7 +325,7 @@ export const COPILOT_INNER_STATE_MAP = Object.freeze({
     "pr_ready_no_feedback",
   ]),
   [LIFECYCLE_STATE.FEEDBACK_RESOLUTION]: Object.freeze([
-    "waiting_for_copilot_review",
+    "waiting_for_external_review",
     "unresolved_feedback_present",
     "already_fixed_needs_reply_resolve",
     "ready_to_rerequest_review",

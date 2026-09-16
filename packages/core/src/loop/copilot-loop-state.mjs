@@ -17,7 +17,7 @@ export const STATE = Object.freeze({
   /** PR is ready-for-review; no Copilot review has been requested or received yet. */
   PR_READY_NO_FEEDBACK: "pr_ready_no_feedback",
   /** Copilot review was requested and is in requested_reviewers; waiting for review activity. */
-  WAITING_FOR_COPILOT_REVIEW: "waiting_for_copilot_review",
+  WAITING_FOR_EXTERNAL_REVIEW: "waiting_for_external_review",
   /** Unresolved review threads exist that require a fix and/or reply/resolve action. */
   UNRESOLVED_FEEDBACK_PRESENT: "unresolved_feedback_present",
   /**
@@ -76,8 +76,8 @@ export const DISPOSITION = Object.freeze({
 export const TRANSITIONS = Object.freeze({
   [STATE.NO_PR]: [],
   [STATE.PR_DRAFT]: [STATE.PR_READY_NO_FEEDBACK],
-  [STATE.PR_READY_NO_FEEDBACK]: [STATE.WAITING_FOR_COPILOT_REVIEW],
-  [STATE.WAITING_FOR_COPILOT_REVIEW]: [
+  [STATE.PR_READY_NO_FEEDBACK]: [STATE.WAITING_FOR_EXTERNAL_REVIEW],
+  [STATE.WAITING_FOR_EXTERNAL_REVIEW]: [
     STATE.UNRESOLVED_FEEDBACK_PRESENT,
     STATE.READY_TO_REREQUEST_REVIEW,
     STATE.WAITING_FOR_CI,
@@ -90,7 +90,7 @@ export const TRANSITIONS = Object.freeze({
     STATE.READY_TO_REREQUEST_REVIEW,
   ],
   [STATE.READY_TO_REREQUEST_REVIEW]: [
-    STATE.WAITING_FOR_COPILOT_REVIEW,
+    STATE.WAITING_FOR_EXTERNAL_REVIEW,
     STATE.REVIEW_REQUEST_UNAVAILABLE,
     STATE.DONE,
   ],
@@ -113,7 +113,7 @@ export const NEXT_ACTIONS = Object.freeze({
   [STATE.NO_PR]: "Create a PR or hand work to Copilot",
   [STATE.PR_DRAFT]: "Move the PR from draft to ready-for-review",
   [STATE.PR_READY_NO_FEEDBACK]: "Request Copilot review via scripts/github/request-copilot-review.mjs",
-  [STATE.WAITING_FOR_COPILOT_REVIEW]: "Wait for Copilot review via scripts/github/probe-copilot-review.mjs",
+  [STATE.WAITING_FOR_EXTERNAL_REVIEW]: "Wait for Copilot review via scripts/github/probe-copilot-review.mjs",
   [STATE.UNRESOLVED_FEEDBACK_PRESENT]: "Address unresolved review feedback, then reply to and resolve each thread on GitHub",
   [STATE.ALREADY_FIXED_NEEDS_REPLY_RESOLVE]: "Reply to and resolve addressed threads on GitHub via scripts/github/reply-resolve-review-thread.mjs before re-requesting review",
   [STATE.READY_TO_REREQUEST_REVIEW]: "Re-request Copilot review via scripts/github/request-copilot-review.mjs only after smallest honest local validation is green and no known fixable CI-red state remains, or confirm the PR is done",
@@ -340,7 +340,7 @@ export function applyConfirmedReviewRequest(snapshot, reviewRequestStatus) {
  * - "unavailable" or "failed" review-request status routes into stop/report states
  * - agentFixStatus "applied" distinguishes fix-needed from already-fixed-needs-reply/resolve
  * - Copilot review request still active (via requested_reviewers or a PENDING current-head Copilot review)
- *   routes into waiting_for_copilot_review until that request is conclusively settled for this head
+ *   routes into waiting_for_external_review until that request is conclusively settled for this head
  *
  * @param {object} snapshot - raw or normalized snapshot
  * @param {object} [refinementConfig] - optional refinement config with low-signal heuristic fields
@@ -393,7 +393,7 @@ export function interpretLoopState(snapshot, refinementConfig) {
   //   - clean PR (clean threads + green CI): ROUND_CAP_CLEAN_FALLBACK, even with
   //     a lingering in-flight request or an advanced head — no further round is
   //     permitted, so never re-open for re-request or wait on Copilot. Re-opening
-  //     would dead-end at WAITING_FOR_COPILOT_REVIEW on a review that can never
+  //     would dead-end at WAITING_FOR_EXTERNAL_REVIEW on a review that can never
   //     come. The pre_approval_gate (enforced elsewhere) reviews post-cap head
   //     changes, so this skips no review of new code.
   //   - not clean, no in-flight request: hard stop at ROUND_CAP_REACHED.
@@ -430,7 +430,7 @@ export function interpretLoopState(snapshot, refinementConfig) {
       state = STATE.UNRESOLVED_FEEDBACK_PRESENT;
     } else if (s.copilotReviewRequestStatus === "requested" || s.copilotReviewRequestStatus === "already-requested") {
       // A current-head Copilot request is still active/pending and must settle before gate progression.
-      state = STATE.WAITING_FOR_COPILOT_REVIEW;
+      state = STATE.WAITING_FOR_EXTERNAL_REVIEW;
     } else if (s.copilotReviewPresent) {
       // Copilot has reviewed at least once; all threads resolved
       if (ciBlocks) {
@@ -511,7 +511,7 @@ export function summarizeLoopInterpretation(snapshotOrInterpretation, refinement
   let loopDisposition;
 
   switch (interpretation.state) {
-    case STATE.WAITING_FOR_COPILOT_REVIEW:
+    case STATE.WAITING_FOR_EXTERNAL_REVIEW:
     case STATE.WAITING_FOR_CI:
       loopDisposition = DISPOSITION.PENDING;
       break;

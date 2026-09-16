@@ -98,9 +98,9 @@ test("start_on_issue with a linked PR routes directly to PR follow-up", () => {
   });
 
   assert.equal(result.publicEntrypoint, PUBLIC_DEV_LOOP_ENTRYPOINT);
-  assert.equal(result.selectedGate, DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP);
+  assert.equal(result.selectedGate, DEV_LOOP_GATE.VERIFICATION);
   assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.ROUTE);
-  assert.equal(result.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP);
+  assert.equal(result.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION);
   assert.equal(result.canonicalState.target.kind, DEV_LOOP_TARGET_KIND.PR);
   assert.equal(result.canonicalState.target.pr, 88);
 });
@@ -119,7 +119,7 @@ test("start_on_issue with a linked PR keeps that PR canonical instead of opening
     targetPreference: DEV_LOOP_TARGET_PREFERENCE.PREFER_GITHUB_FIRST,
   });
 
-  assert.equal(result.selectedGate, DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP);
+  assert.equal(result.selectedGate, DEV_LOOP_GATE.VERIFICATION);
   assert.equal(result.canonicalState.target.kind, DEV_LOOP_TARGET_KIND.PR);
   assert.equal(result.canonicalState.target.pr, 260);
   assert.match(result.nextAction, /canonical artifact/i);
@@ -143,7 +143,7 @@ test("start_on_issue with valid canonical PR state for the same issue routes fro
   });
 
   assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.ROUTE);
-  assert.equal(result.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP);
+  assert.equal(result.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION);
   assert.equal(result.canonicalState.target.kind, DEV_LOOP_TARGET_KIND.PR);
   assert.equal(result.canonicalState.target.pr, 88);
 });
@@ -310,7 +310,7 @@ test("continue_on_pr routes Copilot-owned PR follow-up to the compatibility copi
   });
 
   assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.ROUTE);
-  assert.equal(result.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP);
+  assert.equal(result.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION);
 });
 
 test("continue_on_pr with conflicting canonical PR state fails closed", () => {
@@ -580,9 +580,9 @@ test("auto_continue_current routes detected state with durable auto execution mo
     },
   });
 
-  assert.equal(result.selectedGate, DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP);
+  assert.equal(result.selectedGate, DEV_LOOP_GATE.VERIFICATION);
   assert.equal(result.routeKind, DEV_LOOP_ROUTE_KIND.ROUTE);
-  assert.equal(result.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP);
+  assert.equal(result.selectedStrategy, INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION);
   assert.equal(result.executionMode, DEV_LOOP_EXECUTION_MODE.DURABLE_AUTO);
   assert.equal(result.waitSemantics, DEV_LOOP_WAIT_SEMANTICS.DEFAULT);
 });

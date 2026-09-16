@@ -3,7 +3,7 @@
 // (#1502): a Copilot review was requested on a head that ALREADY carries
 // Copilot's own clean submitted review. Copilot does not re-engage a change it
 // effectively approved, so the request sits pending indefinitely. BELOW the
-// round cap that is a deadlock: the loop stays `waiting_for_copilot_review` and
+// round cap that is a deadlock: the loop stays `waiting_for_external_review` and
 // `pre_approval_gate` cannot post. At the cap it is not — the interpreter
 // already emits `round_cap_clean_fallback` and the gate is allowed with the
 // request still pending, so withdrawing there changes nothing about the gate.

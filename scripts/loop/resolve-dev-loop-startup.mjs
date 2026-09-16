@@ -81,7 +81,7 @@ Required (exactly one):
 Optional modifier:
   --ui-review    With --pr only: route the PR to the ui_review strategy
                  (running-app review from an isolated worktree) instead of
-                 the default continue_on_pr/copilot_pr_followup path.
+                 the default continue_on_pr/verification path.
                  Rejected without --pr, or combined with --issue/--input/
                  --plan-file/--spike.
   --lightweight  With --issue: use the PR body as the spec-of-record
@@ -138,7 +138,7 @@ const STRATEGY_REQUIRED_READS = {
     "skills/docs/copilot-loop-operations.md",
     "skills/docs/issue-intake-procedure.md",
   ],
-  copilot_pr_followup: [
+  verification: [
     SHARED_PUBLIC_CONTRACT,
     SHARED_RETROSPECTIVE_CONTRACT,
     "skills/copilot-pr-followup/SKILL.md",
@@ -176,7 +176,7 @@ const STRATEGY_REQUIRED_READS = {
 const STRATEGY_ASYNC_DISPATCH = {
   local_implementation: false,
   issue_intake: true,
-  copilot_pr_followup: true,
+  verification: true,
   external_pr_followup: true,
   reviewer_fixer: true,
   wait_watch: true,
@@ -194,7 +194,7 @@ const STRATEGY_ASYNC_DISPATCH = {
 export const STRATEGY_OWNERSHIP_GATE = {
   local_implementation: true,
   issue_intake: true,
-  copilot_pr_followup: true,
+  verification: true,
   external_pr_followup: true,
   reviewer_fixer: true,
   final_approval: true,
@@ -820,7 +820,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
   }
   const resolvedTargetPreference = targetPreference ?? resolveTargetPreference(repoRoot);
   // `--ui-review` routes the PR to the ui_review strategy instead of the
-  // default continue_on_pr/copilot_pr_followup path; every other field
+  // default continue_on_pr/verification path; every other field
   // (ownership/nextActor/artifactState/etc.) stays identical — only intent +
   // loopState change, and only when the flag is set, so the plain --pr path
   // is byte-unchanged.
@@ -830,7 +830,7 @@ export function buildAutoResolvedInput({ issue, pr, cwd, targetPreference, input
     targetPreference: resolvedTargetPreference,
     artifactState,
     issueLinkageResolution: "not_applicable",
-    loopState: uiReview ? "pr_ui_review_start" : "pr_followup_start",
+    loopState: uiReview ? "pr_ui_review_start" : "verification_start",
     currentState: {
       target: { kind: "pr", issue: null, pr, linkedPr: null, branch: null, phase: null },
       ownership: "copilot",

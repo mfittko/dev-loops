@@ -29,7 +29,7 @@ test("copilot review gates keep phase-specific angle ownership in one canonical 
   const devLoopPreApprovalMatch = devLoopStep7.match(/### Pre-approval gate contract[\s\S]*?(?=\n## |\n### |$)/);
   const devLoopPreApproval = devLoopPreApprovalMatch ? devLoopPreApprovalMatch[0] : "";
   assert.ok(devLoopPreApproval.length > 0, "copilot-pr-followup pre-approval gate section not found inside Step 7");
-  assert.match(copilotPrFollowupSkill, /Canonical owner for the internal `copilot_pr_followup` route behind the public `dev-loop` façade/i);
+  assert.match(copilotPrFollowupSkill, /Canonical owner for the internal `(?:verification|copilot_verification)` route behind the public `dev-loop` façade/i);
   assert.match(copilotPrFollowupSkill, /canonical internal owner of the shared post-PR mechanics/i);
   assertRuleOwned("GATE-COMMENT-SCOPE-ONLY", "skills/docs/gate-review-comment-contract.md");
   const expectedDevLoopShape = [/Gate name:/i, /Trigger \/ boundary:/i, /Review angles:/i, /Pass criteria:/i, /Next step after passing:/i];
@@ -121,11 +121,11 @@ test("copilot-pr-followup skill keeps async watch persistence explicit", async (
   ]);
   assert.match(skillContent, /dev-loops loop watch-cycle/i);
   assert.match(skillContent, /zero-timeout `idle` probes are for explicit one-shot status\/reattach checks only/i);
-  assert.match(skillContent, /returning to `waiting_for_copilot_review` is a persistence boundary: resume the watcher instead of reporting completion/i);
+  assert.match(skillContent, /returning to `(?:waiting_for_external_review|waiting_for_copilot_review)` is a persistence boundary: resume the watcher instead of reporting completion/i);
   assert.match(skillContent, /persistent async watch\/fix loop, not handoff-only behavior/i);
   assert.match(skillContent, /if `cycleDisposition` is `pending` and `terminal` is `false`, the subagent exits on the wait boundary; the main session re-dispatches another watch boundary/i);
   assert.match(skillContent, /if the user explicitly asks for async handoff-only behavior/i);
-  assert.match(skillContent, /child async run exits[\s\S]*waiting_for_copilot_review[\s\S]*main session re-dispatches the same-PR follow-up path when feasible/i);
+  assert.match(skillContent, /child async run exits[\s\S]*(?:waiting_for_external_review|waiting_for_copilot_review)[\s\S]*main session re-dispatches the same-PR follow-up path when feasible/i);
   assert.match(scriptsReadme, /`cycleDisposition: "pending"` with `terminal: false` means stay attached and run another watch boundary rather than exiting as clean success/i);
   assert.match(scriptsReadme, /handoff-only behavior must be explicitly requested/i);
   assertRuleOwned("COPILOT-STATE-WATCH-PERSISTENCE", "skills/docs/copilot-loop-state-graph.md");

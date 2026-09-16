@@ -102,7 +102,7 @@ test("issue-intake surface requires unattended resume-from-state behavior when a
   assert.match(content, /linked_pr_ready_for_followup[\s\S]*FACADE-BOOTSTRAP-ISOLATED-WORKTREE-CONTINUATION/i);
   assert.match(content, /safe isolated checkout\/worktree/i);
   assert.match(content, /When the draft PR appears, classify whether it is still the bootstrap-only Copilot draft/i);
-  assert.match(content, /child async run exits[\s\S]*non-terminal[\s\S]*waiting_for_copilot_review/i);
+  assert.match(content, /child async run exits[\s\S]*non-terminal[\s\S]*(?:waiting_for_external_review|waiting_for_copilot_review)/i);
   assert.match(content, /automatically resume\/restart follow-up when continuation is feasible/i);
   assertRuleOwned("OPS-DRAFT-FIRST-PR", "skills/docs/copilot-loop-operations.md");
   assert.match(content, /OPS-DRAFT-FIRST-PR/);
@@ -156,7 +156,7 @@ test("issue-based shorthand auto dev-loop trigger is documented as one public in
   assertRuleOwned("FACADE-BOOTSTRAP-QUIET-NO-EJECT", PUBLIC_CONTRACT_PATH);
   assertRuleOwned("FACADE-BOOTSTRAP-FOLLOWUP-REENTRY", PUBLIC_CONTRACT_PATH);
   assertRuleOwned("FACADE-BOOTSTRAP-ISOLATED-WORKTREE-CONTINUATION", PUBLIC_CONTRACT_PATH);
-  assert.match(publicContract, /non-terminal follow-up\/wait states[\s\S]*waiting_for_copilot_review[\s\S]*continuation boundaries/i);
+  assert.match(publicContract, /non-terminal follow-up\/wait states[\s\S]*(?:waiting_for_external_review|waiting_for_copilot_review)[\s\S]*continuation boundaries/i);
   assert.match(publicContract, /async child exits before the requested stop boundary[\s\S]*re-dispatch via the main session driver/i);
   assert.match(publicContract, /R --> A\[Human approval checkpoint\]/i);
   assert.match(publicContract, /R --> M\[Wait for merge authorization\]/i);

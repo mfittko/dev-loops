@@ -570,9 +570,9 @@ Contract:
 - when handoff stays in watch mode, checks Copilot session activity on the PR head branch via `detect-copilot-session-activity.mjs`
 - when activity is `active`, blocks on `gh run watch <run-id>` and then continues with the same emitted persistent watch budget instead of silently degrading to a zero-timeout probe
 - when handoff returns `action: "watch"`, runs `probe-copilot-review.mjs` with the emitted `watchArgs`; zero-timeout probes are reserved for explicit `--probe-only` status checks
-- treats `waiting_for_copilot_review` as a persistence boundary, not a completion boundary
+- treats `waiting_for_external_review` as a persistence boundary, not a completion boundary
 - for explicit async loop entry/continuation, `cycleDisposition: "pending"` with `terminal: false` means stay attached and run another watch boundary rather than exiting as clean success
-- after a follow-up fix / reply-resolve / re-request path returns to `waiting_for_copilot_review`, resume this helper again instead of treating the re-request handoff as completion
+- after a follow-up fix / reply-resolve / re-request path returns to `waiting_for_external_review`, resume this helper again instead of treating the re-request handoff as completion
 - handoff-only behavior must be explicitly requested; do not silently reinterpret async loop entry as one-step transition behavior
 - preserves the shared Copilot-loop `loopDisposition` contract from the handoff/state-machine output (`pending`, `unresolved_feedback`, `clean_converged`, `blocked`, `action_required`, `done`)
 - exposes the helper's coarser wait-cycle summary separately as `cycleDisposition`
@@ -650,7 +650,7 @@ Failure behavior:
 - Malformed arguments, unexpected `gh` failures, and review-thread detection failures emit `{ "ok": false, "error": "..." }` on stderr and exit non-zero
 
 Key behavioral guarantees:
-- When `unresolvedThreadCount > 0`, the state is always in the fix/reply-resolve family — never `waiting_for_copilot_review` or any wait state
+- When `unresolvedThreadCount > 0`, the state is always in the fix/reply-resolve family — never `waiting_for_external_review` or any wait state
 - When `copilotReviewRequestStatus` is `unavailable` or `failed`, the state is a terminal stop/report state with no allowed transitions
 - When `agentFixStatus` is `"applied"` and unresolved threads exist, the state is `already_fixed_needs_reply_resolve`, and `allowedTransitions` includes only `ready_to_rerequest_review`
 - When the current head has clean convergence (a submitted Copilot review, zero unresolved and actionable threads, and CI not blocked), automatic same-head re-request is suppressed until a meaningful remediation event occurs
@@ -871,9 +871,9 @@ Reviewer-scope contract:
 
 Contract:
 - auto-detect mode calls both inner detectors, interprets their current states, and emits one
-  outer action: `continue_wait`, `reenter_copilot_loop`, `reenter_reviewer_loop`, `stop`, or `done`
+  outer action: `continue_wait`, `enter_verification_loop`, `enter_reviewer_loop`, `stop`, or `done`
 - treats draft PRs as a re-entry point into owned draft-stage follow-up rather than a terminal stop
-- treats `waiting_for_copilot_review`, `waiting_for_ci`, and reviewer `submitted_review`
+- treats `waiting_for_external_review`, `waiting_for_ci`, and reviewer `submitted_review`
   as outer-loop-owned `continue_wait` states at explicit external/handoff boundaries
 - preserves compatibility for reviewer `waiting_for_author_followup` and `waiting_for_re_request`
   as legacy named external-wait boundaries

@@ -224,8 +224,8 @@ test("interpretLoopState routes into unresolved_feedback_present when threads ex
   });
   assert.equal(result.state, STATE.UNRESOLVED_FEEDBACK_PRESENT);
   assert.ok(result.allowedTransitions.includes(STATE.ALREADY_FIXED_NEEDS_REPLY_RESOLVE));
-  assert.ok(!result.allowedTransitions.includes(STATE.WAITING_FOR_COPILOT_REVIEW),
-    "must not include waiting_for_copilot_review when unresolved threads exist");
+  assert.ok(!result.allowedTransitions.includes(STATE.WAITING_FOR_EXTERNAL_REVIEW),
+    "must not include waiting_for_external_review when unresolved threads exist");
 });
 
 // ---------------------------------------------------------------------------
@@ -297,7 +297,7 @@ test("interpretLoopState routes to already_fixed_needs_reply_resolve when agentF
   });
   assert.equal(result.state, STATE.ALREADY_FIXED_NEEDS_REPLY_RESOLVE);
   assert.deepEqual(result.allowedTransitions, [STATE.READY_TO_REREQUEST_REVIEW]);
-  assert.ok(!result.allowedTransitions.includes(STATE.WAITING_FOR_COPILOT_REVIEW),
+  assert.ok(!result.allowedTransitions.includes(STATE.WAITING_FOR_EXTERNAL_REVIEW),
     "reply/resolve must complete before re-request becomes allowed");
   assert.match(result.nextAction, /reply/i);
 });
@@ -330,7 +330,7 @@ test("interpretLoopState does not enter wait states after unavailable review req
     unresolvedThreadCount: 0,
   });
   assert.equal(result.state, STATE.REVIEW_REQUEST_UNAVAILABLE);
-  assert.notEqual(result.state, STATE.WAITING_FOR_COPILOT_REVIEW);
+  assert.notEqual(result.state, STATE.WAITING_FOR_EXTERNAL_REVIEW);
   assert.notEqual(result.state, STATE.WAITING_FOR_CI);
   assert.deepEqual(result.allowedTransitions, []);
 });
@@ -344,7 +344,7 @@ test("interpretLoopState does not enter wait states after failed review request"
     unresolvedThreadCount: 0,
   });
   assert.equal(result.state, STATE.BLOCKED_NEEDS_USER_DECISION);
-  assert.notEqual(result.state, STATE.WAITING_FOR_COPILOT_REVIEW);
+  assert.notEqual(result.state, STATE.WAITING_FOR_EXTERNAL_REVIEW);
   assert.deepEqual(result.allowedTransitions, []);
 });
 
@@ -363,7 +363,7 @@ test("interpretLoopState returns pr_ready_no_feedback for open ready PR with no 
     ciStatus: "success",
   });
   assert.equal(result.state, STATE.PR_READY_NO_FEEDBACK);
-  assert.deepEqual(result.allowedTransitions, [STATE.WAITING_FOR_COPILOT_REVIEW]);
+  assert.deepEqual(result.allowedTransitions, [STATE.WAITING_FOR_EXTERNAL_REVIEW]);
 });
 
 test("interpretLoopState returns waiting_for_ci for open PR with no review when ciStatus is none", () => {
@@ -380,7 +380,7 @@ test("interpretLoopState returns waiting_for_ci for open PR with no review when 
   assert.notEqual(result.state, STATE.PR_READY_NO_FEEDBACK);
 });
 
-test("interpretLoopState returns waiting_for_copilot_review when Copilot is in requested_reviewers", () => {
+test("interpretLoopState returns waiting_for_external_review when Copilot is in requested_reviewers", () => {
   for (const status of ["requested", "already-requested"]) {
     const result = interpretLoopState({
       prExists: true,
@@ -390,15 +390,15 @@ test("interpretLoopState returns waiting_for_copilot_review when Copilot is in r
       copilotReviewOnCurrentHead: false,
       unresolvedThreadCount: 0,
     });
-    assert.equal(result.state, STATE.WAITING_FOR_COPILOT_REVIEW, `failed for status=${status}`);
+    assert.equal(result.state, STATE.WAITING_FOR_EXTERNAL_REVIEW, `failed for status=${status}`);
   }
 });
 
 // ---------------------------------------------------------------------------
-// Regression: fresh Copilot review on current head should exit waiting_for_copilot_review
+// Regression: fresh Copilot review on current head should exit waiting_for_external_review
 // ---------------------------------------------------------------------------
 
-test("interpretLoopState keeps waiting_for_copilot_review while current-head request status remains active", () => {
+test("interpretLoopState keeps waiting_for_external_review while current-head request status remains active", () => {
   // Even with a submitted current-head review, an active requested_reviewers signal is
   // treated as not yet conclusively settled for this head.
   for (const status of ["requested", "already-requested"]) {
@@ -411,8 +411,8 @@ test("interpretLoopState keeps waiting_for_copilot_review while current-head req
       unresolvedThreadCount: 0,
       ciStatus: "success",
     });
-    assert.equal(result.state, STATE.WAITING_FOR_COPILOT_REVIEW,
-      `expected waiting_for_copilot_review while request status is ${status}`);
+    assert.equal(result.state, STATE.WAITING_FOR_EXTERNAL_REVIEW,
+      `expected waiting_for_external_review while request status is ${status}`);
     assert.equal(result.autoRerequestEligible, false);
     assert.equal(result.sameHeadCleanConverged, false);
   }
@@ -485,14 +485,14 @@ test("a suppressed_post_convergence_docs_only request routes to the round-cap co
 
   const interpretation = interpretLoopState(snapshot, { maxCopilotRounds: 2 });
   assert.equal(interpretation.state, STATE.ROUND_CAP_CLEAN_FALLBACK);
-  assert.notEqual(interpretation.state, STATE.WAITING_FOR_COPILOT_REVIEW);
+  assert.notEqual(interpretation.state, STATE.WAITING_FOR_EXTERNAL_REVIEW);
 
   const summary = summarizeLoopInterpretation(interpretation, { maxCopilotRounds: 2 });
   assert.equal(summary.loopDisposition, DISPOSITION.DONE);
   assert.equal(summary.terminal, true);
 });
 
-test("interpretLoopState stays in waiting_for_copilot_review when review is not yet on current head", () => {
+test("interpretLoopState stays in waiting_for_external_review when review is not yet on current head", () => {
   // Copilot is in requested_reviewers but has NOT submitted a review on this head yet
   const result = interpretLoopState({
     prExists: true,
@@ -502,10 +502,10 @@ test("interpretLoopState stays in waiting_for_copilot_review when review is not 
     copilotReviewOnCurrentHead: false,
     unresolvedThreadCount: 0,
   });
-  assert.equal(result.state, STATE.WAITING_FOR_COPILOT_REVIEW);
+  assert.equal(result.state, STATE.WAITING_FOR_EXTERNAL_REVIEW);
 });
 
-test("interpretLoopState keeps waiting_for_copilot_review while request is active even when ci is pending", () => {
+test("interpretLoopState keeps waiting_for_external_review while request is active even when ci is pending", () => {
   const result = interpretLoopState({
     prExists: true,
     prNumber: 17,
@@ -515,7 +515,7 @@ test("interpretLoopState keeps waiting_for_copilot_review while request is activ
     unresolvedThreadCount: 0,
     ciStatus: "pending",
   });
-  assert.equal(result.state, STATE.WAITING_FOR_COPILOT_REVIEW);
+  assert.equal(result.state, STATE.WAITING_FOR_EXTERNAL_REVIEW);
 });
 
 test("interpretLoopState returns ready_to_rerequest_review when Copilot has reviewed and all threads resolved", () => {
@@ -528,7 +528,7 @@ test("interpretLoopState returns ready_to_rerequest_review when Copilot has revi
     ciStatus: "success",
   });
   assert.equal(result.state, STATE.READY_TO_REREQUEST_REVIEW);
-  assert.ok(result.allowedTransitions.includes(STATE.WAITING_FOR_COPILOT_REVIEW));
+  assert.ok(result.allowedTransitions.includes(STATE.WAITING_FOR_EXTERNAL_REVIEW));
   assert.ok(result.allowedTransitions.includes(STATE.DONE));
   assert.equal(result.autoRerequestEligible, true);
   assert.equal(result.sameHeadCleanConverged, false);
@@ -1231,7 +1231,7 @@ test("round cap overrides unresolved-thread routing when maxCopilotRounds is exc
 });
 
 // Round-cap deadlock guard (#848): a lingering Copilot reviewer assignment
-// (already-requested) must not dead-end the loop at WAITING_FOR_COPILOT_REVIEW once
+// (already-requested) must not dead-end the loop at WAITING_FOR_EXTERNAL_REVIEW once
 // the cap is reached with a clean PR. The clean fallback takes priority over the
 // stale assignment because no further Copilot round is permitted past the cap.
 test("interpretLoopState routes to ROUND_CAP_CLEAN_FALLBACK when cap reached with clean PR despite lingering already-requested assignment", () => {
@@ -1250,7 +1250,7 @@ test("interpretLoopState routes to ROUND_CAP_CLEAN_FALLBACK when cap reached wit
   const refinementConfig = { maxCopilotRounds: 5 };
 
   const result = interpretLoopState(snapshot, refinementConfig);
-  assert.notEqual(result.state, STATE.WAITING_FOR_COPILOT_REVIEW);
+  assert.notEqual(result.state, STATE.WAITING_FOR_EXTERNAL_REVIEW);
   assert.equal(result.state, STATE.ROUND_CAP_CLEAN_FALLBACK);
   assert.equal(result.roundCapCleanEligible, true);
   assert.equal(result.autoRerequestEligible, false);
@@ -1278,7 +1278,7 @@ test("interpretLoopState routes to ROUND_CAP_CLEAN_FALLBACK (no illegal re-reque
   assert.equal(result.autoRerequestEligible, false);
 });
 
-test("interpretLoopState keeps WAITING_FOR_COPILOT_REVIEW when cap NOT reached with already-requested assignment (regression guard)", () => {
+test("interpretLoopState keeps WAITING_FOR_EXTERNAL_REVIEW when cap NOT reached with already-requested assignment (regression guard)", () => {
   const snapshot = {
     prExists: true,
     prNumber: 847,
@@ -1294,7 +1294,7 @@ test("interpretLoopState keeps WAITING_FOR_COPILOT_REVIEW when cap NOT reached w
   const refinementConfig = { maxCopilotRounds: 5 };
 
   const result = interpretLoopState(snapshot, refinementConfig);
-  assert.equal(result.state, STATE.WAITING_FOR_COPILOT_REVIEW);
+  assert.equal(result.state, STATE.WAITING_FOR_EXTERNAL_REVIEW);
   assert.equal(result.roundCapCleanEligible, false);
 });
 
@@ -1337,9 +1337,9 @@ test("interpretLoopState does not produce a clean fallback when cap reached with
 
   const result = interpretLoopState(snapshot, refinementConfig);
   // Not clean (failing CI) + in-flight request at the cap: falls through to the normal
-  // wait routing (threads are 0 and a request is in flight) → WAITING_FOR_COPILOT_REVIEW,
+  // wait routing (threads are 0 and a request is in flight) → WAITING_FOR_EXTERNAL_REVIEW,
   // never a clean fallback.
-  assert.equal(result.state, STATE.WAITING_FOR_COPILOT_REVIEW);
+  assert.equal(result.state, STATE.WAITING_FOR_EXTERNAL_REVIEW);
   assert.equal(result.roundCapCleanEligible, false);
 });
 
@@ -1410,9 +1410,9 @@ test("round cap clean fallback takes priority over a lingering in-flight Copilot
 
   // At the cap, copilotReviewRoundCount counts COMPLETED rounds, so any in-flight
   // request is for a forbidden over-cap round. With a clean PR, the loop must proceed
-  // to the pre_approval_gate fallback rather than dead-end at WAITING_FOR_COPILOT_REVIEW.
+  // to the pre_approval_gate fallback rather than dead-end at WAITING_FOR_EXTERNAL_REVIEW.
   const result = interpretLoopState(snapshot, refinementConfig);
-  assert.notEqual(result.state, STATE.WAITING_FOR_COPILOT_REVIEW);
+  assert.notEqual(result.state, STATE.WAITING_FOR_EXTERNAL_REVIEW);
   assert.equal(result.state, STATE.ROUND_CAP_CLEAN_FALLBACK);
   assert.equal(result.roundCapCleanEligible, true);
 });
@@ -1435,7 +1435,7 @@ test("round cap with in-flight request but NOT clean stays in fix/wait routing (
   // Pending CI + in-flight request: not clean, so no clean fallback; the in-flight
   // request keeps the loop waiting for Copilot rather than forcing a hard stop.
   const result = interpretLoopState(snapshot, refinementConfig);
-  assert.equal(result.state, STATE.WAITING_FOR_COPILOT_REVIEW);
+  assert.equal(result.state, STATE.WAITING_FOR_EXTERNAL_REVIEW);
   assert.equal(result.roundCapCleanEligible, false);
 });
 

@@ -289,14 +289,14 @@ test("renderInspectRunViewerHtml renders required top-level fields for authorita
   assert.match(html, /End/);
   assert.match(html, /Next/);
   assert.match(html, /🔁/);
-  assert.match(html, /outer-loop family:[\s\S]*current <code>continue_current_wait<\/code>; continue_current_wait; full authoritative state machine shown; continue_current_wait, handoff_to_copilot_loop, handoff_to_reviewer_loop, stay_with_current_live_owner, stop_needs_human, done_terminal, needs_reconcile/);
+  assert.match(html, /outer-loop family:[\s\S]*current <code>continue_current_wait<\/code>; continue_current_wait; full authoritative state machine shown; continue_current_wait, handoff_to_verification_loop, handoff_to_reviewer_loop, stay_with_current_live_owner, stop_needs_human, done_terminal, needs_reconcile/);
   assert.match(html, /copilot layer:[\s\S]*full authoritative state machine shown; unresolved_feedback_present, ready_to_rerequest_review, waiting_for_ci/);
   assert.match(html, /reviewer layer:[\s\S]*full authoritative state machine shown; waiting_for_re_request, waiting_for_review_request/);
   assert.match(html, /Dimmed nodes are still part of the authoritative state machine/);
   assert.ok(html.indexOf('class="mermaid-state-graph mermaid"') < html.indexOf('class="state-graph-cues"'));
   assert.match(html, /outer lane comes from the shared authoritative outer-loop graph contract/);
   assert.match(html, /Outer-loop/);
-  assert.match(html, /Copilot loop iterations/);
+  assert.match(html, /External review rounds \(Copilot\)/);
   assert.match(html, /4 completed, 1 pending/);
   assert.match(html, /fix commits: 3/);
   assert.match(html, /Copilot/);
@@ -325,9 +325,9 @@ test("renderInspectRunViewerHtml keeps selected handoff-to-copilot rows on the a
     target: { repo: "owner/repo", pr: 3 },
     snapshot: makeSnapshot({
       target: { repo: "owner/repo", pr: 3 },
-      outerState: "handoff_to_copilot_loop",
-      outerAction: "reenter_copilot_loop",
-      activeFamilyState: "reenter_copilot_loop",
+      outerState: "handoff_to_verification_loop",
+      outerAction: "enter_verification_loop",
+      activeFamilyState: "enter_verification_loop",
       statusClass: "active",
       needsAttention: false,
       layers: {
@@ -359,13 +359,13 @@ test("renderInspectRunViewerHtml shows waiting inbox signal when outer routing h
   const waitingSnapshot = makeSnapshot({
     target: { repo: "owner/repo", pr: 3 },
     outerState: "handoff_to_reviewer_loop",
-    outerAction: "reenter_reviewer_loop",
-    activeFamilyState: "reenter_reviewer_loop",
+    outerAction: "enter_reviewer_loop",
+    activeFamilyState: "enter_reviewer_loop",
     statusClass: "active",
     needsAttention: false,
     layers: {
       copilot: {
-        currentState: "waiting_for_copilot_review",
+        currentState: "waiting_for_external_review",
         allowedTransitions: ["unresolved_feedback_present", "ready_to_rerequest_review", "waiting_for_ci"],
       },
       reviewer: {
@@ -395,8 +395,8 @@ test("renderInspectRunViewerHtml does not headline waiting_for_ci when reviewer 
   const reviewerActiveSnapshot = makeSnapshot({
     target: { repo: "owner/repo", pr: 7 },
     outerState: "handoff_to_reviewer_loop",
-    outerAction: "reenter_reviewer_loop",
-    activeFamilyState: "reenter_reviewer_loop",
+    outerAction: "enter_reviewer_loop",
+    activeFamilyState: "enter_reviewer_loop",
     statusClass: "active",
     needsAttention: false,
     layers: {
@@ -440,7 +440,7 @@ test("renderInspectRunViewerHtml uses a gate inbox signal when clean convergence
     layers: {
       copilot: {
         currentState: "ready_to_rerequest_review",
-        allowedTransitions: ["waiting_for_copilot_review", "review_request_unavailable", "done"],
+        allowedTransitions: ["waiting_for_external_review", "review_request_unavailable", "done"],
         sameHeadCleanConverged: true,
         loopDisposition: "clean_converged",
         terminal: true,
@@ -481,7 +481,7 @@ test("renderInspectRunViewerHtml keeps hard attention ahead of waiting layer inb
     needsAttention: true,
     layers: {
       copilot: {
-        currentState: "waiting_for_copilot_review",
+        currentState: "waiting_for_external_review",
         allowedTransitions: ["unresolved_feedback_present", "ready_to_rerequest_review", "waiting_for_ci"],
       },
       reviewer: {
@@ -586,7 +586,7 @@ test("renderInspectRunViewerHtml distinguishes empty transitions from unavailabl
     snapshot: makeSnapshot({
       layers: {
         copilot: {
-          currentState: "waiting_for_copilot_review",
+          currentState: "waiting_for_external_review",
           allowedTransitions: [],
         },
         reviewer: {
@@ -669,7 +669,7 @@ test("renderInspectRunViewerHtml keeps stale approved snapshots on waiting until
     layers: {
       copilot: {
         currentState: "ready_to_rerequest_review",
-        allowedTransitions: ["waiting_for_copilot_review", "review_request_unavailable", "done"],
+        allowedTransitions: ["waiting_for_external_review", "review_request_unavailable", "done"],
         sameHeadCleanConverged: false,
         loopDisposition: "pending",
         terminal: false,
@@ -749,7 +749,7 @@ test("renderInspectRunViewerHtml requires explicit gate evidence before framing 
       layers: {
         copilot: {
           currentState: "ready_to_rerequest_review",
-          allowedTransitions: ["waiting_for_copilot_review", "review_request_unavailable", "done"],
+          allowedTransitions: ["waiting_for_external_review", "review_request_unavailable", "done"],
           sameHeadCleanConverged: true,
           loopDisposition: "clean_converged",
           terminal: true,
@@ -785,7 +785,7 @@ test("renderInspectRunViewerHtml blocks approval-oriented language for same-head
       layers: {
         copilot: {
           currentState: "ready_to_rerequest_review",
-          allowedTransitions: ["waiting_for_copilot_review", "review_request_unavailable", "done"],
+          allowedTransitions: ["waiting_for_external_review", "review_request_unavailable", "done"],
           sameHeadCleanConverged: true,
           loopDisposition: "clean_converged",
           terminal: true,
@@ -813,7 +813,7 @@ test("renderInspectRunViewerHtml shows round-cap messaging for round_cap_reached
     target: { repo: "owner/repo", pr: 55 },
     snapshot: makeSnapshot({
       outerState: "continue_current_wait",
-      outerAction: "reenter_copilot_loop",
+      outerAction: "enter_verification_loop",
       statusClass: "blocked",
       layers: {
         copilot: {
@@ -844,7 +844,7 @@ test("renderInspectRunViewerHtml shows round-cap fallback messaging for round_ca
     target: { repo: "owner/repo", pr: 55 },
     snapshot: makeSnapshot({
       outerState: "continue_current_wait",
-      outerAction: "reenter_copilot_loop",
+      outerAction: "enter_verification_loop",
       statusClass: "done",
       layers: {
         copilot: {
@@ -935,7 +935,7 @@ test("renderInspectRunViewerHtml renders conflicting snapshot cues", () => {
       markers: {
         missing: [],
         stale: [],
-        conflicts: ["checkpoint outerAction 'continue_wait' differs from live-derived 'reenter_copilot_loop'"],
+        conflicts: ["checkpoint outerAction 'continue_wait' differs from live-derived 'enter_verification_loop'"],
       },
     }),
   });

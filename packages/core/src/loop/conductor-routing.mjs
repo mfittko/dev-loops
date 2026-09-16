@@ -32,7 +32,7 @@ export const ROUTING_OUTCOME = Object.freeze({
   /** Outer-loop wait; re-enter after a bounded wait interval. No handoff needed yet. */
   CONTINUE_CURRENT_WAIT: "continue_current_wait",
   /** Copilot inner loop should handle the next step. */
-  HANDOFF_TO_COPILOT_LOOP: "handoff_to_copilot_loop",
+  HANDOFF_TO_VERIFICATION_LOOP: "handoff_to_verification_loop",
   /** Reviewer inner loop should handle the next step. */
   HANDOFF_TO_REVIEWER_LOOP: "handoff_to_reviewer_loop",
   /** A live owner already has control; no new handoff is needed at this cycle. */
@@ -50,7 +50,7 @@ export const ROUTING_OUTCOME = Object.freeze({
  */
 export const LOOP_FAMILY = Object.freeze({
   /** Copilot review/fix inner loop. */
-  COPILOT_LOOP: "copilot_loop",
+  VERIFICATION_LOOP: "verification_loop",
   /** Reviewer-side inner loop. */
   REVIEWER_LOOP: "reviewer_loop",
   /** Outer conductor loop (wait/checkpoint). */
@@ -120,7 +120,7 @@ const COPILOT_WEAK_ACTIVE = new Set([
 
 // Copilot wait states owned by the orchestrator
 const COPILOT_WAIT = new Set([
-  "waiting_for_copilot_review",
+  "waiting_for_external_review",
   "waiting_for_ci",
 ]);
 
@@ -292,7 +292,7 @@ function continueCurrentWait({
  *   4. Hard copilot stop (review_request_unavailable, blocked) → stop_needs_human
  *   5. Hard reviewer stop (blocked) → stop_needs_human
  *   6. pr_draft — live-owner check, then handoff (marking requiresLocalIsolation when needed)
- *   7. Copilot explicit review-settle wait (waiting_for_copilot_review) → continue_current_wait
+ *   7. Copilot explicit review-settle wait (waiting_for_external_review) → continue_current_wait
  *   8. Reviewer active states — live-owner check, handoff (marking requiresLocalIsolation when needed)
  *   9. Copilot strong active states — live-owner check, handoff (marking requiresLocalIsolation when needed)
  *   10. Outer-loop wait states (copilot or reviewer)
@@ -399,7 +399,7 @@ function routeFromStates({
         targetIdentity: normalizedTarget,
         loopFamily: LOOP_FAMILY.NONE,
         entrypoint: ENTRYPOINT.NONE,
-        reason: "Copilot loop is blocked and requires human decision",
+        reason: "Verification loop is blocked and requires human decision",
         requiredArgs: baseArgs,
         requiresLocalIsolation,
         confidence,
@@ -434,12 +434,12 @@ function routeFromStates({
       return stayWithLiveOwner({ normalizedTarget, copilotState, reviewerState, baseArgs, requiresLocalIsolation, confidence });
     }
     return {
-      routingOutcome: ROUTING_OUTCOME.HANDOFF_TO_COPILOT_LOOP,
-      outerAction: "reenter_copilot_loop",
+      routingOutcome: ROUTING_OUTCOME.HANDOFF_TO_VERIFICATION_LOOP,
+      outerAction: "enter_verification_loop",
       stopReason: null,
       handoffEnvelope: buildEnvelope({
         targetIdentity: normalizedTarget,
-        loopFamily: LOOP_FAMILY.COPILOT_LOOP,
+        loopFamily: LOOP_FAMILY.VERIFICATION_LOOP,
         entrypoint: ENTRYPOINT.COPILOT_PR_HANDOFF,
         reason: `PR is in draft state; copilot loop required: copilot_state=${copilotState}`,
         requiredArgs: baseArgs,
@@ -450,7 +450,7 @@ function routeFromStates({
   }
 
   // 7. Copilot explicit review-settle wait — keep watch semantics until settled
-  if (copilotState === "waiting_for_copilot_review") {
+  if (copilotState === "waiting_for_external_review") {
     return continueCurrentWait({
       normalizedTarget,
       copilotState,
@@ -468,7 +468,7 @@ function routeFromStates({
     }
     return {
       routingOutcome: ROUTING_OUTCOME.HANDOFF_TO_REVIEWER_LOOP,
-      outerAction: "reenter_reviewer_loop",
+      outerAction: "enter_reviewer_loop",
       stopReason: null,
       handoffEnvelope: buildEnvelope({
         targetIdentity: normalizedTarget,
@@ -488,14 +488,14 @@ function routeFromStates({
       return stayWithLiveOwner({ normalizedTarget, copilotState, reviewerState, baseArgs, requiresLocalIsolation, confidence });
     }
     return {
-      routingOutcome: ROUTING_OUTCOME.HANDOFF_TO_COPILOT_LOOP,
-      outerAction: "reenter_copilot_loop",
+      routingOutcome: ROUTING_OUTCOME.HANDOFF_TO_VERIFICATION_LOOP,
+      outerAction: "enter_verification_loop",
       stopReason: null,
       handoffEnvelope: buildEnvelope({
         targetIdentity: normalizedTarget,
-        loopFamily: LOOP_FAMILY.COPILOT_LOOP,
+        loopFamily: LOOP_FAMILY.VERIFICATION_LOOP,
         entrypoint: ENTRYPOINT.COPILOT_PR_HANDOFF,
-        reason: `Copilot loop requires action: copilot_state=${copilotState}`,
+        reason: `Verification loop requires action: copilot_state=${copilotState}`,
         requiredArgs: baseArgs,
         requiresLocalIsolation,
         confidence,
@@ -521,14 +521,14 @@ function routeFromStates({
       return stayWithLiveOwner({ normalizedTarget, copilotState, reviewerState, baseArgs, requiresLocalIsolation, confidence });
     }
     return {
-      routingOutcome: ROUTING_OUTCOME.HANDOFF_TO_COPILOT_LOOP,
-      outerAction: "reenter_copilot_loop",
+      routingOutcome: ROUTING_OUTCOME.HANDOFF_TO_VERIFICATION_LOOP,
+      outerAction: "enter_verification_loop",
       stopReason: null,
       handoffEnvelope: buildEnvelope({
         targetIdentity: normalizedTarget,
-        loopFamily: LOOP_FAMILY.COPILOT_LOOP,
+        loopFamily: LOOP_FAMILY.VERIFICATION_LOOP,
         entrypoint: ENTRYPOINT.COPILOT_PR_HANDOFF,
-        reason: `Copilot loop requires action: copilot_state=${copilotState}`,
+        reason: `Verification loop requires action: copilot_state=${copilotState}`,
         requiredArgs: baseArgs,
         requiresLocalIsolation,
         confidence,
@@ -672,7 +672,7 @@ export function evaluateConductorRouting({
 
 export const OUTER_STATE = Object.freeze({
   CONTINUE_CURRENT_WAIT: ROUTING_OUTCOME.CONTINUE_CURRENT_WAIT,
-  HANDOFF_TO_COPILOT_LOOP: ROUTING_OUTCOME.HANDOFF_TO_COPILOT_LOOP,
+  HANDOFF_TO_VERIFICATION_LOOP: ROUTING_OUTCOME.HANDOFF_TO_VERIFICATION_LOOP,
   HANDOFF_TO_REVIEWER_LOOP: ROUTING_OUTCOME.HANDOFF_TO_REVIEWER_LOOP,
   STAY_WITH_CURRENT_LIVE_OWNER: ROUTING_OUTCOME.STAY_WITH_CURRENT_LIVE_OWNER,
   STOP_NEEDS_HUMAN: ROUTING_OUTCOME.STOP_NEEDS_HUMAN,
@@ -701,7 +701,7 @@ export const OUTER_GRAPH = Object.freeze({
 
 export const OUTER_NEXT_ACTIONS = Object.freeze({
   [OUTER_STATE.CONTINUE_CURRENT_WAIT]: "Remain in outer wait and re-inspect after the bounded interval.",
-  [OUTER_STATE.HANDOFF_TO_COPILOT_LOOP]: "Re-enter the Copilot loop.",
+  [OUTER_STATE.HANDOFF_TO_VERIFICATION_LOOP]: "Re-enter the Copilot loop.",
   [OUTER_STATE.HANDOFF_TO_REVIEWER_LOOP]: "Re-enter the reviewer loop.",
   [OUTER_STATE.STAY_WITH_CURRENT_LIVE_OWNER]: "Do not issue a new handoff; wait because a live owner is already active.",
   [OUTER_STATE.STOP_NEEDS_HUMAN]: "Stop and require human intervention before continuing.",
@@ -711,7 +711,7 @@ export const OUTER_NEXT_ACTIONS = Object.freeze({
 
 export const OUTER_TRANSITIONS = Object.freeze({
   [OUTER_STATE.CONTINUE_CURRENT_WAIT]: ALL_OUTER_STATES,
-  [OUTER_STATE.HANDOFF_TO_COPILOT_LOOP]: ALL_OUTER_STATES,
+  [OUTER_STATE.HANDOFF_TO_VERIFICATION_LOOP]: ALL_OUTER_STATES,
   [OUTER_STATE.HANDOFF_TO_REVIEWER_LOOP]: ALL_OUTER_STATES,
   [OUTER_STATE.STAY_WITH_CURRENT_LIVE_OWNER]: ALL_OUTER_STATES,
   [OUTER_STATE.STOP_NEEDS_HUMAN]: Object.freeze([]),

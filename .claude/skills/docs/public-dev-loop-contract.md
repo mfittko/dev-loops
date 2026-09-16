@@ -248,7 +248,7 @@ The public router currently maps to these deterministic internal strategies:
 |---|---|---|
 | `local_implementation` | local branch/phase work and explicit local starts | `dev-loop` |
 | `issue_intake` | issue-first normalization/intake before PR follow-up | none (internal-only via `dev-loop` routing; implemented by [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md) + [Copilot Loop Operations](./copilot-loop-operations.md) + [Issue Intake Procedure](./issue-intake-procedure.md)) |
-| `copilot_pr_followup` | Copilot-owned PR follow-up | none (internal-only via `dev-loop` routing) |
+| `verification` | Copilot-owned PR follow-up | none (internal-only via `dev-loop` routing) |
 | `external_pr_followup` | external-human contributor PR follow-up | none |
 | `reviewer_fixer` | reviewer/fixer passes on the current PR | none |
 | `wait_watch` | waiting/watch states | `dev-loop` |
@@ -297,9 +297,9 @@ Fail closed if those readiness/assignment facts are missing or invalid.
 
 ## Single-contributor ownership gate (resolve-dev-loop-startup)
 
-This is a separate, script-layer gate — `issueAssignmentState` above is an authoritative issue-state fact, not a bounded variation parameter (see [Bounded variation parameter contract](#bounded-variation-parameter-contract)), and this gate is a distinct seam from the Copilot-first assignment seam. It is enforced by `resolve-dev-loop-startup.mjs` after it selects the strategy for the `--issue`/`--pr` start, and applies ONLY to code-changing or merge-authoritative strategies (`local_implementation`, `issue_intake`, `copilot_pr_followup`, `external_pr_followup`, `reviewer_fixer`, `final_approval`; an unknown/future strategy defaults to gated) via `STRATEGY_OWNERSHIP_GATE` — see `docs/decisions/0042-ownership-gate-scoped-to-code-changing-strategies.md`. Pure read/observe strategies (`ui_review`, `wait_watch`) are exempt: a reviewer can run `/dev-loops:loop-review-ui` (or `/loop-review-ui` in the dev-loops repo itself) or wait/watch against work they do not own. For a gated strategy, the artifact (issue or PR) must resolve to a SOLE human owner — the viewer (`gh api user`'s login) and no other human assignee — failing closed on anything else:
+This is a separate, script-layer gate — `issueAssignmentState` above is an authoritative issue-state fact, not a bounded variation parameter (see [Bounded variation parameter contract](#bounded-variation-parameter-contract)), and this gate is a distinct seam from the Copilot-first assignment seam. It is enforced by `resolve-dev-loop-startup.mjs` after it selects the strategy for the `--issue`/`--pr` start, and applies ONLY to code-changing or merge-authoritative strategies (`local_implementation`, `issue_intake`, `verification`, `external_pr_followup`, `reviewer_fixer`, `final_approval`; an unknown/future strategy defaults to gated) via `STRATEGY_OWNERSHIP_GATE` — see `docs/decisions/0042-ownership-gate-scoped-to-code-changing-strategies.md`. Pure read/observe strategies (`ui_review`, `wait_watch`) are exempt: a reviewer can run `/dev-loops:loop-review-ui` (or `/loop-review-ui` in the dev-loops repo itself) or wait/watch against work they do not own. For a gated strategy, the artifact (issue or PR) must resolve to a SOLE human owner — the viewer (`gh api user`'s login) and no other human assignee — failing closed on anything else:
 
-**The standalone `review` route is ownership-exempt too, but by a different mechanism (issue #1850).** `review` (`skills/review/SKILL.md`, `/dev-loops:loop-review`) is not a `resolve-dev-loop-startup.mjs` strategy at all, so `STRATEGY_OWNERSHIP_GATE` never applies to it — unlike `ui_review`/`wait_watch`, which ARE evaluator strategies carrying an explicit `false` entry in that map. The public `dev-loop` router recognizes a plain review request and dispatches straight to the `review` skill before its own startup resolver — and the ownership gate it enforces — ever runs; the review pipeline scripts (`write-gate-context.mjs`, `consolidate-fanin.mjs`, `upsert-checkpoint-verdict.mjs`) never invoke `resolve-dev-loop-startup.mjs` either, so the exemption holds even if a caller reached them directly. This is safe because `review` is read-only: no branch push, no fix commit, no merge, no board move, no assignee claim. Every write-capable route (`local_implementation`, `issue_intake`, `copilot_pr_followup`, `external_pr_followup`, `reviewer_fixer`, `final_approval`) stays gated exactly as before.
+**The standalone `review` route is ownership-exempt too, but by a different mechanism (issue #1850).** `review` (`skills/review/SKILL.md`, `/dev-loops:loop-review`) is not a `resolve-dev-loop-startup.mjs` strategy at all, so `STRATEGY_OWNERSHIP_GATE` never applies to it — unlike `ui_review`/`wait_watch`, which ARE evaluator strategies carrying an explicit `false` entry in that map. The public `dev-loop` router recognizes a plain review request and dispatches straight to the `review` skill before its own startup resolver — and the ownership gate it enforces — ever runs; the review pipeline scripts (`write-gate-context.mjs`, `consolidate-fanin.mjs`, `upsert-checkpoint-verdict.mjs`) never invoke `resolve-dev-loop-startup.mjs` either, so the exemption holds even if a caller reached them directly. This is safe because `review` is read-only: no branch push, no fix commit, no merge, no board move, no assignee claim. Every write-capable route (`local_implementation`, `issue_intake`, `verification`, `external_pr_followup`, `reviewer_fixer`, `final_approval`) stays gated exactly as before.
 
 - assigned to another human, or co-assigned to the viewer AND another human (contested — not sole) → foreign-ownership error naming the OTHER assignee(s), never the viewer; no readiness bundle
 - unassigned → not-claimed error naming the exact claim command (`edit-issue.mjs`/`edit-pr.mjs --add-assignee @me`); no readiness bundle
@@ -341,7 +341,7 @@ The shared machine-checkable gate contract is exported from `packages/core/src/l
 | `issue_intake` | `route` | `issue_intake` | issue canonical state without a linked PR routes to issue intake |
 | `external_pr_followup` | `route` | `external_pr_followup` | external-human PR ownership routes to external PR follow-up |
 | `reviewer_fixer` | `route` | `reviewer_fixer` | reviewer-owned or reviewer-next PR state routes to reviewer/fixer |
-| `copilot_pr_followup` | `route` | `copilot_pr_followup` | Copilot-owned PR state routes to Copilot PR follow-up |
+| `verification` | `route` | `verification` | Copilot-owned PR state routes to Copilot PR follow-up |
 | `ui_review` | `route` | `ui_review` | an explicit UI-review request on a PR target routes to the ui_review running-app review strategy |
 | `fail_closed_reconcile` | `needs_reconcile` | `null` | ambiguous, conflicting, or unsupported canonical state fails closed to reconcile; `none` is only the startup wrapper's display key |
 
@@ -366,7 +366,7 @@ First-match-wins routing posture:
 9. explicit UI-review request (`review_pr_ui` intent) on a PR target -> `ui_review`
 10. PR owned by external human -> `external_pr_followup`
 11. PR owned by reviewer or next actor reviewer -> `reviewer_fixer`
-12. PR owned by Copilot -> `copilot_pr_followup`
+12. PR owned by Copilot -> `verification`
 13. anything else -> fail closed to `needs_reconcile`
 
 ## Required transitions
@@ -382,7 +382,7 @@ gate can be followed, on the next cycle, by any of the gates.
 - `issue_intake` -> any dev-loop gate
 - `external_pr_followup` -> any dev-loop gate
 - `reviewer_fixer` -> any dev-loop gate
-- `copilot_pr_followup` -> any dev-loop gate
+- `verification` -> any dev-loop gate
 - `ui_review` -> any dev-loop gate
 
 Terminal gates (`stop_blocked_or_not_authorized`, `stop_done_terminal`,
@@ -437,7 +437,7 @@ Bootstrap-only exception to the general blocked-escalation rule for `waiting_for
 | <!-- rule: FACADE-BOOTSTRAP-FOLLOWUP-REENTRY --> `FACADE-BOOTSTRAP-FOLLOWUP-REENTRY` | refreshed seam state advances to `linked_pr_ready_for_followup` | durable-auto continuation MUST re-enter the same linked PR follow-up path |
 | <!-- rule: FACADE-BOOTSTRAP-ISOLATED-WORKTREE-CONTINUATION --> `FACADE-BOOTSTRAP-ISOLATED-WORKTREE-CONTINUATION` | follow-up handoff carries `conductorRouting.handoffEnvelope.requiresLocalIsolation=true` | orchestration SHOULD continue through an isolated checkout/worktree transition rather than treat that boundary as final completion (the runtime surfaces the flag; it does not enforce re-entry) |
 
-Main conductor orchestration MUST treat non-terminal follow-up/wait states (for example `waiting_for_copilot_review`) as continuation boundaries rather than clean completion. If an async child exits before the requested stop boundary and continuation is feasible, re-dispatch via the main session driver (the subagent exits on external wait; the main session re-dispatches); otherwise surface the concrete blocker.
+Main conductor orchestration MUST treat non-terminal follow-up/wait states (for example `waiting_for_external_review`) as continuation boundaries rather than clean completion. If an async child exits before the requested stop boundary and continuation is feasible, re-dispatch via the main session driver (the subagent exits on external wait; the main session re-dispatches); otherwise surface the concrete blocker.
 
 ## Internal / external model
 
@@ -548,8 +548,8 @@ These are parameterized uses of `dev-loop`, not new workflow-facing entrypoints.
 | User intent | Canonical state / route |
 |---|---|
 | start dev loop on issue `86` with no linked PR | synthesize issue target -> `issue_intake` internal strategy (routed behind `dev-loop`) |
-| start dev loop on issue `86` with linked PR `88` and Copilot ownership | issue target + `linkedPr=88` -> route as PR `88` -> `copilot_pr_followup` internal strategy (routed behind `dev-loop`) |
-| continue dev loop on PR `88` with Copilot ownership | PR target + `ownership=copilot` -> `copilot_pr_followup` internal strategy (routed behind `dev-loop`) |
+| start dev loop on issue `86` with linked PR `88` and Copilot ownership | issue target + `linkedPr=88` -> route as PR `88` -> `verification` internal strategy (routed behind `dev-loop`) |
+| continue dev loop on PR `88` with Copilot ownership | PR target + `ownership=copilot` -> `verification` internal strategy (routed behind `dev-loop`) |
 | start issue `86` locally, then continue the loop | local phase slice for issue `86` -> `local_implementation`, then resume via public `dev-loop` against the updated state |
 | continue the current dev loop while waiting | same target + `status=waiting` -> `wait_watch` |
 | what state is the dev loop in? | inspect the canonical state and report the routed internal strategy without switching public entrypoints |

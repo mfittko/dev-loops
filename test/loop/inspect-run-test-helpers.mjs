@@ -97,7 +97,7 @@ export async function writeGhStub(tempDir) {
 
 export const withTempDir = (fn) => withTempDirHelper(fn, { prefix: "pi-inspect-run-test-" });
 
-export function makeCopilotEvidence(state = "waiting_for_copilot_review", { sameHeadCleanConverged = false } = {}) {
+export function makeCopilotEvidence(state = "waiting_for_external_review", { sameHeadCleanConverged = false } = {}) {
   return {
     snapshot: {
       prExists: true,

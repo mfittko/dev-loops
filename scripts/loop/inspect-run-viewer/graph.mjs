@@ -393,9 +393,9 @@ export function buildInspectionMermaidGraph(snapshot) {
     && !String(snapshot.lifecyclePhase).toLowerCase().includes("unavailable");
   if (lifecycleAvailable) {
     focusIds = [lanes[3].currentId];
-  } else if (outerState === OUTER_STATE.HANDOFF_TO_COPILOT_LOOP || outerAction === "reenter_copilot_loop") {
+  } else if (outerState === OUTER_STATE.HANDOFF_TO_VERIFICATION_LOOP || outerAction === "enter_verification_loop") {
     focusIds = [lanes[1].currentId];
-  } else if (outerState === OUTER_STATE.HANDOFF_TO_REVIEWER_LOOP || outerAction === "reenter_reviewer_loop") {
+  } else if (outerState === OUTER_STATE.HANDOFF_TO_REVIEWER_LOOP || outerAction === "enter_reviewer_loop") {
     focusIds = [lanes[2].currentId];
   } else {
     const copilotFocusId = lanes[1].currentId;

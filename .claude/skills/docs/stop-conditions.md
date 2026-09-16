@@ -12,7 +12,8 @@ Canonical owner for agent stop / wait / block conditions across all workflow fam
 | <!-- term: state:merge_ready --> `merge_ready` | Lifecycle state where merge preconditions are ready to evaluate. |
 | <!-- term: state:waiting --> `waiting` | Lifecycle state for healthy external waits. |
 | <!-- term: state:waiting_for_initial_copilot_implementation --> `waiting_for_initial_copilot_implementation` | Bootstrap wait state for the first Copilot PR. |
-| <!-- term: state:waiting_for_copilot_review --> `waiting_for_copilot_review` | Copilot review-settle wait state for the current head. |
+| <!-- term: state:waiting_for_external_review --> `waiting_for_external_review` | External review-settle wait state for the current head; the external review actor is Copilot today (ADR 0073). |
+| <!-- term: state:waiting_for_copilot_review --> `waiting_for_copilot_review` | Deprecated spelling of `waiting_for_external_review`, kept defined while the prose half of ADR 0073 migrates. Do not use in new prose. |
 | <!-- term: state:waiting_for_merge_authorization --> `waiting_for_merge_authorization` | Stop state for merge-ready work without explicit merge authorization. |
 | <!-- term: reason:needs_reconcile --> `needs_reconcile` | Reconcile reason for ambiguous, contradictory, or unsupported state. |
 
@@ -34,7 +35,7 @@ Canonical owner for agent stop / wait / block conditions across all workflow fam
 |---|---|---|---|
 | <!-- rule: STOP-WAIT-001 --> `STOP-WAIT-001` | `waiting` lifecycle state | `wait_watch` | The loop MUST treat this as a healthy wait and re-dispatch from the main session. |
 | <!-- rule: STOP-INITIAL-COPILOT-001 --> `STOP-INITIAL-COPILOT-001` | `waiting_for_initial_copilot_implementation` | `issue_intake` | The loop MUST use the bootstrap wait with a one-hour watch budget. |
-| <!-- rule: STOP-COPILOT-REVIEW-001 --> `STOP-COPILOT-REVIEW-001` | `waiting_for_copilot_review` | `copilot_pr_followup` | The loop MUST treat this as a continuation boundary, not completion. |
+| <!-- rule: STOP-COPILOT-REVIEW-001 --> `STOP-COPILOT-REVIEW-001` | `waiting_for_copilot_review` | `copilot_verification` | The loop MUST treat this as a continuation boundary, not completion. |
 | <!-- rule: STOP-QUIET-WATCHER-001 --> `STOP-QUIET-WATCHER-001` | Quiet watcher observations | `wait_watch` | The loop MUST treat quiet observations as observational only and MUST NOT surface them as stops by themselves. |
 
 ## Cross-references

@@ -31,19 +31,19 @@ test("decideOuterAction: copilot no_pr → stop / pr_not_ready", () => {
   assert.equal(result.reason, "pr_not_ready");
 });
 
-test("decideOuterAction: copilot pr_draft → reenter_copilot_loop", () => {
+test("decideOuterAction: copilot pr_draft → enter_verification_loop", () => {
   const result = decideOuterAction({
     copilotState: "pr_draft",
     reviewerState: "waiting_for_review_request",
     gitStatus: { isDirty: false, isDetached: false },
   });
-  assert.equal(result.outerAction, "reenter_copilot_loop");
+  assert.equal(result.outerAction, "enter_verification_loop");
   assert.equal(result.reason, undefined);
 });
 
-test("decideOuterAction: copilot waiting_for_copilot_review → continue_wait", () => {
+test("decideOuterAction: copilot waiting_for_external_review → continue_wait", () => {
   const result = decideOuterAction({
-    copilotState: "waiting_for_copilot_review",
+    copilotState: "waiting_for_external_review",
     reviewerState: "waiting_for_review_request",
     gitStatus: { isDirty: false, isDetached: false },
   });
@@ -81,42 +81,42 @@ test("decideOuterAction: copilot waiting_for_ci → continue_wait", () => {
   assert.equal(result.reason, undefined);
 });
 
-test("decideOuterAction: reviewer review_requested → reenter_reviewer_loop", () => {
+test("decideOuterAction: reviewer review_requested → enter_reviewer_loop", () => {
   const result = decideOuterAction({
     copilotState: "pr_ready_no_feedback",
     reviewerState: "review_requested",
     gitStatus: { isDirty: false, isDetached: false },
   });
-  assert.equal(result.outerAction, "reenter_reviewer_loop");
+  assert.equal(result.outerAction, "enter_reviewer_loop");
   assert.equal(result.reason, undefined);
 });
 
-test("decideOuterAction: reviewer review_invalidated → reenter_reviewer_loop", () => {
+test("decideOuterAction: reviewer review_invalidated → enter_reviewer_loop", () => {
   const result = decideOuterAction({
     copilotState: "pr_ready_no_feedback",
     reviewerState: "review_invalidated",
     gitStatus: { isDirty: false, isDetached: false },
   });
-  assert.equal(result.outerAction, "reenter_reviewer_loop");
+  assert.equal(result.outerAction, "enter_reviewer_loop");
 });
 
-test("decideOuterAction: copilot unresolved_feedback_present → reenter_copilot_loop", () => {
+test("decideOuterAction: copilot unresolved_feedback_present → enter_verification_loop", () => {
   const result = decideOuterAction({
     copilotState: "unresolved_feedback_present",
     reviewerState: "waiting_for_author_followup",
     gitStatus: { isDirty: false, isDetached: false },
   });
-  assert.equal(result.outerAction, "reenter_copilot_loop");
+  assert.equal(result.outerAction, "enter_verification_loop");
   assert.equal(result.reason, undefined);
 });
 
-test("decideOuterAction: copilot ready_to_rerequest_review → reenter_copilot_loop", () => {
+test("decideOuterAction: copilot ready_to_rerequest_review → enter_verification_loop", () => {
   const result = decideOuterAction({
     copilotState: "ready_to_rerequest_review",
     reviewerState: "waiting_for_review_request",
     gitStatus: { isDirty: false, isDetached: false },
   });
-  assert.equal(result.outerAction, "reenter_copilot_loop");
+  assert.equal(result.outerAction, "enter_verification_loop");
 });
 
 test("decideOuterAction: copilot blocked_needs_user_decision → stop / copilot_blocked", () => {
@@ -149,81 +149,81 @@ test("decideOuterAction: copilot review_request_unavailable → stop / review_un
   assert.equal(result.reason, "review_unavailable");
 });
 
-test("decideOuterAction: dirty checkout + pr_draft → reenter_copilot_loop", () => {
+test("decideOuterAction: dirty checkout + pr_draft → enter_verification_loop", () => {
   const result = decideOuterAction({
     copilotState: "pr_draft",
     reviewerState: "waiting_for_review_request",
     gitStatus: { isDirty: true, isDetached: false },
   });
-  assert.equal(result.outerAction, "reenter_copilot_loop");
+  assert.equal(result.outerAction, "enter_verification_loop");
   assert.equal(result.reason, undefined);
 });
 
-test("decideOuterAction: detached HEAD + pr_draft → reenter_copilot_loop", () => {
+test("decideOuterAction: detached HEAD + pr_draft → enter_verification_loop", () => {
   const result = decideOuterAction({
     copilotState: "pr_draft",
     reviewerState: "waiting_for_review_request",
     gitStatus: { isDirty: false, isDetached: true },
   });
-  assert.equal(result.outerAction, "reenter_copilot_loop");
+  assert.equal(result.outerAction, "enter_verification_loop");
   assert.equal(result.reason, undefined);
 });
 
-test("decideOuterAction: dirty checkout + unresolved_feedback → reenter_copilot_loop", () => {
+test("decideOuterAction: dirty checkout + unresolved_feedback → enter_verification_loop", () => {
   const result = decideOuterAction({
     copilotState: "unresolved_feedback_present",
     reviewerState: "waiting_for_author_followup",
     gitStatus: { isDirty: true, isDetached: false },
   });
-  assert.equal(result.outerAction, "reenter_copilot_loop");
+  assert.equal(result.outerAction, "enter_verification_loop");
   assert.equal(result.reason, undefined);
 });
 
-test("decideOuterAction: detached HEAD + unresolved_feedback → reenter_copilot_loop", () => {
+test("decideOuterAction: detached HEAD + unresolved_feedback → enter_verification_loop", () => {
   const result = decideOuterAction({
     copilotState: "unresolved_feedback_present",
     reviewerState: "waiting_for_review_request",
     gitStatus: { isDirty: false, isDetached: true },
   });
-  assert.equal(result.outerAction, "reenter_copilot_loop");
+  assert.equal(result.outerAction, "enter_verification_loop");
   assert.equal(result.reason, undefined);
 });
 
-test("decideOuterAction: dirty checkout + reviewer review_requested → reenter_reviewer_loop", () => {
+test("decideOuterAction: dirty checkout + reviewer review_requested → enter_reviewer_loop", () => {
   const result = decideOuterAction({
     copilotState: "pr_ready_no_feedback",
     reviewerState: "review_requested",
     gitStatus: { isDirty: true, isDetached: false },
   });
-  assert.equal(result.outerAction, "reenter_reviewer_loop");
+  assert.equal(result.outerAction, "enter_reviewer_loop");
   assert.equal(result.reason, undefined);
 });
 
-test("decideOuterAction: dirty checkout + reviewer waiting_for_user_submit → reenter_reviewer_loop (no local exec needed)", () => {
+test("decideOuterAction: dirty checkout + reviewer waiting_for_user_submit → enter_reviewer_loop (no local exec needed)", () => {
   // waiting_for_user_submit does not need local execution, so dirty checkout is safe
   const result = decideOuterAction({
     copilotState: "pr_ready_no_feedback",
     reviewerState: "waiting_for_user_submit",
     gitStatus: { isDirty: true, isDetached: false },
   });
-  assert.equal(result.outerAction, "reenter_reviewer_loop");
+  assert.equal(result.outerAction, "enter_reviewer_loop");
   assert.equal(result.reason, undefined);
 });
 
-test("decideOuterAction: dirty checkout + copilot already_fixed_needs_reply_resolve → reenter_copilot_loop (no local edit needed)", () => {
+test("decideOuterAction: dirty checkout + copilot already_fixed_needs_reply_resolve → enter_verification_loop (no local edit needed)", () => {
   // already_fixed_needs_reply_resolve only needs GitHub API calls, not code edits
   const result = decideOuterAction({
     copilotState: "already_fixed_needs_reply_resolve",
     reviewerState: "waiting_for_review_request",
     gitStatus: { isDirty: true, isDetached: false },
   });
-  assert.equal(result.outerAction, "reenter_copilot_loop");
+  assert.equal(result.outerAction, "enter_verification_loop");
   assert.equal(result.reason, undefined);
 });
 
-test("decideOuterAction: waiting_for_copilot_review keeps orchestrator waiting even when reviewer is active", () => {
+test("decideOuterAction: waiting_for_external_review keeps orchestrator waiting even when reviewer is active", () => {
   const result = decideOuterAction({
-    copilotState: "waiting_for_copilot_review",
+    copilotState: "waiting_for_external_review",
     reviewerState: "review_requested",
     gitStatus: { isDirty: false, isDetached: false },
   });
@@ -236,7 +236,7 @@ test("decideOuterAction: reviewer active still wins when copilot is waiting_for_
     reviewerState: "review_requested",
     gitStatus: { isDirty: false, isDetached: false },
   });
-  assert.equal(result.outerAction, "reenter_reviewer_loop");
+  assert.equal(result.outerAction, "enter_reviewer_loop");
 });
 
 test("decideOuterAction: copilot active wins over reviewer wait state", () => {
@@ -246,7 +246,7 @@ test("decideOuterAction: copilot active wins over reviewer wait state", () => {
     reviewerState: "waiting_for_author_followup",
     gitStatus: { isDirty: false, isDetached: false },
   });
-  assert.equal(result.outerAction, "reenter_copilot_loop");
+  assert.equal(result.outerAction, "enter_verification_loop");
 });
 
 // ---------------------------------------------------------------------------
@@ -261,8 +261,8 @@ test("outer-loop --help prints usage and exits 0", async () => {
   assert(helpLong.stdout.includes("--repo"), "expected --repo in help");
   assert(helpLong.stdout.includes("--pr"), "expected --pr in help");
   assert(helpLong.stdout.includes("continue_wait"), "expected continue_wait in help");
-  assert(helpLong.stdout.includes("reenter_copilot_loop"), "expected reenter_copilot_loop in help");
-  assert(helpLong.stdout.includes("reenter_reviewer_loop"), "expected reenter_reviewer_loop in help");
+  assert(helpLong.stdout.includes("enter_verification_loop"), "expected enter_verification_loop in help");
+  assert(helpLong.stdout.includes("enter_reviewer_loop"), "expected enter_reviewer_loop in help");
 
   const helpShort = await runNode(["-h"]);
   assert.equal(helpShort.code, 0);
@@ -303,7 +303,7 @@ test("outer-loop rejects malformed arguments with usage guidance", async () => {
 });
 
 // ---------------------------------------------------------------------------
-test("outer-loop: pr_draft → reenter_copilot_loop", async () => {
+test("outer-loop: pr_draft → enter_verification_loop", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "outer-loop-pr-draft-"));
 
   try {
@@ -350,10 +350,10 @@ test("outer-loop: pr_draft → reenter_copilot_loop", async () => {
     assert.equal(result.code, 0, `stdout=${result.stdout} stderr=${result.stderr}`);
     const output = JSON.parse(result.stdout);
     assert.equal(output.ok, true);
-    assert.equal(output.outerAction, "reenter_copilot_loop");
+    assert.equal(output.outerAction, "enter_verification_loop");
     assert.equal(output.copilotState, "pr_draft");
     assert.equal(output.reason, undefined);
-    assert.equal(output.checkpoint.outerAction, "reenter_copilot_loop");
+    assert.equal(output.checkpoint.outerAction, "enter_verification_loop");
     assert.equal(output.checkpoint.waitCycles, 0);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -363,7 +363,7 @@ test("outer-loop: pr_draft → reenter_copilot_loop", async () => {
 // CLI: copilot wait timeout → re-detect → continue_wait
 // ---------------------------------------------------------------------------
 
-test("outer-loop: waiting_for_copilot_review → continue_wait", async () => {
+test("outer-loop: waiting_for_external_review → continue_wait", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-outer-copilot-wait-"));
 
   try {
@@ -405,7 +405,7 @@ test("outer-loop: waiting_for_copilot_review → continue_wait", async () => {
     const output = JSON.parse(result.stdout);
     assert.equal(output.ok, true);
     assert.equal(output.outerAction, "continue_wait");
-    assert.equal(output.copilotState, "waiting_for_copilot_review");
+    assert.equal(output.copilotState, "waiting_for_external_review");
     assert.equal(output.reason, undefined);
     assert.ok(output.checkpoint, "expected checkpoint in output");
     assert.equal(output.checkpoint.outerAction, "continue_wait");
@@ -446,7 +446,7 @@ test("outer-loop mixed live+snapshot input keeps local sourceMode", async () => 
   }
 });
 
-test("outer-loop: copilot pr_draft → reenter_copilot_loop", async () => {
+test("outer-loop: copilot pr_draft → enter_verification_loop", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-outer-copilot-draft-"));
 
   try {
@@ -489,7 +489,7 @@ test("outer-loop: copilot pr_draft → reenter_copilot_loop", async () => {
 
     const output = JSON.parse(result.stdout);
     assert.equal(output.ok, true);
-    assert.equal(output.outerAction, "reenter_copilot_loop");
+    assert.equal(output.outerAction, "enter_verification_loop");
     assert.equal(output.copilotState, "pr_draft");
     assert.equal("reason" in output, false);
     assert.equal(output.checkpoint.waitCycles, 0);
@@ -617,7 +617,7 @@ test("outer-loop: reviewer submitted_review (author pushed; no re-request) → c
 // CLI: explicit re-request after author/Copilot follow-up → reviewer re-entry
 // ---------------------------------------------------------------------------
 
-test("outer-loop: submitted_review → review_requested after explicit re-request → reenter_reviewer_loop", async () => {
+test("outer-loop: submitted_review → review_requested after explicit re-request → enter_reviewer_loop", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-outer-reviewer-reentry-"));
 
   try {
@@ -663,7 +663,7 @@ test("outer-loop: submitted_review → review_requested after explicit re-reques
 
     const output = JSON.parse(result.stdout);
     assert.equal(output.ok, true);
-    assert.equal(output.outerAction, "reenter_reviewer_loop");
+    assert.equal(output.outerAction, "enter_reviewer_loop");
     assert.equal(output.reviewerState, "review_requested");
     assert.equal(output.reviewerScope.mode, "single_reviewer");
     assert.equal(output.reviewerScope.reviewerLogin, "pi-reviewer");
@@ -679,7 +679,7 @@ test("outer-loop: submitted_review → review_requested after explicit re-reques
 // CLI: isolation-needed re-entry stays as a handoff with requiresLocalIsolation
 // ---------------------------------------------------------------------------
 
-test("outer-loop: dirty checkout + unresolved_feedback → handoff_to_copilot_loop with isolation flag", async () => {
+test("outer-loop: dirty checkout + unresolved_feedback → handoff_to_verification_loop with isolation flag", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-outer-dirty-copilot-"));
 
   try {
@@ -723,10 +723,10 @@ test("outer-loop: dirty checkout + unresolved_feedback → handoff_to_copilot_lo
 
     const output = JSON.parse(result.stdout);
     assert.equal(output.ok, true);
-    assert.equal(output.outerAction, "reenter_copilot_loop");
+    assert.equal(output.outerAction, "enter_verification_loop");
     assert.equal(output.reason, undefined);
     assert.equal(output.copilotState, "unresolved_feedback_present");
-    assert.equal(output.conductorRouting.routingOutcome, "handoff_to_copilot_loop");
+    assert.equal(output.conductorRouting.routingOutcome, "handoff_to_verification_loop");
     assert.equal(output.conductorRouting.handoffEnvelope.requiresLocalIsolation, true);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -775,7 +775,7 @@ test("outer-loop: detached HEAD + reviewer review_requested → handoff_to_revie
 
     const output = JSON.parse(result.stdout);
     assert.equal(output.ok, true);
-    assert.equal(output.outerAction, "reenter_reviewer_loop");
+    assert.equal(output.outerAction, "enter_reviewer_loop");
     assert.equal(output.reason, undefined);
     assert.equal(output.conductorRouting.routingOutcome, "handoff_to_reviewer_loop");
     assert.equal(output.conductorRouting.handoffEnvelope.requiresLocalIsolation, true);
@@ -824,13 +824,13 @@ test("outer-loop: dirty local checkout keeps PR-draft follow-up as an isolation-
 
     assert.equal(result.code, 0, `stderr: ${result.stderr}`);
     const output = JSON.parse(result.stdout);
-    assert.equal(output.outerAction, "reenter_copilot_loop");
+    assert.equal(output.outerAction, "enter_verification_loop");
     assert.equal(output.reason, undefined);
     assert.equal(output.branchIdentity.localBranch, "main");
     assert.equal(output.branchIdentity.prBranch, "copilot/fix-gate-progression-issue");
     assert.equal(output.branchIdentity.branchMatches, false);
     assert.equal(output.branchIdentity.headMatches, false);
-    assert.equal(output.conductorRouting.routingOutcome, "handoff_to_copilot_loop");
+    assert.equal(output.conductorRouting.routingOutcome, "handoff_to_verification_loop");
     assert.equal(output.conductorRouting.handoffEnvelope.requiresLocalIsolation, true);
     assert.equal(output.conductorRouting.handoffEnvelope.requiredArgs.headRefName, "copilot/fix-gate-progression-issue");
     assert.equal(output.conductorRouting.handoffEnvelope.requiredArgs.headRefOid, "abc123");

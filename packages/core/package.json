@@ -45,6 +45,7 @@
     "./loop/gate-fanin": "./src/loop/gate-fanin.mjs",
     "./loop/handoff-envelope": "./src/loop/handoff-envelope.mjs",
     "./loop/lifecycle-state": "./src/loop/lifecycle-state.mjs",
+    "./loop/loop-vocabulary": "./src/loop/loop-vocabulary.mjs",
     "./loop/markdown-sections": "./src/loop/markdown-sections.mjs",
     "./loop/merge-approval": "./src/loop/merge-approval.mjs",
     "./loop/issue-refinement-artifact": "./src/loop/issue-refinement-artifact.mjs",

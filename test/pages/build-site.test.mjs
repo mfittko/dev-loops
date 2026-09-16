@@ -202,8 +202,8 @@ test('build-site: state atlas is generated from the code tables, navigable, with
     // is a terminal copilot state, so it renders as a `-->` edge to [*].
     assert.ok(atlas.includes('round_cap_clean_fallback -->'), 'copilot STATE/TRANSITIONS rendered');
     assert.ok(atlas.includes('waiting_for_review_request'), 'reviewer REVIEWER_STATE rendered');
-    assert.ok(atlas.includes('handoff_to_copilot_loop'), 'outer OUTER_STATE rendered');
-    assert.ok(atlas.includes('copilot_pr_followup'), 'public dev-loop gate contract rendered');
+    assert.ok(atlas.includes('handoff_to_verification_loop'), 'outer OUTER_STATE rendered');
+    assert.ok(atlas.includes('verification'), 'public dev-loop gate contract rendered');
 
     // The nav on the landing page links the atlas as a top-level menu item.
     const index = await readFile(join(out, 'index.html'), 'utf8');

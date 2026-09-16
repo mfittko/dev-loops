@@ -301,7 +301,7 @@ test("copilot-pr-handoff requests review and emits watch action for pr_ready_no_
     const output = JSON.parse(result.stdout);
     assert.equal(output.ok, true);
     assert.equal(output.action, "watch");
-    assert.equal(output.state, "waiting_for_copilot_review");
+    assert.equal(output.state, "waiting_for_external_review");
     assert.equal(output.reviewRequestStatus, "requested");
     assert.deepEqual(output.watchTimeoutPolicy, EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY);
     assert.ok(Array.isArray(output.allowedTransitions));
@@ -356,7 +356,7 @@ test("copilot-pr-handoff emits watch action when Copilot is already requested", 
     const output = JSON.parse(result.stdout);
     assert.equal(output.ok, true);
     assert.equal(output.action, "watch");
-    assert.equal(output.state, "waiting_for_copilot_review");
+    assert.equal(output.state, "waiting_for_external_review");
     assert.deepEqual(output.watchTimeoutPolicy, EXTERNAL_HEALTHY_WAIT_TIMEOUT_POLICY);
     assert.ok(output.watchArgs, "expected watchArgs");
     assert.equal(output.watchArgs.pollIntervalMs, 60_000);
@@ -393,7 +393,7 @@ test("copilot-pr-handoff treats watch timeout with pending requested review as n
     const output = JSON.parse(result.stdout);
     assert.equal(output.ok, true);
     assert.equal(output.action, "watch");
-    assert.equal(output.state, "waiting_for_copilot_review");
+    assert.equal(output.state, "waiting_for_external_review");
     assert.equal(output.watchStatus, "timeout");
     assert.equal(output.loopDisposition, "pending");
     assert.equal(output.terminal, false);
@@ -668,7 +668,7 @@ test("copilot-pr-handoff emits watch action when 422 but Copilot is in requested
     const output = JSON.parse(result.stdout);
     assert.equal(output.ok, true);
     assert.equal(output.action, "watch");
-    assert.equal(output.state, "waiting_for_copilot_review");
+    assert.equal(output.state, "waiting_for_external_review");
     assert.equal(output.reviewRequestStatus, "already-requested");
     assert.ok(output.watchArgs, "expected watchArgs in watch action");
     assert.equal(output.watchArgs.repo, "owner/repo");
@@ -740,7 +740,7 @@ test("copilot-pr-handoff emits watch action when 422 but Copilot has a pending r
     const output = JSON.parse(result.stdout);
     assert.equal(output.ok, true);
     assert.equal(output.action, "watch");
-    assert.equal(output.state, "waiting_for_copilot_review");
+    assert.equal(output.state, "waiting_for_external_review");
     assert.equal(output.reviewRequestStatus, "already-requested");
     assert.ok(output.watchArgs, "expected watchArgs in watch action");
     assert.equal(output.watchArgs.repo, "owner/repo");
@@ -925,7 +925,7 @@ process.exit(97);
     const output = JSON.parse(result.stdout);
     assert.equal(output.ok, true);
     assert.equal(output.action, "watch");
-    assert.equal(output.state, "waiting_for_copilot_review");
+    assert.equal(output.state, "waiting_for_external_review");
     assert.equal(output.reviewRequestStatus, "requested");
     assert.ok(output.watchArgs, "expected watchArgs after green re-request path");
   } finally {
@@ -1108,7 +1108,7 @@ test("copilot-pr-handoff preserves copilotReviewPresent=false for an initial req
     const output = JSON.parse(result.stdout);
     assert.equal(output.ok, true);
     assert.equal(output.action, "watch");
-    assert.equal(output.state, "waiting_for_copilot_review");
+    assert.equal(output.state, "waiting_for_external_review");
     assert.equal(output.reviewRequestStatus, "requested");
     assert.equal(output.snapshot.copilotReviewRequestStatus, "requested");
     assert.equal(output.snapshot.copilotReviewOnCurrentHead, false);
@@ -1224,7 +1224,7 @@ process.exit(97);
     const output = JSON.parse(result.stdout);
     assert.equal(output.ok, true);
     assert.equal(output.action, "watch");
-    assert.equal(output.state, "waiting_for_copilot_review");
+    assert.equal(output.state, "waiting_for_external_review");
     assert.equal(output.reviewRequestStatus, "requested");
     assert.ok(output.watchArgs, "expected watchArgs in watch action");
   } finally {
@@ -1452,7 +1452,7 @@ test("copilot-pr-handoff re-requests Copilot review at the cap when a significan
     assert.equal(output.ok, true);
     // Significant change at the cap → reopen a Copilot cycle: re-request + watch.
     assert.equal(output.action, "watch");
-    assert.equal(output.state, "waiting_for_copilot_review");
+    assert.equal(output.state, "waiting_for_external_review");
     assert.equal(output.reviewRequestStatus, "requested");
     assert.equal(output.roundCapCleanEligible, false);
     assert.notEqual(output.loopDisposition, "done");
@@ -1530,7 +1530,7 @@ test("copilot-pr-handoff treats a suppressed_post_convergence_docs_only request 
     assert.equal(output.reviewRequestStatus, "suppressed_post_convergence_docs_only");
     // ...but must NOT leak into the shared request-status contract.
     assert.equal(output.requestWatchContract.requestStatus, "none");
-    assert.notEqual(output.state, "waiting_for_copilot_review");
+    assert.notEqual(output.state, "waiting_for_external_review");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1630,7 +1630,7 @@ test("copilot-pr-handoff stays at round_cap_clean_fallback when the last reviewe
 // #1165 (in-flight-rerequest race): at the round cap with all threads clean and
 // a Copilot review REQUESTED and pending on the current head (a --force-rerequest
 // in flight for a significant post-convergence change), handoff must surface
-// waiting_for_copilot_review — NOT round_cap_clean_fallback. Proceeding to
+// waiting_for_external_review — NOT round_cap_clean_fallback. Proceeding to
 // pre_approval_gate would skip the pending review; detect-pr-gate-coordination-state
 // gates pre-approval here, so both authorities now gate until the review lands.
 test("copilot-pr-handoff waits for the pending Copilot review (in-flight force-rerequest) instead of the clean fallback (#1165)", async () => {
@@ -1669,7 +1669,7 @@ test("copilot-pr-handoff waits for the pending Copilot review (in-flight force-r
     assert.equal(output.ok, true);
     // Pending review on the current head → wait, never proceed to pre_approval.
     assert.equal(output.action, "watch");
-    assert.equal(output.state, "waiting_for_copilot_review");
+    assert.equal(output.state, "waiting_for_external_review");
     assert.equal(output.roundCapCleanEligible, false);
     assert.equal(output.terminal, false);
     assert.ok(output.watchArgs, "expected watchArgs while waiting for the pending review");
@@ -1717,7 +1717,7 @@ test("copilot-pr-handoff waits (fail closed) when a review is pending and the es
     // The pending-request guard fires before the fragile escape-hatch fetch, so a
     // fetch failure can no longer silently downgrade to "proceed".
     assert.equal(output.action, "watch");
-    assert.equal(output.state, "waiting_for_copilot_review");
+    assert.equal(output.state, "waiting_for_external_review");
     assert.equal(output.roundCapCleanEligible, false);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -2761,7 +2761,7 @@ test("copilot-pr-handoff does not skip Copilot for consumer-facing PR", async ()
     const output = JSON.parse(result.stdout);
     assert.equal(output.ok, true);
     assert.equal(output.action, "watch");
-    assert.equal(output.state, "waiting_for_copilot_review");
+    assert.equal(output.state, "waiting_for_external_review");
     assert.equal(output.internalOnlySkipCopilot, undefined, "should not set internal skip for consumer-facing PR");
     assert.equal(output.reviewRequestStatus, "requested");
   } finally {
@@ -2794,7 +2794,7 @@ test("copilot-pr-handoff skips internal detection when GH_SEQUENCE_PATH is set (
     assert.equal(output.ok, true);
     // In stub mode, internal detection is skipped → normal Copilot request flow
     assert.equal(output.action, "watch");
-    assert.equal(output.state, "waiting_for_copilot_review");
+    assert.equal(output.state, "waiting_for_external_review");
     assert.equal(output.internalOnlySkipCopilot, undefined);
   } finally {
     await rm(tempDir, { recursive: true, force: true });

@@ -1,6 +1,6 @@
 # Copilot loop operations
 
-Canonical owner for operating the deterministic Copilot PR follow-up state machine — the operational reference for the routed `copilot_pr_followup`, `wait_watch`, `reviewer_fixer`, and `final_approval` paths behind `dev-loop`. The machine's states and transitions are defined by [Copilot Loop State Graph](./copilot-loop-state-graph.md).
+Canonical owner for operating the deterministic Copilot PR follow-up state machine — the operational reference for the routed `copilot_verification`, `wait_watch`, `reviewer_fixer`, and `final_approval` paths behind `dev-loop`. The machine's states and transitions are defined by [Copilot Loop State Graph](./copilot-loop-state-graph.md).
 
 Use it together with:
 - [Copilot PR Follow-up Skill](../copilot-pr-followup/SKILL.md)
@@ -205,7 +205,7 @@ is the canonical re-attachment artifact for async subagent runs. It is written b
 |---|---|
 | `pr` | PR number |
 | `repo` | Repository slug (`owner/name`; lowercased by `outer-loop.mjs`) |
-| `outerAction` | Next action: `continue_wait`, `reenter_copilot_loop`, `reenter_reviewer_loop`, `stop`, `done` |
+| `outerAction` | Next action: `continue_wait`, `reenter_copilot_loop`, `enter_reviewer_loop`, `stop`, `done` |
 | `copilotState` | Current copilot inner-loop state |
 | `reviewerState` | Current reviewer inner-loop state |
 | `reviewerScope` | Reviewer scope mode (always present; e.g. `all_reviewers` or `single_reviewer`) |
@@ -222,7 +222,7 @@ checkpoint, it must read the checkpoint before entering any intake or follow-up 
 
 1. If `outerAction` is `continue_wait` or `reenter_copilot_loop`: auto-resume the loop
    rather than treating the start as fresh intake.
-2. If `outerAction` is `reenter_reviewer_loop`: enter the reviewer-loop path.
+2. If `outerAction` is `enter_reviewer_loop`: enter the reviewer-loop path.
 3. If `outerAction` is `stop`: the loop is blocked or needs a human decision; report the `reason` and ask for direction.
 4. If no checkpoint or `outerAction` is `done`: `done` means the PR is merged/closed; normal fresh startup.
 

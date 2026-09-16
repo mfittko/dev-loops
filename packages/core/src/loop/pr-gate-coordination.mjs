@@ -610,7 +610,7 @@ function applyUnsettledCopilotReviewEntryGuard(input, result) {
   const lifecycleState = typeof input.lifecycleState === "string" ? input.lifecycleState.trim().toLowerCase() : "";
   // Also exempt the evaluator's own ROUND_CAP_REACHED grant shape:
   // without this, this guard would rewrite that grant back to
-  // waiting_for_copilot_review the instant it is produced, re-introducing the
+  // waiting_for_external_review the instant it is produced, re-introducing the
   // never-arriving-review dead-end the round-cap exemption exists to prevent.
   const roundCapCleanFallback = lifecycleState === STATE.ROUND_CAP_CLEAN_FALLBACK
     || isRoundCapReachedCleanGrant(result);
@@ -625,7 +625,7 @@ function applyUnsettledCopilotReviewEntryGuard(input, result) {
   const allowedNextActions = [];
   const forbiddenActions = [];
   pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW]);
-  // Full postDraftForbidden set (matching the canonical WAITING_FOR_COPILOT_REVIEW
+  // Full postDraftForbidden set (matching the canonical WAITING_FOR_EXTERNAL_REVIEW
   // result this guard synthesizes) plus the final-approval actions the replaced
   // boundary result also forbade — dropping RUN_DRAFT_GATE/MARK_READY_FOR_REVIEW
   // here would let a draft_gate verdict post on a non-draft PR slip through where
@@ -642,7 +642,7 @@ function applyUnsettledCopilotReviewEntryGuard(input, result) {
     repo: input.repo ?? null,
     pr: Number.isInteger(input.pr) ? input.pr : null,
     currentHeadSha: result.currentHeadSha ?? null,
-    lifecycleState: STATE.WAITING_FOR_COPILOT_REVIEW,
+    lifecycleState: STATE.WAITING_FOR_EXTERNAL_REVIEW,
     loopDisposition: DISPOSITION.PENDING,
     gateBoundary: PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW,
     draftGateAlreadySatisfied: result.draftGateAlreadySatisfied === true,
@@ -1302,7 +1302,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
     });
   }
 
-  if (effectiveLifecycleState === STATE.WAITING_FOR_COPILOT_REVIEW || effectiveLifecycleState === STATE.WAITING_FOR_CI) {
+  if (effectiveLifecycleState === STATE.WAITING_FOR_EXTERNAL_REVIEW || effectiveLifecycleState === STATE.WAITING_FOR_CI) {
     const waitAction = effectiveLifecycleState === STATE.WAITING_FOR_CI
       ? PR_CHECKPOINT_ACTION.WAIT_FOR_CI
       : PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW;

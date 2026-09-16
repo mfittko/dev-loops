@@ -606,7 +606,7 @@ test("conductor-monitor reports monitoring when open PRs are still in healthy wa
     assert.equal(payload.summary.waiting, 1);
     assert.equal(payload.summary.needsAttention, 0);
     assert.equal(payload.prs[0].number, 17);
-    assert.equal(payload.prs[0].state, "waiting_for_copilot_review");
+    assert.equal(payload.prs[0].state, "waiting_for_external_review");
     assert.equal(payload.prs[0].loopDisposition, "pending");
     assert.equal(payload.prs[0].needsAttention, false);
     assert.equal(payload.prs[0].snapshot.copilotReviewRequestStatus, "requested");
@@ -725,7 +725,7 @@ test("conductor-monitor flags unresolved-feedback PRs as needing attention while
     assert.equal(actionable.snapshot.unresolvedThreadCount, 2);
     assert.equal(actionable.snapshot.actionableThreadCount, 1);
 
-    assert.equal(waiting.state, "waiting_for_copilot_review");
+    assert.equal(waiting.state, "waiting_for_external_review");
     assert.equal(waiting.loopDisposition, "pending");
     assert.equal(waiting.needsAttention, false);
   } finally {
@@ -810,7 +810,7 @@ test("conductor-monitor --auto-resume fails closed when an active matching run c
       runId: "run-complete-43",
       cwd: repoRoot,
       timestampMs: 1700000011000,
-      outputText: "Active PR: owner/repo#43\nArtifact state: open\nLoop state: waiting_for_copilot_review\n",
+      outputText: "Active PR: owner/repo#43\nArtifact state: open\nLoop state: waiting_for_external_review\n",
     });
     const { statusPath } = await writeAsyncRun({
       asyncRunsRoot,
@@ -819,7 +819,7 @@ test("conductor-monitor --auto-resume fails closed when an active matching run c
       cwd: repoRoot,
       sessionPath,
       timestampMs: 1700000012000,
-      outputText: "Active PR: owner/repo#43\nLoop state: waiting_for_copilot_review\n",
+      outputText: "Active PR: owner/repo#43\nLoop state: waiting_for_external_review\n",
     });
     const activeStatus = JSON.parse(await readFile(statusPath, "utf8"));
     delete activeStatus.lastUpdate;
@@ -882,7 +882,7 @@ test("conductor-monitor --auto-resume fails closed when run exit state cannot be
     const runDir = path.join(sessionRoot, "run-unknown-56", "run-0");
     await mkdir(artifactsDir, { recursive: true });
     await mkdir(runDir, { recursive: true });
-    await writeFile(path.join(artifactsDir, "run-unknown-56_dev-loop_0_output.md"), "Active PR: owner/repo#56\nArtifact state: open\nLoop state: waiting_for_copilot_review\n", "utf8");
+    await writeFile(path.join(artifactsDir, "run-unknown-56_dev-loop_0_output.md"), "Active PR: owner/repo#56\nArtifact state: open\nLoop state: waiting_for_external_review\n", "utf8");
     await writeFile(path.join(runDir, "session.jsonl"), `${JSON.stringify({ type: "session", version: 3, id: "run-unknown-56-session", timestamp: "2026-06-03T00:00:00.000Z", cwd: repoRoot })}\n`, "utf8");
 
     const { runChild } = makeGhMock(buildGhEntries({
@@ -957,7 +957,7 @@ test("conductor-monitor --auto-resume uses grouped result summaries as the artif
         "Agent: dev-loop",
         "Active PR: owner/repo#58",
         "Artifact state: open",
-        "Loop state: waiting_for_copilot_review",
+        "Loop state: waiting_for_external_review",
       ].join("\n"),
       results: [{
         agent: "dev-loop",
@@ -967,7 +967,7 @@ test("conductor-monitor --auto-resume uses grouped result summaries as the artif
           "Agent: dev-loop",
           "Active PR: owner/repo#58",
           "Artifact state: open",
-          "Loop state: waiting_for_copilot_review",
+          "Loop state: waiting_for_external_review",
         ].join("\n"),
       }],
     }, null, 2)}
@@ -1127,7 +1127,7 @@ test("conductor-monitor --auto-resume fails closed when an active matching run h
       runId: "run-complete-59",
       cwd: repoRoot,
       timestampMs: 1700000015000,
-      outputText: "Active PR: owner/repo#59\nArtifact state: open\nLoop state: waiting_for_copilot_review\n",
+      outputText: "Active PR: owner/repo#59\nArtifact state: open\nLoop state: waiting_for_external_review\n",
     });
     await writeAsyncRun({
       asyncRunsRoot,
@@ -1136,7 +1136,7 @@ test("conductor-monitor --auto-resume fails closed when an active matching run h
       cwd: repoRoot,
       sessionPath,
       timestampMs: 1700000015000,
-      outputText: "Active PR: owner/repo#59\nLoop state: waiting_for_copilot_review\n",
+      outputText: "Active PR: owner/repo#59\nLoop state: waiting_for_external_review\n",
     });
 
     const { runChild } = makeGhMock(buildGhEntries({
@@ -1166,7 +1166,7 @@ test("conductor-monitor --auto-resume does not invent a failed run state from me
     await mkdir(runDir, { recursive: true });
     await writeFile(path.join(artifactsDir, "run-meta-60_dev-loop_0_meta.json"), `${JSON.stringify({ runId: "run-meta-60", agent: "dev-loop", timestamp: 1700000016000 }, null, 2)}
 `, "utf8");
-    await writeFile(path.join(artifactsDir, "run-meta-60_dev-loop_0_output.md"), "Active PR: owner/repo#60\nArtifact state: open\nLoop state: waiting_for_copilot_review\n", "utf8");
+    await writeFile(path.join(artifactsDir, "run-meta-60_dev-loop_0_output.md"), "Active PR: owner/repo#60\nArtifact state: open\nLoop state: waiting_for_external_review\n", "utf8");
     await writeFile(path.join(runDir, "session.jsonl"), `${JSON.stringify({ type: "session", version: 3, id: "run-meta-60-session", timestamp: "2026-06-03T00:00:00.000Z", cwd: repoRoot })}\n`, "utf8");
     await writeAsyncRun({
       asyncRunsRoot,
@@ -1175,7 +1175,7 @@ test("conductor-monitor --auto-resume does not invent a failed run state from me
       cwd: repoRoot,
       sessionPath: path.join(runDir, "session.jsonl"),
       timestampMs: 1700000016500,
-      outputText: "Active PR: owner/repo#60\nLoop state: waiting_for_copilot_review\n",
+      outputText: "Active PR: owner/repo#60\nLoop state: waiting_for_external_review\n",
     });
 
     const { runChild } = makeGhMock(buildGhEntries({
@@ -1208,7 +1208,7 @@ test("conductor-monitor --auto-resume keeps stale-worktree runs resumable when J
         "Agent: dev-loop",
         "Active PR: owner/repo#61",
         "Artifact state: open",
-        "Loop state: waiting_for_copilot_review",
+        "Loop state: waiting_for_external_review",
       ].join("\n"),
       results: [{
         agent: "dev-loop",
@@ -1218,7 +1218,7 @@ test("conductor-monitor --auto-resume keeps stale-worktree runs resumable when J
           "Agent: dev-loop",
           "Active PR: owner/repo#61",
           "Artifact state: open",
-          "Loop state: waiting_for_copilot_review",
+          "Loop state: waiting_for_external_review",
         ].join("\n"),
       }],
     }, null, 2)}
@@ -1482,7 +1482,7 @@ test("conductor-monitor --auto-resume ignores an older completed run when a newe
       outputText: [
         "Active PR: owner/repo#30",
         "Artifact state: open",
-        "Loop state: waiting_for_copilot_review",
+        "Loop state: waiting_for_external_review",
       ].join("\n"),
     });
     await writeAsyncRun({
@@ -1492,7 +1492,7 @@ test("conductor-monitor --auto-resume ignores an older completed run when a newe
       cwd: repoRoot,
       sessionPath,
       timestampMs: 1700000005000,
-      outputText: "Active PR: owner/repo#30\nLoop state: waiting_for_copilot_review\n",
+      outputText: "Active PR: owner/repo#30\nLoop state: waiting_for_external_review\n",
     });
 
     const { runChild } = makeGhMock(buildGhEntries({

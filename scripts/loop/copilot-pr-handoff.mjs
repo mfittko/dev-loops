@@ -94,7 +94,7 @@ Exit codes:
   1  Argument error or gh failure
   2  Invalid --jq filter`.trim();
 const WATCH_STATES = new Set([
-  STATE.WAITING_FOR_COPILOT_REVIEW,
+  STATE.WAITING_FOR_EXTERNAL_REVIEW,
 ]);
 const FIX_STATES = new Set([
   STATE.UNRESOLVED_FEEDBACK_PRESENT,
@@ -664,9 +664,9 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
       && reviewRequestInFlight) {
     interpretation = {
       ...interpretation,
-      state: STATE.WAITING_FOR_COPILOT_REVIEW,
-      nextAction: NEXT_ACTIONS[STATE.WAITING_FOR_COPILOT_REVIEW],
-      allowedTransitions: [...(TRANSITIONS[STATE.WAITING_FOR_COPILOT_REVIEW] || [])],
+      state: STATE.WAITING_FOR_EXTERNAL_REVIEW,
+      nextAction: NEXT_ACTIONS[STATE.WAITING_FOR_EXTERNAL_REVIEW],
+      allowedTransitions: [...(TRANSITIONS[STATE.WAITING_FOR_EXTERNAL_REVIEW] || [])],
       roundCapCleanEligible: false,
     };
   }
@@ -742,14 +742,14 @@ export async function runHandoff(options, { env = process.env, ghCommand = "gh",
     // The re-interpretation re-hits the round cap (rounds still >= max) and would
     // flip a reopened cycle back to ROUND_CAP_CLEAN_FALLBACK. A confirmed request
     // for a significant new change is a genuine new wait cycle, so map it to the
-    // honest WAITING_FOR_COPILOT_REVIEW state (what a below-cap re-request yields).
+    // honest WAITING_FOR_EXTERNAL_REVIEW state (what a below-cap re-request yields).
     if (reopenedCapCycle
         && (reviewRequestStatus === "requested" || reviewRequestStatus === "already-requested")) {
       interpretation = {
         ...interpretation,
-        state: STATE.WAITING_FOR_COPILOT_REVIEW,
-        nextAction: NEXT_ACTIONS[STATE.WAITING_FOR_COPILOT_REVIEW],
-        allowedTransitions: [...(TRANSITIONS[STATE.WAITING_FOR_COPILOT_REVIEW] || [])],
+        state: STATE.WAITING_FOR_EXTERNAL_REVIEW,
+        nextAction: NEXT_ACTIONS[STATE.WAITING_FOR_EXTERNAL_REVIEW],
+        allowedTransitions: [...(TRANSITIONS[STATE.WAITING_FOR_EXTERNAL_REVIEW] || [])],
         roundCapCleanEligible: false,
       };
     }

@@ -47,7 +47,7 @@ Qualifying gates:
 
 | Gate | Strategy | Description |
 |---|---|---|
-| `copilot_pr_followup` | Copilot PR follow-up | Primary routed GitHub-first async path |
+| `copilot_verification` | Copilot PR follow-up | Primary routed GitHub-first async path |
 | `issue_intake` | Issue intake | Copilot-first issue assignment path |
 
 `RETROSPECTIVE_QUALIFYING_GATES` in `packages/core/src/loop/retrospective-checkpoint.mjs` enumerates these as descriptive classification only — no runtime consumer consults it. The practical arming trigger is the extension's message-shape match (see `.pi/extensions/dev-loop-behavioral-review.ts` below), which fires without consulting this enumeration, and the recency mechanism below never re-derives "was this a qualifying gate" for a past cycle.

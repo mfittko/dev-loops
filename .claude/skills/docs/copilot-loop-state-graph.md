@@ -22,7 +22,7 @@ The implementation lives in:
 | `no_pr` | No open PR exists for the current work |
 | `pr_draft` | PR exists but is in draft state |
 | `pr_ready_no_feedback` | PR is ready-for-review; no Copilot review requested or received yet |
-| `waiting_for_copilot_review` | Copilot review is still active for the current head via `requested_reviewers`, an immediately confirmed request, or a pending current-head review; waiting for the current-head review-request lifecycle to settle |
+| `waiting_for_external_review` | Copilot review is still active for the current head via `requested_reviewers`, an immediately confirmed request, or a pending current-head review; waiting for the current-head review-request lifecycle to settle |
 | `unresolved_feedback_present` | Unresolved review threads exist that require fix and/or reply/resolve |
 | `already_fixed_needs_reply_resolve` | Agent has applied a fix; threads still need reply/resolve on GitHub before re-request |
 | `ready_to_rerequest_review` | All threads resolved; Copilot has reviewed at least once; only re-request once the updated head is green or credibly green |
@@ -45,13 +45,13 @@ Terminal states with no outgoing transitions: `no_pr`, `review_request_unavailab
 
 - `pr_draft` -> `pr_ready_no_feedback`
   - move PR from draft to ready
-- `pr_ready_no_feedback` -> `waiting_for_copilot_review`
+- `pr_ready_no_feedback` -> `waiting_for_external_review`
   - request Copilot review
-- `waiting_for_copilot_review` -> `unresolved_feedback_present`
+- `waiting_for_external_review` -> `unresolved_feedback_present`
   - Copilot reviewed; unresolved threads exist
-- `waiting_for_copilot_review` -> `ready_to_rerequest_review`
+- `waiting_for_external_review` -> `ready_to_rerequest_review`
   - Copilot reviewed; all threads resolved
-- `waiting_for_copilot_review` -> `waiting_for_ci`
+- `waiting_for_external_review` -> `waiting_for_ci`
   - CI checks are running or have not materialized yet
 - `unresolved_feedback_present` -> `already_fixed_needs_reply_resolve`
   - agent applied fix; threads still open on GitHub
@@ -59,7 +59,7 @@ Terminal states with no outgoing transitions: `no_pr`, `review_request_unavailab
   - iterative: address one thread at a time
 - `already_fixed_needs_reply_resolve` -> `ready_to_rerequest_review`
   - all threads replied to and resolved
-- `ready_to_rerequest_review` -> `waiting_for_copilot_review`
+- `ready_to_rerequest_review` -> `waiting_for_external_review`
   - re-request another Copilot pass
 - `ready_to_rerequest_review` -> `review_request_unavailable`
   - re-request failed with unavailable
@@ -128,7 +128,7 @@ The interpreter applies rules in priority order. The first matching rule wins.
 6. `(unresolvedThreadCount > 0 || copilotBodyFeedbackUnresolved) && agentFixStatus === "applied"` → `already_fixed_needs_reply_resolve`
 7. `unresolvedThreadCount > 0 || copilotBodyFeedbackUnresolved` → `unresolved_feedback_present`
    *(Unresolved feedback always takes priority over any wait/watch path. A body-only Copilot finding — `copilotBodyFeedbackUnresolved` true with zero inline threads — routes here too, and likewise keeps the round-cap `cleanThreads` check and `ready_to_rerequest_review` clean-convergence from treating the head as clean)*
-8. `copilotReviewRequestStatus === "requested" || copilotReviewRequestStatus === "already-requested"` → `waiting_for_copilot_review`
+8. `copilotReviewRequestStatus === "requested" || copilotReviewRequestStatus === "already-requested"` → `waiting_for_external_review`
    *(A current-head Copilot review request is still active or pending; the wait is not concluded until that request status settles, even when a submitted current-head review is already visible.)*
 9. `copilotReviewPresent && ciStatus === "failure"` → `blocked_needs_user_decision`
 10. `copilotReviewPresent && (ciStatus === "pending" || ciStatus === "none")` → `waiting_for_ci`
@@ -154,7 +154,7 @@ When rule 11 yields `ready_to_rerequest_review`, the interpreter also emits two 
 ### Active current-head request state keeps the wait open
 
 <!-- rule: COPILOT-STATE-ACTIVE-REQUEST-WAIT -->
-`COPILOT-STATE-ACTIVE-REQUEST-WAIT`: Rule 8 MUST route to `waiting_for_copilot_review` whenever the effective request status is `requested` or `already-requested`. A submitted (non-PENDING) Copilot review on the current head is necessary evidence for clean convergence, but it is not sufficient while the request remains active. This reconciliation is shared (issue #1588): `resolveCopilotReviewRequestStatus` in `scripts/loop/_copilot-review-request-status.mjs` is the single derivation path for `copilotReviewRequestStatus` across `detect-copilot-loop-state.mjs`, `detect-pr-gate-coordination-state.mjs`, and `request-copilot-review.mjs`. It resolves an ambiguous `requested_reviewers` entry (Copilot listed AND a submitted current-head review exists with no PENDING review) by comparing the latest `review_requested` timeline event timestamp against the latest submitted review timestamp: if the request is newer than the review, the request is genuinely active and the status stays `requested`; if the request predates the review, it is stale and settles to `none`. When the timeline is unavailable, the derivation fails closed to `requested`. A settled (`none`) status lets the loop proceed from `ready_to_rerequest_review` to `pre_approval_gate` instead of dead-ending into `stop`. The loop falls through to rule 9+ only after the current-head request status settles to `none` or another non-active terminal status.
+`COPILOT-STATE-ACTIVE-REQUEST-WAIT`: Rule 8 MUST route to `waiting_for_external_review` whenever the effective request status is `requested` or `already-requested`. A submitted (non-PENDING) Copilot review on the current head is necessary evidence for clean convergence, but it is not sufficient while the request remains active. This reconciliation is shared (issue #1588): `resolveCopilotReviewRequestStatus` in `scripts/loop/_copilot-review-request-status.mjs` is the single derivation path for `copilotReviewRequestStatus` across `detect-copilot-loop-state.mjs`, `detect-pr-gate-coordination-state.mjs`, and `request-copilot-review.mjs`. It resolves an ambiguous `requested_reviewers` entry (Copilot listed AND a submitted current-head review exists with no PENDING review) by comparing the latest `review_requested` timeline event timestamp against the latest submitted review timestamp: if the request is newer than the review, the request is genuinely active and the status stays `requested`; if the request predates the review, it is stale and settles to `none`. When the timeline is unavailable, the derivation fails closed to `requested`. A settled (`none`) status lets the loop proceed from `ready_to_rerequest_review` to `pre_approval_gate` instead of dead-ending into `stop`. The loop falls through to rule 9+ only after the current-head request status settles to `none` or another non-active terminal status.
 
 ### Automatic same-head re-request suppression after clean convergence
 
@@ -171,7 +171,7 @@ The net effect: `unavailable` in the snapshot means the request path failed **an
 ### `failed` and plain `unavailable` stop the loop immediately
 
 <!-- rule: COPILOT-STATE-TERMINAL-STOP -->
-`COPILOT-STATE-TERMINAL-STOP`: Rules 4 and 5 MUST check for terminal review-request failures before any other non-closed state; the loop MUST NOT fall through to `waiting_for_copilot_review` or `waiting_for_ci` when the review request has definitively failed with no in-progress evidence.
+`COPILOT-STATE-TERMINAL-STOP`: Rules 4 and 5 MUST check for terminal review-request failures before any other non-closed state; the loop MUST NOT fall through to `waiting_for_external_review` or `waiting_for_ci` when the review request has definitively failed with no in-progress evidence.
 
 ### Incomplete review-thread detection blocks auto-detect
 
@@ -180,7 +180,7 @@ Auto-detect must fail closed when review-thread state cannot be captured or pars
 ### Reply/resolve must precede re-request
 
 <!-- rule: COPILOT-STATE-REPLY-BEFORE-REREQUEST -->
-`COPILOT-STATE-REPLY-BEFORE-REREQUEST`: `already_fixed_needs_reply_resolve` MUST transition only to `ready_to_rerequest_review`, never directly to `waiting_for_copilot_review`; the agent MUST explicitly resolve threads on GitHub (via `scripts/github/reply-resolve-review-thread.mjs`) before triggering the next Copilot pass.
+`COPILOT-STATE-REPLY-BEFORE-REREQUEST`: `already_fixed_needs_reply_resolve` MUST transition only to `ready_to_rerequest_review`, never directly to `waiting_for_external_review`; the agent MUST explicitly resolve threads on GitHub (via `scripts/github/reply-resolve-review-thread.mjs`) before triggering the next Copilot pass.
 
 ### Green validation precondition before follow-up re-request
 
@@ -196,10 +196,10 @@ Re-requesting Copilot after a follow-up fix is gated on the updated head being g
 - continue remediation if CI/checks for the current head are known red for a fixable issue
 - if waiting for current-head checks times out before they settle, remain waiting/blocked rather than crossing the CI-dependent boundary anyway
 
-### `waiting_for_copilot_review` is a persistence boundary for explicit async loop entry
+### `waiting_for_external_review` is a persistence boundary for explicit async loop entry
 
 <!-- rule: COPILOT-STATE-WATCH-PERSISTENCE -->
-`COPILOT-STATE-WATCH-PERSISTENCE`: When a user explicitly asks to enter or continue the async Copilot dev loop, landing on `waiting_for_copilot_review` MUST keep the loop in watch mode (the continuation-not-completion core is owned by [`STOP-COPILOT-REVIEW-001`](./stop-conditions.md), quiet observations by [`STOP-QUIET-WATCHER-001`](./stop-conditions.md)). This rule owns watch REATTACHMENT: after a quiet `timeout`/`idle`, refresh deterministic state and, if it remains `waiting_for_copilot_review` (or another non-terminal wait state), keep the async watcher attached; after a successful narrow follow-up fix / reply-resolve / re-request cycle that returns to `waiting_for_copilot_review`, resume watch mode instead of treating the re-request handoff as the end of the async run. Handoff-only behavior is a separate, narrower contract and MUST be explicitly requested.
+`COPILOT-STATE-WATCH-PERSISTENCE`: When a user explicitly asks to enter or continue the async Copilot dev loop, landing on `waiting_for_external_review` MUST keep the loop in watch mode (the continuation-not-completion core is owned by [`STOP-COPILOT-REVIEW-001`](./stop-conditions.md), quiet observations by [`STOP-QUIET-WATCHER-001`](./stop-conditions.md)). This rule owns watch REATTACHMENT: after a quiet `timeout`/`idle`, refresh deterministic state and, if it remains `waiting_for_external_review` (or another non-terminal wait state), keep the async watcher attached; after a successful narrow follow-up fix / reply-resolve / re-request cycle that returns to `waiting_for_external_review`, resume watch mode instead of treating the re-request handoff as the end of the async run. Handoff-only behavior is a separate, narrower contract and MUST be explicitly requested.
 
 ## Normal request/watch routing contract
 
@@ -217,6 +217,6 @@ Skills and operational docs should reference this helper contract for determinis
 |---|---|
 | `scripts/loop/detect-copilot-loop-state.mjs` | Current-state detection and snapshot interpretation (this machine) |
 | `scripts/github/request-copilot-review.mjs` | Request or detect Copilot review; its `status` output maps to `copilotReviewRequestStatus` |
-| `scripts/github/probe-copilot-review.mjs` | Watch for fresh Copilot review activity (use in `waiting_for_copilot_review`) |
+| `scripts/github/probe-copilot-review.mjs` | Watch for fresh Copilot review activity (use in `waiting_for_external_review`) |
 | `scripts/github/capture-review-threads.mjs` | Capture and normalize review threads; provides `unresolvedThreadCount` / `actionableThreadCount` |
 | `scripts/github/reply-resolve-review-thread.mjs` | Reply to and resolve a single review thread (use in `already_fixed_needs_reply_resolve`) |

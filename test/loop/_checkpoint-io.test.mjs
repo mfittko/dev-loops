@@ -148,7 +148,7 @@ test("readExistingCheckpoint: reads from explicit checkpointDir when provided", 
   await withTempDir(async (tempDir) => {
     const explicitDir = path.join(tempDir, "custom-checkpoint");
     const checkpointPath = path.join(explicitDir, "outer-loop-state.json");
-    const data = { pr: 42, repo: "owner/repo", outerAction: "reenter_copilot_loop" };
+    const data = { pr: 42, repo: "owner/repo", outerAction: "enter_verification_loop" };
     await writeJson(checkpointPath, data);
 
     const { checkpoint, filePath } = await readExistingCheckpoint("owner/repo", 42, { checkpointDir: explicitDir });

@@ -6,7 +6,9 @@ import { REVIEWER_STATE } from "../../packages/core/src/loop/reviewer-loop-state
 import { OUTER_STATE } from "../../packages/core/src/loop/conductor-routing.mjs";
 import {
   deriveInboxSignalFromSnapshot,
+  renderCopilotLayerSection,
   renderLoopIterationMetrics,
+  renderOverviewSection,
   summarizeCurrentPrStatus,
 } from "../../scripts/loop/inspect-run-viewer/status.mjs";
 
@@ -44,8 +46,8 @@ test("every copilot loop state has state-specific viewer copy", () => {
     const summary = summarizeCurrentPrStatus(snapshotWith({
       copilotState,
       reviewerState: REVIEWER_STATE.WAITING_FOR_REVIEW_REQUEST,
-      outerState: OUTER_STATE.HANDOFF_TO_COPILOT_LOOP,
-      outerAction: "reenter_copilot_loop",
+      outerState: OUTER_STATE.HANDOFF_TO_VERIFICATION_LOOP,
+      outerAction: "enter_verification_loop",
     }));
     if (LANE_LEVEL_HEADLINES.has(summary.headline)) {
       generic.push(copilotState);
@@ -62,7 +64,7 @@ test("every reviewer loop state has state-specific viewer copy", () => {
       copilotState: "waiting_for_ci",
       reviewerState,
       outerState: OUTER_STATE.HANDOFF_TO_REVIEWER_LOOP,
-      outerAction: "reenter_reviewer_loop",
+      outerAction: "enter_reviewer_loop",
     }));
     if (LANE_LEVEL_HEADLINES.has(summary.headline)) {
       generic.push(reviewerState);
@@ -78,8 +80,8 @@ test("no state claims a requested follow-up without a review request on record",
       const summary = summarizeCurrentPrStatus(snapshotWith({
         copilotState,
         reviewerState,
-        outerState: OUTER_STATE.HANDOFF_TO_COPILOT_LOOP,
-        outerAction: "reenter_copilot_loop",
+        outerState: OUTER_STATE.HANDOFF_TO_VERIFICATION_LOOP,
+        outerAction: "enter_verification_loop",
       }));
       if (/requested follow-up/i.test(`${summary.detail} ${summary.nextAction}`)) {
         offenders.push(`${copilotState}/${reviewerState}`);
@@ -97,8 +99,8 @@ test("a lane fall-back quotes the routing layer's own reason when one exists", (
     // Both lanes must be states the viewer has no copy for, otherwise a
     // lane-specific branch answers before the fall-back is reached.
     reviewerState: "some_future_reviewer_state",
-    outerState: OUTER_STATE.HANDOFF_TO_COPILOT_LOOP,
-    outerAction: "reenter_copilot_loop",
+    outerState: OUTER_STATE.HANDOFF_TO_VERIFICATION_LOOP,
+    outerAction: "enter_verification_loop",
     outerHandoffReason: routingReason,
   }));
 
@@ -112,8 +114,8 @@ test("the triage signal is labelled so it cannot be read as the needsAttention f
   const snapshot = snapshotWith({
     copilotState: COPILOT_STATE.PR_DRAFT,
     reviewerState: REVIEWER_STATE.WAITING_FOR_REVIEW_REQUEST,
-    outerState: OUTER_STATE.HANDOFF_TO_COPILOT_LOOP,
-    outerAction: "reenter_copilot_loop",
+    outerState: OUTER_STATE.HANDOFF_TO_VERIFICATION_LOOP,
+    outerAction: "enter_verification_loop",
   });
   assert.equal(deriveInboxSignalFromSnapshot(snapshot), "attention");
   assert.equal(snapshot.needsAttention, false);
@@ -121,6 +123,39 @@ test("the triage signal is labelled so it cannot be read as the needsAttention f
   const summary = summarizeCurrentPrStatus(snapshot);
   assert.equal(summary.headline, "Draft PR; no review requested yet");
   assert.doesNotMatch(summary.nextAction, /requested follow-up/i);
+});
+
+test("the overview answers 'what happens next' with the lifecycle phase, not just the lane", () => {
+  // The lane spans implementation through pre_approval_gate (ADR 0073), so the
+  // outer state alone cannot tell an operator what happens next. The phase can,
+  // and the snapshot has always carried it.
+  const overview = renderOverviewSection({
+    ...snapshotWith({
+      copilotState: COPILOT_STATE.PR_DRAFT,
+      reviewerState: REVIEWER_STATE.WAITING_FOR_REVIEW_REQUEST,
+      outerState: OUTER_STATE.HANDOFF_TO_VERIFICATION_LOOP,
+      outerAction: "enter_verification_loop",
+    }),
+    lifecyclePhase: "implementation",
+    lifecycleAllowedTransitions: ["draft_gate", "feedback_resolution"],
+  });
+
+  assert.match(overview, /lifecycle phase/);
+  assert.match(overview, /implementation/);
+  assert.match(overview, /next phases/);
+  assert.match(overview, /draft_gate/);
+});
+
+test("the lane layer card is named for the lane, and the round metrics for the actor", () => {
+  const card = renderCopilotLayerSection(
+    { currentState: COPILOT_STATE.PR_DRAFT, allowedTransitions: [], terminal: false },
+    { available: false, reason: "requires_live_github_facts" },
+  );
+  assert.match(card, /PR follow-up lane/);
+  assert.doesNotMatch(card, /<h3>Copilot<\/h3>/);
+  // The rounds really are Copilot's (every input is isCopilotLogin-filtered), so
+  // this block keeps the actor's name while the card around it does not.
+  assert.match(card, /External review rounds \(Copilot\)/);
 });
 
 test("unavailable round metrics say which kind of unavailable they are", () => {

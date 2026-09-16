@@ -39,9 +39,9 @@ test("workflow-handoff-contract includes acceptance template table", async () =>
   const content = await readTemplate();
 
   // Each strategy+gate combo must be documented
-  assert.match(content, /copilot_pr_followup.*draft/i);
-  assert.match(content, /copilot_pr_followup.*watch/i);
-  assert.match(content, /copilot_pr_followup.*pre-approval/i);
+  assert.match(content, /(?:verification|copilot_verification).*draft/i);
+  assert.match(content, /(?:verification|copilot_verification).*watch/i);
+  assert.match(content, /(?:verification|copilot_verification).*pre-approval/i);
   assert.match(content, /final_approval/i);
   assert.match(content, /local_implementation/i);
   assert.match(content, /issue_intake/i);

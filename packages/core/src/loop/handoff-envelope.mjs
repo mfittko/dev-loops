@@ -38,7 +38,7 @@ const DEFAULT_ACTIVE_NOTICE_MS = 300_000;
 
 /** Maps normalized strategy name to its default stop rules */
 const STRATEGY_DEFAULT_STOP_RULES = Object.freeze({
-  [INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP]: ["draft-pr", "merge"],
+  [INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION]: ["draft-pr", "merge"],
   [INTERNAL_DEV_LOOP_STRATEGY.ISSUE_INTAKE]: ["merge"],
   [INTERNAL_DEV_LOOP_STRATEGY.EXTERNAL_PR_FOLLOWUP]: ["merge"],
   [INTERNAL_DEV_LOOP_STRATEGY.REVIEWER_FIXER]: ["merge"],
@@ -78,8 +78,8 @@ function register(strategy, gate, template) {
   ACCEPTANCE_TEMPLATES.set(acceptanceKey(strategy, gate), deepFreeze({ ...template }));
 }
 
-// copilot_pr_followup sub-gates
-register(INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP, "draft", {
+// verification sub-gates
+register(INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION, "draft", {
   criteria: [
     { id: "ac-check", must: "Verify all acceptance criteria from linked issue are met or tracked.", severity: "required" },
     { id: "scope", must: "Every changed file belongs in this PR; no unrelated or out-of-scope changes.", severity: "required" },
@@ -92,7 +92,7 @@ register(INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP, "draft", {
   activeNoticeAfterMs: DEFAULT_ACTIVE_NOTICE_MS,
 });
 
-register(INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP, "watch", {
+register(INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION, "watch", {
   criteria: [
     { id: "copilot-activity", must: "Detect new Copilot review activity (comments, threads, review submissions).", severity: "required" },
     { id: "no-stuck-watch", must: "Watch cycle must not stall; timeout or activity triggers follow-up.", severity: "required" },
@@ -103,7 +103,7 @@ register(INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP, "watch", {
   activeNoticeAfterMs: WATCH_ACTIVE_NOTICE_MS,
 });
 
-register(INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP, "pre-approval", {
+register(INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION, "pre-approval", {
   criteria: [
     { id: "full-gate-chain", must: "Complete pre-approval gate chain with all configured review angles.", severity: "required" },
     { id: "clean-verdict", must: "Pre-approval gate must return clean verdict (no findings at a severity in the gate's configured blockCleanOnFindingSeverities, high by default).", severity: "required" },
@@ -555,7 +555,7 @@ function normalizeRetrospectiveFindings(findings) {
 // ---------------------------------------------------------------------------
 
 function resolveSubGate(strategy, gateState) {
-  if (strategy === INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP) {
+  if (strategy === INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION) {
     const sub = gateState.currentSubGate;
     if (sub === "draft" || sub === "watch" || sub === "pre-approval") return sub;
     return "draft";

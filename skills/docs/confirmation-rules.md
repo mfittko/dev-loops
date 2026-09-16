@@ -17,7 +17,7 @@ Canonical owner for agent confirmation / authorization rules across all workflow
 
 ## Where this rule applies
 
-- All routed strategies (`local_implementation`, `copilot_pr_followup`, `issue_intake`, `reviewer_fixer`, `final_approval`)
+- All routed strategies (`local_implementation`, `copilot_verification`, `issue_intake`, `reviewer_fixer`, `final_approval`)
 - All gate entries (`draft_gate`, `pre_approval_gate`)
 - All merge operations
 - All force-push / history-rewriting operations

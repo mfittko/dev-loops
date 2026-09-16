@@ -294,7 +294,7 @@ test("outer-loop: legacy default checkpoint fallback is used only for matching r
       pr: 47,
       repo: "owner/repo",
       outerAction: "continue_wait",
-      copilotState: "waiting_for_copilot_review",
+      copilotState: "waiting_for_external_review",
       reviewerState: "waiting_for_author_followup",
       reason: null,
       timestamp: "2026-05-17T10:00:00Z",
@@ -314,7 +314,7 @@ test("outer-loop: legacy default checkpoint fallback is used only for matching r
       pr: 47,
       repo: "other/repo",
       outerAction: "continue_wait",
-      copilotState: "waiting_for_copilot_review",
+      copilotState: "waiting_for_external_review",
       reviewerState: "waiting_for_author_followup",
       reason: null,
       timestamp: "2026-05-17T10:00:00Z",
@@ -368,7 +368,7 @@ test("outer-loop: prefers repo-qualified checkpoint when both new and legacy che
       pr: 47,
       repo: "owner/repo",
       outerAction: "continue_wait",
-      copilotState: "waiting_for_copilot_review",
+      copilotState: "waiting_for_external_review",
       reviewerState: "waiting_for_author_followup",
       reason: null,
       timestamp: "2026-05-16T10:00:00Z",
@@ -379,7 +379,7 @@ test("outer-loop: prefers repo-qualified checkpoint when both new and legacy che
       pr: 47,
       repo: "owner/repo",
       outerAction: "continue_wait",
-      copilotState: "waiting_for_copilot_review",
+      copilotState: "waiting_for_external_review",
       reviewerState: "waiting_for_author_followup",
       reason: null,
       timestamp: "2026-05-17T10:00:00Z",
@@ -399,7 +399,7 @@ test("outer-loop: prefers repo-qualified checkpoint when both new and legacy che
   }
 });
 
-test("outer-loop: wait cycles reset to 0 when outer action changes from continue_wait to reenter_copilot_loop", async () => {
+test("outer-loop: wait cycles reset to 0 when outer action changes from continue_wait to enter_verification_loop", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "pi-outer-wait-reset-"));
 
   try {
@@ -435,7 +435,7 @@ test("outer-loop: wait cycles reset to 0 when outer action changes from continue
     ], { env });
     assert.equal(JSON.parse(run1.stdout).checkpoint.waitCycles, 1);
 
-    // Second run: copilot has review, unresolved threads → reenter_copilot_loop; waitCycles resets to 0
+    // Second run: copilot has review, unresolved threads → enter_verification_loop; waitCycles resets to 0
     await writeJson(copilotSnapshotPath, {
       prExists: true,
       prNumber: 47,
@@ -457,7 +457,7 @@ test("outer-loop: wait cycles reset to 0 when outer action changes from continue
     ], { env });
     assert.equal(run2.code, 0);
     const out2 = JSON.parse(run2.stdout);
-    assert.equal(out2.outerAction, "reenter_copilot_loop");
+    assert.equal(out2.outerAction, "enter_verification_loop");
     assert.equal(out2.checkpoint.waitCycles, 0);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -611,7 +611,7 @@ test("outer-loop: checkpoint file is created at default location under --checkpo
     assert.equal(checkpoint.pr, 47);
     assert.equal(checkpoint.repo, "owner/repo");
     assert.equal(checkpoint.outerAction, "continue_wait");
-    assert.equal(checkpoint.copilotState, "waiting_for_copilot_review");
+    assert.equal(checkpoint.copilotState, "waiting_for_external_review");
     assert.equal(checkpoint.waitCycles, 1);
     assert.ok(typeof checkpoint.timestamp === "string");
   } finally {

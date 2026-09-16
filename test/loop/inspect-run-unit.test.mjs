@@ -23,12 +23,12 @@ test("mapOuterActionToStatusClass: continue_wait → waiting", () => {
   assert.equal(mapOuterActionToStatusClass("continue_wait"), STATUS_CLASS.WAITING);
 });
 
-test("mapOuterActionToStatusClass: reenter_copilot_loop → active", () => {
-  assert.equal(mapOuterActionToStatusClass("reenter_copilot_loop"), STATUS_CLASS.ACTIVE);
+test("mapOuterActionToStatusClass: enter_verification_loop → active", () => {
+  assert.equal(mapOuterActionToStatusClass("enter_verification_loop"), STATUS_CLASS.ACTIVE);
 });
 
-test("mapOuterActionToStatusClass: reenter_reviewer_loop → active", () => {
-  assert.equal(mapOuterActionToStatusClass("reenter_reviewer_loop"), STATUS_CLASS.ACTIVE);
+test("mapOuterActionToStatusClass: enter_reviewer_loop → active", () => {
+  assert.equal(mapOuterActionToStatusClass("enter_reviewer_loop"), STATUS_CLASS.ACTIVE);
 });
 
 test("mapOuterActionToStatusClass: stop → blocked", () => {
@@ -49,14 +49,14 @@ test("mapOuterActionToStatusClass: unknown value → unknown", () => {
 // ---------------------------------------------------------------------------
 
 test("composeRunInspectionSnapshot: complete live evidence returns all required fields", () => {
-  const copilotEvidence = makeCopilotEvidence("waiting_for_copilot_review");
+  const copilotEvidence = makeCopilotEvidence("waiting_for_external_review");
   const reviewerEvidence = makeReviewerEvidence("waiting_for_author_followup");
 
   const snapshot = composeRunInspectionSnapshot({
     target: { repo: "owner/repo", pr: 55 },
     inspectedAt: "2026-05-18T12:00:00Z",
     outerState: "continue_current_wait",
-    outerAllowedTransitions: ["continue_current_wait", "handoff_to_copilot_loop"],
+    outerAllowedTransitions: ["continue_current_wait", "handoff_to_verification_loop"],
     outerAction: "continue_wait",
     outerReason: undefined,
     copilotEvidence,
@@ -75,7 +75,7 @@ test("composeRunInspectionSnapshot: complete live evidence returns all required 
   assert.equal(snapshot.inspectedAt, "2026-05-18T12:00:00Z");
   assert.equal(snapshot.activeStateFamily, ACTIVE_STATE_FAMILY);
   assert.equal(snapshot.outerState, "continue_current_wait");
-  assert.deepEqual(snapshot.allowedTransitions, ["continue_current_wait", "handoff_to_copilot_loop"]);
+  assert.deepEqual(snapshot.allowedTransitions, ["continue_current_wait", "handoff_to_verification_loop"]);
   assert.equal(snapshot.outerAction, "continue_wait");
   assert.equal(snapshot.activeFamilyState, "continue_wait");
   assert.equal(snapshot.statusClass, STATUS_CLASS.WAITING);
@@ -100,7 +100,7 @@ test("composeRunInspectionSnapshot: complete live evidence returns all required 
     source: "github_pr_timeline",
     reason: "unavailable",
   });
-  assert.equal(snapshot.layers.copilot.currentState, "waiting_for_copilot_review");
+  assert.equal(snapshot.layers.copilot.currentState, "waiting_for_external_review");
   assert.equal(snapshot.layers.copilot.sameHeadCleanConverged, false);
   assert.equal(snapshot.layers.copilot.loopDisposition, "pending");
   assert.equal(snapshot.layers.copilot.terminal, false);
@@ -192,7 +192,7 @@ test("composeRunInspectionSnapshot: clean-converged Copilot state carries same-h
     target: { repo: "owner/repo", pr: 55 },
     inspectedAt: "2026-05-18T12:00:00Z",
     outerState: "continue_current_wait",
-    outerAllowedTransitions: ["continue_current_wait", "handoff_to_copilot_loop"],
+    outerAllowedTransitions: ["continue_current_wait", "handoff_to_verification_loop"],
     outerAction: "continue_wait",
     copilotEvidence,
     reviewerEvidence,
@@ -219,7 +219,7 @@ test("composeRunInspectionSnapshot: approved reviewer verdict on current head is
     target: { repo: "owner/repo", pr: 55 },
     inspectedAt: "2026-05-18T12:00:00Z",
     outerState: "continue_current_wait",
-    outerAllowedTransitions: ["continue_current_wait", "handoff_to_copilot_loop"],
+    outerAllowedTransitions: ["continue_current_wait", "handoff_to_verification_loop"],
     outerAction: "continue_wait",
     copilotEvidence,
     reviewerEvidence,
@@ -246,7 +246,7 @@ test("composeRunInspectionSnapshot: approved reviewer verdict without a submitte
     target: { repo: "owner/repo", pr: 55 },
     inspectedAt: "2026-05-18T12:00:00Z",
     outerState: "continue_current_wait",
-    outerAllowedTransitions: ["continue_current_wait", "handoff_to_copilot_loop"],
+    outerAllowedTransitions: ["continue_current_wait", "handoff_to_verification_loop"],
     outerAction: "continue_wait",
     copilotEvidence,
     reviewerEvidence,
@@ -286,16 +286,16 @@ test("composeRunInspectionSnapshot: live evidence + stop → statusClass blocked
   assert.ok(snapshot.evidence.summary.includes("blocked"));
 });
 
-test("composeRunInspectionSnapshot: live evidence + reenter_copilot_loop → active", () => {
+test("composeRunInspectionSnapshot: live evidence + enter_verification_loop → active", () => {
   const copilotEvidence = makeCopilotEvidence("unresolved_feedback_present");
   const reviewerEvidence = makeReviewerEvidence("waiting_for_author_followup");
 
   const snapshot = composeRunInspectionSnapshot({
     target: { repo: "owner/repo", pr: 55 },
     inspectedAt: "2026-05-18T12:00:00Z",
-    outerState: "handoff_to_copilot_loop",
-    outerAllowedTransitions: ["continue_current_wait", "handoff_to_copilot_loop"],
-    outerAction: "reenter_copilot_loop",
+    outerState: "handoff_to_verification_loop",
+    outerAllowedTransitions: ["continue_current_wait", "handoff_to_verification_loop"],
+    outerAction: "enter_verification_loop",
     copilotEvidence,
     reviewerEvidence,
     existingCheckpoint: null,
@@ -339,7 +339,7 @@ test("composeRunInspectionSnapshot: evidence summary preserves needs_reconcile",
     outerAllowedTransitions: [],
     outerAction: "stop",
     outerReason: "ownership_conflict",
-    copilotEvidence: makeCopilotEvidence("waiting_for_copilot_review"),
+    copilotEvidence: makeCopilotEvidence("waiting_for_external_review"),
     reviewerEvidence: makeReviewerEvidence("waiting_for_review_request"),
     existingCheckpoint: null,
     liveAvailability: { copilot: "ok", reviewer: "ok" },
@@ -357,9 +357,9 @@ test("composeRunInspectionSnapshot: invalid outerState normalizes to unknown and
     target: { repo: "owner/repo", pr: 55 },
     inspectedAt: "2026-05-18T12:00:00Z",
     outerState: "not_a_real_outer_state",
-    outerAllowedTransitions: ["continue_current_wait", "handoff_to_copilot_loop"],
+    outerAllowedTransitions: ["continue_current_wait", "handoff_to_verification_loop"],
     outerAction: "continue_wait",
-    copilotEvidence: makeCopilotEvidence("waiting_for_copilot_review"),
+    copilotEvidence: makeCopilotEvidence("waiting_for_external_review"),
     reviewerEvidence: makeReviewerEvidence("waiting_for_author_followup"),
     existingCheckpoint: null,
     liveAvailability: { copilot: "ok", reviewer: "ok" },
@@ -384,7 +384,7 @@ test("composeRunInspectionSnapshot: checkpoint-only stays advisory and leaves to
     pr: 55,
     repo: "owner/repo",
     outerAction: "continue_wait",
-    copilotState: "waiting_for_copilot_review",
+    copilotState: "waiting_for_external_review",
     reviewerState: "waiting_for_author_followup",
     reason: null,
     timestamp: "2026-05-17T10:00:00Z",
@@ -416,7 +416,7 @@ test("composeRunInspectionSnapshot: checkpoint-only stays advisory and leaves to
   assert.match(snapshot.evidence.summary, /could not be determined|could not be confirmed/i);
 
   // Checkpoint layer is populated
-  assert.equal(snapshot.layers.copilot.currentState, "waiting_for_copilot_review");
+  assert.equal(snapshot.layers.copilot.currentState, "waiting_for_external_review");
   assert.equal(snapshot.layers.copilot.source, "checkpoint");
   assert.equal(snapshot.layers.reviewer.currentState, "waiting_for_author_followup");
   assert.equal(snapshot.layers.reviewer.source, "checkpoint");
@@ -460,12 +460,12 @@ test("composeRunInspectionSnapshot: live wins over stale checkpoint; conflict ma
   const copilotEvidence = makeCopilotEvidence("ready_to_rerequest_review");
   const reviewerEvidence = makeReviewerEvidence("waiting_for_author_followup");
 
-  // Checkpoint says continue_wait but live says reenter_copilot_loop
+  // Checkpoint says continue_wait but live says enter_verification_loop
   const existingCheckpoint = {
     pr: 55,
     repo: "owner/repo",
     outerAction: "continue_wait",           // stale: was waiting
-    copilotState: "waiting_for_copilot_review", // stale
+    copilotState: "waiting_for_external_review", // stale
     reviewerState: "waiting_for_author_followup",
     reason: null,
     timestamp: "2026-05-17T10:00:00Z",
@@ -475,7 +475,7 @@ test("composeRunInspectionSnapshot: live wins over stale checkpoint; conflict ma
   const snapshot = composeRunInspectionSnapshot({
     target: { repo: "owner/repo", pr: 55 },
     inspectedAt: "2026-05-18T12:00:00Z",
-    outerAction: "reenter_copilot_loop",   // live-derived
+    outerAction: "enter_verification_loop",   // live-derived
     copilotEvidence,
     reviewerEvidence,
     existingCheckpoint,
@@ -486,7 +486,7 @@ test("composeRunInspectionSnapshot: live wins over stale checkpoint; conflict ma
   });
 
   // Live wins
-  assert.equal(snapshot.outerAction, "reenter_copilot_loop");
+  assert.equal(snapshot.outerAction, "enter_verification_loop");
   assert.equal(snapshot.statusClass, STATUS_CLASS.ACTIVE);
   assert.equal(snapshot.sourceMode, SOURCE_MODE.LIVE_DETECTOR_BACKED);
   assert.equal(snapshot.trust, TRUST.AUTHORITATIVE);
@@ -494,7 +494,7 @@ test("composeRunInspectionSnapshot: live wins over stale checkpoint; conflict ma
   // Conflicts are recorded
   assert.ok(snapshot.markers.conflicts.length > 0);
   assert.ok(snapshot.markers.conflicts.some((c) => c.includes("continue_wait")));
-  assert.ok(snapshot.markers.conflicts.some((c) => c.includes("reenter_copilot_loop")));
+  assert.ok(snapshot.markers.conflicts.some((c) => c.includes("enter_verification_loop")));
 
   // needsAttention because of conflict
   assert.equal(snapshot.needsAttention, true);
@@ -504,14 +504,14 @@ test("composeRunInspectionSnapshot: live wins over stale checkpoint; conflict ma
 });
 
 test("composeRunInspectionSnapshot: live copilot state matches checkpoint — no conflict", () => {
-  const copilotEvidence = makeCopilotEvidence("waiting_for_copilot_review");
+  const copilotEvidence = makeCopilotEvidence("waiting_for_external_review");
   const reviewerEvidence = makeReviewerEvidence("waiting_for_author_followup");
 
   const existingCheckpoint = {
     pr: 55,
     repo: "owner/repo",
     outerAction: "continue_wait",
-    copilotState: "waiting_for_copilot_review",   // same as live
+    copilotState: "waiting_for_external_review",   // same as live
     reviewerState: "waiting_for_author_followup", // same as live
     reason: null,
     timestamp: "2026-05-17T10:00:00Z",
@@ -541,13 +541,13 @@ test("composeRunInspectionSnapshot: live copilot state matches checkpoint — no
 // ---------------------------------------------------------------------------
 
 test("composeRunInspectionSnapshot: mixed live + checkpoint stays advisory and leaves top-level state unknown", () => {
-  const copilotEvidence = makeCopilotEvidence("waiting_for_copilot_review");
+  const copilotEvidence = makeCopilotEvidence("waiting_for_external_review");
 
   const existingCheckpoint = {
     pr: 55,
     repo: "owner/repo",
     outerAction: "continue_wait",
-    copilotState: "waiting_for_copilot_review",
+    copilotState: "waiting_for_external_review",
     reviewerState: "waiting_for_author_followup",
     reason: null,
     timestamp: "2026-05-17T10:00:00Z",
@@ -577,7 +577,7 @@ test("composeRunInspectionSnapshot: mixed live + checkpoint stays advisory and l
   assert.ok(snapshot.markers.missing.length > 0 || snapshot.markers.stale.length > 0);
 
   // Copilot layer from live
-  assert.equal(snapshot.layers.copilot.currentState, "waiting_for_copilot_review");
+  assert.equal(snapshot.layers.copilot.currentState, "waiting_for_external_review");
   assert.equal(snapshot.layers.copilot.source, undefined); // live source has no "source" field
 
   // Reviewer layer from checkpoint
@@ -594,7 +594,7 @@ test("composeRunInspectionSnapshot: no steering locator → steering unavailable
     target: { repo: "owner/repo", pr: 55 },
     inspectedAt: "2026-05-18T12:00:00Z",
     outerAction: "continue_wait",
-    copilotEvidence: makeCopilotEvidence("waiting_for_copilot_review"),
+    copilotEvidence: makeCopilotEvidence("waiting_for_external_review"),
     reviewerEvidence: makeReviewerEvidence("waiting_for_author_followup"),
     existingCheckpoint: null,
     liveAvailability: { copilot: "ok", reviewer: "ok" },
@@ -613,7 +613,7 @@ test("composeRunInspectionSnapshot: steering locator given but file missing → 
     target: { repo: "owner/repo", pr: 55 },
     inspectedAt: "2026-05-18T12:00:00Z",
     outerAction: "continue_wait",
-    copilotEvidence: makeCopilotEvidence("waiting_for_copilot_review"),
+    copilotEvidence: makeCopilotEvidence("waiting_for_external_review"),
     reviewerEvidence: makeReviewerEvidence("waiting_for_author_followup"),
     existingCheckpoint: null,
     liveAvailability: { copilot: "ok", reviewer: "ok" },
@@ -632,7 +632,7 @@ test("composeRunInspectionSnapshot: steering locator given and file loads → av
     target: { repo: "owner/repo", pr: 55 },
     inspectedAt: "2026-05-18T12:00:00Z",
     outerAction: "continue_wait",
-    copilotEvidence: makeCopilotEvidence("waiting_for_copilot_review"),
+    copilotEvidence: makeCopilotEvidence("waiting_for_external_review"),
     reviewerEvidence: makeReviewerEvidence("waiting_for_author_followup"),
     existingCheckpoint: null,
     liveAvailability: { copilot: "ok", reviewer: "ok" },
@@ -667,7 +667,7 @@ test("composeRunInspectionSnapshot: steering file exists but snapshot-mode evide
     target: { repo: "owner/repo", pr: 55 },
     inspectedAt: "2026-05-18T12:00:00Z",
     outerAction: "continue_wait",
-    copilotEvidence: makeCopilotEvidence("waiting_for_copilot_review"),
+    copilotEvidence: makeCopilotEvidence("waiting_for_external_review"),
     reviewerEvidence: makeReviewerEvidence("waiting_for_author_followup"),
     existingCheckpoint: null,
     liveAvailability: { copilot: "ok", reviewer: "ok" },
@@ -738,7 +738,7 @@ test("composeRunInspectionSnapshot: steering load failed → load_failed reason"
     target: { repo: "owner/repo", pr: 55 },
     inspectedAt: "2026-05-18T12:00:00Z",
     outerAction: "continue_wait",
-    copilotEvidence: makeCopilotEvidence("waiting_for_copilot_review"),
+    copilotEvidence: makeCopilotEvidence("waiting_for_external_review"),
     reviewerEvidence: makeReviewerEvidence("waiting_for_author_followup"),
     existingCheckpoint: null,
     liveAvailability: { copilot: "ok", reviewer: "ok" },
@@ -763,7 +763,7 @@ test("composeRunInspectionSnapshot: output has stable required top-level fields"
     outerState: "continue_current_wait",
     outerAllowedTransitions: ["continue_current_wait"],
     outerAction: "continue_wait",
-    copilotEvidence: makeCopilotEvidence("waiting_for_copilot_review"),
+    copilotEvidence: makeCopilotEvidence("waiting_for_external_review"),
     reviewerEvidence: makeReviewerEvidence("waiting_for_author_followup"),
     existingCheckpoint: null,
     liveAvailability: { copilot: "ok", reviewer: "ok" },
@@ -795,12 +795,12 @@ test("composeRunInspectionSnapshot: output has stable required top-level fields"
 });
 
 test("composeRunInspectionSnapshot: outerAction always equals activeFamilyState", () => {
-  for (const outerAction of ["continue_wait", "done", "stop", "reenter_copilot_loop", "reenter_reviewer_loop"]) {
+  for (const outerAction of ["continue_wait", "done", "stop", "enter_verification_loop", "enter_reviewer_loop"]) {
     const snapshot = composeRunInspectionSnapshot({
       target: { repo: "owner/repo", pr: 55 },
       inspectedAt: "2026-05-18T12:00:00Z",
       outerAction,
-      copilotEvidence: makeCopilotEvidence("waiting_for_copilot_review"),
+      copilotEvidence: makeCopilotEvidence("waiting_for_external_review"),
       reviewerEvidence: makeReviewerEvidence("waiting_for_author_followup"),
       existingCheckpoint: null,
       liveAvailability: { copilot: "ok", reviewer: "ok" },

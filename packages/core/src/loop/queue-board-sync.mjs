@@ -40,7 +40,7 @@ export const DEFAULT_STATE_COLUMN_NAMES = Object.freeze({
 
 /**
  * Default loop-state → logical-column map. Covers both the lifecycle states
- * (lifecycle-state.mjs) and the inner Copilot loop states (copilot-loop-state.mjs),
+ * (lifecycle-state.mjs) and the inner verification-loop states (copilot-loop-state.mjs),
  * plus the conceptual state names. Unknown states fall back to
  * IN_PROGRESS (a safe, visible "work is happening" column) rather than throwing.
  */
@@ -63,7 +63,7 @@ export const DEFAULT_STATE_LOGICAL_MAP = Object.freeze({
   pr_ready_no_feedback: LOGICAL_COLUMN.IN_PROGRESS,
   feedback_resolution: LOGICAL_COLUMN.IN_PROGRESS,
   copilot_review: LOGICAL_COLUMN.IN_PROGRESS,
-  waiting_for_copilot_review: LOGICAL_COLUMN.IN_PROGRESS,
+  waiting_for_external_review: LOGICAL_COLUMN.IN_PROGRESS,
   ready_to_rerequest_review: LOGICAL_COLUMN.IN_PROGRESS,
   unresolved_feedback_present: LOGICAL_COLUMN.IN_PROGRESS,
   already_fixed_needs_reply_resolve: LOGICAL_COLUMN.IN_PROGRESS,

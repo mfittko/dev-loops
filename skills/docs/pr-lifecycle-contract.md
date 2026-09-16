@@ -95,7 +95,7 @@ The family-local lifecycle SHOULD be modeled in this vocabulary. These state ide
 | <!-- term: state:draft_local_review_gate --> `draft_local_review_gate` | draft PR is at the local draft-stage gate boundary |
 | <!-- term: state:draft_local_remediation --> `draft_local_remediation` | draft-stage findings require more local remediation while the PR remains draft |
 | <!-- term: state:ready_state_needs_copilot_request --> `ready_state_needs_copilot_request` | draft gate is clear for the current head; Copilot request is the next legal step |
-| `waiting_for_copilot_review` | Copilot request/re-review is observably in progress for the current head |
+| `waiting_for_external_review` | Copilot request/re-review is observably in progress for the current head |
 | <!-- term: state:copilot_feedback_remediation --> `copilot_feedback_remediation` | unresolved Copilot feedback exists; fixes are the next active step |
 | <!-- term: state:copilot_reply_resolve_pending --> `copilot_reply_resolve_pending` | fixes were applied, but GitHub thread reply/resolve work still remains |
 | <!-- term: state:merge_conflict_resolution --> `merge_conflict_resolution` | current PR head conflicts with base or local reconcile is in progress; resolve conflicts before any further gate progression |
@@ -118,11 +118,11 @@ At minimum, the lifecycle MUST enforce these transitions:
   - human decision required
 - `draft_local_remediation` -> `draft_local_review_gate`
   - fixes pushed on the draft head
-- `ready_state_needs_copilot_request` -> `waiting_for_copilot_review`
+- `ready_state_needs_copilot_request` -> `waiting_for_external_review`
   - explicit request/confirm succeeded
 - `ready_state_needs_copilot_request` -> `stopped_needs_user_decision`
   - request unavailable or blocked
-- `waiting_for_copilot_review` -> `copilot_feedback_remediation`
+- `waiting_for_external_review` -> `copilot_feedback_remediation`
   - unresolved Copilot feedback exists
 - `copilot_feedback_remediation` -> `copilot_reply_resolve_pending`
   - fixes applied but reply/resolve still remains
@@ -132,7 +132,7 @@ At minimum, the lifecycle MUST enforce these transitions:
   - current-head merge state is conflicted (`DIRTY` / `CONFLICTING`) or local conflict reconciliation is already in progress
 - `merge_conflict_resolution` -> normal lifecycle re-entry state
   - only after local conflict resolution produces a new head, validation is rerun for the touched conflict slice, and gate state is re-detected for that new head
-- `waiting_for_copilot_review` -> `final_local_preapproval_gate`
+- `waiting_for_external_review` -> `final_local_preapproval_gate`
   - the current-head request/re-review cycle has settled cleanly with no unresolved feedback and no further Copilot pass is needed
 - `final_local_preapproval_gate` -> `final_gate_remediation`
   - pre-approval gate findings require changes

@@ -49,7 +49,7 @@ Success output (stdout, JSON):
         "isDraft": false,
         "headRefName": "...",
         "authorLogin": "...",
-        "state": "waiting_for_copilot_review",
+        "state": "waiting_for_external_review",
         "nextAction": "...",
         "loopDisposition": "pending",
         "terminal": false,
@@ -1227,7 +1227,7 @@ function classifyResumeBucket(text, parsedArtifactState) {
     return RESUME_ACTION.NEEDS_FEEDBACK_FIX;
   }
   if (
-    /\bwaiting_for_copilot_review\b/u.test(normalized)
+    /\bwaiting_for_external_review\b/u.test(normalized)
     || /\bready_to_rerequest_review\b/u.test(normalized)
     || /\brequest(?:ing)? another copilot pass\b/u.test(normalized)
     || /\bwatch(?:ing)? the next copilot review cycle\b/u.test(normalized)

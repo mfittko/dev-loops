@@ -528,7 +528,7 @@ function selectGateForState(canonicalState, { uiReviewRequested = false } = {}) 
   }
 
   if (canonicalState.target.kind === DEV_LOOP_TARGET_KIND.PR && canonicalState.ownership === DEV_LOOP_ACTOR.COPILOT) {
-    return DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP;
+    return DEV_LOOP_GATE.VERIFICATION;
   }
 
   return DEV_LOOP_GATE.FAIL_CLOSED_RECONCILE;
@@ -769,15 +769,15 @@ function routeForState(
     });
   }
 
-  if (selectedGate === DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP) {
+  if (selectedGate === DEV_LOOP_GATE.VERIFICATION) {
     return buildResult({
       selectedGate,
       routeKind: DEV_LOOP_ROUTE_KIND.ROUTE,
-      selectedStrategy: INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP,
+      selectedStrategy: INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION,
       executionMode,
       canonicalState: routableCanonicalState,
-      nextAction: "Run the Copilot PR follow-up strategy for the current PR; treat it as the canonical artifact for the issue and do not open a second PR.",
-      reason: "Copilot-owned PR states route to the Copilot PR follow-up strategy; an already-open linked PR must stay canonical until reconciled.",
+      nextAction: "Run the verification loop for the current PR; treat it as the canonical artifact for the issue and do not open a second PR.",
+      reason: "A PR the Copilot coding agent owns routes to the verification loop; an already-open linked PR must stay canonical until reconciled.",
     });
   }
 

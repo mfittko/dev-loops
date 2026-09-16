@@ -34,6 +34,7 @@ import {
   RETROSPECTIVE_CHECKPOINT_STATE,
   test,
 } from "./public-dev-loop-routing-test-helpers.mjs";
+import { normalizeLoopVocabularyToken } from "../src/loop/loop-vocabulary.mjs";
 
 test("public dev-loop routing exports the single public façade name", () => {
   assert.equal(PUBLIC_DEV_LOOP_ENTRYPOINT, "dev-loop");
@@ -89,9 +90,9 @@ test("public dev-loop routing exposes an explicit gate contract for the current 
         selectedStrategy: INTERNAL_DEV_LOOP_STRATEGY.REVIEWER_FIXER,
       },
       {
-        gate: DEV_LOOP_GATE.COPILOT_PR_FOLLOWUP,
+        gate: DEV_LOOP_GATE.VERIFICATION,
         routeKind: DEV_LOOP_ROUTE_KIND.ROUTE,
-        selectedStrategy: INTERNAL_DEV_LOOP_STRATEGY.COPILOT_PR_FOLLOWUP,
+        selectedStrategy: INTERNAL_DEV_LOOP_STRATEGY.VERIFICATION,
       },
       {
         gate: DEV_LOOP_GATE.UI_REVIEW,
@@ -114,10 +115,16 @@ test("public contract doc stays aligned with the machine-checkable gate contract
     .map((line) => line.match(/^\|\s*`([^`]+)`\s*\|/))
     .filter(Boolean)
     .map((match) => match[1]);
-  const routingGateSection = documentedGates.slice(
-    documentedGates.indexOf(DEV_LOOP_GATE.STOP_BLOCKED_OR_NOT_AUTHORIZED),
-    documentedGates.indexOf(DEV_LOOP_GATE.FAIL_CLOSED_RECONCILE) + 1,
-  );
+  const routingGateSection = documentedGates
+    .slice(
+      documentedGates.indexOf(DEV_LOOP_GATE.STOP_BLOCKED_OR_NOT_AUTHORIZED),
+      documentedGates.indexOf(DEV_LOOP_GATE.FAIL_CLOSED_RECONCILE) + 1,
+    )
+    // ADR 0073 renames the lane vocabulary in code before the prose half lands
+    // (the prose PRs are in flight). Normalizing the documented token keeps this
+    // contract honest across the transition: the doc may still spell a lane the
+    // old way, but it may not document a DIFFERENT set of gates.
+    .map((gate) => normalizeLoopVocabularyToken(gate));
 
   assert.deepEqual(
     routingGateSection,

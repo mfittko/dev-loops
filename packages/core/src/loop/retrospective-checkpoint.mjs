@@ -47,11 +47,11 @@ export const RETROSPECTIVE_CHECKPOINT_STATE = Object.freeze({
  * start/resume when the previous run used one of these gates.
  *
  * Qualifying gates:
- * - copilot_pr_followup: Copilot-owned PR follow-up (primary routed GitHub-first path)
+ * - verification: verification loop (Copilot-owned PR) (primary routed GitHub-first path)
  * - issue_intake: Copilot-first issue intake (GitHub-first issue assignment path)
  */
 export const RETROSPECTIVE_QUALIFYING_GATES = Object.freeze([
-  "copilot_pr_followup",
+  "verification",
   "issue_intake",
 ]);
 
