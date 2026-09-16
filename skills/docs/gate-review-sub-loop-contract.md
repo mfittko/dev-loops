@@ -242,101 +242,63 @@ adds on top of that module.
   fed `requestGroups` built by `buildAngleRequestGroups` from the round's PENDING
   fan-out angles (the resolved angle set minus whatever
   `options.fanoutDispatch.pendingGroups` already excludes as completed/carried — a
-  group never lists an angle this round will not actually dispatch), each mapped
-  to its concrete resolved model via `resolveRoleModel(config, { role: angle,
-  harness, kind: "angle" })` — the SAME per-angle tier resolution (config override →
-  per-angle tier → built-in review-persona tier → null=inherit) an actual fan-out
-  dispatches on. This is deliberately NOT `resolveReviewerRole(config,
-  angle).model`: that reads only a bare per-angle `model` override and ignores
-  `tier` entirely, so it can merge two angles that dispatch on different tiers into
-  one false "inherit" bucket, or (for a bare no-override angle, which resolves
-  through the built-in review tier to a concrete model on most harnesses) report
-  "inherit" for an angle that never inherits in practice. **`harness` is hardcoded
-  `"claude"` today** — `resolveRoleModel` itself accepts a `harness` parameter and
-  `write-gate-context.mjs` honors `options.harness` when present, but no shipped
-  entrypoint threads a different value through: there is no `--harness` CLI flag,
-  and `buildGateContext`'s option whitelist does not forward `harness` from its
-  caller. So the plan records the `claude`-harness resolution only; built-in tiers
-  are `null` (inherit) for the `pi` harness, so a `pi` fan-out actually dispatches
-  at inherit for every angle with no explicit per-harness override — the plan's
-  concrete `claude`-resolved groups are not evidence of what a `pi` dispatch would
-  do. Threading `harness` through a CLI flag and `buildGateContext`'s whitelist is
-  a later slice. Without a config, every angle resolves to the reserved `"inherit"`
-  bucket (never guessed); a plan written this way records only "no config was
-  consulted," not evidence of real dispatch grouping. Angle names on both sides of
-  the pending-set intersection are trimmed the same way `--angles` itself is
-  validated, so a whitespace-padded angle in `fanoutDispatch.pendingGroups` still
-  matches the trimmed universe rather than silently dropping out of the plan.
-  `sharedPrefixHash` always equals the `sha256:`-prefixed hash of the
-  briefing-prefix bytes actually written in the same call (the independent,
-  bare-hex `prefixHash` `write-gate-context.mjs` returns/uses for its own `#1537`
-  rebuild-detection and `verify-fresh-review-context.mjs`'s sentinel contract is a
-  different, older field this artifact does not own); a mismatch would mean the
-  plan describes a prefix that was never materialized.
-  **Shipped coverage today:** the production call site feeds
-  `buildAngleRequestGroups` only the model, the shared-prefix bytes, and a fixed
-  `blockBoundaries` constant (`REQUEST_PLAN_BLOCK_BOUNDARIES`, owned by
-  `write-gate-context.mjs`) — `toolDefinitions`, `instructions`, and `settings` are
-  NOT yet threaded through (they fall through to that function's empty defaults),
-  so the shipped fingerprint does not yet move when tool definitions,
-  instructions, or settings change; treat those three as
-  documented-but-not-yet-observed until a later slice feeds real values. A group
-  containing a non-`"full"`-scope angle still keeps `cacheBoundary:
-  "after_shared_prefix"`: every angle in the group — scoped or not — is mandated
-  (`GATE-EXEC-BRIEFING-PREFIX`) to read the full shared prefix first, and a scoped
-  companion file is additional material layered AFTER that boundary, never a
-  replacement of the shared prefix bytes within it. `ttlIntent` is derived from
-  the resolved harness capability's `cacheTtlControl`: only `"5m_1h"`
-  (caller-selectable) defaults to `"5m"`; every other posture (`"fixed"`/`"opaque"`)
-  is `"harness_managed"` — the claude harness's shipped default is `"fixed"`, so
-  the production call site writes `"harness_managed"` today.
+  group never lists an angle this round will not actually dispatch), each mapped to
+  its concrete resolved model via `resolveRoleModel(config, { role: angle, harness,
+  kind: "angle" })` — the SAME per-angle tier resolution an actual fan-out dispatches
+  on, deliberately NOT `resolveReviewerRole(config, angle).model` (which ignores
+  `tier` and would merge angles that dispatch on different tiers into one false
+  "inherit" bucket). Angle names on both sides of the pending-set intersection are
+  trimmed the same way `--angles` is validated, so a whitespace-padded name still
+  matches. `sharedPrefixHash` always equals the `sha256:`-prefixed hash of the
+  briefing-prefix bytes written in the SAME call — a mismatch would mean the plan
+  describes a prefix that was never materialized. (It is a different, newer field
+  than the bare-hex `prefixHash` used for issue #1537 rebuild-detection and
+  `verify-fresh-review-context.mjs`'s sentinel contract.) A group containing a
+  non-`"full"`-scope angle still keeps `cacheBoundary: "after_shared_prefix"`: every
+  angle is mandated (`GATE-EXEC-BRIEFING-PREFIX`) to read the full shared prefix
+  first, and a scoped companion file layers AFTER that boundary. `ttlIntent` derives
+  from the resolved harness capability's `cacheTtlControl`: only `"5m_1h"`
+  (caller-selectable) defaults to `"5m"`; `"fixed"`/`"opaque"` are `"harness_managed"`.
+
+  **Honest scope of the recorded plan.** Two limits MUST NOT be read past:
+  `harness` is hardcoded `"claude"` today (no `--harness` flag, and
+  `buildGateContext`'s option whitelist does not forward it), so the plan records
+  the `claude`-harness resolution only and is NOT evidence of what a `pi` fan-out
+  would dispatch (built-in tiers are `null`/inherit there). Without a config every
+  angle resolves to the reserved `"inherit"` bucket, which records "no config was
+  consulted", never real dispatch grouping. And the shipped call site feeds
+  `buildAngleRequestGroups` only the model, the shared-prefix bytes, and the fixed
+  `REQUEST_PLAN_BLOCK_BOUNDARIES` constant — `toolDefinitions`, `instructions` and
+  `settings` fall through to empty defaults, so the shipped fingerprint does not yet
+  move when those change; treat them as documented-but-not-yet-observed.
 
 - **`<gate>-<headSha>.briefing-volatile.txt`** — the physically separate volatile
   tail: round-level values that sit AFTER the cache boundary the briefing prefix
-  establishes AND that `renderBriefingPrefix` never consumes (the rule for
-  what belongs here: volatile-tail material is whatever the stable prefix render
-  does not read). `gate`/`head` are the one deliberate exception to that rule:
-  `renderBriefingPrefix` also states both values (in its own identifying header),
-  so this file's `gate:`/`head:` lines are a repeated identifying header, not
-  volatile-tail material by the rule — they let a reader with only the volatile
-  tail open still tell which round/head it belongs to without cross-referencing
-  the prefix. Today the rest of the content is `validationPosture` (only a
-  pointer, `validationResultsPath`, reaches the prefix — the posture string
-  itself never does; a `validationPosture` containing a newline is rejected
-  rather than interpolated raw, since an embedded newline could forge additional
-  `key: value` lines in this line-structured file) and `loggedAt`, a genuine
-  per-write timestamp with no prefix counterpart — which is why this file, unlike
-  the dispatch plan above, is NOT deterministic.
-  `acceptanceCriteria` is NOT in this file: `write-gate-context.mjs` passes it as
-  `renderBriefingPrefix`'s `issueRef`, which appears in the stable prefix's
-  `## Linked issue <ref>` heading whenever an issue body/sections are present, so
-  it is stable-prefix material (and separately recorded in the JSON context
-  artifact's `scope.acceptanceCriteria`), never volatile-tail material. This file
-  exists so the boundary `cacheBoundary: "after_shared_prefix"` names is a real
-  file boundary, not only a documented convention or a common substring buried
-  inside per-angle prompt text. Writing or changing this file never touches the
-  stable briefing-prefix bytes — the two are independent files, written
-  independently, and a change confined to the volatile file leaves the prefix's
-  bytes (and therefore `GATE-EXEC-BRIEFING-PREFIX`'s hash contract) untouched.
+  establishes AND that `renderBriefingPrefix` never consumes (that is the rule for
+  what belongs here). `gate`/`head` are the deliberate exception — `renderBriefingPrefix`
+  states both in its own identifying header, so this file's `gate:`/`head:` lines are
+  a repeated identifying header, not volatile-tail material by the rule; they let a
+  reader holding only this file tell which round it belongs to. The rest is
+  `validationPosture` (only the `validationResultsPath` pointer reaches the prefix; a
+  posture containing a newline is REJECTED rather than interpolated raw, since an
+  embedded newline could forge additional `key: value` lines in this line-structured
+  file) and `loggedAt`, a genuine per-write timestamp — which is why this file, unlike
+  the dispatch plan, is NOT deterministic. `acceptanceCriteria` is NOT here: it is
+  passed as `renderBriefingPrefix`'s `issueRef` and appears in the stable prefix's
+  `## Linked issue <ref>` heading, so it is stable-prefix material. This file exists
+  so the boundary `cacheBoundary: "after_shared_prefix"` names is a real file
+  boundary; writing it never touches the stable prefix bytes or
+  `GATE-EXEC-BRIEFING-PREFIX`'s hash contract.
 
-**Write ordering.** The briefing prefix is written first, then the volatile tail
-and the dispatch plan, then the JSON context artifact's completion marker LAST —
-downstream consumers (`readGateContext`, a reviewer's `--context-path` guard) key
-on the JSON marker's existence, so a mid-set write failure must never leave a
-complete-looking artifact pointing at a missing or stale sibling. The plan is
-built — and validated (`buildAngleRequestGroups`/`buildReviewDispatchPlan` throw on
-a bad angle/model/capability shape) — BEFORE any destructive write. The prior JSON
-marker is unlinked only once the prefix bytes are actually changing (an idempotent
-same-bytes rerun keeps the marker, since no sibling can then contradict it), and
-only one directory `mkdir` is needed before the first sibling write — every
-sibling path (prefix, volatile tail, dispatch plan, JSON marker) shares the same
-directory.
-
-This artifact and capability representation are the deterministic foundation a
-later slice's primer-dispatch evidence consumes: the plan says WHAT the observable
-request shape and grouping are; a later slice records WHETHER a primer barrier
-actually ran before the rest of a group's fan-out, using this plan's
-`requestPrefixFingerprint`/`sharedPrefixHash` as its ordering evidence.
+**Write ordering.** The briefing prefix is written first, then the volatile tail and
+the dispatch plan, then the JSON context artifact's completion marker LAST —
+downstream consumers (`readGateContext`, a reviewer's `--context-path` guard) key on
+that marker, so a mid-set write failure must never leave a complete-looking artifact
+pointing at a missing or stale sibling. The plan is built and validated
+(`buildAngleRequestGroups`/`buildReviewDispatchPlan` throw on a bad angle/model/
+capability shape) BEFORE any destructive write, and the prior JSON marker is unlinked
+only once the prefix bytes are actually changing (an idempotent same-bytes rerun keeps
+it).
 
 ### Phase 1.5 — Cache primer (MANDATORY)
 
@@ -352,16 +314,14 @@ plus its angle-specific briefing.
 **Default execution — one-reviewer-as-primer (zero extra cost):** dispatch ONE real
 reviewer first, then release the rest once its prefix write has landed — on its first
 streamed token if the harness streams, else on its completion (see the barrier fallback in
-step 3). No extra spawn, no extra tokens — the first reviewer runs anyway; the others simply
-start after its prefix write has landed. This is why priming is mandatory rather than opt-in:
-in its default form it costs at most a small serialization latency, and it removes an N×
-cache-write on every fan-out.
+step 3). No extra spawn and no extra tokens: the first reviewer runs anyway, and the others
+simply start after its prefix write lands.
 
 **Alternative — dedicated angle-less primer:** spawn a single scoped `review` agent seeded
 with the briefing prefix **verbatim and ONLY** (no angle suffix), which runs the mandatory
 `verify-fresh-review-context.mjs` check, confirms context, and returns **without reviewing**
-(no findings artifact). Cleaner to reason about; costs one extra angle-less spawn. Use it
-where an explicit primer is preferred; otherwise the one-reviewer form is the default.
+(no findings artifact). It costs one extra angle-less spawn. Use it where an explicit primer
+is preferred; otherwise the one-reviewer form is the default.
 
 **The `<gate>-prime` scope and "no findings artifact" details below apply ONLY to the
 dedicated angle-less primer variant.** In the default one-reviewer-as-primer path there is
@@ -373,17 +333,13 @@ Byte-identical *artifact* bytes are necessary but NOT sufficient: the cache key 
 **request prefix through the breakpoint** — model, tools + tool ordering, system/project/
 agent instructions, message/content-block boundaries, thinking/tool-choice settings, the
 materialized context bytes, and the breakpoint position + TTL. A primer spawned as a
-different agent (different system prompt, tool set, or model) writes a DIFFERENT cache that
-the `review` reviewers never read. So the primer is literally a fan-out reviewer minus the
-angle suffix — same agent, same envelope — or it is useless. Because it is angle-less it is
-NOT a review round and **produces no findings artifact, so fan-in ignores it.** If it runs
-the invariant block's `verify-fresh-review-context.mjs` check, it uses the reserved
-`<gate>-prime` scope and records the SAME prefix hash as the reviewers — so it passes
-`verify-briefing-prefixes.mjs` **by construction** (a same-hash sentinel is never a
-mismatch), never a spurious failure. (`verify-briefing-prefixes.mjs` does not today special-
-case `<gate>-prime`; because the primer's hash matches the reviewers', no exclusion is
-required for correctness. Teaching that verifier to treat `-prime` as a non-angle in its
-per-gate accounting is an optional follow-up, not a precondition.)
+different agent (different system prompt, tool set, or model) writes a DIFFERENT cache the
+`review` reviewers never read, so the primer is a fan-out reviewer minus the angle suffix —
+same agent, same envelope — or it is useless. Being angle-less it is NOT a review round and
+**produces no findings artifact, so fan-in ignores it.** If it runs the invariant block's
+`verify-fresh-review-context.mjs` check, it uses the reserved `<gate>-prime` scope and
+records the SAME prefix hash as the reviewers, so it passes `verify-briefing-prefixes.mjs`
+by construction rather than needing an exclusion there.
 
 **Ordered execution:**
 
@@ -431,23 +387,15 @@ per-gate accounting is an optional follow-up, not a precondition.)
    differing model or prefix defeats reuse and is the same failure the byte-identity rule
    already guards against.
 
-Rationale (why the primer, not just the shared prefix): a parallel fan-out with no primer
-launches every reviewer before any has written the cache — a **cold-cache race** where all
-N pay a cache write and none reads. The barrier collapses that to 1 write + N reads.
-
-**No verification pass — dev-loops runs only on agent harnesses (pi, Claude Code).** There
-is no raw-API path here: the orchestrator spawns primer and reviewers via the harness's
-agent/subagent mechanism and never sees a request's `usage`, cannot set a
-`prompt_cache_key`, and cannot place an explicit cache breakpoint — the harness owns
-caching. So the primer cannot be verified from inside and there is nothing to pin; it
-relies entirely on the barrier + byte-identical prefix + same model producing a
-**content-hash cache reuse** across spawns (Anthropic caching matches on the content-prefix
-hash, org+model scoped — not conversation-scoped, no explicit key required). Priming is
-mandatory rather than a knob precisely because its default (one-reviewer) form is essentially
-free: worst case is a small serialization latency (if a harness turns out not to reuse the
-prefix across spawns), best case turns N cache-writes into 1 write + N reads on every
-fan-out. The unmeasurability from inside the harness is a reason to prefer the zero-extra-cost
-one-reviewer form, not a reason to make the win opt-in.
+**No verification pass — dev-loops runs only on agent harnesses (pi, Claude Code).** The
+orchestrator spawns primer and reviewers through the harness's agent/subagent mechanism and
+never sees a request's `usage`, cannot set a `prompt_cache_key`, and cannot place an explicit
+cache breakpoint: the harness owns caching. The primer therefore cannot be verified from
+inside and there is nothing to pin — it relies entirely on the barrier plus a byte-identical
+prefix plus the same model producing a content-hash cache reuse across spawns. Priming stays
+mandatory because its default one-reviewer form costs at most a small serialization latency,
+and unmeasurability is a reason to prefer that zero-extra-cost form, never a reason to make
+the win opt-in.
 
 <!-- rule: GATE-EXEC-VALIDATION-ARTIFACT -->
 `GATE-EXEC-VALIDATION-ARTIFACT`: The preamble MUST run the round's validation set exactly
@@ -840,29 +788,21 @@ bytes; how those bytes REACH the spawned reviewer's actual prompt differs by har
   prompt) — but it does NOT observe what the agent actually pasted into the tool call, so a
   FAITHFUL record of the emitted bytes paired with a drifted actual relay (an added preamble in
   the tool call itself) is the documented delivered-task boundary below ("Three identities, one
-  honest boundary"), not something this check can catch. Honest finding (closes the `#1841` AC3 gap this scope is best-effort on): Claude
-  Code's Agent-tool dispatch layer exposes no usage/cache-read telemetry to the orchestrating
-  agent for a spawned subagent, so REAL provider cache reuse across sibling reviewers of one
-  round (`org+model content-hash reads on reviewers 2..N`) cannot be measured or verified from
-  inside this harness — only the ordering/fingerprint invariants above (byte-identical prefix,
-  by-construction inline alignment, mechanical layout enforcement) are assertable here; a
-  verified-reuse claim would require the harness to expose that telemetry, which is outside this
-  repo's control. This is a harness-capability limit, not a defect in the composer: the composer
-  still guarantees, by construction, that every compliant dispatch UNIT of a round shares a
-  byte-identical leading prefix span, which is the necessary (if not independently provable)
-  precondition for the provider to ever reuse its cache.
-- **Agent-driven fan-out (Codex's agent tool):** Codex is agent-driven and, like Claude Code,
-  routes through the generic batch/agent adapter rather than a dedicated concrete adapter (only
-  `pi` ships one today; the per-harness fixtures stamp Claude Code and Codex onto the same
-  generic adapter with a distinct env). Its agent-tool dispatch therefore carries the SAME
-  observed limitation as the Claude Code case above: the orchestrating agent has no primitive to
-  inject a program-constructed byte-exact prompt independently of the prompt parameter it
-  constructs, so the final relay hop is not mechanically enforced (the delivered-task boundary),
-  and the dispatch layer exposes no usage/cache-read telemetry for a spawned subagent, so real
-  provider cache reuse is not measurable from inside it either. This repo does NOT independently
-  qualify Codex's agent-tool dispatch for production — the limitation is documented explicitly,
-  never certified away; the same by-construction emitted-unit binding and ordering invariants are
-  what remain assertable.
+  honest boundary"), not something this check can catch. Honest limit (the `#1841` AC3 gap this
+  scope is best-effort on): the Agent-tool dispatch layer exposes no usage/cache-read telemetry
+  for a spawned subagent, so REAL provider cache reuse across sibling reviewers of one round
+  cannot be measured from inside this harness. Only the ordering/fingerprint invariants above
+  are assertable here; a verified-reuse claim would need telemetry outside this repo's control.
+  This is a harness-capability limit, not a composer defect: the composer still guarantees by
+  construction that every compliant dispatch UNIT of a round shares a byte-identical leading
+  prefix span, the necessary (if not independently provable) precondition for cache reuse.
+- **Agent-driven fan-out (Codex's agent tool):** Codex routes through the same generic
+  batch/agent adapter as Claude Code (only `pi` ships a dedicated adapter today; the
+  per-harness fixtures stamp Claude Code and Codex onto the generic adapter with a distinct
+  env), and carries BOTH limitations of the Claude Code case above verbatim: the final relay
+  hop is not mechanically enforced, and real provider cache reuse is not measurable. This repo
+  does NOT independently qualify Codex's agent-tool dispatch for production — the limitation is
+  documented explicitly, never certified away.
 
 **Content inlining.** `write-gate-context.mjs` renders this invariant block as a
 `<gate>-<headSha>.briefing-prefix.txt` file sibling to the JSON context artifact, in a
@@ -1230,77 +1170,48 @@ check still runs first (pass `--repo`/`--pr` so it can verify no artifacts exist
 
 Before consolidating, `consolidate-fanin.mjs` itself runs
 `scripts/github/verify-briefing-prefixes.mjs --head-sha <sha>` (the
-`GATE-EXEC-BRIEFING-PREFIX` enforcement check, #1618 — the verifier previously
-had ZERO callers, so the rule's own cited proof was never invoked); a fail-closed
-result (mismatched or missing prefix hashes across this round's reviewer
-sentinels, or a sentinel count short of the dispatch units the conductor spawned)
-MUST stop the pass rather than proceed to consolidation. In the SAME `--head-sha`
-block it ALSO runs `scripts/github/verify-dispatch-prompt-layout.mjs --head-sha
-<sha>` (issue #1841/#2131, completing #1468's own acceptance — see the
-"Prompt-LAYOUT enforcement" / "Emitted-unit binding" paragraphs under
-`GATE-EXEC-BRIEFING-PREFIX` above), which fails closed on any recorded reviewer
-prompt that does not BIND to the sanctioned emitter's inline-aligned emitted unit
-(full-content hash match + INLINE invariant prefix). The conductor supplies
-the expected dispatch-unit count via `--expected-dispatch-units <n>` (the Phase 1
-context artifact's `fanout.pendingGroups.length` — the dispatched dispatch-UNIT
-count, NOT `fanout.wavePlan.length`, which is the WAVE count, typically 1, not
-the dispatch-unit count; groups for grouped dispatch, angle count for per-angle
-dispatch; NOT the per-angle artifact count, which would false-fail every
-grouped round). Whether `pendingGroups` already excludes carry-forward-carried
-angles depends on whether the Phase 1 artifact was built with `write-gate-context.mjs
---carried-angles <json>` (issue #1635, see [Angle carry-forward
-(fail-closed)](#angle-carry-forward-fail-closed) for when a conductor should
-pass it and how it differs from consolidate-fanin's own same-named flag):
-passed the Phase 1.2 carry-forward result, `reviewerBudgetPreflight` excludes
-any dispatch unit (group) whose angles are ALL carried-or-completed from
-`pendingGroups`, so its length already matches the dispatch-unit count over
-the plan's FRESH angles and needs no further subtraction for a FULLY-carried
-unit. A PARTIALLY-carried unit (only SOME of its angles carried) stays in
-`pendingGroups` whole, while Phase 2 fans out by re-resolving dispatch groups
-over the resolved-minus-carried angle set and re-chunking the leftovers
-(`resolveFanoutGroups` is run fresh, not `pendingGroups`'s own group
-boundaries) — so a carry that splits a unit can leave `pendingGroups.length`
-ahead of the unit count Phase 2 actually dispatches. `pendingGroups.length`
-is therefore a safe upper bound, never the authoritative figure; the
-authoritative `--expected-dispatch-units` value is always the dispatch-unit
-count Phase 2 actually spawned reviewers for. If the Phase 1 artifact was
-never rebuilt after Phase 1.2 resolved (Phase 1 runs before Phase 1.2 in the
-sub-loop's own ordering, so a conductor must explicitly rebuild it to pick up
-this input), `pendingGroups` still includes the carried angles and would
-overcount — the caller must subtract the carry-forward-carried dispatch units
-from `pendingGroups.length` by hand before passing
-`--expected-dispatch-units`. Either way, if the resulting count
-is `0` (an all-carried-or-complete round dispatches no reviewer at all), OMIT
-`--expected-dispatch-units` entirely rather than pass `0`:
-`consolidate-fanin.mjs` parses it as a POSITIVE integer and throws on `0`. A
-wrong/stale `--carried-angles` value can only shrink `pendingGroups` further,
-never grow it past the true group count, so this seam can under-dispatch but
-never fabricate a clean verdict — but NOT because of
-`consolidate-fanin.mjs`'s OWN sentinel-count check (its `--expected-dispatch-units`
-threshold, not `verify-briefing-prefixes.mjs`, which has no dispatch-unit
-threshold of its own — it only reports `reviewerCount`): that check's own
-threshold is this same shrunken `--expected-dispatch-units`, so a shrunken
-`pendingGroups` shrinks both sides of its comparison identically and it cannot
-see the difference. What actually catches an under-dispatched round is
-narrower than that framing suggests: `checkFanoutAngleCoverage`
+`GATE-EXEC-BRIEFING-PREFIX` enforcement check, #1618); a fail-closed result
+(mismatched or missing prefix hashes across this round's reviewer sentinels, or a
+sentinel count short of the dispatch units the conductor spawned) MUST stop the
+pass rather than proceed to consolidation. In the SAME `--head-sha` block it ALSO
+runs `scripts/github/verify-dispatch-prompt-layout.mjs --head-sha <sha>` (issue
+#1841/#2131 — see the "Prompt-LAYOUT enforcement" / "Emitted-unit binding"
+paragraphs under `GATE-EXEC-BRIEFING-PREFIX` above), which fails closed on any
+recorded reviewer prompt that does not BIND to the sanctioned emitter's
+inline-aligned emitted unit (full-content hash match + INLINE invariant prefix).
+
+The conductor supplies the expected dispatch-unit count via
+`--expected-dispatch-units <n>`. The authoritative value is always the dispatch-unit
+count Phase 2 ACTUALLY spawned reviewers for — the `count` the sanctioned emitter
+returned for the round (`GATE-EXEC-FANOUT-DISPATCH-EMIT`), which already reflects
+its own cap-splitting. It is never `fanout.wavePlan.length` (the WAVE count,
+typically 1) and never the per-angle artifact count (which would false-fail every
+grouped round). The Phase 1 context artifact's `fanout.pendingGroups.length` is an
+UPPER BOUND on it, not the figure: with the artifact rebuilt from the Phase 1.2
+result (`write-gate-context.mjs --carried-angles <json>`, issue #1635),
+`reviewerBudgetPreflight` drops any unit whose angles are ALL carried-or-complete,
+but a PARTIALLY-carried unit stays in `pendingGroups` whole while Phase 2 re-resolves
+and re-chunks the leftover angle set, and without that rebuild `pendingGroups` still
+includes the carried angles entirely. If the count is `0` (an all-carried-or-complete
+round dispatches no reviewer), OMIT `--expected-dispatch-units` rather than pass `0`,
+which `consolidate-fanin.mjs` rejects as a non-positive integer.
+
+**What the sentinel-count check does and does not catch.** Its threshold IS the
+`--expected-dispatch-units` value, so a value derived from an under-shrunken plan
+shrinks both sides of the comparison identically and the check cannot see the
+difference (`verify-briefing-prefixes.mjs` has no dispatch-unit threshold of its own
+— it only reports `reviewerCount`). `checkFanoutAngleCoverage`
 (`@dev-loops/core/loop/gate-fanin`, called by `write-gate-findings-log.mjs`,
-`upsert-checkpoint-verdict.mjs`, and `detect-checkpoint-evidence.mjs` — never
-by `consolidate-fanin.mjs` itself) reports only `missingMandatory` +
-`foreignAngles`, computed purely from the CALLER-supplied `mandatoryAngles`
-(each caller passes its resolved `gates.<gate>` config angles with
-`mandatory: true`); it never unions the hardcoded ALWAYS_INCLUDE set, so it
-protects only a CONFIGURED mandatory angle, never a non-mandatory angle
-(hardcoded ALWAYS_INCLUDE included) that ends up with no artifact at all —
-and the fail-closed merge check (`buildPreMergeGateCheck`) rejects on a
-missing clean current-head marker plus that same configured-mandatory/pool
-coverage, never per-angle completeness. So a wrong
-`--carried-angles` naming only NON-mandatory angles (hardcoded ALWAYS_INCLUDE
-included) under-dispatches with no
-mechanical refusal catching it; the only trace is the ledger's own
-carried-angle provenance. The direction stays fail-safe for budget/spend
-either way — it can under-dispatch, never over-spend or fabricate findings
-for an angle that DID run — it just does not mechanically catch every
-under-dispatch by itself. A fan-in-side, angle-agnostic backstop for exactly
+`upsert-checkpoint-verdict.mjs` and `detect-checkpoint-evidence.mjs`, never by
+`consolidate-fanin.mjs`) reports `missingMandatory` + `foreignAngles` computed purely
+from the CALLER-supplied `mandatoryAngles`, and never unions the hardcoded
+ALWAYS_INCLUDE set — so it protects a CONFIGURED mandatory angle only, and the
+fail-closed merge check (`buildPreMergeGateCheck`) likewise rejects on a missing clean
+current-head marker plus that same coverage, never per-angle completeness. A wrong
+`--carried-angles` naming only NON-mandatory angles therefore under-dispatches with no
+mechanical refusal, leaving the ledger's carried-angle provenance as the only trace.
+The direction stays fail-safe — under-dispatch, never over-spend and never fabricated
+findings for an angle that DID run — but it is not mechanically caught by itself. A fan-in-side, angle-agnostic backstop for exactly
 this gap is `checkResolvedAngleEvidence` (`@dev-loops/core/loop/gate-fanin`):
 given the round's full RESOLVED angle set (not just its configured mandatory
 subset), it fails closed on any resolved angle with neither a real per-angle
