@@ -12,7 +12,7 @@ Phases: 1 = Copilot follow-up and directly coupled references/tests; 2 = other r
 
 | File | Phase | Disposition | Evidence / remaining work |
 | --- | --- | --- | --- |
-| `skills/copilot-pr-followup/SKILL.md` | 1 | in progress | Path-resolution prose simplified and independently reviewed; remaining sections pending, including recorded ambiguities. |
+| `skills/copilot-pr-followup/SKILL.md` | 1 | in progress | Path-resolution and fan-out/fan-in checklist condensed; mandatory owner loading explicit. Remaining sections and recorded ambiguities pending. |
 | `skills/dev-loop/SKILL.md` | 2 | pending | Not yet reviewed. |
 | `skills/dev-loop/scripts/dev-mode-context.mjs` | 3 | pending | Not yet reviewed. |
 | `skills/dev-loop/scripts/dev-mode-context.test.mjs` | 3 | pending | Not yet reviewed. |
@@ -54,7 +54,7 @@ Phases: 1 = Copilot follow-up and directly coupled references/tests; 2 = other r
 | `skills/docs/entrypoint-strategies.md` | 3 | pending | Not yet reviewed. |
 | `skills/docs/epic-tree-refinement-procedure.md` | 3 | pending | Not yet reviewed. |
 | `skills/docs/gate-review-comment-contract.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/gate-review-sub-loop-contract.md` | 1 | in progress | Source and coupled contracts under inspection. |
+| `skills/docs/gate-review-sub-loop-contract.md` | 1 | in progress | Full source read; primer, grouping duplication and fan-in count explanation condensed. Independent semantic/scenario review passed for this slice; remaining sections pending. |
 | `skills/docs/issue-intake-procedure.md` | 3 | pending | Not yet reviewed. |
 | `skills/docs/local-planning.md` | 3 | pending | Not yet reviewed. |
 | `skills/docs/main-agent-contract.md` | 3 | pending | Not yet reviewed. |
@@ -100,6 +100,8 @@ Compare old/new instructions for actors, permissions, triggers, conditions, orde
 
 - Fan-in count: source mentions `fanout.pendingGroups.length`, but the emitter can split leftover groups into additional reviewer units. Trace actual emitted/spawned-unit authority before editing.
 - CI evidence flag: follow-up describes `--local-validation-head-sha`; the wait procedure says the detector CLI removed it. Verify the supported interface before changing instructions.
+- Carry eligibility: the skill still says clean-only; the owner and current tools support carrying `findings_present` with unchanged findings. The contradictory passages remain unresolved.
+- Zero-unit rounds: the skill says an all-carried round dispatches no emitter, but sanctioned consumers require an emit plan and the emitter/writer reject an empty plan. No exception or new stop rule was invented.
 
 The detector's current `--help` lists no `--local-validation-head-sha` option. The dispatch emitter returns its expanded unit count, and its tests cover splits beyond the configured group count. These are evidence for reconciliation, not permission to silently redefine behavior. No semantic resolution or clean whole-phase verdict is recorded yet.
 
@@ -115,3 +117,22 @@ The detector's current `--help` lists no `--local-validation-head-sha` option. T
 The first slice changes two source documents; neither is fully reviewed for simplification yet. All other inventory rows remain pending or under inspection. Do not merge this partial cleanup as completion of issue 2236.
 
 Validation for this slice used Bun 1.4.1: 69 focused contract/projection tests passed; generated-asset check passed for 92 assets; docs/link/rule/changelog checks passed. The first default `bun run verify` attempt exposed another incidental packaging-sentence assertion and local listener/Git worktree fixture failures. The assertion was replaced with installed-link, bundle, packaging and ownership checks; all 12 tests in that file passed, including wording variants and missing-link/bundle failures. The two environmental test files passed all 48 tests with the required local permissions. A full rerun on `49125139` then passed: 9,289 tests across 390 files, zero skipped or failed, plus docs and workflow checks. This is local validation, not lifecycle-gate clearance or completion of the remaining inventory.
+
+## Substantive condensation slice
+
+The human clarified that total loaded contract surface, rather than shorter entrypoints alone, is the objective. Variant A remains PR2237; the independent-B handoff in issue2236 is not a dispatch or merge authorization. This slice follows that clarified spec and does not reuse previous clearance.
+
+The fan-out and fan-in checklist items shrink from 918 words each to 164 and 201 words. Their owner also shrinks: grouping algorithms, primer rationale and count derivations no longer repeat. The skill explicitly requires the complete owner before execution. Existing rule IDs, anchors, flags, evidence duties and harness distinctions remain. The actual emitted/spawned dispatch count replaces the stale unsplit-count derivation, following the owner's existing explicit authority and emitter tests; the other ambiguities above remain untouched.
+
+Measurements use `wc -w -c`: whitespace words and UTF-8 bytes, including code examples/frontmatter, not tokenizer estimates or isolated prose estimates. Columns compare the original unmodified base, the prior A checkpoint, and this slice respectively.
+
+| Named surface | Original base `894a5a59` words / bytes | A checkpoint `cc032f92` words / bytes | This slice words / bytes |
+| --- | --- | --- | --- |
+| All 77 tracked `skills/` files (including code/registry files) | 152,637 / 1,182,913 | 152,462 / 1,181,751 | 149,162 / 1,157,388 |
+| Follow-up skill + gate-review owner | 43,100 / 326,906 | 42,939 / 325,850 | 39,639 / 301,487 |
+| Corresponding Claude projections, used instead of source pair | 42,907 / 325,900 | 42,746 / 324,844 | 39,446 / 300,481 |
+| Named conductor contract-read set below | 79,828 / 606,829 | 79,667 / 605,773 | 76,367 / 581,410 |
+
+The conductor set assumes a source/Pi follow-up gate and counts each of these full files once: the source pair above; AGENTS.md; dev-loop/SKILL.md; and docs/public-dev-loop-contract, retrospective-checkpoint-contract, copilot-loop-operations, entrypoint-strategies, confirmation-rules, stop-conditions, validation-policy, main-agent-contract, anti-patterns, worktree-guidance, structural-quality, gate-review-comment-contract, spec-authority-contract, acceptance-criteria-verification and merge-preconditions (all docs names under `skills/`, with `.md`). This includes the same mandatory owner in both versions, not a short checklist compared with missing references. It is a named contract-text measurement, not a complete live prompt or token bill: PR/spec/diff artifacts, system instructions and step-specific additional reads vary. Reviewers consume their emitted briefing and role instructions in separate contexts; do not multiply the conductor set by reviewer count. Other routes and a complete transitive live-read audit remain pending.
+
+The compact old-obligation trace is in the local phase review artifact `tmp/phases/issue-2236/condensation-obligations.md`. Independent comparison found no introduced semantic defect; seven read-only scenarios covered emitted groups/leftovers, partial carry, zero-unit ambiguity, missing evidence, opaque caching, grouped provenance and stale head. This is scoped evidence, not lifecycle clearance or proof of better determinism. Contract tests now accept wrapped steps while rejecting flags borrowed from sibling steps. Full verification for this slice passed under Bun1.4.1: 9,290 tests across390 files, no skips/failures, plus docs/workflows. Assets check passed92 projections; docs were rerun after this ledger update.
