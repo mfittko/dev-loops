@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
@@ -535,6 +535,23 @@ exit 0
     assert.equal(await runtime.commandExists("subagent"), true);
     assert.equal(await runtime.ghAuthOk(), true);
     assert.equal(await runtime.insideGitRepo(), true);
+
+    // The managed viewer record is repo-root-relative, so `inspect` must resolve
+    // the toplevel and NOT cwd: resolve cwd instead and a CLI run from a
+    // subdirectory manages a second viewer record while the Pi extension keeps
+    // addressing the first one.
+    await mkdir(path.join(repoDir, "sub"), { recursive: true });
+    assert.equal(
+      await createCliRuntime({ cwd: path.join(repoDir, "sub") }).getRepoRoot(),
+      await realpath(repoDir),
+    );
+
+    // Fail closed outside a checkout: without the guard an empty repo root
+    // reaches the lifecycle manager instead of the operator.
+    await assert.rejects(
+      () => createCliRuntime({ cwd: tempRoot }).getRepoRoot(),
+      /from inside a git repository checkout/,
+    );
   } finally {
     if (previousPath === undefined) {
       delete process.env.PATH;

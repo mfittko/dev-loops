@@ -1043,6 +1043,73 @@ test("renderInboxShellScript keeps the empty-inbox line hidden when the lookup f
   assert.equal(runInboxShellScript({ hasError: false }).hidden, false);
 });
 
+// The deferred handoff panel's only trigger is this client script, so it is
+// executed against stub globals the same way the inbox shell script is above.
+function runHandoffLazyScript(fetchImpl) {
+  const status = { textContent: "" };
+  const container = {
+    dataset: { handoffSrc: "/handoff-envelope.html?repo=owner%2Frepo&pr=55" },
+    innerHTML: "",
+    querySelector: (selector) => (selector === "[data-handoff-status]" ? status : null),
+  };
+  const listeners = [];
+  const document = {
+    addEventListener(name, handler) { listeners.push({ name, handler }); },
+    querySelector: (selector) => (selector === "[data-handoff-lazy]" ? container : null),
+  };
+  const html = renderInspectRunViewerHtml({
+    repo: "owner/repo",
+    target: { repo: "owner/repo", pr: 55 },
+    snapshot: makeSnapshot(),
+    inboxItems: [],
+  });
+  const source = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+    .map((match) => match[1])
+    .find((body) => body.includes("loadHandoffPanel"));
+  new Function("document", "fetch", source)(document, fetchImpl);
+  return { container, status, listeners };
+}
+
+test("the deferred handoff panel fetches on its own tabchange only, and a failed fetch stays retryable", async () => {
+  const calls = [];
+  let respond = () => Promise.resolve({ ok: true, text: async () => "<p>envelope</p>" });
+  const run = runHandoffLazyScript((url) => {
+    calls.push(url);
+    return respond();
+  });
+
+  // The event name graph.mjs dispatches. Rename either half and the tab sits on
+  // "Loading the handoff envelope…" forever with a green suite.
+  assert.deepEqual(run.listeners.map((entry) => entry.name), ["inspect-run-viewer:tabchange"]);
+  const dispatch = async (detail) => {
+    run.listeners[0].handler({ detail });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+
+  // Every tab switch fires this event; only the handoff tab may spend a
+  // resolver spawn, which is the whole point of deferring the panel.
+  await dispatch({ tabName: "graph" });
+  await dispatch(undefined);
+  assert.deepEqual(calls, []);
+
+  respond = () => Promise.reject(new Error("boom"));
+  await dispatch({ tabName: "handoff" });
+  assert.deepEqual(calls, ["/handoff-envelope.html?repo=owner%2Frepo&pr=55"]);
+  assert.match(run.status.textContent, /Could not resolve the handoff envelope: boom\. Reopen the tab to retry\./);
+
+  // The failure resets the latch, so the shipped "Reopen the tab to retry." is
+  // true: without the reset one transient failure wedges the panel for the life
+  // of the page.
+  respond = () => Promise.resolve({ ok: true, text: async () => "<p>envelope</p>" });
+  await dispatch({ tabName: "handoff" });
+  assert.equal(calls.length, 2);
+  assert.equal(run.container.innerHTML, "<p>envelope</p>");
+
+  // A resolved panel stays latched: reopening the tab must not re-spawn.
+  await dispatch({ tabName: "handoff" });
+  assert.equal(calls.length, 2);
+});
+
 // The `?refresh=1` round trip has two client halves and no DOM in this suite, so
 // the banner script is executed against stub globals the same way the inbox
 // shell script is above.
