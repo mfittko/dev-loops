@@ -196,7 +196,14 @@ test("main(): a configured group OVER the angle cap splits into ceil(N/3) sub-un
 // the default maxAnglesPerGroup=3 auto-chunk into exactly 3 bundles
 // ([a,b,c], [d,e,f], [g]); the emitted count must be 3, not 7.
 async function seedRealAutoChunkOnlyBundle(tmpDir, angles) {
-  const { config } = await loadDevLoopConfig({ repoRoot: tmpDir }); // no .devloops → no configured groups
+  const { config } = await loadDevLoopConfig({ repoRoot: tmpDir }); // no .devloops
+  // loadDevLoopConfig still layers in the shipped extension-defaults.yaml,
+  // whose gates.fanout.groups table is NON-EMPTY (design-simplicity,
+  // design-solid, etc.) — those just don't match angles a..g. Clear the
+  // resolved table so this fixture literally models AC1/AC9's claimed
+  // "repository with NO configured gates.fanout.groups table", not merely a
+  // table that fails to match (Copilot review, PR 2233).
+  if (config?.gates?.fanout) config.gates.fanout.groups = [];
   const options = parseWriteGateContextCliArgs([
     "--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA,
     "--angles", JSON.stringify(angles),
