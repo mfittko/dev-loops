@@ -790,7 +790,7 @@ dispatch path, and it closes three failure modes prose discipline never held:
   (`GATE-EXEC-BUILD-ONCE-SEED`), and the fresh-context sentinel + briefing-prefix hash are
   enforced unchanged (`GATE-EXEC-BRIEFING-PREFIX`).
 - **Every multi-angle resolved unit shares a reviewer — configured group or auto-chunk bundle
-  alike (ADR 0048; issue 2180 reconciles this emitter to it).** The emitter shares one reviewer
+  alike (ADR 0048 reconciles this emitter to it).** The emitter shares one reviewer
   for ANY multi-angle `resolveFanoutGroups` unit: a configured `gates.fanout.groups` group, or an
   ungrouped-leftover bundle `resolveFanoutGroups` auto-chunked into `group:...`. It records the
   resolved unit's own name as the reviewer's provenance `group`, capped and split at
