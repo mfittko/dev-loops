@@ -238,6 +238,35 @@ test("createInspectionViewerAdapter keeps an in-flight snapshot cached past the 
   assert.equal(inspectRunCalls, 1);
 });
 
+test("createInspectionViewerAdapter sweeps an in-flight snapshot that never settles", async () => {
+  // `gh` children carry no timeout, so a hung handshake produces a promise that
+  // neither resolves nor rejects. Without the in-flight ceiling that entry owns
+  // its key for the process lifetime and every later render for that PR joins
+  // the hung promise — a wedge the pre-cache behavior never had.
+  let nowMs = Date.parse("2026-05-21T00:00:00.000Z");
+  let inspectRunCalls = 0;
+  const adapter = createInspectionViewerAdapter({
+    nowImpl: () => nowMs,
+    snapshotInflightCeilingMs: 60_000,
+    inspectRunImpl: () => {
+      inspectRunCalls += 1;
+      return new Promise(() => {});
+    },
+  });
+  const target = { repo: "owner/repo", pr: 55 };
+
+  void adapter.loadSnapshot(target);
+  assert.equal(inspectRunCalls, 1);
+
+  nowMs += 30_000;
+  void adapter.loadSnapshot(target);
+  assert.equal(inspectRunCalls, 1, "inside the ceiling a later caller still joins the in-flight load");
+
+  nowMs += 31_000;
+  void adapter.loadSnapshot(target);
+  assert.equal(inspectRunCalls, 2, "past the ceiling the wedged entry is swept and the load retries live");
+});
+
 test("createInspectionViewerAdapter never caches a failed snapshot load", async () => {
   let inspectRunCalls = 0;
   const adapter = createInspectionViewerAdapter({

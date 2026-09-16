@@ -6,6 +6,7 @@ import {
   renderInspectRunViewerHtml,
 } from "../../scripts/loop/inspect-run-viewer.mjs";
 import { renderInboxShellScript } from "../../scripts/loop/inspect-run-viewer/inbox.mjs";
+import { renderCurrentStateBanner } from "../../scripts/loop/inspect-run-viewer/status.mjs";
 import { makeSnapshot } from "./inspect-run-viewer-test-helpers.mjs";
 test("renderInspectRunViewerHtml emits the round-metrics fragment URL as a JS string, not HTML-escaped", () => {
   const html = renderInspectRunViewerHtml({
@@ -1040,4 +1041,55 @@ test("renderInboxShellScript keeps the empty-inbox line hidden when the lookup f
   // the failure line exists to replace.
   assert.equal(runInboxShellScript({ hasError: true }).hidden, true);
   assert.equal(runInboxShellScript({ hasError: false }).hidden, false);
+});
+
+// The `?refresh=1` round trip has two client halves and no DOM in this suite, so
+// the banner script is executed against stub globals the same way the inbox
+// shell script is above.
+function runCurrentStateBannerScript(href) {
+  const replaceStateCalls = [];
+  const select = {
+    options: [{ value: "off" }, { value: "60000" }, { value: "300000" }, { value: "900000" }],
+    value: "off",
+    addEventListener() {},
+  };
+  const manualButton = { hidden: false, addEventListener() {} };
+  const document = {
+    querySelector(selector) {
+      if (selector === "[data-auto-reload-select]") return select;
+      if (selector === "[data-auto-reload-manual]") return manualButton;
+      return null;
+    },
+  };
+  const window = {
+    location: { href },
+    history: { replaceState(_state, _title, url) { replaceStateCalls.push(url); } },
+    localStorage: { getItem: () => null },
+    setInterval: () => 1,
+    clearInterval() {},
+    addEventListener() {},
+  };
+  const html = renderCurrentStateBanner(makeSnapshot(), { repo: "owner/repo", pr: 55 }, "Waiting");
+  const source = /<script>([\s\S]*)<\/script>/.exec(html)[1];
+  new Function("document", "window", source)(document, window);
+  return { html, replaceStateCalls };
+}
+
+test("the current-state banner strips ?refresh=1 from the address bar after the forced load", () => {
+  // Auto-reload ticks and plain F5 re-send the current URL verbatim, so a
+  // surviving `refresh=1` forces a live fan-out on every tick and permanently
+  // defeats the snapshot memo. CHANGELOG.md and scripts/README.md ship the strip
+  // as contract, and it sits inside a silent try/catch.
+  const stripped = runCurrentStateBannerScript("http://localhost:7331/?repo=owner%2Frepo&pr=55&refresh=1");
+  assert.equal(stripped.replaceStateCalls.length, 1);
+  assert.doesNotMatch(stripped.replaceStateCalls[0], /refresh/);
+  assert.match(stripped.replaceStateCalls[0], /pr=55/);
+
+  // A URL without the flag must not rewrite history at all.
+  const untouched = runCurrentStateBannerScript("http://localhost:7331/?repo=owner%2Frepo&pr=55");
+  assert.deepEqual(untouched.replaceStateCalls, []);
+
+  // The producing half: the Reload control is what puts the flag on the URL.
+  assert.match(untouched.html, /searchParams\.set\('refresh', '1'\)/);
+  assert.match(untouched.html, /window\.location\.assign\(/);
 });

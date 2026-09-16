@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import { test } from "bun:test";
 
 import {
@@ -11,10 +12,12 @@ import {
   TRUST,
 } from "../../packages/core/src/loop/run-inspection.mjs";
 import { STATE as COPILOT_STATE } from "../../packages/core/src/loop/copilot-loop-state.mjs";
-import { inspectRunLoopIterations, parseInspectRunCliArgs } from "../../scripts/loop/inspect-run.mjs";
+import { inspectRun, inspectRunLoopIterations, parseInspectRunCliArgs } from "../../scripts/loop/inspect-run.mjs";
 import {
   makeCopilotEvidence,
   makeReviewerEvidence,
+  withTempDir,
+  writeJson,
 } from "./inspect-run-test-helpers.mjs";
 test("mapOuterActionToStatusClass: continue_wait → waiting", () => {
   assert.equal(mapOuterActionToStatusClass("continue_wait"), STATUS_CLASS.WAITING);
@@ -995,4 +998,36 @@ test("inspectRunLoopIterations answers the deferred fragment without a live GitH
     inspectRunLoopIterations({ repo: "owner/repo/extra", pr: 1, copilotInputPath: "/nonexistent" }),
     /--repo must match <owner\/name>/,
   );
+});
+
+test("inspectRun honors includeLoopIterations:false and keeps the full fan-out on by default", async () => {
+  // The viewer's page render is the only caller that passes the flag, and the
+  // server test asserts what the ADAPTER received, not what inspectRun does with
+  // it. Without this, deleting `includeLoopIterations` from the destructure
+  // leaves the suite green while every render re-pays the 6-call fan-out.
+  await withTempDir(async (tempDir) => {
+    const copilotPath = path.join(tempDir, "copilot.json");
+    const reviewerPath = path.join(tempDir, "reviewer.json");
+    await writeJson(copilotPath, {
+      prExists: true,
+      prNumber: 55,
+      prDraft: false,
+      copilotReviewRequestStatus: "requested",
+      unresolvedThreadCount: 0,
+      ciStatus: "success",
+    });
+    await writeJson(reviewerPath, { prExists: true, prNumber: 55, prHeadSha: "abc123" });
+
+    // A file-backed copilot input keeps both branches gh-free and still
+    // distinguishable: deferred_by_caller vs requires_live_github_facts.
+    const options = { repo: "owner/repo", pr: 55, copilotInputPath: copilotPath, reviewerInputPath: reviewerPath };
+    const context = { ghCommand: path.join(tempDir, "gh-must-not-run") };
+
+    const deferred = await inspectRun({ ...options, includeLoopIterations: false }, context);
+    assert.equal(deferred.loopIterations.reason, "deferred_by_caller");
+    assert.equal(deferred.loopIterations.available, false);
+
+    const full = await inspectRun(options, context);
+    assert.notEqual(full.loopIterations.reason, "deferred_by_caller");
+  });
 });

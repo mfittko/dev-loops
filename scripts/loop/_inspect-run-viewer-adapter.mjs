@@ -13,6 +13,11 @@ const SIGNAL_KEY_CACHE_TTL_MS = 5 * 60 * 1000;
 // serves a cached snapshot. `loadSnapshot(target, { refresh: true })` bypasses
 // it for the selected PR only.
 const SNAPSHOT_CACHE_TTL_MS = 15_000;
+// `gh` child processes register no timeout, so a hung handshake yields a promise
+// that never settles. Without a ceiling that entry owns its cache key for the
+// process lifetime and every later render for that PR joins the hung promise.
+// Far above the TTL so a merely slow fan-out is still shared, not re-run.
+const SNAPSHOT_INFLIGHT_CEILING_MS = 120_000;
 const DEFAULT_UPDATED_WITHIN_DAYS = 7;
 const DEFAULT_RESULT_LIMIT = 25;
 const MAX_RESULT_LIMIT = 100;
@@ -303,6 +308,7 @@ export function createInspectionViewerAdapter({
   runGhJsonImpl = ghJson,
   nowImpl = () => Date.now(),
   snapshotCacheTtlMs = SNAPSHOT_CACHE_TTL_MS,
+  snapshotInflightCeilingMs = SNAPSHOT_INFLIGHT_CEILING_MS,
 } = {}) {
   const runGhJson = (args, { env = process.env, ghCommand = "gh" } = {}) => runGhJsonImpl(args, { env, ghCommand });
   const toRepoSlug = (repository) => {
@@ -326,11 +332,14 @@ export function createInspectionViewerAdapter({
   // snapshot.json fetch) share one `gh` fan-out instead of racing. `cachedAt` is
   // stamped when the fetch SETTLES, not when it starts: stamping it up front
   // sweeps a load slower than the TTL while it is still in flight, and a second
-  // full fan-out then starts on exactly the loads the cache exists for.
+  // full fan-out then starts on exactly the loads the cache exists for. An
+  // unsettled entry is still swept at the much higher in-flight ceiling, so a
+  // `gh` fan-out that never settles cannot own its key forever.
   function memoizeFetch(key, refresh, factory) {
     const nowMs = nowImpl();
     for (const [cachedKey, entry] of snapshotCache.entries()) {
-      if (entry.settled && (nowMs - entry.cachedAt) > snapshotCacheTtlMs) {
+      const maxAgeMs = entry.settled ? snapshotCacheTtlMs : snapshotInflightCeilingMs;
+      if ((nowMs - entry.cachedAt) > maxAgeMs) {
         snapshotCache.delete(cachedKey);
       }
     }
