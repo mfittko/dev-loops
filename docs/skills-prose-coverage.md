@@ -80,8 +80,8 @@ Phases: 1 = Copilot follow-up and directly coupled references/tests; 2 = other r
 | `skills/docs/ui-review-recipe-contract.md` | 3 | pending | Not yet reviewed. |
 | `skills/docs/ui-smoke-harness.md` | 3 | pending | Not yet reviewed. |
 | `skills/docs/ui-validation-contract.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/validation-policy.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/wait-watch-procedure.md` | 1 | in progress | Opener, read-only boundary and timeout wording simplified and independently reviewed; remaining sections pending. |
+| `skills/docs/validation-policy.md` | 1 | changed | Full source inspected; CI exception now requires its current owner. Default validation, coverage admission and meaningful exception rules intentionally retained. |
+| `skills/docs/wait-watch-procedure.md` | 1 | changed | Full-file old/new review complete; duplicate capture commands and obsolete CI history removed. Remaining route-local decisions intentionally retained to avoid loading the full follow-up bundle. |
 | `skills/docs/workflow-handoff-contract.md` | 3 | pending | Not yet reviewed. |
 | `skills/docs/worktree-guidance.md` | 3 | pending | Not yet reviewed. |
 | `skills/final-approval/SKILL.md` | 2 | pending | Not yet reviewed. |
@@ -213,3 +213,13 @@ The old test failed because it pinned the governing-issue sentence. Replacement 
 A second obsolete CLI instruction, `--review-request-status`, is corrected visibly: existing parser tests reject it. Separate requests still follow the request-result branches before a normal detector refresh. Combined handoff preserves its own request result through `applyConfirmedReviewRequest`; it does not accept an external override. No snapshot fabrication or new request permission is introduced.
 
 Net source reduction for this slice is 445 words / 2,825 bytes; the source pair is 36,664 / 281,552 and the 24-file normal-draft comparison set is 83,125 / 637,786. Validation passed: 21 focused contract tests, 161 closing-sweep/handoff/parser tests, 92-asset parity and full `bun run verify` (9,292 tests across 390 files, no skips/failures, plus docs/workflows).
+
+## Wait-file completion and primer accuracy
+
+Whole-file independent review found the remaining wait instructions necessary at the narrow route boundary: read-only ownership, fresh transitions, ordered envelope loading, lightweight flags, confirmed watch entry, timeouts and harness differences must remain available without preloading the full follow-up owner. Duplicate capture commands were removed because the destination procedure is already mandatory at re-entry. The zero-suite paragraph now states the actual missing-input limitation directly. The exact pre-approval dispatch clause is unchanged. Broader cumulative-budget and generic-redispatch limitations remain recorded above; this is file-level review, not whole-phase or lifecycle clearance.
+
+The primer checklist retains mandatory priming, first-token/completion barrier, both primer forms and the owner's request-envelope/evidence duties. Unsupported promises of zero extra cost and guaranteed cache reads were removed; ordering evidence is not provider cache telemetry. The validation-policy table's third obsolete flag reference now requires the same bounded CI owner rather than suggesting an unavailable override. Independent review found no changed permission or execution branch.
+
+The complete wait file is 959 words / 7,340 bytes versus 1,035 / 7,920 at the original base. A narrow source-route set—AGENTS, main-agent contract, dev-loop entrypoint, public contract and wait procedure, each once—is 13,840 / 106,456 versus 13,764 / 105,876. Startup mechanically names only the last two route files; the first three are baseline reads. Variable issue/PR state and agent-role text are excluded in both versions. This is a named static instruction set, not observed token usage.
+
+Net whole-tree reduction for the current slice is 67 words / 406 bytes. The normal-draft 24-file set is 83,120 / 637,854: five fewer words but 68 more bytes than the preceding slice, because the truthful CI-owner link is longer. The file-level accounting does not hide that tradeoff. Focused checks passed 31 tests; doc guard passed 353 with one skip. Full `bun run verify` passed: 9,292 tests across 390 files, no skips/failures, plus docs/workflows. All 92 generated assets matched.

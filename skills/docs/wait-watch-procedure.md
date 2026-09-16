@@ -66,11 +66,8 @@ After a watch settles:
    `nextAction`. A destination route restores its own ownership, isolation, gate,
    and retrospective requirements. Never enter fixing or approval from the old
    watch envelope. `stop`/`needs_reconcile` remain terminal decision boundaries.
-4. For feedback, the destination follow-up procedure reads the current unresolved
-   working set with `capture-review-threads.mjs --unresolved --bodies` and the
-   reply/resolve IDs with `list-review-threads.mjs --unresolved-only` (both take
-   `--repo <owner/name> --pr <N>`). Dispatch fixing through its fixer procedure;
-   unresolved feedback is not completion.
+4. For feedback, follow the fresh destination's current-thread capture and fixer
+   procedure. Unresolved feedback is not completion.
 
 Preserve the existing [timeout policy](copilot-loop-operations.md#timeout-and-watch-policy):
 each review watch boundary has a 30-minute maximum budget; a refresh still showing
@@ -85,12 +82,10 @@ The cycle helper supplies its bounded policy internally; do not pass it unsuppor
 flags such as `--probe-only` or `--poll-interval-ms`. Flag support is command-specific:
 `watch-ci` supports `--poll-interval-ms`; `watch-cycle` does not.
 
-For a zero current-head-suite head, the detector derives CI status automatically
-from GitHub facts and the previous-head rollup; the watch-route CLIs expose no flag
-to assert local validation (the `--local-validation-head-sha` surface was removed
-in the #549 CLI-surface audit to auto-resolve derivable state), so an agent cannot
-force `crediblyGreen` from the wait route. Never infer green from missing CI: a
-refresh still reporting raw `none` routes to CI follow-up, not a self-certified green.
+The watch-route CLIs accept no local-validation evidence input; a normal refresh
+cannot activate the zero-suite `crediblyGreen` exception. Never infer green from
+missing CI. A detector result of `none` follows the existing CI wait/reconciliation
+policy.
 
 Wait only through the deterministic tools in `COPILOT-FOLLOWUP-WAIT-TOOLS`.
 Helper-owned polling is expected; do not create shell sleep/poll loops, detached
