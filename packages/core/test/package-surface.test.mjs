@@ -19,6 +19,7 @@ test("packages/core exports the sanctioned runtime boundary and de-exports unuse
   assert.equal(packageJson.exports["./loop/copilot-ci-status"], "./src/loop/copilot-ci-status.mjs");
   assert.equal(packageJson.exports["./loop/copilot-loop-iterations"], "./src/loop/copilot-loop-iterations.mjs");
   assert.equal(packageJson.exports["./loop/copilot-loop-state"], "./src/loop/copilot-loop-state.mjs");
+  assert.equal(packageJson.exports["./loop/execution-record"], "./src/loop/execution-record.mjs");
   assert.equal(packageJson.exports["./loop/outer-loop-state"], undefined);
   assert.equal(packageJson.exports["./loop/phase-files"], "./src/loop/phase-files.mjs");
   assert.equal(packageJson.exports["./loop/pr-gate-coordination"], "./src/loop/pr-gate-coordination.mjs");

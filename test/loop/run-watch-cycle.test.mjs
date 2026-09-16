@@ -1230,3 +1230,135 @@ test("watcher-exclusivity copilot path has no post-watch re-gate (only the pre-w
   assert.equal(calls, 1, "only the pre-watch exclusivity gate call happens on the copilot path");
   assert.equal(result.watcherExclusivity ?? null, null, "no post-watch transition marker is produced on the copilot path");
 });
+
+test("execution-record telemetry (issue 2157 slice b2): a real watch_cycle record is attached, sourced from the cycle's own owner/disposition", async () => {
+  const headSha = "a".repeat(40);
+  const result = await runWatchCycle(
+    { repo: "owner/repo", pr: 17 },
+    {
+      env: RUN_ID_ENV,
+      runHandoffImpl: copilotWatchHandoffWithHead(headSha),
+      recordWatchClaimImpl: async ({ head, waitKind }) => ({ ok: true, status: "watch_claim_recorded", watch: { head, waitKind, updatedAt: new Date().toISOString() } }),
+      watchCopilotReviewImpl: async (options) => ({ ok: true, status: "timeout", repo: options.repo, pr: options.pr, attempts: 1, newComments: [], newReviews: [], newIssueComments: [] }),
+    },
+  );
+  assert.equal(result.executionRecord.role, "watch_cycle");
+  assert.equal(result.executionRecord.headSha, headSha);
+  assert.equal(result.executionRecord.unitId, "run-1");
+  assert.equal(result.executionRecord.waitOwner, "run-1");
+  assert.equal(result.executionRecord.outcome, result.cycleDisposition);
+  assert.equal(result.executionRecord.metrics.turns, 0);
+  assert.equal(result.executionRecord.providerTokens.input.available, false);
+  assert.match(result.executionRecord.providerTokens.input.reason, /performs no model turn/);
+});
+
+test("execution-record telemetry is skipped, not thrown, when the cycle has no usable head (never breaks the cycle)", async () => {
+  const result = await runWatchCycle(
+    { repo: "owner/repo", pr: 17 },
+    { env: RUN_ID_ENV, runHandoffImpl: copilotWatchHandoffWithHead(null) },
+  );
+  assert.equal(result.executionRecord, undefined);
+});
+
+test("execution-record telemetry: toolCalls counts the real gh/network calls the cycle issues, never a hardcoded zero", async () => {
+  const headSha = "b".repeat(40);
+  const result = await runWatchCycle(
+    { repo: "owner/repo", pr: 17 },
+    {
+      env: RUN_ID_ENV,
+      runChild: async () => ({ code: 0, stdout: "{}", stderr: "" }),
+      runHandoffImpl: async (options, ctx) => {
+        await ctx.runChild("gh", ["pr", "view"], ctx.env);
+        await ctx.runChild("gh", ["pr", "view", "--json", "headRefOid"], ctx.env);
+        return copilotWatchHandoffWithHead(headSha)();
+      },
+      recordWatchClaimImpl: async ({ head, waitKind }) => ({ ok: true, status: "watch_claim_recorded", watch: { head, waitKind, updatedAt: new Date().toISOString() } }),
+      watchCopilotReviewImpl: async (options) => ({ ok: true, status: "timeout", repo: options.repo, pr: options.pr, attempts: 1, newComments: [], newReviews: [], newIssueComments: [] }),
+    },
+  );
+  assert.equal(result.executionRecord.metrics.toolCalls, 2, "toolCalls must reflect the gh calls actually issued via the shared runChild seam, never a hardcoded zero");
+  assert.equal(typeof result.executionRecord.metrics.localToolTimeMs, "number");
+  assert.ok(result.executionRecord.metrics.localToolTimeMs >= 0);
+});
+
+test("execution-record telemetry: toolCalls counts the workflow-run watcher's `gh run watch` spawn on the session-activity branch, not just the runChild seam", async () => {
+  // Round-2 Copilot finding: watchWorkflowRun spawns `gh run watch` directly
+  // (it needs a persistent streaming child with timeout-triggered SIGTERM,
+  // which the buffered runChild seam cannot provide), so it must be counted
+  // through its own spawnImpl seam. This exercises the real watchWorkflowRun
+  // (not a watchWorkflowRunImpl stub) to prove the spawn itself is counted.
+  const headSha = "d".repeat(40);
+  const spawnCalls = [];
+  const spawnImpl = (...args) => {
+    spawnCalls.push(args);
+    const child = new EventEmitter();
+    child.stderr = new PassThrough();
+    child.kill = () => true;
+    // Resolve the watch on the next microtask, after watchWorkflowRun has
+    // synchronously attached its "close" listener within this same call.
+    queueMicrotask(() => child.emit("close", 0));
+    return child;
+  };
+
+  const result = await runWatchCycle(
+    { repo: "owner/repo", pr: 17 },
+    {
+      env: RUN_ID_ENV,
+      runHandoffImpl: copilotWatchHandoffWithHead(headSha),
+      detectSessionActivity: true,
+      spawnImpl,
+      fetchPrHeadBranchImpl: async () => "copilot/session-branch",
+      detectCopilotSessionActivityImpl: async () => ({
+        ok: true,
+        activity: "active",
+        runId: 444,
+        runName: "Addressing comment on PR owner/repo#17",
+        runStatus: "in_progress",
+        runConclusion: null,
+        runCreatedAt: "2026-05-27T13:08:48Z",
+        branch: "copilot/session-branch",
+        confidence: "high",
+      }),
+      recordWatchClaimImpl: async ({ head, waitKind }) => ({ ok: true, status: "watch_claim_recorded", watch: { head, waitKind, updatedAt: new Date().toISOString() } }),
+      watchCopilotReviewImpl: async (options) => ({ ok: true, status: "timeout", repo: options.repo, pr: options.pr, attempts: 1, newComments: [], newReviews: [], newIssueComments: [] }),
+    },
+  );
+
+  assert.equal(spawnCalls.length, 1, "the real watchWorkflowRun must have spawned `gh run watch` exactly once");
+  assert.equal(spawnCalls[0][1][0], "run", "the counted spawn must be the `gh run watch` call, not some other process");
+  assert.equal(spawnCalls[0][1][1], "watch");
+  assert.equal(
+    result.executionRecord.metrics.toolCalls,
+    1,
+    "toolCalls must include the workflow-run watcher's gh run watch spawn, not under-count it to zero",
+  );
+});
+
+test("execution-record telemetry: a blocked CI gate attaches a record whose outcome matches the final pending disposition, not the initial terminal guess", async () => {
+  const headSha = "c".repeat(40);
+  const result = await runWatchCycle(
+    { repo: "owner/repo", pr: 17 },
+    {
+      env: RUN_ID_ENV,
+      runHandoffImpl: async () => ({
+        ok: true,
+        action: "stop",
+        state: "waiting_for_ci",
+        allowedTransitions: [],
+        nextAction: "Wait for CI",
+        snapshot: { repo: "owner/repo", pr: 17, currentHeadSha: headSha },
+        loopDisposition: "pending",
+        terminal: false,
+      }),
+      recordWatchClaimImpl: async () => ({ ok: false, error: "ownership_lost", message: "owned by run-2" }),
+      watchCiStatusImpl: async () => { throw new Error("must not start a second CI watcher while another run owns the boundary"); },
+    },
+  );
+  assert.equal(result.cycleDisposition, "pending");
+  assert.equal(
+    result.executionRecord.outcome,
+    "pending",
+    "the record's outcome must reflect the FINAL disposition (pending) set by the exclusivity block, not the initial terminal guess made before the gate resolved",
+  );
+  assert.equal(result.executionRecord.outcome, result.cycleDisposition);
+});
