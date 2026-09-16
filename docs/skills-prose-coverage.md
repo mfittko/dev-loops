@@ -223,3 +223,16 @@ The primer checklist retains mandatory priming, first-token/completion barrier, 
 The complete wait file is 959 words / 7,340 bytes versus 1,035 / 7,920 at the original base. A narrow source-route set—AGENTS, main-agent contract, dev-loop entrypoint, public contract and wait procedure, each once—is 13,840 / 106,456 versus 13,764 / 105,876. Startup mechanically names only the last two route files; the first three are baseline reads. Variable issue/PR state and agent-role text are excluded in both versions. This is a named static instruction set, not observed token usage.
 
 Net whole-tree reduction for the current slice is 67 words / 406 bytes. The normal-draft 24-file set is 83,120 / 637,854: five fewer words but 68 more bytes than the preceding slice, because the truthful CI-owner link is longer. The file-level accounting does not hide that tradeoff. Focused checks passed 31 tests; doc guard passed 353 with one skip. Full `bun run verify` passed: 9,292 tests across 390 files, no skips/failures, plus docs/workflows. All 92 generated assets matched.
+
+## Gate-comment command slice
+
+The skill retains canonical-helper-only posting, same-call current-head artifacts and true counts, durable identity-bearing findings logs on every round, withheld-summary-plus-ledger, explicit inline mode/reason, and precomputed size evidence. All three command blocks and the narrow human-authorized CI override are unchanged. Removed renderer/default explanations already belong to `GATE-COMMENT-SINGLE-SURFACE`, `GATE-COMMENT-SIZE-BUDGET-FIELDS` and the existing helper; no additional mandatory read or reference file was introduced.
+
+| Removed explanation | Retained authority or enforcement |
+| --- | --- |
+| Finding placement, markers and digest calculation | Gate-comment owner; helper rendering and `buildStructuredFindingsDigest`; existing single-surface/count tests. |
+| Structured input normalization and ledger identity rationale | `normalizeStructuredFindings` and preloaded-ledger validation; existing malformed/mixed-shape and wrong-gate/head tests. Agent input-selection duties remain explicit. |
+| Withheld coverage internals | Mandatory Phase 3 owner and provenance validation; summary alone remains forbidden. |
+| Inline default and size auto-derivation detail | Existing argument checks and `evaluatePrSizeBudget` path; explicit mode/reason and size precomputation remain required. |
+
+Independent old/new review found no material drift for withheld output, wrong ledger identity, missing inline reason, zero placeholders or size-budget exits 0/1/2. This review does not claim that prose tests prove agent compliance. The source reduction is 488 words / 3,525 bytes, without moving text elsewhere. The source pair is now 36,159 / 277,962; the 24-file normal-draft set is 82,632 / 634,329. Focused checks passed 31 tests, doc guard passed 353 with one skip, and all 92 generated assets matched. Full `bun run verify` passed: 9,292 tests across 390 files, no skips/failures, plus docs/workflows.
