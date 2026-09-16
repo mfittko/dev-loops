@@ -1,3 +1,7 @@
+---
+prNumber: 2234
+---
+
 # Finding the flow presentation
 
 ## Status
@@ -35,7 +39,7 @@ No changes to agent runtime behavior, new dependencies, live deployment or merge
 
 - [x] Presentation, notes, research, browser registration and Pages integration are committed on the isolated feature branch.
 - [x] Relevant browser, Pages, documentation and contract checks pass; validation scope and limitations are reported.
-- [ ] A self-assigned draft PR links this plan and summarizes the complete presentation and Pages scope.
+- [x] A self-assigned draft PR links this plan and summarizes the complete presentation and Pages scope.
 - [ ] Subsequent lifecycle gates and human approval precede any merge; draft creation does not imply approval or deployment.
 
 ## Risks and open questions
