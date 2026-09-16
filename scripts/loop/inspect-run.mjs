@@ -302,6 +302,7 @@ export async function inspectRun(options, { env = process.env, ghCommand = "gh" 
   let outerAllowedTransitions;
   let outerAction;
   let outerReason;
+  let outerHandoffReason;
   const explicitTargetMissing =
     copilotEvidence?.snapshot?.prExists === false
     || reviewerEvidence?.snapshot?.prExists === false;
@@ -325,6 +326,11 @@ export async function inspectRun(options, { env = process.env, ghCommand = "gh" 
     outerAllowedTransitions = outerInterpretation.allowedTransitions;
     outerAction = outerInterpretation.outerAction;
     outerReason = outerInterpretation.stopReason;
+    // The routing layer already explains its own decision; carry that sentence
+    // through instead of leaving the viewer to invent one from state names.
+    outerHandoffReason = typeof outerInterpretation.handoffEnvelope?.reason === "string"
+      ? outerInterpretation.handoffEnvelope.reason
+      : undefined;
   }
   let steeringEvidence = null;
   let steeringLoadFailed = false;
@@ -381,6 +387,7 @@ export async function inspectRun(options, { env = process.env, ghCommand = "gh" 
     outerAllowedTransitions,
     outerAction,
     outerReason,
+    outerHandoffReason,
     copilotEvidence,
     reviewerEvidence,
     existingCheckpoint,

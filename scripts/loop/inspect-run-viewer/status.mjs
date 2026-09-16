@@ -88,9 +88,13 @@ function renderCurrentStateBadge(stateLabel) {
   return renderBadge(stateLabel, SNAPSHOT_BADGE_VARIANTS[stateLabel] ?? "muted");
 }
 
+// The inbox signal is a TRIAGE ranking ("which PR should I look at"), not the
+// snapshot's `needsAttention` blocking flag — `attention` here fires for any
+// handoff outer state. It is labelled so the banner chip cannot be read as a
+// contradiction of the `needs attention: false` field in the card below it.
 function renderInboxSignalBadge(snapshot) {
   const signal = deriveInboxSignalFromSnapshot(snapshot);
-  return renderBadge(signal.replaceAll("_", " "), INBOX_SIGNAL_BADGE_VARIANTS[signal] ?? "muted");
+  return renderBadge(`triage: ${signal.replaceAll("_", " ")}`, INBOX_SIGNAL_BADGE_VARIANTS[signal] ?? "muted");
 }
 
 function renderBooleanBadge(value, { positive = false } = {}) {
@@ -141,12 +145,26 @@ function buildCopilotLoopIterationEntries(snapshot) {
 
 // `deferred_by_caller` means the page rendered without the loop-iteration
 // fan-out and the client fills this block in from the round-metrics fragment.
+// "not present" reads like a data failure. A PR with no Copilot round yet is a
+// different fact from a capture that failed, and the snapshot already tells
+// them apart via `reason` — so say which one it is.
+const LOOP_ITERATION_UNAVAILABLE_COPY = {
+  no_pr: "No pull request yet, so there are no Copilot rounds to count.",
+  requires_live_github_facts: "No Copilot round on record for this PR yet.",
+  github_fact_capture_failed: "Round metrics could not be read from GitHub for this PR.",
+};
+
 export function renderLoopIterationMetrics(loopIterations) {
   if (loopIterations?.available === false && loopIterations?.reason === "deferred_by_caller") {
     return `<p class="viewer-deferred-metrics" data-round-metrics-status>Loading round metrics…</p>`;
   }
   if (!loopIterations) {
     return renderCardEmptyState();
+  }
+  if (loopIterations.available === false) {
+    const copy = LOOP_ITERATION_UNAVAILABLE_COPY[loopIterations.reason]
+      ?? `Round metrics unavailable (${humanizeStateToken(loopIterations.reason ?? "no reason given")}).`;
+    return `<p class="handoff-empty-copy" data-round-metrics-unavailable>${escapeHtml(copy)}</p>`;
   }
   return renderStatGrid([
     { label: "completed rounds", value: escapeHtml(String(loopIterations.completedCopilotReviewRounds ?? "not present")) },
@@ -327,6 +345,10 @@ export function summarizeCurrentPrStatus(snapshot) {
   const copilotLoopDisposition = formatStateToken(snapshot.layers?.copilot?.loopDisposition);
   const copilotTerminal = snapshot.layers?.copilot?.terminal === true;
   const reviewerApprovedOnCurrentHead = snapshot.layers?.reviewer?.approvedOnCurrentHead === true;
+  // The routing layer's own explanation for this outer state, when it gave one.
+  const routingReason = typeof snapshot.outerHandoffReason === "string" && snapshot.outerHandoffReason.length > 0
+    ? snapshot.outerHandoffReason
+    : null;
 
   if (outerState === OUTER_STATE.NEEDS_RECONCILE) {
     return {
@@ -357,6 +379,62 @@ export function summarizeCurrentPrStatus(snapshot) {
       headline: "PR complete",
       detail: "The current inspection says this PR is in a terminal done state.",
       nextAction: "Confirm merge/readiness context or inspect the raw snapshot for terminal evidence.",
+    };
+  }
+
+  if (copilotState === "no_pr") {
+    return {
+      headline: "No pull request yet",
+      detail: "The Copilot lane reports no_pr: no pull request exists for this work, so no review lane can run.",
+      nextAction: "Open the draft PR before expecting any Copilot or reviewer activity.",
+    };
+  }
+
+  if (copilotState === "pr_draft") {
+    return {
+      headline: "Draft PR; no review requested yet",
+      detail: "The PR is still a draft, so Copilot has not been asked for a review and no follow-up has been requested.",
+      nextAction: "Run the draft gate, then mark the PR ready for review to start the Copilot lane.",
+    };
+  }
+
+  if (copilotState === "pr_ready_no_feedback") {
+    return {
+      headline: "Ready for review; no Copilot pass yet",
+      detail: "The PR is ready for review but no Copilot review has been requested or received on this head.",
+      nextAction: "Request the first Copilot review for the current head.",
+    };
+  }
+
+  if (copilotState === "review_request_unavailable") {
+    return {
+      headline: "Copilot review unavailable",
+      detail: "The Copilot review request came back unavailable, so no review is pending despite the loop being in the Copilot lane.",
+      nextAction: "Report the unavailable review request; do not wait or watch as if a review had been requested.",
+    };
+  }
+
+  if (copilotState === "low_signal_converged") {
+    return {
+      headline: "Converged on low signal",
+      detail: "The re-request loop stopped because repeated Copilot rounds produced only minimal actionable feedback.",
+      nextAction: "Move to the current-head pre_approval_gate instead of requesting another Copilot pass.",
+    };
+  }
+
+  if (copilotState === "internal_tooling_direct_gate") {
+    return {
+      headline: "Internal tooling; Copilot review skipped",
+      detail: "This PR is internal-tooling only, so external Copilot review is skipped by design.",
+      nextAction: "Proceed directly to the current-head pre_approval_gate.",
+    };
+  }
+
+  if (copilotState === "blocked_needs_user_decision") {
+    return {
+      headline: "Blocked; needs your decision",
+      detail: "The Copilot lane hit a failure (review request, CI, or similar) that the loop cannot resolve on its own.",
+      nextAction: "Read the blocking reason below and decide how the loop should continue.",
     };
   }
 
@@ -432,6 +510,26 @@ export function summarizeCurrentPrStatus(snapshot) {
     };
   }
 
+  if (reviewerState === "blocked_needs_user_decision") {
+    return {
+      headline: "Reviewer lane blocked; needs your decision",
+      detail: "The reviewer lane stopped on a condition it cannot resolve on its own (for example a failed review submission).",
+      nextAction: "Read the reviewer lane details below and decide how to continue.",
+    };
+  }
+
+  // An idle reviewer lane is only the headline when routing is not pointing at
+  // the Copilot lane; otherwise the Copilot lane owns the next action.
+  if (reviewerState === "waiting_for_review_request"
+    && outerState !== OUTER_STATE.HANDOFF_TO_COPILOT_LOOP
+    && outerAction !== "reenter_copilot_loop") {
+    return {
+      headline: "No review requested yet",
+      detail: "The reviewer lane is idle: no review has been requested on this PR, so nothing is pending on a reviewer.",
+      nextAction: "Request a review when the PR is ready for one; nothing is waiting on a reviewer right now.",
+    };
+  }
+
   if (reviewerState === "waiting_for_author_followup") {
     return {
       headline: "Waiting for author follow-up",
@@ -488,19 +586,25 @@ export function summarizeCurrentPrStatus(snapshot) {
     };
   }
 
+  // Lane-level fall-backs. Every state with a known meaning is handled above;
+  // these only run for a lane state this viewer has no specific copy for, so
+  // they quote the routing layer's own reason rather than asserting a follow-up
+  // that may never have been requested.
   if (outerState === OUTER_STATE.HANDOFF_TO_COPILOT_LOOP || outerAction === "reenter_copilot_loop") {
     return {
-      headline: "Copilot loop needs action",
-      detail: "The authoritative outer state is handoff_to_copilot_loop, so the next meaningful work is in the Copilot lane.",
-      nextAction: "Inspect the Copilot state and act on the requested follow-up.",
+      headline: "Copilot lane is next",
+      detail: routingReason
+        ?? "The authoritative outer state is handoff_to_copilot_loop, so the next meaningful work is in the Copilot lane.",
+      nextAction: `Continue in the Copilot lane from ${humanizeStateToken(copilotState)}.`,
     };
   }
 
   if (outerState === OUTER_STATE.HANDOFF_TO_REVIEWER_LOOP || outerAction === "reenter_reviewer_loop") {
     return {
-      headline: "Reviewer loop needs action",
-      detail: "The authoritative outer state is handoff_to_reviewer_loop, so the next meaningful work is in the reviewer lane.",
-      nextAction: "Inspect the reviewer state and act on the requested follow-up.",
+      headline: "Reviewer lane is next",
+      detail: routingReason
+        ?? "The authoritative outer state is handoff_to_reviewer_loop, so the next meaningful work is in the reviewer lane.",
+      nextAction: `Continue in the reviewer lane from ${humanizeStateToken(reviewerState)}.`,
     };
   }
 

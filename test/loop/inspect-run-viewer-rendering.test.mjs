@@ -350,7 +350,7 @@ test("renderInspectRunViewerHtml keeps selected handoff-to-copilot rows on the a
 
   assert.match(html, /assigned-pr-row-attention/);
   assert.match(html, /is-selected/);
-  assert.match(html, /Copilot loop needs action/);
+  assert.match(html, /Copilot lane is next/);
   assert.match(html, /title="Active loop"/);
   assert.match(html, /🔁/);
 });

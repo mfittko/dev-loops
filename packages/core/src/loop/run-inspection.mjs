@@ -195,6 +195,12 @@ function evaluateLiveSteeringAvailability({
  *   Optional stop reason string from the authoritative outer-loop interpretation
  *   (for example `interpretOuterLoopState(...).stopReason`, such as
  *   "copilot_blocked").
+ * @param {string | undefined} [params.outerHandoffReason]
+ *   Optional human-readable reason from the routing handoff envelope (for
+ *   example `interpretOuterLoopState(...).handoffEnvelope.reason`, such as
+ *   "PR is in draft state; copilot loop required: copilot_state=pr_draft").
+ *   Emitted on the snapshot as `outerHandoffReason` so presentation layers can
+ *   quote the state machine instead of re-deriving prose from state names.
  * @param {{ snapshot: object, interpretation: { state: string, allowedTransitions: string[], nextAction: string } } | null} params.copilotEvidence
  *   Live copilot inner-loop facts. null when live detection was unavailable.
  * @param {{ snapshot: object, interpretation: { state: string, allowedTransitions: string[], nextAction: string } } | null} params.reviewerEvidence
@@ -233,6 +239,7 @@ export function composeRunInspectionSnapshot({
   outerAllowedTransitions,
   outerAction,
   outerReason,
+  outerHandoffReason,
   copilotEvidence,
   reviewerEvidence,
   existingCheckpoint,
@@ -591,6 +598,13 @@ export function composeRunInspectionSnapshot({
     outerState: effectiveOuterState ?? "unknown",
     ...(effectiveOuterAllowedTransitions !== undefined ? { allowedTransitions: effectiveOuterAllowedTransitions } : {}),
     outerAction: effectiveOuterAction ?? "unknown",
+    // The routing layer's own sentence for WHY this outer state was chosen
+    // (`interpretOuterLoopState(...).handoffEnvelope.reason`). Surfaced so
+    // presentation layers can quote it instead of re-deriving their own prose
+    // and drifting from the state machine. Omitted when routing gave none.
+    ...(typeof outerHandoffReason === "string" && outerHandoffReason.length > 0
+      ? { outerHandoffReason }
+      : {}),
     activeFamilyState: effectiveOuterAction ?? "unknown",
     statusClass,
     needsAttention,
