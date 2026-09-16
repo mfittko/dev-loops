@@ -32,8 +32,9 @@ const PREFIX_BYTES = "## Invariant prefix\nrepo: o/r\nhead: c\n";
 const VOLATILE_BYTES = "# volatile tail\ngate: pre_approval_gate\n";
 
 // A CONFIGURED group (design-simplicity — in the shipped gates.fanout.groups),
-// an AUTO-CHUNK leftover unit (group:...), and a singleton. Only the configured
-// group shares a reviewer; the auto-chunk unit splits into per-angle singletons.
+// an AUTO-CHUNK leftover unit (group:...), and a singleton. Both multi-angle
+// units — configured or auto-chunk — share one reviewer each (issue 2180 /
+// ADR 0048); only the genuine singleton stays a singleton.
 const FANOUT = {
   groups: [
     { name: "design-simplicity", angles: ["dry", "kiss"] },
@@ -64,7 +65,11 @@ test("requires --repo/--pr/--gate/--head-sha", () => {
   assert.equal(runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE]).status, 2);
 });
 
-test("shares a reviewer only for a configured group; splits an auto-chunk unit into per-angle singletons", async () => {
+// Issue 2180 (Path A) / ADR 0048 reconciliation: a configured group AND an
+// auto-chunk leftover bundle both dispatch as ONE shared reviewer recording
+// the resolved unit's own name as provenance `group`; only the genuine
+// singleton dispatches without a shared group.
+test("shares a reviewer for a configured group AND an auto-chunk bundle alike; only a genuine singleton dispatches alone", async () => {
   await withTmpDir(async (tmpDir) => {
     await seedBundle(tmpDir);
     const result = runEmitCli(
@@ -74,8 +79,9 @@ test("shares a reviewer only for a configured group; splits an auto-chunk unit i
     assert.equal(result.status, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, true);
-    // design-simplicity (shared) + determinism + state-concurrency + contradiction-lens
-    assert.equal(payload.count, 4);
+    // design-simplicity (shared) + the auto-chunk bundle (shared) + contradiction-lens
+    // — NOT one reviewer per angle (AC9 exact-count: 3 units, not 4 angles).
+    assert.equal(payload.count, 3);
     // the coordinator waves the EMITTED units by this bound, not the stale wavePlan
     assert.equal(typeof payload.maxConcurrent, "number");
     assert.ok(payload.maxConcurrent >= 1);
@@ -86,15 +92,14 @@ test("shares a reviewer only for a configured group; splits an auto-chunk unit i
     assert.ok(cfg, "configured group scope present");
     assert.deepEqual(cfg.angles, ["dry", "kiss"]);
     assert.equal(cfg.group, "design-simplicity");
-    // auto-chunk unit's angles each become their own singleton reviewer (no shared group)
-    const det = bySc["pre-approval-gate-determinism"];
-    const stc = bySc["pre-approval-gate-state-concurrency"];
-    assert.ok(det && stc, "auto-chunk angles dispatched as distinct singletons");
-    assert.equal(det.group, null);
-    assert.equal(stc.group, null);
-    assert.deepEqual(det.angles, ["determinism"]);
-    // no shared unit carries the auto-chunk `group:...` name as provenance
-    assert.ok(!payload.units.some((u) => u.group === "group:determinism+state-concurrency"));
+    // auto-chunk bundle → ONE shared reviewer, group = the bundle's own resolved name
+    const autoChunk = bySc["pre-approval-gate-group-group-determinism-state-concurrency"];
+    assert.ok(autoChunk, "auto-chunk bundle scope present, shared not split");
+    assert.deepEqual(autoChunk.angles, ["determinism", "state-concurrency"]);
+    assert.equal(autoChunk.group, "group:determinism+state-concurrency");
+    // no per-angle singleton was emitted for the bundled angles
+    assert.ok(!("pre-approval-gate-determinism" in bySc));
+    assert.ok(!("pre-approval-gate-state-concurrency" in bySc));
     // singleton stays a singleton
     assert.equal(bySc["pre-approval-gate-contradiction-lens"].group, null);
 
@@ -180,6 +185,51 @@ test("main(): a configured group OVER the angle cap splits into ceil(N/3) sub-un
     // 5 angles / cap 3 → part1 (3 angles) + part2 (2 angles), both multi-angle.
     assert.equal(splitUnits.length, 2);
     for (const u of splitUnits) assert.equal(u.group, "design-solid");
+  });
+});
+
+// AC9 (issue 2180, Path A) end-to-end exact-count fixture: a NO-config-table
+// angle set (no gates.fanout.groups match at all) routed through the REAL
+// resolveFanoutGroups auto-chunk path (via resolveFanoutDispatch, the same
+// seam write-gate-context.mjs's CLI drives) must dispatch ONE shared reviewer
+// PER AUTO-CHUNK BUNDLE — never one reviewer per angle. 7 ungrouped angles at
+// the default maxAnglesPerGroup=3 auto-chunk into exactly 3 bundles
+// ([a,b,c], [d,e,f], [g]); the emitted count must be 3, not 7.
+async function seedRealAutoChunkOnlyBundle(tmpDir, angles) {
+  const { config } = await loadDevLoopConfig({ repoRoot: tmpDir }); // no .devloops → no configured groups
+  const options = parseWriteGateContextCliArgs([
+    "--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA,
+    "--angles", JSON.stringify(angles),
+  ]);
+  options.config = config;
+  options.fanoutDispatch = resolveFanoutDispatch(config, mapGateToConfigKey(GATE), angles, {});
+  await writeGateContext(options, { repoRoot: tmpDir });
+}
+
+test("main(): a no-config-table angle set dispatches ONE shared reviewer per auto-chunk bundle, not one per angle (AC9, issue 2180)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const angles = ["a", "b", "c", "d", "e", "f", "g"];
+    await seedRealAutoChunkOnlyBundle(tmpDir, angles);
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, true);
+    // 7 angles / cap 3 → 3 auto-chunk bundles ([a,b,c],[d,e,f],[g]), NOT 7
+    // per-angle singletons.
+    assert.equal(payload.count, 3);
+    // Coverage (AC7): every input angle is dispatched exactly once.
+    assert.deepEqual(payload.units.flatMap((u) => u.angles).sort(), [...angles].sort());
+    // The two 3-angle bundles are shared reviewers recording their own
+    // auto-chunk bundle name as provenance `group`; the trailing 1-angle
+    // bundle is a genuine singleton with no shared group.
+    const sharedUnits = payload.units.filter((u) => u.angles.length > 1);
+    assert.equal(sharedUnits.length, 2);
+    for (const u of sharedUnits) assert.match(u.group, /^group:/);
+    const singleton = payload.units.find((u) => u.angles.length === 1);
+    assert.equal(singleton.group, null);
   });
 });
 
@@ -620,10 +670,10 @@ test("fails closed (exit 1) when a unit's invariant-prefix record is missing", a
   });
 });
 
-test("fails closed (exit 1) when two split singletons derive a colliding scope", async () => {
+test("fails closed (exit 1) when two distinct singleton units derive a colliding scope", async () => {
   await withTmpDir(async (tmpDir) => {
-    // A non-configured unit whose two angles sanitize to the same scope segment.
-    await seedBundle(tmpDir, { fanout: { groups: [{ name: "u", angles: ["foo.bar", "foo-bar"] }] } });
+    // Two distinct single-angle units whose angle names sanitize to the same scope segment.
+    await seedBundle(tmpDir, { fanout: { groups: [{ name: "foo.bar", angles: ["foo.bar"] }, { name: "foo-bar", angles: ["foo-bar"] }] } });
     const result = runEmitCli(
       ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
       { cwd: tmpDir },
@@ -674,14 +724,19 @@ test("trims padded angle names so the dispatched angle and scope carry no whites
   });
 });
 
-test("expandDispatchUnits: trims padded angles", () => {
-  assert.deepEqual(expandDispatchUnits([{ name: "u", angles: [" a ", "b "] }], new Set()), [
+test("expandDispatchUnits: trims padded angles on a singleton", () => {
+  assert.deepEqual(expandDispatchUnits([{ name: "u", angles: [" a "] }], new Set()), [
     { name: "a", angles: ["a"], group: null },
-    { name: "b", angles: ["b"], group: null },
   ]);
 });
 
-test("expandDispatchUnits: configured group stays shared, everything else splits to singletons", () => {
+test("expandDispatchUnits: trims padded angles on a multi-angle (shared) unit", () => {
+  assert.deepEqual(expandDispatchUnits([{ name: "u", angles: [" a ", "b "] }], new Set()), [
+    { name: "u", angles: ["a", "b"], group: "u" },
+  ]);
+});
+
+test("expandDispatchUnits: a configured group AND an auto-chunk bundle both stay shared; only the genuine singleton splits alone", () => {
   const configured = new Set(["design-simplicity"]);
   const units = [
     { name: "design-simplicity", angles: ["dry", "kiss"] },
@@ -691,10 +746,26 @@ test("expandDispatchUnits: configured group stays shared, everything else splits
   const out = expandDispatchUnits(units, configured);
   assert.deepEqual(out, [
     { name: "design-simplicity", angles: ["dry", "kiss"], group: "design-simplicity" },
-    { name: "a", angles: ["a"], group: null },
-    { name: "b", angles: ["b"], group: null },
+    { name: "group:a+b", angles: ["a", "b"], group: "group:a+b" },
     { name: "solo", angles: ["solo"], group: null },
   ]);
+});
+
+// AC7 coverage: the union of angles across emitted units equals the input
+// angle set — no angle dropped or duplicated by grouping a mix of configured
+// groups, auto-chunk bundles, and singletons.
+test("expandDispatchUnits: emitted angle coverage equals the input angle set (no drop/duplicate)", () => {
+  const configured = new Set(["design-simplicity"]);
+  const units = [
+    { name: "design-simplicity", angles: ["dry", "kiss"] },
+    { name: "group:a+b+c", angles: ["a", "b", "c"] },
+    { name: "solo", angles: ["solo"] },
+  ];
+  const out = expandDispatchUnits(units, configured);
+  const inputAngles = units.flatMap((u) => u.angles);
+  const emittedAngles = out.flatMap((u) => u.angles);
+  assert.deepEqual([...emittedAngles].sort(), [...inputAngles].sort());
+  assert.equal(new Set(emittedAngles).size, emittedAngles.length);
 });
 
 test("expandDispatchUnits: a configured group AT the angle cap stays one shared unit", () => {
@@ -824,7 +895,7 @@ test("a pre-valid --jq filter does not affect a successful run", async () => {
       { cwd: tmpDir },
     );
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout.trim(), "4");
+    assert.equal(result.stdout.trim(), "3");
     const tmpRoot = path.join(tmpDir, "tmp");
     const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
     assert.equal(JSON.parse(await readFile(planPath, "utf8")).ok, true);
