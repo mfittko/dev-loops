@@ -117,6 +117,13 @@ Exit codes:
 // Upper bound on the awaited best-effort startup reconcile so a slow or hung gh
 // can never delay startup completion.
 const STARTUP_RECONCILE_BUDGET_MS = 20000;
+
+// The post-emit board self-heal is a WRITE path with its own `gh` fan-out. It
+// runs only for a target-resolving invocation, and never for a read-only caller
+// that passed --no-reconcile (the inspect viewer's handoff-envelope preview).
+export function shouldRunStartupReconcile(options) {
+  return options.reconcile !== false && (options.issue !== undefined || options.pr !== undefined);
+}
 const SHARED_PUBLIC_CONTRACT = "skills/docs/public-dev-loop-contract.md";
 const SHARED_RETROSPECTIVE_CONTRACT = "skills/docs/retrospective-checkpoint-contract.md";
 const STRATEGY_REQUIRED_READS = {
@@ -1393,7 +1400,7 @@ export async function runCli(argv = process.argv.slice(2), { stdout = process.st
   // configured board so it never shells out to gh in the no-.devloops unit tests;
   // never writes stdout, never changes exit code, never throws. Skips
   // --input/--plan-file/--spike modes.
-  if (options.reconcile !== false && (options.issue !== undefined || options.pr !== undefined)) {
+  if (shouldRunStartupReconcile(options)) {
     let reconcileRoot = sessionCwd;
     try {
       reconcileRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {

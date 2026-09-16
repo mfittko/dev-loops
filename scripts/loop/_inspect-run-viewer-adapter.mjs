@@ -1,5 +1,5 @@
 import { parseRepoSlugParts } from "@dev-loops/core/github/repo-slug";
-import { inspectRun } from "./inspect-run.mjs";
+import { inspectRun, inspectRunLoopIterations } from "./inspect-run.mjs";
 import { ghJson } from "@dev-loops/core/github/gh";
 import { runChild } from "@dev-loops/core/cli/primitives";
 const ASSIGNED_PR_LIST_CACHE_TTL_MS = 15_000;
@@ -19,8 +19,13 @@ const MAX_RESULT_LIMIT = 100;
 const DEFAULT_PR_STATE = "open";
 const DEFAULT_INBOX_MODE = "assignee";
 const DEFAULT_INBOX_SIGNAL = "waiting";
+// Anchored to gh's own phrasings ("API rate limit exceeded", "rate limit already
+// exceeded", "You have exceeded a secondary rate limit"). A bare `rate limit`
+// substring also matches an echoed PR title or proxy body, and classifying those
+// as rate limits shows the operator a retry time that will never come true.
 export function isRateLimitError(error) {
-  return /rate limit/i.test(error instanceof Error ? error.message : String(error ?? ""));
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /rate limit[^\n]{0,20}\bexceeded\b|\bexceeded\b[^\n]{0,20}rate limit/i.test(message);
 }
 
 // The failing `gh search` call surfaces no headers, and `gh api rate_limit`
@@ -30,7 +35,9 @@ export function isRateLimitError(error) {
 export async function readRateLimitResetMs({ env = process.env, ghCommand = "gh", runChildImpl = runChild } = {}) {
   try {
     const result = await runChildImpl(ghCommand, ["api", "-i", "graphql", "-f", "query={viewer{login}}"], env);
-    const match = /^x-ratelimit-reset:\s*(\d+)\s*$/im.exec(`${result?.stdout ?? ""}${result?.stderr ?? ""}`);
+    // Newline between the two streams: without it an unterminated stdout merges
+    // its last line into stderr's first and the anchored match silently misses.
+    const match = /^x-ratelimit-reset:\s*(\d+)\s*$/im.exec(`${result?.stdout ?? ""}\n${result?.stderr ?? ""}`);
     if (match === null) {
       return null;
     }
@@ -254,6 +261,7 @@ function snapshotCacheKey(target, options) {
 }
 export function createInspectionViewerAdapter({
   inspectRunImpl = inspectRun,
+  inspectRunLoopIterationsImpl = inspectRunLoopIterations,
   runGhJsonImpl = ghJson,
   nowImpl = () => Date.now(),
   snapshotCacheTtlMs = SNAPSHOT_CACHE_TTL_MS,
@@ -276,35 +284,59 @@ export function createInspectionViewerAdapter({
   const assignedPrListCache = new Map();
   const signalKeyCache = new Map();
   const snapshotCache = new Map();
+  // The cached value is the PROMISE, so concurrent callers (page render plus its
+  // snapshot.json fetch) share one `gh` fan-out instead of racing. `cachedAt` is
+  // stamped when the fetch SETTLES, not when it starts: stamping it up front
+  // sweeps a load slower than the TTL while it is still in flight, and a second
+  // full fan-out then starts on exactly the loads the cache exists for.
+  function memoizeFetch(key, refresh, factory) {
+    const nowMs = nowImpl();
+    for (const [cachedKey, entry] of snapshotCache.entries()) {
+      if (entry.settled && (nowMs - entry.cachedAt) > snapshotCacheTtlMs) {
+        snapshotCache.delete(cachedKey);
+      }
+    }
+    const cached = refresh ? undefined : snapshotCache.get(key);
+    if (cached) {
+      return cached.promise;
+    }
+    const promise = (async () => factory())();
+    const entry = { cachedAt: nowMs, promise, settled: false };
+    snapshotCache.set(key, entry);
+    promise.then(
+      () => {
+        entry.cachedAt = nowImpl();
+        entry.settled = true;
+      },
+      // Never cache a failure: drop the entry so the next request retries live.
+      () => {
+        if (snapshotCache.get(key) === entry) {
+          snapshotCache.delete(key);
+        }
+      },
+    );
+    return promise;
+  }
   return {
     async loadSnapshot(target, options = {}) {
       const normalizedTarget = normalizeInspectionTarget(target);
       const { refresh = false, ...inspectOptions } = options;
+      const load = () => inspectRunImpl({ ...inspectOptions, ...normalizedTarget });
       if (!(snapshotCacheTtlMs > 0)) {
-        return inspectRunImpl({ ...inspectOptions, ...normalizedTarget });
+        return load();
       }
-      const nowMs = nowImpl();
-      const key = snapshotCacheKey(normalizedTarget, inspectOptions);
-      for (const [cachedKey, entry] of snapshotCache.entries()) {
-        if ((nowMs - entry.cachedAt) > snapshotCacheTtlMs) {
-          snapshotCache.delete(cachedKey);
-        }
+      return memoizeFetch(snapshotCacheKey(normalizedTarget, inspectOptions), refresh, load);
+    },
+    // Round metrics only: what the deferred /round-metrics.html fragment renders.
+    // Cached apart from the snapshot so reopening a PR inside the TTL is free.
+    async loadLoopIterations(target, options = {}) {
+      const normalizedTarget = normalizeInspectionTarget(target);
+      const { refresh = false, includeLoopIterations: _unused, ...inspectOptions } = options;
+      const load = () => inspectRunLoopIterationsImpl({ ...inspectOptions, ...normalizedTarget });
+      if (!(snapshotCacheTtlMs > 0)) {
+        return load();
       }
-      // The cached value is the PROMISE, so concurrent callers (page render plus
-      // its snapshot.json fetch) share one `gh` fan-out instead of racing.
-      const cached = refresh ? undefined : snapshotCache.get(key);
-      if (cached) {
-        return cached.promise;
-      }
-      const promise = (async () => inspectRunImpl({ ...inspectOptions, ...normalizedTarget }))();
-      snapshotCache.set(key, { cachedAt: nowMs, promise });
-      // Never cache a failure: drop the entry so the next request retries live.
-      promise.catch(() => {
-        if (snapshotCache.get(key)?.promise === promise) {
-          snapshotCache.delete(key);
-        }
-      });
-      return promise;
+      return memoizeFetch(`loopIterations:${snapshotCacheKey(normalizedTarget, inspectOptions)}`, refresh, load);
     },
     async listAssignedPullRequests(options = {}) {
       const {
@@ -332,6 +364,14 @@ export function createInspectionViewerAdapter({
       for (const [key, entry] of assignedPrListCache.entries()) {
         if ((nowMs - entry.cachedAt) > ASSIGNED_PR_LIST_CACHE_TTL_MS) {
           assignedPrListCache.delete(key);
+        }
+      }
+      // Same sweep for the signal cache: its key space is the full filter
+      // permutation, so a long-lived viewer browsing many repo scopes would
+      // otherwise accumulate entries for the process lifetime.
+      for (const [key, entry] of signalKeyCache.entries()) {
+        if ((nowMs - entry.cachedAt) > SIGNAL_KEY_CACHE_TTL_MS) {
+          signalKeyCache.delete(key);
         }
       }
       const cacheKey = `${ghCommand}::${repoSlug.length > 0 ? repoSlug.toLowerCase() : "all-repos"}::${normalizedMode}::${normalizedState}::${normalizedLimit}::${normalizedUpdatedWithinDays ?? "all"}`;
@@ -366,30 +406,36 @@ export function createInspectionViewerAdapter({
       // The 4 signal queries only tint the inbox dots and change far more slowly
       // than the list itself, so they get their own long TTL: a list refresh
       // costs 1 search call, not 5. Every `gh search` spends GraphQL points.
+      // The cached value is the in-flight PROMISE, so a page render overlapping
+      // an auto-reload tick joins the same 4 searches instead of firing 8.
+      const listPromise = runGhJson(baseQueryArgs, { env, ghCommand });
       const signalCached = signalKeyCache.get(cacheKey);
-      const signalsFresh = signalCached && (nowMs - signalCached.cachedAt) <= SIGNAL_KEY_CACHE_TTL_MS;
-      const [payload, signalSets] = await Promise.all([
-        runGhJson(baseQueryArgs, { env, ghCommand }),
-        signalsFresh
-          ? Promise.resolve(signalCached.sets)
-          : Promise.all([
-            runGhJson(queryArgsFor({ review: "changes_requested" }), { env, ghCommand }),
-            runGhJson(queryArgsFor({ checks: "failure" }), { env, ghCommand }),
-            runGhJson(queryArgsFor({ checks: "pending" }), { env, ghCommand }),
-            runGhJson(queryArgsFor({ review: "approved" }), { env, ghCommand }),
-          ]).then(([changesRequested, failingChecks, pendingChecks, approved]) => {
-            const sets = {
-              attention: new Set([
-                ...createEntryKeySet(changesRequested, toRepoSlug),
-                ...createEntryKeySet(failingChecks, toRepoSlug),
-              ]),
-              pending: createEntryKeySet(pendingChecks, toRepoSlug),
-              ready: createEntryKeySet(approved, toRepoSlug),
-            };
-            signalKeyCache.set(cacheKey, { cachedAt: nowMs, sets });
-            return sets;
-          }),
-      ]);
+      let signalsPromise;
+      if (signalCached) {
+        signalsPromise = signalCached.promise;
+      } else {
+        signalsPromise = Promise.all([
+          runGhJson(queryArgsFor({ review: "changes_requested" }), { env, ghCommand }),
+          runGhJson(queryArgsFor({ checks: "failure" }), { env, ghCommand }),
+          runGhJson(queryArgsFor({ checks: "pending" }), { env, ghCommand }),
+          runGhJson(queryArgsFor({ review: "approved" }), { env, ghCommand }),
+        ]).then(([changesRequested, failingChecks, pendingChecks, approved]) => ({
+          attention: new Set([
+            ...createEntryKeySet(changesRequested, toRepoSlug),
+            ...createEntryKeySet(failingChecks, toRepoSlug),
+          ]),
+          pending: createEntryKeySet(pendingChecks, toRepoSlug),
+          ready: createEntryKeySet(approved, toRepoSlug),
+        }));
+        const signalEntry = { cachedAt: nowMs, promise: signalsPromise };
+        signalKeyCache.set(cacheKey, signalEntry);
+        signalsPromise.catch(() => {
+          if (signalKeyCache.get(cacheKey) === signalEntry) {
+            signalKeyCache.delete(cacheKey);
+          }
+        });
+      }
+      const [payload, signalSets] = await Promise.all([listPromise, signalsPromise]);
       if (!Array.isArray(payload)) {
         return [];
       }

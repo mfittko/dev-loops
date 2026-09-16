@@ -6,6 +6,39 @@ import {
   renderInspectRunViewerHtml,
 } from "../../scripts/loop/inspect-run-viewer.mjs";
 import { makeSnapshot } from "./inspect-run-viewer-test-helpers.mjs";
+test("renderInspectRunViewerHtml emits the round-metrics fragment URL as a JS string, not HTML-escaped", () => {
+  const html = renderInspectRunViewerHtml({
+    repo: "owner/repo",
+    target: { repo: "owner/repo", pr: 55 },
+    snapshot: makeSnapshot({
+      loopIterations: { available: false, source: "github_pr_timeline", reason: "deferred_by_caller" },
+    }),
+    inboxItems: [],
+  });
+
+  // Script content is raw text: an HTML-escaped `&` would ship literally and
+  // the server would see a junk `amp;pr` key with no `pr`.
+  assert.match(html, /fetch\("\/round-metrics\.html\?repo=owner%2Frepo&pr=55"/);
+  assert.doesNotMatch(html, /round-metrics\.html\?[^"]*&amp;/);
+  // The handoff link lives in an HTML attribute, where entities ARE decoded.
+  assert.match(html, /data-handoff-src="\/handoff-envelope\.html\?repo=owner%2Frepo&amp;pr=55"/);
+});
+
+test("renderInspectRunViewerHtml offers the 3d default inbox window alongside the wider presets", () => {
+  const html = renderInspectRunViewerHtml({
+    repo: null,
+    target: null,
+    snapshot: null,
+    inboxItems: [],
+    inboxUpdatedWithinDays: 3,
+  });
+
+  assert.match(html, /selected\s*>3d<\/option>/);
+  for (const label of ["7d", "30d", "90d", "All"]) {
+    assert.match(html, new RegExp(`>${label}</option>`));
+  }
+});
+
 test("renderInspectRunViewerHtml keeps the empty inbox copy generic across state and paging filters", () => {
   const html = renderInspectRunViewerHtml({
     repo: null,

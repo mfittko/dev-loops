@@ -36,7 +36,9 @@ export const MERMAID_BROWSER_ASSET_PATH = path.join(
   "vendor",
   "mermaid.min.js",
 );
-// 3d keeps the default inbox small; each widening costs 5 `gh search` calls.
+// Default inbox window. It bounds the RESULT SET, not the call count (a list
+// refresh costs the same searches at any window), so widening it is a readability
+// choice: use the 7d/30d/90d/All presets when an older PR has to be visible.
 export const DEFAULT_INBOX_UPDATED_WITHIN_DAYS = 3;
 export const DEFAULT_INBOX_PAGE_SIZE = 25;
 export const MAX_INBOX_RESULT_LIMIT = 100;

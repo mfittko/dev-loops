@@ -75,7 +75,11 @@ test("createInspectionViewerAdapter keeps normalized target authoritative over o
 
 test("rate-limit failures carry a retry-at hint read from the live reset header", async () => {
   assert.equal(isRateLimitError(new Error("gh command failed: GraphQL: API rate limit already exceeded")), true);
+  assert.equal(isRateLimitError(new Error("You have exceeded a secondary rate limit")), true);
   assert.equal(isRateLimitError(new Error("gh command failed: not found")), false);
+  // A PR title or proxy body echoing the phrase is not a rate limit, and showing
+  // the operator a retry time for it is wrong guidance.
+  assert.equal(isRateLimitError(new Error('gh command failed: no results for "raise the rate limit doc"')), false);
 
   const resetMs = await readRateLimitResetMs({
     runChildImpl: async () => ({
@@ -85,6 +89,15 @@ test("rate-limit failures carry a retry-at hint read from the live reset header"
     }),
   });
   assert.equal(resetMs, 1789568063000);
+
+  // An unterminated stdout must not merge its last line into stderr's first and
+  // silently break the anchored header match.
+  assert.equal(
+    await readRateLimitResetMs({
+      runChildImpl: async () => ({ code: 0, stdout: "HTTP/2.0 200 OK", stderr: "x-ratelimit-reset: 1789568063\n" }),
+    }),
+    1789568063000,
+  );
 
   assert.equal(
     describeRetryAfter(1789568063000, 1789568063000 - (14 * 60_000)),
@@ -129,6 +142,65 @@ test("createInspectionViewerAdapter caches snapshots per target, coalesces concu
   nowMs += 16_000;
   await adapter.loadSnapshot(target);
   assert.equal(inspectRunCalls, 4, "an expired entry refetches");
+
+  // `includeLoopIterations` is part of the cache key, so a deferred page-render
+  // snapshot can never be served to `/snapshot.json`, which asks for the full one.
+  await adapter.loadSnapshot(target, { includeLoopIterations: false });
+  assert.equal(inspectRunCalls, 5, "a deferred load must not be answered from the full-snapshot entry");
+  await adapter.loadSnapshot(target);
+  assert.equal(inspectRunCalls, 5, "the full-snapshot entry is untouched by the deferred one");
+});
+
+test("createInspectionViewerAdapter fetches round metrics alone and caches them apart from the snapshot", async () => {
+  let loopIterationCalls = 0;
+  const adapter = createInspectionViewerAdapter({
+    inspectRunImpl: async () => ({ ok: true }),
+    inspectRunLoopIterationsImpl: async (options) => {
+      loopIterationCalls += 1;
+      return { available: true, source: "github_pr_timeline", target: `${options.repo}#${options.pr}` };
+    },
+  });
+  const target = { repo: "owner/repo", pr: 55 };
+
+  const [first, second] = await Promise.all([
+    adapter.loadLoopIterations(target),
+    adapter.loadLoopIterations(target),
+  ]);
+  assert.equal(loopIterationCalls, 1, "concurrent round-metrics fetches share one fan-out");
+  assert.equal(first.target, "owner/repo#55");
+  assert.deepEqual(first, second);
+
+  await adapter.loadLoopIterations({ repo: "owner/repo", pr: 56 });
+  assert.equal(loopIterationCalls, 2, "a different PR is cached separately");
+
+  // Round metrics never come out of the snapshot entry, and vice versa.
+  await adapter.loadSnapshot(target);
+  await adapter.loadLoopIterations(target);
+  assert.equal(loopIterationCalls, 2);
+});
+
+test("createInspectionViewerAdapter keeps an in-flight snapshot cached past the TTL instead of sweeping it mid-load", async () => {
+  let nowMs = Date.parse("2026-05-21T00:00:00.000Z");
+  let inspectRunCalls = 0;
+  let release;
+  const adapter = createInspectionViewerAdapter({
+    nowImpl: () => nowMs,
+    inspectRunImpl: async () => {
+      inspectRunCalls += 1;
+      await new Promise((resolve) => { release = resolve; });
+      return { ok: true };
+    },
+  });
+  const target = { repo: "owner/repo", pr: 55 };
+
+  const slowLoad = adapter.loadSnapshot(target);
+  // The load is still running when the TTL elapses: a second caller must join it
+  // rather than start another full ~20-call fan-out.
+  nowMs += 16_000;
+  const joined = adapter.loadSnapshot(target);
+  release();
+  await Promise.all([slowLoad, joined]);
+  assert.equal(inspectRunCalls, 1);
 });
 
 test("createInspectionViewerAdapter never caches a failed snapshot load", async () => {
@@ -194,6 +266,28 @@ test("createInspectionViewerAdapter omits --updated when updatedWithinDays is nu
   for (const args of seenArgs) {
     assert.equal(args.includes("--updated"), false);
   }
+});
+
+test("createInspectionViewerAdapter shares one dot-signal fan-out between concurrent list refreshes", async () => {
+  let signalCalls = 0;
+  const adapter = createInspectionViewerAdapter({
+    inspectRunImpl: async () => ({ ok: true }),
+    runGhJsonImpl: async (args) => {
+      if (args.includes("changes_requested") || args.includes("failure") || args.includes("pending") || args.includes("approved")) {
+        signalCalls += 1;
+        return [];
+      }
+      return [];
+    },
+  });
+
+  // A page render overlapping an auto-reload tick must fire the 4 dot-signal
+  // searches once, not twice.
+  await Promise.all([
+    adapter.listAssignedPullRequests({ repo: "owner/repo" }),
+    adapter.listAssignedPullRequests({ repo: "owner/repo" }),
+  ]);
+  assert.equal(signalCalls, 4);
 });
 
 test("createInspectionViewerAdapter refreshes expired assigned PR cache entries", async () => {

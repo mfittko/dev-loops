@@ -555,8 +555,14 @@ export function composeRunInspectionSnapshot({
   if (lifecyclePhase === null) {
     // Fallback: derive from available PR facts
     const loopIter = loopIterations ?? {};
+    // A caller that deferred the loop-iteration fan-out must not get a DIFFERENT
+    // lifecycle phase than a full inspection: fall back to the same signal on the
+    // copilot evidence, which every caller loads either way.
     const hasUnresolvedThreads = typeof loopIter.unresolvedReviewThreads === "number"
-      && loopIter.unresolvedReviewThreads > 0;
+      ? loopIter.unresolvedReviewThreads > 0
+      : loopIter.reason === "deferred_by_caller"
+        && typeof copilotEvidence?.snapshot?.unresolvedThreadCount === "number"
+        && copilotEvidence.snapshot.unresolvedThreadCount > 0;
     const copilotState = copilotLiveOk && copilotEvidence !== null
       ? copilotEvidence.interpretation.state
       : null;

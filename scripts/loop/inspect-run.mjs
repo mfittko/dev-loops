@@ -213,6 +213,40 @@ async function fetchCopilotLoopIterations({ repo, pr, snapshot }, { env, ghComma
     degradedReasons,
   });
 }
+// Round metrics from already-loaded copilot evidence, and nothing else. The one
+// place that decides what `loopIterations` is, so the viewer's round-metrics
+// fragment and a full `inspectRun` cannot answer differently.
+export async function resolveLoopIterationMetrics(
+  { repo, pr, copilotInputPath, copilotEvidence },
+  { env = process.env, ghCommand = "gh" } = {},
+) {
+  if (copilotEvidence?.snapshot?.prExists === false) {
+    return { available: false, source: "github_pr_timeline", reason: "no_pr" };
+  }
+  if (copilotInputPath !== undefined || copilotEvidence === null) {
+    return { available: false, source: "github_pr_timeline", reason: "requires_live_github_facts" };
+  }
+  try {
+    return await fetchCopilotLoopIterations({ repo, pr, snapshot: copilotEvidence.snapshot }, { env, ghCommand });
+  } catch {
+    return { available: false, source: "github_pr_timeline", reason: "github_fact_capture_failed" };
+  }
+}
+
+// The deferred round-metrics fragment renders `loopIterations` and nothing else,
+// so it fetches copilot evidence plus the 6-call fan-out instead of rebuilding a
+// whole snapshot it would throw away.
+export async function inspectRunLoopIterations(options, { env = process.env, ghCommand = "gh" } = {}) {
+  const { repo, pr, copilotInputPath } = options;
+  parseRepoSlug(repo);
+  let copilotEvidence = null;
+  try {
+    copilotEvidence = await loadCopilotEvidence({ repo, pr, copilotInputPath }, { env, ghCommand });
+  } catch {
+  }
+  return resolveLoopIterationMetrics({ repo, pr, copilotInputPath, copilotEvidence }, { env, ghCommand });
+}
+
 async function loadSteeringState(steeringStateFile) {
   try {
     const text = await readFile(steeringStateFile, "utf8");
@@ -260,37 +294,9 @@ export async function inspectRun(options, { env = process.env, ghCommand = "gh" 
     reviewerLiveStatus = "ok";
   } catch {
   }
-  let loopIterations = {
-    available: false,
-    source: "github_pr_timeline",
-    reason: "requires_live_github_facts",
-  };
-  if (copilotEvidence?.snapshot?.prExists === false) {
-    loopIterations = {
-      available: false,
-      source: "github_pr_timeline",
-      reason: "no_pr",
-    };
-  } else if (includeLoopIterations === false) {
-    loopIterations = {
-      available: false,
-      source: "github_pr_timeline",
-      reason: "deferred_by_caller",
-    };
-  } else if (copilotInputPath === undefined && copilotEvidence !== null) {
-    try {
-      loopIterations = await fetchCopilotLoopIterations(
-        { repo, pr, snapshot: copilotEvidence.snapshot },
-        { env, ghCommand },
-      );
-    } catch {
-      loopIterations = {
-        available: false,
-        source: "github_pr_timeline",
-        reason: "github_fact_capture_failed",
-      };
-    }
-  }
+  const loopIterations = includeLoopIterations === false && copilotEvidence?.snapshot?.prExists !== false
+    ? { available: false, source: "github_pr_timeline", reason: "deferred_by_caller" }
+    : await resolveLoopIterationMetrics({ repo, pr, copilotInputPath, copilotEvidence }, { env, ghCommand });
   const { checkpoint: existingCheckpoint, filePath: checkpointEvidencePath } = await readExistingCheckpoint(repo, pr, { failSilently: true });
   let outerState;
   let outerAllowedTransitions;

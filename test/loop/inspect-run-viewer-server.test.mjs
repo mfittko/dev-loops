@@ -4,7 +4,6 @@ import { get } from "node:http";
 import { test } from "bun:test";
 
 import { createInspectRunViewerServer } from "../../scripts/loop/inspect-run-viewer.mjs";
-import { DEFAULT_INBOX_UPDATED_WITHIN_DAYS } from "../../scripts/loop/inspect-run-viewer/constants.mjs";
 import { makeSnapshot, requestOnce } from "./inspect-run-viewer-test-helpers.mjs";
 test("createInspectRunViewerServer answers /healthz without touching the adapter", async () => {
   let adapterCalls = 0;
@@ -35,7 +34,8 @@ test("createInspectRunViewerServer answers /healthz without touching the adapter
   }
 });
 
-test("createInspectRunViewerServer surfaces a failed inbox lookup instead of rendering an empty list", async () => {
+test("createInspectRunViewerServer surfaces a failed inbox lookup with a rate-limit retry time", async () => {
+  let rateLimitProbes = 0;
   const adapter = {
     loadHandoffEnvelope: async () => null,
     async loadSnapshot() {
@@ -46,7 +46,15 @@ test("createInspectRunViewerServer surfaces a failed inbox lookup instead of ren
     },
   };
 
-  const server = createInspectRunViewerServer({ host: "127.0.0.1", port: 0 }, { adapter });
+  const server = createInspectRunViewerServer({ host: "127.0.0.1", port: 0 }, {
+    adapter,
+    // Injected: without this seam the rate-limit branch spawns a real
+    // `gh api -i graphql`, spending a GraphQL point per test run.
+    readRateLimitResetMsImpl: async () => {
+      rateLimitProbes += 1;
+      return Date.now() + (14 * 60_000);
+    },
+  });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
 
@@ -56,25 +64,132 @@ test("createInspectRunViewerServer surfaces a failed inbox lookup instead of ren
 
     assert.equal(response.statusCode, 200);
     assert.match(response.body, /PR lookup failed: gh command failed: GraphQL: API rate limit already exceeded/);
+    assert.match(response.body, /Retry in ~14 min \(resets at \d{2}:\d{2} UTC\)\./);
     assert.match(response.body, /data-inbox-error/);
+    assert.equal(rateLimitProbes, 1);
+
+    // The reset moment does not move, so a second render reuses the probe.
+    await requestOnce(`http://127.0.0.1:${address.port}/`);
+    assert.equal(rateLimitProbes, 1);
   } finally {
     server.close();
     await once(server, "close");
   }
 });
 
-test("createInspectRunViewerServer defers the resolver-backed handoff envelope to its own fragment route", async () => {
-  let resolverCalls = 0;
+test("createInspectRunViewerServer does not probe the rate limit for an unrelated inbox failure", async () => {
+  let rateLimitProbes = 0;
   const adapter = {
+    loadHandoffEnvelope: async () => null,
     async loadSnapshot() {
+      return makeSnapshot({});
+    },
+    async listAssignedPullRequests() {
+      // A PR title echoed back by `gh search` is not a rate limit.
+      throw new Error("gh command failed: no results for \"raise the rate limit doc\"");
+    },
+  };
+
+  const server = createInspectRunViewerServer({ host: "127.0.0.1", port: 0 }, {
+    adapter,
+    readRateLimitResetMsImpl: async () => {
+      rateLimitProbes += 1;
+      return Date.now() + 60_000;
+    },
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const address = server.address();
+    const response = await requestOnce(`http://127.0.0.1:${address.port}/`);
+    assert.equal(response.statusCode, 200);
+    assert.equal(rateLimitProbes, 0);
+    assert.doesNotMatch(response.body, /Retry in ~/);
+  } finally {
+    server.close();
+    await once(server, "close");
+  }
+});
+
+test("createInspectRunViewerServer spawns the resolver only from the handoff fragment route, never during a page render", async () => {
+  let resolverSpawns = 0;
+  const snapshotOptions = [];
+  const adapter = {
+    async loadSnapshot(_target, options = {}) {
+      snapshotOptions.push(options);
       return makeSnapshot({});
     },
     async listAssignedPullRequests() {
       return [{ target: { repo: "owner/repo", pr: 55 }, title: "PR", updatedAt: null, signal: "waiting" }];
     },
-    async loadHandoffEnvelope() {
-      resolverCalls += 1;
-      return null;
+  };
+
+  const server = createInspectRunViewerServer({ host: "127.0.0.1", port: 0 }, {
+    adapter,
+    runResolverForTargetImpl: async () => {
+      resolverSpawns += 1;
+      return { bundleKind: "unresolved" };
+    },
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const address = server.address();
+    const page = await requestOnce(`http://127.0.0.1:${address.port}/?repo=owner%2Frepo&pr=55`);
+    assert.equal(page.statusCode, 200);
+    assert.equal(resolverSpawns, 0, "the page render must not spawn the resolver");
+    assert.match(page.body, /data-handoff-lazy/, "the handoff tab defers to its fragment route");
+    assert.deepEqual(
+      snapshotOptions.map((options) => options.includeLoopIterations),
+      [false],
+      "the page render must defer the loop-iteration fan-out",
+    );
+
+    const fragment = await requestOnce(`http://127.0.0.1:${address.port}/handoff-envelope.html?repo=owner%2Frepo&pr=55`);
+    assert.equal(fragment.statusCode, 200);
+    assert.equal(fragment.headers["content-type"], "text/html; charset=utf-8");
+    assert.equal(resolverSpawns, 1);
+
+    // The envelope legitimately resolved to null; that is a cache HIT, not a
+    // miss, so reopening the tab must not re-spawn the resolver.
+    const reopened = await requestOnce(`http://127.0.0.1:${address.port}/handoff-envelope.html?repo=owner%2Frepo&pr=55`);
+    assert.equal(reopened.statusCode, 200);
+    assert.equal(resolverSpawns, 1, "a cached null envelope must still suppress the resolver");
+  } finally {
+    server.close();
+    await once(server, "close");
+  }
+});
+
+test("createInspectRunViewerServer renders /round-metrics.html for its OWN pr and fails closed without one", async () => {
+  const loopIterationTargets = [];
+  const adapter = {
+    async loadSnapshot() {
+      return makeSnapshot({});
+    },
+    async listAssignedPullRequests() {
+      return [
+        { target: { repo: "owner/repo", pr: 12 }, title: "first", updatedAt: null, signal: "waiting" },
+        { target: { repo: "owner/repo", pr: 55 }, title: "second", updatedAt: null, signal: "waiting" },
+      ];
+    },
+    async loadLoopIterations(target) {
+      loopIterationTargets.push(target);
+      if (target.pr === 99) {
+        throw new Error("gh exploded");
+      }
+      return {
+        available: true,
+        source: "github_pr_timeline",
+        completedCopilotReviewRounds: 4,
+        pendingCopilotReviewRounds: 1,
+        copilotReviewComments: 8,
+        unresolvedReviewThreads: 0,
+        resolvedReviewThreads: 8,
+        fixCommitsAfterFeedback: 3,
+      };
     },
   };
 
@@ -84,10 +199,58 @@ test("createInspectRunViewerServer defers the resolver-backed handoff envelope t
 
   try {
     const address = server.address();
-    const fragment = await requestOnce(`http://127.0.0.1:${address.port}/handoff-envelope.html?repo=owner%2Frepo&pr=55`);
-    assert.equal(fragment.statusCode, 200);
-    assert.equal(fragment.headers["content-type"], "text/html; charset=utf-8");
-    assert.equal(resolverCalls, 1);
+
+    const rendered = await requestOnce(`http://127.0.0.1:${address.port}/round-metrics.html?repo=owner%2Frepo&pr=55`);
+    assert.equal(rendered.statusCode, 200);
+    assert.equal(rendered.headers["content-type"], "text/html; charset=utf-8");
+    assert.match(rendered.body, /completed rounds/);
+    assert.deepEqual(
+      loopIterationTargets,
+      [{ repo: "owner/repo", pr: 55 }],
+      "the fragment renders the requested pr, never the first inbox entry",
+    );
+
+    // A dropped `pr` must be rejected, not silently answered with PR 12's grid
+    // under PR 55's heading.
+    const targetless = await requestOnce(`http://127.0.0.1:${address.port}/round-metrics.html?repo=owner%2Frepo`);
+    assert.equal(targetless.statusCode, 400);
+    assert.deepEqual(loopIterationTargets, [{ repo: "owner/repo", pr: 55 }], "a target-less fragment costs no fan-out");
+
+    const failed = await requestOnce(`http://127.0.0.1:${address.port}/round-metrics.html?repo=owner%2Frepo&pr=99`);
+    assert.equal(failed.statusCode, 500);
+    assert.match(failed.body, /Round metrics unavailable: gh exploded/);
+  } finally {
+    server.close();
+    await once(server, "close");
+  }
+});
+
+test("createInspectRunViewerServer honors ?refresh=1 on the page render and nowhere else", async () => {
+  const refreshFlags = [];
+  const adapter = {
+    loadHandoffEnvelope: async () => null,
+    async loadSnapshot(_target, options = {}) {
+      refreshFlags.push(options.refresh === true);
+      return makeSnapshot({});
+    },
+    async listAssignedPullRequests() {
+      return [{ target: { repo: "owner/repo", pr: 55 }, title: "PR", updatedAt: null, signal: "waiting" }];
+    },
+  };
+
+  const server = createInspectRunViewerServer({ host: "127.0.0.1", port: 0 }, { adapter });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const address = server.address();
+    await requestOnce(`http://127.0.0.1:${address.port}/?repo=owner%2Frepo&pr=55&refresh=1`);
+    assert.deepEqual(refreshFlags, [true], "the Reload control forces a live re-fetch of the page render");
+
+    // A bookmarked or polled JSON URL must not be able to re-run the fan-out per
+    // request; the 15s cache stays in front of it.
+    await requestOnce(`http://127.0.0.1:${address.port}/snapshot.json?repo=owner%2Frepo&pr=55&refresh=1`);
+    assert.deepEqual(refreshFlags, [true, false]);
   } finally {
     server.close();
     await once(server, "close");
@@ -720,7 +883,9 @@ test("createInspectRunViewerServer reuses the all-repos inbox query for the defa
     assert.deepEqual(listCalls, [
       {
         repo: undefined,
-        updatedWithinDays: DEFAULT_INBOX_UPDATED_WITHIN_DAYS,
+        // Literal, not the constant: narrowing the default inbox window silently
+        // hides assigned PRs the operator was seeing the day before.
+        updatedWithinDays: 3,
         state: "open",
         mode: "assignee",
         limit: 100,
@@ -798,7 +963,9 @@ test("createInspectRunViewerServer constrains repo-scoped inbox discovery to the
     assert.deepEqual(listCalls, [
       {
         repo: "owner/repo",
-        updatedWithinDays: DEFAULT_INBOX_UPDATED_WITHIN_DAYS,
+        // Literal, not the constant: narrowing the default inbox window silently
+        // hides assigned PRs the operator was seeing the day before.
+        updatedWithinDays: 3,
         state: "open",
         mode: "assignee",
         limit: 100,

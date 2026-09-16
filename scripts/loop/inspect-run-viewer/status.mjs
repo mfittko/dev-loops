@@ -108,6 +108,12 @@ function buildCopilotLoopIterationEntries(snapshot) {
   if (loopIterations === null || loopIterations === undefined) {
     return null;
   }
+  // Deferred is not "unavailable": this block is outside the round-metrics slot
+  // the client fills, so rendering the usual `not present` rows here would tell
+  // the operator the evidence is missing while the Overview grid shows counts.
+  if (loopIterations.available === false && loopIterations.reason === "deferred_by_caller") {
+    return [["round metrics", "deferred to the Overview tab, which loads them after first paint"]];
+  }
 
   const humanSummary = loopIterations.available
     ? [

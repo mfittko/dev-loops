@@ -52,11 +52,14 @@ function renderRoundMetricsLazyScript(target) {
     return "";
   }
   const params = new URLSearchParams({ repo: target.repo, pr: String(target.pr) });
+  // A JS string literal, NOT escapeHtml: script content is raw text, so an
+  // HTML-escaped `&` would ship literally as `&amp;` and drop the `pr` param.
+  const fragmentUrl = JSON.stringify(`/round-metrics.html?${params.toString()}`);
   return `<script>
     (() => {
       const slot = document.querySelector("[data-round-metrics-slot]");
       if (!slot || !slot.querySelector("[data-round-metrics-status]")) { return; }
-      fetch("/round-metrics.html?${escapeHtml(params.toString())}", { headers: { accept: "text/html" } })
+      fetch(${fragmentUrl}, { headers: { accept: "text/html" } })
         .then((response) => (response.ok ? response.text() : Promise.reject(new Error("status " + response.status))))
         .then((html) => { slot.innerHTML = html; })
         .catch((error) => {

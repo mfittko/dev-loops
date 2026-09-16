@@ -21,6 +21,7 @@ import {
   STRATEGY_OWNERSHIP_GATE,
   ownershipGateAppliesToStrategy,
   runCli,
+  shouldRunStartupReconcile,
 } from "../../scripts/loop/resolve-dev-loop-startup.mjs";
 import { buildDevLoopHandoffEnvelope, validateHandoffEnvelope } from "@dev-loops/core/loop/handoff-envelope";
 
@@ -124,6 +125,11 @@ test("parseResolveDevLoopStartupCliArgs parses --input and --help", () => {
     reconcile: true,
   });
   assert.equal(parseResolveDevLoopStartupCliArgs(["--pr", "7", "--no-reconcile"]).reconcile, false);
+  // The parse is not the point: --no-reconcile exists to SKIP the post-emit board
+  // self-heal, which is the 36.6s / 188-gh-call path the viewer must not trigger.
+  assert.equal(shouldRunStartupReconcile(parseResolveDevLoopStartupCliArgs(["--pr", "7"])), true);
+  assert.equal(shouldRunStartupReconcile(parseResolveDevLoopStartupCliArgs(["--pr", "7", "--no-reconcile"])), false);
+  assert.equal(shouldRunStartupReconcile(parseResolveDevLoopStartupCliArgs(["--issue", "7", "--no-reconcile"])), false);
   assert.deepEqual(parseResolveDevLoopStartupCliArgs(["--help"]), {
     help: true,
     inputPath: undefined,
