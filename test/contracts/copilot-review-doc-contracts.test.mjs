@@ -10,6 +10,8 @@ import {
 } from "../imported-assets-helpers.mjs";
 import { assertRuleOwned, assertRulePresent, extractOwnedText } from "./_rule-helpers.mjs";
 import { extractRelativeMarkdownLinks } from "../../scripts/docs/validate-links.mjs";
+import { extractRuleReferences } from "../../scripts/docs/validate-rule-ownership.mjs";
+import { parseMarkdownSections } from "../../packages/core/src/loop/issue-refinement-artifact.mjs";
 
 function assertReference(content, target) {
   const targets = extractRelativeMarkdownLinks(content).map(({ rawTarget }) => rawTarget.split("#")[0]);
@@ -98,7 +100,14 @@ test("copilot review gates keep phase-specific angle ownership in one canonical 
   }
 });
 
-test("tracker-backed PR validation guidance keeps stable evidence canonical and template/mirror surfaces in parity", async () => {
+function assertValidationPolicyReference(template) {
+  const section = parseMarkdownSections(template).find(({ level, name }) => level === 2 && name.toLowerCase() === "validation");
+  assert.ok(section, "PR template must contain a Validation section");
+  const references = extractRuleReferences(section.bodyLines.join("\n"), ".github/pull_request_template.md");
+  assert.ok(references.some(({ id }) => id === "OPS-PR-VALIDATION-STABLE-EVIDENCE"), "Validation must reference its reporting-policy owner");
+}
+
+test("tracker-backed PR validation references its canonical policy and keeps the mirror in parity", async () => {
   const [operationsDoc, claudeMirror, template] = await Promise.all([
     readRepo("skills/docs/copilot-loop-operations.md"),
     readRepo(".claude/skills/docs/copilot-loop-operations.md"),
@@ -106,17 +115,26 @@ test("tracker-backed PR validation guidance keeps stable evidence canonical and 
   ]);
   const ruleId = "OPS-PR-VALIDATION-STABLE-EVIDENCE";
   assertRuleOwned(ruleId, "skills/docs/copilot-loop-operations.md");
-  const ownedText = extractOwnedText(operationsDoc, ruleId);
-  assert.match(ownedText, /command or named check/i);
-  assert.match(ownedText, /stable pass\/fail outcome/i);
-  assert.match(ownedText, /aggregate test, assertion, or asset counts/i);
-  assert.match(ownedText, /skip counts.*durations.*timestamps.*incidental totals/i);
-  assert.match(ownedText, /explicit acceptance criterion.*exact quantity behaviorally significant/i);
-  assert.match(ownedText, /head-stamped validation and gate artifacts/i);
   assert.equal(claudeMirror, operationsDoc, "generated Claude contract mirror must remain byte-identical");
-  assert.match(template, new RegExp(`rule-ref: ${ruleId}`));
-  assert.match(template, /list each command or named check with its stable pass\/fail outcome/i);
-  assert.match(template, /Keep volatile counts, durations, timestamps, and incidental totals in the head-stamped validation\/gate artifacts/i);
+  assertValidationPolicyReference(template);
+  // Reporting semantics have no executable policy validator. This checks owner
+  // discovery/projection, not compliance; quantity exceptions and head-bound
+  // details need scenario review recorded in the cleanup coverage artifact.
+});
+
+test("validation-policy reference accepts rewritten guidance but cannot be borrowed from another section", () => {
+  const reference = "<!-- rule-ref: OPS-PR-VALIDATION-STABLE-EVIDENCE -->";
+  for (const guidance of ["Record each check and its result.", "Give the command\nand stable outcome."]) {
+    assertValidationPolicyReference(`## Validation\n${reference}\n${guidance}\n## Notes\nOther text.`);
+  }
+  for (const content of [
+    "## Validation\nNo reference.",
+    "## Validation\n<!-- rule-ref: OPS-DRAFT-FIRST-PR -->",
+    `${reference}\n## Validation\nNo local reference.`,
+    `## Validation\nNo local reference.\n## Notes\n${reference}`,
+    `## Validation\n\x60\x60\x60text\n${reference}\n\x60\x60\x60`,
+    `\x60\x60\x60markdown\n## Validation\n${reference}\n\x60\x60\x60`,
+  ]) assert.throws(() => assertValidationPolicyReference(content));
 });
 test("copilot-pr-followup skill routes review requests and wait seams through deterministic helpers", async () => {
   const skillContent = await readRepo("skills/copilot-pr-followup/SKILL.md");
