@@ -27,7 +27,7 @@ Both `normalizeStatusCheckRollupContract` and `normalizeHeadScopedCiContract` re
 
 The prober and the detector cannot disagree about whether the loop may proceed: both partition out the loop-derived entries before computing status, and a contract test pins them against one shared rollup fixture. A genuinely failing check beside a red gate-evidence still blocks and is still reported in `failedChecks`; the excluded entry stays visible in `excludedFailureDetails` so a reader can tell "green apart from gate-evidence" from "green".
 
-Note: `"crediblyGreen"` is a distinct, unrelated CI status reserved for the bounded zero-suite local-validation exception (`--local-validation-head-sha`, #740/#1338) — it is never produced by the gate-evidence exclusion above.
+Note: `"crediblyGreen"` is a distinct, unrelated CI status reserved for the bounded zero-suite local-validation exception the detector derives — it is never produced by the gate-evidence exclusion above.
 
 ## Inputs
 
