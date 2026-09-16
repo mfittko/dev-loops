@@ -133,3 +133,67 @@ Wrong order detail: repair the draft, then recheck. Order data unavailable: no s
 - “A graph makes the process explicit. Its checks determine what it can establish.”
 
 Avoid “graphs make AI deterministic,” “a second agent verifies truth,” “automatic retries guarantee success,” or “prompting is obsolete.” Prompts still matter inside each step; they should not be the only enforcement mechanism for mandatory rules.
+
+## 12. Human decisions and workflow costs
+
+Added 2026-09-16 for slides 30–36. These operating recommendations are design synthesis. The sources establish mechanisms and bounded observations; this section supplies no measured dev-loops savings.
+
+Sources 3 and 6 above establish persisted interruption and bounded service retries. Our extension: people own goals, acceptance criteria, permission and resource limits; give them current evidence, open risks and approve/return/reject options. Track approval queues, human effort and decision quality. Preserve unfinished work when a budget runs out. Spend limits must not silently change acceptance criteria or supply clearance.
+
+Proposed economic comparison: hold tasks and acceptance criteria fixed; include failed runs, all workers, tools, compute and human effort. Report cost per accepted result together with completion rate, escaped defects, elapsed time and expensive outliers. State the valuation of human time and allocation of development/maintenance costs. With zero accepted results, report zero completions and total cost. The ratio has no finite value.
+
+## 13. Multi-agent work can multiply expenditure
+
+Source: [Anthropic, How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system), 2025-06-13.
+
+Observed in its research system: parallel exploration helped its evaluated research tasks, while vague delegation produced duplicate searches. Its usage comparison reported roughly 15 times the tokens of chat interactions for multi-agent systems. That comparator is chat interactions; the number is neither an equivalent single-agent comparison nor a dollar multiplier. The article also reports that one rubric-based judge fit its particular evaluation better than separate component judges.
+
+Use: require bounded assignments and evaluate total work. These observations do not establish an optimal reviewer count for software or a universal advantage for specialization.
+
+## 14. Context strategies need reliable handoffs
+
+Source: [Anthropic, Effective context engineering for AI agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents), 2025-09-29.
+
+Guidance: context can be managed through compaction, persisted notes, retrieval and focused subagents. Summarization can lose details; retrieval adds work and latency.
+
+Design synthesis: compare continuing conversation, fresh task context, and scoped handoffs with retrievable artifacts. A useful handoff includes goals, authoritative state, constraints, evidence references, unresolved questions and an output contract. Account for producing and maintaining it. Fresh workers still need enough facts to act correctly.
+
+## 15. Prompt caching changes the cost comparison
+
+Source: [Claude Platform, Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching), checked 2026-09-16.
+
+Mechanism: cache hits require matching prompt prefixes and the provider's other eligibility conditions. Stable content may be reused across requests. Changes before a cached boundary can prevent reuse.
+
+Design synthesis: measure uncached input, cache writes, cache reads and output across workers. Fresh context does not imply lower cost or a completely cold cache; continuing context does not imply paying full uncached price for every repeated token. Cache reuse does not remove material from context. Actual request structure and cache behavior determine the result. Omit universal price percentages and lifetimes.
+
+## 16. Review organization is a task-dependent choice
+
+Source: [Claude Code, Code Review](https://code.claude.com/docs/en/code-review), checked 2026-09-16.
+
+Documented behavior: multiple review stages find, verify, rank and report candidate findings. This is a product mechanism, with no controlled proof here that specialized review always outperforms one general reviewer.
+
+Design synthesis: assign distinct answerable questions, keep every required outcome accountable, consolidate duplicates and adjudicate disagreements. Separate contexts do not ensure statistically independent errors. Group related angles when they can share evidence. Compare valid unique findings, missed defects, false positives, latency and human triage time under the same task set.
+
+## 17. Model routing can be evaluated empirically
+
+Source: [Ong et al., RouteLLM: Learning to Route LLMs with Preference Data](https://arxiv.org/abs/2406.18665), revision 2025-02-23; abstract inspected.
+
+Research finding: learned routers selected stronger or weaker models and improved the cost/quality tradeoff on the tested benchmarks. Its historical results are specific to that setup.
+
+Design synthesis: use code for exact checks; test suitable lower-cost models on bounded tasks; evaluate stronger models for difficulty or risk. Include failed attempts, routing errors and fallback in the economic comparison. Required checks and authorization stay fixed across model choices. No current model price or dev-loops savings is inferred.
+
+## 18. Tool outputs should support the next decision
+
+Source: [Anthropic, Writing effective tools for agents](https://www.anthropic.com/engineering/writing-tools-for-agents), 2025-09-11.
+
+Guidance: return relevant material, offer concise/detailed modes and useful error information, and evaluate format choices. No one format is universally best.
+
+Design example: the slide's unknown validation result names the unchecked item, reason, permitted recovery action and evidence reference. It explicitly preserves incompleteness and truncation. Full logs remain available on demand. The fields were created for this teaching example; no token saving was measured for it.
+
+## Additional implementation evidence
+
+The new dev-loops references use the existing inspected revision, `9b5f988e`, verified again on 2026-09-16.
+
+- [Model and fan-out configuration](https://github.com/mfittko/dev-loops/blob/9b5f988e/packages/core/src/config/config.mjs): role-tier resolution, per-role/per-angle overrides, grouped and per-angle review dispatch. Defaults are harness-dependent; inheritance can mean no model change. <!-- secret-scan:allow source link pinned to inspected repository commit -->
+- [Dev-loop skill](https://github.com/mfittko/dev-loops/blob/9b5f988e/skills/dev-loop/SKILL.md): stable handoff content with changing gate state at the end; concise output, field selection and silent predicates. <!-- secret-scan:allow source link pinned to inspected repository commit -->
+- These seams show configurable mechanisms. They supply no cache-hit rate, cost reduction, universal resource-budget controller or proof of review effectiveness.

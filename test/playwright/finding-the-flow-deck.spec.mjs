@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
 
 import { expect, test } from "@playwright/test";
 
@@ -8,13 +9,34 @@ import { startFixtureServer, stopFixtureServer } from "./harness/webkit-smoke-ha
 const entry = deckRegistryEntry("finding-the-flow-deck");
 const deckPath = fileURLToPath(new URL(`../../docs/presentations/${entry.deck}`, import.meta.url));
 
+test.setTimeout(60_000);
+
 defineDeckSuite({ ...entry, deckPath, desktopFit: true, mobileFit: true, evidenceAssertions: true });
+
+test("speaker notes reserve fifty minutes of content and ten for questions", () => {
+  const notes = readFileSync(new URL("../../docs/presentations/finding-the-flow-speaker-notes.md", import.meta.url), "utf8");
+  const headings = [...notes.matchAll(/^## (\d+)\. .* — (.+)$/gm)];
+  expect(headings.map((heading) => Number(heading[1]))).toEqual(Array.from({ length: 42 }, (_, index) => index + 1));
+  const seconds = headings.slice(0, -1).map((heading) => {
+    const [minutes, seconds] = heading[2].split(":").map(Number);
+    return minutes * 60 + seconds;
+  });
+  expect(seconds.reduce((total, duration) => total + duration, 0)).toBe(50 * 60);
+  expect(seconds.slice(29, 36).reduce((total, duration) => total + duration, 0)).toBe(11 * 60);
+  expect(seconds[36]).toBe(2 * 60);
+  expect(notes).toContain("| Questions, with sources on screen | 42 | 10:00 |");
+});
 
 test("finding the flow supports keyboard navigation and keeps links usable", async ({ page }) => {
   const { server, url } = await startFixtureServer(() => makeDeckServer(deckPath));
   try {
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.goto(url);
+    await expect(page.locator("section.slide")).toHaveCount(42);
+    expect(await page.locator(".footer").allTextContents()).toEqual(Array.from({ length: 42 }, (_, index) => `${index + 1} / 42`));
+    await expect(page.locator("#budget-stop")).toContainText("A limit cannot weaken acceptance criteria or mark unfinished work complete.");
+    await expect(page.locator("#tool-result")).toContainText("unknown");
+    await expect(page.locator("#context-choice")).toContainText("cache");
     await expect(page.locator("#ui-findings img")).toHaveJSProperty("naturalWidth", 1280);
     await page.keyboard.press("ArrowRight");
     await page.waitForFunction(() => scrollY > innerHeight / 2);
