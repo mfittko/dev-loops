@@ -1,4 +1,6 @@
 import { access } from "node:fs/promises";
+import { extractRelativeMarkdownLinks } from "../../scripts/docs/validate-links.mjs";
+import { assertRuleOwned } from "./_rule-helpers.mjs";
 
 import {
   assert,
@@ -39,14 +41,14 @@ const GATE_DRIVING_SKILLS = [
   SUB_LOOP_CONTRACT,
 ];
 
-// Each numbered procedure step in the fan-out/fan-in section is one long line
-// starting "N. **<heading>:**" (see the section this pins). Extract by heading
-// substring so a mutation that deletes the whole step (leaving only the header
-// or a sibling step's mention of the same token) cannot satisfy the check.
-function extractStepLine(content, heading, file) {
-  const line = content.split("\n").find((l) => l.includes(heading));
-  assert.ok(line, `${file}: expected to find the ${JSON.stringify(heading)} step`);
-  return line;
+// Include wrapped paragraphs, but never borrow a command from a sibling step
+// or the following section. Heading wording is not used to find the boundary.
+function extractStep(content, heading, file) {
+  const lines = content.split("\n");
+  const start = lines.findIndex((line) => /^\d+\. /.test(line) && line.replace(/^\d+\. /, "").startsWith(heading));
+  assert.ok(start >= 0, `${file}: expected to find the ${JSON.stringify(heading)} step`);
+  const end = lines.findIndex((line, index) => index > start && /^(?:\d+\. |#{1,6} )/.test(line));
+  return lines.slice(start, end < 0 ? undefined : end).join("\n");
 }
 
 // Phase 1.2 (Carry-forward): names the CLI, the SHA form it requires, the
@@ -76,19 +78,18 @@ const PHASE_1_2_ROUTING = [
   /never treat exit 1 as "nothing to re-run"/,
 ];
 
-// Phase 2 (Fan-out): must dispatch by SUBTRACTION — the current head's
-// resolved angle set minus the plan's carried angles, never the plan's
-// mustRerun field — this is the clause that makes the carry-forward plan
-// operative rather than advisory, pinned in its unambiguous form.
+// Phase 2 routes carry-forward through the pending emitter API. The actual
+// subtraction is exercised end-to-end in emit-fanout-dispatch.test.mjs;
+// prose meaning is reviewed in the linked owner, not inferred from keywords.
 const PHASE_2_ROUTING = [
-  /resolved angle set minus the plan's `carried` angles \(the Phase 1\.2 subtraction — never `mustRerun`\)/,
+  /`[^`]*emit-fanout-dispatch\.mjs[^`]*--pending[^`]*`/,
+  /`[^`]*--carried-angles[^`]*--prev-head[^`]*`/,
 ];
 
 // Phase 3 (Fan-in): --provenance belongs to the LEDGER WRITE, not the comment
 // post — pinned on this line specifically so a reworded sentence that reattaches
 // the flag to the wrong command (the exact defect this pins) fails here. The
-// whole step is ONE line, so `[^\n]*` spans it end to end and cannot fail on a
-// reattached flag; anchor inside the backtick-delimited code span instead
+// step may span paragraphs; anchor inside the backtick-delimited code span
 // (`[^`]*`), which stops at the first closing backtick and so cannot reach past
 // the ledger-write command into a later, separately-quoted mention.
 const PHASE_3_ROUTING = [
@@ -110,25 +111,47 @@ const BARE_FINDINGS_ONLY_RERUN_CLASS =
 
 test("copilot-pr-followup SKILL's Phase 1.2 step routes the fan-out through resolve-angle-carry-forward", async () => {
   const skill = await readRepo(SKILL);
-  const line = extractStepLine(skill, "**Carry-forward (Phase 1.2):**", SKILL);
+  const line = extractStep(skill, "**Carry-forward (Phase 1.2):**", SKILL);
   assertMatchesAll(line, PHASE_1_2_ROUTING, `${SKILL} Phase 1.2 step`);
 });
 
-test("copilot-pr-followup SKILL's Phase 2 step dispatches only the angles Phase 1.2 left to re-run", async () => {
+test("copilot-pr-followup Phase 2 routes to the owned fan-out procedure and pending emitter", async () => {
   const skill = await readRepo(SKILL);
-  const line = extractStepLine(skill, "**Fan-out (Phase 2):**", SKILL);
+  const line = extractStep(skill, "**Fan-out (Phase 2):**", SKILL);
+  const links = extractRelativeMarkdownLinks(line).map(({ rawTarget }) => rawTarget);
+  assert.ok(links.includes("../docs/gate-review-sub-loop-contract.md#phase-2--fan-out-independent-reviewers-seeded-with-the-neutral-bundle"));
+  assertRuleOwned("GATE-EXEC-ANGLE-CARRY-FORWARD", SUB_LOOP_CONTRACT);
+  assertRuleOwned("GATE-EXEC-FANOUT-DISPATCH-EMIT", SUB_LOOP_CONTRACT);
   assertMatchesAll(line, PHASE_2_ROUTING, `${SKILL} Phase 2 step`);
 });
 
 test("copilot-pr-followup SKILL's Phase 3 step attaches --provenance to the ledger write, not the comment post", async () => {
   const skill = await readRepo(SKILL);
-  const line = extractStepLine(skill, "**Fan-in (Phase 3):**", SKILL);
+  const line = extractStep(skill, "**Fan-in (Phase 3):**", SKILL);
   assertMatchesAll(line, PHASE_3_ROUTING, `${SKILL} Phase 3 step`);
   assert.doesNotMatch(
     line,
     PHASE_3_PROVENANCE_NOT_ON_COMMENT_POST,
     `${SKILL} Phase 3 step must not attach --provenance to the post-gate-findings.mjs comment post`,
   );
+});
+
+test("phase routing checks accept wrapped prose but cannot borrow a sibling's command", () => {
+  const heading = "**Fan-in (Phase 3):**";
+  const command = "`write-gate-findings-log.mjs --provenance '<json>'`";
+  for (const prose of ["Record the carry.", "Preserve the prior\n   review identity."]) {
+    const content = `5. ${heading} ${prose}\n\n   ${command} with \`carriedFromHead\`.\n6. **Verdict:** Next step.\n`;
+    assertMatchesAll(extractStep(content, heading, "fixture"), PHASE_3_ROUTING);
+  }
+  for (const boundary of ["6. **Verdict:**", "## Next section"]) {
+    const content = `5. ${heading} \`carriedFromHead\`.\n${boundary}\n${command}`;
+    assert.throws(() => assertMatchesAll(extractStep(content, heading, "fixture"), PHASE_3_ROUTING));
+  }
+  assert.throws(() => extractStep(`6. **Verdict:** Mentions ${heading}`, heading, "fixture"));
+  assert.throws(() => assert.doesNotMatch(
+    "`post-gate-findings.mjs --provenance '<json>'`",
+    PHASE_3_PROVENANCE_NOT_ON_COMMENT_POST,
+  ));
 });
 
 test("the carry-forward CLI the SKILL routes to exists", async () => {
