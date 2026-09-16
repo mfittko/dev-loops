@@ -374,59 +374,22 @@ MUST NOT silently run the suite itself and MUST NOT treat the gap as clean.
 ### Phase 2 — Fan-out: independent reviewers seeded with the neutral bundle
 
 <!-- rule: GATE-EXEC-REVIEWER-BUDGET-PREFLIGHT -->
-**Reviewer-budget preflight (issue #1507).** Before fanning out, the conductor
-runs a pure reviewer-budget preflight and reads its result from
-`artifact.fanout.preflight` (emitted by `write-gate-context.mjs`, which derives
-it via `reviewerBudgetPreflight` from `@dev-loops/core/loop/gate-fanin`). The
-preflight derives how many reviewers the round needs — one per dispatch unit
-(the resolved fresh angles + re-verifications, NOT the raw angle count: a group
-of N angles is one reviewer's scoped dispatch) — and compares it against the
-harness's remaining reviewer budget, supplied to `write-gate-context` via
-`--available-reviewers <n>` (the conductor reads whatever budget the harness
-exposes and passes it through). The result shape:
+**Reviewer-budget preflight.** Before fan-out, read the harness's exposed remaining reviewer budget and pass it as `write-gate-context.mjs --available-reviewers <n>`. Read `artifact.fanout.preflight`, derived by `reviewerBudgetPreflight` (`@dev-loops/core/loop/gate-fanin`). It compares the budget with required dispatch units (fresh angles plus re-verifications, grouped where applicable), not the raw angle count.
 
 ```
 { ok, dispatch, requiredReviewers, availableReviewers, shortfall, reason, verdict, executionMode, completedAngles, carriedAngles, pendingGroups, skippedGroups }
 ```
 
-- `dispatch: true` (budget sufficient, OR the harness does not expose a budget
-  so no shortfall can be proven) → proceed with the wave-by-wave fan-out below.
-- `dispatch: false` (`reason: "budget_shortfall"`, `shortfall` names the exact
-  count the budget is short) → the conductor MUST NOT spawn any reviewer. Zero
-  reviewers are dispatched. The shortfall is a recorded, resumable state: the
-  gate-context artifact itself is the record (it carries the dispatch plan +
-  preflight for this head), and completed per-angle artifacts stay valid for
-  their head. A later session resumes the fan-out instead of restarting it:
-  `reviewerBudgetPreflight` receives `completedAngles` — the angle names that
-  already have a CLEAN findings artifact stamped for this head (scanned by
-  `write-gate-context.mjs` from the per-angle reviews directory) — and a second
-  input, `carriedAngles` (issue #1635: `write-gate-context.mjs --carried-angles
-  <json>`, always emitted at `preflight.carriedAngles` even when empty) — the
-  angle names the fail-closed carry-forward seam has proven carried forward
-  from a prior clean head. It excludes any dispatch unit whose angles are ALL
-  complete-OR-carried from `requiredReviewers` and from `preflight.pendingGroups`.
-  The conductor dispatches only `pendingGroups` (the shortfall), never
-  re-dispatching a group already complete-or-carried at this head, so a
-  session that exhausted its reviewer budget mid-fan-out picks up exactly
-  where it stopped once a later session re-runs `write-gate-context`
-  (`--available-reviewers` with the now-refreshed budget) at the same head and
-  the preflight clears. Completed per-angle artifacts from PRIOR heads stay
-  valid for their head via the carry-forward seam (see [Angle carry-forward
-  (fail-closed)](#angle-carry-forward-fail-closed)); that seam and the
-  same-head resume above are distinct SOURCES — one a head-bump provenance
-  check that intentionally fails closed when `--prev-head` equals
-  `--head-sha`, the other a same-head artifact scan — that both feed this ONE
-  exclusion predicate once a conductor threads the carry-forward result in via
-  `--carried-angles`.
+| Result | Required action |
+| --- | --- |
+| `dispatch: true` | Proceed with wave-by-wave fan-out. An unexposed budget (`availableReviewers: null`) also proceeds: only a proven shortfall blocks. |
+| `dispatch: false`, `reason: "budget_shortfall"` | MUST spawn zero reviewers. The context records the head-bound plan and exact `shortfall`; preserve completed artifacts and resume when budget becomes available. |
 
-**No new gate-exemption path (#1507 AC4).** A budget shortfall is NOT a
-verdict: `preflight.verdict` and `preflight.executionMode` are always `null`. A
-shortfall never downgrades a required gate to `inline_single_agent` and never
-produces a clean verdict — `buildPreMergeGateCheck` /
-`evaluateInlineFanoutMode` reject a gate with no clean current-head marker and a
-non-`fanout_fanin` execution mode, so a shortfall state fails closed at merge.
-The preflight only blocks on a PROVEN shortfall; when the budget is unexposed
-(`availableReviewers: null`), it proceeds (today's behavior).
+To resume at the same head, rerun `write-gate-context.mjs` with the refreshed budget. Its reviews-directory scan supplies `completedAngles`: angles with CLEAN findings artifacts stamped for that head. Prior-head artifacts require the separate [fail-closed carry-forward seam](#angle-carry-forward-fail-closed); pass its proven carried names from a prior clean head through `--carried-angles <json>`, never a guess. The seam rejects equal `--prev-head` / `--head-sha`; same-head scanning does not use it.
+
+`preflight.carriedAngles` is always emitted, including when empty. The preflight excludes a unit from `requiredReviewers` and `pendingGroups` only when ALL its angles are complete or carried. Dispatch only pending groups through the emitter below; never redispatch a completed-or-carried group. Completed artifacts remain valid for their own head.
+
+**No gate exemption.** `preflight.verdict` and `preflight.executionMode` remain `null`: shortfall is resumable state, never a clean verdict or permission to use `inline_single_agent`. `buildPreMergeGateCheck` / `evaluateInlineFanoutMode` retain the fail-closed merge requirements for a clean current-head marker and qualified `fanout_fanin` execution.
 
 Resolve grouping through `resolveFanoutGroups(config, gate, resolvedAngles, { fullLabel })` (`@dev-loops/core/config`), then dispatch through `GATE-EXEC-FANOUT-DISPATCH-EMIT` below. Do not treat the context's unsplit groups as the final emitted units.
 
