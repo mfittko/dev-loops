@@ -652,131 +652,24 @@ bytes; how those bytes REACH the spawned reviewer's actual prompt differs by har
   never certified away; the same by-construction emitted-unit binding and ordering invariants are
   what remain assertable.
 
-**Content inlining.** `write-gate-context.mjs` renders this invariant block as a
-`<gate>-<headSha>.briefing-prefix.txt` file sibling to the JSON context artifact, in a
-fixed section order: header (repo/PR/head/gate/worktree + the verify-fresh instruction),
-`## Reviewer source-read invariant` (the worktree-source-over-installed-copies rule
-`GATE-EXEC-SOURCE-READ-WORKTREE`, identical for every reviewer), `## Reviewer token
-discipline` (the per-reviewer token-waste rules, identical for every
-reviewer), PR body, linked-issue body (when present), the full diff at the reviewed head,
-and a changed-files/adjacent-code summary, plus one CONDITIONAL trailing section, `##
-Validation results at this head`, present only when a validation-results artifact was
-threaded (`GATE-EXEC-VALIDATION-ARTIFACT`); absent that input, the seven fixed sections are
-the whole prefix: the conditional section appends after the fixed sections without reordering or changing them. The PR body and
-each linked-issue body are
-author-controlled GitHub text (PR author or linked-issue author), so each is carried in
-its OWN fenced markdown block, never inlined unframed — a fence renders as inert literal
-text, so a hostile body cannot forge a `##`/`###` section heading (e.g. a fake linked-issue
-label, or a second `## Diff at reviewed head`/`## Changed files` section ahead of the real
-one) or emit `PR_BODY_ABSENT_SENTINEL`/`ISSUE_BODY_ABSENT_SENTINEL` as if it were the
-renderer's own statement. A multi-issue PR's per-issue bodies are passed through as
-structured data (label + body pairs), never pre-joined into one string, so the renderer
-itself — not any one issue's body — owns emitting each `### <label>` heading, outside every
-fence. Every fence delimiter (`pickFence`) is sized one backtick longer than the longest
-backtick run already inside the text it wraps, so the wrapped content can never close the
-fence early and leak into a later section. The diff is FILTERED before inlining (issue
-#1853, `filterDiffForInline` in `@dev-loops/core/loop/review-dispatch-plan`): lockfiles
-(`bun.lock`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `Cargo.lock`, `Gemfile.lock`,
-`composer.lock`, and `*-lock.y[a]ml` generally), generated/vendored trees (`dist/`, `lib/`,
-`coverage/`, `node_modules/`, `.claude/`), and any caller-configured `excludeGlobs` are
-dropped whole-file (`DEFAULT_DIFF_EXCLUDE_GLOBS`, always applied — a caller's own globs
-layer on top, never replace it) — high-churn/not-review-relevant hunks never dilute the
-shared per-head block. An excluded file's CHANGE still appears in the "Changed files"
-summary and stays fully readable on demand from the FULL, unfiltered `scope.diffPath`
-pointer file (never itself filtered) or `git diff` in the reviewed worktree; only the
-INLINED copy is narrowed. The (filtered) diff SHOULD then be inlined up to a size cap
-(`BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES`, a fixed constant), carried inside a fenced
-markdown block sized by the same `pickFence` rule — the fence and surrounding framing are
-part of the rendered prefix bytes, so "inline" means the diff content travels in the
-prefix, not that its raw bytes appear unframed. Over the cap the prefix falls back to
-pointer mode: it references
-`scope.diffPath` when the persisted `.diff` is present, and otherwise discloses that the
-diff pointer is unavailable (reviewers re-derive via `git diff`). Either way the mode is
-disclosed in both the artifact (`prefixMode: "inline"|"pointer"`) and the prefix text
-itself — self-rendered modes only. A third, CLI-only mode, `prefixMode: "file"`
-(an orchestrator-authored prefix recorded via `--prefix-file`, below), discloses the mode
-in the artifact only: the recorded bytes are the orchestrator's own composed prefix
-verbatim, so the prefix text itself carries no `prefixMode` line. This is purely a
-size/performance choice and a zero-semantic change to the byte-identity requirement above:
-whichever mode ran, every reviewer of the same round still receives byte-identical prefix
-bytes, and `verify-fresh-review-context.mjs --prefix-file`/`verify-briefing-prefixes.mjs`
-hash and compare those bytes exactly as before, oblivious to which mode produced them.
+**Content inlining.** Use `write-gate-context.mjs`'s generated `<gate>-<headSha>.briefing-prefix.txt`, beside the JSON context artifact. `renderBriefingPrefix` owns its fixed section order, separate author-controlled body/issue fences, diff fencing and conditional trailing validation section (`GATE-EXEC-VALIDATION-ARTIFACT`); consume those bytes unchanged. The renderer, never issue-body text, supplies multi-issue labels outside those fences.
 
-**Hunk-collapse.** Inline diff rendering (prefix and scoped variants below) first collapses
-any run of AT LEAST TWO consecutive hunks that is PROVABLY one pure single-token
-substitution — every changed-line pair in every hunk of the run replaces the SAME old
-token with the SAME new token on a whole token boundary (never a shared substring inside a
-larger identifier — a rename touching `grossAmount`/`netAmount` and a different rename
-touching `grossRate`/`netRate` do NOT collapse together just because both reduce to
-"gross"→"net" at the character level) — into one summary line naming the substitution, the
-hunk/file counts, and the affected file paths (capped, with a "+N more" tail), with a
-pointer back to the byte-exact `scope.diffPath`. A run of exactly one hunk stays below the
-collapse floor and renders in full, unchanged — collapsing exists to absorb large
-mechanical runs, not to hide a single hunk's own diff. Any hunk not provably pure (unequal
-add/remove counts, more than one token changed, an inconsistent pair, or any changed line
-that is not a `+`/`-`/context line) renders in full — fail-closed. A file whose own header
-carries anything beyond the bare `diff --git`/`index`/`---`/`+++` identity lines (a mode
-change, a rename, a similarity-index line, a binary marker) is excluded from collapse
-entirely, even when every one of its hunks is otherwise pure: that metadata lives in the
-header, not a hunk, so hunk-purity analysis alone would never see it, and a collapsed
-summary line would silently drop it. This only changes what
-gets INLINED; the persisted `.diff` file is never touched, so a reviewer can always read
-the untouched original.
+`filterDiffForInline` in `@dev-loops/core/loop/review-dispatch-plan` applies `DEFAULT_DIFF_EXCLUDE_GLOBS` plus caller `excludeGlobs`; caller exclusions never replace the defaults. Filtering changes only the inline copy. Excluded files remain in the changed-files summary; the complete diff remains available through `scope.diffPath` or `git diff` in the reviewed worktree.
 
-**Per-angle scoped variants.** An angle whose configured `scope` (`gates.<gate>.angles[].scope`)
-is `changed-files` or `docs-only` gets an additional companion file,
-`<gate>-<headSha>.briefing-<scope>.txt`, sibling to the invariant prefix: `changed-files`
-carries the full (hunk-collapsed) diff without the adjacent-code bundle OR the invariant
-prefix's "Changed files + adjacent-code summary" section — the diff text itself still names
-every changed file, but the file-count/adjacent-file-list summary is not re-rendered into
-this companion; `docs-only` narrows further to doc-file hunks only — its surface's own
-diff slice, explicitly stating
-"(no doc-file hunks in this diff)" when that slice is empty (a round that touched no doc
-files is a truthful zero, not a builder fault). No
-scoped variant drops a mandatory input: both variants MUST carry the PR body, the
-acceptance-criteria text (linked-issue body/sections), and the validation-results pointer
-verbatim from the invariant prefix, unabridged. A scoped variant MUST ALSO link the full
-bundle unconditionally — an explicit pointer back to the invariant-prefix file path AND to
-`scope.diffPath` (falling back to an explicit "pointer unavailable" line when
-`scope.diffPath` is null), plus the sibling JSON context-artifact path — so a reviewer
-whose angle turns out to need more than its slice can always widen to the
-full diff and adjacent-code bundle (`GATE-EXEC-BUILD-ONCE-SEED` still applies — a scoped
-variant is an additional narrow seed, never a replacement, and AC1's reviewer-effectiveness
-requirement is exactly this: no angle loses PR body, acceptance criteria, validation
-results, or its surface's diff slice, and every angle can reach the full bundle on demand).
-The context artifact records each
-resolved angle's scope (`angleScopes`) and the emitted variant paths (`briefingVariants`);
-an unconfigured/unknown scope, or any error building a variant, fails open to the full
-invariant prefix.
+The filtered diff SHOULD be inlined within `BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES`. Consume the builder's recorded mode:
 
-**Enforcement.** Each reviewer passes `--prefix-hash <sha256>` (or `--prefix-file <path>`,
-hashed by the tool) to `verify-fresh-review-context.mjs`, which persists the hash on the
-reviewer's per-scope sentinel. This hash/file is ALWAYS the invariant prefix, never a
-per-angle scoped variant: a reviewer additionally seeded with `briefingVariants[scope]`
-(previous section) still hashes/records the invariant-prefix bytes it was also given, so
-this per-gate record index and the one-hash-per-round check below apply unchanged whether
-or not any reviewer of the round was additionally seeded with a variant — the variant
-carries no hash or record of its own. An orchestrator that briefs reviewers with its OWN
-composed prefix records it with `write-gate-context.mjs --prefix-file <path>` — the
-record file then carries those exact bytes (`prefixMode: "file"`) instead of the
-tool's self-rendered prefix, so the fan-in verification below agrees with the actual
-briefing without any hand-edited record files. Before Phase 3 consolidation, the fan-in MUST run
-`scripts/github/verify-briefing-prefixes.mjs --head-sha <sha>`, which fails closed (exit 1)
-when sentinels for the same round record two or more DISTINCT prefix hashes, or when any
-sentinel for the round records no prefix hash at all — a missing hash means the
-invariant-prefix proof was never established for that reviewer and is treated the same as
-a mismatch, never grandfathered in — a single hashless sentinel (e.g. a one-angle Phase 5
-retry round) fails closed the same way. The check is deterministic and offline: it only
-reads sentinel and record files already on disk. Verification is **per-gate by record
-hash**: `write-gate-context.mjs` persists a per-gate briefing-prefix record
-(`<gate>-<headSha>.briefing-prefix.txt` under `tmp/gate-context/**`), and the fan-in builds
-a hash→gate(s) index from those records. Each sentinel's recorded hash must match one of
-those records, so two gates reviewed at the same head each verify against their own record
-instead of colliding into a spurious mismatch. A hash matching no record, or a hash
-belonging to a DIFFERENT gate than the sentinel's gate-prefixed scope declares, fails
-closed. Only when no on-disk records exist (offline/legacy) does it fall back to the flat
-rule that all of the round's sentinels share ONE identical hash. See
-`verify-briefing-prefixes.mjs --help` for the worked same-head two-gate example.
+- `inline` / `pointer`: disclosed in both artifact and rendered prefix. Pointer mode names `scope.diffPath` or explicitly reports its absence; reviewers rederive an unavailable diff with `git diff`.
+- `file`: an orchestrator-supplied `--prefix-file` is recorded verbatim. The artifact discloses the mode; the supplied text gains no mode line.
+
+Every mode retains the same byte-identity requirement.
+
+**Hunk-collapse.** `collapsePureSubstitutionRuns` owns inline compaction for the prefix and scoped variants: only runs of at least two consecutive hunks proven to contain the same pure whole-token substitution collapse. Its purity and file-header checks preserve every nonqualifying hunk and metadata; summaries retain substitution/count/path information and access to the original diff. The persisted `.diff` remains untouched.
+
+**Per-angle scoped variants.** Use emitted `angleScopes` and `briefingVariants` paths (`<gate>-<headSha>.briefing-<scope>.txt`). `renderScopedBriefingVariant` owns `changed-files` and `docs-only` slices, omitting adjacent-code material from both. Both MUST retain PR body, acceptance criteria and validation-results pointer verbatim/unabridged, plus unconditional invariant-prefix, full-diff and JSON-context pointers (explicitly disclose a missing diff pointer). Treat every variant as an **additional** narrow seed, never a replacement for the invariant prefix (`GATE-EXEC-BUILD-ONCE-SEED`); widen through those pointers when needed. An empty docs slice is explicitly reported; unknown/unconfigured scope or a variant-build failure falls back to the full invariant prefix.
+
+**Enforcement.** Each reviewer passes `--prefix-hash <sha256>` or `--prefix-file <path>` to `verify-fresh-review-context.mjs`, which persists it on the per-scope sentinel. Always hash the invariant prefix, never a scoped variant; variants have no separate hash record. Record an orchestrator-authored prefix through `write-gate-context.mjs --prefix-file`, never by editing record files.
+
+Before Phase 3, fan-in MUST run `scripts/github/verify-briefing-prefixes.mjs --head-sha <sha>` and stop on failure (exit 1). The offline verifier checks sentinel hashes against per-gate prefix records, rejecting missing/mismatched or wrong-gate evidence, including a single hashless sentinel. Separate gates at the same head remain separate. Only when no prefix records exist does it use the legacy flat one-hash rule. See its `--help` for the same-head two-gate example.
 
 **Prompt-LAYOUT enforcement (issue #1841/#1852, completes #1468).** Prefix-hash equality alone does not prove prompt layout. On the sanctioned path, `compose-reviewer-prompt.mjs` composes and records the prompt in the same call through `recordDispatchPromptLayout`; there is no separate recording step to pair incorrectly or skip.
 

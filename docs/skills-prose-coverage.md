@@ -176,3 +176,20 @@ The implemented tests check the skill-to-operations/wait and operations-to-state
 The owner retains atomic compose-and-record, capped leading bytes plus a full-content hash, canonical emitted-file rediscovery, inline prefix layout, fail-closed invalid records, the zero-record exception and separate records-floor, delivery uncertainty and recovery preserving history. The compact obligation mapping is: capture paragraph/command, binding checks/failure list, delivery boundary, then exception/recovery paragraph. Six independent scenarios covered altered suffix, pointer/angle-first layout, missing evidence, zero records with a pending plan, dishonest final-hop delivery and recovery. No introduced semantic finding was reported.
 
 This removes another 297 words / 1,985 bytes from source and its projection. The source pair is 38,874 / 296,374; the 24-file conservative set is 85,337 / 652,473 under the same assumptions. Existing recovery wording still says rerun emitter and reconsolidate; tooling additionally calls for redispatch. That discrepancy is recorded, not resolved by the prose edit. Validation passed: 21 focused contract tests, 189 helper tests, 92-asset parity and full `bun run verify` (9,292 tests across 390 files, no skips/failures, plus docs/workflows).
+
+## Generated-briefing slice
+
+Repeated generator internals now point to their existing implementation; agent invocation, byte identity, complete-input access, fallback and verification duties remain in the owner. The old predicate trace is:
+
+| Removed enumeration | Existing authority / retained instruction |
+| --- | --- |
+| Section order, body fencing, multi-issue labels, validation suffix | `renderBriefingPrefix` / `pickFence` in `scripts/github/write-gate-context.mjs`; consume emitted bytes unchanged. |
+| Default/additional exclusion globs and whole-file filtering | `filterDiffForInline` / `DEFAULT_DIFF_EXCLUDE_GLOBS`; preserve changed-file visibility and full-diff access. |
+| Cap/mode selection and exact supplied-prefix bytes | Builder modes; all modes retain byte identity and missing-pointer disclosure. |
+| Collapse purity, two-hunk floor, metadata exceptions and bounded summary paths | `collapsePureSubstitutionRuns`, `analyzeHunkPurity`, `hasNonTrivialFileHeader`; nonqualifying hunks/metadata and persisted diff remain intact. |
+| Scope-specific slices and fallback | `renderScopedBriefingVariant` and `writeGateContext`; full body/AC/validation and unconditional widening pointers remain required. |
+| Missing hash, wrong gate, same-head separation and legacy fallback | `verify-briefing-prefixes.mjs`; reviewers record invariant hashes and fan-in must invoke verification and stop on failure. |
+
+Independent old/new review found no material loss across malicious fenced bodies, excluded files, one/two-hunk runs, impure/metadata-bearing hunks, scoped inputs, fallback, hash failures and absent-record scenarios. The 439 focused renderer/filter/verifier tests passed. No runtime feature or new tolerance was introduced.
+
+This slice removes 1,050 words / 6,893 bytes from source and its generated mirror. The source pair is now 37,824 / 289,481; the 24-file conservative set is 84,287 / 645,580. Whole-tree coverage remains partial. Full `bun run verify` passed: 9,292 tests across 390 files, no skips/failures, plus docs/workflows. The 92-asset parity check also passed.
