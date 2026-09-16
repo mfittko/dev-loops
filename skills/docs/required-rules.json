@@ -343,6 +343,11 @@
       "enforcementNote": "fan-in validates the recorded primer dispatch evidence via packages/core/src/loop/primer-evidence.mjs validatePrimerEvidence"
     },
     {
+      "id": "GATE-EXEC-EXECUTION-RECORD",
+      "enforcement": "runtime",
+      "enforcementNote": "enforceExecutionUnitRecord (packages/core/src/loop/execution-record.mjs) fails closed on a malformed/dishonest execution-unit record; scripts/loop/run-watch-cycle.mjs buildWatchCycleExecutionRecord is the one live producer today"
+    },
+    {
       "id": "GATE-EXEC-REGATE-MANDATORY"
     },
     {
