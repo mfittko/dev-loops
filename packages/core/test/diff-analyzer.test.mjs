@@ -41,6 +41,13 @@ test("classifyFile: code for .mjs/.js/.ts", () => {
   assert.equal(classifyFile("scripts/bar.mjs"), "code");
 });
 
+test("classifyFile: code for Ruby source (.rb/.rake/Rakefile)", () => {
+  assert.equal(classifyFile("tools/report.rb"), "code");
+  assert.equal(classifyFile("app/models/user.rb"), "code");
+  assert.equal(classifyFile("lib/tasks/cron.rake"), "code");
+  assert.equal(classifyFile("Rakefile"), "code");
+});
+
 test("classifyFile: ci for .github/ paths", () => {
   assert.equal(classifyFile(".github/workflows/verify.yml"), "ci");
 });

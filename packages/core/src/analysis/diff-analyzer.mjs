@@ -155,7 +155,11 @@ export function classifyFile(filePath) {
   }
   if (
     fp.endsWith(".mjs") || fp.endsWith(".js") ||
-    fp.endsWith(".ts") || fp.endsWith(".mts")
+    fp.endsWith(".ts") || fp.endsWith(".mts") ||
+    // Ruby source. Without this a Ruby-only diff falls through to "unknown",
+    // which the size gate treats as unclassified/non-JS source and hard-blocks
+    // with no waiver — so an ops script or any .rb change cannot go ready.
+    fp.endsWith(".rb") || fp.endsWith(".rake") || fp.split("/").pop() === "Rakefile"
   ) {
     return "code";
   }
