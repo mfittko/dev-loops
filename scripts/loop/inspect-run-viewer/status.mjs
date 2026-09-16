@@ -612,7 +612,7 @@ export function renderCurrentStateBanner(snapshot, target, stateLabel, selectedT
       <select id="current-pr-state-auto-reload" class="current-pr-state-auto-reload-select" data-auto-reload-select aria-label="Auto-reload period">
         ${autoReloadOptions.map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`).join("")}
       </select>
-      <button type="button" class="viewer-action-button current-pr-state-reload" data-auto-reload-manual onclick="{ const u = new URL(window.location.href); u.searchParams.set('refresh', '1'); window.location.assign(u.toString()); }" title="Reload snapshot (forces a live re-fetch of this PR)" aria-label="Reload snapshot">🔄 Reload</button>
+      <button type="button" class="viewer-action-button current-pr-state-reload" data-auto-reload-manual onclick="{ const u = new URL(window.location.href); u.searchParams.set('refresh', '1'); window.location.assign(u.toString()); }" title="Reload snapshot (forces a live re-fetch of this PR&#39;s snapshot; the round-metrics and handoff panels keep their own cache windows)" aria-label="Reload snapshot">🔄 Reload</button>
     </div>
   </section>
   <script>

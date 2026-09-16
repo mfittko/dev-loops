@@ -473,13 +473,20 @@ export function createInspectRunViewerServer(options, deps = {}) {
     if (cached) {
       return cached.envelope;
     }
-    // Gate state comes from the same snapshot `/handoff-envelope.json` uses, so
-    // the two representations of one target cannot disagree on head SHA / CI.
-    const gateState = await loadGateState(target);
-    if (typeof adapter.loadHandoffEnvelope === "function") {
-      return adapter.loadHandoffEnvelope(target, gateState, adapterOptions);
+    // Both branches read the same memoized snapshot the page render reads, so
+    // no representation of one target can disagree with another: the injected
+    // loader gets that snapshot verbatim (exactly what `/` hands it) and the
+    // resolver path gets the gate state distilled from it.
+    let snapshot = null;
+    try {
+      snapshot = await adapter.loadSnapshot(target, { ...adapterOptions, includeLoopIterations: false });
+    } catch {
+      snapshot = null;
     }
-    return warmHandoffEnvelope(target, gateState);
+    if (typeof adapter.loadHandoffEnvelope === "function") {
+      return adapter.loadHandoffEnvelope(target, snapshot, adapterOptions);
+    }
+    return warmHandoffEnvelope(target, snapshot === null ? {} : gateStateFromSnapshot(snapshot));
   }
 
   const HTML_HEADERS = { "content-type": "text/html; charset=utf-8" };
@@ -799,6 +806,9 @@ export function createInspectRunViewerServer(options, deps = {}) {
         target: requestTarget,
         snapshot: snapshot ?? null,
         handoffEnvelope,
+        // An injected loader already resolved inline above, so a null envelope
+        // is final: only the resolver-backed path defers to the fragment route.
+        handoffDeferred: typeof adapter.loadHandoffEnvelope !== "function",
         error,
         inboxError: inboxError === null ? null : inboxError.message,
         inboxItems,

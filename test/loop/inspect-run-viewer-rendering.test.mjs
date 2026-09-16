@@ -22,6 +22,18 @@ test("renderInspectRunViewerHtml emits the round-metrics fragment URL as a JS st
   assert.doesNotMatch(html, /round-metrics\.html\?[^"]*&amp;/);
   // The handoff link lives in an HTML attribute, where entities ARE decoded.
   assert.match(html, /data-handoff-src="\/handoff-envelope\.html\?repo=owner%2Frepo&amp;pr=55"/);
+  // The two hooks the client script requires before it fetches anything: lose
+  // either and no fetch is issued, no error is shown, and the grid sits on
+  // "Loading round metrics…" forever with a green suite.
+  assert.match(html, /<div data-round-metrics-slot>/);
+  assert.match(
+    html,
+    /<div data-round-metrics-slot>[\s\S]*?data-round-metrics-status[\s\S]*?<\/div>/,
+    "the slot's own content must carry the status hook the client reads",
+  );
+  // Deferred must read as deferred in the Copilot layer too, never as missing
+  // evidence while the Overview grid shows real counts.
+  assert.match(html, /deferred to the Overview tab, which loads them after first paint/);
 });
 
 test("renderInspectRunViewerHtml offers the 3d default inbox window alongside the wider presets", () => {

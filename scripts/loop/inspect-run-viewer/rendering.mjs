@@ -101,6 +101,10 @@ export function renderInspectRunViewerHtml({
   target = null,
   snapshot = null,
   handoffEnvelope = null,
+  // False when the caller already resolved the envelope inline (an injected
+  // loader): a null envelope then means "no envelope", not "not fetched yet",
+  // so the lazy fragment must not re-ask for it.
+  handoffDeferred = true,
   error = null,
   // Rendered in the sidebar, next to the empty list it would otherwise look like.
   inboxError = null,
@@ -442,7 +446,7 @@ export function renderInspectRunViewerHtml({
               </section>
             </div>
             <div class="tab-content" id="tab-handoff" role="tabpanel" aria-labelledby="tab-btn-handoff">
-              ${handoffEnvelope === null && target !== null
+              ${handoffDeferred && handoffEnvelope === null && target !== null
                 ? `<div data-handoff-lazy data-handoff-src="${escapeHtml(renderHandoffFragmentHref(target))}">
                 <section class="viewer-card"><h3>Agent handoff</h3><p data-handoff-status>Loading the handoff envelope…</p></section>
               </div>`

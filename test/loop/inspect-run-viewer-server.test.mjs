@@ -163,6 +163,100 @@ test("createInspectRunViewerServer spawns the resolver only from the handoff fra
   }
 });
 
+test("createInspectRunViewerServer coalesces concurrent handoff fragment requests into one resolver spawn", async () => {
+  let resolverSpawns = 0;
+  let releaseResolver;
+  const resolverGate = new Promise((resolve) => { releaseResolver = resolve; });
+  // Barrier: both requests must be inside the fragment path before either is
+  // allowed to reach the resolver, or the 5-minute cache alone would satisfy
+  // the assertion and the in-flight map could be deleted with the suite green.
+  let arrivals = 0;
+  let announceBothArrived;
+  const bothArrived = new Promise((resolve) => { announceBothArrived = resolve; });
+  const adapter = {
+    async loadSnapshot() {
+      arrivals += 1;
+      if (arrivals >= 2) { announceBothArrived(); }
+      await bothArrived;
+      return makeSnapshot({});
+    },
+    async listAssignedPullRequests() {
+      return [{ target: { repo: "owner/repo", pr: 55 }, title: "PR", updatedAt: null, signal: "waiting" }];
+    },
+  };
+
+  const server = createInspectRunViewerServer({ host: "127.0.0.1", port: 0 }, {
+    adapter,
+    runResolverForTargetImpl: async () => {
+      resolverSpawns += 1;
+      await resolverGate;
+      return { bundleKind: "unresolved" };
+    },
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const address = server.address();
+    const url = `http://127.0.0.1:${address.port}/handoff-envelope.html?repo=owner%2Frepo&pr=55`;
+    const first = requestOnce(url);
+    const second = requestOnce(url);
+    await bothArrived;
+    // Both handlers are past the snapshot read; give them the turns they need
+    // to reach the warm path before the resolver is allowed to settle.
+    await new Promise((resolve) => { setTimeout(resolve, 20); });
+    releaseResolver();
+    const responses = await Promise.all([first, second]);
+    assert.deepEqual(responses.map((response) => response.statusCode), [200, 200]);
+    assert.equal(resolverSpawns, 1, "overlapping handoff-tab opens must share one resolver spawn");
+  } finally {
+    server.close();
+    await once(server, "close");
+  }
+});
+
+test("createInspectRunViewerServer hands an injected loadHandoffEnvelope the same argument from / and from the fragment route", async () => {
+  const envelopeArgs = [];
+  const adapter = {
+    async loadSnapshot() {
+      return makeSnapshot({});
+    },
+    async listAssignedPullRequests() {
+      return [{ target: { repo: "owner/repo", pr: 55 }, title: "PR", updatedAt: null, signal: "waiting" }];
+    },
+    async loadHandoffEnvelope(_target, second) {
+      envelopeArgs.push(second);
+      return null;
+    },
+  };
+
+  const server = createInspectRunViewerServer({ host: "127.0.0.1", port: 0 }, { adapter });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  try {
+    const address = server.address();
+    const page = await requestOnce(`http://127.0.0.1:${address.port}/?repo=owner%2Frepo&pr=55`);
+    assert.equal(page.statusCode, 200);
+    assert.equal(envelopeArgs.length, 1, "the page render resolves the injected loader exactly once");
+    // An injected loader already answered inline, so a null envelope is final:
+    // deferring to the fragment would re-run the loader on every page view.
+    assert.doesNotMatch(page.body, /<div data-handoff-lazy/);
+
+    const fragment = await requestOnce(`http://127.0.0.1:${address.port}/handoff-envelope.html?repo=owner%2Frepo&pr=55`);
+    assert.equal(fragment.statusCode, 200);
+    assert.equal(envelopeArgs.length, 2);
+    assert.deepEqual(
+      envelopeArgs[1],
+      envelopeArgs[0],
+      "one target must not yield two different envelope inputs depending on which route asked",
+    );
+  } finally {
+    server.close();
+    await once(server, "close");
+  }
+});
+
 test("createInspectRunViewerServer renders /round-metrics.html for its OWN pr and fails closed without one", async () => {
   const loopIterationTargets = [];
   const adapter = {

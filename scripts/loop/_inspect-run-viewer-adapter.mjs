@@ -467,6 +467,12 @@ export function createInspectionViewerAdapter({
         }));
         const signalEntry = { cachedAt: nowMs, promise: signalsPromise };
         signalKeyCache.set(cacheKey, signalEntry);
+        // Stamped when the fan-out SETTLES, the same rule memoizeFetch uses:
+        // stamping only at start expires a load slower than the TTL against the
+        // moment it began, so the entry it produced is already half spent.
+        signalsPromise.then(() => {
+          signalEntry.cachedAt = nowImpl();
+        }, () => {});
         signalsPromise.catch(() => {
           if (signalKeyCache.get(cacheKey) === signalEntry) {
             signalKeyCache.delete(cacheKey);

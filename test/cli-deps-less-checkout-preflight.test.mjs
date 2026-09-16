@@ -70,9 +70,11 @@ test("cli/index.mjs has no top-level @dev-loops/core import on the reachable pat
 test("a command that needs core prints one friendly line and exits non-zero — not a module-load stack trace", () => {
   const dir = buildDepsLessCheckout();
   try {
-    // Cover all three core-needing preflight gates: subcommand spawn (queue add),
-    // action (gates), and subcommand --help spawn (queue add --help).
-    for (const args of [["queue", "add", "--repo", "mfittko/dev-loops", "--item", "1"], ["gates"], ["queue", "add", "--help"]]) {
+    // Cover all four core-needing preflight gates: subcommand spawn (queue add),
+    // action (gates), subcommand --help spawn (queue add --help), and the
+    // inspect lifecycle action, whose lazy `import("managed-instance.mjs")`
+    // throws ERR_MODULE_NOT_FOUND straight out of runCli without the gate.
+    for (const args of [["queue", "add", "--repo", "mfittko/dev-loops", "--item", "1"], ["gates"], ["queue", "add", "--help"], ["inspect", "status"]]) {
       const result = runCli(dir, args);
       assert.notEqual(result.status, 0, `expected non-zero exit for ${args.join(" ")}`);
       const stderrLines = result.stderr.trim().split("\n").filter(Boolean);
