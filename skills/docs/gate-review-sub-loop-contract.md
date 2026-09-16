@@ -1205,53 +1205,17 @@ either resolves to a direct top-level sibling of the artifacts inside
 `--findings-dir` (a subdirectory of `--findings-dir` is fine — artifact
 discovery is top-level-only).
 
-The render budget applies ONLY to the visible-comment shape (`--out`) — never
-to the ledger (`--ledger-out`, always written in FULL, never budgeted). Fit is
-measured by actually rendering a candidate `--out` shape through
-`upsert-checkpoint-verdict.mjs`'s own render path and catching its
-length-exceeded throw, not an approximated size, so a shape this CLI accepts
-never later throws when `upsert-checkpoint-verdict.mjs` posts it. A round too
-large to render is shrunk by hard-truncating every finding's summary evenly
-(halving the per-finding cap down to a 16-char floor) until the whole round
-renders — SHORTENING each finding's own text, never replacing it with a
-synthetic omitted-count/ledger-pointer marker (#1942: such a marker names the
-local disposition ledger, which lives only on the runner's disk and is
-invisible to a GitHub reader, so it could never actually surface a withheld
-finding to a reviewer). A round too large to render even at that 16-char
-floor exits 0 with `commentBudgetExceeded: true` and WITHHOLDS `--out`
-entirely, PROVIDED `--ledger-out` was also given; without `--ledger-out` the
-same over-budget round instead FAILS CLOSED (exit 1) at the point it would
-withhold, since a withheld round's only durable, unbudgeted record is the
-ledger and nothing would land on disk (the findings would exist only on that
-process's stdout, which the sanctioned ledger/post path cannot consume):
+The render budget limits the visible-comment shape (`--out`), never the complete `--ledger-out`. The CLI measures fit through `upsert-checkpoint-verdict.mjs`'s renderer. It halves each finding's summary cap down to 16 characters, retaining real finding text, angles and verdicts. Never replace findings with synthetic omitted-count or local-ledger-pointer markers: a runner-local ledger is not visible to GitHub readers.
 
-1. **real (hard-truncated)** — every finding keeps its own real text, shrunk
-   as far as the 16-char floor allows; there is no per-angle marker/upgrade
-   ladder to decide between, since every angle degrades the same way (its
-   own findings, shorter).
-2. **withheld** — reached only when even the whole round hard-truncated to
-   the 16-char floor still does not fit: `findingsJson` in the result is
-   emitted empty and `--out`, if given, is REMOVED from disk (deleted, not
-   merely skipped — a stale prior-round `--out` is never left for a caller to
-   read as this round's findings). This is an absolute structural floor (far
-   more angles than any single comment can hold even hard-truncated), not a
-   per-finding degradation choice.
+| Render result | Consolidation output |
+| --- | --- |
+| Fits, including after truncation | Per-angle findings in `--out` if requested; `commentBudgetExceeded` absent. |
+| Still too large at the 16-character floor; `--ledger-out` supplied | Exit 0, `commentBudgetExceeded: true`, `findingsJson: []`; withhold `--out` and remove any stale file at that path. The full ledger remains available. |
+| Still too large; no `--ledger-out` | Fail closed (exit 1): stdout alone is not a durable record for the sanctioned ledger/post path. |
 
-The hard-truncated case keeps the REAL angle set and each angle's REAL
-verdict intact (never collapsed into one foreign section, which would fail
-`upsert-checkpoint-verdict.mjs`'s mandatory-angle/pool validation). Only in
-the withheld case is `--out` never written (or removed if it already
-existed); whoever posts the verdict via the
-[Gate comment command](../copilot-pr-followup/SKILL.md#mandatory-gate-comment-command-contract)
-MUST check for `--out`'s existence before passing `--findings-json <path>` —
-passing a path that was never written fails closed with ENOENT; fall back to
-that command's `--findings-summary` instead, naming the round size and
-pointing at the ledger (`--ledger-out`), which is always complete regardless
-of outcome. Dropping `--findings-json` does NOT also drop
-`--findings-severity-counts` — that flag's requirement is scoped to
-`verdict === "clean"` under a gate with `blockCleanOnFindingSeverities`
-configured, independent of execution mode, so a clean withheld round must
-still pass it. Which artifact proves angle coverage depends on whether the
+After successful consolidation, the [Gate comment command](../copilot-pr-followup/SKILL.md#mandatory-gate-comment-command-contract) caller MUST check that `--out` exists before passing `--findings-json <path>`; an absent path fails closed with ENOENT. For a withheld round, use `--findings-summary` naming the round size and complete `--ledger-out` location. Omitting `--findings-json` does not remove the `--findings-severity-counts` requirement: a `clean` verdict under a gate with `blockCleanOnFindingSeverities` configured still requires it, regardless of execution mode.
+
+Which artifact proves angle coverage depends on whether the
 comment can carry per-angle data: `--findings-json`'s per-angle shape lets
 `upsert-checkpoint-verdict.mjs` check coverage straight off the comment
 content, but ANY `fanout_fanin` verdict posted without `--findings-json` —
