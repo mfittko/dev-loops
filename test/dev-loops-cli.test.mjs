@@ -282,7 +282,7 @@ test("CLI drives the inspect viewer lifecycle and renders the shared inspect lin
   assert.equal(exitCode, 0);
   assert.deepEqual(calls, [{ repoRoot: "/repo/root", repo: "mfittko/dev-loops" }]);
   assert.match(stdout.read(), /inspect open/);
-  assert.match(stdout.read(), /State: running/);
+  assert.match(stdout.read(), /State: 🟢 running/);
   assert.match(stdout.read(), /URL: http:\/\/127\.0\.0\.1:7777/);
   assert.equal(stderr.read(), "");
 });
@@ -309,7 +309,7 @@ test("CLI exits non-zero and writes to stderr when an inspect lifecycle action f
 
   assert.equal(exitCode, 1);
   assert.equal(stdout.read(), "");
-  assert.match(stderr.read(), /State: conflict_unmanaged_listener/);
+  assert.match(stderr.read(), /State: 🟠 conflict_unmanaged_listener/);
 });
 
 test("CLI rejects unknown inspect actions with the inspect usage line", async () => {
