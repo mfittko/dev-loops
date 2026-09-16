@@ -10,6 +10,7 @@ import {
   STATUS_CLASS,
   TRUST,
 } from "../../packages/core/src/loop/run-inspection.mjs";
+import { STATE as COPILOT_STATE } from "../../packages/core/src/loop/copilot-loop-state.mjs";
 import { parseInspectRunCliArgs } from "../../scripts/loop/inspect-run.mjs";
 import {
   makeCopilotEvidence,
@@ -887,3 +888,95 @@ test("parseInspectRunCliArgs: invalid repo slug throws", () => {
   );
 });
 
+
+// ---------------------------------------------------------------------------
+// Unit tests: lifecycle phase is independent of the loop-iteration fan-out
+// ---------------------------------------------------------------------------
+
+// The viewer's page render defers the loop-iteration fan-out while /snapshot.json
+// does not, so the two MUST agree on lifecyclePhase or the dashboard contradicts
+// its own raw payload on every load. These pin that agreement at the composer.
+
+function composeWithLoopIterations(loopIterations, { copilotEvidence, liveAvailability }) {
+  return composeRunInspectionSnapshot({
+    target: { repo: "owner/repo", pr: 55 },
+    inspectedAt: "2026-05-18T12:00:00Z",
+    outerState: "continue_current_wait",
+    outerAllowedTransitions: ["continue_current_wait"],
+    outerAction: "continue_wait",
+    outerReason: undefined,
+    copilotEvidence,
+    reviewerEvidence: makeReviewerEvidence("waiting_for_author_followup"),
+    existingCheckpoint: null,
+    liveAvailability,
+    steeringLocatorPath: null,
+    steeringEvidence: null,
+    steeringLoadFailed: false,
+    loopIterations,
+  });
+}
+
+const DEFERRED_LOOP_ITERATIONS = Object.freeze({
+  available: false,
+  source: "github_pr_timeline",
+  reason: "deferred_by_caller",
+});
+
+test("composeRunInspectionSnapshot: a deferred fan-out yields the same lifecyclePhase as a full one, for every copilot state", () => {
+  const fullIterations = {
+    available: true,
+    source: "github_pr_timeline",
+    unresolvedReviewThreads: 3,
+    completedCopilotReviewRounds: 2,
+  };
+
+  for (const copilotState of Object.values(COPILOT_STATE)) {
+    const evidenceArgs = {
+      copilotEvidence: makeCopilotEvidence(copilotState),
+      liveAvailability: { copilot: "ok", reviewer: "ok" },
+    };
+    const deferred = composeWithLoopIterations(DEFERRED_LOOP_ITERATIONS, evidenceArgs);
+    const full = composeWithLoopIterations(fullIterations, evidenceArgs);
+
+    assert.equal(
+      deferred.lifecyclePhase,
+      full.lifecyclePhase,
+      `${copilotState}: deferring the fan-out changed the lifecycle phase`,
+    );
+    assert.deepEqual(deferred.lifecycleAllowedTransitions, full.lifecycleAllowedTransitions);
+    // Present evidence resolves the phase from the state map, never from the
+    // fan-out — which is why deferring it is safe.
+    assert.equal(typeof deferred.lifecyclePhase, "string");
+  }
+});
+
+test("composeRunInspectionSnapshot: with copilot evidence absent, a deferred fan-out still matches a full one", () => {
+  // The only path that reaches the fallback. There is no thread count from any
+  // source here, so a deferred and a full inspection must land identically
+  // rather than one of them inventing a phase the other does not see.
+  const evidenceArgs = { copilotEvidence: null, liveAvailability: { copilot: "failed", reviewer: "ok" } };
+  const deferred = composeWithLoopIterations(DEFERRED_LOOP_ITERATIONS, evidenceArgs);
+  const unavailable = composeWithLoopIterations(
+    { available: false, source: "github_pr_timeline", reason: "requires_live_github_facts" },
+    evidenceArgs,
+  );
+
+  assert.equal(deferred.lifecyclePhase, unavailable.lifecyclePhase);
+  assert.deepEqual(deferred.lifecycleAllowedTransitions, unavailable.lifecycleAllowedTransitions);
+});
+
+test("composeRunInspectionSnapshot: the fallback still honors a real unresolved-thread count", () => {
+  // Guard against over-simplifying the fallback away: when the caller DID supply
+  // a numeric count and evidence is absent, it must still drive the phase.
+  const evidenceArgs = { copilotEvidence: null, liveAvailability: { copilot: "failed", reviewer: "ok" } };
+  const withThreads = composeWithLoopIterations(
+    { available: true, source: "github_pr_timeline", unresolvedReviewThreads: 4 },
+    evidenceArgs,
+  );
+  const withoutThreads = composeWithLoopIterations(
+    { available: true, source: "github_pr_timeline", unresolvedReviewThreads: 0 },
+    evidenceArgs,
+  );
+
+  assert.notEqual(withThreads.lifecyclePhase, withoutThreads.lifecyclePhase);
+});
