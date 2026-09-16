@@ -9,6 +9,43 @@ import {
   USER_FACING_AGENT_SURFACE,
 } from "../imported-assets-helpers.mjs";
 import { assertRuleOwned, assertRulePresent, extractOwnedText } from "./_rule-helpers.mjs";
+import { extractRelativeMarkdownLinks } from "../../scripts/docs/validate-links.mjs";
+
+function assertReference(content, target) {
+  const targets = extractRelativeMarkdownLinks(content).map(({ rawTarget }) => rawTarget.split("#")[0]);
+  assert.ok(targets.includes(target), `missing required reference: ${target}`);
+}
+
+function extractStep(content, number) {
+  const lines = content.split("\n");
+  const start = lines.findIndex((line) => line.startsWith(`## Step ${number}:`));
+  assert.ok(start >= 0, `copilot-pr-followup Step ${number} section not found`);
+  const end = lines.findIndex((line, index) => index > start && line.startsWith("## "));
+  return lines.slice(start, end < 0 ? undefined : end).join("\n");
+}
+
+const ASYNC_DISPATCH_CLAUSE = "Before reporting merge-ready or stopping at the human approval checkpoint, you must complete the pre_approval_gate procedure and verify that a visible clean checkpoint verdict comment exists on the PR for the current head SHA. Do not stop or report completion without this evidence.";
+
+function assertDispatchClause(step) {
+  assert.ok(step.includes(ASYNC_DISPATCH_CLAUSE), "Step 6 must embed the pre-approval dispatch clause verbatim");
+}
+
+test("step extraction accepts renamed headings and wrapped prose without borrowing a sibling's payload", () => {
+  for (const title of ["Async watch behavior", "Watch and resume"]) {
+    const content = `## Step 6: ${title}\nRead the\nfollowing requirement.\n\n### Dispatch\n> ${ASYNC_DISPATCH_CLAUSE}\n\n## Step 7: Review feedback\nSibling.\n`;
+    assertDispatchClause(extractStep(content, 6));
+    assert.equal(extractStep(content, 7), "## Step 7: Review feedback\nSibling.\n");
+  }
+  assert.throws(() => extractStep("## Step 7: Review feedback\nMention ## Step 6: Watch", 6), /Step 6 section not found/);
+  for (const boundary of ["## Step 7: Review feedback", "## Validation policy"]) {
+    assert.throws(() => assertDispatchClause(extractStep(`## Step 6: Watch\nNo payload.\n${boundary}\n${ASYNC_DISPATCH_CLAUSE}`, 6)));
+  }
+  for (const changed of [
+    ASYNC_DISPATCH_CLAUSE.replace("must complete", "may skip"),
+    ASYNC_DISPATCH_CLAUSE.replace("current head SHA", "any head SHA"),
+    ASYNC_DISPATCH_CLAUSE.toLowerCase(),
+  ]) assert.throws(() => assertDispatchClause(changed));
+});
 
 async function readCopilotSkillSurface() {
   const [skill, operationsDoc, intakeDoc] = await Promise.all([
@@ -20,9 +57,7 @@ async function readCopilotSkillSurface() {
 }
 test("copilot review gates keep phase-specific angle ownership in one canonical internal skill", async () => {
   const copilotPrFollowupSkill = await readRepo("skills/copilot-pr-followup/SKILL.md");
-  const devLoopStep7Match = copilotPrFollowupSkill.match(/## Step 7: Pi review\/fix follow-up loop[\s\S]*?(?=\n## Step 8|$)/);
-  const devLoopStep7 = devLoopStep7Match ? devLoopStep7Match[0] : "";
-  assert.ok(devLoopStep7.length > 0, "copilot-pr-followup Step 7 section not found");
+  const devLoopStep7 = extractStep(copilotPrFollowupSkill, 7);
   const devLoopDraftGateMatch = devLoopStep7.match(/### Draft gate contract[\s\S]*?(?=\n### |$)/);
   const devLoopDraftGate = devLoopDraftGateMatch ? devLoopDraftGateMatch[0] : "";
   assert.ok(devLoopDraftGate.length > 0, "copilot-pr-followup draft-gate section not found inside Step 7");
@@ -85,7 +120,7 @@ test("tracker-backed PR validation guidance keeps stable evidence canonical and 
 });
 test("copilot-pr-followup skill routes review requests and wait seams through deterministic helpers", async () => {
   const skillContent = await readRepo("skills/copilot-pr-followup/SKILL.md");
-  const requestSectionMatch = skillContent.match(/<!-- rule: COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY -->[\s\S]*?## Step 6: Async watch behavior/);
+  const requestSectionMatch = skillContent.match(/<!-- rule: COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY -->[\s\S]*?(?=\n## Step 6:)/);
   const requestSection = requestSectionMatch ? requestSectionMatch[0] : "";
   assert.ok(requestSection.length > 0, "request/wait section not found");
   assert.match(requestSection, /request-copilot-review\.mjs/i);
@@ -96,9 +131,7 @@ test("copilot-pr-followup skill routes review requests and wait seams through de
   assert.match(requestSection, /`already-requested`:/i);
   assert.match(requestSection, /`suppressed_same_head_clean`:/i);
   assert.match(requestSection, /`unavailable`:/i);
-  const step6Match = skillContent.match(/## Step 6: Async watch behavior[\s\S]*?(?=\n## Step 7|$)/);
-  const step6 = step6Match ? step6Match[0] : "";
-  assert.ok(step6.length > 0, "copilot-pr-followup Step 6 section not found");
+  const step6 = extractStep(skillContent, 6);
   assert.match(step6, /detect-copilot-loop-state\.mjs/i);
   assert.match(step6, /dev-loops loop watch-cycle/i);
   assert.match(step6, /gh run watch <run-id> --repo <owner\/name>/i);
@@ -113,29 +146,34 @@ test("copilot-pr-followup skill routes review requests and wait seams through de
   assertRuleOwned("COPILOT-FOLLOWUP-WAIT-TOOLS", "skills/copilot-pr-followup/SKILL.md");
   assert.match(step6, /do not wrap repeated/i);
 });
-test("copilot-pr-followup skill keeps async watch persistence explicit", async () => {
-  const [skillContent, scriptsReadme, stateGraph] = await Promise.all([
+test("watch policy references make the persistence owner available, without proving agent continuation", async () => {
+  const [skillContent, operationsDoc] = await Promise.all([
     readRepo("skills/copilot-pr-followup/SKILL.md"),
-    readRepo("scripts/README.md"),
-    readRepo("skills/docs/copilot-loop-state-graph.md"),
+    readRepo("skills/docs/copilot-loop-operations.md"),
   ]);
-  assert.match(skillContent, /dev-loops loop watch-cycle/i);
-  assert.match(skillContent, /zero-timeout `idle` probes are for explicit one-shot status\/reattach checks only/i);
-  assert.match(skillContent, /returning to `waiting_for_copilot_review` is a persistence boundary: resume the watcher instead of reporting completion/i);
-  assert.match(skillContent, /persistent async watch\/fix loop, not handoff-only behavior/i);
-  assert.match(skillContent, /if `cycleDisposition` is `pending` and `terminal` is `false`, the subagent exits on the wait boundary; the main session re-dispatches another watch boundary/i);
-  assert.match(skillContent, /if the user explicitly asks for async handoff-only behavior/i);
-  assert.match(skillContent, /child async run exits[\s\S]*waiting_for_copilot_review[\s\S]*main session re-dispatches the same-PR follow-up path when feasible/i);
-  assert.match(scriptsReadme, /`cycleDisposition: "pending"` with `terminal: false` means stay attached and run another watch boundary rather than exiting as clean success/i);
-  assert.match(scriptsReadme, /handoff-only behavior must be explicitly requested/i);
+  assertReference(skillContent, "../docs/copilot-loop-operations.md");
+  assertReference(skillContent, "../docs/wait-watch-procedure.md");
+  assertReference(operationsDoc, "./copilot-loop-state-graph.md");
+  assert.ok((await stat(fromRepoRoot("skills/docs/wait-watch-procedure.md"))).isFile());
   assertRuleOwned("COPILOT-STATE-WATCH-PERSISTENCE", "skills/docs/copilot-loop-state-graph.md");
-  assert.match(stateGraph, /COPILOT-STATE-WATCH-PERSISTENCE/);
+  // run-watch-cycle/outer-loop tests cover executable pending/continue-wait results.
+  // Agent continuation, handoff authorization and cumulative budgets require
+  // semantic scenario review; these references cannot detect inverted prose.
+});
+
+test("watch policy references tolerate renamed labels and reflow, but require each target", () => {
+  for (const target of ["../docs/copilot-loop-operations.md", "../docs/wait-watch-procedure.md", "./copilot-loop-state-graph.md"]) {
+    for (const content of [
+      `Read [Policy](${target}).`,
+      `For this case, follow\nthe [operating contract](${target}#details).`,
+    ]) assertReference(content, target);
+    assert.throws(() => assertReference(`The policy is at \`${target}\`.`, target), /missing required reference/);
+    assert.throws(() => assertReference("[Other policy](./unrelated.md)", target), /missing required reference/);
+  }
 });
 test("copilot-pr-followup skill hardens reply-resolve, gate sequencing, and merge-ready checks", async () => {
   const skillContent = await readRepo("skills/copilot-pr-followup/SKILL.md");
-  const step6Match = skillContent.match(/## Step 6: Async watch behavior[\s\S]*?(?=\n## Step 7|$)/);
-  const step6 = step6Match ? step6Match[0] : "";
-  assert.ok(step6.length > 0, "copilot-pr-followup Step 6 section not found");
+  const step6 = extractStep(skillContent, 6);
   assert.match(
     step6,
     /Every async dev-loop dispatch task body must include this clause verbatim/i,
@@ -145,14 +183,8 @@ test("copilot-pr-followup skill hardens reply-resolve, gate sequencing, and merg
   // mandates ("must include this clause verbatim") that this exact quoted
   // clause be reproduced unchanged in every async dispatch task body, so the
   // test asserts it byte-for-byte.
-  assert.match(
-    step6,
-    /Before reporting merge-ready or stopping at the human approval checkpoint, you must complete the pre_approval_gate procedure and verify that a visible clean checkpoint verdict comment exists on the PR for the current head SHA\. Do not stop or report completion without this evidence\./i,
-    "Step 6 should embed the required pre-approval gate dispatch clause verbatim",
-  );
-  const step7Match = skillContent.match(/## Step 7: Pi review\/fix follow-up loop[\s\S]*?(?=\n## Validation policy|$)/);
-  const step7 = step7Match ? step7Match[0] : "";
-  assert.ok(step7.length > 0, "copilot-pr-followup Step 7 section not found");
+  assertDispatchClause(step6);
+  const step7 = extractStep(skillContent, 7);
   assert.match(
     step7,
     /must use the deterministic helper `reply-resolve-review-thread\.mjs`/i,
@@ -339,9 +371,7 @@ test("copilot-pr-followup skill hardens reply-resolve, gate sequencing, and merg
 test("copilot-pr-followup skill caps Copilot re-review rounds via config and snapshot state", async () => {
   const skillContent = await readRepo("skills/copilot-pr-followup/SKILL.md");
 
-  const step7Match = skillContent.match(/## Step 7: Pi review\/fix follow-up loop[\s\S]*?(?=\n## Validation policy|$)/);
-  const step7 = step7Match ? step7Match[0] : "";
-  assert.ok(step7.length > 0, "copilot-pr-followup Step 7 section not found");
+  const step7 = extractStep(skillContent, 7);
 
   assert.match(step7, /resolveRefinementConfig\(config, "maxCopilotRounds"\)/i);
   assert.match(step7, /default config ships `maxCopilotRounds: 5`/i);

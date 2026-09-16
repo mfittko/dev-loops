@@ -778,60 +778,28 @@ closed. Only when no on-disk records exist (offline/legacy) does it fall back to
 rule that all of the round's sentinels share ONE identical hash. See
 `verify-briefing-prefixes.mjs --help` for the worked same-head two-gate example.
 
-**Prompt-LAYOUT enforcement (issue #1841/#1852, completes #1468).** Everything above proves the
-recorded prefix HASH is byte-identical across a round's sentinels — it proves nothing about
-whether any reviewer's ACTUAL dispatched prompt LED with those bytes. On the sanctioned fan-out
-path ("The composer" paragraph above), this is closed BY CONSTRUCTION: composing a reviewer
-prompt via `compose-reviewer-prompt.mjs` records it in the SAME call, via
-`record-dispatch-prompt-layout.mjs`'s exported `recordDispatchPromptLayout` — there is no
-separate step an orchestrator could pair incorrectly or skip, and a canonical-path dispatch is
-therefore NEVER left unrecorded. The underlying capture primitive
-(`scripts/github/record-dispatch-prompt-layout.mjs --scope <gate>-<angle-or-group> --head-sha
-<sha> --prefix-path <the invariant-prefix file path this reviewer's prompt was composed
-from/points at> --prompt-file <path to the ACTUAL composed prompt text>`) remains directly
-callable for a caller that already has an independently-composed prompt file on disk. Either
-way, the record captures the prompt's leading bytes (up to `DISPATCH_PROMPT_LEADING_CAP_BYTES`,
-`@dev-loops/core/loop/review-dispatch-plan`) AND a `promptContentHash` — the sha256 of the FULL
-recorded prompt, never truncated — to `tmp/checkpoint-dispatch-prompt-<scope>-<headSha>.json`.
+**Prompt-LAYOUT enforcement (issue #1841/#1852, completes #1468).** Prefix-hash equality alone does not prove prompt layout. On the sanctioned path, `compose-reviewer-prompt.mjs` composes and records the prompt in the same call through `recordDispatchPromptLayout`; there is no separate recording step to pair incorrectly or skip.
 
-**Emitted-unit binding (issue #2131).** Before Phase 3 consolidation, the fan-in runs
-`scripts/github/verify-dispatch-prompt-layout.mjs --head-sha <sha>` (wired into
-`consolidate-fanin.mjs`'s own `--head-sha` block, alongside `verify-briefing-prefixes.mjs`),
-which fails closed (exit 1) unless EACH present dispatch record BINDS to the sanctioned emitter's
-emitted unit — the canonical `<gate>-<headSha>.dispatch-prompt-<scope>.txt` file the composer
-writes sibling to the invariant prefix. The bind requires BOTH: (1) the record's
-`promptContentHash` equals the sha256 of that emitted file (re-discovered on disk by name under
-`<tmp-root>/gate-context/**`, NEVER trusted from the record's own stored path), and (2) the
-emitted file LEADS with the round's byte-identical invariant prefix INLINE (`prefixBytes` as its
-leading bytes, the layout `composeReviewerPromptText` produces by construction), angle-specific
-text strictly AFTER. A leading-prefix match alone is not sufficient — **a matching invariant
-prefix does not prove an unchanged suffix**, so the full-content hash is what closes the
-altered-suffix gap. This mechanically rejects the three failure modes prose discipline never
-held (the #2129 incident): a hand-composed **pointer-seeding** prompt (leads with the
-`renderBriefingPointerLine` pointer LINE, not the inlined prefix — not inline-aligned, so
-rejected), a **paraphrased/altered suffix** (recorded hash ≠ emitted-file hash), and any
-**mismatched delivered prompt**.
+For an independently composed prompt file, the capture primitive remains callable:
 
-**Three identities, one honest boundary.** This binds **recorded-layout identity** (the
-`promptContentHash` in the record) to **generated-file identity** (the emitted unit re-hashed on
-disk). It does NOT establish **delivered-task identity** — whether the spawned subagent actually
-received those exact bytes. Under Claude Code's Agent tool the orchestrating agent relays the
-emitted `--out` bytes into the `prompt` parameter by hand, and no Agent-tool primitive exposes
-that final hop for independent verification, so a coordinator that honestly records the delivered
-bytes is caught when they drift from the emitted unit, but a coordinator that records the emitted
-bytes while delivering something else is not mechanically provable here. That relay hop is the
-documented fail-closed best-effort boundary (see "Per-harness delivery" above and
-`GATE-EXEC-FANOUT-DISPATCH-EMIT`), exposed as a limitation rather than papered over — treating
-the emitted-file hash as proof of task delivery is an explicit non-goal.
+```sh
+scripts/github/record-dispatch-prompt-layout.mjs --scope <gate>-<angle-or-group> \
+  --head-sha <sha> --prefix-path <invariant-prefix-path> \
+  --prompt-file <actual-composed-prompt-path>
+```
 
-A present record that carries no `promptContentHash`, or that binds to no emitted unit on disk,
-FAILS CLOSED — never grandfathered (same posture as a null `prefixPath`/`leading`): a
-coordinator-authored record cannot prove emitted-unit provenance on its own. A round with NO
-dispatch-prompt records at all is still never newly blocked (progressive/optional capture, same
-posture as `GATE-EXEC-PRIMER-EVIDENCE` below) — this stays true for a caller that genuinely never
-adopted the composer (e.g. a pre-#1852 artifact replayed offline). A noncompliant round recovers
-by re-running the sanctioned emitter (`emit-fanout-dispatch.mjs`) and re-consolidating; the
-original review history and audit records are preserved, not relabeled valid.
+Both paths write `tmp/checkpoint-dispatch-prompt-<scope>-<headSha>.json`: leading bytes up to `DISPATCH_PROMPT_LEADING_CAP_BYTES` (`@dev-loops/core/loop/review-dispatch-plan`) and `promptContentHash`, the SHA-256 of the **entire** prompt.
+
+**Emitted-unit binding (issue #2131).** Before Phase 3, `consolidate-fanin.mjs --head-sha` runs `scripts/github/verify-dispatch-prompt-layout.mjs --head-sha <sha>` alongside `verify-briefing-prefixes.mjs`. Every present record must satisfy both checks:
+
+- Its full-content hash matches the canonical `<gate>-<headSha>.dispatch-prompt-<scope>.txt`, rediscovered under `<tmp-root>/gate-context/**`, never trusted from the record's stored path.
+- That emitted file begins with the round's byte-identical invariant prefix **inline**, with angle-specific text strictly after it.
+
+Missing/malformed `prefixPath` or leading bytes, missing `promptContentHash`, a missing emitted file, altered suffixes/hash mismatches, and pointer-seeded or angle-first emitted prompts fail closed (exit 1), never grandfathered.
+
+**Three identities, one honest boundary.** This binds recorded-layout identity to generated-file identity, **not delivered-task identity**. Claude Code's orchestrator must relay emitted bytes verbatim into the Agent prompt, but the check cannot observe that final hop. It catches honestly recorded delivery drift; recording emitted bytes while delivering different bytes remains unverified. Do not present an emitted-file hash as proof of delivery. The per-harness delivery limitations above and `GATE-EXEC-FANOUT-DISPATCH-EMIT` still apply.
+
+Zero dispatch-prompt records do not themselves fail this check: capture remains progressive/optional for non-composer callers, including legacy offline rounds, as with `GATE-EXEC-PRIMER-EVIDENCE`. This does not waive the separate records-floor below. Recover a noncompliant round by rerunning `emit-fanout-dispatch.mjs` and reconsolidating; preserve original review history and audit records rather than relabeling them valid.
 
 **Records-floor (issue #1868).** The remaining vacuous-pass shape — a coordinator round that
 records ZERO dispatch/briefing evidence for a gate that DID dispatch units — is closed
