@@ -8,7 +8,10 @@ import {
   test,
   USER_FACING_AGENT_SURFACE,
 } from "../imported-assets-helpers.mjs";
-import { assertRuleOwned, extractOwnedText } from "./_rule-helpers.mjs";
+import { fileURLToPath } from "node:url";
+import { collectGeneratedAssets } from "../../scripts/claude/generate-claude-assets.mjs";
+import { extractRelativeMarkdownLinks } from "../../scripts/docs/validate-links.mjs";
+import { assertNotRestated, assertRuleOwned, extractOwnedText } from "./_rule-helpers.mjs";
 
 const PUBLIC_CONTRACT_PATH = "skills/docs/public-dev-loop-contract.md";
 
@@ -21,39 +24,54 @@ async function readCopilotFollowupSurface() {
   return [skill, operationsDoc, intakeDoc].join("\n\n");
 }
 
-test("installed skill guidance owns packaging guarantees and contract docs stay contract-focused", async () => {
-  const [devLoopSkill, copilotFollowupSkill, publicContract, retrospectiveContract] = await Promise.all([
+function assertBundledContractLinks(content, requiredDocs, targets) {
+  const links = new Set(extractRelativeMarkdownLinks(content).map(({ rawTarget }) => rawTarget.split("#")[0]));
+  for (const doc of requiredDocs) {
+    assert.ok(links.has(`../docs/${doc}`), `missing installed contract link: ${doc}`);
+    assert.ok(targets.has(`.claude/skills/docs/${doc}`), `missing bundled contract: ${doc}`);
+  }
+}
+
+test("installed skills reference bundled contracts and own asset-path rules", async () => {
+  const [devLoopSkill, copilotFollowupSkill, packageJson] = await Promise.all([
     readRepo("skills/dev-loop/SKILL.md"),
     readRepo("skills/copilot-pr-followup/SKILL.md"),
-    readRepo("skills/docs/public-dev-loop-contract.md"),
-    readRepo("skills/docs/retrospective-checkpoint-contract.md"),
+    readRepo("package.json"),
   ]);
-
-  assert.match(devLoopSkill, /Required installed runtime contract docs/i);
-  assert.match(devLoopSkill, /shared bundled copies under `\.\.\/docs\/` from this skill directory/i);
-  assert.match(devLoopSkill, /read those bundled `\.\.\/docs\/` files from the installed skill layout/i);
-  assert.match(devLoopSkill, /packaging\/installer bug/i);
-
-  assert.match(copilotFollowupSkill, /Required bundled runtime contract docs for installed copies of this skill/i);
-  assert.match(copilotFollowupSkill, /required bundled contract docs live under the shared `\.\.\/docs\/` directory next to the installed skill directories/i);
-  assertRuleOwned("ASSET-PATH-INSTALLED-NO-ASSUME", "skills/copilot-pr-followup/SKILL.md");
-  assert.match(copilotFollowupSkill, /ASSET-PATH-INSTALLED-NO-ASSUME/);
-  assert.match(copilotFollowupSkill, /Read those bundled `\.\.\/docs\/` files from the installed skill layout/i);
-  assert.match(copilotFollowupSkill, /packaging\/installer bug/i);
-  assert.match(publicContract, /canonical owner lives in the shipped `skills\/docs\/` surface/i);
-  assert.match(publicContract, /installed skill\/runtime consumers reliably own the skills subtree/i);
-  assert.match(publicContract, /read the same contract via \[Public Dev Loop Contract\]\(\.\.\/docs\/public-dev-loop-contract\.md\) from the installed skill directory/i);
-
-  for (const [label, content] of [
-    ["skills/docs/public-dev-loop-contract.md", publicContract],
-    ["skills/docs/retrospective-checkpoint-contract.md", retrospectiveContract],
-  ]) {
-    assert.doesNotMatch(content, /Packaged \/ installed skill use|Packaged \/ installed agent use/i, `${label} should not restate the shared install contract block`);
-    assert.doesNotMatch(content, /required runtime contract doc for installed/i, `${label} should not duplicate install-contract ownership prose`);
-    assert.doesNotMatch(content, /source-tree canonical ownership/i, `${label} should not duplicate install-contract ownership prose`);
-    assert.doesNotMatch(content, /shared installed copy resolved as `\.\.\/docs\//i, `${label} should not duplicate install-contract ownership prose`);
-    assert.doesNotMatch(content, /packaging\/installer bug/i, `${label} should not duplicate install-contract ownership prose`);
+  const pkg = JSON.parse(packageJson);
+  assert.ok(pkg.files.includes("skills/"), "npm must ship the canonical skills subtree");
+  assert.ok(pkg.files.includes(".claude/skills/"), "npm must ship the Claude skills subtree");
+  assert.ok(pkg.pi.skills.includes("skills"), "Pi must discover the shipped skills subtree");
+  const assets = collectGeneratedAssets({ repoRoot: fileURLToPath(fromRepoRoot("")) });
+  const targets = new Set(assets.map(({ target }) => target));
+  const requiredDocs = [
+    "public-dev-loop-contract.md",
+    "retrospective-checkpoint-contract.md",
+    "issue-intake-procedure.md",
+    "copilot-loop-operations.md",
+  ];
+  for (const [name, source] of [["dev-loop", devLoopSkill], ["copilot-pr-followup", copilotFollowupSkill]]) {
+    const generated = assets.find(({ target }) => target === `.claude/skills/${name}/SKILL.md`);
+    assert.ok(generated, `missing generated skill: ${name}`);
+    const docs = name === "dev-loop" ? ["public-dev-loop-contract.md"] : requiredDocs;
+    for (const content of [source, generated.content]) assertBundledContractLinks(content, docs, targets);
   }
+  // Ownership and literal restatement are checkable; natural-language meaning remains review work.
+  for (const id of ["ASSET-PATH-INSTALLED-NO-ASSUME", "ASSET-PATH-SOURCE-NO-REPO-LOCAL"]) {
+    assertRuleOwned(id, "skills/copilot-pr-followup/SKILL.md");
+    assertNotRestated(id, [PUBLIC_CONTRACT_PATH, "skills/docs/retrospective-checkpoint-contract.md"]);
+  }
+});
+
+test("installed contract link checks accept wording changes and reject missing links or bundles", () => {
+  const doc = "public-dev-loop-contract.md";
+  const targets = new Set([`.claude/skills/docs/${doc}`]);
+  for (const content of [
+    `Read [Public Dev Loop Contract](../docs/${doc}).`,
+    `The installed copy is available here:\n[Routing contract](../docs/${doc}#startup).`,
+  ]) assertBundledContractLinks(content, [doc], targets);
+  assert.throws(() => assertBundledContractLinks("No contract link.", [doc], targets), /missing installed contract link/);
+  assert.throws(() => assertBundledContractLinks(`[Contract](../docs/${doc})`, [doc], new Set()), /missing bundled contract/);
 });
 
 test("root docs path does not become a second semantic owner for the public dev-loop contract", async () => {
