@@ -40,8 +40,7 @@ These routing guarantees are owned by [Copilot Loop State Graph](./copilot-loop-
 1. Run `node <resolved-skill-scripts>/loop/detect-copilot-loop-state.mjs --repo <owner/name> --pr <number>`
    to get the current Copilot-loop state, decisive snapshot fields, and recommended next action.
 
-2. If you already ran `<resolved-skill-scripts>/github/request-copilot-review.mjs` and got a known status,
-   inject it without re-probing: add `--review-request-status <status>`.
+2. After a separate `<resolved-skill-scripts>/github/request-copilot-review.mjs` call, apply `COPILOT-FOLLOWUP-REQUEST-BRANCHING` in the [follow-up skill](../copilot-pr-followup/SKILL.md), then refresh the detector normally. `--review-request-status` is unsupported. For combined detection/request/watch routing, use `copilot-pr-handoff.mjs` and consume its returned request/watch contract; it preserves its own request result, not an externally supplied override.
 
 3. When the agent has applied a fix and wants to signal reply/resolve is next, build a snapshot
    with `agentFixStatus: "applied"` and use `--input <snapshot.json>` for interpretation.

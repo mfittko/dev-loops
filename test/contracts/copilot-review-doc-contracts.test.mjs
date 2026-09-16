@@ -573,6 +573,16 @@ test("docs index references sub-issue-tree-contract.md", async () => {
 // invocation was never updated, leaving #1992 inert. This pins the wire across every
 // sanctioned invocation (source + .claude mirror) and guards against regressing to a
 // bare `--ledger`-only call.
+function assertGoverningIssueArgument(content, label) {
+  // Match executable examples, not bare mentions of the script in prose.
+  const matches = [...content.matchAll(/close-gate-findings\.mjs --ledger <[^>]+>([^\n`]*)/g)];
+  assert.ok(matches.length > 0, `${label} must contain a close-gate-findings invocation`);
+  for (const match of matches) {
+    const values = [...match[1].matchAll(/(?:^|\s)--allowed-refs\s+(\S+)/g)].map((entry) => entry[1]);
+    assert.deepEqual(values, ["<governing-issue>"], `${label}: each invocation must use --allowed-refs <governing-issue>, never a hardcoded issue`);
+  }
+}
+
 test("sanctioned close-gate-findings invocations pass --allowed-refs <governing-issue> (source + mirror)", async () => {
   const invocationDocs = [
     "skills/copilot-pr-followup/SKILL.md",
@@ -580,42 +590,20 @@ test("sanctioned close-gate-findings invocations pass --allowed-refs <governing-
     "skills/docs/gate-review-sub-loop-contract.md",
     ".claude/skills/docs/gate-review-sub-loop-contract.md",
   ];
-  // Match an executable invocation: the script name immediately followed by --ledger
-  // and a <placeholder> value (prose mentions of the script name carry no --ledger).
-  const invocationPattern = /close-gate-findings\.mjs --ledger <[^>]+>([^\n`]*)/g;
-  let totalInvocations = 0;
   for (const relPath of invocationDocs) {
-    const content = await readRepo(relPath);
-    const matches = [...content.matchAll(invocationPattern)];
-    assert.ok(matches.length > 0, `${relPath} must contain at least one close-gate-findings invocation`);
-    for (const match of matches) {
-      totalInvocations += 1;
-      assert.match(
-        match[1],
-        /--allowed-refs <governing-issue>/,
-        `${relPath}: every close-gate-findings invocation must carry --allowed-refs <governing-issue> (found bare: "${match[0].trim()}")`,
-      );
-    }
+    assertGoverningIssueArgument(await readRepo(relPath), relPath);
   }
-  // Sanity: all four docs contributed at least one invocation.
-  assert.ok(totalInvocations >= 4, `expected >= 4 sanctioned invocations across docs, found ${totalInvocations}`);
 });
-test("close-gate-findings --allowed-refs governing issue is resolved deterministically, not hardcoded", async () => {
-  const skill = await readRepo("skills/copilot-pr-followup/SKILL.md");
-  // The authoritative resolution note lives in copilot-pr-followup Step 7: the
-  // governing issue is the PR's closingIssuesReferences, resolved deterministically,
-  // never a hardcoded literal.
-  assert.match(skill, /<governing-issue>` is the PR's governing \(closing\) issue resolved DETERMINISTICALLY/i);
-  assert.match(skill, /closingIssuesReferences/);
-  assert.match(skill, /NEVER a hardcoded literal/i);
-  // Scoped allowlist, not a blanket bypass: an unrelated bare ref stays fail-closed.
-  assert.match(skill, /UNrelated issue stays fail-closed/i);
-  // Guard against a literal issue number slipping into the sanctioned invocation.
-  const invocationLine = skill.match(/close-gate-findings\.mjs --ledger <[^>]+> --allowed-refs [^\n`]*/);
-  assert.ok(invocationLine, "copilot-pr-followup Step 7 close-gate-findings invocation not found");
-  assert.doesNotMatch(
-    invocationLine[0],
-    /--allowed-refs\s+\d/,
-    "the sanctioned invocation must pass the <governing-issue> placeholder, never a hardcoded numeric id",
-  );
+test("governing-issue argument checks tolerate prose edits and reject missing or wrong values", () => {
+  // This checks the documented argument, not whether an agent selects the real
+  // closing issues. Closing-reference/umbrella/no-issue decisions need semantic
+  // review; close-gate-findings runtime tests cover unrelated-reference refusal.
+  const command = "close-gate-findings.mjs --ledger <ledger>";
+  for (const prose of ["Resolve the closing issues.", "Use the governing\nissue references."]) {
+    assertGoverningIssueArgument(`${prose}\n\`${command} --allowed-refs <governing-issue>\``, "fixture");
+  }
+  assert.throws(() => assertGoverningIssueArgument("No invocation.", "fixture"));
+  for (const suffix of ["", " --allowed-refs", " --allowed-refs 2236", " --allowed-refs <unrelated-issue>", " --allowed-refs <governing-issue> --allowed-refs 2236"]) {
+    assert.throws(() => assertGoverningIssueArgument(`\`${command}${suffix}\``, "fixture"));
+  }
 });
