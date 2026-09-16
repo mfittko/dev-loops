@@ -2,26 +2,27 @@
 
 *Loops, graphs, and more reliable AI agents*
 
-Audience: company-wide; no programming knowledge assumed. Timing: 48 minutes of explanation, a 2-minute audience exercise, and 10 minutes for questions: 60 minutes total. Slides 1–41 take 50 minutes including the exercise; slide 42 stays up during questions. [Open the deck](finding-the-flow.html). Use arrow keys, Page Up/Down, or Space; Home/End jumps. Links keep normal keyboard behavior. The HTML opens offline and uses no external assets. Browser print offers a landscape PDF; the HTML is the primary deliverable.
+Audience: company-wide; no programming knowledge assumed. Timing: 48 minutes of explanation, a 2-minute audience exercise, and 10 minutes for questions: 60 minutes total. Slides 1–42 take 50 minutes including the exercise; slide 43 stays up during questions. [Open the deck](finding-the-flow.html). Use arrow keys, Page Up/Down, or Space; Home/End jumps. Links keep normal keyboard behavior. The HTML opens offline and uses no external assets. Browser print offers a landscape PDF; the HTML is the primary deliverable.
 
 ## Running order
 
 | Section | Slides | Time |
 | --- | --- | --- |
-| Foundations: steps, state, guards | 1–6 | 5:00 |
-| Worked traces, spec changes and recovery | 7–13 | 8:15 |
-| Bounded freedom and parallel checks | 14–16 | 3:30 |
-| dev-loops: routing, job cards and nested reviews | 17–22 | 7:30 |
-| Actual UI sub-loop used for this deck | 23–25 | 3:30 |
-| dev-loops: evidence, waits and authority | 26–29 | 5:00 |
-| Human decisions and total cost | 30–36 | 11:00 |
-| Audience exercise and answer | 37–38 | 3:00 |
-| Limits, evaluation, close | 39–41 | 3:15 |
-| Questions, with sources on screen | 42 | 10:00 |
+| Foundations: steps, state, guards | 1–6 | 4:45 |
+| Grilling the goal | 7 | 1:30 |
+| Worked traces, spec changes and recovery | 8–14 | 7:45 |
+| Bounded freedom and parallel checks | 15–17 | 3:30 |
+| dev-loops: routing, job cards and nested reviews | 18–23 | 7:15 |
+| Actual UI sub-loop used for this deck | 24–26 | 3:30 |
+| dev-loops: evidence, waits and authority | 27–30 | 5:00 |
+| Human decisions and total cost | 31–37 | 10:30 |
+| Audience exercise and answer | 38–39 | 3:00 |
+| Limits, evaluation, close | 40–42 | 3:15 |
+| Questions, with sources on screen | 43 | 10:00 |
 
-Follow the highlighted arrows. The customer diagrams show three states of the same process; slide 11 applies invalidation to an authorized acceptance-criteria change in dev-loops. Values and retry budgets are teaching examples; no production logs are shown. The public router's five fields are a useful vocabulary; actual decisions also depend on validated evidence and settings.
+Follow the highlighted arrows. The customer diagrams show three states of the same process; slide 12 applies invalidation to an authorized acceptance-criteria change in dev-loops. Values and retry budgets are teaching examples; no production logs are shown. The public router's five fields are a useful vocabulary; actual decisions also depend on validated evidence and settings.
 
-Delivery cues: trace each changed arrow once; use the state table as a reference. Keep the full technical explanations below for questions and preparation. In slides 18–19 name one routing case, in 22 name the coverage/judge/repair sequence, and in 24 show one visual defect. Spend the recovered time on the decision packet, total-cost scorecard and budget branch. Keep the two-minute exercise and ten-minute Q&A intact.
+Delivery cues: trace each changed arrow once; use the state table as a reference. Keep the full technical explanations below for questions and preparation. On slide 7, ask two example questions, name the human decision and follow the feedback edge. In slides 19–20 name one routing case, in 23 name the coverage/judge/repair sequence, and in 25 show one visual defect. Keep the decision packet, total-cost scorecard and budget branch substantive. Preserve the two-minute exercise and ten-minute Q&A.
 
 ## Pitch
 
@@ -43,7 +44,7 @@ A detailed prompt can say that the check is mandatory. If the same agent also de
 
 Prompts shape the quality of work within a step. Mandatory process rules also need executable checks and permissions.
 
-## 3. The arrows are rules — 1:15
+## 3. The arrows are rules — 1:00
 
 Walk across the diagram. A node is a step that does work. An edge is an allowed transition between steps. A guard is a condition that must hold before that transition can happen.
 
@@ -82,7 +83,22 @@ Workflow graphs organize what work may happen next. Knowledge graphs and GraphRA
 
 Sources: [3 Years of Graph Engineering with LangGraph](https://www.langchain.com/blog/3-years-of-graph-engineering-with-langgraph), 22 July 2026; [Feng et al.](https://arxiv.org/abs/2608.21156), recent preprint. These sources offer emerging terminology and practitioner framing. They establish neither a settled standard nor comparative proof.
 
-## 7. Check and approve before sending — 0:45
+## 7. Make the goal testable — 1:30
+
+Before the agent starts useful work, people need an agreement about the outcome. Grilling means asking follow-up questions until the goal, scope and evidence requirements are clear enough to act on. An agent can propose alternatives, investigate facts, challenge assumptions and flag contradictory or untestable criteria. A person decides the intended outcome and tradeoffs.
+
+The questions can come from a person, an agent interviewing a person, or agents doing preliminary exploration. Agent-only answers remain proposals or sourced observations. They do not authorize material conceptual or acceptance-criteria changes. Human approval is part of the conceptual workflow shown here.
+
+Use the customer example: “improve replies” leaves the target unclear. Ask which facts must be correct, which promises are allowed, who can send, and how success will be checked. An agreed contract could require current order facts, prohibit unsupported delivery promises and require approval of the exact reply. Record the goal, non-goals, acceptance criteria and completion evidence. This makes success testable and helps expose work aimed at the wrong outcome.
+
+Follow the feedback edge: unanswered questions return to questioning and then another human decision. If evidence or a decision is unavailable, pause and name the gap; bound the time spent questioning. Begin execution only when the contract is approved and required gaps are resolved. A well-formed contract can still express the wrong goal, and agents can reinforce a mistaken assumption. Requirements quality and conceptual judgment remain fallible.
+
+The slide is a proposed human-in-the-loop conceptual process. The actual dev-loops grill supports interactive answers and evidence-based auto-answering, synthesizes an acceptance-criterion/completion-evidence matrix and non-goals, then checks for remaining gaps. Its state machine includes clean, human-handoff and blocked outcomes; an already-refined artifact can take a zero-iteration path. Neither a clean structural artifact nor an agent's self-answer establishes human authorization for material spec changes.
+
+Sources: [Loop-grill skill](https://github.com/mfittko/dev-loops/blob/9b5f988e/skills/loop-grill/SKILL.md), [refinement-grill state machine](https://github.com/mfittko/dev-loops/blob/9b5f988e/packages/core/src/loop/refinement-grill-state.mjs), and [human-only spec authority](https://github.com/mfittko/dev-loops/blob/9b5f988e/skills/docs/spec-authority-contract.md), all verified at the existing source snapshot. <!-- secret-scan:allow source links pinned to inspected repository commit -->
+
+
+## 8. Check and approve before sending — 0:45
 
 This customer-service process is a teaching example. It has not been deployed as company policy. The customer asks about an order. The agent receives the order facts and drafts a reply. Validation checks the fields we can check against the system of record, such as the order identifier and recipient. A person approves the exact draft before it is sent.
 
@@ -93,7 +109,7 @@ The drafting agent has no direct send permission. A separate action boundary che
 Structured field checks validate only the specific facts they cover. Subjective tone, implications, and unusual requests may need a person or a fallible model-based evaluator.
 
 
-## 8. Follow the happy path — 1:00
+## 9. Follow the happy path — 1:00
 
 Introduce the diagram once. The top row is draft → validate → human approval → guarded send. Lower branches represent repair and recovering unavailable facts. Cyan nodes and edges show the current trace; the muted routes remain available when their conditions are met.
 
@@ -103,7 +119,7 @@ Walk one arrow at a time. The draft-ready event permits validation; the passing 
 
 This demonstrates that the stipulated checks and authority precede the action. Reply quality remains dependent on the checks' coverage. The system still needs good checks for the facts and risks that matter.
 
-## 9. A failed check sends it back — 1:30
+## 10. A failed check sends it back — 1:15
 
 Keep the same graph on screen so the audience can see what changed: only the observed state and the highlighted route.
 
@@ -113,7 +129,7 @@ The agent creates B. B is new work; it has no passing validation merely because 
 
 The feedback names the defect, the work changes, the check runs again, and the loop has an exit.
 
-## 10. Unknown takes another arrow — 1:30
+## 11. Unknown takes another arrow — 1:15
 
 The order service is unavailable, so validation cannot establish whether the date is right. Validation returns unknown because the facts are unavailable. Sending remains unavailable while the workflow recovers those facts.
 
@@ -123,7 +139,7 @@ Distinguish a known external wait from unknown process state. We may know a chec
 
 Recovery needs a budget chosen for the process; there is no universal retry count. AWS's retry guidance supports budgets, backoff, and care around overloaded services.
 
-## 11. Changed criteria require fresh clearance — 1:00
+## 12. Changed criteria require fresh clearance — 1:00
 
 Acceptance criteria (ACs) say what the work must satisfy. Move from the customer example to an actual dev-loops rule: during development, a person authorizes a material change from criteria v1 to v2 and records that decision on the canonical tracker artifact.
 
@@ -135,7 +151,7 @@ This differs from an implementation-only change under the same spec. There, affe
 
 Source: [Immutable spec-authority contract](https://github.com/mfittko/dev-loops/blob/9b5f988e/skills/docs/spec-authority-contract.md), “Human-only spec change,” and `resolveCriterionInvalidation` in `packages/core/src/loop/spec-authority.mjs` (lines 512–553). A changed spec digest returns the full prior-approved set as stale and no carried criteria. This enforcement seam implements the authority contract. Tool credentials may still permit edits to tracker text. <!-- secret-scan:allow source link pinned to inspected repository commit -->
 
-## 12. Advancement requires evidence. — 1:00
+## 13. Advancement requires evidence. — 1:00
 
 Explain “fail closed” in ordinary terms: if we cannot establish permission, we do not perform the protected action. The three outcomes are pass, fail, and unknown/error.
 
@@ -145,7 +161,7 @@ Recovery can continue: restore the evidence, retry a temporary read failure, or 
 
 Source: [OWASP Fail Securely](https://community.owasp.org/Fail_securely) is a security principle about error paths and permission. We apply that principle to quality gates as a design analogy. OWASP provides no certification of agent correctness here.
 
-## 13. “Try again” needs a reason — 1:30
+## 14. “Try again” needs a reason — 1:30
 
 There are different failure types, and each deserves a different arrow.
 
@@ -158,7 +174,7 @@ The workflow owns the counter and stop route, which persist across conversations
 Sources: [AWS retry limits](https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_mitigate_interaction_failure_limit_retries.html) and [Making retries safe with idempotent APIs](https://aws.amazon.com/builders-library/making-retries-safe-with-idempotent-APIs/). Recovery taxonomy is our synthesis. [LangGraph interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts) also warns about replayed side effects on resume.
 
 
-## 14. Define where the agent can choose — 1:00
+## 15. Define where the agent can choose — 1:00
 
 An investigation can be open-ended within a node: search several sources, compare hypotheses, choose useful tools, and draft an answer. The outside workflow still controls whether the work can advance, consume more budget, or perform a protected action.
 
@@ -169,7 +185,7 @@ For very simple tasks, one model call and a validator may be enough. Extra graph
 Sources: [Anthropic workflow/agent patterns](https://www.anthropic.com/engineering/building-effective-agents); [LangChain graph engineering](https://www.langchain.com/blog/3-years-of-graph-engineering-with-langgraph). The latter explicitly discusses full agents inside nodes and where rigid paths are a poor fit.
 
 
-## 15. Parallel work still needs a join — 1:30
+## 16. Parallel work still needs a join — 1:30
 
 Introduce the second graph shape. Three independent checks can inspect the same version at the same time. In this example they cover facts, policy, and destination. “Fan out” starts those branches. “Fan in” gathers their outcomes.
 
@@ -179,7 +195,7 @@ A join is an actual decision boundary. It needs a declared list of required outc
 
 Parallelism is optional. Use it when the checks are genuinely independent and the saved wait outweighs the coordination cost.
 
-## 16. Two passes and a missing check — 1:00
+## 17. Two passes and a missing check — 1:00
 
 Ask the audience to decide before reading the answer: “Two passed. One never returned. Are we done?”
 
@@ -187,7 +203,7 @@ No: the recipient check was required and its outcome is absent. The workflow can
 
 All required checks must have accountable outcomes. Policy determines which findings block. A policy can classify some findings as advisory. Completeness and severity are separate questions. This distinction becomes concrete in the dev-loops review round.
 
-## 17. Apply it to AI development — 1:00
+## 18. Apply it to AI development — 1:00
 
 “dev-loops is where I've been applying these ideas to software development.”
 
@@ -200,7 +216,7 @@ Each cycle, the outer router re-reads the artifact and derives the next route fr
 Source snapshot: [public routing contract](https://github.com/mfittko/dev-loops/blob/9b5f988e/skills/docs/public-dev-loop-contract.md) and [routing implementation](https://github.com/mfittko/dev-loops/blob/9b5f988e/packages/core/src/loop/public-dev-loop-routing.mjs). <!-- secret-scan:allow source links pinned to inspected repository commit -->
 
 
-## 18. What does the router know? — 0:45
+## 19. What does the router know? — 0:45
 
 Translate the five fields. Target is the active work record. Ownership is lasting responsibility. Next actor is who should act now. Status describes the current condition. Authorization records whether the action is allowed.
 
@@ -210,7 +226,7 @@ The example pull-request number is invented for teaching. Real routing also cons
 
 Source: public routing contract and `packages/core/src/loop/public-dev-loop-routing.mjs` at the inspected revision.
 
-## 19. One state, one next action — 0:45
+## 20. One state, one next action — 0:45
 
 Read three rows: blocked or unauthorized stops; a known external wait routes to wait/watch; reviewer-next routes to the review/fix strategy. The order of these rules matters when several facts could appear relevant.
 
@@ -220,7 +236,7 @@ If target identity or family-local state is malformed or missing, reconciliation
 
 Sources: `routeForState` in public-dev-loop-routing.mjs and `evaluateConductorRouting` in conductor-routing.mjs. The displayed cases illustrate selected routes. The implementation contains the complete routing logic.
 
-## 20. Give the worker a job card — 2:00
+## 21. Give the worker a job card — 1:45
 
 Use the job-card analogy: a worker needs to know which work item is active, what to read, what action to take, and what evidence to return. They also need the stopping rules.
 
@@ -232,7 +248,7 @@ The card gives the worker instructions, which it can misunderstand. Runtime guar
 
 Source: `buildDevLoopHandoffEnvelope` and its validator in `packages/core/src/loop/handoff-envelope.mjs`.
 
-## 21. A loop can contain another loop — 1:30
+## 22. A loop can contain another loop — 1:30
 
 Trace the outside rectangle: observe current facts, resolve a route, perform a bounded action, refresh. On the next cycle, the router evaluates the new state again.
 
@@ -242,7 +258,7 @@ This conceptual diagram groups work across multiple functions. The repository co
 
 The value of nesting is scale: the outer process remains understandable while a complex job uses its own bounded mechanics.
 
-## 22. A review round has an output contract — 1:30
+## 23. A review round has an output contract — 1:30
 
 Zoom into the inner loop. A current evidence bundle carries the scope and revision to the required review lenses. A dispatch unit can cover several review lenses.
 
@@ -255,7 +271,7 @@ After required evidence is complete, the mandatory judge phase produces scope/re
 Sources: `packages/core/src/loop/gate-fanin.mjs`, `checkFanoutAngleCoverage`, `checkResolvedAngleEvidence`, the sanctioned fan-in CLI, and the gate-review sub-loop contract. The diagram summarizes the intended composition. Reviewers can still make mistakes.
 
 
-## 23. How this presentation was built — 1:45
+## 24. How this presentation was built — 1:45
 
 This presentation provides the example. During preparation, the implementing agent authored the HTML and ran the shared browser suite. The parent agent inspected screenshots and returned visual findings. Those two agents performed the design and review roles within this collaboration.
 
@@ -265,7 +281,7 @@ The initial 33-slide expanded draft passed all six browser tests. Visual review 
 
 Explain the sub-loop boundary: the outer task remains “prepare the talk.” The narrower UI job is “make the current slides readable and diagrammatically correct under the stated checks.” The author repeats that job until the results are ready to return to the outer task.
 
-## 24. Visual review caught errors in the graph — 1:00
+## 25. Visual review caught errors in the graph — 1:00
 
 Show the embedded earlier screenshot. The state snapshot says two waits remain, but the first diagram highlighted the exhausted-budget handover too. That incorrectly suggests the current run is already taking the handover branch.
 
@@ -275,7 +291,7 @@ These review findings were corrected in the later draft. The screenshot preserve
 
 The successful automated tests and the visual findings answer different questions. Passing layout checks establishes geometric fit under those assertions. Graph meaning needs a separate visual review.
 
-## 25. Exit on evidence for the current render — 0:45
+## 26. Exit on evidence for the current render — 0:45
 
 Turn the observed collaboration into a reusable workflow contract. Every edit requires a fresh render. Required automated and visual results must be present. Actionable findings return to the author, while the outer process waits for the sub-loop result and then refreshes its state.
 
@@ -286,7 +302,7 @@ Likewise, the actual visual review here was an agent inspecting screenshots in c
 “Clean” means no remaining actionable findings within the selected checks and review scope. Taste remains subjective, and audience members may still misunderstand a slide.
 
 
-## 26. Each revision needs current evidence — 1:15
+## 27. Each revision needs current evidence — 1:15
 
 Give a short trace: tests fail on revision A. An agent repairs the code, producing revision B. The earlier evidence cannot establish that B is ready. The required pre-approval record must identify B.
 
@@ -299,7 +315,7 @@ The unreadable-review example has precise scope: when the size/risk approval rul
 Sources: [detect-checkpoint-evidence.mjs, `buildPreMergeGateCheck`](https://github.com/mfittko/dev-loops/blob/9b5f988e/scripts/github/detect-checkpoint-evidence.mjs#L373); [merge-pr.mjs, head check and pinned merge](https://github.com/mfittko/dev-loops/blob/9b5f988e/scripts/github/merge-pr.mjs#L233). Code inspected at commit `9b5f988e`. <!-- secret-scan:allow source links pinned to inspected repository commit -->
 
 
-## 27. Waiting survives the conversation — 1:00
+## 28. Waiting survives the conversation — 1:00
 
 An external test or review may take longer than a chat session. A checkpoint records enough identity and interpreted state to reattach: which repository, which work record, which revision, and what wait was in progress.
 
@@ -309,7 +325,7 @@ The outer-loop code preserves carried wait-cycle state only with matching identi
 
 Sources: `scripts/loop/outer-loop.mjs`, conductor-routing.mjs, and the public startup/resume contract.
 
-## 28. Publishing requires separate authorization — 1:15
+## 29. Publishing requires separate authorization — 1:15
 
 Evidence and authority answer different questions. Checks say which conditions were established. Human approval and authorization say whether the action may happen. The default lifecycle retains those decisions even when the technical evidence is clean.
 
@@ -320,7 +336,7 @@ The project has deterministic runtime checks, procedural rules, and harness-spec
 Sources: [merge preconditions](https://github.com/mfittko/dev-loops/blob/9b5f988e/skills/docs/merge-preconditions.md), [merge evaluator](https://github.com/mfittko/dev-loops/blob/9b5f988e/packages/core/src/loop/merge-approval.mjs), [main-agent enforcement coverage](https://github.com/mfittko/dev-loops/blob/9b5f988e/skills/docs/main-agent-contract.md). <!-- secret-scan:allow source links pinned to inspected repository commit -->
 
 
-## 29. The merge checks the actual version — 1:30
+## 30. The merge checks the actual version — 1:30
 
 Read the table as two alternative branches, each with two steps.
 
@@ -332,7 +348,7 @@ This closes a timing gap between observing permission and executing the action. 
 
 Source: `scripts/github/merge-pr.mjs`, head mismatch comparison and version-pinned merge invocation.
 
-## 30. People own the decisions — 2:00
+## 31. People own the decisions — 1:45
 
 The earlier graphs assigned a person the approval step. Their work starts earlier: someone must decide what outcome is worth pursuing, what counts as acceptable, which actions are allowed, and how much time or money to spend. People also resolve ambiguous requirements, handle exceptions and revise the process when its checks fail to catch an important problem.
 
@@ -342,7 +358,7 @@ Approval has a cost. A queue of repetitive prompts can encourage rubber-stamping
 
 These are proposed operating practices. [LangGraph interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts) provides a persisted pause/resume mechanism. Its existence alone establishes nothing about the quality of a human's decision.
 
-## 31. Cost per accepted result — 1:30
+## 32. Cost per accepted result — 1:30
 
 Use a fixed set of representative tasks and the same acceptance criteria. Add model, tool and compute charges across successful and failed runs, including every worker and retry. Record human minutes separately; if converting them into money, state the valuation. Divide the resulting total by accepted results. With zero accepted results, report the cost and zero completions; the ratio has no finite value.
 
@@ -352,7 +368,7 @@ This is a proposed scorecard. A comparison against one capable agent under the s
 
 Evaluation basis: [Anthropic agent evaluations](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents). A separate [Anthropic research-system account](https://www.anthropic.com/engineering/multi-agent-research-system) reported roughly 15 times the tokens of chat interactions in its 2025 usage data. The comparison measured token use against chat interactions. Equivalent single-agent workflows were outside that comparison, and the result cannot establish a universal cost multiplier. Leave this number off the slide unless asked.
 
-## 32. Choose what the next worker needs — 2:00
+## 33. Choose what the next worker needs — 1:45
 
 Read the rows as three possible ways to carry work. A continuing conversation preserves earlier reasoning and also accumulates material that may be stale. A fresh worker needs enough information to reconstruct the task. A scoped handoff can carry the goal, current state, constraints, evidence references, unresolved questions and expected output, with full artifacts available for retrieval. Summarization can lose important details, and fetching them again takes time.
 
@@ -362,7 +378,7 @@ The dev-loops snapshot uses a stable envelope body and required reading list, wi
 
 Sources: [Context engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents), [Claude prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching), and the [dev-loop envelope/output contract at the inspected revision](https://github.com/mfittko/dev-loops/blob/9b5f988e/skills/dev-loop/SKILL.md). <!-- secret-scan:allow source link pinned to inspected repository commit -->
 
-## 33. Give each review a clear question — 1:30
+## 34. Give each review a clear question — 1:30
 
 A small change may receive enough coverage from one general reviewer. For broader work, explicit questions can focus attention: does it meet the requirements, expose private information, or break an existing interface? Give each reviewer the current evidence bundle and require support for its findings. Separate contexts can still produce correlated mistakes.
 
@@ -372,7 +388,7 @@ Compare valid unique findings, missed defects, false positives, review latency a
 
 Implementation evidence: grouped review configuration and resolver in [config.mjs at the inspected revision](https://github.com/mfittko/dev-loops/blob/9b5f988e/packages/core/src/config/config.mjs). <!-- secret-scan:allow source link pinned to inspected repository commit -->
 
-## 34. Match capability to the step — 1:15
+## 35. Match capability to the step — 1:15
 
 Use ordinary code for exact comparisons and permission rules. Evaluate a lower-cost model for bounded work such as extraction or classification. Difficult reasoning, unresolved failures or higher-risk work can justify testing a stronger model. All candidates must meet the same acceptance bar and authority rules.
 
@@ -382,7 +398,7 @@ Evaluate the entire route, including misrouting and retries. Choosing a cheap mo
 
 Implementation evidence: role-tier defaults and `resolveRoleModel` in [config.mjs at the inspected revision](https://github.com/mfittko/dev-loops/blob/9b5f988e/packages/core/src/config/config.mjs). <!-- secret-scan:allow source link pinned to inspected repository commit -->
 
-## 35. Return the facts needed to act — 1:15
+## 36. Return the facts needed to act — 1:15
 
 Return to the order-service outage. The example tool result says validation is unknown, names the unchecked delivery date in reply B, and permits recovery while keeping send blocked. The evidence reference identifies the run and check so the worker can retrieve the full record. The identifiers and table structure were created for this teaching example.
 
@@ -390,7 +406,7 @@ A concise result still has to expose missing outcomes, errors and truncation. A 
 
 [Anthropic's tool-design guidance](https://www.anthropic.com/engineering/writing-tools-for-agents) discusses relevant output, concise/detailed modes and format evaluation. The pinned dev-loop skill likewise documents concise summaries, field selection and silent predicates. This demonstrates an output convention; it supplies no measured token reduction for this deck's illustrative response.
 
-## 36. An exhausted budget pauses the work — 1:30
+## 37. An exhausted budget pauses the work — 1:30
 
 Follow the branch from the limit. The controller records the unfinished work, evidence, attempts, costs and reason for stopping. It pauses further attempts and asks the authorized owner for a decision. The owner can extend the budget, authorize a scope change, or stop. A resumed run refreshes state and runs the required checks.
 
@@ -401,7 +417,7 @@ Choose limits for spend, elapsed time and repair rounds. Account across workers 
 [AWS retry guidance](https://docs.aws.amazon.com/wellarchitected/latest/framework/rel_mitigate_interaction_failure_limit_retries.html) supports bounded attempts and elapsed time for service retries. Applying limits to reasoning repairs, spend and human decisions is our workflow design inference. Resume only with the required authorization and fresh evidence.
 
 
-## 37. Which arrow is allowed? — 2:00
+## 38. Which arrow is allowed? — 2:00
 
 Give people 60 seconds with a neighbor, then take two or three answers. Ask them to name the missing fact and the next permitted step.
 
@@ -409,7 +425,7 @@ A: the draft is ready, but the check timed out. B: a person approved A, while th
 
 Leave this slide up during discussion. The next slide is the answer reveal; no interactive simulator or network connection is required. This two-minute block is included in the 50-minute content slot.
 
-## 38. A pause can be the correct result — 1:00
+## 39. A pause can be the correct result — 1:00
 
 A needs evidence recovery within a budget. B needs validation and approval for the current version. C needs an authorized decision.
 
@@ -417,7 +433,7 @@ Point out that all three can be productive next steps even though none publishes
 
 If someone proposes “ask another AI,” ask what evidence or permission that answer could actually establish. Another AI can offer a second opinion. Authorization still requires the person's decision.
 
-## 39. What do these checks establish? — 1:00
+## 40. What do these checks establish? — 1:00
 
 Under the same rules, the same validated inputs can lead to the same permitted transition. Prose and tool responses can still vary, and output correctness requires separate evaluation.
 
@@ -425,7 +441,7 @@ A check can be incomplete. A model-based reviewer can make the same mistake as t
 
 For questions about self-correction: [Huang et al., ICLR 2024](https://arxiv.org/abs/2310.01798) found limitations in intrinsic self-correction without external feedback for the models/tasks studied. It motivates external feedback within the models and tasks studied. Its findings cannot be generalized to all current models.
 
-## 40. Test the wrong turns — 1:30
+## 41. Test the wrong turns — 1:30
 
 Ask what would happen if the required check vanished. Then change the artifact after approval. Then simulate a timeout after an external action. The important test is whether the implementation takes the safe route when the happy path breaks.
 
@@ -435,7 +451,7 @@ The dev-loops evidence presented here covers concrete process mechanisms and reg
 
 Source: [Anthropic, Demystifying evals for AI agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents), 9 January 2026. It distinguishes traces from environment outcomes and repeated-trial evaluation.
 
-## 41. Make the next step depend on evidence — 0:45
+## 42. Make the next step depend on evidence — 0:45
 
 “Pick a process you already know. Draw the steps. At each arrow, ask what must be true before we move on. Then draw what happens when it isn't.”
 
@@ -443,7 +459,7 @@ Start with one meaningful boundary. Decide how to recover, when to stop, and who
 
 End on the user's line: “Let reliable results depend less on the agent following oh-so-sophisticated prompts.” Pause for questions.
 
-## 42. Further down the graph — appendix / questions
+## 43. Further down the graph — appendix / questions
 
 Leave this on screen during questions. The [research companion](finding-the-flow-research.md) maps each external source to supported claims, presentation use, and caveats. All links are primary material; the survey is explicitly a recent preprint. The dev-loops links pin the inspected source revision so the cited evidence remains reproducible.
 

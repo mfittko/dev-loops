@@ -136,7 +136,7 @@ Avoid “graphs make AI deterministic,” “a second agent verifies truth,” �
 
 ## 12. Human decisions and workflow costs
 
-Added 2026-09-16 for slides 30–36. These operating recommendations are design synthesis. The sources establish mechanisms and bounded observations; this section supplies no measured dev-loops savings.
+Added 2026-09-16 for slides 31–37. These operating recommendations are design synthesis. The sources establish mechanisms and bounded observations; this section supplies no measured dev-loops savings.
 
 Sources 3 and 6 above establish persisted interruption and bounded service retries. Our extension: people own goals, acceptance criteria, permission and resource limits; give them current evidence, open risks and approve/return/reject options. Track approval queues, human effort and decision quality. Preserve unfinished work when a budget runs out. Spend limits must not silently change acceptance criteria or supply clearance.
 
@@ -197,3 +197,13 @@ The new dev-loops references use the existing inspected revision, `9b5f988e`, ve
 - [Model and fan-out configuration](https://github.com/mfittko/dev-loops/blob/9b5f988e/packages/core/src/config/config.mjs): role-tier resolution, per-role/per-angle overrides, grouped and per-angle review dispatch. Defaults are harness-dependent; inheritance can mean no model change. <!-- secret-scan:allow source link pinned to inspected repository commit -->
 - [Dev-loop skill](https://github.com/mfittko/dev-loops/blob/9b5f988e/skills/dev-loop/SKILL.md): stable handoff content with changing gate state at the end; concise output, field selection and silent predicates. <!-- secret-scan:allow source link pinned to inspected repository commit -->
 - These seams show configurable mechanisms. They supply no cache-hit rate, cost reduction, universal resource-budget controller or proof of review effectiveness.
+
+## 19. Grilling makes the intended outcome explicit
+
+Sources at the existing inspected revision: [Loop-grill skill](https://github.com/mfittko/dev-loops/blob/9b5f988e/skills/loop-grill/SKILL.md), [refinement-grill state machine](https://github.com/mfittko/dev-loops/blob/9b5f988e/packages/core/src/loop/refinement-grill-state.mjs), and [spec-authority contract](https://github.com/mfittko/dev-loops/blob/9b5f988e/skills/docs/spec-authority-contract.md). Verified 2026-09-16. <!-- secret-scan:allow source links pinned to inspected repository commit -->
+
+Documented mechanism: interactive questions or evidence-based auto-answers expose specification gaps. Synthesis records an acceptance-criterion/completion-evidence matrix and non-goals. Rechecking can find further gaps. Unresolved gaps require human handoff; failed reads or parsing block the workflow pending a user decision. An already-refined artifact can return clean without another interview.
+
+Slide 7 proposes a human-in-the-loop conceptual workflow. People or agents can lead the questions; agents can explore alternatives, seek evidence and challenge assumptions. People decide intent and tradeoffs and approve the contract. Agent-only exploration cannot authorize material spec changes. In dev-loops, that authority belongs to explicit human approval on the canonical artifact, with prior-spec evidence invalidated after a material change.
+
+The customer-reply contract is illustrative. Grilling aims to expose ambiguity and make success testable; well-formed criteria can still describe the wrong outcome. Agents can reinforce mistaken assumptions, and a clean gap check does not prove conceptual quality. No measured improvement is claimed.
