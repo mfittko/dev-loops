@@ -348,6 +348,12 @@ export function defineDeckSuite({
 // The deck registry. Each deck is data — adding a deck is one entry here plus a
 // thin spec that calls defineDeckSuite(DECK_REGISTRY.<key>).
 export const DECK_REGISTRY = {
+  "finding-the-flow-deck": {
+    sliceId: "finding-the-flow-deck",
+    deck: "finding-the-flow.html",
+    mobileCapture: { id: "recovery", stateName: "Recovery paths" },
+sectionIds: ["hero","problem","map","state","guards","lineage","grill","example","trace-pass","trace-repair","trace-unknown","trace-edit","guard","recovery","freedom","fanout","fanout-missing","dev-loop","dev-state","dev-route","dev-envelope","dev-nested","dev-review","ui-loop","ui-findings","ui-exit","evidence","dev-wait","authority","merge-trace","human-work","outcome-cost","context-choice","review-cost","model-choice","tool-result","budget-stop","exercise","answers","limits","measure","close","reading"].map((id) => ({ id, capture: ["grill","hero","trace-pass","trace-repair","trace-unknown","trace-edit","fanout","dev-nested","dev-review","ui-loop","ui-findings","ui-exit","authority","human-work","outcome-cost","context-choice","review-cost","model-choice","tool-result","budget-stop","close"].includes(id) })),
+  },
   "intro-deck": {
     sliceId: "intro-deck",
     deck: "introducing-dev-loops.html",
