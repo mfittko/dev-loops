@@ -99,13 +99,13 @@ export function selectSupersededGateReviewIds({ reviews, gate, currentHeadSha, m
 const LIST_REVIEWS_QUERY = `query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){pullRequest(number:$pr){reviews(first:100){nodes{id isMinimized body}}}}}`;
 const MINIMIZE_MUTATION = `mutation($id:ID!){minimizeComment(input:{subjectId:$id,classifier:OUTDATED}){minimizedComment{isMinimized}}}`;
 
-async function defaultListReviews({ owner, name, pr }, { env, ghCommand, runChild, ghGraphqlImpl }) {
+async function defaultListReviews({ owner, name, pr }, { env, runChild, ghGraphqlImpl }) {
   const payload = await ghGraphqlImpl(LIST_REVIEWS_QUERY, { owner, name, pr }, env, runChild);
   const nodes = payload?.data?.repository?.pullRequest?.reviews?.nodes;
   return Array.isArray(nodes) ? nodes : [];
 }
 
-async function defaultMinimize(id, { env, ghCommand, runChild, ghGraphqlImpl }) {
+async function defaultMinimize(id, { env, runChild, ghGraphqlImpl }) {
   await ghGraphqlImpl(MINIMIZE_MUTATION, { id }, env, runChild);
 }
 
@@ -125,7 +125,6 @@ export async function minimizeSupersededGateReviews(
   { owner, name, pr, gate, currentHeadSha },
   {
     env = process.env,
-    ghCommand = "gh",
     runChild,
     ghGraphqlImpl,
     listReviewsImpl = defaultListReviews,
@@ -138,7 +137,7 @@ export async function minimizeSupersededGateReviews(
   if (gate !== "draft_gate" && gate !== "pre_approval_gate") {
     return { ok: true, minimized: 0, overflow: 0 };
   }
-  const io = { env, ghCommand, runChild, ghGraphqlImpl };
+  const io = { env, runChild, ghGraphqlImpl };
   try {
     const reviews = await listReviewsImpl({ owner, name, pr }, io);
     const { ids, overflow } = selectSupersededGateReviewIds({ reviews, gate, currentHeadSha, max });

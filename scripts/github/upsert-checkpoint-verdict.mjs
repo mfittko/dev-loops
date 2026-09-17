@@ -3121,7 +3121,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     ? null
     : (await minimizeSupersededGateReviews(
         { ...parseRepoSlug(options.repo), pr: options.pr, gate: options.gate, currentHeadSha: canonicalHeadSha },
-        { env, ghCommand, runChild, ghGraphqlImpl: runGhGraphql },
+        { env, runChild, ghGraphqlImpl: runGhGraphql },
       )).warning ?? null;
   return {
     ok: true,
