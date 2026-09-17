@@ -9539,3 +9539,75 @@ test("#2257: a new draft_gate verdict folds prior same-gate verdict reviews as O
     assert.ok(!calls.some((c) => c.args.includes("id=PRR_min")));
   }, { prefix: "dev-loops-upsert-2257-minimize-" });
 });
+
+test("#2257: the minimize sweep failing never blocks the verdict post, and surfaces a minimizeWarning", async () => {
+  await withTempDir(async () => {
+    const CUR = "def5678000000000000000000000000000000000";
+    const PRIOR = "abc1234000000000000000000000000000000000";
+    // Same setup as the clean-sweep #2257 test above: a prior draft_gate verdict
+    // at a DIFFERENT head triggers the supersede sweep. Here the sweep's own
+    // reviews-list query fails, exercising the fail-open wiring: the verdict
+    // post must still succeed, and the failure must surface as minimizeWarning.
+    const priorVerdictComment = {
+      id: 99,
+      body: [
+        "### Gate review: `draft_gate`",
+        "",
+        `**Reviewed head SHA:** \`${PRIOR}\``,
+        "**Verdict:** findings_present",
+        "",
+        "**Findings summary:** prior round",
+        "",
+        "**Next action:** fix",
+      ].join("\n"),
+      html_url: "https://github.com/owner/repo/pull/17#issuecomment-99",
+      updated_at: "2026-05-30T17:00:00Z",
+    };
+    // Claims mode: match by content, not call position, so the sweep's extra
+    // call is matched wherever in the sequence it lands.
+    const claim = (entry) => ({ ...entry, matchByClaims: true });
+    const { runChild, calls } = makeGhMock([
+      ...buildGateCoordinationEntries({
+        headSha: CUR,
+        isDraft: true,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        issueComments: [priorVerdictComment],
+      }).map(claim),
+      claim({
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":102,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-102"}\n',
+      }),
+      // The supersede sweep's reviews-list query fails outright (rate limit,
+      // API error, etc). No minimize mutation call follows: the sweep's own
+      // try/catch skips straight to the fail-open warning.
+      claim({
+        assertArgContains: ["reviews(first:100)"],
+        exitCode: 1,
+        stderr: "rate limit exceeded\n",
+      }),
+    ]);
+
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: CUR,
+      verdict: "clean",
+      findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "nice-to-have": 0 },
+      findingsSummary: "no issues found",
+      nextAction: "mark ready for review",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: fanoutDisabledRepoRoot });
+
+    // The verdict post itself still succeeds: the sweep failure never blocks it.
+    assert.equal(result.action, "created");
+    assert.equal(result.commentId, 102);
+    // The failure is surfaced as a non-empty operator-facing warning, not swallowed.
+    assert.equal(typeof result.minimizeWarning, "string");
+    assert.ok(result.minimizeWarning.length > 0);
+    assert.match(result.minimizeWarning, /rate limit exceeded/);
+    // No minimize mutation call ever fires: the list query failed first.
+    assert.ok(!calls.some((c) => c.args.some((a) => a.startsWith("id="))));
+  }, { prefix: "dev-loops-upsert-2257-minimize-failopen-" });
+});
