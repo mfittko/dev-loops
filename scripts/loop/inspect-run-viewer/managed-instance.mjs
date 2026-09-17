@@ -118,9 +118,12 @@ async function defaultIsProcessAlive(pid) {
   }
 }
 
-async function defaultHealthcheck(url) {
+// `/healthz` answers from memory. Probing `/` instead used to render the whole
+// dashboard (inbox search + snapshot fan-out) just to prove the port was live,
+// which is what made starting the viewer slow.
+async function defaultHealthcheck(baseUrl) {
   try {
-    const response = await fetch(url, { method: 'GET' });
+    const response = await fetch(new URL('/healthz', baseUrl), { method: 'GET' });
     return response.status === 200;
   } catch {
     return false;

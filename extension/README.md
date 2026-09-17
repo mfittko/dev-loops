@@ -43,6 +43,16 @@ Installing the package with `pi install git:github.com/mfittko/dev-loops` expose
   - prints active review angles with their prompts from config
 - `/dev-loops gates`
   - same as above, but inside the Pi extension
+- `dev-loops inspect open [--repo <owner/name>]`
+  - same as the slash form: start or reuse the managed viewer and best-effort open it in the browser
+- `dev-loops inspect resume [--repo <owner/name>]`
+  - same as the slash form: reattach only to a confirmed live managed viewer
+- `dev-loops inspect status [--repo <owner/name>]`
+  - same as the slash form: report one bounded local lifecycle state plus the current URL when known
+- `dev-loops inspect stop [--repo <owner/name>]`
+  - same as the slash form: stop only the recorded managed viewer process
+- `dev-loops inspect restart [--repo <owner/name>]`
+  - same as the slash form: explicitly restart the recorded managed viewer; never kill an unknown listener
 - `dev-loops hide`
   - is intentionally unsupported and exits non-zero with a shell-friendly stderr message because `hide` is session-local Pi UI behavior
 
@@ -51,7 +61,7 @@ Installing the package with `pi install git:github.com/mfittko/dev-loops` expose
 This slice is intentionally narrow.
 
 Extension-owned behavior:
-- operator-facing lifecycle UX under `/dev-loops inspect ...`
+- the Pi-side operator surface for the lifecycle, `/dev-loops inspect ...`; the shell surface `dev-loops inspect ...` drives the same lifecycle through the shared executor against the same managed-instance record, so neither surface owns it exclusively
 - repo-local managed-instance record at `.pi/ui-servers/inspect-run-viewer.json`
 - safe URL discovery, liveness checks, resume/reattach, stop, and explicit restart handling
 - best-effort browser open
