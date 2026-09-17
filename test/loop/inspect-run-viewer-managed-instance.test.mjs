@@ -699,6 +699,10 @@ test('defaultHealthcheck fetches without AbortSignal (Node v24 compatibility)', 
 
     const healthcheckCall = fetchCalls.find((c) => String(c.url).includes('4311'));
     assert.ok(healthcheckCall, 'healthcheck should call fetch');
+    // The probe must target the in-memory liveness route. Probing the bare base
+    // URL renders the whole dashboard (inbox search + snapshot fan-out) on every
+    // `inspect open`/`restart` just to prove the port is up.
+    assert.equal(new URL(String(healthcheckCall.url)).pathname, '/healthz');
     assert.equal(healthcheckCall.options?.method, 'GET');
     assert.ok(!healthcheckCall.options?.signal, 'fetch must not receive an AbortSignal');
   } finally {

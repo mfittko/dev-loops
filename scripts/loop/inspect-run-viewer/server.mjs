@@ -14,6 +14,9 @@ import {
   MERMAID_BROWSER_ASSET_ROUTE,
 } from "./constants.mjs";
 import { normalizeCliRepoOption } from "./cli.mjs";
+import { renderHandoffEnvelopeSection } from "./handoff-envelope-renderer.mjs";
+import { renderLoopIterationMetrics } from "./status.mjs";
+import { escapeHtml } from "./shared.mjs";
 import {
   deriveInboxSignalFromSnapshot,
   loadMermaidBrowserScript,
@@ -23,7 +26,10 @@ import {
 } from "./rendering.mjs";
 import {
   createInspectionViewerAdapter,
+  describeRetryAfter,
+  isRateLimitError,
   normalizeInspectionTarget,
+  readRateLimitResetMs,
 } from "../_inspect-run-viewer-adapter.mjs";
 import { dedupeRepoSlugOptions, repoSlugEquals } from "@dev-loops/core/github/repo-slug";
 import { buildDevLoopHandoffEnvelope } from "@dev-loops/core/loop/handoff-envelope";
@@ -96,15 +102,17 @@ function requireSnapshotForJson(snapshot) {
 }
 
 
-async function runResolverForTarget(target, { repoRoot = process.cwd() } = {}) {
+async function runResolverForTarget(target, { repoRoot = process.cwd(), timeoutMs = 30000 } = {}) {
   if (typeof target.repo !== "string" || target.repo.trim().length === 0) {
     throw new Error("Cannot resolve handoff envelope: target repo is required");
   }
-  const args = ["scripts/loop/resolve-dev-loop-startup.mjs", "--pr", String(target.pr)];
+  // `--no-reconcile`: the viewer is read-only, and the resolver's post-emit board
+  // self-heal is a write path whose gh fan-out dominated this call's wall time.
+  const args = ["scripts/loop/resolve-dev-loop-startup.mjs", "--pr", String(target.pr), "--no-reconcile"];
   // Read-only envelope preview: never claims and must render PRs the operator
   // does not own, so the ownership gate is bypassed like every inspection path.
   const env = { ...process.env, ...runContextEnv("viewer-operator-tool"), DEVLOOPS_OWNERSHIP_BYPASS: "1" };
-  const { stdout, stderr } = await execFile("node", args, { cwd: repoRoot, timeout: 30000, env });
+  const { stdout, stderr } = await execFile("node", args, { cwd: repoRoot, timeout: timeoutMs, env });
   try {
     return JSON.parse(stdout);
   } catch (_err) {
@@ -349,6 +357,13 @@ export function createInspectRunViewerServer(options, deps = {}) {
   const adapter = deps.adapter ?? createInspectionViewerAdapter();
   const loadMermaidBrowserScriptImpl = deps.loadMermaidBrowserScriptImpl ?? loadMermaidBrowserScript;
   const logErrorImpl = deps.logErrorImpl ?? (() => {});
+  // Seams for the three subprocess-spawning paths. Without them a unit test that
+  // walks the rate-limit branch really runs `gh api -i graphql` (one GraphQL
+  // point per run, unbounded wall time), and nothing can assert that the page
+  // render does NOT spawn the resolver.
+  const runResolverForTargetImpl = deps.runResolverForTargetImpl ?? runResolverForTarget;
+  const loadDevLoopConfigImpl = deps.loadDevLoopConfigImpl ?? loadDevLoopConfig;
+  const readRateLimitResetMsImpl = deps.readRateLimitResetMsImpl ?? readRateLimitResetMs;
   const fixedRepo = options.repo === undefined ? null : normalizeCliRepoOption(options.repo);
   const fallbackTarget = options.pr === undefined || options.pr === null || fixedRepo === null
     ? null
@@ -358,11 +373,159 @@ export function createInspectRunViewerServer(options, deps = {}) {
   const jsonErrorTarget = fallbackTarget ?? { repo: fixedRepo, pr: null };
   const cachedInboxSignals = new Map();
   const CACHED_INBOX_SIGNALS_MAX = 200;
+  // The handoff envelope needs a full resolver spawn (tens of seconds), so the
+  // page render never waits on it: it renders whatever is already cached, and
+  // the resolve happens only when the operator opens the handoff tab and the
+  // client fetches `/handoff-envelope.html`. `/handoff-envelope.json` still
+  // resolves synchronously for callers that want the envelope itself.
+  const handoffEnvelopeCache = new Map();
+  const HANDOFF_ENVELOPE_CACHE_TTL_MS = 5 * 60 * 1000;
+  const RATE_LIMIT_PROBE_TTL_MS = 60 * 1000;
+  let rateLimitResetProbe = null;
   function setCachedInboxSignal(key, value) {
     if (cachedInboxSignals.size >= CACHED_INBOX_SIGNALS_MAX) {
       cachedInboxSignals.delete(cachedInboxSignals.keys().next().value);
     }
     cachedInboxSignals.set(key, value);
+  }
+
+  function gateStateFromSnapshot(snapshot) {
+    return snapshot
+      ? {
+        currentHeadSha: snapshot.currentHeadSha || null,
+        ciStatus: snapshot.ciStatus || null,
+        unresolvedThreadCount: typeof snapshot.unresolvedThreadCount === "number" ? snapshot.unresolvedThreadCount : 0,
+        copilotRoundCount: typeof snapshot.copilotRoundCount === "number" ? snapshot.copilotRoundCount : 0,
+      }
+      : {};
+  }
+
+  // Returns the ENTRY, not the envelope: a target whose envelope legitimately
+  // resolves to null must still count as a hit, or the 5-minute cache never
+  // suppresses anything and every handoff-tab open re-spawns the resolver.
+  function readCachedHandoffEnvelope(target) {
+    const entry = handoffEnvelopeCache.get(renderTargetKey(target));
+    if (!entry || (Date.now() - entry.cachedAt) > HANDOFF_ENVELOPE_CACHE_TTL_MS) {
+      return null;
+    }
+    return entry;
+  }
+
+  // One source of gate state for every envelope representation: the HTML
+  // fragment and `/handoff-envelope.json` must not describe the same target's
+  // head SHA and CI status differently.
+  async function loadGateState(target) {
+    try {
+      return gateStateFromSnapshot(await adapter.loadSnapshot(target, { ...adapterOptions, includeLoopIterations: false }));
+    } catch {
+      return {};
+    }
+  }
+
+  function writeCachedHandoffEnvelope(target, envelope) {
+    handoffEnvelopeCache.set(renderTargetKey(target), { cachedAt: Date.now(), envelope });
+  }
+
+  // One in-flight warm per target: repeated renders never stack resolver spawns.
+  const handoffEnvelopeWarming = new Map();
+  function warmHandoffEnvelope(target, gateState) {
+    const key = renderTargetKey(target);
+    const inFlight = handoffEnvelopeWarming.get(key);
+    if (inFlight) {
+      return inFlight;
+    }
+    const warming = (async () => {
+      // The handoff tab shows a status line while this runs, so it gets a
+      // generous timeout instead of the request-path one it used to time out
+      // against.
+      const resolverResult = await runResolverForTargetImpl(target, { repoRoot: process.cwd(), timeoutMs: 120000 });
+      if (!resolverResult || resolverResult.bundleKind !== "resolved") {
+        return null;
+      }
+      const { config: devLoopConfig, errors: configErrors } = await loadDevLoopConfigImpl({ repoRoot: process.cwd() });
+      if (configErrors && configErrors.length > 0) {
+        return null;
+      }
+      return buildDevLoopHandoffEnvelope(
+        resolverResult,
+        devLoopConfig,
+        gateState,
+        { repoSlug: target.repo },
+      );
+    })()
+      .then((envelope) => {
+        writeCachedHandoffEnvelope(target, envelope);
+        return envelope;
+      })
+      .catch((error) => {
+        logErrorImpl(Object.assign(new Error("handoff envelope resolution failed"), { cause: error }));
+        return null;
+      })
+      .finally(() => {
+        handoffEnvelopeWarming.delete(key);
+      });
+    handoffEnvelopeWarming.set(key, warming);
+    return warming;
+  }
+
+  async function resolveHandoffEnvelopeForFragment(target) {
+    const cached = readCachedHandoffEnvelope(target);
+    if (cached) {
+      return cached.envelope;
+    }
+    // Both branches read the same memoized snapshot the page render reads, so
+    // no representation of one target can disagree with another: the injected
+    // loader gets that snapshot verbatim (exactly what `/` hands it) and the
+    // resolver path gets the gate state distilled from it.
+    let snapshot = null;
+    try {
+      snapshot = await adapter.loadSnapshot(target, { ...adapterOptions, includeLoopIterations: false });
+    } catch {
+      snapshot = null;
+    }
+    if (typeof adapter.loadHandoffEnvelope === "function") {
+      return adapter.loadHandoffEnvelope(target, snapshot, adapterOptions);
+    }
+    return warmHandoffEnvelope(target, snapshot === null ? {} : gateStateFromSnapshot(snapshot));
+  }
+
+  const HTML_HEADERS = { "content-type": "text/html; charset=utf-8" };
+  async function respondWithFragment(requestPath, target, response) {
+    const roundMetrics = requestPath === "/round-metrics.html";
+    if (target === null) {
+      writeText(
+        response,
+        400,
+        roundMetrics
+          ? "<p>Select a PR first.</p>"
+          : "<section class=\"viewer-card\"><h3>Agent handoff</h3><p>Select a PR first.</p></section>",
+        HTML_HEADERS,
+      );
+      return;
+    }
+    try {
+      // Feature-detected like every other optional adapter method here: an
+      // injected adapter without this one (every pre-existing one) must render
+      // the route's own empty state, not a raw `... is not a function` string.
+      const loadLoopIterations = typeof adapter.loadLoopIterations === "function"
+        ? adapter.loadLoopIterations.bind(adapter)
+        : async () => null;
+      const body = roundMetrics
+        ? renderLoopIterationMetrics(await loadLoopIterations(target, adapterOptions) ?? null)
+        : renderHandoffEnvelopeSection(await resolveHandoffEnvelopeForFragment(target));
+      writeText(response, 200, body, HTML_HEADERS);
+    } catch (error) {
+      logErrorImpl(error);
+      const message = escapeHtml(error instanceof Error ? error.message : String(error));
+      writeText(
+        response,
+        500,
+        roundMetrics
+          ? `<p>Round metrics unavailable: ${message}</p>`
+          : `<section class="viewer-card"><h3>Agent handoff</h3><p>${message}</p></section>`,
+        HTML_HEADERS,
+      );
+    }
   }
 
   return createServer(async (request, response) => {
@@ -376,7 +539,15 @@ export function createInspectRunViewerServer(options, deps = {}) {
         return;
       }
 
-      if (requestPath !== "/" && requestPath !== "/snapshot.json" && requestPath !== "/handoff-envelope.json" && requestPath !== MERMAID_BROWSER_ASSET_ROUTE) {
+      // Liveness only: answered from memory, never touches `gh`. The managed
+      // launcher polls this instead of rendering the dashboard to prove the
+      // port is up.
+      if (requestPath === "/healthz") {
+        writeText(response, 200, "ok\n", { "content-type": "text/plain; charset=utf-8" });
+        return;
+      }
+
+      if (requestPath !== "/" && requestPath !== "/snapshot.json" && requestPath !== "/handoff-envelope.json" && requestPath !== "/handoff-envelope.html" && requestPath !== "/round-metrics.html" && requestPath !== MERMAID_BROWSER_ASSET_ROUTE) {
         writeText(response, 404, "Not Found", {
           "content-type": "text/plain; charset=utf-8",
         });
@@ -417,6 +588,27 @@ export function createInspectRunViewerServer(options, deps = {}) {
         throw error;
       }
 
+      // `?refresh=1` forces a live re-fetch of the SELECTED target on the page
+      // render only. The inbox listing and every other cached target are
+      // untouched, and the JSON routes stay behind the cache so a polling client
+      // or a bookmarked `?refresh=1` URL cannot re-run the fan-out per request.
+      const selectedTargetOptions = requestPath === "/"
+        && typeof request.url === "string"
+        && new URL(request.url, "http://localhost").searchParams.get("refresh") === "1"
+        ? { ...adapterOptions, refresh: true }
+        : adapterOptions;
+
+      // Both fragment routes are parameterized by their OWN `?repo=&pr=` and
+      // render data for THAT pr. When the URL omits `pr` they fall back to the
+      // startup `--pr` target (the same default `/` renders), never to an inbox
+      // lookup; with no startup target a missing or unparseable target is a 400
+      // rather than a 200 carrying a different PR's data. Answering here, before
+      // the inbox query, also keeps a fragment fetch off `gh search` entirely.
+      if (requestPath === "/round-metrics.html" || requestPath === "/handoff-envelope.html") {
+        await respondWithFragment(requestPath, requestedView.target, response);
+        return;
+      }
+
       const listAssignedPullRequests = typeof adapter.listAssignedPullRequests === "function"
         ? adapter.listAssignedPullRequests.bind(adapter)
         : async () => [];
@@ -440,6 +632,9 @@ export function createInspectRunViewerServer(options, deps = {}) {
 
       let assignedEntries = [];
       let scopeSourceEntries = [];
+      // A failed inbox query (rate limit, auth, network) used to render exactly
+      // like a genuinely empty inbox. Keep it and surface it on the page.
+      let inboxError = null;
       if (supportsAssignedInbox) {
         try {
           if (fixedRepo !== null) {
@@ -477,6 +672,30 @@ export function createInspectRunViewerServer(options, deps = {}) {
           }
         } catch (error) {
           logErrorImpl(error);
+          inboxError = error instanceof Error ? error : new Error(String(error));
+          // A rate-limited operator's first question is "when can I retry?".
+          // The reset moment does not move, so the probe is cached: a rate-limited
+          // viewer must not spend a call per render asking about its own limit.
+          if (isRateLimitError(inboxError)) {
+            // Cache the PROMISE, not the settled value: assigning only after the
+            // await let every concurrent render (two tabs auto-reloading on the
+            // same tick) start its own probe, each spending budget the operator
+            // has already run out of. Same promise-caching rule as every other
+            // cache here.
+            if (rateLimitResetProbe === null || Date.now() > rateLimitResetProbe.expiresAt) {
+              const promise = readRateLimitResetMsImpl({ ...adapterOptions });
+              rateLimitResetProbe = { promise, expiresAt: Date.now() + RATE_LIMIT_PROBE_TTL_MS };
+              promise.catch(() => {
+                if (rateLimitResetProbe?.promise === promise) {
+                  rateLimitResetProbe = null;
+                }
+              });
+            }
+            const retryHint = describeRetryAfter(await rateLimitResetProbe.promise);
+            if (retryHint !== null) {
+              inboxError = new Error(`${inboxError.message} ${retryHint}`);
+            }
+          }
           assignedEntries = [];
           scopeSourceEntries = [];
         }
@@ -506,31 +725,17 @@ export function createInspectRunViewerServer(options, deps = {}) {
           return;
         }
         try {
-          const resolverResult = await runResolverForTarget(requestTarget, { repoRoot: process.cwd() });
+          const resolverResult = await runResolverForTargetImpl(requestTarget, { repoRoot: process.cwd() });
           if (!resolverResult || resolverResult.bundleKind !== "resolved") {
             writeJson(response, 400, { ok: false, target: requestTarget, error: { message: "Resolver did not return a resolved bundle; handoff envelope unavailable." } });
             return;
           }
-          const { config: devLoopConfig, errors: configErrors } = await loadDevLoopConfig({ repoRoot: process.cwd() });
+          const { config: devLoopConfig, errors: configErrors } = await loadDevLoopConfigImpl({ repoRoot: process.cwd() });
           if (configErrors && configErrors.length > 0) {
             writeJson(response, 500, { ok: false, target: requestTarget, error: { message: "Dev-loop config has validation errors; handoff envelope unavailable." } });
             return;
           }
-          let gateState = {};
-          try {
-            const snapshot = await adapter.loadSnapshot(requestTarget, adapterOptions);
-            if (snapshot) {
-              gateState = {
-                currentHeadSha: snapshot.currentHeadSha || null,
-                ciStatus: snapshot.ciStatus || null,
-                unresolvedThreadCount: typeof snapshot.unresolvedThreadCount === "number" ? snapshot.unresolvedThreadCount : 0,
-                copilotRoundCount: typeof snapshot.copilotRoundCount === "number" ? snapshot.copilotRoundCount : 0,
-              };
-            }
-          } catch {
-            // Snapshot unavailable — gateState stays empty
-          }
-          const envelope = buildDevLoopHandoffEnvelope(resolverResult, devLoopConfig, gateState);
+          const envelope = buildDevLoopHandoffEnvelope(resolverResult, devLoopConfig, await loadGateState(requestTarget));
           writeJson(response, 200, envelope);
         } catch (error) {
           writeJson(response, 500, jsonErrorPayload(requestTarget, error));
@@ -544,7 +749,7 @@ export function createInspectRunViewerServer(options, deps = {}) {
           return;
         }
         try {
-          const snapshot = requireSnapshotForJson(await adapter.loadSnapshot(requestTarget, adapterOptions));
+          const snapshot = requireSnapshotForJson(await adapter.loadSnapshot(requestTarget, selectedTargetOptions));
           setCachedInboxSignal(renderTargetKey(requestTarget), deriveInboxSignalFromSnapshot(snapshot));
           writeJson(response, 200, snapshot);
         } catch (error) {
@@ -560,39 +765,27 @@ export function createInspectRunViewerServer(options, deps = {}) {
       let error = null;
       if (requestTarget !== null) {
         try {
-          snapshot = await adapter.loadSnapshot(requestTarget, adapterOptions);
+          // Page render skips the loop-iteration fan-out (6 of ~20 gh calls);
+          // the client pulls it from /round-metrics.html after first paint.
+          snapshot = await adapter.loadSnapshot(requestTarget, { ...selectedTargetOptions, includeLoopIterations: false });
           if (snapshot !== null && snapshot !== undefined) {
             setCachedInboxSignal(renderTargetKey(requestTarget), deriveInboxSignalFromSnapshot(snapshot));
           }
         } catch (caught) {
           error = caught instanceof Error ? caught : new Error(String(caught));
         }
-        try {
-          if (typeof adapter.loadHandoffEnvelope === "function") {
+        if (typeof adapter.loadHandoffEnvelope === "function") {
+          // Injected loader: in-process and cheap, so it still resolves inline.
+          try {
             handoffEnvelope = await adapter.loadHandoffEnvelope(requestTarget, snapshot, adapterOptions);
-          } else {
-            const resolverResult = await runResolverForTarget(requestTarget, { repoRoot: process.cwd() });
-            if (resolverResult && resolverResult.bundleKind === "resolved") {
-              const { config: devLoopConfig, errors: configErrors } = await loadDevLoopConfig({ repoRoot: process.cwd() });
-              if (!configErrors || configErrors.length === 0) {
-                const gateState = snapshot ? {
-                  currentHeadSha: snapshot.currentHeadSha || null,
-                  ciStatus: snapshot.ciStatus || null,
-                  unresolvedThreadCount: typeof snapshot.unresolvedThreadCount === "number" ? snapshot.unresolvedThreadCount : 0,
-                  copilotRoundCount: typeof snapshot.copilotRoundCount === "number" ? snapshot.copilotRoundCount : 0,
-                } : {};
-                handoffEnvelope = buildDevLoopHandoffEnvelope(
-                  resolverResult,
-                  devLoopConfig,
-                  gateState,
-                  { repoSlug: requestTarget.repo },
-                );
-              }
-            }
+          } catch (caught) {
+            logErrorImpl(Object.assign(new Error("handoff envelope resolution failed"), { cause: caught }));
+            handoffEnvelope = null;
           }
-        } catch (caught) {
-          logErrorImpl(Object.assign(new Error("handoff envelope resolution failed"), { cause: caught }));
-          handoffEnvelope = null;
+        } else {
+          // Resolver-backed envelope: served lazily to the handoff tab via
+          // /handoff-envelope.html, so the page render never waits on a spawn.
+          handoffEnvelope = readCachedHandoffEnvelope(requestTarget)?.envelope ?? null;
         }
       }
 
@@ -614,7 +807,11 @@ export function createInspectRunViewerServer(options, deps = {}) {
         target: requestTarget,
         snapshot: snapshot ?? null,
         handoffEnvelope,
+        // An injected loader already resolved inline above, so a null envelope
+        // is final: only the resolver-backed path defers to the fragment route.
+        handoffDeferred: typeof adapter.loadHandoffEnvelope !== "function",
         error,
+        inboxError: inboxError === null ? null : inboxError.message,
         inboxItems,
         selectedTitle: requestTarget === null
           ? null

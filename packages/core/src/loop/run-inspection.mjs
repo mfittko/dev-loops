@@ -555,6 +555,12 @@ export function composeRunInspectionSnapshot({
   if (lifecyclePhase === null) {
     // Fallback: derive from available PR facts
     const loopIter = loopIterations ?? {};
+    // Deferring the loop-iteration fan-out cannot change the phase: every copilot
+    // state maps to one (COPILOT_INNER_STATE_MAP is total over STATE), so whenever
+    // copilot evidence is present the phase is already resolved above and this
+    // fallback never runs. It runs only when that evidence is ABSENT, where there
+    // is no thread count to consult from any source — so there is nothing here to
+    // reconcile between a deferred and a full inspection.
     const hasUnresolvedThreads = typeof loopIter.unresolvedReviewThreads === "number"
       && loopIter.unresolvedReviewThreads > 0;
     const copilotState = copilotLiveOk && copilotEvidence !== null
