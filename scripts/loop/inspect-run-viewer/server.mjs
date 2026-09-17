@@ -599,8 +599,9 @@ export function createInspectRunViewerServer(options, deps = {}) {
         : adapterOptions;
 
       // Both fragment routes are parameterized by their OWN `?repo=&pr=` and
-      // render data for THAT pr, so they resolve their target from the request
-      // alone: no inbox fallback, and a missing or unparseable target is a 400
+      // render data for THAT pr. When the URL omits `pr` they fall back to the
+      // startup `--pr` target (the same default `/` renders), never to an inbox
+      // lookup; with no startup target a missing or unparseable target is a 400
       // rather than a 200 carrying a different PR's data. Answering here, before
       // the inbox query, also keeps a fragment fetch off `gh search` entirely.
       if (requestPath === "/round-metrics.html" || requestPath === "/handoff-envelope.html") {

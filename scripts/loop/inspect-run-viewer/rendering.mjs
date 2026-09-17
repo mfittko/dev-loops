@@ -406,7 +406,7 @@ export function renderInspectRunViewerHtml({
             <section class="viewer-tab-section" aria-label="Dashboard empty state">
               <div class="handoff-empty-state">
                 <h2>Choose a PR from sidebar</h2>
-                <p>The dashboard can span all assigned repos or be narrowed to one repo. Sidebar defaults to open PRs from last 7 days and paginates through result set.</p>
+                <p>The dashboard can span all assigned repos or be narrowed to one repo. Sidebar defaults to open PRs from last ${DEFAULT_INBOX_UPDATED_WITHIN_DAYS} days and paginates through result set.</p>
               </div>
             </section>`
           : `${renderCurrentStateBanner(normalizedSnapshot, target, stateLabel, effectiveSelectedTitle)}
