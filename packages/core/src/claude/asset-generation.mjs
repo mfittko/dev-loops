@@ -296,6 +296,36 @@ export function transformCommand({ source, raw, version = "latest" }) {
 }
 
 /**
+ * Check whether a skill should be excluded from Claude asset generation.
+ * Supports:
+ * - `claude-sync: false`
+ * - `harness: pi` (or `harness: ["pi"]`)
+ * - `pi-only: true`
+ *
+ * @param {Record<string, unknown> | undefined} frontmatter
+ * @returns {boolean}
+ */
+export function isSkillExcludedFromClaude(frontmatter) {
+  if (!frontmatter || typeof frontmatter !== "object") {
+    return false;
+  }
+  if (frontmatter["claude-sync"] === false || frontmatter["claude-sync"] === "false") {
+    return true;
+  }
+  if (frontmatter["pi-only"] === true || frontmatter["pi-only"] === "true") {
+    return true;
+  }
+  const harness = frontmatter.harness;
+  if (typeof harness === "string" && harness.trim().toLowerCase() === "pi") {
+    return true;
+  }
+  if (Array.isArray(harness) && harness.length === 1 && String(harness[0]).trim().toLowerCase() === "pi") {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Transform a canonical `skills/<name>/SKILL.md` into a Claude `.claude/skills/<name>/SKILL.md`.
  * @param {{ source: string, raw: string, version?: string }} input
  * @returns {string} Full generated file content.

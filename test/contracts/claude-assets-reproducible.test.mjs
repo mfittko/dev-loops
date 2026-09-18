@@ -198,7 +198,7 @@ test("direct slash commands are generated and map to the public dev-loop entrypo
   }
 });
 
-test("every canonical agent and non-doc skill has a generated counterpart", () => {
+test("every canonical agent and non-doc skill (unless excluded) has a generated counterpart", () => {
   const assets = collectGeneratedAssets({ repoRoot });
   const targets = assets.map((a) => a.target);
   // Spot-check the known surfaces so an accidentally-skipped source is caught.
@@ -210,6 +210,12 @@ test("every canonical agent and non-doc skill has a generated counterpart", () =
   ]) {
     assert.ok(targets.includes(expected), `expected generated asset ${expected}`);
   }
+  // Excluded skills (claude-sync: false / pi-only: true) must NOT be generated.
+  assert.equal(
+    targets.includes(".claude/skills/pi-session-audit/SKILL.md"),
+    false,
+    "pi-session-audit has claude-sync: false and must not be generated under .claude/skills/",
+  );
 });
 
 test("a malformed plugin manifest fails asset generation loudly instead of writing garbage", () => {

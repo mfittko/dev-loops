@@ -1,11 +1,12 @@
 ---
 name: pi-session-audit
 description: >-
-  Audit Pi session transcripts (.jsonl files) to measure token efficiency,
+  Audit Pi session transcripts (.jsonl files) via `dev-loops loop audit-session` to measure token efficiency,
   identify context snowballing in coordinators, verify cache hit ratios, and report
   per-agent and per-model token breakdowns across runs.
 allowed-tools: read bash
 user-invocable: false
+claude-sync: false
 ---
 
 # Pi Session Audit

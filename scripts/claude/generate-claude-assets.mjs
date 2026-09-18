@@ -15,7 +15,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { transformAgent, transformSkill, transformCommand, stripPiOnlyBlocks } from "@dev-loops/core/claude/asset-generation";
+import { transformAgent, transformSkill, transformCommand, stripPiOnlyBlocks, splitFrontmatter, isSkillExcludedFromClaude } from "@dev-loops/core/claude/asset-generation";
 import { isDirectCliRun } from "../lib/direct-run.mjs";
 
 /**
@@ -81,6 +81,10 @@ export function collectGeneratedAssets({ repoRoot = process.cwd() } = {}) {
       const abs = path.join(repoRoot, source);
       if (!fs.existsSync(abs)) continue; // e.g. skills/docs/ holds shared docs, not a SKILL.md
       const raw = fs.readFileSync(abs, "utf8");
+      const { frontmatter } = splitFrontmatter(raw, source);
+      if (isSkillExcludedFromClaude(frontmatter)) {
+        continue;
+      }
       assets.push({ target: `.claude/skills/${entry.name}/SKILL.md`, content: transformSkill({ source, raw, version }) });
     }
   }

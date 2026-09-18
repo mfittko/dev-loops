@@ -11,6 +11,7 @@ import {
   transformAgent,
   transformSkill,
   transformCommand,
+  isSkillExcludedFromClaude,
 } from "../src/claude/asset-generation.mjs";
 
 test("rewriteCliInvocation pins the package-local CLI to npx dev-loops@<version> (#801, #833)", () => {
@@ -150,6 +151,23 @@ test("transformSkill maps allowed-tools (space), preserves user-invocable, drops
   assert.equal(out.includes("compatibility:"), false, "Pi-specific compatibility should be dropped");
   assert.match(out, /<!-- GENERATED from skills\/local-implementation\/SKILL\.md by/);
   assert.match(out, /# Local Implementation\nbody text/);
+});
+
+test("isSkillExcludedFromClaude detects exclusion flags", () => {
+  assert.equal(isSkillExcludedFromClaude({ "claude-sync": false }), true);
+  assert.equal(isSkillExcludedFromClaude({ "claude-sync": "false" }), true);
+  assert.equal(isSkillExcludedFromClaude({ "pi-only": true }), true);
+  assert.equal(isSkillExcludedFromClaude({ "pi-only": "true" }), true);
+  assert.equal(isSkillExcludedFromClaude({ harness: "pi" }), true);
+  assert.equal(isSkillExcludedFromClaude({ harness: ["pi"] }), true);
+
+  assert.equal(isSkillExcludedFromClaude({ "claude-sync": true }), false);
+  assert.equal(isSkillExcludedFromClaude({ "pi-only": false }), false);
+  assert.equal(isSkillExcludedFromClaude({ harness: "claude" }), false);
+  assert.equal(isSkillExcludedFromClaude({ harness: ["pi", "claude"] }), false);
+  assert.equal(isSkillExcludedFromClaude({}), false);
+  assert.equal(isSkillExcludedFromClaude(null), false);
+  assert.equal(isSkillExcludedFromClaude(undefined), false);
 });
 
 test("transformCommand keeps description+argument-hint, rewrites CLI, adds banner (#972)", () => {
