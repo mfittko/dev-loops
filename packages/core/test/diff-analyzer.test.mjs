@@ -46,6 +46,28 @@ test("classifyFile: code for Ruby source (.rb/.rake/Rakefile)", () => {
   assert.equal(classifyFile("app/models/user.rb"), "code");
   assert.equal(classifyFile("lib/tasks/cron.rake"), "code");
   assert.equal(classifyFile("Rakefile"), "code");
+  assert.equal(classifyFile("db/migrate/20240101_add_col.rb"), "code");
+});
+
+test("classifyFile: code for Rails view templates (.erb/.haml/.slim/.jbuilder)", () => {
+  assert.equal(classifyFile("app/views/users/show.html.erb"), "code");
+  assert.equal(classifyFile("app/views/layouts/app.haml"), "code");
+  assert.equal(classifyFile("app/views/posts/index.slim"), "code");
+  assert.equal(classifyFile("app/views/api/users.json.jbuilder"), "code");
+});
+
+test("classifyFile: test for Ruby specs (spec/, *_spec.rb, *_test.rb)", () => {
+  assert.equal(classifyFile("spec/models/user_spec.rb"), "test");
+  assert.equal(classifyFile("spec/support/helper.rb"), "test");
+  assert.equal(classifyFile("test/models/user_test.rb"), "test");
+  assert.equal(classifyFile("app/lib/thing_test.rb"), "test");
+});
+
+test("classifyFile: config for Ruby manifests (Gemfile/.gemspec/config.ru)", () => {
+  assert.equal(classifyFile("Gemfile"), "config");
+  assert.equal(classifyFile("Gemfile.lock"), "config");
+  assert.equal(classifyFile("mygem.gemspec"), "config");
+  assert.equal(classifyFile("config.ru"), "config");
 });
 
 test("classifyFile: ci for .github/ paths", () => {
