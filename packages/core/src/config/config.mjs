@@ -6,6 +6,7 @@ import { parse as parseYaml } from "yaml";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { classifyFile } from "../analysis/diff-analyzer.mjs";
+import { ChangeCategory } from "../analysis/change-classifier.mjs";
 import { isDevLoopConfigSourcePath } from "../loop/gate-carry-forward.mjs";
 import { isClaudeHarness } from "../loop/run-context.mjs";
 import { trimmedOrNull } from "../loop/normalize.mjs";
@@ -113,6 +114,13 @@ const RefinementConfig = z.strictObject({
 // cost saving, never a silently-enforced information cut.
 export const GATE_ANGLE_SCOPES = Object.freeze(["full", "changed-files", "docs-only"]);
 
+// Change-category and file-kind vocabularies a consumer angle can bind to.
+// CHANGE_CATEGORY_NAMES mirrors ChangeCategory; FILE_KIND_NAMES mirrors
+// classifyFile()'s output range. Both feed z.enum so an unknown name is
+// rejected fail-closed at validation instead of silently never matching.
+const CHANGE_CATEGORY_NAMES = Object.freeze(Object.values(ChangeCategory));
+const FILE_KIND_NAMES = Object.freeze(["code", "docs", "config", "test", "ci", "unknown"]);
+
 // One review angle: a bare string is sugar for `{ name }`; the fields are
 // documented on the schema below. mergeConfigLayers merges these arrays BY
 // `name` across config layers, so a later layer can add or disable a single
@@ -132,13 +140,15 @@ const GateAngleEntry = z.preprocess(
     model: z.string().trim().min(1).optional().describe("Concrete model override for this angle (highest precedence)."),
     tier: z.string().trim().min(1).optional().describe("Model tier alias for this angle (used when `model` is absent)."),
     scope: z.enum(GATE_ANGLE_SCOPES).optional().describe("Surface scope this angle needs: full (default), changed-files (diff without the adjacent-code bundle or its changed-files/adjacent-file summary section), or docs-only (doc-file hunks only). Unknown/omitted resolves to full."),
+    categories: z.array(z.enum(CHANGE_CATEGORY_NAMES)).min(1).optional().describe("Change categories (e.g. LOGIC_CHANGE, CONFIG_ONLY, SECURITY_SENSITIVE_SEAM) that dynamically SELECT this consumer angle by diff, so it need not be forced mandatory. Unknown names are rejected fail-closed."),
+    kinds: z.array(z.enum(FILE_KIND_NAMES)).min(1).optional().describe("File kinds (code/config/test/ci/docs/unknown, classifyFile output) that dynamically SELECT this consumer angle by diff. Unknown names are rejected fail-closed."),
   }),
 );
 
 // Diff-class kinds a tier's `match` can name — exactly classifyFile()'s
 // output range (../analysis/diff-analyzer.mjs), so a tier config can never
 // name a kind the classifier could not produce.
-const GateTierMatchKind = z.enum(["code", "docs", "config", "test", "ci", "unknown"]);
+const GateTierMatchKind = z.enum(FILE_KIND_NAMES);
 
 // A tier's match conditions: EVERY changed file's kind must be in `kinds`
 // (when set) AND the change must stay within `maxFiles`/`maxLines` (when
@@ -216,7 +226,7 @@ function formatConfigValue(value) {
 const GATE_KEYS_WITH_BLOCKING_SEVERITIES = /** @type {const} */ (["draft", "preApproval", "spike"]);
 
 const GateConfig = z.strictObject({
-  angles: z.array(GateAngleEntry).optional().describe("Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier."),
+  angles: z.array(GateAngleEntry).optional().describe("Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier/scope/categories/kinds."),
   dynamic: GateDynamicConfig.optional().describe("Diff-driven dynamic angle selection policy for this gate."),
   required: z.boolean().default(true).describe("Whether this gate must run."),
   requireCi: z.boolean().default(true).describe("Per-gate CI prerequisite (default true): the gate requires green CI on the current head; false opts this gate out of the CI precondition entirely, including a real failure."),
@@ -916,13 +926,13 @@ const DEFAULT_REVIEWER_PERSONA = "default-reviewer";
 /**
  * Normalize one raw `gates.<gate>.angles[]` entry (string sugar or object,
  * possibly hand-built and never zod-validated — e.g. a test config object) to
- * `{ name, mandatory?, enabled?, persona?, prompt?, model?, tier?, scope? }`.
+ * `{ name, mandatory?, enabled?, persona?, prompt?, model?, tier?, scope?, categories?, kinds? }`.
  * Returns null for a malformed/empty entry so callers can filter it out. An
  * invalid `scope` (not one of GATE_ANGLE_SCOPES) is dropped rather than
  * kept verbatim — resolveGateAngleScope's fail-open default only ever needs
  * to handle an ABSENT field, never a foreign value.
  * @param {unknown} a
- * @returns {{name: string, mandatory?: boolean, enabled?: boolean, persona?: string, prompt?: string, model?: string, tier?: string, scope?: string}|null}
+ * @returns {{name: string, mandatory?: boolean, enabled?: boolean, persona?: string, prompt?: string, model?: string, tier?: string, scope?: string, categories?: string[], kinds?: string[]}|null}
  */
 function normalizeAngleEntry(a) {
   if (typeof a === "string") {
@@ -940,6 +950,17 @@ function normalizeAngleEntry(a) {
     if (typeof a.model === "string" && a.model.trim().length > 0) entry.model = a.model.trim();
     if (typeof a.tier === "string" && a.tier.trim().length > 0) entry.tier = a.tier.trim();
     if (typeof a.scope === "string" && GATE_ANGLE_SCOPES.includes(a.scope.trim())) entry.scope = a.scope.trim();
+    // Category/file-kind bindings for consumer angles. Enum membership is
+    // enforced by the schema; this hand-built path only keeps non-empty string
+    // entries (bad names simply never match at resolve time).
+    const cats = Array.isArray(a.categories)
+      ? a.categories.filter((c) => typeof c === "string" && c.trim().length > 0).map((c) => c.trim())
+      : [];
+    if (cats.length > 0) entry.categories = cats;
+    const kinds = Array.isArray(a.kinds)
+      ? a.kinds.filter((k) => typeof k === "string" && k.trim().length > 0).map((k) => k.trim())
+      : [];
+    if (kinds.length > 0) entry.kinds = kinds;
     return entry;
   }
   return null;
@@ -949,7 +970,7 @@ function normalizeAngleEntry(a) {
  * Normalize a raw `gates.<gate>.angles` array into full entry objects,
  * dropping malformed entries.
  * @param {unknown} raw
- * @returns {Array<{name: string, mandatory?: boolean, enabled?: boolean, persona?: string, prompt?: string, model?: string, tier?: string, scope?: string}>}
+ * @returns {Array<{name: string, mandatory?: boolean, enabled?: boolean, persona?: string, prompt?: string, model?: string, tier?: string, scope?: string, categories?: string[], kinds?: string[]}>}
  */
 function normalizeAngleEntries(raw) {
   if (!Array.isArray(raw)) return [];
@@ -1771,7 +1792,7 @@ function resolveBlockingSeverities(config, gate) {
  *
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"|"spike"} gate
- * @returns {{ angles: string[]|null, excludeAngles: string[], mandatoryAngles: string[], required: boolean, requireCi: boolean, blockCleanOnFindingSeverities: string[], dynamicAngles: boolean, additiveAngles: boolean, mediumFixWindow: number, tiers: Array<{name: string, match: object, angles: string[]}> }}
+ * @returns {{ angles: string[]|null, excludeAngles: string[], mandatoryAngles: string[], required: boolean, requireCi: boolean, blockCleanOnFindingSeverities: string[], dynamicAngles: boolean, additiveAngles: boolean, mediumFixWindow: number, tiers: Array<{name: string, match: object, angles: string[]}>, angleCategoryBindings: Record<string, {categories: string[], kinds: string[]}> }}
  * @throws {Error} when ANY gate's (not only the requested one's) PRESENT
  *   `blockCleanOnFindingSeverities` is schema-invalid (non-array, empty, or an
  *   out-of-vocabulary entry). Validated EAGERLY across all three gates on every
@@ -1809,6 +1830,15 @@ export function resolveGateConfig(config, gate) {
     // still honored so an unmigrated config keeps its window.
     mediumFixWindow: gateConfig?.mediumFixWindow ?? gateConfig?.worthFixingNowFixWindow ?? 3,
     tiers: gateConfig?.tiers ?? [],
+    // Per-angle category/file-kind bindings for enabled entries that declare
+    // them, so dynamic resolution can select a consumer angle by diff instead
+    // of forcing it mandatory. Only entries WITH a declaration appear here;
+    // everything else keeps today's behavior.
+    angleCategoryBindings: Object.fromEntries(
+      entries
+        .filter((e) => e.enabled !== false && (e.categories || e.kinds))
+        .map((e) => [e.name, { categories: e.categories ?? [], kinds: e.kinds ?? [] }]),
+    ),
   };
 }
 
@@ -2668,6 +2698,10 @@ export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabe
   });
 
   const categories = [...new Set(analysis.t1?.changeCategories ?? [])];
+  // File kinds present in the diff, to honor a consumer angle's `kinds`
+  // binding. classifyFile is the same classifier the categories above derive
+  // from, so this adds no new classification surface.
+  const fileKinds = [...new Set((analysis.t0?.files ?? []).map(classifyFile))];
 
   // excludeAngles is a hard ceiling: computed once and reused both to cap the
   // additive anglePool and to filter mandatoryAngles below.
@@ -2682,6 +2716,8 @@ export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabe
     changeCategories: categories,
     ambiguous: analysis.ambiguous,
     anglePool,
+    angleDeclarations: gateConfig.angleCategoryBindings,
+    fileKinds,
   });
 
   // Merge: mandatory always included (filtered by excludeAngles) + dynamically-selected

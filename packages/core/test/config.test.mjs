@@ -383,6 +383,37 @@ describe("schema validation", () => {
     assert.ok(!result.success);
   });
 
+  test("S26b: angle categories/kinds bindings parse with known names (#1938 Gap 2)", () => {
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      gates: {
+        draft: {
+          angles: [
+            { name: "blast-radius", categories: ["LOGIC_CHANGE", "SECURITY_SENSITIVE_SEAM"] },
+            { name: "i18n-sync", kinds: ["config", "code"] },
+          ],
+        },
+      },
+    });
+    assert.ok(result.success, "known category/kind names should parse");
+  });
+
+  test("S26c: angle categories rejects an unknown change-category name (#1938 Gap 2)", () => {
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      gates: { draft: { angles: [{ name: "blast-radius", categories: ["NOT_A_CATEGORY"] }] } },
+    });
+    assert.ok(!result.success, "unknown category name must be rejected fail-closed");
+  });
+
+  test("S26d: angle kinds rejects an unknown file-kind name (#1938 Gap 2)", () => {
+    const result = DevLoopConfigSchema.safeParse({
+      version: 1,
+      gates: { draft: { angles: [{ name: "i18n-sync", kinds: ["ruby"] }] } },
+    });
+    assert.ok(!result.success, "unknown file-kind name must be rejected fail-closed");
+  });
+
   test("S27: uiReview.run with a valid readyUrl parses", () => {
     const result = DevLoopConfigSchema.safeParse({
       version: 1,
@@ -2685,6 +2716,7 @@ describe("role resolution", () => {
         blockCleanOnFindingSeverities: ["high"],
         mediumFixWindow: 3,
         tiers: [],
+        angleCategoryBindings: {},
       });
     });
 
@@ -2706,6 +2738,7 @@ describe("role resolution", () => {
         blockCleanOnFindingSeverities: ["high"],
         mediumFixWindow: 3,
         tiers: [],
+        angleCategoryBindings: {},
       });
       assert.deepEqual(config.gates.draft.angles, ["scope", "coverage"]);
     });
@@ -5754,6 +5787,97 @@ describe("resolveGateAnglesDynamic", () => {
       explicitAngles: ["docs"],
     });
     assert.deepEqual(result.recommendedAngles, ["docs"]);
+  });
+
+  // #1938 Gap 2: a consumer angle absent from CATEGORY_ANGLE_MAP can bind to
+  // change categories / file kinds and be recommended by diff, no `mandatory`.
+  test("consumer angle bound by category is recommended on a matching code diff (#1938 Gap 2)", async () => {
+    const config = {
+      version: 1,
+      gates: {
+        draft: {
+          angles: ["scope", { name: "blast-radius", categories: ["LOGIC_CHANGE"] }],
+          dynamic: { subtractive: true },
+        },
+      },
+    };
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: "M\tsrc/main.mjs" },
+    });
+    assert.equal(result.dynamicAnglesActive, true);
+    assert.ok(result.recommendedAngles.includes("blast-radius"));
+    assert.ok(!result.skippedAngles.includes("blast-radius"));
+  });
+
+  test("consumer angle bound by category is skipped on a non-matching diff (#1938 Gap 2)", async () => {
+    const config = {
+      version: 1,
+      gates: {
+        draft: {
+          angles: ["scope", "docs", { name: "blast-radius", categories: ["LOGIC_CHANGE"] }],
+          dynamic: { subtractive: true },
+        },
+      },
+    };
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: "M\tdocs/guide.md\nM\tREADME.md" },
+    });
+    assert.equal(result.dynamicAnglesActive, true);
+    assert.ok(result.skippedAngles.includes("blast-radius"));
+    assert.ok(!result.recommendedAngles.includes("blast-radius"));
+  });
+
+  test("consumer angle bound by file kind is recommended when that kind is present (#1938 Gap 2)", async () => {
+    const config = {
+      version: 1,
+      gates: {
+        draft: {
+          angles: ["scope", { name: "i18n-sync", kinds: ["config"] }],
+          dynamic: { subtractive: true },
+        },
+      },
+    };
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: "M\tconfig/locales/de.yml" },
+    });
+    assert.equal(result.dynamicAnglesActive, true);
+    assert.ok(result.recommendedAngles.includes("i18n-sync"));
+  });
+
+  test("consumer angle with a category binding is still forced when also mandatory (#1938 Gap 2)", async () => {
+    const config = {
+      version: 1,
+      gates: {
+        draft: {
+          angles: ["scope", "docs", { name: "blast-radius", mandatory: true, categories: ["SECURITY_SENSITIVE_SEAM"] }],
+          dynamic: { subtractive: true },
+        },
+      },
+    };
+    // Docs-only diff does not match SECURITY_SENSITIVE_SEAM, but mandatory forces it.
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: "M\tdocs/guide.md\nM\tREADME.md" },
+    });
+    assert.ok(result.recommendedAngles.includes("blast-radius"));
+    assert.ok(!result.skippedAngles.includes("blast-radius"));
+  });
+
+  test("consumer angle with a non-matching category binding is still included under fallback-to-all (#1938 Gap 2)", async () => {
+    const config = {
+      version: 1,
+      gates: {
+        draft: {
+          angles: ["scope", "coverage", { name: "blast-radius", categories: ["SECURITY_SENSITIVE_SEAM"] }],
+          dynamic: { subtractive: true },
+        },
+      },
+    };
+    // Mixed code+config diff with no diffOutput → ambiguous → fallback-to-all.
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: { nameStatusOutput: "M\tsrc/main.mjs\nM\tconfig/app.yml" },
+    });
+    assert.equal(result.fallbackToAll, true);
+    assert.ok(result.recommendedAngles.includes("blast-radius"));
   });
 });
 describe("resolveGateTier (issue #1550 — diff-class angle tiers)", () => {

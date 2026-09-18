@@ -339,3 +339,80 @@ test("resolveDynamicAngles: additive is a no-op in ambiguous/no-category fallbac
   assert.deepEqual(noCategoriesResult.addedAngles, []);
   assert.deepEqual(noCategoriesResult.addedReasons, {});
 });
+
+// ---------------------------------------------------------------------------
+// Consumer angle category/kind bindings (#1938 Gap 2)
+// ---------------------------------------------------------------------------
+
+// A consumer angle absent from CATEGORY_ANGLE_MAP. Without a declaration it is
+// unselectable on a non-ambiguous diff (today's behavior); with one it can be
+// recommended by matching category or file kind.
+const CONSUMER_ANGLES = ["scope", "correctness", "blast-radius", "gate-evidence"];
+
+test("resolveDynamicAngles: consumer angle selected by matching category", () => {
+  const result = resolveDynamicAngles({
+    configuredAngles: CONSUMER_ANGLES,
+    changeCategories: [ChangeCategory.LOGIC_CHANGE],
+    angleDeclarations: { "blast-radius": { categories: ["LOGIC_CHANGE"] } },
+  });
+  assert.ok(result.recommendedAngles.includes("blast-radius"));
+  assert.ok(!result.skippedAngles.includes("blast-radius"));
+  assert.equal(result.fallbackToAll, false);
+});
+
+test("resolveDynamicAngles: consumer angle skipped by non-matching category", () => {
+  const result = resolveDynamicAngles({
+    configuredAngles: CONSUMER_ANGLES,
+    changeCategories: [ChangeCategory.LOGIC_CHANGE],
+    angleDeclarations: { "blast-radius": { categories: ["SECURITY_SENSITIVE_SEAM"] } },
+  });
+  assert.ok(!result.recommendedAngles.includes("blast-radius"));
+  assert.ok(result.skippedAngles.includes("blast-radius"));
+});
+
+test("resolveDynamicAngles: consumer angle selected by matching file kind", () => {
+  const result = resolveDynamicAngles({
+    configuredAngles: CONSUMER_ANGLES,
+    changeCategories: [ChangeCategory.CONFIG_ONLY],
+    fileKinds: ["config"],
+    angleDeclarations: { "blast-radius": { kinds: ["config"] } },
+  });
+  assert.ok(result.recommendedAngles.includes("blast-radius"));
+});
+
+test("resolveDynamicAngles: undeclared consumer angle stays skipped (unchanged behavior)", () => {
+  const result = resolveDynamicAngles({
+    configuredAngles: CONSUMER_ANGLES,
+    changeCategories: [ChangeCategory.LOGIC_CHANGE],
+  });
+  assert.ok(result.skippedAngles.includes("blast-radius"));
+});
+
+test("resolveDynamicAngles: consumer angle still forced under fallback-to-all", () => {
+  const ambiguous = resolveDynamicAngles({
+    configuredAngles: CONSUMER_ANGLES,
+    changeCategories: [ChangeCategory.LOGIC_CHANGE],
+    ambiguous: true,
+    angleDeclarations: { "blast-radius": { categories: ["SECURITY_SENSITIVE_SEAM"] } },
+  });
+  assert.ok(ambiguous.recommendedAngles.includes("blast-radius"));
+
+  const noCategories = resolveDynamicAngles({
+    configuredAngles: CONSUMER_ANGLES,
+    changeCategories: [],
+    angleDeclarations: { "blast-radius": { categories: ["SECURITY_SENSITIVE_SEAM"] } },
+  });
+  assert.ok(noCategories.recommendedAngles.includes("blast-radius"));
+});
+
+test("resolveDynamicAngles: catalog angles + ALWAYS_INCLUDE unchanged when consumer binding present", () => {
+  const withDecl = resolveDynamicAngles({
+    configuredAngles: CONSUMER_ANGLES,
+    changeCategories: [ChangeCategory.LOGIC_CHANGE],
+    angleDeclarations: { "blast-radius": { categories: ["SECURITY_SENSITIVE_SEAM"] } },
+  });
+  // scope/correctness (catalog LOGIC_CHANGE) + gate-evidence (ALWAYS_INCLUDE) hold.
+  assert.ok(withDecl.recommendedAngles.includes("scope"));
+  assert.ok(withDecl.recommendedAngles.includes("correctness"));
+  assert.ok(withDecl.recommendedAngles.includes("gate-evidence"));
+});
