@@ -16,6 +16,57 @@
 // closed to a full re-review.
 const DOTFILE_CONFIG_BASENAMES = new Set([".devloops"]);
 
+// Generic classifier tables. Files are classified by principle (broad extension
+// tables + directory/basename conventions), not by a bespoke per-language rule.
+// A new mainstream language is covered by adding its extension here, not by a new
+// branch. Deliberate fail-closed exceptions (`.ruby-version`, `.nvmrc`,
+// stylesheets) are simply absent from every table, so they fall through to
+// "unknown".
+
+// Source extensions across the common languages. A file with one of these is
+// executable/product logic → "code".
+const CODE_EXTENSIONS = new Set([
+  // JS/TS
+  ".mjs", ".cjs", ".js", ".jsx", ".ts", ".mts", ".cts", ".tsx",
+  // Ruby (source + Rails view templates, which embed control flow / XSS surface)
+  ".rb", ".rake", ".erb", ".haml", ".slim", ".jbuilder",
+  // Python
+  ".py", ".pyi",
+  // Go
+  ".go",
+  // Rust
+  ".rs",
+  // Java / Kotlin / Scala
+  ".java", ".kt", ".kts", ".scala", ".sc",
+  // C / C++ / C#
+  ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".hxx", ".cs",
+  // PHP / Swift / Elixir / Lua / Dart
+  ".php", ".swift", ".ex", ".exs", ".lua", ".dart",
+  // Shell
+  ".sh", ".bash", ".zsh", ".fish",
+]);
+// Basename-only source files (no discriminating extension).
+const CODE_BASENAMES = new Set(["Rakefile"]);
+
+// Data/config/manifest extensions. `.ru` (rackup) and `.gemspec` are Ruby
+// packaging surface. `.lock` covers every lockfile (Gemfile.lock, Cargo.lock,
+// poetry.lock, yarn.lock, …).
+const CONFIG_EXTENSIONS = new Set([
+  ".yml", ".yaml", ".json", ".toml", ".ini", ".cfg", ".lock", ".ru", ".gemspec",
+]);
+// Manifest basenames without a config extension.
+const CONFIG_BASENAMES = new Set([
+  "Gemfile", "go.mod", "go.sum", "requirements.txt", "pom.xml", "Dockerfile", "Makefile",
+]);
+
+// Prose/documentation extensions.
+const DOCS_EXTENSIONS = new Set([".md", ".markdown", ".rst", ".adoc", ".txt"]);
+
+// Test conventions. A directory segment named any of these, or a basename token
+// (`*_test.*`, `*_spec.*`, `test_*`, `*.test.*`, `*.spec.*`), marks a test file.
+const TEST_DIR_SEGMENTS = new Set(["test", "tests", "spec", "specs", "__tests__"]);
+const TEST_BASENAME_RE = /(\.test\.|\.spec\.|_test\.|_spec\.|^test_)/;
+
 // Prose surface that arms the required `deslop` gate angle.
 // skills/docs/** is excluded via SKILLS_DOCS_EXEMPT_RE: those are normative
 // contracts, not prose.
@@ -136,55 +187,55 @@ export function analyzeT0(nameStatusOutput) {
 export function classifyFile(filePath) {
   const fp = normalizeSep(filePath);
   const base = fp.split("/").pop();
+  // Extension excludes a leading-dot dotfile (`.nvmrc` → "", not ".nvmrc"), so
+  // runtime-version dotfiles never match an extension table and fall through to
+  // "unknown".
+  const dot = base.lastIndexOf(".");
+  const ext = dot > 0 ? base.slice(dot).toLowerCase() : "";
+
   if (fp.startsWith(".github/")) {
     return "ci";
   }
-  // A known code/config/test extension wins over the docs/ directory-prefix
-  // fallback: a code/config/test file hosted under docs/ is still that surface,
-  // not prose. Extension checks run before the prefix fallbacks below.
+  // Config wins over every later surface: a manifest/data file (even one hosted
+  // under docs/, or a build.gradle.kts that also has a code extension) is config,
+  // not prose or code. `.ruby-version`/`.nvmrc` are absent from all tables and so
+  // stay "unknown" — a runtime bump must re-run ci-guard/determinism, not carry a
+  // stale clean verdict.
   if (
-    fp.endsWith(".yml") || fp.endsWith(".yaml") ||
-    fp.endsWith(".json") || fp === "package.json"
+    CONFIG_EXTENSIONS.has(ext) ||
+    CONFIG_BASENAMES.has(base) ||
+    DOTFILE_CONFIG_BASENAMES.has(base) ||
+    base.startsWith("build.gradle")
   ) {
     return "config";
   }
-  if (DOTFILE_CONFIG_BASENAMES.has(base)) {
-    return "config";
-  }
-  // Ruby dependency/boot manifests are configuration surface (config-drift,
-  // packaging), not executable product logic. `.ruby-version` is deliberately
-  // excluded: like `.nvmrc` it stays "unknown" so a runtime bump re-runs
-  // ci-guard/determinism instead of carrying a stale clean verdict.
-  if (
-    base === "Gemfile" || base === "Gemfile.lock" ||
-    fp.endsWith(".gemspec") || fp.endsWith(".ru")
-  ) {
-    return "config";
-  }
-  if (
-    fp.includes(".test.") || fp.startsWith("test/") ||
-    // Ruby test suites: RSpec (spec/, *_spec.rb) and minitest (*_test.rb).
-    fp.startsWith("spec/") || fp.endsWith("_spec.rb") || fp.endsWith("_test.rb")
-  ) {
+  // Generic test convention, part 1: a basename carrying a test/spec token
+  // (`*_test.*`, `*_spec.*`, `test_*`, `*.test.*`, `*.spec.*`) is a test wherever
+  // it lives — a strong per-file signal that subsumes the old `.test.` and Ruby
+  // `*_spec.rb`/`*_test.rb` rules and wins even under `docs/`.
+  if (TEST_BASENAME_RE.test(base)) {
     return "test";
   }
-  if (
-    fp.endsWith(".mjs") || fp.endsWith(".js") ||
-    fp.endsWith(".ts") || fp.endsWith(".mts") ||
-    // Ruby source. Without this a Ruby-only diff falls through to "unknown",
-    // which the size gate treats as unclassified/non-JS source and hard-blocks
-    // with no waiver — so an ops script or any .rb change cannot go ready.
-    fp.endsWith(".rb") || fp.endsWith(".rake") || base === "Rakefile" ||
-    // Rails view templates embed Ruby (control flow, output, XSS surface), so
-    // they carry logic and are code, not prose.
-    fp.endsWith(".erb") || fp.endsWith(".haml") || fp.endsWith(".slim") || fp.endsWith(".jbuilder")
-  ) {
+  // Generic test convention, part 2: a `test`/`tests`/`spec`/`specs`/`__tests__`
+  // path segment at any depth. Subsumes the old root-anchored `test/`/`spec/`
+  // rules and broadens them to nested suites (`packages/core/test/foo.mjs`).
+  // Excluded under `docs/`: the old rule anchored test dirs at the ROOT, so a
+  // docs-tree prose file (`docs/specs/queue-mode/SPEC.md`) was never a test — the
+  // widened any-depth scan must not reclassify it. This only skips the
+  // DIRECTORY-based classification; a code/config file or a test-token basename
+  // under docs/ is still classified by the extension/basename rules above and
+  // below (`docs/example.mjs` → code, `docs/x.test.mjs` → test).
+  const dirs = fp.split("/").slice(0, -1);
+  if (!fp.startsWith("docs/") && dirs.some((seg) => TEST_DIR_SEGMENTS.has(seg))) {
+    return "test";
+  }
+  // Broad source table: a file in any covered language is code, not prose, even
+  // under docs/. Stylesheets (`.scss`/`.sass`) are deliberately absent — a
+  // style/asset kind is out of scope.
+  if (CODE_EXTENSIONS.has(ext) || CODE_BASENAMES.has(base)) {
     return "code";
   }
-  if (
-    fp.startsWith("docs/") || fp.endsWith(".md") || fp.endsWith(".markdown") ||
-    fp === "README.md"
-  ) {
+  if (fp.startsWith("docs/") || DOCS_EXTENSIONS.has(ext)) {
     return "docs";
   }
   return "unknown";
