@@ -463,9 +463,9 @@ test("boundary: UNCLASSIFIED_BLOCK_RATIO (source-like denominator) — AT thresh
   // AT: 500 unknown + 500 code -> sourceChangedLines 1000, ratio 500/1000 = 0.5
   // exactly (strict `>`, so this must not trigger the unclassified block).
   const atThreshold = computeSizeBudget({
-    nameStatusOutput: "M\tsrc/foo.mjs\nM\tapp/models/thing.rb\n",
+    nameStatusOutput: "M\tsrc/foo.mjs\nM\tapp/models/thing.py\n",
     diffOutput: MIXED_DIFF,
-    numstatOutput: numstatZ([[500, 0, "src/foo.mjs"], [500, 0, "app/models/thing.rb"]]),
+    numstatOutput: numstatZ([[500, 0, "src/foo.mjs"], [500, 0, "app/models/thing.py"]]),
     sizeConfig: SIZE_CONFIG,
   });
   assert.ok(!atThreshold.reasons.some((r) => r.includes("unclassified")));
@@ -473,9 +473,9 @@ test("boundary: UNCLASSIFIED_BLOCK_RATIO (source-like denominator) — AT thresh
   // ABOVE: 500 code + 501 unknown -> sourceChangedLines 1001, ratio 501/1001
   // > 0.5 -> blocks.
   const aboveThreshold = computeSizeBudget({
-    nameStatusOutput: "M\tsrc/foo.mjs\nM\tapp/models/thing.rb\n",
+    nameStatusOutput: "M\tsrc/foo.mjs\nM\tapp/models/thing.py\n",
     diffOutput: MIXED_DIFF,
-    numstatOutput: numstatZ([[500, 0, "src/foo.mjs"], [501, 0, "app/models/thing.rb"]]),
+    numstatOutput: numstatZ([[500, 0, "src/foo.mjs"], [501, 0, "app/models/thing.py"]]),
     sizeConfig: SIZE_CONFIG,
   });
   assert.equal(aboveThreshold.outcome, "block");
@@ -502,16 +502,44 @@ test("a lockfile with a large numstat count contributes 0 logic LOC alongside a 
 // computeSizeBudget — fail-closed on substantially unclassified source
 // ---------------------------------------------------------------------------
 
-test("a pure-Ruby-style diff (all files classify unknown) blocks — size budget cannot be computed safely", () => {
+test("a pure-unknown-source diff (all files classify unknown) blocks — size budget cannot be computed safely", () => {
   const result = computeSizeBudget({
-    nameStatusOutput: "M\tapp/models/subscription.rb\n",
+    nameStatusOutput: "M\tapp/models/subscription.py\n",
     diffOutput: "",
-    numstatOutput: numstatZ([[500, 0, "app/models/subscription.rb"]]),
+    numstatOutput: numstatZ([[500, 0, "app/models/subscription.py"]]),
     sizeConfig: SIZE_CONFIG,
   });
   assert.equal(result.outcome, "block");
   assert.equal(result.wholeLogicLoc, 0);
   assert.ok(result.reasons.some((r) => r.includes("unclassified") && r.includes("no waiver possible")));
+});
+
+test("a pure-Ruby diff computes logic LOC and does NOT block — the seam this PR restores", () => {
+  // The bug this PR fixes: before Ruby classification, a Ruby-only diff was all
+  // "unknown" -> wholeLogicLoc 0 and a hard unclassified block with no waiver.
+  // Now .rb classifies as code, so the size budget computes normally and a
+  // small Ruby-only change passes. This pins the integration path, not just the
+  // classifier unit.
+  const rubyDiff = `diff --git a/app/models/subscription.rb b/app/models/subscription.rb
+index aaa..bbb 100644
+--- a/app/models/subscription.rb
++++ b/app/models/subscription.rb
+@@ -1,2 +1,5 @@
+ class Subscription
++  def active?
++    state == :active
++  end
+ end
+`;
+  const result = computeSizeBudget({
+    nameStatusOutput: "M\tapp/models/subscription.rb\n",
+    diffOutput: rubyDiff,
+    numstatOutput: numstatZ([[50, 0, "app/models/subscription.rb"]]),
+    sizeConfig: SIZE_CONFIG,
+  });
+  assert.equal(result.outcome, "pass");
+  assert.equal(result.wholeLogicLoc, 50);
+  assert.ok(!result.reasons.some((r) => r.includes("unclassified")));
 });
 
 test("a mostly-JS diff with a little unknown source still computes normally (no block)", () => {
@@ -526,19 +554,19 @@ test("a mostly-JS diff with a little unknown source still computes normally (no 
 });
 
 test("a substantially-unclassified diff still blocks when padded with docs+config (docs/config must not dilute the unclassified ratio)", () => {
-  // Same shape as the pure-Ruby-only case above, but padded with docs/config
+  // Same shape as the pure-unknown-source case above, but padded with docs/config
   // lines that contribute 0 logicLoc and are NOT source-like: the ratio
   // denominator is source-like changed lines (code + test + unknown) only,
   // so this padding must not dilute unclassifiedRatio below the block
   // threshold. Before the fix, the denominator was ALL changed lines
-  // (300 rb + 300 docs + 100 config = 700, ratio 300/700 = 0.43 -> pass);
-  // after the fix, the denominator is source-like lines only (300 rb,
+  // (300 py + 300 docs + 100 config = 700, ratio 300/700 = 0.43 -> pass);
+  // after the fix, the denominator is source-like lines only (300 py,
   // docs/config excluded), so ratio is 300/300 = 1.0 -> still blocks.
   const result = computeSizeBudget({
-    nameStatusOutput: "M\tapp/models/subscription.rb\nM\tdocs/design.md\nM\tconfig/settings.yml\n",
+    nameStatusOutput: "M\tapp/models/subscription.py\nM\tdocs/design.md\nM\tconfig/settings.yml\n",
     diffOutput: MIXED_DIFF,
     numstatOutput: numstatZ([
-      [300, 0, "app/models/subscription.rb"],
+      [300, 0, "app/models/subscription.py"],
       [300, 0, "docs/design.md"],
       [100, 0, "config/settings.yml"],
     ]),
@@ -568,9 +596,9 @@ test("a docs-only diff (zero source-like changed lines) does not spuriously bloc
 
 test("a configured t1 pattern matching a file that classifies unknown (0 LOC) blocks even when unclassified lines are a small share of the diff", () => {
   const result = computeSizeBudget({
-    nameStatusOutput: "M\tsrc/foo.mjs\nM\tsrc/billing/charge.rb\n",
+    nameStatusOutput: "M\tsrc/foo.mjs\nM\tsrc/billing/charge.py\n",
     diffOutput: MIXED_DIFF,
-    numstatOutput: numstatZ([[500, 0, "src/foo.mjs"], [10, 0, "src/billing/charge.rb"]]),
+    numstatOutput: numstatZ([[500, 0, "src/foo.mjs"], [10, 0, "src/billing/charge.py"]]),
     sizeConfig: SIZE_CONFIG,
   });
   assert.equal(result.outcome, "block");

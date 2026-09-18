@@ -135,6 +135,7 @@ export function analyzeT0(nameStatusOutput) {
  */
 export function classifyFile(filePath) {
   const fp = normalizeSep(filePath);
+  const base = fp.split("/").pop();
   if (fp.startsWith(".github/")) {
     return "ci";
   }
@@ -147,15 +148,36 @@ export function classifyFile(filePath) {
   ) {
     return "config";
   }
-  if (DOTFILE_CONFIG_BASENAMES.has(fp.split("/").pop())) {
+  if (DOTFILE_CONFIG_BASENAMES.has(base)) {
     return "config";
   }
-  if (fp.includes(".test.") || fp.startsWith("test/")) {
+  // Ruby dependency/boot manifests are configuration surface (config-drift,
+  // packaging), not executable product logic. `.ruby-version` is deliberately
+  // excluded: like `.nvmrc` it stays "unknown" so a runtime bump re-runs
+  // ci-guard/determinism instead of carrying a stale clean verdict.
+  if (
+    base === "Gemfile" || base === "Gemfile.lock" ||
+    fp.endsWith(".gemspec") || fp.endsWith(".ru")
+  ) {
+    return "config";
+  }
+  if (
+    fp.includes(".test.") || fp.startsWith("test/") ||
+    // Ruby test suites: RSpec (spec/, *_spec.rb) and minitest (*_test.rb).
+    fp.startsWith("spec/") || fp.endsWith("_spec.rb") || fp.endsWith("_test.rb")
+  ) {
     return "test";
   }
   if (
     fp.endsWith(".mjs") || fp.endsWith(".js") ||
-    fp.endsWith(".ts") || fp.endsWith(".mts")
+    fp.endsWith(".ts") || fp.endsWith(".mts") ||
+    // Ruby source. Without this a Ruby-only diff falls through to "unknown",
+    // which the size gate treats as unclassified/non-JS source and hard-blocks
+    // with no waiver — so an ops script or any .rb change cannot go ready.
+    fp.endsWith(".rb") || fp.endsWith(".rake") || base === "Rakefile" ||
+    // Rails view templates embed Ruby (control flow, output, XSS surface), so
+    // they carry logic and are code, not prose.
+    fp.endsWith(".erb") || fp.endsWith(".haml") || fp.endsWith(".slim") || fp.endsWith(".jbuilder")
   ) {
     return "code";
   }

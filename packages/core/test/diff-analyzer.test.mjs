@@ -41,6 +41,54 @@ test("classifyFile: code for .mjs/.js/.ts", () => {
   assert.equal(classifyFile("scripts/bar.mjs"), "code");
 });
 
+test("classifyFile: code for Ruby source (.rb/.rake/Rakefile)", () => {
+  assert.equal(classifyFile("tools/report.rb"), "code");
+  assert.equal(classifyFile("app/models/user.rb"), "code");
+  assert.equal(classifyFile("lib/tasks/cron.rake"), "code");
+  assert.equal(classifyFile("Rakefile"), "code");
+  assert.equal(classifyFile("db/migrate/20240101_add_col.rb"), "code");
+});
+
+test("classifyFile: code for Rails view templates (.erb/.haml/.slim/.jbuilder)", () => {
+  assert.equal(classifyFile("app/views/users/show.html.erb"), "code");
+  assert.equal(classifyFile("app/views/layouts/app.haml"), "code");
+  assert.equal(classifyFile("app/views/posts/index.slim"), "code");
+  assert.equal(classifyFile("app/views/api/users.json.jbuilder"), "code");
+});
+
+test("classifyFile: test for Ruby specs (spec/, *_spec.rb, *_test.rb)", () => {
+  assert.equal(classifyFile("spec/models/user_spec.rb"), "test");
+  assert.equal(classifyFile("spec/support/helper.rb"), "test");
+  assert.equal(classifyFile("test/models/user_test.rb"), "test");
+  assert.equal(classifyFile("app/lib/thing_test.rb"), "test");
+});
+
+test("classifyFile: config for Ruby manifests (Gemfile/.gemspec/config.ru)", () => {
+  assert.equal(classifyFile("Gemfile"), "config");
+  assert.equal(classifyFile("Gemfile.lock"), "config");
+  assert.equal(classifyFile("mygem.gemspec"), "config");
+  assert.equal(classifyFile("config.ru"), "config");
+  // The `.ru` rule is a suffix match, not an exact `config.ru` name: pin a
+  // non-root/named rackup so it cannot regress to an exact-name check.
+  assert.equal(classifyFile("config/production.ru"), "config");
+});
+
+test("classifyFile: unknown for stylesheets and .ruby-version (explicit non-goals)", () => {
+  // Non-goal: stylesheets are NOT code (no correctness/determinism lens on CSS).
+  assert.equal(classifyFile("app/assets/stylesheets/app.scss"), "unknown");
+  assert.equal(classifyFile("app/assets/stylesheets/app.sass"), "unknown");
+  // Non-goal: .ruby-version stays unknown (fail-closed, like .nvmrc).
+  assert.equal(classifyFile(".ruby-version"), "unknown");
+});
+
+test("classifyFile: unknown for .py (size-budget fixtures depend on this)", () => {
+  // The check-size-budget tests use `.py` files as unclassified-source fixtures;
+  // pin the assumption so a future Python-classification change surfaces here
+  // rather than silently eroding those fixtures' intent.
+  assert.equal(classifyFile("app/models/subscription.py"), "unknown");
+  assert.equal(classifyFile("src/billing/charge.py"), "unknown");
+});
+
 test("classifyFile: ci for .github/ paths", () => {
   assert.equal(classifyFile(".github/workflows/verify.yml"), "ci");
 });
@@ -115,6 +163,27 @@ test("analyzeDiff: mixed code+prose diff keeps PROSE_PRESENT alongside LOGIC_CHA
   });
   assert.ok(r.t1.changeCategories.includes("LOGIC_CHANGE"));
   assert.ok(r.t1.changeCategories.includes("PROSE_PRESENT"));
+});
+
+// AC #5 (issue #1938 Gap 1): a pure Ruby view/spec/manifest diff must yield a
+// non-empty change-category set so resolveDynamicAngles PRUNES instead of
+// falling back to the full angle pool. Before Ruby classification, these files
+// all classified `unknown`, no category armed, and pruning fell back to all.
+test("analyzeDiff + resolveDynamicAngles: a pure Ruby diff prunes instead of falling back to the full pool", () => {
+  const r = analyzeDiff({
+    nameStatusOutput: "M\tapp/views/users/show.html.erb\nM\tspec/models/user_spec.rb\nM\tGemfile",
+    diffOutput: "@@ -1,1 +1,1 @@\n+<%= user.name %>\n",
+  });
+  assert.ok(r.t1.changeCategories.length > 0, "pure Ruby diff yields a non-empty change-category set");
+  assert.equal(r.ambiguous, false, "a classifiable Ruby diff is not ambiguous");
+  const resolved = resolveDynamicAngles({
+    configuredAngles: DRAFT_ANGLES,
+    changeCategories: r.t1.changeCategories,
+    ambiguous: r.ambiguous,
+    anglePool: DRAFT_ANGLES,
+  });
+  assert.equal(resolved.fallbackToAll, false, "Ruby diff must not fall back to the full pool");
+  assert.ok(resolved.skippedAngles.length > 0, "pruning skipped at least one angle");
 });
 
 test("analyzeDiff: non-prose docs diff (skills/docs) does NOT get PROSE_PRESENT", () => {
