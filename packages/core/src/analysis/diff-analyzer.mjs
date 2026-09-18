@@ -209,11 +209,24 @@ export function classifyFile(filePath) {
   ) {
     return "config";
   }
-  // Generic test convention: a `test`/`tests`/`spec`/`specs`/`__tests__` path
-  // segment, or a basename carrying a test/spec token. Subsumes the old
-  // `test/`, `.test.`, and Ruby `spec/`/`*_spec.rb`/`*_test.rb` rules.
+  // Generic test convention, part 1: a basename carrying a test/spec token
+  // (`*_test.*`, `*_spec.*`, `test_*`, `*.test.*`, `*.spec.*`) is a test wherever
+  // it lives — a strong per-file signal that subsumes the old `.test.` and Ruby
+  // `*_spec.rb`/`*_test.rb` rules and wins even under `docs/`.
+  if (TEST_BASENAME_RE.test(base)) {
+    return "test";
+  }
+  // Generic test convention, part 2: a `test`/`tests`/`spec`/`specs`/`__tests__`
+  // path segment at any depth. Subsumes the old root-anchored `test/`/`spec/`
+  // rules and broadens them to nested suites (`packages/core/test/foo.mjs`).
+  // Excluded under `docs/`: the old rule anchored test dirs at the ROOT, so a
+  // docs-tree prose file (`docs/specs/queue-mode/SPEC.md`) was never a test — the
+  // widened any-depth scan must not reclassify it. This only skips the
+  // DIRECTORY-based classification; a code/config file or a test-token basename
+  // under docs/ is still classified by the extension/basename rules above and
+  // below (`docs/example.mjs` → code, `docs/x.test.mjs` → test).
   const dirs = fp.split("/").slice(0, -1);
-  if (dirs.some((seg) => TEST_DIR_SEGMENTS.has(seg)) || TEST_BASENAME_RE.test(base)) {
+  if (!fp.startsWith("docs/") && dirs.some((seg) => TEST_DIR_SEGMENTS.has(seg))) {
     return "test";
   }
   // Broad source table: a file in any covered language is code, not prose, even
