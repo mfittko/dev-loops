@@ -163,7 +163,7 @@
           "type": "object",
           "properties": {
             "angles": {
-              "description": "Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier.",
+              "description": "Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier/scope/categories/kinds.",
               "type": "array",
               "items": {
                 "oneOf": [
@@ -214,6 +214,41 @@
                           "changed-files",
                           "docs-only"
                         ]
+                      },
+                      "categories": {
+                        "description": "Change categories (e.g. LOGIC_CHANGE, CONFIG_ONLY, SECURITY_SENSITIVE_SEAM) that dynamically SELECT this consumer angle by diff, so it need not be forced mandatory. Unknown names are rejected fail-closed.",
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "RENAME_ONLY",
+                            "DOCS_ONLY",
+                            "CONFIG_ONLY",
+                            "TEST_ONLY",
+                            "CI_ONLY",
+                            "COMMENT_ONLY",
+                            "LOGIC_CHANGE",
+                            "SECURITY_SENSITIVE_SEAM",
+                            "PROSE_PRESENT"
+                          ]
+                        }
+                      },
+                      "kinds": {
+                        "description": "File kinds (code/config/test/ci/docs/unknown, classifyFile output) that dynamically SELECT this consumer angle by diff. Unknown names are rejected fail-closed.",
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "code",
+                            "docs",
+                            "config",
+                            "test",
+                            "ci",
+                            "unknown"
+                          ]
+                        }
                       }
                     },
                     "required": [
@@ -352,7 +387,7 @@
           "type": "object",
           "properties": {
             "angles": {
-              "description": "Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier.",
+              "description": "Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier/scope/categories/kinds.",
               "type": "array",
               "items": {
                 "oneOf": [
@@ -403,6 +438,41 @@
                           "changed-files",
                           "docs-only"
                         ]
+                      },
+                      "categories": {
+                        "description": "Change categories (e.g. LOGIC_CHANGE, CONFIG_ONLY, SECURITY_SENSITIVE_SEAM) that dynamically SELECT this consumer angle by diff, so it need not be forced mandatory. Unknown names are rejected fail-closed.",
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "RENAME_ONLY",
+                            "DOCS_ONLY",
+                            "CONFIG_ONLY",
+                            "TEST_ONLY",
+                            "CI_ONLY",
+                            "COMMENT_ONLY",
+                            "LOGIC_CHANGE",
+                            "SECURITY_SENSITIVE_SEAM",
+                            "PROSE_PRESENT"
+                          ]
+                        }
+                      },
+                      "kinds": {
+                        "description": "File kinds (code/config/test/ci/docs/unknown, classifyFile output) that dynamically SELECT this consumer angle by diff. Unknown names are rejected fail-closed.",
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "code",
+                            "docs",
+                            "config",
+                            "test",
+                            "ci",
+                            "unknown"
+                          ]
+                        }
                       }
                     },
                     "required": [
@@ -541,7 +611,7 @@
           "type": "object",
           "properties": {
             "angles": {
-              "description": "Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier.",
+              "description": "Review lenses this gate fans out to. A bare string is sugar for { name }; an object may set mandatory/enabled/persona/prompt/model/tier/scope/categories/kinds.",
               "type": "array",
               "items": {
                 "oneOf": [
@@ -592,6 +662,41 @@
                           "changed-files",
                           "docs-only"
                         ]
+                      },
+                      "categories": {
+                        "description": "Change categories (e.g. LOGIC_CHANGE, CONFIG_ONLY, SECURITY_SENSITIVE_SEAM) that dynamically SELECT this consumer angle by diff, so it need not be forced mandatory. Unknown names are rejected fail-closed.",
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "RENAME_ONLY",
+                            "DOCS_ONLY",
+                            "CONFIG_ONLY",
+                            "TEST_ONLY",
+                            "CI_ONLY",
+                            "COMMENT_ONLY",
+                            "LOGIC_CHANGE",
+                            "SECURITY_SENSITIVE_SEAM",
+                            "PROSE_PRESENT"
+                          ]
+                        }
+                      },
+                      "kinds": {
+                        "description": "File kinds (code/config/test/ci/docs/unknown, classifyFile output) that dynamically SELECT this consumer angle by diff. Unknown names are rejected fail-closed.",
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "code",
+                            "docs",
+                            "config",
+                            "test",
+                            "ci",
+                            "unknown"
+                          ]
+                        }
                       }
                     },
                     "required": [
