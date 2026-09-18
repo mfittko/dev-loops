@@ -81,12 +81,57 @@ test("classifyFile: unknown for stylesheets and .ruby-version (explicit non-goal
   assert.equal(classifyFile(".ruby-version"), "unknown");
 });
 
-test("classifyFile: unknown for .py (size-budget fixtures depend on this)", () => {
-  // The check-size-budget tests use `.py` files as unclassified-source fixtures;
-  // pin the assumption so a future Python-classification change surfaces here
-  // rather than silently eroding those fixtures' intent.
-  assert.equal(classifyFile("app/models/subscription.py"), "unknown");
-  assert.equal(classifyFile("src/billing/charge.py"), "unknown");
+test("classifyFile: code for the broad language table", () => {
+  // Layer 1 of agnostic classification: a source file in any common language is
+  // code, so a single-language diff prunes angles instead of failing closed.
+  for (const path of [
+    "svc/job.py", "pkg/main.go", "src/lib.rs",
+    "src/main/java/App.java", "src/Main.kt", "build/Task.kts",
+    "core/Widget.scala", "scripts/tool.sc",
+    "src/parser.c", "include/parser.h", "src/engine.cc", "src/engine.cpp",
+    "src/engine.cxx", "include/engine.hpp", "include/engine.hh", "include/engine.hxx",
+    "Program.cs", "app/Controller.php", "Sources/App/main.swift",
+    "lib/app.ex", "lib/mix.exs", "config/init.lua", "lib/main.dart",
+    "scripts/deploy.sh", "bin/setup.bash", "bin/run.zsh", "bin/fish.fish",
+    "src/app.jsx", "src/app.tsx", "src/util.cjs", "src/util.cts",
+  ]) {
+    assert.equal(classifyFile(path), "code", path);
+  }
+});
+
+test("classifyFile: generic test convention (dir segments + name tokens)", () => {
+  // Directory segments.
+  assert.equal(classifyFile("tests/unit/foo.py"), "test");
+  assert.equal(classifyFile("pkg/specs/bar.go"), "test");
+  assert.equal(classifyFile("src/__tests__/Widget.tsx"), "test");
+  // Basename tokens across languages.
+  assert.equal(classifyFile("pkg/foo_test.go"), "test");
+  assert.equal(classifyFile("tests/test_foo.py"), "test");
+  assert.equal(classifyFile("src/app.spec.ts"), "test");
+  assert.equal(classifyFile("app/user_spec.rb"), "test");
+  // A non-test name with a "test"-like substring stays code (no false positive).
+  assert.equal(classifyFile("src/latest_state.py"), "code");
+  assert.equal(classifyFile("src/contest.py"), "code");
+});
+
+test("classifyFile: config for generic manifests + data extensions", () => {
+  for (const path of [
+    "Cargo.toml", "pyproject.toml", "go.mod", "go.sum", "requirements.txt",
+    "composer.json", "pom.xml", "build.gradle", "build.gradle.kts",
+    "tox.ini", "setup.cfg", "Dockerfile", "Makefile",
+    // Lockfiles classify as config.
+    "Cargo.lock", "poetry.lock", "yarn.lock",
+  ]) {
+    assert.equal(classifyFile(path), "config", path);
+  }
+});
+
+test("classifyFile: docs for .rst/.adoc/.txt", () => {
+  assert.equal(classifyFile("guide/intro.rst"), "docs");
+  assert.equal(classifyFile("guide/intro.adoc"), "docs");
+  assert.equal(classifyFile("notes/todo.txt"), "docs");
+  // requirements.txt is a manifest, not prose — config wins over the .txt docs rule.
+  assert.equal(classifyFile("requirements.txt"), "config");
 });
 
 test("classifyFile: ci for .github/ paths", () => {

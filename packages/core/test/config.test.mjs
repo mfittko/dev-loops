@@ -4524,10 +4524,11 @@ describe("resolveReviewProportionality (#1984 — primer-owned deterministic pla
     const config = preApprovalTierConfig();
     const plan = resolveReviewProportionality(config, "preApproval", {
       scope: { filesChanged: 1, linesChanged: 1 },
-      // No file extension → classifyFile reports "unknown" → resolveGateTier
-      // returns unclassifiable_file — resolveGateDispatchMode alone has no
-      // classification awareness and would otherwise stay inline.
-      changedFiles: ["Makefile"],
+      // An unrecognized binary/asset extension → classifyFile reports "unknown"
+      // → resolveGateTier returns unclassifiable_file — resolveGateDispatchMode
+      // alone has no classification awareness and would otherwise stay inline.
+      // (A genuine unknown, not a now-classified manifest like Makefile.)
+      changedFiles: ["assets/logo.bin"],
       sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
     });
     assert.equal(plan.mode, "full_fanout");
