@@ -74,6 +74,14 @@ test("outer-loop next-action text stays defined for every authoritative outer st
     assert.equal(typeof OUTER_NEXT_ACTIONS[state], "string");
     assert.ok(OUTER_NEXT_ACTIONS[state].length > 0);
   }
+  assert.equal(
+    OUTER_NEXT_ACTIONS[OUTER_STATE.HANDOFF_TO_VERIFICATION_LOOP],
+    "Enter the verification loop."
+  );
+  assert.equal(
+    OUTER_NEXT_ACTIONS[OUTER_STATE.HANDOFF_TO_REVIEWER_LOOP],
+    "Enter the reviewer loop."
+  );
 });
 
 test("interpretOuterLoopState: continue_current_wait", () => {

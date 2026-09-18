@@ -701,8 +701,8 @@ export const OUTER_GRAPH = Object.freeze({
 
 export const OUTER_NEXT_ACTIONS = Object.freeze({
   [OUTER_STATE.CONTINUE_CURRENT_WAIT]: "Remain in outer wait and re-inspect after the bounded interval.",
-  [OUTER_STATE.HANDOFF_TO_VERIFICATION_LOOP]: "Re-enter the Copilot loop.",
-  [OUTER_STATE.HANDOFF_TO_REVIEWER_LOOP]: "Re-enter the reviewer loop.",
+  [OUTER_STATE.HANDOFF_TO_VERIFICATION_LOOP]: "Enter the verification loop.",
+  [OUTER_STATE.HANDOFF_TO_REVIEWER_LOOP]: "Enter the reviewer loop.",
   [OUTER_STATE.STAY_WITH_CURRENT_LIVE_OWNER]: "Do not issue a new handoff; wait because a live owner is already active.",
   [OUTER_STATE.STOP_NEEDS_HUMAN]: "Stop and require human intervention before continuing.",
   [OUTER_STATE.DONE_TERMINAL]: "End the orchestrator; no further automated action is needed.",
