@@ -1,0 +1,129 @@
+#!/usr/bin/env node
+/**
+ * audit-pi-session.mjs
+ *
+ * Audits Pi session transcripts (.jsonl files) to measure token efficiency,
+ * detect coordinator context snowballing, and report per-agent/per-unit token breakdowns.
+ *
+ * Usage:
+ *   node scripts/loop/audit-pi-session.mjs [path/to/session.jsonl | path/to/session_dir]
+ *   node scripts/loop/audit-pi-session.mjs --latest
+ *   node scripts/loop/audit-pi-session.mjs --json
+ *   node scripts/loop/audit-pi-session.mjs --jq '.summary.totalTokens'
+ */
+import { parseArgs } from "node:util";
+import path from "node:path";
+
+import {
+  findLatestPiSession,
+  auditPiSession,
+  formatMarkdownSummary,
+} from "../lib/audit-pi-session.mjs";
+import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { requireTokenValue } from "../_cli-primitives.mjs";
+import {
+  JQ_OUTPUT_PARSE_OPTIONS,
+  JQ_OUTPUT_USAGE,
+  emitResult,
+  matchJqOutputToken,
+} from "../lib/jq-output.mjs";
+
+const USAGE = `Usage: audit-pi-session.mjs [session-path] [options]
+
+Audit Pi session transcripts (.jsonl files) to measure token efficiency,
+detect context snowballing, and report per-agent token breakdowns.
+
+Arguments:
+  [session-path]    Path to a session directory, coordinator session.jsonl,
+                    or subagent run folder. If omitted, defaults to --latest.
+
+Options:
+  --latest          Automatically find and inspect the latest session under
+                    ~/.pi/agent/sessions/--Users-*-dev-loops--/
+  --json            Emit raw structured JSON instead of human-readable Markdown
+  --help, -h        Show this help
+
+${JQ_OUTPUT_USAGE}`;
+
+export async function runAuditCli(args = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
+  const options = {
+    help: false,
+    json: false,
+    latest: false,
+    sessionPath: null,
+    jq: undefined,
+    silent: false,
+  };
+
+  const positionalArgs = [];
+
+  try {
+    const { values, positionals, tokens } = parseArgs({
+      args,
+      options: {
+        help: { type: "boolean", short: "h" },
+        json: { type: "boolean" },
+        latest: { type: "boolean" },
+        ...JQ_OUTPUT_PARSE_OPTIONS,
+      },
+      allowPositionals: true,
+      tokens: true,
+    });
+
+    if (values.help) {
+      stdout.write(`${USAGE}\n`);
+      return 0;
+    }
+
+    options.json = !!values.json;
+    options.latest = !!values.latest;
+    options.jq = values.jq;
+    options.silent = !!values.silent;
+
+    if (positionals.length > 0) {
+      options.sessionPath = positionals[0];
+    }
+  } catch (error) {
+    stderr.write(`${formatCliError(error.message, { usage: USAGE })}\n`);
+    return 1;
+  }
+
+  let targetPath = options.sessionPath;
+
+  if (!targetPath || options.latest) {
+    const latest = findLatestPiSession();
+    if (!latest) {
+      stderr.write(`${formatCliError("Could not automatically locate latest Pi session directory.", { usage: USAGE })}\n`);
+      return 1;
+    }
+    targetPath = latest;
+  }
+
+  targetPath = path.resolve(process.cwd(), targetPath);
+
+  let result;
+  try {
+    result = await auditPiSession(targetPath);
+  } catch (error) {
+    stderr.write(`${formatCliError(error.message, { usage: USAGE })}\n`);
+    return 1;
+  }
+
+  if (options.json || options.jq !== undefined || options.silent) {
+    return emitResult(result, {
+      jq: options.jq,
+      silent: options.silent,
+      stdout,
+      stderr,
+    });
+  }
+
+  stdout.write(`${formatMarkdownSummary(result)}\n`);
+  return 0;
+}
+
+if (isDirectCliRun(import.meta.url)) {
+  runAuditCli().then((code) => {
+    process.exitCode = code;
+  });
+}

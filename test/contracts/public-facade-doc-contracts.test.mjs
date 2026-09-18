@@ -204,7 +204,7 @@ test("workflow-surface taxonomy stays explicit and guards the entrypoint asset s
     }
   }
   assert.deepEqual(userInvocableSkillEntrypoints, ["dev-loop"]);
-  for (const internalSkillPath of ["skills/copilot-pr-followup/SKILL.md", "skills/local-implementation/SKILL.md", "skills/final-approval/SKILL.md"]) {
+  for (const internalSkillPath of ["skills/copilot-pr-followup/SKILL.md", "skills/local-implementation/SKILL.md", "skills/final-approval/SKILL.md", "skills/pi-session-audit/SKILL.md"]) {
     assert.match(await readRepo(internalSkillPath), /^user-invocable:\s*false\s*$/m);
   }
   assert.equal((await readdir(fromRepoRoot("skills"))).includes("copilot-autopilot"), false);
