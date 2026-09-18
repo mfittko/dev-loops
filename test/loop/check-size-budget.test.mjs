@@ -514,6 +514,34 @@ test("a pure-unknown-source diff (all files classify unknown) blocks — size bu
   assert.ok(result.reasons.some((r) => r.includes("unclassified") && r.includes("no waiver possible")));
 });
 
+test("a pure-Ruby diff computes logic LOC and does NOT block — the seam this PR restores", () => {
+  // The bug this PR fixes: before Ruby classification, a Ruby-only diff was all
+  // "unknown" -> wholeLogicLoc 0 and a hard unclassified block with no waiver.
+  // Now .rb classifies as code, so the size budget computes normally and a
+  // small Ruby-only change passes. This pins the integration path, not just the
+  // classifier unit.
+  const rubyDiff = `diff --git a/app/models/subscription.rb b/app/models/subscription.rb
+index aaa..bbb 100644
+--- a/app/models/subscription.rb
++++ b/app/models/subscription.rb
+@@ -1,2 +1,5 @@
+ class Subscription
++  def active?
++    state == :active
++  end
+ end
+`;
+  const result = computeSizeBudget({
+    nameStatusOutput: "M\tapp/models/subscription.rb\n",
+    diffOutput: rubyDiff,
+    numstatOutput: numstatZ([[50, 0, "app/models/subscription.rb"]]),
+    sizeConfig: SIZE_CONFIG,
+  });
+  assert.equal(result.outcome, "pass");
+  assert.equal(result.wholeLogicLoc, 50);
+  assert.ok(!result.reasons.some((r) => r.includes("unclassified")));
+});
+
 test("a mostly-JS diff with a little unknown source still computes normally (no block)", () => {
   const result = computeSizeBudget({
     nameStatusOutput: "M\tsrc/foo.mjs\nM\tweird/thing.xyz\n",

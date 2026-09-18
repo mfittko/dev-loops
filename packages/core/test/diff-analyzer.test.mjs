@@ -68,6 +68,9 @@ test("classifyFile: config for Ruby manifests (Gemfile/.gemspec/config.ru)", () 
   assert.equal(classifyFile("Gemfile.lock"), "config");
   assert.equal(classifyFile("mygem.gemspec"), "config");
   assert.equal(classifyFile("config.ru"), "config");
+  // The `.ru` rule is a suffix match, not an exact `config.ru` name: pin a
+  // non-root/named rackup so it cannot regress to an exact-name check.
+  assert.equal(classifyFile("config/production.ru"), "config");
 });
 
 test("classifyFile: unknown for stylesheets and .ruby-version (explicit non-goals)", () => {
@@ -172,9 +175,11 @@ test("analyzeDiff + resolveDynamicAngles: a pure Ruby diff prunes instead of fal
     diffOutput: "@@ -1,1 +1,1 @@\n+<%= user.name %>\n",
   });
   assert.ok(r.t1.changeCategories.length > 0, "pure Ruby diff yields a non-empty change-category set");
+  assert.equal(r.ambiguous, false, "a classifiable Ruby diff is not ambiguous");
   const resolved = resolveDynamicAngles({
     configuredAngles: DRAFT_ANGLES,
     changeCategories: r.t1.changeCategories,
+    ambiguous: r.ambiguous,
     anglePool: DRAFT_ANGLES,
   });
   assert.equal(resolved.fallbackToAll, false, "Ruby diff must not fall back to the full pool");
