@@ -70,6 +70,22 @@ test("classifyFile: config for Ruby manifests (Gemfile/.gemspec/config.ru)", () 
   assert.equal(classifyFile("config.ru"), "config");
 });
 
+test("classifyFile: unknown for stylesheets and .ruby-version (explicit non-goals)", () => {
+  // Non-goal: stylesheets are NOT code (no correctness/determinism lens on CSS).
+  assert.equal(classifyFile("app/assets/stylesheets/app.scss"), "unknown");
+  assert.equal(classifyFile("app/assets/stylesheets/app.sass"), "unknown");
+  // Non-goal: .ruby-version stays unknown (fail-closed, like .nvmrc).
+  assert.equal(classifyFile(".ruby-version"), "unknown");
+});
+
+test("classifyFile: unknown for .py (size-budget fixtures depend on this)", () => {
+  // The check-size-budget tests use `.py` files as unclassified-source fixtures;
+  // pin the assumption so a future Python-classification change surfaces here
+  // rather than silently eroding those fixtures' intent.
+  assert.equal(classifyFile("app/models/subscription.py"), "unknown");
+  assert.equal(classifyFile("src/billing/charge.py"), "unknown");
+});
+
 test("classifyFile: ci for .github/ paths", () => {
   assert.equal(classifyFile(".github/workflows/verify.yml"), "ci");
 });
@@ -144,6 +160,25 @@ test("analyzeDiff: mixed code+prose diff keeps PROSE_PRESENT alongside LOGIC_CHA
   });
   assert.ok(r.t1.changeCategories.includes("LOGIC_CHANGE"));
   assert.ok(r.t1.changeCategories.includes("PROSE_PRESENT"));
+});
+
+// AC #5 (issue #1938 Gap 1): a pure Ruby view/spec/manifest diff must yield a
+// non-empty change-category set so resolveDynamicAngles PRUNES instead of
+// falling back to the full angle pool. Before Ruby classification, these files
+// all classified `unknown`, no category armed, and pruning fell back to all.
+test("analyzeDiff + resolveDynamicAngles: a pure Ruby diff prunes instead of falling back to the full pool", () => {
+  const r = analyzeDiff({
+    nameStatusOutput: "M\tapp/views/users/show.html.erb\nM\tspec/models/user_spec.rb\nM\tGemfile",
+    diffOutput: "@@ -1,1 +1,1 @@\n+<%= user.name %>\n",
+  });
+  assert.ok(r.t1.changeCategories.length > 0, "pure Ruby diff yields a non-empty change-category set");
+  const resolved = resolveDynamicAngles({
+    configuredAngles: DRAFT_ANGLES,
+    changeCategories: r.t1.changeCategories,
+    anglePool: DRAFT_ANGLES,
+  });
+  assert.equal(resolved.fallbackToAll, false, "Ruby diff must not fall back to the full pool");
+  assert.ok(resolved.skippedAngles.length > 0, "pruning skipped at least one angle");
 });
 
 test("analyzeDiff: non-prose docs diff (skills/docs) does NOT get PROSE_PRESENT", () => {
