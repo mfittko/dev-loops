@@ -6,11 +6,17 @@ Inventory: 77 tracked files under `skills/`, including 67 Markdown files and ten
 
 Dispositions: `pending`, `in progress`, `changed`, `unchanged`, `generated`, `non-prose`, `blocked`. Generated `.claude/skills/` projections are outside this source inventory and must be regenerated, never edited by hand. Script/registry rows remain pending until their prose-bearing parts have been inspected; no code/schema rewrite is authorized.
 
-Phases: 1 = Copilot follow-up and directly coupled references/tests; 2 = other routed entrypoints and their workflow contracts; 3 = remaining shared documentation, references, templates and script comments/help. Only phase 1 is active. All phases use the same cleanup PR unless the human changes the scope.
+Phases: 1 = Copilot follow-up and directly coupled references/tests (complete); 2 = other routed entrypoints and their workflow contracts (active); 3 = remaining shared documentation, references, templates and script comments/help (pending). All phases use the same cleanup PR unless the human changes the scope.
 
 ## Current run — 2026-09-19
 
-The user selected A for all three phases on `issue-2236`/PR2237; B is now a pinned read-only reference, not an equivalent-scope competition. Issue2236 records this direction and the narrow runtime exception tracked separately by issue2273. Phase 1 is complete for prose inspection, condensation, relevant test audit and local validation; phases 2/3 remain pending. The inventory has 71 pending and six changed rows. This is not whole-issue completion or lifecycle-gate clearance.
+The user selected A for all three phases on `issue-2236`/PR2237; B is now a pinned read-only reference, not an equivalent-scope competition. Issue2236 records this direction and the narrow runtime exception tracked separately by issue2273. Phase 1 is accepted and complete at `b8bfe5b077f917e22330455f311540fd90e42b4d` for prose inspection, condensation, relevant test audit, independent review and local validation. Phase 2 is active; Phase 3 remains pending. The inventory has 65 pending, six in-progress and six changed rows. This is not whole-issue completion or lifecycle-gate clearance.
+
+### Phase transition — bookkeeping only
+
+The Phase-1 full-owner completion record below is the accepted phase boundary. Earlier per-slice status, validation and parked-checkpoint statements are historical snapshots, not current unresolved work or current-head clearance. The ambiguity register below now separates resolved Phase-1 items from remaining limitations.
+
+Phase 2 covers the six routed entrypoints `dev-loop`, `final-approval`, `local-implementation`, `loop-grill`, `review` and `ui-review`, their generated projections and coupled contracts/tests. An initial uncommitted candidate exists for five entrypoints and two tests; it is paused, preserved byte-for-byte and excluded from this bookkeeping change. No Phase-2 completion, independent review, commit or validation clearance is claimed here. Finish this separate transition-bookkeeping step before resuming Phase-2 edits. Phase 3, cumulative verification, lifecycle gates and explicit human merge approval remain outstanding; PR2237 stays draft and unmerged.
 
 | Input / evidence | Current value |
 | --- | --- |
@@ -26,7 +32,7 @@ Main integration retained accepted grouped dispatch, verdict minimization, class
 
 The initial issue amendment changed narrative outside the spec extractor's table. The subsequent runtime exception is explicitly included in that table; refresh canonical identity before spec-bound clearance. Earlier phase/gate claims are not current-head/current-scope clearance.
 
-### Active phase 1: keyed all-carried plan (issue2273)
+### Historical Phase-1 slice: keyed all-carried plan (issue2273)
 
 **Committed-tree validation correction.** CI for `25c843d5e9024ddef6dc43e6a5e03a1fa4574be1` failed generated-asset parity: the partitioned commit omitted two `--repo`/`--pr` additions in the Claude follow-up commands, whose launcher spelling differs from canonical source. The clean committed tree reproduced the failure. Regeneration uses the canonical generator; generated projections must never be reconstructed by text substitution when partitioning a commit. Pending phase-1 prose/tests are parked privately, outside this fixup. Earlier working-tree full-suite/92-asset results are historical and are not current-head clearance. The authoritative post-commit result is `/private/tmp/dev-loop-2237-ci-fix-final-validation.json`, which binds commands/results to the final full commit SHA and tree identity, with clean status and unchanged HEAD/tree before and after validation. Only that artifact's completed successful result establishes this fixup's local validation; CI remains separately reported. After validation, update the private resume checkpoint with the parked-byte location and matching final SHA. Further cleanup awaits exact committed-tree validation and current-head CI.
 
@@ -97,11 +103,11 @@ The Phase-1 brittle-test audit inspected every contract file referencing either 
 | `claude-assets-reproducible`, `claude-plugin-manifest`, `rule-id-doc-contracts`, `bun-toolchain-contract`, `orphan-entrypoint-ratchet` | Inspected; retained generated-byte equality, Pi-only transformations, literal IDs, tool commands, packaging and public-entrypoint metadata. Unrelated source assertions are outside this phase. |
 | Startup/CLI/extension, context, dispatch, carry, sentinel, composer, retirement, fan-in and readiness tests | Inspected applicable fixtures and enforcement; retained behavior and literal route/path assertions. No production implementation was changed to satisfy a prose rewrite. |
 
-Known limits remain explicit. ADR0064 resolves the historical clean-only prose in favor of evidenced findings-present carry; the active owners no longer assert a competing clean-only rule. Issue2273's accepted all-carried path requires a keyed emitted plan and complete resolver proof: empty completed-only resumes still refuse, with no no-plan exemption. Runtime current-head context rebuilding remains distinct from offline lineage composition under ADR0070. The one-angle split-tail `group` discrepancy remains unresolved. Other pre-existing register items (fixer identity and disputed coverage wording) are unchanged. Prompt recovery still requires actual redispatch, not just rewriting emission records.
+Known limits remain explicit. ADR0064 resolves the historical clean-only prose in favor of evidenced findings-present carry; the active owners no longer assert a competing clean-only rule. Issue2273's accepted all-carried path requires a keyed emitted plan and complete resolver proof: empty completed-only resumes still refuse, with no no-plan exemption. Runtime current-head context rebuilding remains distinct from offline lineage composition under ADR0070. The one-angle split-tail `group` discrepancy and disputed coverage wording remain unresolved. Fixer identity was resolved in the preceding owner audit: a fingerprint accompanies, never replaces, the required thread id. Prompt recovery still requires actual redispatch, not just rewriting emission records.
 
 Counts use `wc -w -c`, including code examples/frontmatter, not tokens. From this candidate's starting HEAD to the current source pair: 35,637 / 275,856 → 32,082 / 251,837 words/bytes (3,555 / 24,019 removed). The corresponding regenerated Claude pair is 31,888 / 250,848. All 77 tracked skills files are 141,042 / 1,104,704. The same conservative 24-file source/Pi normal-draft set defined below is 78,265 / 606,699; no removed text was transferred to an additional read. These are static surfaces, not measured live loading or cache savings.
 
-Final validation after Sol's test correction: the focused key suite passed three tests, the complete contract/doc-guard run passed 357 without skips or failures, and full `bun run verify` passed 9,376 tests across 391 files without skips or failures, plus docs and workflows. The earlier ten focused runtime suites passed 754 tests without skips or failures. Canonical generation, the 92-asset parity check and `git diff --check` passed. Logs use the private prefix `/private/tmp/2237-phase1-complete-`; the final full run is `verify.log`. Phase 1 is complete under the selected one-review cadence; phases 2/3 remain pending. These are local working-tree results, not current-head lifecycle evidence or CI clearance.
+Final validation after Sol's test correction: the focused key suite passed three tests, the complete contract/doc-guard run passed 357 without skips or failures, and full `bun run verify` passed 9,376 tests across 391 files without skips or failures, plus docs and workflows. The earlier ten focused runtime suites passed 754 tests without skips or failures. Canonical generation, the 92-asset parity check and `git diff --check` passed. Logs use the private prefix `/private/tmp/2237-phase1-complete-`; the final full run is `verify.log`. Phase 1 was completed under the selected one-review cadence and committed as `b8bfe5b077f917e22330455f311540fd90e42b4d`; phases 2/3 were pending at that checkpoint. These are local working-tree results, not current-head lifecycle evidence or CI clearance.
 
 ## Historical parked checkpoint — 2026-09-16
 
@@ -116,7 +122,7 @@ On explicit resume: fetch origin, refresh canonical startup/envelope and issue22
 | File | Phase | Disposition | Evidence / remaining work |
 | --- | --- | --- | --- |
 | `skills/copilot-pr-followup/SKILL.md` | 1 | changed | Full owner and applicable tests inspected; remaining lifecycle/reattachment/coordination prose condensed. Fresh Sol semantic review and final local verification passed; see current-run trace. |
-| `skills/dev-loop/SKILL.md` | 2 | pending | Not yet reviewed. |
+| `skills/dev-loop/SKILL.md` | 2 | in progress | Phase 2 active; initial candidate preserved pending transition bookkeeping and independent review. |
 | `skills/dev-loop/scripts/dev-mode-context.mjs` | 3 | pending | Not yet reviewed. |
 | `skills/dev-loop/scripts/dev-mode-context.test.mjs` | 3 | pending | Not yet reviewed. |
 | `skills/dev-loop/scripts/init-phase.mjs` | 3 | pending | Not yet reviewed. |
@@ -187,29 +193,30 @@ On explicit resume: fetch origin, refresh canonical startup/envelope and issue22
 | `skills/docs/wait-watch-procedure.md` | 1 | changed | Full-file old/new review complete; duplicate capture commands and obsolete CI history removed. Remaining route-local decisions intentionally retained to avoid loading the full follow-up bundle. |
 | `skills/docs/workflow-handoff-contract.md` | 3 | pending | Not yet reviewed. |
 | `skills/docs/worktree-guidance.md` | 3 | pending | Not yet reviewed. |
-| `skills/final-approval/SKILL.md` | 2 | pending | Not yet reviewed. |
-| `skills/local-implementation/SKILL.md` | 2 | pending | Not yet reviewed. |
-| `skills/loop-grill/SKILL.md` | 2 | pending | Not yet reviewed. |
-| `skills/review/SKILL.md` | 2 | pending | Not yet reviewed. |
-| `skills/ui-review/SKILL.md` | 2 | pending | Not yet reviewed. |
+| `skills/final-approval/SKILL.md` | 2 | in progress | Phase 2 active; redirect inspected, no source edit proposed yet; final disposition pending. |
+| `skills/local-implementation/SKILL.md` | 2 | in progress | Phase 2 active; initial candidate preserved pending transition bookkeeping and independent review. |
+| `skills/loop-grill/SKILL.md` | 2 | in progress | Phase 2 active; initial candidate preserved pending transition bookkeeping and independent review. |
+| `skills/review/SKILL.md` | 2 | in progress | Phase 2 active; initial candidate preserved pending transition bookkeeping and independent review. |
+| `skills/ui-review/SKILL.md` | 2 | in progress | Phase 2 active; initial candidate preserved pending transition bookkeeping and independent review. |
 
-## Phase 1 validation plan
+## Historical Phase-1 validation plan
 
 Reviewed first slice: simplify the follow-up skill's startup/path-resolution prose and the shared wait procedure; replace generated-projection prose pins using existing transformation tests. Subsequent slices condense fan-out/fan-in with its owner while preserving unresolved conflicting instructions. This PR is variant A; the issue now defines an independent variant-B comparison. Neither variant is selected for merge.
 
 Compare old/new instructions for actors, permissions, triggers, conditions, order, exceptions, stop rules, evidence and revision identity. Preserve frontmatter, rule IDs, command examples and the declared verbatim dispatch payload. Independently evaluate high-risk scenarios with no live writes. Replace incidental prose pins with existing structural/behavior seams; keep exact API/projection checks. Run docs, contract, generated-asset and default verification before draft handoff.
 
-## Ambiguity register
+## Ambiguity register — current disposition at Phase-1 acceptance
 
 - Fan-in count: corrected to actual emitted/spawned units following the existing owner's explicit authority and emitter tests; unsplit `pendingGroups.length` was obsolete advice.
 - CI evidence flag: removed executable use of unsupported `--local-validation-head-sha`; the existing CI owner retains prerequisites and now states that ordinary CLI refresh cannot activate the exception. See the code-backed correction below.
-- Carry eligibility: the skill still says clean-only; the owner and current tools support carrying `findings_present` with unchanged findings. The contradictory passages remain unresolved.
-- Zero-unit rounds: the skill says an all-carried round dispatches no emitter, but sanctioned consumers require an emit plan and the emitter/writer reject an empty plan. No exception or new stop rule was invented.
-- Proportionality grouping: `GATE-EXEC-PROPORTIONALITY` describes `full_fanout` as distinct-reviewer-per-angle, while `resolveReviewProportionality` always obtains groups from `resolveFanoutGroups`. The disputed prose is retained pending authority reconciliation.
-- Fixer handoff identity: the owner permits thread ID "or finding fingerprint", while `normalizeFixerDispositionHandoff` requires `threadId` and only optionally accepts a fingerprint. Neither policy nor validator was changed.
-- Review lineage: its introduction says a new head does not rebuild a full head-specific briefing, while Phase 5 mandates a fresh Phase 1 context-builder pass. Whether these refer to distinct artifact layers needs clarification; neither instruction was weakened.
+- Carry eligibility — resolved: ADR0064 and the owner/runtime permit evidenced `findings_present` carry with unchanged findings and retained identity; obsolete clean-only prose was removed.
+- Zero-unit rounds — resolved within issue2273: an all-carried round emits a keyed plan backed by complete resolver proof. Mandatory plan consumption remains; completed-only and unsupported empty plans refuse. No no-plan exemption was introduced.
+- Proportionality grouping — resolved: ADR0072 and `expandDispatchUnits` govern grouped emitted units, preserving size/risk/tier/mandatory floors. The separate one-angle split-tail provenance `group` discrepancy remains unresolved and outside issue2273.
+- Fixer handoff identity — resolved: `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY` requires `threadId`; a fingerprint is optional additional identity. The existing validator was retained.
+- Review lineage — resolved: the authorized ADR0070 clarification distinguishes offline append-only composition from mandatory fresh current-head runtime context rebuilding.
+- Remaining limitations: one-angle split-tail provenance `group` and disputed coverage wording; Phase-2/3 inspection, cumulative validation, lifecycle gates and human approval remain outstanding.
 
-The detector's current `--help` lists no `--local-validation-head-sha` option. The dispatch emitter returns its expanded unit count, and its tests cover splits beyond the configured group count. These evidence-backed description corrections do not resolve the remaining policy conflicts or establish whole-phase clearance.
+The detector's `--help` lists no `--local-validation-head-sha` option; its removed executable use is resolved, while the CI owner's existing prerequisites remain intact. The dispatch emitter returns its expanded unit count, with split coverage in its tests. The accepted Phase-1 trace above establishes the scope of these resolutions, not whole-issue or lifecycle clearance. Historical accounts below retain the uncertainty and validation state of their original slices.
 
 ## First-slice evidence
 
