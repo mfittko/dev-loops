@@ -429,7 +429,15 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   } else {
     units = fanout.groups;
   }
-  if (!Array.isArray(units) || units.length === 0) {
+  // A zero-unit pending plan is valid only when every original angle was
+  // carried. Completed-only resumes and malformed empty plans still refuse;
+  // fan-in independently verifies the carry proof before accepting findings.
+  const carried = new Set(Array.isArray(fanout.preflight?.carriedAngles)
+    ? fanout.preflight.carriedAngles.filter((angle) => typeof angle === "string").map((angle) => angle.trim().toLowerCase()) : []);
+  const allCarried = pendingOnly && Array.isArray(fanout.groups) && fanout.groups.length > 0
+    && fanout.groups.every((unit) => normalizeUnitAngles(unit).length > 0
+      && normalizeUnitAngles(unit).every((angle) => carried.has(angle.trim().toLowerCase())));
+  if (!Array.isArray(units) || (units.length === 0 && !allCarried)) {
     return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — fanout dispatch plan resolves zero units (${pendingOnly ? "pendingGroups" : "groups"}) — nothing to dispatch` }, false);
   }
   // An angle-less resolved unit is a malformed plan: refuse rather than silently

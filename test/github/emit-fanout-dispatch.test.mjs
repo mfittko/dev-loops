@@ -7,6 +7,9 @@ import { test } from "bun:test";
 import { buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, main, sanitizeScopeSegment, splitSubUnitName } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { buildGateEmitPlanPath, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
+import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
+import { consolidateGateFanin } from "../../scripts/loop/consolidate-fanin.mjs";
+import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 
 const emitCliPath = path.resolve("scripts/github/emit-fanout-dispatch.mjs");
@@ -58,6 +61,67 @@ test("emit-fanout-dispatch.mjs --help exits 0", () => {
   const result = runEmitCli(["--help"]);
   assert.equal(result.status, 0);
   assert.match(result.stdout, /emit-fanout-dispatch/);
+});
+
+test("all-carried rounds consume the real emitter's keyed zero-unit plan through fan-in and ledger writing", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const gate = "draft_gate";
+    await writeFile(path.join(repoRoot, ".devloops"), "version: 1\ngates:\n  draft:\n    angles:\n      - name: pr-description\n        enabled: false\n", "utf8");
+    const { config, errors } = await loadDevLoopConfig({ repoRoot });
+    assert.deepEqual(errors, []);
+    const findings = [{ angle: "coverage", severity: "high", summary: "Prior coverage defect remains open" }];
+    const plan = buildCarryForwardPlan({
+      log: { headSha: "b".repeat(40), verdict: "findings_present", findings,
+        provenance: { perAngle: [{ angle: "coverage", reviewer: "prior-reviewer", model: "review-model" }] } },
+      changedFiles: ["docs/readme.md"],
+    });
+    assert.deepEqual(plan.carried.map((entry) => entry.angle), ["coverage"]);
+    const fanout = resolveFanoutDispatch(config, "draft", ["coverage"], { carriedAngles: ["coverage"] });
+    assert.deepEqual(fanout.pendingGroups, []);
+    const contextOptions = parseWriteGateContextCliArgs([
+      "--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA,
+      "--angles", '["coverage"]', "--carried-angles", '["coverage"]',
+    ]);
+    contextOptions.config = config;
+    contextOptions.fanoutDispatch = fanout;
+    await writeGateContext(contextOptions, { repoRoot });
+    const contextDir = path.join(repoRoot, "tmp", "gate-context", "o-r", "pr-7");
+    const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--pending"], { cwd: repoRoot });
+    assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
+    const emitPlan = path.join(contextDir, `${gate}-${HEAD_SHA}.emit-plan.json`);
+    const payload = JSON.parse(await readFile(emitPlan, "utf8"));
+    assert.equal(payload.count, 0);
+    assert.deepEqual(payload.units, []);
+    const findingsDir = path.join(repoRoot, "findings");
+    await mkdir(findingsDir);
+    const faninOptions = { repoRoot, tmpRoot: path.join(repoRoot, "tmp"), findingsDir, gate, headSha: HEAD_SHA, emitPlan,
+      resolvedAngles: ["coverage"], carriedAngles: ["coverage"], carryForwardPlan: plan.carried };
+    const fanin = await consolidateGateFanin(faninOptions);
+    assert.equal(fanin.overallVerdict, "findings_present");
+    assert.equal(fanin.findingsJson[0].angle, "coverage");
+    assert.deepEqual(fanin.findingsJson[0].findings, [{ severity: "high", summary: findings[0].summary, disposition: "accepted-for-fix" }]);
+    const consolidatedFindings = fanin.findingsJson.flatMap(({ angle, findings: entries }) => entries.map((entry) => ({ ...entry, angle })));
+    const provenance = { distinctReviewers: 1, perAngle: plan.carried.map(({ angle, reviewer, model, carriedFromHead, prevVerdict }) =>
+      ({ angle, reviewer, model, carriedFromHead, carriedVerdict: prevVerdict })) };
+    const writeOptions = { repo: REPO, pr: Number(PR), gate, headSha: HEAD_SHA,
+      verdict: fanin.overallVerdict, findings: JSON.stringify(consolidatedFindings), executionMode: "fanout_fanin",
+      provenance: JSON.stringify(provenance), emitPlan, tmpRoot: path.join(repoRoot, "tmp") };
+    const written = await writeGateFindingsLog(writeOptions, { repoRoot });
+    assert.deepEqual(written.log.findings, consolidatedFindings);
+    assert.deepEqual(written.log.provenance.perAngle, provenance.perAngle);
+    await assert.rejects(() => consolidateGateFanin({ ...faninOptions, carryForwardPlan: [] }), /no proof|not present/);
+    await assert.rejects(() => consolidateGateFanin({ ...faninOptions, headSha: "d".repeat(40) }), /stamped for head/);
+    await assert.rejects(() => writeGateFindingsLog({ ...writeOptions,
+      provenance: JSON.stringify({ distinctReviewers: 1, perAngle: [{ angle: "coverage", reviewer: "fresh-reviewer" }] }) }, { repoRoot }), /zero|non-empty|fresh angles/);
+    await rm(emitPlan);
+    await assert.rejects(() => consolidateGateFanin(faninOptions), /could not be read/);
+    for (const carriedAngles of [[], ["different-angle"], "coverage"]) {
+      await seedBundle(repoRoot, { gate, fanout: { ...fanout, preflight: { carriedAngles, completedAngles: ["coverage"] } } });
+      const refused = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--pending"], { cwd: repoRoot });
+      assert.equal(refused.status, 1, refused.stderr || refused.stdout);
+      await assert.rejects(() => readFile(emitPlan), { code: "ENOENT" });
+    }
+  });
 });
 
 test("requires --repo/--pr/--gate/--head-sha", () => {

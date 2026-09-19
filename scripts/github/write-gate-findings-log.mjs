@@ -373,8 +373,10 @@ export async function verifyEmitPlanProvenance(planPath, provenance, round, { re
   if (plan?.repo !== round.repo || planPr !== round.pr || normalizeGate(plan?.gate) !== round.gate || planHeadSha !== round.headSha) {
     throw parseError(`--emit-plan "${planPath}" is stamped for ${JSON.stringify({ repo: plan?.repo, pr: plan?.pr, gate: plan?.gate, headSha: plan?.headSha })} but this findings log writes ${JSON.stringify(round)} — a stale or foreign emit plan must not be consumed`);
   }
-  if (plan.ok !== true || !Array.isArray(plan.units) || plan.units.length === 0 || plan.count !== plan.units.length) {
-    throw parseError(`cannot verify emit-plan provenance: --emit-plan "${planPath}" must carry a non-empty units array whose length equals count`);
+  const allCarried = plan.pending === true && provenance.perAngle.length > 0
+    && provenance.perAngle.every((entry) => entry.carriedFromHead !== undefined);
+  if (plan.ok !== true || !Array.isArray(plan.units) || (plan.units.length === 0 && !allCarried) || plan.count !== plan.units.length) {
+    throw parseError(`cannot verify emit-plan provenance: --emit-plan "${planPath}" must carry a non-empty units array whose length equals count, or a pending zero-unit plan backed entirely by carried provenance`);
   }
 
   const expected = new Map();

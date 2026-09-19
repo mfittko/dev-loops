@@ -8,7 +8,35 @@ Dispositions: `pending`, `in progress`, `changed`, `unchanged`, `generated`, `no
 
 Phases: 1 = Copilot follow-up and directly coupled references/tests; 2 = other routed entrypoints and their workflow contracts; 3 = remaining shared documentation, references, templates and script comments/help. Only phase 1 is active. All phases use the same cleanup PR unless the human changes the scope.
 
-## Parked checkpoint — 2026-09-16
+## Current run — 2026-09-19
+
+The user selected A for all three phases on `issue-2236`/PR2237; B is now a pinned read-only reference, not an equivalent-scope competition. Issue2236 records this direction and the narrow runtime exception tracked separately by issue2273. All phases remain incomplete; the existing inventory below still has 71 pending, four in-progress and two previously changed rows. A link correction or this checkpoint does not complete a file.
+
+| Input / evidence | Current value |
+| --- | --- |
+| Coordinator / worktree | Native Codex `/root/dev_loop`; `tmp/worktrees/dev-loops/issue-2236` |
+| A start / original merge base | `eccf273da654d494bcc67cc118dc2ff4caf6cb91` / `894a5a59080222cef5a47fc3f4e962824e05bfda` |
+| Integrated main / merge commit | `25e04c37a0065a8c32ff1bf6ac266b1aeff64a99` / `3e219529acf3278a96155746004b7950ffd7413a` (pushed and remote verified) |
+| B reference | `608550f80dbc702b026e4ace8b01d6908e16dfae`; untouched |
+| Toolchain / baseline | Bun1.4.1, Node26.7.0; pristine main verify9368pass/391files, assets92pass |
+| Integration validation / review | Exact committed tree verify9373pass/391files, docs/workflows and assets92pass; fresh native Terra `/root/dev_loop/integration_review_native` found no integration regression. Residual production/dependency/schema/CI/unrelated assets equal main. |
+| Preservation / local evidence | Original two-file dirty CI draft and integration backup are preserved privately; exact paths and validation logs are recorded in `/private/tmp/dev-loop-2237-resume.md`. These are local resume artifacts, not durable lifecycle clearance. |
+
+Main integration retained accepted grouped dispatch, verdict minimization, classifier and viewer behavior. Canonical source was reconciled before regeneration. Original writer `/root/dev_loop/integration_fixer` could not resume because the native thread limit was reached at both child and root; the coordinator preserved its independently reviewed staged work and completed the merge/push. No history rewrite or B mutation occurred. Restricted test failures were reproduced on pristine main before rerunning with localhost/Git-fixture permissions.
+
+The initial issue amendment changed narrative outside the spec extractor's table. The subsequent runtime exception is explicitly included in that table; refresh canonical identity before spec-bound clearance. Earlier phase/gate claims are not current-head/current-scope clearance.
+
+### Active phase 1: keyed all-carried plan (issue2273)
+
+This is the user-authorized small runtime exception, to be committed separately in A. The emitter admits a zero-unit `--pending` plan only when every angle in its original non-empty groups is carried; completed-only and unsupported empty plans still refuse. Existing keyed persistence/failure cleanup remains authoritative. Fan-in independently verifies carry proof and coverage; the writer permits empty emitted units only for non-empty entirely carried provenance and rejects fresh mismatches. Both callers still consume the keyed plan. No no-plan exception, synthetic reviewer or CI evidence was introduced.
+
+Real-module test coverage drives the carry resolver, context writer, emitter CLI, fan-in with the actual request-plan/sentinel directory, and findings-log writer. It preserves a blocking prior finding and original reviewer/model identity and rejects missing carry proof, stale head, fresh provenance, missing plan, completed-only and malformed/incomplete carried inputs. Fresh native Terra `/root/dev_loop/runtime_review_retry_2` reviewed frozen diff `674f595fb15b8b8d5d7d3d4971e59a5972a448188ee8e845542dd586b9668820` against integration HEAD and spec `53b8dc344056f2710640c67b074d0b597b81b4a26ad42503b0cc79962f84f611`, with no runtime findings. Targeted validation: 383 tests across four files; docs and 92 assets passed. Only this evidence sentence changed after review. This is not phase completion or lifecycle clearance.
+
+Remaining decisions: lineage clarification (offline composition versus runtime rebuilding) is authorized but not yet applied. Accepted ADR0064 supports correcting clean-only carry descriptions. The pinned main emitter still nulls final provenance `group` on one-angle split tails despite ADR0072's original-group requirement; this pre-existing runtime discrepancy is outside issue2273 and is not silently fixed or claimed preserved. B-reference reviewer `/root/dev_loop/b_reference` identified a useful `mustRerun` inversion counterexample; not yet adopted. Its proposed no-plan interpretation was withdrawn for lack of governing authority.
+
+Comparable canonical-tree measurement (`wc -w -c`, all 77 tracked skills files): pinned main 152940 words / 1185234 bytes; A start 145725 words / 1134425 bytes; integrated A 145978 words / 1136288 bytes. The 6962-word / 48946-byte reduction against main is inherited A work; integration itself adds 253 words / 1863 bytes from main. No tokens or final loaded-context savings claimed.
+
+## Historical parked checkpoint — 2026-09-16
 
 Paused at the user's request; resume only when requested, not automatically on Saturday. PR2237 remains draft and unmerged. Latest implementation/test commit pushed before this note: `cef3de0b` on `issue-2236`. Its full verification passed 9,293 tests across 390 files, plus docs/workflows; doc guard passed 354 with one skip.
 

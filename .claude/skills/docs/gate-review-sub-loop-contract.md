@@ -515,13 +515,23 @@ dispatch path, and it closes three failure modes prose discipline never held:
   group's shared reviewer matches the guard's re-derivation), and this does NOT change which
   angles/units `resolveFanoutGroups` resolves — only how the emitter dispatches them.
 - **Fail-closed inputs.** A missing gate-context artifact, an artifact carrying no fan-out plan
-  (a thin briefing built without `--base`), a plan resolving zero units, a unit with no angles,
+  (a thin briefing built without `--base`), an unsupported plan resolving zero units, a unit with no angles,
   a unit name that sanitizes to an invalid scope, two units deriving a colliding sanitized scope,
   or a unit whose invariant-prefix record is missing all refuse (exit 1) rather than dispatching
   a partial or persona-less fan-out. Each
   unit's angle list is normalized ONCE and threaded through the scope, suffix, and provenance
   `group` derivation, so a malformed unit can never split those three views of whether it is a
   singleton.
+
+**All-carried rounds.** Rebuild the current-head context with the proven carried angles and
+prior head, then run the emitter with `--pending` even when every angle is carried. It writes
+a keyed plan with `count: 0` and `units: []` only when its original non-empty groups are
+entirely covered by the context preflight's carried angles. It emits no reviewer prompts.
+Pass that plan to both fan-in and the findings-log writer; retain complete carry proof,
+prior findings and reviewer identities, resolved-angle coverage, and spec-authority evidence.
+Fan-in independently checks carry eligibility/proof; the writer rejects a zero-unit plan
+with empty or fresh provenance. Same-head completed-only resumes do not qualify for this path.
+Omit `--expected-dispatch-units` at zero, as required by the existing consumer contract.
 
 **Per-harness delivery.** The composer's `--out` file holds the exact full reviewer prompt
 bytes; how those bytes REACH the spawned reviewer's actual prompt differs by harness:
