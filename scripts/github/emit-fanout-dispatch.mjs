@@ -37,7 +37,8 @@ sub-unit's angles stay members of the SAME resolved unit, so the merge guard's
 resolveFanoutGroups re-derivation (detect-checkpoint-evidence.mjs's
 fanoutReviewerPairingError, the fail-closed authority for this) still pairs
 them honestly whether the unit is configured or auto-chunked. A singleton
-records no group.
+from an unsplit single-angle resolved unit records no group; a one-angle split
+tail retains its original unit's group.
 
 The per-unit angle-suffix this emits only NAMES the unit's angle(s) and instructs
 the reviewer to self-resolve each angle's persona/prompt (resolveReviewerRole) —
@@ -48,8 +49,8 @@ scoped angle-review mode), not re-derived here.
 Run write-gate-context.mjs FIRST (it writes the briefing prefix, volatile tail,
 and the fanout dispatch plan this reads). Then dispatch ONE fresh-context \`review\`
 subagent per emitted unit, seeded with that unit's promptPath bytes verbatim, and
-record each unit's \`group\` on Phase 3's provenance (null for a singleton unit; the
-configured group name for a shared unit).
+record each unit's \`group\` on Phase 3's provenance (null for an unsplit singleton;
+the original resolved unit's name for a shared unit or any split sub-unit).
 
 Required:
   --repo <owner/name>        Same vocabulary as write-gate-context.mjs.
@@ -528,7 +529,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     if (!result.composed || !result.recorded) {
       return finish({ ok: false, error: `failed to compose reviewer prompt for unit ${JSON.stringify(unit?.name)} (scope ${scope}): ${result.reason}` }, false);
     }
-    emitted.push({ scope, angles, group: angles.length > 1 ? unit.group : null, promptPath: result.promptPath });
+    emitted.push({ scope, angles, group: unit.group, promptPath: result.promptPath });
   }
 
   // GATE-EXEC-FANOUT-DISPATCH-EMIT: success-only persist of the emitted round

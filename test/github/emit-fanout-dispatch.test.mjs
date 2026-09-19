@@ -291,6 +291,78 @@ test("main(): a configured group OVER the angle cap splits into ceil(N/3) sub-un
   });
 });
 
+for (const configured of [true, false]) {
+  test(`C17: ${configured ? "configured" : "auto-chunk"} singleton split tail retains its original group through emission and ledger writing`, async () => {
+    await withTmpDir(async (repoRoot) => {
+      const angles = ["srp", "soc", "ocp", "lsp", "pr-checklist"];
+      await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1, gates: { fanout: {
+        groups: configured ? [{ name: "design-solid", angles: angles.slice(0, 4) }] : [],
+        maxAnglesPerGroup: 4,
+      } } }));
+      const { config, errors } = await loadDevLoopConfig({ repoRoot });
+      assert.deepEqual(errors, []);
+      const fanout = resolveFanoutDispatch(config, mapGateToConfigKey(GATE), angles, {});
+      assert.deepEqual(fanout.groups.map((unit) => unit.angles), [angles.slice(0, 4), angles.slice(4)]);
+      const options = parseWriteGateContextCliArgs([
+        "--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA,
+        "--angles", JSON.stringify(angles),
+      ]);
+      await writeGateContext({ ...options, config, fanoutDispatch: fanout }, { repoRoot });
+      const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+      assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
+      const payload = JSON.parse(emitted.stdout);
+      const tmpRoot = path.join(repoRoot, "tmp");
+      const emitPlan = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+      assert.deepEqual(JSON.parse(await readFile(emitPlan, "utf8")), payload);
+      assert.equal(payload.count, 3);
+      assert.deepEqual(payload.units.map((unit) => unit.angles), [angles.slice(0, 3), [angles[3]], [angles[4]]]);
+      const group = fanout.groups[0].name;
+      assert.deepEqual(payload.units.map((unit) => unit.group), [group, group, null]);
+      assert.equal(payload.units[1].scope, "pre-approval-gate-lsp");
+      const provenance = { distinctReviewers: 3, perAngle: payload.units.flatMap((unit, index) =>
+        unit.angles.map((angle) => ({ angle, reviewer: `review-${index}`, ...(unit.group === null ? {} : { group: unit.group }) }))) };
+      const writeOptions = { repo: REPO, pr: Number(PR), gate: GATE, headSha: HEAD_SHA, verdict: "clean",
+        findings: "[]", provenance: JSON.stringify(provenance), emitPlan, tmpRoot };
+      const written = await writeGateFindingsLog(writeOptions, { repoRoot });
+      assert.deepEqual(written.log.provenance, provenance);
+      for (const replacement of [undefined, "wrong-group"]) {
+        const changed = structuredClone(provenance);
+        changed.perAngle[3].group = replacement;
+        await assert.rejects(() => writeGateFindingsLog({ ...writeOptions, provenance: JSON.stringify(changed) }, { repoRoot }), /records group/);
+      }
+      const mixedIdentity = structuredClone(provenance);
+      mixedIdentity.perAngle[0].reviewer = "different-reviewer";
+      mixedIdentity.distinctReviewers = 4;
+      await assert.rejects(() => writeGateFindingsLog({ ...writeOptions, provenance: JSON.stringify(mixedIdentity) }, { repoRoot }), /multiple reviewer identities/);
+      const reusedIdentity = structuredClone(provenance);
+      reusedIdentity.perAngle[3].reviewer = "review-0";
+      reusedIdentity.distinctReviewers = 2;
+      await assert.rejects(() => writeGateFindingsLog({ ...writeOptions, provenance: JSON.stringify(reusedIdentity) }, { repoRoot }), /smaller than/);
+      const nullTail = structuredClone(payload);
+      nullTail.units[1].group = null;
+      await writeFile(emitPlan, JSON.stringify(nullTail));
+      await assert.rejects(() => writeGateFindingsLog(writeOptions, { repoRoot }), /records group/);
+      for (const invalidUnits of [
+        // A matching plan/provenance claim cannot manufacture a split tail.
+        [{ ...payload.units[1], group: "arbitrary-group" }],
+        [payload.units[0], { ...payload.units[1], group: "wrong-group" }],
+        [payload.units[1], payload.units[0]],
+        [{ ...payload.units[0], angles: angles.slice(0, 2) }, payload.units[1]],
+      ]) {
+        await writeFile(emitPlan, JSON.stringify({ ...payload, count: invalidUnits.length, units: invalidUnits }));
+        const invalidProvenance = { distinctReviewers: invalidUnits.length, perAngle: invalidUnits.flatMap((unit, index) =>
+          unit.angles.map((angle) => ({ angle, reviewer: `review-${index}`, group: unit.group }))) };
+        await assert.rejects(() => verifyEmitPlanProvenance(emitPlan, invalidProvenance,
+          { repo: REPO, pr: Number(PR), gate: GATE, headSha: HEAD_SHA }, { repoRoot }), /preceding same-group full-cap split sibling/);
+      }
+      const malformed = structuredClone(payload);
+      malformed.units[0].group = null;
+      await writeFile(emitPlan, JSON.stringify(malformed));
+      await assert.rejects(() => writeGateFindingsLog(writeOptions, { repoRoot }), /non-empty for a multi-angle unit/);
+    });
+  });
+}
+
 // AC9 (issue 2180, Path A) end-to-end exact-count fixture: a NO-config-table
 // angle set (no gates.fanout.groups match at all) routed through the REAL
 // resolveFanoutGroups auto-chunk path (via resolveFanoutDispatch, the same

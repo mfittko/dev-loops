@@ -374,8 +374,9 @@ the same atomic compose-and-record core the CLI uses). It emits one
 `{ scope, angles, group, promptPath }` per DISPATCH unit plus a `maxConcurrent` field; the
 conductor then dispatches one fresh-context `review` subagent per emitted unit, seeded with
 that unit's `promptPath` bytes verbatim, records each unit's `group` on Phase 3's `--provenance`
-(null for a singleton unit, the resolved unit's own name — the configured group name, or the
-auto-chunk bundle's own name, for a shared unit), and waves the emitted
+(null for an unsplit single-angle resolved unit; the original resolved unit's own name —
+configured or auto-chunk — for every split sub-unit, including a one-angle tail, and for an
+unsplit shared unit), and waves the emitted
 units at most `maxConcurrent` at a time. The conductor MUST bound this step by the emitter's
 `maxConcurrent` (`resolveFanoutEffectiveConcurrency`, 1 when `gates.fanout.sequential`), NOT by
 `artifact.fanout.wavePlan`: that wave plan is computed over the UNSPLIT `resolveFanoutGroups`
@@ -389,6 +390,8 @@ own result object as the body — self-describing and key-stamped — so two
 concurrent emitters at different gates write distinct files by construction and
 a coordinator consumes THAT keyed path, retiring the hand-rolled fixed-path
 stdout-capture habit whose shared file a concurrent gate silently clobbers.
+The provenance writer accepts a grouped one-angle tail only after a same-group full-cap
+sibling in the emitted plan; an arbitrary standalone grouped singleton still refuses.
 This is the ONE documented
 dispatch path, and it closes three failure modes prose discipline never held:
 
@@ -405,8 +408,8 @@ dispatch path, and it closes three failure modes prose discipline never held:
   ungrouped-leftover bundle `resolveFanoutGroups` auto-chunked into `group:...`. It records the
   resolved unit's own name as the reviewer's provenance `group`, capped and split at
   `REVIEWER_UNIT_MAX_ANGLES` (ordered `<name>-part1`/`-part2`/... sub-units, each still recording
-  the whole unit's name as `group`) exactly as an over-cap configured group already was. Only a
-  genuinely single-angle unit dispatches as a singleton (no shared group). `resolveFanoutGroups`
+  the whole unit's name as `group`, including a one-angle tail) exactly as an over-cap configured
+  group already was. Only a genuinely single-angle unit dispatches as a singleton (no shared group). `resolveFanoutGroups`
   itself draws no dispatch-relevant distinction between a configured group and an auto-chunk
   bundle (both are "this round's resolved dispatch units"), so the emitter no longer draws one
   either. The merge guard (`fanoutReviewerPairingError` in `@dev-loops/core/loop/gate-fanin`) is

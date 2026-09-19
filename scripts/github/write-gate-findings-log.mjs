@@ -12,6 +12,7 @@ import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositio
 // JUDGE_DISPOSITIONS is a frozen array in the core export; wrap as a Set for
 // the validator's membership check so validateFindingsArray stays self-contained.
 import { JUDGE_DISPOSITIONS as _JUDGE_DISPOSITIONS_ARRAY } from "@dev-loops/core/loop/gate-fanin";
+import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
 import { loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
@@ -409,8 +410,15 @@ export async function verifyEmitPlanProvenance(planPath, provenance, round, { re
     if (group !== undefined && (typeof group !== "string" || group.trim().length === 0)) {
       throw parseError(`cannot verify emit-plan provenance: --emit-plan units[${unitIndex}].group must be null or a non-empty string`);
     }
-    if ((unit.angles.length === 1) !== (group === undefined)) {
-      throw parseError(`cannot verify emit-plan provenance: --emit-plan units[${unitIndex}].group must be null for a singleton and non-empty for a multi-angle unit`);
+    // ADR0072: a one-angle split tail retains the original resolved group's name.
+    if (unit.angles.length > 1 && group === undefined) {
+      throw parseError(`cannot verify emit-plan provenance: --emit-plan units[${unitIndex}].group must be non-empty for a multi-angle unit`);
+    }
+    if (unit.angles.length === 1 && group !== undefined) {
+      const previous = plan.units[unitIndex - 1];
+      if (previous?.angles.length !== REVIEWER_UNIT_MAX_ANGLES || previous.group?.trim() !== group.trim()) {
+        throw parseError(`cannot verify emit-plan provenance: --emit-plan units[${unitIndex}] is a grouped singleton without a preceding same-group full-cap split sibling`);
+      }
     }
     for (const rawAngle of unit.angles) {
       if (typeof rawAngle !== "string" || rawAngle.trim().length === 0) {
