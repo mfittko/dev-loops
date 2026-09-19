@@ -1,13 +1,105 @@
 import { parseRepoSlugParts } from "@dev-loops/core/github/repo-slug";
-import { inspectRun } from "./inspect-run.mjs";
+import { inspectRun, inspectRunLoopIterations } from "./inspect-run.mjs";
 import { ghJson } from "@dev-loops/core/github/gh";
+import { runChild } from "@dev-loops/core/cli/primitives";
 const ASSIGNED_PR_LIST_CACHE_TTL_MS = 15_000;
+// Inbox dot signals (review state, check state) move far more slowly than the
+// list, so they outlive the list cache and keep a list refresh at one call.
+const SIGNAL_KEY_CACHE_TTL_MS = 5 * 60 * 1000;
+// One snapshot costs ~20 `gh` subprocesses (copilot evidence + reviewer evidence
+// + the loop-iteration fan-out), and every page render, inbox click and
+// snapshot.json fetch asks for it again. Cache per target for the same window as
+// the inbox list; the shortest auto-reload period is 60s, so auto-reload never
+// serves a cached snapshot. `loadSnapshot(target, { refresh: true })` bypasses
+// it for the selected PR only.
+const SNAPSHOT_CACHE_TTL_MS = 15_000;
+// `gh` child processes register no timeout, so a hung handshake yields a promise
+// that never settles. Without a ceiling that entry owns its cache key for the
+// process lifetime and every later render for that PR joins the hung promise.
+// Far above the TTL so a merely slow fan-out is still shared, not re-run.
+const SNAPSHOT_INFLIGHT_CEILING_MS = 120_000;
 const DEFAULT_UPDATED_WITHIN_DAYS = 7;
 const DEFAULT_RESULT_LIMIT = 25;
 const MAX_RESULT_LIMIT = 100;
 const DEFAULT_PR_STATE = "open";
 const DEFAULT_INBOX_MODE = "assignee";
 const DEFAULT_INBOX_SIGNAL = "waiting";
+// Anchored to gh's own phrasings ("API rate limit exceeded", "rate limit already
+// exceeded", "You have exceeded a secondary rate limit"). A bare `rate limit`
+// substring also matches an echoed PR title or proxy body, and classifying those
+// as rate limits shows the operator a retry time that will never come true.
+export function isRateLimitError(error) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /rate limit[^\n]{0,20}\bexceeded\b|\bexceeded\b[^\n]{0,20}rate limit/i.test(message);
+}
+
+// The failing `gh search` call surfaces no headers, and `gh api rate_limit`
+// reports a DIFFERENT budget than the one search spends (observed: 5000
+// remaining while a live response header said 0). So read the authoritative
+// `X-RateLimit-Reset` off a header-only probe of the same resource.
+// The failing inbox call is `gh search prs`, which spends the SEARCH budget, and
+// search resets on a per-minute cadence while graphql resets hourly. Probing the
+// wrong bucket produces a confidently wrong "retry in ~47 min" for a limit that
+// clears in seconds — worse guidance than the generic failure it replaced. So the
+// probe hits the search resource and REFUSES a reading whose own
+// `X-RateLimit-Resource` header does not say `search`.
+const RATE_LIMIT_PROBE_RESOURCE = "search";
+const RATE_LIMIT_PROBE_TIMEOUT_MS = 5_000;
+
+export async function readRateLimitResetMs({
+  env = process.env,
+  ghCommand = "gh",
+  runChildImpl = runChild,
+  timeoutMs = RATE_LIMIT_PROBE_TIMEOUT_MS,
+} = {}) {
+  try {
+    // This is awaited on the `GET /` request path, and `runChild` settles only on
+    // close/error — it registers no timer. A stalled TLS handshake to the API
+    // would hang the dashboard render until Node's 300s request timeout, with the
+    // child still resident. Bound it here; a probe that misses only costs the hint.
+    const result = await Promise.race([
+      runChildImpl(ghCommand, ["api", "-i", "search/issues?q=repo:github/gitignore+is:issue&per_page=1"], env),
+      new Promise((resolve) => { const timer = setTimeout(() => resolve(null), timeoutMs); timer.unref?.(); }),
+    ]);
+    if (result === null) {
+      return null;
+    }
+    // Newline between the two streams: without it an unterminated stdout merges
+    // its last line into stderr's first and the anchored match silently misses.
+    const headers = `${result?.stdout ?? ""}\n${result?.stderr ?? ""}`;
+    const resource = /^x-ratelimit-resource:\s*(\S+)\s*$/im.exec(headers)?.[1];
+    if (resource !== RATE_LIMIT_PROBE_RESOURCE) {
+      return null;
+    }
+    const match = /^x-ratelimit-reset:\s*(\d+)\s*$/im.exec(headers);
+    if (match === null) {
+      return null;
+    }
+    const resetSeconds = Number(match[1]);
+    return Number.isFinite(resetSeconds) && resetSeconds > 0 ? resetSeconds * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+// A rate-limit window longer than a day is not a rate limit, it is a bad header.
+// The cap also keeps `new Date(resetMs).toISOString()` below the RangeError
+// threshold: an absurd reset value would otherwise throw from inside the request
+// handler and replace the whole dashboard with `Internal Server Error`.
+const MAX_RETRY_HINT_MS = 24 * 60 * 60 * 1000;
+
+export function describeRetryAfter(resetMs, nowMs = Date.now()) {
+  if (typeof resetMs !== "number" || !Number.isFinite(resetMs) || resetMs <= nowMs) {
+    return null;
+  }
+  if ((resetMs - nowMs) > MAX_RETRY_HINT_MS) {
+    return null;
+  }
+  const minutes = Math.ceil((resetMs - nowMs) / 60_000);
+  const clock = new Date(resetMs).toISOString().slice(11, 16);
+  return `Retry in ~${minutes} min (resets at ${clock} UTC).`;
+}
+
 function malformedTargetError(message) {
   const error = new Error(message);
   error.code = "MALFORMED_TARGET";
@@ -196,7 +288,28 @@ export function normalizeInspectionTarget(target) {
     pr: parsePositivePr(target.pr),
   };
 }
-export function createInspectionViewerAdapter({ inspectRunImpl = inspectRun, runGhJsonImpl = ghJson, nowImpl = () => Date.now() } = {}) {
+// Options that change what a snapshot contains; everything else (e.g. `refresh`)
+// is transport-level and must not split the cache.
+function snapshotCacheKey(target, options) {
+  return JSON.stringify([
+    target.repo.toLowerCase(),
+    target.pr,
+    options.steeringStateFile ?? null,
+    options.copilotInputPath ?? null,
+    options.reviewerInputPath ?? null,
+    options.reviewerLogin ?? null,
+    options.ghCommand ?? null,
+    options.includeLoopIterations !== false,
+  ]);
+}
+export function createInspectionViewerAdapter({
+  inspectRunImpl = inspectRun,
+  inspectRunLoopIterationsImpl = inspectRunLoopIterations,
+  runGhJsonImpl = ghJson,
+  nowImpl = () => Date.now(),
+  snapshotCacheTtlMs = SNAPSHOT_CACHE_TTL_MS,
+  snapshotInflightCeilingMs = SNAPSHOT_INFLIGHT_CEILING_MS,
+} = {}) {
   const runGhJson = (args, { env = process.env, ghCommand = "gh" } = {}) => runGhJsonImpl(args, { env, ghCommand });
   const toRepoSlug = (repository) => {
     if (repository === null || typeof repository !== "object") {
@@ -213,10 +326,64 @@ export function createInspectionViewerAdapter({ inspectRunImpl = inspectRun, run
     return `${ownerLogin}/${repoName}`;
   };
   const assignedPrListCache = new Map();
+  const signalKeyCache = new Map();
+  const snapshotCache = new Map();
+  // The cached value is the PROMISE, so concurrent callers (page render plus its
+  // snapshot.json fetch) share one `gh` fan-out instead of racing. `cachedAt` is
+  // stamped when the fetch SETTLES, not when it starts: stamping it up front
+  // sweeps a load slower than the TTL while it is still in flight, and a second
+  // full fan-out then starts on exactly the loads the cache exists for. An
+  // unsettled entry is still swept at the much higher in-flight ceiling, so a
+  // `gh` fan-out that never settles cannot own its key forever.
+  function memoizeFetch(key, refresh, factory) {
+    const nowMs = nowImpl();
+    for (const [cachedKey, entry] of snapshotCache.entries()) {
+      const maxAgeMs = entry.settled ? snapshotCacheTtlMs : snapshotInflightCeilingMs;
+      if ((nowMs - entry.cachedAt) > maxAgeMs) {
+        snapshotCache.delete(cachedKey);
+      }
+    }
+    const cached = refresh ? undefined : snapshotCache.get(key);
+    if (cached) {
+      return cached.promise;
+    }
+    const promise = (async () => factory())();
+    const entry = { cachedAt: nowMs, promise, settled: false };
+    snapshotCache.set(key, entry);
+    promise.then(
+      () => {
+        entry.cachedAt = nowImpl();
+        entry.settled = true;
+      },
+      // Never cache a failure: drop the entry so the next request retries live.
+      () => {
+        if (snapshotCache.get(key) === entry) {
+          snapshotCache.delete(key);
+        }
+      },
+    );
+    return promise;
+  }
   return {
     async loadSnapshot(target, options = {}) {
       const normalizedTarget = normalizeInspectionTarget(target);
-      return inspectRunImpl({ ...options, ...normalizedTarget });
+      const { refresh = false, ...inspectOptions } = options;
+      const load = () => inspectRunImpl({ ...inspectOptions, ...normalizedTarget });
+      if (!(snapshotCacheTtlMs > 0)) {
+        return load();
+      }
+      return memoizeFetch(snapshotCacheKey(normalizedTarget, inspectOptions), refresh, load);
+    },
+    // Round metrics only: what the deferred /round-metrics.html fragment renders.
+    // Cached apart from the snapshot so reopening a PR inside the TTL is free.
+    async loadLoopIterations(target, options = {}) {
+      const normalizedTarget = normalizeInspectionTarget(target);
+      const { refresh = false, includeLoopIterations: _unused, ...inspectOptions } = options;
+      const load = () => inspectRunLoopIterationsImpl({ ...inspectOptions, ...normalizedTarget });
+      if (!(snapshotCacheTtlMs > 0)) {
+        return load();
+      }
+      return memoizeFetch(`loopIterations:${snapshotCacheKey(normalizedTarget, inspectOptions)}`, refresh, load);
     },
     async listAssignedPullRequests(options = {}) {
       const {
@@ -244,6 +411,14 @@ export function createInspectionViewerAdapter({ inspectRunImpl = inspectRun, run
       for (const [key, entry] of assignedPrListCache.entries()) {
         if ((nowMs - entry.cachedAt) > ASSIGNED_PR_LIST_CACHE_TTL_MS) {
           assignedPrListCache.delete(key);
+        }
+      }
+      // Same sweep for the signal cache: its key space is the full filter
+      // permutation, so a long-lived viewer browsing many repo scopes would
+      // otherwise accumulate entries for the process lifetime.
+      for (const [key, entry] of signalKeyCache.entries()) {
+        if ((nowMs - entry.cachedAt) > SIGNAL_KEY_CACHE_TTL_MS) {
+          signalKeyCache.delete(key);
         }
       }
       const cacheKey = `${ghCommand}::${repoSlug.length > 0 ? repoSlug.toLowerCase() : "all-repos"}::${normalizedMode}::${normalizedState}::${normalizedLimit}::${normalizedUpdatedWithinDays ?? "all"}`;
@@ -275,22 +450,51 @@ export function createInspectionViewerAdapter({ inspectRunImpl = inspectRun, run
         nowMs,
         ...overrides,
       });
-      const [payload, changesRequestedPayload, failingChecksPayload, pendingChecksPayload, approvedPayload] = await Promise.all([
-        runGhJson(baseQueryArgs, { env, ghCommand }),
-        runGhJson(queryArgsFor({ review: "changes_requested" }), { env, ghCommand }),
-        runGhJson(queryArgsFor({ checks: "failure" }), { env, ghCommand }),
-        runGhJson(queryArgsFor({ checks: "pending" }), { env, ghCommand }),
-        runGhJson(queryArgsFor({ review: "approved" }), { env, ghCommand }),
-      ]);
+      // The 4 signal queries only tint the inbox dots and change far more slowly
+      // than the list itself, so they get their own long TTL: a list refresh
+      // costs 1 search call, not 5. Every `gh search` spends GraphQL points.
+      // The cached value is the in-flight PROMISE, so a page render overlapping
+      // an auto-reload tick joins the same 4 searches instead of firing 8.
+      const listPromise = runGhJson(baseQueryArgs, { env, ghCommand });
+      const signalCached = signalKeyCache.get(cacheKey);
+      let signalsPromise;
+      if (signalCached) {
+        signalsPromise = signalCached.promise;
+      } else {
+        signalsPromise = Promise.all([
+          runGhJson(queryArgsFor({ review: "changes_requested" }), { env, ghCommand }),
+          runGhJson(queryArgsFor({ checks: "failure" }), { env, ghCommand }),
+          runGhJson(queryArgsFor({ checks: "pending" }), { env, ghCommand }),
+          runGhJson(queryArgsFor({ review: "approved" }), { env, ghCommand }),
+        ]).then(([changesRequested, failingChecks, pendingChecks, approved]) => ({
+          attention: new Set([
+            ...createEntryKeySet(changesRequested, toRepoSlug),
+            ...createEntryKeySet(failingChecks, toRepoSlug),
+          ]),
+          pending: createEntryKeySet(pendingChecks, toRepoSlug),
+          ready: createEntryKeySet(approved, toRepoSlug),
+        }));
+        const signalEntry = { cachedAt: nowMs, promise: signalsPromise };
+        signalKeyCache.set(cacheKey, signalEntry);
+        // Stamped when the fan-out SETTLES, the same rule memoizeFetch uses:
+        // stamping only at start expires a load slower than the TTL against the
+        // moment it began, so the entry it produced is already half spent.
+        signalsPromise.then(() => {
+          signalEntry.cachedAt = nowImpl();
+        }, () => {});
+        signalsPromise.catch(() => {
+          if (signalKeyCache.get(cacheKey) === signalEntry) {
+            signalKeyCache.delete(cacheKey);
+          }
+        });
+      }
+      const [payload, signalSets] = await Promise.all([listPromise, signalsPromise]);
       if (!Array.isArray(payload)) {
         return [];
       }
-      const attentionKeys = new Set([
-        ...createEntryKeySet(changesRequestedPayload, toRepoSlug),
-        ...createEntryKeySet(failingChecksPayload, toRepoSlug),
-      ]);
-      const pendingKeys = createEntryKeySet(pendingChecksPayload, toRepoSlug);
-      const readyKeys = createEntryKeySet(approvedPayload, toRepoSlug);
+      const attentionKeys = signalSets.attention;
+      const pendingKeys = signalSets.pending;
+      const readyKeys = signalSets.ready;
       const normalized = [];
       for (const item of payload) {
         const itemRepo = toRepoSlug(item?.repository);

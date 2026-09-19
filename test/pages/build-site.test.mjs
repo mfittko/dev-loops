@@ -41,6 +41,15 @@ test('build-site: index is the intro article, all resources published, nav links
       'Pages copies the CSP-safe state-graph deck byte-for-byte',
     );
     const index = await readFile(join(out, 'index.html'), 'utf8');
+    const findingFlowDeck = DECKS.find((d) => d.file === 'finding-the-flow.html');
+    assert.ok(findingFlowDeck, 'Finding the flow is registered for Pages publication');
+    assert.equal(deckOut(findingFlowDeck), 'finding-the-flow.html');
+    assert.deepEqual(
+      await readFile(join(out, 'finding-the-flow.html')),
+      await readFile(join(process.cwd(), 'docs', 'presentations', 'finding-the-flow.html')),
+      'Pages copies Finding the flow byte-for-byte',
+    );
+    assert.ok(index.includes('href="finding-the-flow.html">Finding the flow (deck)</a>'), 'landing nav links Finding the flow');
     // The landing page is the intro article (its content), not the old deck index.
     assert.ok(index.includes('Introducing dev-loops'), 'index is the intro article');
     assert.ok(!index.includes('<h1>Presentation Decks</h1>'), 'old deck-index landing is gone');
@@ -57,6 +66,7 @@ test('build-site: index is the intro article, all resources published, nav links
 
     // Deep-dive articles also carry the nav so the set is navigable.
     const deep = await readFile(join(out, ARTICLES[0].file), 'utf8');
+    assert.ok(deep.includes('href="finding-the-flow.html">Finding the flow (deck)</a>'), 'deep-dive nav links Finding the flow');
     assert.ok(deep.includes('class="site-nav"'), 'deep-dive article carries the nav bar');
     const deepGh = ghAnchor(deep);
     assert.equal(deepGh.href, REPO_URL, 'deep-dive GitHub nav anchor links the repo');

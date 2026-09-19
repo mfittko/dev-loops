@@ -54,6 +54,13 @@ export const DECKS = [
     description: 'How dev-loops turns lifecycle state and evidence into one governed control surface.',
     navLabel: 'State graph (deck)',
   },
+  {
+    file: 'finding-the-flow.html',
+    title: 'Finding the flow',
+    subtitle: 'Loops, graphs, and more reliable AI agents',
+    description: 'Enforced workflows, recovery, human decisions and cost tradeoffs, with dev-loops as a worked example.',
+    navLabel: 'Finding the flow (deck)',
+  },
 ];
 
 // Resolve a deck's published filename: distinct outFile when set, else file.

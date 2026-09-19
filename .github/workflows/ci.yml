@@ -197,6 +197,7 @@ jobs:
           bun run test:playwright:deep-dive
           bun run test:playwright:how-decided-deck
           bun run test:playwright:state-graph-surface-deck
+          bun run test:playwright:finding-the-flow-deck
 
   article-smoke:
     needs:

@@ -35,7 +35,20 @@ bulleted list below; an invisible per-finding fingerprint+disposition marker, ne
 visible text, is what `GATE-EXEC-FINDING-THREADS`'s cross-round suppression/deferral tracking
 actually reads back) ([Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#finding-threads-and-disposition)).
 No separate verdict issue comment, no separate findings review, and no deferred-summary comment
-is posted. The body's per-angle breakdown is TWO TRACKS by locatability, rendered at TOP LEVEL,
+is posted.
+
+`GATE-COMMENT-SUPERSEDE-OUTDATED`: A gate round posts its verdict review at that round's head, so
+a multi-round gate accumulates one stale verdict review per prior head. When a new `draft_gate`
+(resp. `pre_approval_gate`) verdict is created, `upsert-checkpoint-verdict.mjs` folds the SAME
+gate's prior verdict reviews recorded at EARLIER heads via GitHub's `minimizeComment(classifier:
+OUTDATED)`. It runs only when the poster already holds evidence of a prior same-gate verdict at a
+different head (never on a first-ever verdict), never touches the just-posted current-head verdict
+or the OTHER gate's verdicts, skips already-minimized reviews, and is bounded by a cap. It is
+BEST-EFFORT and fail-open: a minimize failure logs a `minimizeWarning` on the result and never
+fails the verdict post. Minimizing collapses, never deletes, so the audit trail is intact and the
+fold is reversible.
+
+The body's per-angle breakdown is TWO TRACKS by locatability, rendered at TOP LEVEL,
 NEVER a markdown table:
 1. **Locatable findings** (each carried by its own inline PR review comment) are never
    enumerated per-finding in the body — no reference row, no restated text. The body states only

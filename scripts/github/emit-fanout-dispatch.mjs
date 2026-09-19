@@ -20,20 +20,22 @@ place the gate-context bundle is turned into per-unit reviewer prompts, so a
 coordinator never re-derives persona/prompt composition and never spelunks
 print-gates.mjs.
 
-Dispatch-unit rule: only a CONFIGURED gates.fanout.groups group shares one
-reviewer, and never more than REVIEWER_UNIT_MAX_ANGLES (${REVIEWER_UNIT_MAX_ANGLES}) angles per reviewer.
-A configured group LARGER than that cap deterministically splits into ordered
-≤${REVIEWER_UNIT_MAX_ANGLES}-angle sub-units (\`<name>-part1\`, \`<name>-part2\`, ...) — angle order
-preserved, nothing dropped/duplicated/merged. Every angle NOT in a configured
-group gets its OWN distinct reviewer — including angles resolveFanoutGroups
-auto-chunked into a leftover \`group:...\`
-unit, which this step SPLITS back into per-angle singletons. A coordinator can
-therefore never seed a shared reviewer for an ad-hoc auto-chunk unit the
-configured table never named (a requireFanoutProvenance breach). A configured
-group's (or split sub-unit's) reviewer records a non-null provenance \`group\`;
-each sub-unit's angles stay members of the SAME configured group, so the merge
-guard's resolveFanoutGroups re-derivation (detect-checkpoint-evidence.mjs) still
-pairs them honestly. A singleton records no group.
+Dispatch-unit rule: EVERY multi-angle resolveFanoutGroups unit — a CONFIGURED
+gates.fanout.groups group OR an auto-chunked leftover \`group:...\` bundle —
+shares one reviewer, and never more than REVIEWER_UNIT_MAX_ANGLES (${REVIEWER_UNIT_MAX_ANGLES}) angles
+per reviewer. A multi-angle unit LARGER than that cap deterministically splits
+into ordered ≤${REVIEWER_UNIT_MAX_ANGLES}-angle sub-units (\`<name>-part1\`, \`<name>-part2\`, ...) — angle
+order preserved, nothing dropped/duplicated/merged. Only a genuine SINGLE-angle
+unit gets its own distinct singleton reviewer. This matches ADR 0048's
+grouped-dispatch-default: resolveFanoutGroups draws no dispatch-relevant
+distinction between a configured group and an auto-chunk bundle, so this step
+no longer does either. A multi-angle unit's (or split sub-unit's) reviewer
+records a non-null provenance \`group\` — the resolved unit's own name; each
+sub-unit's angles stay members of the SAME resolved unit, so the merge guard's
+resolveFanoutGroups re-derivation (detect-checkpoint-evidence.mjs's
+fanoutReviewerPairingError, the fail-closed authority for this) still pairs
+them honestly whether the unit is configured or auto-chunked. A singleton
+records no group.
 
 The per-unit angle-suffix this emits only NAMES the unit's angle(s) and instructs
 the reviewer to self-resolve each angle's persona/prompt (resolveReviewerRole) —
@@ -220,18 +222,26 @@ export function splitSubUnitName(baseName, n, configuredGroupNames) {
 
 /**
  * Expand resolveFanoutGroups units into the dispatch units this step actually
- * seeds reviewers for: only a CONFIGURED gates.fanout.groups group (a
- * multi-angle unit whose name is in `configuredGroupNames`) shares one reviewer;
- * every other angle — an ungrouped angle that resolveFanoutGroups auto-chunked
- * into a leftover `group:...` unit, or a single-angle unit — gets its OWN
- * singleton reviewer. This is the "angles not in a configured group get their
- * own distinct reviewer" rule: a coordinator can never seed a shared reviewer
- * for an ad-hoc auto-chunk unit the configured table never named (a
- * requireFanoutProvenance breach). Angle order is preserved. Every emitted unit
- * carries a `group`: the configured group name for a unit derived from a
- * configured group (whole or split sub-unit), null for an ungrouped singleton
- * — this is provenance, distinct from `name` (which scopes the reviewer and,
- * for a split sub-unit, is disambiguated via splitSubUnitName). Pure.
+ * seeds reviewers for: EVERY multi-angle unit — a CONFIGURED `gates.fanout.groups`
+ * group or an auto-chunked leftover `group:...` bundle, resolveFanoutGroups
+ * draws no distinction between the two for dispatch purposes (ADR 0048's
+ * grouped-dispatch-default; issue 2180 reconciles this emitter to it) — shares
+ * ONE reviewer, capped at `REVIEWER_UNIT_MAX_ANGLES` via the same ordered
+ * cap-split used for an over-cap configured group. Only a genuine single-angle
+ * unit dispatches as a singleton. The merge guard (`fanoutReviewerPairingError`
+ * in `@dev-loops/core/loop/gate-fanin`) is the fail-closed authority here: it
+ * re-derives this round's grouping from `resolveFanoutGroups` independently
+ * (`detect-checkpoint-evidence.mjs`) and already honors a shared identity
+ * within ANY resolved unit — configured or auto-chunk — so the emitter no
+ * longer needs to be more conservative than the guard by splitting an
+ * auto-chunk bundle to singletons. Angle order is preserved, nothing
+ * dropped/duplicated/merged. Every emitted unit carries a `group`: the
+ * resolved unit's own name (configured or auto-chunk) for a multi-angle unit
+ * (whole or split sub-unit), null for a genuine singleton — this is
+ * provenance, distinct from `name` (which scopes the reviewer and, for a
+ * split sub-unit, is disambiguated via splitSubUnitName). `configuredGroupNames`
+ * is used only for that disambiguation (together with this round's own unit
+ * names), never to classify a unit as shared vs. singleton. Pure.
  * @param {{ name: string, angles: string[] }[]} units resolveFanoutGroups output
  * @param {Set<string>} configuredGroupNames configured gates.fanout.groups names
  * @returns {{ name: string, angles: string[], group: string|null }[]}
@@ -249,33 +259,47 @@ export function normalizeUnitAngles(unit) {
 }
 
 export function expandDispatchUnits(units, configuredGroupNames) {
+  const unitList = Array.isArray(units) ? units : [];
+  // Disambiguate a split sub-unit's name against every configured group name
+  // AND every OTHER unit resolved this round (a configured group's name and an
+  // auto-chunk bundle's stable name both key a real emitted scope this round,
+  // so both are live collision candidates — not just the configured table).
+  const collisionNames = new Set(configuredGroupNames);
+  for (const unit of unitList) {
+    if (typeof unit?.name === "string" && unit.name.length > 0) collisionNames.add(unit.name);
+  }
   const out = [];
-  for (const unit of Array.isArray(units) ? units : []) {
+  for (const unit of unitList) {
     const angles = normalizeUnitAngles(unit);
-    const isConfiguredGroup = angles.length > 1 && typeof unit?.name === "string" && configuredGroupNames.has(unit.name);
-    if (isConfiguredGroup) {
+    // Every multi-angle resolved unit — a CONFIGURED gates.fanout.groups group
+    // or an auto-chunked leftover `group:...` bundle — shares one reviewer;
+    // resolveFanoutGroups draws no dispatch-relevant distinction between the
+    // two (ADR 0048), so neither does this step. Only a genuine single-angle
+    // unit is a singleton.
+    if (angles.length > 1) {
       // Cap each dispatch unit at REVIEWER_UNIT_MAX_ANGLES assigned angles (the
-      // reviewer-unit-bound primitive's contract). A configured group within
-      // the cap keeps its exact name (unchanged behaviour). A configured group
-      // LARGER than the cap deterministically splits into ordered ≤cap sub-units
-      // — angle order preserved, no angle dropped, duplicated, or merged. Each
-      // sub-unit gets a distinct, collision-disambiguated `<name>-part<n>` name
+      // reviewer-unit-bound primitive's contract). A unit within the cap keeps
+      // its exact name (unchanged behaviour). A unit LARGER than the cap
+      // deterministically splits into ordered ≤cap sub-units — angle order
+      // preserved, no angle dropped, duplicated, or merged. Each sub-unit gets
+      // a distinct, collision-disambiguated `<name>-part<n>` name
       // (splitSubUnitName) so its reviewer scope (dispatchUnitScope) never
       // collides with a sibling's — the dispatch loop's seenScopes guard below
       // remains the final backstop for any residual collision this cannot see.
-      // Every sub-unit records the CONFIGURED group name (not its own split
+      // Every sub-unit records the RESOLVED unit's own name (not its own split
       // name) as `group` — matching the contract's provenance rule — and stays
-      // a member of the SAME configured group, so the fan-in pairing check
-      // (fanoutReviewerPairingError, re-derived against the configured table)
-      // stays honest. maxConcurrent already counts EMITTED dispatch units, so a
-      // split simply yields more units per wave — never more angles per unit.
+      // a member of the SAME resolved unit, so the fan-in pairing check
+      // (fanoutReviewerPairingError, re-derived via resolveFanoutGroups) stays
+      // honest for a configured group AND an auto-chunk bundle alike.
+      // maxConcurrent already counts EMITTED dispatch units, so a split simply
+      // yields more units per wave — never more angles per unit.
       if (angles.length <= REVIEWER_UNIT_MAX_ANGLES) {
         out.push({ name: unit.name, angles, group: unit.name });
       } else {
         for (let i = 0; i < angles.length; i += REVIEWER_UNIT_MAX_ANGLES) {
           const chunk = angles.slice(i, i + REVIEWER_UNIT_MAX_ANGLES);
           const n = i / REVIEWER_UNIT_MAX_ANGLES + 1;
-          out.push({ name: splitSubUnitName(unit.name, n, configuredGroupNames), angles: chunk, group: unit.name });
+          out.push({ name: splitSubUnitName(unit.name, n, collisionNames), angles: chunk, group: unit.name });
         }
       }
     } else {
@@ -416,10 +440,10 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     }
   }
 
-  // Only CONFIGURED gates.fanout.groups share one reviewer; every ungrouped
-  // angle (including one resolveFanoutGroups auto-chunked into a leftover unit)
-  // gets its own singleton reviewer. Load the same config write-gate-context
-  // resolved against (this step runs in that worktree).
+  // Every multi-angle resolveFanoutGroups unit shares one reviewer, configured
+  // group or auto-chunk bundle alike (see expandDispatchUnits); configuredGroupNames
+  // is passed through only for split sub-unit name disambiguation. Load the same
+  // config write-gate-context resolved against (this step runs in that worktree).
   let configuredGroupNames;
   let maxConcurrent;
   try {

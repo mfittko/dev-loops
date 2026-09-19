@@ -1,7 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 
-import { collectDevLoopChecks, executeDevLoopsCommand, parseDevLoopsCommand } from "../lib/dev-loops-core.mjs";
+import { collectDevLoopChecks, executeDevLoopsCommand, inspectResultSeverity, parseDevLoopsCommand } from "../lib/dev-loops-core.mjs";
 
 function createRuntime(overrides = {}) {
   return {
@@ -149,27 +149,60 @@ test("collectDevLoopChecks no longer reports a dev-loop skill readiness check", 
   assert.equal(checks.some((check) => check.id === "local-dev-loop-skill"), false);
 });
 
-test("parser accepts the bounded inspect lifecycle command family only on the extension surface", () => {
-  for (const action of ["open", "resume", "status", "stop", "restart"]) {
-    const parsed = parseDevLoopsCommand(["inspect", action, "--repo", "mfittko/dev-loops"], { surface: "extension" });
-    assert.equal(parsed.kind, "inspect_action");
-    assert.equal(parsed.action, action);
-    assert.equal(parsed.repo, "mfittko/dev-loops");
+test("parser accepts the bounded inspect lifecycle command family on every surface", () => {
+  for (const surface of ["extension", "cli"]) {
+    for (const action of ["open", "resume", "status", "stop", "restart"]) {
+      const parsed = parseDevLoopsCommand(["inspect", action, "--repo", "mfittko/dev-loops"], { surface });
+      assert.equal(parsed.kind, "inspect_action");
+      assert.equal(parsed.action, action);
+      assert.equal(parsed.repo, "mfittko/dev-loops");
+    }
+
+    assert.deepEqual(parseDevLoopsCommand(["inspect", "launch"], { surface }), {
+      kind: "malformed",
+      message: "`inspect` only supports: open, resume, status, stop, restart.",
+      usageAction: "inspect",
+      tokens: ["inspect", "launch"],
+    });
   }
+});
 
-  assert.deepEqual(parseDevLoopsCommand(["inspect", "launch"], { surface: "extension" }), {
-    kind: "malformed",
-    message: "`/dev-loops inspect` only supports: open, resume, status, stop, restart.",
-    usageAction: "inspect",
-    tokens: ["inspect", "launch"],
+test("executor refuses inspect lifecycle actions when the runtime supplies no uiLifecycle", async () => {
+  const result = await executeDevLoopsCommand({
+    input: ["inspect", "open"],
+    surface: "cli",
+    runtime: { async getRepoRoot() { return "/repo/root"; } },
   });
 
-  assert.deepEqual(parseDevLoopsCommand(["inspect", "open"], { surface: "cli" }), {
-    kind: "malformed",
-    message: "Unrecognized command: inspect.",
-    usageAction: undefined,
-    tokens: ["inspect", "open"],
-  });
+  assert.equal(result.kind, "unsupported");
+  assert.match(result.message, /viewer lifecycle runtime/);
+});
+
+test("inspectResultSeverity is fail-closed except for running and no-op stop/status", () => {
+  assert.equal(inspectResultSeverity({ action: "open", state: "running" }), "info");
+  assert.equal(inspectResultSeverity({ action: "status", state: "stopped", record: null }), "info");
+  assert.equal(
+    inspectResultSeverity({ action: "stop", state: "stopped", record: null, detail: "Stopped the managed inspect-run viewer." }),
+    "info",
+  );
+  assert.equal(inspectResultSeverity({ action: "open", state: "stopped", detail: "launch failed" }), "error");
+  assert.equal(inspectResultSeverity({ action: "restart", state: "conflict_unmanaged_listener" }), "error");
+  assert.equal(
+    inspectResultSeverity({
+      action: "stop",
+      state: "stopped",
+      record: { pid: 4242, port: 7777 },
+      detail: "A different managed viewer is running.",
+    }),
+    "error",
+  );
+  // The catch paths in executeDevLoopsCommand emit a `stopped` result with no
+  // `record` and an arbitrary error message. Severity must not read that prose:
+  // a failure that happens to echo viewer wording still exits non-zero.
+  assert.equal(
+    inspectResultSeverity({ action: "stop", state: "stopped", detail: "Stopped the managed inspect-run viewer." }),
+    "error",
+  );
 });
 
 test('executor returns a structured inspect-run UI result when repo-root lookup or lifecycle execution throws', async () => {

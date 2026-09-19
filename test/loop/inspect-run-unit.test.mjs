@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import { test } from "bun:test";
 
 import {
@@ -10,10 +11,13 @@ import {
   STATUS_CLASS,
   TRUST,
 } from "../../packages/core/src/loop/run-inspection.mjs";
-import { parseInspectRunCliArgs } from "../../scripts/loop/inspect-run.mjs";
+import { STATE as COPILOT_STATE } from "../../packages/core/src/loop/copilot-loop-state.mjs";
+import { inspectRun, inspectRunLoopIterations, parseInspectRunCliArgs } from "../../scripts/loop/inspect-run.mjs";
 import {
   makeCopilotEvidence,
   makeReviewerEvidence,
+  withTempDir,
+  writeJson,
 } from "./inspect-run-test-helpers.mjs";
 test("mapOuterActionToStatusClass: continue_wait → waiting", () => {
   assert.equal(mapOuterActionToStatusClass("continue_wait"), STATUS_CLASS.WAITING);
@@ -887,3 +891,143 @@ test("parseInspectRunCliArgs: invalid repo slug throws", () => {
   );
 });
 
+
+// ---------------------------------------------------------------------------
+// Unit tests: lifecycle phase is independent of the loop-iteration fan-out
+// ---------------------------------------------------------------------------
+
+// The viewer's page render defers the loop-iteration fan-out while /snapshot.json
+// does not, so the two MUST agree on lifecyclePhase or the dashboard contradicts
+// its own raw payload on every load. These pin that agreement at the composer.
+
+function composeWithLoopIterations(loopIterations, { copilotEvidence, liveAvailability }) {
+  return composeRunInspectionSnapshot({
+    target: { repo: "owner/repo", pr: 55 },
+    inspectedAt: "2026-05-18T12:00:00Z",
+    outerState: "continue_current_wait",
+    outerAllowedTransitions: ["continue_current_wait"],
+    outerAction: "continue_wait",
+    outerReason: undefined,
+    copilotEvidence,
+    reviewerEvidence: makeReviewerEvidence("waiting_for_author_followup"),
+    existingCheckpoint: null,
+    liveAvailability,
+    steeringLocatorPath: null,
+    steeringEvidence: null,
+    steeringLoadFailed: false,
+    loopIterations,
+  });
+}
+
+const DEFERRED_LOOP_ITERATIONS = Object.freeze({
+  available: false,
+  source: "github_pr_timeline",
+  reason: "deferred_by_caller",
+});
+
+test("composeRunInspectionSnapshot: a deferred fan-out yields the same lifecyclePhase as a full one, for every copilot state", () => {
+  const fullIterations = {
+    available: true,
+    source: "github_pr_timeline",
+    unresolvedReviewThreads: 3,
+    completedCopilotReviewRounds: 2,
+  };
+
+  for (const copilotState of Object.values(COPILOT_STATE)) {
+    const evidenceArgs = {
+      copilotEvidence: makeCopilotEvidence(copilotState),
+      liveAvailability: { copilot: "ok", reviewer: "ok" },
+    };
+    const deferred = composeWithLoopIterations(DEFERRED_LOOP_ITERATIONS, evidenceArgs);
+    const full = composeWithLoopIterations(fullIterations, evidenceArgs);
+
+    assert.equal(
+      deferred.lifecyclePhase,
+      full.lifecyclePhase,
+      `${copilotState}: deferring the fan-out changed the lifecycle phase`,
+    );
+    assert.deepEqual(deferred.lifecycleAllowedTransitions, full.lifecycleAllowedTransitions);
+    // Present evidence resolves the phase from the state map, never from the
+    // fan-out — which is why deferring it is safe.
+    assert.equal(typeof deferred.lifecyclePhase, "string");
+  }
+});
+
+test("composeRunInspectionSnapshot: with copilot evidence absent, a deferred fan-out still matches a full one", () => {
+  // The only path that reaches the fallback. There is no thread count from any
+  // source here, so a deferred and a full inspection must land identically
+  // rather than one of them inventing a phase the other does not see.
+  const evidenceArgs = { copilotEvidence: null, liveAvailability: { copilot: "failed", reviewer: "ok" } };
+  const deferred = composeWithLoopIterations(DEFERRED_LOOP_ITERATIONS, evidenceArgs);
+  const unavailable = composeWithLoopIterations(
+    { available: false, source: "github_pr_timeline", reason: "requires_live_github_facts" },
+    evidenceArgs,
+  );
+
+  assert.equal(deferred.lifecyclePhase, unavailable.lifecyclePhase);
+  assert.deepEqual(deferred.lifecycleAllowedTransitions, unavailable.lifecycleAllowedTransitions);
+});
+
+test("composeRunInspectionSnapshot: the fallback still honors a real unresolved-thread count", () => {
+  // Guard against over-simplifying the fallback away: when the caller DID supply
+  // a numeric count and evidence is absent, it must still drive the phase.
+  const evidenceArgs = { copilotEvidence: null, liveAvailability: { copilot: "failed", reviewer: "ok" } };
+  const withThreads = composeWithLoopIterations(
+    { available: true, source: "github_pr_timeline", unresolvedReviewThreads: 4 },
+    evidenceArgs,
+  );
+  const withoutThreads = composeWithLoopIterations(
+    { available: true, source: "github_pr_timeline", unresolvedReviewThreads: 0 },
+    evidenceArgs,
+  );
+
+  assert.notEqual(withThreads.lifecyclePhase, withoutThreads.lifecyclePhase);
+});
+
+test("inspectRunLoopIterations answers the deferred fragment without a live GitHub fact capture", async () => {
+  // The only production path behind /round-metrics.html: both the adapter and
+  // the server tests inject over it, so nothing else executes it. A file-backed
+  // copilot input costs no `gh` call and still exercises the swallowed evidence
+  // load plus the delegation to resolveLoopIterationMetrics.
+  assert.deepEqual(
+    await inspectRunLoopIterations({ repo: "owner/repo", pr: 1, copilotInputPath: "/nonexistent" }),
+    { available: false, source: "github_pr_timeline", reason: "requires_live_github_facts" },
+  );
+
+  await assert.rejects(
+    inspectRunLoopIterations({ repo: "owner/repo/extra", pr: 1, copilotInputPath: "/nonexistent" }),
+    /--repo must match <owner\/name>/,
+  );
+});
+
+test("inspectRun honors includeLoopIterations:false and keeps the full fan-out on by default", async () => {
+  // The viewer's page render is the only caller that passes the flag, and the
+  // server test asserts what the ADAPTER received, not what inspectRun does with
+  // it. Without this, deleting `includeLoopIterations` from the destructure
+  // leaves the suite green while every render re-pays the 6-call fan-out.
+  await withTempDir(async (tempDir) => {
+    const copilotPath = path.join(tempDir, "copilot.json");
+    const reviewerPath = path.join(tempDir, "reviewer.json");
+    await writeJson(copilotPath, {
+      prExists: true,
+      prNumber: 55,
+      prDraft: false,
+      copilotReviewRequestStatus: "requested",
+      unresolvedThreadCount: 0,
+      ciStatus: "success",
+    });
+    await writeJson(reviewerPath, { prExists: true, prNumber: 55, prHeadSha: "abc123" });
+
+    // A file-backed copilot input keeps both branches gh-free and still
+    // distinguishable: deferred_by_caller vs requires_live_github_facts.
+    const options = { repo: "owner/repo", pr: 55, copilotInputPath: copilotPath, reviewerInputPath: reviewerPath };
+    const context = { ghCommand: path.join(tempDir, "gh-must-not-run") };
+
+    const deferred = await inspectRun({ ...options, includeLoopIterations: false }, context);
+    assert.equal(deferred.loopIterations.reason, "deferred_by_caller");
+    assert.equal(deferred.loopIterations.available, false);
+
+    const full = await inspectRun(options, context);
+    assert.notEqual(full.loopIterations.reason, "deferred_by_caller");
+  });
+});

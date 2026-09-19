@@ -14,6 +14,16 @@ only headline changes back to any `.md` that exists.
 | Introducing dev-loops | [`introducing-dev-loops.html`](introducing-dev-loops.html) | The concept, the data behind it, and how to run the loop on your own project. |
 | dev-loops: A Deep Dive | [`dev-loops-deep-dive.html`](dev-loops-deep-dive.html) | Explicit handoffs on a state graph (Part 1) and measuring the waiting between actions (Part 2). |
 | The State Graph Is the Surface | [`state-graph-surface.html`](state-graph-surface.html) | How authoritative state, bounded loops, evidence, and human authority compose into one control surface. |
+| Finding the flow | [`finding-the-flow.html`](finding-the-flow.html) | A company-wide talk about enforced workflows, recovery, and reliable AI agents, using dev-loops as a case study. |
+
+Finding the flow is a 43-slide presentation for a 60-minute session
+(50 minutes including an exercise, plus 10 minutes for questions), with [speaker notes](finding-the-flow-speaker-notes.md)
+and [primary-source research](finding-the-flow-research.md). Open its HTML directly
+or through the assembled site's navigation. The Pages build includes it as
+`finding-the-flow.html`; after merge to `main` and a successful deployment, it is
+published at [Finding the flow](https://mfittko.github.io/dev-loops/finding-the-flow.html).
+Its shared browser checks run with
+`bun run test:playwright:finding-the-flow-deck`.
 
 Headline companion: [`state-graph-surface-presentation.md`](state-graph-surface-presentation.md).
 
@@ -37,7 +47,7 @@ npx http-server site                       # or: python3 -m http.server -d site
 ```
 
 `scripts/pages/build-site.mjs` copies the deck HTML—including
-`state-graph-surface.html`—into `site/` and generates `site/index.html` (the
+`state-graph-surface.html` and `finding-the-flow.html`—into `site/` and generates `site/index.html` (the
 intro article) with a nav linking the deep-dive article and the decks. `site/`
 is assembled, never hand-maintained, and is gitignored —
 only the script and workflow are committed.
