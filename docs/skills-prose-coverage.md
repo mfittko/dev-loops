@@ -10,7 +10,7 @@ Phases: 1 = Copilot follow-up and directly coupled references/tests; 2 = other r
 
 ## Current run — 2026-09-19
 
-The user selected A for all three phases on `issue-2236`/PR2237; B is now a pinned read-only reference, not an equivalent-scope competition. Issue2236 records this direction and the narrow runtime exception tracked separately by issue2273. All phases remain incomplete; the existing inventory below still has 71 pending, four in-progress and two previously changed rows. A link correction or this checkpoint does not complete a file.
+The user selected A for all three phases on `issue-2236`/PR2237; B is now a pinned read-only reference, not an equivalent-scope competition. Issue2236 records this direction and the narrow runtime exception tracked separately by issue2273. All phases remain incomplete; the inventory below has 71 pending, three in-progress and three changed rows. A link correction or this checkpoint does not complete a file.
 
 | Input / evidence | Current value |
 | --- | --- |
@@ -81,7 +81,7 @@ On explicit resume: fetch origin, refresh canonical startup/envelope and issue22
 | `skills/docs/conductor-routing-contract.md` | 3 | pending | Not yet reviewed. |
 | `skills/docs/confirmation-rules.md` | 3 | pending | Not yet reviewed. |
 | `skills/docs/contract-style-guide.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/copilot-ci-status-contract.md` | 1 | in progress | Full source read; obsolete CLI flag corrected in existing owner with prerequisites retained. Remaining prose pending. |
+| `skills/docs/copilot-ci-status-contract.md` | 1 | changed | Full owner and normalization/detector/prober consumers inspected. Parked exclusion condensation retained; inputs/output, precedence, failure/timeout, unsupported-completed override and zero-suite identity prerequisites unchanged. Both exclusion names stay explicit; missing current-head evidence remains fail-closed failure. 82 focused CI/prober/workflow tests; docs/assets pass. Fresh Terra `/root/dev_loop/ci_owner_review` required restoring the explicit missing-evidence predicate, then verified the fix with no remaining defect. |
 | `skills/docs/copilot-loop-operations.md` | 1 | in progress | CI-exception call site points to its mandatory owner; remaining prose pending. |
 | `skills/docs/copilot-loop-state-graph.md` | 3 | pending | Not yet reviewed. |
 | `skills/docs/cross-harness-regression-contract.md` | 3 | pending | Not yet reviewed. |
