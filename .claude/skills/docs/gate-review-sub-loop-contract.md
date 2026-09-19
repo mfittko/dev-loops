@@ -524,13 +524,18 @@ dispatch path, and it closes three failure modes prose discipline never held:
   singleton.
 
 **All-carried rounds.** Rebuild the current-head context with the proven carried angles and
-prior head, then run the emitter with `--pending` even when every angle is carried. It writes
+prior head, then run the emitter with `--pending --carry-forward-plan <json>` using the
+resolver's complete carry plan, even when every angle is carried. It writes
 a keyed plan with `count: 0` and `units: []` only when its original non-empty groups are
-entirely covered by the context preflight's carried angles. It emits no reviewer prompts.
-Pass that plan to both fan-in and the findings-log writer; retain complete carry proof,
+entirely covered by the context preflight's carried angles and valid carry proof. The keyed
+plan retains that proof, including prior findings and identities, and emits no reviewer prompts.
+Pass that plan to both fan-in and the findings-log writer; supply fan-in's `--repo <owner/name>
+--pr <n>` to bind its full round key. Retain complete carry proof,
 prior findings and reviewer identities, resolved-angle coverage, and spec-authority evidence.
-Fan-in independently checks carry eligibility/proof; the writer rejects a zero-unit plan
-with empty or fresh provenance. Same-head completed-only resumes do not qualify for this path.
+Fan-in independently checks carry eligibility and complete proof against the emitted plan;
+the writer checks exact carried coverage, prior-head/reviewer/model/dispatch/verdict identity,
+and retained findings including recommendations.
+Missing, altered or fresh provenance fails closed. Same-head completed-only resumes do not qualify.
 Omit `--expected-dispatch-units` at zero, as required by the existing consumer contract.
 
 **Per-harness delivery.** The composer's `--out` file holds the exact full reviewer prompt
@@ -927,7 +932,7 @@ Merge the parallel reviewer findings into one consolidated fix plan with the
 sanctioned fan-in CLI:
 
 ```
-dev-loops gate consolidate-fanin --findings-dir <dir> --head-sha <sha> \
+dev-loops gate consolidate-fanin --repo <owner/name> --pr <n> --findings-dir <dir> --head-sha <sha> \
   --gate <draft_gate|pre_approval_gate> --expected-dispatch-units <n> \
   --out <path> --ledger-out <path> --spec-authority <identity-path> \
   --emit-plan <path> \

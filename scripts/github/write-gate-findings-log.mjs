@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { parseArgs } from "node:util";
+import { verifyZeroUnitCarryProvenance } from "./_carried-angles.mjs";
+import { isDeepStrictEqual, parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -118,6 +119,12 @@ function validateFindingsArray(parsed, flagLabel) {
       angle: f.angle.trim(),
       summary: f.summary.trim(),
     };
+    if ("recommendation" in f) {
+      if (typeof f.recommendation !== "string" || f.recommendation.trim().length === 0) {
+        throw parseError(`${flagLabel}[${i}].recommendation must be a non-empty string`);
+      }
+      entry.recommendation = f.recommendation.trim();
+    }
     if (Array.isArray(f.files)) {
       // Trimmed, not just filtered: hasLocatableShape only checks non-empty,
       // but every downstream consumer (diff commentable-line lookup, posted
@@ -360,7 +367,7 @@ export async function checkProvenanceAngleCoverage(provenance, gate, { repoRoot 
  * plan. The plan is never used to construct provenance: it only proves that
  * the already-validated fresh rows describe exactly the units actually emitted.
  */
-export async function verifyEmitPlanProvenance(planPath, provenance, round, { repoRoot = process.cwd() } = {}) {
+export async function verifyEmitPlanProvenance(planPath, provenance, round, { repoRoot = process.cwd(), findings } = {}) {
   let plan;
   const fullPath = path.resolve(repoRoot, planPath);
   try {
@@ -377,6 +384,19 @@ export async function verifyEmitPlanProvenance(planPath, provenance, round, { re
     && provenance.perAngle.every((entry) => entry.carriedFromHead !== undefined);
   if (plan.ok !== true || !Array.isArray(plan.units) || (plan.units.length === 0 && !allCarried) || plan.count !== plan.units.length) {
     throw parseError(`cannot verify emit-plan provenance: --emit-plan "${planPath}" must carry a non-empty units array whose length equals count, or a pending zero-unit plan backed entirely by carried provenance`);
+  }
+  if (plan.units.length === 0) {
+    verifyZeroUnitCarryProvenance(plan.carried, provenance.perAngle);
+    const remaining = Array.isArray(findings) ? [...findings] : [];
+    for (const entry of plan.carried) {
+      for (const prior of entry.findings ?? []) {
+        const index = remaining.findIndex((finding) => finding.angle === entry.angle
+          && ["severity", "summary", "line", "recommendation"].every((key) => finding[key] === prior[key])
+          && isDeepStrictEqual(finding.files, prior.files ?? (prior.file ? [prior.file] : undefined)));
+        if (index < 0) throw parseError(`zero-unit carry proof requires preserved findings for ${entry.angle}`);
+        remaining.splice(index, 1);
+      }
+    }
   }
 
   const expected = new Map();
@@ -717,7 +737,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       pr: options.pr,
       gate: options.gate,
       headSha: options.headSha,
-    }, { repoRoot });
+    }, { repoRoot, findings: rawFindings });
   }
   // Angle-coverage enforcement (fail-closed on missing mandatory angles / foreign
   // angles) only applies when provenance is actually recorded — provenance

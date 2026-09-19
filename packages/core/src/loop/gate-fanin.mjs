@@ -828,6 +828,7 @@ export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities }
           disposition: deriveDisposition(severity, { isBlocking, locatable: hasLocatableShape(f) }),
         };
         if (typeof f.file === "string" && f.file.trim().length > 0) entry.file = f.file.trim();
+        if (Array.isArray(f.files)) entry.files = f.files.filter((file) => typeof file === "string" && file.trim().length > 0).map((file) => file.trim());
         if (typeof f.line === "number" && Number.isFinite(f.line)) entry.line = f.line;
         if (typeof f.recommendation === "string" && f.recommendation.trim().length > 0) {
           entry.recommendation = f.recommendation.trim();
