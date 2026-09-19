@@ -6,11 +6,17 @@ Inventory: 77 tracked files under `skills/`, including 67 Markdown files and ten
 
 Dispositions: `pending`, `in progress`, `changed`, `unchanged`, `generated`, `non-prose`, `blocked`. Generated `.claude/skills/` projections are outside this source inventory and must be regenerated, never edited by hand. Script/registry rows remain pending until their prose-bearing parts have been inspected; no code/schema rewrite is authorized.
 
-Phases: 1 = Copilot follow-up and directly coupled references/tests (complete); 2 = other routed entrypoints and their workflow contracts (complete); 3 = remaining shared documentation, references, templates and script comments/help (pending). All phases use the same cleanup PR unless the human changes the scope.
+Phases: 1 = Copilot follow-up and directly coupled references/tests (complete); 2 = other routed entrypoints and their workflow contracts (complete); 3 = remaining shared documentation, references, templates and script comments/help (active). All phases use the same cleanup PR unless the human changes the scope.
 
 ## Current run — 2026-09-19
 
-The user selected A for all three phases on `issue-2236`/PR2237; B is now a pinned read-only reference, not an equivalent-scope competition. Issue2236 records this direction and the narrow runtime exception tracked separately by issue2273. Phase 1 is accepted and complete at `b8bfe5b077f917e22330455f311540fd90e42b4d` for prose inspection, condensation, relevant test audit, independent review and local validation. Phase 2 is complete under the same bounded review cadence, with its trace below; Phase 3 remains pending. The inventory has 65 pending, eleven changed and one unchanged rows. This is not whole-issue completion or lifecycle-gate clearance.
+The user selected A for all three phases on `issue-2236`/PR2237; B is now a pinned read-only reference, not an equivalent-scope competition. Issue2236 records this direction and the narrow runtime exception tracked separately by issue2273. Phase 1 is accepted and complete at `b8bfe5b077f917e22330455f311540fd90e42b4d` for prose inspection, condensation, relevant test audit, independent review and local validation. Phase 2 is complete at `2aa6cc4468ee631a43de96fa31ae4ad2c7ac55ba` under the same bounded review cadence, with its trace below; Phase 3 is active. The inventory has 65 pending, eleven changed and one unchanged rows. This is not whole-issue completion or lifecycle-gate clearance.
+
+### Phase-3 transition — bookkeeping only
+
+Phase 2 completed all six entrypoint dispositions: `dev-loop`, `local-implementation`, `loop-grill`, `review` and `ui-review` changed; `final-approval` was inspected and retained unchanged. Their obligation traces, coupled-test audit, regenerated projections, Sol review correction and final local validation are recorded below. The earlier paused Phase-2 candidate is historical, not outstanding work.
+
+Phase 3 is the active phase, but this transition changes only this ledger and the PR description; it does not start Phase-3 source/projection/test edits or mark pending inventory rows reviewed. All remaining shared docs, references, templates and script comments/help, applicable coupled-test audit, cumulative measurement/verification, independent full-scope A review and bounded read-only B-reference review remain to be completed. The Phase-2 discrepancies and semantic/live-harness limits below remain visible; this bookkeeping chooses no new policy. B stays unchanged, no new runtime change is authorized, PR2237 stays draft and unmerged, and normal final lifecycle gates and explicit human merge approval remain required.
 
 ### Historical phase transition — bookkeeping only
 
@@ -228,7 +234,7 @@ Reviewed first slice: simplify the follow-up skill's startup/path-resolution pro
 
 Compare old/new instructions for actors, permissions, triggers, conditions, order, exceptions, stop rules, evidence and revision identity. Preserve frontmatter, rule IDs, command examples and the declared verbatim dispatch payload. Independently evaluate high-risk scenarios with no live writes. Replace incidental prose pins with existing structural/behavior seams; keep exact API/projection checks. Run docs, contract, generated-asset and default verification before draft handoff.
 
-## Ambiguity register — current disposition at Phase-1 acceptance
+## Ambiguity register — current disposition at Phase-3 transition
 
 - Fan-in count: corrected to actual emitted/spawned units following the existing owner's explicit authority and emitter tests; unsplit `pendingGroups.length` was obsolete advice.
 - CI evidence flag: removed executable use of unsupported `--local-validation-head-sha`; the existing CI owner retains prerequisites and now states that ordinary CLI refresh cannot activate the exception. See the code-backed correction below.
