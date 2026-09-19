@@ -1,5 +1,6 @@
 import { access } from "node:fs/promises";
 import { extractRelativeMarkdownLinks } from "../../scripts/docs/validate-links.mjs";
+import { parseMarkdownSections } from "../../packages/core/src/loop/issue-refinement-artifact.mjs";
 import { assertRuleOwned } from "./_rule-helpers.mjs";
 
 import {
@@ -43,10 +44,10 @@ const GATE_DRIVING_SKILLS = [
 
 // Include wrapped paragraphs, but never borrow a command from a sibling step
 // or the following section. Heading wording is not used to find the boundary.
-function extractStep(content, heading, file) {
+function extractStep(content, phase, file) {
   const lines = content.split("\n");
-  const start = lines.findIndex((line) => /^\d+\. /.test(line) && line.replace(/^\d+\. /, "").startsWith(heading));
-  assert.ok(start >= 0, `${file}: expected to find the ${JSON.stringify(heading)} step`);
+  const start = lines.findIndex((line) => /^\d+\. /.test(line) && line.match(/^\d+\. \*\*[^*]+\(Phase ([\d.]+)\):\*\*/)?.[1] === phase);
+  assert.ok(start >= 0, `${file}: expected to find the ${JSON.stringify(phase)} step`);
   const end = lines.findIndex((line, index) => index > start && /^(?:\d+\. |#{1,6} )/.test(line));
   return lines.slice(start, end < 0 ? undefined : end).join("\n");
 }
@@ -97,14 +98,14 @@ const BARE_FINDINGS_ONLY_RERUN_CLASS =
 
 test("copilot-pr-followup SKILL's Phase 1.2 step routes the fan-out through resolve-angle-carry-forward", async () => {
   const skill = await readRepo(SKILL);
-  const line = extractStep(skill, "**Carry-forward (Phase 1.2):**", SKILL);
+  const line = extractStep(skill, "1.2", SKILL);
   assertMatchesAll(line, PHASE_1_2_ROUTING, `${SKILL} Phase 1.2 step`);
   assert.ok(extractRelativeMarkdownLinks(line).some(({ rawTarget }) => rawTarget === "../docs/gate-review-sub-loop-contract.md#angle-carry-forward-fail-closed"));
   assertRuleOwned("GATE-EXEC-ANGLE-CARRY-FORWARD", SUB_LOOP_CONTRACT);
 });
 
 test("carry routing binds both head arguments to the resolver through prose rewrites", async () => {
-  const step = extractStep(await readRepo(SKILL), "**Carry-forward (Phase 1.2):**", SKILL);
+  const step = extractStep(await readRepo(SKILL), "1.2", SKILL);
   const reworded = step
     .replace("Use FULL 40-character SHAs", "Supply full commit identities")
     .replace("subtract, never substitute", "use set subtraction")
@@ -124,7 +125,7 @@ test("carry routing binds both head arguments to the resolver through prose rewr
 
 test("copilot-pr-followup Phase 2 routes to the owned fan-out procedure and pending emitter", async () => {
   const skill = await readRepo(SKILL);
-  const line = extractStep(skill, "**Fan-out (Phase 2):**", SKILL);
+  const line = extractStep(skill, "2", SKILL);
   const links = extractRelativeMarkdownLinks(line).map(({ rawTarget }) => rawTarget);
   assert.ok(links.includes("../docs/gate-review-sub-loop-contract.md#phase-2--fan-out-independent-reviewers-seeded-with-the-neutral-bundle"));
   assertRuleOwned("GATE-EXEC-ANGLE-CARRY-FORWARD", SUB_LOOP_CONTRACT);
@@ -134,7 +135,7 @@ test("copilot-pr-followup Phase 2 routes to the owned fan-out procedure and pend
 
 test("copilot-pr-followup SKILL's Phase 3 step attaches --provenance to the ledger write, not the comment post", async () => {
   const skill = await readRepo(SKILL);
-  const line = extractStep(skill, "**Fan-in (Phase 3):**", SKILL);
+  const line = extractStep(skill, "3", SKILL);
   assertMatchesAll(line, PHASE_3_ROUTING, `${SKILL} Phase 3 step`);
   assert.doesNotMatch(
     line,
@@ -143,18 +144,46 @@ test("copilot-pr-followup SKILL's Phase 3 step attaches --provenance to the ledg
   );
 });
 
+function assertJudgeBridge(step) {
+  const commands = [...step.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
+  const writer = commands.find((command) => command.startsWith("write-gate-findings-log.mjs "));
+  const bridge = commands.find((command) => command.startsWith("dev-loops gate judge-pass "));
+  assert.ok(writer && bridge, "fan-in must write judged findings and run the judge bridge");
+  assert.match(writer, /--judge-verdict\s+<judge-verdict-path>/);
+  for (const [flag, value] of [
+    ["head-sha", "current_head_sha"], ["findings-file", "ledger-path"],
+    ["judge-verdict", "judge-verdict-path"], ["out", "act-list-path"],
+    ["ledger-out", "enriched-ledger-path"], ["spec-file", "spec-path"],
+    ["content-digest", "content-digest"], ["spec-authority-verdict", "spec-authority-verdict-path"],
+  ]) assert.match(bridge, new RegExp(`--${flag}\\s+<${value}>`));
+  assert.ok(step.indexOf(writer) < step.indexOf(bridge), "durable judged write precedes the bridge");
+}
+
+test("fan-in routes judged findings through the spec-bound act-list bridge", async () => {
+  const step = extractStep(await readRepo(SKILL), "3", SKILL);
+  assertJudgeBridge(step);
+  assert.ok(extractRelativeMarkdownLinks(step).some(({ rawTarget }) => rawTarget === "../docs/gate-review-sub-loop-contract.md#phase-35--judge-relevance-disposition-1525"));
+  assertRuleOwned("GATE-EXEC-JUDGE-AUTHORITY-SPLIT", SUB_LOOP_CONTRACT);
+  assertJudgeBridge(step.replace("Before the durable write", "Before persisting findings").replace(/\. /g, ".\n   "));
+  for (const changed of [
+    step.replace("--out <act-list-path>", "--out <ledger-path>"),
+    step.replaceAll("--judge-verdict <judge-verdict-path>", ""),
+    step.replace("--spec-authority-verdict <spec-authority-verdict-path>", "") + "\n`other-command --spec-authority-verdict <spec-authority-verdict-path>`",
+  ]) assert.throws(() => assertJudgeBridge(changed));
+});
+
 test("phase routing checks accept wrapped prose but cannot borrow a sibling's command", () => {
   const heading = "**Fan-in (Phase 3):**";
   const command = "`write-gate-findings-log.mjs --provenance '<json>'`";
   for (const prose of ["Record the carry.", "Preserve the prior\n   review identity."]) {
     const content = `5. ${heading} ${prose}\n\n   ${command} with \`carriedFromHead\`.\n6. **Verdict:** Next step.\n`;
-    assertMatchesAll(extractStep(content, heading, "fixture"), PHASE_3_ROUTING);
+    assertMatchesAll(extractStep(content.replace("Fan-in", "Consolidation"), "3", "fixture"), PHASE_3_ROUTING);
   }
   for (const boundary of ["6. **Verdict:**", "## Next section"]) {
     const content = `5. ${heading} \`carriedFromHead\`.\n${boundary}\n${command}`;
-    assert.throws(() => assertMatchesAll(extractStep(content, heading, "fixture"), PHASE_3_ROUTING));
+    assert.throws(() => assertMatchesAll(extractStep(content, "3", "fixture"), PHASE_3_ROUTING));
   }
-  assert.throws(() => extractStep(`6. **Verdict:** Mentions ${heading}`, heading, "fixture"));
+  assert.throws(() => extractStep(`6. **Verdict:** Mentions ${heading}`, "3", "fixture"));
   assert.throws(() => assert.doesNotMatch(
     "`post-gate-findings.mjs --provenance '<json>'`",
     PHASE_3_PROVENANCE_NOT_ON_COMMENT_POST,
@@ -186,8 +215,16 @@ test("copilot-pr-followup SKILL defers retry scoping to Phase 1.2 at both retry 
   // are the two places a bare "only re-run what had findings" rule could sneak
   // back in as an "obvious" restatement; both must point at Phase 1.2 instead.
   const skill = await readRepo(SKILL);
-  const matches = skill.match(/Phase 1\.2 decides what re-runs/g) ?? [];
-  assert.ok(matches.length >= 2, `${SKILL} must defer both retry entry points to Phase 1.2 (found ${matches.length})`);
+  const preApproval = parseMarkdownSections(skill).find(({ level, bodyLines }) => level === 3
+    && bodyLines.includes("- **Gate name:** Pre-approval gate"))?.bodyLines.join("\n");
+  assert.ok(preApproval, "public pre-approval section must exist");
+  const assertOwner = (section) => assert.ok(extractRelativeMarkdownLinks(section).some(({ rawTarget }) =>
+    rawTarget === "../docs/gate-review-sub-loop-contract.md#angle-carry-forward-fail-closed"));
+  for (const section of [extractStep(skill, "5", SKILL), preApproval]) {
+    assertOwner(section);
+    assertOwner(section.replace("decides what re-runs", "governs retry selection"));
+    assert.throws(() => assertOwner(section.replaceAll("#angle-carry-forward-fail-closed", "#phase-2")));
+  }
 });
 
 test("local-implementation developer loop prescribes no gate angle retry scoping", async () => {
@@ -206,47 +243,22 @@ test("local-implementation developer loop prescribes no gate angle retry scoping
   );
 });
 
-test("the sub-loop contract's carry-forward rule states carry-forward as the default posture, not just a MAY", async () => {
-  // Pins the AC4 posture flip so it cannot silently revert to the old MAY
-  // wording: carry-forward must be stated as the default decision procedure,
-  // with full re-dispatch named as the exception. Pinned on the source doc only;
-  // claude-assets-reproducible.test.mjs proves the generated mirror matches it.
-  {
-    const file = SUB_LOOP_CONTRACT;
-    const content = await readRepo(file);
-    assert.match(
-      content,
-      /carried forward to the new head by default/,
-      `${file} must state carry-forward as the default posture`,
-    );
-    assert.match(
-      content,
-      /A full\s*\nre-dispatch of the entire resolved angle set is the EXCEPTION/,
-      `${file} must name full re-dispatch as the exception to the default`,
-    );
-  }
-});
-
-test("copilot-pr-followup SKILL's Phase 2 step injects the known-findings block after the angle prompt, never into the byte-identical prefix", async () => {
-  // AC4's briefing half: the known-findings block is appended AFTER the
-  // angle-specific prompt, not folded into GATE-EXEC-BRIEFING-PREFIX's
-  // byte-identical prefix — folding it in would recompute the prefix hash on
-  // every gate close and break the sanctioned same-head-retry sentinel. Pinned
-  // on the source SKILL only; the generated mirror is covered by
-  // claude-assets-reproducible.test.mjs byte-reproducibility.
-  {
-    const file = SKILL;
-    const content = await readRepo(file);
-    assertMatchesAll(
-      content,
-      [
-        /known-findings block, appended AFTER this\s*\n\s*angle-specific prompt/,
-        /never into the byte-identical prefix `GATE-EXEC-BRIEFING-PREFIX`/,
-        /GATE-EXEC-FINDING-THREADS/,
-      ],
-      `${file} Phase 2 known-findings injection`,
-    );
-  }
+test("Phase 2 routes known-findings reads to the full-body helper and disposition owner", async () => {
+  const step = extractStep(await readRepo(SKILL), "2", SKILL);
+  const owner = "../docs/gate-review-sub-loop-contract.md#finding-threads-and-disposition";
+  const command = "node scripts/github/capture-review-threads.mjs --repo <owner/name> --pr <number>";
+  const assertRead = (text) => {
+    assert.ok([...text.matchAll(/`([^`]+)`/g)].some((match) => match[1] === command));
+    assert.ok(extractRelativeMarkdownLinks(text).some(({ rawTarget }) => rawTarget === owner));
+  };
+  assertRuleOwned("GATE-EXEC-FINDING-THREADS", SUB_LOOP_CONTRACT);
+  assertRead(step);
+  assertRead(`Read the threads with \`${command}\`.\nFollow [their disposition contract](${owner}).`);
+  assert.throws(() => assertRead(step.replace(command, "list-review-threads.mjs --unresolved-only")));
+  assert.throws(() => assertRead(step.replace(owner, "../docs/other.md")));
+  // Routing is structural. Carry defaults and known-findings placement require
+  // semantic scenarios (docs/skills-prose-coverage.md); runtime carry/prompt tests
+  // prove helper behavior, not the conductor's decision to invoke it correctly.
 });
 
 test("detect-checkpoint-evidence.mjs has no gate-thread-specific second unresolved-thread counter", async () => {

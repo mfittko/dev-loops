@@ -623,7 +623,7 @@ Missing/malformed `prefixPath` or leading bytes, missing `promptContentHash`, a 
 
 **Three identities, one honest boundary.** This binds recorded-layout identity to generated-file identity, **not delivered-task identity**. Claude Code's orchestrator must relay emitted bytes verbatim into the Agent prompt, but the check cannot observe that final hop. It catches honestly recorded delivery drift; recording emitted bytes while delivering different bytes remains unverified. Do not present an emitted-file hash as proof of delivery. The per-harness delivery limitations above and `GATE-EXEC-FANOUT-DISPATCH-EMIT` still apply.
 
-Zero dispatch-prompt records do not themselves fail this check: capture remains progressive/optional for non-composer callers, including legacy offline rounds, as with `GATE-EXEC-PRIMER-EVIDENCE`. This does not waive the separate records-floor below. Recover a noncompliant round by rerunning `emit-fanout-dispatch.mjs` and reconsolidating; preserve original review history and audit records rather than relabeling them valid.
+Zero dispatch-prompt records do not themselves fail this check: capture remains progressive/optional for non-composer callers, including legacy offline rounds, as with `GATE-EXEC-PRIMER-EVIDENCE`. This does not waive the records-floor below. Recovery requires re-emitting and actually redispatching compliant prompts before reconsolidating; regenerating files cannot certify old delivery. For unchanged prefix bytes, use the same-head retry guard below. For changed bytes, follow `GATE-EXEC-ROUND-RETIREMENT`: retire before rebuilding, then redispatch. Preserve the original review history and audit records.
 
 **Records-floor (issue #1868).** The remaining vacuous-pass shape — a coordinator round that
 records ZERO dispatch/briefing evidence for a gate that DID dispatch units — is closed
@@ -656,11 +656,10 @@ for the sanctioned blocking-join (or `bg_wait` subscription) alternative.
 
 **Re-run rule:** In subsequent retry cycles (Phase 5), re-running is governed by
 [GATE-EXEC-ANGLE-CARRY-FORWARD](#angle-carry-forward-fail-closed): carry-forward is the
-default posture, so the seam runs first and its plan decides the re-dispatch set — every
-angle it proves untouched keeps its clean verdict, everything it leaves unproven is
-re-reviewed, and every mandatory / always-run angle is re-reviewed regardless. A clean
-angle is re-reviewed whenever the new head's delta touches its surface or the prior log
-attributes any finding to it; it is spared only when the delta provably cannot affect it.
+default decision procedure. Dispatch the current resolved set minus proven carries;
+eligible `clean` and `findings_present` angles retain their verdicts, findings and
+provenance. Surface-touched, ambiguously attributed, mandatory / always-run and otherwise
+unproven angles re-run. A prior finding alone does not force re-review or become clean.
 
 <!-- rule: GATE-EXEC-DISPATCH-RETRY-BACKOFF -->
 `GATE-EXEC-DISPATCH-RETRY-BACKOFF`: A dispatch that fails on a transient provider error (429
@@ -720,14 +719,11 @@ manual chore:
   `--pr-body-fix-retry` is its deprecated alias — gated on a matching prefix hash for an
   UNCHANGED briefing, and explicit round retirement under `GATE-EXEC-ROUND-RETIREMENT` for
   a REBUILT briefing.)
-- The orchestrator **MUST NOT** need to manually clear sentinels between rounds, and
-  **MUST NOT** clear the sentinels of carried-forward clean angles (Phase 5's re-fan
-  re-invokes the surface-touched angles, every angle that produced `findings_present`, and
-  every mandatory / always-run angle; carried-forward clean angles are not re-invoked. Every
-  re-invoked angle gets a distinct new-head key, so no cleanup is required). A round
-  retirement (`GATE-EXEC-ROUND-RETIREMENT`) does not conflict with this: its audited sweep
-  is scoped to the retired gate+head, and a carried-forward angle's sentinel is keyed at
-  its PRIOR head, out of the sweep's reach.
+- The orchestrator **MUST NOT** manually clear sentinels between rounds or clear
+  carried-forward angles' sentinels. Phase 1.2 determines retries, including eligible
+  `findings_present` carries; each re-invoked angle gets a new-head key without cleanup.
+  `GATE-EXEC-ROUND-RETIREMENT` sweeps only its retired gate+head, leaving carried angles'
+  prior-head sentinels outside that scope.
 - Stale pre-round sentinels (the old scope-only name) never collide with a head-keyed round
   and are simply ignored.
 
@@ -973,8 +969,8 @@ yields a publishable findings shape; fix or re-run the offending reviewer
 first.
 
 `--carried-angles <json>` (a JSON array of angle-name strings — Phase 1.2's
-`plan.carried[].angle` values) upserts `{ angle, verdict: "clean", findings:
-[], carriedFromHead: <A> }` for every named angle with no Phase 2 artifact, so
+`plan.carried[].angle` values) upserts the proven prior verdict and findings with
+`carriedFromHead: <A>` for every named angle with no Phase 2 artifact, so
 a carried angle stays visible to `findingsJson`/the mandatory-angle coverage
 check/the posted verdict comment instead of reading as a truncated fan-out (an
 angle whose artifact was never written and is NOT named here is still
@@ -989,7 +985,9 @@ unmapped/unknown angle) or absent from the plan's own `carried` list, the CLI
 FAILS CLOSED (exit 1) rather than mint a fabricated clean entry. The emitted
 `carriedFromHead` field marks ONLY an entry this flag upserted — every
 freshly reviewed angle's entry omits it — so `--out`'s own shape, not just the
-ledger's `provenance.perAngle`, distinguishes carried from fresh.
+ledger's `provenance.perAngle`, distinguishes carried from fresh. A `findings_present`
+carry retains its open findings and their blocking effect; only a clean carry has
+an empty findings array (legacy plans without `prevVerdict` default to clean).
 
 `--out`/`--ledger-out` are also rejected at
 parse time (exit 1) when they resolve to the same path as each other, or when
@@ -1007,68 +1005,35 @@ The render budget limits the visible-comment shape (`--out`), never the complete
 
 After successful consolidation, the [Gate comment command](../copilot-pr-followup/SKILL.md#mandatory-gate-comment-command-contract) caller MUST check that `--out` exists before passing `--findings-json <path>`; an absent path fails closed with ENOENT. For a withheld round, use `--findings-summary` naming the round size and complete `--ledger-out` location. Omitting `--findings-json` does not remove the `--findings-severity-counts` requirement: a `clean` verdict under a gate with `blockCleanOnFindingSeverities` configured still requires it, regardless of execution mode.
 
-Which artifact proves angle coverage depends on whether the
-comment can carry per-angle data: `--findings-json`'s per-angle shape lets
-`upsert-checkpoint-verdict.mjs` check coverage straight off the comment
-content, but ANY `fanout_fanin` verdict posted without `--findings-json` —
-the withheld round is the motivating case, but the code does not
-distinguish it from a normal-sized round that simply omitted the flag —
-carries no per-angle data to check that way. For that case,
-`upsert-checkpoint-verdict.mjs` instead proves coverage from the round's
-disposition ledger — when `--findings-ledger` is also passed, it re-validates
-the ledger's recorded `provenance.perAngle` against the gate's mandatory
-angles AND the gate's configured pool, and refuses to post (naming the
-missing angle(s), or the foreign one(s)) when it does not cover them, or when
-the ledger records no valid provenance at all. It shares
-`checkFanoutAngleCoverage` (`@dev-loops/core`) with both the `--findings-json`
-check above and `detect-checkpoint-evidence.mjs`'s own read-time
-re-validation below — passing the gate's `pool` on every call site — so the
-three can never define "covered" differently for either the mandatory-angle
-or the foreign-angle half of the check. A withheld round MUST still write its
-findings-log ledger via `write-gate-findings-log.mjs --provenance` covering
-the gate's mandatory angles, and pass `--findings-ledger` when posting the
-verdict, so this check actually runs; this is a MECHANISM, not a policy
-obligation on the agent — when the gate configures mandatory angles,
-`upsert-checkpoint-verdict.mjs` refuses (naming the required flags) any
-`fanout_fanin` verdict that supplies NEITHER `--findings-json` NOR
-`--findings-ledger`, since neither artifact is present to prove coverage. A
-gate with no mandatory angles configured is unaffected (vacuously covered
-either way). `detect-checkpoint-evidence.mjs`'s independent read-time
-enforcement (below) remains the backstop on the merge path regardless.
-`write-gate-findings-log.mjs` validates the recorded provenance's angle
-coverage whenever `--provenance` is actually supplied or a `--findings`/
-`--findings-file` wrapper carries its own provenance; `gates.requireFanoutProvenance`
-(which would make that flag required for angle coverage) defaults to `false`.
-Independent of that opt-in, `write-gate-findings-log.mjs` also carries its OWN
-write-time fail-closed guard, unconditional for a gate that configures a
-mandatory angle: an `--execution-mode fanout_fanin` write (mirroring
-`upsert-checkpoint-verdict.mjs`'s own flag; the CLI's default is
-`inline_single_agent`, which stays exempt) with NEITHER an explicit
-`--provenance` NOR a wrapper-supplied one THROWS and writes no ledger, naming
-the gate and its configured mandatory angle(s) — a real merge-gate round is
-always mixed (fresh mandatory + carried angles), so this is the guard that
-actually makes the omitting-conductor failure mode impossible, not merely a
-best-effort opt-in. `detect-checkpoint-evidence.mjs` enforces mandatory-angle coverage
-from the ledger's recorded provenance BY DEFAULT for any `fanout_fanin`
-verdict where the gate configures mandatory angles — a ledger with absent or
-invalid provenance fails closed there regardless of `requireFanoutProvenance`.
-Only the CI gate-evidence verifier bypasses this, by calling
-`detect-checkpoint-evidence.mjs` with `--skip-fanout-ledger-check`; the
-sanctioned pre-merge invocation runs without that flag, so the check is live
-on the merge path by default. Pass `--provenance` on the withheld round's
-ledger write regardless, since it is the only record of mandatory-angle
-coverage this round can have, and a missing one fails both the write-time
-post and the merge-evidence check closed. `commentBudgetExceeded: true` means
-the round is withheld: a round that fits after hard truncation (even at the
-16-char floor) is indistinguishable from an unshrunk one — it carries no flag
-at all, only shorter finding text. `commentBudgetExceeded` and `--out`'s
-existence therefore now agree exactly (`--out` written iff the flag is
-absent). On a withheld round (`findingsJson`
-emitted empty), the posted `**Findings summary:**` digest still counts the
-real totals (never zero) when the caller also passes
-`--findings-severity-counts` with this consolidation's own `severityCounts`
-(always the true, unbudgeted totals); the ledger always carries the true
-numbers regardless.
+Coverage follows `GATE-EXEC-ANGLE-COVERAGE` through shared `checkFanoutAngleCoverage`:
+the verdict writer checks `--findings-json`, or, when absent, the matching
+`--findings-ledger`'s `provenance.perAngle`. This applies to every `fanout_fanin` post
+without structured findings, not only budget-withheld rounds. Missing mandatory angles
+or invalid provenance fail closed when the gate requires mandatory angles; foreign
+angles fail unless `gates.rejectForeignAngles: false` explicitly selects warning mode.
+A gate with no mandatory angles does not require either proof artifact, but valid
+supplied provenance still undergoes angle-name and pool checks. Every check uses the
+gate's resolved pool; the independent merge-evidence read remains a backstop.
+
+A withheld round MUST write the complete log with `write-gate-findings-log.mjs
+--provenance` and pass `--findings-ledger` to the verdict post. Independently of
+`gates.requireFanoutProvenance` (default `false`), gates with mandatory angles have these guards:
+
+- `upsert-checkpoint-verdict.mjs` refuses a `fanout_fanin` post lacking BOTH
+  `--findings-json` and `--findings-ledger`, naming the missing proof flags.
+- `write-gate-findings-log.mjs` refuses a `fanout_fanin` write lacking both explicit
+  and wrapper-supplied provenance, writes no ledger, and names the mandatory angles.
+  Its default `inline_single_agent` mode is exempt from that absence guard. Whenever
+  explicit or `--findings`/`--findings-file` wrapper provenance is supplied, coverage is checked.
+- `detect-checkpoint-evidence.mjs` rejects absent/invalid mandatory-angle provenance
+  by default. Only the CI verifier uses `--skip-fanout-ledger-check`; sanctioned
+  pre-merge checks MUST NOT use that flag.
+
+`commentBudgetExceeded: true` exactly means `--out` was withheld; a fitted round,
+even at the 16-character truncation floor, has no flag. On withheld rounds,
+`findingsJson: []` is a rendering result, not zero findings: pass the consolidation's
+true `severityCounts` through `--findings-severity-counts` so the posted
+`**Findings summary:**` digest retains real totals. The complete ledger always does.
 
 Consolidation:
 
@@ -1430,7 +1395,10 @@ existence, is what this rule cannot yet prove.
 
 The decision is a pure, deterministic, fail-closed seam — `resolveAngleCarryForward` / `resolveCarryForwardAngles` in `@dev-loops/core/loop/gate-carry-forward` — driven by the CLI `scripts/github/resolve-angle-carry-forward.mjs --repo <r> --pr <n> --gate <g> --prev-head <A> --head-sha <B> --spec-authority <identity-path>` (run from the worktree at head B; `--spec-authority` stamps the round's identity onto the carry-forward plan by default, issue 2008 / ADR 0061 AC1). It reads the prior findings-log for head A whose overall verdict is `clean` OR `findings_present`, computes the delta as the direct two-dot tree diff `git diff A..B` (never three-dot — a two-dot diff never omits a file that differs between the reviewed head A and B, so a non-fast-forward advance cannot carry an angle whose surface changed), and returns per angle `carryForward: true|false` with a reason.
 
-**Feeding the plan into the Phase 1 dispatch preflight (issue #1635).** After this seam runs, a conductor doing a head-bump re-gate MAY rebuild the Phase 1 context artifact for the new head so its `fanout.preflight` reflects the reduced dispatch: pass the carried angle names (`plan.carried[].angle`) to `write-gate-context.mjs --carried-angles <json>`. Rebuilding is not automatic — Phase 1 runs before Phase 1.2 in the sub-loop's own ordering, so the artifact this seam's result feeds into already exists by Phase 1.2's own point in the sequence, built without this flag; a conductor must explicitly rebuild it afterward to pick up this flag and reflect the carried angles (see Phase 3's `--expected-dispatch-units` note above for what a rebuilt vs. never-rebuilt artifact each mean for that count). That flag's vocabulary mirrors `consolidate-fanin.mjs`'s own same-named `--carried-angles` (a JSON array of angle-name strings), but the two are NOT interchangeable: `consolidate-fanin.mjs`'s flag is PAIR-REQUIRED with `--carry-forward-plan` as independent proof before it upserts a clean entry into the Phase 3 ledger (see Phase 3's `--carried-angles`/`--carry-forward-plan` proof contract above), while `write-gate-context.mjs`'s flag takes no such proof argument — the caller IS this fail-closed seam's own result, never a guess, so there is nothing left to cross-check — and it only narrows the Phase 1/2 dispatch plan (`fanout.preflight.requiredReviewers`/`pendingGroups`), never the ledger. It still refuses (exit 1) a name whose review surface always re-runs — a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE angle — mirroring `consolidate-fanin.mjs`'s own mandatory-angle refusal for the same reason (an unmapped/unknown angle name, unlike at that sibling seam, is not rejected here — this seam has no plan proof to cross-check it against).
+**Feeding the plan into the Phase 1 dispatch preflight (issue #1635).** After carry resolution, a conductor MAY explicitly rebuild the new-head context with `write-gate-context.mjs --carried-angles <json>` using `plan.carried[].angle`. Phase 1 ran before Phase 1.2, so its existing artifact cannot reflect carry until rebuilt; see Phase 3's dispatch-count rule. Both this writer and `consolidate-fanin.mjs` accept an array of angle-name strings, but their flags serve different purposes:
+
+- The context writer narrows `fanout.preflight.requiredReviewers` / `pendingGroups`, never the ledger. It takes no proof argument: the caller MUST use the resolver's proven result. It refuses configured mandatory and hardcoded `ALWAYS_INCLUDE` angles (exit 1), but does not reject unmapped names.
+- Fan-in requires `--carry-forward-plan` as independent proof before upserting the prior verdict and findings. Its Phase 3 proof checks also reject unmapped names.
 
 **Threading disposition memory into the same rebuild (issue 2175).** On ANY head-bump re-gate rebuild of the Phase 1 context artifact where at least one angle re-runs, the conductor SHOULD also pass `--prev-head <A>` (the prior round's durable findings-log head) in that same `write-gate-context.mjs` invocation, so every re-running reviewer's briefing carries the prior round's `reject`/`defer` dispositions forward (see "Disposition memory into a re-running reviewer's briefing" above for the mechanics and fail-open guarantee). This is not limited to the partial-carry rebuild above (`--carried-angles` naming at least one carried angle): it also applies to the FULL-fallback outcome of the same carry-forward seam, where ambiguity or a fail-closed default (see below) forces `carried: []` and every angle re-runs — that rebuild still SHOULD pass `--prev-head <A>` even though it has no `--carried-angles` worth passing, so the disposition hint is not silently lost on the very rounds most likely to re-litigate settled findings.
 
@@ -1761,49 +1729,40 @@ policy rationale instead of a follow-up issue link, and stamps no `disposition=d
 when one named shared root cause genuinely closed them all.
 
 <!-- rule: GATE-EXEC-FIXER-DISPOSITION-BOUNDARY -->
-`GATE-EXEC-FIXER-DISPOSITION-BOUNDARY`: `GATE-EXEC-THREAD-DISPOSITION` above describes how a
-gate-authored thread eventually closes; this rule is the per-fixer FAIL-CLOSED boundary that sits
-between one fixer push and the NEXT review or gate round — the failure it closes (#1975, #1988) is
-repeated fixer pushes and follow-on gate rounds accumulating unresolved threads because a push
-claimed to address findings without the PR conversation ever carrying a commit-evidenced reply and
-resolution. After every fixer push, every review thread that fixer's handoff marks
-`disposition: "tackled"` MUST be: (1) recorded in the handoff with its thread id (or finding
-fingerprint) and fixing commit SHA
-(`normalizeFixerDispositionHandoff`, `packages/core/src/loop/fixer-disposition.mjs` — throws on a
-missing threadId/fixingCommitSha/disposition or a duplicate threadId/fingerprint); (2) commit
-verified — the fixing commit must be CONTAINED by the observed PR head, never merely pushed
-somewhere (`isCommitContainedByHead`, `scripts/github/_commit-containment.mjs`; a `gh compare`
-`identical`/`ahead` status only — `behind`/`diverged`, an API error, or a missing containment fact
-all fail closed as NOT contained); (3) replied with that commit's evidence; (4) resolved; and (5)
-re-read live and reverified resolved. `evaluateFixerDisposition` (same module) is the single PURE
-decision this boundary enforces: no GitHub/git I/O inside it — live thread state and the
-containment fact table are injected as data, which is what keeps the decision identical across
-every harness (Pi, Claude Code, Codex). It reports one `failedStep` per incomplete thread —
-`missing_from_handoff`, `commit_not_contained`, `reply_missing`, or `not_resolved` — and a SHA
-alone, an uncontained SHA, a wrong-branch or superseded SHA, or a thread whose diff location went
-outdated never authorizes resolution on its own (outdated location does not waive disposition).
-Only threads the fixer explicitly marks `tackled` are in scope: untackled, deferred, rejected,
-foreign-authored, or newly-arrived threads keep their existing `GATE-EXEC-THREAD-DISPOSITION`
-judgment path untouched — this boundary never auto-resolves a thread outside that set. While any
-tackled thread is incomplete, the forbidden-action set
-(`FIXER_DISPOSITION_FORBIDDEN_ACTIONS`, same module) is DELIBERATELY BROADER than
-`pr-gate-coordination.mjs`'s own `postDraftForbidden`: it also forbids requesting or re-requesting
-Copilot review and every gate-dispatch token, because the failure this closes is specifically the
-NEXT review round opening over a dirty surface — this must fire even when the caller's own
-`unresolvedThreadCount` reads 0 (bogus or uncontained evidence must not read as clean).
-`packages/core/src/loop/pr-gate-coordination.mjs` accepts a `fixerDisposition: { complete, incomplete }`
-input; present and not complete, it forces a blocked `feedback_resolution` result ahead of every
-lifecycle-state branch, naming every incomplete thread, its expected fixing commit, its failed
-step, and the only legal next action (`complete_fixer_disposition`).
-`scripts/github/verify-fixer-disposition.mjs` is the enforcement CLI: it loads (or records) the
-durable checkpoint at `tmp/gate-findings/<repo-slug>/pr-<N>/fixer-disposition-<headSha>.json`,
-captures live thread state, computes containment, evaluates, and — only for a thread whose
-containment already checked out — posts the one evidenced reply and resolves, or resolves alone
-when a matching evidenced reply already exists live (idempotent re-entry: it checks live state
-FIRST, so a restart, a rate limit, a timeout, or a reply-succeeded/resolve-failed partial run never
-posts a duplicate evidence reply). `scripts/loop/detect-pr-gate-coordination-state.mjs` surfaces
-this same evaluation into the shared coordination seam; a PR with no recorded checkpoint for its
-current head behaves exactly as it did before this boundary existed.
+`GATE-EXEC-FIXER-DISPOSITION-BOUNDARY`: After every fixer push, each review thread marked
+`disposition: "tackled"` in its handoff MUST, in order, have a recorded `threadId` and
+fixing commit SHA, verified containment by the observed PR head, a reply evidencing that
+commit, resolution, and a live re-read confirming resolution. A finding fingerprint may
+accompany the required thread id; it does not replace it. This per-fixer boundary precedes
+the next review/gate round; `GATE-EXEC-THREAD-DISPOSITION` still governs eventual closure.
+
+`normalizeFixerDispositionHandoff` (`packages/core/src/loop/fixer-disposition.mjs`) rejects
+missing `threadId`/`fixingCommitSha`/`disposition` and duplicate thread ids/fingerprints.
+`isCommitContainedByHead` (`scripts/github/_commit-containment.mjs`) accepts only `gh compare`
+`identical`/`ahead`; `behind`/`diverged`, API errors and missing evidence fail closed.
+A SHA alone, a wrong-branch, superseded or uncontained SHA, or an outdated diff location
+never authorizes resolution. The pure `evaluateFixerDisposition` consumes injected live
+thread/containment facts identically across Pi, Claude Code and Codex, with no GitHub/git I/O.
+It reports one `failedStep` per incomplete thread: `missing_from_handoff`,
+`commit_not_contained`, `reply_missing`, or `not_resolved`.
+
+While any tackled thread is incomplete, `FIXER_DISPOSITION_FORBIDDEN_ACTIONS` also forbids
+Copilot request/re-request and every gate dispatch, beyond `pr-gate-coordination.mjs`'s
+`postDraftForbidden`. A zero `unresolvedThreadCount` cannot waive this boundary.
+`fixerDisposition: { complete, incomplete }`, when present and incomplete, forces blocked
+`feedback_resolution` ahead of every lifecycle branch, naming the thread, expected commit,
+failed step and sole next action `complete_fixer_disposition`. Untackled, deferred, rejected,
+foreign-authored and newly arrived threads keep their existing judgment path; this boundary
+never auto-resolves outside the tackled set.
+
+`scripts/github/verify-fixer-disposition.mjs` loads/records
+`tmp/gate-findings/<repo-slug>/pr-<N>/fixer-disposition-<headSha>.json`, captures live state,
+checks containment and evaluates. Only after containment passes may it post the evidenced
+reply and resolve; if a matching reply already exists, it resolves without reposting. Live
+checks precede writes, so restart, rate limit, timeout and reply-success/resolve-failure
+re-entry cannot duplicate replies. `scripts/loop/detect-pr-gate-coordination-state.mjs`
+feeds this evaluation into coordination. Without a current-head checkpoint, existing
+behavior is unchanged.
 
 <!-- rule: GATE-EXEC-DEFERRAL-RECORD -->
 `GATE-EXEC-DEFERRAL-RECORD`: A deferred finding's record lives in up to THREE places, never a

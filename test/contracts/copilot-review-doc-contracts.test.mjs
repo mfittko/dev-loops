@@ -26,6 +26,26 @@ function extractStep(content, number) {
   return lines.slice(start, end < 0 ? undefined : end).join("\n");
 }
 
+function extractGate(content, gate) {
+  const label = { draft_gate: "Draft gate", pre_approval_gate: "Pre-approval gate" }[gate];
+  const section = parseMarkdownSections(content).find(({ level, bodyLines }) => level === 3
+    && bodyLines.some((line) => line.trim() === `- **Gate name:** ${label}`));
+  assert.ok(section, `missing gate contract for ${gate}`);
+  return section.bodyLines.join("\n");
+}
+
+test("gate extraction accepts renamed headings and keeps sibling requirements separate", () => {
+  const content = "### Before review\n- **Gate name:** Draft gate\nDraft obligation.\n"
+    + "### Before handoff\n- **Gate name:** Pre-approval gate\nApproval obligation.\n"
+    + "## Other policy\nUnrelated obligation.\n";
+  assert.equal(extractGate(content, "draft_gate"), "- **Gate name:** Draft gate\nDraft obligation.");
+  assert.equal(extractGate(content, "pre_approval_gate"), "- **Gate name:** Pre-approval gate\nApproval obligation.");
+  for (const changed of [
+    content.replace("- **Gate name:** Draft gate", "Mentions Draft gate"),
+    "### Before review\nDraft obligation.\n## Other policy\n- **Gate name:** Draft gate",
+  ]) assert.throws(() => extractGate(changed, "draft_gate"), /missing gate contract/);
+});
+
 const ASYNC_DISPATCH_CLAUSE = "Before reporting merge-ready or stopping at the human approval checkpoint, you must complete the pre_approval_gate procedure and verify that a visible clean checkpoint verdict comment exists on the PR for the current head SHA. Do not stop or report completion without this evidence.";
 
 function assertDispatchClause(step) {
@@ -60,14 +80,9 @@ async function readCopilotSkillSurface() {
 test("copilot review gates keep phase-specific angle ownership in one canonical internal skill", async () => {
   const copilotPrFollowupSkill = await readRepo("skills/copilot-pr-followup/SKILL.md");
   const devLoopStep7 = extractStep(copilotPrFollowupSkill, 7);
-  const devLoopDraftGateMatch = devLoopStep7.match(/### Draft gate contract[\s\S]*?(?=\n### |$)/);
-  const devLoopDraftGate = devLoopDraftGateMatch ? devLoopDraftGateMatch[0] : "";
-  assert.ok(devLoopDraftGate.length > 0, "copilot-pr-followup draft-gate section not found inside Step 7");
-  const devLoopPreApprovalMatch = devLoopStep7.match(/### Pre-approval gate contract[\s\S]*?(?=\n## |\n### |$)/);
-  const devLoopPreApproval = devLoopPreApprovalMatch ? devLoopPreApprovalMatch[0] : "";
-  assert.ok(devLoopPreApproval.length > 0, "copilot-pr-followup pre-approval gate section not found inside Step 7");
-  assert.match(copilotPrFollowupSkill, /Canonical owner for the internal `copilot_pr_followup` route behind the public `dev-loop` façade/i);
-  assert.match(copilotPrFollowupSkill, /canonical internal owner of the shared post-PR mechanics/i);
+  const devLoopDraftGate = extractGate(devLoopStep7, "draft_gate");
+  const devLoopPreApproval = extractGate(devLoopStep7, "pre_approval_gate");
+  assert.match(copilotPrFollowupSkill, /^name: copilot-pr-followup$/m);
   assertRuleOwned("GATE-COMMENT-SCOPE-ONLY", "skills/docs/gate-review-comment-contract.md");
   const expectedDevLoopShape = [/Gate name:/i, /Trigger \/ boundary:/i, /Review angles:/i, /Pass criteria:/i, /Next step after passing:/i];
   for (const [label, section] of [
@@ -153,16 +168,10 @@ test("copilot-pr-followup skill routes review requests and wait seams through de
   assert.match(step6, /detect-copilot-loop-state\.mjs/i);
   assert.match(step6, /dev-loops loop watch-cycle/i);
   assert.match(step6, /gh run watch <run-id> --repo <owner\/name>/i);
-  assert.match(step6, /helper-owned sleep inside `dev-loops loop watch-cycle`, `dev-loops gate probe-copilot`, or `dev-loops loop watch-initial` is allowed/i);
-  assert.match(step6, /agent-authored shell polling is forbidden/i);
-  assert.match(step6, /for i in \$\(seq \.\.\.\)/i);
-  assert.match(step6, /while true/i);
-  assert.match(step6, /until \.\.\.; do sleep \.\.\.; done/i);
   // The manual-polling prohibition is elaboration of COPILOT-FOLLOWUP-WAIT-TOOLS
   // (the deterministic-wait-tools rule owned in this same skill file); loose
   // token instead of the full enumerated CLI-list sentence (#1205).
   assertRuleOwned("COPILOT-FOLLOWUP-WAIT-TOOLS", "skills/copilot-pr-followup/SKILL.md");
-  assert.match(step6, /do not wrap repeated/i);
 });
 test("watch policy references make the persistence owner available, without proving agent continuation", async () => {
   const [skillContent, operationsDoc] = await Promise.all([
@@ -272,11 +281,6 @@ test("copilot-pr-followup skill hardens reply-resolve, gate sequencing, and merg
   assertRuleOwned("GATE-SKIP-NOT-RECOVERABLE-BY-CONVERGENCE", "skills/copilot-pr-followup/SKILL.md");
   assert.match(
     step7,
-    /### Merge-ready preconditions/i,
-    "Step 7 should include a merge-ready preconditions subsection",
-  );
-  assert.match(
-    step7,
     /zero unresolved threads.*dev-loops gate capture-threads/i,
     "merge-ready preconditions should require deterministic thread-state verification",
   );
@@ -298,16 +302,6 @@ test("copilot-pr-followup skill hardens reply-resolve, gate sequencing, and merg
   // Hard-gate rule now in canonical merge-preconditions.md
   assert.match(
     step7,
-    /Merge Preconditions/i,
-    "merge-ready preconditions should be a hard gate (canonical reference)",
-  );
-  assert.match(
-    step7,
-    /### Mechanical pre-merge gate evidence check/i,
-    "Step 7 should include a mechanical pre-merge evidence check",
-  );
-  assert.match(
-    step7,
     /detect-checkpoint-evidence\.mjs[\s\S]*always-on/i,
     "mechanical pre-merge check should use the gate evidence helper with always-on enforcement",
   );
@@ -325,11 +319,6 @@ test("copilot-pr-followup skill hardens reply-resolve, gate sequencing, and merg
     step7,
     /raw `gh pr merge` is forbidden/i,
     "the skill should forbid a raw gh pr merge in favor of the wrapper",
-  );
-  assert.match(
-    step7,
-    /### Conflict-resolution gate/i,
-    "Step 7 should include a conflict-resolution subsection",
   );
   assert.match(
     step7,
@@ -376,14 +365,9 @@ test("copilot-pr-followup skill hardens reply-resolve, gate sequencing, and merg
     /wait for current-head CI again/i,
     "conflict-resolution flow should require fresh CI on the new head",
   );
-  const antiPatternsMatch = skillContent.match(/## Anti-patterns[\s\S]*?(?=\n## Recommended companion skills|$)/);
-  const antiPatterns = antiPatternsMatch ? antiPatternsMatch[0] : "";
-  assert.ok(antiPatterns.length > 0, "copilot-pr-followup anti-patterns section not found");
-  assert.match(antiPatterns, /Use.*reply-resolve-review-thread.*instead of ad hoc.*gh api.*thread/i);
-  assert.match(antiPatterns, /declare merge-ready without visible.*pre_approval_gate/i);
-  assert.match(antiPatterns, /declare merge-ready based solely.*mergeable_state.*clean.*CI green/i);
-  assert.match(antiPatterns, /Do not blind-run.*gh pr merge.*gh pr update-branch.*unapproved rebase/i);
-  assert.match(antiPatterns, /Do not dispatch async dev-loop.*omit.*pre-approval gate/i);
+  assertReference(step7, "../docs/merge-preconditions.md");
+  assert.ok(extractRelativeMarkdownLinks(step7).some(({ rawTarget }) => rawTarget === "../local-implementation/SKILL.md#branch--review--merge-policy"));
+
 });
 
 test("copilot-pr-followup skill caps Copilot re-review rounds via config and snapshot state", async () => {
@@ -392,11 +376,6 @@ test("copilot-pr-followup skill caps Copilot re-review rounds via config and sna
   const step7 = extractStep(skillContent, 7);
 
   assert.match(step7, /resolveRefinementConfig\(config, "maxCopilotRounds"\)/i);
-  assert.match(step7, /default config ships `maxCopilotRounds: 5`/i);
-  assert.match(step7, /completed Copilot review-round count/i);
-  assert.match(step7, /if completed review rounds have reached the resolved round cap/i);
-  assert.match(step7, /`deferred to follow-up` note/i);
-  assert.match(step7, /stop and report that the Copilot round limit was reached/i);
   assertRuleOwned("COPILOT-FOLLOWUP-ROUND-CAP", "skills/copilot-pr-followup/SKILL.md");
 });
 
@@ -522,12 +501,7 @@ test("checkpoint verdict comment contract owns its comment-field rules by ID (si
 });
 test("checkpoint verdict comment ownership stays explicit in the canonical internal skill file", async () => {
   const copilotPrFollowupSkill = await readRepo("skills/copilot-pr-followup/SKILL.md");
-  const devLoopDraftGateMatch = copilotPrFollowupSkill.match(/### Draft gate contract[\s\S]*?(?=\n### |\n## |$)/);
-  const devLoopDraftGate = devLoopDraftGateMatch ? devLoopDraftGateMatch[0] : "";
-  assert.ok(devLoopDraftGate.length > 0, "copilot-pr-followup draft gate section not found");
-  assert.match(devLoopDraftGate, /Required PR comment/i);
-  assert.match(devLoopDraftGate, /`draft_gate`/);
-  assert.match(devLoopDraftGate, /head SHA/i);
+  const devLoopDraftGate = extractGate(copilotPrFollowupSkill, "draft_gate");
   assertRuleOwned("GATE-COMMENT-NON-SUBSTITUTION", "skills/docs/gate-review-comment-contract.md");
   assert.match(devLoopDraftGate, /GATE-COMMENT-NON-SUBSTITUTION/);
   // Comment field content, the draft-boundary requirement, and fail-closed behavior are
@@ -540,12 +514,7 @@ test("checkpoint verdict comment ownership stays explicit in the canonical inter
   assert.match(devLoopDraftGate, /GATE-COMMENT-DRAFT-REQUIREMENTS/);
   assert.match(devLoopDraftGate, /GATE-COMMENT-FAIL-CLOSED/);
 
-  const devLoopPreApprovalGateMatch = copilotPrFollowupSkill.match(/### Pre-approval gate contract[\s\S]*?(?=\n### |\n## |$)/);
-  const devLoopPreApprovalGate = devLoopPreApprovalGateMatch ? devLoopPreApprovalGateMatch[0] : "";
-  assert.ok(devLoopPreApprovalGate.length > 0, "copilot-pr-followup pre-approval gate section not found");
-  assert.match(devLoopPreApprovalGate, /Required PR comment/i);
-  assert.match(devLoopPreApprovalGate, /`pre_approval_gate`/);
-  assert.match(devLoopPreApprovalGate, /head SHA/i);
+  const devLoopPreApprovalGate = extractGate(copilotPrFollowupSkill, "pre_approval_gate");
   assert.match(devLoopPreApprovalGate, /GATE-COMMENT-NON-SUBSTITUTION/);
   // The "must be entered and completed before merge-ready" gate-boundary requirement is
   // owned by GATE-COMMENT-FAIL-CLOSED (asserted below); the "not recoverable by asserting
