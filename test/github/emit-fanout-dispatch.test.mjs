@@ -114,6 +114,11 @@ test("all-carried rounds consume the real emitter's keyed zero-unit plan through
     const written = await writeGateFindingsLog(writeOptions, { repoRoot });
     assert.deepEqual(written.log.findings, consolidatedFindings);
     assert.deepEqual(written.log.provenance.perAngle, provenance.perAngle);
+    const newFinding = { ...consolidatedFindings[0], summary: "New High without a fresh review" };
+    for (const extra of [newFinding, consolidatedFindings[0]]) {
+      await assert.rejects(() => writeGateFindingsLog({ ...writeOptions,
+        findings: JSON.stringify([...consolidatedFindings, extra]) }, { repoRoot }), /unproven findings/);
+    }
     await assert.rejects(() => writeGateFindingsLog({ ...writeOptions, findings: "[]" }, { repoRoot }), /preserved findings/);
     await assert.rejects(() => writeGateFindingsLog({ ...writeOptions,
       findings: JSON.stringify(consolidatedFindings.map((finding) => ({ ...finding, recommendation: "changed" }))) }, { repoRoot }), /preserved findings/);
@@ -145,6 +150,25 @@ test("all-carried rounds consume the real emitter's keyed zero-unit plan through
     await assert.rejects(() => consolidateGateFanin({ ...faninOptions, headSha: "d".repeat(40) }), /stamped for head/);
     await assert.rejects(() => writeGateFindingsLog({ ...writeOptions,
       provenance: JSON.stringify({ distinctReviewers: 1, perAngle: [{ angle: "coverage", reviewer: "fresh-reviewer" }] }) }, { repoRoot }), /zero|non-empty|fresh angles/);
+    const cleanPlan = buildCarryForwardPlan({
+      log: { headSha: "b".repeat(40), verdict: "clean", findings: [],
+        provenance: { perAngle: provenance.perAngle.map(({ angle, reviewer, model }) => ({ angle, reviewer, model })) } },
+      changedFiles: ["docs/readme.md"],
+    });
+    const cleanEmitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA,
+      "--pending", "--carry-forward-plan", JSON.stringify(cleanPlan)], { cwd: repoRoot });
+    assert.equal(cleanEmitted.status, 0, cleanEmitted.stderr || cleanEmitted.stdout);
+    const cleanFanin = await consolidateGateFanin({ ...faninOptions, carryForwardPlan: cleanPlan.carried });
+    assert.equal(cleanFanin.overallVerdict, "clean");
+    assert.deepEqual(cleanFanin.findings, []);
+    const cleanWriteOptions = { ...writeOptions, verdict: "clean", findings: "[]",
+      provenance: JSON.stringify({ ...provenance, perAngle: provenance.perAngle.map((entry) => ({ ...entry, carriedVerdict: "clean" })) }) };
+    const cleanWritten = await writeGateFindingsLog(cleanWriteOptions, { repoRoot });
+    assert.deepEqual(cleanWritten.log.findings, []);
+    await assert.rejects(() => writeGateFindingsLog({ ...cleanWriteOptions,
+      verdict: "findings_present", findings: JSON.stringify([newFinding]) }, { repoRoot }), /unproven findings/);
+    assert.deepEqual(JSON.parse(await readFile(cleanWritten.path, "utf8")), cleanWritten.log,
+      "rejected findings must not overwrite the proven ledger");
     await rm(emitPlan);
     await assert.rejects(() => consolidateGateFanin(faninOptions), /could not be read/);
     for (const invalidProof of [null, [], [plan.carried[0]], [plan.carried[0], plan.carried[0]],

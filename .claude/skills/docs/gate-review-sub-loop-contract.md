@@ -443,7 +443,8 @@ Pass that plan to both fan-in and the findings-log writer; supply fan-in's `--re
 prior findings and reviewer identities, resolved-angle coverage, and spec-authority evidence.
 Fan-in independently checks carry eligibility and complete proof against the emitted plan;
 the writer checks exact carried coverage, prior-head/reviewer/model/dispatch/verdict identity,
-and retained findings including recommendations.
+and exact carried finding contents and multiplicities, including recommendations; added or
+duplicate findings fail closed because no fresh reviewer ran.
 Missing, altered or fresh provenance fails closed. Same-head completed-only resumes do not qualify.
 Omit `--expected-dispatch-units` at zero, as required by the existing consumer contract.
 

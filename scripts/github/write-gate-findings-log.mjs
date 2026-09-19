@@ -398,6 +398,7 @@ export async function verifyEmitPlanProvenance(planPath, provenance, round, { re
         remaining.splice(index, 1);
       }
     }
+    if (remaining.length > 0) throw parseError("zero-unit carry proof rejects unproven findings, including duplicates of preserved findings");
   }
 
   const expected = new Map();
