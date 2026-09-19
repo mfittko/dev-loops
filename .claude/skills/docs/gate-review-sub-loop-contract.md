@@ -17,49 +17,28 @@ reviewer with that bundle verbatim. Reviewers MUST NOT fork from, or inherit, a 
 agent's loaded context, and the sub-loop MUST NOT depend on any fork primitive or the
 Workflow tool. Concretely:
 
-1. A deterministic **context-builder script** (`scripts/github/write-gate-context.mjs`)
-   builds ONE generous, neutral context bundle for the head SHA: the full diff plus
-   a structurally-adjacent code bundle (each changed file's 1-hop import in/out-edges)
-   with size guards. Because it is a script, the bundle is neutral (it cannot
-   editorialize) and deterministic (identical head + diff → identical bundle).
-2. Each reviewer is an **independent fresh-context Agent** that is **seeded with that
-   identical neutral bundle verbatim** plus its single review angle (per-angle mode /
-   `gate:full`) or every angle in its resolved dispatch unit (grouped mode, [Phase
-   2](#phase-2--fan-out-independent-reviewers-seeded-with-the-neutral-bundle)), and
-   widens only when a covered angle genuinely needs more. Reviewers never inherit the
-   main (orchestrating) agent's conversation or opinions — that independence is the
-   anti-bias requirement.
+1. `scripts/github/write-gate-context.mjs` builds the neutral head-bound bundle:
+   full diff plus changed files' 1-hop import in/out-edges, with size guards.
+2. Seed each independent fresh-context reviewer verbatim with that bundle and every
+   angle in its emitted unit ([Phase 2](#phase-2--fan-out-independent-reviewers-seeded-with-the-neutral-bundle)).
+   Widen only when a covered angle needs more; never inherit the conductor's conversation or opinions.
 3. Fan-in consolidates the per-angle findings unchanged.
 
-The cost win is **work-dedup**: the diff + adjacent code is built once, not re-derived
-by every reviewer; a shared-prefix prompt-cache is an opportunistic bonus, not a
-requirement. The exact LAYOUT of the seeded briefing text (what precedes what, and what
-must be byte-identical across reviewers to make prompt-cache reuse possible at all) is
-owned by `GATE-EXEC-BRIEFING-PREFIX` in [Phase 2](#phase-2--fan-out-independent-reviewers-seeded-with-the-neutral-bundle) below.
+Build-once avoids repeated diff/adjacent-code discovery. Provider cache reuse is optional;
+briefing layout and byte identity remain mandatory under `GATE-EXEC-BRIEFING-PREFIX` below.
 
 This contract owns the **execution shape** of gate-review work. It does not own:
 - which review angles a specific gate runs (that stays in the skill)
 - the visible gate-review PR comment format (owned by [Gate Review Comment Contract](./gate-review-comment-contract.md), whose evidence is also required for a gate to be satisfied)
 - the broader PR lifecycle sequencing (owned by the workflow skill and [PR Lifecycle Contract](./pr-lifecycle-contract.md))
 
-A THIRD gate, `review` (`GATE_NAMES`, `scripts/github/_gate-names.mjs`), reuses
-this execution shape (Phase 1 context-builder, Phase 1.5 primer, Phase 2
-fan-out, Phase 3 fan-in + verdict-post) with `--gate review`, but stops after
-Phase 3 — it never reaches Phase 3.5 (judge), Phase 4 (fix), or Phase 5
-(repeat), and carries no gate obligation of its own (reachable on any PR, no
-auto-resolve, no forbidden-action refusal, no CI wait). It is a deliberately
-NON-EVIDENCE gate: `review` IS a recognized gate name in the gate-comment
-header vocabulary a comment is parsed against
-(`@dev-loops/core/github/copilot-helpers`) — recognized, not absent — and
-that recognition is exactly what makes the parser return non-evidence
-immediately for a `review`-headed comment, before it can ever fall through
-to the lenient whole-body token scan a genuinely unidentifiable comment
-relies on, regardless of whether the comment carries the
-`--findings-ledger` gate-findings-review marker. (It is separately, and
-unrelatedly, absent from `GATE_CONFIG_KEY` in `@dev-loops/core/loop/gate-fanin`
-— it has no `draft`/`preApproval`-style config threshold — but that absence
-is not what keeps a `review` verdict from satisfying `draft_gate` or
-`pre_approval_gate` evidence.) See the [Review skill](../review/SKILL.md).
+The standalone `review` gate (`GATE_NAMES`, `scripts/github/_gate-names.mjs`) runs
+Phases 1, 1.5, 2 and 3 with `--gate review`, then stops: no judge, fix, repeat,
+auto-resolve, forbidden-action refusal or CI wait; any PR is eligible. Its recognized
+header makes `@dev-loops/core/github/copilot-helpers` return non-evidence before the
+lenient whole-body scan, with or without a findings-ledger marker. Its separate absence
+from `GATE_CONFIG_KEY` means no draft/preApproval threshold, not the reason it cannot
+satisfy lifecycle evidence. Follow the [Review skill](../review/SKILL.md).
 
 ## Separate chains per gate
 
@@ -89,40 +68,22 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
   PR head, and has no access to the gitignored, worktree-local `tmp/gate-context` bundle
   this phase writes (#1135). Reviewers run in the PR's actual worktree/head — the same
   checkout the preamble ran in.
-- the preamble resolves the gate's review angle set: it starts from the configured
-  angle pool (`gates.<gate>.angles` — an array of angle names/objects, D3/D4) and,
-  when `gates.<gate>.dynamic.subtractive` is enabled (ON by default since #1579),
-  narrows it to the angles relevant to the change at hand (configured pool → resolved set). Optional code-review lenses not
-  triggered by the change (for example most code lenses for a docs-only change) are
-  dropped, and the reason each angle was dropped is recorded as rationale. Angle entries
-  with `mandatory: true` form a floor and are always included after dynamic selection
-  (filtered only by entries with `enabled: false`); they are never dropped — a mandatory angle runs even when the diff-classifier
-  would otherwise prune it. Adding a
-  plain (non-mandatory) angle entry is additive but not mandatory — a duplicate name is
-  deduplicated by the set union (appears exactly once, never errors, and keeps that
-  angle's existing mandatory/prunable status); an entry with `enabled: false` is removed
-  like any other angle. Because `gates.<gate>.angles` merges BY NAME across config
-  layers (D3), a consumer can add a new angle, or disable/override an existing one, by
-  naming just that entry — no need to copy-paste/maintain the whole shipped `angles`
-  array. When `dynamic.subtractive` is off (the opt-out escape hatch, or when no diff is
-  available), the configured static pool is used unchanged — set
-  `dynamic.subtractive: false` (full pool) AND apply the `gate:full` label or
-  `gates.fanout.mode: per-angle` to restore the original full static fan-out. The
-  `gate:full` label forces the full (untriered) angle set; as of #1601 (ADR 0048)
-  it no longer forces per-angle DISPATCH — it dispatches grouped, so to also
-  restore one-reviewer-per-angle dispatch shape set `gates.fanout.mode: per-angle`. Symmetrically, when `gates.<gate>.dynamic.additive` is
-  enabled (default **off**), the resolver may also ADD catalog angles that
-  change-category heuristics recommend but that are not already in the gate's
-  configured pool, drawn from the global lens catalog (the explicit `gates.anglePool`
-  override, or — when `anglePool` is not set or is empty — the union of the built-in persona
-  registry's angle names and every angle actually configured across this config's
-  own `gates.draft`/`gates.preApproval`/`gates.spike` `angles`). A disabled (`enabled:
-  false`) entry remains a hard ceiling on additions — an excluded angle is
-  never added, even if the change categories would otherwise recommend it. Additions
-  are recorded in the rationale with action `"added"`, with a reason naming either the
-  triggering change category or, for always-include lenses, that it is an
-  always-include addition. This additive path is off by default, so existing configured angle pools
-  are unaffected unless a gate explicitly opts in.
+- Resolve the gate's angle set from `gates.<gate>.angles` (names/objects).
+  Entries merge BY NAME across config layers: add/override/disable only the named
+  entry, without copying the array. Duplicate names appear once and retain their
+  mandatory/prunable status. `enabled: false` excludes an entry, including a
+  mandatory one, and is a hard ceiling against later additions.
+  - `dynamic.subtractive` defaults ON: retain relevant angles and record each
+    dropped angle's rationale. Enabled `mandatory: true` entries always survive.
+    Off, or without a diff, use the static pool unchanged.
+  - `gate:full` forces the full untriered set but retains grouped dispatch.
+    To restore the full static per-angle fan-out, disable subtractive selection AND
+    set `gates.fanout.mode: per-angle`; `gate:full` alone never selects per-angle dispatch.
+  - `dynamic.additive` defaults OFF. When enabled, add recommended catalog angles
+    absent from the configured pool, except disabled entries. The catalog is the
+    explicit non-empty `gates.anglePool`, otherwise the union of built-in personas
+    and configured draft/preApproval/spike angles. Record each addition as
+    `action: "added"` with its triggering category or always-include reason.
 - **Security-sensitive-seam trigger (`threat-model`).** When the change categories include
   `SECURITY_SENSITIVE_SEAM` — a **code** file's diff (config/doc/markdown lines that merely
   name a primitive are file-gated out) touches browser automation, `child_process`/shell
@@ -168,54 +129,38 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
     `diffSource` distinguishes a base-derived bundle (`"base"`) from a thin briefing
     (`"none"`), while `diffPath` independently signals whether the persisted full diff is
     available.
-  - **`scope.acceptanceCriteriaSource` posture (CLI-only spec resolution, #1496/#1511).**
-    `write-gate-context.mjs` resolves the PR body, the PR's closing issue reference(s), and
-    each closed issue's body from GitHub itself when the caller omits `--pr-body`/
-    `--issue-body`/`--acceptance-criteria` — a caller that simply forgets a flag can no longer
-    seed every fan-out reviewer with the false claim that a PR has no description or no
-    acceptance criteria. An unresolvable read (PR or a linked issue) FAILS CLOSED: a named
-    error, no artifact written — the bundle must never assert absence when resolution merely
-    failed. Supplying `--acceptance-criteria` suppresses the automatic issue-body fetch
-    entirely (it overrides the pointer the fetch would otherwise resolve), so a caller who
-    passes only `--acceptance-criteria` gets no linked-issue body and no `## Linked issue`
-    section; pass `--issue-body` too if the prefix should still carry issue text.
-    `scope.acceptanceCriteriaSource` records how `scope.acceptanceCriteria` came to
-    be: `"provided"` (caller flag, regardless of whether an issue body was independently
-    supplied too), `"linked-issue"` (resolved from the closing reference(s), and at least one
-    resolved issue carries the full refinement matrix — Acceptance criteria checklist + DoD
-    checklist + explicit Non-goals, or a linked refinement doc),
-    `"linked-issue-unrefined"` (resolved, but no linked issue carries the full refinement
-    matrix — distinguishes "linked, unrefined or matrix-incomplete" from "not fetched"), or
-    `"none"` (the PR closes no issue). The field is CLI-only: programmatic `buildGateContext`/`writeGateContext` callers
-    omit it entirely, so a null `acceptanceCriteria` WITHOUT this field means "never
-    resolved" and one WITH it means "genuinely absent" or "genuinely unrefined". An umbrella
-    PR closing several issues resolves ALL of them (not just the first), concatenated under
-    one `## Linked issue <ref1>, <ref2>` section with a `### <ref>` sub-heading per issue; a
-    cross-repo closing reference registered by GitHub (`closingIssuesReferences`, which
-    carries the repository alongside the number) resolves against ITS OWN repository, not the
-    PR's — the `Closes #N` body-keyword fallback used when GitHub reports no closing
-    references is same-repo only and cannot capture an `owner/repo` prefix. `--prefix-file`
-    (an orchestrator recording its own
-    already-rendered prefix) skips this resolution entirely — those fields could never reach
-    the recorded bytes. Because the resolved PR/issue text is embedded in the rendered
-    prefix, a same-head rebuild after a live description edit yields different prefix bytes,
-    which would split one fan-out across two prefix hashes — so a conductor MUST NOT rebuild
-    the context while reviewers for that head are still running. This is now ENFORCED, not
-    merely stated in prose (#1537): `write-gate-context.mjs` REFUSES (throws, exit 1, no
-    bytes written) a same-head rebuild that would change the recorded prefix bytes while
-    this gate's reviewer sentinels for that head are still live (a fan-out is in flight).
-    The refusal names the in-flight head and points at the reviewers already briefed on
-    the prior bytes (their sentinel files + recorded prefix hash). A sentinel scan that
-    fails for any reason other than a missing tmp/ dir (EACCES, ENOTDIR, ...) cannot
-    rule out an in-flight fan-out, so it is REFUSED too (fail-closed) rather than allowed
-    through a broken scan that could hide live sentinels; only an unreadable EXISTING
-    prefix (which cannot be proven to differ) stays advisory. A rebuild after the
-    round has retired — no live sentinels — is unaffected: the frozen artifact of an
-    already-completed gate pass is not the case being protected. Round retirement
-    (`GATE-EXEC-ROUND-RETIREMENT`) does not relax this: it recovers a round AFTER a rebuild
-    stranded it, and never licenses rebuilding mid-flight; the sanctioned rebuild path is
-    retire-THEN-rebuild (retire the round, moving its sentinels out of the live namespace,
-    THEN rebuild at the same head).
+  - **Spec resolution (`scope.acceptanceCriteriaSource`, CLI only).**
+    With `--pr-body`/`--issue-body`/`--acceptance-criteria` omitted,
+    `write-gate-context.mjs` resolves the live PR body, closing references and ALL
+    closed issue bodies. Any failed PR/issue read fails closed with a named error
+    and no artifact; failed resolution never means absent description/criteria.
+    Explicit `--acceptance-criteria` suppresses automatic issue-body fetching;
+    additionally pass `--issue-body` to retain issue text in the prefix.
+    `--prefix-file` skips live resolution entirely because those fields cannot
+    alter caller-supplied prefix bytes.
+
+    | Source value | Meaning |
+    | --- | --- |
+    | `provided` | Explicit criteria, whether or not an issue body was supplied. |
+    | `linked-issue` | At least one resolved issue contains the full AC checklist + DoD checklist + explicit Non-goals matrix, or a linked refinement doc. |
+    | `linked-issue-unrefined` | Issues resolved, but none contains that full refinement matrix. |
+    | `none` | The PR closes no issue. |
+
+    Programmatic `buildGateContext`/`writeGateContext` callers omit this field:
+    null criteria without it means unresolved, not proven absent/unrefined.
+    Umbrella issues appear together under `## Linked issue <ref1>, <ref2>`,
+    each with its own `### <ref>`. GitHub `closingIssuesReferences` resolve in
+    each reference's OWN repository; the fallback `Closes #N` parser runs only
+    when GitHub reports none and supports same-repo references only.
+
+    A conductor MUST NOT rebuild context while reviewers for that head run.
+    Live body edits change the stable prefix: the builder refuses a changed-byte
+    same-head rebuild while that gate+head has live sentinels (exit 1, no writes),
+    naming their files and recorded hash. Sentinel-scan errors other than missing
+    tmp/ also refuse; only an unreadable EXISTING prefix remains advisory because
+    a difference cannot be proven. Retired rounds without live sentinels are
+    unaffected. Follow `GATE-EXEC-ROUND-RETIREMENT`: retire THEN rebuild, never
+    use retirement as permission to rebuild mid-flight.
 - reference the pi-subagents `parallel context-build` technique when applicable:
   run parallel `context-builder` agents from fresh context with distinct output paths
   (e.g. `context-build/request-and-scope.md`, `context-build/codebase-and-patterns.md`,
@@ -317,34 +262,19 @@ If a dispatch still receives 429, follow `GATE-EXEC-DISPATCH-RETRY-BACKOFF` belo
 
 <!-- rule: GATE-EXEC-COLLECTABLE-DISPATCH -->
 `GATE-EXEC-COLLECTABLE-DISPATCH`: Every fan-out reviewer MUST be dispatched as a
-**COLLECTABLE** run — one the orchestrating run observes, awaits, and joins by its
-deterministic per-angle findings artifact (`tmp/gate-reviews/<repo-slug>/pr-<N>/<gate>-<headSha>/<angle>.json`)
-— and NEVER as a **detached-and-uncollectable async run** the orchestrator cannot observe or
-join at fan-in (#1723). This is the dispatch-observability root cause of the fan-out failure:
-detaching reviewers into background runs the orchestrator can neither observe nor collect is
-what left no per-angle evidence artifacts on disk for the fan-in. Concretely:
+**COLLECTABLE** run, never detached and unobservable. The conductor MUST await a
+joinable/foreground run or its deterministic per-angle artifacts at
+`tmp/gate-reviews/<repo-slug>/pr-<N>/<gate>-<headSha>/<angle>.json`.
+A run that cannot be joined at fan-in is failed. A reviewer killed mid-review MUST be
+observed as failed and re-dispatched (or its wave retried at reduced concurrency),
+never counted as evidence. Apply the emitter's concurrency bound above wave by wave,
+awaiting a free slot; every budget-bounded unit writes its per-angle artifacts before fan-in.
 
-- The orchestrator spawns each reviewer as an awaited/foreground (or otherwise joinable) run
-  whose completion it blocks on, OR it awaits the reviewer's per-angle findings artifact at its
-  deterministic path; it does NOT detach reviewers into background runs whose completion and
-  artifacts it can neither observe nor collect. A dispatch the orchestrator cannot join at
-  fan-in is a FAILED fan-out, not a dispatch strategy.
-- A reviewer that dies mid-review (e.g. SIGTERM / resource kill) is OBSERVABLE AS FAILED and
-  MUST be re-dispatched (or its wave retried at the reduced batch), never silently collected as
-  if it had produced evidence. Bounded concurrency is enforced wave-by-wave at
-  `gates.fanout.maxConcurrent` (default 4, #1601) via `scheduleFanoutWaves` (and serialized to
-  one unit per wave when `gates.fanout.sequential` is set, #1726); the conductor
-  awaits a free slot before launching the next wave — never fire-all-then-retry.
-- Review units are right-sized to complete within the run budget: grouped dispatch
-  (`gates.fanout.maxAnglesPerGroup`, default 3, #1601) keeps each reviewer to a bounded,
-  budget-fitting unit, and each unit writes its per-angle artifacts before the fan-in.
-- The fan-in (`consolidate-fanin --expected-dispatch-units <n>`) fails closed when any expected
-  unit's artifact is missing on disk, so an uncollected reviewer can never produce a clean
-  verdict. If a genuine fan-out STILL cannot produce evidence within budget, the drive STOPS
-  and surfaces to the operator for a per-PR decision — it NEVER auto-falls back to an inline
-  single-agent verdict. The inline escape hatch #1648 introduced is removed by #1723: inline
-  remains possible only via the light-mode `scopeUnderThreshold` carve-out, or an explicit
-  operator decision per PR. Each reviewer:
+`consolidate-fanin --expected-dispatch-units <n>` fails closed on missing expected
+evidence. If genuine fan-out still cannot produce evidence within budget, STOP for
+an operator's per-PR decision; never automatically degrade to inline. Inline remains
+limited to the light-mode `scopeUnderThreshold` carve-out or explicit per-PR operator decision.
+Each reviewer:
 
 - starts in fresh context: run the mandatory `verify-fresh-review-context.mjs` invocation exactly as Phase 1 specifies. In the fan-out, `--scope` additionally keeps parallel reviewers in the same working directory from tripping false contamination on each other's sentinels, and `--context-path` (the Phase 1 artifact) fails a reviewer in the wrong/isolated checkout closed. A grouped reviewer runs this ONCE for the whole group, with `--scope <gate>-group-<name>` (below), not once per angle it covers. The sentinel is keyed per review ROUND by the current head SHA, so a retry at a new head naturally gets a fresh sentinel — see [Sentinel lifecycle](#sentinel-lifecycle). Here "fresh" means the reviewer's context is the neutral builder artifact + its angle(s), and explicitly NOT the main agent's conversation/state or a prior reviewer session's state: the injected neutral bundle is the intended seed (allowed), while main-agent / cross-session state bleed fails closed.
 - is composed via the sanctioned composer (`GATE-EXEC-BRIEFING-PREFIX`'s "The composer" paragraph): the same step that runs `verify-fresh-review-context.mjs` (above) ALSO runs `scripts/github/compose-reviewer-prompt.mjs --repo <repo> --pr <n> --gate <gate> --head-sha <sha> --scope <same scope> --angle-suffix-file <path to the group's authored angle-specific prompt text>`, which inlines this round's invariant-prefix bytes as the leading bytes, appends the volatile tail and the angle suffix, writes the composed prompt, and records its dispatch-prompt layout ATOMICALLY (no separate `record-dispatch-prompt-layout.mjs` call needed on this path — the composer already made it). The orchestrator then delivers the composer's `--out` file bytes to the reviewer per the "Per-harness delivery" paragraph below. Hand-composing a prompt and calling `record-dispatch-prompt-layout.mjs` directly against it remains possible as the underlying primitive, but is no longer the sanctioned fan-out path.
@@ -359,23 +289,12 @@ what left no per-angle evidence artifacts on disk for the fan-in. Concretely:
 
 <!-- rule: GATE-EXEC-FANOUT-DISPATCH-KEY -->
 `GATE-EXEC-FANOUT-DISPATCH-KEY`: Every `runs.all` / batch reviewer dispatch MUST carry a unique
-`key` field on EACH item (#1681). The Pi harness's `runs.all` workflowScript API requires each
-collection item to declare its own `key`; omitting it fails the whole dispatch with an `invalid
-key` validation error, which historically degraded a `requireFanoutEvidence` gate to a single
-inline reviewer. This rule encodes the fix so the conductor never drops the `key` and never lets
-a dispatch failure silently collapse fan-out:
-
-- Build each dispatch item with a distinct `key` (a per-angle or per-group slug), so the batch
-  validates on the harness; a missing or blank `key` on an item is a dispatch bug, not a harness
-  quirk to work around at fan-in.
-- When a fan-out dispatch fails for ANY reason (including `invalid key`), the conductor MUST
-  stop and report rather than degrading to an `inline_single_agent` verdict on a gate where
-  `gates.requireFanoutEvidence` is enabled. Merge-time and post-time enforcement both refuse an
-  inline verdict on such a gate through the shared `evaluateInlineFanoutMode` path
-  (`buildPreMergeGateCheck` in `detect-checkpoint-evidence.mjs`, and `upsert-checkpoint-verdict.mjs`),
-  so a degraded gate fails closed rather than passing as fan-out evidence. The only inline
-  acceptance is the light-mode `scopeUnderThreshold` carve-out (or an explicit operator decision
-  per PR), never a silent fallback.
+non-empty `key` on each item (angle/group slug). Missing or blank keys cause Pi's
+`runs.all` validation error `invalid key`. On ANY dispatch failure, the conductor MUST
+stop and report, never silently degrade a `gates.requireFanoutEvidence` gate to
+`inline_single_agent`. Posting and merge share `evaluateInlineFanoutMode`'s fail-closed
+qualification; only the light-mode `scopeUnderThreshold` carve-out or an explicit
+operator decision per PR permits inline.
 
 **Grouped dispatch (default).** Use the resolver and emitter above. Each emitted unit is one concurrent reviewer, while artifacts remain per-angle. Record the emitted group name on every fresh provenance entry that shares that reviewer; [Fan-out provenance](#fan-out-provenance-closing-the-self-produced-artifact-loophole) owns pairing and `countFreshDispatchUnits` owns the distinct-reviewer floor.
 <!-- rule: GATE-EXEC-NO-CWD-DEPENDENCE -->
@@ -433,28 +352,15 @@ emitted prompt as not inline-aligned. Pointer-based seeding governs how the PREF
 recorded for hash byte-identity; it is not a compliant emitted-prompt LAYOUT for a dispatched
 reviewer.
 
-**The composer (issue #1852, by construction, not by agent discipline).** Hand-composing a
-reviewer prompt — leading with a per-group preamble and instructing the reviewer to READ the
-invariant-prefix file rather than inlining its bytes — reflexively defeats the cache-alignment
-rule above: it reads as ergonomic ("tell the reviewer to read the file") but produces exactly
-the angle-first / pointer-varying layouts this section forbids, and prose discipline alone
-never held. `scripts/github/compose-reviewer-prompt.mjs` is the ONE SANCTIONED way a reviewer
-prompt is produced on the fan-out path: given `--repo`/`--pr`/`--gate`/`--head-sha`/`--scope`
-and a `--angle-suffix-file` (the per-group/angle-specific prompt text the orchestrator
-authored), it reads this round's `<gate>-<headSha>.briefing-prefix.txt` and
-`.briefing-volatile.txt` bytes off disk, concatenates prefix + volatile + angle suffix (in that
-fixed order, `composeReviewerPromptText` in `@dev-loops/core/loop/review-dispatch-plan`) so the
-invariant prefix is INLINED as the composed prompt's leading bytes by construction, writes the
-result, and — in the SAME call — records the dispatch-prompt layout via
-`record-dispatch-prompt-layout.mjs`'s `recordDispatchPromptLayout` (see "Prompt-LAYOUT
-enforcement" below). Composing and recording are one atomic call, not two steps an orchestrator
-could pair incorrectly or skip; hand-composed pointer-seeding (calling
-`record-dispatch-prompt-layout.mjs` directly against a manually-assembled prompt) remains
-possible as the underlying primitive but is no longer the sanctioned fan-out path. Angle
-CONTENT is unchanged by this: the composer never generates or templates the angle-specific
-text — it is still the orchestrator's own authored persona/instructions (e.g.
-`COPILOT-FOLLOWUP-ADVERSARIAL-BRIEFING`), supplied verbatim via `--angle-suffix-file`; the
-composer only enforces WHERE that text goes.
+**The composer.** `scripts/github/compose-reviewer-prompt.mjs` is the sanctioned
+fan-out prompt builder. Given `--repo`/`--pr`/`--gate`/`--head-sha`/`--scope` and
+`--angle-suffix-file`, it reads the round's `.briefing-prefix.txt` and
+`.briefing-volatile.txt`, then writes prefix + volatile + supplied angle suffix in
+that order (`composeReviewerPromptText`). The same atomic call records the layout
+through `recordDispatchPromptLayout`; no separate recording step is needed.
+It places supplied angle text verbatim, never generates its content. The emitter
+below supplies the sanctioned per-unit suffix. Hand composition/direct
+`record-dispatch-prompt-layout.mjs` remain underlying primitives, not the fan-out path.
 
 <!-- rule: GATE-EXEC-FANOUT-DISPATCH-EMIT -->
 `GATE-EXEC-FANOUT-DISPATCH-EMIT` (issue #2092): The composer produces ONE reviewer prompt;
@@ -538,50 +444,20 @@ and retained findings including recommendations.
 Missing, altered or fresh provenance fails closed. Same-head completed-only resumes do not qualify.
 Omit `--expected-dispatch-units` at zero, as required by the existing consumer contract.
 
-**Per-harness delivery.** The composer's `--out` file holds the exact full reviewer prompt
-bytes; how those bytes REACH the spawned reviewer's actual prompt differs by harness:
-- **Code-driven fan-out (e.g. a `pi` `runs.all` batch dispatch):** the driver reads the
-  composer's `--out` file (or its stdout `promptPath`) and passes those bytes directly as the
-  spawned reviewer's prompt — a straightforward byte-exact relay with no intermediate agent
-  paraphrase.
-- **Agent-driven fan-out (Claude Code's Agent/Task tool):** the orchestrating agent has no
-  primitive that injects a program-constructed byte-exact prefix into a subagent's prompt
-  independently of the `prompt` STRING PARAMETER it itself constructs for that tool call. The
-  sanctioned sequence is: run the composer, read its `--out` file's exact bytes, and pass those
-  bytes verbatim — with NO added preamble, wrapper text, or paraphrase — as the Agent tool's
-  `prompt` parameter. This makes the prompt CODE-COMPOSED (the composer, not the agent, decides
-  the byte sequence), but the final hop — the orchestrating agent relaying those exact bytes
-  into the tool call — is not itself mechanically enforced by this CLI. On the sanctioned
-  composer path the dispatch record's `promptContentHash` is hashed atomically from the SAME
-  composed bytes that become the emitted `--out` file, so `verify-dispatch-prompt-layout.mjs`'s
-  fan-in check (below) binds the record to that emitted unit and catches a record that is NOT
-  the emitted unit (a hand-composed prompt, a paraphrased suffix, a mismatched delivered
-  prompt) — but it does NOT observe what the agent actually pasted into the tool call, so a
-  FAITHFUL record of the emitted bytes paired with a drifted actual relay (an added preamble in
-  the tool call itself) is the documented delivered-task boundary below ("Three identities, one
-  honest boundary"), not something this check can catch. Honest finding (closes the `#1841` AC3 gap this scope is best-effort on): Claude
-  Code's Agent-tool dispatch layer exposes no usage/cache-read telemetry to the orchestrating
-  agent for a spawned subagent, so REAL provider cache reuse across sibling reviewers of one
-  round (`org+model content-hash reads on reviewers 2..N`) cannot be measured or verified from
-  inside this harness — only the ordering/fingerprint invariants above (byte-identical prefix,
-  by-construction inline alignment, mechanical layout enforcement) are assertable here; a
-  verified-reuse claim would require the harness to expose that telemetry, which is outside this
-  repo's control. This is a harness-capability limit, not a defect in the composer: the composer
-  still guarantees, by construction, that every compliant dispatch UNIT of a round shares a
-  byte-identical leading prefix span, which is the necessary (if not independently provable)
-  precondition for the provider to ever reuse its cache.
-- **Agent-driven fan-out (Codex's agent tool):** Codex is agent-driven and, like Claude Code,
-  routes through the generic batch/agent adapter rather than a dedicated concrete adapter (only
-  `pi` ships one today; the per-harness fixtures stamp Claude Code and Codex onto the same
-  generic adapter with a distinct env). Its agent-tool dispatch therefore carries the SAME
-  observed limitation as the Claude Code case above: the orchestrating agent has no primitive to
-  inject a program-constructed byte-exact prompt independently of the prompt parameter it
-  constructs, so the final relay hop is not mechanically enforced (the delivered-task boundary),
-  and the dispatch layer exposes no usage/cache-read telemetry for a spawned subagent, so real
-  provider cache reuse is not measurable from inside it either. This repo does NOT independently
-  qualify Codex's agent-tool dispatch for production — the limitation is documented explicitly,
-  never certified away; the same by-construction emitted-unit binding and ordering invariants are
-  what remain assertable.
+**Per-harness delivery.** Relay the composer's `--out`/`promptPath` bytes verbatim:
+
+| Dispatch | Delivery and limits |
+| --- | --- |
+| Code-driven Pi `runs.all` | The driver reads the file and directly supplies the spawned reviewer's prompt, without agent paraphrase. |
+| Agent-driven Claude Code Agent/Task | Run the composer, read the file, and copy its exact bytes into `prompt`, with NO preamble, wrapper or paraphrase. No primitive injects those bytes independently of that agent-authored parameter. |
+| Agent-driven Codex | Uses the generic batch/agent adapter, like Claude Code; only Pi ships a concrete adapter. Fixtures distinguish the generic adapters by environment. Codex production dispatch is NOT independently qualified by this repo. |
+
+For both agent-driven harnesses, the final relay is not mechanically observed and
+spawned-agent usage/cache-read telemetry is unavailable. Claim only emitted-unit
+byte identity, inline alignment, ordering and fingerprints, never verified provider
+reuse. `promptContentHash` binds the record atomically to the emitted file; it catches
+recorded paraphrases/mismatches, not a faithful file record paired with a drifted
+actual tool prompt. See "Three identities, one honest boundary" below.
 
 **Content inlining.** Use `write-gate-context.mjs`'s generated `<gate>-<headSha>.briefing-prefix.txt`, beside the JSON context artifact. `renderBriefingPrefix` owns its fixed section order, separate author-controlled body/issue fences, diff fencing and conditional trailing validation section (`GATE-EXEC-VALIDATION-ARTIFACT`); consume those bytes unchanged. The renderer, never issue-body text, supplies multi-issue labels outside those fences.
 
@@ -693,114 +569,63 @@ verified to exist before citation, never assumed from a probe that could have fa
 
 #### Sentinel lifecycle
 
-The fresh-context sentinel, written by `verify-fresh-review-context.mjs`, is scoped **per
-review round**, keyed by the head SHA. This makes the lifecycle mechanical rather than a
-manual chore:
+`verify-fresh-review-context.mjs` keys each sentinel by gate-prefixed scope and the
+full `git rev-parse HEAD`: `tmp/checkpoint-context-sentinel-<scope>-<headSha>.json`.
+With no git/head, it uses legacy `tmp/checkpoint-context-sentinel-<scope>.json`.
+Old scope-only sentinels do not collide with head-keyed rounds.
 
-- The round key is the current head SHA (`git rev-parse HEAD`); reviewers keep invoking the
-  guard as `--scope <gate>-<angle>` (a **gate-prefixed** scope, e.g. `draft-gate-coverage`)
-  and get head-keyed isolation for free — no flag to pass. The gate prefix attributes each
-  sentinel to its gate for the per-gate record-hash check above; the head key gives retry
-  isolation. `git rev-parse HEAD` yields the same full SHA on every invocation for a given
-  head, so the key is deterministic and the same-head guard cannot be defeated by an
-  inconsistent spelling. The sentinel filename is therefore
-  `tmp/checkpoint-context-sentinel-<scope>-<headSha>.json` in a
-  git worktree. When git is unavailable (non-git worktree, no commits), the head component is
-  omitted and the key falls back to the scope-only filename
-  `tmp/checkpoint-context-sentinel-<scope>.json` (legacy behavior) — there is no `-<headSha>`
-  file in that case.
-- **A retry at a new head is never blocked by a prior round's sentinel** — a new head SHA
-  produces a new key, so a re-fan-out after a fix commit passes `fresh: true` with **no
-  manual clear step**.
-- **Within one round the contamination guard is preserved:** a same-scope + same-head
-  re-entry still fails closed (`fresh: false`, exit 1) — that is genuine main-agent /
-  cross-session state bleed. (Two sanctioned same-head paths exist, neither of which is
-  state bleed: the opt-in `--same-head-retry` overwrite documented below —
-  `--pr-body-fix-retry` is its deprecated alias — gated on a matching prefix hash for an
-  UNCHANGED briefing, and explicit round retirement under `GATE-EXEC-ROUND-RETIREMENT` for
-  a REBUILT briefing.)
-- The orchestrator **MUST NOT** manually clear sentinels between rounds or clear
-  carried-forward angles' sentinels. Phase 1.2 determines retries, including eligible
-  `findings_present` carries; each re-invoked angle gets a new-head key without cleanup.
-  `GATE-EXEC-ROUND-RETIREMENT` sweeps only its retired gate+head, leaving carried angles'
-  prior-head sentinels outside that scope.
-- Stale pre-round sentinels (the old scope-only name) never collide with a head-keyed round
-  and are simply ignored.
+A new head gets a fresh key automatically. Within one head, same-scope re-entry fails
+closed (`fresh: false`, exit 1) except for the two sanctioned paths below. The
+orchestrator MUST NOT manually clear sentinels between rounds or clear carried angles'
+sentinels. Phase 1.2 chooses retries, including eligible findings-present carries;
+retirement affects only its gate+head, never carried angles' prior-head sentinels.
 
-**Sanctioned same-head retry.** Some legitimate re-runs never earn a new round key, so a
-plain re-invocation of the same angle collides with its own pass-1 sentinel and fails closed
-exactly like genuine contamination would. The sanctioned scenarios are:
+**Sanctioned same-head retry.** For an interrupted reviewer, harness crash or
+PR-body-only fix, use `verify-fresh-review-context.mjs --same-head-retry`
+(deprecated alias: `--pr-body-fix-retry`). It overwrites only that scope+head sentinel
+and only when supplied `--prefix-hash`/`--prefix-file` EXACTLY matches the existing
+recorded hash. The reason never affects eligibility. Missing hash or mismatch fails
+closed; changed briefing bytes require retirement instead.
 
-- **PR-body/description-only fix** (e.g. editing the PR body's AC/DoD checkboxes
-  so the deterministic #1877 unchecked-box block passes): a body edit never
-  changes the head SHA, so the round key
-  stays the same.
-- **Interrupted reviewer**: a reviewer killed or interrupted AFTER running the sentinel
-  check but BEFORE writing its findings artifact burned the (scope, round) sentinel while
-  producing nothing; the re-dispatched reviewer for the same scope+head is a retry, not
-  state bleed.
-- **Harness crash** mid-round, same shape as the interrupted reviewer.
-
-`verify-fresh-review-context.mjs --same-head-retry` (deprecated alias: `--pr-body-fix-retry`)
-is the sanctioned escape hatch for all of them: it overwrites the existing sentinel for that
-scope+round, but **only** when the given `--prefix-hash`/`--prefix-file` matches the existing
-sentinel's recorded prefix hash **exactly**. An identical hash proves the seeded briefing
-bytes were NOT rebuilt, so the byte-identity invariant (`GATE-EXEC-BRIEFING-PREFIX`) stays
-fully intact for every other sentinel of the same round — the previously-clean angles'
-sentinels are left untouched and still verify against the same on-disk record, so
-`verify-briefing-prefixes.mjs` needs no full re-fan of clean angles and no manual sentinel
-deletion. The retry's REASON never enters the decision; the hash equality is the entire
-safety argument, which is why one mechanical guard covers every scenario above. A hash
-mismatch (the context-builder genuinely rebuilt the briefing) or an existing sentinel
-recording no prefix hash still fails closed — this flag is a narrow, auditable exception,
-never a general bypass of the contamination guard. The mismatch case is not a dead end:
-its sanctioned recovery is retiring the round explicitly under
-`GATE-EXEC-ROUND-RETIREMENT` below. Practically: re-brief the retried
-reviewer with the UNCHANGED, byte-identical invariant prefix (do not re-run
-`write-gate-context.mjs`); for the PR-body-fix case additionally instruct the reviewer to
-fetch the CURRENT PR body/description live (e.g. `gh pr view`) rather than trust the
-prefix's now-stale inlined copy, since the point of that retry is to re-check the
-just-edited description. See `verify-fresh-review-context.mjs --help` for the flag's exact
-semantics and exit codes.
+Re-brief with the UNCHANGED invariant prefix; do not rerun `write-gate-context.mjs`.
+Other angles' sentinels remain untouched and verify against the same prefix record;
+no full re-fan or manual deletion is needed. For a PR-body fix, additionally tell
+the retried reviewer to fetch the CURRENT PR body live (for example `gh pr view`),
+because the unchanged prefix contains the old description. See the guard's `--help`
+for exact exit semantics.
 
 **Sanctioned rebuild-and-retire.**
 
 <!-- rule: GATE-EXEC-ROUND-RETIREMENT -->
-`GATE-EXEC-ROUND-RETIREMENT`: A legitimate rebuild at the same head (the builder resolves PR/issue inputs itself, and correcting bad or stale seeding is a legitimate rebuild) now REQUIRES retiring the round FIRST: under the #1537 enforcement in Phase 1, `write-gate-context.mjs` REFUSES a rebuild that would change the prefix bytes while any of this gate's reviewer sentinels for that head are still live, so the rebuild cannot strand them in the first place — retire-THEN-rebuild is the sanctioned path (rebuilding while reviewers are still running remains forbidden). The recovery framing below — a round whose sentinels were already invalidated and fail closed forever — applies to rounds stranded BEFORE that enforcement landed, or stranded by a path other than `write-gate-context.mjs` (e.g. a sentinel whose recorded hash no longer matches after an out-of-band prefix change): the new briefing-prefix bytes hash differently, so every
-existing sentinel of that round fails closed forever — including under `--same-head-retry`,
-whose hash-equality gate a rebuild destroys by design. The sanctioned recovery is retiring
-the round explicitly: `node scripts/github/retire-gate-round.mjs --gate <gate> --head-sha <sha>
---reason "<why>" [--findings-dir <round artifacts dir>] [--repo <owner/name> --pr <N> | --no-findings-artifacts]`
-(`--head-sha` is the FULL 40-char SHA the sentinels are keyed by) moves every sentinel of THAT GATE keyed by that head
-(and, when given, the round's findings-artifacts directory) into an audited retirement
-directory (`tmp/retired-gate-rounds/<sha>/round-<n>/` with a `retirement.json` record; the
-other gate's live round at the same head is never touched), so a
-FRESH fan-out can run at the same head with every reviewer of the new round agreeing on the
-one new hash. Retirement MUST be explicit — `write-gate-context.mjs` REFUSES a same-head
-rebuild that would change the recorded prefix bytes while this gate's reviewer sentinels
-for that head are still live (#1537, naming this command in the refusal); it never retires
-as a side effect. An operator who needs to rebuild at a head with a live round MUST retire
-first (retire-THEN-rebuild), so the rebuild sees no live sentinels and proceeds. The caller MUST pass `--findings-dir` whenever the retired
-round wrote artifacts: at the same head they would pass the `GATE-EXEC-ARTIFACT-HEAD-STAMP` guard and
-silently mix into the new round's fan-in; retiring them is the explicit discard. This is
-now ENFORCED, not just advised (#1626): when `--findings-dir` is omitted and
-`--no-findings-artifacts` is not set, retirement REFUSES if the canonical per-angle findings
-directory for this gate+head (`tmp/gate-reviews/<slug>/pr-<N>/<gate>-<headSha>/`, the path
-`write-gate-context.mjs` / `consolidate-fanin.mjs` use) exists — its artifacts would stay
-LIVE. `--repo` + `--pr` name that canonical path for the check; `--no-findings-artifacts` is
-the explicit opt-out (the operator accepts any live-artifact risk). The
-retirement directory keeps them recoverable for AUDIT — feeding a retired artifact back
-into the new round's fan-in is NOT sanctioned (the new round re-reviews its angles; the
-one-hash-per-round invariant covers only artifacts its own reviewers wrote). The
-carry-forward channel is closed the same way: `resolve-angle-carry-forward.mjs` fails
-closed when `--prev-head` equals `--head-sha`, so a retired round's verdict can never
-re-seed the fresh fan-out at the same head via `GATE-EXEC-ANGLE-CARRY-FORWARD` either. Retirement
-never weakens the `GATE-EXEC-BRIEFING-PREFIX` enforcement in
-`verify-briefing-prefixes.mjs`: retired sentinels live under a subdirectory its flat scan
-never reads, and sentinels of one LIVE round that disagree still fail closed. A gate+head
-with no sentinels and no canonical artifacts dir retires as a no-op; the canonical-dir
-check still runs first (pass `--repo`/`--pr` so it can verify no artifacts exist, or
-`--no-findings-artifacts` to opt out).
+`GATE-EXEC-ROUND-RETIREMENT`: A legitimate same-head rebuild, including correction
+of stale/bad seeding, MUST retire the round FIRST. Phase 1's builder refuses changed
+prefix bytes while this gate+head has live sentinels; it never retires implicitly.
+Rebuilding while reviewers run remains forbidden. A round already stranded by old
+tooling or an out-of-band prefix change also uses retirement: `--same-head-retry`
+cannot repair its hash mismatch.
+
+```sh
+node scripts/github/retire-gate-round.mjs --gate <gate> --head-sha <sha> --reason "<why>" \
+  [--findings-dir <round artifacts dir>] [--repo <owner/name> --pr <N> | --no-findings-artifacts]
+```
+
+Use the FULL 40-character sentinel-key SHA. Retirement moves only that gate+head's
+sentinels and supplied findings directory into
+`tmp/retired-gate-rounds/<sha>/round-<n>/`, with `retirement.json` for audit.
+The other gate's live same-head round is untouched. Then rebuild and dispatch a FRESH
+fan-out whose reviewers all use the new hash.
+
+The caller MUST pass `--findings-dir` whenever the retired round wrote artifacts:
+same-head stamps alone would otherwise let stale findings enter the new fan-in.
+Without that flag or `--no-findings-artifacts`, retirement REFUSES when the canonical
+`tmp/gate-reviews/<slug>/pr-<N>/<gate>-<headSha>/` exists. Supply `--repo` and `--pr`
+to check that path; `--no-findings-artifacts` is the explicit operator opt-out accepting
+live-artifact risk. Even a no-sentinel/no-artifact no-op performs that check first.
+
+Retired evidence stays recoverable for audit, never as input to the new fan-in.
+The carry resolver also refuses equal prior/current heads, so retirement cannot
+re-seed its own verdict through carry-forward. Retired sentinels sit outside the
+verifier's flat live scan; divergent hashes within a live round still fail closed.
 
 ### Phase 3 — Consolidation: fan-in synthesis and disposition ledger
 
@@ -843,24 +668,13 @@ plan hash is missing or mismatched. The refusal names the failing check
 barrier: the primer write-before-read ordering is no longer asserted only in
 prose, but is a mechanically-checkable fail-closed input to consolidation.
 
-**Enforcement stays OPT-IN, not default-on (issue #1841, investigated as part of
-completing #1468).** `consolidate-fanin.mjs` validates this evidence ONLY when the
-conductor supplies both `--primer-evidence` and `--primer-plan`; a round that
-supplies neither proceeds unenforced, same as before. #1841 investigated flipping
-this to default-on and could NOT prove, within the shipped harness and without a
-live multi-reviewer dispatch to observe, that the Phase 1.5 primer measurably
-produces org+model content-hash cache reads on reviewers 2..N — `primer-evidence.mjs`'s
-own ordering/binding checks are deterministic and offline (timestamps, fingerprints),
-which proves ordering and request-fingerprint invariants but never MEASURES
-provider cache reuse itself (that measurement is `GATE-EXEC-CACHE-TELEMETRY`'s job,
-below, and it is ALSO opt-in for the same reason: no in-repo artifact yet records a
-real harness's cache-creation/cache-read token counts for a primed round). Flipping
-primer-evidence enforcement to default-on without that proof risked false-blocking a
-legitimately-primed fan-out on a harness/mechanism combination nobody had measured.
-Ship the dispatch-LAYOUT check above as unconditional (it needs no such proof — it
-verifies BYTES the orchestrator already controls, not provider-side cache behavior),
-and revisit this default once a real round's cache-telemetry evidence demonstrates
-the primer reliably produces reads on the shipped harness.
+**Enforcement stays OPT-IN.** `consolidate-fanin.mjs` checks primer evidence only
+when both `--primer-evidence` and `--primer-plan` are supplied; neither means
+unenforced. Offline ordering/fingerprint checks do not measure provider cache reuse.
+No in-repo artifact demonstrates a real primed harness round's creation/read token
+counts; revisit default-on enforcement only after that evidence exists, to avoid
+false-blocking unmeasured harness/mechanism combinations. Dispatch-layout checking
+remains unconditional: it verifies controlled prompt bytes, not provider behavior.
 
 <!-- rule: GATE-EXEC-CACHE-TELEMETRY -->
 `GATE-EXEC-CACHE-TELEMETRY`: when a round records cache-telemetry evidence
@@ -1364,34 +1178,21 @@ After applying fixes and advancing the head SHA:
 
 #### Angle carry-forward (fail-closed) {#angle-carry-forward-fail-closed}
 
-<!-- rule: GATE-EXEC-ANGLE-CARRY-FORWARD --> `GATE-EXEC-ANGLE-CARRY-FORWARD`: On a head bump, a previously-**clean** OR previously-**findings_present**
-angle verdict IS carried forward to the new head by default — reusing the prior reviewer's
-result instead of re-fanning that angle — whenever, and ONLY when, the delta between the prior
-reviewed head (A) and the new head (B) provably does not touch that angle's **review
-surface** (issue #2017 added `findings_present` to this eligible set; it was `clean`-only
-before). When a `findings_present` angle carries, it brings its EXACT prior findings with it,
-unchanged, and the round still blocks on them exactly as if that angle had been freshly
-reviewed at head B — carry-forward never converts an open finding into a pass. An angle's OWN prior verdict for this purpose is derived from the prior
-findings-log's own findings — per-angle attribution — NEVER from the round's overall verdict:
-a `clean` OR `findings_present` overall round can still carry a per-angle non-blocking finding,
-and ANY finding recorded against an angle, at any severity, makes that specific angle
-`findings_present` for carry-forward purposes regardless of what the round as a whole was
-labeled. Carry-forward is the DEFAULT posture at every re-gate: the re-dispatch set is
-what this rule leaves unproven — every angle whose review surface the delta touches, every
-mandatory / always-run angle, and every angle whose prior-finding attribution is AMBIGUOUS
-(a finding matching more than one `provenance.perAngle` row) — and each angle the seam marks
-`carried` keeps its proven verdict. A full
-re-dispatch of the entire resolved angle set is the EXCEPTION: it is taken when the seam
-refuses to emit a plan at all (any fail-closed refusal condition below), when the gate has
-no prior head, or when the prior log verdict is neither `clean` nor `findings_present`. "Default" describes which decision
-procedure runs, never a per-angle presumption: the per-angle default without proof stays
-`false` (see the fail-closed defaults below). This is a narrow, fail-closed refinement of the re-fan step above, NOT an exemption from `GATE-EXEC-REGATE-MANDATORY`: the full gate chain still runs at head B (context-builder + consolidation always fresh, plus every angle whose surface changed and every mandatory angle); carry-forward only spares the reviewers that provably have nothing new to look at. An unambiguously-attributed
-findings-present angle — its prior finding matches exactly one `provenance.perAngle` row — carries its open findings
-forward, still open, still blocking, when its surface is provably untouched, including a
-finding deferred to a PR review thread per `GATE-EXEC-THREAD-DISPOSITION` rather than fixed
-in-gate. Only an AMBIGUOUSLY-attributed finding (matching more than one `provenance.perAngle`
-row) forces that angle to re-run at every re-gate that follows, regardless of surface — attribution, not the finding's mere
-existence, is what this rule cannot yet prove.
+<!-- rule: GATE-EXEC-ANGLE-CARRY-FORWARD --> `GATE-EXEC-ANGLE-CARRY-FORWARD`: On every head bump A→B,
+run the carry-forward decision procedure by default. Carry a prior `clean` or
+`findings_present` angle ONLY when the delta provably leaves its review surface
+untouched and every guard below passes. Without proof, `carryForward` remains false.
+Dispatch the current resolved set minus proven carries; touched, mandatory/always-run
+and ambiguously attributed angles re-run. No prior head, an ineligible prior-log verdict
+or any whole-plan refusal means full re-dispatch. Context-builder and consolidation
+always run fresh at B; this never exempts a round from `GATE-EXEC-REGATE-MANDATORY`.
+
+Derive each angle's prior verdict from the prior log's findings, never its overall
+verdict: ANY finding at ANY severity makes that angle `findings_present`, even in an
+overall `clean` round. A findings-present carry retains its EXACT findings unchanged,
+open and blocking as before, including findings left in review threads. An open finding
+alone does not require re-review. Attribution to exactly one `provenance.perAngle` row
+permits carry; attribution to multiple rows forces re-review regardless of surface.
 
 The decision is a pure, deterministic, fail-closed seam — `resolveAngleCarryForward` / `resolveCarryForwardAngles` in `@dev-loops/core/loop/gate-carry-forward` — driven by the CLI `scripts/github/resolve-angle-carry-forward.mjs --repo <r> --pr <n> --gate <g> --prev-head <A> --head-sha <B> --spec-authority <identity-path>` (run from the worktree at head B; `--spec-authority` stamps the round's identity onto the carry-forward plan by default, issue 2008 / ADR 0061 AC1). It reads the prior findings-log for head A whose overall verdict is `clean` OR `findings_present`, computes the delta as the direct two-dot tree diff `git diff A..B` (never three-dot — a two-dot diff never omits a file that differs between the reviewed head A and B, so a non-fast-forward advance cannot carry an angle whose surface changed), and returns per angle `carryForward: true|false` with a reason.
 
@@ -2017,8 +1818,8 @@ not a countable reviewer). You cannot claim more reviewers than you recorded dis
 entries for — this closes the `{distinctReviewers: 2, perAngle: []}` loophole.
 
 **One scoped reviewer per fresh dispatch unit (always-on write-time floor).** `fanout_fanin`
-execution mandates one independent reviewer per resolved dispatch unit — one angle in
-per-angle mode / under `gate:full`, one declared group in grouped mode — because
+execution mandates one independent reviewer per emitted dispatch unit (including grouped
+`gate:full` dispatch under `GATE-EXEC-FANOUT-DISPATCH-EMIT`) because
 recording an internally-consistent `distinctReviewers` count is not enough on its own:
 one reviewer could still cover two angles without that count ever going inconsistent. The
 write path additionally rejects, unconditionally (not gated by `requireFanoutProvenance`),

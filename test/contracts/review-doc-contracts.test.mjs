@@ -9,6 +9,7 @@ import {
   USER_FACING_AGENT_SURFACE,
 } from "../imported-assets-helpers.mjs";
 import { assertRuleOwned } from "./_rule-helpers.mjs";
+import { extractRelativeMarkdownLinks } from "../../scripts/docs/validate-links.mjs";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -166,7 +167,6 @@ test("review workflow resolves pre-approval gate angles from config with explici
   // prescribe it (per LOCAL-DEV-SELF-CHECK-NO-FANOUT); the fan-out sites are
   // the copilot-pr-followup / review surfaces below.
   const gateDocuments = [
-    ["skills/copilot-pr-followup/SKILL.md", copilotFollowupSkill, /default pre-approval gate/i],
     ["agents/review.agent.md", reviewAgent, /default pre-approval gate contract:[\s\S]{0,200}resolveGateAngles/i],
     ["skills/dev-loop/templates/review.md", reviewTemplate, /Default pre-approval gate/i],
     ["skills/docs/reviewer-loop-state-graph.md", reviewerGraph, /default pre-approval gate[\s\S]{0,200}resolveGateAngles/i],
@@ -187,7 +187,8 @@ test("review workflow resolves pre-approval gate angles from config with explici
   assert.match(reviewTemplate, /resolveGateAngles/i);
   assert.match(copilotFollowupSkill, /resolveGateAngles/i);
   assert.match(reviewTemplate, /configured angle checks/i);
-  assert.match(copilotFollowupSkill, /gate-review-sub-loop-contract\.md.*pre-approval/i);
+  assert.ok(extractRelativeMarkdownLinks(copilotFollowupSkill).some(({ rawTarget }) =>
+    rawTarget === "../docs/gate-review-sub-loop-contract.md"));
   assertRuleOwned("GATE-EXEC-BUILD-ONCE-SEED", "skills/docs/gate-review-sub-loop-contract.md");
   assertRuleOwned("GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK", "skills/docs/gate-review-sub-loop-contract.md");
   assert.match(copilotFollowupSkill, /GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK/);

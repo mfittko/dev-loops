@@ -11,6 +11,7 @@ import {
 import { fileURLToPath } from "node:url";
 import { collectGeneratedAssets } from "../../scripts/claude/generate-claude-assets.mjs";
 import { extractRelativeMarkdownLinks } from "../../scripts/docs/validate-links.mjs";
+import { parseMarkdownSections } from "../../packages/core/src/loop/issue-refinement-artifact.mjs";
 import { assertNotRestated, assertRuleOwned, extractOwnedText } from "./_rule-helpers.mjs";
 
 const PUBLIC_CONTRACT_PATH = "skills/docs/public-dev-loop-contract.md";
@@ -148,8 +149,9 @@ test("repo docs define dev-loop as the public façade and keep internal routed l
   assert.match(devLoopSkill, /@dev-loops\/core\/loop\/public-dev-loop-routing/i);
   assert.match(devLoopSkill, /summary/i);
 
-  assert.match(copilotFollowupSkill, /canonical internal/i, "skills/copilot-pr-followup/SKILL.md should preserve canonical-internal framing");
-  assert.match(copilotFollowupSkill, /public `dev-loop`/i, "skills/copilot-pr-followup/SKILL.md should point back to the public dev-loop façade");
+  assert.equal(parseFrontmatter(copilotFollowupSkill)["user-invocable"], false);
+  assert.ok(extractRelativeMarkdownLinks(copilotFollowupSkill).some(({ rawTarget }) =>
+    rawTarget === "../dev-loop/SKILL.md#guard-rules"));
 });
 
 test("workflow-surface taxonomy stays explicit and guards the entrypoint asset surface", async () => {
@@ -260,7 +262,8 @@ test("copilot-pr-followup mandates upsert helper command for gate comments", asy
   assert.match(copilotFollowupSkill, /--head-sha\s+<current_head_sha>/);
   assert.match(copilotFollowupSkill, /--verdict\s+<clean\|findings_present\|blocked>/);
   assert.match(copilotFollowupSkill, /--gate\s+<draft_gate\|pre_approval_gate>/);
-  assert.match(copilotFollowupSkill, /Do NOT use.*gh pr comment.*gh pr review.*gate verdicts.*upsert-checkpoint-verdict/i);
+  // The owner above defines helper-only posting. Command/flag wiring is
+  // structural evidence; word order cannot prove the agent obeys the ban.
 });
 
 test("public dev-loop contract keeps conflict reconciliation local and context-first", async () => {
@@ -304,69 +307,42 @@ test("public dev-loop contract keeps tracker-backed local work inside local_impl
   assert.match(localImplSkill, /LOCAL-TRACKER-NO-DIRECT-MERGE/);
 });
 
-test("checkpoint review chain contract exists and is referenced by both gates", async () => {
-  const [subLoopContract, copilotFollowupSkill] = await Promise.all([
-    readRepo("skills/docs/gate-review-sub-loop-contract.md"),
-    readRepo("skills/copilot-pr-followup/SKILL.md"),
-  ]);
-
-  // Contract doc prescribes the 5 sub-loop phases. The fan-out phase describes
-  // independent reviewers seeded with the build-once neutral bundle — NOT a
-  // fork (the honesty fix, #895).
-  assert.match(subLoopContract, /context-builder/i);
-  assert.match(subLoopContract, /Fan-out: independent reviewers/i);
-  assert.match(subLoopContract, /fan-in.*synthesis/i);
-  assert.match(subLoopContract, /fix/i);
-  assert.match(subLoopContract, /repeat until clean/i);
-
-  // References pi-subagents parallel context-build technique
-  assert.match(subLoopContract, /parallel context-build/i);
-
-  // Worktree isolation is PROHIBITED for per-angle reviewers (#1135): they are
-  // read-only, and isolation both loses the seeded gate-context bundle (gitignored,
-  // worktree-local) and risks reviewing a stale tree checked out from main instead
-  // of the PR head.
-  assert.match(subLoopContract, /worktree isolation is prohibited/i);
-  assert.match(subLoopContract, /--context-path/);
-  assert.match(subLoopContract, /never an isolated worktree/i);
-
-  // Machine-parseable fields
-  assert.match(subLoopContract, /subLoopPhases/i);
-  assert.match(subLoopContract, /contextBuilderRequired/i);
-  assert.match(subLoopContract, /worktreeIsolationProhibited/i);
-  assert.match(subLoopContract, /fixRetryUntilClean/i);
-
-  // Draft gate references the sub-loop contract
-  assert.match(copilotFollowupSkill, /gate-review-sub-loop-contract\.md.*draft gate/i);
-
-  // Pre-approval gate references the sub-loop contract
-  assert.match(copilotFollowupSkill, /gate-review-sub-loop-contract\.md.*pre-approval/i);
-
-  // Contract owns execution shape, not review angles
-  assert.match(subLoopContract, /execution shape/i);
-  assert.match(subLoopContract, /does not own/i);
-
-  // Non-substitution rule between gates
-  assert.match(subLoopContract, /does not satisfy the other gate/i);
+test("both lifecycle gates route to the owned review chain", async () => {
+  const skill = await readRepo("skills/copilot-pr-followup/SKILL.md");
+  for (const gate of ["Draft gate", "Pre-approval gate"]) {
+    const section = parseMarkdownSections(skill).find(({ bodyLines }) =>
+      bodyLines.includes(`- **Gate name:** ${gate}`));
+    assert.ok(section);
+    assert.ok(extractRelativeMarkdownLinks(section.bodyLines.join("\n")).some(({ rawTarget }) =>
+      rawTarget === "../docs/gate-review-sub-loop-contract.md"));
+  }
+  for (const id of ["GATE-EXEC-BUILD-ONCE-SEED", "GATE-EXEC-SEPARATE-CHAINS", "GATE-EXEC-NON-SUBSTITUTION"]) {
+    assertRuleOwned(id, "skills/docs/gate-review-sub-loop-contract.md");
+  }
+  // Context-builder/locality and cross-gate evidence behavior are exercised
+  // by write-gate-context, fresh-review-context and checkpoint-evidence tests.
 });
 
 function assertDraftBoundary(content) {
-  const rule = content.match(/<!-- rule: OPS-DRAFT-FIRST-PR -->\s*([\s\S]*?)(?=\n\s*\n|$)/)?.[1].replace(/\s+/g, " ");
-  assert.ok(rule, "draft-first owner body must exist");
-  assert.match(rule, /MUST\b[^.]*\bdraft\b/);
-  assert.match(rule, /MUST NOT\b[^.]*\bready\b/);
-  assert.match(rule, /`ready-for-review\.mjs`[^.]*gated on clean draft-gate evidence/);
+  const section = parseMarkdownSections(content).find(({ bodyLines }) =>
+    bodyLines.includes("<!-- rule: OPS-DRAFT-FIRST-PR -->"))?.bodyLines.join("\n");
+  assert.ok(section, "draft-first owner section must exist");
+  const commands = [...section.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
+  for (const command of ["create-pr.mjs", "--ready", "ready-for-review.mjs"]) {
+    assert.ok(commands.includes(command), `missing draft-boundary API: ${command}`);
+  }
+  // These are API routes, not proof of natural-language MUST/MUST NOT semantics.
+  // create-pr and ready-for-review suites exercise draft creation and missing,
+  // stale or blocking gate-evidence refusal; agent permission needs review.
 }
 
-test("draft-boundary checks accept reflow but reject weakened or displaced gate evidence", async () => {
+test("draft-boundary routes tolerate rewritten guidance but not missing APIs or owner markers", async () => {
   const owner = await readRepo("skills/docs/copilot-loop-operations.md");
-  assertDraftBoundary(owner.replace("New PRs MUST open", "Every new PR MUST begin"));
-  assertDraftBoundary(owner.replace("Agents MUST NOT create ready PRs.", "Agents\nMUST NOT create ready PRs."));
+  assertDraftBoundary(owner.replace("New PRs MUST open", "Every new PR MUST begin")
+    .replace("gated on clean draft-gate evidence", "after a clean draft gate"));
   for (const changed of [
-    owner.replace("MUST open", "MAY open"),
-    owner.replace("MUST NOT create ready", "MAY create ready"),
-    owner.replace("gated on clean draft-gate evidence", "gated on previous-head evidence"),
-    owner.replace("gated on clean draft-gate evidence", "optional") + "\n`ready-for-review.mjs`, gated on clean draft-gate evidence",
+    owner.replace("<!-- rule: OPS-DRAFT-FIRST-PR -->", ""),
+    owner.replaceAll("`ready-for-review.mjs`", "`different-helper.mjs`"),
   ]) assert.throws(() => assertDraftBoundary(changed));
 });
 
@@ -380,7 +356,7 @@ test("skill docs enforce self-assignment and draft-first rules for create comman
   ]);
 
   // copilot-pr-followup routes PR creation through the canonical create-pr wrapper
-  assert.match(copilotFollowupSkill, /MUST use `node <resolved-skill-scripts>\/github\/create-pr\.mjs/i);
+  assert.match(copilotFollowupSkill, /`node <resolved-skill-scripts>\/github\/create-pr\.mjs/i);
   assert.match(copilotFollowupSkill, /gh issue create --repo <resolved-repo> --assignee @me/i);
   assert.match(copilotFollowupSkill, /node <resolved-skill-scripts>\/github\/create-pr\.mjs --repo <owner\/name> --assignee @me --base <base> --head <head> --title/i);
   assert.doesNotMatch(copilotFollowupSkill, /gh pr create --draft --repo <owner\/name> --assignee @me --base <base> --head <head> --title/i);

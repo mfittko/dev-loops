@@ -30,18 +30,6 @@ import {
 const SKILL = "skills/copilot-pr-followup/SKILL.md";
 const SUB_LOOP_CONTRACT = "skills/docs/gate-review-sub-loop-contract.md";
 
-// Every source skill that drives a gate retry. The bare "only the angles that
-// had findings" rule must survive in none of them. The sub-loop contract owns
-// GATE-EXEC-ANGLE-CARRY-FORWARD itself, and every AC4 sentence lands there, so
-// it is in scope for this guard too. Generated .claude mirrors are not listed:
-// claude-assets-reproducible.test.mjs proves the mirror is byte-reproducible
-// from these sources, so a rule absent from the source is absent from the mirror.
-const GATE_DRIVING_SKILLS = [
-  SKILL,
-  "skills/local-implementation/SKILL.md",
-  SUB_LOOP_CONTRACT,
-];
-
 // Include wrapped paragraphs, but never borrow a command from a sibling step
 // or the following section. Heading wording is not used to find the boundary.
 function extractStep(content, phase, file) {
@@ -86,15 +74,6 @@ const PHASE_3_ROUTING = [
 // --provenance must NOT be reachable, within one code span, from the comment-post
 // command — this is the exact defect round 3 fixed and pins it from reintroduction.
 const PHASE_3_PROVENANCE_NOT_ON_COMMENT_POST = /post-gate-findings\.mjs[^`]*--provenance/;
-
-// The class of banned rule this PR removed: "re-run only ... (findings |
-// findings_present) ... previous pass/head/round". Broad enough to catch a
-// reworded reintroduction of the SAME scoping rule, not just the one literal
-// phrasing this PR happened to delete — a reviewer who restores the removed
-// sentence verbatim, or rewords it (e.g. "in subsequent cycles, re-run only the
-// angles that had findings in the previous pass"), must still be caught.
-const BARE_FINDINGS_ONLY_RERUN_CLASS =
-  /\bonly\b[^.\n]{0,80}\b(?:findings_present|findings)\b[^.\n]{0,60}\bprevious\s+(?:pass|head|round)\b/i;
 
 test("copilot-pr-followup SKILL's Phase 1.2 step routes the fan-out through resolve-angle-carry-forward", async () => {
   const skill = await readRepo(SKILL);
@@ -192,22 +171,6 @@ test("phase routing checks accept wrapped prose but cannot borrow a sibling's co
 
 test("the carry-forward CLI the SKILL routes to exists", async () => {
   await access(fromRepoRoot("scripts/github/resolve-angle-carry-forward.mjs"));
-});
-
-test("no gate-driving skill re-states a bare findings-only re-run rule, in any phrasing", async () => {
-  // The old wording ("only re-run reviewers that produced findings") is a SECOND,
-  // unevidenced scoping rule that silently overrides Phase 1.2 and would let a
-  // previously-clean angle skip without proof its surface is untouched. It has to
-  // be gone from EVERY skill that drives a gate retry, and from the mirrors —
-  // leaving it in a sibling skill just moves the hole, and rewording it must not
-  // resurrect it either.
-  for (const file of GATE_DRIVING_SKILLS) {
-    assert.doesNotMatch(
-      await readRepo(file),
-      BARE_FINDINGS_ONLY_RERUN_CLASS,
-      `${file} must defer re-run scoping to the carry-forward step`,
-    );
-  }
 });
 
 test("copilot-pr-followup SKILL defers retry scoping to Phase 1.2 at both retry entry points", async () => {

@@ -10,7 +10,7 @@ Phases: 1 = Copilot follow-up and directly coupled references/tests; 2 = other r
 
 ## Current run — 2026-09-19
 
-The user selected A for all three phases on `issue-2236`/PR2237; B is now a pinned read-only reference, not an equivalent-scope competition. Issue2236 records this direction and the narrow runtime exception tracked separately by issue2273. All phases remain incomplete; the inventory below has 71 pending, two in-progress and four changed rows. A link correction or this checkpoint does not complete a file.
+The user selected A for all three phases on `issue-2236`/PR2237; B is now a pinned read-only reference, not an equivalent-scope competition. Issue2236 records this direction and the narrow runtime exception tracked separately by issue2273. Phase 1 is complete for prose inspection, condensation, relevant test audit and local validation; phases 2/3 remain pending. The inventory has 71 pending and six changed rows. This is not whole-issue completion or lifecycle-gate clearance.
 
 | Input / evidence | Current value |
 | --- | --- |
@@ -34,7 +34,7 @@ This user-authorized runtime exception was committed separately as `574e27fb`. A
 
 Real-module coverage drives resolver → context writer → emitter CLI → fan-in → findings-log conversion/writer. Corrective red cases reproduced foreign angle, stale prior head, changed reviewer and lost locations; the two-angle positive preserves findings, locations and recommendations. Negatives cover omitted/duplicate proof, foreign/missing round identities, changed findings, fresh provenance and malformed input. The initial independent review by `/root/dev_loop/runtime_review_retry_2` and its 383-test result are historical, superseded for affected behavior. The complete-owner reviewer cleared the corrective runtime and caller diff after remediation. Current validation: 348 targeted tests; full working-tree verify 9377 passed, zero skipped/failed, including the separately pending phase-1 prose; docs/workflows and 92 assets passed. Logs and frozen identities are recorded in the private resume checkpoint. This is not phase completion or lifecycle clearance.
 
-Remaining work: complete the large follow-up and gate owners and the phase-wide brittle-test audit; the bounded handoff/owner slice below does not complete those files. The pinned main emitter still nulls final provenance `group` on one-angle split tails despite ADR0072's original-group requirement; this pre-existing runtime discrepancy is outside issue2273 and is not silently fixed or claimed preserved. B-reference reviewer `/root/dev_loop/b_reference` identified a useful `mustRerun` inversion counterexample; not yet adopted. Its proposed no-plan interpretation was withdrawn for lack of governing authority.
+The full-owner completion below covers the remaining large-owner sections and Phase-1 assertion audit; fresh independent review cleared semantics, with its test correction recorded below. The pinned main emitter still nulls final provenance `group` on one-angle split tails despite ADR0072's original-group requirement; this pre-existing runtime discrepancy is outside issue2273 and is not silently fixed or claimed preserved. B-reference reviewer `/root/dev_loop/b_reference` identified a useful `mustRerun` inversion counterexample; not yet adopted. Its proposed no-plan interpretation was withdrawn for lack of governing authority.
 
 ### Phase 1: follow-up handoff and owner audit
 
@@ -70,6 +70,39 @@ Process limitation: the two preceding commits used the correct worktree/branch a
 
 Comparable canonical-tree measurement (`wc -w -c`, all 77 tracked skills files): pinned main 152940 words / 1185234 bytes; A start 145725 words / 1134425 bytes; integrated A 145978 words / 1136288 bytes. The 6962-word / 48946-byte reduction against main is inherited A work; integration itself adds 253 words / 1863 bytes from main. No tokens or final loaded-context savings claimed.
 
+### Phase 1: full-owner completion
+
+This slice starts at `6db154ca6a109092c7f338c90eee5e66581f072a`. Both remaining owners were read end to end, together with their routed callers, existing companion owners, ADR0064/0070/0072, relevant helpers and tests. The source edits were followed by canonical Claude regeneration. No runtime, dependency, gate policy or Phase-2/3 source changed; no new reference file or mandatory read was introduced. Fresh Sol pre-commit review cleared the semantic condensation and found one dispatch-key test gap, corrected below without changing the owner or runtime.
+
+| Owner sections inspected | Disposition and obligation trace |
+| --- | --- |
+| Follow-up introduction, reattachment and delegation | Condensed. Canonical post-PR ownership, every-resume read-only checkpoint, each `outerAction` branch, Pi redispatch versus Claude inline continuation, and mandatory public dispatch guards remain explicit. |
+| Follow-up runner coordination, retrospective and board sync | Condensed. Ownership/death/staleness predicates, actual executing-child proof, takeover scope, fresh independent full-record retrospective and identity/provenance, main-checkout ordering, configuration, fallback and both nonfatal exit contracts remain. |
+| Follow-up anti-patterns and output | Removed duplicate bans already required at their request/wait/reply/gate/merge decision sites; retained conflict-operation prohibition and concise identity/state/action/authorization reporting. |
+| Other follow-up sections, including commands and gate checklists | Inspected and retained. Earlier slices already condensed shared explanations; remaining routing, validation-before-context, judge-before-write, act-list fix scope, severity/thread handling, approval and current-head evidence are load-bearing. The declared verbatim async clause remains exact. |
+| Gate execution model, standalone review, angle resolution and spec resolution | Condensed. Fresh neutral full-diff/adjacent-code seed, non-evidence review header, config merge/selection floors, CLI versus programmatic spec resolution, all closing references, failed reads and mid-flight rebuild refusal remain. `gate:full` grouped dispatch follows accepted ADR0072. |
+| Gate collectable dispatch, dispatch keys, composer and harness delivery | Condensed. Await/join/artifact requirements, killed-reviewer redispatch, bounded waves, no silent inline fallback, per-item unique keys, atomic ordered composition and verbatim angle content remain. Pi concrete relay and Claude/Codex agent-relay limits are distinct; no delivered-prompt or provider-cache proof is claimed. |
+| Gate sentinel lifecycle and retirement | Condensed. Head/scope isolation, legacy fallback, no manual clears, exact-hash same-head retry with unchanged prefix/live PR-body fetch, retire-before-rebuild, full-SHA/gate/artifact scope, audit preservation and no retired-evidence reuse remain. |
+| Gate primer evidence and carry-forward introduction | Condensed. Primer proof stays opt-in and layout unconditional. Carry uses the current set minus proven clean/findings-present carries; any-severity attribution, exact retained open findings, mandatory/touched/ambiguous reruns and whole-plan refusal remain. Detailed guards remain at the same point of use. |
+| Gate context/request-plan/primer details; consolidation, judge and fixer phases; logging/threads; proportionality, coverage and lineage | Inspected and retained except the changed summaries above. Distinct actor/order/evidence/refusal branches and literal artifacts carry obligations beyond their headings; earlier slices already removed duplicate implementation explanations. Recorded authority conflicts remain visible rather than being resolved by deleting a branch. |
+
+The Phase-1 brittle-test audit inspected every contract file referencing either remaining owner or the four completed Phase-1 companions, plus runtime/CLI/packaging callers found by path search. Assertions are dispositioned by the source they inspect; incidental pins for Phase-2/3 source in mixed files remain for those phases.
+
+| Test surface | Disposition |
+| --- | --- |
+| `copilot-review-doc-contracts`, `issue-intake-doc-contracts`, `public-facade-doc-contracts` | Replaced Phase-1 sentence/title pins with existing Markdown link/section parsers, unique owner IDs, frontmatter, literal API routes and rule ordering. Retained exact declared async payload and command/flag checks. Draft readiness is exercised by real create/ready helpers; structural assertions do not prove MUST/MUST NOT meaning. |
+| `gate-fanout-dispatch-key-contract`, `gate-sub-loop-no-fork-claim-contract`, `gate-fanout-code-defect-surfacing-contract` | Removed incidental wording/keyword heuristics. Assert owned rules, reviewer links and actual fresh-context frontmatter; exercise the existing inline-qualification function for light/full/threshold/reason cases. Following Sol's finding, the key test also reads its canonical rule: `runs.all` MUST require a unique, non-empty `key` on each item. Reflow passes; missing/blank/wrong keys, weakened constraints and sibling-only requirements fail. Actual key discipline, context independence and adversarial effort still require semantic review. |
+| `gate-angle-carry-forward-routing-contract` | Retained step-bound resolver/head/spec/provenance/bridge flags and rewrite/negative fixtures. Removed the natural-language findings-only heuristic: real resolver/emitter/fan-in tests cover eligibility, refusal and all-carried proof; prose meaning remains review work. No `mustRerun` inversion policy was added. |
+| `gate-severity-vocabulary-contract`, `spec-authority-default-on-contract`, `review-doc-contracts` | Select relevant owner sections by stable IDs, accept wrapping, compare actual severity/disposition vocabulary and retain exact API flags; follow-up reaches its owner by a real link. Phase-2/3 prose checks are unchanged. |
+| `claude-assets-reproducible`, `claude-plugin-manifest`, `rule-id-doc-contracts`, `bun-toolchain-contract`, `orphan-entrypoint-ratchet` | Inspected; retained generated-byte equality, Pi-only transformations, literal IDs, tool commands, packaging and public-entrypoint metadata. Unrelated source assertions are outside this phase. |
+| Startup/CLI/extension, context, dispatch, carry, sentinel, composer, retirement, fan-in and readiness tests | Inspected applicable fixtures and enforcement; retained behavior and literal route/path assertions. No production implementation was changed to satisfy a prose rewrite. |
+
+Known limits remain explicit. ADR0064 resolves the historical clean-only prose in favor of evidenced findings-present carry; the active owners no longer assert a competing clean-only rule. Issue2273's accepted all-carried path requires a keyed emitted plan and complete resolver proof: empty completed-only resumes still refuse, with no no-plan exemption. Runtime current-head context rebuilding remains distinct from offline lineage composition under ADR0070. The one-angle split-tail `group` discrepancy remains unresolved. Other pre-existing register items (fixer identity and disputed coverage wording) are unchanged. Prompt recovery still requires actual redispatch, not just rewriting emission records.
+
+Counts use `wc -w -c`, including code examples/frontmatter, not tokens. From this candidate's starting HEAD to the current source pair: 35,637 / 275,856 → 32,082 / 251,837 words/bytes (3,555 / 24,019 removed). The corresponding regenerated Claude pair is 31,888 / 250,848. All 77 tracked skills files are 141,042 / 1,104,704. The same conservative 24-file source/Pi normal-draft set defined below is 78,265 / 606,699; no removed text was transferred to an additional read. These are static surfaces, not measured live loading or cache savings.
+
+Final validation after Sol's test correction: the focused key suite passed three tests, the complete contract/doc-guard run passed 357 without skips or failures, and full `bun run verify` passed 9,376 tests across 391 files without skips or failures, plus docs and workflows. The earlier ten focused runtime suites passed 754 tests without skips or failures. Canonical generation, the 92-asset parity check and `git diff --check` passed. Logs use the private prefix `/private/tmp/2237-phase1-complete-`; the final full run is `verify.log`. Phase 1 is complete under the selected one-review cadence; phases 2/3 remain pending. These are local working-tree results, not current-head lifecycle evidence or CI clearance.
+
 ## Historical parked checkpoint — 2026-09-16
 
 Paused at the user's request; resume only when requested, not automatically on Saturday. PR2237 remains draft and unmerged. Latest implementation/test commit pushed before this note: `cef3de0b` on `issue-2236`. Its full verification passed 9,293 tests across 390 files, plus docs/workflows; doc guard passed 354 with one skip.
@@ -82,7 +115,7 @@ On explicit resume: fetch origin, refresh canonical startup/envelope and issue22
 
 | File | Phase | Disposition | Evidence / remaining work |
 | --- | --- | --- | --- |
-| `skills/copilot-pr-followup/SKILL.md` | 1 | in progress | Path-resolution and fan-out/fan-in checklist condensed; mandatory owner loading explicit. Remaining sections and recorded ambiguities pending. |
+| `skills/copilot-pr-followup/SKILL.md` | 1 | changed | Full owner and applicable tests inspected; remaining lifecycle/reattachment/coordination prose condensed. Fresh Sol semantic review and final local verification passed; see current-run trace. |
 | `skills/dev-loop/SKILL.md` | 2 | pending | Not yet reviewed. |
 | `skills/dev-loop/scripts/dev-mode-context.mjs` | 3 | pending | Not yet reviewed. |
 | `skills/dev-loop/scripts/dev-mode-context.test.mjs` | 3 | pending | Not yet reviewed. |
@@ -124,7 +157,7 @@ On explicit resume: fetch origin, refresh canonical startup/envelope and issue22
 | `skills/docs/entrypoint-strategies.md` | 3 | pending | Not yet reviewed. |
 | `skills/docs/epic-tree-refinement-procedure.md` | 3 | pending | Not yet reviewed. |
 | `skills/docs/gate-review-comment-contract.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/gate-review-sub-loop-contract.md` | 1 | in progress | Full source read; primer, grouping duplication and fan-in count explanation condensed. Independent semantic/scenario review passed for this slice; remaining sections pending. |
+| `skills/docs/gate-review-sub-loop-contract.md` | 1 | changed | Full owner and applicable tests inspected; remaining execution/spec/dispatch/delivery/sentinel/carry summaries condensed, distinct guards retained. Fresh Sol semantic review passed; its dispatch-key test correction and final local verification passed. |
 | `skills/docs/issue-intake-procedure.md` | 3 | pending | Not yet reviewed. |
 | `skills/docs/local-planning.md` | 3 | pending | Not yet reviewed. |
 | `skills/docs/main-agent-contract.md` | 3 | pending | Not yet reviewed. |

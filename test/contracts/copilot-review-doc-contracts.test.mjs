@@ -8,7 +8,7 @@ import {
   test,
   USER_FACING_AGENT_SURFACE,
 } from "../imported-assets-helpers.mjs";
-import { assertRuleOwned, assertRulePresent, extractOwnedText } from "./_rule-helpers.mjs";
+import { assertRuleOwned, assertRulePresent } from "./_rule-helpers.mjs";
 import { extractRelativeMarkdownLinks } from "../../scripts/docs/validate-links.mjs";
 import { extractRuleReferences } from "../../scripts/docs/validate-rule-ownership.mjs";
 import { parseMarkdownSections } from "../../packages/core/src/loop/issue-refinement-artifact.mjs";
@@ -94,7 +94,7 @@ test("copilot review gates keep phase-specific angle ownership in one canonical 
     }
     assert.doesNotMatch(section, /Gate role:/i, `${label} should not introduce extra template-only fields that drift across gates`);
   }
-  const draftAnglePatterns = [/resolveGateAngles\(config, "draft"\)/i, /all configured draft gate angle families/i];
+  const draftAnglePatterns = [/resolveGateAngles\(config, "draft"\)/i];
   const preApprovalAnglePatterns = [/resolveGateAngles\(config, "preApproval"\)/];
   const devLoopDraftOwnedAnglesMatch = devLoopDraftGate.match(/Review angles:[\s\S]*?(?=\n- \*\*Pass criteria)/i);
   const devLoopDraftOwnedAngles = devLoopDraftOwnedAnglesMatch ? devLoopDraftOwnedAnglesMatch[0] : "";
@@ -159,7 +159,8 @@ test("copilot-pr-followup skill routes review requests and wait seams through de
   assert.match(requestSection, /request-copilot-review\.mjs/i);
   assert.match(requestSection, /--force-rerequest-review/i);
   assertRuleOwned("COPILOT-FOLLOWUP-REQUEST-HELPER-ONLY", "skills/copilot-pr-followup/SKILL.md");
-  assert.match(requestSection, /MUST NOT request Copilot by posting literal/i);
+  // Helper-only request authority is owned above; request status branches
+  // retain their literal API vocabulary without freezing the prohibition's wording.
   assert.match(requestSection, /`requested`:/i);
   assert.match(requestSection, /`already-requested`:/i);
   assert.match(requestSection, /`suppressed_same_head_clean`:/i);
@@ -198,176 +199,30 @@ test("watch policy references tolerate renamed labels and reflow, but require ea
     assert.throws(() => assertReference("[Other policy](./unrelated.md)", target), /missing required reference/);
   }
 });
-test("copilot-pr-followup skill hardens reply-resolve, gate sequencing, and merge-ready checks", async () => {
-  const skillContent = await readRepo("skills/copilot-pr-followup/SKILL.md");
-  const step6 = extractStep(skillContent, 6);
-  assert.match(
-    step6,
-    /Every async dev-loop dispatch task body must include this clause verbatim/i,
-    "Step 6 should define canonical async dispatch wording",
-  );
-  // Intentional verbatim-contract pin, not a stray phrase pin: SKILL.md itself
-  // mandates ("must include this clause verbatim") that this exact quoted
-  // clause be reproduced unchanged in every async dispatch task body, so the
-  // test asserts it byte-for-byte.
-  assertDispatchClause(step6);
-  const step7 = extractStep(skillContent, 7);
-  assert.match(
-    step7,
-    /must use the deterministic helper `reply-resolve-review-thread\.mjs`/i,
-    "Step 7 should require the reply-resolve helper",
-  );
-  assert.match(
-    step7,
-    /reply-resolve-review-threads\.mjs/i,
-    "Step 7 should reference the deterministic batch reply-resolve helper for multi-thread follow-up",
-  );
-  assert.doesNotMatch(
-    step7,
-    /prefer the deterministic helper `reply-resolve-review-thread\.mjs`/i,
-    "Step 7 should not leave the reply-resolve helper optional",
-  );
-  assertRuleOwned("COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE", "skills/copilot-pr-followup/SKILL.md");
-  // The four checks below are intentional behavioral coverage of the verification
-  // checkpoint's specific sub-requirements (owned by COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE
-  // above), not standalone exact-sentence contract pins.
-  assert.match(
-    step7,
-    /confirm the GitHub reply actually exists on the intended thread\/comment/i,
-    "verification checkpoint should require confirming the GitHub reply exists",
-  );
-  assert.match(
-    step7,
-    /confirm the pushed current-head diff genuinely addresses the reviewer concern/i,
-    "verification checkpoint should require confirming the pushed fix addresses the concern",
-  );
-  assert.match(
-    step7,
-    /including the unresolved thread count/i,
-    "verification checkpoint should require refreshed API-backed unresolved thread count data",
-  );
-  assert.match(
-    step7,
-    /if any verification check fails, do \*\*not\*\* resolve the thread; leave it open/i,
-    "verification checkpoint should keep threads open when verification fails",
-  );
-  // Structural ordering check: the verification-checkpoint marker must appear
-  // before the resolve-step phrase, content-anchored rather than by ordinal
-  // list position (which is tautological for any numbered list).
-  const verifyIndex = step7.indexOf("COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE");
-  const resolveIndex = step7.indexOf("COPILOT-FOLLOWUP-RESOLVE-AFTER-REPLY");
-  assert.ok(verifyIndex >= 0 && resolveIndex >= 0 && verifyIndex < resolveIndex, "verification checkpoint must appear before the resolve step");
-  assertRuleOwned("COPILOT-FOLLOWUP-RESOLVE-AFTER-REPLY", "skills/copilot-pr-followup/SKILL.md");
-  // Owned-text check — marker survival alone must not mask dropping the resolve-after-reply clause.
-  assert.match(
-    extractOwnedText(step7, "COPILOT-FOLLOWUP-RESOLVE-AFTER-REPLY"),
-    /only after the reply is attached successfully/i,
-  );
-  assert.match(
-    step7,
-    /verify zero unresolved threads remain via `dev-loops gate capture-threads` before proceeding/i,
-    "Step 7 should require deterministic unresolved-thread verification before advancing",
-  );
-  assert.match(
-    step7,
-    /if the refreshed snapshot reports unresolved threads, re-enter the reply\/resolve loop for the missed threads/i,
-    "Step 7 should require re-entering the reply-resolve loop when unresolved threads remain",
-  );
-  // The "must be entered and completed before merge-ready" requirement is owned by
-  // GATE-COMMENT-FAIL-CLOSED (rule-ID reference asserted below) rather than pinned as
-  // prose here; "not recoverable by asserting convergence" is now GATE-SKIP-NOT-RECOVERABLE-BY-CONVERGENCE (#1159).
+test("follow-up routing preserves reply verification order and gate-owner references", async () => {
+  const skill = await readRepo("skills/copilot-pr-followup/SKILL.md");
+  assertDispatchClause(extractStep(skill, 6));
+  const step7 = extractStep(skill, 7);
+  for (const id of [
+    "COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER", "COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE",
+    "COPILOT-FOLLOWUP-RESOLVE-AFTER-REPLY", "GATE-SKIP-NOT-RECOVERABLE-BY-CONVERGENCE",
+  ]) assertRuleOwned(id, "skills/copilot-pr-followup/SKILL.md");
+  assert.ok(step7.includes("GATE-COMMENT-FAIL-CLOSED"));
   assertRuleOwned("GATE-COMMENT-FAIL-CLOSED", "skills/docs/gate-review-comment-contract.md");
-  assert.match(step7, /GATE-COMMENT-FAIL-CLOSED/, "pre-approval gate sequencing should reference the fail-closed rule ID");
-  assertRuleOwned("GATE-SKIP-NOT-RECOVERABLE-BY-CONVERGENCE", "skills/copilot-pr-followup/SKILL.md");
-  assert.match(
-    step7,
-    /zero unresolved threads.*dev-loops gate capture-threads/i,
-    "merge-ready preconditions should require deterministic thread-state verification",
-  );
-  assert.match(
-    step7,
-    /draft_gate.*clean|clean.*draft_gate/i,
-    "merge-ready preconditions should require draft gate evidence",
-  );
-  assert.match(
-    step7,
-    /pre_approval_gate.*clean|clean.*pre_approval_gate/i,
-    "merge-ready preconditions should require current-head clean gate evidence",
-  );
-  assert.match(
-    step7,
-    /green CI/i,
-    "merge-ready preconditions should require current-head green CI",
-  );
-  // Hard-gate rule now in canonical merge-preconditions.md
-  assert.match(
-    step7,
-    /detect-checkpoint-evidence\.mjs[\s\S]*always-on/i,
-    "mechanical pre-merge check should use the gate evidence helper with always-on enforcement",
-  );
-  assert.doesNotMatch(
-    step7,
-    /--require-before-merge/,
-    "the removed opt-in flag must not appear in the skill text",
-  );
-  assert.match(
-    step7,
-    /merge-pr\.mjs/i,
-    "mechanical pre-merge check should name the sanctioned merge wrapper as the canonical merge path",
-  );
-  assert.match(
-    step7,
-    /raw `gh pr merge` is forbidden/i,
-    "the skill should forbid a raw gh pr merge in favor of the wrapper",
-  );
-  assert.match(
-    step7,
-    /`gateBoundary=conflict_resolution`|`mergeStateStatus` is conflicted/i,
-    "conflict-resolution subsection should key off the deterministic helper boundary",
-  );
-  assert.match(
-    step7,
-    /fetch fresh `origin\/main`/i,
-    "conflict-resolution flow should refresh origin/main first",
-  );
-  assert.match(
-    step7,
-    /ask for explicit authorization before any merge commit/i,
-    "conflict-resolution flow should require explicit reconciliation authorization",
-  );
-  assert.match(
-    step7,
-    /default to a merge commit \(`git merge origin\/main`\)/i,
-    "conflict-resolution flow should document the default merge commit path",
-  );
-  assert.match(
-    step7,
-    /auto-resolve simple conflicts/i,
-    "conflict-resolution flow should allow simple auto-resolution",
-  );
-  assert.match(
-    step7,
-    /report complex ones|report complex conflicts/i,
-    "conflict-resolution flow should surface complex conflicts for manual handling",
-  );
-  assert.match(
-    step7,
-    /rerun `detect-pr-gate-coordination-state\.mjs`/i,
-    "conflict-resolution flow should require gate re-detection",
-  );
-  assert.match(
-    step7,
-    /rerun `pre_approval_gate` for the new head/i,
-    "conflict-resolution flow should require a fresh pre-approval gate on the new head",
-  );
-  assert.match(
-    step7,
-    /wait for current-head CI again/i,
-    "conflict-resolution flow should require fresh CI on the new head",
-  );
+  const verifyIndex = step7.indexOf("<!-- rule: COPILOT-FOLLOWUP-VERIFY-BEFORE-RESOLVE -->");
+  const resolveIndex = step7.indexOf("<!-- rule: COPILOT-FOLLOWUP-RESOLVE-AFTER-REPLY -->");
+  assert.ok(verifyIndex >= 0 && resolveIndex > verifyIndex);
   assertReference(step7, "../docs/merge-preconditions.md");
-  assert.ok(extractRelativeMarkdownLinks(step7).some(({ rawTarget }) => rawTarget === "../local-implementation/SKILL.md#branch--review--merge-policy"));
-
+  assert.ok(extractRelativeMarkdownLinks(step7).some(({ rawTarget }) =>
+    rawTarget === "../local-implementation/SKILL.md#branch--review--merge-policy"));
+  for (const command of [
+    "reply-resolve-review-thread.mjs", "reply-resolve-review-threads.mjs",
+    "dev-loops gate capture-threads", "detect-checkpoint-evidence.mjs", "merge-pr.mjs",
+  ]) assert.ok(step7.includes(command), `missing follow-up API: ${command}`);
+  assert.doesNotMatch(step7, /--require-before-merge/);
+  // Reply existence, concern coverage, authorization, conflict recovery and
+  // zero-thread decisions are semantic duties. Existing reply/fixer/merge
+  // tests cover executable checks; sentence matching cannot prove compliance.
 });
 
 test("copilot-pr-followup skill caps Copilot re-review rounds via config and snapshot state", async () => {

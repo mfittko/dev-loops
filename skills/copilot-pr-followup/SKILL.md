@@ -13,11 +13,8 @@ user-invocable: false
 
 # Copilot PR Follow-up
 
-Canonical owner for the internal `copilot_pr_followup` route behind the public `dev-loop` façade.
-
-It is also the canonical internal owner of the shared post-PR mechanics used by this repo:
-PR discovery and interpretation, async watch behavior, fix / reply-resolve / re-request flow,
-gate sequencing, final approval, and merge-ready preconditions.
+Canonical internal owner of post-PR mechanics behind public `dev-loop`: discovery,
+watch, fix/reply/resolve/re-request, gates, final approval and merge readiness.
 
 ## Route ownership
 
@@ -171,31 +168,23 @@ Branch on `status`, never on `ok`/exit-code truthiness alone: `ok: true` means t
 
 ### Re-attachment guard (check for existing loop state first)
 
-Before entering issue-intake normalization or asking "what should we do" for a PR that
-already has an outer-loop checkpoint, check whether the checkpoint implies an auto-resume:
+Before intake normalization or asking for PR direction, read the canonical re-attachment
+artifact `tmp/copilot-loop/<owner>/<repo>/pr-<n>/outer-loop-state.json` without mutating it.
+Never run `outer-loop.mjs` for this guard: it rewrites `timestamp` and may increment `waitCycles`.
+Apply this guard on every same-PR resume<!-- pi-only -->, including between Pi async runs<!-- /pi-only -->:
 
-1. Read the existing outer-loop checkpoint from
-   `tmp/copilot-loop/<owner>/<repo>/pr-<n>/outer-loop-state.json`.
-   Do **not** run `outer-loop.mjs` for this guard — it always rewrites the checkpoint
-   (including `timestamp` and potentially incrementing `waitCycles`).
-   Read the on-disk artifact without mutating it.
-2. If `outerAction` is `continue_wait`:
-   - The loop was waiting; resume it from the checkpoint.
-     <!-- pi-only -->Under Pi the subagent exits and the main session re-dispatches a fresh
-     `dev-loop` async subagent that resumes from the checkpoint.<!-- /pi-only -->
-     Under the Claude Code harness, continue the wait inline (run the next watch cycle yourself).
-3. If `outerAction` is `reenter_copilot_loop`:
-   - The copilot inner loop needs action. Run `copilot-pr-handoff.mjs` to determine the
-     exact next step and proceed.
-4. If `outerAction` is `reenter_reviewer_loop`:
-   - The reviewer inner loop needs action. Enter the reviewer-loop path.
-5. If `outerAction` is `stop`:
-   - Report the `reason` field and ask for direction.
-6. If no checkpoint exists or `outerAction` is `done`:
-   - Continue with normal step sequencing.
+| `outerAction` | Action |
+| --- | --- |
+| `continue_wait` | Resume from the checkpoint. Under Claude Code, run the next watch cycle inline. |
+| `reenter_copilot_loop` | Run `copilot-pr-handoff.mjs` and follow its next step. |
+| `reenter_reviewer_loop` | Enter the reviewer-loop path. |
+| `stop` | Report `reason` and ask for direction. |
+| `done` or no checkpoint | Continue normal step sequencing. |
 
-Do not skip this guard when resuming work on the same PR<!-- pi-only --> (under Pi, between async subagent runs)<!-- /pi-only -->.
-The outer-loop checkpoint is the canonical re-attachment artifact.
+<!-- pi-only -->
+For `continue_wait` under Pi, the subagent exits; the main session re-dispatches a fresh
+`dev-loop` async subagent to resume from the checkpoint.
+<!-- /pi-only -->
 
 ## Step 6: Async watch behavior
 
@@ -249,7 +238,7 @@ Key rules:
 
 ### Async delegation guard rules (#524)
 
-See [Guard rules](../dev-loop/SKILL.md#guard-rules) in the public `dev-loop` skill. Those rules are authoritative and apply to all async subagent dispatch in the PR-followup pipeline. The dev-loop skill is the single source of truth; this section exists only to ensure the rules are visible when this skill is loaded standalone.
+All async PR-followup dispatch MUST follow the public skill's [Guard rules](../dev-loop/SKILL.md#guard-rules).
 
 ## Step 7: Pi review/fix follow-up loop
 
@@ -539,13 +528,20 @@ or merge boundary sees a raw `gh pr merge`, treat that as a workflow violation a
 
 ### Stale runner-coordination lock held by a completed run
 
-The pre-merge gate evidence check fails closed on the PR's runner-coordination claim (`.pi/runner-coordination/<owner>/<name>/pr-<n>.json`): a fresh merge re-dispatch (new run id) is refused with `ownership_lost`, or `stale_runner` once the claim ages past the max-age window.
+The pre-merge check fails closed on `.pi/runner-coordination/<owner>/<name>/pr-<n>.json`:
+a competing new run receives `ownership_lost`, or `stale_runner` after max age.
+The auto-loop releases its own claim best-effort at terminal stops (clean-converged,
+blocked, done, including human approval); release never blocks stopping or clears
+an active competitor's claim. The headless driver also releases claims still owned
+by its run when the process exits.
 
-The auto-loop now releases its claim best-effort when a run reaches a terminal stop (clean-converged, blocked, or done — including the stop at the human approval checkpoint), so a merge-authorized re-dispatch normally inherits a cleared claim and proceeds. The release is non-fatal: it never blocks the stop, and it never clears a claim owned by a genuinely active competing run.
+`copilot-pr-handoff` uses `supersedeStale: true` to take over only confirmed-dead
+(recorded exit signal) or max-age-expired claims. A genuinely live owner still blocks.
+Before standing down or deciding dispatch, verify actual execution with the harness's
+`subagent status`: LIVE means an actively updating `EXECUTING` workflow child.
+A fresh claim heartbeat alone is insufficient; a completed/control run may have left it.
 
-Beyond the terminal release, #1706 removes the stall on the path here: `copilot-pr-handoff` acquires ownership with `supersedeStale: true`, so pre-flight handoff takes over a competing claim whose owning run is **confirmed dead** (recorded exit signal) or past the stale-max-age window — proceeding instead of returning a blocking stop against a leaked lock. The headless dev-loop driver also clears every claim its run still owns when the spawned run's process exits (release-on-death). A genuinely live owner still blocks (one-runner-per-PR preserved); only confirmed-dead or stale claims are superseded. The manual takeover below therefore only remains for a pre-#1706 leak or a live-but-unreleasable edge.
-
-**Anti-trap — a fresh runner-coordination claim heartbeat is not proof of a live driver.** A runner-coordination claim/lock carrying a fresh heartbeat does NOT prove a live agent is driving: the lock may be held by a completed/control run that claimed at takeover and then ended without releasing, yet the heartbeat still reads fresh — which this drive saw as repeated false "live owner / standing down" stalls. LIVE requires a subagent run verified via `subagent status` (a harness command, not a repo script or CLI) showing an actively-updating `EXECUTING` child (a workflow child active now with a recent update). Before any stand-down or dispatch decision, confirm real execution via `subagent status`; never trust the claim heartbeat alone. Only genuinely-executing runs count as a live owner.
+Manual takeover remains for older leaks or an unreleasable edge:
 
 If a stale claim still blocks the merge because the completing run could not release (crash, killed process, or a pre-#1109 run), the sanctioned recovery for a lock held by a COMPLETED run is an explicit takeover by the merge run:
 
@@ -558,7 +554,15 @@ node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs takeover \
 
 ### Mandatory post-merge retrospective checkpoint write
 
-After a merge succeeds (or an explicit retrospective skip is authorized), write the durable retrospective checkpoint before exiting the subagent session. The retrospective itself MUST be a fresh-context, independent pass over the cycle's full agent/subagent tool-call record — dispatched like a gate reviewer, never self-authored inline by the working session (an inline retro fails the checkpoint; see [Retrospective Checkpoint Contract](../docs/retrospective-checkpoint-contract.md) `RETRO-FRESH-CONTEXT-MANDATORY`). The retrospective gate is derived at the START of the NEXT loop by checking local git ancestry between this checkpoint's recorded `identity.mergeCommit` and the base branch — an identity-less record can never be verified, so it is treated the same as a stale one; carrying `--repo`/`--pr`/`--merge-commit` (the repo, this PR's number, and its full merge commit oid — the same oid `node <resolved-skill-scripts>/github/view-pr.mjs --repo <owner/name> --pr <n> --json mergeCommit --jq .pr.mergeCommit.oid` reports) is MUST, not optional (the CLI now rejects `complete`/`skipped` without it). A `complete` record also MUST carry the fresh-context provenance (`--retro-context fresh --record-source <path-to-tool-call-record>`; `inline` is rejected outright):
+After merge (or an authorized retrospective skip), write the durable checkpoint before
+exiting. Under `RETRO-FRESH-CONTEXT-MANDATORY` in [Retrospective Checkpoint Contract](../docs/retrospective-checkpoint-contract.md),
+the retrospective MUST be an independent fresh-context pass over the cycle's full
+agent/subagent tool-call record, dispatched like a gate reviewer, never self-authored inline.
+Both `complete` and `skipped` MUST carry this cycle's `--repo`, `--pr` and full
+`--merge-commit` oid (obtain it with `node <resolved-skill-scripts>/github/view-pr.mjs --repo <owner/name> --pr <n> --json mergeCommit --jq .pr.mergeCommit.oid`).
+The next loop checks that identity against base-branch ancestry; absent identity is
+unverifiable/stale. `complete` also MUST carry fresh-context provenance; the CLI rejects
+`inline` and identity-less complete/skipped records:
 
 ```sh
 node <resolved-skill-scripts>/loop/checkpoint-contract.mjs --state complete --notes "<one-line retrospective summary>" \
@@ -584,7 +588,15 @@ dev-loops queue sync-status --repo <owner/name> --pr <number> --item <linked-iss
 node <resolved-skill-scripts>/projects/archive-done-items.mjs --repo <owner/name> || true
 ```
 
-`queue sync-status --logical-column done` (issue #1458) moves the merged item's board Status to the configured Done column right after merge — the logical name resolves through `queue.statusColumns`, so a board that renamed Done still converges. Omit `--item` when the merged PR is itself the queue item (issue-less / PR-is-the-queue-item case); an unfilled/empty `--item` falls back to `--pr` rather than failing the step. It must run from the main checkout, before the worktree-removal step below — it resolves `.devloops` relative to `cwd` and has no `--repo-root` flag, so running it afterwards would leave it with no cwd at all. Board and threshold resolve from `.devloops` (`tracker.board`, `queue.archiveOlderThanDays`, default 7d), using local `gh` auth — no CI, cron, or PAT. Both steps are best-effort and NON-FATAL, but their exit contracts differ: `queue sync-status` exits 0 on any parsed invocation, including every board/API failure (the JSON result on stdout describes the skip) — only a usage/argument error (exit 1), an invalid `--jq` filter (exit 2), or a falsy `--silent` predicate is non-zero, which the `|| true` above guards against. `archive-done-items.mjs` exits non-zero on a usage/argument error (1), a GitHub API error or invalid `--jq` filter (2), or a project-not-found (3) — its own `|| true` is load-bearing, not redundant, and masks those failures deliberately so a failed archive run never blocks the merge. Neither step blocks the merge or the retrospective.
+Run from the main checkout before worktree removal: `queue sync-status` resolves
+`.devloops` from cwd and has no `--repo-root`. `queue.statusColumns` maps `done` to
+the configured column; omit `--item` for a PR queue item (empty also falls back to `--pr`).
+Board/archive settings are `tracker.board` and `queue.archiveOlderThanDays` (default 7d),
+using local `gh` auth, no CI/cron/PAT. Both steps are best-effort and NON-FATAL; retain
+both `|| true` guards. Sync reports board/API skips in JSON with exit 0; usage errors
+exit 1, invalid `--jq` exits 2 and falsy `--silent` is non-zero. Archive exits 1 for
+usage, 2 for API/`--jq` errors and 3 for project-not-found. Neither failure blocks
+merge or retrospective.
 
 `dev-loops queue reconcile` (idempotent, run best-effort at loop startup) is the fallback convergence path when the sync above is ever skipped or missed — it re-derives every item's column from live GitHub state, so a merge that could not run this hook still lands on Done at the next startup.
 
@@ -604,19 +616,11 @@ Follow [Stop Conditions](../docs/stop-conditions.md). Genuine stops: `blocked` s
 
 ## Anti-patterns
 
-See [Anti-patterns](../docs/anti-patterns.md). Key repo-specific additions:
-- Use `reply-resolve-review-thread.mjs` / `reply-resolve-review-threads.mjs` helpers instead of ad hoc `gh api`/`gh api graphql` thread-mutation commands. Do NOT use `gh pr comment`, `gh api`, or `gh pr review` for gate verdicts (use `upsert-checkpoint-verdict.mjs`).
-- Use `list-review-threads.mjs` and `wait-pr-checks.mjs` instead of ad hoc `gh api graphql` review-thread queries or `gh pr checks` shell-pipe polling loops.
-- Do not declare merge-ready without visible `pre_approval_gate` comment on current head SHA. Do not declare merge-ready based solely on `mergeable_state: clean` + CI green without gate evidence. CI green + resolved threads alone is insufficient.
-- Do not blind-run `gh pr merge`/`gh pr update-branch`/unapproved rebase when conflicted. Do not dispatch async dev-loop tasks that omit the pre-approval gate requirement.
-- Do not assume generated wiki is authoritative over code or CI.
+Follow [Anti-patterns](../docs/anti-patterns.md) and this skill's request, wait,
+reply/resolve, gate-comment and merge boundaries. A conflicted PR never authorizes a
+blind `gh pr merge`, `gh pr update-branch` or unapproved rebase.
 
 ## Output expectations
 
-When using this skill, keep user-facing summaries concise and operational.
-
-A good status update should say:
-- what issue or PR you inspected
-- current state
-- what the next recommended action is
-- whether authorization is needed before taking it
+Report the inspected issue/PR, current state, next recommended action and any required
+authorization concisely.
