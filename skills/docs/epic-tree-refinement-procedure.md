@@ -8,8 +8,7 @@ Use it together with:
 - [Sub-Issue Tree Contract](./sub-issue-tree-contract.md) — authoritative sub-issue tooling
 
 When you have a tree of GitHub issues that already exists and you need to align AC, DoD, scope
-boundaries, and delegation contracts across all levels, follow this procedure. It is deterministic
-enough that a fresh agent can run it without prior context about the tree.
+boundaries, and delegation contracts across all levels, follow this procedure.
 
 ---
 
@@ -178,9 +177,6 @@ each `dev-loops issue edit` mutation, unless running unattended with explicit au
 
 ## Parallelism model
 
-Sibling refinements are independent: siblings only need the parent's contract, not each other's
-output. The wall-clock complexity is O(depth), not O(nodes).
-
 ```text
 Phase A:  [root]                            serial (1 step)
 Phase B:  [child1 || child2 || child3]      parallel per level (1 step per level)
@@ -188,8 +184,6 @@ Phase B:  [child1 || child2 || child3]      parallel per level (1 step per level
 Phase C:  [child1 || child2 || child3]      parallel per level (1 step per level)
 Phase D:  [root]                            serial (1 step)
 ```
-
-Total serial steps for a tree with depth D: `1 + (D-1) + (D-1) + 1 = 2D`
 
 **Fan-out rule:** At any level, when a parent is refined, ALL its children can be refined in parallel. Root/leaf/child ordering follows [EPIC-REFINEMENT-SERIAL-PHASE-GATE](#phase-a--root-refinement-serial) throughout.
 
@@ -206,7 +200,7 @@ The procedure is complete when all issues in the tree satisfy [EPIC-REFINEMENT-R
 | Scope boundary present | Issue body contains explicit `"This issue owns ... It does NOT own ..."` text |
 | No orphaned responsibilities | Each thing the parent delegates maps to exactly one child |
 | No duplicate ownership | No two siblings claim the same responsibility |
-| Sub-issue tree order valid | `manage-sub-issues.mjs verify --ordered` exits 0 |
+| Sub-issue tree order valid | `manage-sub-issues.mjs verify --ordered` exits 0 **and** its JSON reports `verified: true`; see [Sub-Issue Tree Contract](./sub-issue-tree-contract.md). A mismatch exits 0 with `verified: false` and is not completion. |
 
 ---
 

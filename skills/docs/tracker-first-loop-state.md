@@ -6,10 +6,6 @@ machine (#449).
 
 **MVP invariant: one tracker work item → one GitHub PR.**
 
-This document serves dual purpose:
-1. **Story-to-PR contract** — canonical for the PR-level tracker state machine
-2. **Loop state machine doc** — canonical for the tracker-first loop state machine (#449)
-
 Implementation for each:
 
 | Component | File |

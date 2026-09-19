@@ -21,10 +21,7 @@ informational `review` pass — see the review-intent short-circuit carve-out in
 
 ## Purpose
 
-Gate-review verdicts make the workflow auditable and transparent from the PR
-conversation alone. A reviewer or maintainer can inspect which gate ran, which head
-commit was reviewed, whether it passed cleanly, and whether a result is current for
-the latest head — without relying on local or session-only artifacts.
+Gate-review verdicts expose the gate, reviewed head, result and currency in the PR conversation.
 
 <!-- rule: GATE-COMMENT-SINGLE-SURFACE -->
 `GATE-COMMENT-SINGLE-SURFACE`: A gate round produces exactly ONE new visible surface: a single PR
@@ -76,11 +73,7 @@ corrected on its own surface (back-compat read).
 `GATE-EVIDENCE-AUDIT-TWO-SURFACES`: any gate-evidence completeness audit or reporting path MUST
 scan BOTH verdict surfaces — the PR-review stream (`pulls/<n>/reviews`, the primary surface per
 GATE-COMMENT-SINGLE-SURFACE) and the visible issue-comment stream (`issues/<n>/comments`, the
-back-compat read). Scanning the issue-comment stream alone reports a legitimately-posted
-PR-review verdict as "missing": the post-drive audit that filed #1674 falsely concluded #1614's
-round-2 `draft_gate` and `pre_approval_gate` verdicts were unposted because it read only
-`issues/1614/comments`, where no verdict body lives (the verdicts existed as PR reviews at the
-merged head). The deterministic post-drive audit helper is
+back-compat read). The deterministic post-drive audit helper is
 `scripts/github/audit-gate-evidence.mjs` — it reads both surfaces through
 `fetchGateEvidenceComments` and reports each gate's verdict as visible regardless of which
 surface carries it, so a verdict posted only as a PR review is never reported missing. The
@@ -104,8 +97,7 @@ body carrying a known machine-artifact marker token (owned by the artifact filte
 `copilot-helpers.mjs`, delimiter-anchored so no suffixed `<token>-<x>` variant matches) as a
 non-candidate UNLESS it also carries the producer-owned verdict body heading — which is how the
 round's own review, marker and all, stays claimable while the findings comment (which never
-carries that heading) never is. That silent replacement previously destroyed a full round's
-visible findings record seconds after it was posted. Within its OWN claim key each tool keys
+carries that heading) never is. Within its OWN claim key each tool keys
 identity as it needs (the findings comment's marker is deliberately gate-only).
 
 <!-- rule: GATE-COMMENT-SCOPE-ONLY -->

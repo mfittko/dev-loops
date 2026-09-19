@@ -1,64 +1,58 @@
 import { assert, readRepo, test } from "../imported-assets-helpers.mjs";
+import { evaluateInlineFanoutMode } from "../../scripts/github/detect-checkpoint-evidence.mjs";
+import { parseMarkdownSections } from "../../packages/core/src/loop/issue-refinement-artifact.mjs";
 import { assertRuleOwned } from "./_rule-helpers.mjs";
 
-// The rule prose spans several lines, so grab the full block from the marker up to
-// the next `<!-- rule:` marker or a non-empty bold heading (never silently to EOF).
-// An unanchored block is a test error, not a pass: if neither end condition matches,
-// assert fails so a reworded/reflowed heading cannot silently broaden the owned
-// block and mask a cut-off rule.
-function extractRuleBlock(content, id) {
-  const marker = new RegExp(`<!--\\s*rule:\\s*${id}\\s*-->`);
-  const lines = content.split(/\r?\n/);
-  const start = lines.findIndex((line) => marker.test(line));
-  assert.ok(start !== -1, `expected rule marker ${id} to be present`);
-  const remaining = lines.slice(start + 1);
-  const end = remaining.findIndex(
-    // A bold heading terminates the rule block even when it carries trailing
-    // prose on the same line (e.g. `**Grouped dispatch (default).** Before …`),
-    // so the block never swallows the next section: match any line that STARTS
-    // a bold heading, not one that must also end in `**` on the same line.
-    (line) => /<!--\s*rule:\s*[A-Z][A-Z0-9-]*\s*-->/.test(line) || /^\*\*[^*]/.test(line.trim()),
-  );
-  assert.ok(end !== -1, `expected rule block ${id} to be terminated by the next rule marker or bold heading`);
-  const block = remaining.slice(0, end);
-  return block.join(" ").replace(/\s+/g, " ").trim();
+function assertDispatchKeyRequirement(content) {
+  const marker = "<!-- rule: GATE-EXEC-FANOUT-DISPATCH-KEY -->";
+  const lines = parseMarkdownSections(content).find(({ bodyLines }) => bodyLines.includes(marker))?.bodyLines;
+  assert.ok(lines, "dispatch-key owner section must exist");
+  const tail = lines.slice(lines.indexOf(marker) + 1);
+  const boundary = tail.findIndex((line) => !line.trim() || /^<!-- rule:/.test(line));
+  const requirement = tail.slice(0, boundary < 0 ? undefined : boundary).join(" ")
+    .split(/\.(?=\s|$)/, 1)[0].replace(/\s+/g, " ");
+  for (const token of ["`runs.all`", "`key`"]) assert.ok(requirement.includes(token), `missing dispatch API: ${token}`);
+  for (const constraint of [/\bMUST\b/, /\bunique\b/, /\bnon-empty\b/, /\beach item\b/]) {
+    assert.match(requirement, constraint, "each dispatch item requires a unique, non-empty key");
+  }
 }
 
-/**
- * #1681 — runs.all workflowScript dispatch "invalid key"
- *
- * The Pi harness's `runs.all` workflowScript API requires every collection item
- * to declare its own `key` field. A fan-out that omits it fails the whole
- * dispatch with an "invalid key" validation error, which previously degraded a
- * requireFanoutEvidence gate to a single inline reviewer. This test pins the
- * authoritative gate contract so the conductor always emits the `key` field and
- * fails closed (never silently degrades to inline_single_agent) on a dispatch
- * failure.
- */
-test("gate fan-out contract owns the runs.all dispatch-key + fail-closed requirement", async () => {
-  const content = await readRepo("skills/docs/gate-review-sub-loop-contract.md");
+test("batch dispatch keys and collectable fan-out have one canonical owner", async () => {
+  for (const id of ["GATE-EXEC-FANOUT-DISPATCH-KEY", "GATE-EXEC-COLLECTABLE-DISPATCH"]) {
+    assertRuleOwned(id, "skills/docs/gate-review-sub-loop-contract.md");
+  }
+  assertDispatchKeyRequirement(await readRepo("skills/docs/gate-review-sub-loop-contract.md"));
+  // Ownership is not agent compliance or Pi's runs.all validation. Existing
+  // gate-fanin/evidence tests exercise mode refusal; dispatch-key and
+  // stop-on-failure instructions also require semantic review.
+});
 
-  // The rule must live in exactly the canonical gate contract doc, nowhere else.
-  assertRuleOwned("GATE-EXEC-FANOUT-DISPATCH-KEY", "skills/docs/gate-review-sub-loop-contract.md");
-  assert.match(content, /GATE-EXEC-FANOUT-DISPATCH-KEY/);
-  // The grouped-dispatch per-group slug mention is present so grouped fan-out is pinned.
-  assert.match(content, /a per-angle or per-group slug/);
+test("dispatch-key requirement accepts reflow but cannot borrow a sibling's payload", async () => {
+  const owner = await readRepo("skills/docs/gate-review-sub-loop-contract.md");
+  assertDispatchKeyRequirement(owner.replace("Every `runs.all` / batch reviewer dispatch", "Every batch reviewer dispatch through `runs.all`")
+    .replace("a unique\nnon-empty `key` on each item", "a unique non-empty\n`key` on each\nitem"));
+  for (const changed of [
+    owner.replace("non-empty `key`", "non-empty field"),
+    owner.replace("non-empty `key`", "non-empty ``"),
+    owner.replace("non-empty `key`", "non-empty `dispatchId`"),
+    owner.replace("a unique\nnon-empty", "a repeated\nnon-empty"),
+    owner.replace("non-empty `key`", "optional `key`"),
+    owner.replace("`key` on each item", "`key` on the batch"),
+    owner.replace("MUST carry a unique", "MAY carry a unique"),
+    owner.replace("non-empty `key`", "non-empty field")
+      + "\n## Sibling\nEvery `runs.all` dispatch MUST carry a unique non-empty `key` on each item.\n",
+  ]) assert.throws(() => assertDispatchKeyRequirement(changed));
+});
 
-  const owned = extractRuleBlock(content, "GATE-EXEC-FANOUT-DISPATCH-KEY");
-  // Negative case: the owned block must terminate at the next bold heading
-  // (`**Grouped dispatch (default).**`), never swallow the following section.
-  assert.equal(owned.includes("Grouped dispatch (default)"), false, "rule block must terminate at the next bold heading, not extend into the grouped-dispatch section");
-  // The harness `key`-field requirement is encoded (AC1).
-  assert.match(owned, /runs\.all/);
-  assert.match(owned, /`key` field on EACH item/);
-  assert.match(owned, /invalid key/);
-  // AC1's uniqueness + missing/blank-key edge cases are pinned, so a normative
-  // weakening (MUST->MAY, dropping `unique`/`missing or blank`) cannot pass.
-  assert.match(owned, /unique/);
-  assert.match(owned, /missing or blank/);
-  // The conductor fail-closed obligation is encoded (AC2): refusal to degrade
-  // to inline_single_agent on a requireFanoutEvidence gate.
-  assert.match(owned, /fails closed/);
-  assert.match(owned, /inline_single_agent/);
-  assert.match(owned, /requireFanoutEvidence/);
+test("a dispatch failure cannot qualify an inline verdict outside the light carve-out", () => {
+  const gate = { name: "draft_gate", executionMode: "inline_single_agent", inlineReason: "dispatch failed", scopeUnderThreshold: true };
+  const policy = { lightMode: true, hasFullLabel: false };
+  assert.equal(evaluateInlineFanoutMode(gate, policy), null);
+  for (const [review, enforcement] of [
+    [gate, { ...policy, lightMode: false }],
+    [gate, { ...policy, hasFullLabel: true }],
+    [{ ...gate, scopeUnderThreshold: false }, policy],
+    [{ ...gate, inlineReason: "" }, policy],
+  ]) assert.ok(evaluateInlineFanoutMode(review, enforcement));
+  assert.equal(evaluateInlineFanoutMode({ name: "draft_gate", executionMode: "fanout_fanin" }, policy), null);
 });

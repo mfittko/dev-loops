@@ -29,9 +29,7 @@ Everything after the tag is hands-off.
    (`assert-core-dependency-version.mjs` and `generate-claude-assets.mjs
    --check`), fails closed on any residual drift, and stages exactly those
    release files (never `git add -A`). It is idempotent and bump-only — it
-   never commits, tags, pushes, or publishes. This removes the class of drift
-   where the root manifest was bumped while the committed `.claude` tree or
-   lockfile stayed on the prior prerelease (`1.0.2-slim.0` did).
+   never commits, tags, pushes, or publishes.
 
    Land the release changes under `## Unreleased` in `CHANGELOG.md` **before**
    bumping — the bump stamps that heading to `## <version>` and fails closed if
@@ -39,8 +37,7 @@ Everything after the tag is hands-off.
    proceed. `release.yml`'s lockstep guard
    (`scripts/release/assert-core-dependency-version.mjs`) also fails the release
    workflow before the GitHub Release is created if the lockfile is out of
-   lockstep, so the documented tag-push path can never ship a stale lockfile
-   green (rc.7 did: #1886). Committing and pushing this release
+   lockstep. Committing and pushing this release
    commit lands directly on `main`, which the default-branch guard hooks (see
    [Default-branch guard](worktree-guidance.md#default-branch-guard)) now refuse
    by default — a sanctioned release commits and pushes with
@@ -57,8 +54,7 @@ Everything after the tag is hands-off.
    `git add -A` or `git add .`. The release commit runs with
    `DEVLOOPS_ALLOW_MAIN=1`, which intentionally turns the default-branch guard
    off, so a broad add sweeps accumulated main-checkout scratch straight into
-   the release commit (this has already cost a cancelled publish run and a tag
-   re-cut). Before committing, run `git status --porcelain` and verify every
+   the release commit. Before committing, run `git status --porcelain` and verify every
    staged path is an intended release file; abort the commit if anything
    unexpected is staged.
 2. Tag the release commit and push the tag:

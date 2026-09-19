@@ -1,6 +1,6 @@
 # Slides content & storytelling review loop for decks
 
-This document defines the bounded slides content & storytelling review loop introduced for issue #929. It is a sibling of the [Designer + Vision Review Loop](./ui-designer-review-loop.md): that loop answers "does it *look* right?"; this one answers "does it *land*?" — it judges a deck's **narrative**, not its pixels.
+This bounded loop reviews a deck's narrative. Visual review remains with the sibling [Designer + Vision Review Loop](./ui-designer-review-loop.md).
 
 ## Public entrypoint and dependency boundary
 
@@ -8,16 +8,6 @@ This document defines the bounded slides content & storytelling review loop intr
 - This review loop is an internal capability behind `dev-loop`; it does not introduce a second public workflow name.
 - It is a sibling of the visual designer/vision loop, not a replacement: visual and design changes remain the [Designer + Vision Review Loop](./ui-designer-review-loop.md)'s job.
 - It consumes the deck source (and optionally the captured slide screenshots produced by the [UI Smoke Harness](./ui-smoke-harness.md)) plus acceptance criteria and a storytelling brief. It does not redefine browser capture or artifact naming.
-
-## Purpose
-
-The slides-story review loop turns a deck draft into a repeatable next-iteration handoff for narrative quality.
-
-It exists for presentation work where the deck renders correctly and the UI smoke passes, but those are necessary and not sufficient to answer:
-- whether the deck has a story arc a public audience can follow
-- which slides carry more than one message or fail to earn their place
-- where jargon, forward references, or raw identifiers break a non-insider reader
-- when the storytelling side is satisfied enough to stop iterating
 
 ## Required input bundle
 
@@ -96,12 +86,3 @@ The pure validation helpers at `scripts/loop/slides-story-review-contract.mjs` c
 - incomplete optional slide screenshots are blocked (`blocked_incomplete_deck_bundle`)
 - a complete bundle is eligible for review (`ready_for_story_review`)
 - `validateSlidesStoryReviewResult` enforces the output shape and the `story_review_satisfied` | `needs_iteration` outcome set
-
-This keeps the boundary testable before any later higher-level reviewer orchestration is layered on top.
-
-## First two runs (evidence)
-
-This loop was applied inline to both presentation decks before being formalized here. The recorded passes — findings + corrective actions per deck — are the first two runs:
-
-- `docs/presentations/applied-dev-loops-review-notes.md` (#926)
-- `docs/presentations/process-observability-review-notes.md` (#927)

@@ -63,7 +63,7 @@ Before merge, ALL of the following MUST hold:
 
 ## Sanctioned merge wrapper (issue #1939)
 
-The canonical merge path is the sanctioned wrapper `scripts/github/merge-pr.mjs`
+The canonical agent-executed merge path is the sanctioned wrapper `scripts/github/merge-pr.mjs`
 (`node scripts/github/merge-pr.mjs --repo <owner/name> --pr <n> --human-approved-by <login>`,
 squash by default, `--method` configurable). It runs the full precondition list
 above fail-closed and refuses with a non-zero, machine-readable reason naming the
@@ -320,6 +320,11 @@ A standing authorization is valid only when all of the following hold:
   the condition), not only in a chat turn
 - the gate pass is complete at the current head; a gate-incomplete PR stays unauthorized
 
+This recorded authorization's current-head condition is stricter than the general
+one-time draft transition rule in [PR Lifecycle Contract](pr-lifecycle-contract.md).
+The detector accepting an older draft transition record does not establish this
+standing authorization; if its condition is unmet, obtain fresh per-scope approval.
+
 Absent a recorded standing authorization, the per-scope explicit rule above governs.
 
 A standing authorization is surfaced through the same per-run authorization signal the
@@ -338,8 +343,9 @@ human action and this authorization step is **non-overridable**:
   "merge" instruction. The lifecycle resolver therefore never advances to the merge
   state and parks at the `pre_approval_gate` human-merge handoff.
 - The agent still runs the full mechanical pre-merge evidence check and reports
-  merge-ready + gate evidence, then hands off to a human, who merges through the
-  sanctioned wrapper `scripts/github/merge-pr.mjs`. Under `humanMergeOnly` the agent
+  merge-ready + gate evidence, then hands off to a human for the GitHub merge action
+  (ADR 0007). The wrapper also refuses a human invocation while this config is set;
+  do not hand off an unusable wrapper command or change the config to bypass it. Under `humanMergeOnly` the agent
   **never** performs the merge itself — not the wrapper and never a raw `gh pr merge`;
   merge is a human action.
 

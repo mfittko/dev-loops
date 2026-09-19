@@ -832,7 +832,7 @@
     {
       "id": "WORKTREE-NO-STASH",
       "enforcement": "agent",
-      "enforcementNote": "No-stash is agent discipline; no mechanical check."
+      "enforcementNote": "Agent discipline across harnesses; the Claude PreToolUse Bash gate additionally refuses git stash."
     },
     {
       "id": "WORKTREE-WRONG-CHECKOUT-GUARD",

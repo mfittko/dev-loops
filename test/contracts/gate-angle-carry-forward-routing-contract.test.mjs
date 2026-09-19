@@ -1,4 +1,7 @@
 import { access } from "node:fs/promises";
+import { extractRelativeMarkdownLinks } from "../../scripts/docs/validate-links.mjs";
+import { parseMarkdownSections } from "../../packages/core/src/loop/issue-refinement-artifact.mjs";
+import { assertRuleOwned } from "./_rule-helpers.mjs";
 
 import {
   assert,
@@ -27,68 +30,41 @@ import {
 const SKILL = "skills/copilot-pr-followup/SKILL.md";
 const SUB_LOOP_CONTRACT = "skills/docs/gate-review-sub-loop-contract.md";
 
-// Every source skill that drives a gate retry. The bare "only the angles that
-// had findings" rule must survive in none of them. The sub-loop contract owns
-// GATE-EXEC-ANGLE-CARRY-FORWARD itself, and every AC4 sentence lands there, so
-// it is in scope for this guard too. Generated .claude mirrors are not listed:
-// claude-assets-reproducible.test.mjs proves the mirror is byte-reproducible
-// from these sources, so a rule absent from the source is absent from the mirror.
-const GATE_DRIVING_SKILLS = [
-  SKILL,
-  "skills/local-implementation/SKILL.md",
-  SUB_LOOP_CONTRACT,
-];
-
-// Each numbered procedure step in the fan-out/fan-in section is one long line
-// starting "N. **<heading>:**" (see the section this pins). Extract by heading
-// substring so a mutation that deletes the whole step (leaving only the header
-// or a sibling step's mention of the same token) cannot satisfy the check.
-function extractStepLine(content, heading, file) {
-  const line = content.split("\n").find((l) => l.includes(heading));
-  assert.ok(line, `${file}: expected to find the ${JSON.stringify(heading)} step`);
-  return line;
+// Include wrapped paragraphs, but never borrow a command from a sibling step
+// or the following section. Heading wording is not used to find the boundary.
+function extractStep(content, phase, file) {
+  const lines = content.split("\n");
+  const start = lines.findIndex((line) => /^\d+\. /.test(line) && line.match(/^\d+\. \*\*[^*]+\(Phase ([\d.]+)\):\*\*/)?.[1] === phase);
+  assert.ok(start >= 0, `${file}: expected to find the ${JSON.stringify(phase)} step`);
+  const end = lines.findIndex((line, index) => index > start && /^(?:\d+\. |#{1,6} )/.test(line));
+  return lines.slice(start, end < 0 ? undefined : end).join("\n");
 }
 
-// Phase 1.2 (Carry-forward): names the CLI, the SHA form it requires, the
-// subtract-not-substitute dispatch rule, and treats a refusal as full fan-out.
+// Phase 1.2 must invoke the real resolver with bound head/spec identities and
+// load its owner. Eligibility, refusal, subtraction and provenance behavior
+// are covered by resolver/emitter/fan-in tests; prose preservation needs
+// independent semantic review, not an exact sentence masquerading as proof.
 const PHASE_1_2_ROUTING = [
-  /resolve-angle-carry-forward\.mjs/,
-  /--prev-head/,
-  /mustRerun/,
-  // …the dispatch set is the CURRENT head's resolved angles minus the carried
-  // ones, never the plan's own lists — the plan's universe is the PRIOR head's
-  // angle set, so an angle first resolved at this head appears in neither list
-  // and would otherwise go unreviewed.
-  /subtract, never substitute/,
-  /minus the plan's `carried` angles/,
-  // An abbreviated prev-head resolves no log file, so carry-forward would refuse
-  // forever without ever saying why.
-  /FULL 40-character form/,
-  // Carried angles keep the prior reviewer's identity and head, never a fake one.
-  /carriedFromHead/,
-  /never a fabricated fresh review/i,
-  // Round 1 has no prior head, so the step is explicitly skipped rather than
-  // left to fail-closed refusal by accident.
-  /Skip this step on a gate's first round/,
+  // Keep both identities bound to the resolver invocation, not a sibling
+  // command. Full-SHA acceptance/refusal is tested against its actual parser
+  // in resolve-angle-carry-forward.test.mjs, not an incidental prose phrase.
+  /`[^`]*resolve-angle-carry-forward\.mjs[^`]*--prev-head\s+<prior_head_sha>[^`]*--head-sha\s+<current_head_sha>[^`]*--spec-authority\s+<identity-path>[^`]*`/,
   // The rule itself stays owned by the contract doc.
   /GATE-EXEC-ANGLE-CARRY-FORWARD/,
-  // A refusal must widen the fan-out, not silence it.
-  /never treat exit 1 as "nothing to re-run"/,
 ];
 
-// Phase 2 (Fan-out): must dispatch by SUBTRACTION — the current head's
-// resolved angle set minus the plan's carried angles, never the plan's
-// mustRerun field — this is the clause that makes the carry-forward plan
-// operative rather than advisory, pinned in its unambiguous form.
+// Phase 2 routes carry-forward through the pending emitter API. The actual
+// subtraction is exercised end-to-end in emit-fanout-dispatch.test.mjs;
+// prose meaning is reviewed in the linked owner, not inferred from keywords.
 const PHASE_2_ROUTING = [
-  /resolved angle set minus the plan's `carried` angles \(the Phase 1\.2 subtraction — never `mustRerun`\)/,
+  /`[^`]*emit-fanout-dispatch\.mjs[^`]*--pending[^`]*`/,
+  /`[^`]*--carried-angles[^`]*--prev-head[^`]*`/,
 ];
 
 // Phase 3 (Fan-in): --provenance belongs to the LEDGER WRITE, not the comment
 // post — pinned on this line specifically so a reworded sentence that reattaches
 // the flag to the wrong command (the exact defect this pins) fails here. The
-// whole step is ONE line, so `[^\n]*` spans it end to end and cannot fail on a
-// reattached flag; anchor inside the backtick-delimited code span instead
+// step may span paragraphs; anchor inside the backtick-delimited code span
 // (`[^`]*`), which stops at the first closing backtick and so cannot reach past
 // the ledger-write command into a later, separately-quoted mention.
 const PHASE_3_ROUTING = [
@@ -99,30 +75,46 @@ const PHASE_3_ROUTING = [
 // command — this is the exact defect round 3 fixed and pins it from reintroduction.
 const PHASE_3_PROVENANCE_NOT_ON_COMMENT_POST = /post-gate-findings\.mjs[^`]*--provenance/;
 
-// The class of banned rule this PR removed: "re-run only ... (findings |
-// findings_present) ... previous pass/head/round". Broad enough to catch a
-// reworded reintroduction of the SAME scoping rule, not just the one literal
-// phrasing this PR happened to delete — a reviewer who restores the removed
-// sentence verbatim, or rewords it (e.g. "in subsequent cycles, re-run only the
-// angles that had findings in the previous pass"), must still be caught.
-const BARE_FINDINGS_ONLY_RERUN_CLASS =
-  /\bonly\b[^.\n]{0,80}\b(?:findings_present|findings)\b[^.\n]{0,60}\bprevious\s+(?:pass|head|round)\b/i;
-
 test("copilot-pr-followup SKILL's Phase 1.2 step routes the fan-out through resolve-angle-carry-forward", async () => {
   const skill = await readRepo(SKILL);
-  const line = extractStepLine(skill, "**Carry-forward (Phase 1.2):**", SKILL);
+  const line = extractStep(skill, "1.2", SKILL);
   assertMatchesAll(line, PHASE_1_2_ROUTING, `${SKILL} Phase 1.2 step`);
+  assert.ok(extractRelativeMarkdownLinks(line).some(({ rawTarget }) => rawTarget === "../docs/gate-review-sub-loop-contract.md#angle-carry-forward-fail-closed"));
+  assertRuleOwned("GATE-EXEC-ANGLE-CARRY-FORWARD", SUB_LOOP_CONTRACT);
 });
 
-test("copilot-pr-followup SKILL's Phase 2 step dispatches only the angles Phase 1.2 left to re-run", async () => {
+test("carry routing binds both head arguments to the resolver through prose rewrites", async () => {
+  const step = extractStep(await readRepo(SKILL), "1.2", SKILL);
+  const reworded = step
+    .replace("Use FULL 40-character SHAs", "Supply full commit identities")
+    .replace("subtract, never substitute", "use set subtraction")
+    .replace("minus the plan's `carried` angles", "except angles proven carried by the plan")
+    .replace("never a fabricated fresh review", "without inventing a new reviewer")
+    .replace("Skip this step on a gate's first round", "A first round has no carry-forward step")
+    .replace('never treat exit 1 as "nothing to re-run"', "exit 1 requires full fan-out");
+  for (const rewritten of [step, reworded, reworded.replace(/\. /g, ".\n   ")]) {
+    assertMatchesAll(rewritten, PHASE_1_2_ROUTING);
+  }
+  for (const changed of [
+    step.replace("--prev-head <prior_head_sha>", "--prev-head <current_head_sha>"),
+    step.replace("--head-sha <current_head_sha>", "") + "\n`other-command --head-sha <current_head_sha>`",
+    step.replace("--spec-authority <identity-path>", "") + "\n`other-command --spec-authority <identity-path>`",
+  ]) assert.throws(() => assertMatchesAll(changed, PHASE_1_2_ROUTING));
+});
+
+test("copilot-pr-followup Phase 2 routes to the owned fan-out procedure and pending emitter", async () => {
   const skill = await readRepo(SKILL);
-  const line = extractStepLine(skill, "**Fan-out (Phase 2):**", SKILL);
+  const line = extractStep(skill, "2", SKILL);
+  const links = extractRelativeMarkdownLinks(line).map(({ rawTarget }) => rawTarget);
+  assert.ok(links.includes("../docs/gate-review-sub-loop-contract.md#phase-2--fan-out-independent-reviewers-seeded-with-the-neutral-bundle"));
+  assertRuleOwned("GATE-EXEC-ANGLE-CARRY-FORWARD", SUB_LOOP_CONTRACT);
+  assertRuleOwned("GATE-EXEC-FANOUT-DISPATCH-EMIT", SUB_LOOP_CONTRACT);
   assertMatchesAll(line, PHASE_2_ROUTING, `${SKILL} Phase 2 step`);
 });
 
 test("copilot-pr-followup SKILL's Phase 3 step attaches --provenance to the ledger write, not the comment post", async () => {
   const skill = await readRepo(SKILL);
-  const line = extractStepLine(skill, "**Fan-in (Phase 3):**", SKILL);
+  const line = extractStep(skill, "3", SKILL);
   assertMatchesAll(line, PHASE_3_ROUTING, `${SKILL} Phase 3 step`);
   assert.doesNotMatch(
     line,
@@ -131,24 +123,54 @@ test("copilot-pr-followup SKILL's Phase 3 step attaches --provenance to the ledg
   );
 });
 
-test("the carry-forward CLI the SKILL routes to exists", async () => {
-  await access(fromRepoRoot("scripts/github/resolve-angle-carry-forward.mjs"));
+function assertJudgeBridge(step) {
+  const commands = [...step.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
+  const writer = commands.find((command) => command.startsWith("write-gate-findings-log.mjs "));
+  const bridge = commands.find((command) => command.startsWith("dev-loops gate judge-pass "));
+  assert.ok(writer && bridge, "fan-in must write judged findings and run the judge bridge");
+  assert.match(writer, /--judge-verdict\s+<judge-verdict-path>/);
+  for (const [flag, value] of [
+    ["head-sha", "current_head_sha"], ["findings-file", "ledger-path"],
+    ["judge-verdict", "judge-verdict-path"], ["out", "act-list-path"],
+    ["ledger-out", "enriched-ledger-path"], ["spec-file", "spec-path"],
+    ["content-digest", "content-digest"], ["spec-authority-verdict", "spec-authority-verdict-path"],
+  ]) assert.match(bridge, new RegExp(`--${flag}\\s+<${value}>`));
+  assert.ok(step.indexOf(writer) < step.indexOf(bridge), "durable judged write precedes the bridge");
+}
+
+test("fan-in routes judged findings through the spec-bound act-list bridge", async () => {
+  const step = extractStep(await readRepo(SKILL), "3", SKILL);
+  assertJudgeBridge(step);
+  assert.ok(extractRelativeMarkdownLinks(step).some(({ rawTarget }) => rawTarget === "../docs/gate-review-sub-loop-contract.md#phase-35--judge-relevance-disposition-1525"));
+  assertRuleOwned("GATE-EXEC-JUDGE-AUTHORITY-SPLIT", SUB_LOOP_CONTRACT);
+  assertJudgeBridge(step.replace("Before the durable write", "Before persisting findings").replace(/\. /g, ".\n   "));
+  for (const changed of [
+    step.replace("--out <act-list-path>", "--out <ledger-path>"),
+    step.replaceAll("--judge-verdict <judge-verdict-path>", ""),
+    step.replace("--spec-authority-verdict <spec-authority-verdict-path>", "") + "\n`other-command --spec-authority-verdict <spec-authority-verdict-path>`",
+  ]) assert.throws(() => assertJudgeBridge(changed));
 });
 
-test("no gate-driving skill re-states a bare findings-only re-run rule, in any phrasing", async () => {
-  // The old wording ("only re-run reviewers that produced findings") is a SECOND,
-  // unevidenced scoping rule that silently overrides Phase 1.2 and would let a
-  // previously-clean angle skip without proof its surface is untouched. It has to
-  // be gone from EVERY skill that drives a gate retry, and from the mirrors —
-  // leaving it in a sibling skill just moves the hole, and rewording it must not
-  // resurrect it either.
-  for (const file of GATE_DRIVING_SKILLS) {
-    assert.doesNotMatch(
-      await readRepo(file),
-      BARE_FINDINGS_ONLY_RERUN_CLASS,
-      `${file} must defer re-run scoping to the carry-forward step`,
-    );
+test("phase routing checks accept wrapped prose but cannot borrow a sibling's command", () => {
+  const heading = "**Fan-in (Phase 3):**";
+  const command = "`write-gate-findings-log.mjs --provenance '<json>'`";
+  for (const prose of ["Record the carry.", "Preserve the prior\n   review identity."]) {
+    const content = `5. ${heading} ${prose}\n\n   ${command} with \`carriedFromHead\`.\n6. **Verdict:** Next step.\n`;
+    assertMatchesAll(extractStep(content.replace("Fan-in", "Consolidation"), "3", "fixture"), PHASE_3_ROUTING);
   }
+  for (const boundary of ["6. **Verdict:**", "## Next section"]) {
+    const content = `5. ${heading} \`carriedFromHead\`.\n${boundary}\n${command}`;
+    assert.throws(() => assertMatchesAll(extractStep(content, "3", "fixture"), PHASE_3_ROUTING));
+  }
+  assert.throws(() => extractStep(`6. **Verdict:** Mentions ${heading}`, "3", "fixture"));
+  assert.throws(() => assert.doesNotMatch(
+    "`post-gate-findings.mjs --provenance '<json>'`",
+    PHASE_3_PROVENANCE_NOT_ON_COMMENT_POST,
+  ));
+});
+
+test("the carry-forward CLI the SKILL routes to exists", async () => {
+  await access(fromRepoRoot("scripts/github/resolve-angle-carry-forward.mjs"));
 });
 
 test("copilot-pr-followup SKILL defers retry scoping to Phase 1.2 at both retry entry points", async () => {
@@ -156,8 +178,16 @@ test("copilot-pr-followup SKILL defers retry scoping to Phase 1.2 at both retry 
   // are the two places a bare "only re-run what had findings" rule could sneak
   // back in as an "obvious" restatement; both must point at Phase 1.2 instead.
   const skill = await readRepo(SKILL);
-  const matches = skill.match(/Phase 1\.2 decides what re-runs/g) ?? [];
-  assert.ok(matches.length >= 2, `${SKILL} must defer both retry entry points to Phase 1.2 (found ${matches.length})`);
+  const preApproval = parseMarkdownSections(skill).find(({ level, bodyLines }) => level === 3
+    && bodyLines.includes("- **Gate name:** Pre-approval gate"))?.bodyLines.join("\n");
+  assert.ok(preApproval, "public pre-approval section must exist");
+  const assertOwner = (section) => assert.ok(extractRelativeMarkdownLinks(section).some(({ rawTarget }) =>
+    rawTarget === "../docs/gate-review-sub-loop-contract.md#angle-carry-forward-fail-closed"));
+  for (const section of [extractStep(skill, "5", SKILL), preApproval]) {
+    assertOwner(section);
+    assertOwner(section.replace("decides what re-runs", "governs retry selection"));
+    assert.throws(() => assertOwner(section.replaceAll("#angle-carry-forward-fail-closed", "#phase-2")));
+  }
 });
 
 test("local-implementation developer loop prescribes no gate angle retry scoping", async () => {
@@ -176,47 +206,22 @@ test("local-implementation developer loop prescribes no gate angle retry scoping
   );
 });
 
-test("the sub-loop contract's carry-forward rule states carry-forward as the default posture, not just a MAY", async () => {
-  // Pins the AC4 posture flip so it cannot silently revert to the old MAY
-  // wording: carry-forward must be stated as the default decision procedure,
-  // with full re-dispatch named as the exception. Pinned on the source doc only;
-  // claude-assets-reproducible.test.mjs proves the generated mirror matches it.
-  {
-    const file = SUB_LOOP_CONTRACT;
-    const content = await readRepo(file);
-    assert.match(
-      content,
-      /carried forward to the new head by default/,
-      `${file} must state carry-forward as the default posture`,
-    );
-    assert.match(
-      content,
-      /A full\s*\nre-dispatch of the entire resolved angle set is the EXCEPTION/,
-      `${file} must name full re-dispatch as the exception to the default`,
-    );
-  }
-});
-
-test("copilot-pr-followup SKILL's Phase 2 step injects the known-findings block after the angle prompt, never into the byte-identical prefix", async () => {
-  // AC4's briefing half: the known-findings block is appended AFTER the
-  // angle-specific prompt, not folded into GATE-EXEC-BRIEFING-PREFIX's
-  // byte-identical prefix — folding it in would recompute the prefix hash on
-  // every gate close and break the sanctioned same-head-retry sentinel. Pinned
-  // on the source SKILL only; the generated mirror is covered by
-  // claude-assets-reproducible.test.mjs byte-reproducibility.
-  {
-    const file = SKILL;
-    const content = await readRepo(file);
-    assertMatchesAll(
-      content,
-      [
-        /known-findings block, appended AFTER this\s*\n\s*angle-specific prompt/,
-        /never into the byte-identical prefix `GATE-EXEC-BRIEFING-PREFIX`/,
-        /GATE-EXEC-FINDING-THREADS/,
-      ],
-      `${file} Phase 2 known-findings injection`,
-    );
-  }
+test("Phase 2 routes known-findings reads to the full-body helper and disposition owner", async () => {
+  const step = extractStep(await readRepo(SKILL), "2", SKILL);
+  const owner = "../docs/gate-review-sub-loop-contract.md#finding-threads-and-disposition";
+  const command = "node scripts/github/capture-review-threads.mjs --repo <owner/name> --pr <number>";
+  const assertRead = (text) => {
+    assert.ok([...text.matchAll(/`([^`]+)`/g)].some((match) => match[1] === command));
+    assert.ok(extractRelativeMarkdownLinks(text).some(({ rawTarget }) => rawTarget === owner));
+  };
+  assertRuleOwned("GATE-EXEC-FINDING-THREADS", SUB_LOOP_CONTRACT);
+  assertRead(step);
+  assertRead(`Read the threads with \`${command}\`.\nFollow [their disposition contract](${owner}).`);
+  assert.throws(() => assertRead(step.replace(command, "list-review-threads.mjs --unresolved-only")));
+  assert.throws(() => assertRead(step.replace(owner, "../docs/other.md")));
+  // Routing is structural. Carry defaults and known-findings placement require
+  // semantic scenarios (docs/skills-prose-coverage.md); runtime carry/prompt tests
+  // prove helper behavior, not the conductor's decision to invoke it correctly.
 });
 
 test("detect-checkpoint-evidence.mjs has no gate-thread-specific second unresolved-thread counter", async () => {

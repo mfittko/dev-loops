@@ -6,6 +6,7 @@
 // resolve-angle-carry-forward). Without this test, an edit that drops the flags from the
 // gate flow prose would silently revert the feature with no failing test.
 import { assert, readRepo, test } from "../imported-assets-helpers.mjs";
+import { parseMarkdownSections } from "../../packages/core/src/loop/issue-refinement-artifact.mjs";
 
 const REQUIRED_TOKENS = [
   "spec-context.mjs",
@@ -30,6 +31,12 @@ const AC1_REQUIRED_TOKENS = [
 // the test (not silently widen the section to the whole document tail), or the
 // guard's section-scoping degrades with no failing test to catch it.
 function extractPhase35(content, endBoundary, docName) {
+  if (docName === "skills/docs/gate-review-sub-loop-contract.md") {
+    const section = parseMarkdownSections(content).find(({ bodyLines }) =>
+      bodyLines.includes("<!-- rule: GATE-EXEC-JUDGE-PHASE -->"));
+    assert.ok(section, "missing judge-owned section");
+    return section.bodyLines.join("\n");
+  }
   const startMatch = content.match(/Spec authority is engaged by default|Spec-context seam \(default-on/);
   assert.ok(startMatch, "Phase 3.5 default-on spec-authority prose not found");
   const start = startMatch.index;
@@ -40,6 +47,16 @@ function extractPhase35(content, endBoundary, docName) {
   );
   return content.slice(start, start + endMatch.index);
 }
+
+test("judge section selection accepts renamed headings without borrowing sibling flags", () => {
+  const marker = "<!-- rule: GATE-EXEC-JUDGE-PHASE -->";
+  const path = "skills/docs/gate-review-sub-loop-contract.md";
+  for (const heading of ["Judge", "Relevance disposition"]) {
+    assert.equal(extractPhase35(`### ${heading}\n${marker}\n--spec-file\n### Next\n--prior-approvals`, null, path), `${marker}\n--spec-file`);
+  }
+  assert.throws(() => extractPhase35("### Judge\nNo marker", null, path));
+  assert.throws(() => extractPhase35(`\x60\x60\x60md\n### Judge\n${marker}\n\x60\x60\x60`, null, path));
+});
 
 test("skills/dev-loop/SKILL.md pins default-on spec-authority wiring in the gate flow (issue 2008)", async () => {
   const skill = await readRepo("skills/dev-loop/SKILL.md");

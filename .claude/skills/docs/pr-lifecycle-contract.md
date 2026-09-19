@@ -5,11 +5,6 @@ in `dev-loops` — the deterministic family-local PR lifecycle contract.
 
 The canonical contract lives in the shipped `skills/docs/` surface because installed skill/runtime consumers reliably own the skills subtree.
 
-It consolidates the lifecycle boundary currently split across:
-- [Copilot Loop State Graph](./copilot-loop-state-graph.md)
-- [Reviewer Loop State Graph](./reviewer-loop-state-graph.md)
-- [Gate Review Comment Contract](./gate-review-comment-contract.md)
-
 ## Purpose
 
 This contract freezes the end-to-end lifecycle semantics for one PR as it moves through:
@@ -45,7 +40,7 @@ It does not redefine helper transport mechanics, reviewer-loop internals, conduc
 - The lifecycle MUST fail closed when required evidence is missing, stale, ambiguous, or unparsable (see [Fail-closed rules](#fail-closed-rules), `LIFECYCLE-FAIL-CLOSED`).
 - Every gate-crossing decision is for the **current PR head SHA**.
 - Draft existence alone is **not** draft-gate readiness.
-- A PR MUST clear the draft-stage gate for the current head before Copilot review may be requested.
+- A draft PR MUST clear the draft-stage gate for the current head before becoming ready and requesting Copilot. Once non-draft, the transition record remains valid across head changes; requests/re-requests do not require a new draft gate.
 - Ready -> draft resets the lifecycle back into draft-stage gating.
 - A merge-blocking marker in the PR **title** blocks the draft -> ready transition and, for non-draft PRs, blocks entry to the pre-approval gate and final approval (`title_marker_blocked`). `WIP`/`DRAFT` only count when bracketed, parenthesized, colon-suffixed, or standalone (a compound-noun use like `draft-gate`, a conventional-commit scope like `fix(draft):`, or a dash-set-off trailing tag like `Fix login flow — WIP` is exempt); `DO NOT MERGE` and `🚧` match directly rather than through the four constructions, and only whitespace joins the words of `DO NOT MERGE`, so `do-not-merge` does not flag — case-insensitive throughout. Markers are permitted only while the PR remains draft. See [Merge preconditions](merge-preconditions.md#title-markers).
 - Human approval / merge are explicit external waits, not hidden remediation states.
@@ -72,7 +67,7 @@ Purpose:
 Boundary note:
 - `draft_gate` governs only the draft -> ready-for-review boundary for the reviewed head
 - a clean verdict requires no findings at any severity in the gate's `blockCleanOnFindingSeverities` (resolved from config via `resolveGateConfig(config, "draft").blockCleanOnFindingSeverities`)
-- `gates.draft.requireCi=false` does **not** relax `pre_approval_gate` — that boundary has its own separate `gates.preApproval.requireCi` knob (default `true`); by default final approval and merge readiness still require green current-head CI, but a repo may set `gates.preApproval.requireCi: false` to opt the pre-approval boundary out independently (e.g. a repo with no CI)
+- `gates.draft.requireCi=false` does **not** relax `pre_approval_gate` — that boundary has its own separate `gates.preApproval.requireCi` knob (default `true`). A repo may opt the pre-approval boundary out independently; this does not waive the sanctioned merge wrapper's green-CI precondition in [Merge Preconditions](merge-preconditions.md#required-before-merge).
 
 ### 2. `pre_approval_gate`
 
@@ -82,7 +77,7 @@ This gate uses review angles resolved from config (`resolveGateAngles(config, "p
 
 Boundary note:
 - `pre_approval_gate` governs only final approval readiness for the reviewed head
-- CI precondition: `resolveGateConfig(config, "preApproval").requireCi` (default `true`) requires green current-head CI before final approval / merge readiness; set `gates.preApproval.requireCi: false` to opt this boundary out of the CI precondition (e.g. a repo with no CI), mirroring the draft gate's own `requireCi` knob
+- CI precondition: `resolveGateConfig(config, "preApproval").requireCi` (default `true`) requires green current-head CI at this gate boundary; `gates.preApproval.requireCi: false` opts this boundary out. Gate readiness is not merge permission: [Merge Preconditions](merge-preconditions.md#required-before-merge) still governs the merge wrapper.
 - a clean verdict requires no findings at any severity in the gate's `blockCleanOnFindingSeverities` (resolved from config via `resolveGateConfig(config, "preApproval").blockCleanOnFindingSeverities`)
 - non-draft PRs do not need *per-head* `draft_gate` evidence to enter the post-draft review / `pre_approval_gate` lifecycle — the one-time draft -> ready transition record still applies; a non-draft PR with no clean `draft_gate` evidence at all fails closed and must reconcile that missing evidence first (see the current-head `draft_gate` evidence bullet under [Fail-closed rules](#fail-closed-rules))
 
@@ -149,7 +144,7 @@ At minimum, the lifecycle MUST enforce these transitions:
 
 ### Required negative boundaries
 
-- no Copilot request before clean current-head `draft_gate` evidence
+- no initial draft-to-ready Copilot handoff before clean current-head `draft_gate` evidence; subsequent non-draft requests retain the transition record
 - no direct skip from fix-applied to Copilot re-request while reply/resolve remains incomplete
 - no reuse of ready-side or gate evidence after ready -> draft
 - <!-- rule: LIFECYCLE-CONFLICT-BLOCKS-PROGRESS --> `LIFECYCLE-CONFLICT-BLOCKS-PROGRESS`: a conflicted PR MUST NOT be treated as `waiting_for_human_pr_approval`, `waiting_for_merge`, or merge-ready, even if older gate comments and CI were previously green
@@ -220,4 +215,3 @@ In those cases the workflow MUST NOT:
 - [Gate Review Comment Contract](./gate-review-comment-contract.md) — `GATE-COMMENT-*` PR-comment field rules
 - [Merge preconditions](merge-preconditions.md)
 - [Contract style guide](contract-style-guide.md)
-

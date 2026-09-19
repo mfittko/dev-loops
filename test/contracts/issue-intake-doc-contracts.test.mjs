@@ -9,6 +9,8 @@ import {
   USER_FACING_AGENT_SURFACE,
 } from "../imported-assets-helpers.mjs";
 import { assertRuleOwned, extractOwnedText } from "./_rule-helpers.mjs";
+import { extractRelativeMarkdownLinks } from "../../scripts/docs/validate-links.mjs";
+import { parseReadyForReviewCliArgs } from "../../scripts/github/ready-for-review.mjs";
 
 const PUBLIC_CONTRACT_PATH = "skills/docs/public-dev-loop-contract.md";
 
@@ -21,52 +23,27 @@ async function readIssueIntakeSurface() {
   return [skill, intakeDoc, operationsDoc].join("\n\n");
 }
 
-test("issue-intake surface still contains its core workflow guidance", async () => {
-  const content = await readIssueIntakeSurface();
-
-  // Required startup reads now references entrypoint briefing first
-  assert.match(content, /entrypoint briefing/i);
-  assert.match(content, /Read.*contract docs needed for the current step/i);
-  assert.match(content, /Skill asset path resolution/);
+test("follow-up links its startup, validation and review owners", async () => {
+  const skill = await readRepo("skills/copilot-pr-followup/SKILL.md");
+  const links = new Set(extractRelativeMarkdownLinks(skill).map(({ rawTarget }) => rawTarget.split("#")[0]));
+  for (const target of [
+    "../docs/entrypoint-strategies.md", "../docs/validation-policy.md",
+    "../docs/gate-review-sub-loop-contract.md", "../docs/copilot-loop-operations.md",
+  ]) assert.ok(links.has(target), `missing owner link: ${target}`);
   assertRuleOwned("ASSET-PATH-SOURCE-NO-REPO-LOCAL", "skills/copilot-pr-followup/SKILL.md");
-  assert.match(content, /ASSET-PATH-SOURCE-NO-REPO-LOCAL/);
-  assert.match(content, /source-repo helper scripts live two levels up at `\.\.\/\.\.\/scripts\/`/i);
-  assert.match(content, /Before any GitHub mutation/);
-  assert.match(content, /Preferred defaults for this repo:/);
-  // Validation policy now in canonical doc; skill references it
-  assert.match(content, /Validation Policy|validation policy/i);
-  // Reviewer context rules now owned by gate-review-sub-loop-contract.md; skill references it
-  assert.match(content, /Gate Review Sub-Loop Contract/i);
-  assert.match(content, /checkpoint review chain/i);
 });
 
-test("issue-intake surface requires github reply/resolve follow-up and gates waiting on confirmed review-request state", async () => {
-  const content = await readIssueIntakeSurface();
-
-  assert.match(content, /reply\/resolve work is done for the addressed threads/);
-  assert.match(content, /if that local validation is still known red, continue remediation instead of re-requesting Copilot/);
-  assert.match(content, /if GitHub CI\/checks for the updated head are known red for a fixable issue, continue remediation instead of re-requesting Copilot/);
-  // The green/credibly-green re-request gating is its own normative rule
-  // (owned in the same skill file); loose token instead of the full sentence.
-  assertRuleOwned("COPILOT-FOLLOWUP-REREQUEST-GREEN-GATE", "skills/copilot-pr-followup/SKILL.md");
-  assert.match(content, /COPILOT-FOLLOWUP-REREQUEST-GREEN-GATE/);
-  // Owned-text check — marker survival alone must not mask dropping the CI-gating clause.
-  assert.match(
-    extractOwnedText(await readRepo("skills/copilot-pr-followup/SKILL.md"), "COPILOT-FOLLOWUP-REREQUEST-GREEN-GATE"),
-    /green or credibly green/i,
-  );
-  assert.match(content, /explicitly re-request Copilot review for the new head/i);
-  assert.match(content, /wait\/watch loop if the request result is confirmed as `requested` or `already-requested`/);
-  assert.match(content, /`requested`: if another Copilot pass is actually desired, immediately re-baseline/i);
-  assert.match(content, /`already-requested`: apply the same detector-first rebasing and wait branching as `requested`/i);
-  assert.match(content, /`unavailable`: report the limitation and stop/);
-  assert.match(content, /stop and report the error rather than (?:entering a sleep\/watch loop|sleeping and hoping for a new review)/);
-  // GitHub-autolink backtick formatting is elaboration of the reply-resolve
-  // mechanism owned by COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER in this same
-  // skill file; loose tokens instead of the full formatting sentences (#1205).
-  assertRuleOwned("COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER", "skills/copilot-pr-followup/SKILL.md");
-  assert.match(content, /keep commit SHAs and issue\/PR refs as plain text/i);
-  assert.match(content, /do not wrap them in backticks/i);
+test("issue-intake follow-up uses the request, CI and reply owners", async () => {
+  const skill = await readRepo("skills/copilot-pr-followup/SKILL.md");
+  for (const id of [
+    "COPILOT-FOLLOWUP-ROUND-CAP", "COPILOT-FOLLOWUP-REQUEST-BRANCHING",
+    "COPILOT-FOLLOWUP-REREQUEST-GREEN-GATE", "COPILOT-FOLLOWUP-REPLY-RESOLVE-HELPER",
+  ]) assertRuleOwned(id, "skills/copilot-pr-followup/SKILL.md");
+  const links = extractRelativeMarkdownLinks(skill).map(({ rawTarget }) => rawTarget.split("#")[0]);
+  assert.ok(links.includes("../docs/copilot-ci-status-contract.md"));
+  // Request/watch behavior is exercised by request-copilot-review, handoff and
+  // loop-state suites. Reply scope, link formatting and authorization need
+  // semantic review; sentence pins do not establish those agent decisions.
 });
 
 test("fixer agent documentation includes GitHub autolink guidance", async () => {
@@ -77,16 +54,11 @@ test("fixer agent documentation includes GitHub autolink guidance", async () => 
   assert.match(content, /reserve backticks for actual code\/path\/CLI literals/i);
 });
 
-test("issue-intake surface forbids detached bash watcher loops for async follow-up", async () => {
-  const content = await readIssueIntakeSurface();
-
-  assert.match(content, /Pi async subagent|designated async follow-up skill/);
-  // The detached-watcher prohibition is elaboration of COPILOT-FOLLOWUP-WAIT-TOOLS
-  // (owned in the same skill file); loose token instead of the full enumerated
-  // CLI-list sentence (#1205).
+test("issue-intake follow-up has one wait-tools owner and a watch-procedure route", async () => {
   assertRuleOwned("COPILOT-FOLLOWUP-WAIT-TOOLS", "skills/copilot-pr-followup/SKILL.md");
-  assert.match(content, /agent-authored shell polling is forbidden/i);
-  assert.match(content, /stop and report rather than improvising a shell watcher/);
+  const skill = await readRepo("skills/copilot-pr-followup/SKILL.md");
+  assert.ok(extractRelativeMarkdownLinks(skill).some(({ rawTarget }) =>
+    rawTarget === "../docs/wait-watch-procedure.md"));
 });
 
 test("issue-intake surface requires unattended resume-from-state behavior when authorized", async () => {
@@ -177,22 +149,14 @@ test("issue-based shorthand auto dev-loop trigger is documented as one public in
 
 
 
-test("issue-intake surface requires persistent copilot follow-up loop and capped watch timeout", async () => {
-  const content = await readIssueIntakeSurface();
-
-  assert.match(
-    content,
-    /PERSISTENCE MODEL: Subagents do bounded implementation tasks and exit on external wait. The main session drives the loop and re-dispatches when continuation is feasible./i,
-  );
-  assert.match(
-    content,
-    /watch → detect → if threads found, fix \+ reply \+ resolve → re-request → watch again/i,
-  );
-  assert.match(content, /30 minutes[\s\S]*COPILOT_REVIEW_WAIT_TIMEOUT_MS/i);
-  assert.match(
-    content,
-    /watch timeout\s+[—-]\s+PR #<number> needs manual attention/i,
-  );
+test("watch timing and persistence route to existing operation and state owners", async () => {
+  const operations = await readRepo("skills/docs/copilot-loop-operations.md");
+  assertRuleOwned("COPILOT-STATE-WATCH-PERSISTENCE", "skills/docs/copilot-loop-state-graph.md");
+  assert.ok(extractRelativeMarkdownLinks(operations).some(({ rawTarget }) =>
+    rawTarget === "./copilot-loop-state-graph.md"));
+  // Actual timeout and pending-cycle outcomes are covered by watch-cycle /
+  // handoff tests; Pi redispatch versus Claude inline continuation is reviewed
+  // against source and generated assets, not inferred from arrow diagrams.
 });
 
 test("issue-intake surface keeps issue refinement separate from the phase-scoped refiner and explains thin entrypoint agents", async () => {
@@ -238,8 +202,14 @@ test("issue-intake flow carries the resolved repo slug through later GitHub issu
   assert.match(skillContent, /dev-loops issue edit --repo <resolved-repo> --issue <number> --add-assignee @me/);
   assert.match(skillContent, /dev-loops issue edit --repo <resolved-repo> --issue <number> --add-assignee copilot-swe-agent/);
   assert.match(skillContent, /gh pr edit <pr-number> --repo <resolved-repo> --title/);
-  assert.match(skillContent, /gh pr ready <pr-number> --repo <resolved-repo>/);
-  assert.match(skillContent, /gh pr review <pr-number> --repo <resolved-repo> --approve/);
+  const intake = await readRepo("skills/docs/issue-intake-procedure.md");
+  const ready = intake.match(/^node <resolved-skill-scripts>\/github\/ready-for-review\.mjs (.+)$/m);
+  assert.ok(ready, "intake must use the guarded ready wrapper");
+  const args = ready[1].replaceAll("<resolved-repo>", "owner/repo").replaceAll("<pr-number>", "42").split(/\s+/);
+  const parsed = parseReadyForReviewCliArgs(args);
+  assert.equal(parsed.repo, "owner/repo");
+  assert.equal(parsed.pr, 42);
+  assert.doesNotMatch(intake, /^gh pr (?:ready|review .*--approve)\b/m);
   assert.match(skillContent, /detect-checkpoint-evidence\.mjs --repo <resolved-repo> --pr <pr-number>/);
   assert.doesNotMatch(skillContent, /--require-before-merge/, "the removed opt-in flag must not appear in the docs");
   assert.match(skillContent, /merge-pr\.mjs --repo <resolved-repo> --pr <pr-number> --human-approved-by <login>/);

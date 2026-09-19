@@ -239,10 +239,15 @@ When the linked PR becomes substantive, keep the shared loop scoped to the resol
 ```sh
 node <resolved-skill-scripts>/loop/copilot-pr-handoff.mjs --repo <resolved-repo> --pr <number>
 gh pr edit <pr-number> --repo <resolved-repo> --title "..." --body-file <body-file>
-gh pr ready <pr-number> --repo <resolved-repo>
-gh pr review <pr-number> --repo <resolved-repo> --approve --body "..."
+node <resolved-skill-scripts>/github/ready-for-review.mjs --repo <resolved-repo> --pr <pr-number>
 node <resolved-skill-scripts>/github/detect-checkpoint-evidence.mjs --repo <resolved-repo> --pr <pr-number>
 ```
+
+The ready transition uses `RAW-GH-PR-READY-BYPASS`'s mandatory wrapper in
+[Anti-patterns](anti-patterns.md). Intake does not submit an approval review:
+formal review submission belongs to `GATE-REVIEW-SUBMIT-MODES` in
+[Gate Review Comment Contract](gate-review-comment-contract.md), including its
+interactive-confirmation boundary. Gate verdicts remain COMMENT reviews.
 
 The merge itself is gated, not implied by the lines above. The sanctioned merge path is the wrapper `scripts/github/merge-pr.mjs`, which runs all preconditions (green CI, clean `draft_gate` + current-head `pre_approval_gate`, zero unresolved threads, merge authorization) fail-closed before merging; a raw `gh pr merge` is forbidden (`RAW-GH-PR-MERGE-BYPASS`). See [Merge Preconditions](./merge-preconditions.md). Critically, when `autonomy.humanMergeOnly: true` is set, merge is a fixed human-only action — `resolveEffectiveMergeAuthorized` fails closed, the agent **never** merges, and instead reports merge-ready + gate evidence and hands off to a human. Only when **not** `humanMergeOnly` and merge is explicitly authorized may the agent run:
 ```sh
@@ -254,4 +259,3 @@ Bootstrap-wait interpretation remains fail-closed and observational-first — sa
 ## Cross-references
 
 See the "Use it together with" list at the top; additionally, [Epic Tree Refinement Procedure](./epic-tree-refinement-procedure.md) refines an existing sub-issue tree, while this procedure creates it (Phase 3b).
-
