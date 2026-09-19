@@ -121,7 +121,7 @@ Follow [Anti-patterns](../docs/anti-patterns.md) for the general tooling-interna
 Apply [Structural Quality](../docs/structural-quality.md) from the `deep` review angle.
 
 <!-- rule: LOCAL-COMMENT-DISCIPLINE -->
-`LOCAL-COMMENT-DISCIPLINE`: A code comment states something about the code as it now is — a current invariant, a constraint, a fail-closed or security rationale, a calibration knob, or an external-contract note. A comment MUST NOT narrate agent moves or restate the acceptance criteria. A code comment MUST NOT carry any issue/pr number: historic references and single "authoritative reason" references alike are forbidden. When a reference is load-bearing, cite the governing contract/rule by name/path/rule-id (e.g. "per gate-review-sub-loop-contract GATE-EXEC-...") rather than an issue/pr number. This is the comment-side recurrence guard: it protects the cleaned comment state as it is created, so autonomous loops stop refilling the comment-cleanup backlog. Enforced fail-closed on added runtime-source lines by `scripts/loop/check-comment-discipline.mjs` (diff-scoped, added-lines-only, never the pre-existing backlog); it flags any added `#NNN` issue/pr token in a runtime-source comment span, and a genuinely load-bearing exception carries the inline `comment-discipline:allow` escape marker.
+`LOCAL-COMMENT-DISCIPLINE`: Comments describe current invariants, constraints, fail-closed/security rationale, calibration knobs, or external contracts. They MUST NOT narrate agent moves, restate acceptance criteria, or carry issue/PR numbers (including historical or authoritative-reason references). Cite a load-bearing contract by name, path or rule ID instead. `scripts/loop/check-comment-discipline.mjs` fails closed on added runtime-source comment lines containing `#NNN`; it excludes the existing backlog. A genuinely load-bearing exception requires inline `comment-discipline:allow`.
 
 ## Light mode (small changes)
 
@@ -289,8 +289,6 @@ Write 2-3 short variants:
 
 When subagents are available, the default refinement path should use the `refiner` role and **parallel fresh-context subagents** so the variants are independently generated rather than serially contaminated by one another. Pass each refiner a concise written briefing summary instead of relying on forked parent-session context.
 
-For future refinement hardening, treat the `variant-a` / `variant-b` pattern as the stable inner fan-out shape for a given persona or review angle. Do not switch personas halfway through one `a/b` pair. Instead, when more hardening is needed, run multiple fresh-context fan-out passes with different personas or angles, each with its own consistent `a/b` pair, and then merge across those persona-specific passes.
-
 Each refiner variant should make room for:
 - explicit non-goals
 - complete acceptance criteria
@@ -302,13 +300,7 @@ Each refiner variant should make room for:
 
 Use the template in [Phase Variant Template](../dev-loop/templates/phase-variant.md).
 
-Each variant should cover only:
-- scope for this phase
-- files/modules touched
-- tests to add first
-- implementation order
-- acceptance criteria
-- risks/non-goals
+Also include the phase's scope, touched files/modules, tests to write first, and implementation order.
 
 When a phase includes a bounded audit, inventory, or scan:
 - treat the scan as a first-class deliverable rather than an implicit side note
@@ -316,10 +308,9 @@ When a phase includes a bounded audit, inventory, or scan:
 - state explicitly what the scan does **not** authorize or rewrite in the current phase
 
 If subagents generate the variants:
-- run them in parallel with clean context when practical
 - give each variant generator a concise briefing summary that includes phase objective, in-scope work, constraints, known risks, and required outputs
 - keep each `variant-a` / `variant-b` pair anchored to one persona or refinement angle so the alternatives are directly comparable
-- when you want broader hardening, add another fan-out pass with a different persona or angle and its own `variant-a` / `variant-b` pair instead of blending multiple personas into one pair
+- when you want broader hardening, add another fan-out pass with a different persona or angle and its own `variant-a` / `variant-b` pair instead of blending multiple personas into one pair; merge across the resulting passes
 - do not fork the parent session just to share planning context; summarize it instead
 - save raw subagent outputs under `tmp/phases/phase-x/subagents/raw/` only when keeping the raw capture is actually useful
 - then write the human-oriented `Variant A` (`tmp/phases/phase-x/variant-a.md`) / `Variant B` (`tmp/phases/phase-x/variant-b.md`) / `Variant C` (`tmp/phases/phase-x/variant-c.md`) files from those raw outputs when applicable
@@ -352,7 +343,7 @@ The durable phase doc should capture the subset that a fresh human or agent shou
 
 ### 5. Review the merged phase plan adversarially
 
-This plan review is one local planning artifact produced by this working session, not a multi-reviewer fan-out. It does not dispatch fresh-context reviewer subagents and is not lifecycle-gate evidence; the only multi-reviewer lifecycle-gate fan-out sites are the pull-request `draft_gate` and `pre_approval_gate`. The review template referenced below documents that later pull-request gate structure; it is not an activity this plan-review step executes.
+Produce one local planning artifact in this session, not a multi-reviewer fan-out or lifecycle-gate evidence. Do not dispatch reviewer subagents here. The review template's PR gate structure belongs to the later `draft_gate` / `pre_approval_gate`, not this step.
 
 Write:
 - `Phase Review` (`tmp/phases/phase-x/review.md`)
@@ -416,7 +407,7 @@ For each delegated task:
 - tell the subagent whether it should implement, verify, or review
 - require the subagent to report blockers, verification results, and changed files
 - avoid circular delegation and overlapping scopes
-- <!-- rule: LOCAL-DELEGATE-SELF-COMMIT --> `developer`/`quality`/`docs`/`fixer` dispatches COMMIT THEIR OWN WORK before exit per [LOCAL-COMMIT-BEFORE-EXIT](#implementation-loop-for-the-phase) (step 11); for tracker-backed sessions they also push. There is no "edit here, commit there" split: an editing sub-delegate is never told not to commit, and an orchestrator that wants a single consolidated commit performs the edits itself rather than delegating the edit and keeping the commit. The earlier orchestrator-owned-commit split relied on a `DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT=1` env-var exemption that hard-deadlocked an editing subagent under a task-scoped no-commit instruction whenever the orchestrator could not set a per-dispatch env var (the Claude harness): the `subagent-stop-uncommitted-guard` hook demanded a commit the session then denied, then re-blocked the exit (#1936). That split and its env-var exemption are removed; the guard is the enforcer and stays fully enforced for every editing role, so the deadlock is structurally impossible and data-loss protection is preserved.
+- <!-- rule: LOCAL-DELEGATE-SELF-COMMIT --> `developer`/`quality`/`docs`/`fixer` dispatches COMMIT THEIR OWN WORK before exit per [LOCAL-COMMIT-BEFORE-EXIT](#implementation-loop-for-the-phase) (step 11); for tracker-backed sessions they also push. There is no "edit here, commit there" split: an editing sub-delegate is never told not to commit, and an orchestrator that wants a single consolidated commit performs the edits itself rather than delegating the edit and keeping the commit. The removed `DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT` exemption must not be used; `subagent-stop-uncommitted-guard` remains enforced for every editing role.
 
 ### Status monitoring
 
@@ -508,7 +499,7 @@ After the phase plan passes review:
 8. <!-- rule: LOCAL-RETRO-FRESH-CONTEXT-DISPATCH --> Write `Retrospective` (`tmp/phases/phase-x/retrospective.md`) — but the retrospective MUST be produced by a **fresh-context, independent subagent dispatch** (like a gate reviewer), never written inline by this working session: dispatch a fresh-context pass seeded with the cycle's full agent/subagent tool-call/action/result record (the existing session transcript/journal artifacts — reuse them, do not build a new transcript store) plus the phase docs and the issue's acceptance criteria / definition of done / non-goals, and have it evaluate neutrally against those contracts. Save the record path used and record the checkpoint with provenance via `checkpoint-contract.mjs --state complete ... --retro-context fresh --record-source <record-path>` (see [Retrospective Checkpoint Contract](../docs/retrospective-checkpoint-contract.md)); an inline self-authored retro fails the checkpoint (fail-closed, test-pinned). Use [Retrospective Template](../dev-loop/templates/retrospective.md).
 9. Update `tmp/phases/phase-x/manifest.json` and `tmp/phases/index.json`.
 10. Update [Implementation State](../../docs/IMPLEMENTATION_STATE.md).
-11. <!-- rule: LOCAL-COMMIT-BEFORE-EXIT --> **Exit validation gate — no uncommitted changes.** Before the subagent session terminates, run `git status --porcelain` and verify the output is empty. If uncommitted changes exist, first determine whether they are intended implementation changes or unintended/post-validation deltas. Revert any unintended or speculative changes. For intended changes, rerun the narrowest justified validation (`bun run verify` or equivalent) before staging and committing with an appropriate message; for tracker-backed sessions, also push the branch. A subagent session that exits with uncommitted changes in the worktree is a workflow defect and MUST NOT be treated as a clean completion. After committing, verify `git status --porcelain` is empty before declaring phase completion. This exit validation gate is now mechanically backed by a `SubagentStop` hook (`.claude/hooks/subagent-stop-uncommitted-guard.mjs`, #1619) that refuses a subagent stop when the worktree under `tmp/worktrees/` has uncommitted changes, naming `LOCAL-COMMIT-BEFORE-EXIT` and the dirty paths — so an uncommitted worktree can no longer exit silently (post-merge `cleanup-worktree.mjs` force-removes worktrees and would otherwise destroy uncommitted work). The hook is role-aware (#1925): a read-only role (`judge`/`review`, per `READONLY_SUBAGENT_ROLES`) whose contract forbids commits is exempt — any dirty tracked edit in its worktree is foreign (orchestrator-owned), so the guard allows the stop with an advisory naming the orchestrator as responsible; enforcement stays for the orchestrator and every editing role (`developer`, `fixer`, `docs`, `quality`).
+11. <!-- rule: LOCAL-COMMIT-BEFORE-EXIT --> **Exit validation gate — no uncommitted changes.** Run `git status --porcelain` before exiting. Revert unintended/speculative deltas; validate intended changes with the narrowest justified check, then commit and, for tracker-backed sessions, push. Recheck that status is empty before declaring phase completion. Dirty exit is a workflow defect, never clean completion. The `SubagentStop` hook (`.claude/hooks/subagent-stop-uncommitted-guard.mjs`) refuses dirty exits under `tmp/worktrees/`, naming the rule and paths. Read-only `judge`/`review` roles (`READONLY_SUBAGENT_ROLES`) are exempt: their foreign tracked edits produce an advisory naming the orchestrator as responsible. Enforcement remains for the orchestrator and every editing role (`developer`, `fixer`, `docs`, `quality`); post-merge cleanup can otherwise destroy uncommitted work.
 12. For tracker-backed sessions, create the PR from the working branch against the resolved base branch — `.devloops` `workflow.baseBranch` when configured, else the repo's auto-detected default branch (`resolveBaseBranch(config, { cwd })` from `@dev-loops/core/config`; bare name, e.g. `main`) — never a hardcoded `--base main`: `dev-loops-run cli/index.mjs pr create --assignee @me --repo <owner/name> --base <resolved-base> --head <branch> --title "..." --body-file <body-file>` (fallback when the CLI helper is unavailable: `node <resolved-skill-scripts>/github/create-pr.mjs --repo <owner/name> --assignee @me --base <resolved-base> --head <branch> --title "..." --body-file <body-file>`); never raw `gh pr create`. Draft/assignment/`Closes #N` policy: [LOCAL-PR-CREATE-CANONICAL](#tracker-backed-local-implementation) above.
 13. If authorized, merge the fully reviewed, locally validated phase branch back into local `main` (phase-doc-backed sessions) or proceed through the PR gate pipeline (tracker-backed sessions).
 14. If authorization for PR creation or merge is still pending (commit authorization is already enforced by the exit validation gate in step 11), mark the phase as `awaiting-finalization` rather than `completed`, and record exactly which finalization step is pending.
@@ -566,7 +557,7 @@ See [Stop Conditions](../docs/stop-conditions.md). Local-specific stops: phase c
 ## Commit policy
 
 - Do not commit speculative work or before the relevant validation for that slice passes.
-- Immediately before every `git add && git commit` sequence, assert branch identity with `git branch --show-current` and stop if it does not match the intended local working branch. `git branch --show-current` is itself cwd-relative, so it only catches the mismatch if the shell's cwd is right; `WORKTREE-DEFAULT-USE` in [worktree-guidance.md](../docs/worktree-guidance.md#default-rule-use-a-worktree-for-mutating-local-work) additionally mandates addressing the tree explicitly (`git -C <absolute-worktree-path> …`) for the mutating commands themselves, which is what catches a silently-reset cwd rather than just a mismatched one.
+- Immediately before every `git add && git commit` sequence, assert branch identity with `git branch --show-current`; stop on a mismatch. Read and apply `WORKTREE-DEFAULT-USE` in [worktree-guidance.md](../docs/worktree-guidance.md#default-rule-use-a-worktree-for-mutating-local-work), including explicit `git -C <absolute-worktree-path> …` for mutations.
 - Commit only when the coordination/main agent has decided the slice or phase is ready. **Exception:** in non-interactive subagent sessions, commit authorization is implicit — the subagent was dispatched to implement and must commit before exiting, enforced by [LOCAL-COMMIT-BEFORE-EXIT](#implementation-loop-for-the-phase) (implementation loop step 11; `git status --porcelain` must be empty before the session terminates).
 - If commit/merge authorization has not yet been given, do not call the phase `completed`; call it `awaiting-finalization` instead.
 

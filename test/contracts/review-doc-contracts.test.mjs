@@ -314,16 +314,12 @@ test("standalone review route stays structurally decoupled from the single-contr
     readRepo("scripts/github/upsert-checkpoint-verdict.mjs"),
   ]);
 
-  // The public router recognizes review intent and short-circuits to the
-  // review skill BEFORE the startup resolver (and its ownership gate) ever
-  // runs — a foreign-owned PR never blocks the review route.
-  assert.match(devLoopSkill, /Review intent short-circuit/i);
-  assert.match(devLoopSkill, /never run `loop startup`\/`resolve-dev-loop-startup\.mjs` for this route/i);
-  assert.match(devLoopSkill, /ownership-exempt by construction/i);
-
-  // review's own doc states the exemption and why (read-only).
-  assert.match(reviewSkill, /Ownership-exempt \(issue #1850\)/i);
-  assert.match(reviewSkill, /never needs the single-contributor ownership gate/i);
+  // Check the actual route/owner links; the differential test above exercises
+  // the foreign-owned review versus write/merge behavior.
+  assert.ok(extractRelativeMarkdownLinks(devLoopSkill).some(({ rawTarget }) =>
+    rawTarget === "../review/SKILL.md"));
+  assert.ok(extractRelativeMarkdownLinks(reviewSkill).some(({ rawTarget }) =>
+    rawTarget === "../docs/public-dev-loop-contract.md#single-contributor-ownership-gate-resolve-dev-loop-startup"));
 
   // The authoritative ownership-gate contract documents review's exemption
   // (distinct mechanism from the ui_review/wait_watch STRATEGY_OWNERSHIP_GATE

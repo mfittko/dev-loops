@@ -12,17 +12,9 @@ user-invocable: false
 
 # UI Review
 
-`dev-loops loop startup --pr <n> --ui-review` routes the PR to this strategy
-deterministically. When the public router selects `ui_review`, this route
-reviews a PR by proving the change in the running app from an isolated
-worktree, rather than reading the diff alone. It is the running-app review
-sibling of the `reviewer_fixer` route.
-
-Each stage below is invoked as a `dev-loops` CLI subcommand
-(`dev-loops loop ui-review-provision`, `ui-review-drive`, `ui-review-diagnose`,
-`ui-review-report`, `ui-review-teardown`) — the agent orchestrates the
-sequence, threading each stage's result JSON into the next per its contract;
-there is no separate chaining orchestrator.
+`dev-loops loop startup --pr <n> --ui-review` selects `ui_review` to review the
+running app from an isolated PR worktree. Orchestrate the five CLI stages below
+in order, threading each result JSON into the next; there is no chaining helper.
 
 The two browser-driving stages (`ui-review-drive`, and the `visual-grill-capture`
 stage the loop-grill uses) launch headless WebKit through Playwright, which is an
@@ -31,12 +23,7 @@ of its weight. Where one is run, install it once —
 `npm install --save-dev @playwright/test`, then
 `npx playwright install webkit`. When either the package or the browser binary is
 missing, both stages stop with those instructions as the stop reason and carry no
-failure entries. That is deliberate: `ui-review-diagnose` turns every failure into
-a posted finding and never drops one, so a runner-unavailable stop contributes
-nothing downstream and a local setup gap cannot be charged to the PR. Other
-stopped results are not alike — the missing-recipe stop carries a `must-fix` that
-is only surfaced by threading it onward, so read `failures`, not `stopped`, when
-deciding what to report.
+failure entries. Thread `failures` onward, even on stopped results: runner-unavailable has none, while a missing recipe carries a `must-fix`. Diagnose never drops a failure; a setup gap must not become a PR defect.
 
 `@axe-core/playwright` is a separate opt-in
 (`npm install --save-dev @axe-core/playwright`) that drives only the
@@ -152,14 +139,11 @@ screenshot/state artifact when one exists (null otherwise) — a single shared
 object across all findings, NOT per-failure attribution — so a Stage-4 consumer
 null-checks it and must not present it as proof of a specific finding.
 
-The findings list is ranked deterministically — severity, then anchorable-first,
-then kind, then source `file:line` — with no wall-clock or input-order
-dependence, so the same failures always produce the same ordered output.
+Findings sort by severity, anchorability, kind, then source `file:line`, independent of wall-clock or input order.
 
 ## Report
 
-The terminal reporting stage turns the ranked findings into a head-pinned
-PENDING PR review plus a self-contained screenshot artifact, via
+Produce a head-pinned PENDING PR review and self-contained screenshot artifact via
 `dev-loops loop ui-review-report --pr <n> --diagnose-result <p> --html-output <p> [--repo <slug>]`
 (source-repo fallback: `node scripts/loop/ui-review-report.mjs ...`; pure
 decisions in `packages/core/src/loop/ui-review-report.mjs`). It reuses the
@@ -194,10 +178,7 @@ unreadable evidence screenshot omitted — is logged, never silent.
 
 ## Teardown + side-effect ledger
 
-The terminal cleanup stage tears down the loop's transient state — stops the
-app booted in provision, drops the dev-DB rows the drive created, removes the
-provisioned worktree — and ALWAYS emits a side-effect ledger so nothing is
-silently orphaned, via
+Teardown consumes prior-stage results and ALWAYS emits a side-effect ledger. Invoke
 `dev-loops loop ui-review-teardown --repo-root <p> --provision-result <p> [--drive-result <p>] [--row-manifest <p>] [--confirm] [--no-stop-app]`
 (source-repo fallback: `node scripts/loop/ui-review-teardown.mjs ...`; pure
 decisions in `packages/core/src/loop/ui-review-teardown.mjs`). It reads
