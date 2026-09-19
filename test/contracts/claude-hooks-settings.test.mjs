@@ -98,6 +98,22 @@ test("the self-contained hook bundle modules exist under the plugin root (#843)"
   }
 });
 
+test("merge hook descriptions retain the transition owner without requiring a current-head draft gate", () => {
+  for (const file of [
+    "packages/core/src/claude/hook-decisions.mjs",
+    ".claude/hooks/_hook-decisions.mjs",
+    ".claude/hooks/pre-tool-use-bash-gate.mjs",
+  ]) {
+    const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
+    const description = source.match(/\*\s+- `gh pr merge`[^]*?(?=\n \*\s+-)/)?.[0];
+    assert.ok(description, `${file} must describe its merge boundary`);
+    assert.match(description, /GATE-COMMENT-DRAFT-REQUIREMENTS/);
+    assert.match(description, /skills\/docs\/gate-review-comment-contract\.md/);
+    assert.doesNotMatch(description, /current[- ]head\s+draft_gate/);
+    assert.match(description, /current[- ]head\s+pre_approval_gate/);
+  }
+});
+
 test("no .claude/hooks script imports an unresolvable bare package (#843)", () => {
   // The marketplace plugin bundle has no node_modules, so a bare specifier like
   // `@dev-loops/core/...` is unresolvable from the plugin cache and crashes the hook on load.

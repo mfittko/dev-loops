@@ -7,9 +7,9 @@
  *     the canonical wrapper scripts/github/create-pr.mjs (dev-loops pr create), which always drafts
  *     and self-assigns. Closes the hole where raw `gh pr create` opens a ready PR (draft-first breach).
  *   - `gh pr ready` — needs a clean draft_gate verdict (via scripts/loop/pre-pr-ready-gate.mjs).
- *   - `gh pr merge` — needs full pre-merge evidence (clean current-head draft_gate +
- *     pre_approval_gate, via scripts/github/detect-checkpoint-evidence.mjs). This closes the hole
- *     where a hand-run merge skips the loop's pre-merge gate check (and thus the pre-approval gate).
+ *   - `gh pr merge` — blocked outright; use scripts/github/merge-pr.mjs. Its gate evidence check
+ *     requires a clean draft_gate transition record + current-head pre_approval_gate
+ *     (GATE-COMMENT-DRAFT-REQUIREMENTS in skills/docs/gate-review-comment-contract.md).
  *   - raw `gh issue create` / `gh issue comment` / `gh pr comment` — blocked only from a SUBAGENT
  *     context (agent_type present); the main agent/operator retains direct issue creation (#1051).
  *   - `git stash` — blocked outright: `refs/stash` is shared across every worktree over this
