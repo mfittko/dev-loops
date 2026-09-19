@@ -37,7 +37,3 @@ Cut the contrast *scaffolding and dramatic cadence*. Keep load-bearing factual d
 | "Stop optimizing how fast you write code. Start measuring how long it waits." | "The lever you control is how long it waits afterward, so measure that." |
 
 Not every "not" is the antipattern. A real conditional ("more hands help only when the state crosses intact") or a genuine either/or of behavior stays; only the dramatic-contrast crutch goes.
-
-## First runs
-
-The two Medium articles were the first documents run through this step (analysis found ~120 instances across the articles and the two decks): `docs/articles/eliminating-coordination-delay.md` and `docs/articles/make-the-waiting-visible.md`, with their HTML renders and review notes. See the `A/B contrast pass` section in each article's `-notes.md`.

@@ -5,11 +5,6 @@ in `dev-loops` — the deterministic family-local PR lifecycle contract.
 
 The canonical contract lives in the shipped `skills/docs/` surface because installed skill/runtime consumers reliably own the skills subtree.
 
-It consolidates the lifecycle boundary currently split across:
-- [Copilot Loop State Graph](./copilot-loop-state-graph.md)
-- [Reviewer Loop State Graph](./reviewer-loop-state-graph.md)
-- [Gate Review Comment Contract](./gate-review-comment-contract.md)
-
 ## Purpose
 
 This contract freezes the end-to-end lifecycle semantics for one PR as it moves through:
@@ -220,4 +215,3 @@ In those cases the workflow MUST NOT:
 - [Gate Review Comment Contract](./gate-review-comment-contract.md) — `GATE-COMMENT-*` PR-comment field rules
 - [Merge preconditions](merge-preconditions.md)
 - [Contract style guide](contract-style-guide.md)
-

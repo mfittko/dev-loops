@@ -1,6 +1,6 @@
 # Designer + vision review loop for UI slices
 
-This document defines the bounded designer-persona review loop introduced for issue #122 under umbrella issue #97.
+Canonical owner for the bounded designer-persona and vision review loop.
 
 A sibling loop, the [Slides Content & Storytelling Review Loop](./slides-story-review-loop.md), judges a deck's narrative rather than its pixels; both run behind `dev-loop`.
 
@@ -25,12 +25,6 @@ The designer-persona review loop turns deterministic UI artifacts into a repeata
 
 For UI slices that request `uiReviewMode: vision`, this contract also defines
 the vision-model review mode behind the same `dev-loop` boundary.
-
-It exists for UI-heavy work where code correctness and smoke-test success are necessary but not sufficient to answer:
-- what visual or interaction problems remain
-- which named UI states still miss the intended bar
-- what the next UI-fix iteration should focus on
-- when the design-review side is satisfied enough to stop iterating
 
 ## Required input bundle
 

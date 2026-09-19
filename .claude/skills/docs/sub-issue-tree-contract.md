@@ -2,9 +2,6 @@
 
 Canonical owner for the epic/umbrella sub-issue decomposition pattern in `dev-loops`.
 
-This document defines the deterministic pattern for epic/umbrella issue decomposition using
-GitHub sub-issues in `dev-loops`.
-
 ## Purpose
 
 When an umbrella issue (epic) is decomposed into bounded child slices, the **real GitHub

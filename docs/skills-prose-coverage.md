@@ -6,17 +6,17 @@ Inventory: 77 tracked files under `skills/`, including 67 Markdown files and ten
 
 Dispositions: `pending`, `in progress`, `changed`, `unchanged`, `generated`, `non-prose`, `blocked`. Generated `.claude/skills/` projections are outside this source inventory and must be regenerated, never edited by hand. Script/registry rows remain pending until their prose-bearing parts have been inspected; no code/schema rewrite is authorized.
 
-Phases: 1 = Copilot follow-up and directly coupled references/tests (complete); 2 = other routed entrypoints and their workflow contracts (complete); 3 = remaining shared documentation, references, templates and script comments/help (active). All phases use the same cleanup PR unless the human changes the scope.
+Phases: 1 = Copilot follow-up and directly coupled references/tests (complete); 2 = other routed entrypoints and their workflow contracts (complete); 3 = remaining shared documentation, references, templates and script comments/help (inspection/cleanup complete; conflicts recorded). All phases use the same cleanup PR unless the human changes the scope.
 
 ## Current run — 2026-09-19
 
-The user selected A for all three phases on `issue-2236`/PR2237; B is now a pinned read-only reference, not an equivalent-scope competition. Issue2236 records this direction and the narrow runtime exception tracked separately by issue2273. Phase 1 is accepted and complete at `b8bfe5b077f917e22330455f311540fd90e42b4d` for prose inspection, condensation, relevant test audit, independent review and local validation. Phase 2 is complete at `2aa6cc4468ee631a43de96fa31ae4ad2c7ac55ba` under the same bounded review cadence, with its trace below; Phase 3 is active. The inventory has 65 pending, eleven changed and one unchanged rows. This is not whole-issue completion or lifecycle-gate clearance.
+The user selected A for all three phases on `issue-2236`/PR2237; B is now a pinned read-only reference, not an equivalent-scope competition. Issue2236 records this direction and the narrow runtime exception tracked separately by issue2273. Phase 1 is accepted and complete at `b8bfe5b077f917e22330455f311540fd90e42b4d` for prose inspection, condensation, relevant test audit, independent review and local validation. Phase 2 is complete at `2aa6cc4468ee631a43de96fa31ae4ad2c7ac55ba` under the same bounded review cadence, with its trace below; Phase 3 inspection/cleanup and local validation are complete, with unresolved policy conflicts recorded. The inventory now has 36 changed, 32 unchanged, six non-prose and three blocked rows; none remain pending. Blocked rows were inspected but contain unresolved policy conflicts, not completed policy repairs. This is not whole-issue completion or lifecycle-gate clearance.
 
-### Phase-3 transition — bookkeeping only
+### Historical Phase-3 transition — bookkeeping only
 
 Phase 2 completed all six entrypoint dispositions: `dev-loop`, `local-implementation`, `loop-grill`, `review` and `ui-review` changed; `final-approval` was inspected and retained unchanged. Their obligation traces, coupled-test audit, regenerated projections, Sol review correction and final local validation are recorded below. The earlier paused Phase-2 candidate is historical, not outstanding work.
 
-Phase 3 is the active phase, but this transition changes only this ledger and the PR description; it does not start Phase-3 source/projection/test edits or mark pending inventory rows reviewed. All remaining shared docs, references, templates and script comments/help, applicable coupled-test audit, cumulative measurement/verification, independent full-scope A review and bounded read-only B-reference review remain to be completed. The Phase-2 discrepancies and semantic/live-harness limits below remain visible; this bookkeeping chooses no new policy. B stays unchanged, no new runtime change is authorized, PR2237 stays draft and unmerged, and normal final lifecycle gates and explicit human merge approval remain required.
+At that transition, Phase 3 became active, but the transition changed only this ledger and the PR description; it does not start Phase-3 source/projection/test edits or mark pending inventory rows reviewed. All remaining shared docs, references, templates and script comments/help, applicable coupled-test audit, cumulative measurement/verification, independent full-scope A review and bounded read-only B-reference review remain to be completed. The Phase-2 discrepancies and semantic/live-harness limits below remain visible; this bookkeeping chooses no new policy. B stays unchanged, no new runtime change is authorized, PR2237 stays draft and unmerged, and normal final lifecycle gates and explicit human merge approval remain required.
 
 ### Historical phase transition — bookkeeping only
 
@@ -138,6 +138,60 @@ Static `wc -w -c` measurements from the Phase-1 head, including the review corre
 
 Pre-review validation: 447 focused tests across sixteen entrypoint/refinement/UI/handoff suites and 447 watch/verdict/evidence/comment-discipline tests across five suites passed. The first focused run's Git-worktree fixture failed under filesystem restrictions; its permitted isolated rerun and the complete focused rerun passed. Doc guard passed 356 with one network-dependent packaging skip; that packaging test separately passed with registry access. After Sol's correction, 27 affected grill/guardrail/projection tests passed and full `bun run verify` passed 9,376 tests across 391 files with no skips or failures, plus docs and workflows. Canonical regeneration, 92-asset parity and diff whitespace checks passed; docs were checked again after recording completion. Logs use `/private/tmp/2237-phase2-`; the full final run is `verify-final.log`. These are local working-tree results, not lifecycle or current-head CI evidence.
 
+### Phase 3: shared-owner, template and script inspection
+
+The candidate starts at `cfd17ef0a486ade10e3a4a7697e799632598e08b`. All 65 remaining source rows now have explicit dispositions: 25 changed, 31 unchanged, six non-prose and three blocked. Whole inventory: 36 changed, 32 unchanged, six non-prose, three blocked, zero pending. Blocked files were inspected but contain unresolved authority conflicts. Fresh Sol pre-commit semantic review passed the frozen candidate without findings (diff SHA256 `38e59143d437d9693ad1227ad03c8d2cdfba8cef019c9d3a1ac9d778037eeeb3`). Phase-3 inspection/cleanup, bounded semantic review and local validation are complete. The conflicts below remain unresolved; this is not lifecycle or CI clearance.
+
+Inspection covered complete documents/templates, script comments/help and registry enforcement notes, their direct caller references and relevant consumers. Dense schemas/state tables and short scaffolds were retained where each clause carries a distinct input, predicate, authority, evidence or failure boundary. Canonical edits produced 23 changed Claude projections through the existing generator; the two changed scripts contain comment-only edits. No mandatory owner became an optional read; runtime, dependency/schema, branch topology and B remain unchanged.
+
+| Obligation / isolated scenario | Preserved decision and evidence |
+| --- | --- |
+| Quiet child has a pending supervisor request or sanctioned-watch heartbeat | Stall owner retains both exemptions, conjunctive threshold, config/probe fields, verify-before-bail order, fresh recovery brief and operator stop. Pure detector tests cover the predicate; live redispatch was not observed. |
+| In-flight policy decision versus standalone RFC issue | Same-file ADR rules retain implementing-PR versus decision-only deliverable, numbering/acceptance evidence, tripwire waiver and unreadable-rule refusal. Existing tripwire tests cover mechanical detection, not ADR-worthiness judgment. |
+| Epic sibling finishes before its peers | A remains first; B/C retain serial level gates despite sibling parallelism, D remains last. Per-edit prepared body and confirmation remain required unless unattended authorization applies. Removed complexity narration supplied no permission. |
+| UI finding spans lenses, a criterion is uncovered, or console captures a failure | All five same-state artifacts remain required. Route MUST forward AC/passes and emit raw findings; convergence owns normalized dedupe, worse severity and outcome. Template retains criterion refs, human-conflict blocking, axe severity mapping and mechanical-error ownership. Executable template example and existing lens tests cover refusal/outcome branches. |
+| Slides iteration has no findings | Full input/optional-screenshot completeness, skip/refusal, narrative lens and iteration handoff remain. Actual template JSON passes the existing result validator; empty iteration findings and foreign outcomes fail. Narrative quality remains semantic review. |
+| Verified AC coexists with unverified or falsely checked labels | Three non-tracker forks, exact-label dual sync, linked-ready-issue completeness scope and reviewer/judge truthfulness duty remain. Documented tick example executes through its parser; existing tick/verdict suites cover behavior, not truthful agent verification. |
+| Fresh round changes head/CI/timestamp; Claude write points at main | Handoff keeps fresh reviewers, invariant body, volatile-last gateState, ordered owner reads and sanctioned commands; provider cache reuse is conditional. Worktree owner retains cwd anchoring, scratch/no-op boundaries, ambiguous-target refusal, overrides and explicit command paths. |
+| Core-less fallback posts, or gate evidence exists only as a PR review | Fallback keeps full identity, caller severity duty, one-shot/degraded limits, warning and nonzero posting stop. Gate owner retains both audit streams, disjoint claim keys, visible finding carriers and fallback/opt-in exceptions. |
+
+Coupled-test audit: acceptance-verification, slides-story and UI-designer tests replace incidental titles/history/negation pins with command-bound parser checks, Markdown owner links, literal fields/outcomes and executable template examples. Other applicable suites retain ownership, command/payload/schema literals, generated parity, state conformance and explicit normative order/negative clauses. Issue-intake, planning, public-facade and UI harness/validation tests still include prose checks over unchanged obligations; these are bounded alarms, not semantic proof. This phase does not claim to remove every natural-language assertion. No framework or production helper was added.
+
+#### Phase-3 conflict register and limits
+
+Pre-existing discrepancies remain unresolved:
+
+- **Ready transition:** intake Phase 4 prescribes raw `gh pr ready`; `RAW-GH-PR-READY-BYPASS` requires `ready-for-review.mjs`. The intake test also pins the raw example. Intake is blocked for reconciliation.
+- **Human-only merge:** merge-preconditions says the wrapper refuses when `humanMergeOnly` is set, yet tells the human to use that wrapper. `scripts/github/merge-pr.mjs` refuses unconditionally for that config. No bypass was invented; owner remains blocked.
+- **Draft evidence:** lifecycle core requires current-head draft clearance before requesting Copilot, while its post-draft rule accepts the one-time transition record; merge standing-authorization prose again asks for both gates at current head.
+- **Retrospective:** absent-only `NONE` text conflicts with its state table, explicit `none` example and `resolveCheckpointStateFromArtifact`. Per-working-copy wording conflicts with `RETRO-CHECKPOINT-REPO-ROOT`'s shared main-root file. No-write-time-arming prose coexists with the documented extension `required` writer. Owner is blocked; fresh-context provenance remains self-attested.
+- **Queue rename:** `QUEUE-COLUMN-NO-REMOVE` forbids renaming conventional columns while the same owner documents authorized `--rename` repair. Only repeated rationale changed; no precedence selected.
+- **Release branch:** runbook explicitly commits/pushes on main with `DEVLOOPS_ALLOW_MAIN=1`; AGENTS forbids direct main commits. Historical prose was shortened without choosing policy.
+- **Tree verify:** epic completion accepts `verify --ordered` exit 0, but sub-issue owner/helper distinguish command success from `verified: false`; helper returns `ok: true` on mismatch. No correction included.
+- **Registry note:** `WORKTREE-NO-STASH` says no mechanical check while the Claude hook refuses it. Registry schema/enforcement classification remains untouched; no cross-harness guarantee inferred.
+
+Inherited Phase-1/2 limits still apply: split-tail provenance, disputed coverage, judge/ledger ordering, preflight/isolation, tracker phase-doc creation, grill synthesis and absent eight-step handoff checklist. No live Pi/Claude/Codex end-to-end execution, delivered-prompt/cache experiment, lifecycle gate, CI clearance or merge authorization is claimed. Full-scope A/B-reference review and lifecycle decisions remain with the coordinator.
+
+#### Phase-3 static measurements
+
+Method: `wc -w -c` over complete named files including frontmatter/examples/code; before is Phase-3 starting HEAD. The canonical tree includes all 77 tracked skills files. Ledger growth and projections are separate from source savings.
+
+| Surface | Before words / bytes | Candidate words / bytes |
+| --- | --- | --- |
+| All 77 canonical files | 139,087 / 1,091,184 | 137,435 / 1,080,064 |
+| 25 changed canonical files | 43,985 / 332,948 | 42,333 / 321,828 |
+| 23 changed Claude projections | 40,927 / 305,612 | 39,350 / 295,024 |
+| Prior named 24-file normal-draft set | 77,587 / 602,422 | 77,247 / 600,058 |
+| Named 10-file UI set | 17,467 / 132,346 | 17,117 / 130,150 |
+| Transitive Markdown closure of either set (101 files) | 236,300 / 1,833,869 | 234,723 / 1,823,281 |
+
+UI seeds: AGENTS, main-agent contract, dev-loop/ui-review entrypoints, ui-review-recipe, ui-designer-review-loop, ui-artifact, ui-smoke-harness, ui-e2e-scoping and ui-vision template. Normal-draft seeds are the same 24 files in the historical Render-budget slice. Closure recursively follows repository-local Markdown links via existing `extractRelativeMarkdownLinks` (anchors stripped) plus literal backticked `skills/...md` paths; each tracked non-generated Markdown target is counted once. Optional links are included, so both seed sets reach the same 101 files. No target was added or removed. This is a static reference closure, not dynamically selected mandatory reads: wildcard/example paths, runtime artifacts, system prompts and non-Markdown consumers are excluded. Reproducible manifests/script: `/private/tmp/2237-phase3-measure.*`.
+
+Incremental Phase-3 reduction: **1,652 words / 11,120 bytes**. Pinned main had 152,940 / 1,185,234; cumulative reduction is **15,505 / 105,170**, of which **13,853 / 94,050** predates Phase 3. These are static text counts, not token/cache/live-context savings.
+
+Pre-review validation: first focused UI/slides/fallback run 109 passed; affected runtime/ADR/routing/stall/init/envelope/tick suites 243 passed. Full doc guard passed 356 with one network packaging skip; that packaging suite separately passed with registry access. After the last source edits, all 38 focused contracts/envelope tests passed across six files, and docs/links/rules/decisions/changelog, workflows, 92-asset parity and whitespace passed. After Sol passed the unchanged candidate, full `bun run verify` passed **9,376 tests across 391 files, zero skipped/failed**, plus docs and workflows. Separate final docs/workflows/assets (92) and whitespace checks passed. The subsequent ledger-only completion update was rechecked with docs/whitespace before commit. Logs: `/private/tmp/2237-phase3-*`, full run `verify-final.log`.
+
+
 ## Historical parked checkpoint — 2026-09-16
 
 Paused at the user's request; resume only when requested, not automatically on Saturday. PR2237 remains draft and unmerged. Latest implementation/test commit pushed before this note: `cef3de0b` on `issue-2236`. Its full verification passed 9,293 tests across 390 files, plus docs/workflows; doc guard passed 354 with one skip.
@@ -152,76 +206,76 @@ On explicit resume: fetch origin, refresh canonical startup/envelope and issue22
 | --- | --- | --- | --- |
 | `skills/copilot-pr-followup/SKILL.md` | 1 | changed | Full owner and applicable tests inspected; remaining lifecycle/reattachment/coordination prose condensed. Fresh Sol semantic review and final local verification passed; see current-run trace. |
 | `skills/dev-loop/SKILL.md` | 2 | changed | Full entrypoint inspected; duplicate rationale condensed, point-of-use commands/branches retained. Sol review and final validation complete; see Phase-2 trace. |
-| `skills/dev-loop/scripts/dev-mode-context.mjs` | 3 | pending | Not yet reviewed. |
-| `skills/dev-loop/scripts/dev-mode-context.test.mjs` | 3 | pending | Not yet reviewed. |
-| `skills/dev-loop/scripts/init-phase.mjs` | 3 | pending | Not yet reviewed. |
-| `skills/dev-loop/scripts/log-bash-exit-1.mjs` | 3 | pending | Not yet reviewed. |
-| `skills/dev-loop/scripts/phase-files.mjs` | 3 | pending | Not yet reviewed. |
-| `skills/dev-loop/scripts/post-gate-verdict-fallback.mjs` | 3 | pending | Not yet reviewed. |
-| `skills/dev-loop/scripts/post-gate-verdict-fallback.test.mjs` | 3 | pending | Not yet reviewed. |
-| `skills/dev-loop/scripts/render-template.mjs` | 3 | pending | Not yet reviewed. |
-| `skills/dev-loop/scripts/render-template.test.mjs` | 3 | pending | Not yet reviewed. |
-| `skills/dev-loop/templates/bootstrap-agents.md` | 3 | pending | Not yet reviewed. |
-| `skills/dev-loop/templates/bootstrap-implementation-state.md` | 3 | pending | Not yet reviewed. |
-| `skills/dev-loop/templates/bootstrap-implementation-workflow.md` | 3 | pending | Not yet reviewed. |
-| `skills/dev-loop/templates/dev-mode-retrospective.md` | 3 | pending | Not yet reviewed. |
-| `skills/dev-loop/templates/dev-mode-review.md` | 3 | pending | Not yet reviewed. |
-| `skills/dev-loop/templates/dev-mode-skill-changes.md` | 3 | pending | Not yet reviewed. |
-| `skills/dev-loop/templates/merged-phase-plan.md` | 3 | pending | Not yet reviewed. |
-| `skills/dev-loop/templates/phase-doc.md` | 3 | pending | Not yet reviewed. |
-| `skills/dev-loop/templates/phase-summary.md` | 3 | pending | Not yet reviewed. |
-| `skills/dev-loop/templates/phase-variant.md` | 3 | pending | Not yet reviewed. |
-| `skills/dev-loop/templates/retrospective.md` | 3 | pending | Not yet reviewed. |
-| `skills/dev-loop/templates/review.md` | 3 | pending | Not yet reviewed. |
-| `skills/dev-loop/templates/slides-story-review.md` | 3 | pending | Not yet reviewed. |
-| `skills/dev-loop/templates/ui-vision-review.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/ab-contrast-deslop-step.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/acceptance-criteria-verification.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/agent-stall-detection.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/anti-patterns.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/artifact-authority-contract.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/conductor-routing-contract.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/confirmation-rules.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/contract-style-guide.md` | 3 | pending | Not yet reviewed. |
+| `skills/dev-loop/scripts/dev-mode-context.mjs` | 3 | non-prose | Inspected complete context extraction and local-implementation dev-mode caller: behavior, payload keys and diagnostics only; no standalone instructional prose to condense. |
+| `skills/dev-loop/scripts/dev-mode-context.test.mjs` | 3 | non-prose | Inspected complete fixtures/assertions for extraction, settings and context fallback. Test names identify observable behavior; retained executable coverage and literal payloads. |
+| `skills/dev-loop/scripts/init-phase.mjs` | 3 | changed | Condensed duplicate explanatory comments only. ARTIFACT-TRACKER-FIRST-NO-DUP, issue-worktree recognition, durable-doc refusal and ephemeral manifest behavior are unchanged; traced local-implementation/init-phase smoke consumer. |
+| `skills/dev-loop/scripts/log-bash-exit-1.mjs` | 3 | non-prose | Inspected full re-export shim and local-implementation command reference. Export surface only; no editorial content or compatibility change. |
+| `skills/dev-loop/scripts/phase-files.mjs` | 3 | non-prose | Inspected full re-export shim and init-phase/render-template consumers. Canonical phase-file functions remain untouched; no standalone prose. |
+| `skills/dev-loop/scripts/post-gate-verdict-fallback.mjs` | 3 | changed | Removed opening comment duplication; kept the complete degraded-semantics list, caller count responsibility, stderr warning, parser-stable identity and posting-failure stop. Full script/test and dev-loop fallback caller inspected; no executable/help literal changed. |
+| `skills/dev-loop/scripts/post-gate-verdict-fallback.test.mjs` | 3 | unchanged | Full suite inspected: full-SHA identity, duplicate/create behavior, hostile text, literal render markers, gate/severity validation and CLI failure tests protect the degraded poster. Comments explain security/compatibility cases rather than duplicate workflow instructions. |
+| `skills/dev-loop/scripts/render-template.mjs` | 3 | non-prose | Full renderer and local-implementation/template consumers inspected. Placeholder resolution, confinement and CLI diagnostics are behavioral surface; no prose-only reduction. |
+| `skills/dev-loop/scripts/render-template.test.mjs` | 3 | non-prose | Full fixtures inspected for placeholders, path confinement, failures and rendering. Literal examples/assertions exercise behavior, not source-document wording. |
+| `skills/dev-loop/templates/bootstrap-agents.md` | 3 | unchanged | Complete bootstrap template and local-implementation bootstrap caller inspected. Existing short project rules, phase authority and workflow links are point-of-use instructions; placeholders retained. |
+| `skills/dev-loop/templates/bootstrap-implementation-state.md` | 3 | unchanged | Complete state scaffold and bootstrap caller inspected. Active phase, accepted/deferred decisions and canonical document links have separate purposes; no duplicate explanation to remove. |
+| `skills/dev-loop/templates/bootstrap-implementation-workflow.md` | 3 | unchanged | Complete workflow scaffold and bootstrap caller inspected. Its minimal phase sequence and durable-document roles are required first-use content; retaining avoids an optional-link-only bootstrap. |
+| `skills/dev-loop/templates/dev-mode-retrospective.md` | 3 | unchanged | Complete template and dev-mode context/caller inspected. Short required retrospective output fields carry distinct evidence; retained placeholders and section shape. |
+| `skills/dev-loop/templates/dev-mode-review.md` | 3 | unchanged | Complete template and local-implementation dev-mode pass inspected. Each question supplies a distinct review input; already compact, no generic commentary removed. |
+| `skills/dev-loop/templates/dev-mode-skill-changes.md` | 3 | unchanged | Complete 22-word scaffold and dev-mode caller inspected. Skill-change outcome fields only; retaining all fields is the smallest usable template. |
+| `skills/dev-loop/templates/merged-phase-plan.md` | 3 | unchanged | Complete merged-plan scaffold and planning synthesis caller inspected. Chosen plan, dependencies, acceptance and unresolved decisions remain separate required output slots. |
+| `skills/dev-loop/templates/phase-doc.md` | 3 | unchanged | Complete phase scaffold, init-phase renderer and plan-file validator contract inspected. Section names/placeholders are input grammar and durable authority, not prose repetition. |
+| `skills/dev-loop/templates/phase-summary.md` | 3 | unchanged | Complete summary scaffold and local-implementation completion caller inspected. Validation/evidence and residual work fields retained; no explanatory paragraphs to condense. |
+| `skills/dev-loop/templates/phase-variant.md` | 3 | unchanged | Complete variant scaffold and refinement fan-out caller inspected. Alternative plan, rationale and risks are distinct output fields; already minimal. |
+| `skills/dev-loop/templates/retrospective.md` | 3 | unchanged | Complete template, fresh-retrospective caller and checkpoint owner inspected. Neutral fresh-context evidence and process observations remain explicit; cannot infer compliance from record labels. |
+| `skills/dev-loop/templates/review.md` | 3 | unchanged | Complete review scaffold and planning/implementation review callers inspected. AC/DoD coverage, validation, findings and RFC escalation are distinct obligations; exact fields and ordering retained. |
+| `skills/dev-loop/templates/slides-story-review.md` | 3 | unchanged | Complete template and slides-story owner/validator inspected. Input fields, six narrative lenses, grounding/refusal and JSON output are needed at reviewer point of use. JSON example now runs through existing result validator in the coupled contract test. |
+| `skills/dev-loop/templates/ui-vision-review.md` | 3 | changed | Condensed repeated convergence explanation. Retained route MUST-forward AC/pass inputs, raw per-lens output, normalized dedupe identity/worse severity, evidence ownership, all fields, coverage and conflict outcomes; executable JSON-template handoff test added at existing convergence seam. |
+| `skills/docs/ab-contrast-deslop-step.md` | 3 | changed | Complete three-pass procedure and config/deslop consumer inspected. Removed historical first-runs paragraph only; trigger globs, normative-contract/light/spike exemptions, independent verification, factual distinctions and rewrite guidance retained. |
+| `skills/docs/acceptance-criteria-verification.md` | 3 | unchanged | Complete eight-step procedure and follow-up/tick/verdict consumers inspected. Three non-tracker forks, linkage/identity, exact-label dual sync, completeness scope versus truthfulness and non-clean visible posting are distinct. Replaced incidental test sentences with command-parser/field wiring checks. |
+| `skills/docs/agent-stall-detection.md` | 3 | changed | Complete detector contract and public caller inspected. Removed rc.5 incident/missing-feature history; kept conjunctive stall predicate, supervisor/watch exemptions, config/defaults, probe inputs/results, verify-before-bail order, fresh recovery and operator stop. |
+| `skills/docs/anti-patterns.md` | 3 | unchanged | All sixteen items, light-mode boundary and their owner links/callers inspected. Distinct tool/authority/failure prohibitions remain point-of-use guards. Retained order/negative tests where they target explicit normative clauses; raw-ready disagreement is recorded separately. |
+| `skills/docs/artifact-authority-contract.md` | 3 | unchanged | Complete origin/mode definitions, settings layers and P1–P5 flow inspected with local-planning, startup and local-implementation references. Tracker/no-dup, lightweight PR-body authority and promotion branches are not interchangeable; retained normative table and examples. |
+| `skills/docs/conductor-routing-contract.md` | 3 | changed | Removed repeated opening/overview/boundary definition. Full input/output schemas, ownership-unavailable integration note, priority table, reconcile/refusal, transitions, isolation handoff and scenarios retained; traced outer-loop/evaluator references. |
+| `skills/docs/confirmation-rules.md` | 3 | unchanged | Full confirmation table and entrypoint/merge consumers inspected. Exact-action/latest-input authority and pre-authorized scope are compact distinct constraints; no weakening or policy reconciliation. |
+| `skills/docs/contract-style-guide.md` | 3 | unchanged | Complete style-rule table and ownership-validator consumers inspected. IDs, modality, single-owner/reference and conflict/drift norms each encode an independent rule; retained exact markers. |
 | `skills/docs/copilot-ci-status-contract.md` | 1 | changed | Full owner and normalization/detector/prober consumers inspected. Parked exclusion condensation retained; inputs/output, precedence, failure/timeout, unsupported-completed override and zero-suite identity prerequisites unchanged. Both exclusion names stay explicit; missing current-head evidence remains fail-closed failure. 82 focused CI/prober/workflow tests; docs/assets pass. Fresh Terra `/root/dev_loop/ci_owner_review` required restoring the explicit missing-evidence predicate, then verified the fix with no remaining defect. |
 | `skills/docs/copilot-loop-operations.md` | 1 | changed | Full owner/callers inspected and condensed; authority/watch/stop/approval/draft/closing-reference/checkpoint contracts retained. Fresh `/root/dev_loop/phase1_authority_review` semantic review and corrected structural tests; see current-run evidence. |
-| `skills/docs/copilot-loop-state-graph.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/cross-harness-regression-contract.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/decision-record-contract.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/docs-grill-step.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/entrypoint-strategies.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/epic-tree-refinement-procedure.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/gate-review-comment-contract.md` | 3 | pending | Not yet reviewed. |
+| `skills/docs/copilot-loop-state-graph.md` | 3 | changed | Removed duplicate opening definition only. Complete snapshots, precedence/transitions, terminal/wait/persistence and action mapping retained against detector/evaluator callers; current-head and unresolved-feedback distinctions unchanged. |
+| `skills/docs/cross-harness-regression-contract.md` | 3 | unchanged | Complete harness matrix, no-op cases and required test lists inspected with generator/hook callers. Pi, Claude and Codex limitations remain distinct; compact coverage obligations retained. |
+| `skills/docs/decision-record-contract.md` | 3 | changed | Condensed repeated in-flight/RFC-issue explanation into a pointer within the same loaded owner. Complete rule table, accepted decision paths, ADR-only RFC outcome, modality tripwire/read failures/waiver, numbering and consumer-repo location remain. |
+| `skills/docs/docs-grill-step.md` | 3 | changed | Condensed introduction and removed historical first-run account. Kept autonomous refinement and pre-approval surfaces, pure-core boundary, classifier outcomes/refusal, cosmetic nonblocking and human merge authority; traced refiner/config/classifier consumers. |
+| `skills/docs/entrypoint-strategies.md` | 3 | changed | Removed retired-file history and repeated tracker-route rationale. Full state vocabulary, ordered first commands, required reads and standalone-versus-routed tracker detector distinction retained with startup/follow-up callers. |
+| `skills/docs/epic-tree-refinement-procedure.md` | 3 | changed | Removed reassurance and duplicate complexity formula; full A–D ordered procedure, within-level parallelism, serial gates, per-edit confirmation, matrix/scope/non-goals and CLI examples retained. Existing verify-exit discrepancy recorded; no tooling behavior changed. |
+| `skills/docs/gate-review-comment-contract.md` | 3 | changed | Condensed purpose and incident history after complete owner/poster/reader inspection. Tier identity, single visible review, per-finding carriers, minimization, two-surface audit, exact fields/flags, size/failure/current-head and review-only limits are load-bearing and retained. |
 | `skills/docs/gate-review-sub-loop-contract.md` | 1 | changed | Full owner and applicable tests inspected; remaining execution/spec/dispatch/delivery/sentinel/carry summaries condensed, distinct guards retained. Fresh Sol semantic review passed; its dispatch-key test correction and final local verification passed. |
-| `skills/docs/issue-intake-procedure.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/local-planning.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/main-agent-contract.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/merge-preconditions.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/pr-lifecycle-contract.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/projects-queue-contract.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/public-dev-loop-contract.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/release-runbook.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/required-rules.json` | 3 | pending | Not yet reviewed. |
-| `skills/docs/retrospective-checkpoint-contract.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/reviewer-loop-state-graph.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/slides-story-review-loop.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/spec-authority-contract.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/spike-mode-contract.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/stop-conditions.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/structural-quality.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/sub-issue-tree-contract.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/tracker-first-loop-state.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/tracker-seam-contract.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/ui-artifact-contract.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/ui-designer-review-loop.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/ui-e2e-scoping-step.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/ui-review-recipe-contract.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/ui-smoke-harness.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/ui-validation-contract.md` | 3 | pending | Not yet reviewed. |
+| `skills/docs/issue-intake-procedure.md` | 3 | blocked | Complete normalization, refinement/decomposition, assignment/watch and approval procedure plus startup/follow-up/tests inspected. Raw gh pr ready example conflicts with RAW-GH-PR-READY-BYPASS; retained existing text without selecting policy. Other branch-local instructions remain explicit; see Phase-3 conflict register. |
+| `skills/docs/local-planning.md` | 3 | unchanged | Complete validator/flow/worked example inspected with start/refine/promote helpers and local-implementation caller. Required sections, stage stop/approval, promotion authority and full evolving example retain distinct input/output boundaries. |
+| `skills/docs/main-agent-contract.md` | 3 | unchanged | Complete baseline read alongside AGENTS; traced entrypoint and generated harness consumer. Read-only boundary, delegated mutation, notification/wait behavior and Claude inline exception are authority-sensitive and already concentrated in their owner. |
+| `skills/docs/merge-preconditions.md` | 3 | blocked | Complete preconditions, wrapper, authorization, title/size gates and post-merge duties inspected with merge wrapper and follow-up. Human-only wrapper instructions disagree internally; current-head draft evidence also differs from post-draft lifecycle rule. No policy chosen or enforcement changed. |
+| `skills/docs/pr-lifecycle-contract.md` | 3 | changed | Removed duplicated related-owner list already retained in adjacent-contract table. Full lifecycle states, gate order, evidence/current-head, title, changelog and fail-closed branches retained; current-head draft versus one-time post-draft discrepancy explicitly unresolved. |
+| `skills/docs/projects-queue-contract.md` | 3 | changed | Condensed repeated board rationale; full contract/setup/usage inspected with queue helper references. Configured membership/order, Next Up empty/unreachable refusal, bootstrap authorization, mappings/repair, pagination/reorder/archive examples remain. Rename-policy discrepancy recorded without selecting an interpretation. |
+| `skills/docs/public-dev-loop-contract.md` | 3 | unchanged | Complete facade/routing/bootstrap/ownership/concurrency contract and entrypoint callers inspected. Dense actor/authority, stop, stale state, linked-PR, isolated continuation and race limitations carry distinct obligations; retained full owner availability and pre-existing Phase-2 discrepancies. |
+| `skills/docs/release-runbook.md` | 3 | changed | Removed stale prerelease-drift and staging incident history only. Full atomic bump, exact staging, stable approval/tag identity, automation/failure and manual-release prohibitions retained; direct-main exception versus AGENTS rule remains unresolved. |
+| `skills/docs/required-rules.json` | 3 | unchanged | Inspected registry structure and every prose enforcementNote with rule-ownership validator consumer. IDs/enforcement values are schema; short notes distinguish executable versus agent guarantees. No schema/registry rewrite; stale no-stash enforcement note remains a recorded limitation. |
+| `skills/docs/retrospective-checkpoint-contract.md` | 3 | blocked | Complete freshness/provenance, state/enforcement, advisory findings, cycle/path and artifact sections inspected with checkpoint resolver/writer. Explicit none versus absent-only and per-copy versus repo-root descriptions conflict; preserved without inventing policy. Fresh-context self-attestation limits retained. |
+| `skills/docs/reviewer-loop-state-graph.md` | 3 | changed | Removed duplicate opening definition only. Complete snapshot, review ownership/submission/invalidated states, transition table and gate-angle mapping retained with reviewer detector/staging consumers. |
+| `skills/docs/slides-story-review-loop.md` | 3 | changed | Removed duplicate purpose/rationale and first-runs history. Kept same-file narrative lens, full input/output, optional screenshot completeness, skip/refusal, iteration and satisfied boundaries, handoff order and validation seam; executable template test replaces title/history pins. |
+| `skills/docs/spec-authority-contract.md` | 3 | unchanged | Complete whole-spec decision table, identities, invalidation and conflict escalation inspected with Phase-3.5/spec-context consumers. Revision/content/head evidence and last-resort human choice remain explicit; compact normative owner retained. |
+| `skills/docs/spike-mode-contract.md` | 3 | unchanged | Complete start/relaxed profile/timebox/graduation/discard contract and startup/local-planning consumers inspected. Eligibility, plan-file requirement, zero-mutation discard and graduation phase boundaries are distinct exceptions; retained all command/schema literals. |
+| `skills/docs/stop-conditions.md` | 3 | unchanged | Complete stop-state table and entrypoint/merge consumers inspected. Approval, merge authorization, startup uncertainty, legitimate waits and terminal/reconcile stops have different predicates; compact rule ownership retained. |
+| `skills/docs/structural-quality.md` | 3 | unchanged | Complete design/review principles and anti-patterns inspected with local-implementation references. Each prompt targets a distinct structural smell or boundary; retaining the short checklist avoids losing reviewer criteria. |
+| `skills/docs/sub-issue-tree-contract.md` | 3 | changed | Removed duplicate opening definition only. Full decomposition/reference-choice table, conservative follow-up boundary, canonical tooling, hierarchy/no-duplicate rules and verification payload/exit distinction retained with intake/planning consumers. |
+| `skills/docs/tracker-first-loop-state.md` | 3 | changed | Removed duplicate dual-purpose list already expressed by opener/component table. Full PR and loop state machines, metadata/identity, reverse sync/idempotency, blocked behavior and ADR link-only scope retained; standalone routing distinction unchanged. |
+| `skills/docs/tracker-seam-contract.md` | 3 | unchanged | Complete provider seam/config/ownership contract inspected with tracker state and queue references. GitHub issue/PR truth versus scheduling/provider capabilities remain distinct; minimal surface and future-provider limits retained. |
+| `skills/docs/ui-artifact-contract.md` | 3 | changed | Merged repeated five-file list/explanation into one table; removed historical/minimality narration. Full manual/smoke/CI levels, naming/collision, schema, nullable always-emitted evidence, severity mapping, mechanical error ownership and required-suite failure retained. |
+| `skills/docs/ui-designer-review-loop.md` | 3 | changed | Removed historical opener and duplicate purpose; complete inputs, designer/vision modes, four-lens convergence, evidence/coverage/outcome and required-recording boundaries inspected. Coupled test now executes template output; existing validator/lens suites retain executable refusal coverage. |
+| `skills/docs/ui-e2e-scoping-step.md` | 3 | changed | Removed historical broken-margin anecdote. Full globs/registries, exact-path disambiguation, current-head CI signal, registration refusal, visual inspection/no-bespoke-tests and defect-red proof procedure retained with gate/scoping consumers. |
+| `skills/docs/ui-review-recipe-contract.md` | 3 | unchanged | Complete recipe schema/examples, trusted-branch inputs, authentication, provision/drive/teardown contracts inspected with UI-review stage callers. Keys/literals and phase-specific responsibilities retained; no runtime/config change. |
+| `skills/docs/ui-smoke-harness.md` | 3 | changed | Condensed historical opener. Complete WebKit/fixture scope, runtime capture versus test harness ownership, registry-derived projects, required spec naming, adoption and outputs retained with UI consumers. |
+| `skills/docs/ui-validation-contract.md` | 3 | unchanged | Complete trigger and worked intro-deck path inspected with UI-e2e owner and local-implementation caller. Keeping globs, registry and CI mapping at this point of use avoids turning required UI validation into an optional linked read. |
 | `skills/docs/validation-policy.md` | 1 | changed | Full source inspected; CI exception now requires its current owner. Default validation, coverage admission and meaningful exception rules intentionally retained. |
 | `skills/docs/wait-watch-procedure.md` | 1 | changed | Full-file old/new review complete; duplicate capture commands and obsolete CI history removed. Remaining route-local decisions intentionally retained to avoid loading the full follow-up bundle. |
-| `skills/docs/workflow-handoff-contract.md` | 3 | pending | Not yet reviewed. |
-| `skills/docs/worktree-guidance.md` | 3 | pending | Not yet reviewed. |
+| `skills/docs/workflow-handoff-contract.md` | 3 | changed | Condensed repeated cache explanation and removed guaranteed-provider-hit claim. Full derivation tables/schema, terminal tuple, sanctioned-map boundary, required-read order and volatile-last prohibition retained with envelope builder/validator; tests prove bytes, not actual cache reuse. |
+| `skills/docs/worktree-guidance.md` | 3 | changed | Removed wrong-checkout/cwd incident narration. Complete create/reuse/provision/fetch branches, detached/fallback limitations, dependencies, guards and overrides, explicit paths, cleanup and collision rules retained with lifecycle/hook consumers; Pi/Claude distinctions unchanged. |
 | `skills/final-approval/SKILL.md` | 2 | unchanged | Fully inspected; existing minimal redirect explicitly loads the human-approval owner. Sol review and final validation complete. |
 | `skills/local-implementation/SKILL.md` | 2 | changed | Fully inspected; repeated planning/commit explanations condensed, artifact/delegation/worktree/exit rules retained. Sol review and final validation complete. |
 | `skills/loop-grill/SKILL.md` | 2 | changed | Fully inspected; repeated incident/idempotency prose removed, refinement/write-back semantics retained. Sol's orphaned-heading correction applied; final checks passed. |
@@ -234,7 +288,7 @@ Reviewed first slice: simplify the follow-up skill's startup/path-resolution pro
 
 Compare old/new instructions for actors, permissions, triggers, conditions, order, exceptions, stop rules, evidence and revision identity. Preserve frontmatter, rule IDs, command examples and the declared verbatim dispatch payload. Independently evaluate high-risk scenarios with no live writes. Replace incidental prose pins with existing structural/behavior seams; keep exact API/projection checks. Run docs, contract, generated-asset and default verification before draft handoff.
 
-## Ambiguity register — current disposition at Phase-3 transition
+## Ambiguity register — inherited Phase-1/2 disposition
 
 - Fan-in count: corrected to actual emitted/spawned units following the existing owner's explicit authority and emitter tests; unsplit `pendingGroups.length` was obsolete advice.
 - CI evidence flag: removed executable use of unsupported `--local-validation-head-sha`; the existing CI owner retains prerequisites and now states that ordinary CLI refresh cannot activate the exception. See the code-backed correction below.
@@ -243,7 +297,7 @@ Compare old/new instructions for actors, permissions, triggers, conditions, orde
 - Proportionality grouping — resolved: ADR0072 and `expandDispatchUnits` govern grouped emitted units, preserving size/risk/tier/mandatory floors. The separate one-angle split-tail provenance `group` discrepancy remains unresolved and outside issue2273.
 - Fixer handoff identity — resolved: `GATE-EXEC-FIXER-DISPOSITION-BOUNDARY` requires `threadId`; a fingerprint is optional additional identity. The existing validator was retained.
 - Review lineage — resolved: the authorized ADR0070 clarification distinguishes offline append-only composition from mandatory fresh current-head runtime context rebuilding.
-- Remaining limitations: one-angle split-tail provenance `group`, disputed coverage wording and the additional discrepancies recorded in the Phase-2 trace; Phase-3 inspection, cumulative finalization, lifecycle gates and human approval remain outstanding.
+- Remaining limitations: one-angle split-tail provenance `group`, disputed coverage wording and the additional discrepancies recorded in the Phase-2 trace; the Phase-3 record above adds completed inspection/review/local validation and further conflicts. Final lifecycle gates and human approval remain outstanding.
 
 The detector's `--help` lists no `--local-validation-head-sha` option; its removed executable use is resolved, while the CI owner's existing prerequisites remain intact. The dispatch emitter returns its expanded unit count, with split coverage in its tests. The accepted Phase-1 trace above establishes the scope of these resolutions, not whole-issue or lifecycle clearance. Historical accounts below retain the uncertainty and validation state of their original slices.
 

@@ -1,6 +1,6 @@
 # Entrypoint strategies
 
-This document replaces the seven individual `entrypoint-briefing-*.md` files with a single per-strategy-section reference. Each section preserves the state vocabulary and key operational content for that strategy.
+State vocabulary, first actions and required reads by strategy.
 
 ## Copilot PR follow-up
 
@@ -81,7 +81,7 @@ Required reading:
 
 ## Tracker-first
 
-**Decision: won't-do.** There is no `tracker_first` route in `resolve-dev-loop-startup.mjs`, and none is planned. Tracker-backed work is shipped as an **input-source** addition to the existing `local_implementation` strategy (see [Tracker-backed local implementation input-source contract](public-dev-loop-contract.md#tracker-backed-local-implementation-input-source-contract) and the [Local Implementation SKILL](../local-implementation/SKILL.md#tracker-backed-local-implementation)) — not a separate routing family or public workflow entrypoint. That framing is coherent and shipped; a peer `tracker_first` strategy is not needed on top of it.
+**Decision: won't-do.** There is no `tracker_first` route in `resolve-dev-loop-startup.mjs`, and none is planned. Tracker-backed work is an **input-source** of `local_implementation`; see [Tracker-backed local implementation input-source contract](public-dev-loop-contract.md#tracker-backed-local-implementation-input-source-contract) and the [Local Implementation SKILL](../local-implementation/SKILL.md#tracker-backed-local-implementation).
 
 **Standalone tooling (not routed by `dev-loop`):** [Tracker-First Loop State](tracker-first-loop-state.md) documents a PR-level and loop-level state machine with its own detectors (`detect-tracker-first-loop-state.mjs`, `detect-tracker-pr-state.mjs`). These are implemented and tested, but `resolve-dev-loop-startup.mjs` never dispatches to them and the `dev-loops` CLI wrapper does not expose them under `loop loop-state` (that command maps to the Copilot loop detector instead). Treat them as standalone, directly-invoked tools, not as part of the routed strategy list above.
 
