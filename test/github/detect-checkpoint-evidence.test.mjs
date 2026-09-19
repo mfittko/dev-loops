@@ -834,7 +834,7 @@ test("detect-checkpoint-evidence always fails before merge when gate comments ar
   }
 });
 
-test("detect-checkpoint-evidence always passes pre-merge check with clean draft and current-head pre-approval gate comments", async () => {
+test("detect-checkpoint-evidence accepts an older clean draft transition with current-head pre-approval", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-gate-review-premerge-clean-"));
 
   try {
@@ -896,6 +896,8 @@ test("detect-checkpoint-evidence always passes pre-merge check with clean draft 
     assert.equal(payload.preMergeGateCheck.ok, true);
     assert.deepEqual(payload.preMergeGateCheck.failures, []);
     assert.equal(payload.evidenceState, EVIDENCE_STATE.SATISFIED);
+    assert.equal(payload.draftGate.headSha, "bcd5678");
+    assert.equal(payload.preApprovalGateMarker.headSha, "abc1234");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

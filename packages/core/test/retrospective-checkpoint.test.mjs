@@ -427,8 +427,12 @@ test("resolveCheckpointStateFromArtifact: skipped records are NOT provenance-gat
   assert.equal(resolveCheckpointStateFromArtifact(artifact), RETROSPECTIVE_CHECKPOINT_STATE.SKIPPED);
 });
 
-test("resolveCheckpointStateFromArtifact: state 'none' resolves to NONE", () => {
-  assert.equal(resolveCheckpointStateFromArtifact({ state: "none" }), RETROSPECTIVE_CHECKPOINT_STATE.NONE);
+test("resolveCheckpointStateFromArtifact: absence and explicit none cannot be armed by recency", () => {
+  for (const artifact of [undefined, { state: "none" }]) {
+    for (const hasNewerMergeSinceCheckpoint of [false, true]) {
+      assert.equal(resolveCheckpointStateFromArtifact(artifact, { hasNewerMergeSinceCheckpoint }), RETROSPECTIVE_CHECKPOINT_STATE.NONE);
+    }
+  }
 });
 
 test("resolveCheckpointStateFromArtifact: an unrecognized state fails closed to MISSING", () => {

@@ -7,7 +7,7 @@
 
 ## Working rules
 - Main agent: read-only for all files tracked by the repository. All mutations flow through `dev-loop` async subagent. `skills/docs/main-agent-contract.md` is a mandatory baseline read alongside AGENTS.md (intentional exception to requiredReads-only loading for routed work; it defines the absolute delegation boundary that applies in all sessions).
-- No direct commits to `main`; use feature branches, worktrees, and PRs.
+- Use feature branches, worktrees, and PRs; no direct commits to `main` except deliberate release/reconcile commits and pushes under ADR 0044 and [worktree guidance](skills/docs/worktree-guidance.md). Stable tag/publish approval remains operator-owned under the [release runbook](skills/docs/release-runbook.md).
 - Use `tmp/worktrees/<issue-or-branch-slug>/` for mutating local work; keep the main checkout for inspection.
 - Always run `git fetch origin` before creating or reusing a worktree — never create from a stale `origin/main`.
 - Canonical guidance lives in `skills/docs/worktree-guidance.md`.

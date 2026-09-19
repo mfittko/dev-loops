@@ -1,8 +1,6 @@
 # Docs-grill — a standard in-loop step
 
-A repeatable step that interrogates a change against the repository's own contracts and docs while the dev-loop runs. It is a sibling of the [A/B contrast deslop step](./ab-contrast-deslop-step.md) and the [Slides Content & Storytelling Review Loop](./slides-story-review-loop.md): those judge prose and narrative; this one judges whether the change's claims still match the contracts they reference.
-
-It runs autonomously in-loop. The dev-loop performs the grill itself through the surfaces below; it does not depend on a human or the main agent running a separate manual docs pass.
+The dev-loop autonomously checks a change's claims against the repository contracts and docs through the surfaces below. No separate human or main-agent docs pass is required. Related editorial checks: [A/B contrast deslop](./ab-contrast-deslop-step.md) and [Slides Content & Storytelling Review Loop](./slides-story-review-loop.md).
 
 ## What it checks
 
@@ -39,7 +37,3 @@ The pure classifier at `scripts/loop/docs-grill-contract.mjs` codifies the keep/
 - `classifyDocsGrillFinding(finding)` — maps a finding to its disposition and fails closed (`invalid_finding`) on an unknown kind
 
 This keeps the disposition rule testable; the firing surfaces (refiner cross-check, gate `docs` angle) carry the grill itself.
-
-## First run
-
-The [local-first epic (#947)](https://github.com/mfittko/dev-loops/issues/947) tree refinement is the first run of this step. Each node of the epic tree was refined with a per-node grill against the contracts it reuses — `--plan-file` reuses the existing `local_implementation` strategy and `local_phase` target (no new strategy), the plan reuses the phase-doc format under `docs/phases/`, and promotion opens a single draft PR as the spec-of-record — surfacing each contract claim for verification during the refiner+grill fan-out, while refining. The ratified design decisions on #947 record the grilled-and-confirmed contract reuse.

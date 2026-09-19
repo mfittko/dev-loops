@@ -69,8 +69,9 @@ export const DEV_LOOP_AGENT_TYPE = "dev-loop";
  *   - `gh pr create` — blocked outright; PR creation must flow through the canonical wrapper
  *     (`scripts/github/create-pr.mjs` / `dev-loops pr create`), which always drafts and self-assigns.
  *   - `gh pr ready` — blocked without clean draft_gate evidence.
- *   - `gh pr merge` — blocked without full pre-merge gate evidence (clean current-head draft_gate +
- *     pre_approval_gate).
+ *   - `gh pr merge` — blocked outright; use scripts/github/merge-pr.mjs. Its gate evidence check
+ *     requires a clean draft_gate transition record + current-head pre_approval_gate
+ *     (GATE-COMMENT-DRAFT-REQUIREMENTS in skills/docs/gate-review-comment-contract.md).
  *   - raw `gh issue create` / `gh issue comment` / `gh issue edit` / `gh pr comment` — blocked ONLY
  *     from a SUBAGENT context (`agentType` non-null) on the target repo. Sanctioned external writes
  *     flow through node wrappers; the MAIN AGENT / operator (agentType null) retains direct access.
@@ -292,8 +293,7 @@ export function decideBashGate({
       return ALLOW;
     }
   }
-  // When both verbs appear in a compound command, apply the stricter merge gate — if it passes,
-  // the draft_gate (a subset of the pre-merge evidence check) is also satisfied.
+  // When both verbs appear in a compound command, the unconditional raw-merge refusal wins.
   const verb = isMerge ? "gh pr merge" : "gh pr ready";
   // Pass through only when EVERY gated verb segment is PROVEN foreign (explicit repo, managed slug
   // resolves, and demonstrably differs). A segment with no explicit repo, or an unresolvable managed

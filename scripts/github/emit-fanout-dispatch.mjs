@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { validateZeroUnitCarryProof } from "./_carried-angles.mjs";
+import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { gateScopePrefix, normalizeGate } from "./_gate-names.mjs";
 import { HEAD_SHA_RE, VALID_SCOPE_RE } from "./record-dispatch-prompt-layout.mjs";
-import { buildGateContextPath, buildGateEmitPlanPath } from "./write-gate-context.mjs";
+import { buildGateContextPath, buildGateEmitPlanPath, mapGateToConfigKey } from "./write-gate-context.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
-import { loadDevLoopConfig, resolveFanoutEffectiveConcurrency } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveFanoutEffectiveConcurrency, resolveGateAngleContract } from "@dev-loops/core/config";
 import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 
 const USAGE = `Usage: emit-fanout-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--pending] [--tmp-root <path>] [--help]
@@ -35,7 +37,8 @@ sub-unit's angles stay members of the SAME resolved unit, so the merge guard's
 resolveFanoutGroups re-derivation (detect-checkpoint-evidence.mjs's
 fanoutReviewerPairingError, the fail-closed authority for this) still pairs
 them honestly whether the unit is configured or auto-chunked. A singleton
-records no group.
+from an unsplit single-angle resolved unit records no group; a one-angle split
+tail retains its original unit's group.
 
 The per-unit angle-suffix this emits only NAMES the unit's angle(s) and instructs
 the reviewer to self-resolve each angle's persona/prompt (resolveReviewerRole) —
@@ -46,8 +49,8 @@ scoped angle-review mode), not re-derived here.
 Run write-gate-context.mjs FIRST (it writes the briefing prefix, volatile tail,
 and the fanout dispatch plan this reads). Then dispatch ONE fresh-context \`review\`
 subagent per emitted unit, seeded with that unit's promptPath bytes verbatim, and
-record each unit's \`group\` on Phase 3's provenance (null for a singleton unit; the
-configured group name for a shared unit).
+record each unit's \`group\` on Phase 3's provenance (null for an unsplit singleton;
+the original resolved unit's name for a shared unit or any split sub-unit).
 
 Required:
   --repo <owner/name>        Same vocabulary as write-gate-context.mjs.
@@ -61,8 +64,11 @@ Optional:
                                instead of the full fanout.groups. Falls back to
                                fanout.groups only when pendingGroups is ABSENT (an
                                older artifact); a PRESENT-but-empty pendingGroups
-                               means nothing is pending and refuses with "zero
-                               units" rather than silently re-emitting the full set.
+                               requires every resolved angle to be carried with
+                               --carry-forward-plan proof, or refuses zero units.
+  --carry-forward-plan <json>  Resolver output (or its carried array). Required
+                               for a zero-unit pending round; persisted with the
+                               keyed plan for fan-in and provenance verification.
   --tmp-root <path>            The tmp/ directory the round's gate-context
                                artifacts live under (default: process.cwd()/tmp;
                                must match the write-gate-context.mjs call).
@@ -429,8 +435,28 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   } else {
     units = fanout.groups;
   }
-  if (!Array.isArray(units) || units.length === 0) {
+  // A zero-unit pending plan is valid only when every original angle was
+  // carried. Completed-only resumes and malformed empty plans still refuse;
+  // fan-in independently verifies the carry proof before accepting findings.
+  const carried = new Set(Array.isArray(fanout.preflight?.carriedAngles)
+    ? fanout.preflight.carriedAngles.filter((angle) => typeof angle === "string").map((angle) => angle.trim().toLowerCase()) : []);
+  const allCarried = pendingOnly && Array.isArray(fanout.groups) && fanout.groups.length > 0
+    && fanout.groups.every((unit) => normalizeUnitAngles(unit).length > 0
+      && normalizeUnitAngles(unit).every((angle) => carried.has(angle.trim().toLowerCase())));
+  if (!Array.isArray(units) || (units.length === 0 && !allCarried)) {
     return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — fanout dispatch plan resolves zero units (${pendingOnly ? "pendingGroups" : "groups"}) — nothing to dispatch` }, false);
+  }
+  let carryProof;
+  if (units.length === 0) {
+    try {
+      const angles = fanout.groups.flatMap(normalizeUnitAngles);
+      if (angles.some((angle) => angleReviewSurface(angle).kind !== "kinds")) {
+        throw new Error("zero-unit plan cannot carry mandatory, always-run, or unknown angles");
+      }
+      carryProof = validateZeroUnitCarryProof(JSON.parse(resolveFlagValue(argv, "--carry-forward-plan") ?? "null"), angles);
+    } catch (error) {
+      return finish({ ok: false, error: `zero-unit carry proof refused: ${error.message}` }, false);
+    }
   }
   // An angle-less resolved unit is a malformed plan: refuse rather than silently
   // contribute zero reviewers for it.
@@ -448,6 +474,12 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   let maxConcurrent;
   try {
     const { config } = await loadDevLoopConfig({ repoRoot: process.cwd() });
+    if (carryProof !== undefined) {
+      const alwaysRerun = resolveGateAngleContract(config, mapGateToConfigKey(gate)).mandatoryAngles;
+      if (carryProof.some(({ angle }) => angleReviewSurface(angle, { alwaysRerun }).kind !== "kinds")) {
+        throw new Error("zero-unit plan cannot carry configured mandatory angles");
+      }
+    }
     configuredGroupNames = new Set((config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
     // The concurrency bound the coordinator MUST wave the EMITTED (split) units
     // by — the artifact's fanout.wavePlan is computed over the UNSPLIT
@@ -497,7 +529,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     if (!result.composed || !result.recorded) {
       return finish({ ok: false, error: `failed to compose reviewer prompt for unit ${JSON.stringify(unit?.name)} (scope ${scope}): ${result.reason}` }, false);
     }
-    emitted.push({ scope, angles, group: angles.length > 1 ? unit.group : null, promptPath: result.promptPath });
+    emitted.push({ scope, angles, group: unit.group, promptPath: result.promptPath });
   }
 
   // GATE-EXEC-FANOUT-DISPATCH-EMIT: success-only persist of the emitted round
@@ -527,6 +559,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // each earlier finish call, all of which run before the persist) is the one
   // complete seam.
   const payload = { ok: true, gate, headSha, repo, pr, pending: pendingOnly, count: emitted.length, maxConcurrent, units: emitted };
+  if (carryProof !== undefined) payload.carried = carryProof;
   const planPath = buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot });
   try {
     await mkdir(path.dirname(planPath), { recursive: true });

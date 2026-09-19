@@ -224,10 +224,7 @@ elsewhere refuses the install) — see `installCommitMsgGuard` in
 `WORKTREE-WRONG-CHECKOUT-GUARD`: under the Claude harness, the PreToolUse
 `Edit`/`Write` hook (`.claude/hooks/pre-tool-use-write-guard.mjs`, deciding via
 `decideWorktreeCheckoutGuard`) refuses a file mutation that would land on the
-MAIN checkout while a worktree cycle is active — the exact silent slip observed
-on #1973, where six absolute-path edits hit the main checkout instead of the
-freshly-created worktree and were caught only by a manual `git status` before
-commit. The "active worktree" is the one CONTAINING the call context's `cwd`
+MAIN checkout while a worktree cycle is active. The "active worktree" is the one CONTAINING the call context's `cwd`
 (anchoring on cwd, not on the mere existence of a worktree, keeps the guard
 immune to the many stale `tmp/worktrees/` worktrees a long-lived checkout
 accumulates). A write is refused when cwd sits inside a listed worktree and the
@@ -281,12 +278,7 @@ actual default is `main`; the tooling fetches candidate remotes first,
 best-effort, and honors an explicit `--base` override). The main checkout is
 reserved for inspection, control, and lightweight status checks.
 
-A shell's working directory can reset to the primary checkout **silently** —
-after a subprocess run, or when a `cd` inside a compound command does not
-persist into the next one. A relative-path `git add && git commit && git
-push` that runs after such a reset executes in the primary checkout on the
-default branch, landing the change straight on the remote and skipping the PR
-flow. Every mutating git command (`add`, `commit`, `push`, and any command
+A shell's working directory can reset silently. Every mutating git command (`add`, `commit`, `push`, and any command
 that reads or writes files) MUST address the tree explicitly rather than rely
 on cwd: `git -C <absolute-worktree-path> ...` for git, and absolute paths for
 test/build commands. The [default-branch guard](#default-branch-guard) above

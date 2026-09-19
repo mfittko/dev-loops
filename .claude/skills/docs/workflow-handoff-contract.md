@@ -154,11 +154,8 @@ interface HandoffEnvelope {
     orchestratorOwned: string[];
   };
 
-  // #1462: the ONLY per-round-varying block, ALWAYS LAST. Every field here changes
-  // between builds/rounds, so isolating it as the envelope tail keeps everything
-  // above it byte-stable — a fresh reviewer spawn cache-READS that stable prefix
-  // instead of re-billing the full contract scaffolding each round. Treat gateState
-  // as volatile: read it last, or re-derive it fresh via detectors. Never add a
+  // #1462: the ONLY per-round-varying block, ALWAYS LAST. Treat gateState as
+  // volatile: read it last, or re-derive it fresh via detectors. Never add a
   // per-round-varying field above this block.
   gateState: {
     derivedAt: string;         // ISO timestamp
@@ -188,13 +185,11 @@ same target+gate**. All per-round-varying values (`derivedAt`, the head SHA, CI
 status, thread/round counts) live in the trailing `gateState` block, and nothing
 else may.
 
-This is deliberate: we spawn **fresh** review subagents each round (independent,
-bias-free reads). Because the stable body + `requiredReads` are byte-identical,
-each fresh spawn **cache-reads** the whole contract scaffolding instead of
-re-billing it, and only the tiny `gateState` tail is a cache write. **Contract
-rule:** never add a field that varies per round anywhere except inside `gateState`
-— doing so re-poisons the cacheable prefix. A test
-(`#1462: the envelope minus gateState is byte-stable ...`) enforces this.
+Spawn fresh review subagents each round for independent reads. They can reuse
+this stable prefix; actual cache hits depend on the provider and delivered prompt.
+**Contract rule:** never add a field that
+varies per round anywhere except inside `gateState`. The envelope test
+(`#1462: the envelope minus gateState is byte-stable ...`) checks byte stability.
 
 ## Backward compatibility
 

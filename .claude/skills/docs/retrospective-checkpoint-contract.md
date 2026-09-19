@@ -58,7 +58,7 @@ A fresh session determines the status of the required retrospective by reading `
 
 | File state | Mapped checkpoint state | Meaning |
 |---|---|---|
-| File absent (ENOENT) | `RETROSPECTIVE_CHECKPOINT_STATE.NONE` | No requirement has ever been observed on this working copy |
+| File absent (ENOENT) | `RETROSPECTIVE_CHECKPOINT_STATE.NONE` | No checkpoint requirement recorded in this repo's shared main-root file |
 | `{ "state": "none" }` | `RETROSPECTIVE_CHECKPOINT_STATE.NONE` | Explicitly recorded as no requirement |
 | `{ "state": "required" }` or `{ "state": "missing" }` | `RETROSPECTIVE_CHECKPOINT_STATE.MISSING` | Retrospective pending; blocks the next qualifying start/resume |
 | `{ "state": "complete", "identity": {...}, "provenance": {...} }`, no newer PR has merged into the configured base | `RETROSPECTIVE_CHECKPOINT_STATE.COMPLETE` | Retrospective recorded for the current cycle as a fresh-context pass over the tool-call record; requirement satisfied |
@@ -70,7 +70,7 @@ A fresh session determines the status of the required retrospective by reading `
 | The JSON literal `null`, any other non-object value (e.g. a scalar or array), or an unrecognized `state` string | `RETROSPECTIVE_CHECKPOINT_STATE.MISSING` | Present-but-broken artifact fails closed — never treated as "nothing observed" |
 
 <!-- rule: RETRO-ABSENT-NEVER-BLOCKS -->
-An **absent** checkpoint file is the only case that resolves to `NONE`, not `MISSING` — deliberately. The file is gitignored and lives per-working-copy: a fresh clone or a brand-new worktree has never seen a checkpoint at all, and failing closed on absence would block every one of them on first run. This mechanism only re-derives the recency of an EXISTING `complete`/`skipped` record; a derived recency check can never, by itself, ARM the gate (produce a MISSING requirement) where none existed before — only an explicit `required`/`missing` write (see "Durable artifact format" below) or a stale existing record does that.
+An **absent** checkpoint file or an explicit `{ "state": "none" }` resolves to `NONE`, not `MISSING`. A present malformed artifact fails closed. The gitignored file is shared by every linked worktree through `RETRO-CHECKPOINT-REPO-ROOT`; a fresh clone may have no file, but creating a worktree does not reset the checkpoint. Recency only re-evaluates an existing `complete`/`skipped` record: it cannot arm an absent or explicit-none checkpoint. An explicit `required`/`missing` write or an invalid/stale discharge record produces `MISSING`.
 
 ## Enforcement gate
 
@@ -165,17 +165,18 @@ violations):** dev-loops subcommands and `node scripts/*.mjs` invocations — th
 scripts legitimately call `gh`/GraphQL internally; that is the tooling. The rule
 targets the agent's own top-level shell calls, not a script's internals.
 
-**Write-op allowlist (verifier only):** only `gh pr ready` has
-no internal wrapper today; the verifier records it as an `allowedWriteOp` rather
-than a violation so the gap is surfaced distinctly, not as a breach. Ops that DO
+**Write-op allowlist (verifier only):** the verifier still records raw `gh pr ready`
+as an `allowedWriteOp`. This legacy classification does not authorize it:
+`RAW-GH-PR-READY-BYPASS` in [Anti-patterns](anti-patterns.md) requires the existing
+`ready-for-review.mjs` wrapper. Ops that DO
 have a sanctioned wrapper — `gh pr merge` (`scripts/github/merge-pr.mjs`, issue
 #1939), `gh issue create` (`scripts/github/create-issue.mjs`),
 `gh issue edit` (`scripts/github/edit-issue.mjs`), `gh label create`
 (`scripts/github/create-label.mjs`) — are NOT allowlisted, so a raw agent-level
 call is flagged as a violation. The verifier only ever classifies the agent's own
 top-level shell commands, never a wrapper's internal subprocess, so removing a
-wrapped op from the allowlist produces no false positives. Close a remaining gap
-with a wrapper to remove its allowlist entry. None of these block anything.
+wrapped op from the allowlist produces no false positives. The verifier's remaining
+ready allowlist is a classification limitation, not a missing wrapper. None of these findings block anything.
 
 **Inline-interpreter check item:** the raw-call scan below mechanically catches
 `node -e`/`python3 -c`/heredoc calls as a `rawCallViolations` entry — the same
@@ -225,10 +226,10 @@ advisory reflection whose findings reach the conductor via the envelope.
 `requireRetrospective` is not a one-time gate: a `complete` (or `skipped`) checkpoint MUST be scoped to the exact qualifying completion it discharges, not treated as satisfying every later one forever. The durable artifact carries an `identity` — at minimum `{ repo, prNumber, mergeCommit }` — alongside its `state`.
 
 - **The question is PR-merge recency.** Has a newer PR merged into the configured base branch since the checkpoint's recorded discharge point? Direct commits, release commits, tags, open or closed-unmerged PRs, and PRs merged into another base do not open a retrospective cycle.
-- **Derivation, at read time, on every evaluation.** There is no write-time "arming" step. Before inspecting ancestry, the checkpoint identity's `repo` MUST exactly match the current repository auto-detected from the checkout whose base history will be inspected; a foreign or unresolvable repository identity fails closed. `resolveHasNewerMergeSinceCheckpoint` (`scripts/loop/resolve-dev-loop-startup.mjs`) runs a best-effort `git fetch origin <baseBranch>`, uses `git rev-list <mergeCommit>..origin/<baseBranch>` to bound candidate commits, and queries the GraphQL `Commit.associatedPullRequests` connection as merge authority. A candidate qualifies only when GraphQL reports a `MERGED` PR whose merge commit is that candidate and whose base ref equals the configured base. This covers non-default configured bases and one-parent squash merges without the incorrect `git log --merges` filter. Nothing has to remember to write `state: "required"` for the gate to fire correctly.
+- **Derivation, at read time, on every evaluation of a discharge record.** Recency needs no write-time re-arming of an existing `complete`/`skipped` record; the extension's independent best-effort `required` writer remains supported. Before inspecting ancestry, the checkpoint identity's `repo` MUST exactly match the current repository auto-detected from the checkout whose base history will be inspected; a foreign or unresolvable repository identity fails closed. `resolveHasNewerMergeSinceCheckpoint` (`scripts/loop/resolve-dev-loop-startup.mjs`) runs a best-effort `git fetch origin <baseBranch>`, uses `git rev-list <mergeCommit>..origin/<baseBranch>` to bound candidate commits, and queries the GraphQL `Commit.associatedPullRequests` connection as merge authority. A candidate qualifies only when GraphQL reports a `MERGED` PR whose merge commit is that candidate and whose base ref equals the configured base. This covers non-default configured bases and one-parent squash merges without the incorrect `git log --merges` filter. The recency path does not need a `state: "required"` write to invalidate a stale discharge.
 - **Unverifiable ancestry or association fails closed.** When the checkpoint commit cannot be resolved against `origin/<baseBranch>`, or a required GitHub association lookup fails or returns malformed facts, the check resolves to `MISSING`. The GraphQL authority query MUST validate `pageInfo`, follow cursors, and stop at its fixed page bound; malformed responses, missing cursors, and exhausted pagination all fail closed. An unverifiable discharge claim must not be trusted; the outcome is identical to a confirmed newer PR merge.
 - **Completion / skip.** Recording `complete` or `skipped` (via `checkpoint-contract.mjs --state <state> --repo <owner/name> --pr <n> --merge-commit <sha>`, alongside `--notes`/`--reason`) MUST carry the cycle `identity` — the CLI rejects `complete`/`skipped` with no identity at all (previously optional, which could write a record that then failed closed forever with no way to clear it by re-running the same command). A `complete` record additionally MUST carry the fresh-context provenance via `--retro-context fresh --record-source <path>` (the CLI rejects `inline` outright and rejects `complete` with no provenance flags at all). `--merge-commit` MUST be the full merge commit oid (`gh pr view --json mergeCommit --jq .mergeCommit.oid`), not an abbreviated/short sha — the CLI rejects anything that is not exactly 40 hex characters, since a short sha can never match a real commit oid on a later ancestry check and would leave the checkpoint permanently unresolvable (and so permanently stale). `--repo` MUST be `owner/name` shape. `skipped` is scoped exactly like `complete` — an explicit, reasoned escape hatch for one cycle, not a standing exemption.
-- **Fail-closed backstop.** The pure resolver (`resolveCheckpointStateFromArtifact` in `packages/core/src/loop/retrospective-checkpoint.mjs`) takes the caller-derived ancestry result as a boolean (`hasNewerMergeSinceCheckpoint`) and treats a `complete`/`skipped` checkpoint as `MISSING`, not `COMPLETE`/`SKIPPED`, whenever it is set. It also treats a present-but-malformed artifact (not a JSON object — including the JSON literal `null`, which is present-but-broken rather than absent — or an unrecognized `state`) as `MISSING`. Only a genuinely absent file (no `.pi/dev-loop-retrospective-checkpoint.json` at all) resolves to `NONE` — see "RETRO-ABSENT-NEVER-BLOCKS" above.
+- **Fail-closed backstop.** The pure resolver (`resolveCheckpointStateFromArtifact` in `packages/core/src/loop/retrospective-checkpoint.mjs`) takes the caller-derived ancestry result as a boolean (`hasNewerMergeSinceCheckpoint`) and treats a `complete`/`skipped` checkpoint as `MISSING`, not `COMPLETE`/`SKIPPED`, whenever it is set. It also treats a present-but-malformed artifact (not a JSON object — including the JSON literal `null`, which is present-but-broken rather than absent — or an unrecognized `state`) as `MISSING`. Absence and explicit `none` resolve to `NONE` — see `RETRO-ABSENT-NEVER-BLOCKS` above.
 - **Unaffected repos.** A repo with `workflow.requireRetrospective` unset or `false` never performs the ancestry check and never reads or applies the checkpoint file at all — the resolver's entire checkpoint read/injection block is gated on `requireRetrospective` being true, so any checkpoint file that happens to exist is inert. No ancestry fetch or log runs either. (The repo-root path resolution itself still runs one local `git worktree list` on every resolve, config-independent.)
 
 ### Checkpoint path resolves from the repo root, not cwd
