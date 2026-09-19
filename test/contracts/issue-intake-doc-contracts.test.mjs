@@ -10,6 +10,7 @@ import {
 } from "../imported-assets-helpers.mjs";
 import { assertRuleOwned, extractOwnedText } from "./_rule-helpers.mjs";
 import { extractRelativeMarkdownLinks } from "../../scripts/docs/validate-links.mjs";
+import { parseReadyForReviewCliArgs } from "../../scripts/github/ready-for-review.mjs";
 
 const PUBLIC_CONTRACT_PATH = "skills/docs/public-dev-loop-contract.md";
 
@@ -201,8 +202,14 @@ test("issue-intake flow carries the resolved repo slug through later GitHub issu
   assert.match(skillContent, /dev-loops issue edit --repo <resolved-repo> --issue <number> --add-assignee @me/);
   assert.match(skillContent, /dev-loops issue edit --repo <resolved-repo> --issue <number> --add-assignee copilot-swe-agent/);
   assert.match(skillContent, /gh pr edit <pr-number> --repo <resolved-repo> --title/);
-  assert.match(skillContent, /gh pr ready <pr-number> --repo <resolved-repo>/);
-  assert.match(skillContent, /gh pr review <pr-number> --repo <resolved-repo> --approve/);
+  const intake = await readRepo("skills/docs/issue-intake-procedure.md");
+  const ready = intake.match(/^node <resolved-skill-scripts>\/github\/ready-for-review\.mjs (.+)$/m);
+  assert.ok(ready, "intake must use the guarded ready wrapper");
+  const args = ready[1].replaceAll("<resolved-repo>", "owner/repo").replaceAll("<pr-number>", "42").split(/\s+/);
+  const parsed = parseReadyForReviewCliArgs(args);
+  assert.equal(parsed.repo, "owner/repo");
+  assert.equal(parsed.pr, 42);
+  assert.doesNotMatch(intake, /^gh pr (?:ready|review .*--approve)\b/m);
   assert.match(skillContent, /detect-checkpoint-evidence\.mjs --repo <resolved-repo> --pr <pr-number>/);
   assert.doesNotMatch(skillContent, /--require-before-merge/, "the removed opt-in flag must not appear in the docs");
   assert.match(skillContent, /merge-pr\.mjs --repo <resolved-repo> --pr <pr-number> --human-approved-by <login>/);

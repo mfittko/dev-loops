@@ -121,6 +121,7 @@ node <resolved-skill-scripts>/github/manage-sub-issues.mjs verify \
 Returns `"verified": true` when the actual sub-issues match the expected set.
 Add `--ordered` to also verify that the execution order matches exactly.
 `verify` exits 0 for mismatch-only results and reports the discrepancy in JSON.
+Completion requires both exit 0 and `verified: true`; `ok: true` alone only means the command ran.
 Argument/usage errors and `gh`/runtime failures still exit non-zero.
 
 Verification output includes `"missing"` and `"unexpected"` arrays so discrepancies are

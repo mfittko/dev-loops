@@ -1882,8 +1882,8 @@ does NOT claim un-forgeable enforcement. Un-forgeable recording (the harness att
 actually ran each per-angle review) is the Pi-harness bridge — the subagent tool honored
 at child depth (see #1084).
 
-This provenance layer is distinct from the underlying gate verdict itself. The verdict
-comment's clean `draft_gate`/`pre_approval_gate` presence on the current head is enforced
+This provenance layer is distinct from the underlying gate verdict itself. The clean
+draft transition record and current-head `pre_approval_gate` verdict are enforced
 server-side by the `gate-evidence` check
 (`.github/workflows/gate-evidence.yml`, [Merge preconditions](./merge-preconditions.md#items-3-and-4-apply-to-every-path-not-just-the-dev-loop-tooling)),
 which re-runs `detect-checkpoint-evidence.mjs --skip-fanout-ledger-check` on GitHub's own

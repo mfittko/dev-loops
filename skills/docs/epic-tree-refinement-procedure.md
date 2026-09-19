@@ -200,7 +200,7 @@ The procedure is complete when all issues in the tree satisfy [EPIC-REFINEMENT-R
 | Scope boundary present | Issue body contains explicit `"This issue owns ... It does NOT own ..."` text |
 | No orphaned responsibilities | Each thing the parent delegates maps to exactly one child |
 | No duplicate ownership | No two siblings claim the same responsibility |
-| Sub-issue tree order valid | `manage-sub-issues.mjs verify --ordered` exits 0 |
+| Sub-issue tree order valid | `manage-sub-issues.mjs verify --ordered` exits 0 **and** its JSON reports `verified: true`; see [Sub-Issue Tree Contract](./sub-issue-tree-contract.md). A mismatch exits 0 with `verified: false` and is not completion. |
 
 ---
 

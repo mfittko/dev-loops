@@ -20,7 +20,7 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const skillRoot = path.resolve(scriptDir, "..");
 const templateRoot = path.join(skillRoot, "templates");
 
-// ARTIFACT-TRACKER-FIRST-NO-DUP (#1628): issue-keyed worktrees
+// ARTIFACT-TRACKER-FIRST-NO-DUP: issue-keyed worktrees
 // (tmp/worktrees/dev-loops/issue-<n>) are tracker-backed. Refuse a duplicate
 // durable phase doc; keep the ephemeral tmp/phases scaffold.
 const ISSUE_KEYED_WORKTREE_PATTERN = /[\\/]tmp[\\/]worktrees[\\/]dev-loops[\\/]issue-\d+[\\/]?$/u;
@@ -71,7 +71,7 @@ export async function initializePhase(projectRoot, phase, patch = {}) {
     ...result,
     generated: outputs.map(([, outputPath]) => path.relative(projectRoot, outputPath)),
     trackerBacked,
-    // Report every refusal with its rule (AC6, #1628); never silently omit a file.
+    // Report every refusal with its rule; never silently omit a file.
     refusals: trackerBacked
       ? [{ rule: "ARTIFACT-TRACKER-FIRST-NO-DUP", reason: "tracker-backed (issue-keyed) worktree; refusing durable phase-doc mint" }]
       : [],

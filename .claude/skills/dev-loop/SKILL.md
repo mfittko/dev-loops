@@ -193,15 +193,16 @@ dev-loops-run cli/index.mjs gate consolidate-fanin --findings-dir <dir> --head-s
   --spec-authority <identity-path> --jq '.severityCounts'
 ```
 
-**Judge between fan-in and the fixer (Phase 3.5 wired, #1658):** after fan-in (and after the
-durable ledger is written with `write-gate-findings-log --judge-verdict <verdict-path>
---spec-authority <identity-path>`), dispatch
+**Judge between fan-in and the fixer (Phase 3.5 wired, #1658):** after fan-in, before the
+durable findings-log write, follow [Phase 3.5](../docs/gate-review-sub-loop-contract.md#phase-35--judge-relevance-disposition-1525) and dispatch
 the dedicated `judge` agent (`agents/judge.agent.md`) — seeded with the consolidated ledger, the
 linked issue's AC/DoD/non-goals, the PR's declared scope, the prior-round judge ledgers, and the
 spec-context output (the structured spec at `<spec-path>`, `specDigest`, `contentDigest`) — and
 await its two verdict artifacts: the relevance verdict at
 `tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/judge-verdict.json` and the spec-authority
-verdict at the sibling `spec-authority-verdict.json` (its only writes). Then run the deterministic
+verdict at the sibling `spec-authority-verdict.json` (its only writes). Write the durable ledger
+with `write-gate-findings-log --judge-verdict <verdict-path> --spec-authority <identity-path>`
+using those completed verdicts, before posting the visible gate verdict. Then run the deterministic
 bridge to derive the fixer's act list for Phase 4, always with the spec-authority flags, plus the
 durable-approval flags across re-entry:
 

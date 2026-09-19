@@ -87,7 +87,7 @@ dev-loops-run cli/index.mjs loop ensure-worktree --repo-root <main> --issue <n>
 
 This validates worktree isolation (the checkout's `node_modules/@dev-loops/core` resolves to its own `packages/core`; `tmp/worktrees/` stays the recommended default but is no longer the enforced condition) and branch identity (current branch matches the working branch); `--check-subagents` only reports subagent availability and is advisory (fails-open, does not block the gate). If the gate fails, **stop and fix the violation** before proceeding — do not bypass it in normal workflow execution.
 
-This gate does **not** apply to other routed strategies (`copilot_pr_followup`, `external_pr_followup`, `reviewer_fixer`, `wait_watch`, `final_approval`, `issue_intake`); those strategies have their own execution rules and may edit code from any checkout as needed. The development-only bypass (`DEVLOOPS_PREFLIGHT_BYPASS=1`) exists for testing the gate itself and MUST NOT be used in production workflow runs — it is a testing convenience, not an operational escape hatch.
+This preflight gate applies only to `local_implementation`. Other routed strategies retain their own execution rules and the isolation requirements in [Worktree Guidance](../docs/worktree-guidance.md); absence of this preflight never authorizes editing an arbitrary checkout. The development-only bypass (`DEVLOOPS_PREFLIGHT_BYPASS=1`) exists for testing the gate itself and MUST NOT be used in production workflow runs.
 
 ## Narrow failure-triage fast path
 
@@ -241,7 +241,7 @@ For the **current phase only**, run this loop before implementation.
 
 **Lightweight (PR-body-as-spec) exception:** when the session is lightweight — the resolver output carries `canonicalSpecSource: pr_body` and the derived handoff envelope carries `specSource: pr_body` (started via `resolve-dev-loop-startup.mjs --issue <n> --lightweight`) — SKIP the durable phase-doc mint entirely. The PR description is the spec-of-record; do NOT create or commit any `docs/phases/*.md` for this session. The ephemeral `tmp/phases/` scaffold may still be used for local execution state. All other steps (read prior learning, plan, implement) proceed unchanged, and the gate sequence (draft → pre-approval fanout → detect-evidence → human merge) is identical. See [Artifact Authority Contract](../docs/artifact-authority-contract.md) "Lightweight (PR-body-as-spec)".
 
-Otherwise (default phase-doc path), create or update the durable phase doc.
+For tracker-backed sessions, update the canonical issue instead; `ARTIFACT-TRACKER-FIRST-NO-DUP` forbids minting a duplicate phase doc. Create or update the durable phase doc only for phase-doc-backed sessions.
 
 Use paths like:
 - `docs/phases/phase-0.md`
@@ -469,13 +469,10 @@ When handing off a full workflow run to a subagent (draft PR → gates → Copil
 use the canonical hand-off contract. Do not rely on abbreviated task summaries or operator
 memory.
 
-The canonical contract is [Workflow Handoff Contract](../docs/workflow-handoff-contract.md) (source-tree path: `skills/docs/workflow-handoff-contract.md`). It includes:
-- direct contract-doc references the subagent must read before executing
-- a mandatory 8-step checklist (draft PR → draft_gate → ready → Copilot → resolve → pre_approval_gate → merge)
-- non-negotiable invariants (Copilot review loop between gates, `unresolvedThreadCount === 0`, visible gate comments)
+The canonical [Workflow Handoff Contract](../docs/workflow-handoff-contract.md) defines the resolver-derived envelope: `requiredReads`, `nextAction`, gate evidence, acceptance and stop rules. Read that envelope first and load its required contracts before acting. The [PR Lifecycle Contract](../docs/pr-lifecycle-contract.md) owns the gate/Copilot/approval sequence; the envelope is not a fixed checklist.
 
 For all GitHub-first routed follow-up (`copilot_pr_followup`, `issue_intake`), the
- `local-implementation` skill uses this template when delegating the full run to a subagent.
+ `local-implementation` skill uses this envelope when delegating the full run to a subagent.
 Reference it by path, not by memory.
 
 ## Implementation loop for the phase

@@ -86,7 +86,7 @@ Additional gaps discovered through semantic reading of the spec are also recorde
 ### Count-based acceptance criteria guardrail
 
 <!-- rule: GRILL-COUNT-AC-UNIT-DISPATCH-MODE -->
-`GRILL-COUNT-AC-UNIT-DISPATCH-MODE`: An acceptance criterion that names a **count** (sentinel count, angle count, dispatch-unit count) MUST specify which unit the count refers to — `sentinel` vs `angle` vs `dispatch-unit` — and MUST be validated against BOTH the per-angle default AND the shipped grouped-dispatch default, not just one. When the repo uses grouped fan-out by default (this repo does — `resolveFanoutGroups` writes ONE sentinel per group; #1579/#1601), the AC MUST call out the grouped-dispatch interaction explicitly, or it will false-fail every grouped round. Detect a count-based AC that omits the unit or the dispatch-mode interaction as a gap before synthesis, and sharpen the unit + dispatch-mode validation into the synthesized `## Acceptance criteria`.
+`GRILL-COUNT-AC-UNIT-DISPATCH-MODE`: An acceptance criterion that names a **count** (sentinel count, angle count, dispatch-unit count) MUST specify which unit the count refers to — `sentinel` vs `angle` vs `dispatch-unit` — and MUST be validated against BOTH per-angle dispatch and the shipped grouped-dispatch default, not just one. Grouped fan-out writes one sentinel per emitted dispatch unit, not per angle; the AC MUST call out that interaction. Detect an omitted unit or dispatch-mode interaction as a gap before synthesis, then record the outcome and validation evidence in the authoritative `## AC / DoD matrix` required by Step 4.
 
 For each gap, classify it as either:
 - **Bounded choice** — the answer is one of a small discrete set (e.g. yes/no, A/B/C).

@@ -129,6 +129,8 @@ Status options.
 <!-- rule: QUEUE-COLUMN-NO-REMOVE -->
 Operators **MUST NOT remove or rename** the four conventional columns — tooling fails closed
 when expected columns are missing.
+This protects canonical names. The authorized `--repair-rename` path below restores
+recognized equivalents to those names; it does not rename a canonical column away.
 
 ## Queue ordering
 
@@ -241,7 +243,7 @@ Auto-repair covers:
 - Status field with entirely non-standard columns (e.g. `Todo`/`Doing`/`Done`)
 - Status field with a mix of standard and non-standard columns
 
-Auto-repair does NOT remove or rename existing columns. Column removal/reordering remains
+Default auto-repair does NOT remove or rename existing columns; `--repair-rename` is the explicit restoration path below. Column removal/reordering remains
 a manual operation via the GitHub Projects UI.
 
 
@@ -743,7 +745,7 @@ never touched.
 
 #### Repairing drifted Status columns
 
-Real boards drift over time. An operator may rename `Next Up` to `Ready`, or `In Progress` to `Doing`. The bootstrap wrapper can detect these semantically equivalent columns and, with explicit authorization, reconcile them back to the standard names.
+Existing boards may have drifted names such as `Ready` or `Doing`. This is not permission to rename canonical columns: the bootstrap wrapper can detect those equivalents and, with explicit authorization, restore the standard names.
 
 Report drift without mutating (safe default):
 
