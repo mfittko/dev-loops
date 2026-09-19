@@ -9,27 +9,16 @@ Use it together with:
 
 ## Deterministic orchestration authority
 
-When operating in PR follow-up or async watch mode, use the deterministic state machines
-as the authoritative source for:
+At each PR-follow-up/watch decision, use `detect-copilot-loop-state.mjs` or reviewer-side
+`detect-reviewer-loop-state.mjs` for the current state, allowed transitions, next action
+and stop condition. Their mappings are owned by [Copilot Loop State Graph](./copilot-loop-state-graph.md)
+and [Reviewer Loop State Graph](./reviewer-loop-state-graph.md).
 
-- Copilot follow-up loop: `detect-copilot-loop-state.mjs` from the resolved skill scripts directory
-- reviewer-side PR review loop: `detect-reviewer-loop-state.mjs` from the resolved skill scripts directory
-
-Resolve those helper paths from the skill asset layout described by the main skill. In the `dev-loops`
-source repository the skill scripts directory is `../../scripts/` relative to `skills/copilot-pr-followup/SKILL.md`; in normalized
-installed copies it may instead be `scripts/` inside the installed skill directory when that layout bundles the helper scripts.
-
-Use the machines to answer:
-- what state the PR/loop is in right now
-- what transitions are currently allowed
-- what the next required action is
-- when to stop instead of guessing
-
-Each machine's snapshot-to-state mapping is defined in its owner doc (see the Overview of
-[Copilot Loop State Graph](./copilot-loop-state-graph.md) and
-[Reviewer Loop State Graph](./reviewer-loop-state-graph.md)), both bundled sibling docs under `skills/docs/`.
-
-For tracker-first MVP `story -> PR -> tracker sync` work, see [Tracker-First Story-to-PR Contract](./tracker-first-loop-state.md). That doc inherits source-of-truth ownership, the required work item <-> PR link, and reverse-sync semantics from `#21`; it only adds the mutually exclusive workflow-family states and post-merge sync-verification states for this narrower MVP slice.
+Resolve helpers using the main skill's asset layout: `../../scripts/` relative to
+`skills/copilot-pr-followup/SKILL.md` in this source tree, or bundled `scripts/` inside
+normalized installed skills. For MVP `story -> PR -> tracker sync`, follow
+[Tracker-First Story-to-PR Contract](./tracker-first-loop-state.md), including its
+inherited `#21` authority/link/reverse-sync rules and post-merge sync verification.
 
 ## Key guarantees from the state machine
 
@@ -68,9 +57,7 @@ See [Copilot Loop State Graph](./copilot-loop-state-graph.md)'s "Agent judgment 
 ready issue -> confirm scope -> Copilot branch/PR -> async review/watch -> Pi follow-up fixes -> validation -> confirm verdict/action -> merge when authorized
 ```
 
-Use the resolved `detect-copilot-loop-state.mjs` helper from the skill scripts directory at each
-decision point in this flow to determine the current state and route to the correct next step
-deterministically.
+Route each decision through [Deterministic orchestration authority](#deterministic-orchestration-authority).
 
 ## Pre-follow-up working rules
 
@@ -80,13 +67,9 @@ deterministically.
 
 ### Step 1: Choose the work item
 
-Prefer a GitHub issue over an ad hoc local TODO.
-
-When selecting the next item:
-- prefer `type:task` issues under the relevant epic
-- prefer `status:ready`
-- inspect milestone, labels, and acceptance criteria
-- confirm whether a PR already exists for the issue before proposing new execution
+Prefer a GitHub issue over an ad hoc TODO, prioritizing `type:task` under the relevant
+epic and `status:ready`. Inspect milestone, labels and acceptance criteria; check for
+an existing PR before proposing execution.
 
 Useful checks:
 - `gh issue list --state open`
@@ -103,14 +86,9 @@ If the user asks for status/progress/readiness/merge-state/next-step (including 
 
 ### Step 2: Confirm issue scope before execution
 
-Before handing work to Copilot or doing follow-up fixes, summarize:
-- issue number and title
-- parent epic if present
-- milestone
-- labels
-- exact acceptance criteria
-- intended narrow scope
-- non-goals inferred from the issue and plan
+Before Copilot handoff or follow-up fixes, summarize the issue number/title, parent
+epic if present, milestone, labels, exact acceptance criteria, intended narrow scope
+and non-goals inferred from the issue/plan.
 
 If the work item is phase-like, ambiguous, or likely to shape more than one downstream step, default to a short fan-out / fan-in refinement pass before implementation:
 - generate 2-3 plan variants in parallel when practical
@@ -143,19 +121,13 @@ Use this heuristic:
 
 ### Step 4: Copilot handoff rules
 
-When preparing work for Copilot:
-- use the GitHub issue as the source of truth
-- preserve the issue's acceptance criteria
-- keep the requested scope narrow
-- do not broaden into adjacent backlog items
-- prefer one issue per PR unless the user explicitly wants bundling
+Use the GitHub issue as authority; preserve its acceptance criteria and narrow scope,
+without adjacent backlog work. Prefer one issue per PR unless the user requests bundling.
 
 Before any GitHub mutation such as assigning the issue, posting instructions, or changing labels, confirm first unless explicitly authorized.
 
-When you do hand work to Copilot:
-- assign `copilot-swe-agent`
-- reference the issue number and acceptance criteria clearly
-- keep instructions implementation-focused and test-aware
+Assign `copilot-swe-agent`, referencing the issue and acceptance criteria in
+implementation-focused, test-aware instructions.
 
 ## PR description contract
 
@@ -165,20 +137,40 @@ Follow the PR description contract (see [Agent Instructions](../../AGENTS.md) if
 
 Checkbox rule: acceptance criteria, definition-of-done items, and any task list must be rendered as real GitHub markdown checkboxes inside list items (`- [ ]` / `- [x]`, also `* [ ]` / `* [x]`). Do not wrap checkbox markers (e.g. `[x]`) in backticks. Do not place checkbox markers inside table cells — task lists are not interactive there even with a leading `- `.
 
-Mechanically enforced (issue #1863): a draft PR that closes one or more issues cannot leave draft (`gh pr ready` / `ready-for-review.mjs`) while its OWN body is missing Acceptance criteria checklist items, Definition of done checklist items, an explicit Non-goals section, or a `Closes #N`/`Fixes #N` reference — `validateTrackerBackedPrBodySpec` (`@dev-loops/core/loop/issue-refinement-artifact`, reusing `validatePrBodySpec`) fails closed at the draft-exit boundary, independent of any reviewer's soft judgment. A linked issue that already carries its own acceptance criteria does not substitute for this: the PR body is the portable spec-of-record a tracker-agnostic consumer reads.
+At draft exit, `ready-for-review.mjs` applies `validateTrackerBackedPrBodySpec`
+(`@dev-loops/core/loop/issue-refinement-artifact`, reusing `validatePrBodySpec`). For a
+PR closing an issue, its OWN body must contain Acceptance criteria and Definition of
+done checklists, explicit Non-goals, and `Closes #N`/`Fixes #N`; otherwise it fails
+closed. A linked issue's criteria or reviewer judgment cannot substitute.
 
 <!-- rule: OPS-PR-VALIDATION-STABLE-EVIDENCE -->
 `OPS-PR-VALIDATION-STABLE-EVIDENCE`: For tracker-backed PRs, the PR description's Validation section MUST record each validation command or named check together with its stable pass/fail outcome. It MUST NOT include volatile aggregate test, assertion, or asset counts; skip counts; durations; timestamps; or incidental totals unless an explicit acceptance criterion makes that exact quantity behaviorally significant. Detailed totals MUST live in the head-stamped validation and gate artifacts, where they remain bound to the exact revision that produced them.
 
 <!-- rule: OPS-DRAFT-FIRST-PR -->
-`OPS-DRAFT-FIRST-PR`: New PRs in this workflow MUST always be opened as **draft** PRs — mechanically enforced by the `create-pr.mjs` wrapper below, which is unconditionally draft-only and rejects `--ready`. Agents MUST NOT create a fresh PR directly in ready-for-review state; `gh pr ready` (via the `ready-for-review.mjs` wrapper) is the only path out of draft, gated on clean draft-gate evidence. This rule owns the draft-first mechanism itself; [TRACKER-PROJECTION-REQUIRED-METADATA](./tracker-first-loop-state.md#31-required-pr-metadata) owns the tracker-facing "PR MUST start as a draft" metadata expectation. The draft gate inspection is a real workflow boundary, so a new PR must exist in draft before `gh pr ready` is even eligible.
+`OPS-DRAFT-FIRST-PR`: New PRs MUST open as **draft** through `create-pr.mjs`, which
+rejects `--ready`. Agents MUST NOT create ready PRs. The only draft-exit path is
+`ready-for-review.mjs` (`gh pr ready`), gated on clean draft-gate evidence.
+[TRACKER-PROJECTION-REQUIRED-METADATA](./tracker-first-loop-state.md#31-required-pr-metadata)
+owns the corresponding tracker metadata requirement.
 
-Only use `node <resolved-skill-scripts>/github/create-pr.mjs` when authoritative issue↔PR resolution says there is no already-open linked PR. If a PR already exists, reuse/update that canonical PR instead of opening another one. This wrapper preserves the underlying `gh pr create` output contract while enforcing draft-first mechanically and self-assigning the PR by default (`--assignee @me`).
+Use `create-pr.mjs` only after authoritative issue↔PR resolution finds no open linked
+PR; otherwise reuse/update that PR. The wrapper preserves `gh pr create`'s output
+contract and defaults to self-assignment (`--assignee @me`).
 
 MUST use `node <resolved-skill-scripts>/github/create-pr.mjs --repo <owner/name> --assignee @me --base <base> --head <head> --title "..." --body-file <body-file>` (always draft, self-assigned by default; `--assignee @me` is the default).
 
 <!-- rule: CLOSING-REF-BRANCH-MISMATCH -->
-`CLOSING-REF-BRANCH-MISMATCH`: The sanctioned `create-pr.mjs` and `edit-pr.mjs` wrappers MUST refuse (fail closed) a `--body`/`--body-file` carrying a closing reference that disagrees with the issue the PR's own branch resolves to, so a swapped body cannot silently re-point the PR at the wrong issue (a merge would then close it). It recognizes GitHub's full closing-keyword vocabulary (`close`/`closes`/`closed`, `fix`/`fixes`/`fixed`, `resolve`/`resolves`/`resolved`, any case) — not only `Closes`/`Fixes` — and inspects EVERY reference in the body, refusing when any one disagrees (GitHub auto-closes every closing keyword, so a correct first reference does not excuse a wrong second). The expected issue is derived from the branch slug (`issue-<N>` or `dl/issue-<N>-*`): `create-pr` uses the `--head` branch, else the current branch, and an explicit `--issue <n>` still wins; `edit-pr` uses the PR's head branch slug, else its `closingIssuesReferences`. A correct-match reference, a body with no closing reference, and a PR/branch with no resolvable issue (issue-less lightweight) all pass unobstructed; `--allow-cross-issue` records a deliberate cross-issue reference. This guard only compares the referenced issue number — it never alters GitHub auto-close semantics and never rewrites the body. The `Closes`/`Fixes` body-spec vocabulary itself stays owned by `validatePrBodySpec` at the draft-exit boundary.
+`CLOSING-REF-BRANCH-MISMATCH`: `create-pr.mjs` and `edit-pr.mjs` MUST fail closed
+when ANY closing reference in `--body`/`--body-file` disagrees with the expected issue.
+Check every case-insensitive `close`/`closes`/`closed`, `fix`/`fixes`/`fixed`, and
+`resolve`/`resolves`/`resolved` reference; a correct first reference cannot excuse
+a wrong later one. Resolve the expected issue from `issue-<N>` or `dl/issue-<N>-*`:
+creation uses `--head`, otherwise the current branch, with explicit `--issue <n>`
+taking precedence; editing uses the PR head branch, otherwise `closingIssuesReferences`.
+Matching references, no closing references, or no resolvable issue (issue-less
+lightweight) pass. `--allow-cross-issue` records an intentional exception. The guard
+only compares issue numbers: it never rewrites the body or changes GitHub auto-close
+semantics. `validatePrBodySpec` still owns the draft-exit `Closes`/`Fixes` vocabulary.
 
 ## Timeout and watch policy
 

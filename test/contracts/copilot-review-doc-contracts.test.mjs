@@ -443,11 +443,11 @@ test("public dev-loop agent is a thin executable entrypoint that defers to the p
   assert.match(skillContent, /public `dev-loop` façade/i);
 });
 test("canonical contract docs carry their expected contract content", async () => {
-  const [trackerCanonical, conductorContent, ciContent, skillContent] = await Promise.all([
+  const [trackerCanonical, conductorContent, ciContent, operationsContent] = await Promise.all([
     readRepo("skills/docs/tracker-first-loop-state.md"),
     readRepo("skills/docs/conductor-routing-contract.md"),
     readRepo("skills/docs/copilot-ci-status-contract.md"),
-    readCopilotSkillSurface(),
+    readRepo("skills/docs/copilot-loop-operations.md"),
   ]);
   assert.match(trackerCanonical, /Tracker-First Story-to-PR Contract/i);
   assert.match(trackerCanonical, /MVP invariant: one tracker work item → one GitHub PR/i);
@@ -455,7 +455,13 @@ test("canonical contract docs carry their expected contract content", async () =
   assert.match(conductorContent, /conductor routing contract/i);
   assert.match(ciContent, /Copilot PR CI\/check normalization contract/i);
   assert.match(ciContent, /canonical bundled contract/i);
-  assert.match(skillContent, /inherits[\s\S]*source-of-truth ownership[\s\S]*work item <-> PR link[\s\S]*reverse-sync semantics from\s*`#21`/i);
+  // The operational boundary must load the authoritative tracker contract;
+  // copying its ownership/link/reverse-sync prose is not another authority.
+  const authority = parseMarkdownSections(operationsContent).find(({ name }) => name === "Deterministic orchestration authority");
+  assert.ok(authority);
+  assertReference(authority.bodyLines.join("\n"), "./tracker-first-loop-state.md");
+  assertRuleOwned("TRACKER-ONE-ACTIVE-PR", "skills/docs/tracker-first-loop-state.md");
+  assertRuleOwned("TRACKER-BLOCKED-FAIL-CLOSED", "skills/docs/tracker-first-loop-state.md");
 });
 test("new See Also markdown links resolve from docs files", async () => {
   const linkTargetsByDoc = {

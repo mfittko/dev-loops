@@ -350,6 +350,26 @@ test("checkpoint review chain contract exists and is referenced by both gates", 
   assert.match(subLoopContract, /does not satisfy the other gate/i);
 });
 
+function assertDraftBoundary(content) {
+  const rule = content.match(/<!-- rule: OPS-DRAFT-FIRST-PR -->\s*([\s\S]*?)(?=\n\s*\n|$)/)?.[1].replace(/\s+/g, " ");
+  assert.ok(rule, "draft-first owner body must exist");
+  assert.match(rule, /MUST\b[^.]*\bdraft\b/);
+  assert.match(rule, /MUST NOT\b[^.]*\bready\b/);
+  assert.match(rule, /`ready-for-review\.mjs`[^.]*gated on clean draft-gate evidence/);
+}
+
+test("draft-boundary checks accept reflow but reject weakened or displaced gate evidence", async () => {
+  const owner = await readRepo("skills/docs/copilot-loop-operations.md");
+  assertDraftBoundary(owner.replace("New PRs MUST open", "Every new PR MUST begin"));
+  assertDraftBoundary(owner.replace("Agents MUST NOT create ready PRs.", "Agents\nMUST NOT create ready PRs."));
+  for (const changed of [
+    owner.replace("MUST open", "MAY open"),
+    owner.replace("MUST NOT create ready", "MAY create ready"),
+    owner.replace("gated on clean draft-gate evidence", "gated on previous-head evidence"),
+    owner.replace("gated on clean draft-gate evidence", "optional") + "\n`ready-for-review.mjs`, gated on clean draft-gate evidence",
+  ]) assert.throws(() => assertDraftBoundary(changed));
+});
+
 test("skill docs enforce self-assignment and draft-first rules for create commands", async () => {
   const [copilotFollowupSkill, localImplementationSkill, finalApprovalSkill, agents, workflowHandoffTemplate] = await Promise.all([
     readCopilotFollowupSurface(),
@@ -366,7 +386,7 @@ test("skill docs enforce self-assignment and draft-first rules for create comman
   assert.doesNotMatch(copilotFollowupSkill, /gh pr create --draft --repo <owner\/name> --assignee @me --base <base> --head <head> --title/i);
   assertRuleOwned("OPS-DRAFT-FIRST-PR", "skills/docs/copilot-loop-operations.md");
   assert.match(copilotFollowupSkill, /OPS-DRAFT-FIRST-PR/);
-  assert.match(copilotFollowupSkill, /draft gate inspection is a real workflow boundary/i);
+  assertDraftBoundary(await readRepo("skills/docs/copilot-loop-operations.md"));
 
   // local-implementation: PRs are always draft and always assigned — self-assigned
   // by default (`--assignee @me`), honoring an explicit assignee — via the canonical wrapper

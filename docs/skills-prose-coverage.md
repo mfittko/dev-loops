@@ -10,7 +10,7 @@ Phases: 1 = Copilot follow-up and directly coupled references/tests; 2 = other r
 
 ## Current run — 2026-09-19
 
-The user selected A for all three phases on `issue-2236`/PR2237; B is now a pinned read-only reference, not an equivalent-scope competition. Issue2236 records this direction and the narrow runtime exception tracked separately by issue2273. All phases remain incomplete; the inventory below has 71 pending, three in-progress and three changed rows. A link correction or this checkpoint does not complete a file.
+The user selected A for all three phases on `issue-2236`/PR2237; B is now a pinned read-only reference, not an equivalent-scope competition. Issue2236 records this direction and the narrow runtime exception tracked separately by issue2273. All phases remain incomplete; the inventory below has 71 pending, two in-progress and four changed rows. A link correction or this checkpoint does not complete a file.
 
 | Input / evidence | Current value |
 | --- | --- |
@@ -32,7 +32,19 @@ This is the user-authorized small runtime exception, to be committed separately 
 
 Real-module test coverage drives the carry resolver, context writer, emitter CLI, fan-in with the actual request-plan/sentinel directory, and findings-log writer. It preserves a blocking prior finding and original reviewer/model identity and rejects missing carry proof, stale head, fresh provenance, missing plan, completed-only and malformed/incomplete carried inputs. Fresh native Terra `/root/dev_loop/runtime_review_retry_2` reviewed frozen diff `674f595fb15b8b8d5d7d3d4971e59a5972a448188ee8e845542dd586b9668820` against integration HEAD and spec `53b8dc344056f2710640c67b074d0b597b81b4a26ad42503b0cc79962f84f611`, with no runtime findings. Targeted validation: 383 tests across four files; docs and 92 assets passed. Only this evidence sentence changed after review. This is not phase completion or lifecycle clearance.
 
-Remaining decisions: lineage clarification (offline composition versus runtime rebuilding) is authorized but not yet applied. Accepted ADR0064 supports correcting clean-only carry descriptions. The pinned main emitter still nulls final provenance `group` on one-angle split tails despite ADR0072's original-group requirement; this pre-existing runtime discrepancy is outside issue2273 and is not silently fixed or claimed preserved. B-reference reviewer `/root/dev_loop/b_reference` identified a useful `mustRerun` inversion counterexample; not yet adopted. Its proposed no-plan interpretation was withdrawn for lack of governing authority.
+Remaining work: complete the large follow-up and gate owners, including judge/fixer handoff and the remaining brittle-test audit. The pinned main emitter still nulls final provenance `group` on one-angle split tails despite ADR0072's original-group requirement; this pre-existing runtime discrepancy is outside issue2273 and is not silently fixed or claimed preserved. B-reference reviewer `/root/dev_loop/b_reference` identified a useful `mustRerun` inversion counterexample; not yet adopted. Its proposed no-plan interpretation was withdrawn for lack of governing authority.
+
+### Phase 1: operations and obsolete descriptions
+
+Full operations-owner review retained helper/layout authority, issue/PR identity and intake authorization, request/watch branching and stop behavior, draft/closing-reference gates, checkpoint reattachment and interpreter/polling bans. Duplicated explanations were condensed; owner 2713 → 2296 words, 20677 → 18280 bytes. The prior CI slice reduced its owner 1014 → 698 words, 8105 → 6014 bytes (`wc -w -c`, source only).
+
+Obligation trace: ADR0064 plus `buildCarryForwardPlan` retain latest-prior-head/no backscan, all refusal/attribution/mandatory-angle guards, current-set subtraction, prior finding/reviewer/head identity and blocking findings. The follow-up's clean-only statements were obsolete. ADR0070 and `writeGateContext` require fresh current-head runtime rebuilding and advisory prior dispositions; Section E now explicitly limits append-only composition to its offline builder, as authorized. ADR0072 and `expandDispatchUnits` supersede proportionality's per-angle dispatch wording; emitted units replace it without changing any size/risk/tier/mandatory floor or provenance guard.
+
+Fresh Terra `/root/dev_loop/phase1_authority_review` reviewed the operations owner and changed follow-up/gate sections against their accepted decisions/enforcement. Its test-only findings (incidental carry prose pins and missing command-bound spec identity) were fixed and independently rechecked. Reviewed diff: `ce39e853ecf06767a3ea7a29b28ef2db9c5cacb3b42194fd15ecdba3d53e9b09` on `b28547fd4ce15d77de4ca9c5495577e7cbcd8b15`; subsequent ledger edits only record evidence. Expanded contracts/carry/context/lineage validation had 752 pass, one packaging-network skip and one incidental draft-wording failure; after replacing that pin, all 47 affected contracts passed. Docs/assets passed. Phase-wide and cumulative clearance remain pending.
+
+The one skipped check was `claude-plugin-npm-ci-smoke.test.mjs`; rerunning that check alone with registry access passed (one test, no skip). Logs are under `/private/tmp/` with prefix `dev-loop-2237-phase1-`. No unavailable live-harness check is counted as executed.
+
+Process limitation: the two preceding commits used the correct worktree/branch and remote checks but omitted the immediate pre-commit branch-guard invocation and explicit `git -C` spelling. No other branch changed. Subsequent commits use both; no retrospective guard execution is claimed.
 
 Comparable canonical-tree measurement (`wc -w -c`, all 77 tracked skills files): pinned main 152940 words / 1185234 bytes; A start 145725 words / 1134425 bytes; integrated A 145978 words / 1136288 bytes. The 6962-word / 48946-byte reduction against main is inherited A work; integration itself adds 253 words / 1863 bytes from main. No tokens or final loaded-context savings claimed.
 
@@ -82,7 +94,7 @@ On explicit resume: fetch origin, refresh canonical startup/envelope and issue22
 | `skills/docs/confirmation-rules.md` | 3 | pending | Not yet reviewed. |
 | `skills/docs/contract-style-guide.md` | 3 | pending | Not yet reviewed. |
 | `skills/docs/copilot-ci-status-contract.md` | 1 | changed | Full owner and normalization/detector/prober consumers inspected. Parked exclusion condensation retained; inputs/output, precedence, failure/timeout, unsupported-completed override and zero-suite identity prerequisites unchanged. Both exclusion names stay explicit; missing current-head evidence remains fail-closed failure. 82 focused CI/prober/workflow tests; docs/assets pass. Fresh Terra `/root/dev_loop/ci_owner_review` required restoring the explicit missing-evidence predicate, then verified the fix with no remaining defect. |
-| `skills/docs/copilot-loop-operations.md` | 1 | in progress | CI-exception call site points to its mandatory owner; remaining prose pending. |
+| `skills/docs/copilot-loop-operations.md` | 1 | changed | Full owner/callers inspected and condensed; authority/watch/stop/approval/draft/closing-reference/checkpoint contracts retained. Fresh `/root/dev_loop/phase1_authority_review` semantic review and corrected structural tests; see current-run evidence. |
 | `skills/docs/copilot-loop-state-graph.md` | 3 | pending | Not yet reviewed. |
 | `skills/docs/cross-harness-regression-contract.md` | 3 | pending | Not yet reviewed. |
 | `skills/docs/decision-record-contract.md` | 3 | pending | Not yet reviewed. |

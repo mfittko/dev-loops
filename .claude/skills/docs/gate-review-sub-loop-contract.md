@@ -291,7 +291,7 @@ MUST NOT silently run the suite itself and MUST NOT treat the gap as clean.
 | `dispatch: true` | Proceed with wave-by-wave fan-out. An unexposed budget (`availableReviewers: null`) also proceeds: only a proven shortfall blocks. |
 | `dispatch: false`, `reason: "budget_shortfall"` | MUST spawn zero reviewers. The context records the head-bound plan and exact `shortfall`; preserve completed artifacts and resume when budget becomes available. |
 
-To resume at the same head, rerun `write-gate-context.mjs` with the refreshed budget. Its reviews-directory scan supplies `completedAngles`: angles with CLEAN findings artifacts stamped for that head. Prior-head artifacts require the separate [fail-closed carry-forward seam](#angle-carry-forward-fail-closed); pass its proven carried names from a prior clean head through `--carried-angles <json>`, never a guess. The seam rejects equal `--prev-head` / `--head-sha`; same-head scanning does not use it.
+To resume at the same head, rerun `write-gate-context.mjs` with the refreshed budget. Its reviews-directory scan supplies `completedAngles`: angles with CLEAN findings artifacts stamped for that head. Prior-head artifacts require the separate [fail-closed carry-forward seam](#angle-carry-forward-fail-closed); pass only its proven carried names through `--carried-angles <json>`. That seam permits eligible `clean` or `findings_present` verdicts and rejects equal `--prev-head` / `--head-sha`; same-head scanning does not use it.
 
 `preflight.carriedAngles` is always emitted, including when empty. The preflight excludes a unit from `requiredReviewers` and `pendingGroups` only when ALL its angles are complete or carried. Dispatch only pending groups through the emitter below; never redispatch a completed-or-carried group. Completed artifacts remain valid for their own head.
 
@@ -1926,8 +1926,8 @@ production caller and supplies the diff-derived facts. Whenever a RISK-signal fl
 fires — a risk-path touch, a non-clean/ambiguous size-budget outcome, missing
 changed-file evidence, or an unclassifiable diff — the composer's `angles` is the
 FULL untriered pool, never a matched tier's reduced set. The hard size cap alone
-(`over_threshold`) forces `full_fanout` DISPATCH (distinct-reviewer-per-angle, never
-the light single-combined path) but KEEPS the diff-class-tier-reduced angle set —
+(`over_threshold`) forces `full_fanout` DISPATCH (one reviewer per emitted unit under
+`GATE-EXEC-FANOUT-DISPATCH-EMIT`, never the light inline path) but KEEPS the diff-class-tier-reduced angle set —
 see the floor-vs-tier precedence in the function's own doc
 comment. `resolveGateAnglesDynamic` (the resolver `write-gate-context.mjs` calls to
 persist the round's angle set) can opt into this SAME precedence via its
@@ -1945,7 +1945,7 @@ absence-of-evidence-of-risk):
 
 - **Hard size cap** — `over_threshold` (unchanged, above): the diff exceeds
   `localImplementation.lightMode.maxFiles`/`maxLines`. This floor forces `full_fanout`
-  DISPATCH (distinct-reviewer-per-angle, never the light single-combined path) — it
+  DISPATCH (the emitted grouped/singleton units, never the light inline path) — it
   does NOT ADDITIONALLY force the full untriered angle pool: the diff-class-tier
   mechanism still applies, so an over-cap-but-tier-classifiable diff dispatches full
   fan-out over its matched tier's reduced angle set (the mandatory-angle floor, below,
@@ -2198,12 +2198,13 @@ recording + enforcement + fail-closed signal that land independently.
 
 ## Additive review-lineage composition (Section E)
 
-A new head after a fix does NOT rebuild a full head-specific briefing. Reviews
-within a PR review lineage compose toward an **additive review lineage**: a
-stable `review-lineage-base` plus deterministic per-fix-round `round-N-delta`
-artifacts, so round 2+ appends only what changed. The pure builder lives in
-`packages/core/src/loop/review-lineage.mjs` (offline, deterministic, no GitHub/
-harness/clock) and is covered by `packages/core/test/review-lineage.test.mjs`.
+The offline `packages/core/src/loop/review-lineage.mjs` builder composes a stable
+`review-lineage-base` with deterministic per-fix-round `round-N-delta` artifacts;
+round 2+ appends only changes to that composition. It has no GitHub, harness or
+clock dependencies (`packages/core/test/review-lineage.test.mjs`). This artifact
+composition does not replace the runtime gate chain: Phase 1 rebuilds current-head
+context on every head bump, and the carry-forward rebuild passes `--prev-head`
+to seed bounded advisory disposition memory for reviewers that re-run (ADR 0070).
 
 ### Artifact model
 

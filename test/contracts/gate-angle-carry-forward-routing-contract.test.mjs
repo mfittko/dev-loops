@@ -51,31 +51,17 @@ function extractStep(content, heading, file) {
   return lines.slice(start, end < 0 ? undefined : end).join("\n");
 }
 
-// Phase 1.2 (Carry-forward): names the CLI, the SHA form it requires, the
-// subtract-not-substitute dispatch rule, and treats a refusal as full fan-out.
+// Phase 1.2 must invoke the real resolver with bound head/spec identities and
+// load its owner. Eligibility, refusal, subtraction and provenance behavior
+// are covered by resolver/emitter/fan-in tests; prose preservation needs
+// independent semantic review, not an exact sentence masquerading as proof.
 const PHASE_1_2_ROUTING = [
-  /resolve-angle-carry-forward\.mjs/,
-  /--prev-head/,
-  /mustRerun/,
-  // …the dispatch set is the CURRENT head's resolved angles minus the carried
-  // ones, never the plan's own lists — the plan's universe is the PRIOR head's
-  // angle set, so an angle first resolved at this head appears in neither list
-  // and would otherwise go unreviewed.
-  /subtract, never substitute/,
-  /minus the plan's `carried` angles/,
-  // An abbreviated prev-head resolves no log file, so carry-forward would refuse
-  // forever without ever saying why.
-  /FULL 40-character form/,
-  // Carried angles keep the prior reviewer's identity and head, never a fake one.
-  /carriedFromHead/,
-  /never a fabricated fresh review/i,
-  // Round 1 has no prior head, so the step is explicitly skipped rather than
-  // left to fail-closed refusal by accident.
-  /Skip this step on a gate's first round/,
+  // Keep both identities bound to the resolver invocation, not a sibling
+  // command. Full-SHA acceptance/refusal is tested against its actual parser
+  // in resolve-angle-carry-forward.test.mjs, not an incidental prose phrase.
+  /`[^`]*resolve-angle-carry-forward\.mjs[^`]*--prev-head\s+<prior_head_sha>[^`]*--head-sha\s+<current_head_sha>[^`]*--spec-authority\s+<identity-path>[^`]*`/,
   // The rule itself stays owned by the contract doc.
   /GATE-EXEC-ANGLE-CARRY-FORWARD/,
-  // A refusal must widen the fan-out, not silence it.
-  /never treat exit 1 as "nothing to re-run"/,
 ];
 
 // Phase 2 routes carry-forward through the pending emitter API. The actual
@@ -113,6 +99,27 @@ test("copilot-pr-followup SKILL's Phase 1.2 step routes the fan-out through reso
   const skill = await readRepo(SKILL);
   const line = extractStep(skill, "**Carry-forward (Phase 1.2):**", SKILL);
   assertMatchesAll(line, PHASE_1_2_ROUTING, `${SKILL} Phase 1.2 step`);
+  assert.ok(extractRelativeMarkdownLinks(line).some(({ rawTarget }) => rawTarget === "../docs/gate-review-sub-loop-contract.md#angle-carry-forward-fail-closed"));
+  assertRuleOwned("GATE-EXEC-ANGLE-CARRY-FORWARD", SUB_LOOP_CONTRACT);
+});
+
+test("carry routing binds both head arguments to the resolver through prose rewrites", async () => {
+  const step = extractStep(await readRepo(SKILL), "**Carry-forward (Phase 1.2):**", SKILL);
+  const reworded = step
+    .replace("Use FULL 40-character SHAs", "Supply full commit identities")
+    .replace("subtract, never substitute", "use set subtraction")
+    .replace("minus the plan's `carried` angles", "except angles proven carried by the plan")
+    .replace("never a fabricated fresh review", "without inventing a new reviewer")
+    .replace("Skip this step on a gate's first round", "A first round has no carry-forward step")
+    .replace('never treat exit 1 as "nothing to re-run"', "exit 1 requires full fan-out");
+  for (const rewritten of [step, reworded, reworded.replace(/\. /g, ".\n   ")]) {
+    assertMatchesAll(rewritten, PHASE_1_2_ROUTING);
+  }
+  for (const changed of [
+    step.replace("--prev-head <prior_head_sha>", "--prev-head <current_head_sha>"),
+    step.replace("--head-sha <current_head_sha>", "") + "\n`other-command --head-sha <current_head_sha>`",
+    step.replace("--spec-authority <identity-path>", "") + "\n`other-command --spec-authority <identity-path>`",
+  ]) assert.throws(() => assertMatchesAll(changed, PHASE_1_2_ROUTING));
 });
 
 test("copilot-pr-followup Phase 2 routes to the owned fan-out procedure and pending emitter", async () => {
