@@ -2715,6 +2715,7 @@ describe("role resolution", () => {
         additiveAngles: false,
         blockCleanOnFindingSeverities: ["high"],
         mediumFixWindow: 3,
+        inlineSeverityFloor: "medium",
         tiers: [],
         angleCategoryBindings: {},
       });
@@ -2737,6 +2738,7 @@ describe("role resolution", () => {
         additiveAngles: false,
         blockCleanOnFindingSeverities: ["high"],
         mediumFixWindow: 3,
+        inlineSeverityFloor: "medium",
         tiers: [],
         angleCategoryBindings: {},
       });
@@ -3212,6 +3214,58 @@ describe("role resolution", () => {
         const { config, errors } = await loadDevLoopConfig({ repoRoot: tmpDir });
         assert.deepEqual(errors, []);
         assert.equal(resolveGateConfig(config, "draft").mediumFixWindow, 5);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    // inlineSeverityFloor (#2263): mirrors the mediumFixWindow no-schema-default
+    // pattern above — resolveGateConfig, not the schema, supplies the fallback.
+    test("FileConfigSchema accepts every inlineSeverityFloor enum value", () => {
+      for (const floor of ["high", "medium", "low", "nit"]) {
+        const result = FileConfigSchema.safeParse({ version: 1, gates: { draft: { inlineSeverityFloor: floor } } });
+        assert.equal(result.success, true, `expected "${floor}" to be accepted`);
+      }
+    });
+
+    test("FileConfigSchema rejects an out-of-enum inlineSeverityFloor value", () => {
+      const result = FileConfigSchema.safeParse({ version: 1, gates: { draft: { inlineSeverityFloor: "bogus" } } });
+      assert.equal(result.success, false);
+    });
+
+    test("resolveGateConfig resolves inlineSeverityFloor to the default \"medium\" when absent", () => {
+      const config = { version: 1, gates: { draft: {} } };
+      assert.equal(resolveGateConfig(config, "draft").inlineSeverityFloor, "medium");
+    });
+
+    test("resolveGateConfig resolves a configured inlineSeverityFloor", () => {
+      const config = { version: 1, gates: { draft: { inlineSeverityFloor: "low" } } };
+      assert.equal(resolveGateConfig(config, "draft").inlineSeverityFloor, "low");
+    });
+
+    test("resolveGateConfig resolves inlineSeverityFloor independently per gate", () => {
+      const config = {
+        version: 1,
+        gates: { draft: { inlineSeverityFloor: "nit" }, preApproval: {} },
+      };
+      assert.equal(resolveGateConfig(config, "draft").inlineSeverityFloor, "nit");
+      assert.equal(resolveGateConfig(config, "preApproval").inlineSeverityFloor, "medium");
+    });
+
+    // The canonical no-schema-default hazard test (mirrors the mediumFixWindow
+    // alias-only test above): a real .devloops layer setting ONLY this key must
+    // round-trip through the REAL loader, not just a hand-built plain object.
+    test("loadDevLoopConfig + resolveGateConfig honor a real .devloops file's inlineSeverityFloor", async () => {
+      const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-inline-floor-"));
+      try {
+        await writeFile(
+          path.join(tmpDir, ".devloops"),
+          "version: 1\ngates:\n  draft:\n    inlineSeverityFloor: low\n",
+        );
+        const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+        const { config, errors } = await loadDevLoopConfig({ repoRoot: tmpDir });
+        assert.deepEqual(errors, []);
+        assert.equal(resolveGateConfig(config, "draft").inlineSeverityFloor, "low");
       } finally {
         await rm(tmpDir, { recursive: true, force: true });
       }

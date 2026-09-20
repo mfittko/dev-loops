@@ -316,6 +316,16 @@
               "type": "integer",
               "minimum": 0
             },
+            "inlineSeverityFloor": {
+              "description": "Lowest finding severity still posted as an inline resolvable review thread. Findings BELOW this floor are folded into a collapsed <details> block in the verdict-marker body instead of posting inline (they create no gate-authored thread). Default \"medium\": high/medium post inline, low/nit fold. Lower it (e.g. \"low\" or \"nit\") to restore inline posting of lower severities.",
+              "type": "string",
+              "enum": [
+                "high",
+                "medium",
+                "low",
+                "nit"
+              ]
+            },
             "tiers": {
               "minItems": 1,
               "type": "array",
@@ -540,6 +550,16 @@
               "type": "integer",
               "minimum": 0
             },
+            "inlineSeverityFloor": {
+              "description": "Lowest finding severity still posted as an inline resolvable review thread. Findings BELOW this floor are folded into a collapsed <details> block in the verdict-marker body instead of posting inline (they create no gate-authored thread). Default \"medium\": high/medium post inline, low/nit fold. Lower it (e.g. \"low\" or \"nit\") to restore inline posting of lower severities.",
+              "type": "string",
+              "enum": [
+                "high",
+                "medium",
+                "low",
+                "nit"
+              ]
+            },
             "tiers": {
               "minItems": 1,
               "type": "array",
@@ -763,6 +783,16 @@
               "description": "Deprecated alias for mediumFixWindow (pre-rename key name); mediumFixWindow wins when both are set.",
               "type": "integer",
               "minimum": 0
+            },
+            "inlineSeverityFloor": {
+              "description": "Lowest finding severity still posted as an inline resolvable review thread. Findings BELOW this floor are folded into a collapsed <details> block in the verdict-marker body instead of posting inline (they create no gate-authored thread). Default \"medium\": high/medium post inline, low/nit fold. Lower it (e.g. \"low\" or \"nit\") to restore inline posting of lower severities.",
+              "type": "string",
+              "enum": [
+                "high",
+                "medium",
+                "low",
+                "nit"
+              ]
             },
             "tiers": {
               "minItems": 1,

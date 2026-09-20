@@ -202,6 +202,11 @@
       "id": "GATE-COMMENT-IDENTITY-DISJOINT"
     },
     {
+      "id": "GATE-COMMENT-INLINE-SEVERITY-FLOOR",
+      "enforcement": "doc",
+      "enforcementNote": "Behavioral routing rule (config schema + isBelowInlineFloor drive real branching), not a fail-closed refusal citing this rule ID in an error message."
+    },
+    {
       "id": "GATE-COMMENT-NON-SUBSTITUTION"
     },
     {

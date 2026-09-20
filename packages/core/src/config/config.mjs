@@ -244,6 +244,13 @@ const GateConfig = z.strictObject({
   // resolveGateConfig applies the built-in fallback (3) after checking both.
   mediumFixWindow: z.number().int().nonnegative().optional().describe("Per-gate medium fix window: an open medium finding stays in the in-gate fix loop through this many rounds of this gate's chain before deferral. high is exempt (never defers). Default 3."),
   worthFixingNowFixWindow: z.number().int().nonnegative().optional().describe("Deprecated alias for mediumFixWindow (pre-rename key name); mediumFixWindow wins when both are set."),
+  // No schema-level `.default()` for the same reason as mediumFixWindow above:
+  // a default would fill this key on every config layer independently and
+  // shadow a layer that sets only this key. resolveGateConfig applies the
+  // built-in fallback ("medium") when the key is absent on the resolved gate.
+  inlineSeverityFloor: z.enum(["high", "medium", "low", "nit"]).optional().describe(
+    "Lowest finding severity still posted as an inline resolvable review thread. Findings BELOW this floor are folded into a collapsed <details> block in the verdict-marker body instead of posting inline (they create no gate-authored thread). Default \"medium\": high/medium post inline, low/nit fold. Lower it (e.g. \"low\" or \"nit\") to restore inline posting of lower severities."
+  ),
   // Ordered, first-match-wins diff-class angle tiers (see resolveGateTier).
   // Absent/empty = tiers never apply.
   tiers: z.array(GateTier).min(1).describe("Ordered, first-match-wins diff-class angle tiers for this gate. When the first-matching tier's angle set is inside the gate's angle pool, it replaces dynamic angle reduction for that diff class.").optional(),
@@ -1792,7 +1799,7 @@ function resolveBlockingSeverities(config, gate) {
  *
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"|"spike"} gate
- * @returns {{ angles: string[]|null, excludeAngles: string[], mandatoryAngles: string[], required: boolean, requireCi: boolean, blockCleanOnFindingSeverities: string[], dynamicAngles: boolean, additiveAngles: boolean, mediumFixWindow: number, tiers: Array<{name: string, match: object, angles: string[]}>, angleCategoryBindings: Record<string, {categories: string[], kinds: string[]}> }}
+ * @returns {{ angles: string[]|null, excludeAngles: string[], mandatoryAngles: string[], required: boolean, requireCi: boolean, blockCleanOnFindingSeverities: string[], dynamicAngles: boolean, additiveAngles: boolean, mediumFixWindow: number, inlineSeverityFloor: string, tiers: Array<{name: string, match: object, angles: string[]}>, angleCategoryBindings: Record<string, {categories: string[], kinds: string[]}> }}
  * @throws {Error} when ANY gate's (not only the requested one's) PRESENT
  *   `blockCleanOnFindingSeverities` is schema-invalid (non-array, empty, or an
  *   out-of-vocabulary entry). Validated EAGERLY across all three gates on every
@@ -1829,6 +1836,7 @@ export function resolveGateConfig(config, gate) {
     // mediumFixWindow wins; worthFixingNowFixWindow is the deprecated alias,
     // still honored so an unmigrated config keeps its window.
     mediumFixWindow: gateConfig?.mediumFixWindow ?? gateConfig?.worthFixingNowFixWindow ?? 3,
+    inlineSeverityFloor: gateConfig?.inlineSeverityFloor ?? "medium",
     tiers: gateConfig?.tiers ?? [],
     // Per-angle category/file-kind bindings for enabled entries that declare
     // them, so dynamic resolution can select a consumer angle by diff instead

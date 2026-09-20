@@ -34,9 +34,11 @@ import {
   findOwnPendingReview,
   findOwnSubmittedReview,
   fingerprintFinding,
+  isBelowInlineFloor,
   isLocatableFinding,
   listPrReviews,
   readGateFindingsLedger,
+  renderFoldedFindingsBlock,
   renderInlineCommentBody,
   resolveGateRound,
   submitPendingReview,
@@ -1477,7 +1479,7 @@ function renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, 
 // `nonLocatableFindings` also drives an invisible fingerprint+disposition
 // marker per finding, load-bearing for GATE-EXEC-FINDING-THREADS's
 // cross-round suppression/deferral tracking.
-export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings }) {
+export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings, foldedFindings }) {
   const lines = [
     `### Gate review: \`${gate}\``,
   ];
@@ -1545,6 +1547,15 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
     if (angles) {
       const cleanLine = renderCleanRosterLine(angles);
       if (cleanLine) lines.push("", cleanLine);
+    }
+    // Findings below the inline severity floor (GATE-COMMENT-INLINE-SEVERITY-FLOOR) render as their own
+    // top-level collapsed section, after the body-only list and clean roster
+    // and before the gate-evidence note. renderFoldedFindingsBlock already
+    // stamps its own invisible marker per finding, so the trailing
+    // nonLocatableFindings marker loop below (scoped to that array only, which
+    // never includes a folded finding) never double-stamps one.
+    if (Array.isArray(foldedFindings) && foldedFindings.length > 0) {
+      lines.push("", renderFoldedFindingsBlock(foldedFindings, { round }));
     }
   } else if (angles) {
     lines.push("", renderStructuredFindings(angles));
@@ -1946,7 +1957,7 @@ async function loadMatchingFindingsLedger(options, headSha) {
   }
   return ledger;
 }
-async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, preloadedLedger }, gh) {
+async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, preloadedLedger, inlineSeverityFloor }, gh) {
   // The withheld-tier coverage check above already loaded and validated this
   // same --findings-ledger file for this same round; reuse it instead of
   // reading it a second time (undefined means it was never preloaded, e.g. a
@@ -1975,11 +1986,20 @@ async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, pre
     repoRoot,
   });
   const candidates = ledger.findings.filter((f) => !suppressed.has(fingerprintFinding(f)));
+  // Findings below the inline severity floor (GATE-COMMENT-INLINE-SEVERITY-FLOOR) never post inline or
+  // body-file — they fold into the verdict body's collapsed <details> block
+  // instead (see renderFoldedFindingsBlock), regardless of locatability.
+  const folded = candidates.filter((f) => isBelowInlineFloor(f.severity, inlineSeverityFloor));
+  const nonFolded = candidates.filter((f) => !isBelowInlineFloor(f.severity, inlineSeverityFloor));
   const surface = {
     round,
     suppressedCount: ledger.findings.length - candidates.length,
     locatable: [],
-    nonLocatable: candidates,
+    // An update cannot add inline comments (GitHub exposes no endpoint to add
+    // one to an already-submitted review), so every still-at-or-above-floor
+    // candidate body-files on that path — same as before folding existed.
+    nonLocatable: nonFolded,
+    folded,
   };
   if (isUpdate || candidates.length === 0) {
     return surface;
@@ -1987,7 +2007,7 @@ async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, pre
   const commentableSet = buildCommentableLineSet(await fetchPrFiles({ repo: options.repo, pr: options.pr }, gh));
   surface.locatable = [];
   surface.nonLocatable = [];
-  for (const finding of candidates) {
+  for (const finding of nonFolded) {
     (isLocatableFinding(finding, commentableSet) ? surface.locatable : surface.nonLocatable).push(finding);
   }
   return surface;
@@ -2818,7 +2838,14 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // rendered, since the body carries the round number, the body-filed findings,
   // and the reduced per-angle digest that depends on them.
   const findingSurface = await resolveFindingSurface(
-    { options, headSha: canonicalHeadSha, repoRoot, isUpdate: existing !== null, preloadedLedger: preloadedFindingsLedger },
+    {
+      options,
+      headSha: canonicalHeadSha,
+      repoRoot,
+      isUpdate: existing !== null,
+      preloadedLedger: preloadedFindingsLedger,
+      inlineSeverityFloor: activeGateConfig.inlineSeverityFloor,
+    },
     gh,
   );
   const desiredBody = renderGateReviewCommentBody({
@@ -2828,7 +2855,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     structuredFindings,
     gateEvidenceNote: coordination?.gateEvidenceNote ?? null,
     blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
-    ...(findingSurface ? { round: findingSurface.round, nonLocatableFindings: findingSurface.nonLocatable, locatableFindings: findingSurface.locatable } : {}),
+    ...(findingSurface ? { round: findingSurface.round, nonLocatableFindings: findingSurface.nonLocatable, locatableFindings: findingSurface.locatable, foldedFindings: findingSurface.folded } : {}),
   });
   // ISSUE/PR-ID GUARD: the rendered gate verdict body must never emit a
   // raw issue/PR id (fail-closed unless explicitly allowlisted). Guarded here at
@@ -2841,6 +2868,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         round: findingSurface.round,
         inlineComments: findingSurface.locatable.length,
         bodyFiled: findingSurface.nonLocatable.length,
+        folded: findingSurface.folded.length,
         suppressed: findingSurface.suppressedCount,
       }
     : {};
@@ -2962,8 +2990,11 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // still unposted, so a round carrying one is never a noop, whatever the fields
   // say. A rerun of the same ledger suppresses all of its findings against the
   // posted review/threads and reaches zero here.
+  // Folded findings (GATE-COMMENT-INLINE-SEVERITY-FLOOR) count toward "unposted" too: a rerun that adds a
+  // brand-new below-floor finding never before fingerprinted must still force
+  // a re-post (the new folded <details> entry), not fall through to noop.
   const unpostedFindings = findingSurface
-    ? findingSurface.locatable.length + findingSurface.nonLocatable.length
+    ? findingSurface.locatable.length + findingSurface.nonLocatable.length + findingSurface.folded.length
     : 0;
   // Size-budget fields (phase 3 of the fail-closed PR size budget) join the noop comparison so a
   // waiver granted (or a size-budget evaluation run for the first time) at an

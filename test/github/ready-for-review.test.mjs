@@ -21,6 +21,7 @@ function passingCommentDiscipline() {
 }
 
 import { parseReadyForReviewCliArgs, readyForReview } from "../../scripts/github/ready-for-review.mjs";
+import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 
 const scriptPath = path.resolve("scripts/github/ready-for-review.mjs");
 const GH_RUNNER = Symbol("ready-for-review-gh-runner");
@@ -583,6 +584,77 @@ test("#1585: ready-for-review fails closed (-1) when review-thread state is unre
 
     assert.equal(result.code, 1);
     assert.match(result.stderr, /could not read review-thread state/i);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// #2263: a clean draft_gate verdict whose findings are ALL folded (below the
+// inline severity floor) creates no gate-authored review thread of its own —
+// the folded low/nit are recorded only in the verdict body's collapsed
+// <details> block — so ready-for-review must not block on them.
+test("#2263: ready-for-review succeeds when the clean draft_gate verdict carries only folded low/nit findings (no unresolved gate-authored thread)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-2263-folded-"));
+  try {
+    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir);
+    const foldedVerdictBody = renderGateReviewCommentBody({
+      gate: "draft_gate",
+      headSha,
+      verdict: "clean",
+      findingsSummary: "no blocking issues found",
+      nextAction: "mark ready for review",
+      blockCleanOnFindingSeverities: ["high"],
+      round: 1,
+      nonLocatableFindings: [],
+      locatableFindings: [],
+      foldedFindings: [
+        { severity: "low", angle: "naming", summary: "casing nit in a local constant" },
+        { severity: "nit", angle: "style", summary: "trailing whitespace" },
+      ],
+    });
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      {
+        stdout: JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                id: "PR_abc123",
+                isDraft: true,
+                headRefOid: headSha,
+                baseRefName: baseBranch,
+                state: "OPEN",
+                mergeStateStatus: "CLEAN",
+              },
+            },
+          },
+        }),
+      },
+      { stdout: JSON.stringify([{ name: "test", state: "success", bucket: "pass" }]) },
+      { stdout: "[]" }, // listIssueComments: no legacy verdict there
+      // The round's ONE visible surface — a submitted PR review, carrying the
+      // folded <details> block, never an inline/gate-authored comment.
+      {
+        stdout: JSON.stringify([[{
+          id: 501,
+          body: foldedVerdictBody,
+          state: "COMMENTED",
+          submitted_at: "2026-06-05T00:00:00Z",
+          html_url: "https://github.com/owner/repo/pull/17#pullrequestreview-501",
+        }]]),
+      },
+      // No gate-authored thread exists for either folded finding.
+      ...gateThreadLoginStubs({ threads: [] }),
+      { stdout: "" }, // gh pr ready
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 0, `Expected exit code 0, got ${result.code}. Stderr: ${result.stderr}`);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.ok, true, `Script returned ok=false: ${result.stderr}`);
+    assert.equal(output.action, "marked_ready");
+    const calls = await readGhCalls(ghLogPath);
+    assert.ok(calls.some((c) => Array.isArray(c) && c[0] === "pr" && c[1] === "ready"), "gh pr ready should have been called");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
