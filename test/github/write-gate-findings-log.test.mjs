@@ -2415,6 +2415,53 @@ test("writeGateFindingsLog enriches findings from --judge-verdict and records sc
   }
 });
 
+// #2246: the sanctioned shape from the PR 2243 round — a consolidator `clean`
+// wrapper (no blocking-severity finding) whose findings the judge acts on at
+// non-blocking severities only. write-gate-findings-log must ACCEPT it: the
+// caller's --verdict clean matches the wrapper's overallVerdict clean, and the
+// act dispositions merely enrich the findings; the ledger is written clean.
+test("writeGateFindingsLog accepts a clean wrapper with non-blocking judge-act findings (#2246)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-clean-act-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const judgeVerdictPath = path.join(tmpDir, "judge-verdict.json");
+    await writeFile(judgeVerdictPath, JSON.stringify({
+      headSha,
+      scopeDrift: { verdict: "within_scope", rationale: "within AC", driftedAreas: [] },
+      dispositions: [
+        { index: 0, disposition: "act", rationale: "medium in the fix window", criterion: "AC-1" },
+        { index: 1, disposition: "act", rationale: "cheap polish while here", criterion: "AC-1" },
+      ],
+    }), "utf8");
+
+    const result = await writeGateFindingsLog({
+      repo: "owner/repo",
+      pr: 2243,
+      gate: "draft_gate",
+      headSha,
+      verdict: "clean",
+      findings: JSON.stringify({
+        overallVerdict: "clean",
+        findings: [
+          { severity: "medium", angle: "correctness", summary: "worth fixing now", disposition: "accepted-for-fix" },
+          { severity: "low", angle: "docs", summary: "rename variable", disposition: "accepted-for-fix" },
+        ],
+      }),
+      judgeVerdict: judgeVerdictPath,
+      tmpRoot: tmpDir,
+    });
+
+    assert.equal(result.ok, true);
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-2243", `draft_gate-${headSha}.json`);
+    const parsed = JSON.parse(await readFile(fullPath, "utf8"));
+    assert.equal(parsed.verdict, "clean");
+    assert.equal(parsed.findings[0].judgeDisposition, "act");
+    assert.equal(parsed.findings[1].judgeDisposition, "act");
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 // The --judge-verdict path inherits applyJudgeDispositions's coverage
 // fail-closed check the same as the pure seam and runJudgePass: a verdict
 // that leaves a finding undisposed must abort the write rather than persist
