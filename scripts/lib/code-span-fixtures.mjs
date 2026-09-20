@@ -10,14 +10,19 @@
  * regex; the shared set gives the internal gate its own independent coverage
  * rather than relying on an external reviewer as the backstop.
  *
- * `treatment` is `"code"` for every form here: the marker phrase is quoted in a
- * context CommonMark renders as code, so a correct stripper removes it and it
- * can never satisfy the marker match. Unterminated fences must FAIL CLOSED —
- * everything after an unterminated fence is code, so the marker is still
- * stripped. These are the forms enumerated by the fixture set:
+ * `treatment` is `"code"` for every form here: a correct stripper removes the
+ * marker so it can never satisfy the marker match. For most forms the marker is
+ * quoted inside a context CommonMark renders as code. The between-two-spans form
+ * is the deliberate exception — its marker is bare prose, removed only by the
+ * release stripper's coarse fail-closed over-strip (first-to-last backtick on
+ * the line); `treatment: "code"` records that required over-strip, so any
+ * consumer that imports this set must be at least as fail-closed. Unterminated
+ * fences must FAIL CLOSED too — everything after an unterminated fence is code,
+ * so the marker is still stripped. These are the forms enumerated by the set:
  *   - single-backtick inline spans
  *   - multi-backtick (longer-delimiter) spans
  *   - spans whose content contains an inner backtick pair
+ *   - a marker sandwiched between two separate spans (coarse over-strip guard)
  *   - unterminated fences (fail closed)
  * plus the tilde-fence and indented-code-block forms GitHub also renders as
  * code.

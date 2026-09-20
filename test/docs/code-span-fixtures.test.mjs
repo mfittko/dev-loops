@@ -42,6 +42,10 @@ test("shared fixture set enumerates every required code-span class (#1961)", () 
 
 test("stripNonAssertionMarkdown strips the marker from every enumerated form (#1961)", () => {
   for (const { name, body } of APPROVAL_CODE_SPAN_FIXTURES) {
+    // Guard against a vacuous pass: the raw body must embed the marker BEFORE
+    // stripping, so a fixture that dropped the marker cannot silently satisfy
+    // the "stripped" assertion while covering nothing.
+    assert.ok(body.includes(APPROVAL_MARKER), `${name} fixture must embed the marker: ${JSON.stringify(body)}`);
     const stripped = stripNonAssertionMarkdown(body);
     assert.doesNotMatch(
       stripped,
@@ -55,6 +59,9 @@ test("the internal gate refuses approval for every enumerated code-span form (#1
   // This is the nested-backtick fail-open the external reviewer caught on #1954,
   // now caught by the internal gate: no fixture form may satisfy the gate.
   for (const { name, body } of APPROVAL_CODE_SPAN_FIXTURES) {
+    // Guard against a vacuous refusal: the raw body must embed the marker, so
+    // only the stripping (not an absent phrase) stands between it and approval.
+    assert.ok(body.includes(APPROVAL_MARKER), `${name} fixture must embed the marker: ${JSON.stringify(body)}`);
     const decision = resolveApprovalState({
       version: "1.0.0",
       operator: "op",
@@ -77,6 +84,7 @@ test("buildCodeSpanFixtures is reusable for an arbitrary marker phrase (#1961)",
   const fixtures = buildCodeSpanFixtures(marker);
   assert.equal(fixtures.length, APPROVAL_CODE_SPAN_FIXTURES.length);
   for (const { name, body } of fixtures) {
+    assert.ok(body.includes(marker), `${name} fixture must embed the custom marker: ${JSON.stringify(body)}`);
     assert.doesNotMatch(
       stripNonAssertionMarkdown(body),
       new RegExp(marker, "i"),
