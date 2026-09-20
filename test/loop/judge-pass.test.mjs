@@ -436,6 +436,86 @@ test("judgePassCli fails closed when a clean verdict carries an act on a blockin
   );
 });
 
+// #2246: end-to-end proof that judge-pass reads the gate's CONFIGURED
+// blockCleanOnFindingSeverities and maps the gate name to the right config key
+// (draft_gate->draft, else->preApproval). A repo that widens its block set to
+// include `medium` must fail closed on a clean verdict with a medium act — the
+// guard-level unit test covers the widened set in isolation, this covers the
+// resolveBlockingSeverities config->gateKey->guard wiring the CLI actually runs.
+test("judgePassCli reads a configured widened block set and fails a clean+medium-act round closed, per gate key (#2246)", async () => {
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  // gate key -> the .devloops config section the gateKey ternary must select.
+  for (const [gate, section] of [["draft_gate", "draft"], ["pre_approval_gate", "preApproval"]]) {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), `judge-pass-configured-block-${section}-`));
+    await writeFile(
+      path.join(tmpDir, ".devloops"),
+      `version: 1\ngates:\n  ${section}:\n    blockCleanOnFindingSeverities: [high, medium]\n`,
+    );
+    await writeFile(
+      path.join(tmpDir, "ledger.json"),
+      JSON.stringify({ overallVerdict: "clean", findings: [finding({ severity: "medium", summary: "now-blocking medium" })] }),
+    );
+    await writeFile(
+      path.join(tmpDir, "judge-verdict.json"),
+      JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", rationale: "must fix now" }] })),
+    );
+    await assert.rejects(
+      judgePassCli(
+        {
+          repo: "mfittko/dev-loops",
+          pr: "1",
+          gate,
+          headSha: HEAD,
+          findingsFile: "./ledger.json",
+          judgeVerdict: "./judge-verdict.json",
+          out: "./act.json",
+          ledgerOut: "./enriched.json",
+        },
+        { repoRoot: tmpDir },
+      ),
+      /clean verdict is invalid with .* at a blocking severity \(medium\)/,
+      `gate ${gate} must resolve gates.${section}.blockCleanOnFindingSeverities`,
+    );
+  }
+});
+
+// #2246: resolveBlockingSeverities fails CLOSED on a malformed .devloops rather
+// than silently degrading to the ["high"] default — a broken config must not
+// let a would-be-blocking act slip through as clean.
+test("judgePassCli fails closed when the gate config cannot be loaded (#2246)", async () => {
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-bad-config-"));
+  // A schema-invalid blockCleanOnFindingSeverities (unknown severity) makes
+  // loadDevLoopConfig return a non-empty errors[]; resolveBlockingSeverities
+  // must throw rather than fall back.
+  await writeFile(
+    path.join(tmpDir, ".devloops"),
+    "version: 1\ngates:\n  draft:\n    blockCleanOnFindingSeverities: [bogus-severity]\n",
+  );
+  await writeFile(
+    path.join(tmpDir, "ledger.json"),
+    JSON.stringify({ overallVerdict: "clean", findings: [finding({ severity: "low", summary: "x" })] }),
+  );
+  await writeFile(
+    path.join(tmpDir, "judge-verdict.json"),
+    JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", rationale: "y" }] })),
+  );
+  await assert.rejects(
+    judgePassCli(
+      {
+        repo: "mfittko/dev-loops",
+        pr: "1",
+        gate: "draft_gate",
+        headSha: HEAD,
+        findingsFile: "./ledger.json",
+        judgeVerdict: "./judge-verdict.json",
+      },
+      { repoRoot: tmpDir },
+    ),
+    /could not be fully loaded\/validated/,
+  );
+});
+
 // FIX D (#2156): the clean+act invariant must fail BEFORE any durable side
 // effect — neither the approvals record nor a follow-up GitHub issue may be
 // written/created for a round that is about to be rejected. Combines a clean
