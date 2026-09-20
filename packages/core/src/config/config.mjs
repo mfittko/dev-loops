@@ -249,7 +249,7 @@ const GateConfig = z.strictObject({
   // shadow a layer that sets only this key. resolveGateConfig applies the
   // built-in fallback ("medium") when the key is absent on the resolved gate.
   inlineSeverityFloor: z.enum(["high", "medium", "low", "nit"]).optional().describe(
-    "Lowest finding severity still posted as an inline resolvable review thread. Findings BELOW this floor are folded into a collapsed <details> block in the verdict-marker body instead of posting inline (they create no gate-authored thread). Default \"medium\": high/medium post inline, low/nit fold. Lower it (e.g. \"low\" or \"nit\") to restore inline posting of lower severities."
+    "Lowest defect severity still posted as an inline resolvable review thread. Findings BELOW this floor are folded into a collapsed <details> block in the verdict-marker body instead of posting inline (they create no gate-authored thread). Default \"medium\": high/question/medium post inline, low/nit fold. A \"question\" always posts inline regardless of this floor (it must keep its resolvable thread to block gate-close until answered). Lower it (e.g. \"low\" or \"nit\") to restore inline posting of lower severities."
   ),
   // Ordered, first-match-wins diff-class angle tiers (see resolveGateTier).
   // Absent/empty = tiers never apply.

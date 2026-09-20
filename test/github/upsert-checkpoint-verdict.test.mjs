@@ -6778,6 +6778,56 @@ test("upsert-checkpoint-verdict --findings-ledger: lowering inlineSeverityFloor 
   }, { prefix: "dev-loops-upsert-fold-lowered-floor-" });
 });
 
+// #2295 Copilot review fix 1: a "question" must never fold, even at floor
+// "high" (where it would otherwise rank below SEVERITY_ORDER's floor index).
+// A locatable question stays inline (its own resolvable thread); a locatable
+// low at the same raised floor folds, exactly as the default-floor test above
+// already exercises for low/nit.
+const LOCATABLE_QUESTION_FINDING = { severity: "question", angle: "scope", summary: "why parameterize here instead of an ORM?", files: ["src/db.mjs"], line: 2 };
+
+test("upsert-checkpoint-verdict --findings-ledger: raising inlineSeverityFloor to \"high\" still posts a locatable question inline; a low still folds", async () => {
+  await withTempDir(async (tempDir) => {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n  draft:\n    inlineSeverityFloor: high\n", "utf8");
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [LOCATABLE_QUESTION_FINDING, LOCATABLE_LOW_FINDING]);
+    const entries = [
+      ...singleSurfaceLeadingEntries(),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":714,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-714"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsSummary: "2 findings",
+      findingsLedger: ledgerPath,
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+
+    assert.equal(result.action, "created");
+    assert.equal(result.inlineComments, 1);
+    assert.equal(result.bodyFiled, 0);
+    assert.equal(result.folded, 1);
+
+    const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    const posted = JSON.parse(postCall.stdinText);
+    // The question is the ONLY inline comment — it never folds even though
+    // the floor was raised to "high".
+    assert.equal(posted.comments.length, 1);
+    assert.match(JSON.stringify(posted.comments), /why parameterize here instead of an ORM\?/);
+    // The low finding folds into the collapsed <details> block instead.
+    assert.doesNotMatch(JSON.stringify(posted.comments), /inconsistent casing of a local constant/);
+    assert.match(posted.body, /<summary>Suppressed low\/nit findings \(1\) — below the inline severity floor<\/summary>/);
+    assert.match(posted.body, /inconsistent casing of a local constant/);
+  }, { prefix: "dev-loops-upsert-fold-question-high-floor-" });
+});
+
 // AC6: routing (fold vs inline vs body-filed) must never touch the verdict
 // itself — blockCleanOnFindingSeverities semantics are computed upstream from
 // the ledger, and a folded low still renders exactly the non-clean verdict

@@ -121,8 +121,18 @@ export function isFileableDeferral(severity, operatorVisible, round, mediumFixWi
 // in SEVERITY_ORDER. An unknown severity or floor returns false (post inline):
 // inline is the fail-safe surface — it creates a resolvable thread that blocks
 // gate-close, never silently hidden.
+//
+// A `question` NEVER folds, at any floor: unlike a defect severity, a question
+// is answered (never deferred) and an unanswered question blocks gate-close
+// exactly like an open defect via its resolvable thread (GATE-EXEC-THREAD-DISPOSITION).
+// Folding it would drop that thread and let an unanswered question slip past
+// ready-for-review. `question` sorts ABOVE `medium` in SEVERITY_ORDER, so the
+// default floor already keeps it inline; this guard also holds when the floor
+// is raised to `"high"` (where question would otherwise rank below the floor).
 export function isBelowInlineFloor(severity, floor) {
-  const si = SEVERITY_ORDER.indexOf(normalizeSeverity(severity));
+  const sev = normalizeSeverity(severity);
+  if (sev === "question") return false;
+  const si = SEVERITY_ORDER.indexOf(sev);
   const fi = SEVERITY_ORDER.indexOf(normalizeSeverity(floor));
   if (si === -1 || fi === -1) return false;
   return si > fi;
@@ -352,11 +362,16 @@ export async function ensureFollowUpIssue(
   return { issueNumber: result.issueNumber, created: true };
 }
 
-// A fingerprint entry on the follow-up issue always renders as
-// `- \`<16hex>\`` (formatDeferredFindingEntry) — a bare backtick-wrapped
-// 16-hex token, distinct from the full `dev-loops:finding` marker shape (which
-// never appears on an issue body/comment, only on gate review bodies/threads).
-const ISSUE_FINGERPRINT_RE = /`([0-9a-f]{16})`/g;
+// A filed fingerprint always renders as the LEADING token of a list bullet —
+// `- \`<16hex>\` **<severity>** ...` (formatDeferredFindingEntry). Anchor to
+// that exact line-start bullet shape (multiline `m`), never a bare
+// backtick-wrapped 16-hex anywhere in the prose: a commit short-hash or an
+// unrelated code span that happened to be exactly 16 lowercase-hex chars would
+// otherwise be misread as an already-filed fingerprint and silently skip a
+// genuinely-fileable folded finding (a fail-toward-under-filing bug). Tightening
+// the match can at worst re-file a duplicate (harmless dup entry), never drop a
+// filing.
+const ISSUE_FINGERPRINT_RE = /^- `([0-9a-f]{16})`/gm;
 
 function collectIssueFingerprints(text, set) {
   if (typeof text !== "string") return;
