@@ -15,7 +15,7 @@ const HEAD = "3f8a1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c";
 const OLD = "0000000000000000000000000000000000000000";
 
 const COPILOT = "copilot-pull-request-reviewer";
-const copilotReview = ({ commit = HEAD, body }) => ({ login: COPILOT, state: "COMMENTED", commit_id: commit, body });
+const copilotReview = ({ commit = HEAD, body, state = "COMMENTED", submittedAt = "2024-01-10T00:00:00Z" }) => ({ login: COPILOT, state, commit_id: commit, body, submitted_at: submittedAt });
 
 test("isValidGithubLogin rejects boolean, empty, free text; accepts real logins", () => {
   assert.equal(isValidGithubLogin("mfittko"), true);
@@ -329,12 +329,46 @@ test("evaluateCopilotConvergence: a later same-head 🟢 supersedes an earlier s
   const res = evaluateCopilotConvergence({
     currentHeadSha: HEAD,
     reviews: [
-      copilotReview({ body: "### 🟡 Changes recommended\n\nearlier finding." }),
-      copilotReview({ body: "### 🟢 Approval recommended\n\nnow clean." }),
+      copilotReview({ body: "### 🟡 Changes recommended\n\nearlier finding.", submittedAt: "2024-01-10T00:00:00Z" }),
+      copilotReview({ body: "### 🟢 Approval recommended\n\nnow clean.", submittedAt: "2024-01-10T01:00:00Z" }),
     ],
   });
   assert.equal(res.ok, true, JSON.stringify(res));
   assert.equal(res.disposition, "clean");
+});
+
+test("evaluateCopilotConvergence: an equal-timestamp same-head tie folds toward the blocking 🟡 (fail-closed, order-independent)", () => {
+  const tie = "2024-01-10T00:00:00Z";
+  // Both array orders must block: selection must not depend on array order.
+  for (const reviews of [
+    [copilotReview({ body: "### 🟡 Changes recommended\n\nx", submittedAt: tie }), copilotReview({ body: "### 🟢 Approval recommended", submittedAt: tie })],
+    [copilotReview({ body: "### 🟢 Approval recommended", submittedAt: tie }), copilotReview({ body: "### 🟡 Changes recommended\n\nx", submittedAt: tie })],
+  ]) {
+    const res = evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews });
+    assert.equal(res.ok, false, JSON.stringify(res));
+    assert.equal(res.disposition, "changes_recommended");
+  }
+});
+
+test("evaluateCopilotConvergence: a trailing PENDING draft never clears a submitted current-head 🟡", () => {
+  const res = evaluateCopilotConvergence({
+    currentHeadSha: HEAD,
+    reviews: [
+      copilotReview({ body: "### 🟡 Changes recommended\n\nx", submittedAt: "2024-01-10T00:00:00Z" }),
+      copilotReview({ body: "", state: "PENDING", submittedAt: null }),
+    ],
+  });
+  assert.equal(res.ok, false, JSON.stringify(res));
+  assert.equal(res.disposition, "changes_recommended");
+});
+
+test("evaluateCopilotConvergence: a present current-head headerless review classifies NONE and passes", () => {
+  const res = evaluateCopilotConvergence({
+    currentHeadSha: HEAD,
+    reviews: [copilotReview({ body: "" })],
+  });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.disposition, "none");
 });
 
 test("evaluateCopilotConvergence: an unrecognized current-head disposition fails closed", () => {

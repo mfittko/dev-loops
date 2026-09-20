@@ -20,7 +20,7 @@
  * precondition, and the aggregate naming.
  */
 
-import { isCopilotLogin, classifyCopilotReviewBodyDisposition, COPILOT_DISPOSITION } from "../github/copilot-helpers.mjs";
+import { isCopilotLogin, classifyCopilotReviewBodyDisposition, COPILOT_DISPOSITION, SUBMITTED_REVIEW_STATES, normalizeTimestamp } from "../github/copilot-helpers.mjs";
 import { findBlockingTitleMarkers } from "./pr-title-markers.mjs";
 import { resolveSizeBudgetHumanApprovalRequired } from "./size-budget-merge-gate.mjs";
 import { deriveLoopCiStatusFromRollup } from "./copilot-ci-status.mjs";
@@ -186,32 +186,63 @@ export function evaluateCopilotConvergence({ currentHeadSha = null, reviews = []
   // known head to pin the Copilot disposition to.
   if (head.length === 0) return { ok: false, disposition: null, reason: "current head SHA is unknown; cannot pin a Copilot review to it" };
 
-  // reviews arrive oldest-first, so the last current-head Copilot review wins
-  // (matches the latest-review-by-login reduction in verifyFreshHumanApproval
-  // and the loop's summarizeCopilotReviews).
-  // ponytail: a trailing headerless/PENDING same-head Copilot review classifies
-  // NONE and so supersedes an earlier same-head 🟡 — an accepted shared ceiling
-  // that mirrors summarizeCopilotReviews exactly. Making selection here stricter
-  // would diverge the merge gate from the loop (breaking the shared no-drift
-  // guarantee); Copilot emits a disposition header on every ccr-overview-v2 review.
-  let latest = null;
+  // Mirror summarizeCopilotReviews' current-head finding selection so the merge
+  // gate and the loop can never diverge at the SELECTION layer (they already
+  // share classifyCopilotReviewBodyDisposition at the DETECTION layer): consider
+  // only SUBMITTED current-head Copilot reviews, skip PENDING drafts (a PENDING
+  // never resets the finding), pick the latest by submittedAt, and on an
+  // equal-timestamp tie (or when both timestamps are unknown) fold toward the
+  // most-blocking disposition rather than letting array order silently drop it.
+  let latestDisposition = null;
+  let latestAt = null;
   for (const entry of Array.isArray(reviews) ? reviews : []) {
     const login = reviewLogin(entry);
     if (login === null || !isCopilotLogin(login)) continue;
     if (reviewCommit(entry) !== head) continue; // only current-head reviews
-    latest = entry;
+    const state = typeof entry?.state === "string" ? entry.state.toUpperCase() : "";
+    if (state === "PENDING" || !SUBMITTED_REVIEW_STATES.has(state)) continue; // PENDING/unknown never sets the finding
+    const disposition = classifyCopilotReviewBodyDisposition(state, entry?.body);
+    const at = normalizeTimestamp(entry?.submittedAt ?? entry?.submitted_at);
+    if (latestDisposition === null) {
+      latestDisposition = disposition;
+      latestAt = at;
+    } else if (at !== null && (latestAt === null || at > latestAt)) {
+      latestDisposition = disposition; // a strictly-later timestamped review supersedes
+      latestAt = at;
+    } else if ((at !== null && at === latestAt) || (at === null && latestAt === null)) {
+      latestDisposition = moreBlockingDisposition(latestDisposition, disposition); // tie/unknown: fail toward surfacing
+    }
+    // a null-timestamp review once a non-null latest exists is ignored (mirrors summarize)
   }
-  if (latest === null) return { ok: true, disposition: null, reason: null };
+  if (latestDisposition === null) return { ok: true, disposition: null, reason: null };
 
-  const disposition = classifyCopilotReviewBodyDisposition(latest.state, latest.body);
-  if (disposition === COPILOT_DISPOSITION.CHANGES_RECOMMENDED) {
-    return { ok: false, disposition, reason: `current-head Copilot review is "Changes recommended" (🟡, actionable non-approval); converge to "Approval recommended" (🟢) or resolve the feedback before merge` };
+  if (latestDisposition === COPILOT_DISPOSITION.CHANGES_RECOMMENDED) {
+    return { ok: false, disposition: latestDisposition, reason: `current-head Copilot review is "Changes recommended" (🟡, actionable non-approval); converge to "Approval recommended" (🟢) or resolve the feedback before merge` };
   }
-  if (disposition === COPILOT_DISPOSITION.UNRECOGNIZED) {
-    return { ok: false, disposition, reason: `current-head Copilot review carries an unrecognized disposition header (fail closed); a recognized "Approval recommended" (🟢) is required` };
+  if (latestDisposition === COPILOT_DISPOSITION.UNRECOGNIZED) {
+    return { ok: false, disposition: latestDisposition, reason: `current-head Copilot review carries an unrecognized disposition header (fail closed); a recognized "Approval recommended" (🟢) is required` };
   }
   // CLEAN, NONE, and NEEDS_CLOSER_LOOK (🔵, conductor-overridable) pass.
-  return { ok: true, disposition, reason: null };
+  return { ok: true, disposition: latestDisposition, reason: null };
+}
+
+// Disposition blocking precedence, most-blocking first. Used to fold an
+// equal-timestamp same-head tie toward the most-blocking disposition so a tied
+// 🟡/unrecognized is never silently dropped by a co-timestamped 🟢/🔵.
+const COPILOT_DISPOSITION_BLOCKING_ORDER = [
+  COPILOT_DISPOSITION.CHANGES_RECOMMENDED,
+  COPILOT_DISPOSITION.UNRECOGNIZED,
+  COPILOT_DISPOSITION.NEEDS_CLOSER_LOOK,
+  COPILOT_DISPOSITION.CLEAN,
+  COPILOT_DISPOSITION.NONE,
+];
+function moreBlockingDisposition(a, b) {
+  const ia = COPILOT_DISPOSITION_BLOCKING_ORDER.indexOf(a);
+  const ib = COPILOT_DISPOSITION_BLOCKING_ORDER.indexOf(b);
+  // A value absent from the order (defensive) sorts last.
+  const ra = ia === -1 ? COPILOT_DISPOSITION_BLOCKING_ORDER.length : ia;
+  const rb = ib === -1 ? COPILOT_DISPOSITION_BLOCKING_ORDER.length : ib;
+  return ra <= rb ? a : b;
 }
 
 /**

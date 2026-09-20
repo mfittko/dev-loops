@@ -199,7 +199,7 @@ export async function mergePr(options, runtime = {}) {
   const rawReviews = flattenPaginatedSlurp(await ghJson(
     ["api", "--paginate", "--slurp", `repos/${options.repo}/pulls/${options.pr}/reviews?per_page=100`],
     { env, ghCommand, runChild },
-  )).map((r) => ({ login: r?.user?.login ?? null, state: r?.state ?? null, commit_id: r?.commit_id ?? null, type: r?.user?.type ?? null, body: r?.body ?? "" }));
+  )).map((r) => ({ login: r?.user?.login ?? null, state: r?.state ?? null, commit_id: r?.commit_id ?? null, type: r?.user?.type ?? null, body: r?.body ?? "", submitted_at: r?.submitted_at ?? null }));
   const comments = flattenPaginatedSlurp(await ghJson(
     ["api", "--paginate", "--slurp", `repos/${options.repo}/issues/${options.pr}/comments?per_page=100`],
     { env, ghCommand, runChild },
