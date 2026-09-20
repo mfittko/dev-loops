@@ -1490,7 +1490,9 @@ replied to and resolved by `close-gate-findings.mjs` itself, which stamps
 resolved. A low finding is a fixer TRIAGE target, not a silent auto-defer (#1585): the
 fixer receives it as a fix/triage target alongside high and medium, and may
 fix-if-cheap-in-the-same-commit (free polish when already touching that code) or defer. Defer is
-permitted from round 1 on for low findings — no forced fix window. A low finding the fixer
+permitted from round 1 on for low findings — no forced fix window — except a low the judge
+disposed `act`, which is a fix target declinable only on reproduction grounds
+(`GATE-EXEC-JUDGE-AUTHORITY-SPLIT`), never re-deferred on its severity label. A low finding the fixer
 defers is still reply+resolved via an explicit fixer triage decision by the disposition pass
 (`close-gate-findings.mjs`), which runs AFTER the fixer triage — not a silent post-hoc pass that
 can skip threads. Whether that reply+resolve ALSO stamps `disposition=deferred` and files the

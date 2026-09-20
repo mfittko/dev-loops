@@ -55,12 +55,21 @@ test("the Phase 3.5 judge contract states no severity auto-defer and adjudicates
   assert.doesNotMatch(body, OLD_AUTODEFER_RE, "Phase 3.5 must NOT re-introduce the severity-based auto-defer sentence for lows");
 });
 
-test("the severity-axis fixer-triage rule exempts a judge-acted low from the round-1 defer allowance (no downstream re-defer)", async () => {
+test("EVERY round-1 low-defer allowance in the sub-loop contract exempts a judge-acted low (no downstream re-defer)", async () => {
   // Without this, the judge acts a real low but the fixer may still triage-defer
-  // it on cheapness — moving the severity-label defer one stage downstream.
+  // it on cheapness at any un-exempted allowance site — moving the severity-label
+  // defer one stage downstream. The invariant is robust to how many times the
+  // allowance is restated: every "permitted from round 1 ... for low" statement
+  // must be matched by a judge-acted-low exception, so adding a 4th allowance
+  // site without its exception fails closed here.
   const text = await read("skills/docs/gate-review-sub-loop-contract.md");
-  const matches = text.match(/low the (?:JUDGE|judge)[\s\S]{0,80}disposed `act`[\s\S]{0,160}reproduction grounds/g) ?? [];
-  assert.ok(matches.length >= 2, `both "Defer is permitted from round 1 for lows" sites must exempt a judge-acted low as a reproduction-only-declinable fix target (found ${matches.length})`);
+  const allowances = text.match(/permitted from round 1 on for\s+low findings/g) ?? [];
+  const exceptions = text.match(/low the (?:JUDGE|judge)[\s\S]{0,80}disposed `act`[\s\S]{0,160}reproduction grounds/g) ?? [];
+  assert.ok(allowances.length >= 3, `expected the three known round-1 low-defer allowance restatements (found ${allowances.length})`);
+  assert.ok(
+    exceptions.length >= allowances.length,
+    `every round-1 low-defer allowance must carry the judge-acted-low exception: ${allowances.length} allowance(s) but only ${exceptions.length} exception(s)`,
+  );
 });
 
 test("the operational fixer instructions exempt a judge-acted low from the round-1 defer allowance", async () => {
