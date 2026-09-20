@@ -1,6 +1,6 @@
 import { describe, it, test } from "bun:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -210,6 +210,46 @@ describe("validateChangelogCompleteness", () => {
     assert.equal(result.errors.length, 1);
   });
 
+  it("passes a notable PR that ships ONLY a changeset fragment, with no Unreleased edit (issue #2293)", () => {
+    const result = validateChangelogCompleteness({
+      baseChangelog: BASE_CHANGELOG,
+      headChangelog: BASE_CHANGELOG, // no CHANGELOG.md edit at all
+      commitSubjects: ["feat(release): add changeset fragments"],
+      files: ["packages/core/src/x.mjs", "changes/2293-changeset-fragments.md"],
+      addedFiles: ["changes/2293-changeset-fragments.md"],
+    });
+    assert.equal(result.notable, true);
+    assert.equal(result.addedFragment, true);
+    assert.deepEqual(result.errors, []);
+  });
+
+  it("does NOT accept a modified/deleted existing fragment as satisfying the gate (only ADDED counts)", () => {
+    // The fragment path is in the diff (files) but not in addedFiles — it was
+    // modified or deleted, not newly added. The contract requires a NEW fragment.
+    const result = validateChangelogCompleteness({
+      baseChangelog: BASE_CHANGELOG,
+      headChangelog: BASE_CHANGELOG,
+      commitSubjects: ["feat: x"],
+      files: ["packages/core/src/x.mjs", "changes/old-fragment.md"],
+      addedFiles: ["packages/core/src/x.mjs"],
+    });
+    assert.equal(result.addedFragment, false);
+    assert.equal(result.errors.length, 1);
+    assert.match(result.errors[0], /changeset fragment/);
+  });
+
+  it("does not accept changes/README.md as a fragment (fails closed with no fragment and no Unreleased item)", () => {
+    const result = validateChangelogCompleteness({
+      baseChangelog: BASE_CHANGELOG,
+      headChangelog: BASE_CHANGELOG,
+      commitSubjects: ["feat: x"],
+      files: ["packages/core/src/x.mjs", "changes/README.md"],
+    });
+    assert.equal(result.addedFragment, false);
+    assert.equal(result.errors.length, 1);
+    assert.match(result.errors[0], /changeset fragment/);
+  });
+
   it("counts an item absent from the base section as added (endpoint-based, not churn-based)", () => {
     // Assertion is endpoint-based: the check compares base vs. head Unreleased
     // sections only — it never inspects intermediate churn (an item re-added
@@ -248,6 +288,9 @@ function makeFakeGit({ symbolicRef, mergeBase } = {}, rest = {}) {
     },
     async diffNameOnly() {
       return ["README.md"]; // non-code default; notable tests override this
+    },
+    async diffAddedFiles() {
+      return ["README.md"]; // added-only default; fragment tests override this
     },
     async pathExistsIn() {
       return true;
@@ -291,6 +334,67 @@ describe("main()", () => {
     assert.match(log.lines[0], /base ref unavailable/);
   });
 
+  it("accepts an ADDED non-empty fragment but not a modified or empty one", async () => {
+    // Added + non-empty: passes.
+    await withTempChangelog(async (root) => {
+      const dir = path.join(root, "changes");
+      await mkdir(dir, { recursive: true });
+      await writeFile(path.join(dir, "new.md"), "- A real note.\n", "utf8");
+      const added = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" }, {
+        logSubjects: async () => ["feat: x"],
+        diffNameOnly: async () => ["packages/core/src/x.mjs", "changes/new.md"],
+        diffAddedFiles: async () => ["packages/core/src/x.mjs", "changes/new.md"],
+      });
+      assert.equal(await main({ root, git: added, env: {}, log: capturingLog() }), 0);
+    });
+    // Fragment path only modified (not in addedFiles): fails.
+    await withTempChangelog(async (root) => {
+      const modified = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" }, {
+        logSubjects: async () => ["feat: x"],
+        diffNameOnly: async () => ["packages/core/src/x.mjs", "changes/old.md"],
+        diffAddedFiles: async () => ["packages/core/src/x.mjs"],
+      });
+      assert.equal(await main({ root, git: modified, env: {}, log: capturingLog() }), 1);
+    });
+    // Added but EMPTY fragment: rejected (path present, no note).
+    await withTempChangelog(async (root) => {
+      const dir = path.join(root, "changes");
+      await mkdir(dir, { recursive: true });
+      await writeFile(path.join(dir, "blank.md"), "   \n", "utf8");
+      const empty = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" }, {
+        logSubjects: async () => ["feat: x"],
+        diffNameOnly: async () => ["packages/core/src/x.mjs", "changes/blank.md"],
+        diffAddedFiles: async () => ["packages/core/src/x.mjs", "changes/blank.md"],
+      });
+      assert.equal(await main({ root, git: empty, env: {}, log: capturingLog() }), 1);
+    });
+    // Added SYMLINK fragment: rejected (never followed — security policy).
+    await withTempChangelog(async (root) => {
+      const dir = path.join(root, "changes");
+      await mkdir(dir, { recursive: true });
+      await writeFile(path.join(root, "secret.md"), "- Host data.\n", "utf8");
+      await symlink(path.join(root, "secret.md"), path.join(dir, "linked.md"));
+      const linked = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" }, {
+        logSubjects: async () => ["feat: x"],
+        diffNameOnly: async () => ["packages/core/src/x.mjs", "changes/linked.md"],
+        diffAddedFiles: async () => ["packages/core/src/x.mjs", "changes/linked.md"],
+      });
+      assert.equal(await main({ root, git: linked, env: {}, log: capturingLog() }), 1);
+    });
+    // Added fragment with a level-2 "## " heading: rejected (would truncate section).
+    await withTempChangelog(async (root) => {
+      const dir = path.join(root, "changes");
+      await mkdir(dir, { recursive: true });
+      await writeFile(path.join(dir, "bad.md"), "- a note\n\n## Details\n\n- dropped\n", "utf8");
+      const bad = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" }, {
+        logSubjects: async () => ["feat: x"],
+        diffNameOnly: async () => ["packages/core/src/x.mjs", "changes/bad.md"],
+        diffAddedFiles: async () => ["packages/core/src/x.mjs", "changes/bad.md"],
+      });
+      assert.equal(await main({ root, git: bad, env: {}, log: capturingLog() }), 1);
+    });
+  });
+
   it("exits 1 when a notable change adds no Unreleased item, 0 otherwise", async () => {
     await withTempChangelog(async (root) => {
       const failing = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" }, {
@@ -327,4 +431,24 @@ test("diffNameOnly parses NUL-delimited names (one path per classifyFile() entry
   assert.deepEqual(out, ["packages/core/src/a.mjs", "packages/core/src/b.mjs"]);
   const diffCall = calls.find((a) => a.includes("--name-only"));
   assert.ok(diffCall.includes("-z"), "--name-only must use -z so newline-quoted paths cannot hide a code suffix");
+});
+
+test("diffAddedFiles invokes --diff-filter=A --name-only -z and parses NUL-delimited added paths", async () => {
+  // The added-only enforcement seam: a regression in these flags or the NUL
+  // parsing would leave the gate accepting modified/deleted fragments while
+  // fake-git unit tests stay green. Assert the real createGitClient invocation.
+  const calls = [];
+  const exec = async (_cmd, args) => {
+    calls.push(args);
+    return { stdout: "changes/new.md\0packages/core/src/a.mjs\0" };
+  };
+  const git = createGitClient("/tmp", exec);
+  const out = await git.diffAddedFiles("base-sha", "HEAD", { nulDelimited: true });
+  assert.deepEqual(out, ["changes/new.md", "packages/core/src/a.mjs"]);
+  const call = calls.find((a) => a.includes("--name-only"));
+  assert.ok(call.includes("--diff-filter=A"), "must restrict to ADDED paths");
+  assert.ok(call.includes("-z"), "must be NUL-delimited");
+  assert.ok(call.includes("--find-renames"), "rename detection ON so a git-mv fragment is R (excluded), not A");
+  assert.ok(!call.includes("--no-renames"), "must NOT disable rename detection on the added-only query");
+  assert.deepEqual(call.slice(-2), ["base-sha", "HEAD"], "diffs base...HEAD in order");
 });

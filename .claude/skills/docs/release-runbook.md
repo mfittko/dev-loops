@@ -22,19 +22,24 @@ Everything after the tag is hands-off.
    (`^<version>`), `bun.lock` (`bun install --lockfile-only`, proven with
    `bun install --frozen-lockfile`), the generated `.claude` tree (the
    plugin manifest `version` plus every pinned `npx dev-loops@<version>`
-   call-site, via `generate-claude-assets.mjs`), and `CHANGELOG.md` (the
-   `## Unreleased` heading is stamped to `## <version>`, leaving its entries
-   intact, so `extract-changelog-section.mjs` finds the release section). It
+   call-site, via `generate-claude-assets.mjs`), and `CHANGELOG.md` (pending
+   changeset fragments under `changes/` are first assembled into
+   `## Unreleased` and the consumed fragment files removed, via
+   `assemble-changelog-fragments.mjs`; the `## Unreleased` heading is then
+   stamped to `## <version>`, leaving its entries intact, so
+   `extract-changelog-section.mjs` finds the release section). It
    then runs the drift guards
    (`assert-core-dependency-version.mjs` and `generate-claude-assets.mjs
    --check`), fails closed on any residual drift, and stages exactly those
    release files (never `git add -A`). It is idempotent and bump-only — it
    never commits, tags, pushes, or publishes.
 
-   Land the release changes under `## Unreleased` in `CHANGELOG.md` **before**
-   bumping — the bump stamps that heading to `## <version>` and fails closed if
-   there is no Unreleased content to stamp, so an undocumented release cannot
-   proceed. `release.yml`'s lockstep guard
+   Each merged PR records its note as a `changes/<slug>.md` fragment (see
+   `changes/README.md`), so by release time the pending notes are the fragment
+   files plus anything already under `## Unreleased`. The bump assembles the
+   fragments into `## Unreleased`, then stamps that heading to `## <version>`
+   and fails closed if there is still no Unreleased content to stamp, so an
+   undocumented release cannot proceed. `release.yml`'s lockstep guard
    (`scripts/release/assert-core-dependency-version.mjs`) also fails the release
    workflow before the GitHub Release is created if the lockfile is out of
    lockstep. Committing and pushing this release

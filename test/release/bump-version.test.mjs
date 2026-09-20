@@ -17,7 +17,7 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -194,6 +194,98 @@ test("bumpVersion drives surfaces → guards → staging in order and stages onl
     const again = bumpVersion({ repoRoot: dir, version: PRERELEASE, run: rerun.run });
     assert.ok(again.ok && again.surfaces.every((s) => s.ok), "same-target re-run must be a clean no-op");
     assert.deepEqual(again.staged, result.staged);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("bumpVersion assembles pending changeset fragments into the release section, removes them, and stages their deletion (#2293)", () => {
+  const dir = makeFixture("1.0.0-pre.0");
+  try {
+    mkdirSync(path.join(dir, "changes"));
+    writeFileSync(path.join(dir, "changes", "README.md"), "fragments live here\n");
+    writeFileSync(path.join(dir, "changes", "b-second.md"), "- Second fragment change.\n");
+    writeFileSync(path.join(dir, "changes", "a-first.md"), "- First fragment change.\n");
+
+    const { run, calls } = makeRegenRunner(dir, PRERELEASE);
+    const result = bumpVersion({ repoRoot: dir, version: PRERELEASE, run });
+    assert.ok(result.ok);
+
+    // Both fragments (and the pre-existing Unreleased entry) land in the stamped section.
+    const changelog = readFileSync(path.join(dir, "CHANGELOG.md"), "utf8");
+    const section = extractChangelogSection(changelog, PRERELEASE);
+    assert.match(section, /documented change awaiting release/);
+    assert.match(section, /First fragment change/);
+    assert.match(section, /Second fragment change/);
+
+    // Consumed fragments are removed; README (not a fragment) survives.
+    assert.equal(existsSync(path.join(dir, "changes", "a-first.md")), false);
+    assert.equal(existsSync(path.join(dir, "changes", "b-second.md")), false);
+    assert.equal(existsSync(path.join(dir, "changes", "README.md")), true);
+
+    // The deletions are staged via the enumerated `git add --` pathspec.
+    const stageCall = calls.find((c) => c.startsWith("git add"));
+    assert.ok(stageCall.includes(path.join(dir, "changes", "a-first.md")), stageCall);
+    assert.ok(stageCall.includes(path.join(dir, "changes", "b-second.md")), stageCall);
+    assert.ok(!stageCall.includes(path.join(dir, "changes", "README.md")), "README must not be staged as consumed");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("bumpVersion fails closed on an already-stamped tree with pending fragments (no duplicate heading)", () => {
+  const dir = makeFixture("1.0.0-pre.0");
+  try {
+    // Simulate a prior bump that already stamped the target version (no
+    // ## Unreleased, a populated ## <version> section), then a new fragment.
+    writeFileSync(
+      path.join(dir, "CHANGELOG.md"),
+      `# Changelog\n\n## ${PRERELEASE}\n\n- Already released.\n\n## 1.0.0-pre.0 - 2026-01-01\n\n- Prior.\n`,
+    );
+    mkdirSync(path.join(dir, "changes"));
+    writeFileSync(path.join(dir, "changes", "late.md"), "- A note added after the stamp.\n");
+    assert.throws(
+      () => bumpVersion({ repoRoot: dir, version: PRERELEASE, stage: false, run: () => {} }),
+      /already has a "## .*" section/,
+    );
+    // Failing closed before any mutation: the late fragment is untouched.
+    assert.equal(existsSync(path.join(dir, "changes", "late.md")), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("bumpVersion fails closed when both a live Unreleased and an existing target section are present (partial-bump duplicate guard)", () => {
+  const dir = makeFixture("1.0.0-pre.0");
+  try {
+    // A partial bump left a populated ## Unreleased AND an existing ## <version>
+    // section. Stamping would rename Unreleased to a duplicate ## <version>.
+    writeFileSync(
+      path.join(dir, "CHANGELOG.md"),
+      `# Changelog\n\n## Unreleased\n\n- New note.\n\n## ${PRERELEASE}\n\n- Already released.\n\n## 1.0.0-pre.0 - 2026-01-01\n\n- Prior.\n`,
+    );
+    assert.throws(
+      () => bumpVersion({ repoRoot: dir, version: PRERELEASE, stage: false, run: () => {} }),
+      /already has a "## .*" section/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("bumpVersion fails closed on an existing but EMPTY target heading with pending notes (presence, not content)", () => {
+  const dir = makeFixture("1.0.0-pre.0");
+  try {
+    // An existing but content-less "## <version>" heading plus a live Unreleased:
+    // detected by heading presence, so stamping cannot silently duplicate it.
+    writeFileSync(
+      path.join(dir, "CHANGELOG.md"),
+      `# Changelog\n\n## Unreleased\n\n- New note.\n\n## ${PRERELEASE}\n\n## 1.0.0-pre.0 - 2026-01-01\n\n- Prior.\n`,
+    );
+    assert.throws(
+      () => bumpVersion({ repoRoot: dir, version: PRERELEASE, stage: false, run: () => {} }),
+      /already has a "## .*" section/,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
