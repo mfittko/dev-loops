@@ -734,6 +734,31 @@ test("CLI persists a fail-closed full-fallback plan marker on an ineligible prio
   }
 });
 
+test("CLI leaves NO marker on a prior-log INTEGRITY failure (corrupt ledger is not an eligibility refusal) (issue #2251)", async () => {
+  // A findings_present verdict with an empty findings array is an inconsistent/
+  // corrupt ledger, NOT a carry-forward eligibility decision. It must be treated
+  // like an operational failure: no fallback marker, so the emitter fails closed
+  // rather than dispatching off an untrustworthy ledger.
+  const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
+    mandatoryAngles: [],
+    perAngle: [{ angle: "correctness", reviewer: "review-a" }],
+    verdict: "findings_present",
+    findings: [],
+    mutate: async (root) => { await writeFile(path.join(root, "docs/guide.md"), "# Guide\n\nmore.\n", "utf8"); },
+  });
+  try {
+    const { exitCode, stderr } = await runMainRaw([
+      "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
+    ], { repoRoot });
+    assert.equal(exitCode, 1);
+    assert.match(stderr, /findings_present/);
+    const planPath = path.join(repoRoot, buildCarryForwardPlanPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha, tmpRoot: "tmp" }));
+    await assert.rejects(() => readFile(planPath, "utf8"), "integrity failure must leave no marker");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("CLI carries a findings-present code angle forward on a narrow doc-only delta, keeping its open finding (issue #2251 AC4)", async () => {
   const finding = { angle: "correctness", severity: "high", summary: "open defect", recommendation: "fix" };
   const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({

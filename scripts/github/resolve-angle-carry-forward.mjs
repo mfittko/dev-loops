@@ -201,7 +201,17 @@ export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [], del
     throw new Error("prior gate findings-log not found or unreadable — cannot carry forward (fail-closed)");
   }
   if (log.verdict !== "clean" && log.verdict !== "findings_present") {
-    throw new Error(`prior gate findings-log verdict is ${JSON.stringify(log.verdict ?? null)}, not carry-forward-eligible (clean or findings_present) — nothing to carry forward (fail-closed)`);
+    // This is the ONE genuine carry-forward ELIGIBILITY refusal: a readable,
+    // well-formed prior log whose verdict simply is not carry-eligible. Its
+    // contract outcome is a safe full re-dispatch, so the CLI records a fallback
+    // marker for it. Every OTHER throw below is a log INTEGRITY failure (corrupt/
+    // truncated/inconsistent ledger), which is not a carry-forward decision — the
+    // CLI leaves NO marker for those, so the emitter fails closed on the re-gate
+    // exactly as it does for an operational failure, rather than silently
+    // dispatching off an untrustworthy ledger.
+    const refusal = new Error(`prior gate findings-log verdict is ${JSON.stringify(log.verdict ?? null)}, not carry-forward-eligible (clean or findings_present) — nothing to carry forward (fail-closed)`);
+    refusal.carryForwardRefusal = true;
+    throw refusal;
   }
   // FAIL-CLOSED: a "findings_present" overall verdict is only
   // meaningful if `findings` is a non-empty array — a missing/empty/non-array
@@ -442,21 +452,14 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // re-run: parseChangedFiles keeps only a rename's destination path, so
     // classifying that path alone misses what the rename itself implicates.
     const alwaysRerun = [...mandatoryAngles, ...(hasRename ? RENAME_ONLY_ANGLES : [])];
-    // Tag a carry-forward ELIGIBILITY refusal (ineligible prior verdict,
-    // ambiguous attribution, malformed provenance, etc.) so the catch below can
-    // tell it apart from an OPERATIONAL failure (wrong worktree, git error,
-    // missing prior log, unreadable/mismatched log, IO). Only a genuine
-    // eligibility refusal means "carry-forward was consulted and decided nothing
-    // carries" — the safe full-re-dispatch outcome the fallback marker records.
-    // An operational failure means carry-forward was NOT consulted, so it must
-    // leave NO marker and let the emitter keep refusing (fail-closed).
-    let rawPlan;
-    try {
-      rawPlan = buildCarryForwardPlan({ log, changedFiles, alwaysRerun, deltaComplete: reduced });
-    } catch (planError) {
-      if (planError instanceof Error) planError.carryForwardRefusal = true;
-      throw planError;
-    }
+    // buildCarryForwardPlan tags ONLY the genuine eligibility refusal (an
+    // ineligible prior verdict) with `carryForwardRefusal`; a log INTEGRITY
+    // failure (corrupt/truncated/inconsistent ledger — missing provenance,
+    // malformed headSha, unattributable finding, findings_present with no
+    // findings, duplicate angle) throws UNTAGGED and is treated like an
+    // operational failure below: no marker, emitter refuses. So the catch never
+    // blanket-tags — it trusts the tag the pure seam set.
+    const rawPlan = buildCarryForwardPlan({ log, changedFiles, alwaysRerun, deltaComplete: reduced });
     // AC1 (ADR 0061): optional --spec-authority stamps the pinned revision
     // identity onto the plan via the ONE shared helper. Pure no-op when absent.
     // Resolved against `repoRoot` (default process.cwd()) — matching every

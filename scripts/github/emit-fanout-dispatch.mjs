@@ -347,7 +347,23 @@ export async function listPriorFindingsLogHeads({ repo, pr, gate, headSha, tmpRo
   for (const entry of entries) {
     if (!entry.startsWith(prefix) || !entry.endsWith(".json")) continue;
     const sha = entry.slice(prefix.length, -".json".length).toLowerCase();
-    if (/^[0-9a-f]{7,64}$/.test(sha) && sha !== want) heads.add(sha);
+    if (!/^[0-9a-f]{7,64}$/.test(sha) || sha === want) continue;
+    // Do NOT trust the filename alone: a stale or arbitrary `<gate>-<sha>.json`
+    // in this directory must not count as a real prior round (that would let a
+    // fabricated carry-forward marker naming a bogus prevHead satisfy the guard).
+    // Require the file to be a genuine keyed findings-log whose OWN recorded
+    // headSha matches the filename before counting it. A non-ENOENT read error
+    // rethrows (fail-closed, like the readdir above); a missing/malformed/
+    // identity-mismatched file is simply not a valid prior round and is skipped.
+    let log;
+    try {
+      log = JSON.parse(await readFile(path.join(dir, entry), "utf8"));
+    } catch (err) {
+      if (err?.code && err.code !== "ENOENT") throw err;
+      continue;
+    }
+    const recordedHead = log && typeof log.headSha === "string" ? log.headSha.trim().toLowerCase() : null;
+    if (recordedHead === sha) heads.add(sha);
   }
   return heads;
 }
@@ -490,7 +506,14 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       // laundered into "the resolver ran": a marker whose prevHead names no real
       // prior round does not satisfy the guard. repo/gate are compared
       // case-insensitively, matching the findings-log identity check.
-      const planOk = plan
+      // Require the artifact to be a genuine resolver OUTCOME, not merely a JSON
+      // object carrying the five identity fields: a hand-written/truncated file
+      // must not satisfy the guard. A valid plan is either a success result
+      // (`ok: true`) or the documented fail-closed full-fallback marker
+      // (`ok: false, fallback: true`) — nothing else.
+      const planOutcomeValid = plan
+        && (plan.ok === true || (plan.ok === false && plan.fallback === true));
+      const planOk = planOutcomeValid
         && String(plan.headSha ?? "").trim().toLowerCase() === headSha
         && String(plan.gate ?? "").trim().toLowerCase() === gate
         && String(plan.repo ?? "").trim().toLowerCase() === repo.trim().toLowerCase()

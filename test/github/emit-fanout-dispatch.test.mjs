@@ -125,6 +125,42 @@ test("listPriorFindingsLogHeads returns the empty set on ENOENT (genuine first r
   });
 });
 
+test("listPriorFindingsLogHeads ignores a file whose recorded headSha does not match its filename (no filename trust) (issue #2251)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const findingsDir = path.join(repoRoot, "tmp", "gate-findings", "o-r", "pr-7");
+    await mkdir(findingsDir, { recursive: true });
+    const bogusSha = "d".repeat(40);
+    // A file named like a prior log but whose OWN headSha disagrees with the
+    // filename (or is absent) is not a genuine keyed ledger — it must not count.
+    await writeFile(path.join(findingsDir, `${GATE}-${bogusSha}.json`), JSON.stringify({ headSha: "e".repeat(40), verdict: "clean" }), "utf8");
+    await writeFile(path.join(findingsDir, `${GATE}-${"f".repeat(40)}.json`), "not json at all", "utf8");
+    const heads = await listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") });
+    assert.equal(heads.size, 0, "neither the identity-mismatched nor the unparseable file counts as a prior round");
+    // A genuine keyed ledger (recorded headSha === filename) DOES count.
+    const realSha = "a".repeat(40);
+    await writeFile(path.join(findingsDir, `${GATE}-${realSha}.json`), JSON.stringify({ headSha: realSha, gate: GATE, verdict: "clean" }), "utf8");
+    const heads2 = await listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") });
+    assert.deepEqual([...heads2], [realSha]);
+  });
+});
+
+test("re-gate emit refuses a plan artifact that is not a genuine resolver outcome (no ok:true / fallback:true) (issue #2251)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const contextDir = await seedBundle(repoRoot);
+    const priorHead = "d".repeat(40);
+    const findingsDir = path.join(repoRoot, "tmp", "gate-findings", "o-r", "pr-7");
+    await mkdir(findingsDir, { recursive: true });
+    await writeFile(path.join(findingsDir, `${GATE}-${priorHead}.json`), JSON.stringify({ headSha: priorHead, gate: GATE, verdict: "clean" }), "utf8");
+    // A hand-written object carrying the five identity fields + a real prevHead,
+    // but NO genuine resolver outcome flag, must not satisfy the guard.
+    await writeFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.carry-forward-plan.json`),
+      JSON.stringify({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, prevHead: priorHead, carried: [], mustRerun: [] }), "utf8");
+    const refused = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(refused.status, 1, refused.stderr || refused.stdout);
+    assert.match(refused.stdout, /GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED/);
+  });
+});
+
 test("first-round emit (no prior findings-log) never requires a carry-forward plan (issue #2251 AC2 negative)", async () => {
   await withTmpDir(async (repoRoot) => {
     await seedBundle(repoRoot);
