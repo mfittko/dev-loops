@@ -3183,7 +3183,7 @@ async function main() {
     if (result?.findingsLedgerWarning && !options.silent) {
       process.stderr.write(`${result.findingsLedgerWarning}\n`);
     }
-    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
+    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, fields: options.fields });
   } catch (error) {
     // formatCliError surfaces `error.usage` when present, so an over-limit
     // posted-comment field thrown from execution context (findings-file, gate

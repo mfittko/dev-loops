@@ -18,6 +18,7 @@ import {
   upsertCheckpointVerdict,
 } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
+import { emitResult } from "../../scripts/lib/jq-output.mjs";
 import { buildFanoutEnforcement, buildPreMergeGateCheck, deriveEvidenceState, EVIDENCE_STATE, evaluateInlineFanoutMode } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
@@ -167,7 +168,22 @@ const runNode = async (args = [], options = {}) => {
     if (inlineWarning && !options_.silent) {
       stderrChunks.push(`${inlineWarning}\n`);
     }
-    return { code: 0, stdout: `${JSON.stringify(result)}\n`, stderr: stderrChunks.join(""), ghCallCount, calls };
+    // Mirror main()'s output layer so --jq/--silent/--fields behave end-to-end.
+    // The default (no output flag) keeps the exact verbatim-JSON line + code 0
+    // every existing assertion depends on; only a flag path routes through the
+    // real emitResult (which is what main() calls).
+    if (options_.jq === undefined && !options_.silent && options_.fields === undefined) {
+      return { code: 0, stdout: `${JSON.stringify(result)}\n`, stderr: stderrChunks.join(""), ghCallCount, calls };
+    }
+    let out = "";
+    const code = emitResult(result, {
+      jq: options_.jq,
+      silent: options_.silent,
+      fields: options_.fields,
+      stdout: { write: (c) => { out += String(c); return true; } },
+      stderr: { write: (c) => { stderrChunks.push(String(c)); return true; } },
+    });
+    return { code, stdout: out, stderr: stderrChunks.join(""), ghCallCount, calls };
   } catch (error) {
     process.stderr.write = originalWrite;
     return {
@@ -878,6 +894,24 @@ test("upsert-checkpoint-verdict creates a new comment when no same-head marker e
       "--findings-summary", "no issues found",
       "--next-action", "mark ready for review",
     ], { env });
+
+    // #2163: one `--fields` call returns the named top-level scalars as a single
+    // tab-separated line — no `node -e`, no jq object-projection — in the same
+    // scenario the full-JSON assertion below validates. Reuses `env`: each
+    // runNode builds a fresh gh mock.
+    const fieldsResult = await runNode([
+      "--repo", "owner/repo",
+      "--pr", "17",
+      "--gate", "draft_gate",
+      "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean",
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--findings-summary", "no issues found",
+      "--next-action", "mark ready for review",
+      "--fields", "action,gate,commentId",
+    ], { env });
+    assert.equal(fieldsResult.code, 0, fieldsResult.stderr);
+    assert.equal(fieldsResult.stdout, "created\tdraft_gate\t101\n");
 
     assert.equal(result.code, 0);
     assert.equal(result.stderr, "WARNING: gate ran inline_single_agent (not via the fan-out/fan-in review sub-loop). Reason: single-agent inline review (test)\n");

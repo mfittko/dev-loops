@@ -105,7 +105,7 @@ const runNode = async (args = [], options = {}) => {
   const stderr = { write: (chunk) => { err += String(chunk); return true; } };
   try {
     const result = await detectPrGateCoordinationState(opts, runtime);
-    const code = emitResult(result, { jq: opts.jq, silent: opts.silent, stdout, stderr });
+    const code = emitResult(result, { jq: opts.jq, silent: opts.silent, fields: opts.fields, stdout, stderr });
     return { code, stdout: out, stderr: err };
   } catch (error) {
     return { code: 1, stdout: out, stderr: `${err}${formatCliError(error)}\n` };
@@ -248,6 +248,14 @@ test("detect-pr-gate-coordination-state allows post-draft flow for non-draft PRs
     ]);
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "266"], { env });
+
+    // #2163: one `--fields` call on this coordination-state surface returns the
+    // named top-level scalars as a single tab-separated line — no `node -e` and
+    // no jq object-projection, in the same scenario the full-JSON assertion
+    // below validates. Reuses `env`: each runNode builds a fresh gh mock.
+    const fieldsResult = await runNode(["--repo", "owner/repo", "--pr", "266", "--fields", "lifecycleState,gateBoundary,loopDisposition"], { env });
+    assert.equal(fieldsResult.code, 0, fieldsResult.stderr);
+    assert.equal(fieldsResult.stdout, "pr_ready_no_feedback\tpost_draft_external_review\taction_required\n");
 
     assert.equal(result.code, 0);
     assert.equal(result.stderr, "");

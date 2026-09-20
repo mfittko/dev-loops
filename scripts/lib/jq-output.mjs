@@ -355,11 +355,54 @@ function renderJqStream(stream) {
     .join("\n");
 }
 
+// Single source of truth for the --fields stderr envelope, mirroring the --jq
+// one so the two fail-closed paths read identically (same rule ID, same shape).
+function formatFieldsErrorEnvelope(error) {
+  return JSON.stringify({ ok: false, error: `--fields (BASE-JQ-OUTPUT-GUARANTEE): ${error.message}` });
+}
+
+// --fields: the sanctioned multi-field read. Returns the named TOP-LEVEL scalar
+// fields as one tab-separated line, in the requested order, so a caller can run
+// `IFS=$'\t' read -r A B C < <(cmd --fields a,b,c)` — no inline interpreter and
+// no jq object-projection (both banned), so one intended read is one CLI call.
+// Fails closed (JqFilterError) on an unknown field, a non-scalar (object/array)
+// field, a value whose text would break the single-line TSV (embedded
+// tab/newline), or an empty/malformed field list — matching the jq-subset
+// fail-closed posture. Top-level scalar fields only (Non-goals: no nested access).
+function renderFieldsTsv(result, fieldsSpec) {
+  const names = fieldsSpec.split(",").map((s) => s.trim());
+  if (names.length === 0 || names.some((n) => n === "")) {
+    throw new JqFilterError("requires a comma-separated list of field names");
+  }
+  const cells = [];
+  for (const name of names) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+      throw new JqFilterError(`unsupported field name (top-level scalar fields only): ${name}`);
+    }
+    const has =
+      typeof result === "object" && result !== null && Object.prototype.hasOwnProperty.call(result, name);
+    if (!has) {
+      throw new JqFilterError(`unknown field: ${name}`);
+    }
+    const value = result[name];
+    if (value !== null && typeof value === "object") {
+      throw new JqFilterError(`non-scalar field (object/array not supported): ${name}`);
+    }
+    const cell = value === null ? "" : String(value);
+    if (cell.includes("\t") || cell.includes("\n")) {
+      throw new JqFilterError(`field value breaks tab-separated output (embedded tab/newline): ${name}`);
+    }
+    cells.push(cell);
+  }
+  return cells.join("\t");
+}
+
 // Standard option block to merge into a parseArgs `options` map so every script
 // exposes the same flags.
 export const JQ_OUTPUT_PARSE_OPTIONS = {
   jq: { type: "string" },
   silent: { type: "boolean", short: "s" },
+  fields: { type: "string" },
 };
 
 // Shared USAGE fragment so every script documents the flags identically.
@@ -368,7 +411,12 @@ export const JQ_OUTPUT_USAGE = `Output filtering:
                             (field access, .[]/.[N], pipes, select(...), ==,!=,<,<=,>,>=, length, keys).
                             Invalid filter fails closed (stderr + exit 2).
   --silent, -s              Suppress stdout; map result to exit code only
-                            (0 = pass/truthy, 1 = fail/falsy). Composes with --jq as a predicate.`;
+                            (0 = pass/truthy, 1 = fail/falsy). Composes with --jq as a predicate.
+  --fields <a,b,c>          Print the named top-level scalar fields as one
+                            tab-separated line in the requested order, directly
+                            shell-consumable (e.g. IFS=$'\\t' read -r A B C).
+                            Unknown/non-scalar field, or combining with
+                            --jq/--silent, fails closed (stderr + exit 2).`;
 
 // Shared token-matcher for scripts that hand-roll a `parseArgs({ tokens: true })`
 // loop (rather than reading `values.jq`/`values.silent` off a strict parse).
@@ -385,6 +433,10 @@ export function matchJqOutputToken(token, options, requireValue = (t) => t.value
     options.silent = true;
     return true;
   }
+  if (token.name === "fields") {
+    options.fields = requireValue(token);
+    return true;
+  }
   return false;
 }
 
@@ -398,11 +450,35 @@ export function emitResult(
   {
     jq = undefined,
     silent = false,
+    fields = undefined,
     stdout = process.stdout,
     stderr = process.stderr,
     ok = result?.ok !== false,
   } = {},
 ) {
+  if (fields !== undefined) {
+    // --fields is a standalone read mode. Combining it with --jq or --silent has
+    // no coherent meaning, so fail closed rather than silently pick a winner.
+    if (jq !== undefined || silent) {
+      const conflict = jq !== undefined ? "--jq" : "--silent";
+      stderr.write(
+        `${formatFieldsErrorEnvelope(new JqFilterError(`cannot combine with ${conflict}`))}\n`,
+      );
+      return 2;
+    }
+    let line;
+    try {
+      line = renderFieldsTsv(result, fields);
+    } catch (error) {
+      if (error instanceof JqFilterError) {
+        stderr.write(`${formatFieldsErrorEnvelope(error)}\n`);
+        return 2;
+      }
+      throw error;
+    }
+    stdout.write(`${line}\n`);
+    return ok ? 0 : 1;
+  }
   if (jq !== undefined) {
     let stream;
     try {

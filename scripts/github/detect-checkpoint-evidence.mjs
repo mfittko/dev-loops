@@ -1194,7 +1194,7 @@ async function main() {
         process.stderr.write(`WARNING: ${warning}\n`);
       }
     }
-    process.exitCode = emitResult(output, { jq: options.jq, silent: options.silent });
+    process.exitCode = emitResult(output, { jq: options.jq, silent: options.silent, fields: options.fields });
   } catch (error) {
     if (error && typeof error === "object" && "staleRunner" in error && error.staleRunner) {
       const staleRunnerCheck = {

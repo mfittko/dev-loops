@@ -1249,7 +1249,7 @@ async function main() {
   }
   try {
     const result = await detectPrGateCoordinationState(options);
-    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
+    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, fields: options.fields });
   } catch (error) {
     process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;
