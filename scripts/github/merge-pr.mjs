@@ -56,7 +56,10 @@ Optional:
 
 Preconditions (each refuses with a machine-readable reason naming the failing one):
   human_approver, mergeable, ci_green, title_markers, gate_evidence,
-  size_budget_human_approval, merge_approval. gate_evidence reuses
+  copilot_convergence, size_budget_human_approval, merge_approval.
+  copilot_convergence refuses a current-head Copilot "Changes recommended" (🟡)
+  or unrecognized non-approval disposition (🔵 "Needs a closer look" is
+  conductor-overridable; unresolved threads still gate it). gate_evidence reuses
   detect-checkpoint-evidence (draft_gate + current-head pre_approval_gate with
   fan-out provenance, zero unresolved threads, a non-stale/non-foreign runner lock).
 
@@ -69,7 +72,7 @@ Merge classes:
              satisfy it. Fresh approval = a head-pinned APPROVED review by
              <login>, else a head-pinned operator comment "approve merge <headSha>".
 
-Output (stdout, JSON): { ok, merged, mergeCommit, approvedBy, mergeClass, approvalVia, method, repo, pr, headSha }
+Output (stdout, JSON): { ok, merged, mergeCommit, approvedBy, mergeClass, approvalVia, method, repo, pr, headSha, copilotDisposition }
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Merge succeeded
@@ -196,7 +199,7 @@ export async function mergePr(options, runtime = {}) {
   const rawReviews = flattenPaginatedSlurp(await ghJson(
     ["api", "--paginate", "--slurp", `repos/${options.repo}/pulls/${options.pr}/reviews?per_page=100`],
     { env, ghCommand, runChild },
-  )).map((r) => ({ login: r?.user?.login ?? null, state: r?.state ?? null, commit_id: r?.commit_id ?? null, type: r?.user?.type ?? null }));
+  )).map((r) => ({ login: r?.user?.login ?? null, state: r?.state ?? null, commit_id: r?.commit_id ?? null, type: r?.user?.type ?? null, body: r?.body ?? "", submitted_at: r?.submitted_at ?? null }));
   const comments = flattenPaginatedSlurp(await ghJson(
     ["api", "--paginate", "--slurp", `repos/${options.repo}/issues/${options.pr}/comments?per_page=100`],
     { env, ghCommand, runChild },
@@ -341,6 +344,7 @@ export async function mergePr(options, runtime = {}) {
     repo: options.repo,
     pr: options.pr,
     headSha: currentHeadSha,
+    copilotDisposition: verdict.copilotDisposition,
   };
 }
 

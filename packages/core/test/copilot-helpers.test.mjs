@@ -5,8 +5,10 @@ import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 
 import {
+  classifyCopilotReviewBodyDisposition,
   containsBareCopilotSummon,
   copilotReviewBodySignalsChanges,
+  COPILOT_DISPOSITION,
   extractReviewCommitSha,
   isCopilotLogin,
   isGateMachineArtifactBody,
@@ -592,6 +594,49 @@ test("copilotReviewBodySignalsChanges: an unrecognized disposition header fails 
     ),
     true,
   );
+});
+
+test("classifyCopilotReviewBodyDisposition: distinguishes 🟡, 🔵, 🟢, unrecognized, and none", () => {
+  assert.equal(
+    classifyCopilotReviewBodyDisposition("COMMENTED", readOverviewFixture("changes-recommended.md")),
+    COPILOT_DISPOSITION.CHANGES_RECOMMENDED,
+  );
+  assert.equal(
+    classifyCopilotReviewBodyDisposition("COMMENTED", readOverviewFixture("needs-a-closer-look.md")),
+    COPILOT_DISPOSITION.NEEDS_CLOSER_LOOK,
+  );
+  assert.equal(
+    classifyCopilotReviewBodyDisposition("COMMENTED", readOverviewFixture("approval-recommended.md")),
+    COPILOT_DISPOSITION.CLEAN,
+  );
+  assert.equal(
+    classifyCopilotReviewBodyDisposition("COMMENTED", "### 🟣 Deferred to a domain expert\n\nfuture header"),
+    COPILOT_DISPOSITION.UNRECOGNIZED,
+  );
+  assert.equal(classifyCopilotReviewBodyDisposition("COMMENTED", ""), COPILOT_DISPOSITION.NONE);
+  assert.equal(classifyCopilotReviewBodyDisposition("APPROVED", "### 🟡 Changes recommended"), COPILOT_DISPOSITION.NONE);
+  // A human-style CHANGES_REQUESTED is always actionable regardless of body.
+  assert.equal(classifyCopilotReviewBodyDisposition("CHANGES_REQUESTED", ""), COPILOT_DISPOSITION.CHANGES_RECOMMENDED);
+});
+
+test("classifyCopilotReviewBodyDisposition: signalsChanges agrees with the classification (no drift)", () => {
+  // The boolean loop-block signal is derived from the same classification the
+  // merge-convergence precondition reads, so the two can never diverge.
+  for (const [state, body] of [
+    ["COMMENTED", readOverviewFixture("changes-recommended.md")],
+    ["COMMENTED", readOverviewFixture("needs-a-closer-look.md")],
+    ["COMMENTED", readOverviewFixture("approval-recommended.md")],
+    ["COMMENTED", "### 🟣 Deferred to a domain expert"],
+    ["COMMENTED", ""],
+    ["APPROVED", "### 🟡 Changes recommended"],
+    ["CHANGES_REQUESTED", ""],
+  ]) {
+    const disposition = classifyCopilotReviewBodyDisposition(state, body);
+    const expected = disposition === COPILOT_DISPOSITION.CHANGES_RECOMMENDED
+      || disposition === COPILOT_DISPOSITION.NEEDS_CLOSER_LOOK
+      || disposition === COPILOT_DISPOSITION.UNRECOGNIZED;
+    assert.equal(copilotReviewBodySignalsChanges(state, body), expected, `${disposition} disagreed with signalsChanges`);
+  }
 });
 
 test("summarizeCopilotReviews sets hasBodyFindingOnCurrentHead true for a current-head 🟡 COMMENTED review", () => {
