@@ -148,6 +148,54 @@ test("a rename replayed from already-merged main is excluded (hasRename: false, 
   }
 });
 
+test("a PR-own rename whose destination is byte-identical to an existing main file is still kept (hasRename: true, no fail-open) (#2292)", async () => {
+  // Fail-open edge: the PR renames src.mjs -> dest.mjs, but dest.mjs already
+  // exists byte-identical on main. `git diff origin/main..HEAD` then reports
+  // only the DELETED source path (dest is unchanged vs main), so keying the
+  // exclusion on the destination alone would drop this genuine PR-own rename,
+  // leave hasRename false, and wrongly carry the RENAME_ONLY angles. Checking
+  // the source endpoint too keeps it.
+  const root = await mkdtemp(path.join(os.tmpdir(), "git-delta-renamedup-"));
+  try {
+    git(root, ["init", "-q", "-b", "main"]);
+    git(root, ["config", "user.email", "test@example.com"]);
+    git(root, ["config", "user.name", "Test"]);
+    // Fork: src/src.mjs exists; no dest yet.
+    await write(root, "src/src.mjs", "export const same = 1;\n");
+    await write(root, "docs/guide.md", "# Guide\n");
+    git(root, ["add", "-A"]);
+    git(root, ["commit", "-q", "-m", "fork"]);
+    const fork = git(root, ["rev-parse", "HEAD"]).trim();
+
+    // PR branch reviewed at prevHead: edits docs only (no dest, still has src).
+    git(root, ["checkout", "-q", "-b", "pr", fork]);
+    await write(root, "docs/guide.md", "# Guide\n\nPR edit.\n");
+    git(root, ["add", "-A"]);
+    git(root, ["commit", "-q", "-m", "PR round 1 (reviewed)"]);
+    const prevHead = git(root, ["rev-parse", "HEAD"]).trim().toLowerCase();
+
+    // main adds src/dest.mjs with the SAME content the PR will rename src into.
+    git(root, ["checkout", "-q", "main"]);
+    await write(root, "src/dest.mjs", "export const same = 1;\n");
+    git(root, ["add", "-A"]);
+    git(root, ["commit", "-q", "-m", "another PR added dest.mjs on main"]);
+    git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+
+    // Base-move + PR-own rename src.mjs -> dest.mjs (dest now byte-identical to main).
+    git(root, ["checkout", "-q", "pr"]);
+    git(root, ["merge", "-q", "--no-edit", "origin/main"]);
+    git(root, ["mv", "-f", "src/src.mjs", "src/dest.mjs"]);
+    git(root, ["commit", "-q", "-m", "PR-own rename onto an existing main path"]);
+
+    const mainRel = await captureMainRelativeChangedFilesSince({ base: prevHead, mainRef: "origin/main", repoRoot: root });
+    assert.equal(mainRel.reduced, true);
+    assert.equal(mainRel.hasRename, true, "a genuine PR-own rename must set hasRename even when its destination matches main");
+    assert.ok(mainRel.changedFiles.includes("src/dest.mjs"), "the PR-own rename destination is kept");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("delta stays INCREMENTAL, not absolute: a file the PR touched BEFORE prevHead is not re-surfaced", async () => {
   // AC#4: the delta must be incremental (since prevHead), not the absolute PR
   // diff. docs/guide.md was edited in PR round 1 (at prevHead) and never again;

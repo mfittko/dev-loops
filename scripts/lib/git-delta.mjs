@@ -142,15 +142,30 @@ export async function captureMainRelativeChangedFilesSince({ base, mainRef = "or
     const status = cols[0].trim();
     const isRenameOrCopy = /^[RC]\d*$/i.test(status);
     let dest;
+    let src = "";
     if (isRenameOrCopy) {
       if (cols.length < 3) continue;
+      src = (cols[1] ?? "").trim();
       dest = cols[cols.length - 1];
     } else {
       dest = cols[1];
     }
     const file = (dest ?? "").trim();
     if (file.length === 0) continue;
-    if (!prOwn.has(file)) continue; // already on main at head — exclude
+    // A file is PR-own when its head path differs from mainRef (present in
+    // prOwn). For a rename, EITHER endpoint surviving the main-relative
+    // comparison proves the rename is genuinely PR-own, not replayed from an
+    // already-merged main commit: the destination differs from main, OR the
+    // source's deletion is PR-own. When a PR-own rename lands on a destination
+    // path that already exists byte-identical on main, `git diff mainRef..HEAD`
+    // reports only the deleted source path (the destination is unchanged vs
+    // main), so keying the exclusion on the destination alone would drop the
+    // rename, leave `hasRename` false, and wrongly carry the RENAME_ONLY angles
+    // — a fail-open. Checking the source too keeps that rename (issue #2292).
+    // Adding source membership can only RETAIN renames, never over-exclude: a
+    // rename replayed from main has neither endpoint in prOwn and stays dropped.
+    const prOwnEntry = prOwn.has(file) || (isRenameOrCopy && src.length > 0 && prOwn.has(src));
+    if (!prOwnEntry) continue; // already on main at head — exclude
     changedFiles.push(file);
     if (isRenameOrCopy) hasRename = true;
   }
