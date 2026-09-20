@@ -12,7 +12,8 @@
  * and every subagent. This hook is the safety net that reaps whatever slipped through, before the
  * stop is allowed.
  *
- * Scope (mirrors `ui-review-teardown`'s `process.kill(-pgid)` + win32 fail-closed pattern):
+ * Scope (mirrors `ui-review-teardown`'s `process.kill(-pgid)` group-signal + win32 fail-closed
+ * pattern, but — see `signalGroup` below — deliberately drops its positive-pid fallback):
  *   - Verifiable ownership boundary: session + group-leader scoping (below) narrows candidates,
  *     but is NOT sufficient ownership proof by itself — a foreground job-control job (`sleep 300 &`
  *     typed at a shell) or an unrelated detached process the agent started on purpose (e.g. the
@@ -103,9 +104,20 @@ export function discoverOwnBackgroundShells({ selfPid = process.pid, execFileSyn
 }
 
 /**
- * Signal a background shell's process GROUP (`-pid`), falling back to the bare pid when the group
- * signal is not deliverable — the same shape as `ui-review-teardown`'s `signalProcess`. Refuses a
+ * Signal a background shell's process GROUP (`-pid`) ONLY — SIGTERM, best-effort. Refuses a
  * non-positive-integer pid outright (a group-kill on 0/-1 would be catastrophic).
+ *
+ * Deliberately DROPS the positive-pid fallback that `ui-review-teardown`'s `signalProcess` keeps:
+ * `ui-review-teardown` owns a known live server pid it itself spawned moments earlier, with no
+ * reuse window, so falling back to `kill(pid)` there still reaches the right process when the
+ * group signal fails. This reaper's pids instead come from a `ps` scan
+ * (`discoverOwnBackgroundShells`) across a TOCTOU window between discovery and signalling here —
+ * if the group has already exited (ESRCH) or the group signal is refused (EPERM) by the time this
+ * runs, the positive pid may since have been reused by an unrelated process, so a `kill(pid)`
+ * fallback could SIGTERM a process the agent never started, breaking the reaper's "never touches
+ * unrelated processes" guarantee. Swallow ESRCH/EPERM/any other error and leave it: the group is
+ * either already gone or not ours, and the reaper never blocks the stop regardless (best-effort
+ * cleanup only, per the module doc above).
  */
 export function signalGroup(pid, { killImpl = process.kill } = {}) {
   if (!Number.isInteger(pid) || pid <= 1) {
@@ -114,7 +126,8 @@ export function signalGroup(pid, { killImpl = process.kill } = {}) {
   try {
     killImpl(-pid, "SIGTERM");
   } catch {
-    killImpl(pid, "SIGTERM");
+    // Best-effort: the group is already gone or not ours to signal — never fall back to a
+    // positive-pid kill (see doc above); leave it alone.
   }
 }
 

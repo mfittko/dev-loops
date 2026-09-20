@@ -811,19 +811,30 @@ export function commandContainsCopilotSummonComment(command) {
  * probe-copilot` and `dev-loops-run <path>/<wait-script>.mjs`).
  * Anchored at the command head (after an env-assignment/wrapper/binary-path prefix), so a job
  * that merely MENTIONS the basename as an argument — `grep probe-copilot-review.mjs docs`,
- * `echo … wait-pr-checks.mjs` — does NOT match (only a real invocation does). A `.mjs` helper
- * must be run by `node`/`bun`/`deno` or invoked directly as the head; the CLI forms anchor on
- * their own verb.
+ * `echo … wait-pr-checks.mjs`, or a `node`/`dev-loops-run` runner whose EXECUTED script is
+ * something else entirely (`node other.mjs --note probe-copilot-review.mjs`) — does NOT match
+ * (only a real invocation does). A `.mjs` helper must be run by `node`/`bun`/`deno` or
+ * invoked directly as the head; the CLI forms anchor on their own verb. For the runner and
+ * `dev-loops-run` forms, the wait script must be the EXECUTABLE token itself (the first non-flag
+ * argument after the runner) — a `.test(head)` scan over the whole string would also match the
+ * script name showing up later as an unrelated argument's value.
  * @param {string} job @returns {boolean}
  */
 function jobHeadInvokesWaitProbe(job) {
   const head = job.trim().replace(new RegExp(`^${SHELL_EXEC_PREFIX}`), "");
   if (!head) return false;
   const WAIT_SCRIPT = /(?:probe-copilot-review|wait-pr-checks|detect-copilot-loop-state|run-watch-cycle)\.mjs\b/i;
-  // `node`/`bun`/`deno … <path>/<wait-script>.mjs …`
-  if (/^(?:node|bun|deno)\b/i.test(head) && WAIT_SCRIPT.test(head)) return true;
-  // A wait script invoked directly as the command head (a bare `probe-copilot-review.mjs` path).
-  if (new RegExp(`^(?:\\S*/)?${WAIT_SCRIPT.source}`, "i").test(head)) return true;
+  // A wait-script TOKEN: the whole argv token (optionally path-prefixed) must END in one of the
+  // wait-script basenames, not merely contain one — this is what makes the runner checks below
+  // positional rather than an anywhere-in-string scan.
+  const WAIT_SCRIPT_TOKEN = new RegExp(`^(?:\\S*/)?${WAIT_SCRIPT.source.replace(/\\b$/, "$")}`, "i");
+  // `node`/`bun`/`deno [flags] <path>/<wait-script>.mjs …` — the executed script is the first
+  // non-flag token after the runner, never a later argument (`--note probe-copilot-review.mjs`).
+  const runnerExec = head.match(/^(?:node|bun|deno)\b\s+(?:-\S+\s+)*(\S+)/i);
+  if (runnerExec && WAIT_SCRIPT_TOKEN.test(runnerExec[1])) return true;
+  // A wait script invoked directly as the command head (a bare `probe-copilot-review.mjs` path) —
+  // test only the head's OWN first token, not the whole string (a later argument must not count).
+  if (WAIT_SCRIPT_TOKEN.test(head.match(/^\S+/)?.[0] ?? "")) return true;
   // `gh run watch …`
   if (/^(?:\S*\/)?gh\s+run\s+watch\b/i.test(head)) return true;
   // `dev-loops loop watch-cycle|watch-ci|watch-initial` / `dev-loops gate probe-copilot`
@@ -837,8 +848,10 @@ function jobHeadInvokesWaitProbe(job) {
   ) {
     return true;
   }
-  // The launcher invoking a wait/probe script directly: `dev-loops-run <path>/<wait-script>.mjs …`.
-  if (/^(?:\S*\/)?dev-loops-run\b/i.test(head) && WAIT_SCRIPT.test(head)) return true;
+  // The launcher invoking a wait/probe script directly: `dev-loops-run [flags] <path>/<wait-script>.mjs …`
+  // — again the executed script is the first non-flag token after `dev-loops-run`, not any later arg.
+  const devLoopsRunExec = head.match(/^(?:\S*\/)?dev-loops-run\b\s+(?:-\S+\s+)*(\S+)/i);
+  if (devLoopsRunExec && WAIT_SCRIPT_TOKEN.test(devLoopsRunExec[1])) return true;
   return false;
 }
 

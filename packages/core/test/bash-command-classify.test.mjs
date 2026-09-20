@@ -618,6 +618,14 @@ test("commandContainsDetachedWaitTool detects bare-& backgrounded wait/probe scr
   );
   // an unrelated piped pipeline backgrounded is still not denied
   assert.equal(commandContainsDetachedWaitTool("cat foo.txt | tee /tmp/x.log &"), false);
+  // #2288 follow-up: the wait-script name merely appearing as a LATER argument to a node/bun/deno
+  // runner (not the script actually being executed) must NOT be treated as invoking the probe —
+  // only the runner's own executable token counts.
+  assert.equal(commandContainsDetachedWaitTool("node scripts/build.mjs --note probe-copilot-review.mjs &"), false);
+  assert.equal(commandContainsDetachedWaitTool("node scripts/build.mjs --flag=wait-pr-checks.mjs &"), false);
+  // same for `dev-loops-run`: the executed script token must itself be the wait script, not a
+  // later argument that merely mentions one.
+  assert.equal(commandContainsDetachedWaitTool("dev-loops-run scripts/build.mjs --note probe-copilot-review.mjs &"), false);
 });
 
 test("commandInvokesWaitProbeHelper classifies a LIVE process's ps command line (#2065, reaper ownership boundary)", () => {
@@ -634,6 +642,11 @@ test("commandInvokesWaitProbeHelper classifies a LIVE process's ps command line 
   assert.equal(commandInvokesWaitProbeHelper("node .claude/hooks/../../scripts/ui-review-server.mjs --port 4173"), false);
   assert.equal(commandInvokesWaitProbeHelper("npm test"), false);
   assert.equal(commandInvokesWaitProbeHelper("bash"), false);
+  // #2288 follow-up: a live process whose command line merely MENTIONS a wait-script basename as
+  // an argument value (not the script it executes) is not reapable by the SubagentStop reaper.
+  assert.equal(commandInvokesWaitProbeHelper("node scripts/build.mjs --note probe-copilot-review.mjs"), false);
+  assert.equal(commandInvokesWaitProbeHelper("node scripts/build.mjs --flag=wait-pr-checks.mjs"), false);
+  assert.equal(commandInvokesWaitProbeHelper("dev-loops-run scripts/build.mjs --note probe-copilot-review.mjs"), false);
 });
 
 test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, and heredocs", () => {

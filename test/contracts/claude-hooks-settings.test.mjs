@@ -182,9 +182,31 @@ test("discoverOwnBackgroundShells fails safe (empty) when ps errors (#2065)", ()
 test("signalGroup targets the process GROUP and refuses a non-positive-integer pid (#2065)", () => {
   const sent = [];
   signalGroup(4242, { killImpl: (target, sig) => sent.push([target, sig]) });
-  assert.deepEqual(sent, [[-4242, "SIGTERM"]], "signals the negative pid (process group) first");
+  assert.deepEqual(sent, [[-4242, "SIGTERM"]], "signals the negative pid (process group) only");
   for (const bad of [0, 1, -3, 2.5, Number.NaN]) {
     assert.throws(() => signalGroup(bad, { killImpl: () => {} }), /non-positive-integer/);
+  }
+});
+
+test("signalGroup NEVER falls back to a positive-pid kill when the group signal fails (#2288 review — TOCTOU pid-reuse safety)", () => {
+  // A `ps`-discovered leader's group may already be gone (ESRCH) or unsignallable (EPERM) by the
+  // time the reaper fires — the TOCTOU window between discovery and signalling. Unlike
+  // `ui-review-teardown`'s `signalProcess` (a known, just-spawned pid with no reuse window), this
+  // reaper must NEVER retry with the bare positive pid: it may since have been reused by an
+  // unrelated process. Both error shapes below must swallow silently with no second kill call.
+  for (const errCode of ["ESRCH", "EPERM", "EOTHER"]) {
+    const sent = [];
+    const err = new Error(errCode);
+    err.code = errCode;
+    assert.doesNotThrow(() =>
+      signalGroup(4242, {
+        killImpl: (target) => {
+          sent.push(target);
+          throw err;
+        },
+      }),
+    );
+    assert.deepEqual(sent, [-4242], `only the group signal (-pid) is attempted for ${errCode}, never a positive-pid fallback`);
   }
 });
 
