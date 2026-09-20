@@ -188,30 +188,64 @@ test("gate-evidence-runner never posts a status; gate-evidence-reporter always p
   assert.match(statusStep.run, /statuses\/\$\{head_sha\}/);
   assert.match(statusStep.run, /context=gate-evidence/);
 
-  // Head-pairing (#2262): the REUSE path (recompute == false) posts the
-  // detector's OWN verdict, so it must target the detector's OWN
-  // independently-resolved head (needs.gate-evidence-runner.outputs.head_sha)
-  // — never this job's own steps.pr.outputs.head_sha, a SEPARATE live
-  // resolution on issue_comment events that could disagree with the
-  // detector's if the head advanced between the two resolutions
-  // (fail-open). The RECOMPUTE path posts this job's own resolved head,
-  // since that is the head this job itself evaluated.
-  assert.equal(statusStep.env.DETECTOR_HEAD_SHA, "${{ needs.gate-evidence-runner.outputs.head_sha }}");
+  // Head-pairing, closed completely: evidence_state is computed by
+  // detect-checkpoint-evidence.mjs against its OWN resolved `currentHeadSha`
+  // — a SEPARATE resolution from the detector's Resolve-PR-facts `steps.pr`
+  // step. Pairing evidence_state with `steps.pr`'s head risks posting a
+  // verdict for head X onto a Y resolved by a later push. The detector must
+  // instead expose the EXACT head detect-checkpoint-evidence.mjs evaluated —
+  // its own `currentHeadSha` — as a job output, and the reporter's REUSE path
+  // (recompute == false) must post to THAT output, never `steps.pr`'s head.
+  assert.ok(
+    typeof runnerJob.outputs.evaluated_head_sha === "string" && runnerJob.outputs.evaluated_head_sha.length > 0,
+    "gate-evidence-runner must expose evaluated_head_sha (detect-checkpoint-evidence.mjs's own currentHeadSha) as a job output",
+  );
+  assert.equal(runnerJob.outputs.evaluated_head_sha, "${{ steps.gate_check.outputs.evaluated_head_sha }}");
+  const gateCheckStep = runnerJob.steps.find((step) => step.id === "gate_check");
+  assert.ok(gateCheckStep, "expected the detector's gate_check step");
+  assert.match(
+    gateCheckStep.run,
+    /jq -r '\.currentHeadSha \/\/ empty' gate_check_stdout\.json gate_check_stderr\.json/,
+    "gate_check must extract currentHeadSha from detect-checkpoint-evidence.mjs's own output, not steps.pr",
+  );
+  assert.match(gateCheckStep.run, /evaluated_head_sha=\$\{evaluated_head_sha\}/);
+
+  // The RECOMPUTE path likewise posts to the head recompute_check ITSELF
+  // evaluated, exposed the same way.
+  const recomputeStep = reporterJob.steps.find((step) => step.id === "recompute_check");
+  assert.ok(recomputeStep, "expected the reporter's recompute_check step");
+  assert.match(
+    recomputeStep.run,
+    /jq -r '\.currentHeadSha \/\/ empty' gate_check_stdout\.json gate_check_stderr\.json/,
+    "recompute_check must extract currentHeadSha from its own detect-checkpoint-evidence.mjs run",
+  );
+  assert.match(recomputeStep.run, /evaluated_head_sha=\$\{evaluated_head_sha\}/);
+
+  assert.equal(statusStep.env.DETECTOR_EVALUATED_HEAD_SHA, "${{ needs.gate-evidence-runner.outputs.evaluated_head_sha }}");
+  assert.equal(statusStep.env.RECOMPUTE_EVALUATED_HEAD_SHA, "${{ steps.recompute_check.outputs.evaluated_head_sha }}");
   assert.equal(statusStep.env.REPORTER_HEAD_SHA, "${{ steps.pr.outputs.head_sha }}");
-  assert.match(statusStep.run, /head_sha="\$DETECTOR_HEAD_SHA"/);
+  assert.match(statusStep.run, /evaluated_head_sha="\$RECOMPUTE_EVALUATED_HEAD_SHA"/);
+  assert.match(statusStep.run, /evaluated_head_sha="\$DETECTOR_EVALUATED_HEAD_SHA"/);
+
+  // Fallback: an empty evaluated head (detection never resolved one — the
+  // evidence_state is then empty too, already fail-closed to `failure`) still
+  // posts somewhere, via the reporter's own resolved head, rather than the
+  // status post being skipped outright.
+  assert.match(statusStep.run, /if \[ -n "\$evaluated_head_sha" \]; then/);
+  assert.match(statusStep.run, /head_sha="\$evaluated_head_sha"/);
   assert.match(statusStep.run, /head_sha="\$REPORTER_HEAD_SHA"/);
 
-  // Every `${{ }}` value the status step reads (both head SHAs and both
-  // evidence_state values) must be routed through env — never spliced
-  // directly into the shell (the GitHub Actions script-injection
-  // anti-pattern).
+  // Every `${{ }}` value the status step reads (both evaluated head SHAs, the
+  // reporter's own head, and both evidence_state values) must be routed
+  // through env — never spliced directly into the shell (the GitHub Actions
+  // script-injection anti-pattern).
   assert.equal(statusStep.env.RECOMPUTE, "${{ steps.decide.outputs.recompute }}");
   assert.equal(statusStep.env.REUSED_EVIDENCE_STATE, "${{ steps.decide.outputs.evidence_state }}");
   assert.equal(statusStep.env.RECOMPUTED_EVIDENCE_STATE, "${{ steps.recompute_check.outputs.evidence_state }}");
   assert.ok(!statusStep.run.includes("${{ steps.decide"), "decide's outputs must be read via env, not spliced directly into the shell");
-  assert.ok(!statusStep.run.includes("${{ steps.recompute_check"), "recompute_check's evidence_state must be read via env, not spliced directly into the shell");
+  assert.ok(!statusStep.run.includes("${{ steps.recompute_check"), "recompute_check's outputs must be read via env, not spliced directly into the shell");
   assert.ok(!statusStep.run.includes("${{ steps.pr.outputs.head_sha }}"), "the reporter's own head must be read via env (REPORTER_HEAD_SHA), not spliced directly into the shell");
-  assert.ok(!statusStep.run.includes("${{ needs.gate-evidence-runner"), "the detector's head must be read via env (DETECTOR_HEAD_SHA), not spliced directly into the shell");
+  assert.ok(!statusStep.run.includes("${{ needs.gate-evidence-runner"), "the detector's evaluated head must be read via env (DETECTOR_EVALUATED_HEAD_SHA), not spliced directly into the shell");
 });
 
 // Pins the env-routing half of #2262: the `decide` step reads the

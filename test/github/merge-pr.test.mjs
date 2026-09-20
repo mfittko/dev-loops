@@ -237,6 +237,26 @@ test("a merge blocked by branch protection with a stale gate-evidence context na
   assert.match(threw.message, /re-run|verdict comment/i);
 });
 
+test("a base-branch-policy block with a SUCCESS gate-evidence context gets no gate-evidence note (#2262)", async () => {
+  const { runtime } = makeRuntime({
+    prView: {
+      statusCheckRollup: [
+        { status: "COMPLETED", conclusion: "SUCCESS", name: "verify" },
+        { state: "SUCCESS", context: "gate-evidence" },
+      ],
+    },
+  });
+  runtime.runChild = async () => ({ stdout: "", stderr: "GraphQL: Base branch policy prohibits the merge (mergePullRequest)", code: 1 });
+  let threw = null;
+  try { await mergePr(baseOptions(), runtime); } catch (e) { threw = e; }
+  assert.ok(threw, "a branch-protection-blocked merge must throw");
+  assert.match(threw.message, /Base branch policy prohibits the merge/, "the original gh stderr must still be present");
+  assert.ok(
+    !/COMPLETED Gate-evidence run/.test(threw.message),
+    "a real branch-policy block must not get the gate-evidence recovery note when gate-evidence is already SUCCESS — the real cause is a different required check",
+  );
+});
+
 test("a transient gh/API error is NOT misattributed to a stale gate-evidence context even when gate-evidence is non-success (#2262)", async () => {
   const { runtime } = makeRuntime({
     prView: {

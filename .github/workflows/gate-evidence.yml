@@ -66,6 +66,7 @@ jobs:
       number: ${{ steps.pr.outputs.number }}
       draft: ${{ steps.pr.outputs.draft }}
       head_sha: ${{ steps.pr.outputs.head_sha }}
+      evaluated_head_sha: ${{ steps.gate_check.outputs.evaluated_head_sha }}
     steps:
       # The one API call here is retried once; if it still fails, the run
       # fails with no evidence_state output — the reporter job recomputes.
@@ -138,6 +139,12 @@ jobs:
       # (uncaptured) run would have had. This job no longer POSTS a status
       # (0075) — it only computes and exposes evidenceState as a job output;
       # the reporter job below owns the required `gate-evidence` status.
+      #
+      # evaluated_head_sha (detect-checkpoint-evidence.mjs's OWN currentHeadSha,
+      # not steps.pr.outputs.head_sha) is also exposed: the reporter's reuse
+      # path posts evidence_state, so it must post it to the EXACT head this
+      # detection ran against, not a separately-resolved head that could have
+      # advanced between the two resolutions.
       - name: Verify draft_gate / pre_approval_gate evidence
         id: gate_check
         if: steps.pr.outputs.draft == 'false'
@@ -154,6 +161,8 @@ jobs:
           cat gate_check_stderr.json >&2
           evidence_state="$(jq -r '.evidenceState // empty' gate_check_stdout.json gate_check_stderr.json 2>/dev/null | head -n1)"
           echo "evidence_state=${evidence_state}" >> "$GITHUB_OUTPUT"
+          evaluated_head_sha="$(jq -r '.currentHeadSha // empty' gate_check_stdout.json gate_check_stderr.json 2>/dev/null | head -n1)"
+          echo "evaluated_head_sha=${evaluated_head_sha}" >> "$GITHUB_OUTPUT"
 
   # The always-settling REPORTER: owns the required `gate-evidence` status.
   # Concurrency-exempt from the detector's cancel-in-progress group (its own
@@ -277,6 +286,8 @@ jobs:
           cat gate_check_stderr.json >&2
           evidence_state="$(jq -r '.evidenceState // empty' gate_check_stdout.json gate_check_stderr.json 2>/dev/null | head -n1)"
           echo "evidence_state=${evidence_state}" >> "$GITHUB_OUTPUT"
+          evaluated_head_sha="$(jq -r '.currentHeadSha // empty' gate_check_stdout.json gate_check_stderr.json 2>/dev/null | head -n1)"
+          echo "evaluated_head_sha=${evaluated_head_sha}" >> "$GITHUB_OUTPUT"
 
       # evidenceState (satisfied|not_established|violation, from
       # detect-checkpoint-evidence.mjs) drives the posted commit-status state.
@@ -289,18 +300,26 @@ jobs:
       # `!cancelled()` guard here: this run is guaranteed to run to completion
       # once started, so it always posts.
       #
-      # Head-pairing (#2262 draft-gate finding): the REUSE path (recompute ==
-      # false) posts the detector's evidence_state, so it MUST target the
-      # detector's OWN independently-resolved head
-      # (needs.gate-evidence-runner.outputs.head_sha) — never this job's own
-      # `steps.pr.outputs.head_sha`. On issue_comment events both jobs resolve
-      # the head live via a fresh API call; posting a reused verdict to a head
-      # resolved by a SEPARATE call risks a fail-open pairing mismatch if the
-      # head advanced between the two resolutions. The RECOMPUTE path posts
-      # this job's own steps.pr.outputs.head_sha, because that is the head this
-      # job itself evaluated. Every `${{ }}` value read below — both head SHAs
-      # and both evidence_state values — is routed through env, not spliced
-      # directly into the shell (script-injection anti-pattern).
+      # Head-pairing: the REUSE path (recompute == false) posts evidence_state
+      # computed by the detector's OWN detect-checkpoint-evidence.mjs run, so
+      # it MUST target the EXACT head that run evaluated — its own
+      # `currentHeadSha`, exposed as
+      # `needs.gate-evidence-runner.outputs.evaluated_head_sha` — never
+      # `head_sha` from the detector's separately-resolved Resolve-PR-facts
+      # step. Pairing evidence_state with a head resolved by a separate API
+      # call (as the old wiring did) lets a push land between the two
+      # resolutions and post a verdict for head X onto head Y. Likewise the
+      # RECOMPUTE path posts `steps.recompute_check.outputs.evaluated_head_sha`
+      # — the head this job's own detection run evaluated — not its
+      # independently-resolved `steps.pr.outputs.head_sha`. If the selected
+      # evaluated head is EMPTY (detection could not resolve a head at all —
+      # evidence_state is then empty too, which already fails closed to
+      # `failure`), fall back to this job's own resolved
+      # `steps.pr.outputs.head_sha` so a fail-closed `failure` still lands
+      # somewhere rather than the status post being skipped outright. Every
+      # `${{ }}` value read below — both evaluated head SHAs, the reporter's
+      # own head, and both evidence_state values — is routed through env, not
+      # spliced directly into the shell (script-injection anti-pattern).
       - name: Report gate-evidence status on the PR head SHA
         id: post
         if: steps.pr.outputs.draft == 'false'
@@ -309,16 +328,22 @@ jobs:
           RECOMPUTE: ${{ steps.decide.outputs.recompute }}
           REUSED_EVIDENCE_STATE: ${{ steps.decide.outputs.evidence_state }}
           RECOMPUTED_EVIDENCE_STATE: ${{ steps.recompute_check.outputs.evidence_state }}
-          DETECTOR_HEAD_SHA: ${{ needs.gate-evidence-runner.outputs.head_sha }}
+          DETECTOR_EVALUATED_HEAD_SHA: ${{ needs.gate-evidence-runner.outputs.evaluated_head_sha }}
+          RECOMPUTE_EVALUATED_HEAD_SHA: ${{ steps.recompute_check.outputs.evaluated_head_sha }}
           REPORTER_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: |
           set +e
           if [ "$RECOMPUTE" = "true" ]; then
             evidence_state="$RECOMPUTED_EVIDENCE_STATE"
-            head_sha="$REPORTER_HEAD_SHA"
+            evaluated_head_sha="$RECOMPUTE_EVALUATED_HEAD_SHA"
           else
             evidence_state="$REUSED_EVIDENCE_STATE"
-            head_sha="$DETECTOR_HEAD_SHA"
+            evaluated_head_sha="$DETECTOR_EVALUATED_HEAD_SHA"
+          fi
+          if [ -n "$evaluated_head_sha" ]; then
+            head_sha="$evaluated_head_sha"
+          else
+            head_sha="$REPORTER_HEAD_SHA"
           fi
           case "$evidence_state" in
             satisfied) state="success" ;;
