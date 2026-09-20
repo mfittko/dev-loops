@@ -350,6 +350,21 @@ test("evaluateCopilotConvergence: an equal-timestamp same-head tie folds toward 
   }
 });
 
+test("evaluateCopilotConvergence: an invalid-timestamp 🟡 is not superseded by a valid-timestamp 🟢 (raw-string compare mirrors the loop; no fail-open)", () => {
+  // The loop's summarizeCopilotReviews compares the RAW submittedAt string, so an
+  // unparseable submittedAt is kept as-is, not coerced to null. Parsing here would
+  // make the malformed 🟡 drop out and let the valid 🟢 supersede — a fail-open.
+  // Both array orders must block, matching the loop.
+  for (const reviews of [
+    [copilotReview({ body: "### 🟡 Changes recommended\n\nx", submittedAt: "not-a-timestamp" }), copilotReview({ body: "### 🟢 Approval recommended", submittedAt: "2024-01-10T00:00:00Z" })],
+    [copilotReview({ body: "### 🟢 Approval recommended", submittedAt: "2024-01-10T00:00:00Z" }), copilotReview({ body: "### 🟡 Changes recommended\n\nx", submittedAt: "not-a-timestamp" })],
+  ]) {
+    const res = evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews });
+    assert.equal(res.ok, false, JSON.stringify(res));
+    assert.equal(res.disposition, "changes_recommended");
+  }
+});
+
 test("evaluateCopilotConvergence: a trailing PENDING draft never clears a submitted current-head 🟡", () => {
   const res = evaluateCopilotConvergence({
     currentHeadSha: HEAD,

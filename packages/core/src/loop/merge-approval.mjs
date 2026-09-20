@@ -20,7 +20,7 @@
  * precondition, and the aggregate naming.
  */
 
-import { isCopilotLogin, classifyCopilotReviewBodyDisposition, COPILOT_DISPOSITION, SUBMITTED_REVIEW_STATES, normalizeTimestamp } from "../github/copilot-helpers.mjs";
+import { isCopilotLogin, classifyCopilotReviewBodyDisposition, COPILOT_DISPOSITION, SUBMITTED_REVIEW_STATES } from "../github/copilot-helpers.mjs";
 import { findBlockingTitleMarkers } from "./pr-title-markers.mjs";
 import { resolveSizeBudgetHumanApprovalRequired } from "./size-budget-merge-gate.mjs";
 import { deriveLoopCiStatusFromRollup } from "./copilot-ci-status.mjs";
@@ -186,13 +186,17 @@ export function evaluateCopilotConvergence({ currentHeadSha = null, reviews = []
   // known head to pin the Copilot disposition to.
   if (head.length === 0) return { ok: false, disposition: null, reason: "current head SHA is unknown; cannot pin a Copilot review to it" };
 
-  // Mirror summarizeCopilotReviews' current-head finding selection so the merge
-  // gate and the loop can never diverge at the SELECTION layer (they already
-  // share classifyCopilotReviewBodyDisposition at the DETECTION layer): consider
-  // only SUBMITTED current-head Copilot reviews, skip PENDING drafts (a PENDING
-  // never resets the finding), pick the latest by submittedAt, and on an
-  // equal-timestamp tie (or when both timestamps are unknown) fold toward the
-  // most-blocking disposition rather than letting array order silently drop it.
+  // Mirror summarizeCopilotReviews' current-head finding selection BYTE-FOR-BYTE
+  // so the merge gate and the loop can never diverge (they already share
+  // classifyCopilotReviewBodyDisposition at the detection layer). Use the SAME
+  // comparison the loop uses — the RAW submittedAt string (a non-string is null),
+  // compared with `>`/`===`, NOT a parsed timestamp: parsing would diverge on a
+  // malformed/mixed-offset submittedAt (an invalid-timestamp 🟡 that the loop
+  // keeps as latest could otherwise be superseded here — a fail-open). Consider
+  // only SUBMITTED current-head reviews, skip PENDING drafts (a PENDING never
+  // sets the finding), pick the latest by submittedAt string, and on an
+  // equal-string tie (or both-null) fold toward the most-blocking disposition so
+  // array order never silently drops a finding.
   let latestDisposition = null;
   let latestAt = null;
   for (const entry of Array.isArray(reviews) ? reviews : []) {
@@ -202,17 +206,18 @@ export function evaluateCopilotConvergence({ currentHeadSha = null, reviews = []
     const state = typeof entry?.state === "string" ? entry.state.toUpperCase() : "";
     if (state === "PENDING" || !SUBMITTED_REVIEW_STATES.has(state)) continue; // PENDING/unknown never sets the finding
     const disposition = classifyCopilotReviewBodyDisposition(state, entry?.body);
-    const at = normalizeTimestamp(entry?.submittedAt ?? entry?.submitted_at);
-    if (latestDisposition === null) {
-      latestDisposition = disposition;
-      latestAt = at;
-    } else if (at !== null && (latestAt === null || at > latestAt)) {
-      latestDisposition = disposition; // a strictly-later timestamped review supersedes
-      latestAt = at;
-    } else if ((at !== null && at === latestAt) || (at === null && latestAt === null)) {
-      latestDisposition = moreBlockingDisposition(latestDisposition, disposition); // tie/unknown: fail toward surfacing
+    const submittedAt = typeof entry?.submittedAt === "string"
+      ? entry.submittedAt
+      : (typeof entry?.submitted_at === "string" ? entry.submitted_at : null);
+    if (submittedAt !== null && (latestAt === null || submittedAt > latestAt)) {
+      latestDisposition = disposition; // a lexicographically-later submittedAt supersedes (matches summarize)
+      latestAt = submittedAt;
+    } else if (submittedAt !== null && submittedAt === latestAt) {
+      latestDisposition = latestDisposition === null ? disposition : moreBlockingDisposition(latestDisposition, disposition);
+    } else if (submittedAt === null && latestAt === null) {
+      latestDisposition = latestDisposition === null ? disposition : moreBlockingDisposition(latestDisposition, disposition);
     }
-    // a null-timestamp review once a non-null latest exists is ignored (mirrors summarize)
+    // a null submittedAt once a non-null latest exists is ignored (mirrors summarize)
   }
   if (latestDisposition === null) return { ok: true, disposition: null, reason: null };
 
