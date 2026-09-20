@@ -895,7 +895,11 @@ export const SCOPE_DRIFT_VERDICT_ALIASES = Object.freeze({ none: "within_scope" 
  * @returns {unknown}
  */
 export function normalizeScopeDriftVerdict(verdict) {
-  return Object.prototype.hasOwnProperty.call(SCOPE_DRIFT_VERDICT_ALIASES, verdict)
+  // Only a primitive string spelling normalizes. `hasOwnProperty.call` coerces
+  // its key argument, so without this guard a boxed `new String("none")` or an
+  // object whose `toString()` returns `"none"` would alias to `within_scope` —
+  // a fail-open contradicting the validator's non-string-fails-closed contract.
+  return typeof verdict === "string" && Object.prototype.hasOwnProperty.call(SCOPE_DRIFT_VERDICT_ALIASES, verdict)
     ? SCOPE_DRIFT_VERDICT_ALIASES[verdict]
     : verdict;
 }

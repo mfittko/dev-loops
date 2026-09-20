@@ -1419,6 +1419,31 @@ describe("applyJudgeDispositions (#1525)", () => {
     assert.equal(normalizeScopeDriftVerdict("bogus"), "bogus");
   });
 
+  test("normalizeScopeDriftVerdict only normalizes a primitive string (non-string fails closed, no alias coercion)", () => {
+    // hasOwnProperty.call coerces its key, so a boxed String or an object whose
+    // toString() is "none" must NOT alias to within_scope — the guard keeps
+    // non-string verdicts on the passthrough path so the validator rejects them.
+    const boxed = new String("none"); // eslint-disable-line no-new-wrappers
+    assert.notEqual(normalizeScopeDriftVerdict(boxed), "within_scope");
+    assert.equal(normalizeScopeDriftVerdict(boxed), boxed);
+    const coercer = { toString: () => "none" };
+    assert.equal(normalizeScopeDriftVerdict(coercer), coercer);
+    assert.equal(normalizeScopeDriftVerdict(42), 42);
+    assert.equal(normalizeScopeDriftVerdict(null), null);
+  });
+
+  test("validateJudgeVerdict fails closed on a non-string scopeDrift.verdict that coerces to an alias key", () => {
+    const boxed = new String("none"); // eslint-disable-line no-new-wrappers
+    assert.throws(
+      () => validateJudgeVerdict(judgeVerdict([{ index: 0, disposition: "act", rationale: "x", criterion: "AC-1" }, { index: 1, disposition: "reject", rationale: "y", criterion: "NG-3" }], { verdict: boxed, rationale: "x", driftedAreas: [] })),
+      /scopeDrift\.verdict must be one of: within_scope, drift_detected/,
+    );
+    assert.throws(
+      () => validateJudgeVerdict(judgeVerdict([{ index: 0, disposition: "act", rationale: "x", criterion: "AC-1" }, { index: 1, disposition: "reject", rationale: "y", criterion: "NG-3" }], { verdict: { toString: () => "none" }, rationale: "x", driftedAreas: [] })),
+      /scopeDrift\.verdict must be one of: within_scope, drift_detected/,
+    );
+  });
+
   test("validateJudgeVerdict still fails closed on a scopeDrift.verdict outside the vocabulary", () => {
     assert.throws(
       () => validateJudgeVerdict(judgeVerdict([{ index: 0, disposition: "act", rationale: "x", criterion: "AC-1" }, { index: 1, disposition: "reject", rationale: "y", criterion: "NG-3" }], { verdict: "sideways", rationale: "x", driftedAreas: [] })),
