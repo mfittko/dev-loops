@@ -899,6 +899,70 @@ test("upsert-checkpoint-verdict creates a new comment when no same-head marker e
   }, { prefix: "dev-loops-upsert-gate-review-create-" });
 });
 
+// #2163: real-subprocess guard for main()'s `fields: options.fields` passthrough
+// (upsert-checkpoint-verdict.mjs:3186). writeGhStubHelper + the runNode fallback
+// spawn the ACTUAL CLI (no GH_MOCK_ENTRIES stashed, so the in-process branch above
+// is not exercised), so a regression dropping that passthrough would fail this
+// test even though it stays invisible to the in-process harness.
+test("upsert-checkpoint-verdict --fields returns the named top-level scalars as one tab-separated line (real CLI)", async () => {
+  await withTempDir(async (tempDir) => {
+    const { env } = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+        stdout: JSON.stringify({ number: 17, state: "OPEN", isDraft: true, headRefOid: "abc1234000000000000000000000000000000000", body: DEFAULT_TEST_PR_BODY, closingIssuesReferences: [], reviews: [], statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"],
+        stdout: '{"users":[],"teams":[]}\n',
+      },
+      {
+        assertArgs: ["api", "graphql", "pr=17"],
+        stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"],
+        stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n',
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: '[]\n',
+      },
+      // main() (real CLI) resolves the inline-execution mode itself, unlike the
+      // in-process harness above (which is handed an already-resolved
+      // executionMode), so it fetches the PR reviews list and changed-files list
+      // to auto-detect fanout vs inline before posting.
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+        stdout: '[]\n',
+      },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files", "--jq", ".files[].path"],
+        stdout: "src/index.ts\n",
+      },
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["### Gate review: `draft_gate`", "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`", "**Next action:** mark ready for review"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
+      },
+    ]);
+
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--pr", "17",
+      "--gate", "draft_gate",
+      "--head-sha", "abc1234000000000000000000000000000000000",
+      "--verdict", "clean",
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--findings-summary", "no issues found",
+      "--next-action", "mark ready for review",
+      "--fields", "action,gate,commentId",
+    ], { env, cwd: fanoutDisabledRepoRoot });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout, "created\tdraft_gate\t101\n");
+  }, { prefix: "dev-loops-upsert-gate-review-fields-" });
+});
+
 test("upsert-checkpoint-verdict --size-budget-json records the size-budget outcome/T1-slice/waiver fields on the posted verdict", async () => {
   await withTempDir(async (tempDir) => {
     const sizeBudgetPath = path.join(tempDir, "size-budget.json");

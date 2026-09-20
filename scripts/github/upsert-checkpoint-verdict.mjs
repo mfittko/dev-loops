@@ -6,7 +6,7 @@ import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
 import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, checkFanoutAngleCoverage, normalizeSeverity, normalizeSeverityCounts, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
 import { parseArgs } from "node:util";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken, preflightFieldsSpec } from "../lib/jq-output.mjs";
 import { parseAllowedRefsCsv, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghGraphql as runGhGraphql, ghJson as runGhJson } from "@dev-loops/core/github/gh";
@@ -3168,6 +3168,15 @@ async function main() {
     process.stdout.write(`${USAGE}\n`);
     return;
   }
+  // Reject a syntactically invalid/conflicting --fields BEFORE the mutation
+  // below (createGateReview posts to GitHub), so a malformed --fields or a
+  // --fields+--jq/--silent conflict can never post the verdict then fail at
+  // emit time — mirrors preflightJqFilter's use in the other mutation CLIs.
+  const fieldsPreflightError = preflightFieldsSpec(options.fields, { jq: options.jq, silent: options.silent });
+  if (fieldsPreflightError !== undefined) {
+    process.exitCode = fieldsPreflightError;
+    return;
+  }
   const inlineWarning = buildInlineExecutionWarning(options.executionMode, options.inlineReason);
   try {
     const result = await upsertCheckpointVerdict(options);
@@ -3183,7 +3192,7 @@ async function main() {
     if (result?.findingsLedgerWarning && !options.silent) {
       process.stderr.write(`${result.findingsLedgerWarning}\n`);
     }
-    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
+    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, fields: options.fields });
   } catch (error) {
     // formatCliError surfaces `error.usage` when present, so an over-limit
     // posted-comment field thrown from execution context (findings-file, gate

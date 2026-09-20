@@ -1,0 +1,134 @@
+/**
+ * Shared CommonMark code-span fixture set for approval / marker-text stripping.
+ *
+ * Any gate or reviewer that validates approval or marker text (for example the
+ * release-approval gate's `stripNonAssertionMarkdown` in
+ * scripts/release/verify-release-approval.mjs) can import this set to prove its
+ * stripper treats every enumerated code-span form as CODE — never as a prose
+ * assertion that could satisfy a marker match. The fail-open class this guards
+ * is a nested / multi-backtick CommonMark code span surviving a naive stripping
+ * regex; the shared set gives the internal gate its own independent coverage
+ * rather than relying on an external reviewer as the backstop.
+ *
+ * `treatment` is `"code"` for every form here: a correct stripper removes the
+ * marker so it can never satisfy the marker match. For most forms the marker is
+ * quoted inside a context CommonMark renders as code. The between-two-spans form
+ * is the deliberate exception — its marker is bare prose, removed only by the
+ * release stripper's coarse fail-closed over-strip (first-to-last backtick on
+ * the line); `treatment: "code"` records that required over-strip, so any
+ * consumer that imports this set must be at least as fail-closed. Unterminated
+ * fences must FAIL CLOSED too — everything after an unterminated fence is code,
+ * so the marker is still stripped. These are the forms enumerated by the set:
+ *   - single-backtick inline spans
+ *   - multi-backtick (longer-delimiter) spans
+ *   - spans whose content contains an inner backtick pair
+ *   - a marker sandwiched between two separate spans (coarse over-strip guard)
+ *   - unterminated fences (fail closed)
+ * plus the tilde-fence and indented-code-block forms GitHub also renders as
+ * code.
+ *
+ * No third-party imports: pure data + one builder, so a deps-free release-path
+ * script (see scripts/lib/direct-run.mjs) could import it too.
+ */
+
+/**
+ * The marker forms, parameterized by the marker phrase. Each `wrap(marker)`
+ * returns a comment body that embeds `marker` inside a code context. `category`
+ * names the AC-enumerated class the form covers.
+ */
+export const CODE_SPAN_FORMS = [
+  {
+    name: "single-backtick inline span",
+    category: "single-backtick span",
+    wrap: (m) => `Post \`${m}\` as a comment.`,
+  },
+  {
+    name: "double-backtick span",
+    category: "multi-backtick delimiter",
+    wrap: (m) => `See the runbook step \`\`${m}\`\` (double-backtick span).`,
+  },
+  {
+    name: "longer-delimiter (quad-backtick) span",
+    category: "multi-backtick delimiter",
+    wrap: (m) => `\`\`\`\` ${m} \`\`\`\``,
+  },
+  {
+    name: "span whose content is an inner backtick pair",
+    category: "inner-backtick pair",
+    wrap: (m) => `\`\` \`${m}\` \`\``,
+  },
+  {
+    name: "inner-backtick pair preceding the marker in one span",
+    category: "inner-backtick pair",
+    wrap: (m) => `\`\` \`x\` ${m} \`\``,
+  },
+  {
+    name: "marker sandwiched between two separate code spans on one line",
+    category: "multi-backtick delimiter",
+    // The marker is bare prose here, BETWEEN two spans, not inside one. The
+    // coarse first-to-last-backtick line strip removes it anyway (fail closed);
+    // this is the unique guard for that coarse strip: a precise-matcher
+    // regression would keep the inner-span forms passing while re-opening only
+    // this one, so the set must keep it to stay a superset of the release
+    // gate's prior private coverage.
+    wrap: (m) => `\`\`code \` here\`\` ${m} \`\`x\`\``,
+  },
+  {
+    name: "triple-backtick fenced block",
+    category: "multi-backtick delimiter",
+    wrap: (m) => `\`\`\`\n${m}\n\`\`\``,
+  },
+  {
+    name: "tilde fenced block",
+    category: "multi-backtick delimiter",
+    wrap: (m) => `~~~\n${m}\n~~~`,
+  },
+  {
+    name: "unterminated backtick fence (fail closed)",
+    category: "unterminated fence",
+    wrap: (m) => `\`\`\`\n${m}`,
+  },
+  {
+    name: "unterminated tilde fence (fail closed)",
+    category: "unterminated fence",
+    wrap: (m) => `~~~\n${m}`,
+  },
+  {
+    name: "four-space indented code block",
+    category: "indented code block",
+    wrap: (m) => `    ${m}`,
+  },
+  {
+    name: "tab-indented code block",
+    category: "indented code block",
+    wrap: (m) => `\t${m}`,
+  },
+];
+
+/**
+ * Build the fixture set for a given marker phrase. Each fixture is
+ * `{ name, category, body, treatment: "code" }`. A stripper is correct on the
+ * set when the marker text no longer appears in the stripped body of any
+ * fixture (so it can never satisfy the marker match).
+ */
+export function buildCodeSpanFixtures(marker) {
+  if (typeof marker !== "string" || marker.trim().length === 0) {
+    throw new Error("buildCodeSpanFixtures requires a non-empty marker string");
+  }
+  return CODE_SPAN_FORMS.map((f) => ({
+    name: f.name,
+    category: f.category,
+    body: f.wrap(marker),
+    treatment: "code",
+  }));
+}
+
+/**
+ * The release-approval marker phrase — the concrete instance of this fail-open
+ * class. Exported so the release-gate coverage consumes the shared set rather
+ * than a private copy.
+ */
+export const APPROVAL_MARKER = "approve release v1.0.0";
+
+/** The fixture set for the release-approval marker. */
+export const APPROVAL_CODE_SPAN_FIXTURES = buildCodeSpanFixtures(APPROVAL_MARKER);

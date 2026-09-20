@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { test } from "bun:test";
 import {
   JqFilterError,
   evaluateJqFilter,
   assertJqFilterSyntax,
   preflightJqFilter,
+  preflightFieldsSpec,
   emitResult,
   matchJqOutputToken,
 } from "../../scripts/lib/jq-output.mjs";
@@ -215,4 +217,155 @@ test("matchJqOutputToken: consumes --jq/--silent tokens into options, ignores ot
   const d = {};
   assert.equal(matchJqOutputToken({ name: "jq", value: ".x" }, d, (t) => t.value.toUpperCase()), true);
   assert.equal(d.jq, ".X");
+  // --fields <value>: same value-getter contract as --jq (the multi-field read).
+  const e = {};
+  assert.equal(matchJqOutputToken({ name: "fields", value: "a,b,c" }, e), true);
+  assert.equal(e.fields, "a,b,c");
+  const f = {};
+  assert.equal(matchJqOutputToken({ name: "fields", value: "x" }, f, (t) => t.value.toUpperCase()), true);
+  assert.equal(f.fields, "X");
+});
+
+const fieldsSample = { ok: true, lifecycleState: "pr_ready_no_feedback", gateBoundary: "post_draft", count: 3, note: null, snapshot: { rounds: 3 }, items: [1, 2] };
+
+test("emitResult: --fields prints named top-level scalars as one TSV line in requested order", () => {
+  const out = sink();
+  assert.equal(emitResult(fieldsSample, { fields: "lifecycleState,gateBoundary,count", stdout: out }), 0);
+  assert.equal(out.get(), "pr_ready_no_feedback\tpost_draft\t3\n");
+  // Order follows the requested list, not the object's key order.
+  const out2 = sink();
+  assert.equal(emitResult(fieldsSample, { fields: "count,lifecycleState", stdout: out2 }), 0);
+  assert.equal(out2.get(), "3\tpr_ready_no_feedback\n");
+});
+
+test("emitResult: --fields output is shell `read A B C`-consumable (one line, tab-separated, requested count)", () => {
+  const out = sink();
+  emitResult(fieldsSample, { fields: "lifecycleState,gateBoundary,count", stdout: out });
+  const line = out.get().replace(/\n$/, "");
+  // What `IFS=$'\t' read -r A B C` binds: split on tab yields exactly the fields, in order.
+  assert.deepEqual(line.split("\t"), ["pr_ready_no_feedback", "post_draft", "3"]);
+});
+
+test("emitResult: --fields renders a null field as an empty cell (still a stable column)", () => {
+  const out = sink();
+  assert.equal(emitResult(fieldsSample, { fields: "note,count", stdout: out }), 0);
+  assert.equal(out.get(), "\t3\n");
+});
+
+test("emitResult: --fields on ok:false still prints TSV but returns exit 1", () => {
+  const out = sink();
+  assert.equal(emitResult({ ok: false, lifecycleState: "blocked" }, { fields: "lifecycleState", stdout: out }), 1);
+  assert.equal(out.get(), "blocked\n");
+});
+
+test("emitResult: --fields fails closed on an unknown field (exit 2 + stderr envelope)", () => {
+  const out = sink();
+  const err = sink();
+  assert.equal(emitResult(fieldsSample, { fields: "lifecycleState,nope", stdout: out, stderr: err }), 2);
+  assert.equal(out.get(), "");
+  const parsed = JSON.parse(err.get().trim());
+  assert.equal(parsed.ok, false);
+  assert.match(parsed.error, /^--fields \(BASE-JQ-OUTPUT-GUARANTEE\):/);
+  assert.match(parsed.error, /unknown field: nope/);
+});
+
+test("emitResult: --fields fails closed on a non-scalar (object/array) field (exit 2)", () => {
+  for (const field of ["snapshot", "items"]) {
+    const out = sink();
+    const err = sink();
+    assert.equal(emitResult(fieldsSample, { fields: `lifecycleState,${field}`, stdout: out, stderr: err }), 2);
+    assert.equal(out.get(), "");
+    assert.match(err.get(), /^\{"ok":false/);
+    assert.match(JSON.parse(err.get().trim()).error, /non-scalar/);
+  }
+});
+
+test("emitResult: --fields fails closed on a value that would break the single-line TSV (embedded tab/newline)", () => {
+  for (const bad of ["a\tb", "a\nb"]) {
+    const err = sink();
+    assert.equal(emitResult({ x: bad }, { fields: "x", stdout: sink(), stderr: err }), 2);
+    assert.match(JSON.parse(err.get().trim()).error, /tab\/newline/);
+  }
+});
+
+test("emitResult: --fields fails closed on an empty or malformed field list (exit 2)", () => {
+  for (const spec of ["", "lifecycleState,,gateBoundary", "not a field", ".lifecycleState"]) {
+    const err = sink();
+    assert.equal(emitResult(fieldsSample, { fields: spec, stdout: sink(), stderr: err }), 2);
+    assert.match(JSON.parse(err.get().trim()).error, /^--fields \(BASE-JQ-OUTPUT-GUARANTEE\):/);
+  }
+});
+
+test("emitResult: --fields refuses to combine with --jq or --silent (no silent winner; exit 2)", () => {
+  const errJq = sink();
+  assert.equal(emitResult(fieldsSample, { fields: "count", jq: ".count", stdout: sink(), stderr: errJq }), 2);
+  assert.match(JSON.parse(errJq.get().trim()).error, /cannot combine with --jq/);
+  const errSilent = sink();
+  assert.equal(emitResult(fieldsSample, { fields: "count", silent: true, stdout: sink(), stderr: errSilent }), 2);
+  assert.match(JSON.parse(errSilent.get().trim()).error, /cannot combine with --silent/);
+});
+
+test("emitResult: omitting --fields leaves the verbatim-JSON default output unchanged (no regression)", () => {
+  const out = sink();
+  assert.equal(emitResult(fieldsSample, { stdout: out }), 0);
+  assert.deepEqual(JSON.parse(out.get()), fieldsSample);
+});
+
+test("preflightFieldsSpec: undefined fields is a no-op (nothing to validate)", () => {
+  const err = sink();
+  assert.equal(preflightFieldsSpec(undefined, { stderr: err }), undefined);
+  assert.equal(err.get(), "");
+});
+
+test("preflightFieldsSpec: a valid spec passes through with no stderr", () => {
+  const err = sink();
+  assert.equal(preflightFieldsSpec("a,b,c", { stderr: err }), undefined);
+  assert.equal(err.get(), "");
+});
+
+test("preflightFieldsSpec: --fields+--jq and --fields+--silent each fail closed (exit 2)", () => {
+  const errJq = sink();
+  assert.equal(preflightFieldsSpec("a,b", { jq: ".a", stderr: errJq }), 2);
+  const parsedJq = JSON.parse(errJq.get().trim());
+  assert.equal(parsedJq.ok, false);
+  assert.match(parsedJq.error, /^--fields \(BASE-JQ-OUTPUT-GUARANTEE\):/);
+  assert.match(parsedJq.error, /cannot combine with --jq/);
+
+  const errSilent = sink();
+  assert.equal(preflightFieldsSpec("a,b", { silent: true, stderr: errSilent }), 2);
+  assert.match(JSON.parse(errSilent.get().trim()).error, /cannot combine with --silent/);
+});
+
+test("preflightFieldsSpec: a malformed/empty field list fails closed (exit 2)", () => {
+  for (const spec of ["", "a,,b", "not a field"]) {
+    const err = sink();
+    assert.equal(preflightFieldsSpec(spec, { stderr: err }), 2);
+    assert.match(JSON.parse(err.get().trim()).error, /^--fields \(BASE-JQ-OUTPUT-GUARANTEE\):/);
+  }
+});
+
+test("preflightFieldsSpec: the preflight envelope is byte-identical to emitResult's own --fields branch for the same malformed input", () => {
+  const preErr = sink();
+  assert.equal(preflightFieldsSpec("a,,b", { stderr: preErr }), 2);
+
+  const emitErr = sink();
+  emitResult({}, { fields: "a,,b", stdout: sink(), stderr: emitErr });
+  assert.equal(preErr.get(), emitErr.get());
+
+  // Same proof for the --jq-conflict branch.
+  const preConflictErr = sink();
+  assert.equal(preflightFieldsSpec("a,b", { jq: ".a", stderr: preConflictErr }), 2);
+  const emitConflictErr = sink();
+  emitResult(fieldsSample, { fields: "a,b", jq: ".a", stdout: sink(), stderr: emitConflictErr });
+  assert.equal(preConflictErr.get(), emitConflictErr.get());
+});
+
+test("emitResult: --fields TSV output is cut(1)-consumable even with a null/empty leading cell", () => {
+  const out = sink();
+  assert.equal(emitResult(fieldsSample, { fields: "note,count", stdout: out }), 0);
+  const line = out.get().replace(/\n$/, "");
+  // Real `cut`, not a hand-rolled split: proves the documented empty-safe
+  // consumer actually works against emitResult's real TSV bytes.
+  assert.equal(execFileSync("cut", ["-f1"], { input: `${line}\n` }).toString(), "\n");
+  assert.equal(execFileSync("cut", ["-f2"], { input: `${line}\n` }).toString(), "3\n");
 });

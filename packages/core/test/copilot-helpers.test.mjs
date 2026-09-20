@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 
 import {
@@ -523,6 +526,70 @@ test("copilotReviewBodySignalsChanges: underscore-emphasis 'No _changes recommen
 test("copilotReviewBodySignalsChanges: 🟡 is authoritative alongside the word 'no' elsewhere in the body", () => {
   assert.equal(
     copilotReviewBodySignalsChanges("COMMENTED", "### 🟡 Changes recommended\n\nno issues elsewhere though."),
+    true,
+  );
+});
+
+// Real captured `ccr-overview-v2` bodies, one per disposition. These back the
+// text-matching (not emoji-keyed) contract for all three Copilot dispositions.
+const OVERVIEW_FIXTURE_DIR = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "copilot-overview");
+const readOverviewFixture = (name) => readFileSync(join(OVERVIEW_FIXTURE_DIR, name), "utf8");
+
+test("copilotReviewBodySignalsChanges: captured 🔵 'Needs a closer look' overview signals changes (non-approval)", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", readOverviewFixture("needs-a-closer-look.md")),
+    true,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: captured 🟡 'Changes recommended' overview signals changes", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", readOverviewFixture("changes-recommended.md")),
+    true,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: captured 🟢 'Approval recommended' overview is clean", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", readOverviewFixture("approval-recommended.md")),
+    false,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: 'Changes recommended' is text-matched with the emoji absent", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", "### Changes recommended\n\nA finding without the glyph."),
+    true,
+  );
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", "### 🟡 Changes recommended\n\nA finding with the glyph."),
+    true,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: 'Approval recommended' is clean with the emoji absent", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", "### Approval recommended\n\nLooks good."),
+    false,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: a disposition phrase quoted outside the header never false-positives", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges(
+      "COMMENTED",
+      "<!-- ccr-overview-v2 -->\n## Copilot review overview\n\n### 🟢 Approval recommended\n\nNo changes recommended and no closer look needed here.",
+    ),
+    false,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: an unrecognized disposition header fails closed (unresolved feedback)", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges(
+      "COMMENTED",
+      "<!-- ccr-overview-v2 -->\n## Copilot review overview\n\n### 🟣 Deferred to a domain expert\n\nSome future disposition we do not map yet.",
+    ),
     true,
   );
 });
