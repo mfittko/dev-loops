@@ -587,6 +587,17 @@ test("commandContainsDetachedWaitTool detects bare-& backgrounded wait/probe scr
   assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5 &> /tmp/x.log"), false);
   // a bare `&` on a NON-wait command is not this rule's concern.
   assert.equal(commandContainsDetachedWaitTool("node scripts/build.mjs &"), false);
+  // Copilot review: the helper must be INVOKED at a job head, not merely mentioned — a background
+  // job that names the basename as an ARGUMENT (grep/echo) is not backgrounding the probe.
+  assert.equal(commandContainsDetachedWaitTool("grep probe-copilot-review.mjs docs &"), false);
+  assert.equal(commandContainsDetachedWaitTool('echo "see wait-pr-checks.mjs" &'), false);
+  assert.equal(commandContainsDetachedWaitTool("cat notes-about-probe-copilot-review.mjs.txt &"), false);
+  // but the invocation forms (node/bun runner, direct script head, gh run watch, dev-loops) still deny
+  assert.equal(commandContainsDetachedWaitTool("bun scripts/github/probe-copilot-review.mjs --pr 5 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("./scripts/github/wait-pr-checks.mjs --pr 5 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("dev-loops gate probe-copilot --pr 5 &"), true);
+  // backgrounding a DIFFERENT job while a probe runs in the foreground is not the probe's own backgrounding
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5; echo done &"), false);
 });
 
 test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, and heredocs", () => {

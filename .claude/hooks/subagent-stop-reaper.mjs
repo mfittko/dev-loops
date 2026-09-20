@@ -13,8 +13,11 @@
  * stop is allowed.
  *
  * Scope (mirrors `ui-review-teardown`'s `process.kill(-pgid)` + win32 fail-closed pattern):
- *   - It kills ONLY the agent's own background shells — the members of the reaper's process GROUP,
- *     minus the reaper itself and the group leader (the session/agent). It never touches unrelated
+ *   - Verifiable ownership boundary: it reaps ONLY process-GROUP LEADERS (a process whose own pgid
+ *     equals its pid — i.e. a real detached background job group) that share the reaper's SESSION,
+ *     minus the reaper itself and the session leader (the agent/shell). Because every reaped pid
+ *     leads its OWN group, `process.kill(-pid)` signals only that job's group — never a foreground
+ *     sibling or another process that merely shares the reaper's group. It never touches unrelated
  *     processes, other sessions, or git/worktree state (the uncommitted-work guard owns that).
  *   - win32 fails closed: Node cannot signal a process group there, so the reaper skips rather than
  *     misfire.
@@ -26,9 +29,10 @@
  * unit-testable without spawning processes. Discovery and signalling are injectable seams so the
  * behavior is testable without real background shells.
  *
- * ponytail: process-group enumeration via `ps`, no PID registry (a PID registry / general job
- * supervisor is an explicit #2065 non-goal). If the harness spawns the hook in its own group,
- * nothing is found → no-op, which is the fail-safe; prevention is the real fix, this is the net.
+ * ponytail: session + group-leader enumeration via `ps`, no PID registry (a PID registry / general
+ * job supervisor is an explicit #2065 non-goal). A background job that is NOT its own group leader
+ * (e.g. a shell that backgrounded a child without job control) is conservatively left alone → the
+ * reaper no-ops rather than risk a foreground sibling; prevention is the real fix, this is the net.
  */
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -37,29 +41,42 @@ import { decideSubagentStopReap } from "./_hook-decisions.mjs";
 import { readHookInput } from "./_hook-io.mjs";
 
 /**
- * Best-effort discovery of the shells THIS agent left running in the background: enumerate the
- * reaper's process GROUP and drop the reaper itself and the group leader (pid === pgid, the
- * session/agent). A `ps` failure or an unresolvable group yields an empty set (fail-safe no-op).
+ * Best-effort discovery of the detached background job groups THIS agent left running: resolve the
+ * reaper's own SESSION id (the ownership boundary a background job the agent started shares), then
+ * enumerate every process and keep only the process-GROUP LEADERS (pid === pgid) in that session,
+ * dropping the reaper itself and the session leader (the agent/shell). Restricting to group leaders
+ * is the verifiable per-job boundary: each returned pid leads its own group, so a later
+ * `kill(-pid)` signals only that job's group, never a foreground sibling that merely shares the
+ * reaper's group. A `ps` failure or an unresolvable session yields an empty set (fail-safe no-op).
  */
 export function discoverOwnBackgroundShells({ selfPid = process.pid, execFileSyncImpl = execFileSync } = {}) {
-  let pgid = null;
+  let sid = null;
   try {
-    pgid = Number(execFileSyncImpl("ps", ["-o", "pgid=", "-p", String(selfPid)], { encoding: "utf8", timeout: 4000 }).trim());
+    sid = Number(execFileSyncImpl("ps", ["-o", "sess=", "-p", String(selfPid)], { encoding: "utf8", timeout: 4000 }).trim());
   } catch {
-    return { pgid: null, pids: [] };
+    return { sid: null, pids: [] };
   }
-  if (!Number.isInteger(pgid) || pgid <= 1) return { pgid: null, pids: [] };
+  if (!Number.isInteger(sid) || sid <= 1) return { sid: null, pids: [] };
   let out = "";
   try {
-    out = execFileSyncImpl("ps", ["-o", "pid=", "-g", String(pgid)], { encoding: "utf8", timeout: 4000 });
+    out = execFileSyncImpl("ps", ["-A", "-o", "pid=,pgid=,sess="], { encoding: "utf8", timeout: 4000 });
   } catch {
-    return { pgid, pids: [] };
+    return { sid, pids: [] };
   }
-  const pids = out
-    .split("\n")
-    .map((l) => Number(l.trim()))
-    .filter((p) => Number.isInteger(p) && p > 1 && p !== selfPid && p !== pgid);
-  return { pgid, pids };
+  const pids = [];
+  for (const line of out.split("\n")) {
+    const m = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)$/);
+    if (!m) continue;
+    const pid = Number(m[1]);
+    const pgid = Number(m[2]);
+    const sess = Number(m[3]);
+    // Own the process only when: same session as the reaper; a process-GROUP LEADER (pid === pgid,
+    // a real detached job group); not the reaper itself; and not the session leader (pid === sid).
+    if (sess === sid && pid === pgid && pid > 1 && pid !== selfPid && pid !== sid) {
+      pids.push(pid);
+    }
+  }
+  return { sid, pids };
 }
 
 /**
@@ -87,14 +104,14 @@ export function runSubagentStopReaper({
   signal = signalGroup,
 } = {}) {
   // `input` is accepted for parity with the other SubagentStop hooks and to keep stdin drained;
-  // discovery is process-group based, so the payload carries nothing the reaper needs today.
+  // discovery is session/group-leader based, so the payload carries nothing the reaper needs today.
   void input;
-  const { pgid, pids } = discover({ selfPid });
+  const { sid, pids } = discover({ selfPid });
   const decision = decideSubagentStopReap({
     platform,
     backgroundPids: pids,
     selfPid,
-    protectedPids: pgid ? [pgid] : [],
+    protectedPids: sid ? [sid] : [], // never signal the session leader (the agent/shell)
   });
   if (decision.decision === "reap") {
     for (const pid of decision.pids) {

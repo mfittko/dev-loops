@@ -803,32 +803,56 @@ export function commandContainsCopilotSummonComment(command) {
 }
 
 /**
- * Wait/probe helper commands that MUST run as a bounded FOREGROUND probe, never backgrounded.
- * The Copilot/CI wait is a bounded inline probe by contract (`probe-copilot-review.mjs` /
- * `wait-pr-checks.mjs` with an explicit timeout; `dev-loops gate probe-copilot`, `gh run watch`,
- * the watch-cycle CLIs). Under the Claude Code harness there is no async wake, so a backgrounded
- * one is never joined and orphans past the agent stop. Basenames match a `node
- * scripts/github/…` or a bare invocation alike.
+ * Whether a single shell JOB's command HEAD invokes a wait/probe helper — the Copilot/CI wait
+ * tools that MUST run as a bounded FOREGROUND probe (`probe-copilot-review.mjs` /
+ * `wait-pr-checks.mjs` with an explicit timeout; `detect-copilot-loop-state.mjs`;
+ * `run-watch-cycle.mjs`; `gh run watch`; `dev-loops loop watch-*` / `gate probe-copilot`).
+ * Anchored at the command head (after an env-assignment/wrapper/binary-path prefix), so a job
+ * that merely MENTIONS the basename as an argument — `grep probe-copilot-review.mjs docs`,
+ * `echo … wait-pr-checks.mjs` — does NOT match (only a real invocation does). A `.mjs` helper
+ * must be run by `node`/`bun`/`deno` or invoked directly as the head; the CLI forms anchor on
+ * their own verb.
+ * @param {string} job @returns {boolean}
  */
-const WAIT_PROBE_SCRIPT_RE =
-  /\b(?:probe-copilot-review|wait-pr-checks|detect-copilot-loop-state|run-watch-cycle)\.mjs\b|\bgh\s+run\s+watch\b|\b(?:loop\s+watch-cycle|loop\s+watch-ci|loop\s+watch-initial|gate\s+probe-copilot)\b/i;
+function jobHeadInvokesWaitProbe(job) {
+  const head = job.trim().replace(new RegExp(`^${SHELL_EXEC_PREFIX}`), "");
+  if (!head) return false;
+  const WAIT_SCRIPT = /(?:probe-copilot-review|wait-pr-checks|detect-copilot-loop-state|run-watch-cycle)\.mjs\b/i;
+  // `node`/`bun`/`deno … <path>/<wait-script>.mjs …`
+  if (/^(?:node|bun|deno)\b/i.test(head) && WAIT_SCRIPT.test(head)) return true;
+  // A wait script invoked directly as the command head (a bare `probe-copilot-review.mjs` path).
+  if (new RegExp(`^(?:\\S*/)?${WAIT_SCRIPT.source}`, "i").test(head)) return true;
+  // `gh run watch …`
+  if (/^(?:\S*\/)?gh\s+run\s+watch\b/i.test(head)) return true;
+  // `dev-loops loop watch-cycle|watch-ci|watch-initial` / `dev-loops gate probe-copilot`
+  if (/^(?:\S*\/)?dev-loops\s+(?:loop\s+watch-(?:cycle|ci|initial)|gate\s+probe-copilot)\b/i.test(head)) return true;
+  return false;
+}
 
 /**
  * Whether the command launches a wait/probe helper in the BACKGROUND — a bare `&` control
- * operator, not `&&` and not a redirection (`2>&1`, `>&2`, `&>file`). These helpers are bounded
- * foreground probes by contract; backgrounding one recreates the orphaned-wait defect.
- * Coarse by design: ANY background `&` in a command that also invokes a wait/probe helper denies.
+ * operator (not `&&`, not a redirection like `2>&1`/`>&2`/`&>file`) terminating a JOB whose
+ * command head invokes that helper. Segment/job-head-anchored (not a whole-string basename scan),
+ * so a background `&` on an UNRELATED job that merely mentions the filename is NOT denied; only
+ * backgrounding the helper's own job is. These helpers are bounded foreground probes by contract;
+ * backgrounding one recreates the orphaned-wait defect under the wake-less Claude harness.
  * ponytail: redirection stripping is a fixed set (`N>&M`, `&>`/`&>>`), not a full shell parse —
- * enough to tell a background `&` from a redirection `&`; upgrade only if a real command needs it.
+ * enough to tell a background `&` from a redirection `&`; the job split keys off the same set of
+ * control operators the rest of this module uses.
  * @param {string} command @returns {boolean}
  */
 function commandBackgroundsWaitProbe(command) {
-  if (!WAIT_PROBE_SCRIPT_RE.test(command)) return false;
   const withoutRedir = command
     .replace(/\d*>&\d*-?/g, " ") // 2>&1, 1>&2, >&2, >&-
     .replace(/&>>?/g, " "); // &>file, &>>file
-  // A background control operator is a single `&` that is not part of `&&`.
-  return /(?<!&)&(?!&)/.test(withoutRedir);
+  // Tokenize into jobs + the control operator following each; `&&` is matched before a lone `&`.
+  const parts = withoutRedir.split(/(&&|\|\||;|\||&|\n|\r)/);
+  for (let i = 0; i < parts.length; i += 2) {
+    // parts[i] is a job; parts[i+1] is the operator terminating it (undefined at end-of-string).
+    // A lone `&` operator means the preceding job was launched in the background.
+    if (parts[i + 1] === "&" && jobHeadInvokesWaitProbe(parts[i])) return true;
+  }
+  return false;
 }
 
 /**

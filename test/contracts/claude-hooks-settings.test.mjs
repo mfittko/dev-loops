@@ -7,7 +7,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
 import { evaluateSubagentStop } from "../../.claude/hooks/subagent-stop-uncommitted-guard.mjs";
-import { runSubagentStopReaper } from "../../.claude/hooks/subagent-stop-reaper.mjs";
+import { runSubagentStopReaper, discoverOwnBackgroundShells, signalGroup } from "../../.claude/hooks/subagent-stop-reaper.mjs";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 // Hook scripts live under the plugin root (.claude/hooks) so the Claude plugin can bundle them
@@ -109,11 +109,11 @@ test("SubagentStop reaper reaps ONLY the agent's own discovered shells and alway
     platform: "linux",
     selfPid: 999,
     // discover returns the reaper's own background shells + the protected group leader (pgid)
-    discover: () => ({ pgid: 500, pids: [4242, 4243] }),
+    discover: () => ({ sid: 500, pids: [4242, 4243] }),
     signal: (pid) => signalled.push(pid),
   });
   assert.equal(code, 0, "the reaper never blocks the stop");
-  assert.deepEqual(signalled, [4242, 4243], "reaps exactly the discovered own shells");
+  assert.deepEqual(signalled, [4242, 4243], "reaps exactly the discovered own detached job-group leaders");
 });
 
 test("SubagentStop reaper is a no-op when nothing is discovered (#2065)", () => {
@@ -123,11 +123,49 @@ test("SubagentStop reaper is a no-op when nothing is discovered (#2065)", () => 
     stderr: { write: () => {} },
     platform: "linux",
     selfPid: 999,
-    discover: () => ({ pgid: null, pids: [] }),
+    discover: () => ({ sid: null, pids: [] }),
     signal: (pid) => signalled.push(pid),
   });
   assert.equal(code, 0);
   assert.deepEqual(signalled, [], "no shells signalled when there is nothing to reap");
+});
+
+test("discoverOwnBackgroundShells returns ONLY session-scoped process-group leaders, excluding self + session leader (#2065, Copilot review)", () => {
+  // Injected `ps`: first call resolves the reaper's own session id; second lists all processes as
+  // `pid pgid sess` rows. Only rows in session 500 that are group leaders (pid === pgid) and are
+  // neither the reaper (999) nor the session leader (500) may be reaped.
+  const calls = [];
+  const execFileSyncImpl = (cmd, args) => {
+    calls.push(args.join(" "));
+    if (args.includes("-p")) return "500\n"; // ps -o sess= -p 999  → session 500
+    // ps -A -o pid=,pgid=,sess=
+    return [
+      "500 500 500", // session leader (the agent/shell) — excluded (pid === sid)
+      "999 999 500", // the reaper itself — excluded (pid === selfPid)
+      "4242 4242 500", // detached job-group leader in our session — REAP
+      "4243 4243 500", // detached job-group leader in our session — REAP
+      "5000 500 500", // foreground sibling sharing the session-leader's group (pid !== pgid) — skip
+      "6000 6000 700", // a group leader in a DIFFERENT session — skip
+      "garbage row",
+    ].join("\n") + "\n";
+  };
+  const { sid, pids } = discoverOwnBackgroundShells({ selfPid: 999, execFileSyncImpl });
+  assert.equal(sid, 500);
+  assert.deepEqual(pids, [4242, 4243]);
+});
+
+test("discoverOwnBackgroundShells fails safe (empty) when ps errors (#2065)", () => {
+  const throwing = () => { throw new Error("ps unavailable"); };
+  assert.deepEqual(discoverOwnBackgroundShells({ selfPid: 999, execFileSyncImpl: throwing }), { sid: null, pids: [] });
+});
+
+test("signalGroup targets the process GROUP and refuses a non-positive-integer pid (#2065)", () => {
+  const sent = [];
+  signalGroup(4242, { killImpl: (target, sig) => sent.push([target, sig]) });
+  assert.deepEqual(sent, [[-4242, "SIGTERM"]], "signals the negative pid (process group) first");
+  for (const bad of [0, 1, -3, 2.5, Number.NaN]) {
+    assert.throws(() => signalGroup(bad, { killImpl: () => {} }), /non-positive-integer/);
+  }
 });
 
 test("SubagentStop reaper fails closed on win32 — no shell is signalled (#2065)", () => {
@@ -137,7 +175,7 @@ test("SubagentStop reaper fails closed on win32 — no shell is signalled (#2065
     stderr: { write: () => {} },
     platform: "win32",
     selfPid: 999,
-    discover: () => ({ pgid: 500, pids: [4242, 4243] }),
+    discover: () => ({ sid: 500, pids: [4242, 4243] }),
     signal: (pid) => signalled.push(pid),
   });
   assert.equal(code, 0);

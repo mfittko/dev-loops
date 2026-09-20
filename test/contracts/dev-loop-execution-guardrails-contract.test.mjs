@@ -59,10 +59,22 @@ test("dev-loop contract pins a bounded FOREGROUND inline probe for the Copilot/C
     // the sanctioned wait names the bounded foreground inline probe scripts
     assert.match(doc, /probe-copilot-review\.mjs/, `${name} should name the bounded foreground probe script`);
     assert.match(doc, /wait-pr-checks\.mjs/, `${name} should name the CI wait probe script`);
-    // the pin requires a FOREGROUND probe
-    assert.match(doc, /foreground/i, `${name} should require a foreground probe`);
-    // the backgrounded sleep-poll / bare-& form is forbidden
-    assert.match(doc, /background/i, `${name} should forbid the backgrounded wait`);
+    // Assert the sentence SEMANTICS, not just isolated words (Copilot review, #2065): each doc must
+    // (a) tie a FOREGROUND probe to an explicit --timeout/--timeout-ms bound, and (b) explicitly
+    // FORBID/ban the backgrounded wait — a doc that merely mentioned "background" while permitting
+    // it must fail. The two assertions below each require a foreground+bounded phrase and a
+    // prohibition phrase in proximity to the wait subject.
+    assert.match(
+      doc,
+      /foreground[\s\S]{0,160}--timeout(?:-ms)?|--timeout(?:-ms)?[\s\S]{0,160}foreground/i,
+      `${name} should tie the FOREGROUND probe to an explicit --timeout/--timeout-ms bound`,
+    );
+    assert.match(
+      doc,
+      /(?:forbidden|never|must not|banned|barred)[\s\S]{0,80}background|background[\s\S]{0,120}(?:forbidden|never|must not|banned|barred|orphan)/i,
+      `${name} should explicitly forbid the backgrounded wait, not merely mention "background"`,
+    );
+    // the backgrounded sleep-poll / bare-& form is named as the prohibited shape
     assert.match(doc, /sleep|&/i, `${name} should name the sleep-poll / bare-& form`);
   }
 });

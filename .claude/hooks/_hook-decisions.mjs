@@ -132,6 +132,29 @@ export function decideBashGate({
     };
   }
 
+  // COPILOT-FOLLOWUP-WAIT-TOOLS: banned detached/polling wait wrappers. Actor-independent: the
+  // coordinator/main agent — not subagents only — is the actor that leaves backgrounded
+  // `until`/`while … sleep … done` poll loops and bare-`&` backgrounded probe shells orphaned
+  // under the Claude Code harness (no async wake to join them), so the gate must deny its
+  // backgrounding too. Evaluated HERE, before the `gh pr ready`/`merge`/`create` classification,
+  // so a compound command that pairs a lifecycle verb with a backgrounded wait
+  // (`gh pr create --repo other/x && node …/probe-copilot-review.mjs … &`) cannot short-circuit
+  // past it via the create/ready ALLOW paths. The sanctioned wait is always a bounded FOREGROUND
+  // inline probe (`probe-copilot-review.mjs` / `wait-pr-checks.mjs` with an explicit
+  // --timeout/--timeout-ms; `gh run watch`; the watch-cycle CLIs).
+  if (inManagedRepo && commandContainsDetachedWaitTool(command)) {
+    return {
+      decision: "deny",
+      reason:
+        "COPILOT-FOLLOWUP-WAIT-TOOLS: wait only through a bounded FOREGROUND probe (scripts/github/" +
+        "probe-copilot-review.mjs or scripts/github/wait-pr-checks.mjs with an explicit --timeout/" +
+        "--timeout-ms; scripts/loop/detect-copilot-loop-state.mjs one-shot; dev-loops loop watch-cycle; " +
+        "gh run watch) — nohup/disown/tmux/screen detach, while-sleep-poll loops, and bare-`&` " +
+        "backgrounding of a probe/wait script are barred for the coordinator and every subagent (a " +
+        "backgrounded wait orphans under Claude Code, which has no async wake to join it).",
+    };
+  }
+
   // SUBISSUE-NO-ADHOC-BYPASS: ad-hoc `gh api` writes to the target repo's sub-issue endpoints.
   // Actor-independent (no reserved direct path). Gated on the target repo: the absolute slug-embedded
   // form identifies the target repo; the bare relative form (`gh api issues/5/sub_issues`) resolves
@@ -239,25 +262,9 @@ export function decideBashGate({
   }
 
   if (!isReady && !isMerge && !isCreate) {
-    // COPILOT-FOLLOWUP-WAIT-TOOLS: banned detached/polling wait wrappers. Actor-independent:
-    // the coordinator/main agent — not subagents only — is the actor that leaves
-    // backgrounded `until`/`while … sleep … done` poll loops and bare-`&` backgrounded probe
-    // shells orphaned under the Claude Code harness (no async wake to join them), so the gate must
-    // deny its backgrounding too. The sanctioned wait is always a bounded FOREGROUND inline probe
-    // (`probe-copilot-review.mjs` / `wait-pr-checks.mjs` with an explicit --timeout / --timeout-ms;
-    // `gh run watch`; the watch-cycle CLIs).
-    if (inManagedRepo && commandContainsDetachedWaitTool(command)) {
-      return {
-        decision: "deny",
-        reason:
-          "COPILOT-FOLLOWUP-WAIT-TOOLS: wait only through a bounded FOREGROUND probe (scripts/github/" +
-          "probe-copilot-review.mjs or scripts/github/wait-pr-checks.mjs with an explicit --timeout/" +
-          "--timeout-ms; scripts/loop/detect-copilot-loop-state.mjs one-shot; dev-loops loop watch-cycle; " +
-          "gh run watch) — nohup/disown/tmux/screen detach, while-sleep-poll loops, and bare-`&` " +
-          "backgrounding of a probe/wait script are barred for the coordinator and every subagent (a " +
-          "backgrounded wait orphans under Claude Code, which has no async wake to join it).",
-      };
-    }
+    // The detached-wait deny (COPILOT-FOLLOWUP-WAIT-TOOLS) is evaluated earlier — actor-independently
+    // and BEFORE this lifecycle-verb classification — so a compound command pairing a lifecycle verb
+    // with a backgrounded wait cannot short-circuit past it through the create/ready ALLOW paths.
     return ALLOW;
   }
 

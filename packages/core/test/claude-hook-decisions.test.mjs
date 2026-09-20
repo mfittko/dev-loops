@@ -823,6 +823,21 @@ test("decideBashGate denies a bare-& backgrounded probe and a sleep-poll loop fo
   assert.equal(decideBashGate({ command: fg, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: "dev-loop" }).decision, "allow");
 });
 
+// Copilot review (#2065): the detached-wait deny is evaluated BEFORE the gh pr create/ready/merge
+// classification, so a compound command cannot short-circuit past it via a lifecycle-verb ALLOW path.
+test("decideBashGate denies a backgrounded probe even when paired with a lifecycle verb (no compound short-circuit)", () => {
+  // out-of-scope create (would take the create ALLOW path) chained with a backgrounded probe
+  const withForeignCreate = "gh pr create --repo other/repo --fill && node scripts/github/probe-copilot-review.mjs --pr 5 &";
+  const d1 = decideBashGate({ command: withForeignCreate, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null });
+  assert.equal(d1.decision, "deny");
+  assert.match(d1.reason, /COPILOT-FOLLOWUP-WAIT-TOOLS/);
+  // gh pr ready (a gated verb) chained with a backgrounded probe
+  const withReady = "gh pr ready 5 && node scripts/github/wait-pr-checks.mjs --pr 5 &";
+  const d2 = decideBashGate({ command: withReady, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: "dev-loop" });
+  assert.equal(d2.decision, "deny");
+  assert.match(d2.reason, /COPILOT-FOLLOWUP-WAIT-TOOLS/);
+});
+
 test("decideBashGate gates relative-endpoint gh api writes to the target repo", () => {
   // bare relative endpoint (resolved against the cwd repo) is denied in the target repo
   const d = decideBashGate({ command: "gh api -X POST issues/5/sub_issues -f child=6", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null });
