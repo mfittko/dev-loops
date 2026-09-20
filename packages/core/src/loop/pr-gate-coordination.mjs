@@ -592,7 +592,59 @@ function applyUnsettledCopilotReviewEntryGuard(input, result) {
   const copilotReviewRequestStatus = typeof input.copilotReviewRequestStatus === "string"
     ? input.copilotReviewRequestStatus.trim().toLowerCase()
     : "none";
-  if (copilotReviewRequestStatus !== "requested" && copilotReviewRequestStatus !== "already-requested") {
+  const sameHeadCleanConverged = input.sameHeadCleanConverged === true;
+  const copilotReviewRoundCount = normalizeNonNegativeInteger(input.copilotReviewRoundCount);
+  const copilotReviewOnCurrentHead = input.copilotReviewOnCurrentHead === true;
+  const outstandingRequest = copilotReviewRequestStatus === "requested"
+    || copilotReviewRequestStatus === "already-requested";
+  const roundCapReached = isCopilotRoundCapReached({
+    copilotReviewRoundCount: input.copilotReviewRoundCount,
+    maxCopilotRounds: input.maxCopilotRounds,
+  });
+  // Absent / never-driven: Copilot review is enabled (maxCopilotRounds
+  // > 0, not internal_only) but no round was requested or received for the
+  // CURRENT head, so a clean pre_approval_gate verdict would rest on nothing the
+  // loop actually drove on the head under review. The reconciled status alone is
+  // ambiguous: the reconciler (resolveCopilotReviewRequestStatus) folds a clean
+  // same-head submitted review into "none" too. Three facts each prove this is
+  // not the never-driven case and exempt this branch:
+  //   - sameHeadCleanConverged: a clean same-head submitted Copilot review
+  //     exists on THIS head (including GitHub's incidental auto-review) — the
+  //     no-redundant-re-request case;
+  //   - copilotReviewOnCurrentHead: a submitted Copilot review exists on THIS
+  //     head (a settled current-head round; at a grant boundary its threads are
+  //     already resolved). This is keyed on CURRENT-HEAD evidence, never a raw
+  //     across-PR round count: copilotReviewRoundCount counts reviews on ANY
+  //     head, so a PR with prior-head rounds and a NEW current head that carries
+  //     no review (interpreter state low_signal_converged with
+  //     copilotReviewOnCurrentHead false) must still fail closed;
+  //   - roundCapReached: at/past the cap no further Copilot round can be driven,
+  //     so requiring a current-head review is impossible to satisfy — the
+  //     pre_approval_gate reviews the post-cap head. The core only reaches a
+  //     grant boundary here after gating CI/threads, and a significant
+  //     post-convergence change routes to a rerequest (a new cycle) before this
+  //     guard runs, so this exemption cannot mask a genuinely-unreviewed change;
+  //   - postConvergenceReviewSuppressed: an operator verified (via
+  //     withdraw-copilot-review-request) that the current-head delta since
+  //     Copilot's last submitted review is a pure doc/prose bump, so the prior
+  //     converged review stands for this head — the core grants pre_approval on
+  //     the same basis (never derived here from other snapshot facts).
+  // Fail closed on ANY non-outstanding status, not only the literal "none":
+  // this is the independent gate-ENTRY re-check, so it must not trust the
+  // caller's status string. A non-canonical/unknown value ("", "unavailable",
+  // "failed", a typo) with a grant-y lifecycleState and no current-head review
+  // fails closed rather than slipping through the "none"-only default. Only a
+  // driven current-head review (or the impossible-further-round cap state, or an
+  // operator-verified pure-doc-bump suppression) exempts, so an agent that skips
+  // the explicit Copilot round cannot reach a clean pre_approval verdict via any
+  // grant-y lifecycleState (e.g. a stale/racy low_signal_converged label, or one
+  // carried by prior-head rounds).
+  const absentNeverDriven = !outstandingRequest
+    && !copilotReviewOnCurrentHead
+    && !sameHeadCleanConverged
+    && !roundCapReached
+    && input.postConvergenceReviewSuppressed !== true;
+  if (!outstandingRequest && !absentNeverDriven) {
     return null;
   }
   // Round-cap exemption (mirrors shouldGuardCopilotReviewRequest):
@@ -603,10 +655,6 @@ function applyUnsettledCopilotReviewEntryGuard(input, result) {
   // and the head is clean — either sameHeadCleanConverged or the interpreter's
   // round_cap_clean_fallback state — the pre_approval_gate proceeds unless
   // significant post-convergence changes require a new review cycle.
-  const roundCapReached = isCopilotRoundCapReached({
-    copilotReviewRoundCount: input.copilotReviewRoundCount,
-    maxCopilotRounds: input.maxCopilotRounds,
-  });
   const lifecycleState = typeof input.lifecycleState === "string" ? input.lifecycleState.trim().toLowerCase() : "";
   // Also exempt the evaluator's own ROUND_CAP_REACHED grant shape:
   // without this, this guard would rewrite that grant back to
@@ -624,7 +672,15 @@ function applyUnsettledCopilotReviewEntryGuard(input, result) {
 
   const allowedNextActions = [];
   const forbiddenActions = [];
-  pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW]);
+  // Two shapes fail closed here. An OUTSTANDING request (requested/
+  // already-requested) waits for the current-head review to settle. The
+  // ABSENT / never-driven case has nothing to wait for — no request is
+  // in flight — so the loop must first REQUEST a Copilot review, mirroring the
+  // detector-side shouldGuardCopilotReviewRequest override.
+  const nextAction = absentNeverDriven
+    ? PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW
+    : PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW;
+  pushUnique(allowedNextActions, [nextAction]);
   // Full postDraftForbidden set (matching the canonical WAITING_FOR_COPILOT_REVIEW
   // result this guard synthesizes) plus the final-approval actions the replaced
   // boundary result also forbade — dropping RUN_DRAFT_GATE/MARK_READY_FOR_REVIEW
@@ -642,18 +698,24 @@ function applyUnsettledCopilotReviewEntryGuard(input, result) {
     repo: input.repo ?? null,
     pr: Number.isInteger(input.pr) ? input.pr : null,
     currentHeadSha: result.currentHeadSha ?? null,
-    lifecycleState: STATE.WAITING_FOR_COPILOT_REVIEW,
-    loopDisposition: DISPOSITION.PENDING,
+    lifecycleState: absentNeverDriven ? STATE.PR_READY_NO_FEEDBACK : STATE.WAITING_FOR_COPILOT_REVIEW,
+    loopDisposition: absentNeverDriven ? DISPOSITION.ACTION_REQUIRED : DISPOSITION.PENDING,
     gateBoundary: PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW,
     draftGateAlreadySatisfied: result.draftGateAlreadySatisfied === true,
     draftGate: result.draftGate,
     preApprovalGate: result.preApprovalGate,
     allowedNextActions,
     forbiddenActions,
-    nextAction: PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW,
-    reason: "A Copilot review request is still outstanding on the current head (independent gate-entry "
-      + "re-check, issue #1190) — pre_approval_gate/final-approval entry is refused until the current-head "
-      + "review settles, even though the caller-reported convergence signal claims otherwise.",
+    nextAction,
+    reason: absentNeverDriven
+      ? "Copilot review is enabled for this repo (maxCopilotRounds > 0) but no Copilot review round has been "
+        + "requested or received for the current head (independent gate-entry re-check, issue #2146) — a clean "
+        + "pre_approval_gate/final-approval verdict requires a Copilot round the loop actually drove and awaited, "
+        + "so request Copilot review first. A clean same-head submitted Copilot review (including GitHub's "
+        + "auto-review) would satisfy this; an absent/never-driven round is not settled convergence."
+      : "A Copilot review request is still outstanding on the current head (independent gate-entry "
+        + "re-check, issue #1190) — pre_approval_gate/final-approval entry is refused until the current-head "
+        + "review settles, even though the caller-reported convergence signal claims otherwise.",
     mergeStateStatus: result.mergeStateStatus ?? null,
     conflictFiles: result.conflictFiles ?? [],
     refinementArtifact: result.refinementArtifact ?? null,

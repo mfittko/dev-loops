@@ -346,6 +346,202 @@ test("#1190: maxCopilotRounds: 0 (Copilot review disabled) is exempt from the ou
   assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
 });
 
+// #2146: the pre_approval Copilot round must be genuinely driven when Copilot
+// is enabled — a clean pre_approval verdict can no longer ride on a lifecycle
+// label that grants entry while NO Copilot round was ever requested or received
+// for the current head. The independent gate-ENTRY re-check now fails closed on
+// the absent / never-driven case (status "none", zero completed rounds, no clean
+// same-head review), not only the outstanding-request case (#1190). A
+// grant-y lifecycleState (e.g. a stale/racy low_signal_converged label with
+// zero rounds) is the exact bypass this closes.
+test("#2146: absent/never-driven Copilot round refuses pre_approval_gate entry even when the caller "
+  + "claims a converged lifecycleState", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 2146,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    // low_signal_converged would grant RUN_PRE_APPROVAL_GATE, but with zero
+    // completed rounds it is unreachable through the real interpreter — a
+    // stale/injected label the entry guard must not trust.
+    lifecycleState: STATE.LOW_SIGNAL_CONVERGED,
+    sameHeadCleanConverged: false,
+    copilotReviewRequestStatus: "none",
+    copilotReviewRoundCount: 0,
+    maxCopilotRounds: 2,
+    ciStatus: "success",
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW);
+  // Nothing is in flight to wait for, so the loop must request a round first.
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert.match(result.reason, /2146/);
+  // Same full postDraftForbidden set as the #1190 wait shape — a draft_gate/
+  // final-approval verdict must not slip through on a non-draft PR.
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL));
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY));
+});
+
+test("#2146: a clean same-head submitted Copilot review (incl. GitHub auto-review) still satisfies "
+  + "convergence — no redundant re-request forced", () => {
+  // The #2144 shape: sameHeadCleanConverged (a clean submitted review on THIS
+  // head), reconciled request status "none", zero explicit rounds driven.
+  const result = evaluatePrGateCoordination({
+    pr: 2144,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    sameHeadCleanConverged: true,
+    copilotReviewRequestStatus: "none",
+    copilotReviewRoundCount: 0,
+    maxCopilotRounds: 2,
+    ciStatus: "success",
+    preApprovalGate: gate({ visible: false }),
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+});
+
+test("#2146: a current-head Copilot review is a driven round — low-signal convergence with a "
+  + "current-head review still permits pre_approval_gate entry", () => {
+  // low_signal_converged with a review ON THE CURRENT HEAD DID drive a round for
+  // the head under review, so it is not the never-driven case and must not regress.
+  const result = evaluatePrGateCoordination({
+    pr: 2146,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.LOW_SIGNAL_CONVERGED,
+    sameHeadCleanConverged: false,
+    copilotReviewRequestStatus: "none",
+    copilotReviewRoundCount: 5,
+    copilotReviewOnCurrentHead: true,
+    maxCopilotRounds: 10,
+    ciStatus: "success",
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+  });
+
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+});
+
+// A positive across-PR copilotReviewRoundCount is NOT proof of a round on the
+// CURRENT head: the interpreter can reach low_signal_converged with rounds on a
+// PRIOR head and copilotReviewOnCurrentHead false (see
+// copilot-loop-state.test.mjs "suppresses when lastCopilotRoundMaxSignal is low").
+// Keying the exemption on the raw count would permit pre_approval on a new head
+// that carries no Copilot review — the exact bypass #2146 closes. The guard keys
+// on current-head evidence, so this fails closed.
+test("#2146: prior-head rounds with no current-head review fail closed at pre_approval entry", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 2146,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.LOW_SIGNAL_CONVERGED,
+    sameHeadCleanConverged: false,
+    copilotReviewRequestStatus: "none",
+    copilotReviewRoundCount: 5, // rounds happened — but on a PRIOR head
+    copilotReviewOnCurrentHead: false, // the current head carries no review
+    maxCopilotRounds: 10, // cap NOT reached, so no round-cap fallback exemption
+    ciStatus: "success",
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert.match(result.reason, /2146/);
+});
+
+test("#2146: an operator-verified post-convergence suppression exempts the absent/never-driven guard "
+  + "(head advanced past a converged review, pure doc/prose bump)", () => {
+  // withdraw-copilot-review-request records that the current-head delta is a pure
+  // doc/prose bump, so the prior converged review stands for this head even though
+  // copilotReviewOnCurrentHead is false. The core grants pre_approval on the same
+  // basis; the guard must not override it.
+  const result = evaluatePrGateCoordination({
+    pr: 2146,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    sameHeadCleanConverged: false,
+    copilotReviewOnCurrentHead: false,
+    copilotReviewRequestStatus: "none",
+    copilotReviewRoundCount: 1,
+    maxCopilotRounds: 10,
+    postConvergenceReviewSuppressed: true,
+    ciStatus: "success",
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+  });
+
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+});
+
+test("#2146: maxCopilotRounds: 0 (Copilot disabled) is exempt from the absent/never-driven entry guard", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 2146,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.LOW_SIGNAL_CONVERGED,
+    sameHeadCleanConverged: false,
+    copilotReviewRequestStatus: "none",
+    copilotReviewRoundCount: 0,
+    maxCopilotRounds: 0,
+    ciStatus: "success",
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+  });
+
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+});
+
+// The independent entry guard must not trust the caller's status string: a
+// non-canonical / unknown value (here an empty string, which is `typeof
+// "string"` and so bypasses the "none" default) with a grant-y lifecycleState
+// and zero driven rounds must fail CLOSED, not slip through a "none"-only check.
+// Locks the fail-closed direction so a refactor back to `status === "none"`
+// (which would fail open here) is caught.
+test("#2146: a non-canonical/unknown request status with no driven round fails closed at entry", () => {
+  for (const status of ["", "unavailable", "failed", "bogus"]) {
+    const result = evaluatePrGateCoordination({
+      pr: 2146,
+      currentHeadSha: "fedcba987654",
+      prDraft: false,
+      lifecycleState: STATE.LOW_SIGNAL_CONVERGED,
+      sameHeadCleanConverged: false,
+      copilotReviewRequestStatus: status,
+      copilotReviewRoundCount: 0,
+      maxCopilotRounds: 2,
+      ciStatus: "success",
+      draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+      draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+      preApprovalGate: gate({ visible: false }),
+    });
+    assert(
+      result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE),
+      `status ${JSON.stringify(status)} must fail closed at pre_approval entry`,
+    );
+    assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  }
+});
+
 test("issue 1771: internal_only READY_TO_REREQUEST_REVIEW with no Copilot convergence point still enters pre-approval directly", () => {
   // The suppression signal (handoff: run pre_approval_gate directly) and the
   // gate-boundary evaluator must agree. Before the fix this combination —
@@ -1786,6 +1982,12 @@ test("LOW_SIGNAL_CONVERGED routes to pre-approval gate when CI is green", () => 
     repo: "owner/repo", pr: 17,
     lifecycleState: STATE.LOW_SIGNAL_CONVERGED,
     loopDisposition: DISPOSITION.DONE,
+    // low-signal convergence is only reachable after real Copilot rounds
+    // (interpreter requires copilotReviewRoundCount > lowSignalRoundThreshold,
+    // default 3). The #2146 never-driven entry guard is keyed on a CURRENT-HEAD
+    // review, so this legit convergence carries copilotReviewOnCurrentHead: true.
+    copilotReviewRoundCount: 5,
+    copilotReviewOnCurrentHead: true,
     prDraft: false, ciStatus: "success",
     draftGate: { visible: true, verdict: "clean", headSha: "abc1234" },
     preApprovalGate: {},
@@ -1800,6 +2002,8 @@ test("LOW_SIGNAL_CONVERGED with clean pre-approval gate advances to final approv
   const result = evaluatePrGateCoordination({
     repo: "owner/repo", pr: 17, currentHeadSha: "abc1234",
     lifecycleState: STATE.LOW_SIGNAL_CONVERGED, loopDisposition: DISPOSITION.DONE,
+    copilotReviewRoundCount: 5,
+    copilotReviewOnCurrentHead: true,
     prDraft: false, ciStatus: "success",
     preApprovalGate: { visible: true, verdict: "clean", headSha: "abc1234" },
     preApprovalGateMarker: { visible: true, verdict: "clean", headSha: "abc1234", contractComplete: true },
@@ -2571,6 +2775,8 @@ test("clean title still reaches final_approval_ready at the low-signal heuristic
   const result = evaluatePrGateCoordination({
     repo: "owner/repo", pr: 17, currentHeadSha: "abc1234",
     lifecycleState: STATE.LOW_SIGNAL_CONVERGED, loopDisposition: DISPOSITION.DONE,
+    copilotReviewRoundCount: 5,
+    copilotReviewOnCurrentHead: true,
     prDraft: false, ciStatus: "success",
     prTitle: "Wire up the convergence heuristic",
     preApprovalGate: { visible: true, verdict: "clean", headSha: "abc1234" },

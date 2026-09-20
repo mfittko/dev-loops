@@ -1826,6 +1826,10 @@ export function buildCoordinationEvaluatorInput({
     // rather than trusting a stale/compound lifecycleState label alone.
     unresolvedThreadCount: coordinationContext.snapshot?.unresolvedThreadCount ?? null,
     sameHeadCleanConverged: coordinationContext.interpretation.sameHeadCleanConverged,
+    // Current-head Copilot review evidence, fed alongside sameHeadCleanConverged so
+    // the absent/never-driven entry guard keys on a round driven for THIS head
+    // (never a raw across-PR copilotReviewRoundCount, which counts prior-head rounds).
+    copilotReviewOnCurrentHead: coordinationContext.snapshot?.copilotReviewOnCurrentHead === true,
     // Operator-authorized post-convergence suppression: computed and
     // verified once in loadPrGateCoordinationContext (resolvePostConvergenceReviewSuppressed)
     // — see detect-pr-gate-coordination-state.mjs.
