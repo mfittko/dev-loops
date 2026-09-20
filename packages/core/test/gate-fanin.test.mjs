@@ -31,7 +31,7 @@ import {
   hasLocatableShape,
 } from "../src/loop/gate-fanin.mjs";
 import {
-  assertCleanImpliesNoAct,
+  assertCleanImpliesNoBlockingAct,
   clusterFindings,
   dedupeActListByCluster,
 } from "../src/loop/finding-cluster.mjs";
@@ -1543,13 +1543,17 @@ describe("consolidateFanin + finding-cluster (issue 2156 — fan-in clustering /
     assert.deepEqual(deduped, [findings[0], findings[2]]);
   });
 
-  test("assertCleanImpliesNoAct rejects a clean verdict paired with a nonzero act count", () => {
-    assert.throws(() => assertCleanImpliesNoAct("clean", 1), /clean verdict is invalid/);
+  test("assertCleanImpliesNoBlockingAct rejects a clean verdict with an act on a blocking severity", () => {
+    assert.throws(
+      () => assertCleanImpliesNoBlockingAct("clean", [{ severity: "high" }], ["high"]),
+      /clean verdict is invalid/,
+    );
   });
 
-  test("assertCleanImpliesNoAct accepts a clean verdict with a zero act count and a findings_present verdict with any act count", () => {
-    assert.equal(assertCleanImpliesNoAct("clean", 0), "clean");
-    assert.equal(assertCleanImpliesNoAct("findings_present", 3), "findings_present");
+  test("assertCleanImpliesNoBlockingAct accepts a clean verdict with acts only on non-blocking severities", () => {
+    assert.equal(assertCleanImpliesNoBlockingAct("clean", [{ severity: "medium" }, { severity: "low" }], ["high"]), "clean");
+    assert.equal(assertCleanImpliesNoBlockingAct("clean", [], ["high"]), "clean");
+    assert.equal(assertCleanImpliesNoBlockingAct("findings_present", [{ severity: "high" }], ["high"]), "findings_present");
   });
 });
 
