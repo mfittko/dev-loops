@@ -860,7 +860,13 @@ Consolidation:
   (non-defects) — severity is the reviewer's advisory weight only; deferral is a
   DISPOSITION — derived at fan-in for non-blocking findings, finalized per thread by the
   fix cycle / gate close — so no severity is spelled "defer" — and a severity/round
-  eligibility rule is never sufficient merit for closure. Every resolve-without-fix
+  eligibility rule is never sufficient merit for closure. Calibrate severity to
+  CONSEQUENCE, not diff size: a defect that breaks correctness on a reachable path, or opens
+  a fail-open / security / fail-closed gap, is at least `medium` — never `low` — no matter how
+  small the change; `low` is reserved for a real defect with no operator-visible consequence.
+  Under-labeling a real correctness/fail-open defect as `low` is a calibration defect: the
+  internal gate must rate such a finding comparably to an external reviewer, not lean on a
+  later Copilot round to re-surface it at the correct severity. Every resolve-without-fix
   reply for a low, medium, or nit MUST include an `Examined on merits:` rationale
   identifying the finding and its scope, acceptance-criteria, fix-window, or filing-bar
   basis; a severity-only dismissal is non-conforming. The pre-rename spellings
@@ -954,7 +960,13 @@ by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fanin`):
 
 - `index` is the 0-based position of the finding in the consolidated ledger's `findings`
   array. One disposition per finding.
-- `act` — in-scope for this PR; the fixer addresses it.
+- `act` — a genuine defect or in-scope gap relevant to this PR's acceptance criteria / definition
+  of done (a correctness bug, a fail-open/fail-closed gap, a security regression, or an AC-breaking
+  defect), plus the non-defect `act` cases named below (a `nit` riding an already-planned fix pass;
+  an admitted coverage-expansion request); the fixer addresses it. Severity is an INPUT to the judgment, never an auto-gate:
+  the judge adjudicates EVERY finding — INCLUDING a `low` — on its merits, and a real defect
+  is `act` regardless of its severity label. Round 1 is the cheapest fix point, so a real
+  AC-relevant `low` is acted up front, never auto-deferred on its label.
 - `defer` — real but belongs in a follow-up; MUST carry a `followUpDraft` (soft-cap contract):
   the draft is the durable ledger record, and the conductor consuming the verdict appends or
   files it by hand. The defer bar is high (net-reduction policy): a `nit` MUST NOT get
@@ -962,9 +974,12 @@ by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fanin`):
   only when it rides an already-planned fix pass — or `reject`, and the resolved thread note
   is its record; this governs the relevance/filing axis only, while the severity-derived
   `disposition` field keeps its own deferred-with-no-fixer-cycle semantics for nits), and a
-  `low` MUST be deferred only when leaving it unfixed would change an operator-visible
-  outcome (wrong guidance a conductor executes, a fail-closed gap reachable on a sanctioned
-  path, or a demonstrable bug) — otherwise it defaults to `reject`. When the judge's briefing
+  `low` adjudicated as a genuine AC-relevant defect is `act` (above), never deferred or
+  rejected on its severity label; a `low` that is real but out of this PR's scope MUST be
+  `defer`red only when leaving it unfixed would change an operator-visible outcome (wrong
+  guidance a conductor executes, a fail-closed gap reachable on a sanctioned path, or a
+  demonstrable bug), and a genuinely non-blocking/cosmetic `low` that clears none of those
+  defaults to `reject`. When the judge's briefing
   names an existing open issue covering the finding's territory, the `followUpDraft` MUST be
   titled `Append to issue N: ...`; coverage resolution is otherwise the conductor's job — the
   conductor MUST check the open issues (via `list-issues.mjs`) before filing and append a
@@ -1144,7 +1159,11 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
   auto-defer (#1585): the fixer receives every gate-authored finding (high,
   medium, AND low) as a fix/triage target and may fix-if-cheap-in-the-same-commit
   (free polish when already touching that code), else defer. Defer is permitted from round 1 on for
-  low findings — no forced fix window (the medium window (#1581) is unaffected). A LOCATABLE
+  low findings — no forced fix window (the medium window (#1581) is unaffected). A low the JUDGE
+  disposed `act`, however, is a fix target rather than a triage-defer candidate: the fixer may
+  decline it only on reproduction grounds (`GATE-EXEC-JUDGE-AUTHORITY-SPLIT`), exactly as a judge
+  `act` overrides a nit's no-fixer-cycle default — this is what makes a real AC-relevant low get
+  fixed up front rather than re-deferred one stage downstream on its severity label. A LOCATABLE
   question is a fixer ANSWER target, never fixed or deferred: the fixer replies with an answer
   (promoting the
   finding to a defect severity if the answer reveals one, or escalating to the author when
@@ -1513,7 +1532,8 @@ question, OR nit) is resolved before the gate is considered satisfied and before
 — a clean verdict alone no longer satisfies the gate. The fixer triages EVERY gate-authored
 defect finding (high, medium, AND low) on EVERY gate round (clean verdict or
 not): fix-if-cheap-in-the-same-commit, else defer — defer is permitted from round 1 on for
-low findings (#1585) — and answers every gate-authored question. Fix-close is the fixer's role; the disposition pass
+low findings (#1585), except a low the judge disposed `act`, which is a fix target declinable
+only on reproduction grounds (`GATE-EXEC-JUDGE-AUTHORITY-SPLIT`) — and answers every gate-authored question. Fix-close is the fixer's role; the disposition pass
 (`close-gate-findings`) then resolves every still-open DEFERRABLE gate-authored thread
 (low, nit, and out-of-window medium) as the closing sweep AFTER the fixer's
 triage — it never fix-closes, and it deliberately leaves high, question, and in-window
