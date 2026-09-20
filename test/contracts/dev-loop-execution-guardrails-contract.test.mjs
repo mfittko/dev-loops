@@ -52,6 +52,21 @@ test("dev-loop SKILL enforces bounded Copilot/CI watch (#1660)", async () => {
 
 });
 
+test("dev-loop contract pins a bounded FOREGROUND inline probe for the Copilot/CI wait and forbids the backgrounded sleep-poll (#2065)", async () => {
+  const skill = await readRepo("skills/dev-loop/SKILL.md");
+  const agent = await readRepo("agents/dev-loop.agent.md");
+  for (const [name, doc] of [["SKILL", skill], ["agent", agent]]) {
+    // the sanctioned wait names the bounded foreground inline probe scripts
+    assert.match(doc, /probe-copilot-review\.mjs/, `${name} should name the bounded foreground probe script`);
+    assert.match(doc, /wait-pr-checks\.mjs/, `${name} should name the CI wait probe script`);
+    // the pin requires a FOREGROUND probe
+    assert.match(doc, /foreground/i, `${name} should require a foreground probe`);
+    // the backgrounded sleep-poll / bare-& form is forbidden
+    assert.match(doc, /background/i, `${name} should forbid the backgrounded wait`);
+    assert.match(doc, /sleep|&/i, `${name} should name the sleep-poll / bare-& form`);
+  }
+});
+
 test("loop-grill skill enforces the count-based AC unit + dispatch-mode guardrail (#1649)", async () => {
   const skill = await readRepo("skills/loop-grill/SKILL.md");
   assertRulePresent("GRILL-COUNT-AC-UNIT-DISPATCH-MODE");

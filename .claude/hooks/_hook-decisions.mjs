@@ -239,18 +239,23 @@ export function decideBashGate({
   }
 
   if (!isReady && !isMerge && !isCreate) {
-    // COPILOT-FOLLOWUP-WAIT-TOOLS: banned detached/polling wait wrappers. Subagent-only — the
-    // rule is classified `agent` (behavioral guidance for the dev-loop driving agent); the main
-    // agent/operator retains manual wait tooling. The main agent's own sanctioned wait path is still
-    // the deterministic tools.
-    if (typeof agentType === "string" && inManagedRepo && commandContainsDetachedWaitTool(command)) {
+    // COPILOT-FOLLOWUP-WAIT-TOOLS: banned detached/polling wait wrappers. Actor-independent:
+    // the coordinator/main agent — not subagents only — is the actor that leaves
+    // backgrounded `until`/`while … sleep … done` poll loops and bare-`&` backgrounded probe
+    // shells orphaned under the Claude Code harness (no async wake to join them), so the gate must
+    // deny its backgrounding too. The sanctioned wait is always a bounded FOREGROUND inline probe
+    // (`probe-copilot-review.mjs` / `wait-pr-checks.mjs` with an explicit --timeout / --timeout-ms;
+    // `gh run watch`; the watch-cycle CLIs).
+    if (inManagedRepo && commandContainsDetachedWaitTool(command)) {
       return {
         decision: "deny",
         reason:
-          "COPILOT-FOLLOWUP-WAIT-TOOLS: wait only through deterministic tools (scripts/loop/detect-copilot-" +
-          "loop-state.mjs one-shot, dev-loops loop watch-cycle persistent, scripts/github/wait-pr-checks.mjs, " +
-          "gh run watch) — nohup/disown/tmux/screen detach and while-sleep-poll loops are barred for the " +
-          "dev-loop driving agent.",
+          "COPILOT-FOLLOWUP-WAIT-TOOLS: wait only through a bounded FOREGROUND probe (scripts/github/" +
+          "probe-copilot-review.mjs or scripts/github/wait-pr-checks.mjs with an explicit --timeout/" +
+          "--timeout-ms; scripts/loop/detect-copilot-loop-state.mjs one-shot; dev-loops loop watch-cycle; " +
+          "gh run watch) — nohup/disown/tmux/screen detach, while-sleep-poll loops, and bare-`&` " +
+          "backgrounding of a probe/wait script are barred for the coordinator and every subagent (a " +
+          "backgrounded wait orphans under Claude Code, which has no async wake to join it).",
       };
     }
     return ALLOW;
@@ -629,5 +634,82 @@ export function decideSubagentStopGuard({ cwd, porcelain, pendingCommitAuthoriza
       "`git worktree remove --force`). Commit your work before stopping. " +
       `Dirty paths (${dirty.length}):\n` +
       listed.join("\n"),
+  };
+}
+
+/**
+ * Decide which agent-started background shells a SubagentStop reaper must kill.
+ *
+ * Under the Claude Code harness there is no async wake, so a backgrounded wait/poll shell the
+ * agent launched is never joined and never exits — it orphans past the agent stop (multiple such
+ * shells were observed accumulating across completed loops, one running ~11h). Prevention is the
+ * root-cause fix (the PreToolUse Bash-gate denies backgrounding a wait/probe helper); this reaper
+ * is the safety net that reaps whatever slipped through, before the stop is allowed.
+ *
+ * This decider is the PURE core: given the agent's own background-shell PIDs and the platform, it
+ * returns the set to signal. The hook signals each PID's process GROUP (`process.kill(-pgid)`),
+ * mirroring the `ui-review-teardown` kill pattern; the block/allow of the stop itself is NOT this
+ * reaper's job (the uncommitted-work guard owns stop-blocking) — the reaper always lets the stop
+ * proceed and only cleans up.
+ *
+ * Fail-closed / non-destructive rails:
+ *   - win32: Node cannot signal a process group (the `-pid` form throws), so refuse to attempt
+ *     (skip) rather than misfire — mirrors `ui-review-teardown`'s win32 fail-closed rail.
+ *   - Only positive integers > 1 are reapable. A pid of 0 (`kill(0)` targets the reaper's OWN
+ *     group), 1 (init), or a negative/NaN/float value is rejected: a process-GROUP kill on a bad
+ *     pid would be catastrophic (0 = own group, -1 = every process).
+ *   - The reaper never reaps ITSELF (`selfPid`) or a listed ancestor/session pid (`protectedPids`)
+ *     — reaping the session leader would take down the agent it is cleaning up after.
+ *   - An empty candidate set is a no-op (nothing to reap), never an error.
+ *
+ * Pure and side-effect free (the `process.platform` default is read at call, like
+ * `ui-review-teardown`'s `killProcess`); the hook discovers the PIDs and performs the kills.
+ *
+ * @param {Object} params
+ * @param {string} [params.platform] - `process.platform`; `win32` fails closed (skip).
+ * @param {number[]} [params.backgroundPids] - PIDs of the agent's own background shells (the hook
+ *   discovers these). A non-array is treated as empty (fail-safe).
+ * @param {number|null} [params.selfPid] - The reaper's own PID; never reaped.
+ * @param {number[]} [params.protectedPids] - Ancestor/session/group-leader PIDs never reaped.
+ * @returns {{decision:"reap"|"noop"|"skip", pids:number[], reason:string}}
+ */
+export function decideSubagentStopReap({
+  platform = process.platform,
+  backgroundPids = [],
+  selfPid = null,
+  protectedPids = [],
+} = {}) {
+  if (platform === "win32") {
+    return {
+      decision: "skip",
+      pids: [],
+      reason:
+        "SUBAGENT-STOP-REAP: win32 process-group reaping is unsupported (Node cannot signal a " +
+        "process group); leaving background shells to the OS (fail closed).",
+    };
+  }
+  const protectedSet = new Set(
+    [selfPid, ...(Array.isArray(protectedPids) ? protectedPids : [])]
+      .map((p) => Number(p))
+      .filter((p) => Number.isInteger(p)),
+  );
+  const seen = new Set();
+  const pids = [];
+  for (const raw of Array.isArray(backgroundPids) ? backgroundPids : []) {
+    const pid = Number(raw);
+    // Reject 0/1/negative/NaN/float defensively — a group-kill on any of these is catastrophic.
+    if (!Number.isInteger(pid) || pid <= 1) continue;
+    if (protectedSet.has(pid)) continue; // never reap self / an ancestor / the session leader
+    if (seen.has(pid)) continue;
+    seen.add(pid);
+    pids.push(pid);
+  }
+  if (pids.length === 0) {
+    return { decision: "noop", pids: [], reason: "SUBAGENT-STOP-REAP: no agent-started background shells to reap." };
+  }
+  return {
+    decision: "reap",
+    pids,
+    reason: `SUBAGENT-STOP-REAP: reaping ${pids.length} agent-started background shell(s): ${pids.join(", ")}.`,
   };
 }

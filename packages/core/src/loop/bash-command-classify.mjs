@@ -802,10 +802,41 @@ export function commandContainsCopilotSummonComment(command) {
 }
 
 /**
+ * Wait/probe helper commands that MUST run as a bounded FOREGROUND probe, never backgrounded.
+ * The Copilot/CI wait is a bounded inline probe by contract (`probe-copilot-review.mjs` /
+ * `wait-pr-checks.mjs` with an explicit timeout; `dev-loops gate probe-copilot`, `gh run watch`,
+ * the watch-cycle CLIs). Under the Claude Code harness there is no async wake, so a backgrounded
+ * one is never joined and orphans past the agent stop. Basenames match a `node
+ * scripts/github/…` or a bare invocation alike.
+ */
+const WAIT_PROBE_SCRIPT_RE =
+  /\b(?:probe-copilot-review|wait-pr-checks|detect-copilot-loop-state|run-watch-cycle)\.mjs\b|\bgh\s+run\s+watch\b|\b(?:loop\s+watch-cycle|loop\s+watch-ci|loop\s+watch-initial|gate\s+probe-copilot)\b/i;
+
+/**
+ * Whether the command launches a wait/probe helper in the BACKGROUND — a bare `&` control
+ * operator, not `&&` and not a redirection (`2>&1`, `>&2`, `&>file`). These helpers are bounded
+ * foreground probes by contract; backgrounding one recreates the orphaned-wait defect.
+ * Coarse by design: ANY background `&` in a command that also invokes a wait/probe helper denies.
+ * ponytail: redirection stripping is a fixed set (`N>&M`, `&>`/`&>>`), not a full shell parse —
+ * enough to tell a background `&` from a redirection `&`; upgrade only if a real command needs it.
+ * @param {string} command @returns {boolean}
+ */
+function commandBackgroundsWaitProbe(command) {
+  if (!WAIT_PROBE_SCRIPT_RE.test(command)) return false;
+  const withoutRedir = command
+    .replace(/\d*>&\d*-?/g, " ") // 2>&1, 1>&2, >&2, >&-
+    .replace(/&>>?/g, " "); // &>file, &>>file
+  // A background control operator is a single `&` that is not part of `&&`.
+  return /(?<!&)&(?!&)/.test(withoutRedir);
+}
+
+/**
  * COPILOT-FOLLOWUP-WAIT-TOOLS: a banned detached/polling wait — `nohup`, `disown`, `tmux new-session`,
- * `screen -dm`, or a `while`/`until`/`seq` loop whose body contains both a `sleep` and a gh or
- * loop-state call. Behavioral rule (required-rules classification `agent`): scoped in decideBashGate to the
- * dev-loop driving agent (subagent-only) so the main agent/operator retains manual wait tooling.
+ * `screen -dm`, a `while`/`until`/`seq` loop whose body contains both a `sleep` and a gh or
+ * loop-state call, OR a bare-`&` backgrounded wait/probe helper. Actor-independent at the
+ * decideBashGate call site: the coordinator/main agent is the actor that leaves these orphaned
+ * under Claude Code, so the gate catches its backgrounding too, not only a subagent's — the
+ * sanctioned wait is always the bounded FOREGROUND probe.
  * @param {string} command @returns {boolean}
  */
 export function commandContainsDetachedWaitTool(command) {
@@ -815,6 +846,10 @@ export function commandContainsDetachedWaitTool(command) {
   // body calls and miss the pattern. `gh` must be a standalone token (not `grep gh-notes`), and
   // `loop-state` must sit at a command-head position (not a substring inside `grep loop-state x`).
   if (/(?:while|until|for)\b/i.test(whole) && /\bsleep\b/.test(whole) && /\bgh(?=\s|$)|(?:^|[;&|(])\s*loop-state(?=\s|$)/.test(whole)) {
+    return true;
+  }
+  // A wait/probe helper launched with a bare `&` — the orphaned-background-shell form.
+  if (commandBackgroundsWaitProbe(whole)) {
     return true;
   }
   return shellSegments(command).some((segment) => {

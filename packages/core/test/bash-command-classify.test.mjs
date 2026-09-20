@@ -570,6 +570,25 @@ test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () =
   assert.equal(commandContainsDetachedWaitTool("while true; do sleep 1; loop-state status; done"), true);
 });
 
+test("commandContainsDetachedWaitTool detects bare-& backgrounded wait/probe scripts (#2065)", () => {
+  // Backgrounding a bounded probe/wait helper is the orphaned-shell form the reaper exists for.
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --repo o/r --pr 5 --timeout-ms 300000 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/wait-pr-checks.mjs --pr 5 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("gh run watch 123 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("dev-loops loop watch-cycle --repo o/r --pr 5 &"), true);
+  // FOREGROUND probes (no background &) are allowed — the sanctioned form.
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --repo o/r --pr 5 --timeout-ms 300000"), false);
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/wait-pr-checks.mjs --pr 5"), false);
+  // `&&` (logical AND) after a probe is NOT backgrounding.
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5 && echo done"), false);
+  // redirections that use `&` (2>&1, &>) are not backgrounding by themselves.
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1"), false);
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5 &> /tmp/x.log"), false);
+  // a bare `&` on a NON-wait command is not this rule's concern.
+  assert.equal(commandContainsDetachedWaitTool("node scripts/build.mjs &"), false);
+});
+
 test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, and heredocs", () => {
   assert.equal(commandContainsInlineInterpreter('node -e "console.log(1)"'), true);
   assert.equal(commandContainsInlineInterpreter('node --eval "console.log(1)"'), true);

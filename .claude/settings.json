@@ -44,6 +44,10 @@
           {
             "type": "command",
             "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/subagent-stop-uncommitted-guard.mjs"
+          },
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/subagent-stop-reaper.mjs"
           }
         ]
       }

@@ -7,6 +7,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
 import { evaluateSubagentStop } from "../../.claude/hooks/subagent-stop-uncommitted-guard.mjs";
+import { runSubagentStopReaper } from "../../.claude/hooks/subagent-stop-reaper.mjs";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 // Hook scripts live under the plugin root (.claude/hooks) so the Claude plugin can bundle them
@@ -67,6 +68,8 @@ test(".claude/settings.json is valid JSON and wires the four dev-loop hook regis
   assert.match(postMerge.hooks[0].command, /\$\{CLAUDE_PROJECT_DIR\}\/\.claude\/hooks\/post-tool-use-merge\.mjs/);
   assert.ok(subagentStop, "SubagentStop matcher must be registered");
   assert.match(subagentStop.hooks[0].command, /\$\{CLAUDE_PROJECT_DIR\}\/\.claude\/hooks\/subagent-stop-uncommitted-guard\.mjs/);
+  // #2065: the background-shell reaper is wired alongside the uncommitted-work guard.
+  assert.match(subagentStop.hooks[1].command, /\$\{CLAUDE_PROJECT_DIR\}\/\.claude\/hooks\/subagent-stop-reaper\.mjs/);
 });
 
 test(".claude/hooks/hooks.json wires the plugin hooks via ${CLAUDE_PLUGIN_ROOT} (#824)", () => {
@@ -80,6 +83,8 @@ test(".claude/hooks/hooks.json wires the plugin hooks via ${CLAUDE_PLUGIN_ROOT} 
   assert.match(postMerge.hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/post-tool-use-merge\.mjs/);
   assert.ok(subagentStop, "SubagentStop matcher must be registered in hooks.json");
   assert.match(subagentStop.hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/subagent-stop-uncommitted-guard\.mjs/);
+  // #2065: the reaper is wired alongside the uncommitted-work guard in the plugin manifest too.
+  assert.match(subagentStop.hooks[1].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/subagent-stop-reaper\.mjs/);
 });
 
 test("the three hook scripts (+ _hook-io) exist under the plugin root", () => {
@@ -90,6 +95,53 @@ test("the three hook scripts (+ _hook-io) exist under the plugin root", () => {
 
 test("the SubagentStop uncommitted-work guard hook exists under the plugin root (#1619)", () => {
   assert.ok(fs.existsSync(path.join(hooksDir, "subagent-stop-uncommitted-guard.mjs")), "missing subagent-stop-uncommitted-guard.mjs");
+});
+
+test("the SubagentStop background-shell reaper hook exists under the plugin root (#2065)", () => {
+  assert.ok(fs.existsSync(path.join(hooksDir, "subagent-stop-reaper.mjs")), "missing subagent-stop-reaper.mjs");
+});
+
+test("SubagentStop reaper reaps ONLY the agent's own discovered shells and always allows the stop (#2065)", () => {
+  const signalled = [];
+  const code = runSubagentStopReaper({
+    input: {},
+    stderr: { write: () => {} },
+    platform: "linux",
+    selfPid: 999,
+    // discover returns the reaper's own background shells + the protected group leader (pgid)
+    discover: () => ({ pgid: 500, pids: [4242, 4243] }),
+    signal: (pid) => signalled.push(pid),
+  });
+  assert.equal(code, 0, "the reaper never blocks the stop");
+  assert.deepEqual(signalled, [4242, 4243], "reaps exactly the discovered own shells");
+});
+
+test("SubagentStop reaper is a no-op when nothing is discovered (#2065)", () => {
+  const signalled = [];
+  const code = runSubagentStopReaper({
+    input: {},
+    stderr: { write: () => {} },
+    platform: "linux",
+    selfPid: 999,
+    discover: () => ({ pgid: null, pids: [] }),
+    signal: (pid) => signalled.push(pid),
+  });
+  assert.equal(code, 0);
+  assert.deepEqual(signalled, [], "no shells signalled when there is nothing to reap");
+});
+
+test("SubagentStop reaper fails closed on win32 — no shell is signalled (#2065)", () => {
+  const signalled = [];
+  const code = runSubagentStopReaper({
+    input: {},
+    stderr: { write: () => {} },
+    platform: "win32",
+    selfPid: 999,
+    discover: () => ({ pgid: 500, pids: [4242, 4243] }),
+    signal: (pid) => signalled.push(pid),
+  });
+  assert.equal(code, 0);
+  assert.deepEqual(signalled, [], "win32 must not signal any process group (fail closed)");
 });
 
 test("the self-contained hook bundle modules exist under the plugin root (#843)", () => {
