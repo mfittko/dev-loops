@@ -147,6 +147,17 @@ test("the `.claude/bin/dev-loops-run` launcher shares the checkout-wins-no-versi
   assert.match(launcher, /NO version\s*\n?\/\/\s*comparison|NO version comparison/i, "dev-loops-run must state no version comparison");
   assert.ok(launcher.includes("function isCheckout") && launcher.includes("function findCheckout"),
     "dev-loops-run must define the isCheckout/findCheckout predicate the pi ladder mirrors");
+  // Lock the predicate PARITY, not just its presence: the launcher's isCheckout must key on the
+  // same two conditions the pi walk-up snippet does — a sibling `scripts` dir AND
+  // package.json name === "dev-loops". If a future launcher change drops either condition, this
+  // fails so the pi prose ladder cannot silently diverge (AC: predicate uniform across harnesses).
+  const isCheckoutBody = launcher.slice(launcher.indexOf("function isCheckout"), launcher.indexOf("function findCheckout"));
+  assert.match(isCheckoutBody, /"scripts"/, "dev-loops-run isCheckout must require a sibling scripts/ dir");
+  assert.match(isCheckoutBody, /=== *"dev-loops"/, 'dev-loops-run isCheckout must require package.json name === "dev-loops"');
+  for (const token of ['"scripts"', '"dev-loops"']) {
+    assert.ok(CHECKOUT_WALKUP_SNIPPET.includes(token), `walk-up snippet must key on the same condition: ${token}`);
+  }
+  assert.match(CHECKOUT_WALKUP_SNIPPET, /=== *"dev-loops"/, "walk-up snippet must gate on name === dev-loops");
 });
 
 test("the embedded walk-up finds a checkout ancestor and falls through on a miss (#2145)", () => {
@@ -185,6 +196,20 @@ test("the embedded walk-up finds a checkout ancestor and falls through on a miss
       otherExit = err.status;
     }
     assert.equal(otherExit, 1, "a non-dev-loops package.json must not be treated as a checkout");
+
+    // The predicate is a two-condition AND: a dev-loops package.json WITHOUT a sibling scripts/
+    // dir is not a checkout. Exercises the scripts/ branch's negative (the other half of the
+    // mirrored predicate), so both conditions — not just the name — are proven.
+    const noScripts = path.join(root, "no-scripts");
+    fs.mkdirSync(noScripts, { recursive: true });
+    fs.writeFileSync(path.join(noScripts, "package.json"), JSON.stringify({ name: "dev-loops" }));
+    let noScriptsExit = 0;
+    try {
+      execFileSync(process.execPath, ["-e", CHECKOUT_WALKUP_SNIPPET], { cwd: noScripts, encoding: "utf8" });
+    } catch (err) {
+      noScriptsExit = err.status;
+    }
+    assert.equal(noScriptsExit, 1, "a dev-loops package.json without a sibling scripts/ dir is not a checkout");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
