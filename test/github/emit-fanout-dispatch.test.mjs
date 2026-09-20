@@ -136,9 +136,15 @@ test("listPriorFindingsLogHeads ignores a file whose recorded headSha does not m
     await writeFile(path.join(findingsDir, `${GATE}-${"f".repeat(40)}.json`), "not json at all", "utf8");
     const heads = await listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") });
     assert.equal(heads.size, 0, "neither the identity-mismatched nor the unparseable file counts as a prior round");
-    // A genuine keyed ledger (recorded headSha === filename) DOES count.
+    // A file whose headSha matches its filename but whose recorded gate/repo/pr
+    // belongs to another ledger must NOT count (full-identity validation).
+    const foreignSha = "b".repeat(40);
+    await writeFile(path.join(findingsDir, `${GATE}-${foreignSha}.json`), JSON.stringify({ headSha: foreignSha, gate: "draft_gate", repo: REPO, pr: PR, verdict: "clean" }), "utf8");
+    const headsForeign = await listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") });
+    assert.equal(headsForeign.size, 0, "a ledger recording a different gate does not count for this gate");
+    // A genuine keyed ledger (recorded headSha === filename, matching identity) DOES count.
     const realSha = "a".repeat(40);
-    await writeFile(path.join(findingsDir, `${GATE}-${realSha}.json`), JSON.stringify({ headSha: realSha, gate: GATE, verdict: "clean" }), "utf8");
+    await writeFile(path.join(findingsDir, `${GATE}-${realSha}.json`), JSON.stringify({ headSha: realSha, gate: GATE, repo: REPO, pr: Number(PR), verdict: "clean" }), "utf8");
     const heads2 = await listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") });
     assert.deepEqual([...heads2], [realSha]);
   });

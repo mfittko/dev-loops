@@ -734,6 +734,31 @@ test("CLI persists a fail-closed full-fallback plan marker on an ineligible prio
   }
 });
 
+test("CLI removes a prior successful plan when a later run at the same head fails operationally (authoritative per-run) (issue #2251)", async () => {
+  // A successful run writes the keyed plan. A later run at the SAME head with a
+  // bogus --prev-head fails operationally and must leave NO stale plan — the
+  // start-of-run removal makes each invocation authoritative, so a failed retry
+  // is never laundered into "the resolver succeeded" via the earlier artifact.
+  const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
+    mandatoryAngles: [],
+    perAngle: [{ angle: "correctness", reviewer: "review-a" }, { angle: "docs", reviewer: "review-c" }],
+    mutate: async (root) => { await writeFile(path.join(root, "docs/guide.md"), "# Guide\n\nmore.\n", "utf8"); },
+  });
+  const planPath = path.join(repoRoot, buildCarryForwardPlanPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha, tmpRoot: "tmp" }));
+  try {
+    const ok = await runMain(["--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha], { repoRoot });
+    assert.equal(ok.ok, true);
+    const first = JSON.parse(await readFile(planPath, "utf8"));
+    assert.equal(first.ok, true);
+    // Retry at the same head with a bogus --prev-head that resolves no log.
+    const { exitCode } = await runMainRaw(["--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", "f".repeat(40), "--head-sha", headSha], { repoRoot });
+    assert.equal(exitCode, 1);
+    await assert.rejects(() => readFile(planPath, "utf8"), "the failed retry must have removed the prior successful plan");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("CLI leaves NO marker on a prior-log INTEGRITY failure (corrupt ledger is not an eligibility refusal) (issue #2251)", async () => {
   // A findings_present verdict with an empty findings array is an inconsistent/
   // corrupt ledger, NOT a carry-forward eligibility decision. It must be treated

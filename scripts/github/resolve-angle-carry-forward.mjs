@@ -24,7 +24,7 @@
  * post-convergence head bump is a pure doc/prose bump, so it need not force a
  * fresh blocking Copilot round.
  */
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
@@ -396,6 +396,20 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     return;
   }
   try {
+    // Remove any stale plan artifact for this exact (repo, pr, gate, headSha)
+    // BEFORE doing any work, so EVERY invocation's outcome is authoritative and
+    // a run that fails operationally (or on an integrity error) leaves NO plan
+    // behind — a prior successful run's artifact must never be laundered into
+    // "this resolver run succeeded". Mirrors emit-fanout-dispatch.mjs's
+    // start-of-flow emit-plan removal. The success and eligibility-refusal paths
+    // below re-write the artifact; every other exit leaves it absent. ENOENT is
+    // fine (nothing to remove).
+    await rm(
+      path.resolve(repoRoot, buildCarryForwardPlanPath({
+        repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp",
+      })),
+      { force: true },
+    );
     const logPath = buildLogPath({
       repo: options.repo,
       pr: options.pr,

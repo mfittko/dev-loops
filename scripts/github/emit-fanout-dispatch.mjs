@@ -362,8 +362,23 @@ export async function listPriorFindingsLogHeads({ repo, pr, gate, headSha, tmpRo
       if (err?.code && err.code !== "ENOENT") throw err;
       continue;
     }
-    const recordedHead = log && typeof log.headSha === "string" ? log.headSha.trim().toLowerCase() : null;
-    if (recordedHead === sha) heads.add(sha);
+    // Validate the FULL ledger identity, not just headSha===filename: a foreign
+    // or mislabeled findings-log whose recorded repo/pr/gate belongs to another
+    // ledger must not count as a prior round for THIS invocation (its head could
+    // otherwise satisfy a marker's prevHead membership check). A field that is
+    // present must match; an absent field is tolerated (older ledger shape), and
+    // the directory itself already segregates by repo/pr. Mirrors
+    // write-gate-context.mjs's own prior-log identity check.
+    if (!log || typeof log !== "object") continue;
+    const recordedHead = typeof log.headSha === "string" ? log.headSha.trim().toLowerCase() : null;
+    const recordedGate = typeof log.gate === "string" ? log.gate.trim() : null;
+    const recordedRepo = typeof log.repo === "string" ? log.repo.trim().toLowerCase() : null;
+    const recordedPr = log.pr;
+    const identityOk = recordedHead === sha
+      && (recordedGate === null || recordedGate === gate)
+      && (recordedRepo === null || recordedRepo === String(repo).trim().toLowerCase())
+      && (recordedPr === undefined || recordedPr === null || String(recordedPr) === String(pr));
+    if (identityOk) heads.add(sha);
   }
   return heads;
 }

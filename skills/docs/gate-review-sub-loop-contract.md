@@ -1233,11 +1233,14 @@ failure (a corrupt/truncated/inconsistent ledger — missing `provenance.perAngl
 malformed `headSha`, an unattributable finding, a `findings_present` verdict with no
 findings, a duplicate angle) are both treated the same: carry-forward could not be
 soundly evaluated, so no marker is written and a wrong/guessed `--prev-head` or an
-untrustworthy ledger can never be laundered into "the resolver ran". The
+untrustworthy ledger can never be laundered into "the resolver ran". The resolver also REMOVES any
+stale plan artifact for this `(repo, pr, gate, headSha)` at the START of every run, so each invocation is
+authoritative and a prior successful run's artifact is never laundered into proof that a later failed
+retry succeeded. The
 fan-out emitter (`emit-fanout-dispatch.mjs`, `GATE-EXEC-FANOUT-DISPATCH-EMIT`) is the
 enforcing chokepoint: on a re-gate head (a durable findings-log for this gate exists at
-an EARLIER head — established by reading each candidate log's OWN recorded `headSha`,
-never by trusting a filename alone) it REFUSES to emit — spawning zero reviewers —
+an EARLIER head — established by reading each candidate log's OWN recorded FULL identity
+(`repo`/`pr`/`gate`/`headSha`), never by trusting a filename alone) it REFUSES to emit — spawning zero reviewers —
 unless a plan artifact is recorded at the current head that is a genuine resolver
 outcome (`ok: true`, or `ok: false` with `fallback: true`), whose
 `(repo, pr, gate, headSha)` key matches this round, AND whose `prevHead` names one of
