@@ -777,12 +777,16 @@ async function resolveBlockingSeverities(options, resolvedRoot) {
       `--gate ${options.gate} config (repo-root ${JSON.stringify(resolvedRoot)}) could not be fully loaded/validated: ${JSON.stringify(errors)}`,
     );
   }
-  // Use the owned GATE_CONFIG_KEY map (the single source for gate-name ->
-  // config-section) rather than a hand-rolled ternary, so this resolves the
-  // SAME section consolidate-fanin.mjs does and cannot silently diverge if a
-  // gate key ever changes. options.gate is validated against GATE_NAMES above,
-  // so the lookup is always defined.
-  return resolveGateConfig(config, GATE_CONFIG_KEY[options.gate]).blockCleanOnFindingSeverities;
+  // Resolve the gate's config section via the owned GATE_CONFIG_KEY map (the
+  // single source for gate-name -> config-section) rather than a hand-rolled
+  // ternary, so the two lifecycle gates resolve the SAME section
+  // consolidate-fanin.mjs does. GATE_CONFIG_KEY only covers the two LIFECYCLE
+  // gates; the informational `review` gate has no config section of its own, so
+  // it reuses pre_approval_gate's blocking severities — the exact fallback
+  // consolidate-fanin.mjs's `=== "draft_gate" ? "draft" : "preApproval"` also
+  // takes for review. options.gate is validated against GATE_NAMES above.
+  const gateKey = GATE_CONFIG_KEY[options.gate] ?? "preApproval";
+  return resolveGateConfig(config, gateKey).blockCleanOnFindingSeverities;
 }
 
 export async function judgePassCli(

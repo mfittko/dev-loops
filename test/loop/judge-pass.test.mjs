@@ -444,8 +444,10 @@ test("judgePassCli fails closed when a clean verdict carries an act on a blockin
 // resolveBlockingSeverities config->gateKey->guard wiring the CLI actually runs.
 test("judgePassCli reads a configured widened block set and fails a clean+medium-act round closed, per gate key (#2246)", async () => {
   const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
-  // gate key -> the .devloops config section the gateKey ternary must select.
-  for (const [gate, section] of [["draft_gate", "draft"], ["pre_approval_gate", "preApproval"]]) {
+  // gate -> the .devloops config section resolveBlockingSeverities must select.
+  // The informational `review` gate has no config section of its own and reuses
+  // pre_approval_gate's blocking severities (matching consolidate-fanin.mjs).
+  for (const [gate, section] of [["draft_gate", "draft"], ["pre_approval_gate", "preApproval"], ["review", "preApproval"]]) {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), `judge-pass-configured-block-${section}-`));
     await writeFile(
       path.join(tmpDir, ".devloops"),
