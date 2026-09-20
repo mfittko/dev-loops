@@ -63,7 +63,7 @@ The architectural objective is therefore:
 
 This record resolves the RFC in #2269 at the architecture-boundary level. It intentionally does **not** select an exact CLI name, module layout, serialized schema, or numerical token/call budget. Those remain implementation/configuration choices subject to the contract below.
 
-The rule applies generally wherever dev-loop chooses a **mechanical lifecycle transition** from authoritative state. The first implementation owned by #2269 is bounded to the gate/coordinator seam. Existing domain owners are not implicitly authorized for wholesale rewrites.
+The rule applies generally wherever dev-loop chooses a **mechanical lifecycle transition** from authoritative state. Delivery begins in the implementation subtree rooted at #2276, with the gate/coordinator reconciler owned by #2278. Existing domain owners are not implicitly authorized for wholesale rewrites.
 
 Related work retains its existing ownership:
 
@@ -167,7 +167,7 @@ Examples of authority boundaries are:
 
 A projection MUST NOT become workflow authority merely because it is convenient to read.
 
-In particular, #2270's gate status is an observational, deterministic, read-only projection. It may normalize coverage, execution, verdict, and evidence references, but it does not own lifecycle transition policy and does not become an authoritative `nextAction` store. #2269's reconciler may consume its underlying library or its projection.
+In particular, #2270's gate status is an observational, deterministic, read-only projection. It may normalize coverage, execution, verdict, and evidence references, but it does not own lifecycle transition policy and does not become an authoritative `nextAction` store. The reconciler delivered under #2278 may consume its underlying library or its projection.
 
 ### 3. Refresh produces a first-class but ephemeral normalized snapshot
 
@@ -400,7 +400,7 @@ same snapshot + same policy version = same nextAction
 
 This ADR standardizes the reconciliation protocol and invariants. It does not require one universal `reconcileEverything()` implementation.
 
-Gate/coordinator reconciliation is the first #2269 implementation. Other domains such as startup, routing, validation readiness, or future outer-loop control may adopt the protocol incrementally while retaining their existing policy ownership.
+Gate/coordinator reconciliation is the first implementation slice under #2276 and is owned by #2278. Other domains such as startup, routing, validation readiness, or future outer-loop control may adopt the protocol incrementally while retaining their existing policy ownership.
 
 ```mermaid
 flowchart TB
@@ -427,7 +427,7 @@ There is no atomic snapshot spanning GitHub, worktree state, runtime workers, an
 
 Every effectful action SHALL carry the identities and preconditions on which reconciliation depended.
 
-Immediately before an externally visible effect, the executor verifies relevant preconditions.
+A separate precondition read followed by an effect is insufficient because authority can change between them. At the effect boundary, the adapter SHALL use either an authority-native conditional mutation or compare-and-act primitive, or an effect-scoped fencing token that the external effect system validates as part of the mutation. If the external system provides neither mechanism for a precondition whose violation could make the effect unlawful, automatic execution is unsupported and fails closed without attempting the effect.
 
 ```mermaid
 sequenceDiagram
@@ -437,18 +437,21 @@ sequenceDiagram
     participant X as External effect
 
     R->>E: action + expected head/spec/owner/proof identities
-    E->>A: Re-check relevant preconditions
+    E->>A: Conditional mutation or validate effect fence
 
     alt Preconditions still match
-        E->>X: Perform effect
+        E->>X: Perform fenced / conditional effect
         X-->>E: Receipt / observation
     else Authority changed
         E-->>R: precondition_failed / stale_snapshot
         Note over R,E: No effect performed
+    else Atomicity or fence unavailable / result unknowable
+        E-->>R: conditional_effect_unsupported / execution_ambiguous
+        Note over R,E: Block; do not infer success or choose another transition
     end
 ```
 
-On mismatch, the action performs no effect; the system refreshes and reconciles again.
+On a confirmed mismatch, the action performs no effect; the system refreshes and reconciles again. If the adapter cannot establish whether the condition held at the effect boundary or whether the effect occurred, it records `execution_ambiguous` and fails closed for explicit recovery. A post-effect re-read cannot retroactively prove the mutation was lawful.
 
 This applies to reviewer dispatch, gate/checkpoint writes, fixer/developer actions tied to expected identity, lifecycle creation/advancement, lease-dependent effects, and approval/merge boundaries.
 
@@ -679,7 +682,7 @@ New durable facts are justified individually only when losing them would make co
 
 Examples include an external execution receipt that the harness cannot rediscover or existing cumulative budget counters.
 
-Where an existing owner already persists that fact, #2269 SHALL reuse it rather than introduce a second ledger.
+Where an existing owner already persists that fact, delivery under #2276 SHALL reuse it rather than introduce a second ledger.
 
 Remaining work SHOULD normally be derived:
 
@@ -793,7 +796,7 @@ flowchart LR
     Q -->|metric unavailable| UNK[Record unavailable; do not fabricate]
 ```
 
-This ADR does not freeze numeric thresholds. Existing #2157 limits and any future #2269 benchmark configuration remain configurable/evidence-driven policy.
+This ADR does not freeze numeric thresholds. Existing #2157 limits and any future #2276 benchmark configuration remain configurable/evidence-driven policy.
 
 ### 19. Contract and policy identity are explicit and separate from workflow identity
 
@@ -992,7 +995,7 @@ After those gates pass, the gate/coordinator domain switches immediately to the 
 
 Broad #2237-like stress and efficiency measurement occur **after** cutover.
 
-Temporary shadow/rollback compatibility MUST NOT become permanent dual control. It must be removed no later than the work that closes #2269 after the post-cutover broad stress run confirms the new path's correctness and recovery invariants.
+Temporary shadow/rollback compatibility MUST NOT become permanent dual control. It must be removed by #2284 after the post-cutover broad stress run confirms the new path's correctness and recovery invariants.
 
 ### 24. Cutover authority is exclusive; rollback is explicit
 
@@ -1131,14 +1134,14 @@ This makes a supervisor useful for anomaly detection and steering while preventi
 
 ### Delivery is intentionally aggressive
 
-The first #2269 implementation is not required to migrate every dev-loop domain before delivering value.
+The first delivery slice under #2276 is not required to migrate every dev-loop domain before delivering value.
 
 The delivery path is:
 
 ```mermaid
 flowchart LR
     A[#2251 carry proof<br/>and #2204 identity work] --> B[#2270 honest compact projection]
-    B --> C[#2269 gate reconciler implementation]
+    B --> C[#2278 gate reconciler implementation]
     C --> D[Fixture matrix]
     D --> E[3 bounded live pilots]
     E --> F[Immediate gate/coordinator cutover]
@@ -1146,7 +1149,7 @@ flowchart LR
     G --> H[Remove legacy authority / temporary shadow]
 ```
 
-Architecture is decided before #2270's projection shape is frozen as a runner API, while practical delivery can continue in the existing #2251 → #2270 → #2269 sequence.
+Architecture is decided before #2270's projection shape is frozen as a runner API, while practical delivery can continue through #2251 → #2270 → #2278 under the #2276 implementation epic.
 
 The efficiency epic does not wait for the future supervisor, a generalized workflow engine, Codex production support, or an arbitrary numerical savings target.
 
