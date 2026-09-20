@@ -37,7 +37,11 @@ async function write(root, rel, content) {
 // So the ONLY file changed since prevHead is other.mjs, which is already on main
 // at head → the main-relative delta is empty (integrate-only).
 // `prExtra` mutates the branch AFTER the merge to add a genuine PR-own change.
-async function makeBaseMoveRepo({ prExtra } = {}) {
+// `mainRename` (issue 2292): instead of editing other.mjs's content on main, RENAME
+// it there (byte-identical content) — so the base-move merge replays a rename
+// from already-merged main, exercising the rename-status columns in
+// captureMainRelativeChangedFilesSince's per-line parse.
+async function makeBaseMoveRepo({ prExtra, mainRename = false } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "git-delta-basemove-"));
   git(root, ["init", "-q", "-b", "main"]);
   git(root, ["config", "user.email", "test@example.com"]);
@@ -57,11 +61,17 @@ async function makeBaseMoveRepo({ prExtra } = {}) {
   git(root, ["commit", "-q", "-m", "PR round 1 (reviewed)"]);
   const prevHead = git(root, ["rev-parse", "HEAD"]).trim().toLowerCase();
 
-  // main advances: another PR merged other.mjs=v2 (a file the PR never touched).
+  // main advances: another PR merged other.mjs=v2 (a file the PR never touched),
+  // OR (mainRename) renamed it with no content change.
   git(root, ["checkout", "-q", "main"]);
-  await write(root, "src/other.mjs", "export const other = 2;\n");
-  git(root, ["add", "-A"]);
-  git(root, ["commit", "-q", "-m", "other PR merged to main"]);
+  if (mainRename) {
+    git(root, ["mv", "src/other.mjs", "src/other-renamed.mjs"]);
+    git(root, ["commit", "-q", "-m", "other PR renamed on main"]);
+  } else {
+    await write(root, "src/other.mjs", "export const other = 2;\n");
+    git(root, ["add", "-A"]);
+    git(root, ["commit", "-q", "-m", "other PR merged to main"]);
+  }
   // Simulate the remote-tracking ref the resolver excludes against.
   git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
 
@@ -104,6 +114,35 @@ test("genuine PR-own commit after the base-move still appears in the main-relati
     assert.equal(mainRel.reduced, true);
     assert.ok(mainRel.changedFiles.includes("src/bar.mjs"), "a real PR-own change is kept → its angle re-runs");
     assert.ok(!mainRel.changedFiles.includes("src/other.mjs"), "the merged-main file stays excluded");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("PR-own rename after the base-move is kept (hasRename: true, reduced: true)", async () => {
+  const { root, prevHead } = await makeBaseMoveRepo({
+    prExtra: async (r) => {
+      git(r, ["mv", "src/foo.mjs", "src/foo-renamed.mjs"]);
+      git(r, ["commit", "-q", "-m", "PR-own rename"]);
+    },
+  });
+  try {
+    const mainRel = await captureMainRelativeChangedFilesSince({ base: prevHead, mainRef: "origin/main", repoRoot: root });
+    assert.equal(mainRel.reduced, true);
+    assert.ok(mainRel.changedFiles.includes("src/foo-renamed.mjs"), "a PR-own rename destination is kept");
+    assert.equal(mainRel.hasRename, true, "a surviving PR-own rename sets hasRename");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a rename replayed from already-merged main is excluded (hasRename: false, reduced: true)", async () => {
+  const { root, prevHead } = await makeBaseMoveRepo({ mainRename: true });
+  try {
+    const mainRel = await captureMainRelativeChangedFilesSince({ base: prevHead, mainRef: "origin/main", repoRoot: root });
+    assert.equal(mainRel.reduced, true);
+    assert.ok(!mainRel.changedFiles.includes("src/other-renamed.mjs"), "a rename replayed from already-merged main is excluded");
+    assert.equal(mainRel.hasRename, false, "an excluded rename does not force RENAME_ONLY angles to re-run");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
