@@ -6728,6 +6728,11 @@ test("upsert-checkpoint-verdict --findings-ledger: at the default floor, a locat
     assert.match(posted.comments[0].body, /SQL injection in the query builder/);
     assert.doesNotMatch(JSON.stringify(posted.comments), /inconsistent casing of a local constant|trailing whitespace/);
 
+    // Contrast with the all-folded case below (#2263): this round carries a
+    // non-folded (must-fix) candidate needing a locatability decision, so the
+    // diff round-trip DOES run.
+    assert.ok(calls.some((c) => c.args.includes("repos/owner/repo/pulls/17/files?per_page=100")));
+
     // The collapsed <details> block carries both folded findings' visible text.
     assert.match(posted.body, /<details>/);
     assert.match(posted.body, /<summary>Suppressed low\/nit findings \(2\) — below the inline severity floor<\/summary>/);
@@ -6737,6 +6742,53 @@ test("upsert-checkpoint-verdict --findings-ledger: at the default floor, a locat
     assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=low angle=naming round=1 disposition=deferred -->$/m);
     assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=nit angle=style round=1 disposition=deferred -->$/m);
   }, { prefix: "dev-loops-upsert-fold-default-floor-" });
+});
+
+// #2263: an ALL-folded round (every candidate ranks below the inline severity
+// floor) needs no locatability decision at all, so resolveFindingSurface must
+// skip the fetchPrFiles diff round-trip entirely — not just skip inline
+// posting for the folded findings. Proven by OMITTING the PR-files fixture
+// entry from `entries`: in claims-matching mode an unclaimed entry is silently
+// fine, but a call the mock has no entry for returns exit code 97 (see
+// makeGhMock), which would fail this test if fetchPrFiles ran anyway.
+test("upsert-checkpoint-verdict --findings-ledger: an all-folded round (every candidate below the inline floor) never calls the PR-files diff endpoint", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [LOCATABLE_LOW_FINDING, LOCATABLE_NIT_FINDING]);
+    const entries = [
+      ...singleSurfaceLeadingEntries({ files: null }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":715,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-715"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsSummary: "2 findings",
+      findingsLedger: ledgerPath,
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+
+    assert.equal(result.action, "created");
+    assert.equal(result.inlineComments, 0);
+    assert.equal(result.bodyFiled, 0);
+    assert.equal(result.folded, 2);
+
+    // Belt-and-suspenders on top of the fixture omission above: no call ever
+    // reached the PR-files listing endpoint.
+    assert.ok(!calls.some((c) => c.args.includes("repos/owner/repo/pulls/17/files?per_page=100")));
+
+    const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    const posted = JSON.parse(postCall.stdinText);
+    assert.equal(posted.comments.length, 0);
+    assert.match(posted.body, /<summary>Suppressed low\/nit findings \(2\) — below the inline severity floor<\/summary>/);
+  }, { prefix: "dev-loops-upsert-fold-all-folded-no-files-fetch-" });
 });
 
 test("upsert-checkpoint-verdict --findings-ledger: lowering inlineSeverityFloor to \"low\" restores inline posting of low findings (the escape hatch); nit still folds", async () => {
