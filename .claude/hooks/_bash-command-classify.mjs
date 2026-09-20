@@ -837,10 +837,11 @@ function commandHasBareBackgroundOperator(command) {
 /**
  * The wait/probe helper FAMILY: the Copilot/CI wait tools that MUST run as a bounded FOREGROUND
  * probe — the `.mjs` helpers (`probe-copilot-review`, `wait-pr-checks`, `detect-copilot-loop-state`,
- * `run-watch-cycle`), `gh run watch`, and the `dev-loops`/`dev-loops-run` `watch-cycle`/`watch-ci`/
- * `watch-initial`/`gate probe-copilot` CLI verbs. A coarse ANYWHERE-in-the-string substring/family
- * match (deliberately NOT exec-position anchored) — see `commandContainsDetachedWaitTool`'s JSDoc
- * for the fail-closed rationale.
+ * `run-watch-cycle`, `probe-ci-status` — the sanctioned `ci-status`/`watch-ci` CI-status wait,
+ * skills/dev-loop/SKILL.md's "PR checks/status" entry), `gh run watch`, and the
+ * `dev-loops`/`dev-loops-run` `watch-cycle`/`watch-ci`/`watch-initial`/`gate probe-copilot` CLI
+ * verbs. A coarse ANYWHERE-in-the-string substring/family match (deliberately NOT exec-position
+ * anchored) — see `commandContainsDetachedWaitTool`'s JSDoc for the fail-closed rationale.
  */
 const WAIT_PROBE_FAMILY_RE = new RegExp(
   [
@@ -848,6 +849,7 @@ const WAIT_PROBE_FAMILY_RE = new RegExp(
     "wait-pr-checks\\.mjs",
     "detect-copilot-loop-state\\.mjs",
     "run-watch-cycle\\.mjs",
+    "probe-ci-status\\.mjs",
     "gh\\s+run\\s+watch",
     "watch-cycle",
     "watch-ci",
