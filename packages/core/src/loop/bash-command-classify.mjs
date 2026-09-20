@@ -913,7 +913,7 @@ export function commandInvokesWaitProbeHelper(command) {
 
 /**
  * COPILOT-FOLLOWUP-WAIT-TOOLS: a banned detached/polling wait — `nohup`, `disown`, `tmux new-session`,
- * `screen -dm`, a `while`/`until`/`seq` loop whose body contains both a `sleep` and a gh or
+ * `screen -dm`, a `while`/`until`/`for` loop whose body contains both a `sleep` and a gh or
  * loop-state call, OR a bare-`&` backgrounded wait/probe helper. Actor-independent at the
  * decideBashGate call site: the coordinator/main agent is the actor that leaves these orphaned
  * under Claude Code, so the gate catches its backgrounding too, not only a subagent's — the
