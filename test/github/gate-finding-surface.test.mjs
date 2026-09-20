@@ -323,10 +323,12 @@ test("isBelowInlineFloor: legacy severity spellings normalize before ranking", (
 });
 
 // #2295 Copilot review fix 1: a "question" never folds, at ANY floor —
-// including a floor raised to "high", where it would otherwise rank below
-// (SEVERITY_ORDER = ["high","question","medium","low","nit"]). Contrast with
+// including a floor value like "high" that the config schema no longer permits
+// (the enum is constrained to ["medium","low","nit"]). isBelowInlineFloor is a
+// pure function, not schema-bound, so this proves the defense-in-depth guard
+// holds even for a floor the config can never produce. Contrast with
 // "low"/"medium", which DO fold once the floor is raised past them.
-test("isBelowInlineFloor: a \"question\" never folds, even at floor \"high\" where it would otherwise rank below", () => {
+test("isBelowInlineFloor: a \"question\" never folds, even at a floor value (\"high\") the config no longer permits", () => {
   assert.equal(isBelowInlineFloor("question", "high"), false);
   assert.equal(isBelowInlineFloor("question", "medium"), false);
   assert.equal(isBelowInlineFloor("low", "high"), true);
