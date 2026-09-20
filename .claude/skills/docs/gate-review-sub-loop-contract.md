@@ -1210,6 +1210,34 @@ and ambiguously attributed angles re-run. No prior head, an ineligible prior-log
 or any whole-plan refusal means full re-dispatch. Context-builder and consolidation
 always run fresh at B; this never exempts a round from `GATE-EXEC-REGATE-MANDATORY`.
 
+Eligibility is decided PER ANGLE by the delta against that angle's review surface —
+`clean` OR `findings_present` both carry when the delta provably misses the surface.
+There is no "the prior round was not clean, so nothing carries forward" rule: the
+overall verdict of the prior round never gates carry-forward, and a re-gate NEVER
+skips the resolver on the theory that a non-clean prior round re-fans everything. The
+one and only skip is a gate's genuine FIRST round (no prior findings-log at any head);
+every subsequent head bump runs the resolver, enforced below.
+
+<!-- rule: GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED --> `GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED`
+(issue #2251): a re-gate MUST NOT dispatch a reviewer until carry-forward has been
+consulted at the current head. `resolve-angle-carry-forward.mjs` records its result as
+the keyed `<gate>-<headSha>.carry-forward-plan.json` artifact
+(`buildCarryForwardPlanPath` in `write-gate-context.mjs`) at head B — on BOTH the
+success path (`ok: true`, with `carried`/`mustRerun`) and a genuine carry-forward
+ELIGIBILITY refusal (`ok: false, fallback: true`, e.g. an ineligible prior verdict or
+ambiguous attribution, whose contract outcome is a safe full re-dispatch). An
+OPERATIONAL failure (a `--prev-head` that resolves no log, a mismatched/unreadable log,
+a wrong worktree, a git/IO error) is NOT a carry-forward decision and records NO marker,
+so a wrong or guessed `--prev-head` can never be laundered into "the resolver ran". The
+fan-out emitter (`emit-fanout-dispatch.mjs`, `GATE-EXEC-FANOUT-DISPATCH-EMIT`) is the
+enforcing chokepoint: on a re-gate head (a durable findings-log for this gate exists at
+an EARLIER head) it REFUSES to emit — spawning zero reviewers — unless a plan artifact
+is recorded at the current head whose `(repo, pr, gate, headSha)` key matches this round
+AND whose `prevHead` names one of the actual prior findings-log heads. The emitter is
+chosen over the post-hoc ledger seam because it fails earliest — before the wasted
+fan-out this rule exists to prevent. Only `draft_gate` / `pre_approval_gate` carry
+forward; the review gate has no resolver and never guards here.
+
 Derive each angle's prior verdict from the prior log's findings, never its overall
 verdict: ANY finding at ANY severity makes that angle `findings_present`, even in an
 overall `clean` round. A findings-present carry retains its EXACT findings unchanged,

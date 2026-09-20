@@ -244,6 +244,10 @@
       "id": "GATE-EXEC-ANGLE-CARRY-FORWARD"
     },
     {
+      "id": "GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED",
+      "enforcement": "runtime"
+    },
+    {
       "id": "GATE-EXEC-ANGLE-COVERAGE"
     },
     {

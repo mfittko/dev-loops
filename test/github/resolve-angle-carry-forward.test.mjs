@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -13,6 +13,7 @@ import {
   runGitCommand,
 } from "../../scripts/github/resolve-angle-carry-forward.mjs";
 import { buildLogPath, parseProvenanceJson } from "../../scripts/github/write-gate-findings-log.mjs";
+import { buildCarryForwardPlanPath } from "../../scripts/github/write-gate-context.mjs";
 
 // Scrub inherited global/system git config and any leaked GIT_DIR/GIT_WORK_TREE
 // so host-side commit signing, hooks, templates, or an exported repo pointer
@@ -594,12 +595,22 @@ test("CLI fails closed (exit 1, prior gate findings-log not found) on a first ro
 test("parseResolveAngleCarryForwardCliArgs requires the core args", () => {
   assert.throws(() => parseResolveAngleCarryForwardCliArgs(["--repo", "o/n"]), /Missing required arguments/);
   const fullPrevHead = "a".repeat(40);
+  const fullHeadSha = "b".repeat(40);
   const opts = parseResolveAngleCarryForwardCliArgs([
-    "--repo", "o/n", "--pr", "5", "--gate", "draft_gate", "--prev-head", fullPrevHead, "--head-sha", "bbbbbbb",
+    "--repo", "o/n", "--pr", "5", "--gate", "draft_gate", "--prev-head", fullPrevHead, "--head-sha", fullHeadSha,
   ]);
   assert.equal(opts.gate, "draft_gate");
   assert.equal(opts.prevHead, fullPrevHead);
-  assert.equal(opts.headSha, "bbbbbbb");
+  assert.equal(opts.headSha, fullHeadSha);
+});
+
+test("parseResolveAngleCarryForwardCliArgs rejects an abbreviated --head-sha (the resolver keys its plan artifact by the full SHA)", () => {
+  assert.throws(
+    () => parseResolveAngleCarryForwardCliArgs([
+      "--repo", "o/n", "--pr", "5", "--gate", "draft_gate", "--prev-head", "a".repeat(40), "--head-sha", "bbbbbbb",
+    ]),
+    /--head-sha must be the FULL head commit SHA/,
+  );
 });
 
 test("parseResolveAngleCarryForwardCliArgs rejects an abbreviated --prev-head (the log path is keyed by the full SHA)", () => {
@@ -656,6 +667,113 @@ test("round A→B: a clean angle the delta misses carries, gets no fresh reviewe
     assert.deepEqual(provenance.perAngle.map((a) => a.angle).sort(), ["correctness", "coverage", "docs"]);
     assert.equal(provenance.perAngle.filter((a) => a.carriedFromHead === prevHead).length, 2);
     assert.equal(provenance.perAngle.filter((a) => !("carriedFromHead" in a)).length, 1);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI persists a keyed carry-forward plan artifact at the CURRENT head before dispatch (issue #2251 AC1)", async () => {
+  const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
+    mandatoryAngles: [],
+    perAngle: [
+      { angle: "correctness", reviewer: "review-a" },
+      { angle: "docs", reviewer: "review-c" },
+    ],
+    mutate: async (root) => { await writeFile(path.join(root, "docs/guide.md"), "# Guide\n\nmore.\n", "utf8"); },
+  });
+  try {
+    const planPath = path.join(repoRoot, buildCarryForwardPlanPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha, tmpRoot: "tmp" }));
+    // No plan artifact exists until the resolver runs at head B.
+    await assert.rejects(() => readFile(planPath, "utf8"));
+    const result = await runMain([
+      "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
+    ], { repoRoot });
+    assert.equal(result.ok, true);
+    // The resolver recorded its plan keyed to the CURRENT head, self-describing.
+    const persisted = JSON.parse(await readFile(planPath, "utf8"));
+    assert.equal(persisted.ok, true);
+    assert.equal(persisted.headSha, headSha);
+    assert.equal(persisted.gate, "draft_gate");
+    assert.deepEqual(persisted.carried.map((c) => c.angle), result.carried.map((c) => c.angle));
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI persists a fail-closed full-fallback plan marker on an ineligible prior verdict (issue #2251)", async () => {
+  // A `blocked` prior verdict is not carry-forward-eligible: the resolver
+  // refuses (exit 1) and the contract's outcome is a full re-dispatch. It still
+  // records that the resolver RAN at head B, so the emitter's re-gate guard
+  // proceeds (full dispatch) instead of deadlocking against a missing plan.
+  const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
+    mandatoryAngles: [],
+    perAngle: [{ angle: "correctness", reviewer: "review-a" }],
+    verdict: "blocked",
+    mutate: async (root) => { await writeFile(path.join(root, "docs/guide.md"), "# Guide\n\nmore.\n", "utf8"); },
+  });
+  try {
+    const { exitCode } = await runMainRaw([
+      "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
+    ], { repoRoot });
+    assert.equal(exitCode, 1);
+    const planPath = path.join(repoRoot, buildCarryForwardPlanPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha, tmpRoot: "tmp" }));
+    const persisted = JSON.parse(await readFile(planPath, "utf8"));
+    assert.equal(persisted.ok, false);
+    assert.equal(persisted.fallback, true);
+    assert.equal(persisted.headSha, headSha);
+    assert.equal(persisted.gate, "draft_gate");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI carries a findings-present code angle forward on a narrow doc-only delta, keeping its open finding (issue #2251 AC4)", async () => {
+  const finding = { angle: "correctness", severity: "high", summary: "open defect", recommendation: "fix" };
+  const { repoRoot, prevHead, headSha } = await makeCarryForwardRepo({
+    mandatoryAngles: [],
+    perAngle: [
+      { angle: "correctness", reviewer: "review-a" },
+      { angle: "docs", reviewer: "review-c" },
+    ],
+    verdict: "findings_present",
+    findings: [finding],
+    mutate: async (root) => { await writeFile(path.join(root, "docs/guide.md"), "# Guide\n\nnarrow doc fix.\n", "utf8"); },
+  });
+  try {
+    const result = await runMain([
+      "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
+    ], { repoRoot });
+    assert.equal(result.ok, true);
+    const carried = result.carried.find((c) => c.angle === "correctness");
+    assert.ok(carried, "correctness carried forward, not re-dispatched");
+    assert.equal(carried.prevVerdict, "findings_present");
+    assert.deepEqual(carried.findings, [finding], "open finding carried unchanged, still blocking");
+    assert.ok(!result.mustRerun.some((m) => m.angle === "correctness"));
+    assert.ok(result.mustRerun.some((m) => m.angle === "docs"), "docs surface touched -> re-runs");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI leaves NO plan marker on an OPERATIONAL failure (a --prev-head that resolves no log), so the guard stays fail-closed (issue #2251)", async () => {
+  // A real prior log exists at prevHead, but the driver passes a well-formed but
+  // WRONG --prev-head with no log. That is not a carry-forward decision — the
+  // resolver did not consult carry-forward — so it must persist NO marker; the
+  // emitter then keeps refusing rather than being laundered into "resolver ran".
+  const { repoRoot, headSha } = await makeCarryForwardRepo({
+    mandatoryAngles: [],
+    perAngle: [{ angle: "correctness", reviewer: "review-a" }],
+    mutate: async (root) => { await writeFile(path.join(root, "docs/guide.md"), "# Guide\n\nmore.\n", "utf8"); },
+  });
+  const bogusPrev = "f".repeat(40);
+  try {
+    const { exitCode, stderr } = await runMainRaw([
+      "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", bogusPrev, "--head-sha", headSha,
+    ], { repoRoot });
+    assert.equal(exitCode, 1);
+    assert.match(stderr, /not found/);
+    const planPath = path.join(repoRoot, buildCarryForwardPlanPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha, tmpRoot: "tmp" }));
+    await assert.rejects(() => readFile(planPath, "utf8"), "operational failure must leave no marker");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -1061,11 +1179,13 @@ test("parseResolveAngleCarryForwardCliArgs fails closed on a same-head carry", (
     ]),
     /same-head carry-forward/,
   );
-  // Abbreviated --head-sha spelling of the same commit must not slip past.
+  // An abbreviated --head-sha is now rejected outright (full SHA required for
+  // the keyed plan artifact), before the same-head check — so it fails closed
+  // with the full-SHA error rather than slipping past.
   assert.throws(
     () => parseResolveAngleCarryForwardCliArgs([
       "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", sha, "--head-sha", sha.slice(0, 7),
     ]),
-    /same-head carry-forward/,
+    /--head-sha must be the FULL head commit SHA/,
   );
 });

@@ -64,6 +64,77 @@ test("emit-fanout-dispatch.mjs --help exits 0", () => {
   assert.match(result.stdout, /emit-fanout-dispatch/);
 });
 
+test("re-gate emit refuses without a carry-forward plan artifact, proceeds once the resolver recorded one (issue #2251 AC2)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const contextDir = await seedBundle(repoRoot);
+    // A prior findings-log for THIS gate at a DIFFERENT head makes head c a re-gate.
+    const priorHead = "d".repeat(40);
+    const findingsDir = path.join(repoRoot, "tmp", "gate-findings", "o-r", "pr-7");
+    await mkdir(findingsDir, { recursive: true });
+    await writeFile(path.join(findingsDir, `${GATE}-${priorHead}.json`), JSON.stringify({
+      headSha: priorHead, gate: GATE, verdict: "findings_present",
+      findings: [{ angle: "contradiction-lens", severity: "low", summary: "x" }],
+      provenance: { perAngle: [{ angle: "contradiction-lens", reviewer: "r" }] },
+    }), "utf8");
+
+    // No carry-forward plan artifact at head c yet -> refuse, spawn zero reviewers.
+    const refused = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(refused.status, 1, refused.stderr || refused.stdout);
+    assert.match(refused.stdout, /GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED/);
+    // A refusal leaves no emit-plan (no reviewer prompt emitted).
+    await assert.rejects(() => readFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.emit-plan.json`), "utf8"));
+
+    // A plan keyed to the right head/gate but naming a BOGUS prior head (not a
+    // real findings-log) does NOT satisfy the guard — a wrong --prev-head cannot
+    // be laundered into "the resolver ran".
+    const planPath = path.join(contextDir, `${GATE}-${HEAD_SHA}.carry-forward-plan.json`);
+    await writeFile(planPath, JSON.stringify({ ok: false, fallback: true, repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, prevHead: "e".repeat(40), carried: [], mustRerun: [] }), "utf8");
+    const stillRefused = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(stillRefused.status, 1, stillRefused.stderr || stillRefused.stdout);
+    assert.match(stillRefused.stdout, /GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED/);
+
+    // Record the resolver's plan keyed at head c, naming the REAL prior head ->
+    // the guard passes, units emit.
+    await writeFile(planPath, JSON.stringify({ ok: true, repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, prevHead: priorHead, carried: [], mustRerun: [] }), "utf8");
+    const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
+    const payload = JSON.parse(await readFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.emit-plan.json`), "utf8"));
+    assert.ok(payload.count > 0);
+  });
+});
+
+test("first-round emit (no prior findings-log) never requires a carry-forward plan (issue #2251 AC2 negative)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    await seedBundle(repoRoot);
+    // No prior findings-log anywhere -> not a re-gate -> guard does not fire.
+    const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
+  });
+});
+
+test("write-gate-context --carried-angles records preflight.carriedAngles and excludes the fully-carried unit from pendingGroups (issue #2251 AC3)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    await writeFile(path.join(repoRoot, ".devloops"), "version: 1\ngates:\n  draft:\n    angles:\n      - name: pr-description\n        enabled: false\n", "utf8");
+    const { config, errors } = await loadDevLoopConfig({ repoRoot });
+    assert.deepEqual(errors, []);
+    const carried = ["coverage", "correctness"];
+    const fanout = resolveFanoutDispatch(config, "draft", carried, { carriedAngles: carried });
+    assert.deepEqual([...fanout.preflight.carriedAngles].sort(), [...carried].sort());
+    // Every dispatch unit is fully carried, so none remain pending.
+    assert.deepEqual(fanout.pendingGroups, []);
+    const opts = parseWriteGateContextCliArgs([
+      "--repo", REPO, "--pr", PR, "--gate", "draft_gate", "--head-sha", HEAD_SHA,
+      "--angles", JSON.stringify(carried), "--carried-angles", JSON.stringify(carried),
+    ]);
+    opts.config = config;
+    opts.fanoutDispatch = fanout;
+    await writeGateContext(opts, { repoRoot });
+    const artifact = JSON.parse(await readFile(path.join(repoRoot, "tmp", "gate-context", "o-r", "pr-7", `draft_gate-${HEAD_SHA}.json`), "utf8"));
+    assert.deepEqual([...artifact.fanout.preflight.carriedAngles].sort(), [...carried].sort());
+    assert.deepEqual(artifact.fanout.pendingGroups, []);
+  });
+});
+
 test("all-carried rounds consume the real emitter's keyed zero-unit plan through fan-in and ledger writing", async () => {
   await withTmpDir(async (repoRoot) => {
     const gate = "draft_gate";
