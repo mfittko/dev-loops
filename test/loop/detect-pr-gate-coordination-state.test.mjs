@@ -105,7 +105,7 @@ const runNode = async (args = [], options = {}) => {
   const stderr = { write: (chunk) => { err += String(chunk); return true; } };
   try {
     const result = await detectPrGateCoordinationState(opts, runtime);
-    const code = emitResult(result, { jq: opts.jq, silent: opts.silent, fields: opts.fields, stdout, stderr });
+    const code = emitResult(result, { jq: opts.jq, silent: opts.silent, stdout, stderr });
     return { code, stdout: out, stderr: err };
   } catch (error) {
     return { code: 1, stdout: out, stderr: `${err}${formatCliError(error)}\n` };
@@ -249,14 +249,6 @@ test("detect-pr-gate-coordination-state allows post-draft flow for non-draft PRs
 
     const result = await runNode(["--repo", "owner/repo", "--pr", "266"], { env });
 
-    // #2163: one `--fields` call on this coordination-state surface returns the
-    // named top-level scalars as a single tab-separated line — no `node -e` and
-    // no jq object-projection, in the same scenario the full-JSON assertion
-    // below validates. Reuses `env`: each runNode builds a fresh gh mock.
-    const fieldsResult = await runNode(["--repo", "owner/repo", "--pr", "266", "--fields", "lifecycleState,gateBoundary,loopDisposition"], { env });
-    assert.equal(fieldsResult.code, 0, fieldsResult.stderr);
-    assert.equal(fieldsResult.stdout, "pr_ready_no_feedback\tpost_draft_external_review\taction_required\n");
-
     assert.equal(result.code, 0);
     assert.equal(result.stderr, "");
     assert.deepEqual(JSON.parse(result.stdout), {
@@ -314,6 +306,82 @@ test("detect-pr-gate-coordination-state allows post-draft flow for non-draft PRs
         reason: "No deterministically resolvable linked issue (no closingIssuesReferences and no Closes/Fixes/Resolves #n reference in body).",
       },
     });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// #2163: real-subprocess guard for main()'s `fields: opts.fields` passthrough
+// (detect-pr-gate-coordination-state.mjs:1252). writeGhStubHelper (the PATH-stub
+// form) + the runNode fallback spawn the ACTUAL CLI (no GH_MOCK_ENTRIES stashed,
+// so the in-process branch above is not exercised), so a regression dropping
+// that passthrough would fail this test even though it stays invisible to the
+// in-process harness's own emitResult call.
+test("detect-pr-gate-coordination-state --fields returns the named top-level scalars as one tab-separated line (real CLI)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-state-fields-"));
+
+  try {
+    const { env } = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+        stdout: jsonLine({
+          number: 266,
+          state: "OPEN",
+          isDraft: false,
+          headRefOid: "def56789abcdef",
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+          reviews: [],
+        }),
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/266/requested_reviewers"],
+        stdout: jsonLine({ users: [], teams: [] }),
+      },
+      {
+        assertArgs: ["api", "graphql", "pr=266"],
+        stdout: jsonLine({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes: [],
+                },
+              },
+            },
+          },
+        }),
+      },
+      {
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid"],
+        stdout: jsonLine({ headRefOid: "def56789abcdef" }),
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/266/comments?per_page=100"],
+        stdout: jsonLine([[
+          {
+            id: 11,
+            body: [
+              "Gate review: draft_gate",
+              "Reviewed head SHA: c94679e",
+              "Verdict: clean",
+              "Findings summary: no issues found",
+              "Next action: mark ready for review",
+            ].join("\n"),
+            html_url: "https://example.test/comment/11",
+            updated_at: "2026-05-31T20:00:00Z",
+          },
+        ]]),
+      },
+      {
+        assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],
+        stdout: "\n",
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "266", "--fields", "lifecycleState,gateBoundary,loopDisposition"], { env, cwd: capFixtureRepoRoot });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout, "pr_ready_no_feedback\tpost_draft_external_review\taction_required\n");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
