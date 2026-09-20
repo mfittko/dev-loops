@@ -805,7 +805,9 @@ export function commandContainsCopilotSummonComment(command) {
  * Whether a single shell JOB's command HEAD invokes a wait/probe helper — the Copilot/CI wait
  * tools that MUST run as a bounded FOREGROUND probe (`probe-copilot-review.mjs` /
  * `wait-pr-checks.mjs` with an explicit timeout; `detect-copilot-loop-state.mjs`;
- * `run-watch-cycle.mjs`; `gh run watch`; `dev-loops loop watch-*` / `gate probe-copilot`).
+ * `run-watch-cycle.mjs`; `gh run watch`; `dev-loops loop watch-*` / `gate probe-copilot`; and the
+ * Claude plugin launcher forms of the same, `dev-loops-run cli/index.mjs loop watch-*` / `gate
+ * probe-copilot` and `dev-loops-run <path>/<wait-script>.mjs`).
  * Anchored at the command head (after an env-assignment/wrapper/binary-path prefix), so a job
  * that merely MENTIONS the basename as an argument — `grep probe-copilot-review.mjs docs`,
  * `echo … wait-pr-checks.mjs` — does NOT match (only a real invocation does). A `.mjs` helper
@@ -825,16 +827,32 @@ function jobHeadInvokesWaitProbe(job) {
   if (/^(?:\S*\/)?gh\s+run\s+watch\b/i.test(head)) return true;
   // `dev-loops loop watch-cycle|watch-ci|watch-initial` / `dev-loops gate probe-copilot`
   if (/^(?:\S*\/)?dev-loops\s+(?:loop\s+watch-(?:cycle|ci|initial)|gate\s+probe-copilot)\b/i.test(head)) return true;
+  // The Claude plugin launcher form of the same CLI verbs: `dev-loops-run cli/index.mjs loop
+  // watch-cycle|watch-ci|watch-initial` / `dev-loops-run cli/index.mjs gate probe-copilot`.
+  if (
+    /^(?:\S*\/)?dev-loops-run\s+(?:\S*\/)?cli\/index\.mjs\s+(?:loop\s+watch-(?:cycle|ci|initial)|gate\s+probe-copilot)\b/i.test(
+      head,
+    )
+  ) {
+    return true;
+  }
+  // The launcher invoking a wait/probe script directly: `dev-loops-run <path>/<wait-script>.mjs …`.
+  if (/^(?:\S*\/)?dev-loops-run\b/i.test(head) && WAIT_SCRIPT.test(head)) return true;
   return false;
 }
 
 /**
  * Whether the command launches a wait/probe helper in the BACKGROUND — a bare `&` control
- * operator (not `&&`, not a redirection like `2>&1`/`>&2`/`&>file`) terminating a JOB whose
- * command head invokes that helper. Segment/job-head-anchored (not a whole-string basename scan),
- * so a background `&` on an UNRELATED job that merely mentions the filename is NOT denied; only
- * backgrounding the helper's own job is. These helpers are bounded foreground probes by contract;
- * backgrounding one recreates the orphaned-wait defect under the wake-less Claude harness.
+ * operator (not `&&`, not a redirection like `2>&1`/`>&2`/`&>file`) terminating a PIPELINE any of
+ * whose stage heads invokes that helper. A `|`-joined pipeline is one job for backgrounding
+ * purposes: `probe-copilot-review.mjs … | tee log &` backgrounds the WHOLE pipeline (the probe
+ * included), not just the trailing `tee` stage the `&` textually follows, so every `|`-stage head
+ * in the accumulated pipeline is checked, not only the one immediately before the `&`.
+ * Segment/job-head-anchored (not a whole-string basename scan), so a background `&` on an
+ * UNRELATED pipeline that merely mentions the filename is NOT denied; only backgrounding the
+ * helper's own pipeline is. These helpers are bounded foreground probes by contract; backgrounding
+ * one (directly or via a piped stage) recreates the orphaned-wait defect under the wake-less
+ * Claude harness.
  * ponytail: redirection stripping is a fixed set (`N>&M`, `&>`/`&>>`), not a full shell parse —
  * enough to tell a background `&` from a redirection `&`; the job split keys off the same set of
  * control operators the rest of this module uses.
@@ -846,12 +864,51 @@ function commandBackgroundsWaitProbe(command) {
     .replace(/&>>?/g, " "); // &>file, &>>file
   // Tokenize into jobs + the control operator following each; `&&` is matched before a lone `&`.
   const parts = withoutRedir.split(/(&&|\|\||;|\||&|\n|\r)/);
+  let pipelineStages = [];
   for (let i = 0; i < parts.length; i += 2) {
     // parts[i] is a job; parts[i+1] is the operator terminating it (undefined at end-of-string).
-    // A lone `&` operator means the preceding job was launched in the background.
-    if (parts[i + 1] === "&" && jobHeadInvokesWaitProbe(parts[i])) return true;
+    pipelineStages.push(parts[i]);
+    const op = parts[i + 1];
+    if (op === "|") continue; // still inside the same pipeline; accumulate the next stage
+    // A lone `&` operator backgrounds the WHOLE accumulated pipeline — check every stage head.
+    if (op === "&" && pipelineStages.some((stage) => jobHeadInvokesWaitProbe(stage))) return true;
+    pipelineStages = [];
   }
   return false;
+}
+
+/**
+ * Whether COMMAND is (or contains) a sleep-poll loop over `gh`/`loop-state` — a `while`/`until`/
+ * `for` loop whose body contains both a `sleep` and a `gh` or `loop-state` call. Checked on the
+ * WHOLE command (not per-segment): the loop body is `;`-delimited, so a per-segment split would
+ * separate the loop head from its `sleep`/`gh` body calls and miss the pattern. `gh` must be a
+ * standalone token (not `grep gh-notes`), and `loop-state` must sit at a command-head position
+ * (not a substring inside `grep loop-state x`). Shared by `commandContainsDetachedWaitTool` (the
+ * PreToolUse gate, over the shell text about to run) and `commandInvokesWaitProbeHelper` (the
+ * SubagentStop reaper's ownership signature, over a live process's `ps` command line).
+ * @param {string} command @returns {boolean}
+ */
+export function commandIsSleepPollLoop(command) {
+  const whole = command.trim();
+  return (
+    /(?:while|until|for)\b/i.test(whole) &&
+    /\bsleep\b/.test(whole) &&
+    /\bgh(?=\s|$)|(?:^|[;&|(])\s*loop-state(?=\s|$)/.test(whole)
+  );
+}
+
+/**
+ * Whether COMMAND itself IS an invocation of a Copilot/CI wait/probe helper — the reusable
+ * signature the SubagentStop reaper (`discoverOwnBackgroundShells`) uses to decide which
+ * process-group leader it may own and reap: a `jobHeadInvokesWaitProbe` match (a `.mjs` helper,
+ * `gh run watch`, `dev-loops`/`dev-loops-run` watch-cycle/probe-copilot) OR a sleep-poll loop
+ * (`commandIsSleepPollLoop`). Unlike `commandContainsDetachedWaitTool`, this takes no `&`/backgrounding
+ * operator into account — it classifies an already-running process's command line, not shell
+ * syntax about to execute.
+ * @param {string} command @returns {boolean}
+ */
+export function commandInvokesWaitProbeHelper(command) {
+  return jobHeadInvokesWaitProbe(command) || commandIsSleepPollLoop(command);
 }
 
 /**
@@ -865,11 +922,7 @@ function commandBackgroundsWaitProbe(command) {
  */
 export function commandContainsDetachedWaitTool(command) {
   const whole = command.trim();
-  // Checked on the WHOLE command (not per-segment): the `while`/`until`/`for` loop body is
-  // `;`-delimited, so a per-segment split would separate the loop head from its `sleep`/`gh`
-  // body calls and miss the pattern. `gh` must be a standalone token (not `grep gh-notes`), and
-  // `loop-state` must sit at a command-head position (not a substring inside `grep loop-state x`).
-  if (/(?:while|until|for)\b/i.test(whole) && /\bsleep\b/.test(whole) && /\bgh(?=\s|$)|(?:^|[;&|(])\s*loop-state(?=\s|$)/.test(whole)) {
+  if (commandIsSleepPollLoop(whole)) {
     return true;
   }
   // A wait/probe helper launched with a bare `&` — the orphaned-background-shell form.

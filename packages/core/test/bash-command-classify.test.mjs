@@ -36,6 +36,7 @@ import {
   commandContainsCopilotRequestBypass,
   commandContainsCopilotSummonComment,
   commandContainsDetachedWaitTool,
+  commandInvokesWaitProbeHelper,
   commandContainsInlineInterpreter,
 } from "../src/loop/bash-command-classify.mjs";
 
@@ -598,6 +599,41 @@ test("commandContainsDetachedWaitTool detects bare-& backgrounded wait/probe scr
   assert.equal(commandContainsDetachedWaitTool("dev-loops gate probe-copilot --pr 5 &"), true);
   // backgrounding a DIFFERENT job while a probe runs in the foreground is not the probe's own backgrounding
   assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5; echo done &"), false);
+  // the Claude plugin launcher form of the CLI verbs (#2065 follow-up: bypassed the gate before)
+  assert.equal(commandContainsDetachedWaitTool("dev-loops-run cli/index.mjs loop watch-cycle --repo o/r --pr 5 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("dev-loops-run cli/index.mjs gate probe-copilot --pr 5 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("dev-loops-run scripts/github/probe-copilot-review.mjs --pr 5 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("dev-loops-run cli/index.mjs loop watch-cycle --repo o/r --pr 5"), false);
+  // a backgrounded PIPELINE: the `&` trails the `tee` stage, but the probe stage must still deny
+  // (#2065 follow-up: splitting on `|` as a job boundary let this bypass the gate)
+  assert.equal(
+    commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5 --timeout-ms 0 | tee /tmp/x.log &"),
+    true,
+  );
+  assert.equal(commandContainsDetachedWaitTool("gh run watch 123 | tee /tmp/x.log &"), true);
+  // a piped foreground probe (no trailing `&`) is not backgrounded at all
+  assert.equal(
+    commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5 --timeout-ms 0 | tee /tmp/x.log"),
+    false,
+  );
+  // an unrelated piped pipeline backgrounded is still not denied
+  assert.equal(commandContainsDetachedWaitTool("cat foo.txt | tee /tmp/x.log &"), false);
+});
+
+test("commandInvokesWaitProbeHelper classifies a LIVE process's ps command line (#2065, reaper ownership boundary)", () => {
+  // A live wait/probe helper's own command line — no `&`/backgrounding syntax to look for, this
+  // classifies the process itself (the SubagentStop reaper's ownership signature).
+  assert.equal(commandInvokesWaitProbeHelper("node scripts/github/probe-copilot-review.mjs --repo o/r --pr 5 --timeout-ms 0"), true);
+  assert.equal(commandInvokesWaitProbeHelper("node scripts/github/wait-pr-checks.mjs --pr 5"), true);
+  assert.equal(commandInvokesWaitProbeHelper("gh run watch 123"), true);
+  assert.equal(commandInvokesWaitProbeHelper("dev-loops loop watch-cycle --repo o/r --pr 5"), true);
+  assert.equal(commandInvokesWaitProbeHelper("dev-loops-run cli/index.mjs loop watch-cycle --repo o/r --pr 5"), true);
+  assert.equal(commandInvokesWaitProbeHelper("dev-loops-run cli/index.mjs gate probe-copilot --pr 5"), true);
+  assert.equal(commandInvokesWaitProbeHelper("while ! gh pr view 1 --json state --jq .state; do sleep 5; done"), true);
+  // an unrelated detached process (e.g. the UI-review server) does not match
+  assert.equal(commandInvokesWaitProbeHelper("node .claude/hooks/../../scripts/ui-review-server.mjs --port 4173"), false);
+  assert.equal(commandInvokesWaitProbeHelper("npm test"), false);
+  assert.equal(commandInvokesWaitProbeHelper("bash"), false);
 });
 
 test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, and heredocs", () => {

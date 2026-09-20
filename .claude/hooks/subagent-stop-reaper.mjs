@@ -13,12 +13,23 @@
  * stop is allowed.
  *
  * Scope (mirrors `ui-review-teardown`'s `process.kill(-pgid)` + win32 fail-closed pattern):
- *   - Verifiable ownership boundary: it reaps ONLY process-GROUP LEADERS (a process whose own pgid
- *     equals its pid — i.e. a real detached background job group) that share the reaper's SESSION,
- *     minus the reaper itself and the session leader (the agent/shell). Because every reaped pid
- *     leads its OWN group, `process.kill(-pid)` signals only that job's group — never a foreground
- *     sibling or another process that merely shares the reaper's group. It never touches unrelated
- *     processes, other sessions, or git/worktree state (the uncommitted-work guard owns that).
+ *   - Verifiable ownership boundary: session + group-leader scoping (below) narrows candidates,
+ *     but is NOT sufficient ownership proof by itself — a foreground job-control job (`sleep 300 &`
+ *     typed at a shell) or an unrelated detached process the agent started on purpose (e.g. the
+ *     `ui-review` skill's server, spawned with `{ detached: true }`) is ALSO a group leader in the
+ *     SAME session. The reaper therefore also requires the leader's COMMAND to match the
+ *     wait/probe helper signature (`commandInvokesWaitProbeHelper` in
+ *     `../../packages/core/src/loop/bash-command-classify.mjs`, vendored into
+ *     `./_bash-command-classify.mjs`) — the exact set of tools the PreToolUse Bash-gate denies
+ *     backgrounding (`probe-copilot-review`/`wait-pr-checks`/`detect-copilot-loop-state`/
+ *     `run-watch-cycle` .mjs, `gh run watch`, `dev-loops`/`dev-loops-run` watch-cycle/probe-copilot, a
+ *     `while|until … sleep … (gh|loop-state)` poll loop). A group leader that is session-scoped but
+ *     does NOT match this signature (the UI-review server, an ad-hoc foreground job) is left alone
+ *     by construction — only a job whose OWN command is a wait/probe helper is reapable.
+ *   - Because every reaped pid leads its OWN group, `process.kill(-pid)` signals only that job's
+ *     group — never a foreground sibling or another process that merely shares the reaper's group.
+ *     It never touches unrelated processes, other sessions, or git/worktree state (the
+ *     uncommitted-work guard owns that).
  *   - win32 fails closed: Node cannot signal a process group there, so the reaper skips rather than
  *     misfire.
  *   - The reaper NEVER blocks the stop — it always exits 0. Blocking the stop is the
@@ -37,6 +48,7 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+import { commandInvokesWaitProbeHelper } from "./_bash-command-classify.mjs";
 import { decideSubagentStopReap } from "./_hook-decisions.mjs";
 import { readHookInput } from "./_hook-io.mjs";
 
@@ -44,8 +56,12 @@ import { readHookInput } from "./_hook-io.mjs";
  * Best-effort discovery of the detached background job groups THIS agent left running: resolve the
  * reaper's own SESSION id (the ownership boundary a background job the agent started shares), then
  * enumerate every process and keep only the process-GROUP LEADERS (pid === pgid) in that session,
- * dropping the reaper itself and the session leader (the agent/shell). Restricting to group leaders
- * is the verifiable per-job boundary: each returned pid leads its own group, so a later
+ * dropping the reaper itself and the session leader (the agent/shell) — AND whose COMMAND matches
+ * the wait/probe helper signature (`commandInvokesWaitProbeHelper`), the verifiable ownership
+ * boundary: session + group-leader scoping alone would also catch a foreground job-control job or
+ * an unrelated detached process (e.g. the `ui-review` server) sharing the same session, so a
+ * leader that does not itself invoke a wait/probe helper is left alone. Restricting to matching
+ * group leaders is the per-job boundary: each returned pid leads its own group, so a later
  * `kill(-pid)` signals only that job's group, never a foreground sibling that merely shares the
  * reaper's group. A `ps` failure or an unresolvable session yields an empty set (fail-safe no-op).
  */
@@ -59,20 +75,27 @@ export function discoverOwnBackgroundShells({ selfPid = process.pid, execFileSyn
   if (!Number.isInteger(sid) || sid <= 1) return { sid: null, pids: [] };
   let out = "";
   try {
-    out = execFileSyncImpl("ps", ["-A", "-o", "pid=,pgid=,sess="], { encoding: "utf8", timeout: 4000 });
+    // `command=` is the trailing field and may itself contain spaces — split with a limited
+    // field count (3 numeric fields + the rest of the line as command) rather than a fixed-width
+    // token split, so a multi-word command line is captured whole, not truncated at its first space.
+    out = execFileSyncImpl("ps", ["-A", "-o", "pid=,pgid=,sess=,command="], { encoding: "utf8", timeout: 4000 });
   } catch {
     return { sid, pids: [] };
   }
   const pids = [];
   for (const line of out.split("\n")) {
-    const m = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)$/);
+    const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/);
     if (!m) continue;
     const pid = Number(m[1]);
     const pgid = Number(m[2]);
     const sess = Number(m[3]);
+    const command = m[4];
     // Own the process only when: same session as the reaper; a process-GROUP LEADER (pid === pgid,
-    // a real detached job group); not the reaper itself; and not the session leader (pid === sid).
-    if (sess === sid && pid === pgid && pid > 1 && pid !== selfPid && pid !== sid) {
+    // a real detached job group); not the reaper itself; not the session leader (pid === sid); AND
+    // its own command matches the wait/probe helper signature — the verifiable ownership boundary
+    // that makes an unrelated group leader (a foreground job, a detached UI-review server, …)
+    // unreapable by construction.
+    if (sess === sid && pid === pgid && pid > 1 && pid !== selfPid && pid !== sid && commandInvokesWaitProbeHelper(command)) {
       pids.push(pid);
     }
   }
