@@ -181,7 +181,18 @@ practice:
   green `gate-evidence` check **once branch protection on `main` requires it**.
   Until an operator adds it to branch protection, the check runs and reports at
   pre-merge/verdict points on every non-draft PR but does **not** yet block
-  merge — it is reporting-only in that window.
+  merge — it is reporting-only in that window. The workflow is two jobs
+  (`docs/decisions/0076-gate-evidence-reporter-split-always-settles-required-status.md`,
+  amending 0043): `gate-evidence-runner` keeps `cancel-in-progress: true` for
+  waste-avoidance but no longer posts the status itself, and a non-cancelling
+  `gate-evidence-reporter` job always settles the required check at the final
+  head after a burst of review/comment events, closing the gap where the
+  LAST-triggered run of a burst was itself cancelled and no run posted a
+  status. `merge-pr.mjs` surfaces this transitional-period recovery directly:
+  when `gh pr merge` is blocked and the `gate-evidence` context is not
+  `success`, its error names the required check and the same recovery —
+  complete/re-run the latest Gate-evidence run, or edit the current-head
+  verdict comment — instead of only GitHub's generic block message.
 
 The server-side check verifies the same visible, comment-derived verdict fields
 the client-side tooling does (including the light-mode inline exception,

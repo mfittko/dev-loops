@@ -20,16 +20,22 @@ const STATUS_CONTEXT_SUCCESS_STATES = new Set(["SUCCESS"]);
 export const LOOP_DERIVED_CI_CHECK_NAME = "gate-evidence";
 
 /**
- * The same workflow ALSO surfaces as a check run under its job id
- * (`gate-evidence-runner`) beside the commit status named above, and both are
- * the loop's own derived signal. Excluding only the status context left the
- * runner's conclusion gating the loop's own pre_approval step: once the
- * workflow gained job-level concurrency, a superseded run is cancelled as
+ * The same workflow ALSO surfaces as check runs under its two job ids
+ * (`gate-evidence-runner`, the compute-heavy detector, and
+ * `gate-evidence-reporter`, the always-settling job that owns the status
+ * above — see docs/decisions/0076) beside the commit status named above, and
+ * all are the loop's own derived signal. Excluding only the status context
+ * left either job's conclusion gating the loop's own pre_approval step: once
+ * the workflow gained job-level concurrency, a superseded run is cancelled as
  * normal operation, and a cancelled run is deliberately NOT treated as green
  * (see normalizeStatusCheckRollupStatus) — so one routine cancellation made
  * the whole head read "none" and the loop waited on CI forever.
  */
-export const LOOP_DERIVED_CI_CHECK_NAMES = Object.freeze([LOOP_DERIVED_CI_CHECK_NAME, "gate-evidence-runner"]);
+export const LOOP_DERIVED_CI_CHECK_NAMES = Object.freeze([
+  LOOP_DERIVED_CI_CHECK_NAME,
+  "gate-evidence-runner",
+  "gate-evidence-reporter",
+]);
 
 function checkEntryName(entry) {
   if (typeof entry?.name === "string" && entry.name.length > 0) return entry.name;
@@ -139,6 +145,27 @@ export function normalizeStatusCheckRollupStatus(rollup) {
   if (hasUnsupportedCompleted) return "none";
   if (hasSuccess) return "success";
   return "none";
+}
+
+/**
+ * Resolve the normalized status of ONE named context/check within a
+ * `statusCheckRollup` (or check-runs-shaped) payload — e.g. whether the
+ * required `gate-evidence` context itself (as opposed to the loop's own
+ * exclusion of it, see `deriveLoopCiStatusFromRollup`) is success, failure,
+ * pending, or absent. Reuses the same name matching
+ * (`partitionEntriesByCheckName`) and state normalization
+ * (`normalizeStatusCheckRollupStatus`) the rollup helpers on this module
+ * already use, so a caller that needs one context's own state (e.g.
+ * merge-pr.mjs naming the real cause of a block on `gate-evidence`) does not
+ * re-derive name matching or status normalization.
+ *
+ * @param {Array<object>} rollup
+ * @param {string} contextName
+ * @returns {"success"|"failure"|"pending"|"none"}
+ */
+export function resolveNamedContextState(rollup, contextName) {
+  const { matched } = partitionEntriesByCheckName(rollup, contextName);
+  return normalizeStatusCheckRollupStatus(matched);
 }
 
 /**
