@@ -739,6 +739,20 @@ export function buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot = "tmp"
   return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".emit-plan.json" });
 }
 
+// Deterministic path for the keyed carry-forward plan artifact
+// (GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED, `resolve-angle-carry-forward.mjs`):
+// the resolver's own plan result persisted as a keyed sibling of the
+// gate-context bundle at the CURRENT head (head B), so its mere presence is the
+// deterministic proof that carry-forward was consulted before dispatch. The
+// fan-out emitter refuses to spawn a reviewer on a re-gate head (a prior
+// findings-log for this gate exists at an earlier head) when this artifact is
+// absent. Mirrors buildGateContextPath (same path-segment params); the body is
+// the resolver's own result object (or a fail-closed full-fallback marker when
+// the resolver refused), so the artifact is self-describing and key-stamped.
+export function buildCarryForwardPlanPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
+  return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".carry-forward-plan.json" });
+}
+
 // Deterministic path for the shared validation-results artifact
 // (GATE-EXEC-VALIDATION-ARTIFACT, `run-gate-validation.mjs`): the record of
 // this round's validation suites, run once and read (not re-run) by every
