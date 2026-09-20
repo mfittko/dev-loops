@@ -5,7 +5,7 @@ import { validateZeroUnitCarryProof } from "./_carried-angles.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
-import { gateScopePrefix, normalizeGate } from "./_gate-names.mjs";
+import { gateScopePrefix, LIFECYCLE_GATES, normalizeGate } from "./_gate-names.mjs";
 import { HEAD_SHA_RE, VALID_SCOPE_RE } from "./record-dispatch-prompt-layout.mjs";
 import { buildCarryForwardPlanPath, buildGateContextPath, buildGateEmitPlanPath, mapGateToConfigKey } from "./write-gate-context.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
@@ -468,10 +468,13 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // resolver entirely and would re-fan every angle — the exact amplifier this
   // issue exists to prevent. Refuse to emit (no reviewer spawned) until the
   // resolver has run at this head. This is the earliest chokepoint (before the
-  // wasted fan-out), chosen over the post-hoc ledger seam. Only
-  // draft_gate / pre_approval_gate carry forward; the review gate has no
-  // resolver, so it never guards here.
-  if (gate === "draft_gate" || gate === "pre_approval_gate") {
+  // wasted fan-out), chosen over the post-hoc ledger seam. Only the lifecycle
+  // gates carry forward; the review gate has no resolver, so it never guards
+  // here. Bind to the exported LIFECYCLE_GATES set (not a parallel inline
+  // literal) so a future lifecycle gate is guarded automatically rather than
+  // silently falling open — the same load-bearing derivation _gate-names.mjs
+  // uses for GATE_NAMES.
+  if (LIFECYCLE_GATES.includes(gate)) {
     const priorHeads = await listPriorFindingsLogHeads({ repo, pr, gate, headSha, tmpRoot });
     if (priorHeads.size > 0) {
       let plan = null;

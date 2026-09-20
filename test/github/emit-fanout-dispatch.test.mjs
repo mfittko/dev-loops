@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, main, sanitizeScopeSegment, splitSubUnitName } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, listPriorFindingsLogHeads, main, sanitizeScopeSegment, splitSubUnitName } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { buildGateEmitPlanPath, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
@@ -100,6 +100,28 @@ test("re-gate emit refuses without a carry-forward plan artifact, proceeds once 
     assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
     const payload = JSON.parse(await readFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.emit-plan.json`), "utf8"));
     assert.ok(payload.count > 0);
+  });
+});
+
+test("listPriorFindingsLogHeads rethrows a non-ENOENT readdir error (fail-closed, not laundered into first-round) (issue #2251)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    // Make the findings-log DIR path a regular file so readdir hits ENOTDIR:
+    // the enforcement-critical branch must rethrow, never fail-open to "no
+    // prior round" (which would silently skip the carry-forward guard).
+    const findingsDir = path.join(repoRoot, "tmp", "gate-findings", "o-r", "pr-7");
+    await mkdir(path.dirname(findingsDir), { recursive: true });
+    await writeFile(findingsDir, "not a directory", "utf8");
+    await assert.rejects(
+      () => listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") }),
+      (err) => err && err.code !== "ENOENT",
+    );
+  });
+});
+
+test("listPriorFindingsLogHeads returns the empty set on ENOENT (genuine first round)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const heads = await listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") });
+    assert.equal(heads.size, 0);
   });
 });
 

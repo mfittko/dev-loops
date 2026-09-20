@@ -694,6 +694,13 @@ test("CLI persists a keyed carry-forward plan artifact at the CURRENT head befor
     assert.equal(persisted.ok, true);
     assert.equal(persisted.headSha, headSha);
     assert.equal(persisted.gate, "draft_gate");
+    // Producer/consumer field contract: the emitter's planOk gate validates
+    // repo, pr, gate, headSha AND prevHead — assert the persisted plan carries
+    // every one, so dropping any of them from the resolver result regresses here
+    // (not silently at a real re-gate deadlock).
+    assert.equal(persisted.repo, "o/n");
+    assert.equal(String(persisted.pr), "7");
+    assert.equal(persisted.prevHead, prevHead);
     assert.deepEqual(persisted.carried.map((c) => c.angle), result.carried.map((c) => c.angle));
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
