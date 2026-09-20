@@ -123,18 +123,57 @@ test("gate-evidence workflow re-fires on review submission, review comments, and
   assert.equal(workflow.permissions.statuses, "write");
 });
 
-// Pin #1702's stale-PENDING regression: the status report step must ALWAYS post
-// a definitive success/failure on the current head SHA — never `pending`. The
-// check only fires at pre-merge/verdict points, so `not_established` (no clean
-// verdict for the current head yet) is a fail-closed `failure` flipped to
-// `success` by the next verdict-post re-fire, never a dangling pending.
-test("gate-evidence always posts a definitive success/failure, never a stale pending (#1702)", async () => {
+// Pin #1702's stale-PENDING regression AND #2262's split: the detector
+// (`gate-evidence-runner`) no longer posts a status at all — it only computes
+// and exposes `evidence_state` as a job output. The reporter
+// (`gate-evidence-reporter`) OWNS the required `gate-evidence` status, is
+// concurrency-exempt (non-cancelling) from the detector's cancel-in-progress
+// group so the final event in a burst always gets to post, and always posts a
+// definitive success/failure on the current head SHA — never `pending`. The
+// check only fires at pre-merge/verdict points, so `not_established` (no
+// clean verdict for the current head yet) is a fail-closed `failure` flipped
+// to `success` by the next verdict-post re-fire, never a dangling pending.
+test("gate-evidence-runner never posts a status; gate-evidence-reporter always posts a definitive success/failure, never a stale pending (#1702, #2262)", async () => {
   const content = await readRepo(".github/workflows/gate-evidence.yml");
   const workflow = parseYaml(content);
-  const statusStep = workflow.jobs["gate-evidence-runner"].steps.find(
+  const runnerJob = workflow.jobs["gate-evidence-runner"];
+  const reporterJob = workflow.jobs["gate-evidence-reporter"];
+  assert.ok(reporterJob, "expected a gate-evidence-reporter job");
+
+  // The detector must not itself post a status — that is the whole point of
+  // the split (#2262): a job that keeps cancel-in-progress can never
+  // guarantee the LAST-triggered run of a burst completes, so it must not be
+  // the one the required check depends on.
+  assert.ok(
+    !runnerJob.steps.some((step) => typeof step.run === "string" && step.run.includes("gh api --method POST") && step.run.includes("statuses/")),
+    "gate-evidence-runner must not post a status — the reporter owns the required check",
+  );
+  assert.ok(
+    runnerJob.outputs && typeof runnerJob.outputs.evidence_state === "string" && runnerJob.outputs.evidence_state.length > 0,
+    "gate-evidence-runner must expose evidence_state as a job output for the reporter to reuse",
+  );
+
+  // The reporter is concurrency-exempt from the detector's cancel-in-progress
+  // group: its own NON-cancelling group, serializing per PR without ever
+  // killing a running reporter, so the final event's reporter always
+  // completes and posts (the design invariant closing #2262).
+  assert.ok(reporterJob.concurrency, "reporter must declare its own concurrency group");
+  assert.equal(
+    reporterJob.concurrency.group,
+    "gate-evidence-reporter-${{ github.event.pull_request.number || github.event.issue.number }}",
+  );
+  assert.equal(reporterJob.concurrency["cancel-in-progress"], false, "the reporter's group must be non-cancelling");
+  assert.deepEqual(reporterJob.needs, ["gate-evidence-runner"]);
+  assert.ok(String(reporterJob.if).includes("always()"), "the reporter must run even when the detector was cancelled");
+  assert.ok(
+    String(reporterJob.if).includes("needs.gate-evidence-runner.result != 'skipped'"),
+    "the reporter must still no-op when the detector was guard-skipped (draft / non-marker comment)",
+  );
+
+  const statusStep = reporterJob.steps.find(
     (step) => typeof step.run === "string" && step.run.includes("gh api --method POST"),
   );
-  assert.ok(statusStep, "expected the explicit status-posting step");
+  assert.ok(statusStep, "expected the reporter to own the explicit status-posting step");
 
   // The case statement must never emit `pending`: satisfied is the only
   // success, everything else fails closed to failure.
@@ -214,23 +253,31 @@ test("gate-evidence posts an explicit status to the resolved PR head SHA, not th
   const detectorStep = steps.find((step) => step.id === "gate_check");
   assert.ok(detectorStep, "expected the detector step");
   assert.match(detectorStep.run, /--pr "\$\{\{ steps\.pr\.outputs\.number \}\}"/);
-
-  const statusStep = steps.find((step) => typeof step.run === "string" && step.run.includes("gh api --method POST"));
-  assert.ok(statusStep, "expected a step posting an explicit commit status");
-  // !cancelled() (not always()): a failed detector still fail-closed posts,
-  // but a run superseded via cancel-in-progress must NOT race the newer run
-  // with a spurious failure; the draft guard keeps the draft no-op.
-  assert.equal(
-    statusStep.if.replace(/\s+/gu, " ").trim(),
-    "${{ !cancelled() && steps.pr.outputs.draft == 'false' }}",
-  );
-  assert.match(statusStep.run, /statuses\/\$\{\{ steps\.pr\.outputs\.head_sha \}\}/);
-  assert.match(statusStep.run, /context=gate-evidence/);
+  assert.match(detectorStep.run, /evidence_state=/, "the detector must write evidence_state to $GITHUB_OUTPUT for the reporter to reuse");
 
   // Every step that needs a checkout/deps or reports must skip on drafts,
-  // matching the previous job-level draft no-op.
+  // matching the previous job-level draft no-op. The detector job no longer
+  // posts a status, so it needs no !cancelled() guard on any step.
   for (const step of steps) {
     if (step.id === "pr") continue;
     assert.match(String(step.if ?? ""), /steps\.pr\.outputs\.draft == 'false'/, `step "${step.name}" must carry the draft guard`);
   }
+
+  // The reporter's recompute path reuses the SAME trusted-base checkout
+  // configuration as the detector — its independent recomputation must be
+  // evaluated against trusted code too, never the PR head.
+  const reporterSteps = workflow.jobs["gate-evidence-reporter"].steps;
+  const reporterFactsStep = reporterSteps.find((step) => step.id === "pr");
+  assert.ok(reporterFactsStep, "expected the reporter to carry its own Resolve-PR-facts step with id 'pr'");
+  assert.deepEqual(reporterFactsStep.run, factsStep.run, "the reporter's Resolve-PR-facts step must be copied verbatim from the detector's");
+
+  const reporterCheckoutStep = reporterSteps.find((step) => typeof step.uses === "string" && step.uses.startsWith("actions/checkout"));
+  assert.ok(reporterCheckoutStep, "expected the reporter's recompute path to include a checkout step");
+  assert.equal(reporterCheckoutStep.with.ref, "${{ github.event.repository.default_branch }}");
+  assert.equal(reporterCheckoutStep.with["persist-credentials"], false);
+
+  const reporterDetectStep = reporterSteps.find((step) => step.id === "recompute_check");
+  assert.ok(reporterDetectStep, "expected the reporter's recompute detector step");
+  assert.match(reporterDetectStep.run, /--pr "\$\{\{ steps\.pr\.outputs\.number \}\}"/);
+  assert.match(reporterDetectStep.run, /evidence_state=/);
 });

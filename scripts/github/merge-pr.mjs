@@ -10,6 +10,7 @@ import { loadDevLoopConfig, resolveEffectiveMergeAuthorizedFromLoad, resolveHuma
 import { countUnresolvedHumanChangesRequested } from "@dev-loops/core/loop/size-budget-merge-gate";
 import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { evaluateMergePreconditions, resolveCiGreenFromRollup, isValidGithubLogin } from "@dev-loops/core/loop/merge-approval";
+import { resolveNamedContextState, LOOP_DERIVED_CI_CHECK_NAME } from "@dev-loops/core/loop/copilot-ci-status";
 import { assertGithubWriteStubbedInTestMode } from "@dev-loops/core/github/test-mode-write-guard";
 import { flattenPaginatedSlurp } from "./post-gate-findings.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -296,7 +297,19 @@ export async function mergePr(options, runtime = {}) {
   // signal-kill (runChild resolves `{ code: null }`) both mean the merge did
   // not cleanly succeed, so neither may report ok/exit-0.
   if (!mergeRun || mergeRun.code !== 0) {
-    throw new Error(`gh pr merge did not succeed (code ${mergeRun?.code ?? "null"}): ${(mergeRun?.stderr || "").trim() || "no stderr"}`);
+    const rawStderr = (mergeRun?.stderr || "").trim() || "no stderr";
+    // The observed real-world path (docs/decisions/0075): every real
+    // precondition (including
+    // `ciGreen`, which already EXCLUDES `gate-evidence` — see
+    // resolveCiGreenFromRollup) passed, so `gh pr merge` is the first place a
+    // stale/non-success `gate-evidence` REQUIRED context surfaces, and GitHub's
+    // own stderr for that block is the generic "base branch policy prohibits
+    // the merge" — it never names the actual required check. Name it here.
+    const gateEvidenceState = resolveNamedContextState(prView?.statusCheckRollup, LOOP_DERIVED_CI_CHECK_NAME);
+    const gateEvidenceNote = gateEvidenceState !== "success"
+      ? ` The required \`${LOOP_DERIVED_CI_CHECK_NAME}\` context is ${gateEvidenceState} at head ${currentHeadSha}; this required check needs a COMPLETED Gate-evidence run. Recovery: complete/re-run the latest Gate-evidence Actions run to success, or edit the current-head gate-verdict comment to re-fire it (see ADR 0043 / the reporter split in ADR 0075).`
+      : "";
+    throw new Error(`gh pr merge did not succeed (code ${mergeRun?.code ?? "null"}): ${rawStderr}${gateEvidenceNote}`);
   }
   const merged = await ghJson(
     ["pr", "view", String(options.pr), "--repo", options.repo, "--json", "mergeCommit,state"],

@@ -5,6 +5,7 @@ name: Gate evidence
 # Rationale and design records:
 #   docs/decisions/0034-server-side-gate-evidence-required-check.md
 #   docs/decisions/0043-gate-evidence-verdict-comment-refire.md
+#   docs/decisions/0075-gate-evidence-reporter-split-always-settles-required-status.md
 on:
   pull_request:
     types: [opened, reopened, ready_for_review]
@@ -22,6 +23,12 @@ permissions:
   statuses: write
 
 jobs:
+  # The compute-heavy DETECTOR: checks out the trusted default branch and runs
+  # detect-checkpoint-evidence.mjs. Keeps job-level cancel-in-progress — its
+  # waste-avoidance is worth keeping — but it no longer owns the required
+  # `gate-evidence` status (see docs/decisions/0075). It exposes its verdict as
+  # a job output so the non-cancelling reporter job below can reuse it without
+  # recomputing when it was not superseded.
   gate-evidence-runner:
     # pull_request/review events: skip drafts via the payload. issue_comment:
     # only PR comments carrying the gate-comment marker OR the head-pinned
@@ -42,22 +49,28 @@ jobs:
         startsWith(github.event.changes.body.from, 'approve merge ')) &&
        contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
     # One evaluation per PR at a time; a superseded in-flight run is cancelled —
-    # the newer run reflects newer comment/thread state and posts the status.
-    # JOB-level deliberately: a workflow-level group is joined by every run
-    # BEFORE the job `if` is evaluated, so a marker-skipped ordinary-comment
-    # run would cancel a live eligible evaluation and then post nothing —
-    # re-creating the stale-status deadlock this workflow exists to close. A
-    # job-level group is only joined by jobs that actually start.
+    # the newer run reflects newer comment/thread state. JOB-level
+    # deliberately: a workflow-level group is joined by every run BEFORE the
+    # job `if` is evaluated, so a marker-skipped ordinary-comment run would
+    # cancel a live eligible evaluation. A job-level group is only joined by
+    # jobs that actually start. A cancelled detector run contributes no
+    # evidence_state output; the reporter job recomputes in that case (0075) —
+    # this job no longer needs to itself guarantee a completed, status-posting
+    # run at the final head.
     concurrency:
       group: gate-evidence-${{ github.event.pull_request.number || github.event.issue.number }}
       cancel-in-progress: true
     runs-on: ubuntu-latest
+    outputs:
+      evidence_state: ${{ steps.gate_check.outputs.evidence_state }}
+      number: ${{ steps.pr.outputs.number }}
+      draft: ${{ steps.pr.outputs.draft }}
+      head_sha: ${{ steps.pr.outputs.head_sha }}
     steps:
       # The one API call here is retried once; if it still fails, the run
-      # fails with NO status posted — without a resolved head SHA there is
-      # nothing to target. That window exists only on issue_comment runs and
-      # leaves the prior status standing (identical to the pre-issue_comment
-      # behavior); the next verdict post/edit re-fires a fresh evaluation.
+      # fails with no evidence_state output — the reporter job recomputes.
+      # That window exists only on issue_comment runs and leaves the prior
+      # status standing until the reporter's independent resolution below.
       - name: Resolve PR facts (number, draft, head SHA)
         id: pr
         env:
@@ -116,13 +129,15 @@ jobs:
       # verdict, and a clean pre_approval_gate verdict on the current head,
       # including the documented light-mode inline exception.
       #
-      # set +e: a non-zero exit must still reach the status-reporting step
-      # below (posting a status) rather than aborting the job with no status
-      # posted at all, which would leave the required check pending forever
-      # instead of failing closed. stdout/stderr are captured to files (rather
-      # than piped through `jq` directly) so a non-JSON line on either stream
-      # can never break parsing, and both are still echoed for the same
-      # Actions-log visibility a plain (uncaptured) run would have had.
+      # set +e: a non-zero exit must still reach the evidence_state output write
+      # below rather than aborting the job with no output written at all, which
+      # would silently force the reporter job into a recompute it could avoid.
+      # stdout/stderr are captured to files (rather than piped through `jq`
+      # directly) so a non-JSON line on either stream can never break parsing,
+      # and both are still echoed for the same Actions-log visibility a plain
+      # (uncaptured) run would have had. This job no longer POSTS a status
+      # (0075) — it only computes and exposes evidenceState as a job output;
+      # the reporter job below owns the required `gate-evidence` status.
       - name: Verify draft_gate / pre_approval_gate evidence
         id: gate_check
         if: steps.pr.outputs.draft == 'false'
@@ -137,42 +152,148 @@ jobs:
             > gate_check_stdout.json 2> gate_check_stderr.json
           cat gate_check_stdout.json
           cat gate_check_stderr.json >&2
+          evidence_state="$(jq -r '.evidenceState // empty' gate_check_stdout.json gate_check_stderr.json 2>/dev/null | head -n1)"
+          echo "evidence_state=${evidence_state}" >> "$GITHUB_OUTPUT"
+
+  # The always-settling REPORTER: owns the required `gate-evidence` status.
+  # Concurrency-exempt from the detector's cancel-in-progress group (its own
+  # NON-cancelling group), so a burst of review/comment events can cancel
+  # every detector run — including the last-triggered one — without leaving
+  # the required check dangling: this job still runs for the final event and
+  # always posts a definitive state at the resolved head (docs/decisions/0075).
+  gate-evidence-reporter:
+    needs: [gate-evidence-runner]
+    # always(): runs whether the detector succeeded, failed, or was cancelled
+    # by its OWN job-level concurrency group (the workflow RUN itself is not
+    # cancelled, only that one job) — `needs.<job>.result` reports `cancelled`
+    # in that case, not `skipped`, so `always()` still lets this job start.
+    # `!= 'skipped'` preserves the draft / non-marker-comment no-op: the
+    # detector's job `if` guard skips it outright for those events, and this
+    # job must skip too rather than posting a status for an event that was
+    # never eligible.
+    if: ${{ always() && needs.gate-evidence-runner.result != 'skipped' }}
+    # NON-cancelling: serializes per PR (a run still QUEUED when a newer one
+    # is queued is superseded and dropped without executing — it would only
+    # have posted a state a newer event already supersedes), but NEVER kills a
+    # RUNNING reporter. The run triggered by the final event in a burst is
+    # therefore always the one that gets to execute and post — the design
+    # invariant that closes the issue (see the burst-simulation regression in
+    # test/github/gate-evidence-burst.test.mjs).
+    concurrency:
+      group: gate-evidence-reporter-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    steps:
+      # Copied verbatim from the detector's Resolve-PR-facts step: this job
+      # resolves number/draft/head SHA INDEPENDENTLY, so it is robust to the
+      # detector job having been cancelled before it ever set its own outputs.
+      - name: Resolve PR facts (number, draft, head SHA)
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+            num="${{ github.event.issue.number }}"
+            gh api "repos/${{ github.repository }}/pulls/${num}" > pr.json \
+              || { sleep 5; gh api "repos/${{ github.repository }}/pulls/${num}" > pr.json; }
+            {
+              echo "number=${num}"
+              echo "draft=$(jq -r '.draft' pr.json)"
+              echo "head_sha=$(jq -r '.head.sha' pr.json)"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "number=${{ github.event.pull_request.number }}"
+              echo "draft=${{ github.event.pull_request.draft }}"
+              echo "head_sha=${{ github.event.pull_request.head.sha }}"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      # Reuse the detector's evidence_state when it is present (the detector
+      # was not superseded before it wrote it). When it is EMPTY — the
+      # detector was cancelled or failed before reaching that write — this job
+      # recomputes independently below, rather than posting on stale/missing
+      # information.
+      - name: Decide evidence source
+        id: decide
+        if: steps.pr.outputs.draft == 'false'
+        run: |
+          evidence_state="${{ needs.gate-evidence-runner.outputs.evidence_state }}"
+          if [ -n "$evidence_state" ]; then
+            {
+              echo "evidence_state=${evidence_state}"
+              echo "recompute=false"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "recompute=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The recompute path mirrors the detector's checkout/setup/install/detect
+      # steps exactly (same trusted-base evaluation provenance) — it only runs
+      # when the detector's own evidence_state was unavailable.
+      - name: Check out repository
+        if: steps.decide.outputs.recompute == 'true' && steps.pr.outputs.draft == 'false'
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        if: steps.decide.outputs.recompute == 'true' && steps.pr.outputs.draft == 'false'
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Set up Bun
+        if: steps.decide.outputs.recompute == 'true' && steps.pr.outputs.draft == 'false'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.1
+
+      - name: Install workspace dependencies
+        if: steps.decide.outputs.recompute == 'true' && steps.pr.outputs.draft == 'false'
+        run: bun install --frozen-lockfile
+
+      - name: Recompute draft_gate / pre_approval_gate evidence
+        id: recompute_check
+        if: steps.decide.outputs.recompute == 'true' && steps.pr.outputs.draft == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          node scripts/github/detect-checkpoint-evidence.mjs \
+            --repo "${{ github.repository }}" \
+            --pr "${{ steps.pr.outputs.number }}" \
+            --skip-fanout-ledger-check \
+            > gate_check_stdout.json 2> gate_check_stderr.json
+          cat gate_check_stdout.json
+          cat gate_check_stderr.json >&2
+          evidence_state="$(jq -r '.evidenceState // empty' gate_check_stdout.json gate_check_stderr.json 2>/dev/null | head -n1)"
+          echo "evidence_state=${evidence_state}" >> "$GITHUB_OUTPUT"
 
       # evidenceState (satisfied|not_established|violation, from
       # detect-checkpoint-evidence.mjs) drives the posted commit-status state.
       # #1702 makes the status ALWAYS DEFINITIVE — never `pending`, so a
       # completed run can never leave the required check dangling in a
-      # stale-PENDING-BLOCKED state. The check only fires at a pre-merge/verdict
-      # point, so `not_established` (no clean verdict for the current head yet)
-      # is a fail-closed `failure` until the next verdict-post re-fires and
-      # flips it to `success` — the merge gate stays decisive, never hung.
-      # `violation` (a visible current-head comment carries a bad verdict, or
-      # another pre-merge check failed) too. A missing/unparseable
-      # evidenceState (e.g. an earlier checkout/npm-ci failure that skipped the
-      # detector step entirely) fails CLOSED to `failure`, never "no status".
-      # The loop's own CI-status reading excludes this context
-      # (LOOP_DERIVED_CI_CHECK_NAME), so a definitive gate-evidence state never
-      # deadlocks the loop's convergence.
-      # !cancelled() (not always()): a run superseded via cancel-in-progress
-      # has no evidenceState and must NOT post — always() would fire on
-      # cancellation and race the newer run with a spurious `failure`. A
-      # merely-failed detector step still posts (fail-closed) because
-      # !cancelled() is true on step failure.
+      # stale-PENDING-BLOCKED state. `not_established`/`violation`/a missing or
+      # unparseable evidenceState all fail CLOSED to `failure`; only
+      # `satisfied` maps to `success`. This job is NON-cancelling (#2262 /
+      # 0075), so — unlike the old single-job design — there is no
+      # `!cancelled()` guard here: this run is guaranteed to run to completion
+      # once started, so it always posts.
       - name: Report gate-evidence status on the PR head SHA
-        if: ${{ !cancelled() && steps.pr.outputs.draft == 'false' }}
+        id: post
+        if: steps.pr.outputs.draft == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # set +e: nothing here may abort before the gh api POST below. Under
-          # the Actions default shell (bash -eo pipefail) a non-zero jq/head in
-          # the pipeline would otherwise exit the step with no status posted,
-          # leaving the required check stuck (stale) instead of failing closed.
           set +e
-          evidence_state="$(jq -r '.evidenceState // empty' gate_check_stdout.json gate_check_stderr.json 2>/dev/null | head -n1)"
-          # #1702: definitive-only. `satisfied` is the only success; anything
-          # else (not_established, violation, missing/parse error) fails closed
-          # to `failure` so a completed run always leaves a pass/fail on the
-          # current head, never a dangling stuck state.
+          if [ "${{ steps.decide.outputs.recompute }}" = "true" ]; then
+            evidence_state="${{ steps.recompute_check.outputs.evidence_state }}"
+          else
+            evidence_state="${{ steps.decide.outputs.evidence_state }}"
+          fi
           case "$evidence_state" in
             satisfied) state="success" ;;
             *) state="failure" ;;
