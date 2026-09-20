@@ -2,7 +2,7 @@
 // finding on its severity label. The judge/reviewer pipeline is LLM-driven, so
 // the durable fix is the briefing contract prose — these tests fail closed if
 // the severity-based auto-defer for lows reappears, or if the internal reviewer
-// severity calibration rule is dropped. See ADR 0077 (amends ADR 0051).
+// severity calibration rule is dropped. See ADR 0078 (amends ADR 0051).
 //
 // Assertions key on 2-3 load-bearing tokens with bounded gaps (not whole
 // sentences), so a semantics-preserving rewording does not falsely break them,
@@ -79,8 +79,8 @@ test("agents/review.agent.md applies the severity calibration so reviewers do no
 
 // --- ADR provenance: the amendment is recorded, 0051's body is untouched ---
 
-test("ADR 0077 records the merit-disposition + calibration decision and amends ADR 0051", async () => {
-  const adr = await read("docs/decisions/0077-judge-adjudicates-every-finding-on-merits.md");
-  assert.match(adr, /^Amends \[ADR 0051\]/m, "ADR 0077 must declare it amends ADR 0051");
-  assert.match(adr, /Severity is an INPUT to the judge, never an auto-gate/, "ADR 0077 must record the merit-disposition decision");
+test("ADR 0078 records the merit-disposition + calibration decision and amends ADR 0051", async () => {
+  const adr = await read("docs/decisions/0078-judge-adjudicates-every-finding-on-merits.md");
+  assert.match(adr, /^Amends \[ADR 0051\]/m, "ADR 0078 must declare it amends ADR 0051");
+  assert.match(adr, /Severity is an INPUT to the judge, never an auto-gate/, "ADR 0078 must record the merit-disposition decision");
 });

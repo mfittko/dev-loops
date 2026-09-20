@@ -1,4 +1,4 @@
-# 0077. First-round gate adjudicates every finding on merits: no severity-based auto-defer, plus internal severity calibration
+# 0078. First-round gate adjudicates every finding on merits: no severity-based auto-defer, plus internal severity calibration
 
 ## Status
 
