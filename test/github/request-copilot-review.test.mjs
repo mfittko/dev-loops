@@ -2057,6 +2057,9 @@ test("request-copilot-review --force-rerequest-review allows re-request when cap
         assertArgs: ["api", "repos/owner/repo/compare/sha5...newsha"],
         stdout: JSON.stringify({ status: "ahead", files: [{ filename: "src/foo.mjs", status: "modified" }] }) + "\n",
       },
+      // #2292: base-ref read is unavailable → the main-relative exclusion is
+      // skipped (fail-open) and the raw delta is used, exactly as before.
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefName", "--jq", ".baseRefName"], stdout: "\n" },
       {
         assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"],
         stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n',
@@ -2168,6 +2171,64 @@ test("request-copilot-review --force-rerequest-review suppresses a pure doc/pros
   assert.equal(calls.some(isCopilotRequestCall), false);
 });
 
+test("request-copilot-review --force-rerequest-review suppresses an INTEGRATE-ONLY base-move (merged-base code, no PR-own surface) instead of forcing a fresh round (#2292)", async () => {
+  // The delta since the last reviewed head carries a CODE file, but that file was
+  // merged in from the base branch (identical to the base at HEAD), so it is NOT
+  // PR-own. The base-relative exclusion reduces the delta to empty → an
+  // integrate-only base-move → the round is suppressed rather than deadlocking
+  // against the round cap on byte-identical already-reviewed code.
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17", "--force-rerequest-review"], [
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      EMPTY_REVIEW_STREAM_ENTRY,
+      {
+        // Incremental delta sha5..newsha: a code file (merged from base).
+        assertArgs: ["api", "repos/owner/repo/compare/sha5...newsha"],
+        stdout: JSON.stringify({ status: "ahead", files: [{ filename: "src/foo.mjs", status: "modified" }] }) + "\n",
+      },
+      // #2292: dedicated base-ref read for the main-relative exclusion.
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefName", "--jq", ".baseRefName"], stdout: "main\n" },
+      {
+        // Base-relative compare: src/foo.mjs is already on main (identical) → not
+        // PR-own → reduced delta empty → integrate-only base-move → carry.
+        assertArgs: ["api", "repos/owner/repo/compare/main...newsha"],
+        stdout: JSON.stringify({ status: "ahead", files: [] }) + "\n",
+      },
+    ]);
+
+  assert.equal(result.status, "suppressed_post_convergence_docs_only");
+  assert.equal(calls.some(isCopilotRequestCall), false, "no fresh Copilot round is placed for an integrate-only base-move");
+});
+
+test("request-copilot-review --force-rerequest-review STILL re-opens when a genuine PR-own code file changed since the last review (#2292 fail-closed)", async () => {
+  // The base-relative compare shows src/foo.mjs IS PR-own (differs from base), so
+  // the reduced delta keeps it → touches Copilot's surface → a fresh round is
+  // required, exactly as before. The main-relative reduction never carries a real
+  // PR-own change.
+  const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17", "--force-rerequest-review"], [
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      EMPTY_REVIEW_STREAM_ENTRY,
+      {
+        assertArgs: ["api", "repos/owner/repo/compare/sha5...newsha"],
+        stdout: JSON.stringify({ status: "ahead", files: [{ filename: "src/foo.mjs", status: "modified" }] }) + "\n",
+      },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefName", "--jq", ".baseRefName"], stdout: "main\n" },
+      {
+        // src/foo.mjs differs from base → PR-own → kept in the reduced delta.
+        assertArgs: ["api", "repos/owner/repo/compare/main...newsha"],
+        stdout: JSON.stringify({ status: "ahead", files: [{ filename: "src/foo.mjs", status: "modified" }] }) + "\n",
+      },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
+    ]);
+
+  assert.equal(result.status, "requested");
+});
+
 test("request-copilot-review --force-rerequest-review re-opens the round when a doc bump also carries a code file (#1326 preserves the exception)", async () => {
   const { result } = await runInProcess(["--repo", "owner/repo", "--pr", "17", "--force-rerequest-review"], [
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
@@ -2179,6 +2240,8 @@ test("request-copilot-review --force-rerequest-review re-opens the round when a 
         assertArgs: ["api", "repos/owner/repo/compare/sha5...newsha"],
         stdout: JSON.stringify({ status: "ahead", files: [{ filename: "docs/guide.md", status: "modified" }, { filename: "src/foo.mjs", status: "modified" }] }) + "\n",
       },
+      // #2292: base-ref unavailable → main-relative exclusion skipped (fail-open); the raw mixed delta re-opens.
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefName", "--jq", ".baseRefName"], stdout: "\n" },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
       { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
       { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },

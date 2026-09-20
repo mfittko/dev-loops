@@ -277,6 +277,33 @@ describe("resolveAngleCarryForward — fail-closed decision", () => {
     assert.equal(resolveAngleCarryForward({ angle: "correctness", changedFiles: undefined, prevVerdict: "clean" }).carryForward, false);
   });
 
+  // #2292: a PROVEN-complete empty delta (main-relative reduction ran and found
+  // nothing PR-own changed — an integrate-only base-move) CARRIES a mapped angle
+  // forward, instead of deadlocking against the Copilot round cap.
+  test("deltaComplete + empty delta -> mapped angle CARRIES (integrate-only base-move)", () => {
+    const decision = resolveAngleCarryForward({ angle: "correctness", changedFiles: [], prevVerdict: "clean", deltaComplete: true });
+    assert.equal(decision.carryForward, true);
+    assert.match(decision.reason, /provably outside the angle's review surface/);
+  });
+
+  test("deltaComplete + empty delta still NEVER carries an always-run angle", () => {
+    const decision = resolveAngleCarryForward({ angle: "pr-description", changedFiles: [], prevVerdict: "clean", deltaComplete: true });
+    assert.equal(decision.carryForward, false);
+    assert.match(decision.reason, /always re-runs/);
+  });
+
+  test("deltaComplete never rescues an unavailable (non-array) delta", () => {
+    assert.equal(
+      resolveAngleCarryForward({ angle: "correctness", changedFiles: undefined, prevVerdict: "clean", deltaComplete: true }).carryForward,
+      false,
+    );
+  });
+
+  test("deltaComplete + empty carries a findings-present angle too (open finding rides along)", () => {
+    const decision = resolveAngleCarryForward({ angle: "correctness", changedFiles: [], prevVerdict: "findings_present", deltaComplete: true });
+    assert.equal(decision.carryForward, true);
+  });
+
   test("unclassifiable file in delta -> false (fail-closed)", () => {
     const decision = resolveAngleCarryForward({
       angle: "correctness",
@@ -368,5 +395,21 @@ describe("resolveConvergenceCarryForward — AC2 fail-closed Copilot convergence
 
   test("non-array changedFiles -> false (fail-closed)", () => {
     assert.equal(resolveConvergenceCarryForward({ changedFiles: undefined }).carryForward, false);
+  });
+
+  // #2292: an integrate-only base-move (proven-complete empty delta) carries the
+  // Copilot convergence forward instead of forcing a fresh blocking round.
+  test("deltaComplete + empty delta carries convergence (integrate-only base-move)", () => {
+    const decision = resolveConvergenceCarryForward({ changedFiles: [], deltaComplete: true });
+    assert.equal(decision.carryForward, true);
+    assert.match(decision.reason, /integrate-only base-move/);
+  });
+
+  test("deltaComplete + a real code file still forces a fresh round (fail closed)", () => {
+    assert.equal(resolveConvergenceCarryForward({ changedFiles: ["src/foo.mjs"], deltaComplete: true }).carryForward, false);
+  });
+
+  test("deltaComplete never rescues an unavailable (non-array) delta", () => {
+    assert.equal(resolveConvergenceCarryForward({ changedFiles: undefined, deltaComplete: true }).carryForward, false);
   });
 });
