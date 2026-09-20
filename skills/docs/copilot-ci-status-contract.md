@@ -16,7 +16,7 @@ The first two return the shared machine-readable shape documented below.
 
 ## Loop-derived check exclusion
 
-Exclude BOTH `.github/workflows/gate-evidence.yml` surfaces before deriving loop CI: the `gate-evidence` commit `StatusContext` (`.context`) and the `gate-evidence-runner` check run. `LOOP_DERIVED_CI_CHECK_NAME` names the former; `LOOP_DERIVED_CI_CHECK_NAMES` contains both. Workflow tests require every job id to belong to the full set.
+Exclude all THREE `.github/workflows/gate-evidence.yml` surfaces before deriving loop CI: the `gate-evidence` commit `StatusContext` (`.context`), the `gate-evidence-runner` detector check run, and the `gate-evidence-reporter` reporter check run. `LOOP_DERIVED_CI_CHECK_NAME` names the first; `LOOP_DERIVED_CI_CHECK_NAMES` contains all three. Workflow tests require every job id to belong to the full set.
 
 These are derived from loop progress, not independent build/test signals. Letting them block `pre_approval_gate` would prevent the verdict needed to make them green. Missing current-head evidence fails closed to definitive `failure`; that evidence, unresolved threads, stale runners and genuine gate violations remain independently tracked in the loop snapshot. Exclusion applies regardless of conclusion, including historical pending entries and definitive failures; the workflow never posts pending. It also excludes cancelled superseded runner checks without treating cancellation of real CI as green.
 
