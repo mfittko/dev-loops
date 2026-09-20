@@ -28,7 +28,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { loadDevLoopConfig, resolveGateAngleContract } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveBaseBranch, resolveGateAngleContract } from "@dev-loops/core/config";
 import {
   angleReviewSurface,
   RENAME_ONLY_ANGLES,
@@ -394,15 +394,22 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // capturing the delta so no mislabeled plan is emitted.
     await assertWorktreeAtHeadAsync(options.headSha, { repoRoot, runGit });
     // MAIN-RELATIVE incremental delta: files changed since the prior reviewed
-    // head (prev-head..HEAD) MINUS files already on origin/main at HEAD. A
-    // base-move re-gate that only integrates already-merged main commits then
+    // head (prev-head..HEAD) MINUS files already on the PR's base branch at HEAD.
+    // A base-move re-gate that only integrates already-merged base commits then
     // contributes NO touched surface, so every eligible angle (and Copilot
     // convergence) carries forward instead of deadlocking against the round cap.
-    // `reduced` is true only when the origin/main-relative exclusion actually
-    // ran; it becomes `deltaComplete` below so an EMPTY reduced delta carries
-    // (proven "nothing PR-own changed") while an unreduced/unavailable delta
-    // still fails closed.
-    const { changedFiles, hasRename, reduced } = await captureMainRelativeChangedFilesSince({ base: options.prevHead, mainRef: "origin/main", repoRoot, runGit });
+    // The exclusion ref is the CONFIGURED base branch (workflow.baseBranch, else
+    // the auto-detected default), never a hardcoded origin/main: a repo whose
+    // base is e.g. release-x must exclude against origin/release-x, or a stale
+    // origin/main could exclude files that still differ from the true base and
+    // permit an UNSAFE carry (fail-open). resolveBaseBranch returns a bare branch
+    // name, so origin/ is prepended for the remote-tracking ref.
+    const mainRef = `origin/${resolveBaseBranch(config, { cwd: repoRoot })}`;
+    // `reduced` is true only when the base-relative exclusion actually ran; it
+    // becomes `deltaComplete` below so an EMPTY reduced delta carries (proven
+    // "nothing PR-own changed") while an unreduced/unavailable delta still fails
+    // closed.
+    const { changedFiles, hasRename, reduced } = await captureMainRelativeChangedFilesSince({ base: options.prevHead, mainRef, repoRoot, runGit });
     // A rename anywhere in the delta forces the RENAME_ONLY-mapped angles to
     // re-run: parseChangedFiles keeps only a rename's destination path, so
     // classifying that path alone misses what the rename itself implicates.

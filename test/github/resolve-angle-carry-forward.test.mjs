@@ -471,6 +471,63 @@ test("CLI carries code angles + Copilot convergence across an integrate-only bas
   }
 });
 
+test("CLI excludes against the CONFIGURED base branch, not a hardcoded origin/main (#2292 fail-open fix)", async () => {
+  // A repo whose base is `release-1` (workflow.baseBranch) must reduce against
+  // origin/release-1. A stale/unrelated origin/main must NOT be used — else a
+  // file identical to origin/main but different from the true base would be
+  // wrongly excluded (unsafe carry). Here the merged-base file lands on
+  // release-1; origin/main is a DECOY that never saw it.
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "carry-forward-basebranch-"));
+  try {
+    git(repoRoot, ["init", "-q", "-b", "release-1"]);
+    git(repoRoot, ["config", "user.email", "test@example.com"]);
+    git(repoRoot, ["config", "user.name", "Test"]);
+    await writeFile(path.join(repoRoot, ".devloops.yaml"), "version: 1\nworkflow:\n  baseBranch: release-1\ngates:\n  draft: {}\n", "utf8");
+    await mkdir(path.join(repoRoot, "src"), { recursive: true });
+    await mkdir(path.join(repoRoot, "docs"), { recursive: true });
+    await writeFile(path.join(repoRoot, "src/other.mjs"), "export const other = 1;\n", "utf8");
+    await writeFile(path.join(repoRoot, "docs/guide.md"), "# Guide\n", "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "fork"]);
+    const fork = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    // A DECOY origin/main pinned at the fork (never sees other.mjs=v2).
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", fork]);
+
+    git(repoRoot, ["checkout", "-q", "-b", "pr", fork]);
+    await writeFile(path.join(repoRoot, "docs/guide.md"), "# Guide\n\nPR edit.\n", "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "PR round 1 (reviewed)"]);
+    const prevHead = git(repoRoot, ["rev-parse", "HEAD"]).trim().toLowerCase();
+
+    // release-1 advances src/other.mjs=v2 (already-merged base commit).
+    git(repoRoot, ["checkout", "-q", "release-1"]);
+    await writeFile(path.join(repoRoot, "src/other.mjs"), "export const other = 2;\n", "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "other PR merged to release-1"]);
+    git(repoRoot, ["update-ref", "refs/remotes/origin/release-1", "HEAD"]);
+
+    // Base-move: PR merges origin/release-1.
+    git(repoRoot, ["checkout", "-q", "pr"]);
+    git(repoRoot, ["merge", "-q", "--no-edit", "origin/release-1"]);
+    const headSha = git(repoRoot, ["rev-parse", "HEAD"]).trim().toLowerCase();
+
+    const perAngle = [{ angle: "correctness", reviewer: "review-a" }, { angle: "coverage", reviewer: "review-b" }];
+    const logPath = path.join(repoRoot, buildLogPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(logPath), { recursive: true });
+    await writeFile(logPath, JSON.stringify({ headSha: prevHead, verdict: "clean", provenance: { distinctReviewers: perAngle.length, perAngle } }), "utf8");
+
+    const result = await runMain([
+      "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
+    ], { repoRoot });
+    assert.equal(result.ok, true);
+    // other.mjs's HEAD blob equals origin/release-1 (the true base) → excluded.
+    assert.deepEqual(result.deltaChangedFiles, [], "integrate-only base-move against the CONFIGURED base contributes no PR-own surface");
+    assert.deepEqual(result.carried.map((c) => c.angle).sort(), ["correctness", "coverage"], "code angles carry against the configured base branch");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("CLI fails closed when --head-sha does not match the worktree HEAD (wrong worktree)", async () => {
   const { repoRoot, prevHead } = await makeCarryForwardRepo({
     mandatoryAngles: [],

@@ -161,7 +161,7 @@ export async function captureMainRelativeChangedFilesSince({ base, mainRef = "or
     // reports only the deleted source path (the destination is unchanged vs
     // main), so keying the exclusion on the destination alone would drop the
     // rename, leave `hasRename` false, and wrongly carry the RENAME_ONLY angles
-    // — a fail-open. Checking the source too keeps that rename (issue #2292).
+    // — a fail-open. Checking the source too keeps that rename.
     // Adding source membership can only RETAIN renames, never over-exclude: a
     // rename replayed from main has neither endpoint in prOwn and stays dropped.
     const prOwnEntry = prOwn.has(file) || (isRenameOrCopy && src.length > 0 && prOwn.has(src));
