@@ -321,7 +321,7 @@ export function expandDispatchUnits(units, configuredGroupNames) {
  * from the current one. A prior-round log is the deterministic signal that this
  * is not the gate's first round — independent of whether the driver passed
  * `--prev-head`, so a driver cannot evade the carry-forward step by omitting the
- * flag (the exact defect issue #2251 fixes). Only draft_gate / pre_approval_gate
+ * flag (the exact defect GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED prevents). Only draft_gate / pre_approval_gate
  * carry forward (the review gate has no resolver), so the caller guards this to
  * those gates. A non-empty result makes the current head a re-gate.
  *
@@ -459,7 +459,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — gate-context artifact at ${JSON.stringify(contextPath)} carries no fanout dispatch plan — re-run write-gate-context.mjs (a thin briefing with no --base emits no fanout plan)` }, false);
   }
 
-  // GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED (issue #2251): on a re-gate head — a
+  // GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED: on a re-gate head — a
   // durable findings-log for this gate exists at an EARLIER head — carry-forward
   // MUST have been consulted before any reviewer is dispatched.
   // resolve-angle-carry-forward.mjs records its plan (or a fail-closed
