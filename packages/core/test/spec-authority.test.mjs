@@ -4,6 +4,7 @@ import test, { describe } from "node:test";
 import {
   SPEC_AUTHORITY_OUTCOMES,
   SPEC_AUTHORITY_OUTCOME_VALUES,
+  SPEC_AUTHORITY_CONFLICT_OUTCOMES,
   HUMAN_SPEC_DECISION_OUTCOME,
   outcomeRequiresHumanDecision,
   normalizeSpec,
@@ -167,6 +168,72 @@ describe("whole-spec judge disposition", () => {
       { ...id, criterionIds: specCriterionIds(SPEC) },
     );
     assert.deepEqual(ok.conflictingCriteria, ["ng:0"]);
+  });
+
+  test("an absent conflictingCriteria on a conflict outcome routes to the named rule, not the generic id-set error (#2259)", () => {
+    const id = identities();
+    for (const outcome of SPEC_AUTHORITY_CONFLICT_OUTCOMES) {
+      // rationale names the criteria in prose but leaves the machine-checked
+      // field absent — the exact producer/enforcer mismatch from PR 2247.
+      const rationaleOnly = {
+        ...wholeSpecDecision(SPEC),
+        ...id,
+        outcome,
+        authorizedRemediation: undefined,
+        rationale: "conflicts with ng:0 (named here in prose only)",
+      };
+      assert.throws(
+        () => validateSpecAuthorityDecision(rationaleOnly, { ...id, criterionIds: specCriterionIds(SPEC) }),
+        (err) => {
+          assert.match(err.message, /SPEC-AUTHORITY-CONFLICT-EVIDENCE/);
+          assert.doesNotMatch(err.message, /must be an array of criterion ids/);
+          return true;
+        },
+        `${outcome} with absent conflictingCriteria must name SPEC-AUTHORITY-CONFLICT-EVIDENCE`,
+      );
+      // An explicitly empty array is the same "no evidence" case.
+      assert.throws(
+        () => validateSpecAuthorityDecision({ ...rationaleOnly, conflictingCriteria: [] }, { ...id, criterionIds: specCriterionIds(SPEC) }),
+        /SPEC-AUTHORITY-CONFLICT-EVIDENCE/,
+      );
+      // A contract-conformant verdict (populated array) is accepted with no edit.
+      const ok = validateSpecAuthorityDecision(
+        { ...rationaleOnly, conflictingCriteria: ["ng:0"] },
+        { ...id, criterionIds: specCriterionIds(SPEC) },
+      );
+      assert.equal(ok.outcome, outcome);
+      assert.deepEqual(ok.conflictingCriteria, ["ng:0"]);
+    }
+  });
+
+  test("producer contract and enforcer name the same conflictingCriteria field+shape for both conflict outcomes (divergence guard, #2259)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const path = await import("node:path");
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    // Enforcer side: the set of outcomes that REQUIRE conflictingCriteria is
+    // exactly the two conflict outcomes, and each fails closed on the named rule
+    // when the field is absent.
+    assert.deepEqual(
+      [...SPEC_AUTHORITY_CONFLICT_OUTCOMES].sort(),
+      ["finding_conflicts", "remediation_conflicts"],
+    );
+    // Producer side: the documented judge contract names conflictingCriteria as
+    // a non-empty array requirement for BOTH conflict outcomes, tied to the same
+    // enforcer rule. Scope every assertion to the single requirement LINE (not
+    // the whole doc) so weakening it — dropping "non-empty", softening "MUST",
+    // or omitting an outcome — fails the guard, not just a full revert. Assert
+    // against both the source and the generated surface.
+    for (const rel of ["../../../agents/judge.agent.md", "../../../.claude/agents/judge.md"]) {
+      const doc = readFileSync(path.resolve(here, rel), "utf8");
+      const line = doc.split("\n").find((l) => l.startsWith("Both conflict outcomes"));
+      assert.ok(line, `${rel} must carry the conflictingCriteria requirement line`);
+      assert.match(line, /MUST carry a non-empty `conflictingCriteria` array/, `${rel} requirement line must pin the non-empty conflictingCriteria array shape`);
+      assert.match(line, /SPEC-AUTHORITY-CONFLICT-EVIDENCE/, `${rel} requirement line must name the enforcer rule`);
+      for (const outcome of SPEC_AUTHORITY_CONFLICT_OUTCOMES) {
+        assert.ok(line.includes(`\`${outcome}\``), `${rel} requirement line must name the conflict outcome ${outcome}`);
+      }
+    }
   });
 
   test("a non-conflict outcome must not smuggle a conflict list", () => {

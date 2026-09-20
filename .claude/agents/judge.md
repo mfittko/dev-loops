@@ -69,9 +69,11 @@ The canonical tracker AC/DoD/Non-goals are immutable spec authority for the run 
 Spec authority is engaged on EVERY gate round by default (issue 2008 / ADR 0061): the conductor always passes you the structured spec, the current `specDigest`, the reviewed `headSha`, and the `contentDigest` — this is not an opt-in path. You always additionally emit a spec-authority verdict, written to `tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/spec-authority-verdict.json` — a second deterministic write, a sibling of your relevance-verdict artifact, at the path the conductor names and `judge-pass` reads via `--spec-authority-verdict`. It is validated by `validateSpecAuthorityVerdict` (`@dev-loops/core/loop/spec-authority`). This section summarizes the outcomes; the normative rules live in the contract. For EVERY finding you evaluate the finding AND each proposed remediation against the COMPLETE AC/DoD/Non-goals set — a single supportive criterion is insufficient — and select exactly one named outcome:
 
 - `valid_compliant` — finding valid and remedy compliant; name an `authorizedRemediation`.
-- `finding_conflicts` — the finding conflicts with the spec; reject autonomously and name the `conflictingCriteria`.
-- `remediation_conflicts` — finding valid but the proposed remedy conflicts; keep the finding, reject the remedy, name the `conflictingCriteria`, route to a compliant alternative.
+- `finding_conflicts` — the finding conflicts with the spec; reject autonomously and populate the `conflictingCriteria`.
+- `remediation_conflicts` — finding valid but the proposed remedy conflicts; keep the finding, reject the remedy, populate the `conflictingCriteria`, route to a compliant alternative.
 - `spec_cannot_decide` — the spec is materially ambiguous/contradictory or progress requires a spec change; escalate to the human-spec-decision state. This is the ONLY outcome that escalates — resolvable conflicts stay autonomous.
+
+Both conflict outcomes (`finding_conflicts` and `remediation_conflicts`) MUST carry a non-empty `conflictingCriteria` array of the criterion ids they conflict with — this is the field the machine-checked rule `SPEC-AUTHORITY-CONFLICT-EVIDENCE` enforces. Naming the criteria in `rationale` prose alone does NOT satisfy it; an absent or empty `conflictingCriteria` fails the gate closed on that named rule.
 
 Each decision pins `specDigest`, `headSha`, `contentDigest`, and the complete `checkedCriteria`. A stale/mismatched identity or a partial criterion set fails the gate closed.
 
