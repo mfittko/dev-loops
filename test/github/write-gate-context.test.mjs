@@ -2681,6 +2681,22 @@ test("renderBriefingPrefix: under-cap — inline mode, fixed section order, all 
   assert.ok(text.includes("--scope draft-gate-<your-dispatch-unit>"));
 });
 
+// #2241: the fresh-context sentinel must be invoked through the dev-loops-run
+// launcher, never a bare `node scripts/…` path — a consumer plugin install
+// ships without the scripts/ tree, so bare node throws MODULE_NOT_FOUND.
+test("renderBriefingPrefix: emits the fresh-context sentinel via the dev-loops-run launcher, never bare `node scripts/…`, in both the standalone and compound cd forms (#2241)", () => {
+  const { text } = renderBriefingPrefix(renderInput({ worktreeRoot: "/wt/issue-2241" }));
+  // Standalone (line 1329) form: launcher, not bare node.
+  assert.ok(text.includes("dev-loops-run scripts/github/verify-fresh-review-context.mjs"));
+  // Compound `cd … && …` (line 1334) form: launcher inside the worktree cd.
+  assert.ok(text.includes('cd "/wt/issue-2241" && dev-loops-run scripts/github/verify-fresh-review-context.mjs'));
+  // No bare `node scripts/github/…` on the reviewer-briefing dispatch surface.
+  assert.ok(!text.includes("node scripts/github/verify-fresh-review-context.mjs"));
+  // Worktree-locality preserved: reviewer cd's in first, --context-path stays cwd-relative.
+  assert.ok(text.includes('cd "/wt/issue-2241" &&'));
+  assert.ok(text.includes(`--context-path ${renderInput().contextPath}`));
+});
+
 test("renderBriefingPrefix: gate scope hyphenation covers ALL underscores, not just the first", () => {
   const { text } = renderBriefingPrefix(renderInput({ gate: "pre_approval_gate" }));
   assert.ok(text.includes("--scope pre-approval-gate-<your-dispatch-unit>"));
@@ -3602,9 +3618,9 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       `worktree: ${path.resolve(repoRoot)}`,
       "prefixMode: inline",
       "",
-      "Mandatory: before doing any angle-specific work, run `node scripts/github/verify-fresh-review-context.mjs --scope draft-gate-<your-dispatch-unit> --context-path tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json --prefix-file tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.briefing-prefix.txt` once — <your-dispatch-unit> is your angle name for a per-angle dispatch, or `group-<name>` for a grouped dispatch (run once for the whole group, never once per angle in it). Refuse to proceed on contamination or a missing artifact.",
+      "Mandatory: before doing any angle-specific work, run `dev-loops-run scripts/github/verify-fresh-review-context.mjs --scope draft-gate-<your-dispatch-unit> --context-path tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json --prefix-file tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.briefing-prefix.txt` once — <your-dispatch-unit> is your angle name for a per-angle dispatch, or `group-<name>` for a grouped dispatch (run once for the whole group, never once per angle in it). Refuse to proceed on contamination or a missing artifact.", // secret-scan:allow fixture head SHA in briefing snapshot (not a secret)
       "",
-      `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as ONE compound command that enters this worktree first (\`cd "${path.resolve(repoRoot)}" && node scripts/github/verify-fresh-review-context.mjs ...\`) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${path.resolve(repoRoot)}" ...\` and every file read via an absolute path under ${path.resolve(repoRoot)}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
+      `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as ONE compound command that enters this worktree first (\`cd "${path.resolve(repoRoot)}" && dev-loops-run scripts/github/verify-fresh-review-context.mjs ...\`) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${path.resolve(repoRoot)}" ...\` and every file read via an absolute path under ${path.resolve(repoRoot)}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
       "",
       `Findings write-path invariant: WRITE every findings artifact under THIS worktree's tmp/, never the primary checkout's. Write each per-angle findings artifact to the ABSOLUTE path \`${path.resolve(repoRoot)}/tmp/gate-reviews/owner-repo/pr-80/draft_gate-${options.headSha}/<angle>.json\` (\`<angle>\` = your angle name), and pass \`--tmp-root "${path.resolve(repoRoot)}/tmp"\` to any findings-writer CLI (e.g. \`write-gate-findings-log.mjs\`). Cwd-relative \`tmp/...\` resolves against whatever checkout the command started in — a findings artifact written to the primary checkout's tmp/ is invisible to fan-in and fails the gate as missing evidence.`,
       "",
