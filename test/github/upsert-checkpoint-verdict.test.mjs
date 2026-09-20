@@ -6877,7 +6877,7 @@ test("upsert-checkpoint-verdict --findings-ledger: at the default \"medium\" flo
     assert.doesNotMatch(JSON.stringify(posted.comments), /inconsistent casing of a local constant/);
     assert.match(posted.body, /<summary>Suppressed low\/nit findings \(1\) — below the inline severity floor<\/summary>/);
     assert.match(posted.body, /inconsistent casing of a local constant/);
-  }, { prefix: "dev-loops-upsert-fold-question-high-floor-" });
+  }, { prefix: "dev-loops-upsert-fold-question-default-medium-floor-" });
 });
 
 // AC6: routing (fold vs inline vs body-filed) must never touch the verdict
