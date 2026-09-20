@@ -196,6 +196,18 @@ describe("whole-spec judge disposition", () => {
         () => validateSpecAuthorityDecision({ ...rationaleOnly, conflictingCriteria: [] }, { ...id, criterionIds: specCriterionIds(SPEC) }),
         /SPEC-AUTHORITY-CONFLICT-EVIDENCE/,
       );
+      // A present-but-non-array value (e.g. a bare string) is also routed to the
+      // named rule — not the generic id-set shape error — before normalizeIdSet
+      // runs. Guards against a reorder that would silently reintroduce it.
+      assert.throws(
+        () => validateSpecAuthorityDecision({ ...rationaleOnly, conflictingCriteria: "ng:0" }, { ...id, criterionIds: specCriterionIds(SPEC) }),
+        (err) => {
+          assert.match(err.message, /SPEC-AUTHORITY-CONFLICT-EVIDENCE/);
+          assert.doesNotMatch(err.message, /must be an array of criterion ids/);
+          return true;
+        },
+        `${outcome} with a bare-string conflictingCriteria must name SPEC-AUTHORITY-CONFLICT-EVIDENCE`,
+      );
       // A contract-conformant verdict (populated array) is accepted with no edit.
       const ok = validateSpecAuthorityDecision(
         { ...rationaleOnly, conflictingCriteria: ["ng:0"] },
