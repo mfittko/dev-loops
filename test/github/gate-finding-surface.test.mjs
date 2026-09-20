@@ -322,6 +322,17 @@ test("isBelowInlineFloor: legacy severity spellings normalize before ranking", (
   assert.equal(isBelowInlineFloor("must-fix", "medium"), false); // high
 });
 
+// #2295 Copilot review fix 1: a "question" never folds, at ANY floor —
+// including a floor raised to "high", where it would otherwise rank below
+// (SEVERITY_ORDER = ["high","question","medium","low","nit"]). Contrast with
+// "low"/"medium", which DO fold once the floor is raised past them.
+test("isBelowInlineFloor: a \"question\" never folds, even at floor \"high\" where it would otherwise rank below", () => {
+  assert.equal(isBelowInlineFloor("question", "high"), false);
+  assert.equal(isBelowInlineFloor("question", "medium"), false);
+  assert.equal(isBelowInlineFloor("low", "high"), true);
+  assert.equal(isBelowInlineFloor("medium", "high"), true);
+});
+
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
@@ -545,6 +556,37 @@ test("fetchFollowUpIssueFingerprints: no fingerprints in body or comments return
   };
   const result = await fetchFollowUpIssueFingerprints({ repo: "o/r", issueNumber: 101 }, { run });
   assert.deepEqual([...result], []);
+});
+
+// #2295 Copilot review fix 2: ISSUE_FINGERPRINT_RE is anchored to the leading
+// list-bullet shape formatDeferredFindingEntry renders (`- \`<16hex>\` ...`).
+// A stray backtick-wrapped 16-hex token elsewhere in prose (e.g. quoting a
+// commit-ish or an unrelated code span) must NOT be misread as an
+// already-filed fingerprint — under-matching here at worst re-files a
+// harmless duplicate; over-matching would silently skip a genuinely-fileable
+// folded finding.
+test("fetchFollowUpIssueFingerprints: a stray backtick-wrapped 16-hex token in prose (not a leading bullet) is not collected", async () => {
+  const run = async (ghCommand, args) => {
+    const endpoint = args[args.length - 1];
+    if (endpoint.includes("/comments")) {
+      return {
+        code: 0,
+        stdout: JSON.stringify([[
+          { body: "See commit `0123456789abcdef` for context — not a filed fingerprint." },
+        ]]),
+        stderr: "",
+      };
+    }
+    return {
+      code: 0,
+      stdout: JSON.stringify({
+        body: "Mentioned in passing: `fedcba9876543210` is unrelated.\n\n- `1111111111111111` **low** (`naming`): casing nit",
+      }),
+      stderr: "",
+    };
+  };
+  const result = await fetchFollowUpIssueFingerprints({ repo: "o/r", issueNumber: 101 }, { run });
+  assert.deepEqual([...result], ["1111111111111111"]);
 });
 
 // The single visible surface carries the verdict fields AND the body-filed

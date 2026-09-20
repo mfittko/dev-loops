@@ -317,7 +317,7 @@
               "minimum": 0
             },
             "inlineSeverityFloor": {
-              "description": "Lowest finding severity still posted as an inline resolvable review thread. Findings BELOW this floor are folded into a collapsed <details> block in the verdict-marker body instead of posting inline (they create no gate-authored thread). Default \"medium\": high/medium post inline, low/nit fold. Lower it (e.g. \"low\" or \"nit\") to restore inline posting of lower severities.",
+              "description": "Lowest defect severity still posted as an inline resolvable review thread. Findings BELOW this floor are folded into a collapsed <details> block in the verdict-marker body instead of posting inline (they create no gate-authored thread). Default \"medium\": high/question/medium post inline, low/nit fold. A \"question\" always posts inline regardless of this floor (it must keep its resolvable thread to block gate-close until answered). Lower it (e.g. \"low\" or \"nit\") to restore inline posting of lower severities.",
               "type": "string",
               "enum": [
                 "high",
@@ -551,7 +551,7 @@
               "minimum": 0
             },
             "inlineSeverityFloor": {
-              "description": "Lowest finding severity still posted as an inline resolvable review thread. Findings BELOW this floor are folded into a collapsed <details> block in the verdict-marker body instead of posting inline (they create no gate-authored thread). Default \"medium\": high/medium post inline, low/nit fold. Lower it (e.g. \"low\" or \"nit\") to restore inline posting of lower severities.",
+              "description": "Lowest defect severity still posted as an inline resolvable review thread. Findings BELOW this floor are folded into a collapsed <details> block in the verdict-marker body instead of posting inline (they create no gate-authored thread). Default \"medium\": high/question/medium post inline, low/nit fold. A \"question\" always posts inline regardless of this floor (it must keep its resolvable thread to block gate-close until answered). Lower it (e.g. \"low\" or \"nit\") to restore inline posting of lower severities.",
               "type": "string",
               "enum": [
                 "high",
@@ -785,7 +785,7 @@
               "minimum": 0
             },
             "inlineSeverityFloor": {
-              "description": "Lowest finding severity still posted as an inline resolvable review thread. Findings BELOW this floor are folded into a collapsed <details> block in the verdict-marker body instead of posting inline (they create no gate-authored thread). Default \"medium\": high/medium post inline, low/nit fold. Lower it (e.g. \"low\" or \"nit\") to restore inline posting of lower severities.",
+              "description": "Lowest defect severity still posted as an inline resolvable review thread. Findings BELOW this floor are folded into a collapsed <details> block in the verdict-marker body instead of posting inline (they create no gate-authored thread). Default \"medium\": high/question/medium post inline, low/nit fold. A \"question\" always posts inline regardless of this floor (it must keep its resolvable thread to block gate-close until answered). Lower it (e.g. \"low\" or \"nit\") to restore inline posting of lower severities.",
               "type": "string",
               "enum": [
                 "high",

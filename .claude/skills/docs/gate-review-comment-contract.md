@@ -76,7 +76,11 @@ folded finding creates NO gate-authored review thread of its own and therefore n
 [Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#finding-threads-and-disposition)).
 Lowering `inlineSeverityFloor` (e.g. to `"low"` or `"nit"`) is the documented escape hatch back to
 full inline/body-filed posting; an out-of-vocabulary value is rejected by the config schema, and an
-unrecognized severity fails OPEN (posts inline, never silently folded). `blockCleanOnFindingSeverities`
+unrecognized severity fails OPEN (posts inline, never silently folded). A `question` NEVER folds at
+any floor — including a floor raised to `"high"`, where it would otherwise rank below: a question is
+answered (never deferred), and its resolvable thread is what blocks gate-close until answered
+(`GATE-EXEC-THREAD-DISPOSITION`), so folding it away would let an unanswered question slip past
+ready-for-review. `blockCleanOnFindingSeverities`
 semantics are unaffected — the verdict is computed upstream from the ledger, never from which track
 a finding renders on.
 
