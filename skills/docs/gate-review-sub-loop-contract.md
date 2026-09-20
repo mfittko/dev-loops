@@ -976,7 +976,7 @@ by `validateJudgeVerdict` (`@dev-loops/core/loop/gate-fanin`):
   `disposition` field keeps its own deferred-with-no-fixer-cycle semantics for nits), and a
   `low` adjudicated as a genuine AC-relevant defect is `act` (above), never deferred or
   rejected on its severity label; a `low` that is real but out of this PR's scope MUST be
-  `defer`red only when leaving it unfixed would change an operator-visible outcome (wrong
+  deferred only when leaving it unfixed would change an operator-visible outcome (wrong
   guidance a conductor executes, a fail-closed gap reachable on a sanctioned path, or a
   demonstrable bug), and a genuinely non-blocking/cosmetic `low` that clears none of those
   defaults to `reject`. When the judge's briefing
