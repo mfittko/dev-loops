@@ -348,6 +348,35 @@ export function preflightJqFilter(jq, { stderr = process.stderr } = {}) {
   }
 }
 
+// Fail-fast --fields preflight for mutation wrappers: call this AFTER
+// argument parsing but BEFORE the wrapper's mutation runs, mirroring
+// preflightJqFilter above. `undefined` means there is nothing to validate
+// (fields omitted) or the spec is syntactically valid; the wrapper proceeds
+// normally (its own eventual emitResult call still handles data-dependent
+// --fields errors — unknown field, non-scalar value, embedded tab/newline —
+// unchanged). Only the two SYNTACTIC, data-independent failures fail closed
+// here: combining --fields with --jq/--silent, and a malformed/empty field
+// list. Writes the exact stderr envelope emitResult's own --fields branch
+// would produce (formatFieldsErrorEnvelope, the one shared formatter) and
+// returns 2 — the caller should return that code immediately, skipping the
+// mutation.
+export function preflightFieldsSpec(fields, { jq = undefined, silent = false, stderr = process.stderr } = {}) {
+  if (fields === undefined) return undefined;
+  if (jq !== undefined || silent) {
+    const conflict = jq !== undefined ? "--jq" : "--silent";
+    stderr.write(`${formatFieldsErrorEnvelope(new JqFilterError(`cannot combine with ${conflict}`))}\n`);
+    return 2;
+  }
+  try {
+    assertFieldsSpecSyntax(fields);
+    return undefined;
+  } catch (error) {
+    if (!(error instanceof JqFilterError)) throw error;
+    stderr.write(`${formatFieldsErrorEnvelope(error)}\n`);
+    return 2;
+  }
+}
+
 function renderJqStream(stream) {
   // jq prints each value on its own line; single value => just that value.
   return stream
@@ -361,6 +390,28 @@ function formatFieldsErrorEnvelope(error) {
   return JSON.stringify({ ok: false, error: `--fields (BASE-JQ-OUTPUT-GUARANTEE): ${error.message}` });
 }
 
+// Validate a --fields spec's SYNTAX only, independent of any data: split into
+// names, reject an empty/malformed list (empty spec, empty entry like
+// `a,,b`), and reject any name outside the top-level-scalar name grammar.
+// Throws JqFilterError on malformed syntax. Data-dependent failures (unknown
+// field, non-scalar value, embedded tab/newline) need real data and are NOT
+// checked here — they stay in renderFieldsTsv below. This is the one source
+// of truth for --fields syntax both renderFieldsTsv (real render) and
+// preflightFieldsSpec (parse-time pre-validation) build on, so the two can
+// never drift apart. Returns the parsed field names on success.
+function assertFieldsSpecSyntax(fieldsSpec) {
+  const names = fieldsSpec.split(",").map((s) => s.trim());
+  if (names.length === 0 || names.some((n) => n === "")) {
+    throw new JqFilterError("requires a comma-separated list of field names");
+  }
+  for (const name of names) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+      throw new JqFilterError(`unsupported field name (top-level scalar fields only): ${name}`);
+    }
+  }
+  return names;
+}
+
 // --fields: the sanctioned multi-field read. Returns the named TOP-LEVEL scalar
 // fields as one tab-separated line, in the requested order, so a caller can run
 // `IFS=$'\t' read -r A B C < <(cmd --fields a,b,c)` — no inline interpreter and
@@ -370,15 +421,9 @@ function formatFieldsErrorEnvelope(error) {
 // tab/newline), or an empty/malformed field list — matching the jq-subset
 // fail-closed posture. Top-level scalar fields only (Non-goals: no nested access).
 function renderFieldsTsv(result, fieldsSpec) {
-  const names = fieldsSpec.split(",").map((s) => s.trim());
-  if (names.length === 0 || names.some((n) => n === "")) {
-    throw new JqFilterError("requires a comma-separated list of field names");
-  }
+  const names = assertFieldsSpecSyntax(fieldsSpec);
   const cells = [];
   for (const name of names) {
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
-      throw new JqFilterError(`unsupported field name (top-level scalar fields only): ${name}`);
-    }
     const has =
       typeof result === "object" && result !== null && Object.prototype.hasOwnProperty.call(result, name);
     if (!has) {
@@ -414,7 +459,12 @@ export const JQ_OUTPUT_USAGE = `Output filtering:
                             (0 = pass/truthy, 1 = fail/falsy). Composes with --jq as a predicate.
   --fields <a,b,c>          Print the named top-level scalar fields as one
                             tab-separated line in the requested order, directly
-                            shell-consumable (e.g. IFS=$'\\t' read -r A B C).
+                            shell-consumable. Use \`cut -f<n>\` when a field may
+                            be null/empty: it handles an empty/leading cell
+                            correctly. \`IFS=$'\\t' read -r A B C\` is safe only
+                            when every cell is known non-empty (empty/leading
+                            tabs are IFS whitespace and get collapsed, so a
+                            null cell misbinds the rest).
                             Unknown/non-scalar field, or combining with
                             --jq/--silent, fails closed (stderr + exit 2).`;
 

@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { test } from "bun:test";
 import {
   JqFilterError,
   evaluateJqFilter,
   assertJqFilterSyntax,
   preflightJqFilter,
+  preflightFieldsSpec,
   emitResult,
   matchJqOutputToken,
 } from "../../scripts/lib/jq-output.mjs";
@@ -307,4 +309,63 @@ test("emitResult: omitting --fields leaves the verbatim-JSON default output unch
   const out = sink();
   assert.equal(emitResult(fieldsSample, { stdout: out }), 0);
   assert.deepEqual(JSON.parse(out.get()), fieldsSample);
+});
+
+test("preflightFieldsSpec: undefined fields is a no-op (nothing to validate)", () => {
+  const err = sink();
+  assert.equal(preflightFieldsSpec(undefined, { stderr: err }), undefined);
+  assert.equal(err.get(), "");
+});
+
+test("preflightFieldsSpec: a valid spec passes through with no stderr", () => {
+  const err = sink();
+  assert.equal(preflightFieldsSpec("a,b,c", { stderr: err }), undefined);
+  assert.equal(err.get(), "");
+});
+
+test("preflightFieldsSpec: --fields+--jq and --fields+--silent each fail closed (exit 2)", () => {
+  const errJq = sink();
+  assert.equal(preflightFieldsSpec("a,b", { jq: ".a", stderr: errJq }), 2);
+  const parsedJq = JSON.parse(errJq.get().trim());
+  assert.equal(parsedJq.ok, false);
+  assert.match(parsedJq.error, /^--fields \(BASE-JQ-OUTPUT-GUARANTEE\):/);
+  assert.match(parsedJq.error, /cannot combine with --jq/);
+
+  const errSilent = sink();
+  assert.equal(preflightFieldsSpec("a,b", { silent: true, stderr: errSilent }), 2);
+  assert.match(JSON.parse(errSilent.get().trim()).error, /cannot combine with --silent/);
+});
+
+test("preflightFieldsSpec: a malformed/empty field list fails closed (exit 2)", () => {
+  for (const spec of ["", "a,,b", "not a field"]) {
+    const err = sink();
+    assert.equal(preflightFieldsSpec(spec, { stderr: err }), 2);
+    assert.match(JSON.parse(err.get().trim()).error, /^--fields \(BASE-JQ-OUTPUT-GUARANTEE\):/);
+  }
+});
+
+test("preflightFieldsSpec: the preflight envelope is byte-identical to emitResult's own --fields branch for the same malformed input", () => {
+  const preErr = sink();
+  assert.equal(preflightFieldsSpec("a,,b", { stderr: preErr }), 2);
+
+  const emitErr = sink();
+  emitResult({}, { fields: "a,,b", stdout: sink(), stderr: emitErr });
+  assert.equal(preErr.get(), emitErr.get());
+
+  // Same proof for the --jq-conflict branch.
+  const preConflictErr = sink();
+  assert.equal(preflightFieldsSpec("a,b", { jq: ".a", stderr: preConflictErr }), 2);
+  const emitConflictErr = sink();
+  emitResult(fieldsSample, { fields: "a,b", jq: ".a", stdout: sink(), stderr: emitConflictErr });
+  assert.equal(preConflictErr.get(), emitConflictErr.get());
+});
+
+test("emitResult: --fields TSV output is cut(1)-consumable even with a null/empty leading cell", () => {
+  const out = sink();
+  assert.equal(emitResult(fieldsSample, { fields: "note,count", stdout: out }), 0);
+  const line = out.get().replace(/\n$/, "");
+  // Real `cut`, not a hand-rolled split: proves the documented empty-safe
+  // consumer actually works against emitResult's real TSV bytes.
+  assert.equal(execFileSync("cut", ["-f1"], { input: `${line}\n` }).toString(), "\n");
+  assert.equal(execFileSync("cut", ["-f2"], { input: `${line}\n` }).toString(), "3\n");
 });
