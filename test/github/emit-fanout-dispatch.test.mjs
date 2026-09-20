@@ -1289,4 +1289,9 @@ test("buildAngleNamingSuffix carries the bounded reviewer contract: budget, proh
   assert.match(suffix, /--tool-calls <tool calls you used>/);
   assert.match(suffix, /--findings-dir </);
   assert.doesNotMatch(suffix, /--angles "dry,kiss"/);
+  // #2241: the escape-hatch invocation goes through the dev-loops-run launcher,
+  // never a bare `node scripts/…` path (bare node is not portable to a consumer
+  // plugin install that ships no scripts/ tree).
+  assert.match(suffix, /dev-loops-run scripts\/github\/emit-reviewer-blocked\.mjs/);
+  assert.doesNotMatch(suffix, /node scripts\/github\/emit-reviewer-blocked\.mjs/);
 });
