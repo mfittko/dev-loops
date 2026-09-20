@@ -3222,15 +3222,19 @@ describe("role resolution", () => {
     // inlineSeverityFloor (#2263): mirrors the mediumFixWindow no-schema-default
     // pattern above — resolveGateConfig, not the schema, supplies the fallback.
     test("FileConfigSchema accepts every inlineSeverityFloor enum value", () => {
-      for (const floor of ["high", "medium", "low", "nit"]) {
+      for (const floor of ["medium", "low", "nit"]) {
         const result = FileConfigSchema.safeParse({ version: 1, gates: { draft: { inlineSeverityFloor: floor } } });
         assert.equal(result.success, true, `expected "${floor}" to be accepted`);
       }
     });
 
-    test("FileConfigSchema rejects an out-of-enum inlineSeverityFloor value", () => {
-      const result = FileConfigSchema.safeParse({ version: 1, gates: { draft: { inlineSeverityFloor: "bogus" } } });
-      assert.equal(result.success, false);
+    // #2263 non-goal: the floor can never be raised above "medium", so "high"
+    // is schema-invalid — a medium (or higher) finding can never fold.
+    test("FileConfigSchema rejects an out-of-enum inlineSeverityFloor value (including \"high\")", () => {
+      for (const floor of ["high", "bogus"]) {
+        const result = FileConfigSchema.safeParse({ version: 1, gates: { draft: { inlineSeverityFloor: floor } } });
+        assert.equal(result.success, false, `expected "${floor}" to be rejected`);
+      }
     });
 
     test("resolveGateConfig resolves inlineSeverityFloor to the default \"medium\" when absent", () => {

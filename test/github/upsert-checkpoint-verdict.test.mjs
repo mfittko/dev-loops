@@ -6778,16 +6778,16 @@ test("upsert-checkpoint-verdict --findings-ledger: lowering inlineSeverityFloor 
   }, { prefix: "dev-loops-upsert-fold-lowered-floor-" });
 });
 
-// #2295 Copilot review fix 1: a "question" must never fold, even at floor
-// "high" (where it would otherwise rank below SEVERITY_ORDER's floor index).
-// A locatable question stays inline (its own resolvable thread); a locatable
-// low at the same raised floor folds, exactly as the default-floor test above
-// already exercises for low/nit.
+// #2295 Copilot review fix 1: a "question" always posts inline, and a low
+// folds, at the DEFAULT "medium" floor. (The floor enum is now constrained to
+// <= "medium", so "high" is schema-invalid; the "question never folds even at a
+// raised floor" invariant stays proven at the unit level in
+// test/github/gate-finding-surface.test.mjs, where isBelowInlineFloor is a pure
+// function not bound to the schema.)
 const LOCATABLE_QUESTION_FINDING = { severity: "question", angle: "scope", summary: "why parameterize here instead of an ORM?", files: ["src/db.mjs"], line: 2 };
 
-test("upsert-checkpoint-verdict --findings-ledger: raising inlineSeverityFloor to \"high\" still posts a locatable question inline; a low still folds", async () => {
+test("upsert-checkpoint-verdict --findings-ledger: at the default \"medium\" floor a locatable question posts inline while a low folds", async () => {
   await withTempDir(async (tempDir) => {
-    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n  draft:\n    inlineSeverityFloor: high\n", "utf8");
     const ledgerPath = await writeSingleSurfaceLedger(tempDir, [LOCATABLE_QUESTION_FINDING, LOCATABLE_LOW_FINDING]);
     const entries = [
       ...singleSurfaceLeadingEntries(),
@@ -6817,8 +6817,8 @@ test("upsert-checkpoint-verdict --findings-ledger: raising inlineSeverityFloor t
 
     const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
     const posted = JSON.parse(postCall.stdinText);
-    // The question is the ONLY inline comment — it never folds even though
-    // the floor was raised to "high".
+    // The question is the ONLY inline comment — it posts inline at the default
+    // floor, and the low finding folds.
     assert.equal(posted.comments.length, 1);
     assert.match(JSON.stringify(posted.comments), /why parameterize here instead of an ORM\?/);
     // The low finding folds into the collapsed <details> block instead.

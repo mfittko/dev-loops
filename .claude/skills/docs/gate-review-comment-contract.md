@@ -62,9 +62,12 @@ table (the third, folded, track is severity-gated rather than locatability-gated
 
 <!-- rule: GATE-COMMENT-INLINE-SEVERITY-FLOOR -->
 `GATE-COMMENT-INLINE-SEVERITY-FLOOR` (#2263): a finding whose severity ranks below
-`gates.<gate>.inlineSeverityFloor` (default `medium`; the rank order is high, question, medium,
-low, nit — so the default folds `low`/`nit` and keeps `high`/`question`/`medium` on the two tracks
-above) skips both tracks and folds into a THIRD track instead, regardless of locatability: one
+`gates.<gate>.inlineSeverityFloor` skips both tracks and folds into a THIRD track instead,
+regardless of locatability. The floor's valid values are `medium` (default), `low`, `nit`: it can
+never be raised above `medium` (the severity rank order is high, question, medium, low, nit), so
+`medium`/`high`/`question` always post inline and only `low`/`nit` can ever fold. This enforces the
+issue's non-goal ("never suppress medium or high from inline") by construction and keeps the
+folded-block `low/nit` summary label accurate. Folding produces one
 collapsed `<details><summary>Suppressed low/nit findings (N) — below the inline severity
 floor</summary>...</details>` block, its own top-level section rendered after the body-only list
 and clean-angle roster, before the gate-evidence note. Each folded finding renders as a
@@ -75,9 +78,9 @@ folded finding creates NO gate-authored review thread of its own and therefore n
 `unresolvedGateThreadCount` (`GATE-EXEC-FINDING-THREADS`,
 [Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#finding-threads-and-disposition)).
 Lowering `inlineSeverityFloor` (e.g. to `"low"` or `"nit"`) is the documented escape hatch back to
-full inline/body-filed posting; an out-of-vocabulary value is rejected by the config schema, and an
-unrecognized severity fails OPEN (posts inline, never silently folded). A `question` NEVER folds at
-any floor — including a floor raised to `"high"`, where it would otherwise rank below: a question is
+full inline/body-filed posting; an out-of-vocabulary value — including `"high"`, which the enum no
+longer permits — is rejected by the config schema, and an unrecognized severity fails OPEN (posts
+inline, never silently folded). A `question` NEVER folds at any floor: a question is
 answered (never deferred), and its resolvable thread is what blocks gate-close until answered
 (`GATE-EXEC-THREAD-DISPOSITION`), so folding it away would let an unanswered question slip past
 ready-for-review. `blockCleanOnFindingSeverities`

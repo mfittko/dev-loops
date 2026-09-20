@@ -127,8 +127,12 @@ export function isFileableDeferral(severity, operatorVisible, round, mediumFixWi
 // exactly like an open defect via its resolvable thread (GATE-EXEC-THREAD-DISPOSITION).
 // Folding it would drop that thread and let an unanswered question slip past
 // ready-for-review. `question` sorts ABOVE `medium` in SEVERITY_ORDER, so the
-// default floor already keeps it inline; this guard also holds when the floor
-// is raised to `"high"` (where question would otherwise rank below the floor).
+// default floor already keeps it inline. The config floor enum is now constrained
+// to <= `medium` (["medium","low","nit"]), so a config-driven floor can no longer
+// even reach the case where a question would rank below it. This guard is
+// defense-in-depth: it documents the invariant and holds even for a hand-passed
+// floor value the config no longer permits (e.g. `"high"`), since isBelowInlineFloor
+// is a pure function not bound to the schema.
 export function isBelowInlineFloor(severity, floor) {
   const sev = normalizeSeverity(severity);
   if (sev === "question") return false;
