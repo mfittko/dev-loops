@@ -11,13 +11,16 @@
  *
  * It reuses, never re-derives, the existing precondition set:
  * `resolveSizeBudgetHumanApprovalRequired` (size-budget-merge-gate),
- * `findBlockingTitleMarkers` (pr-title-markers), and the detect-checkpoint-evidence
+ * `findBlockingTitleMarkers` (pr-title-markers), the detect-checkpoint-evidence
  * `preMergeGateCheck` bundle (draft/pre-approval verdicts, threads, runner lock,
- * fan-out provenance). This module adds ONLY the human-approver identity, the
- * merge-class split, and the aggregate naming.
+ * fan-out provenance), and `classifyCopilotReviewBodyDisposition` (copilot-helpers,
+ * the same current-head Copilot disposition detection the loop's
+ * `copilotBodyFeedbackUnresolved` reads). This module adds ONLY the
+ * human-approver identity, the merge-class split, the Copilot-convergence
+ * precondition, and the aggregate naming.
  */
 
-import { isCopilotLogin } from "../github/copilot-helpers.mjs";
+import { isCopilotLogin, classifyCopilotReviewBodyDisposition, COPILOT_DISPOSITION } from "../github/copilot-helpers.mjs";
 import { findBlockingTitleMarkers } from "./pr-title-markers.mjs";
 import { resolveSizeBudgetHumanApprovalRequired } from "./size-budget-merge-gate.mjs";
 import { deriveLoopCiStatusFromRollup } from "./copilot-ci-status.mjs";
@@ -151,6 +154,67 @@ export function verifyFreshHumanApproval({ approvedBy, currentHeadSha, reviews =
 }
 
 /**
+ * Copilot-convergence merge precondition. Wires the current-head Copilot
+ * body-disposition detection into the merge gate so the merge wrapper
+ * and the loop (`copilotBodyFeedbackUnresolved`) read the SAME classification
+ * (`classifyCopilotReviewBodyDisposition`). The classification is shared, so it
+ * cannot drift; the POLICY differs by design (the loop self-blocks on 🔵, this
+ * gate treats 🔵 as conductor-overridable). Fail-closed.
+ *
+ * Only the LATEST Copilot review pinned to `currentHeadSha` is judged, so a
+ * stale non-approval at an earlier head never blocks and a later same-head 🟢
+ * clears an earlier same-head finding.
+ *
+ * Policy (operator-resolved during the v1.0.4 drain):
+ *   🟡 "Changes recommended" on the current head -> BLOCK (actionable; the review
+ *      body is unresolved feedback even with zero inline threads — the exact
+ *      body-only fail-open the loop detects and this precondition enforces at merge).
+ *   🔵 "Needs a closer look" -> conductor-OVERRIDABLE (soft), NOT blocked here.
+ *      Unresolved threads still gate it (detect-checkpoint-evidence refuses any
+ *      unresolved review thread), so a 🔵 merges only with zero unresolved
+ *      threads — the conductor's override is choosing to run the merge on a
+ *      thread-clean 🔵.
+ *   unrecognized disposition -> BLOCK (fail closed on a Copilot format change).
+ *   🟢 clean / no current-head Copilot review / stale earlier-head -> PASS.
+ *
+ * @returns {{ ok: boolean, disposition: string|null, reason: string|null }}
+ */
+export function evaluateCopilotConvergence({ currentHeadSha = null, reviews = [] } = {}) {
+  const head = typeof currentHeadSha === "string" ? currentHeadSha.trim() : "";
+  // Head unknown: no current-head review can be pinned. Fail closed (matches
+  // verifyFreshHumanApproval), so this precondition can never pass without a
+  // known head to pin the Copilot disposition to.
+  if (head.length === 0) return { ok: false, disposition: null, reason: "current head SHA is unknown; cannot pin a Copilot review to it" };
+
+  // reviews arrive oldest-first, so the last current-head Copilot review wins
+  // (matches the latest-review-by-login reduction in verifyFreshHumanApproval
+  // and the loop's summarizeCopilotReviews).
+  // ponytail: a trailing headerless/PENDING same-head Copilot review classifies
+  // NONE and so supersedes an earlier same-head 🟡 — an accepted shared ceiling
+  // that mirrors summarizeCopilotReviews exactly. Making selection here stricter
+  // would diverge the merge gate from the loop (breaking the shared no-drift
+  // guarantee); Copilot emits a disposition header on every ccr-overview-v2 review.
+  let latest = null;
+  for (const entry of Array.isArray(reviews) ? reviews : []) {
+    const login = reviewLogin(entry);
+    if (login === null || !isCopilotLogin(login)) continue;
+    if (reviewCommit(entry) !== head) continue; // only current-head reviews
+    latest = entry;
+  }
+  if (latest === null) return { ok: true, disposition: null, reason: null };
+
+  const disposition = classifyCopilotReviewBodyDisposition(latest.state, latest.body);
+  if (disposition === COPILOT_DISPOSITION.CHANGES_RECOMMENDED) {
+    return { ok: false, disposition, reason: `current-head Copilot review is "Changes recommended" (🟡, actionable non-approval); converge to "Approval recommended" (🟢) or resolve the feedback before merge` };
+  }
+  if (disposition === COPILOT_DISPOSITION.UNRECOGNIZED) {
+    return { ok: false, disposition, reason: `current-head Copilot review carries an unrecognized disposition header (fail closed); a recognized "Approval recommended" (🟢) is required` };
+  }
+  // CLEAN, NONE, and NEEDS_CLOSER_LOOK (🔵, conductor-overridable) pass.
+  return { ok: true, disposition, reason: null };
+}
+
+/**
  * Decide whether merge is authorized given the class, the standing
  * authorization signal, and any fresh per-merge approval.
  *
@@ -273,11 +337,27 @@ export function evaluateMergePreconditions({
     failures.push({ precondition: "size_budget_human_approval", reason: "size-budget requires a human APPROVED review OR a head-pinned \"approve merge <headSha>\" operator comment, with zero unresolved CHANGES_REQUESTED, for this escalated/T1 PR" });
   }
 
+  // Copilot-convergence precondition: refuse a current-head Copilot non-approval
+  // body disposition, mirroring the loop's copilotBodyFeedbackUnresolved.
+  const copilotConvergence = evaluateCopilotConvergence({ currentHeadSha, reviews });
+  if (!copilotConvergence.ok) {
+    failures.push({ precondition: "copilot_convergence", reason: copilotConvergence.reason });
+  }
+
   const mergeClass = resolveMergeClass({ sizeOutcome, touchesT1, stableRelease });
   const decision = resolveMergeApprovalDecision({ mergeClass, standingAuthorized, freshApproval });
   if (!decision.authorized) {
     failures.push({ precondition: "merge_approval", reason: decision.reason });
   }
 
-  return { ok: failures.length === 0, failures, mergeClass, approvalVia: decision.authorized ? decision.via : null };
+  return {
+    ok: failures.length === 0,
+    failures,
+    mergeClass,
+    approvalVia: decision.authorized ? decision.via : null,
+    // Audit trace: the current-head Copilot disposition this verdict saw, so a
+    // merge that ran on a conductor-overridable 🔵 (or any disposition) is
+    // recorded on the machine-readable result rather than being invisible.
+    copilotDisposition: copilotConvergence.disposition,
+  };
 }

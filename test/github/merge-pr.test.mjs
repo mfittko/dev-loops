@@ -95,6 +95,26 @@ test("fully-satisfied standing-authorized drain merge succeeds, stamps the appro
   assert.ok(!calls.runChild.some((c) => c.args.join(" ").match(/release|publish|tag/)));
 });
 
+test("a current-head Copilot 🟡 non-approval refuses via copilot_convergence (proves the review body reaches the gate)", async () => {
+  const { runtime, calls } = makeRuntime({
+    reviews: [{ user: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit_id: HEAD, body: "### 🟡 Changes recommended\n\nfix the off-by-one." }],
+  });
+  let threw = null;
+  try { await mergePr(baseOptions(), runtime); } catch (e) { threw = e; }
+  assert.ok(threw, "a current-head 🟡 must refuse");
+  assert.ok(threw.mergePrFailure.failures.some((f) => f.precondition === "copilot_convergence"), JSON.stringify(threw.mergePrFailure.failures));
+  assert.equal(calls.runChild.length, 0, "no merge on a current-head 🟡");
+});
+
+test("a current-head Copilot 🟢 merges and records the disposition for audit", async () => {
+  const { runtime } = makeRuntime({
+    reviews: [{ user: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit_id: HEAD, body: "### 🟢 Approval recommended\n\nlooks good." }],
+  });
+  const result = await mergePr(baseOptions(), runtime);
+  assert.equal(result.ok, true);
+  assert.equal(result.copilotDisposition, "clean");
+});
+
 test("each missing precondition refuses with a machine-readable reason naming it", async () => {
   const cases = [
     ["mergeable", makeRuntime({ prView: { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" } }), {}],
