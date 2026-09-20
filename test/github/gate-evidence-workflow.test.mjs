@@ -235,6 +235,15 @@ test("gate-evidence-runner never posts a status; gate-evidence-reporter always p
   assert.match(statusStep.run, /head_sha="\$evaluated_head_sha"/);
   assert.match(statusStep.run, /head_sha="\$REPORTER_HEAD_SHA"/);
 
+  // The status step must run under always(): without it, this step's default
+  // success() condition would SKIP it whenever an earlier reporter step in
+  // this job fails (decide, checkout/setup-node/setup-bun/install, or
+  // recompute_check) — reintroducing the dangling required-status deadlock
+  // the reporter split exists to close. The draft guard is preserved
+  // alongside always() — only Resolve-PR-facts itself failing before setting
+  // `draft` (the pre-existing accepted residual) still leaves this skipped.
+  assert.equal(statusStep.if, "${{ always() && steps.pr.outputs.draft == 'false' }}");
+
   // Every `${{ }}` value the status step reads (both evaluated head SHAs, the
   // reporter's own head, and both evidence_state values) must be routed
   // through env — never spliced directly into the shell (the GitHub Actions

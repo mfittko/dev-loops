@@ -295,10 +295,24 @@ jobs:
       # completed run can never leave the required check dangling in a
       # stale-PENDING-BLOCKED state. `not_established`/`violation`/a missing or
       # unparseable evidenceState all fail CLOSED to `failure`; only
-      # `satisfied` maps to `success`. This job is NON-cancelling (#2262 /
-      # 0075), so — unlike the old single-job design — there is no
-      # `!cancelled()` guard here: this run is guaranteed to run to completion
-      # once started, so it always posts.
+      # `satisfied` maps to `success`. This job is NON-cancelling
+      # (docs/decisions/0075), so — unlike the old single-job design — there is
+      # no `!cancelled()` guard here.
+      #
+      # if: always() — a JOB running to completion does not mean every STEP in
+      # it runs. Without always() here, this step's default success()
+      # condition would SKIP it whenever an earlier reporter step in this same
+      # job fails (Resolve PR facts, checkout/setup-node/setup-bun/install, or
+      # Recompute draft_gate/pre_approval_gate evidence) — reintroducing the
+      # dangling required-status deadlock this reporter split exists to close
+      # (docs/decisions/0075). always() lets this step run on any upstream
+      # outcome, gated only by the resolved draft flag; a failed recompute
+      # leaves evidence_state/evaluated_head_sha empty, which the mapping and
+      # fallback below already resolve to a fail-closed `failure` posted to
+      # the reporter's own resolved head. The one case this deliberately does
+      # NOT cover is Resolve PR facts itself failing before setting `draft` —
+      # that leaves the guard false and nothing posted, the pre-existing
+      # accepted residual documented in docs/decisions/0043 and 0075.
       #
       # Head-pairing: the REUSE path (recompute == false) posts evidence_state
       # computed by the detector's OWN detect-checkpoint-evidence.mjs run, so
@@ -322,7 +336,7 @@ jobs:
       # spliced directly into the shell (script-injection anti-pattern).
       - name: Report gate-evidence status on the PR head SHA
         id: post
-        if: steps.pr.outputs.draft == 'false'
+        if: ${{ always() && steps.pr.outputs.draft == 'false' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RECOMPUTE: ${{ steps.decide.outputs.recompute }}
