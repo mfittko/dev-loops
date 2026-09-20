@@ -354,18 +354,68 @@ test("judgePassCli --out is deduped to one remediation per acted cluster; --ledg
   assert.equal(enrichedLedger.findings.filter((f) => f.judgeDisposition === "act").length, 3);
 });
 
-test("judgePassCli fails closed when a clean ledger verdict is paired with a nonzero judge act count (#2156)", async () => {
-  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-clean-act-"));
+// #2246: a "clean" consolidator verdict means no BLOCKING-severity finding
+// remains open (this repo blocks clean only on "high"). Under
+// GATE-EXEC-BLOCKING-ONLY-FIX the fix cycle still acts on non-blocking findings
+// (mediums in the fix window, triaged lows), so a clean verdict routinely
+// carries non-blocking act findings and MUST NOT fail closed — it must produce
+// the fixer act list and the enriched ledger like any other round. This
+// reproduces the PR 2243 draft_gate round (consolidator clean, judge acts on
+// mediums/lows only).
+test("judgePassCli accepts a clean verdict whose acts are all non-blocking, producing the act list and ledger (#2246)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-clean-nonblocking-"));
   await writeFile(
     path.join(tmpDir, "ledger.json"),
-    // A "clean" overallVerdict (e.g. no blocking-severity finding) can still
-    // carry a low-severity finding the judge later decides to act on — that
-    // combination must never be written as a clean verdict.
-    JSON.stringify({ overallVerdict: "clean", findings: [finding({ severity: "low", disposition: "deferred" })] }),
+    JSON.stringify({
+      overallVerdict: "clean",
+      findings: [
+        finding({ severity: "medium", summary: "medium worth fixing now" }),
+        finding({ severity: "low", summary: "cheap polish" }),
+      ],
+    }),
   );
   await writeFile(
     path.join(tmpDir, "judge-verdict.json"),
-    JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", rationale: "actually needs fixing now" }] })),
+    JSON.stringify(verdict({ dispositions: [
+      { index: 0, disposition: "act", rationale: "in the medium fix window" },
+      { index: 1, disposition: "act", rationale: "fix while touching this code" },
+    ] })),
+  );
+  const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
+  const payload = await judgePassCli(
+    {
+      repo: "mfittko/dev-loops",
+      pr: "2243",
+      gate: "draft_gate",
+      headSha: HEAD,
+      findingsFile: "./ledger.json",
+      judgeVerdict: "./judge-verdict.json",
+      out: "./act.json",
+      ledgerOut: "./enriched.json",
+    },
+    { repoRoot: tmpDir },
+  );
+  assert.equal(payload.ok, true);
+  assert.equal(payload.actCount, 2);
+  assert.equal(JSON.parse(await readFile(path.join(tmpDir, "act.json"), "utf8")).length, 2);
+  assert.equal(
+    JSON.parse(await readFile(path.join(tmpDir, "enriched.json"), "utf8")).findings.filter((f) => f.judgeDisposition === "act").length,
+    2,
+  );
+});
+
+// #2246: the fail-closed half of the same rule — a clean verdict with an act on
+// a BLOCKING severity (high, in this repo's block set) is genuinely invalid: an
+// acted high is unresolved blocking work, so the round cannot be clean.
+test("judgePassCli fails closed when a clean verdict carries an act on a blocking severity (#2246)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "judge-pass-clean-blocking-act-"));
+  await writeFile(
+    path.join(tmpDir, "ledger.json"),
+    JSON.stringify({ overallVerdict: "clean", findings: [finding({ severity: "high", summary: "blocking defect" })] }),
+  );
+  await writeFile(
+    path.join(tmpDir, "judge-verdict.json"),
+    JSON.stringify(verdict({ dispositions: [{ index: 0, disposition: "act", rationale: "must fix now" }] })),
   );
   const { judgePassCli } = await import("../../scripts/loop/judge-pass.mjs");
   await assert.rejects(
@@ -382,7 +432,7 @@ test("judgePassCli fails closed when a clean ledger verdict is paired with a non
       },
       { repoRoot: tmpDir },
     ),
-    /clean verdict is invalid with a nonzero act count/,
+    /clean verdict is invalid with .* at a blocking severity/,
   );
 });
 
@@ -437,7 +487,7 @@ test("judgePassCli: rejecting a clean+act round creates no follow-up issue and w
       },
       { repoRoot: tmpDir, createIssue, commentIssue, listIssues },
     ),
-    /clean verdict is invalid with a nonzero act count/,
+    /clean verdict is invalid with .* at a blocking severity/,
   );
   assert.equal(createCalls.length, 0, "no follow-up issue created before the round is rejected");
   assert.equal(commentCalls.length, 0, "no follow-up issue comment posted before the round is rejected");

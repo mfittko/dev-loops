@@ -10,7 +10,7 @@
  * array/objects.
  */
 
-import { resolveFindingFile } from "./gate-fanin.mjs";
+import { normalizeSeverity, resolveFindingFile } from "./gate-fanin.mjs";
 
 // NUL separates the three key components so a value inside one component
 // (e.g. a recommendation that happens to contain a colon or digits matching
@@ -257,21 +257,40 @@ export function dedupeActListByCluster(actFindings, clusters, allFindings) {
 }
 
 /**
- * A "clean" verdict is invalid the moment any finding was acted on — an
- * acted finding is, by definition, unresolved work. Throws a clear Error on
- * `overallVerdict === "clean" && actCount > 0`; returns `overallVerdict`
- * unchanged otherwise.
+ * A "clean" verdict means no finding at a BLOCKING severity remains open. It is
+ * invalid only when a finding at a blocking severity was acted on — that is
+ * unresolved blocking work, so the round cannot be clean. Acting on a
+ * NON-BLOCKING finding (a medium in the fix window, a low the fixer triages) is
+ * expected under a clean verdict per `GATE-EXEC-BLOCKING-ONLY-FIX`: the fix
+ * cycle covers non-blocking findings even though they never block clean, so a
+ * clean verdict routinely carries non-blocking act findings.
+ *
+ * Throws a clear Error on `overallVerdict === "clean"` with any act finding at a
+ * blocking severity; returns `overallVerdict` unchanged otherwise.
  *
  * @param {unknown} overallVerdict
- * @param {number} actCount — non-negative integer; fails closed otherwise.
+ * @param {Array<{severity?: unknown}>} actFindings — the round's act-disposed findings.
+ * @param {string[]} [blockingSeverities] — the gate's blocking severities (default ["high"]).
  * @returns {unknown} `overallVerdict`, unchanged.
  */
-export function assertCleanImpliesNoAct(overallVerdict, actCount) {
-  if (!Number.isInteger(actCount) || actCount < 0) {
-    throw new TypeError("assertCleanImpliesNoAct requires actCount to be a non-negative integer");
+export function assertCleanImpliesNoBlockingAct(overallVerdict, actFindings, blockingSeverities) {
+  if (!Array.isArray(actFindings)) {
+    throw new TypeError("assertCleanImpliesNoBlockingAct requires actFindings to be an array");
   }
-  if (overallVerdict === "clean" && actCount > 0) {
-    throw new Error("clean verdict is invalid with a nonzero act count: any acted finding prevents clean");
+  if (overallVerdict !== "clean") return overallVerdict;
+  const blocking = new Set(
+    (Array.isArray(blockingSeverities) && blockingSeverities.length > 0 ? blockingSeverities : ["high"]).map((s) =>
+      normalizeSeverity(s),
+    ),
+  );
+  const offending = actFindings.filter((f) => blocking.has(normalizeSeverity(f?.severity)));
+  if (offending.length > 0) {
+    const severities = [...new Set(offending.map((f) => normalizeSeverity(f?.severity)))].join(", ");
+    throw new Error(
+      `clean verdict is invalid with ${offending.length} acted finding(s) at a blocking severity (${severities}): ` +
+        `a blocking-severity finding acted on this round cannot be clean. Non-blocking act findings are allowed under ` +
+        `a clean verdict (GATE-EXEC-BLOCKING-ONLY-FIX).`,
+    );
   }
   return overallVerdict;
 }
