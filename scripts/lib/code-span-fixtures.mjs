@@ -58,6 +58,17 @@ export const CODE_SPAN_FORMS = [
     wrap: (m) => `\`\` \`x\` ${m} \`\``,
   },
   {
+    name: "marker sandwiched between two separate code spans on one line",
+    category: "multi-backtick delimiter",
+    // The marker is bare prose here, BETWEEN two spans, not inside one. The
+    // coarse first-to-last-backtick line strip removes it anyway (fail closed);
+    // this is the unique guard for that coarse strip: a precise-matcher
+    // regression would keep the inner-span forms passing while re-opening only
+    // this one, so the set must keep it to stay a superset of the release
+    // gate's prior private coverage.
+    wrap: (m) => `\`\`code \` here\`\` ${m} \`\`x\`\``,
+  },
+  {
     name: "triple-backtick fenced block",
     category: "multi-backtick delimiter",
     wrap: (m) => `\`\`\`\n${m}\n\`\`\``,
