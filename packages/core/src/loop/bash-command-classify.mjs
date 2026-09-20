@@ -801,6 +801,43 @@ export function commandContainsCopilotSummonComment(command) {
   return /(["'])\s*\/copilot(?:\s+re-review\b(?:\s+[^\s"']+)*|\s*(?:["']|$))/i.test(command);
 }
 
+/** Whether HEAD's first token is the `timeout` binary — bare, path-prefixed
+ * (`/usr/bin/timeout`), or the `gtimeout` name used when GNU coreutils is installed alongside the
+ * BSD `timeout` on macOS. */
+const TIMEOUT_BIN_RE = /^(?:\S*\/)?g?timeout$/i;
+
+/**
+ * If HEAD is a `timeout`-wrapped invocation (`timeout [OPTION]... DURATION COMMAND [ARG]...`),
+ * strip the wrapper — the `timeout` token, its options, and its required DURATION argument — and
+ * return the remaining COMMAND head so the caller can re-resolve and classify the WRAPPED
+ * command instead. Returns HEAD unchanged when it is not a (well-formed) `timeout` invocation, so
+ * a non-wait `timeout` command (`timeout 600 npm test`) is unaffected downstream — the caller
+ * still runs its normal matching, which simply does not recognize `npm test` as a wait helper.
+ * Only `-k`/`--kill-after` and `-s`/`--signal` are value-taking options (each consumes a following
+ * token unless the value is attached via `=` or glued to a short flag, e.g. `-k5`); every other
+ * `-...` token (`-v`/`--verbose`, `--preserve-status`, `--foreground`) is a boolean flag.
+ * ponytail: option parsing is GNU-getopt-shaped, not a full CLI parser — covers the documented
+ * bounded-wait forms (`timeout 600 …`, `timeout -k 5 300 …`, `timeout --signal=TERM 600 …`);
+ * combined short flags (`-vk 5 600`) are out of scope, extend here if that shape shows up.
+ * @param {string} head @returns {string}
+ */
+function stripTimeoutWrapper(head) {
+  const m = head.match(/^(\S+)(?:\s+([\s\S]*))?$/);
+  if (!m || !TIMEOUT_BIN_RE.test(m[1])) return head;
+  let rest = m[2] ?? "";
+  for (;;) {
+    const opt = rest.match(/^(-\S+)\s*/);
+    if (!opt) break;
+    rest = rest.slice(opt[0].length);
+    if (/^(?:-k|--kill-after|-s|--signal)$/i.test(opt[1])) {
+      rest = rest.replace(/^\S+\s*/, ""); // consume the option's separate value token
+    }
+  }
+  const dur = rest.match(/^\d+(?:\.\d+)?[smhd]?\s*/i);
+  if (!dur) return head; // no DURATION found — malformed/unrecognized `timeout` call, leave as-is
+  return rest.slice(dur[0].length);
+}
+
 /**
  * Whether a single shell JOB's command HEAD invokes a wait/probe helper — the Copilot/CI wait
  * tools that MUST run as a bounded FOREGROUND probe (`probe-copilot-review.mjs` /
@@ -817,10 +854,15 @@ export function commandContainsCopilotSummonComment(command) {
  * `dev-loops-run` forms, the wait script must be the EXECUTABLE token itself (the first non-flag
  * argument after the runner) — a `.test(head)` scan over the whole string would also match the
  * script name showing up later as an unrelated argument's value.
+ * A `timeout DURATION <cmd>` wrapper (the documented bounded-wait form) is unwrapped BEFORE this
+ * matching runs (`stripTimeoutWrapper`), so `timeout 600 node .../probe-copilot-review.mjs` is
+ * classified on the wrapped command's own head, same as an unwrapped invocation.
  * @param {string} job @returns {boolean}
  */
 function jobHeadInvokesWaitProbe(job) {
-  const head = job.trim().replace(new RegExp(`^${SHELL_EXEC_PREFIX}`), "");
+  let head = job.trim().replace(new RegExp(`^${SHELL_EXEC_PREFIX}`), "");
+  if (!head) return false;
+  head = stripTimeoutWrapper(head).replace(new RegExp(`^${SHELL_EXEC_PREFIX}`), "");
   if (!head) return false;
   const WAIT_SCRIPT = /(?:probe-copilot-review|wait-pr-checks|detect-copilot-loop-state|run-watch-cycle)\.mjs\b/i;
   // A wait-script TOKEN: the whole argv token (optionally path-prefixed) must END in one of the

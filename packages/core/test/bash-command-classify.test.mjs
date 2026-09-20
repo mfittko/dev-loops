@@ -626,6 +626,18 @@ test("commandContainsDetachedWaitTool detects bare-& backgrounded wait/probe scr
   // same for `dev-loops-run`: the executed script token must itself be the wait script, not a
   // later argument that merely mentions one.
   assert.equal(commandContainsDetachedWaitTool("dev-loops-run scripts/build.mjs --note probe-copilot-review.mjs &"), false);
+  // #2288 follow-up: a `timeout`-wrapped wait/probe helper is headed by `timeout`, not the wait
+  // script — the bare-`&` check must unwrap it to see the real (backgrounded) command.
+  assert.equal(
+    commandContainsDetachedWaitTool("timeout 600 node scripts/github/probe-copilot-review.mjs --pr 5 &"),
+    true,
+  );
+  assert.equal(
+    commandContainsDetachedWaitTool("timeout -k 5 300 node scripts/github/wait-pr-checks.mjs --pr 5 &"),
+    true,
+  );
+  // a `timeout`-wrapped NON-wait command is unaffected
+  assert.equal(commandContainsDetachedWaitTool("timeout 600 npm test &"), false);
 });
 
 test("commandInvokesWaitProbeHelper classifies a LIVE process's ps command line (#2065, reaper ownership boundary)", () => {
@@ -647,6 +659,10 @@ test("commandInvokesWaitProbeHelper classifies a LIVE process's ps command line 
   assert.equal(commandInvokesWaitProbeHelper("node scripts/build.mjs --note probe-copilot-review.mjs"), false);
   assert.equal(commandInvokesWaitProbeHelper("node scripts/build.mjs --flag=wait-pr-checks.mjs"), false);
   assert.equal(commandInvokesWaitProbeHelper("dev-loops-run scripts/build.mjs --note probe-copilot-review.mjs"), false);
+  // #2288 follow-up: a live `timeout`-wrapped probe's ps command line is headed by `timeout`, not
+  // the wait script — the reaper's ownership signature must unwrap it to recognize the process it owns.
+  assert.equal(commandInvokesWaitProbeHelper("timeout 600 node scripts/github/probe-copilot-review.mjs --pr 5"), true);
+  assert.equal(commandContainsDetachedWaitTool("timeout 600 node scripts/github/probe-copilot-review.mjs --pr 5"), false);
 });
 
 test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, and heredocs", () => {
