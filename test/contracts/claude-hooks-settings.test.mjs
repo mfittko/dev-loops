@@ -7,7 +7,6 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
 import { evaluateSubagentStop } from "../../.claude/hooks/subagent-stop-uncommitted-guard.mjs";
-import { runSubagentStopReaper, discoverOwnBackgroundShells, signalGroup } from "../../.claude/hooks/subagent-stop-reaper.mjs";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 // Hook scripts live under the plugin root (.claude/hooks) so the Claude plugin can bundle them
@@ -68,8 +67,6 @@ test(".claude/settings.json is valid JSON and wires the four dev-loop hook regis
   assert.match(postMerge.hooks[0].command, /\$\{CLAUDE_PROJECT_DIR\}\/\.claude\/hooks\/post-tool-use-merge\.mjs/);
   assert.ok(subagentStop, "SubagentStop matcher must be registered");
   assert.match(subagentStop.hooks[0].command, /\$\{CLAUDE_PROJECT_DIR\}\/\.claude\/hooks\/subagent-stop-uncommitted-guard\.mjs/);
-  // #2065: the background-shell reaper is wired alongside the uncommitted-work guard.
-  assert.match(subagentStop.hooks[1].command, /\$\{CLAUDE_PROJECT_DIR\}\/\.claude\/hooks\/subagent-stop-reaper\.mjs/);
 });
 
 test(".claude/hooks/hooks.json wires the plugin hooks via ${CLAUDE_PLUGIN_ROOT} (#824)", () => {
@@ -83,8 +80,6 @@ test(".claude/hooks/hooks.json wires the plugin hooks via ${CLAUDE_PLUGIN_ROOT} 
   assert.match(postMerge.hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/post-tool-use-merge\.mjs/);
   assert.ok(subagentStop, "SubagentStop matcher must be registered in hooks.json");
   assert.match(subagentStop.hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/subagent-stop-uncommitted-guard\.mjs/);
-  // #2065: the reaper is wired alongside the uncommitted-work guard in the plugin manifest too.
-  assert.match(subagentStop.hooks[1].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/hooks\/subagent-stop-reaper\.mjs/);
 });
 
 test("the three hook scripts (+ _hook-io) exist under the plugin root", () => {
@@ -95,133 +90,6 @@ test("the three hook scripts (+ _hook-io) exist under the plugin root", () => {
 
 test("the SubagentStop uncommitted-work guard hook exists under the plugin root (#1619)", () => {
   assert.ok(fs.existsSync(path.join(hooksDir, "subagent-stop-uncommitted-guard.mjs")), "missing subagent-stop-uncommitted-guard.mjs");
-});
-
-test("the SubagentStop background-shell reaper hook exists under the plugin root (#2065)", () => {
-  assert.ok(fs.existsSync(path.join(hooksDir, "subagent-stop-reaper.mjs")), "missing subagent-stop-reaper.mjs");
-});
-
-test("SubagentStop reaper reaps ONLY the agent's own discovered shells and always allows the stop (#2065)", () => {
-  const signalled = [];
-  const code = runSubagentStopReaper({
-    input: {},
-    stderr: { write: () => {} },
-    platform: "linux",
-    selfPid: 999,
-    // discover returns the reaper's own background shells + the protected group leader (pgid)
-    discover: () => ({ sid: 500, pids: [4242, 4243] }),
-    signal: (pid) => signalled.push(pid),
-  });
-  assert.equal(code, 0, "the reaper never blocks the stop");
-  assert.deepEqual(signalled, [4242, 4243], "reaps exactly the discovered own detached job-group leaders");
-});
-
-test("SubagentStop reaper is a no-op when nothing is discovered (#2065)", () => {
-  const signalled = [];
-  const code = runSubagentStopReaper({
-    input: {},
-    stderr: { write: () => {} },
-    platform: "linux",
-    selfPid: 999,
-    discover: () => ({ sid: null, pids: [] }),
-    signal: (pid) => signalled.push(pid),
-  });
-  assert.equal(code, 0);
-  assert.deepEqual(signalled, [], "no shells signalled when there is nothing to reap");
-});
-
-test("discoverOwnBackgroundShells returns ONLY session-scoped, wait/probe-matching process-group leaders, excluding self + session leader (#2065, Copilot review)", () => {
-  // Injected `ps`: first call resolves the reaper's own session id; second lists all processes as
-  // `pid pgid sess command` rows. Only rows in session 500 that are group leaders (pid === pgid),
-  // are neither the reaper (999) nor the session leader (500), AND whose command matches the
-  // wait/probe helper signature may be reaped.
-  const calls = [];
-  const execFileSyncImpl = (cmd, args) => {
-    calls.push(args.join(" "));
-    if (args.includes("-p")) return "500\n"; // ps -o sess= -p 999  → session 500
-    // ps -A -o pid=,pgid=,sess=,command=
-    return [
-      "500 500 500 -bash", // session leader (the agent/shell) — excluded (pid === sid)
-      "999 999 500 node .claude/hooks/subagent-stop-reaper.mjs", // the reaper itself — excluded (pid === selfPid)
-      "4242 4242 500 node scripts/github/probe-copilot-review.mjs --pr 5", // detached wait-shell leader in our session — REAP
-      "4243 4243 500 gh run watch 123 --repo o/r", // detached wait-shell leader in our session — REAP
-      "5000 500 500 node scripts/foo.mjs", // foreground sibling sharing the session-leader's group (pid !== pgid) — skip
-      "6000 6000 700 gh run watch 999", // a matching group leader in a DIFFERENT session — skip
-      "garbage row",
-    ].join("\n") + "\n";
-  };
-  const { sid, pids } = discoverOwnBackgroundShells({ selfPid: 999, execFileSyncImpl });
-  assert.equal(sid, 500);
-  assert.deepEqual(pids, [4242, 4243]);
-});
-
-test("discoverOwnBackgroundShells reaps a matching wait-shell leader but NOT a non-matching detached leader in the same session (#2065, Copilot review — ownership boundary)", () => {
-  // Both 4242 and 5555 are session-scoped process-GROUP LEADERS (pid === pgid), so the OLD
-  // session+group-leader-only boundary would have reaped both. Only 4242's command matches the
-  // wait/probe helper signature; 5555 is an unrelated detached process (e.g. the ui-review skill's
-  // server, spawned with `{ detached: true }`) that must be left alone by construction.
-  const execFileSyncImpl = (cmd, args) => {
-    if (args.includes("-p")) return "500\n"; // ps -o sess= -p 999  → session 500
-    return [
-      "500 500 500 -bash",
-      "999 999 500 node .claude/hooks/subagent-stop-reaper.mjs",
-      "4242 4242 500 node scripts/github/probe-copilot-review.mjs --repo o/r --pr 5 --timeout-ms 300000",
-      "5555 5555 500 node scripts/ui-review-server.mjs --port 4173",
-    ].join("\n") + "\n";
-  };
-  const { sid, pids } = discoverOwnBackgroundShells({ selfPid: 999, execFileSyncImpl });
-  assert.equal(sid, 500);
-  assert.deepEqual(pids, [4242], "only the wait/probe-matching leader is reapable; the detached UI-review server is not");
-});
-
-test("discoverOwnBackgroundShells fails safe (empty) when ps errors (#2065)", () => {
-  const throwing = () => { throw new Error("ps unavailable"); };
-  assert.deepEqual(discoverOwnBackgroundShells({ selfPid: 999, execFileSyncImpl: throwing }), { sid: null, pids: [] });
-});
-
-test("signalGroup targets the process GROUP and refuses a non-positive-integer pid (#2065)", () => {
-  const sent = [];
-  signalGroup(4242, { killImpl: (target, sig) => sent.push([target, sig]) });
-  assert.deepEqual(sent, [[-4242, "SIGTERM"]], "signals the negative pid (process group) only");
-  for (const bad of [0, 1, -3, 2.5, Number.NaN]) {
-    assert.throws(() => signalGroup(bad, { killImpl: () => {} }), /non-positive-integer/);
-  }
-});
-
-test("signalGroup NEVER falls back to a positive-pid kill when the group signal fails (#2288 review — TOCTOU pid-reuse safety)", () => {
-  // A `ps`-discovered leader's group may already be gone (ESRCH) or unsignallable (EPERM) by the
-  // time the reaper fires — the TOCTOU window between discovery and signalling. Unlike
-  // `ui-review-teardown`'s `signalProcess` (a known, just-spawned pid with no reuse window), this
-  // reaper must NEVER retry with the bare positive pid: it may since have been reused by an
-  // unrelated process. Both error shapes below must swallow silently with no second kill call.
-  for (const errCode of ["ESRCH", "EPERM", "EOTHER"]) {
-    const sent = [];
-    const err = new Error(errCode);
-    err.code = errCode;
-    assert.doesNotThrow(() =>
-      signalGroup(4242, {
-        killImpl: (target) => {
-          sent.push(target);
-          throw err;
-        },
-      }),
-    );
-    assert.deepEqual(sent, [-4242], `only the group signal (-pid) is attempted for ${errCode}, never a positive-pid fallback`);
-  }
-});
-
-test("SubagentStop reaper fails closed on win32 — no shell is signalled (#2065)", () => {
-  const signalled = [];
-  const code = runSubagentStopReaper({
-    input: {},
-    stderr: { write: () => {} },
-    platform: "win32",
-    selfPid: 999,
-    discover: () => ({ sid: 500, pids: [4242, 4243] }),
-    signal: (pid) => signalled.push(pid),
-  });
-  assert.equal(code, 0);
-  assert.deepEqual(signalled, [], "win32 must not signal any process group (fail closed)");
 });
 
 test("the self-contained hook bundle modules exist under the plugin root (#843)", () => {

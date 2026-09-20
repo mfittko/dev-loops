@@ -114,11 +114,7 @@
     {
       "id": "COPILOT-FOLLOWUP-WAIT-TOOLS",
       "enforcement": "agent",
-      "enforcementNote": "Choosing a wait tool is behavioral guidance; backgrounding a wait/probe (detach wrappers, while-sleep-poll loops, bare-& probe scripts) is mechanically denied by the PreToolUse Bash-gate for the coordinator and every subagent (#2065)."
-    },
-    {
-      "id": "SUBAGENT-STOP-REAP",
-      "enforcement": "runtime"
+      "enforcementNote": "Choosing a wait tool is behavioral guidance; backgrounding a wait/probe (detach wrappers, while-sleep-poll loops, bare-& probe scripts, or any wrapper around one — timeout/nohup/sh -c/a node loader flag) is mechanically denied by the PreToolUse Bash-gate, actor-independently and fail-closed, for the coordinator and every subagent (#2065)."
     },
     {
       "id": "COPILOT-STATE-ACTIVE-REQUEST-WAIT"

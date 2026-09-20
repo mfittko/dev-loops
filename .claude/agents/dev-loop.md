@@ -64,7 +64,7 @@ The pi-subagents skill is parent-only, so delegated subagents do not receive orc
 - No child subagent spawning beyond assigned fanout work.
 - Bounded tasks with concrete scope, exit conditions, and validation expectations.
 - Awaiting a nested child this run dispatched (a judge, a fixer, or a single reviewer): join it with a blocking dispatch (`async: false`) or one `bg_wait` nonBlocking subscription. Never sleep-poll for it, and never end the turn to await it — see `END-TURN-AND-AWAIT-WAKE` in [Anti-patterns](../skills/docs/anti-patterns.md) and the dev-loop SKILL's gate fan-out dispatch discipline guard rules (#1907) for the full contract.
-- Waiting for Copilot review or CI: run a bounded FOREGROUND inline probe (`probe-copilot-review.mjs` / `wait-pr-checks.mjs` with an explicit `--timeout`/`--timeout-ms`), never a backgrounded `until`/`while … sleep … done` poll loop or a bare-`&` backgrounded probe (#2065). Claude Code has no async wake, so a backgrounded wait orphans past the stop; the PreToolUse Bash-gate denies it for the coordinator and every subagent, and a `SubagentStop` reaper kills any that slip through.
+- Waiting for Copilot review or CI: run a bounded FOREGROUND inline probe (`probe-copilot-review.mjs` / `wait-pr-checks.mjs` with an explicit `--timeout`/`--timeout-ms`), never a backgrounded `until`/`while … sleep … done` poll loop or a bare-`&` backgrounded probe (#2065). Claude Code has no async wake, so a backgrounded wait orphans past the stop; the PreToolUse Bash-gate denies it for the coordinator and every subagent, actor-independently and fail-closed (a `SubagentStop` background-shell reaper safety-net is tracked as follow-up #2296).
 
 ## Output
 

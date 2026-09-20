@@ -36,7 +36,6 @@ import {
   commandContainsCopilotRequestBypass,
   commandContainsCopilotSummonComment,
   commandContainsDetachedWaitTool,
-  commandInvokesWaitProbeHelper,
   commandContainsInlineInterpreter,
 } from "../src/loop/bash-command-classify.mjs";
 
@@ -543,10 +542,16 @@ test("commandContainsCopilotSummonComment detects bare /copilot summons in gh pr
 });
 
 test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () => {
-  assert.equal(commandContainsDetachedWaitTool("nohup node scripts/foo.mjs > /tmp/x.log 2>&1 &"), true);
-  assert.equal(commandContainsDetachedWaitTool("disown"), true);
-  assert.equal(commandContainsDetachedWaitTool("tmux new-session -d -s loop"), true);
-  assert.equal(commandContainsDetachedWaitTool("screen -dmS loop"), true);
+  // COARSE + FAIL-CLOSED (#2065 OPTION-C): a detach mechanism (nohup/disown/tmux/screen) now also
+  // requires a wait/probe FAMILY reference — this rule bars detaching the wait/probe specifically
+  // (its own name is COPILOT-FOLLOWUP-WAIT-TOOLS), not detaching an arbitrary unrelated command.
+  assert.equal(commandContainsDetachedWaitTool("nohup node scripts/foo.mjs > /tmp/x.log 2>&1 &"), false);
+  assert.equal(commandContainsDetachedWaitTool("disown"), false);
+  assert.equal(commandContainsDetachedWaitTool("tmux new-session -d -s loop"), false);
+  assert.equal(commandContainsDetachedWaitTool("screen -dmS loop"), false);
+  // paired with a wait/probe family reference, the same detach mechanisms still deny.
+  assert.equal(commandContainsDetachedWaitTool("nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1"), true);
+  assert.equal(commandContainsDetachedWaitTool("tmux new-session -d -s loop 'node scripts/github/wait-pr-checks.mjs --pr 5'"), true);
   assert.equal(commandContainsDetachedWaitTool("while ! gh pr view 1 --json state --jq .state; do sleep 5; done"), true);
   assert.equal(commandContainsDetachedWaitTool("npm test"), false);
   assert.equal(commandContainsDetachedWaitTool("gh pr view 1"), false);
@@ -572,7 +577,7 @@ test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () =
 });
 
 test("commandContainsDetachedWaitTool detects bare-& backgrounded wait/probe scripts (#2065)", () => {
-  // Backgrounding a bounded probe/wait helper is the orphaned-shell form the reaper exists for.
+  // Backgrounding a bounded probe/wait helper is the orphaned-shell form this rule prevents.
   assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --repo o/r --pr 5 --timeout-ms 300000 &"), true);
   assert.equal(commandContainsDetachedWaitTool("node scripts/github/wait-pr-checks.mjs --pr 5 &"), true);
   assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 &"), true);
@@ -588,24 +593,29 @@ test("commandContainsDetachedWaitTool detects bare-& backgrounded wait/probe scr
   assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5 &> /tmp/x.log"), false);
   // a bare `&` on a NON-wait command is not this rule's concern.
   assert.equal(commandContainsDetachedWaitTool("node scripts/build.mjs &"), false);
-  // Copilot review: the helper must be INVOKED at a job head, not merely mentioned — a background
-  // job that names the basename as an ARGUMENT (grep/echo) is not backgrounding the probe.
-  assert.equal(commandContainsDetachedWaitTool("grep probe-copilot-review.mjs docs &"), false);
-  assert.equal(commandContainsDetachedWaitTool('echo "see wait-pr-checks.mjs" &'), false);
-  assert.equal(commandContainsDetachedWaitTool("cat notes-about-probe-copilot-review.mjs.txt &"), false);
-  // but the invocation forms (node/bun runner, direct script head, gh run watch, dev-loops) still deny
+  // COARSE + FAIL-CLOSED (#2065 OPTION-C): the family match is a plain substring/family scan, not
+  // exec-position anchored — a backgrounded job that merely MENTIONS a family basename as an
+  // argument (grep/echo/a comment) is now ALSO denied. This is a deliberate, accepted tradeoff
+  // (benign false positive), not a regression: it is what makes the gate un-bypassable by a
+  // wrapper (see the wrapper cases below) and it just forces the sanctioned foreground path.
+  assert.equal(commandContainsDetachedWaitTool("grep probe-copilot-review.mjs docs &"), true);
+  assert.equal(commandContainsDetachedWaitTool('echo "see wait-pr-checks.mjs" &'), true);
+  assert.equal(commandContainsDetachedWaitTool("cat notes-about-probe-copilot-review.mjs.txt &"), true);
+  // the invocation forms (node/bun runner, direct script head, gh run watch, dev-loops) still deny
   assert.equal(commandContainsDetachedWaitTool("bun scripts/github/probe-copilot-review.mjs --pr 5 &"), true);
   assert.equal(commandContainsDetachedWaitTool("./scripts/github/wait-pr-checks.mjs --pr 5 &"), true);
   assert.equal(commandContainsDetachedWaitTool("dev-loops gate probe-copilot --pr 5 &"), true);
-  // backgrounding a DIFFERENT job while a probe runs in the foreground is not the probe's own backgrounding
-  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5; echo done &"), false);
-  // the Claude plugin launcher form of the CLI verbs (#2065 follow-up: bypassed the gate before)
+  // backgrounding a DIFFERENT job while a probe mentions/runs elsewhere in the same command string
+  // is ALSO denied under the coarse family scan (accepted tradeoff, see above).
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5; echo done &"), true);
+  // an unrelated bare-& command with no family reference at all is unaffected.
+  assert.equal(commandContainsDetachedWaitTool("node scripts/other.mjs --pr 5; echo done &"), false);
+  // the Claude plugin launcher form of the CLI verbs
   assert.equal(commandContainsDetachedWaitTool("dev-loops-run cli/index.mjs loop watch-cycle --repo o/r --pr 5 &"), true);
   assert.equal(commandContainsDetachedWaitTool("dev-loops-run cli/index.mjs gate probe-copilot --pr 5 &"), true);
   assert.equal(commandContainsDetachedWaitTool("dev-loops-run scripts/github/probe-copilot-review.mjs --pr 5 &"), true);
   assert.equal(commandContainsDetachedWaitTool("dev-loops-run cli/index.mjs loop watch-cycle --repo o/r --pr 5"), false);
-  // a backgrounded PIPELINE: the `&` trails the `tee` stage, but the probe stage must still deny
-  // (#2065 follow-up: splitting on `|` as a job boundary let this bypass the gate)
+  // a backgrounded PIPELINE denies too — the family reference appears anywhere in the string.
   assert.equal(
     commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5 --timeout-ms 0 | tee /tmp/x.log &"),
     true,
@@ -616,53 +626,38 @@ test("commandContainsDetachedWaitTool detects bare-& backgrounded wait/probe scr
     commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5 --timeout-ms 0 | tee /tmp/x.log"),
     false,
   );
-  // an unrelated piped pipeline backgrounded is still not denied
+  // an unrelated piped pipeline backgrounded, with no family reference, is not denied
   assert.equal(commandContainsDetachedWaitTool("cat foo.txt | tee /tmp/x.log &"), false);
-  // #2288 follow-up: the wait-script name merely appearing as a LATER argument to a node/bun/deno
-  // runner (not the script actually being executed) must NOT be treated as invoking the probe —
-  // only the runner's own executable token counts.
-  assert.equal(commandContainsDetachedWaitTool("node scripts/build.mjs --note probe-copilot-review.mjs &"), false);
-  assert.equal(commandContainsDetachedWaitTool("node scripts/build.mjs --flag=wait-pr-checks.mjs &"), false);
-  // same for `dev-loops-run`: the executed script token must itself be the wait script, not a
-  // later argument that merely mentions one.
-  assert.equal(commandContainsDetachedWaitTool("dev-loops-run scripts/build.mjs --note probe-copilot-review.mjs &"), false);
-  // #2288 follow-up: a `timeout`-wrapped wait/probe helper is headed by `timeout`, not the wait
-  // script — the bare-`&` check must unwrap it to see the real (backgrounded) command.
+  // AC2: no wrapper can hide the family reference from the coarse scan — `timeout … &`, `nohup`,
+  // `sh -c '… &'`, and a value-taking node loader flag (-r/--require/--loader/--import) are all
+  // denied, because the family token still appears somewhere in the command text.
+  assert.equal(
+    commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --repo o/r --pr 5 &"),
+    true,
+  );
   assert.equal(
     commandContainsDetachedWaitTool("timeout 600 node scripts/github/probe-copilot-review.mjs --pr 5 &"),
     true,
   );
   assert.equal(
-    commandContainsDetachedWaitTool("timeout -k 5 300 node scripts/github/wait-pr-checks.mjs --pr 5 &"),
+    commandContainsDetachedWaitTool("nohup node scripts/github/probe-copilot-review.mjs --pr 5 &"),
     true,
   );
-  // a `timeout`-wrapped NON-wait command is unaffected
+  assert.equal(
+    commandContainsDetachedWaitTool("sh -c 'node scripts/github/probe-copilot-review.mjs --pr 5 &'"),
+    true,
+  );
+  assert.equal(
+    commandContainsDetachedWaitTool("node --require ./loader.mjs scripts/github/probe-copilot-review.mjs --pr 5 &"),
+    true,
+  );
+  // AC3: a sleep-poll wait loop denies outright, ambiguous/wrapped or not (fails closed).
+  assert.equal(
+    commandContainsDetachedWaitTool("timeout 600 sh -c 'until gh pr view 5 --json state; do sleep 5; done'"),
+    true,
+  );
+  // a `timeout`-wrapped NON-wait command is unaffected (no family reference at all)
   assert.equal(commandContainsDetachedWaitTool("timeout 600 npm test &"), false);
-});
-
-test("commandInvokesWaitProbeHelper classifies a LIVE process's ps command line (#2065, reaper ownership boundary)", () => {
-  // A live wait/probe helper's own command line — no `&`/backgrounding syntax to look for, this
-  // classifies the process itself (the SubagentStop reaper's ownership signature).
-  assert.equal(commandInvokesWaitProbeHelper("node scripts/github/probe-copilot-review.mjs --repo o/r --pr 5 --timeout-ms 0"), true);
-  assert.equal(commandInvokesWaitProbeHelper("node scripts/github/wait-pr-checks.mjs --pr 5"), true);
-  assert.equal(commandInvokesWaitProbeHelper("gh run watch 123"), true);
-  assert.equal(commandInvokesWaitProbeHelper("dev-loops loop watch-cycle --repo o/r --pr 5"), true);
-  assert.equal(commandInvokesWaitProbeHelper("dev-loops-run cli/index.mjs loop watch-cycle --repo o/r --pr 5"), true);
-  assert.equal(commandInvokesWaitProbeHelper("dev-loops-run cli/index.mjs gate probe-copilot --pr 5"), true);
-  assert.equal(commandInvokesWaitProbeHelper("while ! gh pr view 1 --json state --jq .state; do sleep 5; done"), true);
-  // an unrelated detached process (e.g. the UI-review server) does not match
-  assert.equal(commandInvokesWaitProbeHelper("node .claude/hooks/../../scripts/ui-review-server.mjs --port 4173"), false);
-  assert.equal(commandInvokesWaitProbeHelper("npm test"), false);
-  assert.equal(commandInvokesWaitProbeHelper("bash"), false);
-  // #2288 follow-up: a live process whose command line merely MENTIONS a wait-script basename as
-  // an argument value (not the script it executes) is not reapable by the SubagentStop reaper.
-  assert.equal(commandInvokesWaitProbeHelper("node scripts/build.mjs --note probe-copilot-review.mjs"), false);
-  assert.equal(commandInvokesWaitProbeHelper("node scripts/build.mjs --flag=wait-pr-checks.mjs"), false);
-  assert.equal(commandInvokesWaitProbeHelper("dev-loops-run scripts/build.mjs --note probe-copilot-review.mjs"), false);
-  // #2288 follow-up: a live `timeout`-wrapped probe's ps command line is headed by `timeout`, not
-  // the wait script — the reaper's ownership signature must unwrap it to recognize the process it owns.
-  assert.equal(commandInvokesWaitProbeHelper("timeout 600 node scripts/github/probe-copilot-review.mjs --pr 5"), true);
-  assert.equal(commandContainsDetachedWaitTool("timeout 600 node scripts/github/probe-copilot-review.mjs --pr 5"), false);
 });
 
 test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, and heredocs", () => {

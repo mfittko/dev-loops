@@ -801,146 +801,13 @@ export function commandContainsCopilotSummonComment(command) {
   return /(["'])\s*\/copilot(?:\s+re-review\b(?:\s+[^\s"']+)*|\s*(?:["']|$))/i.test(command);
 }
 
-/** Whether HEAD's first token is the `timeout` binary — bare, path-prefixed
- * (`/usr/bin/timeout`), or the `gtimeout` name used when GNU coreutils is installed alongside the
- * BSD `timeout` on macOS. */
-const TIMEOUT_BIN_RE = /^(?:\S*\/)?g?timeout$/i;
-
-/**
- * If HEAD is a `timeout`-wrapped invocation (`timeout [OPTION]... DURATION COMMAND [ARG]...`),
- * strip the wrapper — the `timeout` token, its options, and its required DURATION argument — and
- * return the remaining COMMAND head so the caller can re-resolve and classify the WRAPPED
- * command instead. Returns HEAD unchanged when it is not a (well-formed) `timeout` invocation, so
- * a non-wait `timeout` command (`timeout 600 npm test`) is unaffected downstream — the caller
- * still runs its normal matching, which simply does not recognize `npm test` as a wait helper.
- * Only `-k`/`--kill-after` and `-s`/`--signal` are value-taking options (each consumes a following
- * token unless the value is attached via `=` or glued to a short flag, e.g. `-k5`); every other
- * `-...` token (`-v`/`--verbose`, `--preserve-status`, `--foreground`) is a boolean flag.
- * ponytail: option parsing is GNU-getopt-shaped, not a full CLI parser — covers the documented
- * bounded-wait forms (`timeout 600 …`, `timeout -k 5 300 …`, `timeout --signal=TERM 600 …`);
- * combined short flags (`-vk 5 600`) are out of scope, extend here if that shape shows up.
- * @param {string} head @returns {string}
- */
-function stripTimeoutWrapper(head) {
-  const m = head.match(/^(\S+)(?:\s+([\s\S]*))?$/);
-  if (!m || !TIMEOUT_BIN_RE.test(m[1])) return head;
-  let rest = m[2] ?? "";
-  for (;;) {
-    const opt = rest.match(/^(-\S+)\s*/);
-    if (!opt) break;
-    rest = rest.slice(opt[0].length);
-    if (/^(?:-k|--kill-after|-s|--signal)$/i.test(opt[1])) {
-      rest = rest.replace(/^\S+\s*/, ""); // consume the option's separate value token
-    }
-  }
-  const dur = rest.match(/^\d+(?:\.\d+)?[smhd]?\s*/i);
-  if (!dur) return head; // no DURATION found — malformed/unrecognized `timeout` call, leave as-is
-  return rest.slice(dur[0].length);
-}
-
-/**
- * Whether a single shell JOB's command HEAD invokes a wait/probe helper — the Copilot/CI wait
- * tools that MUST run as a bounded FOREGROUND probe (`probe-copilot-review.mjs` /
- * `wait-pr-checks.mjs` with an explicit timeout; `detect-copilot-loop-state.mjs`;
- * `run-watch-cycle.mjs`; `gh run watch`; `dev-loops loop watch-*` / `gate probe-copilot`; and the
- * Claude plugin launcher forms of the same, `dev-loops-run cli/index.mjs loop watch-*` / `gate
- * probe-copilot` and `dev-loops-run <path>/<wait-script>.mjs`).
- * Anchored at the command head (after an env-assignment/wrapper/binary-path prefix), so a job
- * that merely MENTIONS the basename as an argument — `grep probe-copilot-review.mjs docs`,
- * `echo … wait-pr-checks.mjs`, or a `node`/`dev-loops-run` runner whose EXECUTED script is
- * something else entirely (`node other.mjs --note probe-copilot-review.mjs`) — does NOT match
- * (only a real invocation does). A `.mjs` helper must be run by `node`/`bun`/`deno` or
- * invoked directly as the head; the CLI forms anchor on their own verb. For the runner and
- * `dev-loops-run` forms, the wait script must be the EXECUTABLE token itself (the first non-flag
- * argument after the runner) — a `.test(head)` scan over the whole string would also match the
- * script name showing up later as an unrelated argument's value.
- * A `timeout DURATION <cmd>` wrapper (the documented bounded-wait form) is unwrapped BEFORE this
- * matching runs (`stripTimeoutWrapper`), so `timeout 600 node .../probe-copilot-review.mjs` is
- * classified on the wrapped command's own head, same as an unwrapped invocation.
- * @param {string} job @returns {boolean}
- */
-function jobHeadInvokesWaitProbe(job) {
-  let head = job.trim().replace(new RegExp(`^${SHELL_EXEC_PREFIX}`), "");
-  if (!head) return false;
-  head = stripTimeoutWrapper(head).replace(new RegExp(`^${SHELL_EXEC_PREFIX}`), "");
-  if (!head) return false;
-  const WAIT_SCRIPT = /(?:probe-copilot-review|wait-pr-checks|detect-copilot-loop-state|run-watch-cycle)\.mjs\b/i;
-  // A wait-script TOKEN: the whole argv token (optionally path-prefixed) must END in one of the
-  // wait-script basenames, not merely contain one — this is what makes the runner checks below
-  // positional rather than an anywhere-in-string scan.
-  const WAIT_SCRIPT_TOKEN = new RegExp(`^(?:\\S*/)?${WAIT_SCRIPT.source.replace(/\\b$/, "$")}`, "i");
-  // `node`/`bun`/`deno [flags] <path>/<wait-script>.mjs …` — the executed script is the first
-  // non-flag token after the runner, never a later argument (`--note probe-copilot-review.mjs`).
-  const runnerExec = head.match(/^(?:node|bun|deno)\b\s+(?:-\S+\s+)*(\S+)/i);
-  if (runnerExec && WAIT_SCRIPT_TOKEN.test(runnerExec[1])) return true;
-  // A wait script invoked directly as the command head (a bare `probe-copilot-review.mjs` path) —
-  // test only the head's OWN first token, not the whole string (a later argument must not count).
-  if (WAIT_SCRIPT_TOKEN.test(head.match(/^\S+/)?.[0] ?? "")) return true;
-  // `gh run watch …`
-  if (/^(?:\S*\/)?gh\s+run\s+watch\b/i.test(head)) return true;
-  // `dev-loops loop watch-cycle|watch-ci|watch-initial` / `dev-loops gate probe-copilot`
-  if (/^(?:\S*\/)?dev-loops\s+(?:loop\s+watch-(?:cycle|ci|initial)|gate\s+probe-copilot)\b/i.test(head)) return true;
-  // The Claude plugin launcher form of the same CLI verbs: `dev-loops-run cli/index.mjs loop
-  // watch-cycle|watch-ci|watch-initial` / `dev-loops-run cli/index.mjs gate probe-copilot`.
-  if (
-    /^(?:\S*\/)?dev-loops-run\s+(?:\S*\/)?cli\/index\.mjs\s+(?:loop\s+watch-(?:cycle|ci|initial)|gate\s+probe-copilot)\b/i.test(
-      head,
-    )
-  ) {
-    return true;
-  }
-  // The launcher invoking a wait/probe script directly: `dev-loops-run [flags] <path>/<wait-script>.mjs …`
-  // — again the executed script is the first non-flag token after `dev-loops-run`, not any later arg.
-  const devLoopsRunExec = head.match(/^(?:\S*\/)?dev-loops-run\b\s+(?:-\S+\s+)*(\S+)/i);
-  if (devLoopsRunExec && WAIT_SCRIPT_TOKEN.test(devLoopsRunExec[1])) return true;
-  return false;
-}
-
-/**
- * Whether the command launches a wait/probe helper in the BACKGROUND — a bare `&` control
- * operator (not `&&`, not a redirection like `2>&1`/`>&2`/`&>file`) terminating a PIPELINE any of
- * whose stage heads invokes that helper. A `|`-joined pipeline is one job for backgrounding
- * purposes: `probe-copilot-review.mjs … | tee log &` backgrounds the WHOLE pipeline (the probe
- * included), not just the trailing `tee` stage the `&` textually follows, so every `|`-stage head
- * in the accumulated pipeline is checked, not only the one immediately before the `&`.
- * Segment/job-head-anchored (not a whole-string basename scan), so a background `&` on an
- * UNRELATED pipeline that merely mentions the filename is NOT denied; only backgrounding the
- * helper's own pipeline is. These helpers are bounded foreground probes by contract; backgrounding
- * one (directly or via a piped stage) recreates the orphaned-wait defect under the wake-less
- * Claude harness.
- * ponytail: redirection stripping is a fixed set (`N>&M`, `&>`/`&>>`), not a full shell parse —
- * enough to tell a background `&` from a redirection `&`; the job split keys off the same set of
- * control operators the rest of this module uses.
- * @param {string} command @returns {boolean}
- */
-function commandBackgroundsWaitProbe(command) {
-  const withoutRedir = command
-    .replace(/\d*>&\d*-?/g, " ") // 2>&1, 1>&2, >&2, >&-
-    .replace(/&>>?/g, " "); // &>file, &>>file
-  // Tokenize into jobs + the control operator following each; `&&` is matched before a lone `&`.
-  const parts = withoutRedir.split(/(&&|\|\||;|\||&|\n|\r)/);
-  let pipelineStages = [];
-  for (let i = 0; i < parts.length; i += 2) {
-    // parts[i] is a job; parts[i+1] is the operator terminating it (undefined at end-of-string).
-    pipelineStages.push(parts[i]);
-    const op = parts[i + 1];
-    if (op === "|") continue; // still inside the same pipeline; accumulate the next stage
-    // A lone `&` operator backgrounds the WHOLE accumulated pipeline — check every stage head.
-    if (op === "&" && pipelineStages.some((stage) => jobHeadInvokesWaitProbe(stage))) return true;
-    pipelineStages = [];
-  }
-  return false;
-}
-
 /**
  * Whether COMMAND is (or contains) a sleep-poll loop over `gh`/`loop-state` — a `while`/`until`/
  * `for` loop whose body contains both a `sleep` and a `gh` or `loop-state` call. Checked on the
  * WHOLE command (not per-segment): the loop body is `;`-delimited, so a per-segment split would
  * separate the loop head from its `sleep`/`gh` body calls and miss the pattern. `gh` must be a
  * standalone token (not `grep gh-notes`), and `loop-state` must sit at a command-head position
- * (not a substring inside `grep loop-state x`). Shared by `commandContainsDetachedWaitTool` (the
- * PreToolUse gate, over the shell text about to run) and `commandInvokesWaitProbeHelper` (the
- * SubagentStop reaper's ownership signature, over a live process's `ps` command line).
+ * (not a substring inside `grep loop-state x`).
  * @param {string} command @returns {boolean}
  */
 export function commandIsSleepPollLoop(command) {
@@ -953,26 +820,65 @@ export function commandIsSleepPollLoop(command) {
 }
 
 /**
- * Whether COMMAND itself IS an invocation of a Copilot/CI wait/probe helper — the reusable
- * signature the SubagentStop reaper (`discoverOwnBackgroundShells`) uses to decide which
- * process-group leader it may own and reap: a `jobHeadInvokesWaitProbe` match (a `.mjs` helper,
- * `gh run watch`, `dev-loops`/`dev-loops-run` watch-cycle/probe-copilot) OR a sleep-poll loop
- * (`commandIsSleepPollLoop`). Unlike `commandContainsDetachedWaitTool`, this takes no `&`/backgrounding
- * operator into account — it classifies an already-running process's command line, not shell
- * syntax about to execute.
+ * Whether COMMAND contains a bare `&` backgrounding control operator — not `&&` (logical AND) and
+ * not a redirection (`2>&1`, `>&2`, `&>file`, `&>>file`). A coarse whole-string check (no shell
+ * parse): redirection forms are stripped first, then any surviving lone `&` (not immediately
+ * preceded or followed by another `&`) counts.
  * @param {string} command @returns {boolean}
  */
-export function commandInvokesWaitProbeHelper(command) {
-  return jobHeadInvokesWaitProbe(command) || commandIsSleepPollLoop(command);
+function commandHasBareBackgroundOperator(command) {
+  const withoutRedir = command
+    .replace(/\d*>&\d*-?/g, " ") // 2>&1, 1>&2, >&2, >&-
+    .replace(/&>>?/g, " "); // &>file, &>>file
+  return /(?<!&)&(?!&)/.test(withoutRedir);
 }
 
 /**
- * COPILOT-FOLLOWUP-WAIT-TOOLS: a banned detached/polling wait — `nohup`, `disown`, `tmux new-session`,
- * `screen -dm`, a `while`/`until`/`for` loop whose body contains both a `sleep` and a gh or
- * loop-state call, OR a bare-`&` backgrounded wait/probe helper. Actor-independent at the
- * decideBashGate call site: the coordinator/main agent is the actor that leaves these orphaned
- * under Claude Code, so the gate catches its backgrounding too, not only a subagent's — the
- * sanctioned wait is always the bounded FOREGROUND probe.
+ * The wait/probe helper FAMILY: the Copilot/CI wait tools that MUST run as a bounded FOREGROUND
+ * probe — the `.mjs` helpers (`probe-copilot-review`, `wait-pr-checks`, `detect-copilot-loop-state`,
+ * `run-watch-cycle`), `gh run watch`, and the `dev-loops`/`dev-loops-run` `watch-cycle`/`watch-ci`/
+ * `watch-initial`/`gate probe-copilot` CLI verbs. A coarse ANYWHERE-in-the-string substring/family
+ * match (deliberately NOT exec-position anchored) — see `commandContainsDetachedWaitTool`'s JSDoc
+ * for the fail-closed rationale.
+ */
+const WAIT_PROBE_FAMILY_RE = new RegExp(
+  [
+    "probe-copilot-review\\.mjs",
+    "wait-pr-checks\\.mjs",
+    "detect-copilot-loop-state\\.mjs",
+    "run-watch-cycle\\.mjs",
+    "gh\\s+run\\s+watch",
+    "watch-cycle",
+    "watch-ci",
+    "watch-initial",
+    "probe-copilot",
+  ].join("|"),
+  "i",
+);
+
+/**
+ * COPILOT-FOLLOWUP-WAIT-TOOLS: a banned detached/polling wait. COARSE + FAIL-CLOSED BY DESIGN
+ * (#2065 OPTION-C, prevention-only scope): this denies whenever the command BOTH
+ *   (a) backgrounds/detaches/polls — a bare `&` control operator (`commandHasBareBackgroundOperator`),
+ *       `nohup`/`disown`/`tmux new-session`/`screen -dm`, OR a sleep-poll loop
+ *       (`commandIsSleepPollLoop`, which denies outright — it IS the backgrounding signal), AND
+ *   (b) references the wait/probe FAMILY anywhere in the command string (`WAIT_PROBE_FAMILY_RE`) —
+ *       a coarse substring/family match, deliberately NOT exec-position anchored.
+ *
+ * Because the family match is coarse (anywhere in the string, not the executed token), NO wrapper
+ * can hide the reference from it: `timeout N … &`, `env … &`, `nohup …`, `sh -c '… &'`, or a node
+ * loader flag (`node -r ./loader.mjs …/probe-copilot-review.mjs &`, `--require`/`--loader`/
+ * `--import`) all still carry the family token in the backgrounded command text, so all are denied.
+ * This trades precision for guaranteed coverage: a background command that merely MENTIONS a
+ * family name as an unrelated argument (`echo "see probe-copilot-review.mjs" &`) is also denied —
+ * a benign false positive, sanctioned by the issue's non-goals (this is a prevention gate, not an
+ * exec-position parser; a denied benign command simply falls back to the sanctioned foreground
+ * path). The precise exec-position parser this replaced (and the SubagentStop background-shell
+ * reaper it fed) is deferred to the follow-up safety-net issue (#2296).
+ *
+ * Actor-independent at the decideBashGate call site: the coordinator/main agent — not only a
+ * subagent — is the actor that leaves these orphaned under Claude Code (no async wake to join a
+ * backgrounded wait), so the gate catches its backgrounding too.
  * @param {string} command @returns {boolean}
  */
 export function commandContainsDetachedWaitTool(command) {
@@ -980,18 +886,20 @@ export function commandContainsDetachedWaitTool(command) {
   if (commandIsSleepPollLoop(whole)) {
     return true;
   }
-  // A wait/probe helper launched with a bare `&` — the orphaned-background-shell form.
-  if (commandBackgroundsWaitProbe(whole)) {
-    return true;
-  }
-  return shellSegments(command).some((segment) => {
-    // `nohup`/`disown` only detach when they head a command (segment start, or right after a shell
-    // operator) — a bare mention (`cat nohup.out`, `echo "nohup banned"`) is not a detach.
-    if (/(?:^|[;&|])\s*(?:nohup|disown)\b/.test(segment)) return true;
-    if (/^tmux\s+new-session\b/i.test(segment)) return true;
-    if (/^screen\s+-dm/i.test(segment)) return true;
+  const detaches =
+    commandHasBareBackgroundOperator(whole) ||
+    shellSegments(command).some((segment) => {
+      // `nohup`/`disown` only detach when they head a command (segment start, or right after a
+      // shell operator) — a bare mention (`cat nohup.out`, `echo "nohup banned"`) is not a detach.
+      if (/(?:^|[;&|])\s*(?:nohup|disown)\b/.test(segment)) return true;
+      if (/^tmux\s+new-session\b/i.test(segment)) return true;
+      if (/^screen\s+-dm/i.test(segment)) return true;
+      return false;
+    });
+  if (!detaches) {
     return false;
-  });
+  }
+  return WAIT_PROBE_FAMILY_RE.test(whole);
 }
 
 /** Build a `node`/`python`/`python3` command-head matcher (env/wrapper/path prefix tolerated). */

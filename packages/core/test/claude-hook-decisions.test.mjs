@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 
-import { decideBashGate, decideWriteGuard, decideSubagentStopGuard, decideSubagentStopReap, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV } from "../src/claude/hook-decisions.mjs";
+import { decideBashGate, decideWriteGuard, decideSubagentStopGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV } from "../src/claude/hook-decisions.mjs";
 
 const TARGET = "mfittko/dev-loops";
 
@@ -786,18 +786,21 @@ test("decideBashGate denies Copilot review-request bypasses naming COPILOT-FOLLO
 // null) is the actor that leaves backgrounded poll loops / bare-`&` probe shells orphaned under
 // Claude Code, so the gate denies its backgrounding too, not only a subagent's.
 test("decideBashGate denies detached wait tools for BOTH the coordinator and a subagent (COPILOT-FOLLOWUP-WAIT-TOOLS, #2065)", () => {
-  const sub = decideBashGate({ command: "nohup node scripts/foo.mjs > /tmp/x.log 2>&1 &", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: "dev-loop" });
+  // COARSE + FAIL-CLOSED (#2065 OPTION-C): a detach mechanism (here nohup) denies only paired with
+  // a wait/probe FAMILY reference — the command below names `probe-copilot-review.mjs`.
+  const detached = "nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 &";
+  const sub = decideBashGate({ command: detached, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: "dev-loop" });
   assert.equal(sub.decision, "deny");
   assert.match(sub.reason, /COPILOT-FOLLOWUP-WAIT-TOOLS/);
   // coordinator/main agent (no agent_type) is NO LONGER exempt (#2065)
-  const main = decideBashGate({ command: "nohup node scripts/foo.mjs > /tmp/x.log 2>&1 &", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null });
+  const main = decideBashGate({ command: detached, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null });
   assert.equal(main.decision, "deny");
   assert.match(main.reason, /COPILOT-FOLLOWUP-WAIT-TOOLS/);
   // off-target passes through (both actors)
-  assert.equal(decideBashGate({ command: "nohup node scripts/foo.mjs &", repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET, agentType: "dev-loop" }).decision, "allow");
-  assert.equal(decideBashGate({ command: "nohup node scripts/foo.mjs &", repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET, agentType: null }).decision, "allow");
+  assert.equal(decideBashGate({ command: detached, repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET, agentType: "dev-loop" }).decision, "allow");
+  assert.equal(decideBashGate({ command: detached, repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET, agentType: null }).decision, "allow");
   // the refusal body names the bounded FOREGROUND probe path and the banned detach forms, uncorrupted
-  const reason = decideBashGate({ command: "nohup node scripts/foo.mjs &", repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null }).reason;
+  const reason = decideBashGate({ command: detached, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null }).reason;
   assert.match(reason, /gh run watch/);
   assert.match(reason, /nohup\/disown\/tmux\/screen/);
   assert.match(reason, /probe-copilot-review\.mjs/);
@@ -836,6 +839,39 @@ test("decideBashGate denies a backgrounded probe even when paired with a lifecyc
   const d2 = decideBashGate({ command: withReady, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: "dev-loop" });
   assert.equal(d2.decision, "deny");
   assert.match(d2.reason, /COPILOT-FOLLOWUP-WAIT-TOOLS/);
+});
+
+// #2065 AC2/AC3 (OPTION-C, prevention-only): the coarse fail-closed classifier denies a
+// backgrounded wait/probe command through every wrapper form below — none can hide the
+// wait/probe FAMILY reference from the coarse whole-string scan — for BOTH a main/coordinator
+// invocation (no agent_type) AND a subagent invocation. A sleep-poll wait loop is denied
+// outright (AC3: fails closed on an ambiguous/wrapped wait command rather than allowing it).
+test("decideBashGate denies every wrapper form of a backgrounded wait/probe, for coordinator AND subagent (#2065 AC2/AC3)", () => {
+  const commands = [
+    // bare backgrounded probe
+    "node scripts/github/probe-copilot-review.mjs --repo mfittko/dev-loops --pr 5 &",
+    // timeout-wrapped
+    "timeout 600 node scripts/github/probe-copilot-review.mjs --repo mfittko/dev-loops --pr 5 &",
+    // nohup-wrapped
+    "nohup node scripts/github/probe-copilot-review.mjs --repo mfittko/dev-loops --pr 5 &",
+    // sh -c wrapped (a naive exec-position parser cannot see inside the quoted subshell)
+    "sh -c 'node scripts/github/probe-copilot-review.mjs --repo mfittko/dev-loops --pr 5 &'",
+    // a value-taking node loader flag ahead of the script path
+    "node --require ./loader.mjs scripts/github/probe-copilot-review.mjs --repo mfittko/dev-loops --pr 5 &",
+    // ambiguous/wrapped sleep-poll wait loop (AC3: fails closed rather than allowing it)
+    "timeout 600 sh -c 'until gh pr view 5 --json state; do sleep 5; done'",
+  ];
+  for (const command of commands) {
+    for (const agentType of [null, "dev-loop"]) {
+      const d = decideBashGate({ command, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType });
+      assert.equal(d.decision, "deny", `expected deny for agentType=${agentType}: ${command}`);
+      assert.match(d.reason, /COPILOT-FOLLOWUP-WAIT-TOOLS/);
+    }
+  }
+  // the sanctioned bounded FOREGROUND probe (no backgrounding) remains allowed for both actors
+  const fg = "node scripts/github/probe-copilot-review.mjs --repo mfittko/dev-loops --pr 5 --timeout-ms 0";
+  assert.equal(decideBashGate({ command: fg, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: null }).decision, "allow");
+  assert.equal(decideBashGate({ command: fg, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType: "dev-loop" }).decision, "allow");
 });
 
 test("decideBashGate gates relative-endpoint gh api writes to the target repo", () => {
@@ -932,7 +968,9 @@ test("decideBashGate denies git stash in a non-mfittko managed repo", () => {
 });
 
 test("decideBashGate denies a detached wait tool from the dev-loop agent in a non-mfittko managed repo", () => {
-  const d = decideBashGate({ command: "nohup sleep 1 &", ...CONSUMER_CTX, agentType: "dev-loop" });
+  // COARSE + FAIL-CLOSED (#2065 OPTION-C): a bare backgrounded wait/probe family reference denies
+  // outright — no detach mechanism (nohup) is even needed once the command carries the family token.
+  const d = decideBashGate({ command: "node scripts/github/probe-copilot-review.mjs --pr 1 &", ...CONSUMER_CTX, agentType: "dev-loop" });
   assert.equal(d.decision, "deny");
   assert.match(d.reason, /COPILOT-FOLLOWUP-WAIT-TOOLS/);
 });
@@ -1079,42 +1117,4 @@ test("decideWorktreeCheckoutGuard allows an outside-repo / gitignored scratch wr
 
 test("WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV reuses the default-branch-guard override (one operator flag)", () => {
   assert.equal(WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV, "DEVLOOPS_ALLOW_MAIN");
-});
-
-// ---------------------------------------------------------------------------
-// decideSubagentStopReap (#2065) — the SubagentStop background-shell reaper's pure core.
-// ---------------------------------------------------------------------------
-
-test("decideSubagentStopReap reaps the agent's own background shells (POSIX)", () => {
-  const d = decideSubagentStopReap({ platform: "linux", backgroundPids: [4242, 4243], selfPid: 999 });
-  assert.equal(d.decision, "reap");
-  assert.deepEqual(d.pids, [4242, 4243]);
-  assert.match(d.reason, /SUBAGENT-STOP-REAP/);
-});
-
-test("decideSubagentStopReap is a no-op when there is nothing to reap", () => {
-  const d = decideSubagentStopReap({ platform: "linux", backgroundPids: [], selfPid: 999 });
-  assert.equal(d.decision, "noop");
-  assert.deepEqual(d.pids, []);
-  // a non-array candidate set is treated as empty (fail-safe)
-  assert.equal(decideSubagentStopReap({ platform: "linux", backgroundPids: null }).decision, "noop");
-});
-
-test("decideSubagentStopReap fails closed on win32 (unsupported platform) — no reap", () => {
-  const d = decideSubagentStopReap({ platform: "win32", backgroundPids: [4242, 4243], selfPid: 999 });
-  assert.equal(d.decision, "skip");
-  assert.deepEqual(d.pids, []);
-  assert.match(d.reason, /win32/);
-});
-
-test("decideSubagentStopReap never reaps itself, an ancestor, or a non-positive-integer pid", () => {
-  const d = decideSubagentStopReap({
-    platform: "darwin",
-    // includes: self, an ancestor/session pid, pid 0 (own group), 1 (init), negative, NaN, a float, a dup
-    backgroundPids: [999, 500, 0, 1, -7, Number.NaN, 42.5, 4242, 4242, 4243],
-    selfPid: 999,
-    protectedPids: [500],
-  });
-  assert.equal(d.decision, "reap");
-  assert.deepEqual(d.pids, [4242, 4243], "only valid, own, deduped, non-protected pids are reaped");
 });
