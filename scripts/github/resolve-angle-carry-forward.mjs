@@ -39,7 +39,7 @@ import { baseAngleName } from "@dev-loops/core/loop/gate-fanin";
 
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
-import { captureChangedFilesBetween, runGitCommand } from "../lib/git-delta.mjs";
+import { captureMainRelativeChangedFilesSince, runGitCommand } from "../lib/git-delta.mjs";
 export { runGitCommand } from "../lib/git-delta.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -176,14 +176,19 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
  * @param {object} input
  * @param {object|null} input.log — the prior findings-log JSON (verdict must be
  *   "clean" or "findings_present")
- * @param {string[]} input.changedFiles — delta A..B changed files
+ * @param {string[]} input.changedFiles — the MAIN-RELATIVE incremental delta
+ *   (files changed since head A whose head-B content is genuinely PR-own), NOT
+ *   the raw two-dot A..B delta.
  * @param {Iterable<string>} [input.alwaysRerun] — angles that must NEVER carry
  *   forward regardless of the delta (the gate's configured mandatory angles, plus
  *   the RENAME_ONLY-mapped angles when the delta contains any rename). Each
  *   resolves to an always-rerun surface so it lands in `mustRerun`, not `carried`.
+ * @param {boolean} [input.deltaComplete=false] — proof the main-relative reduction
+ *   ran, so an EMPTY delta carries every eligible angle (integrate-only base-move)
+ *   instead of failing closed. Threaded to {@link resolveAngleCarryForward}.
  * @returns {{ prevHead: string, carried: Array<{angle: string, carriedFromHead: string, reviewer?: string, dispatchId?: string, model?: string, prevVerdict: "clean"|"findings_present", findings: Array<object>, reason: string}>, mustRerun: Array<{angle: string, reason: string}> }}
  */
-export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [] }) {
+export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [], deltaComplete = false }) {
   if (!log || typeof log !== "object") {
     throw new Error("prior gate findings-log not found or unreadable — cannot carry forward (fail-closed)");
   }
@@ -302,7 +307,7 @@ export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [] }) {
     const priorFindings = priorFindingsByAngle.get(angle);
     const prevVerdict = priorFindings ? "findings_present" : "clean";
     const angleSurface = angleReviewSurface(angle, { alwaysRerun });
-    const decision = resolveAngleCarryForward({ angle, angleSurface, changedFiles, prevVerdict });
+    const decision = resolveAngleCarryForward({ angle, angleSurface, changedFiles, prevVerdict, deltaComplete });
     if (decision.carryForward) {
       carried.push({
         angle,
@@ -388,12 +393,21 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // head would compute every decision against the wrong head; abort before
     // capturing the delta so no mislabeled plan is emitted.
     await assertWorktreeAtHeadAsync(options.headSha, { repoRoot, runGit });
-    const { changedFiles, hasRename } = await captureChangedFilesBetween({ base: options.prevHead, repoRoot, runGit });
+    // MAIN-RELATIVE incremental delta: files changed since the prior reviewed
+    // head (prev-head..HEAD) MINUS files already on origin/main at HEAD. A
+    // base-move re-gate that only integrates already-merged main commits then
+    // contributes NO touched surface, so every eligible angle (and Copilot
+    // convergence) carries forward instead of deadlocking against the round cap.
+    // `reduced` is true only when the origin/main-relative exclusion actually
+    // ran; it becomes `deltaComplete` below so an EMPTY reduced delta carries
+    // (proven "nothing PR-own changed") while an unreduced/unavailable delta
+    // still fails closed.
+    const { changedFiles, hasRename, reduced } = await captureMainRelativeChangedFilesSince({ base: options.prevHead, mainRef: "origin/main", repoRoot, runGit });
     // A rename anywhere in the delta forces the RENAME_ONLY-mapped angles to
     // re-run: parseChangedFiles keeps only a rename's destination path, so
     // classifying that path alone misses what the rename itself implicates.
     const alwaysRerun = [...mandatoryAngles, ...(hasRename ? RENAME_ONLY_ANGLES : [])];
-    const rawPlan = buildCarryForwardPlan({ log, changedFiles, alwaysRerun });
+    const rawPlan = buildCarryForwardPlan({ log, changedFiles, alwaysRerun, deltaComplete: reduced });
     // AC1 (ADR 0061): optional --spec-authority stamps the pinned revision
     // identity onto the plan via the ONE shared helper. Pure no-op when absent.
     // Resolved against `repoRoot` (default process.cwd()) — matching every
@@ -403,7 +417,7 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       parseError,
     );
     const plan = stampOptionalSpecAuthority(rawPlan, specAuthorityIdentity);
-    const copilotConvergence = resolveConvergenceCarryForward({ changedFiles });
+    const copilotConvergence = resolveConvergenceCarryForward({ changedFiles, deltaComplete: reduced });
     const result = {
       ok: true,
       repo: options.repo,

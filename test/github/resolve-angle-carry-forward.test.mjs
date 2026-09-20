@@ -409,6 +409,68 @@ test("CLI re-runs code angles on a DIVERGENT advance where the file equals the m
   }
 });
 
+test("CLI carries code angles + Copilot convergence across an integrate-only base-move (#2292)", async () => {
+  // Base-move re-gate: the PR (reviewed at prevHead touching docs only) merges
+  // origin/main, which advanced another PR's src/other.mjs=v2. The merged-main
+  // file must NOT force the code angles to re-run — every eligible angle and the
+  // Copilot convergence carry forward, breaking the round-cap deadlock.
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "carry-forward-basemove-"));
+  try {
+    git(repoRoot, ["init", "-q", "-b", "main"]);
+    git(repoRoot, ["config", "user.email", "test@example.com"]);
+    git(repoRoot, ["config", "user.name", "Test"]);
+    await writeFile(path.join(repoRoot, ".devloops.yaml"), "version: 1\ngates:\n  draft: {}\n", "utf8");
+    await mkdir(path.join(repoRoot, "src"), { recursive: true });
+    await mkdir(path.join(repoRoot, "docs"), { recursive: true });
+    await writeFile(path.join(repoRoot, "src/foo.mjs"), "export const foo = 1;\n", "utf8");
+    await writeFile(path.join(repoRoot, "src/other.mjs"), "export const other = 1;\n", "utf8");
+    await writeFile(path.join(repoRoot, "docs/guide.md"), "# Guide\n", "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "fork"]);
+    const fork = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+
+    // PR branch reviewed at prevHead: edits docs/guide.md only.
+    git(repoRoot, ["checkout", "-q", "-b", "pr", fork]);
+    await writeFile(path.join(repoRoot, "docs/guide.md"), "# Guide\n\nPR edit.\n", "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "PR round 1 (reviewed)"]);
+    const prevHead = git(repoRoot, ["rev-parse", "HEAD"]).trim().toLowerCase();
+
+    // main advances src/other.mjs=v2 (a file the PR never touched).
+    git(repoRoot, ["checkout", "-q", "main"]);
+    await writeFile(path.join(repoRoot, "src/other.mjs"), "export const other = 2;\n", "utf8");
+    git(repoRoot, ["add", "-A"]);
+    git(repoRoot, ["commit", "-q", "-m", "other PR merged to main"]);
+    git(repoRoot, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+
+    // Base-move: PR merges origin/main (clean, disjoint files).
+    git(repoRoot, ["checkout", "-q", "pr"]);
+    git(repoRoot, ["merge", "-q", "--no-edit", "origin/main"]);
+    const headSha = git(repoRoot, ["rev-parse", "HEAD"]).trim().toLowerCase();
+
+    const perAngle = [
+      { angle: "correctness", reviewer: "review-a" },
+      { angle: "coverage", reviewer: "review-b" },
+    ];
+    const logPath = path.join(repoRoot, buildLogPath({ repo: "o/n", pr: 7, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(logPath), { recursive: true });
+    await writeFile(logPath, JSON.stringify({ headSha: prevHead, verdict: "clean", provenance: { distinctReviewers: perAngle.length, perAngle } }), "utf8");
+
+    const result = await runMain([
+      "--repo", "o/n", "--pr", "7", "--gate", "draft_gate", "--prev-head", prevHead, "--head-sha", headSha,
+    ], { repoRoot });
+    assert.equal(result.ok, true);
+    // The already-merged main file is excluded from the delta basis entirely.
+    assert.deepEqual(result.deltaChangedFiles, [], "integrate-only base-move contributes no PR-own surface");
+    const carried = result.carried.map((c) => c.angle).sort();
+    assert.deepEqual(carried, ["correctness", "coverage"], "both code angles carry (no re-review of already-merged main code)");
+    assert.equal(result.mustRerun.length, 0, "nothing must re-run on an integrate-only base-move");
+    assert.equal(result.copilotConvergence.carryForward, true, "Copilot convergence carries across the base-move");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("CLI fails closed when --head-sha does not match the worktree HEAD (wrong worktree)", async () => {
   const { repoRoot, prevHead } = await makeCarryForwardRepo({
     mandatoryAngles: [],
