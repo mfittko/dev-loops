@@ -542,13 +542,14 @@ test("commandContainsCopilotSummonComment detects bare /copilot summons in gh pr
 });
 
 test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () => {
-  // COARSE + FAIL-CLOSED (#2065 OPTION-C): a detach mechanism (nohup/disown/tmux/screen) now also
-  // requires a wait/probe FAMILY reference — this rule bars detaching the wait/probe specifically
-  // (its own name is COPILOT-FOLLOWUP-WAIT-TOOLS), not detaching an arbitrary unrelated command.
-  assert.equal(commandContainsDetachedWaitTool("nohup node scripts/foo.mjs > /tmp/x.log 2>&1 &"), false);
-  assert.equal(commandContainsDetachedWaitTool("disown"), false);
-  assert.equal(commandContainsDetachedWaitTool("tmux new-session -d -s loop"), false);
-  assert.equal(commandContainsDetachedWaitTool("screen -dmS loop"), false);
+  // #1622: a detach mechanism (nohup/disown/tmux/screen) is denied UNCONDITIONALLY — no wait/probe
+  // FAMILY reference required. #2065 OPTION-C's coarse AND-condition had inadvertently narrowed
+  // this to "detach AND family reference"; restored to the pre-#2065 unconditional ban (regression
+  // guard, main/coordinator context — subagent context is covered separately below).
+  assert.equal(commandContainsDetachedWaitTool("nohup node scripts/foo.mjs > /tmp/x.log 2>&1 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("disown"), true);
+  assert.equal(commandContainsDetachedWaitTool("tmux new-session -d -s loop"), true);
+  assert.equal(commandContainsDetachedWaitTool("screen -dmS loop"), true);
   // paired with a wait/probe family reference, the same detach mechanisms still deny.
   assert.equal(commandContainsDetachedWaitTool("nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1"), true);
   assert.equal(commandContainsDetachedWaitTool("tmux new-session -d -s loop 'node scripts/github/wait-pr-checks.mjs --pr 5'"), true);

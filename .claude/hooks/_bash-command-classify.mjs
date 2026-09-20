@@ -858,24 +858,31 @@ const WAIT_PROBE_FAMILY_RE = new RegExp(
 );
 
 /**
- * COPILOT-FOLLOWUP-WAIT-TOOLS: a banned detached/polling wait. COARSE + FAIL-CLOSED BY DESIGN
- * (#2065 OPTION-C, prevention-only scope): this denies whenever the command BOTH
- *   (a) backgrounds/detaches/polls — a bare `&` control operator (`commandHasBareBackgroundOperator`),
- *       `nohup`/`disown`/`tmux new-session`/`screen -dm`, OR a sleep-poll loop
- *       (`commandIsSleepPollLoop`, which denies outright — it IS the backgrounding signal), AND
- *   (b) references the wait/probe FAMILY anywhere in the command string (`WAIT_PROBE_FAMILY_RE`) —
- *       a coarse substring/family match, deliberately NOT exec-position anchored.
+ * COPILOT-FOLLOWUP-WAIT-TOOLS: a banned detached/polling wait. This is a UNION of three
+ * independent deny conditions — NOT one big AND (#2065 OPTION-C originally folded the
+ * detach-wrapper signal into an AND with the wait/probe family reference below, which
+ * inadvertently NARROWED the pre-existing #1622 unconditional detach ban: a family-less
+ * `nohup node scripts/foo.mjs &` was wrongly allowed; restored to a union here):
  *
- * Because the family match is coarse (anywhere in the string, not the executed token), NO wrapper
- * can hide the reference from it: `timeout N … &`, `env … &`, `nohup …`, `sh -c '… &'`, or a node
- * loader flag (`node -r ./loader.mjs …/probe-copilot-review.mjs &`, `--require`/`--loader`/
- * `--import`) all still carry the family token in the backgrounded command text, so all are denied.
- * This trades precision for guaranteed coverage: a background command that merely MENTIONS a
- * family name as an unrelated argument (`echo "see probe-copilot-review.mjs" &`) is also denied —
- * a benign false positive, sanctioned by the issue's non-goals (this is a prevention gate, not an
- * exec-position parser; a denied benign command simply falls back to the sanctioned foreground
- * path). The precise exec-position parser this replaced (and the SubagentStop background-shell
- * reaper it fed) is deferred to the follow-up safety-net issue (#2296).
+ *   (1) #1622: `nohup`/`disown`/`tmux new-session`/`screen -dm` anywhere in a command segment —
+ *       denied UNCONDITIONALLY, with NO wait/probe-family requirement.
+ *   (2) A `while`/`until`/`for` sleep-poll loop over `gh`/`loop-state` (`commandIsSleepPollLoop`) —
+ *       denied UNCONDITIONALLY — it IS the backgrounding signal.
+ *   (3) #2065 OPTION-C, prevention-only scope: a bare `&` background (`commandHasBareBackgroundOperator`,
+ *       including a `timeout …`/`env …`/`sh -c` wrapper of it) that ALSO references the wait/probe
+ *       FAMILY anywhere in the command string (`WAIT_PROBE_FAMILY_RE`) — a coarse substring/family
+ *       match, deliberately NOT exec-position anchored.
+ *
+ * Because (3)'s family match is coarse (anywhere in the string, not the executed token), NO wrapper
+ * can hide the reference from it: `timeout N … &`, `env … &`, `sh -c '… &'`, or a node loader flag
+ * (`node -r ./loader.mjs …/probe-copilot-review.mjs &`, `--require`/`--loader`/`--import`) all still
+ * carry the family token in the backgrounded command text, so all are denied. This trades precision
+ * for guaranteed coverage: a background command that merely MENTIONS a family name as an unrelated
+ * argument (`echo "see probe-copilot-review.mjs" &`) is also denied — a benign false positive,
+ * sanctioned by the issue's non-goals (this is a prevention gate, not an exec-position parser; a
+ * denied benign command simply falls back to the sanctioned foreground path). The precise
+ * exec-position parser this replaced (and the SubagentStop background-shell reaper it fed) is
+ * deferred to the follow-up safety-net issue (#2296).
  *
  * Actor-independent at the decideBashGate call site: the coordinator/main agent — not only a
  * subagent — is the actor that leaves these orphaned under Claude Code (no async wake to join a
@@ -884,20 +891,27 @@ const WAIT_PROBE_FAMILY_RE = new RegExp(
  */
 export function commandContainsDetachedWaitTool(command) {
   const whole = command.trim();
+
+  // (1) #1622: unconditional detach-wrapper ban — no wait/probe-family requirement.
+  const hasDetachWrapper = shellSegments(command).some((segment) => {
+    // `nohup`/`disown` only detach when they head a command (segment start, or right after a
+    // shell operator) — a bare mention (`cat nohup.out`, `echo "nohup banned"`) is not a detach.
+    if (/(?:^|[;&|])\s*(?:nohup|disown)\b/.test(segment)) return true;
+    if (/^tmux\s+new-session\b/i.test(segment)) return true;
+    if (/^screen\s+-dm/i.test(segment)) return true;
+    return false;
+  });
+  if (hasDetachWrapper) {
+    return true;
+  }
+
+  // (2) Unconditional sleep-poll-loop ban.
   if (commandIsSleepPollLoop(whole)) {
     return true;
   }
-  const detaches =
-    commandHasBareBackgroundOperator(whole) ||
-    shellSegments(command).some((segment) => {
-      // `nohup`/`disown` only detach when they head a command (segment start, or right after a
-      // shell operator) — a bare mention (`cat nohup.out`, `echo "nohup banned"`) is not a detach.
-      if (/(?:^|[;&|])\s*(?:nohup|disown)\b/.test(segment)) return true;
-      if (/^tmux\s+new-session\b/i.test(segment)) return true;
-      if (/^screen\s+-dm/i.test(segment)) return true;
-      return false;
-    });
-  if (!detaches) {
+
+  // (3) #2065 OPTION-C: bare-`&` background AND a wait/probe family reference.
+  if (!commandHasBareBackgroundOperator(whole)) {
     return false;
   }
   return WAIT_PROBE_FAMILY_RE.test(whole);
