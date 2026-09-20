@@ -316,6 +316,15 @@
               "type": "integer",
               "minimum": 0
             },
+            "inlineSeverityFloor": {
+              "description": "Lowest defect severity still posted as an inline resolvable review thread. Valid values: \"medium\" (default), \"low\", \"nit\" — the floor can never be raised above \"medium\", so medium/high/question always post inline and only low/nit can ever fold. Findings BELOW this floor are folded into a collapsed <details> block in the verdict-marker body instead of posting inline (they create no gate-authored thread); this enforces the \"never suppress medium/high\" non-goal, keeping the folded-summary \"low/nit\" label accurate by construction. A \"question\" always posts inline regardless of this floor (it must keep its resolvable thread to block gate-close until answered). Lower it (e.g. \"low\" or \"nit\") to restore inline posting of lower severities.",
+              "type": "string",
+              "enum": [
+                "medium",
+                "low",
+                "nit"
+              ]
+            },
             "tiers": {
               "minItems": 1,
               "type": "array",
@@ -540,6 +549,15 @@
               "type": "integer",
               "minimum": 0
             },
+            "inlineSeverityFloor": {
+              "description": "Lowest defect severity still posted as an inline resolvable review thread. Valid values: \"medium\" (default), \"low\", \"nit\" — the floor can never be raised above \"medium\", so medium/high/question always post inline and only low/nit can ever fold. Findings BELOW this floor are folded into a collapsed <details> block in the verdict-marker body instead of posting inline (they create no gate-authored thread); this enforces the \"never suppress medium/high\" non-goal, keeping the folded-summary \"low/nit\" label accurate by construction. A \"question\" always posts inline regardless of this floor (it must keep its resolvable thread to block gate-close until answered). Lower it (e.g. \"low\" or \"nit\") to restore inline posting of lower severities.",
+              "type": "string",
+              "enum": [
+                "medium",
+                "low",
+                "nit"
+              ]
+            },
             "tiers": {
               "minItems": 1,
               "type": "array",
@@ -763,6 +781,15 @@
               "description": "Deprecated alias for mediumFixWindow (pre-rename key name); mediumFixWindow wins when both are set.",
               "type": "integer",
               "minimum": 0
+            },
+            "inlineSeverityFloor": {
+              "description": "Lowest defect severity still posted as an inline resolvable review thread. Valid values: \"medium\" (default), \"low\", \"nit\" — the floor can never be raised above \"medium\", so medium/high/question always post inline and only low/nit can ever fold. Findings BELOW this floor are folded into a collapsed <details> block in the verdict-marker body instead of posting inline (they create no gate-authored thread); this enforces the \"never suppress medium/high\" non-goal, keeping the folded-summary \"low/nit\" label accurate by construction. A \"question\" always posts inline regardless of this floor (it must keep its resolvable thread to block gate-close until answered). Lower it (e.g. \"low\" or \"nit\") to restore inline posting of lower severities.",
+              "type": "string",
+              "enum": [
+                "medium",
+                "low",
+                "nit"
+              ]
             },
             "tiers": {
               "minItems": 1,

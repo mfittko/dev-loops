@@ -5,7 +5,7 @@ name: Gate evidence
 # Rationale and design records:
 #   docs/decisions/0034-server-side-gate-evidence-required-check.md
 #   docs/decisions/0043-gate-evidence-verdict-comment-refire.md
-#   docs/decisions/0075-gate-evidence-reporter-split-always-settles-required-status.md
+#   docs/decisions/0076-gate-evidence-reporter-split-always-settles-required-status.md
 on:
   pull_request:
     types: [opened, reopened, ready_for_review]
@@ -26,7 +26,7 @@ jobs:
   # The compute-heavy DETECTOR: checks out the trusted default branch and runs
   # detect-checkpoint-evidence.mjs. Keeps job-level cancel-in-progress — its
   # waste-avoidance is worth keeping — but it no longer owns the required
-  # `gate-evidence` status (see docs/decisions/0075). It exposes its verdict as
+  # `gate-evidence` status (see docs/decisions/0076). It exposes its verdict as
   # a job output so the non-cancelling reporter job below can reuse it without
   # recomputing when it was not superseded.
   gate-evidence-runner:
@@ -54,7 +54,7 @@ jobs:
     # job `if` is evaluated, so a marker-skipped ordinary-comment run would
     # cancel a live eligible evaluation. A job-level group is only joined by
     # jobs that actually start. A cancelled detector run contributes no
-    # evidence_state output; the reporter job recomputes in that case (0075) —
+    # evidence_state output; the reporter job recomputes in that case (0076) —
     # this job no longer needs to itself guarantee a completed, status-posting
     # run at the final head.
     concurrency:
@@ -137,7 +137,7 @@ jobs:
       # directly) so a non-JSON line on either stream can never break parsing,
       # and both are still echoed for the same Actions-log visibility a plain
       # (uncaptured) run would have had. This job no longer POSTS a status
-      # (0075) — it only computes and exposes evidenceState as a job output;
+      # (0076) — it only computes and exposes evidenceState as a job output;
       # the reporter job below owns the required `gate-evidence` status.
       #
       # evaluated_head_sha (detect-checkpoint-evidence.mjs's OWN currentHeadSha,
@@ -169,7 +169,7 @@ jobs:
   # NON-cancelling group), so a burst of review/comment events can cancel
   # every detector run — including the last-triggered one — without leaving
   # the required check dangling: this job still runs for the final event and
-  # always posts a definitive state at the resolved head (docs/decisions/0075).
+  # always posts a definitive state at the resolved head (docs/decisions/0076).
   gate-evidence-reporter:
     needs: [gate-evidence-runner]
     # always(): runs whether the detector succeeded, failed, or was cancelled
@@ -296,7 +296,7 @@ jobs:
       # stale-PENDING-BLOCKED state. `not_established`/`violation`/a missing or
       # unparseable evidenceState all fail CLOSED to `failure`; only
       # `satisfied` maps to `success`. This job is NON-cancelling
-      # (docs/decisions/0075), so — unlike the old single-job design — there is
+      # (docs/decisions/0076), so — unlike the old single-job design — there is
       # no `!cancelled()` guard here.
       #
       # if: always() — a JOB running to completion does not mean every STEP in
@@ -305,14 +305,14 @@ jobs:
       # job fails (Resolve PR facts, checkout/setup-node/setup-bun/install, or
       # Recompute draft_gate/pre_approval_gate evidence) — reintroducing the
       # dangling required-status deadlock this reporter split exists to close
-      # (docs/decisions/0075). always() lets this step run on any upstream
+      # (docs/decisions/0076). always() lets this step run on any upstream
       # outcome, gated only by the resolved draft flag; a failed recompute
       # leaves evidence_state/evaluated_head_sha empty, which the mapping and
       # fallback below already resolve to a fail-closed `failure` posted to
       # the reporter's own resolved head. The one case this deliberately does
       # NOT cover is Resolve PR facts itself failing before setting `draft` —
       # that leaves the guard false and nothing posted, the pre-existing
-      # accepted residual documented in docs/decisions/0043 and 0075.
+      # accepted residual documented in docs/decisions/0043 and 0076.
       #
       # Head-pairing: the REUSE path (recompute == false) posts evidence_state
       # computed by the detector's OWN detect-checkpoint-evidence.mjs run, so

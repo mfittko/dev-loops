@@ -23,7 +23,7 @@ export const LOOP_DERIVED_CI_CHECK_NAME = "gate-evidence";
  * The same workflow ALSO surfaces as check runs under its two job ids
  * (`gate-evidence-runner`, the compute-heavy detector, and
  * `gate-evidence-reporter`, the always-settling job that owns the status
- * above — see docs/decisions/0075) beside the commit status named above, and
+ * above — see docs/decisions/0076) beside the commit status named above, and
  * all are the loop's own derived signal. Excluding only the status context
  * left either job's conclusion gating the loop's own pre_approval step: once
  * the workflow gained job-level concurrency, a superseded run is cancelled as

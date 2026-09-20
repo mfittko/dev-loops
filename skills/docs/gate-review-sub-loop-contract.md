@@ -1397,6 +1397,15 @@ genuine verdict header — a historical standalone findings review, a historical
 (`dev-loops:gate-findings gate=`, `GATE-COMMENT-IDENTITY-DISJOINT`) — stays excluded and can
 never win the newest-gate-marker tie-break over a real verdict.
 
+(#2263) `GATE-COMMENT-INLINE-SEVERITY-FLOOR` (owned by
+[Checkpoint Verdict Comment Contract](./gate-review-comment-contract.md)) applies BEFORE the
+locatability split above: a finding ranked below the gate's `inlineSeverityFloor` (default
+`medium`, so `low`/`nit` by default) never reaches either the inline or body-filed track — it
+folds into the verdict body's own collapsed `<details>` section instead, regardless of
+locatability, carrying the same fingerprint+`disposition=deferred` marker shape a body-filed
+finding carries. A folded finding creates NO review thread, so it never enters
+`unresolvedGateThreadCount` below.
+
 Before posting, a candidate finding is dropped when its fingerprint already matches an
 OWN-AUTHORED (the authenticated `gh` viewer's own login) existing thread or review body on the
 PR, resolved threads included — a foreign review/thread quoting or forging the same marker shape
@@ -1580,6 +1589,19 @@ disposition pass or the judge defer path (a locatable thread stamped `dispositio
 body-filed non-locatable case is the one disclosed exception (#1807 known limitation): it is
 stamped and body-filed durably (the first two places) but does not itself create the tracked
 issue, because that render-time call site has no GitHub I/O.
+
+A FOLDED finding (#2263, `GATE-COMMENT-INLINE-SEVERITY-FLOOR`) is NOT this disclosed exception: it
+gets its own filing pass. `close-gate-findings.mjs` recomputes the round's folded findings directly
+from the ledger (they carry no thread to select a disposition target from) and applies the exact
+same net-reduction filing bar (`isFileableDeferral`) the thread pass uses — an operator-visible
+`low` (its own marker's `ov=1`) is filed to the PR's ONE tracked follow-up issue, deduped by
+fingerprint against that issue's existing body+comments so a re-run never double-files; a `nit` or
+a non-operator-visible `low` files nothing, on the theory that it is already recorded, visible, in
+the folded `<details>` block itself — that IS its resolved-with-rationale record. Both passes
+share the SAME follow-up issue (the thread pass's `followUpIssueNumber`, when it filed one this
+round, is threaded into the folded pass as its `existingIssueNumber`) — never two issues for one
+PR/round.
+
 The posted surface and the ledger both carry the finding marker's optional `disposition=deferred`
 field (`<!-- dev-loops:finding <fp16> severity=<s> angle=<a> round=<n>[ ov=1][ disposition=deferred][ issue=<n>] -->`
 — `ov=1` is the #1846 operator-visibility signal, present only when the finding's own producer set

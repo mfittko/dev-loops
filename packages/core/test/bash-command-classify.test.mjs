@@ -542,10 +542,17 @@ test("commandContainsCopilotSummonComment detects bare /copilot summons in gh pr
 });
 
 test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () => {
+  // #1622: a detach mechanism (nohup/disown/tmux/screen) is denied UNCONDITIONALLY — no wait/probe
+  // FAMILY reference required. #2065 OPTION-C's coarse AND-condition had inadvertently narrowed
+  // this to "detach AND family reference"; restored to the pre-#2065 unconditional ban (regression
+  // guard, main/coordinator context — subagent context is covered separately below).
   assert.equal(commandContainsDetachedWaitTool("nohup node scripts/foo.mjs > /tmp/x.log 2>&1 &"), true);
   assert.equal(commandContainsDetachedWaitTool("disown"), true);
   assert.equal(commandContainsDetachedWaitTool("tmux new-session -d -s loop"), true);
   assert.equal(commandContainsDetachedWaitTool("screen -dmS loop"), true);
+  // paired with a wait/probe family reference, the same detach mechanisms still deny.
+  assert.equal(commandContainsDetachedWaitTool("nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1"), true);
+  assert.equal(commandContainsDetachedWaitTool("tmux new-session -d -s loop 'node scripts/github/wait-pr-checks.mjs --pr 5'"), true);
   assert.equal(commandContainsDetachedWaitTool("while ! gh pr view 1 --json state --jq .state; do sleep 5; done"), true);
   assert.equal(commandContainsDetachedWaitTool("npm test"), false);
   assert.equal(commandContainsDetachedWaitTool("gh pr view 1"), false);
@@ -568,6 +575,95 @@ test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () =
   // loop-state must be a command-head CALL, not a substring of a grep/echo target
   assert.equal(commandContainsDetachedWaitTool("for i in $(seq 1 3); do sleep 1; grep loop-state x; done"), false);
   assert.equal(commandContainsDetachedWaitTool("while true; do sleep 1; loop-state status; done"), true);
+});
+
+test("commandContainsDetachedWaitTool detects bare-& backgrounded wait/probe scripts (#2065)", () => {
+  // Backgrounding a bounded probe/wait helper is the orphaned-shell form this rule prevents.
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --repo o/r --pr 5 --timeout-ms 300000 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/wait-pr-checks.mjs --pr 5 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("gh run watch 123 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("dev-loops loop watch-cycle --repo o/r --pr 5 &"), true);
+  // probe-ci-status.mjs (#2290 follow-up): sanctioned foreground CI-status wait
+  // (skills/dev-loop/SKILL.md's `ci-status`/`watch-ci` entry) — a backgrounded `&` invocation is
+  // an orphanable wait exactly like the other family members and must be denied.
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-ci-status.mjs --repo o/r --pr 5 &"), true);
+  // FOREGROUND probes (no background &) are allowed — the sanctioned form.
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --repo o/r --pr 5 --timeout-ms 300000"), false);
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/wait-pr-checks.mjs --pr 5"), false);
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-ci-status.mjs --repo o/r --pr 5 --timeout-ms 0"), false);
+  // `&&` (logical AND) after a probe is NOT backgrounding.
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5 && echo done"), false);
+  // redirections that use `&` (2>&1, &>) are not backgrounding by themselves.
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1"), false);
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5 &> /tmp/x.log"), false);
+  // a bare `&` on a NON-wait command is not this rule's concern.
+  assert.equal(commandContainsDetachedWaitTool("node scripts/build.mjs &"), false);
+  // COARSE + FAIL-CLOSED (#2065 OPTION-C): the family match is a plain substring/family scan, not
+  // exec-position anchored — a backgrounded job that merely MENTIONS a family basename as an
+  // argument (grep/echo/a comment) is now ALSO denied. This is a deliberate, accepted tradeoff
+  // (benign false positive), not a regression: it is what makes the gate un-bypassable by a
+  // wrapper (see the wrapper cases below) and it just forces the sanctioned foreground path.
+  assert.equal(commandContainsDetachedWaitTool("grep probe-copilot-review.mjs docs &"), true);
+  assert.equal(commandContainsDetachedWaitTool('echo "see wait-pr-checks.mjs" &'), true);
+  assert.equal(commandContainsDetachedWaitTool("cat notes-about-probe-copilot-review.mjs.txt &"), true);
+  // the invocation forms (node/bun runner, direct script head, gh run watch, dev-loops) still deny
+  assert.equal(commandContainsDetachedWaitTool("bun scripts/github/probe-copilot-review.mjs --pr 5 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("./scripts/github/wait-pr-checks.mjs --pr 5 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("dev-loops gate probe-copilot --pr 5 &"), true);
+  // backgrounding a DIFFERENT job while a probe mentions/runs elsewhere in the same command string
+  // is ALSO denied under the coarse family scan (accepted tradeoff, see above).
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5; echo done &"), true);
+  // an unrelated bare-& command with no family reference at all is unaffected.
+  assert.equal(commandContainsDetachedWaitTool("node scripts/other.mjs --pr 5; echo done &"), false);
+  // the Claude plugin launcher form of the CLI verbs
+  assert.equal(commandContainsDetachedWaitTool("dev-loops-run cli/index.mjs loop watch-cycle --repo o/r --pr 5 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("dev-loops-run cli/index.mjs gate probe-copilot --pr 5 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("dev-loops-run scripts/github/probe-copilot-review.mjs --pr 5 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("dev-loops-run cli/index.mjs loop watch-cycle --repo o/r --pr 5"), false);
+  // a backgrounded PIPELINE denies too — the family reference appears anywhere in the string.
+  assert.equal(
+    commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5 --timeout-ms 0 | tee /tmp/x.log &"),
+    true,
+  );
+  assert.equal(commandContainsDetachedWaitTool("gh run watch 123 | tee /tmp/x.log &"), true);
+  // a piped foreground probe (no trailing `&`) is not backgrounded at all
+  assert.equal(
+    commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5 --timeout-ms 0 | tee /tmp/x.log"),
+    false,
+  );
+  // an unrelated piped pipeline backgrounded, with no family reference, is not denied
+  assert.equal(commandContainsDetachedWaitTool("cat foo.txt | tee /tmp/x.log &"), false);
+  // AC2: no wrapper can hide the family reference from the coarse scan — `timeout … &`, `nohup`,
+  // `sh -c '… &'`, and a value-taking node loader flag (-r/--require/--loader/--import) are all
+  // denied, because the family token still appears somewhere in the command text.
+  assert.equal(
+    commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --repo o/r --pr 5 &"),
+    true,
+  );
+  assert.equal(
+    commandContainsDetachedWaitTool("timeout 600 node scripts/github/probe-copilot-review.mjs --pr 5 &"),
+    true,
+  );
+  assert.equal(
+    commandContainsDetachedWaitTool("nohup node scripts/github/probe-copilot-review.mjs --pr 5 &"),
+    true,
+  );
+  assert.equal(
+    commandContainsDetachedWaitTool("sh -c 'node scripts/github/probe-copilot-review.mjs --pr 5 &'"),
+    true,
+  );
+  assert.equal(
+    commandContainsDetachedWaitTool("node --require ./loader.mjs scripts/github/probe-copilot-review.mjs --pr 5 &"),
+    true,
+  );
+  // AC3: a sleep-poll wait loop denies outright, ambiguous/wrapped or not (fails closed).
+  assert.equal(
+    commandContainsDetachedWaitTool("timeout 600 sh -c 'until gh pr view 5 --json state; do sleep 5; done'"),
+    true,
+  );
+  // a `timeout`-wrapped NON-wait command is unaffected (no family reference at all)
+  assert.equal(commandContainsDetachedWaitTool("timeout 600 npm test &"), false);
 });
 
 test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, and heredocs", () => {

@@ -4,7 +4,7 @@ import { parse as parseYaml } from "yaml";
 import { readRepo } from "../imported-assets-helpers.mjs";
 
 // Workflow-driven model of the two concurrency groups the gate-evidence
-// reporter split introduced (docs/decisions/0075), simulating a "cancelling
+// reporter split introduced (docs/decisions/0076), simulating a "cancelling
 // burst" of N review/comment events at a clean PR close. Unlike a
 // hand-coded model, every input below is PARSED out of the real
 // .github/workflows/gate-evidence.yml — a concurrency flip or a

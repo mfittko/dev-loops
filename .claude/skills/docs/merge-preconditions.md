@@ -182,7 +182,7 @@ practice:
   Until an operator adds it to branch protection, the check runs and reports at
   pre-merge/verdict points on every non-draft PR but does **not** yet block
   merge — it is reporting-only in that window. The workflow is two jobs
-  (`docs/decisions/0075-gate-evidence-reporter-split-always-settles-required-status.md`,
+  (`docs/decisions/0076-gate-evidence-reporter-split-always-settles-required-status.md`,
   amending 0043): `gate-evidence-runner` keeps `cancel-in-progress: true` for
   waste-avoidance but no longer posts the status itself, and a non-cancelling
   `gate-evidence-reporter` job always settles the required check at the final

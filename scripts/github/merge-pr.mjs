@@ -298,7 +298,7 @@ export async function mergePr(options, runtime = {}) {
   // not cleanly succeed, so neither may report ok/exit-0.
   if (!mergeRun || mergeRun.code !== 0) {
     const rawStderr = (mergeRun?.stderr || "").trim() || "no stderr";
-    // The observed real-world path (docs/decisions/0075): every real
+    // The observed real-world path (docs/decisions/0076): every real
     // precondition (including
     // `ciGreen`, which already EXCLUDES `gate-evidence` — see
     // resolveCiGreenFromRollup) passed, so `gh pr merge` is the first place a
@@ -315,7 +315,7 @@ export async function mergePr(options, runtime = {}) {
     const looksLikeBranchPolicyBlock = /base branch policy|protected branch|required status check/i.test(rawStderr);
     const gateEvidenceState = resolveNamedContextState(prView?.statusCheckRollup, LOOP_DERIVED_CI_CHECK_NAME);
     const gateEvidenceNote = looksLikeBranchPolicyBlock && gateEvidenceState !== "success"
-      ? ` The required \`${LOOP_DERIVED_CI_CHECK_NAME}\` context is ${gateEvidenceState} at head ${currentHeadSha}; this required check needs a COMPLETED Gate-evidence run. Recovery: complete/re-run the latest Gate-evidence Actions run to success, or edit the current-head gate-verdict comment to re-fire it (see ADR 0043 / the reporter split in ADR 0075).`
+      ? ` The required \`${LOOP_DERIVED_CI_CHECK_NAME}\` context is ${gateEvidenceState} at head ${currentHeadSha}; this required check needs a COMPLETED Gate-evidence run. Recovery: complete/re-run the latest Gate-evidence Actions run to success, or edit the current-head gate-verdict comment to re-fire it (see ADR 0043 / the reporter split in ADR 0076).`
       : "";
     throw new Error(`gh pr merge did not succeed (code ${mergeRun?.code ?? "null"}): ${rawStderr}${gateEvidenceNote}`);
   }
