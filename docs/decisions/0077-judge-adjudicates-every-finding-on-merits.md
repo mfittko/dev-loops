@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-09-20
+Accepted — 2026-09-20 ([PR 2308](https://github.com/mfittko/dev-loops/pull/2308))
 
 Amends [ADR 0051](./0051-net-reduction-disposition-policy.md): that record set the judge's high `defer` bar (a `low` defers only when operator-visible, else `reject`) to stop the loop net-adding backlog. It left the disposition surface reading as if a `low` were only ever `defer` or `reject` — never `act` — so a real defect labeled `low` was ruled out of an up-front fix on its severity label alone. This record keeps 0051's filing bar intact (a cosmetic `low` still `reject`s, a `low`/`nit` still files nothing) and adds the missing `act` path plus an internal-reviewer severity-calibration rule.
 
