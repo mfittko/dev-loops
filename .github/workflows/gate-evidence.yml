@@ -214,11 +214,17 @@ jobs:
       # detector was cancelled or failed before reaching that write — this job
       # recomputes independently below, rather than posting on stale/missing
       # information.
+      #
+      # EVIDENCE_STATE is routed through env (not spliced as `${{ }}` directly
+      # into the shell) — a `${{ }}`-into-shell splice is the GitHub Actions
+      # script-injection anti-pattern.
       - name: Decide evidence source
         id: decide
         if: steps.pr.outputs.draft == 'false'
+        env:
+          EVIDENCE_STATE: ${{ needs.gate-evidence-runner.outputs.evidence_state }}
         run: |
-          evidence_state="${{ needs.gate-evidence-runner.outputs.evidence_state }}"
+          evidence_state="$EVIDENCE_STATE"
           if [ -n "$evidence_state" ]; then
             {
               echo "evidence_state=${evidence_state}"
@@ -282,23 +288,43 @@ jobs:
       # 0075), so — unlike the old single-job design — there is no
       # `!cancelled()` guard here: this run is guaranteed to run to completion
       # once started, so it always posts.
+      #
+      # Head-pairing (#2262 draft-gate finding): the REUSE path (recompute ==
+      # false) posts the detector's evidence_state, so it MUST target the
+      # detector's OWN independently-resolved head
+      # (needs.gate-evidence-runner.outputs.head_sha) — never this job's own
+      # `steps.pr.outputs.head_sha`. On issue_comment events both jobs resolve
+      # the head live via a fresh API call; posting a reused verdict to a head
+      # resolved by a SEPARATE call risks a fail-open pairing mismatch if the
+      # head advanced between the two resolutions. The RECOMPUTE path posts
+      # this job's own steps.pr.outputs.head_sha, because that is the head this
+      # job itself evaluated. Every `${{ }}` value read below — both head SHAs
+      # and both evidence_state values — is routed through env, not spliced
+      # directly into the shell (script-injection anti-pattern).
       - name: Report gate-evidence status on the PR head SHA
         id: post
         if: steps.pr.outputs.draft == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RECOMPUTE: ${{ steps.decide.outputs.recompute }}
+          REUSED_EVIDENCE_STATE: ${{ steps.decide.outputs.evidence_state }}
+          RECOMPUTED_EVIDENCE_STATE: ${{ steps.recompute_check.outputs.evidence_state }}
+          DETECTOR_HEAD_SHA: ${{ needs.gate-evidence-runner.outputs.head_sha }}
+          REPORTER_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: |
           set +e
-          if [ "${{ steps.decide.outputs.recompute }}" = "true" ]; then
-            evidence_state="${{ steps.recompute_check.outputs.evidence_state }}"
+          if [ "$RECOMPUTE" = "true" ]; then
+            evidence_state="$RECOMPUTED_EVIDENCE_STATE"
+            head_sha="$REPORTER_HEAD_SHA"
           else
-            evidence_state="${{ steps.decide.outputs.evidence_state }}"
+            evidence_state="$REUSED_EVIDENCE_STATE"
+            head_sha="$DETECTOR_HEAD_SHA"
           fi
           case "$evidence_state" in
             satisfied) state="success" ;;
             *) state="failure" ;;
           esac
-          gh api --method POST "repos/${{ github.repository }}/statuses/${{ steps.pr.outputs.head_sha }}" \
+          gh api --method POST "repos/${{ github.repository }}/statuses/${head_sha}" \
             -f "state=${state}" \
             -f "context=gate-evidence" \
             -f "target_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \

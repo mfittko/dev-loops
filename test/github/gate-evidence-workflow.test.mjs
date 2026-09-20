@@ -185,8 +185,46 @@ test("gate-evidence-runner never posts a status; gate-evidence-reporter always p
   // Definitive status targets the RESOLVED PR head SHA (fork-forging guard
   // preserved) under the gate-evidence context.
   assert.match(statusStep.run, /state=\$\{state\}/);
-  assert.match(statusStep.run, /statuses\/\$\{\{ steps\.pr\.outputs\.head_sha \}\}/);
+  assert.match(statusStep.run, /statuses\/\$\{head_sha\}/);
   assert.match(statusStep.run, /context=gate-evidence/);
+
+  // Head-pairing (#2262): the REUSE path (recompute == false) posts the
+  // detector's OWN verdict, so it must target the detector's OWN
+  // independently-resolved head (needs.gate-evidence-runner.outputs.head_sha)
+  // — never this job's own steps.pr.outputs.head_sha, a SEPARATE live
+  // resolution on issue_comment events that could disagree with the
+  // detector's if the head advanced between the two resolutions
+  // (fail-open). The RECOMPUTE path posts this job's own resolved head,
+  // since that is the head this job itself evaluated.
+  assert.equal(statusStep.env.DETECTOR_HEAD_SHA, "${{ needs.gate-evidence-runner.outputs.head_sha }}");
+  assert.equal(statusStep.env.REPORTER_HEAD_SHA, "${{ steps.pr.outputs.head_sha }}");
+  assert.match(statusStep.run, /head_sha="\$DETECTOR_HEAD_SHA"/);
+  assert.match(statusStep.run, /head_sha="\$REPORTER_HEAD_SHA"/);
+
+  // Every `${{ }}` value the status step reads (both head SHAs and both
+  // evidence_state values) must be routed through env — never spliced
+  // directly into the shell (the GitHub Actions script-injection
+  // anti-pattern).
+  assert.equal(statusStep.env.RECOMPUTE, "${{ steps.decide.outputs.recompute }}");
+  assert.equal(statusStep.env.REUSED_EVIDENCE_STATE, "${{ steps.decide.outputs.evidence_state }}");
+  assert.equal(statusStep.env.RECOMPUTED_EVIDENCE_STATE, "${{ steps.recompute_check.outputs.evidence_state }}");
+  assert.ok(!statusStep.run.includes("${{ steps.decide"), "decide's outputs must be read via env, not spliced directly into the shell");
+  assert.ok(!statusStep.run.includes("${{ steps.recompute_check"), "recompute_check's evidence_state must be read via env, not spliced directly into the shell");
+  assert.ok(!statusStep.run.includes("${{ steps.pr.outputs.head_sha }}"), "the reporter's own head must be read via env (REPORTER_HEAD_SHA), not spliced directly into the shell");
+  assert.ok(!statusStep.run.includes("${{ needs.gate-evidence-runner"), "the detector's head must be read via env (DETECTOR_HEAD_SHA), not spliced directly into the shell");
+});
+
+// Pins the env-routing half of #2262: the `decide` step reads the
+// detector's evidence_state (an attacker-influenced-shape value, since it
+// flows from `detect-checkpoint-evidence.mjs` output) through env, never
+// spliced directly into the shell as a `${{ }}` expression.
+test("gate-evidence-reporter's decide step reads the detector's evidence_state via env, not a direct splice", async () => {
+  const content = await readRepo(".github/workflows/gate-evidence.yml");
+  const workflow = parseYaml(content);
+  const decideStep = workflow.jobs["gate-evidence-reporter"].steps.find((step) => step.id === "decide");
+  assert.ok(decideStep, "expected a decide step");
+  assert.equal(decideStep.env?.EVIDENCE_STATE, "${{ needs.gate-evidence-runner.outputs.evidence_state }}");
+  assert.ok(!decideStep.run.includes("${{"), "decide step must read the detector's evidence_state via env, not a direct ${{ }} splice");
 });
 
 // Pins the #1385 gate-review must-fix (as evolved by #1464): review/comment

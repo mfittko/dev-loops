@@ -305,8 +305,16 @@ export async function mergePr(options, runtime = {}) {
     // stale/non-success `gate-evidence` REQUIRED context surfaces, and GitHub's
     // own stderr for that block is the generic "base branch policy prohibits
     // the merge" — it never names the actual required check. Name it here.
+    //
+    // Only attach the note when `rawStderr` actually LOOKS LIKE a
+    // branch-protection/base-branch-policy block (AC3 real-cause
+    // requirement): a signal-kill
+    // (`code: null`), a `--match-head-commit` head-race, or a transient
+    // gh/API error would otherwise get this misleading "needs a COMPLETED
+    // Gate-evidence run" note even though the real failure is unrelated.
+    const looksLikeBranchPolicyBlock = /base branch policy|protected branch|required status check|required checks|not mergeable/i.test(rawStderr);
     const gateEvidenceState = resolveNamedContextState(prView?.statusCheckRollup, LOOP_DERIVED_CI_CHECK_NAME);
-    const gateEvidenceNote = gateEvidenceState !== "success"
+    const gateEvidenceNote = looksLikeBranchPolicyBlock && gateEvidenceState !== "success"
       ? ` The required \`${LOOP_DERIVED_CI_CHECK_NAME}\` context is ${gateEvidenceState} at head ${currentHeadSha}; this required check needs a COMPLETED Gate-evidence run. Recovery: complete/re-run the latest Gate-evidence Actions run to success, or edit the current-head gate-verdict comment to re-fire it (see ADR 0043 / the reporter split in ADR 0075).`
       : "";
     throw new Error(`gh pr merge did not succeed (code ${mergeRun?.code ?? "null"}): ${rawStderr}${gateEvidenceNote}`);
