@@ -14,7 +14,7 @@ import path from "node:path";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { matchGateReviewCommentHeader } from "@dev-loops/core/github/copilot-helpers";
 import { createIssue as coreCreateIssue, commentIssue as coreCommentIssue, listIssues as coreListIssues } from "@dev-loops/core/github/issue-ops";
-import { VALID_SEVERITIES, hasLocatableShape, normalizeSeverity, resolveFindingFile } from "@dev-loops/core/loop/gate-fanin";
+import { SEVERITY_ORDER, VALID_SEVERITIES, hasLocatableShape, normalizeSeverity, resolveFindingFile } from "@dev-loops/core/loop/gate-fanin";
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import {
   parseJsonText,
@@ -115,6 +115,17 @@ export function isFileableDeferral(severity, operatorVisible, round, mediumFixWi
   if (sev === "medium") return round > mediumFixWindow;
   if (sev === "low") return operatorVisible === true;
   return false; // "nit" (never fileable), "high"/"question" (never resolved here)
+}
+
+// Fold a finding out of inline threads when its severity ranks below `floor`
+// in SEVERITY_ORDER. An unknown severity or floor returns false (post inline):
+// inline is the fail-safe surface — it creates a resolvable thread that blocks
+// gate-close, never silently hidden.
+export function isBelowInlineFloor(severity, floor) {
+  const si = SEVERITY_ORDER.indexOf(normalizeSeverity(severity));
+  const fi = SEVERITY_ORDER.indexOf(normalizeSeverity(floor));
+  if (si === -1 || fi === -1) return false;
+  return si > fi;
 }
 
 // Per-finding suppression + disposition marker. Deliberately carries no `gate`
@@ -341,6 +352,37 @@ export async function ensureFollowUpIssue(
   return { issueNumber: result.issueNumber, created: true };
 }
 
+// A fingerprint entry on the follow-up issue always renders as
+// `- \`<16hex>\`` (formatDeferredFindingEntry) — a bare backtick-wrapped
+// 16-hex token, distinct from the full `dev-loops:finding` marker shape (which
+// never appears on an issue body/comment, only on gate review bodies/threads).
+const ISSUE_FINGERPRINT_RE = /`([0-9a-f]{16})`/g;
+
+function collectIssueFingerprints(text, set) {
+  if (typeof text !== "string") return;
+  for (const match of text.matchAll(ISSUE_FINGERPRINT_RE)) {
+    set.add(match[1]);
+  }
+}
+
+/**
+ * Read the fingerprints already listed on the PR's tracked follow-up issue
+ * (body + comments), so the folded-filing pass never re-files one across a
+ * close-gate re-run or a re-listed ledger. Fingerprints render as
+ * `- \`<16hex>\`` (formatDeferredFindingEntry). Returns a Set<string>.
+ */
+export async function fetchFollowUpIssueFingerprints(
+  { repo, issueNumber },
+  { env = process.env, ghCommand = "gh", run = defaultRunChild } = {},
+) {
+  const fingerprints = new Set();
+  const issue = await runGhJson(["api", `repos/${repo}/issues/${issueNumber}`], { env, ghCommand, runChild: run });
+  collectIssueFingerprints(issue?.body, fingerprints);
+  const comments = await listIssueComments({ repo, pr: issueNumber }, { env, ghCommand, runChild: run });
+  for (const comment of comments) collectIssueFingerprints(comment?.body, fingerprints);
+  return fingerprints;
+}
+
 // ---------------------------------------------------------------------------
 // Rendering (finding lines, inline comments, body-filed blocks)
 // ---------------------------------------------------------------------------
@@ -356,7 +398,7 @@ export async function ensureFollowUpIssue(
 // sanitizeInline. normalizeSeverity alone does not neutralize hostile
 // characters, so it is applied in addition to, never instead of,
 // sanitizeInline.
-function renderFindingLine({ severity, angle, summary, judgeDisposition }) {
+export function renderFindingLine({ severity, angle, summary, judgeDisposition }) {
   const safeSeverity = sanitizeInline(normalizeSeverity(severity));
   const judgeSuffix = typeof judgeDisposition === "string" && judgeDisposition.trim().length > 0
     ? ` — judge: ${sanitizeInline(judgeDisposition)}`
@@ -424,7 +466,11 @@ export function buildNonLocatableFindingMarker(finding, { round }) {
   // would misclassify it (e.g. "must-fix" !== "high").
   const severity = /** @type {string} */ (normalizeSeverity(finding.severity));
   const disposition = severity === "high" ? undefined : "deferred";
-  return buildFindingMarker({ fp, severity, angle: finding.angle, round, disposition });
+  // Carry the operator-visibility signal onto the marker (ov=1 only when
+  // true) so a later reader (the folded-filing pass, close-gate-findings.mjs)
+  // can decide fileability without re-reading the ephemeral ledger. Backward
+  // compatible: omitted when false/absent, exactly like renderInlineCommentBody.
+  return buildFindingMarker({ fp, severity, angle: finding.angle, round, operatorVisible: finding.operatorVisible === true, disposition });
 }
 
 // Human-readable rendering of a body-filed finding, kept for callers that
@@ -454,6 +500,37 @@ export function renderNonLocatableBlock(finding, { round }) {
     lines.push(`> Location: ${refs}`);
   }
   return lines.join("\n");
+}
+
+// Fold every finding below the inline severity floor into ONE collapsed
+// <details> block instead of posting each as its own inline resolvable
+// thread. Each entry pairs an invisible marker (fp+severity+angle+round+ov+
+// disposition=deferred — buildNonLocatableFindingMarker, the same shape a
+// body-filed finding renders) with a visible `file:line + summary` bullet, so
+// GATE-EXEC-FINDING-THREADS' cross-round fingerprint suppression
+// (collectSuppressedFingerprints, which reads own review bodies) still
+// renders a folded finding exactly once across rounds. Markers stay at
+// column 0 (FINDING_MARKER_RE/collectFingerprints are line-start anchored).
+// Returns "" when `foldedFindings` is empty — no block for a clean round.
+export function renderFoldedFindingsBlock(foldedFindings, { round }) {
+  if (!Array.isArray(foldedFindings) || foldedFindings.length === 0) return "";
+  const lines = [
+    "<details>",
+    `<summary>Suppressed low/nit findings (${foldedFindings.length}) — below the inline severity floor</summary>`,
+    "",
+  ];
+  for (const finding of foldedFindings) {
+    const severity = /** @type {string} */ (normalizeSeverity(finding.severity));
+    lines.push(buildNonLocatableFindingMarker(finding, { round }));
+    // Location prefix mirrors renderNonLocatableBlock's Location logic:
+    // files[0] gets the :line ref, absent files renders no prefix.
+    const hasFile = Array.isArray(finding.files) && finding.files.length > 0;
+    const lineRef = hasFile && Number.isInteger(finding.line) ? `:${finding.line}` : "";
+    const locationPrefix = hasFile ? `\`${sanitizeCodeSpan(finding.files[0])}${lineRef}\` ` : "";
+    lines.push(`- ${locationPrefix}${renderFindingLine({ ...finding, severity })}`);
+  }
+  lines.push("</details>");
+  return sanitizeCopilotSummonTokens(lines.join("\n"));
 }
 
 // ---------------------------------------------------------------------------
