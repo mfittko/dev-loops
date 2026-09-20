@@ -63,7 +63,7 @@ Write a single JSON object to the deterministic path the conductor names (under 
   - `reject` — this finding is out-of-scope against a named non-goal or scope boundary, or falls below the defer bar above; this PR is not the place to act on it, and a follow-up is not warranted.
 - `rationale` MUST name the criterion, non-goal, scope boundary, or defer-bar test the disposition turns on — never a bare "not relevant" or "will fix later." A below-the-bar `reject` names the bar it failed (nit-never-defers, or no operator-visible outcome), not a fabricated non-goal.
 - Coverage-expansion findings are dispositioned against [VALIDATE-COVERAGE-ADMISSION](../skills/docs/validation-policy.md) (canonical owner; do not restate its admission test here): a coverage request that fails that rule is `reject`. Apply it using the prior-round ledgers you already hold; demonstrated defects keep their established disposition.
-- `scopeDrift.verdict` is `drift_detected` when the diff has grown past the PR's stated acceptance criteria in ways the per-finding dispositions alone do not capture; `within_scope` otherwise. The scope-drift verdict is distinct from your per-finding dispositions: a PR can have every finding in-scope and still drift as a whole.
+- `scopeDrift.verdict` is `drift_detected` when the diff has grown past the PR's stated acceptance criteria in ways the per-finding dispositions alone do not capture; `within_scope` otherwise. The scope-drift verdict is distinct from your per-finding dispositions: a PR can have every finding in-scope and still drift as a whole. Emit `within_scope` for the no-drift case; the validator also normalizes the intuitive `none` spelling to `within_scope`.
 
 ## Immutable spec authority (whole-spec disposition)
 

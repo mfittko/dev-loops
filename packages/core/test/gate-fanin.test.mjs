@@ -22,6 +22,8 @@ import {
   normalizeSeverity,
   applyJudgeDispositions,
   validateJudgeVerdict,
+  SCOPE_DRIFT_VERDICTS,
+  normalizeScopeDriftVerdict,
   tallySeverities,
   zeroSeverityCounts,
   SEVERITY_ORDER,
@@ -1395,6 +1397,59 @@ describe("applyJudgeDispositions (#1525)", () => {
     assert.equal(scopeDrift.verdict, "drift_detected");
     assert.equal(scopeDrift.driftedAreas[0], "cli surface");
   });
+
+  test("scopeDrift.verdict 'none' normalizes to within_scope, rationale and driftedAreas byte-intact (#2260)", () => {
+    const verdict = judgeVerdict(
+      [
+        { index: 0, disposition: "act", rationale: "in-scope", criterion: "AC-1" },
+        { index: 1, disposition: "reject", rationale: "style-only rename, out of scope", criterion: "Non-goal 3" },
+      ],
+      { verdict: "none", rationale: "no drift; the diff matches the stated AC exactly", driftedAreas: [] },
+    );
+    const { scopeDrift } = applyJudgeDispositions(baseFindings, verdict);
+    assert.equal(scopeDrift.verdict, "within_scope");
+    assert.equal(scopeDrift.rationale, "no drift; the diff matches the stated AC exactly");
+    assert.deepEqual(scopeDrift.driftedAreas, []);
+  });
+
+  test("normalizeScopeDriftVerdict maps none -> within_scope and passes canonical/unknown through", () => {
+    assert.equal(normalizeScopeDriftVerdict("none"), "within_scope");
+    assert.equal(normalizeScopeDriftVerdict("within_scope"), "within_scope");
+    assert.equal(normalizeScopeDriftVerdict("drift_detected"), "drift_detected");
+    assert.equal(normalizeScopeDriftVerdict("bogus"), "bogus");
+  });
+
+  test("validateJudgeVerdict still fails closed on a scopeDrift.verdict outside the vocabulary", () => {
+    assert.throws(
+      () => validateJudgeVerdict(judgeVerdict([{ index: 0, disposition: "act", rationale: "x", criterion: "AC-1" }, { index: 1, disposition: "reject", rationale: "y", criterion: "NG-3" }], { verdict: "sideways", rationale: "x", driftedAreas: [] })),
+      /scopeDrift\.verdict must be one of: within_scope, drift_detected/,
+    );
+  });
+
+  // Every doc surface that spells the scopeDrift.verdict vocabulary in a
+  // schema line is bound to the validator's accepted set, so a producer-facing
+  // description and the enforcer cannot silently diverge again (#2260).
+  for (const rel of ["../../../agents/judge.agent.md", "../../../skills/docs/gate-review-sub-loop-contract.md"]) {
+    test(`scopeDrift.verdict vocabulary in ${rel.replace("../../../", "")} equals the validator's accepted set (divergence guard, #2260)`, async () => {
+      const { readFileSync } = await import("node:fs");
+      const { fileURLToPath } = await import("node:url");
+      const path = await import("node:path");
+      const docPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), rel);
+      const doc = readFileSync(docPath, "utf8");
+      // Capture only the scopeDrift.verdict VALUE expression — a run of quoted
+      // tokens optionally pipe-joined — so surrounding schema keys never leak in.
+      const block = doc.match(/"scopeDrift"\s*:\s*\{[\s\S]*?"verdict"\s*:\s*((?:"[^"]*"\s*\|?\s*)+)/);
+      assert.ok(block, `${rel} must document a scopeDrift.verdict schema line`);
+      // Tolerate both spellings: two quoted tokens ("a" | "b") and one pipe-joined
+      // string ("a|b").
+      const documented = [...block[1].matchAll(/[a-z_]+/g)].map((m) => m[0]);
+      assert.deepEqual(
+        [...new Set(documented)].sort(),
+        [...SCOPE_DRIFT_VERDICTS].sort(),
+        `${rel} scopeDrift.verdict values must equal the validator's accepted set`,
+      );
+    });
+  }
 
   test("toFindingsLogShape carries judge fields through to the ledger shape", () => {
     const verdict = judgeVerdict([
