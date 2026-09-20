@@ -1200,7 +1200,7 @@ permits carry; attribution to multiple rows forces re-review regardless of surfa
 
 The decision is a pure, deterministic, fail-closed seam — `resolveAngleCarryForward` / `resolveCarryForwardAngles` in `@dev-loops/core/loop/gate-carry-forward` — driven by the CLI `scripts/github/resolve-angle-carry-forward.mjs --repo <r> --pr <n> --gate <g> --prev-head <A> --head-sha <B> --spec-authority <identity-path>` (run from the worktree at head B; `--spec-authority` stamps the round's identity onto the carry-forward plan by default, issue 2008 / ADR 0061 AC1). It reads the prior findings-log for head A whose overall verdict is `clean` OR `findings_present`, computes the touched-surface delta, and returns per angle `carryForward: true|false` with a reason.
 
-**Delta basis — main-relative incremental (issue #2292).** The touched-surface delta is the two-dot tree diff `git diff A..B` (files changed since the reviewed head A) MINUS files already on `origin/main` at head B — equivalently `(A..B) ∩ (origin/main..B)`, computed by `captureMainRelativeChangedFilesSince` in `scripts/lib/git-delta.mjs`. It stays two-dot, never three-dot, and never the absolute `merge-base(origin/main,B)...B` PR diff: a two-dot `A..B` never omits a file that differs between A and B (so a divergent non-fast-forward advance cannot carry an angle whose surface changed), and keeping the delta INCREMENTAL means an angle untouched *since head A* stays carried even when the PR touched it in an earlier round (the absolute PR diff would re-review every angle the PR ever touched, carrying nothing). The `origin/main`-relative exclusion drops files a base-move only INTEGRATES from already-merged main commits: on a base-move re-gate that merges `origin/main` to resolve a conflict, those files are byte-identical to main (already reviewed) and contribute NO touched surface, so every eligible angle — and the Copilot convergence carry — carries forward instead of deadlocking against the Copilot round cap. Fail-closed is preserved: a genuine new PR-own commit whose head content differs from `origin/main` still forces re-review, and when `origin/main` does not resolve the exclusion is skipped (the delta falls back to plain `A..B` and an empty delta still fails closed). Renames that a base-move only replays from main are excluded too, so they do not force the RENAME_ONLY angles to re-run.
+**Delta basis — base-relative incremental (issue #2292).** The touched-surface delta is the two-dot tree diff `git diff A..B` (files changed since the reviewed head A) MINUS files already on the PR's base branch at head B — equivalently `(A..B) ∩ (base..B)`, computed by `captureMainRelativeChangedFilesSince` in `scripts/lib/git-delta.mjs`. The exclusion ref is the CONFIGURED base branch (`origin/<resolveBaseBranch(config)>` — `workflow.baseBranch`, else the auto-detected default; `origin/main` by default), never a hardcoded `origin/main`: a repo whose base is e.g. `release-x` excludes against `origin/release-x`, so a stale `origin/main` cannot exclude files that still differ from the true base and permit an unsafe carry. It stays two-dot, never three-dot, and never the absolute `merge-base(base,B)...B` PR diff: a two-dot `A..B` never omits a file that differs between A and B (so a divergent non-fast-forward advance cannot carry an angle whose surface changed), and keeping the delta INCREMENTAL means an angle untouched *since head A* stays carried even when the PR touched it in an earlier round (the absolute PR diff would re-review every angle the PR ever touched, carrying nothing). The base-relative exclusion drops files a base-move only INTEGRATES from already-merged base commits: on a base-move re-gate that merges the base branch to resolve a conflict, those files are byte-identical to the base (already reviewed) and contribute NO touched surface, so every eligible angle — and the Copilot convergence carry — carries forward instead of deadlocking against the Copilot round cap. The same exclusion is applied at the OPERATIONAL Copilot round-cap path (`request-copilot-review.mjs`): the post-convergence carry reduces the delta-since-last-review by the PR's base branch and passes `deltaComplete`, so an integrate-only base-move is suppressed there too rather than forcing a fresh round. Fail-closed is preserved: a genuine new PR-own commit whose head content differs from the base still forces re-review, and when the base branch does not resolve the exclusion is skipped (the delta falls back to plain `A..B` and an empty delta still fails closed). Renames that a base-move only replays from the base are excluded too, so they do not force the RENAME_ONLY angles to re-run.
 
 **Feeding the plan into the Phase 1 dispatch preflight (issue #1635).** After carry resolution, a conductor MAY explicitly rebuild the new-head context with `write-gate-context.mjs --carried-angles <json>` using `plan.carried[].angle`. Phase 1 ran before Phase 1.2, so its existing artifact cannot reflect carry until rebuilt; see Phase 3's dispatch-count rule. Both this writer and `consolidate-fanin.mjs` accept an array of angle-name strings, but their flags serve different purposes:
 
@@ -1226,7 +1226,7 @@ change to it, regardless of the angle's declared surface. `classifyFile`
 correctly reports these files as `config`; the carry-forward seam overrides
 that via `isDevLoopConfigSourcePath` and forces a full re-run (fail-closed).
 
-**Renames force the RENAME_ONLY angles to re-run.** A rename records only its destination path, so classifying that path alone would miss what the move itself implicates (a relocated doc breaking a link, a moved test/code file shifting scope/contract-surface). When the main-relative delta (above) contains ANY rename/copy row that SURVIVES the `origin/main` exclusion (a PR-own rename, not one a base-move only replayed from main), the CLI forces the RENAME_ONLY-mapped angles (`CATEGORY_ANGLE_MAP[RENAME_ONLY]`: `scope`, `correctness`, `contract-surface`, `docs`, `link-check`) to re-run for that run; the remaining angles still follow the surface rule above.
+**Renames force the RENAME_ONLY angles to re-run.** A rename records only its destination path, so classifying that path alone would miss what the move itself implicates (a relocated doc breaking a link, a moved test/code file shifting scope/contract-surface). When the base-relative delta (above) contains ANY rename/copy row that SURVIVES the base-branch exclusion (a PR-own rename, not one a base-move only replayed from the base), the CLI forces the RENAME_ONLY-mapped angles (`CATEGORY_ANGLE_MAP[RENAME_ONLY]`: `scope`, `correctness`, `contract-surface`, `docs`, `link-check`) to re-run for that run; the remaining angles still follow the surface rule above.
 
 **Provenance — carried, not fabricated.** A carried verdict preserves the fail-closed evidence contract. The new head's findings-log records the carried angle in `provenance.perAngle` with `carriedFromHead: <A>` and the SAME `reviewer` identity that reviewed it at head A (honest attribution — that reviewer genuinely reviewed this angle's surface, which the delta did not change). The ledger also records `provenance.perAngle[].carriedVerdict` (`clean`|`findings_present`, requires `carriedFromHead`) so the record distinguishes a findings-present carry from a clean one at a glance; a findings-present carry preserves its prior findings unchanged, not converted into an approval. `distinctReviewers` still counts real reviewer identities and the mandatory-angle / distinct-reviewer consistency checks in `write-gate-findings-log.mjs` are unchanged; carry-forward never invents a reviewer or a fresh review.
 
@@ -1402,6 +1402,15 @@ genuine verdict header — a historical standalone findings review, a historical
 `<!-- dev-loops:deferred-summary -->` comment, or the current opt-in findings comment
 (`dev-loops:gate-findings gate=`, `GATE-COMMENT-IDENTITY-DISJOINT`) — stays excluded and can
 never win the newest-gate-marker tie-break over a real verdict.
+
+(#2263) `GATE-COMMENT-INLINE-SEVERITY-FLOOR` (owned by
+[Checkpoint Verdict Comment Contract](./gate-review-comment-contract.md)) applies BEFORE the
+locatability split above: a finding ranked below the gate's `inlineSeverityFloor` (default
+`medium`, so `low`/`nit` by default) never reaches either the inline or body-filed track — it
+folds into the verdict body's own collapsed `<details>` section instead, regardless of
+locatability, carrying the same fingerprint+`disposition=deferred` marker shape a body-filed
+finding carries. A folded finding creates NO review thread, so it never enters
+`unresolvedGateThreadCount` below.
 
 Before posting, a candidate finding is dropped when its fingerprint already matches an
 OWN-AUTHORED (the authenticated `gh` viewer's own login) existing thread or review body on the
@@ -1586,6 +1595,19 @@ disposition pass or the judge defer path (a locatable thread stamped `dispositio
 body-filed non-locatable case is the one disclosed exception (#1807 known limitation): it is
 stamped and body-filed durably (the first two places) but does not itself create the tracked
 issue, because that render-time call site has no GitHub I/O.
+
+A FOLDED finding (#2263, `GATE-COMMENT-INLINE-SEVERITY-FLOOR`) is NOT this disclosed exception: it
+gets its own filing pass. `close-gate-findings.mjs` recomputes the round's folded findings directly
+from the ledger (they carry no thread to select a disposition target from) and applies the exact
+same net-reduction filing bar (`isFileableDeferral`) the thread pass uses — an operator-visible
+`low` (its own marker's `ov=1`) is filed to the PR's ONE tracked follow-up issue, deduped by
+fingerprint against that issue's existing body+comments so a re-run never double-files; a `nit` or
+a non-operator-visible `low` files nothing, on the theory that it is already recorded, visible, in
+the folded `<details>` block itself — that IS its resolved-with-rationale record. Both passes
+share the SAME follow-up issue (the thread pass's `followUpIssueNumber`, when it filed one this
+round, is threaded into the folded pass as its `existingIssueNumber`) — never two issues for one
+PR/round.
+
 The posted surface and the ledger both carry the finding marker's optional `disposition=deferred`
 field (`<!-- dev-loops:finding <fp16> severity=<s> angle=<a> round=<n>[ ov=1][ disposition=deferred][ issue=<n>] -->`
 — `ov=1` is the #1846 operator-visibility signal, present only when the finding's own producer set

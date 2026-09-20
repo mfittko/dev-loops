@@ -6595,7 +6595,10 @@ function singleSurfaceLeadingEntries({ isDraft = true, issueComments = [], revie
 }
 
 const LOCATABLE_FINDING = { severity: "must-fix", angle: "correctness", summary: "SQL injection in the query builder", files: ["src/db.mjs"], line: 2, recommendation: "parameterize it" };
-const BODY_FILED_FINDING = { severity: "nice-to-have", angle: "coverage", summary: "inconsistent casing in constants" };
+// #2263: at/above the default "medium" inline severity floor, so this
+// fixture's own documented AC (body-filed, not folded) stays exercised
+// independent of the fold behavior, which gets its own dedicated tests below.
+const BODY_FILED_FINDING = { severity: "worth-fixing-now", angle: "coverage", summary: "inconsistent casing in constants" };
 
 // AC1 + AC2: one review carries the verdict fields, the reduced per-angle
 // digest, the body-filed finding, and the locatable finding as an INLINE
@@ -6608,7 +6611,7 @@ test("upsert-checkpoint-verdict --findings-ledger posts ONE review: inline locat
       { angle: "pr-description", verdict: "clean", findings: [] },
       { angle: "scope", verdict: "clean", findings: [] },
       { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix", summary: LOCATABLE_FINDING.summary, file: "src/db.mjs", line: 2 }] },
-      { angle: "coverage", verdict: "findings_present", findings: [{ severity: "nice-to-have", summary: BODY_FILED_FINDING.summary }] },
+      { angle: "coverage", verdict: "findings_present", findings: [{ severity: "worth-fixing-now", summary: BODY_FILED_FINDING.summary }] },
     ]), "utf8");
 
     let postedPayload = null;
@@ -6667,15 +6670,263 @@ test("upsert-checkpoint-verdict --findings-ledger posts ONE review: inline locat
 
     // The body-only bulleted list carries the non-locatable finding's own
     // text, and the clean angles collapse into one trailing roster line.
-    assert.match(postedPayload.body, /^- 🟡 low — inconsistent casing in constants _\(coverage\)_$/m);
+    assert.match(postedPayload.body, /^- 🟠 medium — inconsistent casing in constants _\(coverage\)_$/m);
     assert.match(postedPayload.body, /^\*\*Clean \(2\):\*\* pr-description, scope$/m);
     // The body-filed finding still stamps its own invisible marker (#1942) —
     // load-bearing for cross-round suppression/deferral, never rendered as
     // visible text.
-    assert.match(postedPayload.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=low angle=coverage round=1 disposition=deferred -->$/m);
+    assert.match(postedPayload.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=medium angle=coverage round=1 disposition=deferred -->$/m);
     // The gate-scoped round marker rides on the same body.
     assert.match(postedPayload.body, /^<!-- dev-loops:gate-findings-review draft_gate [0-9a-f]{40} round=1 -->$/m);
   }, { prefix: "dev-loops-upsert-single-surface-" });
+});
+
+// ---------------------------------------------------------------------------
+// #2263: inlineSeverityFloor — locatable low/nit findings fold into the
+// verdict body's collapsed <details> block instead of posting inline, at the
+// default floor ("medium"). high stays inline unconditionally; lowering the
+// floor is the documented escape hatch back to full inline posting.
+// ---------------------------------------------------------------------------
+
+const LOCATABLE_LOW_FINDING = { severity: "low", angle: "naming", summary: "inconsistent casing of a local constant", files: ["src/db.mjs"], line: 2 };
+const LOCATABLE_NIT_FINDING = { severity: "nit", angle: "style", summary: "trailing whitespace", files: ["src/db.mjs"], line: 3 };
+
+test("upsert-checkpoint-verdict --findings-ledger: at the default floor, a locatable low/nit folds into the body's <details> block — ZERO inline comments for either, high stays inline", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [LOCATABLE_FINDING, LOCATABLE_LOW_FINDING, LOCATABLE_NIT_FINDING]);
+    const entries = [
+      ...singleSurfaceLeadingEntries(),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":711,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-711"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsSummary: "3 findings",
+      findingsLedger: ledgerPath,
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+
+    assert.equal(result.action, "created");
+    assert.equal(result.inlineComments, 1);
+    assert.equal(result.bodyFiled, 0);
+    assert.equal(result.folded, 2);
+
+    const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    const posted = JSON.parse(postCall.stdinText);
+    // Only the high finding produces an inline comment; the low/nit pair
+    // never reaches createGateReview's `comments` array at all.
+    assert.equal(posted.comments.length, 1);
+    assert.match(posted.comments[0].body, /SQL injection in the query builder/);
+    assert.doesNotMatch(JSON.stringify(posted.comments), /inconsistent casing of a local constant|trailing whitespace/);
+
+    // Contrast with the all-folded case below (#2263): this round carries a
+    // non-folded (must-fix) candidate needing a locatability decision, so the
+    // diff round-trip DOES run.
+    assert.ok(calls.some((c) => c.args.includes("repos/owner/repo/pulls/17/files?per_page=100")));
+
+    // The collapsed <details> block carries both folded findings' visible text.
+    assert.match(posted.body, /<details>/);
+    assert.match(posted.body, /<summary>Suppressed low\/nit findings \(2\) — below the inline severity floor<\/summary>/);
+    assert.match(posted.body, /`src\/db\.mjs:2` \*\*low\*\* \(`naming`\): inconsistent casing of a local constant/);
+    assert.match(posted.body, /\*\*nit\*\* \(`style`\): trailing whitespace/);
+    // Each folded finding still stamps its own invisible marker, deferred.
+    assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=low angle=naming round=1 disposition=deferred -->$/m);
+    assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=nit angle=style round=1 disposition=deferred -->$/m);
+  }, { prefix: "dev-loops-upsert-fold-default-floor-" });
+});
+
+// #2263: an ALL-folded round (every candidate ranks below the inline severity
+// floor) needs no locatability decision at all, so resolveFindingSurface must
+// skip the fetchPrFiles diff round-trip entirely — not just skip inline
+// posting for the folded findings. Proven by OMITTING the PR-files fixture
+// entry from `entries`: in claims-matching mode an unclaimed entry is silently
+// fine, but a call the mock has no entry for returns exit code 97 (see
+// makeGhMock), which would fail this test if fetchPrFiles ran anyway.
+test("upsert-checkpoint-verdict --findings-ledger: an all-folded round (every candidate below the inline floor) never calls the PR-files diff endpoint", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [LOCATABLE_LOW_FINDING, LOCATABLE_NIT_FINDING]);
+    const entries = [
+      ...singleSurfaceLeadingEntries({ files: null }),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":715,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-715"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsSummary: "2 findings",
+      findingsLedger: ledgerPath,
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+
+    assert.equal(result.action, "created");
+    assert.equal(result.inlineComments, 0);
+    assert.equal(result.bodyFiled, 0);
+    assert.equal(result.folded, 2);
+
+    // Belt-and-suspenders on top of the fixture omission above: no call ever
+    // reached the PR-files listing endpoint.
+    assert.ok(!calls.some((c) => c.args.includes("repos/owner/repo/pulls/17/files?per_page=100")));
+
+    const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    const posted = JSON.parse(postCall.stdinText);
+    assert.equal(posted.comments.length, 0);
+    assert.match(posted.body, /<summary>Suppressed low\/nit findings \(2\) — below the inline severity floor<\/summary>/);
+  }, { prefix: "dev-loops-upsert-fold-all-folded-no-files-fetch-" });
+});
+
+test("upsert-checkpoint-verdict --findings-ledger: lowering inlineSeverityFloor to \"low\" restores inline posting of low findings (the escape hatch); nit still folds", async () => {
+  await withTempDir(async (tempDir) => {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n  draft:\n    inlineSeverityFloor: low\n", "utf8");
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [LOCATABLE_FINDING, LOCATABLE_LOW_FINDING, LOCATABLE_NIT_FINDING]);
+    const entries = [
+      ...singleSurfaceLeadingEntries(),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":712,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-712"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsSummary: "3 findings",
+      findingsLedger: ledgerPath,
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+
+    assert.equal(result.action, "created");
+    assert.equal(result.inlineComments, 2);
+    assert.equal(result.bodyFiled, 0);
+    assert.equal(result.folded, 1);
+
+    const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    const posted = JSON.parse(postCall.stdinText);
+    assert.equal(posted.comments.length, 2);
+    assert.match(JSON.stringify(posted.comments), /inconsistent casing of a local constant/);
+    assert.match(posted.body, /<summary>Suppressed low\/nit findings \(1\) — below the inline severity floor<\/summary>/);
+    assert.match(posted.body, /\*\*nit\*\* \(`style`\): trailing whitespace/);
+  }, { prefix: "dev-loops-upsert-fold-lowered-floor-" });
+});
+
+// #2295 Copilot review fix 1: a "question" always posts inline, and a low
+// folds, at the DEFAULT "medium" floor. (The floor enum is now constrained to
+// <= "medium", so "high" is schema-invalid; the "question never folds even at a
+// raised floor" invariant stays proven at the unit level in
+// test/github/gate-finding-surface.test.mjs, where isBelowInlineFloor is a pure
+// function not bound to the schema.)
+const LOCATABLE_QUESTION_FINDING = { severity: "question", angle: "scope", summary: "why parameterize here instead of an ORM?", files: ["src/db.mjs"], line: 2 };
+
+test("upsert-checkpoint-verdict --findings-ledger: at the default \"medium\" floor a locatable question posts inline while a low folds", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [LOCATABLE_QUESTION_FINDING, LOCATABLE_LOW_FINDING]);
+    const entries = [
+      ...singleSurfaceLeadingEntries(),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":714,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-714"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsSummary: "2 findings",
+      findingsLedger: ledgerPath,
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+
+    assert.equal(result.action, "created");
+    assert.equal(result.inlineComments, 1);
+    assert.equal(result.bodyFiled, 0);
+    assert.equal(result.folded, 1);
+
+    const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    const posted = JSON.parse(postCall.stdinText);
+    // The question is the ONLY inline comment — it posts inline at the default
+    // floor, and the low finding folds.
+    assert.equal(posted.comments.length, 1);
+    assert.match(JSON.stringify(posted.comments), /why parameterize here instead of an ORM\?/);
+    // The low finding folds into the collapsed <details> block instead.
+    assert.doesNotMatch(JSON.stringify(posted.comments), /inconsistent casing of a local constant/);
+    assert.match(posted.body, /<summary>Suppressed low\/nit findings \(1\) — below the inline severity floor<\/summary>/);
+    assert.match(posted.body, /inconsistent casing of a local constant/);
+  }, { prefix: "dev-loops-upsert-fold-question-default-medium-floor-" });
+});
+
+// AC6: routing (fold vs inline vs body-filed) must never touch the verdict
+// itself — blockCleanOnFindingSeverities semantics are computed upstream from
+// the ledger, and a folded low still renders exactly the non-clean verdict
+// its caller supplied, with the configured blocking-severities line intact.
+test("upsert-checkpoint-verdict --findings-ledger: a folded low finding does not affect blockCleanOnFindingSeverities' verdict rendering (AC6)", async () => {
+  await withTempDir(async (tempDir) => {
+    await writeFile(
+      path.join(tempDir, ".devloops"),
+      "version: 1\ngates:\n  requireFanoutEvidence: false\n  draft:\n    blockCleanOnFindingSeverities: [high, medium, low]\n",
+      "utf8",
+    );
+    const ledgerPath = await writeSingleSurfaceLedger(tempDir, [LOCATABLE_LOW_FINDING]);
+    const entries = [
+      ...singleSurfaceLeadingEntries(),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":713,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-713"}\n',
+      },
+    ];
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha: SINGLE_SURFACE_HEAD,
+      verdict: "findings_present",
+      findingsSummary: "1 finding",
+      findingsLedger: ledgerPath,
+      nextAction: "stay draft and fix",
+      executionMode: "inline_single_agent",
+      inlineReason: "single-agent inline review (test)",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+
+    assert.equal(result.action, "created");
+    assert.equal(result.inlineComments, 0);
+    assert.equal(result.folded, 1);
+    assert.deepEqual(result.blockCleanOnFindingSeverities, ["high", "medium", "low"]);
+
+    const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    const posted = JSON.parse(postCall.stdinText);
+    assert.equal(posted.comments.length, 0);
+    // The verdict line and the blocking-severities line still render exactly
+    // as the caller supplied them, unaffected by the finding's own folding.
+    assert.match(posted.body, /^\*\*Verdict:\*\* findings_present$/m);
+    assert.match(posted.body, /^\*\*Blocking severities:\*\* high, medium, low \(clean requires no findings matching these severities\)$/m);
+    assert.match(posted.body, /inconsistent casing of a local constant/);
+  }, { prefix: "dev-loops-upsert-fold-blocking-severities-" });
 });
 
 // AC5: an own-authored thread already carrying the finding's fingerprint drops
@@ -9175,8 +9426,12 @@ test("upsert-checkpoint-verdict posts a --findings-json finding whose summary ca
 // went through. A locatable finding here, carrying BOTH the entity-encoded
 // bracket AND a genuine deliberate cross-reference id, pins the inline path
 // and the guard loop running with a non-empty allowedRefs in the same call.
+// #2263: at/above the default "medium" inline severity floor, so this
+// finding stays on the inline path this test is specifically about (the
+// entity-encoded bracket / allowedRefs guard through createGateReview's
+// per-comment id-guard loop), independent of the fold behavior.
 const ENTITY_AND_ALLOWED_REF_FINDING = {
-  severity: "nice-to-have",
+  severity: "worth-fixing-now",
   angle: "coverage",
   summary: "rename the [id] route segment to [slug]; deliberate cross-ref to issue #1670",
   files: ["src/db.mjs"],
