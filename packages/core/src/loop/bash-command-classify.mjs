@@ -860,7 +860,7 @@ const WAIT_PROBE_FAMILY_RE = new RegExp(
  * COPILOT-FOLLOWUP-WAIT-TOOLS: a banned detached/polling wait. This is a UNION of three
  * independent deny conditions — NOT one big AND (an AND-condition here would inadvertently
  * narrow the unconditional detach-wrapper ban below to "detach AND family reference", wrongly
- * allowing a family-less `nohup node scripts/foo.mjs &`):
+ * allowing a family-less `nohup node build.mjs &`):
  *
  *   (1) `nohup`/`disown`/`tmux new-session`/`screen -dm` anywhere in a command segment — denied
  *       UNCONDITIONALLY, with NO wait/probe-family requirement.

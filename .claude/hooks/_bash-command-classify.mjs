@@ -859,16 +859,15 @@ const WAIT_PROBE_FAMILY_RE = new RegExp(
 
 /**
  * COPILOT-FOLLOWUP-WAIT-TOOLS: a banned detached/polling wait. This is a UNION of three
- * independent deny conditions — NOT one big AND (#2065 OPTION-C originally folded the
- * detach-wrapper signal into an AND with the wait/probe family reference below, which
- * inadvertently NARROWED the pre-existing #1622 unconditional detach ban: a family-less
- * `nohup node scripts/foo.mjs &` was wrongly allowed; restored to a union here):
+ * independent deny conditions — NOT one big AND (an AND-condition here would inadvertently
+ * narrow the unconditional detach-wrapper ban below to "detach AND family reference", wrongly
+ * allowing a family-less `nohup node build.mjs &`):
  *
- *   (1) #1622: `nohup`/`disown`/`tmux new-session`/`screen -dm` anywhere in a command segment —
- *       denied UNCONDITIONALLY, with NO wait/probe-family requirement.
+ *   (1) `nohup`/`disown`/`tmux new-session`/`screen -dm` anywhere in a command segment — denied
+ *       UNCONDITIONALLY, with NO wait/probe-family requirement.
  *   (2) A `while`/`until`/`for` sleep-poll loop over `gh`/`loop-state` (`commandIsSleepPollLoop`) —
  *       denied UNCONDITIONALLY — it IS the backgrounding signal.
- *   (3) #2065 OPTION-C, prevention-only scope: a bare `&` background (`commandHasBareBackgroundOperator`,
+ *   (3) OPTION-C, prevention-only scope: a bare `&` background (`commandHasBareBackgroundOperator`,
  *       including a `timeout …`/`env …`/`sh -c` wrapper of it) that ALSO references the wait/probe
  *       FAMILY anywhere in the command string (`WAIT_PROBE_FAMILY_RE`) — a coarse substring/family
  *       match, deliberately NOT exec-position anchored.
@@ -882,7 +881,7 @@ const WAIT_PROBE_FAMILY_RE = new RegExp(
  * sanctioned by the issue's non-goals (this is a prevention gate, not an exec-position parser; a
  * denied benign command simply falls back to the sanctioned foreground path). The precise
  * exec-position parser this replaced (and the SubagentStop background-shell reaper it fed) is
- * deferred to the follow-up safety-net issue (#2296).
+ * deferred to a follow-up safety-net effort.
  *
  * Actor-independent at the decideBashGate call site: the coordinator/main agent — not only a
  * subagent — is the actor that leaves these orphaned under Claude Code (no async wake to join a
@@ -892,7 +891,7 @@ const WAIT_PROBE_FAMILY_RE = new RegExp(
 export function commandContainsDetachedWaitTool(command) {
   const whole = command.trim();
 
-  // (1) #1622: unconditional detach-wrapper ban — no wait/probe-family requirement.
+  // (1) Unconditional detach-wrapper ban — no wait/probe-family requirement.
   const hasDetachWrapper = shellSegments(command).some((segment) => {
     // `nohup`/`disown` only detach when they head a command (segment start, or right after a
     // shell operator) — a bare mention (`cat nohup.out`, `echo "nohup banned"`) is not a detach.
@@ -910,7 +909,7 @@ export function commandContainsDetachedWaitTool(command) {
     return true;
   }
 
-  // (3) #2065 OPTION-C: bare-`&` background AND a wait/probe family reference.
+  // (3) OPTION-C: bare-`&` background AND a wait/probe family reference.
   if (!commandHasBareBackgroundOperator(whole)) {
     return false;
   }
