@@ -2001,7 +2001,14 @@ async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, pre
     nonLocatable: nonFolded,
     folded,
   };
-  if (isUpdate || candidates.length === 0) {
+  // Skip the diff/locatability split when there is nothing to split: an update
+  // (cannot add inline comments), no candidates at all, OR an all-folded round
+  // (every candidate ranks below the inline floor, so none needs a locatability
+  // decision). Guarding the all-folded case on nonFolded.length avoids an
+  // unnecessary fetchPrFiles round-trip — and, more importantly, keeps a
+  // transient PR-files listing failure from failing an all-folded verdict post
+  // that never needed the diff.
+  if (isUpdate || candidates.length === 0 || nonFolded.length === 0) {
     return surface;
   }
   const commentableSet = buildCommentableLineSet(await fetchPrFiles({ repo: options.repo, pr: options.pr }, gh));
