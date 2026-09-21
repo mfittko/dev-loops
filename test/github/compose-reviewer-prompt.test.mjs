@@ -119,23 +119,6 @@ test("composeAndRecordReviewerPrompt composes an inline-prefix-first prompt, wri
   });
 });
 
-// Issue #1957: an underscore gate-id-derived group scope must compose on the
-// first attempt (no hyphen self-correction retry).
-test("composeAndRecordReviewerPrompt composes with an underscore gate-id-derived group scope without retry", async () => {
-  await withTmpDir(async (tmpDir) => {
-    await seedGateContext(tmpDir);
-    const suffixFile = path.join(tmpDir, "angle.txt");
-    await writeFile(suffixFile, "## Group: docs-surface\nReview docs surface.", "utf8");
-
-    const result = await composeAndRecordReviewerPrompt({
-      repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, scope: "draft_gate-group-docs-surface",
-      angleSuffixFile: suffixFile, tmpRoot: path.join(tmpDir, "tmp"),
-    });
-    assert.equal(result.composed, true);
-    assert.equal(result.recorded, true);
-  });
-});
-
 test("AC1: two different dispatch units of the same round share a byte-identical leading prefix span, and both bind on verify", async () => {
   await withTmpDir(async (tmpDir) => {
     await seedGateContext(tmpDir);

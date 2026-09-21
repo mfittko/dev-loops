@@ -31,11 +31,11 @@ const REFUSAL_MESSAGE = "scripts/github/compose-reviewer-prompt.mjs's CLI is not
 /**
  * Compose one reviewer prompt (invariant prefix + volatile tail + angle suffix,
  * in that fixed order) and record its dispatch-prompt layout ATOMICALLY — the
- * reusable core the CLI and the one-shot fan-out emitter
- * (emit-fanout-dispatch.mjs) both call, so a canonical-path dispatch prompt is
- * NEVER produced by two independent code paths that could drift. All inputs are
- * pre-validated by the caller (the CLI validates via its arg parser; the emitter
- * derives them from the gate-context artifact + resolveFanoutGroups units).
+ * reusable core driven ONLY by scripts/github/emit-fanout-dispatch.mjs, once
+ * per dispatch unit of a round, so a canonical-path dispatch prompt is NEVER
+ * produced by two independent code paths that could drift. All inputs are
+ * pre-validated by the emitter, which derives them from the gate-context
+ * artifact + resolveFanoutGroups units.
  *
  * @returns {Promise<{ composed: boolean, reason?: string, recorded?: boolean,
  *   promptPath?: string, prefixPath?: string, promptLength?: number, truncated?: boolean }>}
@@ -90,13 +90,14 @@ export async function composeAndRecordReviewerPrompt({ repo, pr, gate, headSha, 
   return { composed: true, recorded: true, promptPath: outPath, prefixPath, promptLength: composed.length, truncated: recordResult.truncated };
 }
 
-// This CLI refuses every direct fan-out invocation (AC1, issue #2166): the
-// composer above is a legitimate internal building block
-// (emit-fanout-dispatch.mjs's compose-and-record core), but calling it once
-// per dispatch unit from the command line produces reviewer prompts with NO
-// keyed emit-plan.json, so a round dispatched this way fails closed only at
-// fan-in. Refuse unconditionally (except --help) rather than compose
-// anything, so this latent trap can no longer be reached via the CLI.
+// This CLI refuses every direct fan-out invocation: the composer above is a
+// legitimate internal building block (emit-fanout-dispatch.mjs's
+// compose-and-record core), but calling it once per dispatch unit from the
+// command line produces reviewer prompts with NO keyed emit-plan.json, so a
+// round dispatched this way fails closed only at fan-in
+// (GATE-EXEC-FANOUT-DISPATCH-EMIT). Refuse unconditionally (except --help)
+// rather than compose anything, so this latent trap can no longer be
+// reached via the CLI.
 export async function main(argv = process.argv.slice(2)) {
   if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(`${USAGE}\n`);
