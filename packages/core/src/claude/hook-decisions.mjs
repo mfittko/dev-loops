@@ -68,19 +68,10 @@ export const DEV_LOOP_AGENT_TYPE = "dev-loop";
  * deciders compare against `DEV_LOOP_AGENT_TYPE`. Returns the substring after the last `:` when
  * present, else `agentType` unchanged (including `null`/non-string, passed through as-is).
  *
- * ponytail: every hook script today reads `agent_type` as a raw string
- * (`typeof input?.agent_type === "string" ? input.agent_type : null`, see
- * `.claude/hooks/pre-tool-use-bash-gate.mjs` / `pre-tool-use-write-guard.mjs`) with no namespace
- * stripping, and this repo's own recorded runs have never observed a namespaced value — so this is
- * a defensive no-op today, not a confirmed live bypass. It is applied unconditionally anyway
- * because it is cheap and because the Claude Code plugin convention namespaces a plugin-defined
- * subagent's dispatched type as `<plugin-name>:<agent-name>`; this repo's own plugin name is
- * `dev-loops` (`.claude-plugin/marketplace.json`), so an installed-via-marketplace coordinator run
- * could plausibly arrive as `dev-loops:dev-loop` rather than the bare `dev-loop` frontmatter name.
+ * Applied in the coordinator-scoped deciders (`decideBashGate`, `decideCoordinatorWriteGuard`).
  * Deliberately NOT applied in `decideWriteGuard` — its main-agent allow-set boundary is covered by
- * the `DEVLOOPS_RUN_ID` run-id check first, so an unstripped namespaced `agent_type` there does not
- * reopen the boundary this fix addresses (coordinator→worker delegation), and broadening that
- * decider's comparison is out of scope for this fix.
+ * the `DEVLOOPS_RUN_ID` run-id check first, and broadening that decider's comparison is out of
+ * scope for the coordinator→worker delegation boundary.
  * @param {string|null|undefined} agentType @returns {string|null|undefined}
  */
 export function normalizeAgentType(agentType) {

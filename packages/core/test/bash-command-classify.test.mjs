@@ -749,6 +749,16 @@ test("commandContainsCodeVerificationEntrypoint matches colon-namespaced sub-scr
   // prefix-tolerated wrapper commands
   assert.equal(commandContainsCodeVerificationEntrypoint("timeout 600 bun run verify"), true);
   assert.equal(commandContainsCodeVerificationEntrypoint("nice bun run verify"), true);
+  // widened nice/timeout forms: nice -n <N>, and timeout carrying a leading flag before the
+  // duration (-s <sig>, -k <dur>, --signal=, --kill-after=, --preserve-status, --foreground)
+  assert.equal(commandContainsCodeVerificationEntrypoint("nice -n 10 bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("timeout -k 30 600 bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("timeout -s TERM 600 bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("timeout --preserve-status 600 bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("timeout --kill-after=30 600 bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("timeout --foreground 600 vitest"), true);
+  // multiple leading timeout flags combine in any order
+  assert.equal(commandContainsCodeVerificationEntrypoint("timeout -k 30 -s TERM 600 bun run verify"), true);
 
   // must still not match compact orchestration commands
   assert.equal(commandContainsCodeVerificationEntrypoint("dev-loops queue list"), false);
@@ -760,6 +770,19 @@ test("commandContainsCodeVerificationEntrypoint matches colon-namespaced sub-scr
   assert.equal(commandContainsCodeVerificationEntrypoint("cat test/foo.test.mjs"), false);
   // hyphen-form script name (not a `:` sub-script) — deliberately left unmatched, not required
   assert.equal(commandContainsCodeVerificationEntrypoint("npm run build-docs"), false);
+  // deliberately fail-open ceiling forms — pinned as explicit negatives, not just narration
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun run vitest"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("npm --prefix ./x run test"), false);
+});
+
+test("commandContainsGitStash and the gh classifiers do NOT gain the verify-wrapper nice/timeout tolerance (#2082)", () => {
+  // The widened nice/timeout wrapper tolerance is scoped to VERIFY_EXEC_PREFIX
+  // (commandContainsCodeVerificationEntrypoint only) and must not leak into the shared
+  // SHELL_EXEC_PREFIX classifiers used by git stash and the gh pr/issue/api matchers.
+  assert.equal(commandContainsGitStash("timeout 600 git stash"), false);
+  assert.equal(commandContainsGitStash("nice -n 10 git stash"), false);
+  assert.equal(commandContainsGhPrCreate("timeout 600 gh pr create --fill"), false);
+  assert.equal(commandContainsGhPrMerge("nice -n 10 gh pr merge 1"), false);
 });
 
 // ---------------------------------------------------------------------------
