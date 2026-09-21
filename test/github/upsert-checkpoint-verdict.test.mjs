@@ -1322,20 +1322,28 @@ const PRE_APPROVAL_READY_REVIEWS = [1, 2, 3, 4, 5].map((i) => ({
   author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
   submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
 }));
-test("upsert-checkpoint-verdict posts pre_approval for a thread-clean current-head 🔵 below the round cap (#2345)", async () => {
+test("upsert-checkpoint-verdict posts pre_approval for a thread-clean current-head 🔵 at the round cap (#2345)", async () => {
   await withTempDir(async (tempDir) => {
     const headSha = "abc1234000000000000000000000000000000000";
     const env = await writeGhStub(tempDir, [
       ...buildGateCoordinationEntries({
         isDraft: false,
         statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
-        reviews: [{
-          author: { login: "copilot-pull-request-reviewer[bot]" },
-          state: "COMMENTED",
-          submittedAt: "2026-06-01T20:01:00Z",
-          commit: { oid: headSha },
-          body: "### 🔵 Needs a closer look\n\nFindings: None",
-        }],
+        reviews: [
+          {
+            author: { login: "copilot-pull-request-reviewer[bot]" },
+            state: "COMMENTED",
+            submittedAt: "2026-06-01T20:00:00Z",
+            commit: { oid: "1".repeat(40) },
+          },
+          {
+            author: { login: "copilot-pull-request-reviewer[bot]" },
+            state: "COMMENTED",
+            submittedAt: "2026-06-01T20:01:00Z",
+            commit: { oid: headSha },
+            body: "### 🔵 Needs a closer look\n\nFindings: None",
+          },
+        ],
       }).map((entry) => ({ ...entry, matchByClaims: true })),
       {
         matchByClaims: true,
