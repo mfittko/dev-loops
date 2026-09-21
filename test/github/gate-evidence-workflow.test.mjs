@@ -376,7 +376,7 @@ test("required-context invariant (status not job) stays documented on the merge-
   // gate-evidence status as required and BOTH jobs as never-required, without
   // pinning exact prose (which churns on wording fixes).
   assert.match(doc, /required status is the `gate-evidence` commit status/, "the status must be named as the required context");
-  assert.match(doc, /never (be )?(a|either) (Gate-evidence )?job/i, "the invariant must forbid a job as the required context");
+  assert.match(doc, /never (be )?(a|either)\s+(Gate-evidence )?job/i, "the invariant must forbid a job as the required context");
   assert.match(doc, /gate-evidence-runner/, "the runner job must be named");
   assert.match(doc, /gate-evidence-reporter/, "the reporter job must be named");
   // Tie the doc claim to the code: both jobs the invariant forbids as a required
