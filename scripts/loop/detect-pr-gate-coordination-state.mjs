@@ -792,7 +792,7 @@ export async function resolvePostConvergenceReviewSuppressed({ repo, pr, current
     );
     return reverified.carryForward === true;
   }
-  // Below-cap live carry-forward recognition (#2345/#2316): no operator marker
+  // Below-cap live carry-forward recognition: no operator marker
   // applies, so recognize a settled below-cap head by re-verifying LIVE that the
   // current head's delta since Copilot's last submitted review is a proven
   // integrate-only base-move / pure-doc carry — the SAME reduction the at-cap
@@ -907,9 +907,9 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     currentHeadSha,
   });
   const reviewSummary = summarizeCopilotReviews(prData?.reviews, { headSha: currentHeadSha, draftGateResetAtMs });
-  // Path A (#2345): the gate-ENTRY body-feedback block must consume the SAME
-  // shared convergence eval the MERGE gate uses, not the raw current-head body
-  // finding. `hasBodyFindingOnCurrentHead` is true for BOTH 🟡 CHANGES_RECOMMENDED
+  // The gate-ENTRY body-feedback block must consume the same evaluateCopilotConvergence
+  // eval the MERGE gate uses, not the raw current-head body finding.
+  // `hasBodyFindingOnCurrentHead` is true for BOTH 🟡 CHANGES_RECOMMENDED
   // and 🔵 NEEDS_CLOSER_LOOK, but evaluateCopilotConvergence treats a thread-clean
   // 🔵 as converged (ok:true). Block on the body ONLY when convergence fails
   // (🟡 / unrecognized / unknown head) — fail closed. Unresolved THREADS still

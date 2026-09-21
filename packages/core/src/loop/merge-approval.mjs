@@ -211,11 +211,12 @@ export function evaluateCopilotConvergence({ currentHeadSha = null, reviews = []
   for (const entry of Array.isArray(reviews) ? reviews : []) {
     // Shape-tolerant Copilot-login + commit extraction: the merge gate feeds
     // REST-shaped reviews (user.login/commit_id) while the gate-ENTRY detector
-    // feeds `gh pr view` GraphQL-shaped reviews (author.login/commit.oid). This
-    // eval must recognize BOTH so the two call sites share ONE convergence
-    // verdict (#2345). Only Copilot reviews matter here, so broadening the login
-    // read to author.login cannot affect verifyFreshHumanApproval (which keeps
-    // its own REST-only reviewLogin/reviewCommit).
+    // feeds `gh pr view` GraphQL-shaped reviews (author.login/commit.oid). Both
+    // call sites route through this one evaluateCopilotConvergence, so it must
+    // recognize BOTH shapes to produce ONE convergence verdict. Only Copilot
+    // reviews matter here, so broadening the login read to author.login cannot
+    // affect verifyFreshHumanApproval (which keeps its own REST-only
+    // reviewLogin/reviewCommit).
     const login = copilotConvergenceReviewLogin(entry);
     if (login === null || !isCopilotLogin(login)) continue;
     if (extractReviewCommitSha(entry) !== head) continue; // only current-head reviews

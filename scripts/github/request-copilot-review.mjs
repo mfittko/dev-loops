@@ -946,14 +946,15 @@ export async function performCopilotReviewRequest(
     // carryForward:false on any code/test/config/CI or unclassifiable file
     // (or an empty delta without proof), so every uncertain case re-opens the
     // round exactly as before.
-    // Apply the SAME main-relative exclusion the carry-forward resolver uses —
-    // drop files already on the PR's base branch at the current head. A
-    // base-move that only integrates already-merged base commits then
-    // contributes NO PR-own surface, so it must not force a fresh Copilot round
-    // (the round-cap deadlock this fix targets). The shared reduction fails
-    // closed to the raw delta whenever the base ref is unknown or the compare is
-    // unavailable/non-linear/renamed, preserving today's behavior. This exact
-    // proof is shared with the below-cap gate-ENTRY recognition (#2345).
+    // Apply the same main-relative exclusion classifyPrOwnDeltaSinceLastReview
+    // always uses — drop files already on the PR's base branch at the current
+    // head. A base-move that only integrates already-merged base commits then
+    // contributes NO PR-own surface, so it must not force a fresh Copilot round.
+    // The reduction fails closed to the raw delta whenever the base ref is
+    // unknown or the compare is unavailable/non-linear/renamed, preserving
+    // today's behavior. detect-pr-gate-coordination-state.mjs's below-cap
+    // gate-ENTRY recognition calls the same exported function, so both call
+    // sites apply this exact proof.
     const convergence = await classifyPrOwnDeltaSinceLastReview(
       { repo: options.repo, pr: options.pr, base: lastReviewSha, head: currentHeadSha },
       runtime,

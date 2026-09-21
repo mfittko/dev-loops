@@ -871,12 +871,13 @@ test("detect-pr-gate-coordination-state allows pre_approval_gate (not an impossi
   }
 });
 
-// #2345 Path A: a thread-clean current-head Copilot 🔵 "Needs a closer look"
-// review at the round cap must ENTER pre_approval (the merge gate already treats
-// 🔵 as conductor-overridable). Before the fix the gate-ENTRY body-feedback term
-// blocked on ANY current-head body finding (🟡 OR 🔵), dead-ending the loop at
-// the cap. The current head carries the latest Copilot review, so no
-// post-convergence compare fires (last-reviewed head === current head).
+// A thread-clean current-head Copilot 🔵 "Needs a closer look" review at the
+// round cap must ENTER pre_approval (the merge gate already treats 🔵 as
+// conductor-overridable). The gate-ENTRY body-feedback term must not block on
+// ANY current-head body finding (🟡 OR 🔵); it blocks only when
+// evaluateCopilotConvergence fails. The current head carries the latest
+// Copilot review, so no post-convergence compare fires (last-reviewed head
+// === current head).
 function pathAGhEntries({ reviewBody, threadNodes = [], atCap = true }) {
   const currentHead = "def56789abcdef";
   // At the round cap (default) two submitted rounds are present (cap = 2 in the
@@ -970,8 +971,8 @@ test("detect-pr-gate-coordination-state still BLOCKS pre_approval for a 🔵 wit
   assert.ok(!parsed.allowedNextActions.includes("run_pre_approval_gate"));
 });
 
-// #2345 AC3: the gate-ENTRY body-feedback term and the MERGE gate consume the
-// SAME evaluateCopilotConvergence. For one {currentHeadSha, reviews} input the
+// The gate-ENTRY body-feedback term and the MERGE gate consume the same
+// evaluateCopilotConvergence. For one {currentHeadSha, reviews} input the
 // shared eval decides both: 🔵 → ok:true (entry allowed), 🟡 → ok:false (blocked).
 test("gate-entry body-feedback and the merge gate agree via the shared evaluateCopilotConvergence (#2345 AC3)", () => {
   const currentHeadSha = "def56789abcdef";
@@ -2594,8 +2595,9 @@ describe("resolvePostConvergenceReviewSuppressed (#1441)", () => {
   }
 
   const snapshot = { copilotReviewRequestStatus: "none", unresolvedThreadCount: 0 };
-  // #2345 Path B fires only when Copilot reviewed an EARLIER head and the current
-  // head has advanced past it (not itself reviewed) — the stuck settled shape.
+  // The below-cap live carry-forward recognition fires only when Copilot reviewed
+  // an EARLIER head and the current head has advanced past it (not itself
+  // reviewed) — the stuck settled shape.
   const belowCapSnapshot = { copilotReviewRequestStatus: "none", unresolvedThreadCount: 0, copilotReviewPresent: true, copilotReviewOnCurrentHead: false };
 
   // prData carries Copilot's actual last submitted review (commit "oldsha"),
@@ -2672,10 +2674,11 @@ describe("resolvePostConvergenceReviewSuppressed (#1441)", () => {
     });
   });
 
-  // #2345 Path B: with NO operator marker, recognize a settled below-cap head by
-  // re-verifying LIVE that the current head's delta since Copilot's last submitted
-  // review is a proven integrate-only base-move / pure-doc carry — the SAME PR-own
-  // reduction the at-cap request-copilot-review path uses.
+  // With NO operator marker, recognize a settled below-cap head by re-verifying
+  // LIVE that the current head's delta since Copilot's last submitted review is a
+  // proven integrate-only base-move / pure-doc carry, via the same
+  // classifyPrOwnDeltaSinceLastReview reduction the at-cap request-copilot-review
+  // path uses.
   it("returns true when no marker exists but the below-cap delta is a proven integrate-only base-move (#2345)", async () => {
     const { runChild } = makeGhMock([
       // Raw delta since the last-reviewed head includes a base file (a code file
