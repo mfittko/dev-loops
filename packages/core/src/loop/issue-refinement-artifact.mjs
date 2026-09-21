@@ -966,14 +966,16 @@ function sectionHasBody(section) {
 // contradict that.
 const TOP_LEVEL_NON_CHECKBOX_BULLET_PATTERN = /^(?:>\s*)*(?:[-*+]|\d+[.)])\s+(?!\[[ xX]\](?:\s|$))(.+?)\s*$/u;
 
-// A spaced Markdown thematic break (`* * *`, `- - -`, `+ + +`) also matches
+// A spaced Markdown thematic break (`* * *`, `- - -`) also matches
 // `TOP_LEVEL_NON_CHECKBOX_BULLET_PATTERN` (marker, whitespace, more marker
 // text) but is a divider, not a bullet — `parseChecklistItems` never treats
 // it as an item, so counting it here would reject a legitimate AC/DoD
 // section over a divider line. `***`/`---` (no spaces) already fail the
 // bullet pattern's `\s+` requirement, so only the spaced form needs this
-// guard. Same-marker-only via the backreference, matching the CommonMark
-// thematic-break rule (3+ of the SAME char, optional spaces, nothing else).
+// guard. Same-marker-only via the backreference, and only `-`/`*`/`_` per
+// the CommonMark thematic-break rule (3+ of the SAME char, optional spaces,
+// nothing else) — `+` is NOT a valid thematic-break marker, so `+ + +`
+// stays correctly counted as a real (single-item) plain bullet.
 const THEMATIC_BREAK_RE = /^([-*_])(?:[ \t]*\1){2,}[ \t]*$/u;
 
 /**
