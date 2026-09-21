@@ -46,8 +46,8 @@ test("this repo's .devloops resolves the pre-PR-reviewer to Fable on Claude and 
 
   assert.equal(
     resolveRoleModel(config, { role: "pre-PR-reviewer", harness: "claude" }),
-    "claude-fable-5-1",
-    "Claude-Code harness pre-PR-reviewer must resolve to Fable via .devloops",
+    "fable",
+    "Claude-Code harness pre-PR-reviewer must resolve to the Fable model token via .devloops",
   );
   assert.equal(
     resolveRoleModel(config, { role: "pre-PR-reviewer", harness: "pi" }),

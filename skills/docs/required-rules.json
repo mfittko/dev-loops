@@ -531,10 +531,6 @@
       "enforcement": "doc"
     },
     {
-      "id": "PRE-PR-ONE-FRESH-REVIEWER",
-      "enforcement": "doc"
-    },
-    {
       "id": "PRE-PR-BOUNDED-TWO-ROUNDS",
       "enforcement": "doc"
     },
@@ -543,15 +539,19 @@
       "enforcement": "doc"
     },
     {
-      "id": "PRE-PR-MODEL-CONFIG-RESOLVED",
-      "enforcement": "doc"
-    },
-    {
       "id": "PRE-PR-GATE-STILL-AUTHORITY",
       "enforcement": "doc"
     },
     {
+      "id": "PRE-PR-MODEL-CONFIG-RESOLVED",
+      "enforcement": "doc"
+    },
+    {
       "id": "PRE-PR-NOT-GATE-EVIDENCE",
+      "enforcement": "doc"
+    },
+    {
+      "id": "PRE-PR-ONE-FRESH-REVIEWER",
       "enforcement": "doc"
     },
     {

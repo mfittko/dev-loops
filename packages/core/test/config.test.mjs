@@ -6461,11 +6461,11 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
     // Mirrors this repo's .devloops opt-in: Fable on Claude only, Pi inherits.
     const config = {
       models: {
-        tiers: { "pre-pr-strong": { claude: "claude-fable-5-1" } },
+        tiers: { "pre-pr-strong": { claude: "fable" } },
         roleTiers: { "pre-PR-reviewer": "pre-pr-strong" },
       },
     };
-    assert.equal(resolveRoleModel(config, { role: "pre-PR-reviewer", harness: "claude" }), "claude-fable-5-1");
+    assert.equal(resolveRoleModel(config, { role: "pre-PR-reviewer", harness: "claude" }), "fable");
     // Pi has no entry in the tier → null (inherit/default), keeping it harness-agnostic.
     assert.equal(resolveRoleModel(config, { role: "pre-PR-reviewer", harness: "pi" }), null);
     // Zero config: built-in high tier is a null no-op on Pi, opus on Claude.
