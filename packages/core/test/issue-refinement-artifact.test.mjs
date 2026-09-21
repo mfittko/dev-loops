@@ -983,3 +983,41 @@ test("#2333 regression: a plain-bullet AC/DoD body can never reach the completen
     { uncheckedAcItems: [], uncheckedDodItems: [] },
   );
 });
+
+test("#2333 review: a mixed AC section (checkbox + plain bullet) rejects and acItems stays sourced from the checkbox items only", () => {
+  const body = prBodySpecFixture({ ac: "- [ ] works\n- plain", dod: "- [ ] tested" });
+  const result = validatePrBodySpec({ body, expectedIssue: 123 });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.code === "acceptance_criteria_not_checkboxes"));
+  assert.deepEqual(result.acItems, ["works"]);
+});
+
+test("#2333 review: an indented explanatory sub-bullet under a checkbox item passes (regression guard)", () => {
+  const body = prBodySpecFixture({ ac: "- [ ] works\n  - detail", dod: "- [ ] tested" });
+  const result = validatePrBodySpec({ body, expectedIssue: 123 });
+  assert.ok(!result.errors.some((e) => e.code === "acceptance_criteria_not_checkboxes"));
+});
+
+test("#2333 review: alternate `*` checkbox marker passes and is block-visible", () => {
+  const body = prBodySpecFixture({ ac: "* [ ] works", dod: "- [x] tested" });
+  const result = validatePrBodySpec({ body, expectedIssue: 123 });
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body }).uncheckedAcItems,
+    ["works"],
+  );
+});
+
+test("#2333 review: a plain bullet in a DUPLICATE Acceptance criteria heading rejects (same section set as the completeness block)", () => {
+  const body = `${PR_BODY_SPEC_NARRATIVE}\n## Acceptance criteria\n- [x] real\n\n## Acceptance criteria\n- plain dup\n\n## Definition of done\n- [ ] tested\n`;
+  const result = validatePrBodySpec({ body, expectedIssue: 123 });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.code === "acceptance_criteria_not_checkboxes"));
+});
+
+test("#2333 review: a plain bullet under a nested ### sub-heading inside Acceptance criteria rejects", () => {
+  const body = `${PR_BODY_SPEC_NARRATIVE}\n## Acceptance criteria\n- [ ] real\n\n### Notes\n- plain in sub\n\n## Definition of done\n- [ ] tested\n`;
+  const result = validatePrBodySpec({ body, expectedIssue: 123 });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.code === "acceptance_criteria_not_checkboxes"));
+});

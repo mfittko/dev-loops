@@ -950,13 +950,37 @@ function sectionHasBody(section) {
 }
 
 /**
+ * Scan every section the completeness block would read (ALL sections matching
+ * `patterns`, deep-flattened past `###` sub-headings via
+ * `findAllSectionsByPatterns` + `flattenSectionDeep` — the same union
+ * `extractPrBodyUncheckedChecklistItems` reads) for top-level plain bullets
+ * (no checkbox marker). Shares the section-set read with the completeness
+ * block on purpose: a plain bullet invisible to `validatePrBodySpec`'s own
+ * single-section read but visible to the completeness block (a duplicate
+ * AC/DoD heading, or a bullet nested under a `###` sub-heading) must still
+ * reject here, or the two surfaces diverge on the same checkbox-marker
+ * fail-open class this module closes for the simple single-section case.
+ */
+function scanPlainBullets(sections, patterns) {
+  const matched = findAllSectionsByPatterns(sections, patterns);
+  const items = [];
+  for (let i = 0; i < sections.length; i += 1) {
+    if (!matched.includes(sections[i])) continue;
+    items.push(...parseChecklistItems(flattenSectionDeep(sections, i)).filter((it) => it.checked === null));
+  }
+  return items;
+}
+
+/**
  * Validate that a PR body carries every invariant required to serve as the
  * lightweight spec-of-record: Objective/why, in-scope, explicit non-goals,
- * testable Acceptance criteria (>=1 checklist item), Definition of done
- * (>=1 checklist item), Open questions/risks, and — unless issue-less mode is
+ * testable Acceptance criteria (>=1 checkbox item), Definition of done
+ * (>=1 checkbox item), Open questions/risks, and — unless issue-less mode is
  * requested — a GitHub closing-keyword issue reference. Reuses the generic
  * markdown logic so there is no parallel validator. Fails closed: every missing
- * invariant is reported under its distinct `missing_*` code. Pure; no I/O.
+ * invariant is reported under its distinct `missing_*` code (plus the two
+ * `*_not_checkboxes` codes for a plain-bullet AC/DoD section — see
+ * `scanPlainBullets`). Pure; no I/O.
  *
  * Issue-less mode (`issueLess: true`): the closing-issue linkage flips from
  * REQUIRED to FORBIDDEN (the PR is the sole artifact), failing closed under
@@ -1047,37 +1071,44 @@ export function validatePrBodySpec({ body = "", expectedIssue = null, issueLess 
   // Checkbox markers are REQUIRED (not just any bullet): the completeness
   // block (extractPrBodyUncheckedChecklistItems) only ever sees checkbox
   // items, so a plain bullet here would fail-open the completeness check
-  // even though this validator accepted it.
+  // even though this validator accepted it. The plain-bullet scan reads the
+  // SAME section set the completeness block reads (scanPlainBullets), not
+  // just the first section, so a duplicate heading or a bullet nested under a
+  // `###` sub-heading cannot hide from this check either.
   const acSection = findSectionByPatterns(sections, ACCEPTANCE_SECTION_PATTERNS);
   const acParsed = acSection ? parseChecklistItems(acSection.bodyLines.join("\n")) : [];
-  const acPlainBullets = acParsed.filter((item) => item.checked === null);
   const acItems = acParsed.filter((item) => item.checked !== null).map((item) => item.text);
   if (acParsed.length === 0) {
     errors.push({
       code: "missing_acceptance_criteria",
-      message: "Missing testable Acceptance criteria (no checklist items found).",
+      message: "Missing testable Acceptance criteria (no checkbox items found).",
     });
-  } else if (acPlainBullets.length > 0) {
-    errors.push({
-      code: "acceptance_criteria_not_checkboxes",
-      message: `Acceptance criteria must use checkbox markers ('- [ ]'/'- [x]'), not plain bullets (found ${acPlainBullets.length} plain bullet(s)); plain bullets fail-open the completeness block.`,
-    });
+  } else {
+    const acPlainBullets = scanPlainBullets(sections, ACCEPTANCE_SECTION_PATTERNS);
+    if (acPlainBullets.length > 0) {
+      errors.push({
+        code: "acceptance_criteria_not_checkboxes",
+        message: `Acceptance criteria must use checkbox markers ('- [ ]'/'- [x]'), not plain bullets (found ${acPlainBullets.length} plain bullet(s)); plain bullets fail-open the completeness block.`,
+      });
+    }
   }
 
   const dodSection = findSectionByPatterns(sections, DOD_SECTION_PATTERNS);
   const dodParsed = dodSection ? parseChecklistItems(dodSection.bodyLines.join("\n")) : [];
-  const dodPlainBullets = dodParsed.filter((item) => item.checked === null);
   const dodItems = dodParsed.filter((item) => item.checked !== null).map((item) => item.text);
   if (dodParsed.length === 0) {
     errors.push({
       code: "missing_definition_of_done",
-      message: "Missing Definition of done (no checklist items found).",
+      message: "Missing Definition of done (no checkbox items found).",
     });
-  } else if (dodPlainBullets.length > 0) {
-    errors.push({
-      code: "definition_of_done_not_checkboxes",
-      message: `Definition of done must use checkbox markers ('- [ ]'/'- [x]'), not plain bullets (found ${dodPlainBullets.length} plain bullet(s)); plain bullets fail-open the completeness block.`,
-    });
+  } else {
+    const dodPlainBullets = scanPlainBullets(sections, DOD_SECTION_PATTERNS);
+    if (dodPlainBullets.length > 0) {
+      errors.push({
+        code: "definition_of_done_not_checkboxes",
+        message: `Definition of done must use checkbox markers ('- [ ]'/'- [x]'), not plain bullets (found ${dodPlainBullets.length} plain bullet(s)); plain bullets fail-open the completeness block.`,
+      });
+    }
   }
 
   const closesIssues = extractClosingIssueNumbers(bodyText);
