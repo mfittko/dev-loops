@@ -233,14 +233,15 @@ describe("whole-spec judge disposition", () => {
     // Producer side: the documented judge contract names conflictingCriteria as
     // a non-empty array requirement for BOTH conflict outcomes, tied to the same
     // enforcer rule. Scope every assertion to the single requirement LINE (not
-    // the whole doc) so weakening it — dropping "non-empty", softening "MUST",
-    // or omitting an outcome — fails the guard, not just a full revert. Assert
-    // against both the source and the generated surface.
+    // the whole doc) so weakening it — dropping "non-empty", dropping the
+    // "of criterion ids" element shape, softening "MUST", or omitting an
+    // outcome — fails the guard, not just a full revert. Assert against both
+    // the source and the generated surface.
     for (const rel of ["../../../agents/judge.agent.md", "../../../.claude/agents/judge.md"]) {
       const doc = readFileSync(path.resolve(here, rel), "utf8");
       const line = doc.split("\n").find((l) => l.startsWith("Both conflict outcomes"));
       assert.ok(line, `${rel} must carry the conflictingCriteria requirement line`);
-      assert.match(line, /MUST carry a non-empty `conflictingCriteria` array/, `${rel} requirement line must pin the non-empty conflictingCriteria array shape`);
+      assert.match(line, /MUST carry a non-empty `conflictingCriteria` array of (?:the )?criterion ids/, `${rel} requirement line must pin the full shape: a non-empty conflictingCriteria array OF CRITERION IDS (the element shape the enforcer's normalizeIdSet requires), not merely a non-empty array`);
       assert.match(line, /SPEC-AUTHORITY-CONFLICT-EVIDENCE/, `${rel} requirement line must name the enforcer rule`);
       for (const outcome of SPEC_AUTHORITY_CONFLICT_OUTCOMES) {
         assert.ok(line.includes(`\`${outcome}\``), `${rel} requirement line must name the conflict outcome ${outcome}`);
