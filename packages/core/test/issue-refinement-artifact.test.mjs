@@ -1070,3 +1070,51 @@ test("#2333 follow-up (#2341): a mixed DoD section with an ordered plain bullet 
   assert.equal(result.ok, false);
   assert.ok(result.errors.some((e) => e.code === "definition_of_done_not_checkboxes"));
 });
+
+test("#2333 follow-up (#2341): a no-space checkbox-lookalike (`- [ ]works`) is still rejected as a plain bullet", () => {
+  const body = prBodySpecFixture({ ac: "- [ ]works", dod: "- [ ] tested" });
+  const result = validatePrBodySpec({ body, expectedIssue: 123 });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.code === "acceptance_criteria_not_checkboxes"));
+});
+
+// PR #2338 review thread A: the plain-bullet lookahead required whitespace
+// after `]`, so an empty end-of-line checkbox placeholder (`- [ ]`/`- [x]`,
+// no trailing text) was NOT excluded and got miscounted as a plain bullet —
+// contradicting parseChecklistItems, which documents empty placeholders as
+// skipped.
+test("#2333 review (PR 2338 thread A): a real checkbox plus an empty `- [ ]` end-of-line placeholder passes", () => {
+  const body = prBodySpecFixture({ ac: "- [ ] works\n- [ ]", dod: "- [ ] tested" });
+  const result = validatePrBodySpec({ body, expectedIssue: 123 });
+  assert.ok(!result.errors.some((e) => e.code === "acceptance_criteria_not_checkboxes"));
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.acItems, ["works"]);
+});
+
+test("#2333 review (PR 2338 thread A): a real checkbox plus an empty `- [x]` end-of-line placeholder passes", () => {
+  const body = prBodySpecFixture({ ac: "- [ ] works\n- [x]", dod: "- [ ] tested" });
+  const result = validatePrBodySpec({ body, expectedIssue: 123 });
+  assert.ok(!result.errors.some((e) => e.code === "acceptance_criteria_not_checkboxes"));
+  assert.equal(result.ok, true);
+});
+
+// PR #2338 review thread B: scanPlainBullets ran only inside the `else`
+// branch (when parseChecklistItems found items), so an AC/DoD section made
+// ENTIRELY of non-dash plain bullets (zero parsed checkbox items) fell into
+// the "no items" branch and reported missing_acceptance_criteria /
+// missing_definition_of_done instead of the distinct *_not_checkboxes code.
+test("#2333 review (PR 2338 thread B): a pure non-dash plain-bullet AC section reports acceptance_criteria_not_checkboxes, not missing_acceptance_criteria", () => {
+  const body = prBodySpecFixture({ ac: "* plain\n1. also plain", dod: "- [ ] tested" });
+  const result = validatePrBodySpec({ body, expectedIssue: 123 });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.code === "acceptance_criteria_not_checkboxes"));
+  assert.ok(!result.errors.some((e) => e.code === "missing_acceptance_criteria"));
+});
+
+test("#2333 review (PR 2338 thread B): a pure non-dash plain-bullet DoD section reports definition_of_done_not_checkboxes, not missing_definition_of_done", () => {
+  const body = prBodySpecFixture({ ac: "- [ ] works", dod: "* plain\n1. also plain" });
+  const result = validatePrBodySpec({ body, expectedIssue: 123 });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.code === "definition_of_done_not_checkboxes"));
+  assert.ok(!result.errors.some((e) => e.code === "missing_definition_of_done"));
+});

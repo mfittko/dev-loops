@@ -958,8 +958,13 @@ function sectionHasBody(section) {
 // plain line used a non-dash marker. No leading-space match before the
 // marker/blockquote keeps this top-level only: an indented continuation
 // (`  - detail`) is sub-content and is not matched. The negative lookahead
-// excludes a real checkbox line so `- [ ] works` is never double-counted.
-const TOP_LEVEL_NON_CHECKBOX_BULLET_PATTERN = /^(?:>\s*)*(?:[-*+]|\d+[.)])\s+(?!\[[ xX]\]\s)(.+?)\s*$/u;
+// excludes a real checkbox line so `- [ ] works` is never double-counted; the
+// lookahead treats end-of-line as a checkbox terminator too (`(?:\s|$)`), so
+// an empty checkbox placeholder (`- [ ]`/`- [x]`, no trailing text) is
+// excluded rather than mis-caught as a plain bullet — `parseChecklistItems`
+// already documents empty placeholders as skipped, and this scan must not
+// contradict that.
+const TOP_LEVEL_NON_CHECKBOX_BULLET_PATTERN = /^(?:>\s*)*(?:[-*+]|\d+[.)])\s+(?!\[[ xX]\](?:\s|$))(.+?)\s*$/u;
 
 /**
  * Scan a flattened section body for top-level non-checkbox bullet lines
@@ -996,7 +1001,8 @@ function scanTopLevelNonCheckboxBulletLines(text) {
  * single-section case. Local `scanTopLevelNonCheckboxBulletLines` scan, not
  * `parseChecklistItems`'s `checked: null` state, so a non-dash plain bullet
  * (`*`/`+`/ordered) is caught too — `parseChecklistItems` and the shared
- * #1877 completeness-block logic it backs stay untouched.
+ * deterministic pre-approval completeness-block logic it backs (see
+ * acceptance-criteria-verification.md) stay untouched.
  */
 function scanPlainBullets(sections, patterns) {
   const matched = findAllSectionsByPatterns(sections, patterns);
@@ -1111,41 +1117,43 @@ export function validatePrBodySpec({ body = "", expectedIssue = null, issueLess 
   // even though this validator accepted it. The plain-bullet scan reads the
   // SAME section set the completeness block reads (scanPlainBullets), not
   // just the first section, so a duplicate heading or a bullet nested under a
-  // `###` sub-heading cannot hide from this check either.
+  // `###` sub-heading cannot hide from this check either. The scan runs
+  // INDEPENDENTLY of parseChecklistItems (not gated on it finding items) and
+  // is checked FIRST: an AC/DoD section made entirely of non-dash plain
+  // bullets (`* plain`, `1. plain`) yields zero parsed checkbox items, so
+  // gating the scan on "items found" would misreport that case as
+  // missing_acceptance_criteria/missing_definition_of_done instead of the
+  // distinct *_not_checkboxes code.
   const acSection = findSectionByPatterns(sections, ACCEPTANCE_SECTION_PATTERNS);
   const acParsed = acSection ? parseChecklistItems(acSection.bodyLines.join("\n")) : [];
   const acItems = acParsed.filter((item) => item.checked !== null).map((item) => item.text);
-  if (acParsed.length === 0) {
+  const acPlainBullets = scanPlainBullets(sections, ACCEPTANCE_SECTION_PATTERNS);
+  if (acPlainBullets.length > 0) {
+    errors.push({
+      code: "acceptance_criteria_not_checkboxes",
+      message: `Acceptance criteria must use checkbox markers ('- [ ]'/'- [x]'), not plain bullets (found ${acPlainBullets.length} plain bullet(s)); plain bullets fail-open the completeness block.`,
+    });
+  } else if (acParsed.length === 0) {
     errors.push({
       code: "missing_acceptance_criteria",
       message: "Missing testable Acceptance criteria (no checkbox items found).",
     });
-  } else {
-    const acPlainBullets = scanPlainBullets(sections, ACCEPTANCE_SECTION_PATTERNS);
-    if (acPlainBullets.length > 0) {
-      errors.push({
-        code: "acceptance_criteria_not_checkboxes",
-        message: `Acceptance criteria must use checkbox markers ('- [ ]'/'- [x]'), not plain bullets (found ${acPlainBullets.length} plain bullet(s)); plain bullets fail-open the completeness block.`,
-      });
-    }
   }
 
   const dodSection = findSectionByPatterns(sections, DOD_SECTION_PATTERNS);
   const dodParsed = dodSection ? parseChecklistItems(dodSection.bodyLines.join("\n")) : [];
   const dodItems = dodParsed.filter((item) => item.checked !== null).map((item) => item.text);
-  if (dodParsed.length === 0) {
+  const dodPlainBullets = scanPlainBullets(sections, DOD_SECTION_PATTERNS);
+  if (dodPlainBullets.length > 0) {
+    errors.push({
+      code: "definition_of_done_not_checkboxes",
+      message: `Definition of done must use checkbox markers ('- [ ]'/'- [x]'), not plain bullets (found ${dodPlainBullets.length} plain bullet(s)); plain bullets fail-open the completeness block.`,
+    });
+  } else if (dodParsed.length === 0) {
     errors.push({
       code: "missing_definition_of_done",
       message: "Missing Definition of done (no checkbox items found).",
     });
-  } else {
-    const dodPlainBullets = scanPlainBullets(sections, DOD_SECTION_PATTERNS);
-    if (dodPlainBullets.length > 0) {
-      errors.push({
-        code: "definition_of_done_not_checkboxes",
-        message: `Definition of done must use checkbox markers ('- [ ]'/'- [x]'), not plain bullets (found ${dodPlainBullets.length} plain bullet(s)); plain bullets fail-open the completeness block.`,
-      });
-    }
   }
 
   const closesIssues = extractClosingIssueNumbers(bodyText);
