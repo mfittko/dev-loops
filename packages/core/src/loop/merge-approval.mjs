@@ -163,12 +163,9 @@ export function verifyFreshHumanApproval({ approvedBy, currentHeadSha, reviews =
 }
 
 /**
- * Copilot-convergence merge precondition. Wires the current-head Copilot
- * body-disposition detection into the merge gate so the merge wrapper
- * and the loop (`copilotBodyFeedbackUnresolved`) read the SAME classification
- * (`classifyCopilotReviewBodyDisposition`). The classification is shared, so it
- * cannot drift; the POLICY differs by design (the loop self-blocks on 🔵, this
- * gate treats 🔵 as conductor-overridable). Fail-closed.
+ * Shared Copilot-convergence evaluation for pre-approval entry and merge.
+ * Both treat a thread-clean 🔵 as conductor-overridable; unresolved threads
+ * still block independently. Fail-closed.
  *
  * Only the LATEST Copilot review pinned to `currentHeadSha` is judged, so a
  * stale non-approval at an earlier head never blocks and a later same-head 🟢
