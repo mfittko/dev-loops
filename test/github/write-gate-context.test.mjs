@@ -7,8 +7,8 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 
-import { GATE_ANGLE_SCOPES, loadDevLoopConfig, resolveGateAngles, resolveGateAnglesDynamic } from "@dev-loops/core/config";
-import { buildAngleRequestGroups, INHERIT_MODEL_KEY } from "@dev-loops/core/loop/review-dispatch-plan";
+import { GATE_ANGLE_SCOPES, loadDevLoopConfig, resolveGateAngles, resolveGateAnglesDynamic, resolveReviewerRole } from "@dev-loops/core/config";
+import { buildAngleRequestGroups, composeReviewerPromptText, INHERIT_MODEL_KEY } from "@dev-loops/core/loop/review-dispatch-plan";
 import { initGitFixture, makeGhMock } from "../_helpers.mjs";
 
 import {
@@ -1481,12 +1481,13 @@ test("CLI without --base emits an explicit thin-briefing posture, not a silent f
   }
 });
 
-// The three-angle tier set on this fixture is DOCS_TIER's link-check plus both
-// mandatory floors (gate-evidence from the fixture .devloops, pr-description
-// from the shipped defaults, merged by name). The untriered assertions below
-// must therefore pin an angle the tier set EXCLUDES — a bare size check would
-// also hold for the tier set itself and pin nothing.
-const TIERED_ANGLE_SET = ["gate-evidence", "link-check", "pr-description"];
+// The four-angle tier set on this fixture is DOCS_TIER's link-check plus all
+// three mandatory floors (gate-evidence from the fixture .devloops;
+// pr-description and holistic from the shipped defaults, merged by name).
+// The untriered assertions below must therefore pin an angle the tier set
+// EXCLUDES — a bare size check would also hold for the tier set itself and
+// pin nothing.
+const TIERED_ANGLE_SET = ["gate-evidence", "holistic", "link-check", "pr-description"];
 
 function assertUntriered(artifact, message) {
   assert.notDeepEqual([...artifact.resolvedAngles].sort(), TIERED_ANGLE_SET, message);
@@ -2682,6 +2683,50 @@ test("renderBriefingPrefix: under-cap — inline mode, fixed section order, all 
   // Reviewer scope is gate-prefixed so each reviewer's sentinel self-identifies
   // its gate; renderInput() defaults to gate: "draft_gate".
   assert.ok(text.includes("--scope draft-gate-<your-dispatch-unit>"));
+});
+
+// #2307 AC2 composer-seam test: the config-level tests (config.test.mjs) only
+// pin the static holistic PROMPT STRING (resolveReviewerRole). This test
+// instead exercises the DISPATCH/CONTEXT seam a real fan-out round actually
+// sends: renderBriefingPrefix (spec + diff, the same builder write-gate-
+// context.mjs's CLI calls) composed with the shipped holistic angle suffix
+// via composeReviewerPromptText (the same composer compose-reviewer-
+// prompt.mjs's CLI calls). Asserts the resulting reviewer prompt carries the
+// spec (PR body + linked-issue/AC text) and the diff, and carries NO
+// developer-brief field/section — unlike the Pre-PR reviewer's mandatory
+// REVIEW BRIEF (skills/docs/pre-pr-review-contract.md) — pinning that a
+// future brief-injection at this composer seam would fail this test.
+test("AC2 composer seam: the composed holistic dispatch prompt carries spec + diff and no developer-brief field", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-holistic-seam-"));
+  try {
+    const { config, errors } = await loadDevLoopConfig({ repoRoot });
+    assert.deepEqual(errors, []);
+    const { prompt: holisticSuffix, persona } = resolveReviewerRole(config, "holistic");
+    assert.equal(persona, "review");
+    assert.ok(holisticSuffix, "holistic must resolve a shipped prompt to use as the angle suffix");
+
+    const { text: prefixBytes } = renderBriefingPrefix(renderInput());
+    const composed = composeReviewerPromptText({ prefixBytes, volatileBytes: "", angleSuffix: holisticSuffix });
+
+    // Spec is present: the PR body and the linked issue's acceptance-criteria text.
+    assert.ok(composed.includes("Implement the thing."), "composed prompt must carry the PR body (spec)");
+    assert.ok(composed.includes("Acceptance criteria: the thing works."), "composed prompt must carry the linked-issue spec text");
+    // Diff is present.
+    assert.ok(composed.includes("diff --git a/x.mjs b/x.mjs"), "composed prompt must carry the diff");
+    assert.ok(composed.includes("+added line"), "composed prompt must carry the diff body");
+    // The holistic angle's own independence wording made it into the suffix.
+    assert.match(composed, /un-briefed/i);
+    // No developer-brief field/section anywhere in the composed prompt — the
+    // gate dispatch seam is structurally brief-free. `\b` after BRIEF
+    // excludes an incidental "Briefing" match (e.g. the prefix's own "Gate
+    // Review Briefing" header) — this asserts the Pre-PR reviewer's
+    // mandatory "REVIEW BRIEF" field name is absent, not the unrelated word
+    // "briefing".
+    assert.doesNotMatch(composed, /\bREVIEW BRIEF\b/i);
+    assert.doesNotMatch(composed, /\bbrief:/i);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
 });
 
 // #2241: the fresh-context sentinel must be invoked through the dev-loops-run

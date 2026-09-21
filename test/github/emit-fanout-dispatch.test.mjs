@@ -178,7 +178,7 @@ test("first-round emit (no prior findings-log) never requires a carry-forward pl
 
 test("write-gate-context --carried-angles records preflight.carriedAngles and excludes the fully-carried unit from pendingGroups (issue #2251 AC3)", async () => {
   await withTmpDir(async (repoRoot) => {
-    await writeFile(path.join(repoRoot, ".devloops"), "version: 1\ngates:\n  draft:\n    angles:\n      - name: pr-description\n        enabled: false\n", "utf8");
+    await writeFile(path.join(repoRoot, ".devloops"), "version: 1\ngates:\n  draft:\n    angles:\n      - name: pr-description\n        enabled: false\n      - name: holistic\n        enabled: false\n", "utf8");
     const { config, errors } = await loadDevLoopConfig({ repoRoot });
     assert.deepEqual(errors, []);
     const carried = ["coverage", "correctness"];
@@ -202,7 +202,7 @@ test("write-gate-context --carried-angles records preflight.carriedAngles and ex
 test("all-carried rounds consume the real emitter's keyed zero-unit plan through fan-in and ledger writing", async () => {
   await withTmpDir(async (repoRoot) => {
     const gate = "draft_gate";
-    await writeFile(path.join(repoRoot, ".devloops"), "version: 1\ngates:\n  draft:\n    angles:\n      - name: pr-description\n        enabled: false\n", "utf8");
+    await writeFile(path.join(repoRoot, ".devloops"), "version: 1\ngates:\n  draft:\n    angles:\n      - name: pr-description\n        enabled: false\n      - name: holistic\n        enabled: false\n", "utf8");
     const { config, errors } = await loadDevLoopConfig({ repoRoot });
     assert.deepEqual(errors, []);
     const findings = [{ angle: "coverage", severity: "high", summary: "Prior coverage defect remains open", recommendation: "Cover the omitted path", files: ["src/a.mjs", "src/b.mjs"], line: 7 }];
@@ -454,10 +454,16 @@ for (const configured of [true, false]) {
   test(`C17: ${configured ? "configured" : "auto-chunk"} singleton split tail retains its original group through emission and ledger writing`, async () => {
     await withTmpDir(async (repoRoot) => {
       const angles = ["srp", "soc", "ocp", "lsp", "pr-checklist"];
-      await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1, gates: { fanout: {
-        groups: configured ? [{ name: "design-solid", angles: angles.slice(0, 4) }] : [],
-        maxAnglesPerGroup: 4,
-      } } }));
+      await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1, gates: {
+        // Disable the shipped mandatory "holistic" angle so this fixture's
+        // minimal five-angle contract stays exact (same pattern used elsewhere
+        // to isolate a test's angle set from the shipped defaults).
+        preApproval: { angles: [{ name: "holistic", enabled: false }] },
+        fanout: {
+          groups: configured ? [{ name: "design-solid", angles: angles.slice(0, 4) }] : [],
+          maxAnglesPerGroup: 4,
+        },
+      } }));
       const { config, errors } = await loadDevLoopConfig({ repoRoot });
       assert.deepEqual(errors, []);
       const fanout = resolveFanoutDispatch(config, mapGateToConfigKey(GATE), angles, {});
