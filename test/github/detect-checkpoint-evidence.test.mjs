@@ -29,6 +29,7 @@ import {
   isGateMachineArtifactBody,
   parseGateReviewCommentMarkerBody,
   parseGateReviewCommentBody,
+  parseReviewThreads,
   summarizeGateReviewCommentMarkers,
   summarizeGateReviewComments,
 } from "../../scripts/_core-helpers.mjs";
@@ -1248,6 +1249,32 @@ test("buildPreMergeGateCheck: a genuine zero unresolvedThreads (coerced to 0) pa
   const result = buildPreMergeGateCheck(cleanEvidence(), coerceUnresolvedThreadCount({ summary: { unresolvedThreads: 0 } }));
   assert.equal(result.ok, true);
   assert.deepEqual(result.failures, []);
+});
+
+// Raw-boundary integration (#2310 reviewer follow-up): proves the fail-closed
+// contract end to end against the REAL parseReviewThreads boundary, not just
+// against hand-built parsed shapes. A malformed live payload must throw at
+// parseReviewThreads (so main()'s catch records -1, never a silent 0); a
+// well-formed but EMPTY live payload must parse to a genuine 0 and pass.
+test("raw-boundary: malformed live review-thread payload fails closed end-to-end; a well-formed empty payload is a genuine zero that passes", () => {
+  assert.throws(() => parseReviewThreads({ unexpected: "shape" }), /Could not find review threads/);
+  assert.throws(() => parseReviewThreads(42), /Could not find review threads/);
+
+  assert.equal(coerceUnresolvedThreadCount({ summary: { totalThreads: 0 } }), -1);
+
+  const unknown = buildPreMergeGateCheck(cleanEvidence(), -1);
+  assert.equal(unknown.ok, false);
+  assert.ok(
+    unknown.failures.some((f) => /could not fetch review thread state/.test(f)),
+    JSON.stringify(unknown.failures),
+  );
+
+  const wellFormedEmpty = buildPreMergeGateCheck(
+    cleanEvidence(),
+    coerceUnresolvedThreadCount(parseReviewThreads({ reviewThreads: { nodes: [] } })),
+  );
+  assert.equal(wellFormedEmpty.ok, true);
+  assert.deepEqual(wellFormedEmpty.failures, []);
 });
 
 function cleanEvidence() {
