@@ -179,18 +179,25 @@ const DEFAULT_ASSIGNEE = "@me";
 // and edit-pr compare `Closes #N` / `Fixes #N` against the branch's resolved
 // issue with one implementation. Re-exported here for back-compat consumers.
 export { detectClosingKeyword, extractClosingIssueNumber };
-// Never reads stdin (`gh pr create` doesn't either — body always comes from an
-// explicit --body/--body-file), so allowStdin stays false. An unreadable or
-// empty --body-file FAILS CLOSED (throws) rather than silently substituting ""
-// (which used to let a broken/blank --body-file open a body-less PR unnoticed).
+// Resolves the body value in BOTH the space form (`--body <text>` /
+// `--body-file <path>`) AND the inline form (`--body=<text>` /
+// `--body-file=<path>`) via the same both-forms getFlagValue the other flags
+// use. The inline `=` form MUST NOT bypass the wrapper's body-derived guards
+// (closing-reference enforcement, comment-discipline preflight, tracker-backed
+// PR-body spec): gh honors `--body=<text>`, so a guard that only saw the space
+// form could be sidestepped by writing `--body=`. Never reads stdin (`gh pr
+// create` doesn't either — body always comes from an explicit --body/--body-file).
+// An unreadable or empty --body-file FAILS CLOSED (throws) rather than silently
+// substituting "" (which used to let a broken/blank --body-file open a body-less
+// PR unnoticed).
 async function resolveBody(args) {
-  const bodyIdx = args.indexOf("--body");
-  if (bodyIdx !== -1 && bodyIdx + 1 < args.length) {
-    return args[bodyIdx + 1];
+  const bodyValue = getFlagValue(args, /^--body(?:$|=)/u);
+  if (bodyValue !== null) {
+    return bodyValue;
   }
-  const bodyFileIdx = args.indexOf("--body-file");
-  if (bodyFileIdx !== -1 && bodyFileIdx + 1 < args.length) {
-    return resolveBodyOrFile({ bodyFile: args[bodyFileIdx + 1], allowStdin: false });
+  const bodyFileValue = getFlagValue(args, /^--body-file(?:$|=)/u);
+  if (bodyFileValue !== null) {
+    return resolveBodyOrFile({ bodyFile: bodyFileValue, allowStdin: false });
   }
   return null; // no --body/--body-file given
 }

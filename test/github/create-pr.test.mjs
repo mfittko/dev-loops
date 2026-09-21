@@ -1509,6 +1509,53 @@ test("create-pr fails closed at create for a keyword-only tracker-backed body (n
   }
 });
 
+test("create-pr fails closed on a non-conformant body passed via the inline --body=<text> form (the = form must not bypass the guard)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-body-spec-inline-form-"));
+  try {
+    const { env, counterPath, ghLogPath } = await writeGhStub(tempDir, []);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--base", "main",
+      "--head", "feature",
+      "--title", "Add feature",
+      // Inline = form: gh honors it, so the body-derived guards must see it too.
+      "--body=Closes #77",
+    ], { env });
+    assert.equal(result.code, 1);
+    const stderrPayload = JSON.parse(result.stderr);
+    assert.match(stderrPayload.error, /validate-pr-body-spec/);
+    assert.match(stderrPayload.error, /missing_in_scope/);
+    // Fails closed BEFORE any gh call.
+    assert.equal((await readFile(counterPath, "utf8")).trim(), "0");
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr admits a conformant body passed via the inline --body=<text> form", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-body-spec-inline-pass-"));
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: graphqlNoLinkedPrPayload() },
+      { stdout: "https://github.com/owner/repo/pull/1\n" },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--base", "main",
+      "--head", "feature",
+      "--title", "Add feature",
+      `--body=${conformantBody("Closes #77")}`,
+    ], { env });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal((await readGhCalls(ghLogPath)).length, 2);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("create-pr admits a conformant tracker-backed body through create unchanged", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-body-spec-pass-"));
   try {
