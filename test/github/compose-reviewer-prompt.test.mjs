@@ -66,7 +66,7 @@ test("compose-reviewer-prompt.mjs CLI refuses every direct fan-out invocation an
       ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--scope", "draft-gate-coverage", "--angle-suffix-file", suffixFile],
       { cwd: tmpDir },
     );
-    assert.notEqual(result.status, 0);
+    assert.equal(result.status, 1);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, false);
     assert.match(payload.error, /emit-fanout-dispatch/);
@@ -75,7 +75,7 @@ test("compose-reviewer-prompt.mjs CLI refuses every direct fan-out invocation an
 
 test("compose-reviewer-prompt.mjs CLI refuses with no args too (not just an args-parsing failure)", () => {
   const result = runComposeCli([]);
-  assert.notEqual(result.status, 0);
+  assert.equal(result.status, 1);
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.ok, false);
   assert.match(payload.error, /emit-fanout-dispatch/);

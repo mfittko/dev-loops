@@ -377,8 +377,8 @@ sanctioned step — `scripts/github/emit-fanout-dispatch.mjs` — NOT a composit
 re-derives per round. Given a gate + head whose `write-gate-context.mjs` bundle is already on
 disk, the emitter reads the artifact's fan-out dispatch plan (`artifact.fanout.groups`, or
 `artifact.fanout.pendingGroups` under `--pending`) and, for EACH resolved dispatch unit,
-writes a minimal angle-suffix and drives the composer above (`composeAndRecordReviewerPrompt`,
-the same atomic compose-and-record core the CLI uses). It emits one
+writes a minimal angle-suffix and drives the composer core above (`composeAndRecordReviewerPrompt`,
+the shared atomic compose-and-record core). It emits one
 `{ scope, angles, group, promptPath }` per DISPATCH unit plus a `maxConcurrent` field; the
 conductor then dispatches one fresh-context `review` subagent per emitted unit, seeded with
 that unit's `promptPath` bytes verbatim, records each unit's `group` on Phase 3's `--provenance`
