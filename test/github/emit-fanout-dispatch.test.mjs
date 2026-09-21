@@ -656,7 +656,9 @@ test("end-to-end: write-gate-context.mjs's --carried-angles narrows pendingGroup
     const tmpRoot = path.join(tmpDir, "tmp");
     const exitCode = await main(
       ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--pending"],
-      { tmpRootDefault: tmpRoot },
+      // Inject ledgerTmpRootDefault too so the re-gate ledger scan stays inside
+      // the sandbox instead of reading the real repo's tmp/gate-findings.
+      { tmpRootDefault: tmpRoot, ledgerTmpRootDefault: tmpRoot },
     );
     assert.equal(exitCode, 0);
 
@@ -708,6 +710,7 @@ test("a failed emit-plan write removes a partially-created final artifact", asyn
       ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
       {
         tmpRootDefault: tmpRoot,
+        ledgerTmpRootDefault: tmpRoot,
         persistPlan: async (file, data) => {
           await writeFile(file, data.slice(0, 16), "utf8");
           throw Object.assign(new Error("simulated partial write"), { code: "ENOSPC" });

@@ -759,8 +759,8 @@ Required:
 Optional:
 - `--skip-fanout-ledger-check` — skips only the fan-out findings-log
   ledger/provenance/angle-coverage layer of `gates.requireFanoutEvidence`
-  enforcement (that ledger is a gitignored, worktree-local `tmp/` file, invisible
-  to a stateless remote verifier); the comment-derived executionMode/inlineReason
+  enforcement (that ledger is a gitignored, machine-local `tmp/` file under the
+  main worktree, invisible to a stateless remote verifier); the comment-derived executionMode/inlineReason
   check (including the light-mode inline exception) still applies. Used by the
   `gate-evidence` CI check (`.github/workflows/gate-evidence.yml`); client-side
   callers should omit it.

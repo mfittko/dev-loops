@@ -16,6 +16,7 @@ import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bou
 const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
 import { loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
+import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
@@ -53,7 +54,9 @@ Optional:
                                  for a gate that configures mandatory angles (gates.<gate>.angles entries
                                  with mandatory: true) FAILS CLOSED (throws, writes no ledger) when neither
                                  an explicit --provenance nor a wrapper-supplied one is present. inline_single_agent
-                                 writes stay exempt and byte-identical to before.
+                                 writes stay exempt from the provenance requirement (they carry no provenance);
+                                 the ledger still records the executionMode field either way, so it is no longer
+                                 byte-identical to the pre-executionMode shape.
   --emit-plan <path>             Optional keyed emit-fanout-dispatch plan. When supplied, requires --provenance and fails closed unless that caller-supplied provenance matches the plan's round key and emitted fresh units exactly. The plan is a guard only; it never supplies provenance or findings. Omitted preserves current behavior.
   --full-label                   The PR carries the gate:full label: dispatch groups resolve to one angle per unit, so any reviewer identity shared across fresh angles is rejected regardless of a declared "group" (mirrors write-gate-context.mjs's --full-label). Only meaningful when --provenance is supplied. Omitted (default false) keeps current behavior.
   --judge-verdict <path>         Path to the judge agent's verdict artifact (JSON). When supplied, the findings are
@@ -63,7 +66,12 @@ Optional:
                                  was consciously not acted on and why (#1525). The verdict must dispose every finding
                                  (one disposition per 0-based ledger position) or the run FAILS CLOSED and writes no
                                  ledger. Optional; when absent the ledger writes byte-identically to before.
-  --tmp-root <path>              Root tmp directory (default: tmp/)
+  --tmp-root <path>              Root tmp directory. Default: the MAIN worktree's tmp/
+                                 — the ledger is anchored at the primary git
+                                 worktree so the merge (running from the main checkout)
+                                 can read it and it survives linked-worktree pruning.
+                                 Do NOT pin this to a linked worktree's tmp/, or the
+                                 ledger is lost on prune and unreadable by the merge.
   --spec-authority <path>        JSON { specDigest, headSha, contentDigest, checkedCriteria }
                                   (issue 2008 / ADR 0061 AC1). When supplied, stamps the log
                                   with the pinned revision identity via the ONE shared stamp
@@ -498,7 +506,9 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
     findingsFile: undefined,
     fullLabel: false,
     executionMode: undefined,
-    tmpRoot: "tmp",
+    // Left undefined so writeGateFindingsLog's fallback anchors the ledger at
+    // the MAIN worktree tmp. An explicit --tmp-root still overrides.
+    tmpRoot: undefined,
     specAuthority: undefined,
   };
   for (const token of tokens) {
@@ -726,8 +736,8 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // one) — omitting it here is exactly the omitting-conductor bug this guard
   // closes, since it would otherwise silently diverge from the posted
   // verdict comment's own provenance. inline_single_agent stays exempt (it
-  // legitimately carries no provenance, byte-identical to before), and a
-  // gate with no mandatory angles configured has no coverage obligation to
+  // legitimately carries no provenance; the ledger still records executionMode),
+  // and a gate with no mandatory angles configured has no coverage obligation to
   // prove either way.
   const executionMode = options.executionMode ?? DEFAULT_EXECUTION_MODE;
   if (executionMode === "fanout_fanin" && provenance === undefined) {
@@ -754,12 +764,17 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   const angleCoverage = provenance !== undefined
     ? await checkProvenanceAngleCoverage(provenance, options.gate, { repoRoot })
     : { warning: null };
+  // Default the ledger tmp root to the MAIN worktree: a coordinator
+  // runs the gate inside an ephemeral linked worktree, but the orchestrator's
+  // merge reads this ledger from the main checkout. Anchoring at the primary
+  // worktree lands it in the ONE stable per-repo location both reach, and it
+  // survives linked-worktree pruning. An explicit --tmp-root still wins.
   const logPath = buildLogPath({
     repo: options.repo,
     pr: options.pr,
     gate: options.gate,
     headSha: options.headSha,
-    tmpRoot: options.tmpRoot || "tmp",
+    tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot),
   });
   const fullPath = path.resolve(repoRoot, logPath);
   const log = {
@@ -769,6 +784,15 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     headSha: options.headSha,
     verdict: persistedVerdict,
     loggedAt: new Date().toISOString(),
+    // Record the round's real execution mode: a fanout_fanin verdict
+    // must never persist a null/absent executionMode. No merge-time reader
+    // consumes this field today (detect-checkpoint-evidence reads executionMode
+    // from the posted verdict COMMENT marker, not the ledger; the stateless
+    // reconciliation path likewise reads the comment, never this machine-local
+    // ledger); it is recorded for provenance/audit completeness only.
+    // Defaults to inline_single_agent (DEFAULT_EXECUTION_MODE) exactly like the
+    // write-time provenance guard above, so the two can never disagree.
+    executionMode,
     findings,
   };
   // `overallVerdict` is optional and additive (absent on a bare-array input);

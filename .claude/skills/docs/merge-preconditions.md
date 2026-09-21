@@ -201,12 +201,12 @@ the client-side tooling does (including the light-mode inline exception,
 and the [review-proportionality non-overridable floors](./gate-review-sub-loop-contract.md#review-proportionality-dispatch-plan-non-overridable-floors)
 layered on top of it — the risk-path and size-outcome floors are recomputed from the
 merge-base diff via plain `git`/`check-size-budget.mjs` reads, so this re-verify runs
-even under `--skip-fanout-ledger-check`, which only scopes down the worktree-local
+even under `--skip-fanout-ledger-check`, which only scopes down the machine-local
 ledger/provenance layer, not this one). It does
 **not** re-verify the deeper fan-out
 findings-log ledger/provenance layer (`gates.requireFanoutEvidence` /
-`requireFanoutProvenance`): that evidence lives in a gitignored, worktree-local
-`tmp/` file only the machine that ran the review has on disk, so a stateless CI
+`requireFanoutProvenance`): that evidence lives in a gitignored, machine-local
+`tmp/` file (under the main worktree, #2315) only the machine that ran the review has on disk, so a stateless CI
 runner can never see it. That layer remains client-side/self-reported-only — the
 same "not un-forgeable" caveat the sub-loop contract already documents.
 
@@ -214,7 +214,7 @@ same "not un-forgeable" caveat the sub-loop contract already documents.
 not an accidental gap: the fan-out findings-log ledger at
 `tmp/gate-findings/<slug>/pr-<n>/<gate>-<head>.json` is inherently machine-local,
 so scoping the CI check down to what a stateless runner CAN verify is the only
-correct posture. Making CI read the worktree-local ledger is a non-goal. The
+correct posture. Making CI read the machine-local ledger is a non-goal. The
 local write-skip this CI skip cannot cover — a `fanout_fanin` verdict posted
 without the durable ledger ever being written — is closed instead at the
 **verdict-post refusal** in `scripts/github/upsert-checkpoint-verdict.mjs`: a

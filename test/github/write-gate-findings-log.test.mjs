@@ -75,7 +75,9 @@ test("parseWriteGateFindingsLogCliArgs parses all required args", () => {
     findingsFile: undefined,
     fullLabel: false,
     executionMode: "inline_single_agent",
-    tmpRoot: "tmp",
+    // default left undefined so writeGateFindingsLog anchors the ledger
+    // at the MAIN worktree tmp; an explicit --tmp-root still overrides.
+    tmpRoot: undefined,
     specAuthority: undefined,
   });
 });

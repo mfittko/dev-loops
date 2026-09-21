@@ -602,6 +602,11 @@ test("parseResolveAngleCarryForwardCliArgs requires the core args", () => {
   assert.equal(opts.gate, "draft_gate");
   assert.equal(opts.prevHead, fullPrevHead);
   assert.equal(opts.headSha, fullHeadSha);
+  // Default undefined (not "tmp") so an omitted --tmp-root reaches the
+  // main-worktree ledger anchor at the prior-ledger read; a literal
+  // "tmp" default would make that fallback dead for the normal CLI path and
+  // hard-fail a re-gate from a linked worktree with "prior findings-log not found".
+  assert.equal(opts.tmpRoot, undefined);
 });
 
 test("parseResolveAngleCarryForwardCliArgs rejects an abbreviated --head-sha (the resolver keys its plan artifact by the full SHA)", () => {

@@ -22,6 +22,7 @@ import {
   resolveGateRound,
 } from "./_gate-finding-surface.mjs";
 import { replyAndMaybeResolve } from "./_review-thread-mutations.mjs";
+import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
 import { GATE_CONFIG_KEY } from "@dev-loops/core/loop/gate-fanin";
 
@@ -72,7 +73,8 @@ Required:
                                 repo/pr/gate/headSha are derived from the ledger itself.
 Optional:
   --tmp-root <path>            Root tmp directory for the local findings-log fallback
-                                count (default: tmp/)
+                                count. Omitted, it resolves to the MAIN worktree's tmp/
+                                (the stable per-repo ledger location); an explicit path overrides.
   --allowed-refs <csv>         Explicit allowlist of issue/PR ids a disposition reply
                                 body may cite (same shape/semantics as
                                 reply-resolve-review-thread): the bare-#N comment-id
@@ -490,7 +492,11 @@ async function runFoldedFilingPass({ repo, pr, findings, round, floor, mediumFix
 // ---------------------------------------------------------------------------
 
 export function parseCloseGateFindingsCliArgs(argv) {
-  const options = { help: false, ledgerPath: undefined, tmpRoot: "tmp", allowedRefs: [] };
+  // tmpRoot defaults to undefined (not "tmp") so an OMITTED --tmp-root falls
+  // through to the main-worktree ledger anchor in closeGateFindings; an explicit
+  // --tmp-root still overrides. A literal "tmp" default would make that fallback
+  // dead for the normal CLI path and keep the round cross-check worktree-relative.
+  const options = { help: false, ledgerPath: undefined, tmpRoot: undefined, allowedRefs: [] };
   const { tokens } = parseArgs({
     args: [...argv],
     options: {
@@ -550,7 +556,11 @@ export function parseCloseGateFindingsCliArgs(argv) {
 
 export async function closeGateFindings(options, { env = process.env, ghCommand = "gh", runChild, repoRoot = process.cwd() } = {}) {
   const { repo, pr, gate, headSha, findings } = await readGateFindingsLedger(options.ledgerPath, { errorFactory: parseError });
-  const tmpRoot = options.tmpRoot || "tmp";
+  // The findings-log ledger (resolveGateRound's local-count cross-check) is
+  // anchored at the MAIN worktree; default there so a close running
+  // inside a linked worktree still counts the centralized prior-round ledgers.
+  // An explicit --tmp-root still wins.
+  const tmpRoot = options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot);
   const gh = { env, ghCommand, runChild };
 
   // 1. The authenticated login — the trust boundary for the gate-authored

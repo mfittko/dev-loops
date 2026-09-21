@@ -25,6 +25,7 @@ import {
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { flattenPaginatedSlurp, listIssueComments, resolveAuthenticatedLogin, runGhJson, sanitizeCodeSpan, sanitizeInline } from "./post-gate-findings.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
+import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { BODY_EXCERPT_MAX_CHARS, fetchAllReviewThreads } from "./list-review-threads.mjs";
 import { captureParsedReviewThreads } from "./_review-thread-mutations.mjs";
 import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
@@ -1168,12 +1169,18 @@ async function countLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, re
  * (A) is primary and survives a fresh worktree/clone; (B) and (C) are
  * cross-checks that can only push the round number UP, never down.
  */
-export async function resolveGateRound({ repo, pr, gate, headSha, reviews, issueComments, tmpRoot = "tmp", repoRoot = process.cwd() }) {
+export async function resolveGateRound({ repo, pr, gate, headSha, reviews, issueComments, tmpRoot, repoRoot = process.cwd() }) {
   const verdictHeadShas = new Set([String(headSha).toLowerCase()]);
   collectVerdictHeadShas(issueComments ?? [], gate, verdictHeadShas);
   collectVerdictHeadShas(reviews ?? [], gate, verdictHeadShas);
   const crossCheckRound = crossCheckRoundFromReviewBodies((reviews ?? []).map((r) => r.body), gate);
-  const fallbackRound = await countLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot });
+  // Source (C) reads the findings-log ledger dir, which is anchored at the MAIN
+  // worktree. Default there so a gate running inside a linked worktree
+  // still counts the centralized prior-round ledgers instead of an empty
+  // worktree-local dir (which would silently drop this cross-check to 0). An
+  // explicit tmpRoot (hermetic callers/tests) still wins.
+  const effectiveTmpRoot = tmpRoot ?? resolveGateArtifactTmpRoot(repoRoot);
+  const fallbackRound = await countLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot: effectiveTmpRoot, repoRoot });
   return Math.max(verdictHeadShas.size, crossCheckRound, fallbackRound, 1);
 }
 

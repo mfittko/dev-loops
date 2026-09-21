@@ -241,10 +241,12 @@ function roundEntries({ reviews = [], issueComments = [{ id: 1, body: verdictBod
 // CLI arg parsing
 // ---------------------------------------------------------------------------
 
-test("parseCloseGateFindingsCliArgs: --ledger required, --tmp-root optional (default tmp)", () => {
+test("parseCloseGateFindingsCliArgs: --ledger required, --tmp-root optional (default undefined -> main-worktree ledger anchor)", () => {
   const result = parseCloseGateFindingsCliArgs(["--ledger", "/tmp/x.json"]);
   assert.equal(result.ledgerPath, "/tmp/x.json");
-  assert.equal(result.tmpRoot, "tmp");
+  // Undefined (not "tmp") so an omitted --tmp-root reaches the main-worktree
+  // ledger anchor in closeGateFindings; an explicit --tmp-root wins.
+  assert.equal(result.tmpRoot, undefined);
 });
 
 test("parseCloseGateFindingsCliArgs: --tmp-root overrides the default", () => {
