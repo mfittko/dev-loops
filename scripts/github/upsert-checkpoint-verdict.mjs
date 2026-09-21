@@ -2338,7 +2338,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // review carries no gate obligations, so no configured blocking severities
   // apply to it (a "clean" review claim is advisory, never merge-blocking).
   const activeGateConfig = isReviewGate
-    ? { blockCleanOnFindingSeverities: [] }
+    ? { blockCleanOnFindingSeverities: [], inlineSeverityFloor: "medium" }
     : (options.gate === "draft_gate" ? draftGateConfig : preApprovalGateConfig);
   // Normalized at the CONSUME site, not only in the CLI parser: a direct
   // programmatic caller may pass legacy-keyed counts, and the guard below
