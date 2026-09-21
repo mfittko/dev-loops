@@ -402,6 +402,13 @@ test("the emitted script stays loadable and byte-exact for adversarial prompt by
     const script = await readFile(plan.waves[0].scriptPath, "utf8");
     assert.equal(waveScriptCallShape(script).runsAllCalls, 1);
     assert.equal(waveScriptCallShape(script).hasLegacyTasksInput, false);
+    // Pin the escaping BRANCH, not just the round-trip: ES2019+ accepts raw
+    // U+2028/U+2029 inside a string literal, so the byte-exact assertion above
+    // stays green even if the escaping were dropped. Only the emitted escape
+    // sequences prove the pre-ES2019 guarantee is still applied.
+    assert.match(script, /\\u2028/);
+    assert.match(script, /\\u2029/);
+    assert.doesNotMatch(script, /\u2028|\u2029/);
   });
 });
 

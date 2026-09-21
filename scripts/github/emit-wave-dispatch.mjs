@@ -76,8 +76,8 @@ Output (stdout, JSON):
   plan with no units, a unit-level refusal, a shape refusal, a script/persist IO
   failure, or a data-dependent --jq error) leaves NO wave artifact on disk for
   this (gate, headSha) key. Argument-validation exits that precede the key
-  resolution (bad --repo/--pr/--gate/--head-sha/--tmp-root/--cwd/--timeout-ms)
-  do not touch the key's artifacts.
+  resolution (bad --repo/--pr/--gate/--head-sha/--tmp-root/--cwd/--timeout-ms,
+  an empty --jq, or an invalid --jq filter) do not touch the key's artifacts.
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Emitted one ready wave script + call body per wave
