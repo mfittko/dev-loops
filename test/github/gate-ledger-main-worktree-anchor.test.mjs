@@ -35,11 +35,12 @@ async function exists(p) {
 
 const HEAD = "abc1234def5678";
 const PROV = JSON.stringify({
-  distinctReviewers: 3,
+  distinctReviewers: 4,
   perAngle: [
     { angle: "dry", reviewer: "review-a" },
     { angle: "kiss", reviewer: "review-b" },
     { angle: "pr-checklist", reviewer: "review-c" },
+    { angle: "holistic", reviewer: "review-d" },
   ],
 });
 
@@ -162,7 +163,7 @@ test("AC2: a worktree-written fanout_fanin ledger's provenance is verifiable fro
     });
     const pa = enforcement.gates.find((g) => g.name === "pre_approval_gate");
     assert.ok(pa && pa.provenance, "provenance written in the worktree must be readable from the main checkout");
-    assert.equal(pa.provenance.distinctReviewers, 3);
+    assert.equal(pa.provenance.distinctReviewers, 4);
 
     const evidence = {
       currentHeadSha: HEAD,
@@ -196,7 +197,7 @@ test("reader-side: a ledger written from one linked worktree is found by a reade
         tmpRoot: resolveGateArtifactTmpRoot(readerCwd),
       });
       const ledger = JSON.parse(await readFile(path.resolve(readerCwd, logPath), "utf8"));
-      assert.equal(ledger.provenance.distinctReviewers, 3, `reader at ${readerCwd} must read the main-anchored ledger`);
+      assert.equal(ledger.provenance.distinctReviewers, 4, `reader at ${readerCwd} must read the main-anchored ledger`);
       assert.equal(ledger.executionMode, "fanout_fanin");
     }
   } finally {
