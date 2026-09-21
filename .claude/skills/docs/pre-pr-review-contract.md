@@ -34,7 +34,8 @@ phase-doc-backed sessions have no first push.
 
 <!-- rule: PRE-PR-ONE-FRESH-REVIEWER -->
 `PRE-PR-ONE-FRESH-REVIEWER`: the developer MUST hand a mandatory REVIEW BRIEF to
-exactly ONE fresh-context, general-purpose reviewer. The brief is a
+exactly ONE fresh-context, general-purpose reviewer per round (a round-two
+re-review runs one reviewer too; see `PRE-PR-BOUNDED-TWO-ROUNDS`). The brief is a
 developer-authored prompt stating what changed, what to scrutinize, known risks
 and tradeoffs, and where the implementation cut corners. The reviewer MUST NOT be
 a fixed angle: it reviews holistically per the brief. Fresh context is required,
