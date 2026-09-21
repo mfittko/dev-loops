@@ -9,11 +9,9 @@ verdicts under the operating session's identity. There is no separate read-only 
 no mandatory async-subagent dispatch — i.e. no Pi-style main-agent→dev-loop async hop: the dev-loop
 agent is invoked directly and owns the work end to end, at that outer level. This is distinct from
 the coordinator→worker delegation described next: the same dev-loop agent, now acting as
-COORDINATOR one level down, still owes a fresh WORKER subagent for tracked-file edits and
-verification runs. But for TRACKED
-repo files (source, tests, docs) the coordinator is itself read-only, one level down: it MUST
-delegate every tracked-file implementation edit to a fresh WORKER subagent
-(`developer`/`fixer`/`quality`/`docs`). The coordinator MAY still write EPHEMERAL artifacts
+COORDINATOR one level down, is itself read-only for TRACKED repo files (source, tests, docs) and
+MUST delegate every tracked-file implementation edit and verification run to a fresh WORKER
+subagent (`developer`/`fixer`/`quality`/`docs`). The coordinator MAY still write EPHEMERAL artifacts
 directly — `tmp/`, the scratchpad, and sanctioned ledger paths (the PR body markdown, comment
 bodies, dispatch prompts, gate evidence/ledgers under `tmp/gate-findings/`) — because those are
 gitignored/non-repo paths, not tracked-file mutations. This coordinator→worker boundary is the

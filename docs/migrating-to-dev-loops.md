@@ -67,8 +67,10 @@ tracked-file implementation edit AND every code-verification/build command (`bun
 `vitest`, `npm test`, ...) to a fresh worker subagent, instead of writing or verifying inline.
 Default is **fail-open** (adopt-safe): the boundary is inert until a consumer repo opts in by
 setting `DEVLOOPS_COORDINATOR_READONLY: "1"` in its `.claude/settings.json` `env` block. Once
-enabled, the guard decision logic is **fail-closed and non-bypassable by the agent itself** — see
-[Main Agent Contract](../skills/docs/main-agent-contract.md) for the full boundary contract.
+enabled, the guard decision logic is **fail-closed and non-bypassable by the dispatched coordinator
+(`agent_type: "dev-loop"`) for its guarded surface** — Write/Edit on tracked files and recognized
+verify/build entrypoints; see [Main Agent Contract](../skills/docs/main-agent-contract.md) for the
+full boundary contract.
 
 ### Pi harness users: these `PI_*` vars are unchanged
 
