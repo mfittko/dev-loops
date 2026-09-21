@@ -310,7 +310,8 @@ export function normalizeTimestamp(value) {
 export function extractReviewCommitSha(review) {
   const graphqlSha = typeof review?.commit?.oid === "string" ? review.commit.oid.trim() : "";
   const restSha = typeof review?.commit_id === "string" ? review.commit_id.trim() : "";
-  const sha = graphqlSha || restSha;
+  const camelCaseSha = typeof review?.commitId === "string" ? review.commitId.trim() : "";
+  const sha = graphqlSha || restSha || camelCaseSha;
   return sha.length > 0 ? sha : null;
 }
 
