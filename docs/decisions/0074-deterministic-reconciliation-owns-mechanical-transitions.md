@@ -685,16 +685,21 @@ Examples include an external execution receipt that the harness cannot rediscove
 
 Where an existing owner already persists that fact, delivery under #2276 SHALL reuse it rather than introduce a second ledger.
 
-Remaining work SHOULD normally be derived:
+Remaining work SHOULD normally be derived along two distinct axes, never a single subtraction, because coverage is not completion:
 
 ```text
-required work
-- valid completed/carry evidence
-- valid in-flight executions
-= work still required
+coverage still required
+  = required review/validation coverage
+    - clean completion evidence
+    - clean carry evidence
+    - valid in-flight executions
+
+work still required
+  = coverage still required
+    + unresolved findings and open judgment obligations
 ```
 
-rather than stored as another authoritative list.
+Only clean, obligation-free evidence reduces the work set. A carried `findings_present` angle (Section 4) satisfies coverage yet retains its blocking findings, so it stays in `work still required` and continues to block completion; it is never subtracted as if it were done. Deriving work this way, rather than storing it as another authoritative list, keeps the two axes from conflating.
 
 ### 16. Recovery regenerates derivable state and fails closed for missing unique evidence
 
