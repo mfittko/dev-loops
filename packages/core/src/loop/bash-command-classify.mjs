@@ -830,20 +830,98 @@ export function commandContainsCopilotSummonComment(command) {
 }
 
 /**
+ * Blank the CONTENTS of quoted string literals ('...' and "...") to a space, EXCEPT a quote that is
+ * the payload of an executable-code flag — a short-flag cluster CONTAINING `c` ANYWHERE in the
+ * cluster (`sh -c '…'`, `bash -c '…'`, `bash -lc '…'`, `bash -ec '…'`, `bash -cl '…'`, `bash -ci '…'`,
+ * `bash -cx '…'`) — bash treats ANY `-c`-containing short-flag cluster as command-execution
+ * regardless of where `c` sits in the cluster, not only one that ENDS in `c` — optionally followed by
+ * a `--` terminator (`bash -c -- '…'`), a long `--command` flag, or `eval` — that payload is REAL
+ * shell syntax to be executed, not inert data, so blanking it would hide an actual poll-loop
+ * construct wrapped in one of these forms. A real poll loop's structural tokens
+ * (`while`/`until`/`for`/`do`/`sleep`/`done`, a `[ -f … ]` file test) are UNQUOTED shell syntax; a
+ * quoted issue body, `--body` payload, or quoted example that merely mentions them carries them
+ * INSIDE quotes as inert data. Blanking those quoted contents is what lets the poll-loop matchers key
+ * on an actual loop CONSTRUCT rather than the token sequence appearing anywhere in a command
+ * (`gh issue create --body "while … sleep … done"` must not be flagged). The `s` (dotAll) flag lets
+ * `.` match a newline too, so a MULTI-LINE quoted `--body` (a real issue body commonly spans lines) is
+ * stripped in full, not just its first line.
+ * A quoted string that itself contains a command substitution (`$(...)`) or a backtick (`` `...` ``)
+ * is executable code, not inert data — its inner command runs regardless of the surrounding quotes.
+ * Blanking it would hide a real poll loop such as `while [ "$(gh pr view 5)" != MERGED ]; do sleep 5;
+ * done` that the gh/loop-state ban already denies, so such a quoted literal is PRESERVED (fail-closed
+ * direction) ahead of the `-c`/`--command`/`eval` exemption check below.
+ *
+ * The `-c`-cluster/`--command`/`eval` exemption is intentionally coarse in the fail-closed direction:
+ * it looks only for a `c` anywhere in a preceding short-flag cluster (or `--command`/`eval`), not for
+ * a shell-interpreter anchor. A non-shell command carrying `-c` (e.g. `grep -ci '<loop text>'`,
+ * `wc -c`) may therefore have its quoted argument preserved too and get over-denied — an accepted
+ * benign false positive, because tightening the exemption to a shell-interpreter anchor would risk a
+ * fail-open (missing a real `sh -c` poll loop), the worse direction.
+ *
+ * ponytail: blanks balanced quote pairs only, with the command-substitution/backtick preserve rule
+ * and the `-c`-cluster/`--command`/`eval` exemption above — no full shell tokenizer (mismatched/
+ * partial quotes and other exec-wrapper flags stay out of scope). Accepted ceiling: a deliberately
+ * quoted structural keyword (e.g. `"sleep"`) placed inside a real UNQUOTED loop is blanked like any
+ * other quoted literal and can therefore evade the ban — accepted as a deliberate-evasion class, not
+ * a natural shape a genuine poll loop takes.
+ * @param {string} command @returns {string}
+ */
+function stripQuotedLiterals(command) {
+  return command.replace(/(['"])((?:(?!\1).)*)\1/gs, (match, _quote, inner, offset, full) => {
+    // A quoted string containing a command substitution ($()) or backtick is executable code, not
+    // inert data — its command runs regardless of the surrounding quotes. Blanking it would hide a
+    // real poll loop such as `while [ "$(gh pr view 5)" != MERGED ]; do sleep 5; done` that the
+    // gh/loop-state ban already denied. Preserve it (fail-closed direction).
+    if (/\$\(|`/.test(inner)) {
+      return match;
+    }
+    const before = full.slice(0, offset);
+    if (/(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?|--command|eval)\s*$/.test(before)) {
+      return match; // executable -c/eval payload — leave the real shell syntax intact
+    }
+    return " ";
+  });
+}
+
+/**
  * Whether COMMAND is (or contains) a sleep-poll loop over `gh`/`loop-state` — a `while`/`until`/
  * `for` loop whose body contains both a `sleep` and a `gh` or `loop-state` call. Checked on the
  * WHOLE command (not per-segment): the loop body is `;`-delimited, so a per-segment split would
  * separate the loop head from its `sleep`/`gh` body calls and miss the pattern. `gh` must be a
  * standalone token (not `grep gh-notes`), and `loop-state` must sit at a command-head position
- * (not a substring inside `grep loop-state x`).
+ * (not a substring inside `grep loop-state x`). Quoted literals are blanked first (see
+ * `stripQuotedLiterals`) so a quoted body/example that merely contains the tokens is not flagged.
  * @param {string} command @returns {boolean}
  */
 export function commandIsSleepPollLoop(command) {
-  const whole = command.trim();
+  const whole = stripQuotedLiterals(command.trim());
   return (
     /(?:while|until|for)\b/i.test(whole) &&
     /\bsleep\b/.test(whole) &&
     /\bgh(?=\s|$)|(?:^|[;&|(])\s*loop-state(?=\s|$)/.test(whole)
+  );
+}
+
+/**
+ * Whether COMMAND is (or contains) a bare FILE-MARKER poll loop: a `while`/`until`/`for` loop that
+ * repeatedly tests for a file's existence/type/permission (`[ -f … ]`, `[[ -e … ]]`, `test -f …`,
+ * `[ -r … ]`, `[ -L … ]`) and sleeps, with NO gated wait-tool. This is the orphan pattern under
+ * Claude Code — a `<tasks>/<id>.done` sentinel Claude Code never writes (completion arrives via
+ * async notification), so the loop never exits and, once backgrounded, orphans with no async wake to
+ * reap it. Distinct from `commandIsSleepPollLoop`, which keys on a `gh`/`loop-state` CALL: this keys
+ * on any bash FILE-test operator (existence, type, or permission — `efsdrwxugkOGLNShb`; string/numeric
+ * tests like `-z`/`-n`/`-t` are deliberately excluded, as those never test a marker FILE), catching a
+ * marker poll that calls no gh/loop-state at all. Verb-independent (while/until/for). Quoted literals
+ * are blanked first (see `stripQuotedLiterals`) so a quoted example or `--body` payload that merely
+ * contains the tokens is NOT flagged.
+ * @param {string} command @returns {boolean}
+ */
+export function commandIsFileMarkerPollLoop(command) {
+  const whole = stripQuotedLiterals(command.trim());
+  return (
+    /(?:while|until|for)\b/i.test(whole) &&
+    /\bsleep\b/.test(whole) &&
+    /(?:\[\[?|\btest\b)\s+(?:!\s+)?-[a-hkprsuwxGLNOS]\b/.test(whole)
   );
 }
 
@@ -933,8 +1011,8 @@ export function commandContainsDetachedWaitTool(command) {
     return true;
   }
 
-  // (2) Unconditional sleep-poll-loop ban.
-  if (commandIsSleepPollLoop(whole)) {
+  // (2) Unconditional sleep-poll-loop ban — a gh/loop-state poll OR a bare file-marker poll.
+  if (commandIsSleepPollLoop(whole) || commandIsFileMarkerPollLoop(whole)) {
     return true;
   }
 

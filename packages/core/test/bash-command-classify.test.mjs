@@ -36,6 +36,8 @@ import {
   commandContainsCopilotRequestBypass,
   commandContainsCopilotSummonComment,
   commandContainsDetachedWaitTool,
+  commandIsSleepPollLoop,
+  commandIsFileMarkerPollLoop,
   commandContainsInlineInterpreter,
   commandContainsCodeVerificationEntrypoint,
 } from "../src/loop/bash-command-classify.mjs";
@@ -576,6 +578,152 @@ test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () =
   // loop-state must be a command-head CALL, not a substring of a grep/echo target
   assert.equal(commandContainsDetachedWaitTool("for i in $(seq 1 3); do sleep 1; grep loop-state x; done"), false);
   assert.equal(commandContainsDetachedWaitTool("while true; do sleep 1; loop-state status; done"), true);
+});
+
+// #2317: a bare FILE-MARKER poll loop (no gh/loop-state call — commandIsSleepPollLoop's territory)
+// is a separate orphan pattern under Claude Code: a `<tasks>/<id>.done` sentinel Claude Code never
+// writes, so the loop never exits and, once backgrounded, orphans with no async wake to reap it.
+test("commandIsFileMarkerPollLoop denies bare file-marker poll loops, verb-independent (#2317)", () => {
+  // DENY: two distinct loop verbs (verb-independence) plus [[ ]] and `test -f` forms.
+  const whileLoop = 'while [ ! -f "$TASKS/$AGENT.done" ]; do sleep 5; done';
+  const untilLoop = "until [ -e /tmp/agent.done ]; do sleep 10; done";
+  const forLoop = 'for i in $(seq 1 720); do [ -f done.marker ] && break; sleep 5; done';
+  const doubleBracket = "while [[ -f /tmp/x.done ]]; do sleep 5; done";
+  const testForm = "while test -f /tmp/x.done; do sleep 5; done";
+  for (const cmd of [whileLoop, untilLoop, forLoop, doubleBracket, testForm]) {
+    assert.equal(commandIsFileMarkerPollLoop(cmd), true, `commandIsFileMarkerPollLoop: ${cmd}`);
+    assert.equal(commandContainsDetachedWaitTool(cmd), true, `commandContainsDetachedWaitTool: ${cmd}`);
+  }
+
+  // ALLOW: quoted bodies/examples that merely MENTION the tokens are not a real loop construct.
+  const quotedBody = 'gh issue create --title x --body "while [ -f x.done ]; do sleep 5; done"';
+  const bodyFile = "gh issue create --body-file /tmp/issue-body.md";
+  const quotedExample = 'echo "poll: while [ -f done ]; do sleep 1; done"';
+  for (const cmd of [quotedBody, bodyFile, quotedExample]) {
+    assert.equal(commandIsFileMarkerPollLoop(cmd), false, `commandIsFileMarkerPollLoop: ${cmd}`);
+    assert.equal(commandContainsDetachedWaitTool(cmd), false, `commandContainsDetachedWaitTool: ${cmd}`);
+  }
+
+  // The existing false positive is also fixed: a quoted body containing while/sleep/done no longer
+  // matches commandIsSleepPollLoop (it blocked filing issue #2317 itself).
+  assert.equal(
+    commandIsSleepPollLoop('gh issue create --title x --body "spin: while gh ...; do sleep 5; done"'),
+    false,
+  );
+
+  // No-regression sanity: a gh-call poll loop with no file test stays owned by
+  // commandIsSleepPollLoop, not commandIsFileMarkerPollLoop.
+  assert.equal(commandIsFileMarkerPollLoop("until gh pr view 5; do sleep 5; done"), false);
+});
+
+// H1 (#2317 follow-up): the `-c` exemption in stripQuotedLiterals was too narrow — only a bare `-c`
+// preserved its quoted payload, so `bash -lc '…'`, `bash -ec '…'`, `bash -c -- '…'`, `bash --command
+// '…'`, and `eval '…'` all blanked their REAL shell payload, letting a genuine poll loop wrapped in
+// one of these forms slip through the ban undetected. Widened to any short-flag cluster ending in
+// `c`, an optional `--` terminator, `--command`, or `eval`.
+test("H1: stripQuotedLiterals no-regression — bash -lc/-ec/eval poll-loop payloads are still denied", () => {
+  const lcLoop = "bash -lc 'until gh pr view 5 --json state; do sleep 5; done'";
+  assert.equal(commandIsSleepPollLoop(lcLoop), true);
+  assert.equal(commandContainsDetachedWaitTool(lcLoop), true);
+
+  const evalLoop = "eval 'until gh pr view 5; do sleep 5; done'";
+  assert.equal(commandIsSleepPollLoop(evalLoop), true);
+  assert.equal(commandContainsDetachedWaitTool(evalLoop), true);
+
+  const fileMarkerLcLoop = "bash -lc 'while [ -f x.done ]; do sleep 5; done'";
+  assert.equal(commandIsFileMarkerPollLoop(fileMarkerLcLoop), true);
+  assert.equal(commandContainsDetachedWaitTool(fileMarkerLcLoop), true);
+
+  // --command (long flag) and -c -- (short flag + terminator) are separate alternatives in the
+  // exemption regex — untested until now, so a regression to either one would silently blank the
+  // real payload and let the loop slip the deny (fail OPEN).
+  const commandFlagLoop = "bash --command 'until gh pr view 5; do sleep 5; done'";
+  assert.equal(commandIsSleepPollLoop(commandFlagLoop), true);
+  assert.equal(commandContainsDetachedWaitTool(commandFlagLoop), true);
+
+  const cDashDashLoop = "bash -c -- 'until gh pr view 5; do sleep 5; done'";
+  assert.equal(commandIsSleepPollLoop(cDashDashLoop), true);
+  assert.equal(commandContainsDetachedWaitTool(cDashDashLoop), true);
+
+  const fileMarkerCDashDashLoop = "bash -c -- 'while [ -f x.done ]; do sleep 5; done'";
+  assert.equal(commandIsFileMarkerPollLoop(fileMarkerCDashDashLoop), true);
+  assert.equal(commandContainsDetachedWaitTool(fileMarkerCDashDashLoop), true);
+});
+
+// H2 (#2317 follow-up): the H1 widening still required the short-flag cluster to END in `c`
+// (`-[A-Za-z]*c`), but bash executes the quoted payload for ANY cluster CONTAINING `-c`, regardless
+// of position — `bash -cl '…'`, `bash -ci '…'`, `bash -cx '…'` all execute the payload too. Widened
+// to `-[A-Za-z]*c[A-Za-z]*` so `c` may appear anywhere in the cluster.
+test("H2: stripQuotedLiterals no-regression — -c-not-last short-flag clusters (-cl/-ci) still deny", () => {
+  const clLoop = "bash -cl 'until gh pr view 5; do sleep 5; done'";
+  assert.equal(commandIsSleepPollLoop(clLoop), true);
+  assert.equal(commandContainsDetachedWaitTool(clLoop), true);
+
+  const fileMarkerClLoop = "bash -cl 'while [ -f x.done ]; do sleep 5; done'";
+  assert.equal(commandIsFileMarkerPollLoop(fileMarkerClLoop), true);
+
+  const ciLoop = "bash -ci 'until gh pr view 5; do sleep 5; done'";
+  assert.equal(commandContainsDetachedWaitTool(ciLoop), true);
+});
+
+// H1 follow-up: commandIsFileMarkerPollLoop's operator class deliberately excludes string tests
+// (-z/-n) and the numeric/terminal test (-t) — none of those test a marker FILE. A while/sleep loop
+// keyed on one of those must NOT be flagged as a file-marker poll loop.
+test("H1: commandIsFileMarkerPollLoop excludes string (-z/-n) test operators", () => {
+  assert.equal(commandIsFileMarkerPollLoop('while [ -z "$x" ]; do sleep 5; done'), false);
+  assert.equal(commandIsFileMarkerPollLoop('while [ -n "$x" ]; do sleep 5; done'), false);
+});
+
+// M1 (#2317 follow-up): stripQuotedLiterals only matched a quoted literal WITHOUT the `s` (dotAll)
+// flag, so a newline inside a quoted `--body` broke the match and a normal MULTI-LINE issue body
+// still false-positive-denied (AC2 only held for single-line bodies).
+test("M1: a multi-line quoted --body is stripped and does not false-positive deny", () => {
+  const multiLineBody = `gh issue create --title t --body "Repro steps:\nwhile [ -f x.done ]; do sleep 5; done\nEnd of repro."`;
+  assert.equal(commandIsSleepPollLoop(multiLineBody), false);
+  assert.equal(commandIsFileMarkerPollLoop(multiLineBody), false);
+  assert.equal(commandContainsDetachedWaitTool(multiLineBody), false);
+});
+
+// M3 (#2317 follow-up): commandIsFileMarkerPollLoop's operator class was too narrow ([efsd] only),
+// missing common bash FILE-test operators like -e (default) and -r (readable) that a marker-poll
+// loop may plausibly use.
+test("M3: commandIsFileMarkerPollLoop denies additional bash FILE-test operators (-e, -r)", () => {
+  assert.equal(commandIsFileMarkerPollLoop("until [ -e /tmp/a.done ]; do sleep 5; done"), true);
+  assert.equal(commandIsFileMarkerPollLoop('while [ -r "$m.done" ]; do sleep 5; done'), true);
+});
+
+// M2 replacement (#2317 follow-up): the pre-existing `--body-file /path` ALLOW case proves nothing —
+// a bare path never carries loop tokens in the first place. A MEANINGFUL false-positive ALLOW must
+// have the poll-loop-shaped tokens live ONLY inside a quoted flag value (here --title), with a
+// separate --body-file pointing at a path.
+test("M2: gh issue create with poll-loop tokens only inside a quoted --title (not --body-file) allows", () => {
+  const cmd = 'gh issue create --title "poll: while [ -f x.done ]; do sleep 5; done" --body-file /tmp/b.md';
+  assert.equal(commandIsSleepPollLoop(cmd), false);
+  assert.equal(commandIsFileMarkerPollLoop(cmd), false);
+  assert.equal(commandContainsDetachedWaitTool(cmd), false);
+});
+
+// H3 (#2317 Copilot follow-up regression): stripQuotedLiterals blanked the CONTENTS of every quoted
+// literal, including a double-quoted command substitution ($(...)) or backtick. But $(...)/backtick
+// content executes regardless of the surrounding quotes — it is not inert data — so a natural poll
+// idiom like `while [ "$(gh pr view 5)" != MERGED ]; do sleep 5; done` lost its `gh` token and evaded
+// the pre-existing gh/loop-state ban. A quoted literal containing $(...) or a backtick is now
+// preserved (fail-closed direction) ahead of the -c/eval exemption check.
+test("H3: stripQuotedLiterals preserves a quoted command substitution/backtick — no regression on the gh/loop-state ban", () => {
+  const cmdSubstLoop = 'while [ "$(gh pr view 5)" != MERGED ]; do sleep 5; done';
+  assert.equal(commandIsSleepPollLoop(cmdSubstLoop), true);
+  assert.equal(commandContainsDetachedWaitTool(cmdSubstLoop), true);
+
+  const backtickLoop = 'until [ "' + "`gh pr view 5`" + '" = OPEN ]; do sleep 5; done';
+  assert.equal(commandIsSleepPollLoop(backtickLoop), true);
+
+  const loopStateCmdSubstLoop = 'while [ "$(loop-state status)" != done ]; do sleep 5; done';
+  assert.equal(commandIsSleepPollLoop(loopStateCmdSubstLoop), true);
+
+  // AC2 still holds: a quoted --body with NO command substitution is still blanked.
+  const quotedBodyNoSubst = 'gh issue create --title x --body "while [ -f x.done ]; do sleep 5; done"';
+  assert.equal(commandIsSleepPollLoop(quotedBodyNoSubst), false);
+  assert.equal(commandIsFileMarkerPollLoop(quotedBodyNoSubst), false);
 });
 
 test("commandContainsDetachedWaitTool detects bare-& backgrounded wait/probe scripts (#2065)", () => {
