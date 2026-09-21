@@ -61,6 +61,8 @@ Treat the deterministic public routing contract in [Public Dev Loop Contract](..
 
 Interpret issue-based shorthand triggers like `auto dev loop on issue <n>`, `enter copilot auto dev loop on issue <n>`, and `run auto dev loop on <n> until approval gate` as compatibility wording for the same public `dev-loop` intent, not a second public workflow entrypoint.
 
+Merge, retrospective, and issue creation are orchestrator-owned. The routed child emits its findings as structured text and stops at the human-approval checkpoint: it never merges, never runs a retrospective, and never files issues. Merge and issue creation are carried in the envelope's `sanctionedCommands` orchestrator-owned list; retrospective ownership is stated here so no routed child re-derives which operations it may never perform.
+
 Respect repository contract routing posture:
 - prefer the GitHub-first routed path when work should move through GitHub branches, pull requests, CI, and review
 - route to the local implementation strategy only when the user explicitly requests a local phase-based path
@@ -80,9 +82,10 @@ All delegation MUST originate from the handoff envelope: the envelope's `nextAct
 
 The pi-subagents skill is parent-only, so delegated subagents do not receive orchestration patterns. This section exists as the minimal locally-enforced subset needed for correct delegation — it is not a restatement of the full policy. The `dev-loop` skill owns all procedural rules; this section only declares the invariants the agent MUST follow when it cannot defer to the skill:
 - One writer thread; `async: true` default; `context: "fresh"` for reviewers.
+- Every sub-loop (refine, implement, review fan-out, judge, fixer) runs in its own dedicated fresh-context agent; an agent dispatched to run one of these sub-loops executes it as its assigned bounded task. The coordinator keeps its own context thin and performs no sub-loop work inline.
 - No child subagent spawning beyond assigned fanout work.
 - Bounded tasks with concrete scope, exit conditions, and validation expectations.
-- Awaiting a nested child this run dispatched (a judge, a fixer, or a single reviewer): join it with a blocking dispatch (`async: false`) or one `bg_wait` nonBlocking subscription. Never sleep-poll for it, and never end the turn to await it — see `END-TURN-AND-AWAIT-WAKE` in [Anti-patterns](../skills/docs/anti-patterns.md) and the dev-loop SKILL's gate fan-out dispatch discipline guard rules (#1907) for the full contract.
+- Awaiting any wait the run depends on (a judge, a fixer, a reviewer, a CI-green wait, or a Copilot-review wait) is a synchronous join, never a detached background wait that ends the turn. Join a nested subagent child (judge/fixer/reviewer) with a blocking dispatch (`async: false`) or one `bg_wait` nonBlocking subscription; join a CI-green or Copilot-review wait with the bounded foreground probe in the next bullet. Never sleep-poll for any of them, and never end the turn to await one. See `END-TURN-AND-AWAIT-WAKE` in [Anti-patterns](../skills/docs/anti-patterns.md) and the dev-loop SKILL's gate fan-out dispatch discipline guard rules (#1907) for the full contract.
 - Waiting for Copilot review or CI: run a bounded FOREGROUND inline probe (`probe-copilot-review.mjs` / `wait-pr-checks.mjs` with an explicit `--timeout`/`--timeout-ms`), never a backgrounded `until`/`while … sleep … done` poll loop or a bare-`&` backgrounded probe (#2065). Claude Code has no async wake, so a backgrounded wait orphans past the stop; the PreToolUse Bash-gate denies it for the coordinator and every subagent, actor-independently and fail-closed (a `SubagentStop` background-shell reaper safety-net is tracked as follow-up #2296).
 
 <!-- pi-only -->
