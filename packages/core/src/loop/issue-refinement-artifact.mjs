@@ -966,10 +966,21 @@ function sectionHasBody(section) {
 // contradict that.
 const TOP_LEVEL_NON_CHECKBOX_BULLET_PATTERN = /^(?:>\s*)*(?:[-*+]|\d+[.)])\s+(?!\[[ xX]\](?:\s|$))(.+?)\s*$/u;
 
+// A spaced Markdown thematic break (`* * *`, `- - -`, `+ + +`) also matches
+// `TOP_LEVEL_NON_CHECKBOX_BULLET_PATTERN` (marker, whitespace, more marker
+// text) but is a divider, not a bullet — `parseChecklistItems` never treats
+// it as an item, so counting it here would reject a legitimate AC/DoD
+// section over a divider line. `***`/`---` (no spaces) already fail the
+// bullet pattern's `\s+` requirement, so only the spaced form needs this
+// guard. Same-marker-only via the backreference, matching the CommonMark
+// thematic-break rule (3+ of the SAME char, optional spaces, nothing else).
+const THEMATIC_BREAK_RE = /^([-*_])(?:[ \t]*\1){2,}[ \t]*$/u;
+
 /**
  * Scan a flattened section body for top-level non-checkbox bullet lines
  * (`TOP_LEVEL_NON_CHECKBOX_BULLET_PATTERN`). Fence-skipped via the shared
- * `stepFence` so a fenced fake bullet cannot spoof this check.
+ * `stepFence` so a fenced fake bullet cannot spoof this check. Thematic-break
+ * divider lines (`THEMATIC_BREAK_RE`) are excluded — see its docstring.
  */
 function scanTopLevelNonCheckboxBulletLines(text) {
   if (typeof text !== "string" || text.length === 0) return [];
@@ -980,9 +991,10 @@ function scanTopLevelNonCheckboxBulletLines(text) {
     fence = step.fence;
     if (step.insideFence) continue;
     const match = TOP_LEVEL_NON_CHECKBOX_BULLET_PATTERN.exec(line);
-    if (match && match[1].trim().length > 0) {
-      found.push(match[1].trim());
-    }
+    if (!match || match[1].trim().length === 0) continue;
+    const strippedLine = line.replace(/^(?:>\s*)*/u, "").trim();
+    if (THEMATIC_BREAK_RE.test(strippedLine)) continue;
+    found.push(match[1].trim());
   }
   return found;
 }

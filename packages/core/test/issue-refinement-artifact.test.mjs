@@ -1118,3 +1118,46 @@ test("#2333 review (PR 2338 thread B): a pure non-dash plain-bullet DoD section 
   assert.ok(result.errors.some((e) => e.code === "definition_of_done_not_checkboxes"));
   assert.ok(!result.errors.some((e) => e.code === "missing_definition_of_done"));
 });
+
+// Copilot review-overview finding on PR #2338 (not an inline thread): a
+// spaced Markdown thematic break (`* * *`, `- - -`) also matches the
+// plain-bullet pattern (marker, whitespace, more text) but parseChecklistItems
+// never treats it as an item, so it must not be miscounted as a plain bullet.
+test("#2333 review (overview finding): a real checkbox plus a `* * *` thematic break passes", () => {
+  const body = prBodySpecFixture({ ac: "- [ ] works\n* * *", dod: "- [ ] tested" });
+  const result = validatePrBodySpec({ body, expectedIssue: 123 });
+  assert.ok(!result.errors.some((e) => e.code === "acceptance_criteria_not_checkboxes"));
+  assert.equal(result.ok, true);
+});
+
+test("#2333 review (overview finding): a real checkbox plus a `- - -` thematic break passes", () => {
+  const body = prBodySpecFixture({ ac: "- [ ] works\n- - -", dod: "- [ ] tested" });
+  const result = validatePrBodySpec({ body, expectedIssue: 123 });
+  assert.ok(!result.errors.some((e) => e.code === "acceptance_criteria_not_checkboxes"));
+  assert.equal(result.ok, true);
+});
+
+test("#2333 review (overview finding): a real plain bullet (`* plain item`) is still rejected, proving the thematic-break exclusion is not over-broad", () => {
+  const body = prBodySpecFixture({ ac: "- [ ] works\n* plain item", dod: "- [ ] tested" });
+  const result = validatePrBodySpec({ body, expectedIssue: 123 });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.code === "acceptance_criteria_not_checkboxes"));
+});
+
+test("#2333 review (overview finding): a real checkbox plus a `* * *` thematic break passes in DoD too", () => {
+  const body = prBodySpecFixture({ ac: "- [ ] works", dod: "- [ ] tested\n* * *" });
+  const result = validatePrBodySpec({ body, expectedIssue: 123 });
+  assert.ok(!result.errors.some((e) => e.code === "definition_of_done_not_checkboxes"));
+  assert.equal(result.ok, true);
+});
+
+// `+` is not a valid CommonMark thematic-break character (only `-`, `_`, `*`
+// qualify) — `+ + +` is a real 1-item bullet list (`+` marker, `+ +`
+// content), so it correctly stays rejected as a plain bullet, not excluded
+// as a divider.
+test("#2333 review (overview finding): `+ + +` is NOT a thematic break and stays rejected as a plain bullet", () => {
+  const body = prBodySpecFixture({ ac: "- [ ] works", dod: "- [ ] tested\n+ + +" });
+  const result = validatePrBodySpec({ body, expectedIssue: 123 });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.code === "definition_of_done_not_checkboxes"));
+});
