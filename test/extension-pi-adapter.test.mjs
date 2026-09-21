@@ -1,5 +1,8 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { createPiExtensionAdapter, toHarnessContext } from "../extension/pi-extension-adapter.ts";
 
@@ -96,6 +99,36 @@ test("pi adapter registerCommand forwards name/description and wraps the handler
   await registered.handler("status", { cwd: "/r", hasUI: true, ui: { notify: (m, l) => notes.push({ m, l }) } });
   assert.deepEqual(received, { args: "status", hasUI: true });
   assert.deepEqual(notes, [{ m: "hello", l: "info" }]);
+});
+
+// ---------------------------------------------------------------------------
+// Cross-harness non-regression (#1086): the Claude-only coordinator→worker delegation guard seam
+// (#2082 — decideCoordinatorWriteGuard, the coordinator-verify branch of decideBashGate,
+// commandContainsCodeVerificationEntrypoint, normalizeAgentType) must be inert/absent on the Pi
+// path. Asserted by SOURCE INSPECTION (not "did not throw"): none of the extension/*.ts files that
+// make up the Pi harness surface import from ../loop/hook-decisions.mjs or reference the
+// coordinator-guard exports, so a Pi-side `bun test:extension` run can never invoke them.
+// ---------------------------------------------------------------------------
+test("Pi extension surface (extension/*.ts) does not import or reference the Claude-only coordinator delegation guard seam (#2082, #1086)", () => {
+  const extensionDir = path.resolve(fileURLToPath(new URL("../extension", import.meta.url)));
+  const files = fs.readdirSync(extensionDir).filter((f) => f.endsWith(".ts"));
+  assert.ok(files.length > 0, "expected at least one extension/*.ts file to inspect");
+
+  const forbiddenPatterns = [
+    /hook-decisions/, // decideCoordinatorWriteGuard / decideBashGate's coordinator-verify branch live here
+    /decideCoordinatorWriteGuard/,
+    /normalizeAgentType/,
+    /commandContainsCodeVerificationEntrypoint/,
+  ];
+
+  const offenders = [];
+  for (const file of files) {
+    const source = fs.readFileSync(path.join(extensionDir, file), "utf8");
+    for (const pattern of forbiddenPatterns) {
+      if (pattern.test(source)) offenders.push(`${file} matches ${pattern}`);
+    }
+  }
+  assert.deepEqual(offenders, [], `Pi extension surface must not reference the Claude-only coordinator guard seam:\n${offenders.join("\n")}`);
 });
 
 test("toHarnessContext tolerates a missing ui/cwd and never throws", () => {
