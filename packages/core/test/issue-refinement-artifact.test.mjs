@@ -1021,3 +1021,52 @@ test("#2333 review: a plain bullet under a nested ### sub-heading inside Accepta
   assert.equal(result.ok, false);
   assert.ok(result.errors.some((e) => e.code === "acceptance_criteria_not_checkboxes"));
 });
+
+// Follow-up #2341 (filed against #2333's merged PR): scanPlainBullets relied
+// on parseChecklistItems's `checked === null`, which only fires for the
+// bare-dash plain-bullet form. A mixed section pairing a real checkbox with a
+// non-dash plain bullet (`*`, ordered `N.`, `+`) was invisible to both this
+// validator and the completeness block. These regression-guard the fix.
+test("#2333 follow-up (#2341): a mixed AC section with a `*` plain bullet rejects", () => {
+  const body = prBodySpecFixture({ ac: "- [ ] works\n* plain", dod: "- [ ] tested" });
+  const result = validatePrBodySpec({ body, expectedIssue: 123 });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.code === "acceptance_criteria_not_checkboxes"));
+});
+
+test("#2333 follow-up (#2341): a mixed AC section with an ordered plain bullet rejects", () => {
+  const body = prBodySpecFixture({ ac: "- [ ] works\n1. plain", dod: "- [ ] tested" });
+  const result = validatePrBodySpec({ body, expectedIssue: 123 });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.code === "acceptance_criteria_not_checkboxes"));
+});
+
+test("#2333 follow-up (#2341): a mixed AC section with a `+` plain bullet rejects", () => {
+  const body = prBodySpecFixture({ ac: "- [ ] works\n+ plain", dod: "- [ ] tested" });
+  const result = validatePrBodySpec({ body, expectedIssue: 123 });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.code === "acceptance_criteria_not_checkboxes"));
+});
+
+test("#2333 follow-up (#2341): a pure `*` checkbox AC section still passes and stays completeness-visible", () => {
+  const body = prBodySpecFixture({ ac: "* [ ] works", dod: "- [ ] tested" });
+  const result = validatePrBodySpec({ body, expectedIssue: 123 });
+  assert.ok(!result.errors.some((e) => e.code === "acceptance_criteria_not_checkboxes"));
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body }).uncheckedAcItems,
+    ["works"],
+  );
+});
+
+test("#2333 follow-up (#2341): an indented `*` sub-bullet under a checkbox item still passes", () => {
+  const body = prBodySpecFixture({ ac: "- [ ] works\n  * detail", dod: "- [ ] tested" });
+  const result = validatePrBodySpec({ body, expectedIssue: 123 });
+  assert.ok(!result.errors.some((e) => e.code === "acceptance_criteria_not_checkboxes"));
+});
+
+test("#2333 follow-up (#2341): a mixed DoD section with an ordered plain bullet rejects", () => {
+  const body = prBodySpecFixture({ ac: "- [ ] works", dod: "- [ ] tested\n1. plain" });
+  const result = validatePrBodySpec({ body, expectedIssue: 123 });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.code === "definition_of_done_not_checkboxes"));
+});

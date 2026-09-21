@@ -949,24 +949,61 @@ function sectionHasBody(section) {
   return false;
 }
 
+// A top-level list marker line (any GFM/CommonMark family: `-`/`*`/`+`,
+// ordered `N.`/`N)`, optional leading blockquote `>` runs) with NO checkbox.
+// `validatePrBodySpec`-local: unlike `parseChecklistItems` (whose
+// `checked: null` state fires ONLY for the bare-dash form — see its
+// docstring), this recognizes every marker family, so a mixed AC/DoD section
+// (`- [ ] works` next to `* plain`) cannot escape detection just because the
+// plain line used a non-dash marker. No leading-space match before the
+// marker/blockquote keeps this top-level only: an indented continuation
+// (`  - detail`) is sub-content and is not matched. The negative lookahead
+// excludes a real checkbox line so `- [ ] works` is never double-counted.
+const TOP_LEVEL_NON_CHECKBOX_BULLET_PATTERN = /^(?:>\s*)*(?:[-*+]|\d+[.)])\s+(?!\[[ xX]\]\s)(.+?)\s*$/u;
+
+/**
+ * Scan a flattened section body for top-level non-checkbox bullet lines
+ * (`TOP_LEVEL_NON_CHECKBOX_BULLET_PATTERN`). Fence-skipped via the shared
+ * `stepFence` so a fenced fake bullet cannot spoof this check.
+ */
+function scanTopLevelNonCheckboxBulletLines(text) {
+  if (typeof text !== "string" || text.length === 0) return [];
+  const found = [];
+  let fence = null;
+  for (const line of text.split(/\r?\n/u)) {
+    const step = stepFence(fence, line);
+    fence = step.fence;
+    if (step.insideFence) continue;
+    const match = TOP_LEVEL_NON_CHECKBOX_BULLET_PATTERN.exec(line);
+    if (match && match[1].trim().length > 0) {
+      found.push(match[1].trim());
+    }
+  }
+  return found;
+}
+
 /**
  * Scan every section the completeness block would read (ALL sections matching
  * `patterns`, deep-flattened past `###` sub-headings via
  * `findAllSectionsByPatterns` + `flattenSectionDeep` — the same union
  * `extractPrBodyUncheckedChecklistItems` reads) for top-level plain bullets
- * (no checkbox marker). Shares the section-set read with the completeness
- * block on purpose: a plain bullet invisible to `validatePrBodySpec`'s own
- * single-section read but visible to the completeness block (a duplicate
- * AC/DoD heading, or a bullet nested under a `###` sub-heading) must still
- * reject here, or the two surfaces diverge on the same checkbox-marker
- * fail-open class this module closes for the simple single-section case.
+ * of ANY marker (no checkbox). Shares the section-set read with the
+ * completeness block on purpose: a plain bullet invisible to
+ * `validatePrBodySpec`'s own single-section read but visible to the
+ * completeness block (a duplicate AC/DoD heading, or a bullet nested under a
+ * `###` sub-heading) must still reject here, or the two surfaces diverge on
+ * the same checkbox-marker fail-open class this module closes for the simple
+ * single-section case. Local `scanTopLevelNonCheckboxBulletLines` scan, not
+ * `parseChecklistItems`'s `checked: null` state, so a non-dash plain bullet
+ * (`*`/`+`/ordered) is caught too — `parseChecklistItems` and the shared
+ * #1877 completeness-block logic it backs stay untouched.
  */
 function scanPlainBullets(sections, patterns) {
   const matched = findAllSectionsByPatterns(sections, patterns);
   const items = [];
   for (let i = 0; i < sections.length; i += 1) {
     if (!matched.includes(sections[i])) continue;
-    items.push(...parseChecklistItems(flattenSectionDeep(sections, i)).filter((it) => it.checked === null));
+    items.push(...scanTopLevelNonCheckboxBulletLines(flattenSectionDeep(sections, i)));
   }
   return items;
 }
