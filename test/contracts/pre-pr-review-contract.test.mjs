@@ -1,0 +1,115 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { test } from "bun:test";
+
+import { assertRulePresent, assertRuleOwned } from "./_rule-helpers.mjs";
+
+// Behavioral/contract pins for the pre-PR review phase (issue #2305): a
+// developer-briefed, fresh-context, general-purpose review pass that runs
+// before the first push, fixes findings in-tree, is ephemeral (no
+// PR/thread/Copilot), bounded to one reviewer / two rounds, and leaves the
+// fan-out gate as the authority. The model is config-resolved (never hardcoded).
+
+const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
+const readRepo = (rel) => fs.readFileSync(path.join(repoRoot, rel), "utf8");
+
+const CONTRACT = "skills/docs/pre-pr-review-contract.md";
+const SKILL = "skills/local-implementation/SKILL.md";
+
+const CONTRACT_RULES = [
+  "PRE-PR-BEFORE-FIRST-PUSH",
+  "PRE-PR-ONE-FRESH-REVIEWER",
+  "PRE-PR-BOUNDED-TWO-ROUNDS",
+  "PRE-PR-EPHEMERAL-NO-ARTIFACTS",
+  "PRE-PR-MODEL-CONFIG-RESOLVED",
+  "PRE-PR-GATE-STILL-AUTHORITY",
+  "PRE-PR-NOT-GATE-EVIDENCE",
+];
+
+// The prose paragraph owned by a rule: from its marker to the next rule marker,
+// heading, or blank line. Keyword checks run inside this slice so a pin cannot
+// pass on text that belongs to a different rule, and stays robust to rewording.
+function ruleParagraph(doc, id) {
+  const marker = new RegExp(`<!--\\s*rule:\\s*${id}\\s*-->`);
+  const lines = doc.split(/\r?\n/);
+  const start = lines.findIndex((l) => marker.test(l));
+  assert.ok(start !== -1, `rule ${id} marker must be present in ${CONTRACT}`);
+  const out = [];
+  for (let i = start; i < lines.length; i++) {
+    const line = lines[i];
+    if (i > start && (/^<!--\s*rule:/.test(line) || /^#{1,6}\s/.test(line) || line.trim() === "")) break;
+    out.push(line);
+  }
+  return out.join("\n");
+}
+
+test("pre-PR contract rules are present and owned by the contract doc", () => {
+  for (const id of CONTRACT_RULES) {
+    assertRulePresent(id);
+    assertRuleOwned(id, CONTRACT);
+  }
+});
+
+test("the local-implementation SKILL wires the phase before first push and references the contract", () => {
+  assertRulePresent("LOCAL-PRE-PR-REVIEW-BEFORE-PUSH");
+  assertRuleOwned("LOCAL-PRE-PR-REVIEW-BEFORE-PUSH", SKILL);
+  const skill = readRepo(SKILL);
+  assert.ok(skill.includes("pre-pr-review-contract.md"), "SKILL must link the pre-PR review contract");
+  // The phase step (anchored on its rule marker, not a bold title) sits before
+  // PR creation (step 12, the create-PR line).
+  const stepIdx = skill.indexOf("<!-- rule: LOCAL-PRE-PR-REVIEW-BEFORE-PUSH -->");
+  const prCreateIdx = skill.indexOf("create the PR from the working branch");
+  assert.ok(stepIdx !== -1 && prCreateIdx !== -1 && stepIdx < prCreateIdx, "pre-PR review step must precede PR creation");
+});
+
+test("each pre-PR rule states its invariant with RFC-2119 modality and the right keywords", () => {
+  const doc = readRepo(CONTRACT);
+  // [rule, /modal/, [required keywords...]]
+  const checks = [
+    ["PRE-PR-BEFORE-FIRST-PUSH", /MUST/, ["before the first push", "committed"]],
+    ["PRE-PR-ONE-FRESH-REVIEWER", /MUST/, ["exactly ONE", "fresh-context", "general-purpose", "brief"]],
+    ["PRE-PR-BOUNDED-TWO-ROUNDS", /MUST NOT/, ["one general-purpose reviewer per round", "two", "reviewer"]],
+    ["PRE-PR-EPHEMERAL-NO-ARTIFACTS", /MUST NOT/, ["pull request", "comment", "review thread", "copilot"]],
+    ["PRE-PR-MODEL-CONFIG-RESOLVED", /MUST/, ["resolveRoleModel", "pre-PR-reviewer", "non-null"]],
+    ["PRE-PR-GATE-STILL-AUTHORITY", /MUST/, ["pre-filter", "draft_gate", "pre_approval_gate", "authority"]],
+    ["PRE-PR-NOT-GATE-EVIDENCE", /MUST NOT/, ["gate evidence", "ledger"]],
+  ];
+  for (const [id, modal, keywords] of checks) {
+    const para = ruleParagraph(doc, id);
+    assert.match(para, modal, `${id} must carry RFC-2119 modality`);
+    for (const kw of keywords) {
+      assert.ok(para.toLowerCase().includes(kw.toLowerCase()), `${id} paragraph must mention "${kw}"`);
+    }
+  }
+  // Adversarial-enumeration checklist floor.
+  assert.match(doc, /adversarial-enumeration checklist/i);
+  for (const item of ["errno", "symlink", "rename", "empty", "malformed", "path normalization"]) {
+    assert.ok(doc.toLowerCase().includes(item), `checklist must name "${item}"`);
+  }
+});
+
+test("no concrete model token is hardcoded in the phase prose or SKILL step (config-resolved only)", () => {
+  // The concrete model is a per-repo .devloops opt-in resolved via
+  // resolveRoleModel; it must never be baked into the harness-agnostic phase
+  // contract or its lifecycle wiring. The contract MAY name the accepted-token
+  // vocabulary in the model-resolution paragraph (documenting the harness enum),
+  // so scan every OTHER paragraph for a stray model literal.
+  const bareModel = /\b(fable|opus|sonnet|haiku)\b/i;
+  const fullId = /claude-[a-z0-9]+-\d/i;
+
+  const contract = readRepo(CONTRACT);
+  const modelPara = ruleParagraph(contract, "PRE-PR-MODEL-CONFIG-RESOLVED");
+  const contractRest = contract.replace(modelPara, "");
+  assert.ok(!bareModel.test(contractRest), "contract must not name a concrete model outside the model-resolution rule");
+  assert.ok(!fullId.test(contractRest), "contract must not embed a full model id outside the model-resolution rule");
+
+  // The SKILL's pre-PR step must not name any concrete model at all.
+  const skill = readRepo(SKILL);
+  const stepStart = skill.indexOf("<!-- rule: LOCAL-PRE-PR-REVIEW-BEFORE-PUSH -->");
+  const stepEnd = skill.indexOf("\n12.", stepStart);
+  const step = skill.slice(stepStart, stepEnd === -1 ? undefined : stepEnd);
+  assert.ok(!bareModel.test(step), "SKILL pre-PR step must not name a concrete model");
+  assert.ok(!fullId.test(step), "SKILL pre-PR step must not embed a full model id");
+});

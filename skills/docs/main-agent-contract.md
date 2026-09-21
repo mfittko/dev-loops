@@ -49,8 +49,11 @@ because "the user said yes," not because it is running from a worktree.
 - ALL git operations (branch, commit, push)
 - ALL PR lifecycle (create, draft, review, merge)
 - Sub-delegation to developer, fixer, review, quality, docs agents. `developer`/`quality`/`docs`/`fixer`
-  sub-delegates COMMIT THEIR OWN WORK before exit (`LOCAL-COMMIT-BEFORE-EXIT`); for tracker-backed
-  sessions they also push. There is no "edit here, commit there" split: an editing sub-delegate is
+  sub-delegates COMMIT THEIR OWN WORK before exit (`LOCAL-COMMIT-BEFORE-EXIT`); for a session
+  that pushes and opens a PR (the scope `local-implementation` SKILL step 11b,
+  `LOCAL-PRE-PR-REVIEW-BEFORE-PUSH`, defines: tracker-backed or issue-less `--lightweight`) the
+  first push is deferred to that step so the branch reaches origin once, already cleaned — a
+  sub-delegate commits but does not push. There is no "edit here, commit there" split: an editing sub-delegate is
   never told not to commit, and a `dev-loop` session that wants a single consolidated commit
   performs the edits itself rather than delegating the edit and keeping the commit. The removed
   `DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT` env-var exemption deadlocked an editing subagent under a

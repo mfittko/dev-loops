@@ -489,6 +489,11 @@
       "id": "LOCAL-PR-CREATE-CANONICAL"
     },
     {
+      "id": "LOCAL-PRE-PR-REVIEW-BEFORE-PUSH",
+      "enforcement": "agent",
+      "enforcementNote": "The pre-PR review pass is agent-executed procedure; the SKILL step ordering and phase contract are pinned by test/contracts/pre-pr-review-contract.test.mjs (#2305)."
+    },
+    {
       "id": "LOCAL-PREFLIGHT-GATE-MANDATORY"
     },
     {
@@ -520,6 +525,34 @@
     },
     {
       "id": "OPS-NO-INLINE-INTERPRETER"
+    },
+    {
+      "id": "PRE-PR-BEFORE-FIRST-PUSH",
+      "enforcement": "doc"
+    },
+    {
+      "id": "PRE-PR-BOUNDED-TWO-ROUNDS",
+      "enforcement": "doc"
+    },
+    {
+      "id": "PRE-PR-EPHEMERAL-NO-ARTIFACTS",
+      "enforcement": "doc"
+    },
+    {
+      "id": "PRE-PR-GATE-STILL-AUTHORITY",
+      "enforcement": "doc"
+    },
+    {
+      "id": "PRE-PR-MODEL-CONFIG-RESOLVED",
+      "enforcement": "doc"
+    },
+    {
+      "id": "PRE-PR-NOT-GATE-EVIDENCE",
+      "enforcement": "doc"
+    },
+    {
+      "id": "PRE-PR-ONE-FRESH-REVIEWER",
+      "enforcement": "doc"
     },
     {
       "id": "QUEUE-BOARD-DEVLOOPS-RESOLUTION"

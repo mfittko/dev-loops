@@ -6392,6 +6392,9 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
     ["quality", "sonnet", null],
     ["refiner", "opus", null],
     ["review", "opus", null],
+    // Pre-PR reviewer (issue #2305): built-in high tier, so opus/null with zero
+    // config; operators opt into a concrete per-harness model in .devloops.
+    ["pre-PR-reviewer", "opus", null],
     ["dev-loop", null, null], // inherit
     // A critical gate angle resolves high via its `review` persona.
     ["correctness", "opus", null],
@@ -6452,6 +6455,22 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
     const config = { models: { tiers: { low: { pi: "somePiId" } } } };
     assert.equal(resolveRoleModel(config, { role: "developer", harness: "pi" }), "somePiId");
     assert.equal(resolveRoleModel(config, { role: "developer", harness: "claude" }), "sonnet");
+  });
+
+  test("pre-PR-reviewer role: per-harness opt-in via tiers/roleTiers (issue #2305)", () => {
+    // Mirrors this repo's .devloops opt-in: Fable on Claude only, Pi inherits.
+    const config = {
+      models: {
+        tiers: { "pre-pr-strong": { claude: "fable" } },
+        roleTiers: { "pre-PR-reviewer": "pre-pr-strong" },
+      },
+    };
+    assert.equal(resolveRoleModel(config, { role: "pre-PR-reviewer", harness: "claude" }), "fable");
+    // Pi has no entry in the tier → null (inherit/default), keeping it harness-agnostic.
+    assert.equal(resolveRoleModel(config, { role: "pre-PR-reviewer", harness: "pi" }), null);
+    // Zero config: built-in high tier is a null no-op on Pi, opus on Claude.
+    assert.equal(resolveRoleModel({}, { role: "pre-PR-reviewer", harness: "pi" }), null);
+    assert.equal(resolveRoleModel({}, { role: "pre-PR-reviewer", harness: "claude" }), "opus");
   });
 
   test("inherit tier resolves null on both harnesses", () => {
