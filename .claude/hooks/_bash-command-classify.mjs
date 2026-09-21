@@ -230,7 +230,7 @@ function shellSegments(command) {
  * any repetition), and an absolute/relative path on the binary (`/usr/bin/gh`, `/usr/bin/git`).
  * Shared by every classifier in this file that must catch its verb behind these forms
  * (`gh pr <verb>`, `git stash`, `bun run verify`, ...). `timeout <n>` and `nice` were added for
- * COORDINATOR-VERIFY-DELEGATION (#2082): the coordinator's daily verify/build commands are
+ * COORDINATOR-VERIFY-DELEGATION: the coordinator's daily verify/build commands are
  * routinely run behind `timeout 600 bun run verify` / `nice bun run verify`.
  *
  * Note: this is a pragmatic normalizer, not a full shell tokenizer. Subshell
