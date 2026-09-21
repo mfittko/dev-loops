@@ -2,14 +2,25 @@
 
 How dev-loop work is structured depends on the harness.
 
-**Under the Claude Code harness, the dev-loop runs as a single agent.** The agent invoked for
-dev-loop work performs the steps directly — it reads and writes repository files, runs git and PR
-lifecycle operations, runs the `dev-loops` CLI (including state-changing `gate` / `pr` / `loop`
-subcommands), and posts gate verdicts under the operating session's identity. There is no separate
-read-only "main agent" and no mandatory async-subagent dispatch: the dev-loop agent owns the work
-end to end. The draft-gate `gh pr ready` guard still applies (harness-agnostic). A read-only
-boundary can be re-imposed optionally via the Write/Edit guard hook — opt-in with
-`DEVLOOPS_MAIN_AGENT_READONLY=1` (default fail-open) — for repos that want it.
+**Under the Claude Code harness, the dev-loop runs as a single agent that acts as a delegating
+COORDINATOR.** The agent invoked for dev-loop work runs git and PR lifecycle operations, runs the
+`dev-loops` CLI (including state-changing `gate` / `pr` / `loop` subcommands), and posts gate
+verdicts under the operating session's identity. There is no separate read-only "main agent" and
+no mandatory async-subagent dispatch: the dev-loop agent owns the work end to end. But for TRACKED
+repo files (source, tests, docs) the coordinator is itself read-only, one level down: it MUST
+delegate every tracked-file implementation edit to a fresh WORKER subagent
+(`developer`/`fixer`/`quality`/`docs`). The coordinator MAY still write EPHEMERAL artifacts
+directly — `tmp/`, the scratchpad, and sanctioned ledger paths (the PR body markdown, comment
+bodies, dispatch prompts, gate evidence/ledgers under `tmp/gate-findings/`) — because those are
+gitignored/non-repo paths, not tracked-file mutations. This coordinator→worker boundary is the
+Claude analogue of the absolute main-agent read-only boundary Pi enforces, enforced mechanically
+(not by convention) by the same `PreToolUse` Write/Edit guard hook: opt-in via
+`DEVLOOPS_COORDINATOR_READONLY=1` (default fail-open), fail-closed once enforced, and
+non-bypassable by the coordinator itself — a tracked-file Write/Edit whose `agent_type` is
+`dev-loop` is denied; a worker subagent's `agent_type` is unaffected. The draft-gate `gh pr ready`
+guard still applies (harness-agnostic). A separate, stricter main-agent read-only boundary can
+also be re-imposed via the same hook — opt-in with `DEVLOOPS_MAIN_AGENT_READONLY=1` (default
+fail-open) — for repos that want it.
 
 <!-- pi-only -->
 > **Absolute read-only boundary (Pi).** The main agent must never mutate files tracked by the repository.
@@ -94,6 +105,8 @@ asset-generation time (`harness: "claude"`).
 | `git commit -m "..."` | **BREACH** — must delegate to `dev-loop` |
 | `subagent dev-loop` | Allowed — correct delegation |
 | `subagent fixer` | Allowed only when called from within `dev-loop`; describe the task as part of the message |
+| Claude Code: the `dev-loop` coordinator writes `packages/core/src/foo.mjs` directly | **BREACH** — must delegate to a fresh worker subagent (`developer`/`fixer`/`quality`/`docs`) |
+| Claude Code: the `dev-loop` coordinator writes `tmp/gate-findings/...` (gate evidence) | Allowed — ephemeral/gitignored, not a tracked-file mutation |
 
 ## Dev-loop startup
 
@@ -130,6 +143,13 @@ clause reinforces that for the `dev-loop` dispatch pattern specifically.
   Strict enforcement is opt-in via `DEVLOOPS_MAIN_AGENT_READONLY=1` (default fail-open) so
   adopting the harness does not retroactively break a repo's own interactive dev; full run-id
   propagation into the Claude subagent context completes with the headless/agent wiring.
+- **Coordinator→worker delegation boundary (#2082).** The same Write/Edit guard hook also
+  enforces a second, inner boundary under Claude Code: a tracked-file Write/Edit whose
+  `agent_type` is the coordinator's own (`dev-loop`) is denied — the coordinator must delegate
+  the edit to a fresh worker subagent (`developer`/`fixer`/`quality`/`docs`) instead. Opt-in via
+  `DEVLOOPS_COORDINATOR_READONLY=1` (default fail-open); fail-closed once enforced and
+  non-bypassable by the coordinator. Ephemeral artifacts (`tmp/`, the scratchpad, sanctioned
+  ledger paths) are gitignored/non-repo paths, so they fall through unaffected.
 - **Scope of mechanical enforcement:** the hook covers the Edit and Write tools. Bash-driven
   repo mutations the contract also forbids (`git commit`/`git push`/branch creation, in-place
   edits like `sed -i`, shell redirection `> file` / `tee`) run through the Bash tool and remain

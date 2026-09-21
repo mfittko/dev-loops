@@ -333,6 +333,52 @@ test("write-guard hook allows a gitignored path under strict enforcement", () =>
 });
 
 // ---------------------------------------------------------------------------
+// Coordinator→worker delegation boundary — e2e hook behavior (boundary 3, #2082)
+// ---------------------------------------------------------------------------
+
+test("write-guard hook denies a dev-loop coordinator tracked-file write under strict coordinator enforcement", () => {
+  const { code, json } = runHook(
+    "pre-tool-use-write-guard.mjs",
+    { tool_name: "Write", tool_input: { file_path: path.join(repoRoot, "package.json") }, cwd: repoRoot, agent_type: "dev-loop" },
+    { DEVLOOPS_COORDINATOR_READONLY: "1" },
+  );
+  assert.equal(code, 0);
+  assert.ok(json, "expected a structured decision");
+  assert.equal(json.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(json.hookSpecificOutput.permissionDecisionReason, /Coordinator→worker delegation boundary/);
+});
+
+test("write-guard hook allows a worker subagent tracked-file write under strict coordinator enforcement", () => {
+  const { code, json } = runHook(
+    "pre-tool-use-write-guard.mjs",
+    { tool_name: "Write", tool_input: { file_path: path.join(repoRoot, "package.json") }, cwd: repoRoot, agent_type: "developer" },
+    { DEVLOOPS_COORDINATOR_READONLY: "1" },
+  );
+  assert.equal(code, 0);
+  assert.equal(json, null, "worker subagent (developer) must not be denied by the coordinator boundary");
+});
+
+test("write-guard hook allows a dev-loop coordinator writing a gitignored tmp/ path under strict coordinator enforcement", () => {
+  const { code, json } = runHook(
+    "pre-tool-use-write-guard.mjs",
+    { tool_name: "Write", tool_input: { file_path: path.join(repoRoot, "tmp", "scratch.txt") }, cwd: repoRoot, agent_type: "dev-loop" },
+    { DEVLOOPS_COORDINATOR_READONLY: "1" },
+  );
+  assert.equal(code, 0);
+  assert.equal(json, null, "gitignored tmp/ path must be allowed even for the coordinator");
+});
+
+test("write-guard hook allows a dev-loop coordinator tracked-file write when DEVLOOPS_COORDINATOR_READONLY is unset (fail-open)", () => {
+  const { code, json } = runHook(
+    "pre-tool-use-write-guard.mjs",
+    { tool_name: "Write", tool_input: { file_path: path.join(repoRoot, "package.json") }, cwd: repoRoot, agent_type: "dev-loop" },
+    {},
+  );
+  assert.equal(code, 0);
+  assert.equal(json, null, "no deny when DEVLOOPS_COORDINATOR_READONLY is unset");
+});
+
+// ---------------------------------------------------------------------------
 // Wrong-checkout guard — e2e hook script behavior (boundary 1)
 // ---------------------------------------------------------------------------
 // The pure decider is unit-tested in packages/core/test/claude-hook-decisions.test.mjs;

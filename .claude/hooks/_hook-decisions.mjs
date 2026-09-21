@@ -425,6 +425,51 @@ export function decideWriteGuard({ filePath, isRepoMutation, enforce = false, en
 }
 
 /**
+ * Decide whether a PreToolUse Write/Edit must be blocked by the coordinator→worker delegation
+ * boundary (#2082) — the INVERSE of `decideWriteGuard`, one level down. Under the Claude Code
+ * harness the dev-loop agent itself (Claude `agent_type === "dev-loop"`) acts as a delegating
+ * COORDINATOR: it MUST NOT mutate TRACKED repo files directly — that work is delegated to a fresh
+ * WORKER subagent (`developer`/`fixer`/`quality`/`docs`). `agent_type` is the only discriminator:
+ * `DEVLOOPS_RUN_ID` does not distinguish coordinator from worker (the coordinator mints it and
+ * propagates it to the workers it dispatches), so — unlike `decideWriteGuard` — this decider does
+ * not key on run id at all.
+ *
+ * Denies only when ALL of: strict enforcement is on, the target is a tracked repo mutation, AND
+ * the caller's `agent_type` is the coordinator's (`"dev-loop"`). Every other `agent_type` —
+ * including `null` (the Pi main agent / an interactive Claude session with no subagent context,
+ * which is `decideWriteGuard`'s boundary, not this one) and any worker role — is allowed here.
+ * Strict enforcement is opt-in via `enforce` (the hook derives it from
+ * `DEVLOOPS_COORDINATOR_READONLY=1`); default is fail-open, mirroring `decideWriteGuard`'s
+ * adopt-safe precedent so enabling this boundary does not retroactively break a repo's own
+ * interactive Claude Code dev.
+ *
+ * @param {Object} params
+ * @param {string} params.filePath - Target file path.
+ * @param {boolean} params.isRepoMutation - True if inside the repo working tree AND not gitignored.
+ * @param {boolean} [params.enforce] - Strict mode (DEVLOOPS_COORDINATOR_READONLY=1).
+ * @param {string|null} [params.agentType] - Claude `agent_type` from the hook payload, if any.
+ * @returns {HookDecision}
+ */
+export function decideCoordinatorWriteGuard({ filePath, isRepoMutation, enforce = false, agentType = null }) {
+  if (!enforce) {
+    return ALLOW; // strict enforcement not enabled — fail open
+  }
+  if (!isRepoMutation) {
+    return ALLOW; // non-repo or gitignored path (tmp/, the scratchpad, sanctioned ledger paths)
+  }
+  if (agentType !== DEV_LOOP_AGENT_TYPE) {
+    return ALLOW; // not the coordinator — a worker subagent, or the main agent (the other boundary)
+  }
+  return {
+    decision: "deny",
+    reason:
+      `Coordinator→worker delegation boundary: refusing to mutate repository path "${filePath}" as the ` +
+      "dev-loop coordinator. Delegate this tracked-file edit to a fresh worker subagent (developer/fixer/" +
+      "quality/docs) instead of writing it directly. See skills/docs/main-agent-contract.md.",
+  };
+}
+
+/**
  * Env var that authorizes a deliberate main-checkout mutation while a worktree
  * cycle is active. Reuses the existing default-branch-guard override
  * (`DEVLOOPS_ALLOW_MAIN`, GUARD_OVERRIDE_ENV) — both mean "I intend to operate on

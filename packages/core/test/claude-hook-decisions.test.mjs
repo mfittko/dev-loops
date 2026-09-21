@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 
-import { decideBashGate, decideWriteGuard, decideSubagentStopGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV } from "../src/claude/hook-decisions.mjs";
+import { decideBashGate, decideWriteGuard, decideCoordinatorWriteGuard, decideSubagentStopGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV } from "../src/claude/hook-decisions.mjs";
 
 const TARGET = "mfittko/dev-loops";
 
@@ -579,6 +579,51 @@ test("decideWriteGuard denies a generic (non-dev-loop) subagent — no bypass vi
     const d = decideWriteGuard({ filePath: "src/x.mjs", isRepoMutation: true, enforce: true, env: {}, agentType });
     assert.equal(d.decision, "deny", `agent_type ${agentType} must not bypass the boundary`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// decideCoordinatorWriteGuard (#2082) — coordinator→worker delegation boundary.
+// The INVERSE of decideWriteGuard, one level down: the dev-loop COORDINATOR (agent_type
+// "dev-loop") must not mutate tracked repo files directly; WORKER subagents (developer/fixer/
+// quality/docs) may. Pi no-op rationale: this decider — and the DEVLOOPS_COORDINATOR_READONLY
+// flag that gates it — only fires when agent_type === "dev-loop" under the Claude write-guard
+// hook; Pi never sets Claude's `agent_type` payload field and does not invoke this hook, so the
+// boundary is inert there (no cross-harness regression per #1086).
+// ---------------------------------------------------------------------------
+
+test("decideCoordinatorWriteGuard fails open when enforcement is disabled", () => {
+  assert.equal(
+    decideCoordinatorWriteGuard({ filePath: "packages/core/src/x.mjs", isRepoMutation: true, enforce: false, agentType: "dev-loop" }).decision,
+    "allow",
+  );
+});
+
+test("decideCoordinatorWriteGuard denies a coordinator tracked-file mutation under strict enforcement", () => {
+  const d = decideCoordinatorWriteGuard({ filePath: "packages/core/src/x.mjs", isRepoMutation: true, enforce: true, agentType: "dev-loop" });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /Coordinator→worker delegation boundary/);
+  assert.match(d.reason, /x\.mjs/);
+});
+
+test("decideCoordinatorWriteGuard allows a worker subagent tracked-file mutation under strict enforcement", () => {
+  for (const agentType of ["developer", "fixer", "quality", "docs"]) {
+    const d = decideCoordinatorWriteGuard({ filePath: "packages/core/src/x.mjs", isRepoMutation: true, enforce: true, agentType });
+    assert.equal(d.decision, "allow", `worker agent_type ${agentType} must not be denied by the coordinator boundary`);
+  }
+});
+
+test("decideCoordinatorWriteGuard allows a coordinator writing a non-repo/gitignored path (tmp/scratchpad) under strict enforcement", () => {
+  assert.equal(
+    decideCoordinatorWriteGuard({ filePath: "tmp/scratch.txt", isRepoMutation: false, enforce: true, agentType: "dev-loop" }).decision,
+    "allow",
+  );
+});
+
+test("decideCoordinatorWriteGuard allows a null agent_type (main agent — the other boundary's job, not this one)", () => {
+  assert.equal(
+    decideCoordinatorWriteGuard({ filePath: "packages/core/src/x.mjs", isRepoMutation: true, enforce: true, agentType: null }).decision,
+    "allow",
+  );
 });
 
 // ---------------------------------------------------------------------------
