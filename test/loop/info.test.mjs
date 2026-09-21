@@ -306,6 +306,15 @@ async function runPrInfoWithRollup(mergeStateStatus, statusCheckRollup) {
     "#!/usr/bin/env node",
     "const args = process.argv.slice(2);",
     `if (args[0] === "pr" && args[1] === "view" && parseInt(args[2]) === ${prNumber}) {`,
+    // Guard the REQUEST half of the wiring: fail closed unless buildPrInfo asked
+    // for statusCheckRollup, so the test breaks if that field is dropped from
+    // the --json query rather than passing on the unconditional fixture below.
+    `  const jsonIdx = args.indexOf("--json");`,
+    `  const fields = jsonIdx >= 0 ? String(args[jsonIdx + 1] || "").split(",") : [];`,
+    `  if (!fields.includes("statusCheckRollup")) {`,
+    `    process.stderr.write("stub: --json did not request statusCheckRollup\\n");`,
+    `    process.exit(3);`,
+    `  }`,
     `  process.stdout.write(JSON.stringify({`,
     `    number: ${prNumber}, title: "Unstable PR", body: "", state: "OPEN", isDraft: false,`,
     `    headRefName: "feature-branch", baseRefName: "main", author: { login: "testuser" }, mergedAt: null,`,
