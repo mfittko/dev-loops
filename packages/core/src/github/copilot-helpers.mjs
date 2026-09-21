@@ -809,6 +809,7 @@ export function summarizeCopilotReviews(reviews, { headSha, draftGateResetAtMs }
 
   return {
     copilotReviews,
+    effectiveCopilotReviews: effectiveReviews,
     copilotReviewIds: copilotReviews
       .map((review) => review?.id)
       .filter((id) => id !== null && id !== undefined)

@@ -775,7 +775,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
   const prDraft = input.prDraft === true;
   const prClosed = input.prClosed === true;
   const prMerged = input.prMerged === true;
-  const sameHeadCleanConverged = input.sameHeadCleanConverged === true;
+  const copilotConvergenceOk = input.copilotConvergenceOk === true;
   // Operator-authorized post-convergence suppression: set only when the
   // caller has verified an explicit prior withdrawal (withdraw-copilot-review-
   // request.mjs) recorded a suppression marker for this EXACT head, proving the
@@ -833,7 +833,18 @@ function evaluatePrGateCoordinationCore(input = {}) {
   const refinementArtifactStatus = normalizeRefinementArtifactStatus(refinementArtifact?.status);
   const refinementLinkedIssue = Number.isInteger(refinementArtifact?.linkedIssue) ? refinementArtifact.linkedIssue : null;
 
-  const effectiveLifecycleState = lifecycleState;
+  // Keep the shared loop's body-feedback signal intact. Gate entry alone may
+  // reinterpret a thread-clean, current-head review that the shared convergence
+  // evaluator accepts (notably a conductor-overridable blue review).
+  const gateEntryConverged = copilotConvergenceOk
+    && input.copilotReviewOnCurrentHead === true
+    && unresolvedThreadCount === 0;
+  const effectiveLifecycleState = gateEntryConverged && lifecycleState === STATE.UNRESOLVED_FEEDBACK_PRESENT
+    ? STATE.READY_TO_REREQUEST_REVIEW
+    : (gateEntryConverged && lifecycleState === STATE.ROUND_CAP_REACHED
+        ? STATE.ROUND_CAP_CLEAN_FALLBACK
+        : lifecycleState);
+  const sameHeadCleanConverged = input.sameHeadCleanConverged === true || gateEntryConverged;
 
   const draftGate = toGateStatus(input.draftGate, input.draftGateMarker, currentHeadSha);
   const preApprovalGate = toGateStatus(input.preApprovalGate, input.preApprovalGateMarker, currentHeadSha);
@@ -1807,7 +1818,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
     // human-read reason/evidence text for the latter case would be a false CI
     // claim, so describe the actual grant basis instead.
     const ciClause = ciStatus === "success" ? "green CI" : "CI not required by config";
-    if (unresolvedThreadCount === 0 && ciConfirmedGreen) {
+    if (unresolvedThreadCount === 0 && ciConfirmedGreen && input.copilotConvergenceOk !== false) {
       if (preApprovalGate.currentHeadClean) {
         // Inline title-marker check, mirroring ROUND_CAP_CLEAN_FALLBACK: the
         // outer post-pass guards FINAL_APPROVAL_READY and

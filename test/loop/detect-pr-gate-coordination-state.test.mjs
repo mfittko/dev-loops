@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, it, test } from "bun:test";
 import { makeGhMock, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 
-import { detectPrGateCoordinationState, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, resolvePostConvergenceReviewSuppressed, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { detectPrGateCoordinationState, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, resolvePostConvergenceReviewSuppressed, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
 import { isRoundCapReachedCleanGrant } from "@dev-loops/core/loop/pr-gate-coordination";
 import { evaluateMergePreconditions } from "@dev-loops/core/loop/merge-approval";
@@ -927,12 +927,23 @@ test("detect-pr-gate-coordination-state ENTERS pre_approval for a thread-clean c
   assert.equal(result.code, 0);
   assert.equal(result.stderr, "");
   const parsed = JSON.parse(result.stdout);
-  // The 🔵 no longer sets copilotBodyFeedbackUnresolved, so the round cap routes
-  // to the clean fallback and pre_approval entry is permitted.
+  // Gate entry applies the shared convergence result without weakening the
+  // loop's existing body-feedback signal.
   assert.equal(parsed.lifecycleState, "round_cap_clean_fallback");
   assert.equal(parsed.nextAction, "run_pre_approval_gate");
   assert.ok(parsed.allowedNextActions.includes("run_pre_approval_gate"));
   assert.ok(!parsed.forbiddenActions.includes("run_pre_approval_gate"));
+});
+
+test("gate entry preserves the shared loop body-feedback signal for a current-head 🔵 (#2345)", async () => {
+  const env = writeGhStub(null, pathAGhEntries({ reviewBody: "### 🔵 Needs a closer look\n\nA soft, conductor-overridable non-approval.", atCap: false }));
+  const context = await loadPrGateCoordinationContext(
+    { repo: "owner/repo", pr: 266 },
+    buildMockRuntime(env, { repoRoot: capFixtureRepoRoot }),
+  );
+  assert.equal(context.snapshot.copilotBodyFeedbackUnresolved, true);
+  assert.equal(context.interpretation.state, "unresolved_feedback_present");
+  assert.equal(context.copilotBodyConvergence.ok, true);
 });
 
 test("detect-pr-gate-coordination-state ENTERS pre_approval for a thread-clean current-head 🔵 BELOW the round cap (round 1, non-terminal) (#2345)", async () => {
@@ -965,6 +976,15 @@ test("detect-pr-gate-coordination-state still BLOCKS pre_approval for a below-ca
   assert.equal(result.stderr, "");
   const parsed = JSON.parse(result.stdout);
   assert.notEqual(parsed.lifecycleState, "round_cap_clean_fallback");
+  assert.ok(parsed.forbiddenActions.includes("run_pre_approval_gate"));
+  assert.ok(!parsed.allowedNextActions.includes("run_pre_approval_gate"));
+});
+
+test("detect-pr-gate-coordination-state still BLOCKS pre_approval for an at-cap current-head 🟡 (#2345 no regression)", async () => {
+  const env = writeGhStub(null, pathAGhEntries({ reviewBody: "### 🟡 Changes recommended\n\nActionable feedback in the body." }));
+  const result = await runNode(["--repo", "owner/repo", "--pr", "266"], { env });
+  assert.equal(result.code, 0);
+  const parsed = JSON.parse(result.stdout);
   assert.ok(parsed.forbiddenActions.includes("run_pre_approval_gate"));
   assert.ok(!parsed.allowedNextActions.includes("run_pre_approval_gate"));
 });

@@ -883,7 +883,10 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   // (🟡 / unrecognized / unknown head) — fail closed. Unresolved THREADS still
   // block independently via unresolvedThreadCount, so a 🔵/🟡 with an open thread
   // still blocks (no regression).
-  const copilotBodyConvergence = evaluateCopilotConvergence({ currentHeadSha, reviews: prData?.reviews });
+  const copilotBodyConvergence = evaluateCopilotConvergence({
+    currentHeadSha,
+    reviews: reviewSummary.effectiveCopilotReviews,
+  });
   const reviewRequestStatus = await resolveCopilotReviewRequestStatus(
     { repo: options.repo, pr: options.pr, reviewSummary, copilotRequested },
     runtime,
@@ -897,7 +900,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     unresolvedThreadCount: parsedThreads.summary.unresolvedThreads,
     actionableThreadCount: parsedThreads.summary.actionableThreads,
     copilotReviewRoundCount: reviewSummary.completedCopilotReviewRounds,
-    copilotBodyFeedbackUnresolved: copilotBodyConvergence.ok === false,
+    copilotBodyFeedbackUnresolved: reviewSummary.hasBodyFindingOnCurrentHead,
   });
   if (snapshot.unresolvedThreadCount > 0
       && !snapshot.copilotReviewOnCurrentHead
@@ -968,6 +971,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     gateEvidence,
     interpretation,
     disposition,
+    copilotBodyConvergence,
     refinementArtifact,
     refinementConfig: interpreterRefinementConfig,
     postConvergenceReviewSuppressed,
@@ -1045,6 +1049,7 @@ export function buildGateCoordinationEvaluatorInput({
     // than trusting a stale/compound lifecycleState label alone.
     unresolvedThreadCount: context.snapshot?.unresolvedThreadCount ?? null,
     sameHeadCleanConverged: context.interpretation.sameHeadCleanConverged,
+    copilotConvergenceOk: context.copilotBodyConvergence?.ok === true,
     // Current-head Copilot review evidence, fed alongside sameHeadCleanConverged so
     // the absent/never-driven entry guard keys on a round driven for THIS head
     // (never a raw across-PR copilotReviewRoundCount, which counts prior-head rounds).
