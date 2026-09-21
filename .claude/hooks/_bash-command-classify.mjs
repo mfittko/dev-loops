@@ -846,15 +846,36 @@ export function commandContainsCopilotSummonComment(command) {
  * (`gh issue create --body "while … sleep … done"` must not be flagged). The `s` (dotAll) flag lets
  * `.` match a newline too, so a MULTI-LINE quoted `--body` (a real issue body commonly spans lines) is
  * stripped in full, not just its first line.
- * ponytail: blanks balanced quote pairs only, with the `-c`-cluster/`--command`/`eval` exemption
- * above — no full shell tokenizer (mismatched/partial quotes and other exec-wrapper flags stay out
- * of scope). Accepted ceiling: a deliberately quoted structural keyword (e.g. `"sleep"`) placed
- * inside a real UNQUOTED loop is blanked like any other quoted literal and can therefore evade the
- * ban — accepted as a deliberate-evasion class, not a natural shape a genuine poll loop takes.
+ * A quoted string that itself contains a command substitution (`$(...)`) or a backtick (`` `...` ``)
+ * is executable code, not inert data — its inner command runs regardless of the surrounding quotes.
+ * Blanking it would hide a real poll loop such as `while [ "$(gh pr view 5)" != MERGED ]; do sleep 5;
+ * done` that the gh/loop-state ban already denies, so such a quoted literal is PRESERVED (fail-closed
+ * direction) ahead of the `-c`/`--command`/`eval` exemption check below.
+ *
+ * The `-c`-cluster/`--command`/`eval` exemption is intentionally coarse in the fail-closed direction:
+ * it looks only for a `c` anywhere in a preceding short-flag cluster (or `--command`/`eval`), not for
+ * a shell-interpreter anchor. A non-shell command carrying `-c` (e.g. `grep -ci '<loop text>'`,
+ * `wc -c`) may therefore have its quoted argument preserved too and get over-denied — an accepted
+ * benign false positive, because tightening the exemption to a shell-interpreter anchor would risk a
+ * fail-open (missing a real `sh -c` poll loop), the worse direction.
+ *
+ * ponytail: blanks balanced quote pairs only, with the command-substitution/backtick preserve rule
+ * and the `-c`-cluster/`--command`/`eval` exemption above — no full shell tokenizer (mismatched/
+ * partial quotes and other exec-wrapper flags stay out of scope). Accepted ceiling: a deliberately
+ * quoted structural keyword (e.g. `"sleep"`) placed inside a real UNQUOTED loop is blanked like any
+ * other quoted literal and can therefore evade the ban — accepted as a deliberate-evasion class, not
+ * a natural shape a genuine poll loop takes.
  * @param {string} command @returns {string}
  */
 function stripQuotedLiterals(command) {
-  return command.replace(/(['"])((?:(?!\1).)*)\1/gs, (match, _quote, _inner, offset, full) => {
+  return command.replace(/(['"])((?:(?!\1).)*)\1/gs, (match, _quote, inner, offset, full) => {
+    // A quoted string containing a command substitution ($()) or backtick is executable code, not
+    // inert data — its command runs regardless of the surrounding quotes. Blanking it would hide a
+    // real poll loop such as `while [ "$(gh pr view 5)" != MERGED ]; do sleep 5; done` that the
+    // gh/loop-state ban already denied. Preserve it (fail-closed direction).
+    if (/\$\(|`/.test(inner)) {
+      return match;
+    }
     const before = full.slice(0, offset);
     if (/(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?|--command|eval)\s*$/.test(before)) {
       return match; // executable -c/eval payload — leave the real shell syntax intact

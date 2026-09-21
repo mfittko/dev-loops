@@ -703,6 +703,29 @@ test("M2: gh issue create with poll-loop tokens only inside a quoted --title (no
   assert.equal(commandContainsDetachedWaitTool(cmd), false);
 });
 
+// H3 (#2317 Copilot follow-up regression): stripQuotedLiterals blanked the CONTENTS of every quoted
+// literal, including a double-quoted command substitution ($(...)) or backtick. But $(...)/backtick
+// content executes regardless of the surrounding quotes — it is not inert data — so a natural poll
+// idiom like `while [ "$(gh pr view 5)" != MERGED ]; do sleep 5; done` lost its `gh` token and evaded
+// the pre-existing gh/loop-state ban. A quoted literal containing $(...) or a backtick is now
+// preserved (fail-closed direction) ahead of the -c/eval exemption check.
+test("H3: stripQuotedLiterals preserves a quoted command substitution/backtick — no regression on the gh/loop-state ban", () => {
+  const cmdSubstLoop = 'while [ "$(gh pr view 5)" != MERGED ]; do sleep 5; done';
+  assert.equal(commandIsSleepPollLoop(cmdSubstLoop), true);
+  assert.equal(commandContainsDetachedWaitTool(cmdSubstLoop), true);
+
+  const backtickLoop = 'until [ "' + "`gh pr view 5`" + '" = OPEN ]; do sleep 5; done';
+  assert.equal(commandIsSleepPollLoop(backtickLoop), true);
+
+  const loopStateCmdSubstLoop = 'while [ "$(loop-state status)" != done ]; do sleep 5; done';
+  assert.equal(commandIsSleepPollLoop(loopStateCmdSubstLoop), true);
+
+  // AC2 still holds: a quoted --body with NO command substitution is still blanked.
+  const quotedBodyNoSubst = 'gh issue create --title x --body "while [ -f x.done ]; do sleep 5; done"';
+  assert.equal(commandIsSleepPollLoop(quotedBodyNoSubst), false);
+  assert.equal(commandIsFileMarkerPollLoop(quotedBodyNoSubst), false);
+});
+
 test("commandContainsDetachedWaitTool detects bare-& backgrounded wait/probe scripts (#2065)", () => {
   // Backgrounding a bounded probe/wait helper is the orphaned-shell form this rule prevents.
   assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --repo o/r --pr 5 --timeout-ms 300000 &"), true);

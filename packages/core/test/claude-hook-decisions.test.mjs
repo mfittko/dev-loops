@@ -991,6 +991,19 @@ test("decideBashGate denies bare file-marker poll loops for BOTH the coordinator
   assert.equal(quotedBody.decision, "allow");
 });
 
+// H3 (#2317 Copilot follow-up regression): a double-quoted command substitution ($(...)) must not be
+// blanked by stripQuotedLiterals — its content executes regardless of the surrounding quotes, so a
+// natural poll idiom `while [ "$(gh pr view 5)" != MERGED ]; do sleep 5; done` must still be denied
+// by the pre-existing gh/loop-state ban, for both the coordinator/main agent and a subagent.
+test("decideBashGate denies a command-substitution poll loop for BOTH the coordinator and a subagent (COPILOT-FOLLOWUP-WAIT-TOOLS, #2317 regression)", () => {
+  const cmdSubstLoop = 'while [ "$(gh pr view 5)" != MERGED ]; do sleep 5; done';
+  for (const agentType of [null, "dev-loop"]) {
+    const d = decideBashGate({ command: cmdSubstLoop, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType });
+    assert.equal(d.decision, "deny", `expected deny for agentType=${agentType}`);
+    assert.match(d.reason, /COPILOT-FOLLOWUP-WAIT-TOOLS/);
+  }
+});
+
 // H1 (#2317 follow-up): stripQuotedLiterals's `-c` exemption was too narrow — only a bare `-c`
 // preserved its quoted payload, so `bash -lc '…'` blanked its REAL shell payload and a genuine
 // gh poll loop wrapped in it slipped through the gate undetected. Actor-independent, gate-level
