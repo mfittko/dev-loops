@@ -21,14 +21,17 @@ lopsided economic win.
 <!-- rule: PRE-PR-BEFORE-FIRST-PUSH -->
 `PRE-PR-BEFORE-FIRST-PUSH`: the pre-PR review MUST run after local implementation
 is complete and committed, and BEFORE the first push of the branch and before
-`dev-loops pr create`. Its fixes MUST be applied to the working tree and
+`dev-loops pr create`. Its fixes MUST be applied to the working tree, validated
+with the narrowest justified check (re-checked after the final round), and
 committed (a follow-up commit or an amend of the step-11 commit), so the branch
-is pushed once, already cleaned. In the `local-implementation` loop it sits
-between the exit-validation commit (implementation-loop step 11,
-`LOCAL-COMMIT-BEFORE-EXIT`, whose first push is deferred to here for
-tracker-backed sessions) and PR creation (implementation-loop step 12). The
-phase applies to tracker-backed sessions (those that push and open a PR);
-phase-doc-backed sessions have no first push.
+is pushed once, already cleaned and validated. In the `local-implementation`
+loop it sits between the exit-validation commit (implementation-loop step 11,
+`LOCAL-COMMIT-BEFORE-EXIT`, whose first push is deferred to here) and PR creation
+(implementation-loop step 12). The phase applies to any local-implementation
+session that pushes and opens a PR — tracker-backed OR issue-less `--lightweight`
+(PR-body-as-spec) — since both reach origin via a first push. Only a
+phase-doc-backed session that merges locally has no first push and no pre-PR
+step.
 
 ## The review pass
 
