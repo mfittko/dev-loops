@@ -632,6 +632,29 @@ test("H1: stripQuotedLiterals no-regression — bash -lc/-ec/eval poll-loop payl
   const fileMarkerLcLoop = "bash -lc 'while [ -f x.done ]; do sleep 5; done'";
   assert.equal(commandIsFileMarkerPollLoop(fileMarkerLcLoop), true);
   assert.equal(commandContainsDetachedWaitTool(fileMarkerLcLoop), true);
+
+  // --command (long flag) and -c -- (short flag + terminator) are separate alternatives in the
+  // exemption regex — untested until now, so a regression to either one would silently blank the
+  // real payload and let the loop slip the deny (fail OPEN).
+  const commandFlagLoop = "bash --command 'until gh pr view 5; do sleep 5; done'";
+  assert.equal(commandIsSleepPollLoop(commandFlagLoop), true);
+  assert.equal(commandContainsDetachedWaitTool(commandFlagLoop), true);
+
+  const cDashDashLoop = "bash -c -- 'until gh pr view 5; do sleep 5; done'";
+  assert.equal(commandIsSleepPollLoop(cDashDashLoop), true);
+  assert.equal(commandContainsDetachedWaitTool(cDashDashLoop), true);
+
+  const fileMarkerCDashDashLoop = "bash -c -- 'while [ -f x.done ]; do sleep 5; done'";
+  assert.equal(commandIsFileMarkerPollLoop(fileMarkerCDashDashLoop), true);
+  assert.equal(commandContainsDetachedWaitTool(fileMarkerCDashDashLoop), true);
+});
+
+// H1 follow-up: commandIsFileMarkerPollLoop's operator class deliberately excludes string tests
+// (-z/-n) and the numeric/terminal test (-t) — none of those test a marker FILE. A while/sleep loop
+// keyed on one of those must NOT be flagged as a file-marker poll loop.
+test("H1: commandIsFileMarkerPollLoop excludes string (-z/-n) test operators", () => {
+  assert.equal(commandIsFileMarkerPollLoop('while [ -z "$x" ]; do sleep 5; done'), false);
+  assert.equal(commandIsFileMarkerPollLoop('while [ -n "$x" ]; do sleep 5; done'), false);
 });
 
 // M1 (#2317 follow-up): stripQuotedLiterals only matched a quoted literal WITHOUT the `s` (dotAll)
