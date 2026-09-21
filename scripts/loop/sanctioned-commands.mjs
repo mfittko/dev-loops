@@ -43,7 +43,6 @@ export const SANCTIONED_COMMANDS = Object.freeze({
     "issue-body-title-assignee-milestone": "scripts/github/edit-issue.mjs",
     "issue-comment": "scripts/github/comment-issue.mjs",
     "issue-comment-edit": "scripts/github/edit-comment.mjs",
-    "issue-create": "scripts/github/create-issue.mjs",
   }),
 
   // Lifecycle mutations a subagent MAY perform (state transitions on the PR /
@@ -84,6 +83,7 @@ export const SANCTIONED_COMMANDS = Object.freeze({
   orchestratorOwned: Object.freeze([
     "pr merge via scripts/github/merge-pr.mjs --human-approved-by <login> (raw gh pr merge forbidden)",
     "board status transitions (move-queue-item / sync-item-status.mjs; current batch model)",
+    "issue creation via scripts/github/create-issue.mjs (the dev-loop child emits prio-routed findings; the orchestrator files/routes them; #2173 tracks the deterministic child-origin enforcement check)",
   ]),
 });
 

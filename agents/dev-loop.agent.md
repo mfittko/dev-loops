@@ -61,7 +61,7 @@ Treat the deterministic public routing contract in [Public Dev Loop Contract](..
 
 Interpret issue-based shorthand triggers like `auto dev loop on issue <n>`, `enter copilot auto dev loop on issue <n>`, and `run auto dev loop on <n> until approval gate` as compatibility wording for the same public `dev-loop` intent, not a second public workflow entrypoint.
 
-Merge, retrospective, and issue creation are orchestrator-owned. The routed child emits its findings as structured text and stops at the human-approval checkpoint: it never merges, never runs a retrospective, and never files issues. Merge is also carried in the envelope's `sanctionedCommands` orchestrator-owned list; retrospective and issue-creation ownership are stated here so no routed child re-derives which operations it may never perform.
+Merge, retrospective, and issue creation are orchestrator-owned. The routed child emits its findings as structured text and stops at the human-approval checkpoint: it never merges, never runs a retrospective, and never files issues. Merge and issue creation are carried in the envelope's `sanctionedCommands` orchestrator-owned list; retrospective ownership is stated here so no routed child re-derives which operations it may never perform.
 
 Respect repository contract routing posture:
 - prefer the GitHub-first routed path when work should move through GitHub branches, pull requests, CI, and review
