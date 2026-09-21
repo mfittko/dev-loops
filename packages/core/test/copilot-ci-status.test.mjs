@@ -21,10 +21,19 @@ import {
 const gateEvidenceSuccess = { context: "gate-evidence", state: "SUCCESS" };
 // A superseded detector run: check-run-shaped, conclusion CANCELLED.
 const supersededRunnerCancel = { name: "gate-evidence-runner", status: "COMPLETED", conclusion: "CANCELLED" };
+// A superseded queued reporter run is cancelled too (non-cancelling group only
+// spares a RUNNING reporter); it leaves the same cosmetic cancelled check-run.
+const supersededReporterCancel = { name: "gate-evidence-reporter", status: "COMPLETED", conclusion: "CANCELLED" };
 const greenCi = { name: "verify", status: "COMPLETED", conclusion: "SUCCESS" };
 
 test("classifyBenignGateEvidenceUnstable: benign when UNSTABLE is only superseded runner cancellations and gate-evidence is green", () => {
   const rollup = [gateEvidenceSuccess, supersededRunnerCancel, supersededRunnerCancel, greenCi];
+  const result = classifyBenignGateEvidenceUnstable(rollup, "UNSTABLE");
+  assert.equal(result.benign, true);
+});
+
+test("classifyBenignGateEvidenceUnstable: benign when superseded gate-evidence-reporter cancellations are in the rollup too", () => {
+  const rollup = [gateEvidenceSuccess, supersededRunnerCancel, supersededReporterCancel, supersededReporterCancel, greenCi];
   const result = classifyBenignGateEvidenceUnstable(rollup, "UNSTABLE");
   assert.equal(result.benign, true);
 });

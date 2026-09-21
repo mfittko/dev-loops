@@ -121,15 +121,15 @@ function formatMergeableDisplay(mergeable, mergeStateStatus, statusCheckRollup =
   if (m === "UNKNOWN") {
     return "⏳ UNKNOWN — GitHub still computing; recheck before proceeding";
   }
-  // A benign UNSTABLE is the cosmetic rollup noise from superseded
-  // gate-evidence-runner cancellations while the required gate-evidence status
-  // is itself green; do not mistake it for a real blocker.
+  // A benign UNSTABLE is the cosmetic rollup noise from superseded Gate-evidence
+  // job cancellations (runner or reporter) while the required gate-evidence
+  // status is itself green; do not mistake it for a real blocker. Render the
+  // classifier's own reason so an unavailable rollup or an in-flight run reads
+  // honestly instead of claiming a failing check is present.
   if (s === "UNSTABLE") {
-    const { benign } = classifyBenignGateEvidenceUnstable(statusCheckRollup, mergeStateStatus);
-    if (benign) {
-      return "✅ MERGEABLE (UNSTABLE — benign: gate-evidence green; noise from superseded gate-evidence-runner cancellations)";
-    }
-    return "⚠️ UNSTABLE — a non-success check other than a superseded gate-evidence-runner run is present; investigate before merge";
+    const { benign, reason } = classifyBenignGateEvidenceUnstable(statusCheckRollup, mergeStateStatus);
+    if (benign) return `✅ MERGEABLE (UNSTABLE — benign: ${reason})`;
+    return `⚠️ UNSTABLE — ${reason}; investigate before merge`;
   }
   if (m === "MERGEABLE") {
     return `✅ MERGEABLE${s ? ` (${s})` : ""}`;

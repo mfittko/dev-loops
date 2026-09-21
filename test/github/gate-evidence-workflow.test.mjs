@@ -372,16 +372,18 @@ test("gate-evidence posts an explicit status to the resolved PR head SHA, not th
 test("required-context invariant (status not job) stays documented on the merge-preconditions surface", async () => {
   const doc = await readRepo("skills/docs/merge-preconditions.md");
   assert.match(doc, /MERGE-PRECOND-REQUIRED-CONTEXT-IS-STATUS/, "the required-context invariant rule id must be present");
-  assert.match(
-    doc,
-    /required status is the `gate-evidence` commit status and MUST NEVER be the\s*`gate-evidence-runner` job/,
-    "the invariant must name gate-evidence as required and gate-evidence-runner as never required",
-  );
-  // The job the invariant forbids as a required context is exactly one of the
-  // loop-derived checks the CI derivation already excludes — tie the doc claim
-  // to the code so a rename cannot silently drift them apart.
+  // Loose name checks, not a full-sentence regex: the invariant must name the
+  // gate-evidence status as required and BOTH jobs as never-required, without
+  // pinning exact prose (which churns on wording fixes).
+  assert.match(doc, /required status is the `gate-evidence` commit status/, "the status must be named as the required context");
+  assert.match(doc, /never (be )?(a|either) (Gate-evidence )?job/i, "the invariant must forbid a job as the required context");
+  assert.match(doc, /gate-evidence-runner/, "the runner job must be named");
+  assert.match(doc, /gate-evidence-reporter/, "the reporter job must be named");
+  // Tie the doc claim to the code: both jobs the invariant forbids as a required
+  // context are exactly the loop-derived checks the CI derivation already
+  // excludes, so a rename cannot silently drift them apart.
   assert.ok(
-    LOOP_DERIVED_CI_CHECK_NAMES.includes("gate-evidence-runner"),
-    "gate-evidence-runner must remain a loop-derived (non-required) check",
+    LOOP_DERIVED_CI_CHECK_NAMES.includes("gate-evidence-runner") && LOOP_DERIVED_CI_CHECK_NAMES.includes("gate-evidence-reporter"),
+    "both Gate-evidence jobs must remain loop-derived (non-required) checks",
   );
 });

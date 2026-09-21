@@ -347,19 +347,28 @@ export function normalizeHeadScopedCiContract({
 /**
  * Classify a `mergeStateStatus === "UNSTABLE"` as BENIGN when the required
  * `gate-evidence` commit status is itself `success` and the ONLY non-success
- * rollup entries are superseded `gate-evidence-runner` job check-runs
- * (conclusion `CANCELLED`).
+ * rollup entries are superseded Gate-evidence job check-runs (the
+ * `gate-evidence-runner` detector OR the `gate-evidence-reporter`, conclusion
+ * `CANCELLED`).
  *
- * GitHub's `cancel-in-progress` on the detector job leaves one `cancelled`
- * check-run per superseded run, so `mergeStateStatus` reads `UNSTABLE` on nearly
- * every PR even when the required `gate-evidence` status on the head is green.
- * The cancellation is correct and stays (docs/decisions/0076); this classifier
- * only lets a reader distinguish that cosmetic noise from a real non-success.
+ * Both jobs cancel superseded runs: the detector via `cancel-in-progress`, the
+ * reporter via its non-cancelling group cancelling a still-queued run superseded
+ * by a newer one. Each leaves a `cancelled` check-run on the head, so
+ * `mergeStateStatus` reads `UNSTABLE` on nearly every PR even when the required
+ * `gate-evidence` status on the head is green. The cancellation is correct and
+ * stays (docs/decisions/0076); this classifier only lets a reader distinguish
+ * that cosmetic noise from a real non-success.
  *
  * Fail-closed: only an actual `UNSTABLE` with a `success` `gate-evidence` status
- * and no other non-success entry is benign. A failed (not cancelled)
- * gate-evidence-runner, a non-success `gate-evidence` status, or any other
- * failing/pending check makes it non-benign.
+ * and no other non-success entry is benign. A failed (not cancelled) Gate-evidence
+ * job, a non-success `gate-evidence` status, or any other failing/pending check
+ * makes it non-benign.
+ *
+ * ponytail: `gh pr view --json statusCheckRollup` returns a single bounded page
+ * (~100 contexts); a very chatty PR could exceed it and hide a real failure,
+ * failing this open. Acceptable because this is a display-only surface — the
+ * merge path never consults it. Do NOT wire this classifier into a merge
+ * decision without adding pagination.
  *
  * @param {Array<object>} rollup A `gh pr view --json statusCheckRollup` payload.
  * @param {string|null} mergeStateStatus
@@ -381,15 +390,20 @@ export function classifyBenignGateEvidenceUnstable(rollup, mergeStateStatus) {
     if (normalizeStatusCheckRollupStatus([entry]) === "success") continue;
     const name = checkEntryName(entry);
     const conclusion = typeof entry?.conclusion === "string" ? entry.conclusion.toUpperCase() : "";
-    if (name === "gate-evidence-runner" && conclusion === "CANCELLED") continue;
-    offenders.push(name || "unknown");
+    // A cancelled Gate-evidence job check-run (runner or reporter) is the
+    // superseded-run artifact this classifier exists to ignore. A StatusContext
+    // carries `.state`, never `.conclusion`, so the required `gate-evidence`
+    // status (guarded success above) can never slip through here.
+    if (LOOP_DERIVED_CI_CHECK_NAMES.includes(name) && conclusion === "CANCELLED") continue;
+    const status = typeof entry?.status === "string" ? entry.status.toUpperCase() : "";
+    offenders.push(`${name || "unknown"}=${conclusion || status || "?"}`);
   }
   if (offenders.length > 0) {
     return { benign: false, reason: `non-benign non-success checks present: ${offenders.join(", ")}` };
   }
   return {
     benign: true,
-    reason: "UNSTABLE only from superseded gate-evidence-runner cancellations; gate-evidence status is success",
+    reason: "no non-success entry other than superseded Gate-evidence job cancellations; gate-evidence status is success",
   };
 }
 
