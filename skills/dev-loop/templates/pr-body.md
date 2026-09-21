@@ -43,4 +43,9 @@ What this PR changes and why. One or two sentences of the problem it solves.
 
 - What this PR deliberately does NOT do (prevents scope drift).
 
+## Validation
+
+- `bun run verify`: pass.
+- Record each validation command or named check with its stable pass/fail outcome only. Do NOT paste volatile aggregate test/assertion/asset counts, durations, or timestamps (OPS-PR-VALIDATION-STABLE-EVIDENCE); those live in the head-stamped gate artifacts.
+
 Closes #N

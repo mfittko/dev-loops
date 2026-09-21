@@ -1480,6 +1480,35 @@ test("create-pr fails closed at create when a tracker-backed body omits the spec
   }
 });
 
+test("create-pr fails closed at create for a keyword-only tracker-backed body (no --issue), same codes, before gh", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-body-spec-keyword-only-"));
+  try {
+    const { env, counterPath, ghLogPath } = await writeGhStub(tempDir, []);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--base", "main",
+      // Issue-less branch so the branch-derived closing-ref guard passes; the
+      // body itself makes the PR tracker-backed via the closing keyword alone.
+      "--head", "feature",
+      "--title", "Add feature",
+      "--body", "Closes #77",
+    ], { env });
+    assert.equal(result.code, 1);
+    const stderrPayload = JSON.parse(result.stderr);
+    assert.match(stderrPayload.error, /validate-pr-body-spec/);
+    assert.match(stderrPayload.error, /missing_in_scope/);
+    assert.match(stderrPayload.error, /missing_acceptance_criteria/);
+    assert.match(stderrPayload.error, /missing_definition_of_done/);
+    assert.match(stderrPayload.error, /missing_explicit_non_goals/);
+    // Fails closed BEFORE any gh call (not even the linked-PR probe).
+    assert.equal((await readFile(counterPath, "utf8")).trim(), "0");
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("create-pr admits a conformant tracker-backed body through create unchanged", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-body-spec-pass-"));
   try {
