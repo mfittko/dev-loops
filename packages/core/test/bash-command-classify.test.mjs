@@ -36,6 +36,8 @@ import {
   commandContainsCopilotRequestBypass,
   commandContainsCopilotSummonComment,
   commandContainsDetachedWaitTool,
+  commandIsSleepPollLoop,
+  commandIsFileMarkerPollLoop,
   commandContainsInlineInterpreter,
 } from "../src/loop/bash-command-classify.mjs";
 
@@ -575,6 +577,42 @@ test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () =
   // loop-state must be a command-head CALL, not a substring of a grep/echo target
   assert.equal(commandContainsDetachedWaitTool("for i in $(seq 1 3); do sleep 1; grep loop-state x; done"), false);
   assert.equal(commandContainsDetachedWaitTool("while true; do sleep 1; loop-state status; done"), true);
+});
+
+// #2317: a bare FILE-MARKER poll loop (no gh/loop-state call — commandIsSleepPollLoop's territory)
+// is a separate orphan pattern under Claude Code: a `<tasks>/<id>.done` sentinel Claude Code never
+// writes, so the loop never exits and, once backgrounded, orphans with no async wake to reap it.
+test("commandIsFileMarkerPollLoop denies bare file-marker poll loops, verb-independent (#2317)", () => {
+  // DENY: two distinct loop verbs (verb-independence) plus [[ ]] and `test -f` forms.
+  const whileLoop = 'while [ ! -f "$TASKS/$AGENT.done" ]; do sleep 5; done';
+  const untilLoop = "until [ -e /tmp/agent.done ]; do sleep 10; done";
+  const forLoop = 'for i in $(seq 1 720); do [ -f done.marker ] && break; sleep 5; done';
+  const doubleBracket = "while [[ -f /tmp/x.done ]]; do sleep 5; done";
+  const testForm = "while test -f /tmp/x.done; do sleep 5; done";
+  for (const cmd of [whileLoop, untilLoop, forLoop, doubleBracket, testForm]) {
+    assert.equal(commandIsFileMarkerPollLoop(cmd), true, `commandIsFileMarkerPollLoop: ${cmd}`);
+    assert.equal(commandContainsDetachedWaitTool(cmd), true, `commandContainsDetachedWaitTool: ${cmd}`);
+  }
+
+  // ALLOW: quoted bodies/examples that merely MENTION the tokens are not a real loop construct.
+  const quotedBody = 'gh issue create --title x --body "while [ -f x.done ]; do sleep 5; done"';
+  const bodyFile = "gh issue create --body-file /tmp/issue-body.md";
+  const quotedExample = 'echo "poll: while [ -f done ]; do sleep 1; done"';
+  for (const cmd of [quotedBody, bodyFile, quotedExample]) {
+    assert.equal(commandIsFileMarkerPollLoop(cmd), false, `commandIsFileMarkerPollLoop: ${cmd}`);
+    assert.equal(commandContainsDetachedWaitTool(cmd), false, `commandContainsDetachedWaitTool: ${cmd}`);
+  }
+
+  // The existing false positive is also fixed: a quoted body containing while/sleep/done no longer
+  // matches commandIsSleepPollLoop (it blocked filing issue #2317 itself).
+  assert.equal(
+    commandIsSleepPollLoop('gh issue create --title x --body "spin: while gh ...; do sleep 5; done"'),
+    false,
+  );
+
+  // No-regression sanity: a gh-call poll loop with no file test stays owned by
+  // commandIsSleepPollLoop, not commandIsFileMarkerPollLoop.
+  assert.equal(commandIsFileMarkerPollLoop("until gh pr view 5; do sleep 5; done"), false);
 });
 
 test("commandContainsDetachedWaitTool detects bare-& backgrounded wait/probe scripts (#2065)", () => {

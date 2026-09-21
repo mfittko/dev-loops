@@ -809,6 +809,35 @@ test("decideBashGate denies detached wait tools for BOTH the coordinator and a s
   assert.doesNotMatch(reason, /NaN/);
 });
 
+// #2317: a bare FILE-MARKER poll loop (no gh/loop-state call) is a separate orphan pattern — a
+// `<tasks>/<id>.done` sentinel Claude Code never writes, so the loop never exits and, once
+// backgrounded, orphans with no async wake to reap it. Actor-independent, verb-independent.
+test("decideBashGate denies bare file-marker poll loops for BOTH the coordinator and a subagent (#2317)", () => {
+  const whileLoop = 'while [ ! -f "$T/$A.done" ]; do sleep 5; done';
+  const untilLoop = "until [ -e /tmp/a.done ]; do sleep 10; done";
+  for (const cmd of [whileLoop, untilLoop]) {
+    for (const agentType of [null, "dev-loop"]) {
+      const d = decideBashGate({ command: cmd, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType });
+      assert.equal(d.decision, "deny", `expected deny for agentType=${agentType}, command=${cmd}`);
+      assert.match(d.reason, /COPILOT-FOLLOWUP-WAIT-TOOLS/);
+    }
+    // off-target passes through (both actors)
+    assert.equal(decideBashGate({ command: cmd, repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET, agentType: "dev-loop" }).decision, "allow");
+    assert.equal(decideBashGate({ command: cmd, repoSlug: "someone/else", inManagedContext: true, managedRepoSlug: TARGET, agentType: null }).decision, "allow");
+  }
+  // False-positive allow at the gate: a quoted --body payload merely mentioning while/sleep/done is
+  // not a real loop construct. Use agentType: null (main agent) — a subagent `gh issue create` is
+  // denied for a DIFFERENT reason (the external-write ban), which would mask the poll-loop fix.
+  const quotedBody = decideBashGate({
+    command: 'gh issue create --title x --body "while [ -f x.done ]; do sleep 5; done"',
+    repoSlug: TARGET,
+    inManagedContext: true,
+    managedRepoSlug: TARGET,
+    agentType: null,
+  });
+  assert.equal(quotedBody.decision, "allow");
+});
+
 // #1622 regression guard: the #2065 OPTION-C rework must NOT narrow the pre-existing unconditional
 // detach-wrapper ban to "detach AND family reference". A family-less nohup/disown/tmux/screen
 // detach still denies outright, for both the main/coordinator (agentType null) and a subagent.

@@ -802,20 +802,66 @@ export function commandContainsCopilotSummonComment(command) {
 }
 
 /**
+ * Blank the CONTENTS of quoted string literals ('...' and "...") to a space, EXCEPT a quote that is
+ * the payload of a bare `-c` flag (`sh -c '…'`, `bash -c '…'`, `timeout 5 sh -c '…'`) — that payload
+ * is REAL shell syntax to be executed, not inert data, so blanking it would hide an actual poll-loop
+ * construct wrapped in `sh -c`. A real poll loop's structural tokens (`while`/`until`/`for`/`do`/
+ * `sleep`/`done`, a `[ -f … ]` file test) are UNQUOTED shell syntax; a quoted issue body, `--body`
+ * payload, or quoted example that merely mentions them carries them INSIDE quotes as inert data.
+ * Blanking those quoted contents is what lets the poll-loop matchers key on an actual loop
+ * CONSTRUCT rather than the token sequence appearing anywhere in a command (`gh issue create --body
+ * "while … sleep … done"` must not be flagged).
+ * ponytail: blanks balanced quote pairs only, `-c`-flag-preceded exemption only — no full shell
+ * tokenizer (mismatched/partial quotes, `eval`, and other exec-wrapper flags stay out of scope).
+ * @param {string} command @returns {string}
+ */
+function stripQuotedLiterals(command) {
+  return command.replace(/(['"])((?:(?!\1).)*)\1/g, (match, _quote, _inner, offset, full) => {
+    const before = full.slice(0, offset);
+    if (/(?:^|\s)-c\s*$/.test(before)) {
+      return match; // executable -c payload — leave the real shell syntax intact
+    }
+    return " ";
+  });
+}
+
+/**
  * Whether COMMAND is (or contains) a sleep-poll loop over `gh`/`loop-state` — a `while`/`until`/
  * `for` loop whose body contains both a `sleep` and a `gh` or `loop-state` call. Checked on the
  * WHOLE command (not per-segment): the loop body is `;`-delimited, so a per-segment split would
  * separate the loop head from its `sleep`/`gh` body calls and miss the pattern. `gh` must be a
  * standalone token (not `grep gh-notes`), and `loop-state` must sit at a command-head position
- * (not a substring inside `grep loop-state x`).
+ * (not a substring inside `grep loop-state x`). Quoted literals are blanked first (see
+ * `stripQuotedLiterals`) so a quoted body/example that merely contains the tokens is not flagged.
  * @param {string} command @returns {boolean}
  */
 export function commandIsSleepPollLoop(command) {
-  const whole = command.trim();
+  const whole = stripQuotedLiterals(command.trim());
   return (
     /(?:while|until|for)\b/i.test(whole) &&
     /\bsleep\b/.test(whole) &&
     /\bgh(?=\s|$)|(?:^|[;&|(])\s*loop-state(?=\s|$)/.test(whole)
+  );
+}
+
+/**
+ * Whether COMMAND is (or contains) a bare FILE-MARKER poll loop: a `while`/`until`/`for` loop that
+ * repeatedly tests for a file's existence (`[ -f … ]`, `[[ -e … ]]`, `test -f …`) and sleeps, with
+ * NO gated wait-tool. This is the orphan pattern under Claude Code — a `<tasks>/<id>.done` sentinel
+ * Claude Code never writes (completion arrives via async notification), so the loop never exits and,
+ * once backgrounded, orphans with no async wake to reap it. Distinct from `commandIsSleepPollLoop`,
+ * which keys on a `gh`/`loop-state` CALL: this keys on a FILE-EXISTS TEST, catching a marker poll
+ * that calls no gh/loop-state at all. Verb-independent (while/until/for). Quoted literals are
+ * blanked first (see `stripQuotedLiterals`) so a quoted example or `--body` payload that merely
+ * contains the tokens is NOT flagged.
+ * @param {string} command @returns {boolean}
+ */
+export function commandIsFileMarkerPollLoop(command) {
+  const whole = stripQuotedLiterals(command.trim());
+  return (
+    /(?:while|until|for)\b/i.test(whole) &&
+    /\bsleep\b/.test(whole) &&
+    /(?:\[\[?|\btest\b)\s+(?:!\s+)?-[efsd]\b/.test(whole)
   );
 }
 
@@ -905,8 +951,8 @@ export function commandContainsDetachedWaitTool(command) {
     return true;
   }
 
-  // (2) Unconditional sleep-poll-loop ban.
-  if (commandIsSleepPollLoop(whole)) {
+  // (2) Unconditional sleep-poll-loop ban — a gh/loop-state poll OR a bare file-marker poll.
+  if (commandIsSleepPollLoop(whole) || commandIsFileMarkerPollLoop(whole)) {
     return true;
   }
 
