@@ -61,6 +61,7 @@ Output (stdout, JSON):
     "model": "…" | null,        // authoritative merged tier (resolveRoleModel, kind:"angle")
     "overrideModel": "…" | null, // bare resolveReviewerRole(...).model override, if any
     "fallback": false,
+    "configErrors": [],          // per-layer config load errors (see configErrorCount)
     "configErrorCount": 0,       // >0 => .devloops layer errors; ok:false, no role trusted
     "gate": "draft",            // only when --gate given
     "scope": "full"             // only when --gate given

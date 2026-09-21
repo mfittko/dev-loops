@@ -74,6 +74,32 @@ test("primary model is the merged tier, not the bare override; overrideModel is 
   assert.equal(payload.overrideModel, null);
 });
 
+test("overrideModel carries a NON-NULL bare per-angle model, and the primary model resolves it over the tier", () => {
+  // The complement of the test above: here the angle entry sets an explicit
+  // per-angle `model`, so `overrideModel` (the bare resolveReviewerRole().model)
+  // is NON-NULL — the case the tier-only test never exercises. A distinct `tier`
+  // is present only to prove the primary `model` (resolveRoleModel, kind:"angle")
+  // honors the explicit per-angle model with precedence, NOT the tier mapping.
+  //
+  // Note: with the shipped data model an explicit per-angle `model` is the ONLY
+  // source of a non-null overrideModel (all BUILTIN_PERSONAS have defaultModel
+  // null), and resolveRoleModel(kind:"angle") returns that same per-angle model
+  // first — so a non-null overrideModel necessarily equals the primary model. A
+  // fixture where the two are non-null AND differ is unrealizable without
+  // changing resolveReviewerRole/resolveRoleModel, which is out of scope. The
+  // assertions below still discriminate the two fields: they fail if overrideModel
+  // were dropped (would be null) or if the primary model leaked the tier value.
+  const config = {
+    gates: { draft: { angles: [{ name: "correctness", persona: "paranoid", model: "explicit-angle-model", tier: "audit" }] } },
+    models: { tiers: { audit: { claude: "audit-claude", pi: "audit-pi" } } },
+  };
+  const payload = resolveRolePayload(config, { angle: "correctness", harness: "claude" });
+  assert.equal(payload.overrideModel, "explicit-angle-model", "overrideModel must surface the bare per-angle model override, non-null");
+  assert.notEqual(payload.overrideModel, null, "overrideModel must not be dropped when the entry sets an explicit model");
+  assert.equal(payload.model, "explicit-angle-model", "primary model must honor the explicit per-angle model with precedence");
+  assert.notEqual(payload.model, "audit-claude", "primary model must NOT leak the tier value when an explicit per-angle model is set");
+});
+
 // ---------------------------------------------------------------------------
 // CLI end-to-end against a temp repo (loads the merged config off disk)
 // ---------------------------------------------------------------------------
@@ -111,6 +137,12 @@ test("CLI resolves a built-in angle against a repo with no .devloops override", 
     assert.equal(result.ok, true);
     assert.equal(result.persona, "review");
     assert.equal(result.model, "opus");
+    // The shipped extension-defaults supply a real focus prompt for the built-in
+    // `correctness` angle; the merged config must surface it (not null/empty).
+    assert.ok(
+      typeof result.prompt === "string" && result.prompt.length > 0,
+      "a built-in angle must resolve a non-empty focus prompt from the merged config",
+    );
   });
 });
 
