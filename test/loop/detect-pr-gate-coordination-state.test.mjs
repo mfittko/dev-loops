@@ -9,7 +9,7 @@ import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 import { detectPrGateCoordinationState, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, resolvePostConvergenceReviewSuppressed, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
 import { isRoundCapReachedCleanGrant } from "@dev-loops/core/loop/pr-gate-coordination";
-import { evaluateCopilotConvergence } from "@dev-loops/core/loop/merge-approval";
+import { evaluateMergePreconditions } from "@dev-loops/core/loop/merge-approval";
 import { emitResult } from "../../scripts/lib/jq-output.mjs";
 import { formatCliError } from "../../scripts/_core-helpers.mjs";
 import { PR_CHECKPOINT, PR_CHECKPOINT_ACTION, shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-coordination";
@@ -992,23 +992,36 @@ test("detect-pr-gate-coordination-state still BLOCKS pre_approval for a 🔵 wit
   assert.ok(!parsed.allowedNextActions.includes("run_pre_approval_gate"));
 });
 
-// The gate-ENTRY body-feedback term and the MERGE gate consume the same
-// evaluateCopilotConvergence. For one {currentHeadSha, reviews} input the
-// shared eval decides both: 🔵 → ok:true (entry allowed), 🟡 → ok:false (blocked).
-test("gate-entry body-feedback and the merge gate agree via the shared evaluateCopilotConvergence (#2345 AC3)", () => {
+test("the production gate-entry and merge call sites agree on 🔵 and 🟡 dispositions (#2345 AC3)", async () => {
   const currentHeadSha = "def56789abcdef";
-  const blueReviews = [{ author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: currentHeadSha }, body: "### 🔵 Needs a closer look", submittedAt: "2026-05-31T20:10:00Z" }];
-  const yellowReviews = [{ author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: currentHeadSha }, body: "### 🟡 Changes recommended", submittedAt: "2026-05-31T20:10:00Z" }];
-  const blue = evaluateCopilotConvergence({ currentHeadSha, reviews: blueReviews });
-  const yellow = evaluateCopilotConvergence({ currentHeadSha, reviews: yellowReviews });
-  assert.equal(blue.ok, true);
-  assert.equal(blue.disposition, "needs_closer_look");
-  assert.equal(yellow.ok, false);
-  assert.equal(yellow.disposition, "changes_recommended");
-  // The detector sets copilotBodyFeedbackUnresolved = (convergence.ok === false),
-  // so the 🔵 does NOT block gate entry while the 🟡 does.
-  assert.equal(blue.ok === false, false);
-  assert.equal(yellow.ok === false, true);
+  for (const { body, disposition, allowed } of [
+    { body: "### 🔵 Needs a closer look", disposition: "needs_closer_look", allowed: true },
+    { body: "### 🟡 Changes recommended", disposition: "changes_recommended", allowed: false },
+  ]) {
+    const env = writeGhStub(null, pathAGhEntries({ reviewBody: body, atCap: false }));
+    const gateResult = await runNode(["--repo", "owner/repo", "--pr", "266"], { env });
+    assert.equal(gateResult.code, 0);
+    const gate = JSON.parse(gateResult.stdout);
+    assert.equal(gate.allowedNextActions.includes("run_pre_approval_gate"), allowed);
+
+    const reviews = [{ author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: currentHeadSha }, body, submittedAt: "2026-05-31T20:10:00Z" }];
+    const merge = evaluateMergePreconditions({
+      humanApprovedBy: "alice",
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "CLEAN",
+      ciGreen: { green: true },
+      title: "fix: align Copilot convergence",
+      gateEvidence: { ok: true },
+      sizeOutcome: "pass",
+      touchesT1: false,
+      unresolvedChangesRequestedCount: 0,
+      currentHeadSha,
+      reviews,
+      standingAuthorized: true,
+    });
+    assert.equal(merge.ok, allowed, JSON.stringify(merge.failures));
+    assert.equal(merge.copilotDisposition, disposition);
+  }
 });
 
 test("detect-pr-gate-coordination-state auto-detects local-fix-without-reply (#464) when unresolved threads exist on older review commit", async () => {
@@ -2616,10 +2629,6 @@ describe("resolvePostConvergenceReviewSuppressed (#1441)", () => {
   }
 
   const snapshot = { copilotReviewRequestStatus: "none", unresolvedThreadCount: 0 };
-  // The below-cap live carry-forward recognition fires only when Copilot reviewed
-  // an EARLIER head and the current head has advanced past it (not itself
-  // reviewed) — the stuck settled shape.
-  const belowCapSnapshot = { copilotReviewRequestStatus: "none", unresolvedThreadCount: 0, copilotReviewPresent: true, copilotReviewOnCurrentHead: false };
 
   // prData carries Copilot's actual last submitted review (commit "oldsha"),
   // matching the marker's claimed lastReviewedHeadSha: resolvePostConvergenceReviewSuppressed
@@ -2641,7 +2650,7 @@ describe("resolvePostConvergenceReviewSuppressed (#1441)", () => {
         },
       ]);
       const suppressed = await resolvePostConvergenceReviewSuppressed(
-        { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot: belowCapSnapshot, prData: prDataWithLastReview("oldsha") },
+        { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot, prData: prDataWithLastReview("oldsha") },
         { env: {}, ghCommand: "gh", runChild, checkpointDir },
       );
       assert.equal(suppressed, true);
@@ -2693,66 +2702,6 @@ describe("resolvePostConvergenceReviewSuppressed (#1441)", () => {
       assert.equal(suppressed, false);
       assert.equal(calls.length, 0);
     });
-  });
-
-  // With NO operator marker, recognize a settled below-cap head by re-verifying
-  // LIVE that the current head's delta since Copilot's last submitted review is a
-  // proven integrate-only base-move / pure-doc carry, via the same
-  // classifyPrOwnDeltaSinceLastReview reduction the at-cap request-copilot-review
-  // path uses.
-  it("returns true when no marker exists but the below-cap delta is a proven integrate-only base-move (#2345)", async () => {
-    const { runChild } = makeGhMock([
-      // Raw delta since the last-reviewed head includes a base file (a code file
-      // pulled in by a base-move) …
-      {
-        assertArgs: ["api", "repos/owner/repo/compare/oldsha...newsha"],
-        stdout: jsonLine({ status: "ahead", files: [{ filename: "src/base-only.mjs", status: "modified" }] }),
-      },
-      // … the PR base ref …
-      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefName", "--jq", ".baseRefName"], stdout: "main\n" },
-      // … and the base-relative compare shows that same file is already on base at
-      // the current head, so the PR-own reduced delta is EMPTY → integrate-only.
-      {
-        assertArgs: ["api", "repos/owner/repo/compare/main...newsha"],
-        stdout: jsonLine({ status: "ahead", files: [] }),
-      },
-    ]);
-    const suppressed = await resolvePostConvergenceReviewSuppressed(
-      { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot: belowCapSnapshot, prData: prDataWithLastReview("oldsha") },
-      { env: {}, ghCommand: "gh", runChild },
-    );
-    assert.equal(suppressed, true);
-  });
-
-  it("returns false when no marker exists and the below-cap delta touches Copilot's code surface (#2345 fail-closed)", async () => {
-    const { runChild } = makeGhMock([
-      {
-        assertArgs: ["api", "repos/owner/repo/compare/oldsha...newsha"],
-        stdout: jsonLine({ status: "ahead", files: [{ filename: "src/feature.mjs", status: "modified" }] }),
-      },
-      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefName", "--jq", ".baseRefName"], stdout: "main\n" },
-      // The changed code file is PR-own (still differs from base), so the reduced
-      // delta keeps it → a code delta must NEVER carry forward.
-      {
-        assertArgs: ["api", "repos/owner/repo/compare/main...newsha"],
-        stdout: jsonLine({ status: "ahead", files: [{ filename: "src/feature.mjs", status: "modified" }] }),
-      },
-    ]);
-    const suppressed = await resolvePostConvergenceReviewSuppressed(
-      { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot: belowCapSnapshot, prData: prDataWithLastReview("oldsha") },
-      { env: {}, ghCommand: "gh", runChild },
-    );
-    assert.equal(suppressed, false);
-  });
-
-  it("returns false without any gh call when no marker exists and Copilot's last-reviewed head is unknown (#2345 fail-closed)", async () => {
-    const { runChild, calls } = makeGhMock([]);
-    const suppressed = await resolvePostConvergenceReviewSuppressed(
-      { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot: belowCapSnapshot, prData: { reviews: [] } },
-      { env: {}, ghCommand: "gh", runChild },
-    );
-    assert.equal(suppressed, false);
-    assert.equal(calls.length, 0, "no live carry check without a known compare base");
   });
 
   it("returns false when a pending request or unresolved threads exist, without even reading the marker", async () => {
