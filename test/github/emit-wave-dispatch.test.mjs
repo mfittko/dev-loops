@@ -84,7 +84,7 @@ function planPathFor(tmpDir) {
  * per unit — the exact artifacts a completed emit-fanout-dispatch.mjs run
  * leaves on disk.
  */
-async function seedEmitPlan(tmpDir, { units = DEFAULT_UNITS, maxConcurrent = 3 } = {}) {
+async function seedEmitPlan(tmpDir, { units = DEFAULT_UNITS, maxConcurrent = 3, count } = {}) {
   const planPath = planPathFor(tmpDir);
   const dir = path.dirname(planPath);
   await mkdir(dir, { recursive: true });
@@ -98,7 +98,7 @@ async function seedEmitPlan(tmpDir, { units = DEFAULT_UNITS, maxConcurrent = 3 }
     await writeFile(promptPath, typeof unit.promptBytes === "string" ? unit.promptBytes : `PROMPT BYTES for ${unit.scope ?? "unit"}\n`, "utf8");
     withPrompts.push({ ...unit, promptPath });
   }
-  await writeFile(planPath, `${JSON.stringify({ ok: true, gate: GATE, headSha: HEAD_SHA, repo: REPO, pr: PR, count: withPrompts.length, maxConcurrent, units: withPrompts }, null, 2)}\n`, "utf8");
+  await writeFile(planPath, `${JSON.stringify({ ok: true, gate: GATE, headSha: HEAD_SHA, repo: REPO, pr: PR, count: count ?? withPrompts.length, maxConcurrent, units: withPrompts }, null, 2)}\n`, "utf8");
   return { planPath, dir };
 }
 
@@ -153,11 +153,13 @@ test("emits ONE runs.all call per wave with a unique non-empty key per unit", as
     assert.equal(plan.calls.length, 1);
     const script = await readFile(plan.waves[0].scriptPath, "utf8");
     assert.equal(waveScriptCallShape(script).runsAllCalls, 1, "a wave must be exactly ONE runs.all call");
-    const keys = [...script.matchAll(/key:\s*"([^"]*)"/g)].map((m) => m[1]);
+    // Read the keys from the plan (and, in the probe test below, from the
+    // script's own runs.all call), never by regexing the raw script: inlined
+    // reviewer prose could otherwise be mistaken for code.
+    const keys = plan.waves[0].keys;
     assert.equal(keys.length, 3);
     assert.equal(new Set(keys).size, 3, "every runs.all item needs a UNIQUE key");
     for (const key of keys) assert.ok(key.trim().length > 0, "keys must be non-empty");
-    assert.deepEqual(plan.waves[0].keys, keys);
     // The legacy top-level shape this pi-subagents version rejects must never
     // be emitted.
     assert.equal(waveScriptCallShape(script).hasLegacyTasksInput, false);
@@ -169,6 +171,10 @@ test("emits ONE runs.all call per wave with a unique non-empty key per unit", as
     assert.equal(plan.calls[0].workflowScriptPath, plan.waves[0].scriptPath);
     assert.equal(typeof plan.calls[0].cwd, "string");
     assert.ok(plan.calls[0].cwd.length > 0);
+    // The partition is a function of the round's own recorded artifact.
+    assert.equal(plan.maxConcurrentSource, "emit-plan");
+    assert.equal(plan.sequential, false);
+    assert.equal(plan.sequentialSource, null);
   });
 });
 
@@ -196,7 +202,7 @@ test("partitions the round into ceil(n / maxConcurrent) waves, each within the b
     for (const wave of plan.waves) {
       const script = await readFile(wave.scriptPath, "utf8");
       assert.equal(waveScriptCallShape(script).runsAllCalls, 1);
-      assert.equal([...script.matchAll(/key:\s*"([^"]*)"/g)].length, 3);
+      assert.equal(wave.keys.length, 3);
     }
     assert.equal(new Set(plan.waves.flatMap((w) => w.keys)).size, 6, "keys are unique across the whole round");
   });
@@ -206,11 +212,14 @@ test("partitions the round into ceil(n / maxConcurrent) waves, each within the b
 test("gates.fanout.sequential resolves to single-unit waves", async () => {
   await withTmpDir(async (tmpDir) => {
     const units = Array.from({ length: 3 }, (_, i) => ({ scope: `pre-approval-gate-angle-${i + 1}`, angles: [`angle-${i + 1}`], group: null }));
-    await seedEmitPlan(tmpDir, { units, maxConcurrent: 3 });
+    // The emitter records the EFFECTIVE concurrency, which is 1 when
+    // gates.fanout.sequential is set.
+    await seedEmitPlan(tmpDir, { units, maxConcurrent: 1 });
     assert.equal(await main(baseArgs(tmpDir), { loadConfig: configStub({ sequential: true }) }), 0);
     const plan = await readPlan(tmpDir);
     assert.equal(plan.maxConcurrent, 1);
     assert.equal(plan.sequential, true);
+    assert.equal(plan.sequentialSource, "config-flag");
     assert.equal(plan.waves.length, 3, "sequential resolves to one unit per wave");
     assert.deepEqual(plan.waves.map((w) => w.count), [1, 1, 1]);
   });
@@ -245,7 +254,9 @@ test("serialization is permitted when the gate does not require fan-out evidence
 // `gates.fanout.maxConcurrent: 1`) is the same silent serialization.
 test("a config-level concurrency of 1 without gates.fanout.sequential fails closed", async () => {
   await withTmpDir(async (tmpDir) => {
-    const { dir } = await seedEmitPlan(tmpDir);
+    // The emit-plan records the effective 1, so the refusal is the serialization
+    // guard, not a recorded-vs-resolved maxConcurrent disagreement.
+    const { dir } = await seedEmitPlan(tmpDir, { maxConcurrent: 1 });
     const { exitCode, stdout } = await captureStdout(() => main(baseArgs(tmpDir), { loadConfig: configStub({ maxConcurrent: 1, sequential: false, requireFanoutEvidence: true }) }));
     assert.equal(exitCode, 1);
     const payload = JSON.parse(stdout);
@@ -257,9 +268,168 @@ test("a config-level concurrency of 1 without gates.fanout.sequential fails clos
 
 test("a config-level concurrency of 1 is permitted when fan-out evidence is not required", async () => {
   await withTmpDir(async (tmpDir) => {
-    await seedEmitPlan(tmpDir);
+    await seedEmitPlan(tmpDir, { maxConcurrent: 1 });
     assert.equal(await main(baseArgs(tmpDir), { loadConfig: configStub({ maxConcurrent: 1, sequential: false, requireFanoutEvidence: false }) }), 0);
     assert.equal((await readPlan(tmpDir)).waves.length, 3);
+  });
+});
+
+// A truncated/partial emit-plan must not dispatch as a complete round.
+test("refuses when the emit-plan's recorded count disagrees with its units", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedEmitPlan(tmpDir, { count: 2 });
+    const { exitCode, stdout } = await captureStdout(() => main(baseArgs(tmpDir), { loadConfig: configStub() }));
+    assert.equal(exitCode, 1);
+    const payload = JSON.parse(stdout);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /records count 2 but carries 3/);
+  });
+});
+
+// A re-run at the same key must partition as the round's own artifact records.
+test("refuses when the emit-plan's recorded maxConcurrent disagrees with the resolved value", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedEmitPlan(tmpDir, { maxConcurrent: 2 });
+    const { exitCode, stdout } = await captureStdout(() => main(baseArgs(tmpDir), { loadConfig: configStub({ maxConcurrent: 3 }) }));
+    assert.equal(exitCode, 1);
+    const payload = JSON.parse(stdout);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /records maxConcurrent 2 but the resolved effective fan-out concurrency is 3/);
+  });
+});
+
+test("falls back to the resolved concurrency when the emit-plan records none", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const { planPath } = await seedEmitPlan(tmpDir);
+    const plan = JSON.parse(await readFile(planPath, "utf8"));
+    delete plan.maxConcurrent;
+    await writeFile(planPath, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
+    assert.equal(await main(baseArgs(tmpDir), { loadConfig: configStub() }), 0);
+    const out = await readPlan(tmpDir);
+    assert.equal(out.maxConcurrent, 3);
+    assert.equal(out.maxConcurrentSource, "config");
+  });
+});
+
+// `sequential` reports the resolved config flag, not the derived concurrency;
+// `sequentialSource` names the trigger honestly.
+test("reports the resolved sequential flag and its source", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedEmitPlan(tmpDir, { maxConcurrent: 1 });
+    assert.equal(await main(baseArgs(tmpDir), { loadConfig: configStub({ maxConcurrent: 1, sequential: true, requireFanoutEvidence: true }) }), 0);
+    const plan = await readPlan(tmpDir);
+    assert.equal(plan.sequential, true);
+    assert.equal(plan.sequentialSource, "config-flag");
+    assert.equal(plan.maxConcurrent, 1);
+  });
+});
+
+test("an explicit --sequential without the config flag reports explicit-request, not a config flag", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedEmitPlan(tmpDir, { maxConcurrent: 3 });
+    assert.equal(await main([...baseArgs(tmpDir), "--sequential"], { loadConfig: configStub({ maxConcurrent: 3, sequential: false, requireFanoutEvidence: false }) }), 0);
+    const plan = await readPlan(tmpDir);
+    assert.equal(plan.sequential, false, "the config flag is off; only the request serialized");
+    assert.equal(plan.sequentialSource, "explicit-request");
+    assert.equal(plan.maxConcurrent, 1);
+    assert.equal(plan.waves.length, 3);
+  });
+});
+
+test("a config-level concurrency of 1 reports maxConcurrent:1 as the sequential source", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedEmitPlan(tmpDir, { maxConcurrent: 1 });
+    assert.equal(await main(baseArgs(tmpDir), { loadConfig: configStub({ maxConcurrent: 1, sequential: false, requireFanoutEvidence: false }) }), 0);
+    const plan = await readPlan(tmpDir);
+    assert.equal(plan.sequential, false);
+    assert.equal(plan.sequentialSource, "maxConcurrent:1");
+    assert.equal(plan.maxConcurrent, 1);
+  });
+});
+
+// #1086 cross-harness non-regression: under the Claude harness the effective
+// concurrency is clamped to CLAUDE_MAX_EFFECTIVE_CONCURRENT (2). That clamp is
+// NOT an unjustified serialization and must not trip the maxConcurrent === 1
+// refusal.
+test("the Claude harness clamp partitions at 2 without tripping the maxConcurrent === 1 refusal", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const units = Array.from({ length: 3 }, (_, i) => ({ scope: `pre-approval-gate-angle-${i + 1}`, angles: [`angle-${i + 1}`], group: null }));
+    // The emitter records the EFFECTIVE concurrency, so under CLAUDECODE=1 the
+    // plan records 2 even though the configured value is 3.
+    await seedEmitPlan(tmpDir, { units, maxConcurrent: 2 });
+    const previous = process.env.CLAUDECODE;
+    process.env.CLAUDECODE = "1";
+    try {
+      assert.equal(await main(baseArgs(tmpDir), { loadConfig: configStub({ maxConcurrent: 3 }) }), 0, "the clamp must not be read as a refusal");
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDECODE;
+      else process.env.CLAUDECODE = previous;
+    }
+    const plan = await readPlan(tmpDir);
+    assert.equal(plan.maxConcurrent, 2, "the Claude clamp caps the effective bound at 2");
+    assert.equal(plan.sequential, false, "the clamp is not a serialization");
+    assert.equal(plan.waves.length, 2, "3 units at an effective 2 is 2 waves");
+    assert.deepEqual(plan.waves.map((w) => w.count), [2, 1]);
+    for (const wave of plan.waves) assert.ok(wave.count <= 2);
+  });
+});
+
+// Cleanup branches: every non-success exit after the key is resolved must leave
+// no wave artifact (a stale script is dispatchable).
+test("clears this key's artifacts when a wave script write fails mid-round", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const { dir } = await seedEmitPlan(tmpDir);
+    const exitCode = await main(baseArgs(tmpDir), {
+      loadConfig: configStub(),
+      writeScript: async (file, data) => {
+        await writeFile(file, data.slice(0, 16), "utf8");
+        throw Object.assign(new Error("simulated partial write"), { code: "ENOSPC" });
+      },
+    });
+    assert.equal(exitCode, 2);
+    assert.equal(await readFile(path.join(dir, `${GATE}-${HEAD_SHA}.wave-1.js`), "utf8").catch(() => null), null);
+    assert.equal(await readFile(buildWavePlanPath({ planPath: planPathFor(tmpDir), gate: GATE, headSha: HEAD_SHA }), "utf8").catch(() => null), null);
+  });
+});
+
+test("clears this key's artifacts when the wave-plan persist fails", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const { dir } = await seedEmitPlan(tmpDir);
+    const exitCode = await main(baseArgs(tmpDir), {
+      loadConfig: configStub(),
+      persistPlan: async () => {
+        throw Object.assign(new Error("simulated persist failure"), { code: "EIO" });
+      },
+    });
+    assert.equal(exitCode, 2);
+    assert.equal(await readFile(path.join(dir, `${GATE}-${HEAD_SHA}.wave-1.js`), "utf8").catch(() => null), null);
+    assert.equal(await readFile(buildWavePlanPath({ planPath: planPathFor(tmpDir), gate: GATE, headSha: HEAD_SHA }), "utf8").catch(() => null), null);
+  });
+});
+
+// The --jq validation runs AFTER the start-of-flow clear, so even an invalid
+// filter (which exits 2 before the plan is read) leaves no stale wave artifact.
+test("an invalid --jq filter exits 2 and leaves no stale wave artifact", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const { dir } = await seedEmitPlan(tmpDir);
+    await writeFile(path.join(dir, `${GATE}-${HEAD_SHA}.wave-1.js`), "stale script", "utf8");
+    await writeFile(buildWavePlanPath({ planPath: planPathFor(tmpDir), gate: GATE, headSha: HEAD_SHA }), "{}", "utf8");
+    assert.equal(await main([...baseArgs(tmpDir), "--jq", 'error("boom")'], { loadConfig: configStub() }), 2);
+    assert.equal(await readFile(path.join(dir, `${GATE}-${HEAD_SHA}.wave-1.js`), "utf8").catch(() => null), null);
+    assert.equal(await readFile(buildWavePlanPath({ planPath: planPathFor(tmpDir), gate: GATE, headSha: HEAD_SHA }), "utf8").catch(() => null), null);
+  });
+});
+
+// A data-dependent --jq error fails AFTER the artifacts are written; the
+// success-path guard must still clear them.
+test("a data-dependent --jq error exits 2 and clears the just-written wave artifacts", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const { dir } = await seedEmitPlan(tmpDir);
+    // `.count | length` is syntactically valid but fails at evaluation (count is
+    // a number), so it reaches emitResult after the scripts were persisted.
+    assert.equal(await main([...baseArgs(tmpDir), "--jq", ".count | length"], { loadConfig: configStub() }), 2);
+    assert.equal(await readFile(path.join(dir, `${GATE}-${HEAD_SHA}.wave-1.js`), "utf8").catch(() => null), null);
+    assert.equal(await readFile(buildWavePlanPath({ planPath: planPathFor(tmpDir), gate: GATE, headSha: HEAD_SHA }), "utf8").catch(() => null), null);
   });
 });
 

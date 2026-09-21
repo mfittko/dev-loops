@@ -545,7 +545,14 @@ It refuses (exit 1) on a unit with no key or an unreadable prompt, and it valida
 the built plan's shape before any script reaches disk — one `runs.all` call per wave, unique
 non-empty keys, the concurrency bound honored, and no separate-call partition — as defense in
 depth over the deterministic partitioner. Every non-success exit after the round key is resolved
-leaves no wave artifact on disk for that key.
+leaves no wave artifact on disk for that key. It refuses (exit 1) on either serialization trigger —
+an explicit `--sequential` not backed by `gates.fanout.sequential`, or a resolved effective
+concurrency of 1 (`gates.fanout.maxConcurrent: 1`) while `gates.requireFanoutEvidence` is on — and
+the remediation is to set `gates.fanout.sequential: true` in `.devloops` to record the sanctioned
+load fallback. That refusal is EMITTER-scoped: a wave emitted through this script fails closed, but a
+conductor that bypasses `emit-wave-dispatch.mjs` and composes its own per-unit calls is NOT detected
+at gate time (the issue's open "nothing detects the serialization" residual, not a claim of this
+rule).
 
 "Blocking joins" means awaiting that one call before releasing the next wave — it does NOT mean one
 blocking `subagent` call per dispatch unit. Pi's foreground guard is `subagentInProgress`
@@ -566,7 +573,7 @@ Emitted reviewer prompts carry a bounded tool-call budget plus a MANDATORY artif
 ("finish within N tool calls and WRITE your artifact — never return without the file written"): a
 reviewer that hits its per-unit timeout mid-thought and writes nothing produces no evidence at all,
 so bounded per-reviewer effort plus the mandatory write is what makes a wave collectable. The
-delivery stays agent-authored on Claude Code / Codex (the per-harness delivery table below); only
+delivery stays agent-authored on Claude Code / Codex (the per-harness delivery table above); only
 Pi's driver is code-driven, so this rule changes no other harness's dispatch path.
 
 <!-- rule: GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK -->

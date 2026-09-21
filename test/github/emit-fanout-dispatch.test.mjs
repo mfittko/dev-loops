@@ -1418,6 +1418,10 @@ test("buildAngleNamingSuffix carries the bounded reviewer contract: budget, proh
   // unable to finish every assigned angle (reviewer_coverage_incomplete).
   assert.match(suffix, /exceed this budget/);
   assert.match(suffix, /cannot finish reviewing every assigned angle/);
+  // The mandatory artifact-write clause: bounded per-reviewer effort plus the
+  // write is what makes a wave collectable.
+  assert.match(suffix, /WRITE your findings artifact/);
+  assert.match(suffix, /never return without the file written/);
   // The escape hatch is a directly invokable command, not just a pointer to
   // the script: it names --run/--head-sha/--angles/--completed-angles/
   // --model-turns/--tool-calls/--findings-dir, but every value is a

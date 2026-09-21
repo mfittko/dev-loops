@@ -54,9 +54,13 @@ Optional:
   --tmp-root <path>            The tmp/ directory the round's gate artifacts live
                                under (default: process.cwd()/tmp; must match the
                                emit-fanout-dispatch.mjs call).
-  --cwd <path>                 The worktree the emitted call must run in
-                               (default: process.cwd()) — written into the
-                               emitted call body's \`cwd\`.
+  --cwd <path>                 The worktree the emitted call must run in,
+                               resolved to an ABSOLUTE path (default:
+                               process.cwd()) — written into the emitted call
+                               body's \`cwd\` AND used as the config root the
+                               round's fan-out concurrency is resolved against
+                               (GATE-EXEC-NO-CWD-DEPENDENCE: the shell may sit
+                               in the primary checkout).
   --timeout-ms <ms>            Bounded per-wave dispatch deadline in ms
                                (default: 900000). Must be a positive integer.
   --sequential                 Request single-unit waves. Refused (exit 1) unless
@@ -64,7 +68,8 @@ Optional:
                                \`gates.requireFanoutEvidence\` is off.
 Output (stdout, JSON):
   { "ok": true, "gate": "...", "headSha": "...", "repo": "...", "pr": "...",
-    "count": <n>, "maxConcurrent": <n>, "sequential": <bool>,
+    "count": <n>, "maxConcurrent": <n>, "maxConcurrentSource": "emit-plan|config",
+    "sequential": <bool>, "sequentialSource": "config-flag|explicit-request|maxConcurrent:1|null",
     "waves": [ { "index": <1-based>, "count": <n>, "keys": ["..."], "scriptPath": "..." } ],
     "calls": [ { "workflowScriptPath": "...", "cwd": "...", "async": false, "timeoutMs": <ms> } ] }
   Issue ONE subagent call per entry in \`calls\`, in order, awaiting each wave
@@ -73,16 +78,20 @@ Output (stdout, JSON):
   (via the shared jq-output emitter); a usage/parse error (exit 2) emits
   { "ok": false, "error": "...", "hint"?: "run with --help for usage" } on STDERR.
   Every non-success exit AFTER the round key is resolved (a missing emit-plan, a
-  plan with no units, a unit-level refusal, a shape refusal, a script/persist IO
-  failure, or a data-dependent --jq error) leaves NO wave artifact on disk for
-  this (gate, headSha) key. Argument-validation exits that precede the key
-  resolution (bad --repo/--pr/--gate/--head-sha/--tmp-root/--cwd/--timeout-ms,
-  an empty --jq, or an invalid --jq filter) do not touch the key's artifacts.
+  plan with no units or a recorded count that disagrees with its units, a
+  maxConcurrent recorded by the emit-plan that disagrees with the resolved
+  effective concurrency, a unit-level refusal, a shape refusal, a script/persist
+  IO failure, an empty/invalid --jq, or a data-dependent --jq error) leaves NO
+  wave artifact on disk for this (gate, headSha) key. Argument-validation exits
+  that precede the key resolution (bad --repo/--pr/--gate/--head-sha/--tmp-root/
+  --cwd/--timeout-ms) do not touch the key's artifacts.
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Emitted one ready wave script + call body per wave
   1  Refused: no emit-plan.json at this key (run emit-fanout-dispatch.mjs first),
-     the plan carries no units, a unit carries no key, a unit's promptPath is
+     the plan carries no units or records a count that disagrees with its units,
+     the plan's recorded maxConcurrent disagrees with the resolved effective
+     concurrency, a unit carries no key, a unit's promptPath is
      missing/empty/unreadable, the plan's wave partition does not honor the
      concurrency bound, or the requested serialization is not the sanctioned
      \`gates.fanout.sequential\` fallback
@@ -338,7 +347,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     process.stderr.write(`${formatCliError(parseError("Invalid --cwd value: must be non-empty."))}\n`);
     return 2;
   }
-  const cwd = cwdArg ?? process.cwd();
+  const cwd = path.resolve(cwdArg ?? process.cwd());
   const timeoutArg = resolveFlagValue(argv, "--timeout-ms");
   if (timeoutArg === "") {
     process.stderr.write(`${formatCliError(parseError("Invalid --timeout-ms value: must be a positive integer."))}\n`);
@@ -352,17 +361,6 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     }
     timeoutMs = Number(timeoutArg);
   }
-  const jqArg = resolveFlagValue(argv, "--jq");
-  if (jqArg === "") {
-    process.stderr.write(`${formatCliError(parseError("Invalid --jq value: must be non-empty."))}\n`);
-    return 2;
-  }
-  const jq = jqArg === null ? undefined : jqArg;
-  const silent = argv.includes("--silent") || argv.includes("-s");
-  const finish = (payload, ok) => emitResult(payload, { jq, silent, ok });
-  const jqSyntaxError = preflightJqFilter(jq);
-  if (jqSyntaxError !== undefined) return jqSyntaxError;
-
   let planPath;
   try {
     planPath = buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot });
@@ -374,13 +372,33 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // Clear this key's wave scripts at the very START, before the plan is read,
   // so every non-success exit below leaves NO script on disk — the same
   // stale-artifact hazard GATE-EXEC-FANOUT-DISPATCH-EMIT's start-of-flow rm
-  // protects its own keyed plan against.
+  // protects its own keyed plan against. The --jq/--fields validation runs
+  // AFTER this clear: the round key is resolved by now, so an empty or
+  // syntactically invalid filter is a post-key exit that still leaves no wave
+  // artifact on disk.
   try {
     await clearWaveArtifacts({ planPath, gate, headSha });
   } catch (err) {
     process.stderr.write(`${formatCliError(err)}\n`);
     return 2;
   }
+
+  const jqArg = resolveFlagValue(argv, "--jq");
+  if (jqArg === "") {
+    process.stderr.write(`${formatCliError(parseError("Invalid --jq value: must be non-empty."))}\n`);
+    return 2;
+  }
+  const jq = jqArg === null ? undefined : jqArg;
+  const silent = argv.includes("--silent") || argv.includes("-s");
+  const fieldsArg = resolveFlagValue(argv, "--fields");
+  if (fieldsArg === "") {
+    process.stderr.write(`${formatCliError(parseError("Invalid --fields value: must be non-empty."))}\n`);
+    return 2;
+  }
+  const fields = fieldsArg === null ? undefined : fieldsArg;
+  const finish = (payload, ok) => emitResult(payload, { jq, silent, ...(fields === undefined ? {} : { fields }), ok });
+  const jqSyntaxError = preflightJqFilter(jq);
+  if (jqSyntaxError !== undefined) return jqSyntaxError;
 
   const refuse = async (error) => {
     try {
@@ -404,6 +422,12 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const units = Array.isArray(plan?.units) ? plan.units : [];
   if (plan?.ok !== true || units.length === 0) {
     return refuse(`GATE-EXEC-FANOUT-WAVE-DISPATCH: refusing — the emit-plan at ${JSON.stringify(planPath)} carries no dispatch units (ok=${JSON.stringify(plan?.ok)}, units=${units.length}) — re-run emit-fanout-dispatch.mjs`);
+  }
+  // The emit-plan records the round's unit count. A plan whose recorded count
+  // disagrees with the units it actually carries is truncated/partial and must
+  // not dispatch as a complete round.
+  if (Number.isInteger(plan.count) && plan.count !== units.length) {
+    return refuse(`GATE-EXEC-FANOUT-WAVE-DISPATCH: refusing — the emit-plan at ${JSON.stringify(planPath)} records count ${plan.count} but carries ${units.length} dispatch unit(s) — a truncated or partial plan must not dispatch as a complete round; re-run emit-fanout-dispatch.mjs`);
   }
 
   // The units must each carry a key and a readable promptPath before anything
@@ -431,17 +455,35 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     keyed.push({ key, promptBytes });
   }
 
-  let maxConcurrent;
+  let resolvedMaxConcurrent;
   let sequential;
   let requireFanoutEvidence;
   try {
-    const { config } = await loadConfig({ repoRoot: process.cwd() });
+    const { config } = await loadConfig({ repoRoot: cwd });
     sequential = resolveFanoutSequential(config);
     requireFanoutEvidence = resolveRequireFanoutEvidence(config);
-    maxConcurrent = resolveFanoutEffectiveConcurrency(config, process.env);
+    resolvedMaxConcurrent = resolveFanoutEffectiveConcurrency(config, process.env);
   } catch (err) {
     process.stderr.write(`${formatCliError(err)}\n`);
     return 2;
+  }
+
+  // Partition the round as its own artifact records it. The emit-plan carries
+  // the maxConcurrent the emitter resolved, so a re-run at this key must reuse
+  // that value rather than silently re-partition against a config that changed
+  // underneath the round. A recorded value that disagrees with the freshly
+  // resolved effective concurrency refuses instead of drifting.
+  let maxConcurrent;
+  let maxConcurrentSource;
+  if (Number.isInteger(plan.maxConcurrent) && plan.maxConcurrent >= 1) {
+    if (plan.maxConcurrent !== resolvedMaxConcurrent) {
+      return refuse(`GATE-EXEC-FANOUT-WAVE-DISPATCH: refusing — the emit-plan at ${JSON.stringify(planPath)} records maxConcurrent ${plan.maxConcurrent} but the resolved effective fan-out concurrency is ${resolvedMaxConcurrent} — a re-run at this key must not partition the round differently; re-run emit-fanout-dispatch.mjs`);
+    }
+    maxConcurrent = plan.maxConcurrent;
+    maxConcurrentSource = "emit-plan";
+  } else {
+    maxConcurrent = resolvedMaxConcurrent;
+    maxConcurrentSource = "config";
   }
 
   // GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK: `gates.fanout.sequential: true` is the
@@ -460,6 +502,14 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   }
   if (requestedSequential || sequential) maxConcurrent = 1;
 
+  // Report WHY the round serialized, honestly: `sequential` mirrors the
+  // resolved `gates.fanout.sequential` config flag (never the derived
+  // maxConcurrent), while `sequentialSource` names the trigger.
+  let sequentialSource = null;
+  if (sequential === true) sequentialSource = "config-flag";
+  else if (requestedSequential) sequentialSource = "explicit-request";
+  else if (resolvedMaxConcurrent === 1) sequentialSource = "maxConcurrent:1";
+
   const waves = partitionWaves(keyed, maxConcurrent);
   const waveCount = waves.length;
   const built = [];
@@ -471,7 +521,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
 
   // Fail closed on the shape BEFORE anything reaches disk, so a plan that would
   // serialize units into separate calls never produces a dispatchable script.
-  const validation = validateWaveDispatchPlan({ waves: built, maxConcurrent, count: keyed.length });
+  const validation = validateWaveDispatchPlan({ waves: built, maxConcurrent, count: plan.count });
   if (!validation.ok) {
     return refuse(`GATE-EXEC-FANOUT-WAVE-DISPATCH: refusing — emitted wave plan failed its shape check: ${validation.errors.join("; ")}`);
   }
@@ -499,7 +549,9 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     pr,
     count: keyed.length,
     maxConcurrent,
-    sequential: maxConcurrent === 1,
+    maxConcurrentSource,
+    sequential: sequential === true,
+    sequentialSource,
     waves: built.map(({ index, keys, scriptPath }) => ({ index, count: keys.length, keys, scriptPath })),
     calls: built.map(({ scriptPath }) => ({ workflowScriptPath: scriptPath, cwd, async: false, timeoutMs })),
   };
