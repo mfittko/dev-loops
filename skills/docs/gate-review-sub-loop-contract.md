@@ -277,7 +277,7 @@ limited to the light-mode `scopeUnderThreshold` carve-out or explicit per-PR ope
 Each reviewer:
 
 - starts in fresh context: run the mandatory `verify-fresh-review-context.mjs` invocation exactly as Phase 1 specifies. In the fan-out, `--scope` additionally keeps parallel reviewers in the same working directory from tripping false contamination on each other's sentinels, and `--context-path` (the Phase 1 artifact) fails a reviewer in the wrong/isolated checkout closed. A grouped reviewer runs this ONCE for the whole group, with `--scope <gate>-group-<name>` (below), not once per angle it covers. The sentinel is keyed per review ROUND by the current head SHA, so a retry at a new head naturally gets a fresh sentinel — see [Sentinel lifecycle](#sentinel-lifecycle). Here "fresh" means the reviewer's context is the neutral builder artifact + its angle(s), and explicitly NOT the main agent's conversation/state or a prior reviewer session's state: the injected neutral bundle is the intended seed (allowed), while main-agent / cross-session state bleed fails closed.
-- is composed via the sanctioned composer (`GATE-EXEC-BRIEFING-PREFIX`'s "The composer" paragraph): the same step that runs `verify-fresh-review-context.mjs` (above) ALSO runs `scripts/github/compose-reviewer-prompt.mjs --repo <repo> --pr <n> --gate <gate> --head-sha <sha> --scope <same scope> --angle-suffix-file <path to the group's authored angle-specific prompt text>`, which inlines this round's invariant-prefix bytes as the leading bytes, appends the volatile tail and the angle suffix, writes the composed prompt, and records its dispatch-prompt layout ATOMICALLY (no separate `record-dispatch-prompt-layout.mjs` call needed on this path — the composer already made it). The orchestrator then delivers the composer's `--out` file bytes to the reviewer per the "Per-harness delivery" paragraph below. Hand-composing a prompt and calling `record-dispatch-prompt-layout.mjs` directly against it remains possible as the underlying primitive, but is no longer the sanctioned fan-out path.
+- is composed via the sanctioned composer (`GATE-EXEC-BRIEFING-PREFIX`'s "The composer" paragraph): the same step that runs `verify-fresh-review-context.mjs` (above) is `scripts/github/emit-fanout-dispatch.mjs --repo <repo> --pr <n> --gate <gate> --head-sha <sha>`, which for each dispatch unit writes that unit's angle-suffix and drives the composer core (`composeAndRecordReviewerPrompt`) internally — inlining this round's invariant-prefix bytes as the leading bytes, appending the volatile tail and the angle suffix, writing the composed prompt, and recording its dispatch-prompt layout ATOMICALLY (no separate `record-dispatch-prompt-layout.mjs` call needed on this path — the composer core already made it). The orchestrator then delivers each emitted unit's `promptPath` bytes to its reviewer per the "Per-harness delivery" paragraph below. Hand-composing a prompt and calling `record-dispatch-prompt-layout.mjs` directly against it remains possible as the underlying primitive, but is no longer the sanctioned fan-out path; the composer's own CLI (`compose-reviewer-prompt.mjs`) refuses every direct fan-out invocation (it never writes the keyed emit-plan.json fan-in requires) and names this emitter instead.
 - is seeded with the neutral context bundle verbatim (diff + `adjacentCode`) as its base, and widens (loads more files) only when a covered angle genuinely needs more — it does not re-derive the whole diff/adjacent-code graph. When it widens, it records in the findings artifact's optional `contextWidened` field ONLY the files that actually moved its judgment, never every file it opened. Absence of `contextWidened` (or an empty one) means "not consulted" — never "consulted and clean"; carry-forward and audit logic MUST NOT infer clean-ness from that omission.
 - is scoped to exactly one review angle (one angle per unit under `mode: per-angle`, which bypasses configured groups; every angle in its resolved group (grouped mode, the default — including `gate:full`, which dispatches grouped) — each angle keeps its own prompt, all appended after the one shared invariant prefix (`GATE-EXEC-BRIEFING-PREFIX`)
 - is **read-only**: inspects the diff and returns findings via output artifacts only; never edits files
@@ -356,14 +356,18 @@ emitted prompt as not inline-aligned. Pointer-based seeding governs how the PREF
 recorded for hash byte-identity; it is not a compliant emitted-prompt LAYOUT for a dispatched
 reviewer.
 
-**The composer.** `scripts/github/compose-reviewer-prompt.mjs` is the sanctioned
-fan-out prompt builder. Given `--repo`/`--pr`/`--gate`/`--head-sha`/`--scope` and
-`--angle-suffix-file`, it reads the round's `.briefing-prefix.txt` and
-`.briefing-volatile.txt`, then writes prefix + volatile + supplied angle suffix in
-that order (`composeReviewerPromptText`). The same atomic call records the layout
+**The composer.** `scripts/github/compose-reviewer-prompt.mjs` exports the
+INTERNAL compose-and-record core, `composeAndRecordReviewerPrompt` — it is NOT
+a conductor-invocable fan-out CLI (its own CLI refuses every direct invocation
+and names `emit-fanout-dispatch.mjs`, the sanctioned caller, instead; issue
+#2166). Given `repo`/`pr`/`gate`/`headSha`/`scope` and `angleSuffixFile`, the
+core reads the round's `.briefing-prefix.txt` and `.briefing-volatile.txt`,
+then writes prefix + volatile + supplied angle suffix in that order
+(`composeReviewerPromptText`). The same atomic call records the layout
 through `recordDispatchPromptLayout`; no separate recording step is needed.
-It places supplied angle text verbatim, never generates its content. The emitter
-below supplies the sanctioned per-unit suffix. Hand composition/direct
+It places supplied angle text verbatim, never generates its content. The
+emitter below is the ONE caller that drives this core, once per dispatch
+unit, supplying the sanctioned per-unit suffix. Hand composition/direct
 `record-dispatch-prompt-layout.mjs` remain underlying primitives, not the fan-out path.
 
 <!-- rule: GATE-EXEC-FANOUT-DISPATCH-EMIT -->
@@ -373,8 +377,8 @@ sanctioned step — `scripts/github/emit-fanout-dispatch.mjs` — NOT a composit
 re-derives per round. Given a gate + head whose `write-gate-context.mjs` bundle is already on
 disk, the emitter reads the artifact's fan-out dispatch plan (`artifact.fanout.groups`, or
 `artifact.fanout.pendingGroups` under `--pending`) and, for EACH resolved dispatch unit,
-writes a minimal angle-suffix and drives the composer above (`composeAndRecordReviewerPrompt`,
-the same atomic compose-and-record core the CLI uses). It emits one
+writes a minimal angle-suffix and drives the composer core above (`composeAndRecordReviewerPrompt`,
+the shared atomic compose-and-record core). It emits one
 `{ scope, angles, group, promptPath }` per DISPATCH unit plus a `maxConcurrent` field; the
 conductor then dispatches one fresh-context `review` subagent per emitted unit, seeded with
 that unit's `promptPath` bytes verbatim, records each unit's `group` on Phase 3's `--provenance`
@@ -486,7 +490,7 @@ Every mode retains the same byte-identity requirement.
 
 Before Phase 3, fan-in MUST run `scripts/github/verify-briefing-prefixes.mjs --head-sha <sha>` and stop on failure (exit 1). The offline verifier checks sentinel hashes against per-gate prefix records, rejecting missing/mismatched or wrong-gate evidence, including a single hashless sentinel. Separate gates at the same head remain separate. Only when no prefix records exist does it use the legacy flat one-hash rule. See its `--help` for the same-head two-gate example.
 
-**Prompt-LAYOUT enforcement (issue #1841/#1852, completes #1468).** Prefix-hash equality alone does not prove prompt layout. On the sanctioned path, `compose-reviewer-prompt.mjs` composes and records the prompt in the same call through `recordDispatchPromptLayout`; there is no separate recording step to pair incorrectly or skip.
+**Prompt-LAYOUT enforcement (issue #1841/#1852, completes #1468).** Prefix-hash equality alone does not prove prompt layout. On the sanctioned path, `emit-fanout-dispatch.mjs` composes and records each unit's prompt in the same call, via the composer core (`compose-reviewer-prompt.mjs`'s `composeAndRecordReviewerPrompt`) through `recordDispatchPromptLayout`; there is no separate recording step to pair incorrectly or skip.
 
 For an independently composed prompt file, the capture primitive remains callable:
 
