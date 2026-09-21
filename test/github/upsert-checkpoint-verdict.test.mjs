@@ -1292,6 +1292,53 @@ const PRE_APPROVAL_READY_REVIEWS = [1, 2, 3, 4, 5].map((i) => ({
   author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
   submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
 }));
+test("upsert-checkpoint-verdict posts pre_approval for a thread-clean current-head 🔵 below the round cap (#2345)", async () => {
+  await withTempDir(async (tempDir) => {
+    const headSha = "abc1234000000000000000000000000000000000";
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: false,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        reviews: [{
+          author: { login: "copilot-pull-request-reviewer[bot]" },
+          state: "COMMENTED",
+          submittedAt: "2026-06-01T20:01:00Z",
+          commit: { oid: headSha },
+          body: "### 🔵 Needs a closer look\n\nFindings: None",
+        }],
+      }).map((entry) => ({ ...entry, matchByClaims: true })),
+      {
+        matchByClaims: true,
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"],
+        stdout: '{"baseRefOid":"0000000000000000000000000000000000000000","labels":[]}\n',
+      },
+      {
+        matchByClaims: true,
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["### Gate review: `pre_approval_gate`"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
+      },
+    ]);
+
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--pr", "17",
+      "--gate", "pre_approval_gate",
+      "--head-sha", headSha,
+      "--verdict", "clean",
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--findings-summary", "no issues found",
+      "--next-action", "await final human approval",
+    ], {
+      env,
+      evaluatePrSizeBudget: async () => ({ outcome: "pass", t1SliceLoc: 0, waiver: { t1Valid: false, defaultValid: false } }),
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).action, "created");
+  }, { prefix: "dev-loops-upsert-preapproval-blue-" });
+});
+
 test("upsert-checkpoint-verdict auto-derives the size budget for pre_approval_gate when --size-budget-json is omitted (#2185)", async () => {
   await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, [

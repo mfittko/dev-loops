@@ -608,7 +608,6 @@ export async function classifyDeltaSinceLastReview({ repo, base, head }, runtime
   }
   return resolveConvergenceCarryForward({ changedFiles: deltaChangedFiles });
 }
-
 function classifyRequestFailure(detail) {
   const normalized = detail.toLowerCase();
   if (
