@@ -371,7 +371,7 @@ test("shares a reviewer for a configured group AND an auto-chunk bundle alike; o
       for (const angle of unit.angles) assert.match(composed, new RegExp(angle));
       // The composed suffix points reviewers at the sanctioned CLI, never an
       // inline JS function call a shell reviewer cannot make (#2336).
-      assert.match(composed, /dev-loops gate resolve-role --angle/);
+      assert.match(composed, /dev-loops-run cli\/index\.mjs gate resolve-role --angle/);
       assert.ok(!composed.includes("resolveReviewerRole(config"), "composed suffix must not tell a shell reviewer to call resolveReviewerRole(config, ...) inline");
     }
   });
@@ -1386,11 +1386,11 @@ test("buildAngleNamingSuffix names angles and points at the resolve-role CLI, ne
   assert.match(single, /coverage/);
   // Reviewers run in a shell: the suffix must name the sanctioned CLI, not a
   // resolveReviewerRole(config, ...) call a shell actor cannot make.
-  assert.match(single, /dev-loops gate resolve-role --angle/);
+  assert.match(single, /dev-loops-run cli\/index\.mjs gate resolve-role --angle/);
   assert.ok(!single.includes("resolveReviewerRole(config"), "suffix must not instruct an inline resolveReviewerRole(config, ...) call");
   const group = buildAngleNamingSuffix({ name: "design-simplicity", angles: ["dry", "kiss"] });
   assert.match(group, /dry, kiss/);
-  assert.match(group, /dev-loops gate resolve-role --angle/);
+  assert.match(group, /dev-loops-run cli\/index\.mjs gate resolve-role --angle/);
   assert.ok(!group.includes("resolveReviewerRole(config"), "suffix must not instruct an inline resolveReviewerRole(config, ...) call");
   assert.match(group, /one findings artifact PER ANGLE/);
 });
