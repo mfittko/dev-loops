@@ -272,6 +272,7 @@ NextAction {
   actionId
   workflowIdentity
   contractIdentity
+  policyVersion
   preconditions
   reasonCodes
   evidenceRefs
@@ -298,6 +299,8 @@ await_human
 complete
 ```
 
+`contractIdentity` fixes how the envelope and its semantics are interpreted; `policyVersion` records which deterministic transition policy selected the action (Section 8). Both are required: a resumer compares the envelope's `policyVersion` against the currently selected one to distinguish a still-compatible in-flight action from one an upgrade has invalidated, and fails closed on an incompatible or missing version rather than executing a stale action.
+
 The exact action vocabulary is domain-owned.
 
 "One action" means one **bounded semantic transition**, not one low-level syscall. A homogeneous bounded batch may be one action:
@@ -316,7 +319,7 @@ flowchart LR
 
 The system SHALL NOT force a new reconciliation after every item when a deterministic bounded executor can safely perform the whole semantic transition.
 
-Each constituent externally significant unit still retains stable identity and recovery evidence.
+Each constituent externally significant unit still retains stable identity and recovery evidence. Stable identity and receipts are recovery aids, not a license to skip preconditions on later units: the batch is lawful only when the executor re-validates each constituent effect's Section 9 optimistic precondition/fence at that unit's own effect boundary. If the head, owner, proof, or any depended-upon identity changes after an earlier unit, the executor SHALL stop at the first mismatch or ambiguity and return a typed partial observation (which units committed, which did not) for a fresh reconcile, rather than completing the remaining dispatches. The batch exception never weakens the no-stale-effect guarantee.
 
 Completion, blocking, and human boundaries are explicit typed outcomes:
 
