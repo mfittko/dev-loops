@@ -256,11 +256,9 @@ flowchart LR
 
 A head/spec/config identity change invalidates **direct** reuse unless a sanctioned deterministic rule bridges the change.
 
-Carry-forward is such a bridge. Valid prior `clean` or `findings_present` evidence may carry only when the current carry resolver proves the relevant delta does not invalidate the review surface. Carried findings remain findings; carry-forward does not convert them to clean.
+Carry-forward is one such bridge. This ADR does not restate its eligibility, missing-proof, or same-head round-retirement policy: those rules are already owned by `GATE-EXEC-ANGLE-CARRY-FORWARD` and `GATE-EXEC-ROUND-RETIREMENT` in [Gate Review Sub-Loop Contract](../../skills/docs/gate-review-sub-loop-contract.md), with the carry-forward decision recorded by ADR [0030](0030-angle-carry-forward-fail-closed.md) and ADR [0064](0064-carry-forward-findings-present-eligibility.md).
 
-Missing or invalid bridging proof never authorizes omitted work. Where the proof can be deterministically reconstructed, reconstruct it. Otherwise the affected judgment is fresh work.
-
-Same-head changed judgment briefing bytes require explicit old-round retirement and a new round identity. Exact unchanged retry may continue under the same round according to the existing recovery contract.
+The architectural point here is narrower: deterministic reconciliation consumes the validated evidence those rules produce rather than re-deriving reuse eligibility in model context. Missing or invalid bridging proof never authorizes omitted work; reconciliation treats the affected judgment as fresh work under the owning rules above.
 
 ### 5. Reconciliation returns exactly one typed semantic next action
 
