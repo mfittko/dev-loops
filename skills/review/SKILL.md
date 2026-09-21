@@ -70,7 +70,10 @@ Read [Gate-review sub-loop contract](../docs/gate-review-sub-loop-contract.md) b
    fan-in's `GATE-EXEC-EMIT-PLAN-KEY` fail-closed round-key guard — a stale or
    foreign emit plan fails closed instead of being consumed). Before posting,
    write the durable ledger through `write-gate-findings-log.mjs` with
-   `--findings-file <ledger-out-path> --emit-plan <emit-plan-path>` and
+   `--findings-file <ledger-out-path> --emit-plan <emit-plan-path>`,
+   `--execution-mode fanout_fanin` (this IS a fan-out/fan-in write, so the ledger
+   records the real execution mode — omitting it defaults to `inline_single_agent`
+   and mis-records the round), and
    `--provenance <json>` so the
    same keyed plan also guards that caller-supplied reviewer provenance
    corresponds to the emitted units; the plan remains a guard, never a findings

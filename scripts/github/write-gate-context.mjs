@@ -49,6 +49,7 @@ import { resolveLinkedIssuesFromPr, loadPrGateCoordinationContext } from "../loo
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
+import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { fingerprintFinding } from "./_gate-finding-surface.mjs";
 
 /**
@@ -218,7 +219,10 @@ Optional:
   --available-reviewers <n>      Harness remaining reviewer budget for the #1507 reviewer-budget preflight (non-negative integer). When supplied, the artifact's fanout.preflight reports whether the budget covers this round's dispatch units; on a shortfall, fanout.preflight.dispatch is false and the conductor MUST NOT spawn any reviewer (the shortfall is a resumable state — the artifact records it). Omit when the harness does not expose a budget; the preflight then proceeds (no shortfall can be proven).
   --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean head (mirrors consolidate-fanin.mjs's own --carried-angles vocabulary, minus its --carry-forward-plan proof check — the caller here IS the fail-closed carry-forward seam, resolve-angle-carry-forward.mjs, never a guess). Like consolidate-fanin.mjs's own mandatory-angle refusal, a name whose review surface always re-runs (a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE evidence/security/description angle) fails closed (exit 1) rather than being honored. A dispatch group whose angles are all carried-or-already-complete (already-complete: a clean per-angle artifact already stamped for this head, scanned automatically — see readCompletedAnglesForHead) is excluded from fanout.preflight.requiredReviewers and pendingGroups, so a head-bump re-gate does not over-count angles Phase 1.2 is about to carry. A wrong/stale value can only shrink the dispatch plan, never grow it past the true group count — it can under-dispatch, never over-spend the budget or fabricate findings for an angle that DID run: the configured-mandatory coverage check and the fail-closed merge check's clean current-head merge marker requirement catch an under-dispatched round ONLY when the wrongly-carried angle is a CONFIGURED mandatory angle — neither ever unions the hardcoded ALWAYS_INCLUDE set, so a wrong value naming only a non-mandatory, non-ALWAYS_INCLUDE angle under-dispatches with no mechanical refusal, visible only in the ledger's own carried-angle provenance (an ALWAYS_INCLUDE name is already refused at this CLI's own entry, above). Omit for today's full-count behavior (nothing excluded).
   --prev-head <sha>              FULL head commit SHA (40 or 64 hex chars) of the prior round's durable gate findings-log (mirrors resolve-angle-carry-forward.mjs's own --prev-head vocabulary). When supplied, every prior reject/defer-disposed finding attributed to an angle re-running THIS round (an angle in --angles not named in --carried-angles) is seeded into the rendered volatile tail as a "do not re-raise" hint (AC3, skills/docs/gate-review-sub-loop-contract.md). Fails OPEN, never crashes the briefing: an absent, unreadable, or malformed prior log simply omits the hint block (byte-identical volatile tail to omitting this flag) — it never blocks the write, suppresses a finding, or converts a reject into an approval. Omit for today's behavior (no hint block).
-  --tmp-root <path>              Root tmp directory (default: tmp/)
+  --tmp-root <path>              Root tmp directory. Omitted, the worktree-local gate-context
+                                 bundle is written under the worktree's tmp/ while the prior-head
+                                 findings-log ledger is read from the MAIN worktree's tmp/ (the stable
+                                 per-repo ledger location); an explicit path pins both.
 
 ${JQ_OUTPUT_USAGE}
 `.trim();
@@ -375,7 +379,12 @@ export function parseWriteGateContextCliArgs(argv) {
     availableReviewers: null,
     carriedAngles: null,
     prevHead: null,
-    tmpRoot: "tmp",
+    // Default undefined (not "tmp") so an OMITTED --tmp-root reaches the
+    // main-worktree ledger anchor at the prior-disposition read; every
+    // worktree-local gate-context write site keeps its own `|| "tmp"` fallback,
+    // and an explicit --tmp-root still overrides. A literal "tmp" default would
+    // make the ledger-read fallback dead for the normal CLI path.
+    tmpRoot: undefined,
   };
   for (const token of tokens) {
     if (token.kind === "positional") {
@@ -1349,7 +1358,7 @@ export function renderBriefingPrefix({
   );
   lines.push("");
   lines.push(
-    `Findings write-path invariant: WRITE every findings artifact under THIS worktree's tmp/, never the primary checkout's. Write each per-angle findings artifact to the ABSOLUTE path \`${findingsDir}/<angle>.json\` (\`<angle>\` = your angle name), and pass \`--tmp-root "${worktreeRoot}/tmp"\` to any findings-writer CLI (e.g. \`write-gate-findings-log.mjs\`). Cwd-relative \`tmp/...\` resolves against whatever checkout the command started in — a findings artifact written to the primary checkout's tmp/ is invisible to fan-in and fails the gate as missing evidence.`,
+    `Findings write-path invariant: WRITE each per-angle findings artifact to the ABSOLUTE path \`${findingsDir}/<angle>.json\` (\`<angle>\` = your angle name) under THIS worktree's tmp/, never the primary checkout's. Cwd-relative \`tmp/...\` resolves against whatever checkout the command started in — a per-angle artifact written to the primary checkout's tmp/ is invisible to fan-in and fails the gate as missing evidence. Do NOT pin \`--tmp-root "${worktreeRoot}/tmp"\` on the findings-log LEDGER writer (\`write-gate-findings-log.mjs\`): the ledger is anchored at the MAIN worktree automatically so the orchestrator's merge can read it and it survives worktree pruning — pinning it to this worktree loses it on prune and refuses the merge for missing provenance.`,
   );
   lines.push("");
   lines.push(renderSourceReadInvariantSection(worktreeRoot));
@@ -2566,12 +2575,16 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   let priorDispositions = [];
   if (typeof options.prevHead === "string" && options.prevHead.length > 0) {
     try {
+      // The prior findings-log ledger lives under the MAIN worktree tmp
+      //; read it there so a re-gate inside a linked worktree still
+      // recovers the prior head's reject/defer disposition memory instead of
+      // silently re-raising already-disposed findings. --tmp-root still wins.
       const priorLogPath = buildLogPath({
         repo: options.repo,
         pr: options.pr,
         gate: options.gate,
         headSha: options.prevHead,
-        tmpRoot: options.tmpRoot || "tmp",
+        tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot),
       });
       const priorLog = JSON.parse(await readFile(path.resolve(repoRoot, priorLogPath), "utf8"));
       // FAIL-CLOSED identity check (mirrors resolve-angle-carry-forward.mjs's

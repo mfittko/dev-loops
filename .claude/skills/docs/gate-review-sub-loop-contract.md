@@ -322,10 +322,14 @@ invariant** — the WORKTREE-ABSOLUTE per-angle findings directory (`<worktree>/
 a reviewer MUST write into (`GATE-EXEC-FINDINGS-WRITE-PATH`, #1978). A reviewer's shell cwd is
 not trustworthy across its commands (each may start in the primary checkout, not the worktree),
 so a cwd-relative `tmp/...` write can land in the primary checkout's tmp/ where fan-in never
-looks — surfacing only as a late "missing evidence" failure. Pinning the absolute dir (and
-`--tmp-root <worktree>/tmp` for any findings-writer CLI) in the byte-identical prefix prevents
-that at dispatch; `consolidate-fanin.mjs` additionally detects a findings artifact stranded in
-the primary checkout and names it in the missing-evidence diagnostic rather than failing opaque. Angle identity MUST appear
+looks — surfacing only as a late "missing evidence" failure. Pinning the absolute per-angle dir
+in the byte-identical prefix prevents that at dispatch; `consolidate-fanin.mjs` additionally
+detects a findings artifact stranded in the primary checkout and names it in the missing-evidence
+diagnostic rather than failing opaque. The consolidated findings-log **ledger** is the exception:
+it is anchored at the MAIN worktree automatically (#2315 — so the merge, running from the main
+checkout, can read it and it survives linked-worktree pruning), so the `write-gate-findings-log.mjs`
+ledger writer MUST NOT be `--tmp-root`-pinned to the linked worktree (pinning it loses the ledger
+on prune and refuses the merge for missing provenance). Angle identity MUST appear
 ONLY in the suffix (the angle-specific prompt, e.g.
 `COPILOT-FOLLOWUP-ADVERSARIAL-BRIEFING`'s persona prompt) and the reviewer's `--scope` flag
 — never inside the invariant block, or the byte-identity requirement is violated by
@@ -1984,7 +1988,7 @@ token so that — once branch protection on `main` requires it — an API-driven
 transition cannot skip it. (Until that operator step lands the check runs and reports but
 does not yet block merge.) That flag deliberately
 does NOT re-verify the findings-log ledger/provenance/angle-coverage layer described
-above: the ledger is a gitignored, worktree-local `tmp/` file that only the machine
+above: the ledger is a gitignored, machine-local `tmp/` file (under the main worktree, #2315) that only the machine
 that ran the review has on disk, so a stateless CI runner can never see it. That
 narrower gap is exactly what this caveat and the Pi-harness bridge remain scoped to.
 

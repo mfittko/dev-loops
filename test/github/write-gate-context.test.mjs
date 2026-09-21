@@ -439,7 +439,10 @@ test("parseWriteGateContextCliArgs parses required args", () => {
   assert.equal(result.gate, "draft_gate");
   assert.equal(result.headSha, "abc1234567890abcdef");
   assert.deepEqual(result.angles, ["scope", "correctness"]);
-  assert.equal(result.tmpRoot, "tmp");
+  // Undefined (not "tmp") so an omitted --tmp-root reaches the main-worktree
+  // ledger anchor at the prior-disposition read; an explicit --tmp-root
+  // wins, and every worktree-local gate-context write keeps its own `|| "tmp"`.
+  assert.equal(result.tmpRoot, undefined);
 });
 
 test("parseWriteGateContextCliArgs: --angles dedupes a repeated angle name (first occurrence wins), so resolveFanoutGroups never mints two dispatch units sharing one name from a duplicated --angles list", () => {
@@ -3622,7 +3625,7 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       "",
       `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as ONE compound command that enters this worktree first (\`cd "${path.resolve(repoRoot)}" && dev-loops-run scripts/github/verify-fresh-review-context.mjs ...\`) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${path.resolve(repoRoot)}" ...\` and every file read via an absolute path under ${path.resolve(repoRoot)}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
       "",
-      `Findings write-path invariant: WRITE every findings artifact under THIS worktree's tmp/, never the primary checkout's. Write each per-angle findings artifact to the ABSOLUTE path \`${path.resolve(repoRoot)}/tmp/gate-reviews/owner-repo/pr-80/draft_gate-${options.headSha}/<angle>.json\` (\`<angle>\` = your angle name), and pass \`--tmp-root "${path.resolve(repoRoot)}/tmp"\` to any findings-writer CLI (e.g. \`write-gate-findings-log.mjs\`). Cwd-relative \`tmp/...\` resolves against whatever checkout the command started in — a findings artifact written to the primary checkout's tmp/ is invisible to fan-in and fails the gate as missing evidence.`,
+      `Findings write-path invariant: WRITE each per-angle findings artifact to the ABSOLUTE path \`${path.resolve(repoRoot)}/tmp/gate-reviews/owner-repo/pr-80/draft_gate-${options.headSha}/<angle>.json\` (\`<angle>\` = your angle name) under THIS worktree's tmp/, never the primary checkout's. Cwd-relative \`tmp/...\` resolves against whatever checkout the command started in — a per-angle artifact written to the primary checkout's tmp/ is invisible to fan-in and fails the gate as missing evidence. Do NOT pin \`--tmp-root "${path.resolve(repoRoot)}/tmp"\` on the findings-log LEDGER writer (\`write-gate-findings-log.mjs\`): the ledger is anchored at the MAIN worktree automatically so the orchestrator's merge can read it and it survives worktree pruning — pinning it to this worktree loses it on prune and refuses the merge for missing provenance.`,
       "",
       "## Reviewer source-read invariant",
       "",

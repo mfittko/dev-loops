@@ -431,8 +431,9 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
         continue;
       }
       // A stateless remote verifier (the gate-evidence CI check, or a gh-less API
-      // session) never has the gitignored, worktree-local tmp/gate-findings ledger
-      // on disk — only the machine that ran the review does. skipFanoutLedgerCheck
+      // session) never has the gitignored, machine-local tmp/gate-findings ledger
+      // on disk (it lives under the main worktree's tmp/) — only the machine
+      // that ran the review does. skipFanoutLedgerCheck
       // scopes enforcement down to what IS remotely verifiable from the PR's public
       // comment history: the comment-derived executionMode/inlineReason check above
       // (including the light-mode inline exception). The deeper ledger/provenance/
@@ -864,6 +865,14 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   const gates = [];
   for (const spec of gateSpecs) {
     const headSha = spec.marker.headSha ?? currentHeadSha;
+    // Relative on purpose: writeGateFindingsLog anchors the ledger at the MAIN
+    // worktree tmp, and the ledgerExistsInAny / readLedgerProvenanceInAny
+    // scans below resolve this relative path against EVERY enumerated checkout
+    // (resolveLedgerCheckouts, which always includes the main worktree). So the
+    // merge — running from the main checkout — finds the centralized ledger via
+    // the main-worktree entry, while the multi-checkout scan still defends
+    // against a forged per-worktree shadow ledger. Anchoring this read at the
+    // main worktree directly would collapse that shadow-defense scan.
     const ledgerPath = buildLogPath({ repo, pr, gate: spec.name, headSha, tmpRoot: "tmp" });
     // Re-derive scope FAIL-CLOSED for inline verdicts only (the fan-out default
     // path pays no git I/O). scopeUnderThreshold is true ONLY when lightMode is

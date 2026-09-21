@@ -9,6 +9,7 @@ import { gateScopePrefix, LIFECYCLE_GATES, normalizeGate } from "./_gate-names.m
 import { HEAD_SHA_RE, VALID_SCOPE_RE } from "./record-dispatch-prompt-layout.mjs";
 import { buildCarryForwardPlanPath, buildGateContextPath, buildGateEmitPlanPath, mapGateToConfigKey } from "./write-gate-context.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
+import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
 import { loadDevLoopConfig, resolveFanoutEffectiveConcurrency, resolveGateAngleContract } from "@dev-loops/core/config";
 import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
@@ -391,7 +392,7 @@ function resolveFlagValue(argv, flag) {
   return val;
 }
 
-export async function main(argv = process.argv.slice(2), { tmpRootDefault = path.join(process.cwd(), "tmp"), persistPlan = writeFile } = {}) {
+export async function main(argv = process.argv.slice(2), { tmpRootDefault = path.join(process.cwd(), "tmp"), ledgerTmpRootDefault = resolveGateArtifactTmpRoot(process.cwd()), persistPlan = writeFile } = {}) {
   if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(`${USAGE}\n`);
     return 0;
@@ -424,6 +425,16 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     return 2;
   }
   const tmpRoot = tmpRootArg ?? tmpRootDefault;
+  // The findings-log LEDGER lives under the MAIN worktree tmp, while the
+  // gate-context / emit-plan / carry-forward-plan artifacts stay worktree-local
+  // (reviewers are directed into the worktree). Re-gate detection scans the
+  // ledger dir, so it must look at the main-worktree location or it would miss a
+  // prior round's centralized ledger and wrongly treat a re-gate as a first
+  // round (bypassing the carry-forward guard). An explicit --tmp-root pins both.
+  // ledgerTmpRootDefault is a separate injectable seam (default: main-worktree
+  // tmp) so an in-process caller keeps the ledger scan hermetic instead of it
+  // reading the real process cwd's checkout.
+  const ledgerTmpRoot = tmpRootArg ?? ledgerTmpRootDefault;
   const pendingOnly = argv.includes("--pending");
 
   let contextPath;
@@ -506,7 +517,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // silently falling open — the same load-bearing derivation _gate-names.mjs
   // uses for GATE_NAMES.
   if (LIFECYCLE_GATES.includes(gate)) {
-    const priorHeads = await listPriorFindingsLogHeads({ repo, pr, gate, headSha, tmpRoot });
+    const priorHeads = await listPriorFindingsLogHeads({ repo, pr, gate, headSha, tmpRoot: ledgerTmpRoot });
     if (priorHeads.size > 0) {
       let plan = null;
       try {

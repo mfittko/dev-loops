@@ -45,6 +45,7 @@ import { normalizeFullHeadSha } from "../lib/head-sha.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
 import { normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
+import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import {
   buildCarryForwardPlanPath,
@@ -65,7 +66,9 @@ Required:
                                  prefix refuses "not found"
   --head-sha <sha>              Current head SHA (head B); must be the CWD worktree HEAD
 Optional:
-  --tmp-root <path>             Root tmp directory (default: tmp/)
+  --tmp-root <path>             Root tmp directory. Omitted, the prior findings-log ledger is read
+                                 from the MAIN worktree's tmp/ (the stable per-repo ledger location)
+                                 while the carry-forward plan stays worktree-local; an explicit path pins both.
   --spec-authority <path>       JSON { specDigest, headSha, contentDigest, checkedCriteria }
                                  (issue 2008 / ADR 0061 AC1). When supplied, stamps the plan's
                                  durable record with the pinned revision identity via the ONE
@@ -105,7 +108,13 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
     gate: undefined,
     prevHead: undefined,
     headSha: undefined,
-    tmpRoot: "tmp",
+    // Default undefined (not "tmp") so an OMITTED --tmp-root reaches the
+    // main-worktree ledger anchor at the prior-ledger read; the worktree-local
+    // carry-forward-plan sites keep their own `|| "tmp"` fallback, and an
+    // explicit --tmp-root still overrides. A literal "tmp" default would make the
+    // ledger-read fallback dead for the normal CLI path (a re-gate from a linked
+    // worktree would then hard-fail "prior gate findings-log not found").
+    tmpRoot: undefined,
     specAuthority: undefined,
   };
   for (const token of tokens) {
@@ -410,12 +419,16 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       })),
       { force: true },
     );
+    // The prior findings-log ledger is written under the MAIN worktree tmp
+    //; resolve the read there too so a re-gate running inside a linked
+    // worktree still finds the prior round's ledger to carry forward from
+    // (a miss would hard-fail below). An explicit --tmp-root still overrides.
     const logPath = buildLogPath({
       repo: options.repo,
       pr: options.pr,
       gate: options.gate,
       headSha: options.prevHead,
-      tmpRoot: options.tmpRoot || "tmp",
+      tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot),
     });
     let log = null;
     try {
