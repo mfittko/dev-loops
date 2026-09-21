@@ -3063,6 +3063,7 @@ test("round_cap_reached with zero unresolved threads and green CI allows run_pre
     copilotReviewRoundCount: 2,
     maxCopilotRounds: 2,
     unresolvedThreadCount: 0,
+    copilotConvergenceOk: true,
     draftGate: gate({ visible: true, headSha: "7e0e303b", verdict: "clean" }),
     draftGateMarker: gate({ visible: true, headSha: "7e0e303b", verdict: "clean", contractComplete: true }),
     preApprovalGate: gate({ visible: false }),
@@ -3083,6 +3084,30 @@ test("round_cap_reached with zero unresolved threads and green CI allows run_pre
   assert.match(result.gateEvidenceNote, /zero unresolved threads/i);
 });
 
+for (const [label, copilotConvergenceOk] of [["yellow", false], ["unknown", undefined]]) {
+  test(`round_cap_reached fails closed on ${label} Copilot convergence (#2345)`, () => {
+    const result = evaluatePrGateCoordination({
+      pr: 2346,
+      currentHeadSha: "29aa40b7deadbeef",
+      prDraft: false,
+      lifecycleState: STATE.ROUND_CAP_REACHED,
+      loopDisposition: DISPOSITION.BLOCKED,
+      ciStatus: "success",
+      copilotReviewRoundCount: 2,
+      maxCopilotRounds: 2,
+      unresolvedThreadCount: 0,
+      ...(copilotConvergenceOk === undefined ? {} : { copilotConvergenceOk }),
+      draftGate: gate({ visible: true, headSha: "7e0e303b", verdict: "clean" }),
+      draftGateMarker: gate({ visible: true, headSha: "7e0e303b", verdict: "clean", contractComplete: true }),
+      preApprovalGate: gate({ visible: false }),
+      preApprovalGateMarker: gate({ visible: false }),
+    });
+
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPORT_BLOCKED);
+    assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  });
+}
+
 // #1472 defer: when preApprovalRequireCi is false, ciConfirmedGreen is true
 // regardless of the actual CI status, so a "failure" head can still reach this
 // grant. The reason/gateEvidenceNote must not claim the CI is green in that
@@ -3100,6 +3125,7 @@ test("round_cap_reached with requireCi:false and failing CI grants run_pre_appro
     copilotReviewRoundCount: 2,
     maxCopilotRounds: 2,
     unresolvedThreadCount: 0,
+    copilotConvergenceOk: true,
     draftGate: gate({ visible: true, headSha: "7e0e303b", verdict: "clean" }),
     draftGateMarker: gate({ visible: true, headSha: "7e0e303b", verdict: "clean", contractComplete: true }),
     preApprovalGate: gate({ visible: false }),
@@ -3131,6 +3157,7 @@ test("round_cap_reached with requireCi:false and crediblyGreen CI names config-n
     copilotReviewRoundCount: 2,
     maxCopilotRounds: 2,
     unresolvedThreadCount: 0,
+    copilotConvergenceOk: true,
     draftGate: gate({ visible: true, headSha: "7e0e303b", verdict: "clean" }),
     draftGateMarker: gate({ visible: true, headSha: "7e0e303b", verdict: "clean", contractComplete: true }),
     preApprovalGate: gate({ visible: false }),
@@ -3159,6 +3186,7 @@ test("round_cap_reached with zero unresolved threads and credibly green CI stays
     copilotReviewRoundCount: 2,
     maxCopilotRounds: 2,
     unresolvedThreadCount: 0,
+    copilotConvergenceOk: true,
     draftGate: gate({ visible: true, headSha: "7e0e303b", verdict: "clean" }),
     draftGateMarker: gate({ visible: true, headSha: "7e0e303b", verdict: "clean", contractComplete: true }),
     preApprovalGate: gate({ visible: false }),
@@ -3181,6 +3209,7 @@ test("round_cap_reached with clean current-head pre_approval AND clean draft_gat
     copilotReviewRoundCount: 2,
     maxCopilotRounds: 2,
     unresolvedThreadCount: 0,
+    copilotConvergenceOk: true,
     draftGate: gate({ visible: true, headSha: "7e0e303b", verdict: "clean" }),
     draftGateMarker: gate({ visible: true, headSha: "7e0e303b", verdict: "clean", contractComplete: true }),
     preApprovalGate: gate({ visible: true, headSha: "29aa40b7", verdict: "clean" }),
@@ -3211,6 +3240,7 @@ test("round_cap_reached with clean current-head pre_approval but no draft_gate e
     copilotReviewRoundCount: 2,
     maxCopilotRounds: 2,
     unresolvedThreadCount: 0,
+    copilotConvergenceOk: true,
     draftGate: gate({ visible: false }),
     draftGateMarker: gate({ visible: false }),
     preApprovalGate: gate({ visible: true, headSha: "29aa40b7", verdict: "clean" }),
@@ -3242,6 +3272,7 @@ test("round_cap_reached grant shape with a WIP title blocks on the title marker,
     copilotReviewRoundCount: 2,
     maxCopilotRounds: 2,
     unresolvedThreadCount: 0,
+    copilotConvergenceOk: true,
     draftGate: gate({ visible: false }),
     draftGateMarker: gate({ visible: false }),
     preApprovalGate: gate({ visible: true, headSha: "29aa40b7", verdict: "clean" }),
@@ -3275,6 +3306,7 @@ for (const copilotReviewRequestStatus of ["requested", "already-requested"]) {
       copilotReviewRoundCount: 2,
       maxCopilotRounds: 2,
       unresolvedThreadCount: 0,
+      copilotConvergenceOk: true,
       copilotReviewRequestStatus,
       draftGate: gate({ visible: true, headSha: "7e0e303b", verdict: "clean" }),
       draftGateMarker: gate({ visible: true, headSha: "7e0e303b", verdict: "clean", contractComplete: true }),
@@ -3307,6 +3339,7 @@ test("round_cap_reached reaching final_approval_ready (not the window shape) sti
     copilotReviewRoundCount: 2,
     maxCopilotRounds: 2,
     unresolvedThreadCount: 0,
+    copilotConvergenceOk: true,
     copilotReviewRequestStatus: "requested",
     draftGate: gate({ visible: true, headSha: "7e0e303b", verdict: "clean" }),
     draftGateMarker: gate({ visible: true, headSha: "7e0e303b", verdict: "clean", contractComplete: true }),
@@ -3435,6 +3468,7 @@ test("round_cap_reached grant branch and copilot-loop-state's round-cap fallback
           preApprovalRequireCi,
           ...roundCap,
           unresolvedThreadCount,
+          copilotConvergenceOk: true,
           preApprovalGate: gate({ visible: false }),
           preApprovalGateMarker: gate({ visible: false }),
         });

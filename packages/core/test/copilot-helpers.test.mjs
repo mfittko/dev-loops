@@ -46,9 +46,10 @@ test("normalizeTimestamp returns ms for valid ISO strings and null for invalid i
   assert.equal(normalizeTimestamp(42), null);
 });
 
-test("extractReviewCommitSha prefers GraphQL oid over REST commit_id", () => {
+test("extractReviewCommitSha accepts every supported review commit shape and prefers GraphQL oid", () => {
   assert.equal(extractReviewCommitSha({ commit: { oid: "abc123" } }), "abc123");
   assert.equal(extractReviewCommitSha({ commit_id: "def456" }), "def456");
+  assert.equal(extractReviewCommitSha({ commitId: "ghi789" }), "ghi789");
   assert.equal(extractReviewCommitSha({ commit: { oid: "abc123" }, commit_id: "def456" }), "abc123");
   assert.equal(extractReviewCommitSha({}), null);
   assert.equal(extractReviewCommitSha(null), null);
@@ -442,6 +443,29 @@ test("summarizeCopilotReviews ignores non-Copilot reviews", () => {
   const result = summarizeCopilotReviews(reviews, { headSha: "abc1234" });
   assert.equal(result.copilotReviewPresent, false);
   assert.equal(result.hasSubmittedReviewOnCurrentHead, false);
+});
+
+test("summarizeCopilotReviews exposes only post-reset reviews to downstream evaluators", () => {
+  const beforeReset = {
+    author: { login: "copilot-pull-request-reviewer" },
+    state: "COMMENTED",
+    commit: { oid: "abc1234" },
+    body: "### 🟡 Changes recommended",
+    submittedAt: "2026-05-30T10:00:00Z",
+  };
+  const afterReset = {
+    author: { login: "copilot-pull-request-reviewer" },
+    state: "COMMENTED",
+    commit: { oid: "def5678" },
+    submittedAt: "2026-06-01T10:00:00Z",
+  };
+  const result = summarizeCopilotReviews([beforeReset, afterReset], {
+    headSha: "abc1234",
+    draftGateResetAtMs: Date.parse("2026-05-31T20:00:00Z"),
+  });
+  assert.deepEqual(result.copilotReviews, [beforeReset, afterReset]);
+  assert.deepEqual(result.effectiveCopilotReviews, [afterReset]);
+  assert.equal(result.hasBodyFindingOnCurrentHead, false);
 });
 
 test("copilotReviewBodySignalsChanges: COMMENTED with a 'Changes recommended' body is a finding", () => {
