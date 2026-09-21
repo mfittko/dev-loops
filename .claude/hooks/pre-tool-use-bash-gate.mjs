@@ -14,6 +14,10 @@
  *     context (agent_type present); the main agent/operator retains direct issue creation (#1051).
  *   - `git stash` — blocked outright: `refs/stash` is shared across every worktree over this
  *     repo's one `.git` directory (skills/docs/worktree-guidance.md#never-git-stash-in-a-shared-git-layout).
+ *   - `bun run verify` / `bun test` / `vitest` / `npm test` / `npm run test` / `bun run build` /
+ *     `npm run build` (and yarn/pnpm equivalents) — blocked ONLY from the dev-loop COORDINATOR
+ *     (agent_type "dev-loop"), opt-in via `DEVLOOPS_COORDINATOR_READONLY=1` (#2082). Worker
+ *     subagents (developer/fixer/quality/review) may run these freely.
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -33,6 +37,7 @@ import {
   commandContainsCopilotRequestBypass,
   commandContainsCopilotSummonComment,
   commandContainsDetachedWaitTool,
+  commandContainsCodeVerificationEntrypoint,
   extractPrNumberFromGhPrReadyAnywhere,
   extractPrNumberFromGhPrMergeAnywhere,
   normalizeGitHubRepoSlug,
@@ -93,9 +98,14 @@ const isReplyResolve =
 const isRequestApi = typeof command === "string" && commandContainsCopilotRequestBypass(command, managedRepoSlug);
 const isCopilotSummon = typeof command === "string" && commandContainsCopilotSummonComment(command);
 const isWaitTool = typeof command === "string" && commandContainsDetachedWaitTool(command);
+// COORDINATOR-VERIFY-DELEGATION (#2082) — actor-scoped inside decideBashGate (agentType ===
+// "dev-loop"), so the quick pre-check here only detects the command shape; the hook must not
+// short-circuit to allow before the decider applies the actor + enforceCoordinator scoping.
+const isVerifyEntrypoint = typeof command === "string" && commandContainsCodeVerificationEntrypoint(command);
 if (
   !isReady && !isMerge && !isCreate && !isExternalWrite && !isStash &&
-  !isInline && !isSubIssue && !isReplyResolve && !isRequestApi && !isCopilotSummon && !isWaitTool
+  !isInline && !isSubIssue && !isReplyResolve && !isRequestApi && !isCopilotSummon && !isWaitTool &&
+  !isVerifyEntrypoint
 ) {
   emitAllow();
 }
@@ -146,6 +156,10 @@ if (inManagedContext) {
   }
 }
 
+// Boundary 3 (#2082): the coordinator verify-command delegation boundary, gated by the SAME flag
+// as boundary 3 of pre-tool-use-write-guard.mjs (decideCoordinatorWriteGuard).
+const enforceCoordinator = process.env.DEVLOOPS_COORDINATOR_READONLY === "1";
+
 const decision = decideBashGate({
   command,
   repoSlug,
@@ -155,6 +169,7 @@ const decision = decideBashGate({
   gateError,
   agentType,
   humanMergeOnly,
+  enforceCoordinator,
 });
 if (decision.decision === "deny") {
   emitDeny(decision.reason);

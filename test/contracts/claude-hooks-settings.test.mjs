@@ -275,6 +275,43 @@ test("bash-gate hook recognizes every .devloops config variant (bare/.yaml/.yml/
   }
 });
 
+// ---------------------------------------------------------------------------
+// bash-gate hook — coordinator verify-command delegation boundary (#2082)
+// ---------------------------------------------------------------------------
+
+test("bash-gate hook denies a dev-loop coordinator running bun run verify under strict coordinator enforcement (e2e)", () => {
+  const { code, json } = runHook(
+    "pre-tool-use-bash-gate.mjs",
+    { tool_name: "Bash", tool_input: { command: "bun run verify" }, cwd: repoRoot, agent_type: "dev-loop" },
+    { DEVLOOPS_COORDINATOR_READONLY: "1" },
+  );
+  assert.equal(code, 0);
+  assert.ok(json, "expected a structured decision");
+  assert.equal(json.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(json.hookSpecificOutput.permissionDecisionReason, /COORDINATOR-VERIFY-DELEGATION/);
+});
+
+test("bash-gate hook allows a worker subagent running bun run verify under strict coordinator enforcement (e2e)", () => {
+  const { code, json } = runHook(
+    "pre-tool-use-bash-gate.mjs",
+    { tool_name: "Bash", tool_input: { command: "bun run verify" }, cwd: repoRoot, agent_type: "developer" },
+    { DEVLOOPS_COORDINATOR_READONLY: "1" },
+  );
+  assert.equal(code, 0);
+  assert.equal(json, null, "worker subagent (developer) must not be denied by the coordinator verify boundary");
+});
+
+test("bash-gate hook allows a dev-loop coordinator running bun run verify when DEVLOOPS_COORDINATOR_READONLY is unset (fail-open, e2e)", () => {
+  const { code, json } = runHook("pre-tool-use-bash-gate.mjs", {
+    tool_name: "Bash",
+    tool_input: { command: "bun run verify" },
+    cwd: repoRoot,
+    agent_type: "dev-loop",
+  });
+  assert.equal(code, 0);
+  assert.equal(json, null, "no deny when DEVLOOPS_COORDINATOR_READONLY is unset");
+});
+
 test("bash-gate hook allows git stash in a repo with no .devloops config at all (unmanaged, pass-through)", () => {
   const dir = makeManagedConfigRepo(null);
   try {

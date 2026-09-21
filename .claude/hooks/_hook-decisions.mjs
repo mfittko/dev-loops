@@ -33,6 +33,7 @@ import {
   commandContainsCopilotSummonComment,
   commandContainsDetachedWaitTool,
   commandContainsInlineInterpreter,
+  commandContainsCodeVerificationEntrypoint,
 } from "./_bash-command-classify.mjs";
 
 /**
@@ -94,6 +95,9 @@ export const DEV_LOOP_AGENT_TYPE = "dev-loop";
  *   (`resolveHumanMergeOnly`); when true, `gh pr merge` is refused actor-independently
  *   (STOP-HUMAN-MERGE-001), because the main agent is the actor that performs GitHub writes and a
  *   subagent-only deny would enforce nothing.
+ * @param {boolean} [params.enforceCoordinator] - Strict mode for the COORDINATOR-VERIFY-DELEGATION
+ *   boundary, derived by the hook from `DEVLOOPS_COORDINATOR_READONLY=1` — the SAME flag that
+ *   gates `decideCoordinatorWriteGuard`. Default fail-open (mirrors that boundary).
  * @returns {HookDecision}
  */
 export function decideBashGate({
@@ -105,9 +109,29 @@ export function decideBashGate({
   gateError = null,
   agentType = null,
   humanMergeOnly = false,
+  enforceCoordinator = false,
 }) {
   if (typeof command !== "string") {
     return ALLOW;
+  }
+
+  // COORDINATOR-VERIFY-DELEGATION: a known code-verification/build entrypoint (bun run
+  // verify/test, vitest, npm test/run test/run build, ...) run inline by the dev-loop COORDINATOR
+  // itself (agent_type "dev-loop"). WORKER subagents (developer/fixer/quality/review) may run these
+  // freely — only the coordinator is scoped out, mirroring `decideCoordinatorWriteGuard`'s
+  // agent_type discriminator. Opt-in via the same `DEVLOOPS_COORDINATOR_READONLY=1` flag as the
+  // write-guard boundary; default fail-open. Not scoped to `inManagedRepo` — this is a local
+  // command-invocation boundary (which binary ran), not a GitHub-repo-targeting one.
+  if (enforceCoordinator && agentType === DEV_LOOP_AGENT_TYPE && commandContainsCodeVerificationEntrypoint(command)) {
+    return {
+      decision: "deny",
+      reason:
+        "COORDINATOR-VERIFY-DELEGATION: the dev-loop coordinator must not run code-verification/build " +
+        "commands inline. Delegate the verification run to a fresh worker subagent (developer/fixer/" +
+        "quality/review), which reports back a compact pass/fail plus any failing-test names — or, when " +
+        "checking a pushed commit, prefer CI's structured conclusion (`gh pr checks` / " +
+        "scripts/loop/detect-checkpoint-evidence.mjs) over a local run. See skills/docs/main-agent-contract.md.",
+    };
   }
   // Normalize (trim + case-fold) so a divergent slug (surrounding whitespace, casing) does not
   // silently fail OPEN. A repo is dev-loops-managed when inManagedContext is true (a .devloops
@@ -426,7 +450,7 @@ export function decideWriteGuard({ filePath, isRepoMutation, enforce = false, en
 
 /**
  * Decide whether a PreToolUse Write/Edit must be blocked by the coordinator→worker delegation
- * boundary (#2082) — the INVERSE of `decideWriteGuard`, one level down. Under the Claude Code
+ * boundary — the INVERSE of `decideWriteGuard`, one level down. Under the Claude Code
  * harness the dev-loop agent itself (Claude `agent_type === "dev-loop"`) acts as a delegating
  * COORDINATOR: it MUST NOT mutate TRACKED repo files directly — that work is delegated to a fresh
  * WORKER subagent (`developer`/`fixer`/`quality`/`docs`). `agent_type` is the only discriminator:

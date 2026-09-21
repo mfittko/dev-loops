@@ -536,6 +536,66 @@ test("decideBashGate denies with a guard-failure reason when the gate could not 
 });
 
 // ---------------------------------------------------------------------------
+// decideBashGate — COORDINATOR-VERIFY-DELEGATION (#2082): a coordinator verify-command
+// delegation boundary gated by the SAME DEVLOOPS_COORDINATOR_READONLY flag as
+// decideCoordinatorWriteGuard. Pi no-op rationale: Pi never invokes the Claude PreToolUse Bash
+// gate hook (nor sets its `agent_type` payload field), so this branch — and the flag that gates
+// it — is inert there; no cross-harness regression per #1086.
+// ---------------------------------------------------------------------------
+
+test("decideBashGate DENIES a coordinator running a code-verification entrypoint under strict coordinator enforcement", () => {
+  const d = decideBashGate({
+    command: "bun run verify",
+    repoSlug: TARGET,
+    inManagedContext: true,
+    managedRepoSlug: TARGET,
+    agentType: "dev-loop",
+    enforceCoordinator: true,
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /COORDINATOR-VERIFY-DELEGATION/);
+  assert.match(d.reason, /main-agent-contract\.md/);
+});
+
+test("decideBashGate ALLOWS a worker subagent running a code-verification entrypoint under strict coordinator enforcement", () => {
+  const d = decideBashGate({
+    command: "bun run verify",
+    repoSlug: TARGET,
+    inManagedContext: true,
+    managedRepoSlug: TARGET,
+    agentType: "developer",
+    enforceCoordinator: true,
+  });
+  assert.equal(d.decision, "allow");
+});
+
+test("decideBashGate ALLOWS a coordinator running a compact orchestration command under strict coordinator enforcement", () => {
+  for (const command of ["dev-loops queue list", "git status --short"]) {
+    const d = decideBashGate({
+      command,
+      repoSlug: TARGET,
+      inManagedContext: true,
+      managedRepoSlug: TARGET,
+      agentType: "dev-loop",
+      enforceCoordinator: true,
+    });
+    assert.equal(d.decision, "allow", `compact command "${command}" must not be denied`);
+  }
+});
+
+test("decideBashGate ALLOWS a coordinator running a code-verification entrypoint when DEVLOOPS_COORDINATOR_READONLY is unset (fail-open)", () => {
+  const d = decideBashGate({
+    command: "bun run verify",
+    repoSlug: TARGET,
+    inManagedContext: true,
+    managedRepoSlug: TARGET,
+    agentType: "dev-loop",
+    // enforceCoordinator omitted — defaults to false (fail-open)
+  });
+  assert.equal(d.decision, "allow");
+});
+
+// ---------------------------------------------------------------------------
 // decideWriteGuard
 // ---------------------------------------------------------------------------
 

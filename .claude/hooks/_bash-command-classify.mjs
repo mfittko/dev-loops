@@ -966,3 +966,35 @@ export function commandContainsInlineInterpreter(command) {
     return false;
   });
 }
+
+/**
+ * A package-manager `test`/`verify`/`build` script/task invocation, the `run` keyword optional
+ * (`npm test`, `npm run test`, `bun run verify`, `yarn build`, `pnpm run build`, ...). Anchored on
+ * the executable HEAD (env-assignment/wrapper/path prefix tolerated via `SHELL_EXEC_PREFIX`) so a
+ * path that merely contains the word "test" (`cat test/foo.test.mjs`) never matches — the head
+ * token must literally be one of these four package-manager binaries.
+ */
+const PACKAGE_MANAGER_VERIFY_RUN_RE = new RegExp(
+  `^${SHELL_EXEC_PREFIX}(?:bun|npm|yarn|pnpm)\\s+(?:run\\s+)?(?:test|verify|build)(?:\\s|$)`,
+  "i",
+);
+
+/** `vitest` run directly (any args: `vitest`, `vitest run`, `vitest --coverage`). */
+const VITEST_RE = new RegExp(`^${SHELL_EXEC_PREFIX}vitest(?:\\s|$)`, "i");
+
+/**
+ * COORDINATOR-VERIFY-DELEGATION: whether `command` contains a known code-verification/
+ * build entrypoint in ANY shell segment — `bun test`/`bun run verify`/`bun run build`, `vitest`,
+ * `npm test`/`npm run test`/`npm run build`, and the `yarn`/`pnpm` `test`/`build` equivalents
+ * (with or without the `run` keyword). PreToolUse gate use only: the dev-loop COORDINATOR must
+ * delegate these to a fresh WORKER subagent instead of running them inline; a worker subagent may
+ * run them freely (the actor scoping lives in `decideBashGate`, not here).
+ *
+ * Compact orchestration commands the coordinator MAY still run inline never match — their head
+ * token is not a package-manager binary or `vitest` (`dev-loops queue list`, `gh pr checks --json
+ * --jq`, `detect-checkpoint-evidence`, `git log --oneline -1`, `git status --short`).
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsCodeVerificationEntrypoint(command) {
+  return shellSegments(command).some((segment) => PACKAGE_MANAGER_VERIFY_RUN_RE.test(segment) || VITEST_RE.test(segment));
+}

@@ -37,6 +37,7 @@ import {
   commandContainsCopilotSummonComment,
   commandContainsDetachedWaitTool,
   commandContainsInlineInterpreter,
+  commandContainsCodeVerificationEntrypoint,
 } from "../src/loop/bash-command-classify.mjs";
 
 test("TARGET_REPO_SLUG is the dev-loops repo", () => {
@@ -694,6 +695,37 @@ test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, an
   assert.equal(commandContainsInlineInterpreter('node --require ./setup.js -e "console.log(1)"'), true);
   assert.equal(commandContainsInlineInterpreter('node -r ./x.js --eval "1+1"'), true);
   assert.equal(commandContainsInlineInterpreter('node --import ./m.mjs -p "1+1"'), true);
+});
+
+test("commandContainsCodeVerificationEntrypoint detects known verify/test/build entrypoints and does not over-match compact orchestration commands (#2082)", () => {
+  // known verify/test/build entrypoints — must match
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun test"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun run build"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("vitest"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("vitest run --coverage"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("npm test"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("npm run test"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("npm run build"), true);
+  // yarn/pnpm equivalents (trivial to add, both with and without the `run` keyword)
+  assert.equal(commandContainsCodeVerificationEntrypoint("yarn test"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("yarn build"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("pnpm run test"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("pnpm build"), true);
+  // caught anywhere in a compound command, and behind an env-assignment/wrapper/path prefix
+  assert.equal(commandContainsCodeVerificationEntrypoint("git status --short && bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("CI=1 npm test"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("command bun run verify"), true);
+
+  // compact orchestration commands the coordinator may still run inline — must NOT match
+  assert.equal(commandContainsCodeVerificationEntrypoint("dev-loops queue list"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("gh pr checks 5 --json state --jq .state"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("node scripts/loop/detect-checkpoint-evidence.mjs --repo x --pr 1"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("git log --oneline -1"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("git status --short"), false);
+  // a path that merely contains the word "test" must not match (over-match guard)
+  assert.equal(commandContainsCodeVerificationEntrypoint("cat test/foo.test.mjs"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("node scripts/test-runner.mjs"), false);
 });
 
 // ---------------------------------------------------------------------------
