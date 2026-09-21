@@ -237,6 +237,34 @@ function shellSegments(command) {
 const SHELL_EXEC_PREFIX = "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:(?:command|env|exec)\\s+)*(?:\\S*/)?";
 
 /**
+ * Leading prefix a code-verification/build command may carry before its real executable: the
+ * shared `SHELL_EXEC_PREFIX` (env assignments, `command`/`env`/`exec` wrapper words, binary path)
+ * plus `nice`/`timeout` process wrappers, scoped to this classifier only so the sibling `gh`/`git`
+ * classifiers above are not broadened by wrapper forms they never need to tolerate. Covers bare
+ * `nice`, `nice -n <N>`, bare `timeout <duration>`, and `timeout` carrying `-s <sig>`/`-k <dur>`/
+ * `--signal=<sig>`/`--kill-after=<dur>`/`--preserve-status`/`--foreground` before the duration —
+ * the wrapper forms the coordinator's daily verify/build commands are routinely run behind
+ * (`timeout 600 bun run verify`, `nice -n 10 bun run verify`). Not a full flag parser: other
+ * `timeout`/`nice` flags are a known, deliberately uncovered ceiling.
+ *
+ * The `env` wrapper word additionally tolerates zero-or-more trailing `NAME=value` assignments
+ * before the real executable (`env CI=1 bun run verify`, `env CI=1 FOO=bar npm test`) — the common
+ * everyday `env VAR=value ... cmd` CI-invocation shape, on top of the bare-leading-assignment form
+ * (`CI=1 bun run verify`) already covered by the shared assignment run at the front of this prefix.
+ * It also tolerates the common `env` OPTION forms (mixed freely with `NAME=value` assignments, in
+ * any order/count): `-i`/`--ignore-environment`, `-u <NAME>`/`--unset=<NAME>`, `-C <dir>`/
+ * `--chdir=<dir>`, `-S <str>`/`--split-string=<str>`, a bare `-`, and `--` — so
+ * `env -u DEVLOOPS_COORDINATOR_READONLY bun run verify`, `env -i bun run verify`, and
+ * `env -u FOO CI=1 npm test` all match. Closes the cheap classifier gap where an `env` flag (rather
+ * than a `NAME=value` assignment) reached the executable unclassified. Not a full `env` flag parser:
+ * any other/exotic `env` option is a known, deliberately uncovered ceiling (documented, not chased).
+ * `command`/`exec` do not get the same trailing-assignment/option tolerance — no known daily
+ * invocation shape needs it, and adding it would only widen the pattern without a use case.
+ */
+const VERIFY_EXEC_PREFIX =
+  "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:env(?:\\s+(?:[A-Za-z_][A-Za-z0-9_]*=\\S*|-i|--ignore-environment|-u\\s+\\S+|--unset=\\S+|-C\\s+\\S+|--chdir=\\S+|-S\\s+\\S+|--split-string=\\S+|--|-))*\\s+|(?:command|exec)\\s+|nice(?:\\s+-n\\s+\\S+)?\\s+|timeout(?:\\s+(?:-s\\s+\\S+|-k\\s+\\S+|--signal=\\S+|--kill-after=\\S+|--preserve-status|--foreground))*\\s+\\S+\\s+)*(?:\\S*/)?";
+
+/**
  * Build the `gh <subcmd> <verb>` prefix matcher (subcmd = "pr" | "issue").
  * Tolerates a leading env-assignment/wrapper/path prefix so `GH_TOKEN=x gh pr create`,
  * `command gh issue create`, and `/usr/bin/gh pr create` are all matched. The same regex
@@ -1022,4 +1050,45 @@ export function commandContainsInlineInterpreter(command) {
     }
     return false;
   });
+}
+
+/**
+ * A package-manager `test`/`verify`/`build` script/task invocation, the `run` keyword optional
+ * (`npm test`, `npm run test`, `bun run verify`, `yarn build`, `pnpm run build`, ...). Anchored on
+ * the executable HEAD (env-assignment/wrapper/path/nice/timeout prefix tolerated via
+ * `VERIFY_EXEC_PREFIX`) so a path that merely contains the word "test" (`cat test/foo.test.mjs`)
+ * never matches — the head token must literally be one of these four package-manager binaries.
+ *
+ * Tolerates a run of binary flags between the binary and `run`/the script name (`bun --bun run
+ * verify`), and a `:`-namespaced sub-script (`test:extension`, `test:core`, `verify:docs`, ...) —
+ * the tail is `(?:[:\s]|$)` rather than `(?:\s|$)` so `npm run test:unit` / `yarn test:ci` match
+ * while `npm run build-docs` (hyphen form, a genuinely different script name) still does not.
+ */
+const PACKAGE_MANAGER_VERIFY_RUN_RE = new RegExp(
+  `^${VERIFY_EXEC_PREFIX}(?:bun|npm|yarn|pnpm)(?:\\s+--\\S+)*\\s+(?:run\\s+)?(?:test|verify|build)(?:[:\\s]|$)`,
+  "i",
+);
+
+/**
+ * `vitest` run directly (any args: `vitest`, `vitest run`, `vitest --coverage`), or via the
+ * `npx`/`bunx` package-runner (`npx vitest run`, `bunx vitest`) or `bun`'s `x` subcommand
+ * (`bun x vitest`).
+ */
+const VITEST_RE = new RegExp(`^${VERIFY_EXEC_PREFIX}(?:(?:npx|bunx)\\s+|bun\\s+x\\s+)?vitest(?:\\s|$)`, "i");
+
+/**
+ * COORDINATOR-VERIFY-DELEGATION: whether `command` contains a known code-verification/
+ * build entrypoint in ANY shell segment — `bun test`/`bun run verify`/`bun run build`, `vitest`,
+ * `npm test`/`npm run test`/`npm run build`, and the `yarn`/`pnpm` `test`/`build` equivalents
+ * (with or without the `run` keyword). PreToolUse gate use only: the dev-loop COORDINATOR must
+ * delegate these to a fresh WORKER subagent instead of running them inline; a worker subagent may
+ * run them freely (the actor scoping lives in `decideBashGate`, not here).
+ *
+ * Compact orchestration commands the coordinator MAY still run inline never match — their head
+ * token is not a package-manager binary or `vitest` (`dev-loops queue list`, `gh pr checks --json
+ * --jq`, `detect-checkpoint-evidence`, `git log --oneline -1`, `git status --short`).
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsCodeVerificationEntrypoint(command) {
+  return shellSegments(command).some((segment) => PACKAGE_MANAGER_VERIFY_RUN_RE.test(segment) || VITEST_RE.test(segment));
 }

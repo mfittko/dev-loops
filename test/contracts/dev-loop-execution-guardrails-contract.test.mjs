@@ -91,3 +91,52 @@ test("loop-grill skill enforces the count-based AC unit + dispatch-mode guardrai
   // reviewed semantically; historical incident numbers are not its contract.
 
 });
+
+test("dev-loop agent contract broadens the blocking-wait invariant to CI/Copilot waits and states orchestrator-owned + fresh-context invariants (#2176)", async () => {
+  const agent = await readRepo("agents/dev-loop.agent.md");
+  // AC1: the blocking-wait invariant enumerates CI-green and Copilot-review alongside judge/fixer/reviewer,
+  // and forbids the turn-ending detached background wait.
+  assert.match(
+    agent,
+    /Awaiting any wait the run depends on[\s\S]{0,200}CI-green wait[\s\S]{0,80}Copilot-review wait/i,
+    "the wait invariant should enumerate CI-green and Copilot-review waits alongside judge/fixer/reviewer",
+  );
+  assert.match(
+    agent,
+    /detached background wait that ends the turn/i,
+    "the wait invariant should forbid the detached background wait that ends the turn",
+  );
+  // AC1 routing: the invariant routes each wait kind to its correct mechanism (integration with #2065).
+  assert.match(
+    agent,
+    /join a CI-green or Copilot-review wait with the bounded foreground probe/i,
+    "CI-green/Copilot-review waits should route to the bounded foreground probe",
+  );
+  assert.match(
+    agent,
+    /blocking dispatch \(`async: false`\) or one `bg_wait` nonBlocking subscription/,
+    "subagent children should route to a blocking dispatch or bg_wait subscription",
+  );
+  // AC2: merge + retrospective + issue creation stated as orchestrator-owned; child emits findings and stops at approval.
+  assert.match(
+    agent,
+    /Merge, retrospective, and issue creation are orchestrator-owned/,
+    "the Operating contract should state merge + retrospective + issue creation are orchestrator-owned",
+  );
+  assert.match(
+    agent,
+    /never merges, never runs a retrospective, and never files issues/,
+    "the child must never merge, run a retro, or file issues",
+  );
+  assert.match(
+    agent,
+    /stops at the human-approval checkpoint/i,
+    "the child stops at the human-approval checkpoint",
+  );
+  // AC3: fresh-context-per-sub-loop invariant.
+  assert.match(
+    agent,
+    /Every sub-loop[\s\S]{0,120}runs in its own dedicated fresh-context agent/i,
+    "the delegation section should state the fresh-context-per-sub-loop invariant",
+  );
+});

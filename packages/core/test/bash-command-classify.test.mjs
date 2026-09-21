@@ -39,6 +39,7 @@ import {
   commandIsSleepPollLoop,
   commandIsFileMarkerPollLoop,
   commandContainsInlineInterpreter,
+  commandContainsCodeVerificationEntrypoint,
 } from "../src/loop/bash-command-classify.mjs";
 
 test("TARGET_REPO_SLUG is the dev-loops repo", () => {
@@ -819,6 +820,127 @@ test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, an
   assert.equal(commandContainsInlineInterpreter('node --require ./setup.js -e "console.log(1)"'), true);
   assert.equal(commandContainsInlineInterpreter('node -r ./x.js --eval "1+1"'), true);
   assert.equal(commandContainsInlineInterpreter('node --import ./m.mjs -p "1+1"'), true);
+});
+
+test("commandContainsCodeVerificationEntrypoint detects known verify/test/build entrypoints and does not over-match compact orchestration commands (#2082)", () => {
+  // known verify/test/build entrypoints — must match
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun test"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun run build"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("vitest"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("vitest run --coverage"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("npm test"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("npm run test"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("npm run build"), true);
+  // yarn/pnpm equivalents (trivial to add, both with and without the `run` keyword)
+  assert.equal(commandContainsCodeVerificationEntrypoint("yarn test"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("yarn build"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("pnpm run test"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("pnpm build"), true);
+  // caught anywhere in a compound command, and behind an env-assignment/wrapper/path prefix
+  assert.equal(commandContainsCodeVerificationEntrypoint("git status --short && bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("CI=1 npm test"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("command bun run verify"), true);
+
+  // compact orchestration commands the coordinator may still run inline — must NOT match
+  assert.equal(commandContainsCodeVerificationEntrypoint("dev-loops queue list"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("gh pr checks 5 --json state --jq .state"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("node scripts/github/detect-checkpoint-evidence.mjs --repo x --pr 1"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("git log --oneline -1"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("git status --short"), false);
+  // a path that merely contains the word "test" must not match (over-match guard)
+  assert.equal(commandContainsCodeVerificationEntrypoint("cat test/foo.test.mjs"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("node scripts/test-runner.mjs"), false);
+});
+
+test("commandContainsCodeVerificationEntrypoint matches colon-namespaced sub-scripts, npx/bunx vitest, bun --bun run, and timeout/nice prefixes (#2082 pre-PR review)", () => {
+  // colon-namespaced package-manager sub-scripts (`test:*`/`verify:*`/`build:*`) — the coordinator's
+  // real daily commands, which the plain `(?:\s|$)` tail previously rejected.
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun run test:extension"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun run test:core"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun run test:all"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("npm run test:unit"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("yarn test:ci"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun run verify:docs"), true);
+
+  // vitest via a package-runner or bun's `x` subcommand
+  assert.equal(commandContainsCodeVerificationEntrypoint("bunx vitest"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("npx vitest run"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun x vitest"), true);
+
+  // a binary flag between the binary and the run/script token
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun --bun run verify"), true);
+
+  // prefix-tolerated wrapper commands
+  assert.equal(commandContainsCodeVerificationEntrypoint("timeout 600 bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("nice bun run verify"), true);
+  // widened nice/timeout forms: nice -n <N>, and timeout carrying a leading flag before the
+  // duration (-s <sig>, -k <dur>, --signal=, --kill-after=, --preserve-status, --foreground)
+  assert.equal(commandContainsCodeVerificationEntrypoint("nice -n 10 bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("timeout -k 30 600 bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("timeout -s TERM 600 bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("timeout --preserve-status 600 bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("timeout --kill-after=30 600 bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("timeout --foreground 600 vitest"), true);
+  // multiple leading timeout flags combine in any order
+  assert.equal(commandContainsCodeVerificationEntrypoint("timeout -k 30 -s TERM 600 bun run verify"), true);
+
+  // must still not match compact orchestration commands
+  assert.equal(commandContainsCodeVerificationEntrypoint("dev-loops queue list"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("gh pr checks --json state --jq .state"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("node scripts/github/detect-checkpoint-evidence.mjs --repo x --pr 1"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("git log --oneline -1"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("git status --short"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("node scripts/foo.mjs"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("cat test/foo.test.mjs"), false);
+  // hyphen-form script name (not a `:` sub-script) — deliberately left unmatched, not required
+  assert.equal(commandContainsCodeVerificationEntrypoint("npm run build-docs"), false);
+  // deliberately fail-open ceiling forms — pinned as explicit negatives, not just narration
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun run vitest"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("npm --prefix ./x run test"), false);
+});
+
+test("commandContainsCodeVerificationEntrypoint tolerates an `env` wrapper carrying trailing VAR=value assignments (Copilot review, #2082)", () => {
+  // the common everyday `env VAR=value ... cmd` CI-invocation shape — the `env` wrapper word
+  // followed by zero-or-more `NAME=value` assignments before the package-manager/vitest head.
+  assert.equal(commandContainsCodeVerificationEntrypoint("env CI=1 bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env FOO=bar npm test"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env CI=1 vitest"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env CI=1 FOO=bar bun run verify"), true);
+  // bare leading assignments (no `env` wrapper word) already matched — still does
+  assert.equal(commandContainsCodeVerificationEntrypoint("CI=1 bun run verify"), true);
+  // a quoted/echoed mention is not an invocation and must not match
+  assert.equal(commandContainsCodeVerificationEntrypoint('echo "env CI=1 bun run verify"'), false);
+});
+
+test("commandContainsCodeVerificationEntrypoint tolerates common `env` OPTION forms before the executable, not just VAR=value assignments (Copilot round-2 review, #2326)", () => {
+  // `env -u DEVLOOPS_COORDINATOR_READONLY bun run verify` was the reported bypass: the `env`
+  // branch only tolerated trailing NAME=value assignments, so a leading `env` OPTION reached the
+  // executable unclassified and the command fell through un-denied.
+  assert.equal(commandContainsCodeVerificationEntrypoint("env -u DEVLOOPS_COORDINATOR_READONLY bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env -i bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env -u FOO CI=1 npm test"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env --ignore-environment bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env --unset=FOO bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env -C /tmp bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env --chdir=/tmp bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint('env -S "CI=1" bun run verify'), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env -- bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env - bun run verify"), true);
+  // a quoted/echoed mention is not an invocation and must not match
+  assert.equal(commandContainsCodeVerificationEntrypoint('echo "env -u FOO bun run verify"'), false);
+  // a bare env-option run with no trailing command is not an invocation
+  assert.equal(commandContainsCodeVerificationEntrypoint("env -u FOO"), false);
+});
+
+test("commandContainsGitStash and the gh classifiers do NOT gain the verify-wrapper nice/timeout tolerance (#2082)", () => {
+  // The widened nice/timeout wrapper tolerance is scoped to VERIFY_EXEC_PREFIX
+  // (commandContainsCodeVerificationEntrypoint only) and must not leak into the shared
+  // SHELL_EXEC_PREFIX classifiers used by git stash and the gh pr/issue/api matchers.
+  assert.equal(commandContainsGitStash("timeout 600 git stash"), false);
+  assert.equal(commandContainsGitStash("nice -n 10 git stash"), false);
+  assert.equal(commandContainsGhPrCreate("timeout 600 gh pr create --fill"), false);
+  assert.equal(commandContainsGhPrMerge("nice -n 10 gh pr merge 1"), false);
 });
 
 // ---------------------------------------------------------------------------

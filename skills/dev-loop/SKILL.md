@@ -38,7 +38,7 @@ After async dispatch, follow [Async dispatch posture](../docs/main-agent-contrac
 
 ### Resolve authoritative state
 
-> Under the Claude Code harness the dev-loop runs as a single agent: run these steps directly — no read-only boundary and no separate async-subagent dispatch. See [Main Agent Contract](../docs/main-agent-contract.md).
+> Under the Claude Code harness the dev-loop runs as a single agent: run these steps directly — no separate async-subagent dispatch. The coordinator has an opt-in read-only boundary for tracked repo files and code-verification/build commands (`DEVLOOPS_COORDINATOR_READONLY=1`, enforced by the guard hooks). See [Main Agent Contract](../docs/main-agent-contract.md).
 
 <!-- pi-only -->
 **CLI invocation (`<dev-loops-package-root>`):** dev-loop CLI commands below are invoked as `node <dev-loops-package-root>/cli/index.mjs <verb...>` using the package-local CLI rather than `npx`, so they resolve unambiguously from the installed package without a global install. Resolve `<dev-loops-package-root>` via the first of these **bounded** candidates whose `cli/index.mjs` exists — never assume a single fixed layout (under a Pi user-level install the package lives at `~/.pi/agent/npm/node_modules/dev-loops/`, so the old `../../..` package-relative guess from `skills/dev-loop/SKILL.md` overshoots the package root):

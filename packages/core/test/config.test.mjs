@@ -3523,17 +3523,19 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
       "packaging-runtime", "state-concurrency", "config-drift", "gate-evidence",
       "pr-description", "pr-comments", "contradiction-lens", "code-conformance",
       "semantic-drift", "deslop", // #1442 (ADR 0041 prose half) — deliberate addition atop the pre-#1404 pinned baseline
+      "holistic", // #2307 — independent, un-briefed holistic reviewer added atop the pre-#1404 pinned baseline
     ],
     preApproval: [
       "dry", "kiss", "yagni", "srp", "soc", "deep", "docs", "ocp", "lsp", "isp",
       "dip", "renderer-security", "pr-checklist", "acceptance-criteria",
       "contradiction-lens", "correctness-final", "ui-validation",
+      "holistic", // #2307 — independent, un-briefed holistic reviewer added atop the pre-#1404 pinned baseline
     ],
     spike: ["scope", "docs"],
   };
   const PRE_1404_MANDATORY_SETS = {
-    draft: ["pr-description"],
-    preApproval: ["pr-checklist", "acceptance-criteria", "yagni", "contradiction-lens"],
+    draft: ["pr-description", "holistic"],
+    preApproval: ["pr-checklist", "acceptance-criteria", "yagni", "contradiction-lens", "holistic"],
     spike: [],
   };
   // draft's and preApproval's blocking sets are NOT the pre-#1404 baseline:
@@ -3640,6 +3642,87 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
     assert.equal(threatModel.persona, "review");
     assert.equal(threatModel.prompt, null);
     assert.equal(threatModel.fallback, false);
+  });
+});
+
+// ============================================================================
+// #2307: general-purpose HOLISTIC reviewer angle — independent, un-briefed,
+// spec-driven, fresh-context. Distinct from the developer-briefed Pre-PR
+// reviewer (#2305). Added to the DEFAULT gate fan-out angle set for BOTH
+// draft_gate and pre_approval_gate, dispatched as its own dedicated fan-out
+// unit (never co-batched with a narrow-lens angle).
+// ============================================================================
+
+describe("holistic reviewer angle (#2307)", () => {
+  const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
+
+  // AC1: the default set includes holistic in BOTH gates, and it dispatches
+  // as its own independent fan-out unit in both gates.
+  for (const gate of /** @type {const} */ (["draft", "preApproval"])) {
+    test(`AC1 — ${gate}: resolveGateAngleContract includes "holistic" in both angles and mandatoryAngles`, async () => {
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
+      assert.deepEqual(errors, []);
+      const { mandatoryAngles, pool } = resolveGateAngleContract(config, gate);
+      assert.ok(pool.includes("holistic"), `${gate}: "holistic" must be in the resolved angle pool`);
+      assert.ok(mandatoryAngles.includes("holistic"), `${gate}: "holistic" must be mandatory`);
+    });
+
+    test(`AC1 — ${gate}: resolveFanoutGroups dispatches holistic as its own dedicated unit`, async () => {
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
+      assert.deepEqual(errors, []);
+      const { pool } = resolveGateAngleContract(config, gate);
+      const units = resolveFanoutGroups(config, gate, pool);
+      const holisticUnit = units.find((u) => u.angles.includes("holistic"));
+      assert.deepEqual(
+        holisticUnit,
+        { name: "holistic", angles: ["holistic"] },
+        `${gate}: holistic must dispatch as its own singleton unit, never co-batched with another angle`,
+      );
+    });
+  }
+
+  // AC2: fresh-context, spec-driven, NOT developer-briefed. Gate angles are
+  // structurally un-briefed — the gate context/dispatch path has no brief
+  // field at all; only the Pre-PR path (skills/docs/pre-pr-review-contract.md)
+  // carries a developer brief. This test pins the SHIPPED prompt text so a
+  // regression that softens the independence wording fails closed.
+  test("AC2 — holistic resolves the review persona and a spec-driven, un-briefed, independent prompt", async () => {
+    const { loadDevLoopConfig, resolveReviewerRole } = await import("../src/config/config.mjs");
+    const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
+    assert.deepEqual(errors, []);
+    const role = resolveReviewerRole(config, "holistic");
+    assert.equal(role.persona, "review");
+    assert.ok(role.prompt, "holistic must resolve a prompt from the shipped config");
+    assert.match(role.prompt, /un-briefed/i);
+    assert.match(role.prompt, /only the spec/i);
+    // No brief-injection placeholder/field (e.g. a "Brief:" label or template
+    // slot) — the shipped prompt is a static string with no brief content to
+    // interpolate, unlike the Pre-PR reviewer's mandatory REVIEW BRIEF field
+    // (skills/docs/pre-pr-review-contract.md). Gate angles are structurally
+    // un-briefed: the gate context/dispatch path (write-gate-context.mjs) has
+    // no brief field at all; only the separate Pre-PR path carries one.
+    assert.doesNotMatch(role.prompt, /\bbrief:/i);
+  });
+
+  // AC2: the holistic prompt is duplicated verbatim in gates.draft.angles and
+  // gates.preApproval.angles. resolveReviewerRole only ever returns the FIRST
+  // gate match (draft), so the preApproval copy's independence wording is
+  // otherwise unguarded — a softened/dropped preApproval copy would never
+  // fail the test above. Pin byte-identity between both copies directly.
+  test("AC2 — draft and preApproval holistic prompts are byte-identical (both gates' independence wording is drift-guarded)", async () => {
+    const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+    const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
+    assert.deepEqual(errors, []);
+    const draftHolistic = config.gates.draft.angles.find((a) => a.name === "holistic");
+    const preApprovalHolistic = config.gates.preApproval.angles.find((a) => a.name === "holistic");
+    assert.ok(draftHolistic?.prompt, "draft gate must have a holistic angle with a prompt");
+    assert.ok(preApprovalHolistic?.prompt, "preApproval gate must have a holistic angle with a prompt");
+    assert.equal(draftHolistic.prompt, preApprovalHolistic.prompt);
+    assert.match(preApprovalHolistic.prompt, /un-briefed/i);
+    assert.match(preApprovalHolistic.prompt, /only the spec/i);
+    assert.doesNotMatch(preApprovalHolistic.prompt, /\bbrief:/i);
   });
 });
 

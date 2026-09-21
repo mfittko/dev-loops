@@ -44,6 +44,29 @@ test("sanctioned-commands: forbidden + orchestrator-owned lists are non-empty", 
   assert.ok(SANCTIONED_COMMANDS.orchestratorOwned.length > 0, "orchestrator-owned list must not be empty");
 });
 
+test("sanctioned-commands: issue creation is orchestrator-owned, never a child-sanctioned edit (#2176)", () => {
+  // Binds the map to the agent-contract prose ("the routed child ... never files
+  // issues"): create-issue.mjs must appear ONLY in orchestratorOwned, never in
+  // any child-sanctioned path group (reads/edits/lifecycle).
+  const orchestratorIssueEntry = SANCTIONED_COMMANDS.orchestratorOwned.find(
+    (entry) => /issue creation/i.test(entry) && /create-issue\.mjs/.test(entry),
+  );
+  assert.ok(
+    orchestratorIssueEntry,
+    "orchestratorOwned must name issue creation via scripts/github/create-issue.mjs",
+  );
+
+  for (const group of ["reads", "edits", "lifecycle"]) {
+    for (const wrapperPath of Object.values(SANCTIONED_COMMANDS[group])) {
+      assert.doesNotMatch(
+        wrapperPath,
+        /create-issue\.mjs/,
+        `create-issue.mjs must NOT be child-sanctioned (found in ${group}); issue creation is orchestrator-owned`,
+      );
+    }
+  }
+});
+
 test("sanctioned-commands: the map is carried into the built handoff envelope", async () => {
   const { buildHandoffEnvelopeCli } = await import("../../scripts/loop/build-handoff-envelope.mjs");
 

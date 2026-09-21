@@ -1754,6 +1754,10 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7): a real l
         "      - kiss",
         "      - name: pr-checklist",
         "        mandatory: true",
+        // Disable the shipped mandatory "holistic" angle so this fixture's
+        // pinned two-fresh-unit floor stays exact.
+        "      - name: holistic",
+        "        enabled: false",
         "  fanout:",
         "    groups:",
         "      - name: process",
@@ -1916,6 +1920,10 @@ test("AC4: a real MIXED (fresh + carried) clean re-gate's fanout_fanin ledger wr
         "        mandatory: true",
         "      - name: dry",
         "      - name: docs",
+        // Disable the shipped mandatory "holistic" angle so this fixture's
+        // single pinned mandatory angle (pr-checklist) stays exact.
+        "      - name: holistic",
+        "        enabled: false",
         "",
       ].join("\n"),
       "utf8",
@@ -2060,6 +2068,10 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7, #1601): t
         "      - kiss",
         "      - name: pr-checklist",
         "        mandatory: true",
+        // Disable the shipped mandatory "holistic" angle so this fixture's
+        // pinned two-fresh-unit floor stays exact.
+        "      - name: holistic",
+        "        enabled: false",
         "  fanout:",
         "    groups:",
         "      - name: process",
@@ -2781,7 +2793,9 @@ test("buildFanoutEnforcement (#1984): a tiny diff whose size-budget outcome touc
 // `pr-checklist` is a built-in mandatory default (BUILT_IN_DEFAULTS) that
 // merges into every preApproval config regardless of this fixture, so every
 // ledger below must also record it or trip an unrelated missing-mandatory
-// failure.
+// failure. The shipped extension-defaults "holistic" angle is also mandatory
+// by default; disable it here so this fixture's rename-class pair stays
+// scoped to the one angle under test.
 const RENAME_CLASS_DEVLOOPS = (mandatoryAngleName) => [
   "version: 1",
   "gates:",
@@ -2792,6 +2806,8 @@ const RENAME_CLASS_DEVLOOPS = (mandatoryAngleName) => [
   "      - kiss",
   `      - name: ${mandatoryAngleName}`,
   "        mandatory: true",
+  "      - name: holistic",
+  "        enabled: false",
   "",
 ].join("\n");
 
@@ -4051,14 +4067,16 @@ function fanoutEvidenceGhEntries(executionMode, inlineReason = null) {
 async function writeLedger(tempDir, gate) {
   const dir = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-17");
   await import("node:fs/promises").then((fs) => fs.mkdir(dir, { recursive: true }));
-  // Provenance covering the shipped extension-defaults mandatory angle for each
-  // gate: fanout_fanin ledgers must record it for merge-evidence angle coverage.
+  // Provenance covering the shipped extension-defaults mandatory angles for
+  // each gate (the per-gate named angle plus "holistic", mandatory in both):
+  // fanout_fanin ledgers must record them for merge-evidence angle coverage.
   const mandatory = gate === "draft_gate" ? "pr-description" : "pr-checklist";
   const provenance = {
-    distinctReviewers: 2,
+    distinctReviewers: 3,
     perAngle: [
       { angle: mandatory, reviewer: "review-a" },
       { angle: gate === "draft_gate" ? "scope" : "dry", reviewer: "review-b" },
+      { angle: "holistic", reviewer: "review-c" },
     ],
   };
   await writeFile(path.join(dir, `${gate}-abc1234.json`), JSON.stringify({ gate, headSha: "abc1234", findings: [], provenance }) + "\n", "utf8");
@@ -4244,6 +4262,10 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck PASSES on an auto-chunked 
         "      - d",
         "      - name: pr-checklist",
         "        mandatory: true",
+        // Disable the shipped mandatory "holistic" angle so this fixture's
+        // pinned three-dispatch-unit round stays exact.
+        "      - name: holistic",
+        "        enabled: false",
         "  fanout:",
         "    maxAnglesPerGroup: 2",
         "",
@@ -4317,6 +4339,11 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck PASSES a ledger built from
         "      - b",
         "      - name: pr-checklist",
         "        mandatory: true",
+        // Disable the shipped mandatory "holistic" angle so this fixture's
+        // explicit ["a", "b", "pr-checklist"] resolved-angle set stays the
+        // whole mandatory-angle picture.
+        "      - name: holistic",
+        "        enabled: false",
         "  fanout:",
         "    maxAnglesPerGroup: 2",
         "",

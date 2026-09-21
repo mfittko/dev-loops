@@ -3082,6 +3082,7 @@ test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json is 
       JSON.stringify([
         { angle: "correctness", verdict: "clean", findings: [] },
         { angle: "pr-description", verdict: "clean", findings: [] },
+        { angle: "holistic", verdict: "clean", findings: [] },
       ]),
       "utf8",
     );
@@ -3123,6 +3124,7 @@ test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json car
       JSON.stringify([
         { angle: "correctness", verdict: "findings_present", findings: [{ severity: "nice-to-have", summary: "nice-to-have cleanup" }] },
         { angle: "pr-description", verdict: "clean", findings: [] },
+        { angle: "holistic", verdict: "clean", findings: [] },
       ]),
       "utf8",
     );
@@ -3170,6 +3172,7 @@ test("upsert-checkpoint-verdict allows a clean verdict whose only blocking-sever
           findings: [{ severity: "must-fix", summary: "known limitation", disposition: "operator_acknowledged" }],
         },
         { angle: "pr-description", verdict: "clean", findings: [] },
+        { angle: "holistic", verdict: "clean", findings: [] },
       ]),
       "utf8",
     );
@@ -3736,6 +3739,7 @@ test("upsert-checkpoint-verdict allows a clean verdict whose --findings-json car
           findings: [{ severity: "nice-to-have" }],
         },
         { angle: "pr-description", verdict: "clean", findings: [] },
+        { angle: "holistic", verdict: "clean", findings: [] },
       ]),
       "utf8",
     );
@@ -4002,12 +4006,16 @@ test("upsert-checkpoint-verdict self-heals a ready PR via draft transition, pres
     const { runChild, calls } = makeGhMock(ghEntries, { matchMode: "claims" });
     const env = runIdFreeEnv({ DEVLOOPS_RUN_ID: "" });
 
-    // draft_gate configures a mandatory angle (pr-description); a fanout_fanin
-    // verdict now requires coverage proof rather than a bare findingsSummary —
-    // this test is about the draft-transition self-heal mechanism, not angle
-    // coverage, so findingsJson is the minimal covering shape.
+    // draft_gate configures mandatory angles (pr-description, holistic); a
+    // fanout_fanin verdict now requires coverage proof rather than a bare
+    // findingsSummary — this test is about the draft-transition self-heal
+    // mechanism, not angle coverage, so findingsJson is the minimal covering
+    // shape.
     const findingsPath = path.join(tempDir, "findings.json");
-    await writeFile(findingsPath, JSON.stringify([{ angle: "pr-description", verdict: "clean", findings: [] }]), "utf8");
+    await writeFile(findingsPath, JSON.stringify([
+      { angle: "pr-description", verdict: "clean", findings: [] },
+      { angle: "holistic", verdict: "clean", findings: [] },
+    ]), "utf8");
     // requireFanoutEvidence is on (schema default for the bare tempDir repoRoot),
     // so the fanout_fanin post needs its canonical durable ledger present.
     await stageDurableLedger(tempDir, { headSha, gate: "draft_gate" });
@@ -5355,6 +5363,7 @@ test("upsert-checkpoint-verdict rejects a fanout_fanin verdict whose --findings-
         { angle: "acceptance-criteria", verdict: "clean", findings: [] },
         { angle: "yagni", verdict: "clean", findings: [] },
         { angle: "contradiction-lens", verdict: "clean", findings: [] },
+        { angle: "holistic", verdict: "clean", findings: [] },
         { angle: "made-up-angle", verdict: "clean", findings: [] },
       ]),
       "utf8",
@@ -5386,6 +5395,7 @@ test("upsert-checkpoint-verdict accepts the fan-in synthetic pr-checklist angle 
       findingsPath,
       JSON.stringify([
         { angle: "pr-description", verdict: "clean", findings: [] },
+        { angle: "holistic", verdict: "clean", findings: [] },
         { angle: "scope", verdict: "clean", findings: [] },
         { angle: "pr-checklist", verdict: "clean", findings: [] },
       ]),
@@ -5470,6 +5480,7 @@ test("upsert-checkpoint-verdict WARNS on stderr (not silence) for a foreign angl
       findingsPath,
       JSON.stringify([
         { angle: "pr-description", verdict: "clean", findings: [] },
+        { angle: "holistic", verdict: "clean", findings: [] },
         { angle: "totally-made-up", verdict: "clean", findings: [] },
       ]),
       "utf8",
@@ -5614,6 +5625,8 @@ test("upsert-checkpoint-verdict posts a withheld fanout_fanin verdict whose --fi
       "    angles:",
       "      - name: pr-description",
       "        enabled: false",
+      "      - name: holistic",
+      "        enabled: false",
       "",
     ].join("\n"), "utf8");
     // Same ledger shape as the covered-provenance positive test below, but
@@ -5647,8 +5660,8 @@ test("upsert-checkpoint-verdict posts a withheld fanout_fanin verdict whose --fi
 
 test("upsert-checkpoint-verdict refuses a withheld fanout_fanin verdict whose --findings-ledger provenance names a foreign angle on a gate with a pool but no mandatory angle", async () => {
   await withTempDir(async (tempDir) => {
-    // draft_gate's only mandatory angle (pr-description) disabled via a D3
-    // merge-by-name override, so mandatoryAngles resolves empty while the
+    // draft_gate's mandatory angles (pr-description, holistic) disabled via a
+    // D3 merge-by-name override, so mandatoryAngles resolves empty while the
     // pool (scope, coverage, ...) stays non-empty — pinning that the
     // foreign-angle check still runs for a pool-only, no-mandatory gate
     // instead of being skipped along with the mandatory-angle check.
@@ -5658,6 +5671,8 @@ test("upsert-checkpoint-verdict refuses a withheld fanout_fanin verdict whose --
       "  draft:",
       "    angles:",
       "      - name: pr-description",
+      "        enabled: false",
+      "      - name: holistic",
       "        enabled: false",
       "",
     ].join("\n"), "utf8");
@@ -5697,9 +5712,10 @@ test("upsert-checkpoint-verdict --findings-json renders structured per-angle fin
           findings: [{ severity: "must-fix", summary: "broken edge case", file: "a.mjs", line: 7 }],
         },
         { angle: "coverage", verdict: "clean", findings: [] },
-        // draft_gate's configured mandatory angle (gates.draft.mandatoryAngles):
-        // a fanout_fanin verdict's structured per-angle results must cover it.
+        // draft_gate's configured mandatory angles (gates.draft.mandatoryAngles):
+        // a fanout_fanin verdict's structured per-angle results must cover them.
         { angle: "pr-description", verdict: "clean", findings: [] },
+        { angle: "holistic", verdict: "clean", findings: [] },
       ]),
       "utf8",
     );
@@ -5711,8 +5727,8 @@ test("upsert-checkpoint-verdict --findings-json renders structured per-angle fin
           "**Execution mode:** fanout_fanin",
           "Body-only findings — no anchorable changed line, so carried in full here (plain list, angle in brackets, `file:line` linked to the blob when known):",
           "- 🔴 high — broken edge case _`a.mjs:7`_ _(correctness)_", // "must-fix" input normalizes to canonical "high"
-          "**Clean (2):** coverage, pr-description",
-          "**Findings summary:** 3 angles reviewed; 1 finding (see per-angle breakdown below).",
+          "**Clean (3):** coverage, pr-description, holistic",
+          "**Findings summary:** 4 angles reviewed; 1 finding (see per-angle breakdown below).",
         ],
         stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
       },
@@ -5842,6 +5858,7 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
         { angle: "acceptance-criteria", verdict: "clean", findings: [] },
         { angle: "yagni", verdict: "clean", findings: [] },
         { angle: "contradiction-lens", verdict: "clean", findings: [] },
+        { angle: "holistic", verdict: "clean", findings: [] },
       ]),
       "utf8",
     );
@@ -5909,11 +5926,11 @@ test("upsert-checkpoint-verdict --findings-json structured verdict renders the g
           "- 🟠 medium — minor nit worth noting _(dry)_",
           // The structured single-line digest stays plain; the gateEvidenceNote
           // renders on its own labeled line, not spliced into the digest.
-          "**Findings summary:** 5 angles reviewed; 1 finding (see per-angle breakdown below).",
+          "**Findings summary:** 6 angles reviewed; 1 finding (see per-angle breakdown below).",
           `**Gate evidence note:** ${roundExhaustionNote}`,
         ],
         assertStdinNotIncludes: [
-          `**Findings summary:** 5 angles reviewed; 1 finding (see per-angle breakdown below).; ${roundExhaustionNote}`,
+          `**Findings summary:** 6 angles reviewed; 1 finding (see per-angle breakdown below).; ${roundExhaustionNote}`,
         ],
         stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
       },
@@ -5991,9 +6008,10 @@ test("upsert-checkpoint-verdict's noop short-circuit stays coupled to the posted
         findings: [{ severity: "must-fix", summary: "20 finding(s) omitted from this comment (must-fix: 5, worth-fixing-now: 10, defer: 5) — in the disposition ledger", disposition: "accepted-for-fix" }],
       },
       { angle: "coverage", verdict: "clean", findings: [] },
-      // draft_gate's configured mandatory angle: must be present for a
+      // draft_gate's configured mandatory angles: must be present for a
       // fanout_fanin verdict's angle-coverage check to pass.
       { angle: "pr-description", verdict: "clean", findings: [] },
+      { angle: "holistic", verdict: "clean", findings: [] },
     ];
     const findingsPath = path.join(tempDir, "findings.json");
     await writeFile(findingsPath, JSON.stringify(structuredFindings), "utf8");
@@ -6070,12 +6088,16 @@ test("upsert-checkpoint-verdict records executionMode and warns on inline, stays
         stdout: '{"id":102,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-102"}\n',
       },
     ]);
-    // draft_gate configures a mandatory angle (pr-description); a fanout_fanin
-    // verdict now requires coverage proof (--findings-json here) rather than a
-    // bare --findings-summary — this test is about executionMode recording,
-    // not angle coverage, so --findings-json is the minimal covering shape.
+    // draft_gate configures mandatory angles (pr-description, holistic); a
+    // fanout_fanin verdict now requires coverage proof (--findings-json here)
+    // rather than a bare --findings-summary — this test is about executionMode
+    // recording, not angle coverage, so --findings-json is the minimal
+    // covering shape.
     const findingsPath = path.join(tempDir, "findings.json");
-    await writeFile(findingsPath, JSON.stringify([{ angle: "pr-description", verdict: "clean", findings: [] }]), "utf8");
+    await writeFile(findingsPath, JSON.stringify([
+      { angle: "pr-description", verdict: "clean", findings: [] },
+      { angle: "holistic", verdict: "clean", findings: [] },
+    ]), "utf8");
     const fanout = await runNode([
       "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", "abc1234000000000000000000000000000000000",
       "--verdict", "clean", "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
@@ -6227,7 +6249,10 @@ test("upsert-checkpoint-verdict REFUSES a requireFanoutEvidence fanout_fanin ver
   await withTempDir(async (tempDir) => {
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\n", "utf8");
     const findingsPath = path.join(tempDir, "findings.json");
-    await writeFile(findingsPath, JSON.stringify([{ angle: "pr-description", verdict: "clean", findings: [] }]), "utf8");
+    await writeFile(findingsPath, JSON.stringify([
+      { angle: "pr-description", verdict: "clean", findings: [] },
+      { angle: "holistic", verdict: "clean", findings: [] },
+    ]), "utf8");
 
     const env = await writeGhStub(tempDir, [
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
@@ -6253,7 +6278,10 @@ test("upsert-checkpoint-verdict ACCEPTS a requireFanoutEvidence fanout_fanin ver
     await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: true\n", "utf8");
     await stageDurableLedger(tempDir, { headSha: POSTGATE_FANOUT_HEAD });
     const findingsPath = path.join(tempDir, "findings.json");
-    await writeFile(findingsPath, JSON.stringify([{ angle: "pr-description", verdict: "clean", findings: [] }]), "utf8");
+    await writeFile(findingsPath, JSON.stringify([
+      { angle: "pr-description", verdict: "clean", findings: [] },
+      { angle: "holistic", verdict: "clean", findings: [] },
+    ]), "utf8");
 
     const env = await writeGhStub(tempDir, [
       ...buildGateCoordinationEntries({ isDraft: true, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }),
@@ -6470,8 +6498,8 @@ test("upsert-checkpoint-verdict refuses a withheld (tier-4) fanout_fanin round v
 
 test("upsert-checkpoint-verdict posts a withheld fanout_fanin round via --findings-summary alone when the gate has NO mandatory angle configured", async () => {
   await withTempDir(async (tempDir) => {
-    // draft_gate's only mandatory angle (pr-description) disabled via a D3
-    // merge-by-name override, so mandatoryAngles resolves empty and the
+    // draft_gate's mandatory angles (pr-description, holistic) disabled via a
+    // D3 merge-by-name override, so mandatoryAngles resolves empty and the
     // coverage guard never engages — pinning the escape hatch every
     // no-mandatory-angle consumer repo relies on.
     await writeFile(path.join(tempDir, ".devloops"), [
@@ -6480,6 +6508,8 @@ test("upsert-checkpoint-verdict posts a withheld fanout_fanin round via --findin
       "  draft:",
       "    angles:",
       "      - name: pr-description",
+      "        enabled: false",
+      "      - name: holistic",
       "        enabled: false",
       "",
     ].join("\n"), "utf8");
@@ -6610,6 +6640,7 @@ test("upsert-checkpoint-verdict --findings-ledger posts ONE review: inline locat
     await writeFile(findingsPath, JSON.stringify([
       { angle: "pr-description", verdict: "clean", findings: [] },
       { angle: "scope", verdict: "clean", findings: [] },
+      { angle: "holistic", verdict: "clean", findings: [] },
       { angle: "correctness", verdict: "findings_present", findings: [{ severity: "must-fix", summary: LOCATABLE_FINDING.summary, file: "src/db.mjs", line: 2 }] },
       { angle: "coverage", verdict: "findings_present", findings: [{ severity: "worth-fixing-now", summary: BODY_FILED_FINDING.summary }] },
     ]), "utf8");
@@ -6671,7 +6702,7 @@ test("upsert-checkpoint-verdict --findings-ledger posts ONE review: inline locat
     // The body-only bulleted list carries the non-locatable finding's own
     // text, and the clean angles collapse into one trailing roster line.
     assert.match(postedPayload.body, /^- 🟠 medium — inconsistent casing in constants _\(coverage\)_$/m);
-    assert.match(postedPayload.body, /^\*\*Clean \(2\):\*\* pr-description, scope$/m);
+    assert.match(postedPayload.body, /^\*\*Clean \(3\):\*\* pr-description, scope, holistic$/m);
     // The body-filed finding still stamps its own invisible marker (#1942) —
     // load-bearing for cross-round suppression/deferral, never rendered as
     // visible text.
@@ -7181,6 +7212,11 @@ test("upsert-checkpoint-verdict posts a withheld fanout_fanin verdict when --fin
       "    angles:",
       "      - name: pr-description",
       "        mandatory: true",
+      // The shipped extension-defaults layer also configures a mandatory
+      // "holistic" angle, merged by name (D3) — disable it here so this
+      // fixture's single pinned mandatory angle stays exact.
+      "      - name: holistic",
+      "        enabled: false",
       "",
     ].join("\n"), "utf8");
     const ledgerPath = await writeSingleSurfaceLedger(tempDir, [BODY_FILED_FINDING], {
@@ -9388,6 +9424,7 @@ test("upsert-checkpoint-verdict posts a --findings-json finding whose summary ca
       JSON.stringify([
         { angle: "correctness", verdict: "findings_present", findings: [{ severity: "nice-to-have", summary: "rename the [id] route segment to [slug]" }] },
         { angle: "pr-description", verdict: "clean", findings: [] },
+        { angle: "holistic", verdict: "clean", findings: [] },
       ]),
       "utf8",
     );
