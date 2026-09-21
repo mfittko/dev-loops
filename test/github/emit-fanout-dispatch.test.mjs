@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, main, sanitizeScopeSegment, splitSubUnitName } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, listPriorFindingsLogHeads, main, sanitizeScopeSegment, splitSubUnitName } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { buildGateEmitPlanPath, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
@@ -62,6 +62,141 @@ test("emit-fanout-dispatch.mjs --help exits 0", () => {
   const result = runEmitCli(["--help"]);
   assert.equal(result.status, 0);
   assert.match(result.stdout, /emit-fanout-dispatch/);
+});
+
+test("re-gate emit refuses without a carry-forward plan artifact, proceeds once the resolver recorded one (issue #2251 AC2)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const contextDir = await seedBundle(repoRoot);
+    // A prior findings-log for THIS gate at a DIFFERENT head makes head c a re-gate.
+    const priorHead = "d".repeat(40);
+    const findingsDir = path.join(repoRoot, "tmp", "gate-findings", "o-r", "pr-7");
+    await mkdir(findingsDir, { recursive: true });
+    await writeFile(path.join(findingsDir, `${GATE}-${priorHead}.json`), JSON.stringify({
+      headSha: priorHead, gate: GATE, verdict: "findings_present",
+      findings: [{ angle: "contradiction-lens", severity: "low", summary: "x" }],
+      provenance: { perAngle: [{ angle: "contradiction-lens", reviewer: "r" }] },
+    }), "utf8");
+
+    // No carry-forward plan artifact at head c yet -> refuse, spawn zero reviewers.
+    const refused = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(refused.status, 1, refused.stderr || refused.stdout);
+    assert.match(refused.stdout, /GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED/);
+    // A refusal leaves no emit-plan (no reviewer prompt emitted).
+    await assert.rejects(() => readFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.emit-plan.json`), "utf8"));
+
+    // A plan keyed to the right head/gate but naming a BOGUS prior head (not a
+    // real findings-log) does NOT satisfy the guard — a wrong --prev-head cannot
+    // be laundered into "the resolver ran".
+    const planPath = path.join(contextDir, `${GATE}-${HEAD_SHA}.carry-forward-plan.json`);
+    await writeFile(planPath, JSON.stringify({ ok: false, fallback: true, repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, prevHead: "e".repeat(40), carried: [], mustRerun: [] }), "utf8");
+    const stillRefused = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(stillRefused.status, 1, stillRefused.stderr || stillRefused.stdout);
+    assert.match(stillRefused.stdout, /GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED/);
+
+    // Record the resolver's plan keyed at head c, naming the REAL prior head ->
+    // the guard passes, units emit.
+    await writeFile(planPath, JSON.stringify({ ok: true, repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, prevHead: priorHead, carried: [], mustRerun: [] }), "utf8");
+    const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
+    const payload = JSON.parse(await readFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.emit-plan.json`), "utf8"));
+    assert.ok(payload.count > 0);
+  });
+});
+
+test("listPriorFindingsLogHeads rethrows a non-ENOENT readdir error (fail-closed, not laundered into first-round) (issue #2251)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    // Make the findings-log DIR path a regular file so readdir hits ENOTDIR:
+    // the enforcement-critical branch must rethrow, never fail-open to "no
+    // prior round" (which would silently skip the carry-forward guard).
+    const findingsDir = path.join(repoRoot, "tmp", "gate-findings", "o-r", "pr-7");
+    await mkdir(path.dirname(findingsDir), { recursive: true });
+    await writeFile(findingsDir, "not a directory", "utf8");
+    await assert.rejects(
+      () => listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") }),
+      (err) => err && err.code !== "ENOENT",
+    );
+  });
+});
+
+test("listPriorFindingsLogHeads returns the empty set on ENOENT (genuine first round)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const heads = await listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") });
+    assert.equal(heads.size, 0);
+  });
+});
+
+test("listPriorFindingsLogHeads ignores a file whose recorded headSha does not match its filename (no filename trust) (issue #2251)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const findingsDir = path.join(repoRoot, "tmp", "gate-findings", "o-r", "pr-7");
+    await mkdir(findingsDir, { recursive: true });
+    const bogusSha = "d".repeat(40);
+    // A file named like a prior log but whose OWN headSha disagrees with the
+    // filename (or is absent) is not a genuine keyed ledger — it must not count.
+    await writeFile(path.join(findingsDir, `${GATE}-${bogusSha}.json`), JSON.stringify({ headSha: "e".repeat(40), verdict: "clean" }), "utf8");
+    await writeFile(path.join(findingsDir, `${GATE}-${"f".repeat(40)}.json`), "not json at all", "utf8");
+    const heads = await listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") });
+    assert.equal(heads.size, 0, "neither the identity-mismatched nor the unparseable file counts as a prior round");
+    // A file whose headSha matches its filename but whose recorded gate/repo/pr
+    // belongs to another ledger must NOT count (full-identity validation).
+    const foreignSha = "b".repeat(40);
+    await writeFile(path.join(findingsDir, `${GATE}-${foreignSha}.json`), JSON.stringify({ headSha: foreignSha, gate: "draft_gate", repo: REPO, pr: PR, verdict: "clean" }), "utf8");
+    const headsForeign = await listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") });
+    assert.equal(headsForeign.size, 0, "a ledger recording a different gate does not count for this gate");
+    // A genuine keyed ledger (recorded headSha === filename, matching identity) DOES count.
+    const realSha = "a".repeat(40);
+    await writeFile(path.join(findingsDir, `${GATE}-${realSha}.json`), JSON.stringify({ headSha: realSha, gate: GATE, repo: REPO, pr: Number(PR), verdict: "clean" }), "utf8");
+    const heads2 = await listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") });
+    assert.deepEqual([...heads2], [realSha]);
+  });
+});
+
+test("re-gate emit refuses a plan artifact that is not a genuine resolver outcome (no ok:true / fallback:true) (issue #2251)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const contextDir = await seedBundle(repoRoot);
+    const priorHead = "d".repeat(40);
+    const findingsDir = path.join(repoRoot, "tmp", "gate-findings", "o-r", "pr-7");
+    await mkdir(findingsDir, { recursive: true });
+    await writeFile(path.join(findingsDir, `${GATE}-${priorHead}.json`), JSON.stringify({ headSha: priorHead, gate: GATE, verdict: "clean" }), "utf8");
+    // A hand-written object carrying the five identity fields + a real prevHead,
+    // but NO genuine resolver outcome flag, must not satisfy the guard.
+    await writeFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.carry-forward-plan.json`),
+      JSON.stringify({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, prevHead: priorHead, carried: [], mustRerun: [] }), "utf8");
+    const refused = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(refused.status, 1, refused.stderr || refused.stdout);
+    assert.match(refused.stdout, /GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED/);
+  });
+});
+
+test("first-round emit (no prior findings-log) never requires a carry-forward plan (issue #2251 AC2 negative)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    await seedBundle(repoRoot);
+    // No prior findings-log anywhere -> not a re-gate -> guard does not fire.
+    const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
+  });
+});
+
+test("write-gate-context --carried-angles records preflight.carriedAngles and excludes the fully-carried unit from pendingGroups (issue #2251 AC3)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    await writeFile(path.join(repoRoot, ".devloops"), "version: 1\ngates:\n  draft:\n    angles:\n      - name: pr-description\n        enabled: false\n", "utf8");
+    const { config, errors } = await loadDevLoopConfig({ repoRoot });
+    assert.deepEqual(errors, []);
+    const carried = ["coverage", "correctness"];
+    const fanout = resolveFanoutDispatch(config, "draft", carried, { carriedAngles: carried });
+    assert.deepEqual([...fanout.preflight.carriedAngles].sort(), [...carried].sort());
+    // Every dispatch unit is fully carried, so none remain pending.
+    assert.deepEqual(fanout.pendingGroups, []);
+    const opts = parseWriteGateContextCliArgs([
+      "--repo", REPO, "--pr", PR, "--gate", "draft_gate", "--head-sha", HEAD_SHA,
+      "--angles", JSON.stringify(carried), "--carried-angles", JSON.stringify(carried),
+    ]);
+    opts.config = config;
+    opts.fanoutDispatch = fanout;
+    await writeGateContext(opts, { repoRoot });
+    const artifact = JSON.parse(await readFile(path.join(repoRoot, "tmp", "gate-context", "o-r", "pr-7", `draft_gate-${HEAD_SHA}.json`), "utf8"));
+    assert.deepEqual([...artifact.fanout.preflight.carriedAngles].sort(), [...carried].sort());
+    assert.deepEqual(artifact.fanout.pendingGroups, []);
+  });
 });
 
 test("all-carried rounds consume the real emitter's keyed zero-unit plan through fan-in and ledger writing", async () => {

@@ -24,7 +24,7 @@
  * post-convergence head bump is a pure doc/prose bump, so it need not force a
  * fresh blocking Copilot round.
  */
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
@@ -47,6 +47,7 @@ import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/sp
 import { normalizeGate as normalizeGateShared, normalizeHeadSha as normalizeHeadShaShared } from "./_gate-names.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import {
+  buildCarryForwardPlanPath,
   mapGateToConfigKey,
 } from "./write-gate-context.mjs";
 
@@ -136,8 +137,14 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
       continue;
     }
     if (token.name === "head-sha") {
-      const sha = normalizeHeadSha(requireTokenValue(token, parseError));
-      if (!sha) throw parseError("--head-sha must be a 7-64 character hex SHA");
+      // FULL SHA only: the resolver now writes a path-KEYED plan artifact
+      // (buildCarryForwardPlanPath) at --head-sha, and the fan-out emitter looks
+      // that artifact up by the FULL current head SHA. An abbreviated spelling
+      // would key a file the emitter can never find, refusing a re-gate that
+      // actually ran the resolver. head-sha.mjs's contract also requires a
+      // path-key writer to take the full SHA.
+      const sha = normalizeFullHeadSha(requireTokenValue(token, parseError));
+      if (!sha) throw parseError("--head-sha must be the FULL head commit SHA (40 or 64 hex chars), not a short prefix — the resolver keys its carry-forward plan artifact by the full SHA");
       options.headSha = sha;
       continue;
     }
@@ -151,9 +158,10 @@ export function parseResolveAngleCarryForwardCliArgs(argv) {
   // FAIL-CLOSED: a same-head "carry" would re-seed the CURRENT round from its
   // own (possibly retired) verdict — the exact case round retirement
   // (GATE-EXEC-ROUND-RETIREMENT) discards; a fresh fan-out at the same head
-  // must re-review every angle. startsWith, not ===, because --head-sha
-  // accepts an abbreviated 7-64 hex spelling of the same commit.
-  if (options.prevHead.startsWith(options.headSha)) {
+  // must re-review every angle. Both --prev-head and --head-sha are now FULL
+  // SHAs, so an exact compare is correct (a mixed 40/64 spelling of one commit
+  // does not occur within a single repo's object format).
+  if (options.prevHead === options.headSha) {
     throw parseError("--prev-head equals --head-sha — a same-head carry-forward would re-seed the round from its own prior verdict (retired rounds included); re-review the angles instead");
   }
   return options;
@@ -193,7 +201,17 @@ export function buildCarryForwardPlan({ log, changedFiles, alwaysRerun = [], del
     throw new Error("prior gate findings-log not found or unreadable — cannot carry forward (fail-closed)");
   }
   if (log.verdict !== "clean" && log.verdict !== "findings_present") {
-    throw new Error(`prior gate findings-log verdict is ${JSON.stringify(log.verdict ?? null)}, not carry-forward-eligible (clean or findings_present) — nothing to carry forward (fail-closed)`);
+    // This is the ONE genuine carry-forward ELIGIBILITY refusal: a readable,
+    // well-formed prior log whose verdict simply is not carry-eligible. Its
+    // contract outcome is a safe full re-dispatch, so the CLI records a fallback
+    // marker for it. Every OTHER throw below is a log INTEGRITY failure (corrupt/
+    // truncated/inconsistent ledger), which is not a carry-forward decision — the
+    // CLI leaves NO marker for those, so the emitter fails closed on the re-gate
+    // exactly as it does for an operational failure, rather than silently
+    // dispatching off an untrustworthy ledger.
+    const refusal = new Error(`prior gate findings-log verdict is ${JSON.stringify(log.verdict ?? null)}, not carry-forward-eligible (clean or findings_present) — nothing to carry forward (fail-closed)`);
+    refusal.carryForwardRefusal = true;
+    throw refusal;
   }
   // FAIL-CLOSED: a "findings_present" overall verdict is only
   // meaningful if `findings` is a non-empty array — a missing/empty/non-array
@@ -344,6 +362,26 @@ async function assertWorktreeAtHeadAsync(headSha, { repoRoot, runGit = runGitCom
   }
 }
 
+/**
+ * Persist the resolver's plan (or a fail-closed full-fallback marker) as the
+ * keyed carry-forward plan artifact at the CURRENT head (head B). Its mere
+ * presence is the deterministic proof that carry-forward was consulted before
+ * dispatch — `emit-fanout-dispatch.mjs` refuses to spawn a reviewer on a
+ * re-gate head without it (GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED). Written for
+ * BOTH outcomes: the success path (ok: true, with carried/mustRerun) and the
+ * fail-closed refusal path (ok: false, fallback: true — the resolver ran and
+ * decided full re-dispatch, which is safe), so the artifact records "the
+ * resolver ran" regardless of whether anything carried. Keyed by --head-sha,
+ * so a stale plan sits at a different filename and can never be mistaken for
+ * this head's.
+ */
+async function persistCarryForwardPlan(planBody, { repoRoot, repo, pr, gate, headSha, tmpRoot }) {
+  const planPath = path.resolve(repoRoot, buildCarryForwardPlanPath({ repo, pr, gate, headSha, tmpRoot: tmpRoot || "tmp" }));
+  await mkdir(path.dirname(planPath), { recursive: true });
+  await writeFile(planPath, `${JSON.stringify(planBody, null, 2)}\n`, "utf8");
+  return planPath;
+}
+
 export async function main(argv = process.argv.slice(2), { repoRoot = process.cwd(), runGit = runGitCommand } = {}) {
   let options;
   try {
@@ -358,6 +396,20 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     return;
   }
   try {
+    // Remove any stale plan artifact for this exact (repo, pr, gate, headSha)
+    // BEFORE doing any work, so EVERY invocation's outcome is authoritative and
+    // a run that fails operationally (or on an integrity error) leaves NO plan
+    // behind — a prior successful run's artifact must never be laundered into
+    // "this resolver run succeeded". Mirrors emit-fanout-dispatch.mjs's
+    // start-of-flow emit-plan removal. The success and eligibility-refusal paths
+    // below re-write the artifact; every other exit leaves it absent. ENOENT is
+    // fine (nothing to remove).
+    await rm(
+      path.resolve(repoRoot, buildCarryForwardPlanPath({
+        repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp",
+      })),
+      { force: true },
+    );
     const logPath = buildLogPath({
       repo: options.repo,
       pr: options.pr,
@@ -414,6 +466,13 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
     // re-run: parseChangedFiles keeps only a rename's destination path, so
     // classifying that path alone misses what the rename itself implicates.
     const alwaysRerun = [...mandatoryAngles, ...(hasRename ? RENAME_ONLY_ANGLES : [])];
+    // buildCarryForwardPlan tags ONLY the genuine eligibility refusal (an
+    // ineligible prior verdict) with `carryForwardRefusal`; a log INTEGRITY
+    // failure (corrupt/truncated/inconsistent ledger — missing provenance,
+    // malformed headSha, unattributable finding, findings_present with no
+    // findings, duplicate angle) throws UNTAGGED and is treated like an
+    // operational failure below: no marker, emitter refuses. So the catch never
+    // blanket-tags — it trusts the tag the pure seam set.
     const rawPlan = buildCarryForwardPlan({ log, changedFiles, alwaysRerun, deltaComplete: reduced });
     // AC1 (ADR 0061): optional --spec-authority stamps the pinned revision
     // identity onto the plan via the ONE shared helper. Pure no-op when absent.
@@ -438,12 +497,37 @@ export async function main(argv = process.argv.slice(2), { repoRoot = process.cw
       copilotConvergence,
       ...(plan.specAuthority !== undefined ? { specAuthority: plan.specAuthority } : {}),
     };
+    // Persist the keyed plan artifact BEFORE emitting to stdout, so the proof
+    // that carry-forward ran at head B is durable on disk regardless of how the
+    // stdout emit is shaped (--jq/--silent) or whether the caller captures it.
+    await persistCarryForwardPlan(result, {
+      repoRoot, repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot,
+    });
     process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
   } catch (error) {
-    process.stderr.write(JSON.stringify({
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    }) + "\n");
+    const message = error instanceof Error ? error.message : String(error);
+    // FAIL-CLOSED full-fallback: record a marker ONLY for a genuine carry-forward
+    // ELIGIBILITY refusal (tagged above). The resolver consulted carry-forward and
+    // decided nothing carries — a full re-dispatch, which is safe — so the emitter's
+    // re-gate guard proceeds instead of deadlocking against a missing plan. An
+    // OPERATIONAL failure (missing/mismatched prior log, wrong worktree, git error,
+    // spec-authority/IO) is NOT a decision that carry-forward ran, so it leaves NO
+    // marker and the emitter keeps refusing (a wrong --prev-head that resolves no
+    // log must never be laundered into "resolver ran"). Best-effort persist; never
+    // masks the original refusal.
+    if (error instanceof Error && error.carryForwardRefusal === true) {
+      try {
+        await persistCarryForwardPlan({
+          ok: false, fallback: true, reason: message,
+          repo: options.repo, pr: options.pr, gate: options.gate,
+          prevHead: options.prevHead, headSha: options.headSha,
+          carried: [], mustRerun: [],
+        }, { repoRoot, repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot });
+      } catch {
+        // Best-effort only — the original refusal below is authoritative.
+      }
+    }
+    process.stderr.write(JSON.stringify({ ok: false, error: message }) + "\n");
     process.exitCode = 1;
   }
 }

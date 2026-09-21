@@ -1,13 +1,14 @@
 #!/usr/bin/env node
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { validateZeroUnitCarryProof } from "./_carried-angles.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
-import { gateScopePrefix, normalizeGate } from "./_gate-names.mjs";
+import { gateScopePrefix, LIFECYCLE_GATES, normalizeGate } from "./_gate-names.mjs";
 import { HEAD_SHA_RE, VALID_SCOPE_RE } from "./record-dispatch-prompt-layout.mjs";
-import { buildGateContextPath, buildGateEmitPlanPath, mapGateToConfigKey } from "./write-gate-context.mjs";
+import { buildCarryForwardPlanPath, buildGateContextPath, buildGateEmitPlanPath, mapGateToConfigKey } from "./write-gate-context.mjs";
+import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
 import { loadDevLoopConfig, resolveFanoutEffectiveConcurrency, resolveGateAngleContract } from "@dev-loops/core/config";
 import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
@@ -315,6 +316,73 @@ export function expandDispatchUnits(units, configuredGroupNames) {
   return out;
 }
 
+/**
+ * List the durable gate-findings-log heads for THIS gate at a head DIFFERENT
+ * from the current one. A prior-round log is the deterministic signal that this
+ * is not the gate's first round — independent of whether the driver passed
+ * `--prev-head`, so a driver cannot evade the carry-forward step by omitting the
+ * flag (the exact defect GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED prevents). Only draft_gate / pre_approval_gate
+ * carry forward (the review gate has no resolver), so the caller guards this to
+ * those gates. A non-empty result makes the current head a re-gate.
+ *
+ * FAIL-CLOSED on the scan: ENOENT (the findings-log directory does not exist)
+ * genuinely means "no prior round" and returns the empty set. Any OTHER readdir
+ * error (EACCES, ENOTDIR, …) is NOT proof of a first round — this is an
+ * enforcement chokepoint, so it rethrows rather than fail-open to "not a re-gate"
+ * and silently skipping the guard.
+ * @returns {Promise<Set<string>>} lowercased full SHAs of prior findings-logs
+ */
+export async function listPriorFindingsLogHeads({ repo, pr, gate, headSha, tmpRoot }) {
+  const dir = path.dirname(buildLogPath({ repo, pr, gate, headSha, tmpRoot }));
+  const want = String(headSha).trim().toLowerCase();
+  const prefix = `${gate}-`;
+  const heads = new Set();
+  let entries;
+  try {
+    entries = await readdir(dir);
+  } catch (err) {
+    if (err?.code === "ENOENT") return heads;
+    throw err;
+  }
+  for (const entry of entries) {
+    if (!entry.startsWith(prefix) || !entry.endsWith(".json")) continue;
+    const sha = entry.slice(prefix.length, -".json".length).toLowerCase();
+    if (!/^[0-9a-f]{7,64}$/.test(sha) || sha === want) continue;
+    // Do NOT trust the filename alone: a stale or arbitrary `<gate>-<sha>.json`
+    // in this directory must not count as a real prior round (that would let a
+    // fabricated carry-forward marker naming a bogus prevHead satisfy the guard).
+    // Require the file to be a genuine keyed findings-log whose OWN recorded
+    // headSha matches the filename before counting it. A non-ENOENT read error
+    // rethrows (fail-closed, like the readdir above); a missing/malformed/
+    // identity-mismatched file is simply not a valid prior round and is skipped.
+    let log;
+    try {
+      log = JSON.parse(await readFile(path.join(dir, entry), "utf8"));
+    } catch (err) {
+      if (err?.code && err.code !== "ENOENT") throw err;
+      continue;
+    }
+    // Validate the FULL ledger identity, not just headSha===filename: a foreign
+    // or mislabeled findings-log whose recorded repo/pr/gate belongs to another
+    // ledger must not count as a prior round for THIS invocation (its head could
+    // otherwise satisfy a marker's prevHead membership check). A field that is
+    // present must match; an absent field is tolerated (older ledger shape), and
+    // the directory itself already segregates by repo/pr. Mirrors
+    // write-gate-context.mjs's own prior-log identity check.
+    if (!log || typeof log !== "object") continue;
+    const recordedHead = typeof log.headSha === "string" ? log.headSha.trim().toLowerCase() : null;
+    const recordedGate = typeof log.gate === "string" ? log.gate.trim() : null;
+    const recordedRepo = typeof log.repo === "string" ? log.repo.trim().toLowerCase() : null;
+    const recordedPr = log.pr;
+    const identityOk = recordedHead === sha
+      && (recordedGate === null || recordedGate === gate)
+      && (recordedRepo === null || recordedRepo === String(repo).trim().toLowerCase())
+      && (recordedPr === undefined || recordedPr === null || String(recordedPr) === String(pr));
+    if (identityOk) heads.add(sha);
+  }
+  return heads;
+}
+
 function resolveFlagValue(argv, flag) {
   const idx = argv.indexOf(flag);
   if (idx === -1) return null;
@@ -420,6 +488,56 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   const fanout = artifact?.fanout;
   if (!fanout || typeof fanout !== "object") {
     return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — gate-context artifact at ${JSON.stringify(contextPath)} carries no fanout dispatch plan — re-run write-gate-context.mjs (a thin briefing with no --base emits no fanout plan)` }, false);
+  }
+
+  // GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED: on a re-gate head — a
+  // durable findings-log for this gate exists at an EARLIER head — carry-forward
+  // MUST have been consulted before any reviewer is dispatched.
+  // resolve-angle-carry-forward.mjs records its plan (or a fail-closed
+  // full-fallback marker) as the keyed <gate>-<headSha>.carry-forward-plan.json
+  // sibling at the CURRENT head; its ABSENCE means the re-gate skipped the
+  // resolver entirely and would re-fan every angle — the exact amplifier this
+  // issue exists to prevent. Refuse to emit (no reviewer spawned) until the
+  // resolver has run at this head. This is the earliest chokepoint (before the
+  // wasted fan-out), chosen over the post-hoc ledger seam. Only the lifecycle
+  // gates carry forward; the review gate has no resolver, so it never guards
+  // here. Bind to the exported LIFECYCLE_GATES set (not a parallel inline
+  // literal) so a future lifecycle gate is guarded automatically rather than
+  // silently falling open — the same load-bearing derivation _gate-names.mjs
+  // uses for GATE_NAMES.
+  if (LIFECYCLE_GATES.includes(gate)) {
+    const priorHeads = await listPriorFindingsLogHeads({ repo, pr, gate, headSha, tmpRoot });
+    if (priorHeads.size > 0) {
+      let plan = null;
+      try {
+        plan = JSON.parse(await readFile(buildCarryForwardPlanPath({ repo, pr, gate, headSha, tmpRoot }), "utf8"));
+      } catch {
+        plan = null;
+      }
+      // Bind the plan to THIS round's full identity — the same (repo, pr, gate,
+      // headSha) key write-gate-findings-log enforces, plus `prevHead`. Requiring
+      // `prevHead` to be one of the ACTUAL prior findings-log heads is what stops a
+      // wrong/guessed --prev-head (or a plan copied from another PR) from being
+      // laundered into "the resolver ran": a marker whose prevHead names no real
+      // prior round does not satisfy the guard. repo/gate are compared
+      // case-insensitively, matching the findings-log identity check.
+      // Require the artifact to be a genuine resolver OUTCOME, not merely a JSON
+      // object carrying the five identity fields: a hand-written/truncated file
+      // must not satisfy the guard. A valid plan is either a success result
+      // (`ok: true`) or the documented fail-closed full-fallback marker
+      // (`ok: false, fallback: true`) — nothing else.
+      const planOutcomeValid = plan
+        && (plan.ok === true || (plan.ok === false && plan.fallback === true));
+      const planOk = planOutcomeValid
+        && String(plan.headSha ?? "").trim().toLowerCase() === headSha
+        && String(plan.gate ?? "").trim().toLowerCase() === gate
+        && String(plan.repo ?? "").trim().toLowerCase() === repo.trim().toLowerCase()
+        && String(plan.pr ?? "") === String(pr)
+        && priorHeads.has(String(plan.prevHead ?? "").trim().toLowerCase());
+      if (!planOk) {
+        return finish({ ok: false, error: `GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED: refusing — a prior gate findings-log for ${gate} exists at an earlier head (this is a re-gate), but no valid carry-forward plan artifact (keyed to this repo/pr/gate/head with a prevHead naming a real prior round) is recorded at the current head ${headSha}. Run scripts/github/resolve-angle-carry-forward.mjs --repo ${repo} --pr ${pr} --gate ${gate} --prev-head <A> --head-sha ${headSha} from the current-head worktree before dispatch — the resolver records the plan this step requires.` }, false);
+      }
+    }
   }
 
   // --pending falls back to `groups` ONLY when pendingGroups is genuinely ABSENT
