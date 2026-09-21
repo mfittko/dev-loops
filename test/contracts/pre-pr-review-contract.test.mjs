@@ -46,7 +46,7 @@ function ruleParagraph(doc, id) {
 }
 
 test("pre-PR contract rules are present and owned by the contract doc", () => {
-  for (const id of [...CONTRACT_RULES, "PRE-PR-NOT-GATE-EVIDENCE"]) {
+  for (const id of CONTRACT_RULES) {
     assertRulePresent(id);
     assertRuleOwned(id, CONTRACT);
   }
@@ -69,8 +69,8 @@ test("each pre-PR rule states its invariant with RFC-2119 modality and the right
   // [rule, /modal/, [required keywords...]]
   const checks = [
     ["PRE-PR-BEFORE-FIRST-PUSH", /MUST/, ["before the first push", "committed"]],
-    ["PRE-PR-ONE-FRESH-REVIEWER", /MUST/, ["one", "fresh-context", "general-purpose", "brief"]],
-    ["PRE-PR-BOUNDED-TWO-ROUNDS", /MUST NOT/, ["one", "two", "reviewer"]],
+    ["PRE-PR-ONE-FRESH-REVIEWER", /MUST/, ["exactly ONE", "fresh-context", "general-purpose", "brief"]],
+    ["PRE-PR-BOUNDED-TWO-ROUNDS", /MUST NOT/, ["one general-purpose reviewer per round", "two", "reviewer"]],
     ["PRE-PR-EPHEMERAL-NO-ARTIFACTS", /MUST NOT/, ["pull request", "comment", "review thread", "copilot"]],
     ["PRE-PR-MODEL-CONFIG-RESOLVED", /MUST/, ["resolveRoleModel", "pre-PR-reviewer", "non-null"]],
     ["PRE-PR-GATE-STILL-AUTHORITY", /MUST/, ["pre-filter", "draft_gate", "pre_approval_gate", "authority"]],

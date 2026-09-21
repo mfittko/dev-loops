@@ -26,7 +26,9 @@ committed (a follow-up commit or an amend of the step-11 commit), so the branch
 is pushed once, already cleaned. In the `local-implementation` loop it sits
 between the exit-validation commit (implementation-loop step 11,
 `LOCAL-COMMIT-BEFORE-EXIT`, whose first push is deferred to here for
-tracker-backed sessions) and PR creation (implementation-loop step 12).
+tracker-backed sessions) and PR creation (implementation-loop step 12). The
+phase applies to tracker-backed sessions (those that push and open a PR);
+phase-doc-backed sessions have no first push.
 
 ## The review pass
 
@@ -39,7 +41,9 @@ a fixed angle: it reviews holistically per the brief. Fresh context is required,
 because the implementer rationalizes their own code and a same-context
 self-review is near-worthless. This is distinct from the single developer
 self-check (`LOCAL-DEV-SELF-CHECK-NO-FANOUT`), which the implementer runs against
-the plan; the pre-PR reviewer MUST be a separate fresh-context agent.
+the plan; the pre-PR reviewer MUST be a separate fresh-context agent. The
+reviewer returns findings only and MUST NOT edit the tree; the implementer
+applies the fixes.
 
 The reviewer MUST run with the adversarial-enumeration checklist below so the
 strong model reviews systematically, not ad hoc.
@@ -51,9 +55,9 @@ task and the config-resolved model (see below) passed only when non-null:
 
 - Claude Code: dispatch the built-in `general-purpose` subagent type with the
   brief as its prompt and the resolved model as the Agent `model` parameter.
-- Pi: dispatch a fresh brief-driven general-purpose reviewer (the `review` role
-  in non-gate, brief-driven mode) with the brief as its message. The model stays
-  keyed on the `pre-PR-reviewer` role, not the `review` role.
+- Pi: dispatch one fresh subagent with the brief as its task (a general-purpose
+  reviewer; the PR-bound `review` gate procedure does not apply). The model stays
+  keyed on the `pre-PR-reviewer` role.
 
 ### Adversarial-enumeration checklist
 
@@ -99,11 +103,13 @@ Ephemerality is the whole point: the phase must not recreate in-gate churn.
 ## Bounds
 
 <!-- rule: PRE-PR-BOUNDED-TWO-ROUNDS -->
-`PRE-PR-BOUNDED-TWO-ROUNDS`: the pass MUST NOT exceed ONE general-purpose
-reviewer or two internal rounds; after at most two rounds the branch is pushed
-once. It MUST NOT fan out to multiple reviewers. A round-two re-review reuses the
-same reviewer to verify the applied fixes (it stays fresh relative to the
-implementer, which is the property `PRE-PR-ONE-FRESH-REVIEWER` requires).
+`PRE-PR-BOUNDED-TWO-ROUNDS`: the pass MUST NOT exceed two internal rounds and
+MUST NOT run more than one general-purpose reviewer per round; after at most two
+rounds the branch is pushed once. It MUST NOT fan out to multiple reviewers. The
+round-two re-review verifies the applied fixes with a fresh-context reviewer: the
+same reviewer continued when the harness supports agent continuation, otherwise
+one new fresh-context dispatch. Either way the reviewer stays fresh relative to
+the implementer, which is the property `PRE-PR-ONE-FRESH-REVIEWER` requires.
 
 ## The fan-out gate stays the authority
 
