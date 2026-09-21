@@ -43,7 +43,9 @@ from an unsplit single-angle resolved unit records no group; a one-angle split
 tail retains its original unit's group.
 
 The per-unit angle-suffix this emits only NAMES the unit's angle(s) and instructs
-the reviewer to self-resolve each angle's persona/prompt (resolveReviewerRole) —
+the reviewer to resolve each angle's persona/prompt by running the sanctioned
+\`dev-loops gate resolve-role --angle <name>\` CLI (which wraps resolveReviewerRole
+over the fully merged config — a shell reviewer cannot call the function inline) —
 it never inlines persona text extracted by the coordinator. Reviewer composition
 is resolved by the review agent + the neutral bundle (see the review agent's
 scoped angle-review mode), not re-derived here.
