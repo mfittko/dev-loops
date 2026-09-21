@@ -245,9 +245,16 @@ const SHELL_EXEC_PREFIX = "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:(?:command|env
  * the wrapper forms the coordinator's daily verify/build commands are routinely run behind
  * (`timeout 600 bun run verify`, `nice -n 10 bun run verify`). Not a full flag parser: other
  * `timeout`/`nice` flags are a known, deliberately uncovered ceiling.
+ *
+ * The `env` wrapper word additionally tolerates zero-or-more trailing `NAME=value` assignments
+ * before the real executable (`env CI=1 bun run verify`, `env CI=1 FOO=bar npm test`) — the common
+ * everyday `env VAR=value ... cmd` CI-invocation shape, on top of the bare-leading-assignment form
+ * (`CI=1 bun run verify`) already covered by the shared assignment run at the front of this prefix.
+ * `command`/`exec` do not get the same trailing-assignment tolerance — no known daily invocation
+ * shape needs it, and adding it would only widen the pattern without a use case.
  */
 const VERIFY_EXEC_PREFIX =
-  "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:(?:command|env|exec)\\s+|nice(?:\\s+-n\\s+\\S+)?\\s+|timeout(?:\\s+(?:-s\\s+\\S+|-k\\s+\\S+|--signal=\\S+|--kill-after=\\S+|--preserve-status|--foreground))*\\s+\\S+\\s+)*(?:\\S*/)?";
+  "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:env(?:\\s+[A-Za-z_][A-Za-z0-9_]*=\\S*)*\\s+|(?:command|exec)\\s+|nice(?:\\s+-n\\s+\\S+)?\\s+|timeout(?:\\s+(?:-s\\s+\\S+|-k\\s+\\S+|--signal=\\S+|--kill-after=\\S+|--preserve-status|--foreground))*\\s+\\S+\\s+)*(?:\\S*/)?";
 
 /**
  * Build the `gh <subcmd> <verb>` prefix matcher (subcmd = "pr" | "issue").

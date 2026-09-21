@@ -28,6 +28,11 @@ function runHook(script, payload, env = {}) {
   // #1936, so the hook no longer reads that var — a leaked host value is inert and needs no strip;
   // the #1936 "no escape" tests still set it explicitly to prove it grants no exemption.
   delete childEnv["DEVLOOPS_COMMIT_AUTH_PENDING"];
+  // Strip DEVLOOPS_COORDINATOR_READONLY unless the test explicitly supplies it via `env` below —
+  // this repo's OWN .claude/settings.json sets it to "1" for this repo's own Claude sessions, so a
+  // "fail-open when unset" e2e case run under such a session would otherwise inherit strict
+  // enforcement from the parent process and exercise the deny path instead (Copilot review, #2082).
+  delete childEnv["DEVLOOPS_COORDINATOR_READONLY"];
   const res = spawnSync("node", [path.join(hooksDir, script)], {
     input: JSON.stringify(payload),
     encoding: "utf8",

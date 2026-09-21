@@ -775,6 +775,19 @@ test("commandContainsCodeVerificationEntrypoint matches colon-namespaced sub-scr
   assert.equal(commandContainsCodeVerificationEntrypoint("npm --prefix ./x run test"), false);
 });
 
+test("commandContainsCodeVerificationEntrypoint tolerates an `env` wrapper carrying trailing VAR=value assignments (Copilot review, #2082)", () => {
+  // the common everyday `env VAR=value ... cmd` CI-invocation shape — the `env` wrapper word
+  // followed by zero-or-more `NAME=value` assignments before the package-manager/vitest head.
+  assert.equal(commandContainsCodeVerificationEntrypoint("env CI=1 bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env FOO=bar npm test"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env CI=1 vitest"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env CI=1 FOO=bar bun run verify"), true);
+  // bare leading assignments (no `env` wrapper word) already matched — still does
+  assert.equal(commandContainsCodeVerificationEntrypoint("CI=1 bun run verify"), true);
+  // a quoted/echoed mention is not an invocation and must not match
+  assert.equal(commandContainsCodeVerificationEntrypoint('echo "env CI=1 bun run verify"'), false);
+});
+
 test("commandContainsGitStash and the gh classifiers do NOT gain the verify-wrapper nice/timeout tolerance (#2082)", () => {
   // The widened nice/timeout wrapper tolerance is scoped to VERIFY_EXEC_PREFIX
   // (commandContainsCodeVerificationEntrypoint only) and must not leak into the shared
