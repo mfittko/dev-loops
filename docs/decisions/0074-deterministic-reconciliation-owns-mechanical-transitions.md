@@ -4,6 +4,8 @@
 
 Accepted — 2026-09-21 ([PR 2275](https://github.com/mfittko/dev-loops/pull/2275))
 
+Amended by [ADR 0081](./0081-harness-mediated-agent-io-context-contained.md): deterministic reconciliation remains the mechanical policy/next-action authority, but current native subagent spawn/join is harness-mediated and must be context-contained in disposable execution capsules until a future runtime owns worker process/session I/O.
+
 ## Context
 
 Issue [#2269](https://github.com/mfittko/dev-loops/issues/2269), under the efficiency epic [#2268](https://github.com/mfittko/dev-loops/issues/2268), asks how dev-loop should stop mechanical orchestration from accumulating in a long-lived model transcript while preserving gate semantics, interruption recovery, reviewer independence, carry-forward correctness, and human approval boundaries.
