@@ -250,11 +250,18 @@ const SHELL_EXEC_PREFIX = "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:(?:command|env
  * before the real executable (`env CI=1 bun run verify`, `env CI=1 FOO=bar npm test`) — the common
  * everyday `env VAR=value ... cmd` CI-invocation shape, on top of the bare-leading-assignment form
  * (`CI=1 bun run verify`) already covered by the shared assignment run at the front of this prefix.
- * `command`/`exec` do not get the same trailing-assignment tolerance — no known daily invocation
- * shape needs it, and adding it would only widen the pattern without a use case.
+ * It also tolerates the common `env` OPTION forms (mixed freely with `NAME=value` assignments, in
+ * any order/count): `-i`/`--ignore-environment`, `-u <NAME>`/`--unset=<NAME>`, `-C <dir>`/
+ * `--chdir=<dir>`, `-S <str>`/`--split-string=<str>`, a bare `-`, and `--` — so
+ * `env -u DEVLOOPS_COORDINATOR_READONLY bun run verify`, `env -i bun run verify`, and
+ * `env -u FOO CI=1 npm test` all match. Closes the cheap classifier gap where an `env` flag (rather
+ * than a `NAME=value` assignment) reached the executable unclassified. Not a full `env` flag parser:
+ * any other/exotic `env` option is a known, deliberately uncovered ceiling (documented, not chased).
+ * `command`/`exec` do not get the same trailing-assignment/option tolerance — no known daily
+ * invocation shape needs it, and adding it would only widen the pattern without a use case.
  */
 const VERIFY_EXEC_PREFIX =
-  "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:env(?:\\s+[A-Za-z_][A-Za-z0-9_]*=\\S*)*\\s+|(?:command|exec)\\s+|nice(?:\\s+-n\\s+\\S+)?\\s+|timeout(?:\\s+(?:-s\\s+\\S+|-k\\s+\\S+|--signal=\\S+|--kill-after=\\S+|--preserve-status|--foreground))*\\s+\\S+\\s+)*(?:\\S*/)?";
+  "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:env(?:\\s+(?:[A-Za-z_][A-Za-z0-9_]*=\\S*|-i|--ignore-environment|-u\\s+\\S+|--unset=\\S+|-C\\s+\\S+|--chdir=\\S+|-S\\s+\\S+|--split-string=\\S+|--|-))*\\s+|(?:command|exec)\\s+|nice(?:\\s+-n\\s+\\S+)?\\s+|timeout(?:\\s+(?:-s\\s+\\S+|-k\\s+\\S+|--signal=\\S+|--kill-after=\\S+|--preserve-status|--foreground))*\\s+\\S+\\s+)*(?:\\S*/)?";
 
 /**
  * Build the `gh <subcmd> <verb>` prefix matcher (subcmd = "pr" | "issue").

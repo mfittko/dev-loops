@@ -788,6 +788,26 @@ test("commandContainsCodeVerificationEntrypoint tolerates an `env` wrapper carry
   assert.equal(commandContainsCodeVerificationEntrypoint('echo "env CI=1 bun run verify"'), false);
 });
 
+test("commandContainsCodeVerificationEntrypoint tolerates common `env` OPTION forms before the executable, not just VAR=value assignments (Copilot round-2 review, #2326)", () => {
+  // `env -u DEVLOOPS_COORDINATOR_READONLY bun run verify` was the reported bypass: the `env`
+  // branch only tolerated trailing NAME=value assignments, so a leading `env` OPTION reached the
+  // executable unclassified and the command fell through un-denied.
+  assert.equal(commandContainsCodeVerificationEntrypoint("env -u DEVLOOPS_COORDINATOR_READONLY bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env -i bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env -u FOO CI=1 npm test"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env --ignore-environment bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env --unset=FOO bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env -C /tmp bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env --chdir=/tmp bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint('env -S "CI=1" bun run verify'), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env -- bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env - bun run verify"), true);
+  // a quoted/echoed mention is not an invocation and must not match
+  assert.equal(commandContainsCodeVerificationEntrypoint('echo "env -u FOO bun run verify"'), false);
+  // a bare env-option run with no trailing command is not an invocation
+  assert.equal(commandContainsCodeVerificationEntrypoint("env -u FOO"), false);
+});
+
 test("commandContainsGitStash and the gh classifiers do NOT gain the verify-wrapper nice/timeout tolerance (#2082)", () => {
   // The widened nice/timeout wrapper tolerance is scoped to VERIFY_EXEC_PREFIX
   // (commandContainsCodeVerificationEntrypoint only) and must not leak into the shared

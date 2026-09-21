@@ -20,8 +20,10 @@ gitignored/non-repo paths, not tracked-file mutations. This coordinator→worker
 Claude analogue of the absolute main-agent read-only boundary Pi enforces, enforced mechanically
 (not by convention) by the same `PreToolUse` Write/Edit guard hook: opt-in via
 `DEVLOOPS_COORDINATOR_READONLY=1` (default fail-open), fail-closed once enforced, and
-non-bypassable by the coordinator itself — a tracked-file Write/Edit whose `agent_type` is
-`dev-loop` is denied; a worker subagent's `agent_type` is unaffected. **The coordinator also
+non-bypassable BY THE DISPATCHED COORDINATOR (`agent_type: "dev-loop"`) FOR ITS GUARDED SURFACE — a
+tracked-file Write/Edit whose `agent_type` is `dev-loop` is denied; a worker subagent's `agent_type`
+is unaffected. This is a mechanically-guarded, targeted denylist, not an airtight sandbox; see
+"Guarded surface and deliberate ceilings" below for what it does and does not cover. **The coordinator also
 delegates code-verification/build runs** (#2082): it MUST NOT run `bun run verify`/`bun test`/
 `vitest`/`npm test`/`npm run test`, and the analogous `build` script across `bun`/`npm`/`yarn`/
 `pnpm`, inline — delegate the run to a fresh worker subagent, which reports back a compact

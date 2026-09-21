@@ -345,6 +345,45 @@ test("bash-gate hook allows a namespaced dev-loops:developer worker running bun 
   assert.equal(json, null, "namespaced worker subagent must not be denied by the coordinator verify boundary");
 });
 
+test("bash-gate hook ALLOWS a null-agent_type (top-level/inline) bun run verify under strict coordinator enforcement — this boundary scopes to the dispatched coordinator subagent only, not the top-level agent (Copilot round-2 #2326, e2e)", () => {
+  // The coordinator-verify-delegation boundary is keyed on agent_type === "dev-loop" (a DISPATCHED
+  // coordinator subagent). The top-level/inline agent has agent_type null and is governed by the
+  // SEPARATE main-agent boundary (DEVLOOPS_MAIN_AGENT_READONLY), not this one — see
+  // skills/docs/main-agent-contract.md's "Guarded surface and deliberate ceilings" note. This test
+  // locks that scope: a null agent_type must NOT be denied here, even under strict enforcement.
+  const { code, json } = runHook(
+    "pre-tool-use-bash-gate.mjs",
+    { tool_name: "Bash", tool_input: { command: "bun run verify" }, cwd: repoRoot, agent_type: null },
+    { DEVLOOPS_COORDINATOR_READONLY: "1" },
+  );
+  assert.equal(code, 0);
+  assert.equal(
+    json,
+    null,
+    "a null agent_type (top-level/inline agent) must not be denied by the coordinator-verify boundary — that is the main-agent boundary's job",
+  );
+});
+
+test("bash-gate hook denies a dev-loop coordinator running an env-flag-wrapped verify command under strict coordinator enforcement (Copilot round-2 #2326, e2e)", () => {
+  // `env -u DEVLOOPS_COORDINATOR_READONLY bun run verify` does not change the HOOK's own decision
+  // (the `-u` affects only the child process env); the real gap Copilot flagged was the classifier
+  // not matching an `env` OPTION form at all. Locks the classifier extension end-to-end.
+  const { code, json } = runHook(
+    "pre-tool-use-bash-gate.mjs",
+    {
+      tool_name: "Bash",
+      tool_input: { command: "env -u DEVLOOPS_COORDINATOR_READONLY bun run verify" },
+      cwd: repoRoot,
+      agent_type: "dev-loop",
+    },
+    { DEVLOOPS_COORDINATOR_READONLY: "1" },
+  );
+  assert.equal(code, 0);
+  assert.ok(json, "expected a structured decision");
+  assert.equal(json.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(json.hookSpecificOutput.permissionDecisionReason, /COORDINATOR-VERIFY-DELEGATION/);
+});
+
 test("bash-gate hook allows git stash in a repo with no .devloops config at all (unmanaged, pass-through)", () => {
   const dir = makeManagedConfigRepo(null);
   try {

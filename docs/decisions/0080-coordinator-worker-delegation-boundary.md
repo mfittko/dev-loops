@@ -36,17 +36,39 @@ verification/build entrypoint whenever the caller's `agent_type` is the coordina
 (`dev-loop`, normalized for the plugin-namespaced `dev-loops:dev-loop` form). A worker subagent's
 `agent_type` is unaffected by either check. Both deciders are gated by the same opt-in
 `DEVLOOPS_COORDINATOR_READONLY` flag (default fail-open, adopt-safe for a consumer repo); this repo
-enables it. Once enabled, the decision is fail-closed and non-bypassable by the coordinator itself
-— there is no coordinator-side escape hatch. This mirrors, one level down, the existing absolute
-main-agent read-only boundary Pi enforces at the outer level and that `DEVLOOPS_MAIN_AGENT_READONLY`
-can re-impose for Claude Code.
+enables it. Once enabled, the decision is fail-closed and non-bypassable BY THE DISPATCHED
+COORDINATOR (`agent_type: "dev-loop"`) FOR ITS GUARDED SURFACE — the two mechanically-guarded
+entrypoints named above (`Write`/`Edit` on a tracked file, and a recognized verify/build command).
+This is deliberately narrower than "no coordinator-side escape hatch" from any surface whatsoever:
+see "Deliberate ceilings" below for the three surfaces this boundary does not (yet) cover. This
+mirrors, one level down, the existing absolute main-agent read-only boundary Pi enforces at the
+outer level and that `DEVLOOPS_MAIN_AGENT_READONLY` can re-impose for Claude Code — a SEPARATE
+boundary, keyed on a different `agent_type` shape (null, not `dev-loop`), that governs the
+top-level/inline agent instead.
 
 The verify-command boundary's denylist is a targeted set of known package-manager/`vitest`
-entrypoints (with tolerance for `:`-namespaced sub-scripts, `npx`/`bunx`/`bun x` runners, and a
-bounded set of `nice`/`timeout` process-wrapper forms), not a general shell-command classifier.
+entrypoints (with tolerance for `:`-namespaced sub-scripts, `npx`/`bunx`/`bun x` runners, an `env`
+wrapper carrying either `NAME=value` assignments or common `env` options — `-i`, `-u <NAME>`,
+`-C <dir>`, `-S <str>`, `--`, a bare `-`, and their long forms — and a bounded set of
+`nice`/`timeout` process-wrapper forms), not a general shell-command classifier.
 Harness-agnostic: this is a Claude Code `PreToolUse` hook. Pi never invokes these hooks, so a Pi
 run is unaffected — the coordinator→worker boundary is inert there by construction, not by a
 harness-conditional carve-out.
+
+### Deliberate ceilings
+
+This boundary's "fail-closed, non-bypassable" guarantee is scoped to the guarded surface, not a
+claim that the coordinator has no way to mutate the repo or run a build at all:
+
+1. Bash-driven tracked-file mutations (`sed -i`, `tee`, shell redirection `> file`) run through the
+   Bash tool and remain convention-enforced, not mechanically guarded by either decider.
+2. The top-level/inline agent (`agent_type: null`) is out of scope for this boundary; it is
+   governed by the separate `DEVLOOPS_MAIN_AGENT_READONLY` main-agent boundary instead. Extending
+   mechanical enforcement to the inline coordinator case depends on the coordinator-dispatch-default
+   work and is tracked as a follow-up, not done here.
+3. The verify-command denylist is a targeted classifier keyed on known invocation shapes; an
+   unrecognized command-wrapper form is a documented, deliberately-uncovered ceiling (see
+   "Consequences" below), not a general-purpose shell sandbox.
 
 We rejected mandating a Pi-style async main-agent→dev-loop hop for Claude Code (out of scope for
 this boundary; the outer single-agent structure is unchanged). We rejected making the verify-command
