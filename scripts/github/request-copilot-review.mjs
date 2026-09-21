@@ -82,13 +82,16 @@ Request statuses:
   blocked_by_copilot_comment    A non-Copilot PR comment contains @copilot or /copilot; delete the comment(s) first
   round_cap_reached             Maximum Copilot review rounds reached; no further re-requests will be made
   no_changes_since_last_review  --force-rerequest-review used but PR head has not changed since the last review
-  suppressed_post_convergence_docs_only  At the round cap, the post-convergence head bump is a provable pure doc/prose
-                                delta since the last Copilot-reviewed head; no fresh blocking round is forced (the prior
-                                converged review stands). Any code/test/config/CI or unclassifiable delta re-opens the round.
-                                Also returned BELOW the round cap when an operator explicitly withdrew a stranded review
-                                request for this exact head via withdraw-copilot-review-request.mjs (issue #1441): that
-                                tool proves and records the same pure doc/prose delta since Copilot's last submitted
-                                review, so a below-cap re-request cannot immediately re-strand the same head. Never
+  suppressed_post_convergence_docs_only  Returned at the round cap AND, since #2316, BELOW it, whenever the delta
+                                since the last Copilot-reviewed head is a provable pure doc/prose bump OR an
+                                integrate-only base-move (base-relative reduction empties the delta); no fresh
+                                blocking round is forced (the prior converged review stands). Any code/test/config/CI
+                                or unclassifiable delta re-opens the round. The round-cap return carries
+                                completedRounds/maxRounds; the below-cap return omits them. The operator-marker case
+                                (issue #1441) remains one specific below-cap trigger: an operator explicitly withdrew
+                                a stranded review request for this exact head via withdraw-copilot-review-request.mjs,
+                                which proves and records the same delta classification since Copilot's last submitted
+                                review so a below-cap re-request cannot immediately re-strand the same head. Never
                                 triggered without that prior explicit withdrawal, and any further push invalidates it.
   suppressed_draft              PR is in draft state; review requests are blocked until the PR is marked ready for review
 Error output (stderr, JSON):
@@ -595,6 +598,44 @@ export function getLastCopilotReviewHeadSha(prData) {
   return typeof sha === "string" && sha.trim().length > 0 ? sha.trim() : null;
 }
 
+// Shared convergence-carry decision: consume the delta basis (delta since the
+// last Copilot-reviewed head, base-relative reduction, resolveConvergenceCarryForward)
+// in the request path. Given the last Copilot-reviewed head and the current head,
+// decide whether the delta since that head is provably OUTSIDE Copilot's review
+// surface — a pure doc/prose bump OR an integrate-only base-move (base-relative
+// reduction empties the delta). Returns the carry decision when it carries, else
+// null (fail-closed: caller forces a fresh round). Mirrors the cap-path logic so
+// both paths consume ONE delta basis. gh call order: compare last..head,
+// baseRefName, compare base..head.
+async function resolveConvergenceCarry(options, runtime, { lastReviewSha, currentHeadSha }) {
+  if (!lastReviewSha || !currentHeadSha || lastReviewSha === currentHeadSha) {
+    return null;
+  }
+  const deltaChangedFiles = await fetchDeltaChangedFiles(
+    { repo: options.repo, base: lastReviewSha, head: currentHeadSha },
+    runtime,
+  );
+  if (deltaChangedFiles === null) {
+    return null;
+  }
+  const baseRef = await fetchPrBaseRefName({ repo: options.repo, pr: options.pr }, runtime);
+  let convergenceDelta = deltaChangedFiles;
+  let deltaComplete = false;
+  if (baseRef.length > 0) {
+    const prOwn = await fetchDeltaChangedFiles(
+      { repo: options.repo, base: baseRef, head: currentHeadSha },
+      runtime,
+    );
+    if (prOwn !== null) {
+      const prOwnSet = new Set(prOwn);
+      convergenceDelta = deltaChangedFiles.filter((file) => prOwnSet.has(file));
+      deltaComplete = true;
+    }
+  }
+  const convergence = resolveConvergenceCarryForward({ changedFiles: convergenceDelta, deltaComplete });
+  return convergence.carryForward ? convergence : null;
+}
+
 // Shared classification seam: the same fail-closed
 // fetch-delta-then-classify pipeline the round-cap AC2 check below performs,
 // exposed for withdraw-copilot-review-request.mjs and
@@ -850,6 +891,9 @@ export async function performCopilotReviewRequest(
   // a post-reset PR that detect reports as under-cap must NOT be refused here as
   // cap-reached. Only query checkpoint evidence on this (at/over-cap) path.
   let completedRounds = before.completedCopilotReviewRounds ?? 0;
+  // Tracks whether the cap path already evaluated the convergence-carry decision
+  // below, so the below-cap consumption site does not double-compare.
+  let convergenceCarryEvaluated = false;
   if (completedRounds >= maxRounds
       && !before.requested
       && !before.hasPendingReviewOnCurrentHead) {
@@ -911,54 +955,21 @@ export async function performCopilotReviewRequest(
     }
     // AC2 fail-closed convergence carry-forward: at the round cap, a
     // post-convergence delta PROVABLY outside Copilot's review surface must not
-    // force a fresh blocking round. DEFAULT-SAFE: the delta lookup fails closed
-    // (null) on any uncertainty, and resolveConvergenceCarryForward returns
-    // carryForward:false on any code/test/config/CI or unclassifiable file
-    // (or an empty delta without proof), so every uncertain case re-opens the
-    // round exactly as before.
-    const deltaChangedFiles = await fetchDeltaChangedFiles(
-      { repo: options.repo, base: lastReviewSha, head: currentHeadSha },
-      runtime,
-    );
-    if (deltaChangedFiles !== null) {
-      // Apply the SAME main-relative exclusion the carry-forward resolver
-      // uses — drop files already on the PR's base branch at the current head.
-      // A base-move that only integrates already-merged base commits then
-      // contributes NO PR-own surface, so it must not force a fresh Copilot
-      // round (the round-cap deadlock this fix targets). `deltaComplete` tells
-      // resolveConvergenceCarryForward an EMPTY reduced delta is a PROVEN
-      // integrate-only base-move (carry), not an unavailable one (fail closed).
-      // The base-relative compare fails closed to the raw delta (deltaComplete
-      // stays false) whenever the base ref is unknown or the compare is
-      // unavailable/non-linear/renamed, preserving today's behavior.
-      const baseRef = await fetchPrBaseRefName({ repo: options.repo, pr: options.pr }, runtime);
-      let convergenceDelta = deltaChangedFiles;
-      let deltaComplete = false;
-      if (baseRef.length > 0) {
-        const prOwn = await fetchDeltaChangedFiles(
-          { repo: options.repo, base: baseRef, head: currentHeadSha },
-          runtime,
-        );
-        if (prOwn !== null) {
-          const prOwnSet = new Set(prOwn);
-          convergenceDelta = deltaChangedFiles.filter((file) => prOwnSet.has(file));
-          deltaComplete = true;
-        }
-      }
-      const convergence = resolveConvergenceCarryForward({ changedFiles: convergenceDelta, deltaComplete });
-      if (convergence.carryForward) {
-        return withConfigWarning({
-          ok: true,
-          status: SUPPRESSED_POST_CONVERGENCE_DOCS_ONLY_STATUS,
-          repo: options.repo,
-          pr: options.pr,
-          reviewer: "Copilot",
-          detail: `Post-convergence head bump is provably outside Copilot's review surface (${convergence.reason}); no fresh Copilot round is forced. The prior converged Copilot review still stands — proceed to the gate.`,
-          completedRounds,
-          maxRounds,
-        });
-      }
+    // force a fresh blocking round.
+    const convergence = await resolveConvergenceCarry(options, runtime, { lastReviewSha, currentHeadSha });
+    if (convergence) {
+      return withConfigWarning({
+        ok: true,
+        status: SUPPRESSED_POST_CONVERGENCE_DOCS_ONLY_STATUS,
+        repo: options.repo,
+        pr: options.pr,
+        reviewer: "Copilot",
+        detail: `Post-convergence head bump is provably outside Copilot's review surface (${convergence.reason}); no fresh Copilot round is forced. The prior converged Copilot review still stands — proceed to the gate.`,
+        completedRounds,
+        maxRounds,
+      });
     }
+    convergenceCarryEvaluated = true;
     // Has new (review-relevant) commits — bypass the round cap and proceed with the request
   }
   const sameHeadCleanConverged = await detectSameHeadCleanConvergence(
@@ -986,6 +997,29 @@ export async function performCopilotReviewRequest(
       pr: options.pr,
       reviewer: "Copilot",
     });
+  }
+  // Below the round cap, an integrate-only base-move (or pure doc/prose bump) on
+  // a fresh head must NOT force a redundant Copilot round — consume the same
+  // convergence-carry decision the cap path uses. Skipped when the cap path
+  // already evaluated it (avoids a double compare on the cap+genuine-change
+  // fall-through) and when there is no prior submitted review / no head advance
+  // (fail-safe: a genuine PR-own change or a first review still requests).
+  if (!convergenceCarryEvaluated) {
+    const currentHeadSha = typeof before.prData?.headRefOid === "string" && before.prData.headRefOid.trim().length > 0
+      ? before.prData.headRefOid.trim()
+      : null;
+    const lastReviewSha = getLastCopilotReviewHeadSha(before.prData);
+    const convergence = await resolveConvergenceCarry(options, runtime, { lastReviewSha, currentHeadSha });
+    if (convergence) {
+      return withConfigWarning({
+        ok: true,
+        status: SUPPRESSED_POST_CONVERGENCE_DOCS_ONLY_STATUS,
+        repo: options.repo,
+        pr: options.pr,
+        reviewer: "Copilot",
+        detail: `Post-convergence head bump is provably outside Copilot's review surface (${convergence.reason}); no fresh Copilot round is forced. The prior converged Copilot review still stands — proceed to the gate.`,
+      });
+    }
   }
   const requestResult = await requestCopilotReview(options, runtime);
   if (requestResult.status === "unavailable") {
