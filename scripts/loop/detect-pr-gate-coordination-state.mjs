@@ -1035,6 +1035,10 @@ export function buildGateCoordinationEvaluatorInput({
     // than trusting a stale/compound lifecycleState label alone.
     unresolvedThreadCount: context.snapshot?.unresolvedThreadCount ?? null,
     sameHeadCleanConverged: context.interpretation.sameHeadCleanConverged,
+    // Current-head Copilot review evidence, fed alongside sameHeadCleanConverged so
+    // the absent/never-driven entry guard keys on a round driven for THIS head
+    // (never a raw across-PR copilotReviewRoundCount, which counts prior-head rounds).
+    copilotReviewOnCurrentHead: context.snapshot?.copilotReviewOnCurrentHead === true,
     // Operator-authorized post-convergence suppression: see
     // resolvePostConvergenceReviewSuppressed above for how this is verified.
     postConvergenceReviewSuppressed: context.postConvergenceReviewSuppressed === true,
@@ -1249,7 +1253,7 @@ async function main() {
   }
   try {
     const result = await detectPrGateCoordinationState(options);
-    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
+    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, fields: options.fields });
   } catch (error) {
     process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;

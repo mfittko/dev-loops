@@ -95,6 +95,26 @@ test("fully-satisfied standing-authorized drain merge succeeds, stamps the appro
   assert.ok(!calls.runChild.some((c) => c.args.join(" ").match(/release|publish|tag/)));
 });
 
+test("a current-head Copilot 🟡 non-approval refuses via copilot_convergence (proves the review body reaches the gate)", async () => {
+  const { runtime, calls } = makeRuntime({
+    reviews: [{ user: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit_id: HEAD, body: "### 🟡 Changes recommended\n\nfix the off-by-one." }],
+  });
+  let threw = null;
+  try { await mergePr(baseOptions(), runtime); } catch (e) { threw = e; }
+  assert.ok(threw, "a current-head 🟡 must refuse");
+  assert.ok(threw.mergePrFailure.failures.some((f) => f.precondition === "copilot_convergence"), JSON.stringify(threw.mergePrFailure.failures));
+  assert.equal(calls.runChild.length, 0, "no merge on a current-head 🟡");
+});
+
+test("a current-head Copilot 🟢 merges and records the disposition for audit", async () => {
+  const { runtime } = makeRuntime({
+    reviews: [{ user: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit_id: HEAD, body: "### 🟢 Approval recommended\n\nlooks good." }],
+  });
+  const result = await mergePr(baseOptions(), runtime);
+  assert.equal(result.ok, true);
+  assert.equal(result.copilotDisposition, "clean");
+});
+
 test("each missing precondition refuses with a machine-readable reason naming it", async () => {
   const cases = [
     ["mergeable", makeRuntime({ prView: { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" } }), {}],
@@ -214,6 +234,67 @@ test("a non-zero or signal-killed `gh pr merge` throws instead of reporting a fa
     assert.match(threw.message, /gh pr merge did not succeed/);
     assert.ok(!threw.mergePrFailure, "a merge-execution failure is not a precondition failure");
   }
+});
+
+test("a merge blocked by branch protection with a stale gate-evidence context names the real cause and recovery (#2262)", async () => {
+  const { runtime } = makeRuntime({
+    prView: {
+      statusCheckRollup: [
+        { status: "COMPLETED", conclusion: "SUCCESS", name: "verify" },
+        { status: "COMPLETED", conclusion: "CANCELLED", name: "gate-evidence-runner" },
+        { state: "FAILURE", context: "gate-evidence" },
+      ],
+    },
+  });
+  runtime.runChild = async () => ({ stdout: "", stderr: "GraphQL: Base branch policy prohibits the merge (mergePullRequest)", code: 1 });
+  let threw = null;
+  try { await mergePr(baseOptions(), runtime); } catch (e) { threw = e; }
+  assert.ok(threw, "a branch-protection-blocked merge must throw");
+  assert.match(threw.message, /Base branch policy prohibits the merge/, "the original gh stderr must still be present");
+  assert.match(threw.message, /gate-evidence/);
+  assert.match(threw.message, /failure/i);
+  assert.match(threw.message, /COMPLETED Gate-evidence run/);
+  assert.match(threw.message, /re-run|verdict comment/i);
+});
+
+test("a base-branch-policy block with a SUCCESS gate-evidence context gets no gate-evidence note (#2262)", async () => {
+  const { runtime } = makeRuntime({
+    prView: {
+      statusCheckRollup: [
+        { status: "COMPLETED", conclusion: "SUCCESS", name: "verify" },
+        { state: "SUCCESS", context: "gate-evidence" },
+      ],
+    },
+  });
+  runtime.runChild = async () => ({ stdout: "", stderr: "GraphQL: Base branch policy prohibits the merge (mergePullRequest)", code: 1 });
+  let threw = null;
+  try { await mergePr(baseOptions(), runtime); } catch (e) { threw = e; }
+  assert.ok(threw, "a branch-protection-blocked merge must throw");
+  assert.match(threw.message, /Base branch policy prohibits the merge/, "the original gh stderr must still be present");
+  assert.ok(
+    !/COMPLETED Gate-evidence run/.test(threw.message),
+    "a real branch-policy block must not get the gate-evidence recovery note when gate-evidence is already SUCCESS — the real cause is a different required check",
+  );
+});
+
+test("a transient gh/API error is NOT misattributed to a stale gate-evidence context even when gate-evidence is non-success (#2262)", async () => {
+  const { runtime } = makeRuntime({
+    prView: {
+      statusCheckRollup: [
+        { status: "COMPLETED", conclusion: "SUCCESS", name: "verify" },
+        { state: "FAILURE", context: "gate-evidence" },
+      ],
+    },
+  });
+  runtime.runChild = async () => ({ stdout: "", stderr: "gh: connection reset by peer", code: 1 });
+  let threw = null;
+  try { await mergePr(baseOptions(), runtime); } catch (e) { threw = e; }
+  assert.ok(threw, "a transient gh failure must still throw");
+  assert.match(threw.message, /connection reset by peer/, "the original gh stderr must still be present");
+  assert.ok(
+    !/COMPLETED Gate-evidence run/.test(threw.message),
+    "a non-branch-policy stderr must not get the gate-evidence recovery note, even when gate-evidence is non-success",
+  );
 });
 
 test("a code-0 merge whose PR is not MERGED afterwards is a false success and throws", async () => {

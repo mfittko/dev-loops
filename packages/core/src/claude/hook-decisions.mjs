@@ -68,8 +68,9 @@ export const DEV_LOOP_AGENT_TYPE = "dev-loop";
  *   - `gh pr create` — blocked outright; PR creation must flow through the canonical wrapper
  *     (`scripts/github/create-pr.mjs` / `dev-loops pr create`), which always drafts and self-assigns.
  *   - `gh pr ready` — blocked without clean draft_gate evidence.
- *   - `gh pr merge` — blocked without full pre-merge gate evidence (clean current-head draft_gate +
- *     pre_approval_gate).
+ *   - `gh pr merge` — blocked outright; use scripts/github/merge-pr.mjs. Its gate evidence check
+ *     requires a clean draft_gate transition record + current-head pre_approval_gate
+ *     (GATE-COMMENT-DRAFT-REQUIREMENTS in skills/docs/gate-review-comment-contract.md).
  *   - raw `gh issue create` / `gh issue comment` / `gh issue edit` / `gh pr comment` — blocked ONLY
  *     from a SUBAGENT context (`agentType` non-null) on the target repo. Sanctioned external writes
  *     flow through node wrappers; the MAIN AGENT / operator (agentType null) retains direct access.
@@ -127,6 +128,29 @@ export function decideBashGate({
         "OPS-NO-INLINE-INTERPRETER: inline interpreters (node -e/--eval/-p, python3 -c, heredoc to " +
         "node/python) are barred in the dev-loop flow. Parse tool output via --jq/--silent and mutate " +
         "files via the editor/patch tools or a --jq-composed --body-file, never an inline interpreter.",
+    };
+  }
+
+  // COPILOT-FOLLOWUP-WAIT-TOOLS: banned detached/polling wait wrappers. Actor-independent: the
+  // coordinator/main agent — not subagents only — is the actor that leaves backgrounded
+  // `until`/`while … sleep … done` poll loops and bare-`&` backgrounded probe shells orphaned
+  // under the Claude Code harness (no async wake to join them), so the gate must deny its
+  // backgrounding too. Evaluated HERE, before the `gh pr ready`/`merge`/`create` classification,
+  // so a compound command that pairs a lifecycle verb with a backgrounded wait
+  // (`gh pr create --repo other/x && node …/probe-copilot-review.mjs … &`) cannot short-circuit
+  // past it via the create/ready ALLOW paths. The sanctioned wait is always a bounded FOREGROUND
+  // inline probe (`probe-copilot-review.mjs` / `wait-pr-checks.mjs` with an explicit
+  // --timeout/--timeout-ms; `gh run watch`; the watch-cycle CLIs).
+  if (inManagedRepo && commandContainsDetachedWaitTool(command)) {
+    return {
+      decision: "deny",
+      reason:
+        "COPILOT-FOLLOWUP-WAIT-TOOLS: wait only through a bounded FOREGROUND probe (scripts/github/" +
+        "probe-copilot-review.mjs or scripts/github/wait-pr-checks.mjs with an explicit --timeout/" +
+        "--timeout-ms; scripts/loop/detect-copilot-loop-state.mjs one-shot; dev-loops loop watch-cycle; " +
+        "gh run watch) — nohup/disown/tmux/screen detach, while-sleep-poll loops, and bare-`&` " +
+        "backgrounding of a probe/wait script are barred for the coordinator and every subagent (a " +
+        "backgrounded wait orphans under Claude Code, which has no async wake to join it).",
     };
   }
 
@@ -237,20 +261,9 @@ export function decideBashGate({
   }
 
   if (!isReady && !isMerge && !isCreate) {
-    // COPILOT-FOLLOWUP-WAIT-TOOLS: banned detached/polling wait wrappers. Subagent-only — the
-    // rule is classified `agent` (behavioral guidance for the dev-loop driving agent); the main
-    // agent/operator retains manual wait tooling. The main agent's own sanctioned wait path is still
-    // the deterministic tools.
-    if (typeof agentType === "string" && inManagedRepo && commandContainsDetachedWaitTool(command)) {
-      return {
-        decision: "deny",
-        reason:
-          "COPILOT-FOLLOWUP-WAIT-TOOLS: wait only through deterministic tools (scripts/loop/detect-copilot-" +
-          "loop-state.mjs one-shot, dev-loops loop watch-cycle persistent, scripts/github/wait-pr-checks.mjs, " +
-          "gh run watch) — nohup/disown/tmux/screen detach and while-sleep-poll loops are barred for the " +
-          "dev-loop driving agent.",
-      };
-    }
+    // The detached-wait deny (COPILOT-FOLLOWUP-WAIT-TOOLS) is evaluated earlier — actor-independently
+    // and BEFORE this lifecycle-verb classification — so a compound command pairing a lifecycle verb
+    // with a backgrounded wait cannot short-circuit past it through the create/ready ALLOW paths.
     return ALLOW;
   }
 
@@ -291,8 +304,7 @@ export function decideBashGate({
       return ALLOW;
     }
   }
-  // When both verbs appear in a compound command, apply the stricter merge gate — if it passes,
-  // the draft_gate (a subset of the pre-merge evidence check) is also satisfied.
+  // When both verbs appear in a compound command, the unconditional raw-merge refusal wins.
   const verb = isMerge ? "gh pr merge" : "gh pr ready";
   // Pass through only when EVERY gated verb segment is PROVEN foreign (explicit repo, managed slug
   // resolves, and demonstrably differs). A segment with no explicit repo, or an unresolvable managed

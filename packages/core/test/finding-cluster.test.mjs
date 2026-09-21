@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "bun:test";
 
 import {
-  assertCleanImpliesNoAct,
+  assertCleanImpliesNoBlockingAct,
   clusterFindings,
   clustersFromStampedIds,
   computeRootCauseKey,
@@ -444,25 +444,42 @@ describe("dedupeActListByCluster — context-size before/after evidence", () => 
   });
 });
 
-describe("assertCleanImpliesNoAct", () => {
-  test("throws on clean + a nonzero act count", () => {
-    assert.throws(() => assertCleanImpliesNoAct("clean", 1), /clean verdict is invalid/);
-    assert.throws(() => assertCleanImpliesNoAct("clean", 3), /clean verdict is invalid/);
+describe("assertCleanImpliesNoBlockingAct", () => {
+  test("throws on clean + an act at a blocking severity", () => {
+    assert.throws(() => assertCleanImpliesNoBlockingAct("clean", [{ severity: "high" }], ["high"]), /clean verdict is invalid/);
+    assert.throws(
+      () => assertCleanImpliesNoBlockingAct("clean", [{ severity: "medium" }, { severity: "high" }], ["high"]),
+      /blocking severity \(high\)/,
+    );
   });
 
-  test("returns the verdict unchanged on clean + zero act count", () => {
-    assert.equal(assertCleanImpliesNoAct("clean", 0), "clean");
+  test("accepts clean + acts only on non-blocking severities (GATE-EXEC-BLOCKING-ONLY-FIX)", () => {
+    assert.equal(assertCleanImpliesNoBlockingAct("clean", [{ severity: "medium" }, { severity: "low" }], ["high"]), "clean");
   });
 
-  test("returns the verdict unchanged on findings_present + any act count", () => {
-    assert.equal(assertCleanImpliesNoAct("findings_present", 0), "findings_present");
-    assert.equal(assertCleanImpliesNoAct("findings_present", 5), "findings_present");
+  test("honors a widened blocking set (a medium act under a high+medium block set fails closed)", () => {
+    assert.throws(
+      () => assertCleanImpliesNoBlockingAct("clean", [{ severity: "medium" }], ["high", "medium"]),
+      /clean verdict is invalid/,
+    );
   });
 
-  test("throws TypeError when actCount is not a non-negative integer", () => {
-    assert.throws(() => assertCleanImpliesNoAct("clean", -1), TypeError);
-    assert.throws(() => assertCleanImpliesNoAct("clean", 1.5), TypeError);
-    assert.throws(() => assertCleanImpliesNoAct("clean", "1"), TypeError);
-    assert.throws(() => assertCleanImpliesNoAct("clean", NaN), TypeError);
+  test("returns the verdict unchanged on clean + zero act findings", () => {
+    assert.equal(assertCleanImpliesNoBlockingAct("clean", [], ["high"]), "clean");
+  });
+
+  test("returns the verdict unchanged on findings_present regardless of act severities", () => {
+    assert.equal(assertCleanImpliesNoBlockingAct("findings_present", [], ["high"]), "findings_present");
+    assert.equal(assertCleanImpliesNoBlockingAct("findings_present", [{ severity: "high" }], ["high"]), "findings_present");
+  });
+
+  test("defaults the blocking set to ['high'] when unspecified", () => {
+    assert.throws(() => assertCleanImpliesNoBlockingAct("clean", [{ severity: "high" }]), /clean verdict is invalid/);
+    assert.equal(assertCleanImpliesNoBlockingAct("clean", [{ severity: "medium" }]), "clean");
+  });
+
+  test("throws TypeError when actFindings is not an array", () => {
+    assert.throws(() => assertCleanImpliesNoBlockingAct("clean", 1, ["high"]), TypeError);
+    assert.throws(() => assertCleanImpliesNoBlockingAct("clean", null, ["high"]), TypeError);
   });
 });

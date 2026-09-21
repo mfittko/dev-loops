@@ -331,6 +331,7 @@ test("closeGateFindings posts no review and no comment of its own: a round with 
         round: 1,
         deferredResolved: 0,
         unresolvedGateThreadCount: 0,
+        foldedFiled: 0,
       });
     },
   ));
@@ -1526,6 +1527,116 @@ test("#1585: unresolvedGateThreadCount reflects the subtraction (must-fix stays,
       // 2 unresolved gate-authored threads pre-defer, 1 resolved => 1 remains.
       assert.equal(result.unresolvedGateThreadCount, 1);
       assert.equal(result.followUpIssueNumber, undefined);
+    },
+  ));
+});
+
+// ---------------------------------------------------------------------------
+// #2263: the folded-filing pass. A finding below the gate's inline severity
+// floor (upsert-checkpoint-verdict.mjs's renderFoldedFindingsBlock) never gets
+// a thread of its own, so the net-reduction filing above never sees it — this
+// pass files the operator-visible folded lows directly from the ledger.
+// ---------------------------------------------------------------------------
+
+function getIssueEntry(issueNumber, body) {
+  return {
+    assertArgs: ["api", `repos/${REPO}/issues/${issueNumber}`],
+    stdout: `${JSON.stringify({ body })}\n`,
+  };
+}
+
+function issueCommentsForFingerprintsEntry(issueNumber, comments) {
+  return {
+    assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/issues/${issueNumber}/comments?per_page=100`],
+    stdout: `${JSON.stringify([comments])}\n`,
+  };
+}
+
+test("#2263: an operator-visible folded low files ONE follow-up issue, with no gate-authored thread of its own", async () => {
+  const finding = { severity: "low", angle: "naming", summary: "casing nit in a local constant", operatorVisible: true };
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ threads: [] }),
+      // runFoldedFilingPass's own lookup (no existing issue yet), then
+      // ensureFollowUpIssue's own internal lookup before creating.
+      listFollowUpIssuesEntry(),
+      listFollowUpIssuesEntry(),
+      createFollowUpIssueEntry(9600),
+    ],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.deferredResolved, 0, "a folded finding never had a thread to resolve");
+      assert.equal(result.unresolvedGateThreadCount, 0, "a folded finding never enters the gate-authored thread count");
+      assert.equal(result.foldedFiled, 1);
+      assert.equal(result.followUpIssueNumber, 9600);
+    },
+  ));
+});
+
+test("#2263: a nit and a non-operator-visible low fold with no filing (net-reduction disposition policy) — no follow-up-issue calls at all", async () => {
+  const nitFinding = { severity: "nit", angle: "style", summary: "trailing whitespace" };
+  const quietLowFinding = { severity: "low", angle: "naming", summary: "casing nit in a local constant" };
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [nitFinding, quietLowFinding] }), (ledgerPath) => withGhStub(
+    // No listFollowUpIssuesEntry/createFollowUpIssueEntry here: an
+    // all-unfileable folded batch must never even look up a follow-up issue.
+    roundEntries({ threads: [] }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.foldedFiled, 0);
+      assert.equal(result.followUpIssueNumber, undefined);
+    },
+  ));
+});
+
+test("#2263: re-running the folded-filing pass does not double-file an already-listed fingerprint (idempotency)", async () => {
+  const finding = { severity: "low", angle: "naming", summary: "casing nit in a local constant", operatorVisible: true };
+  const fp = fingerprintFinding(finding);
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ threads: [] }),
+      listFollowUpIssuesEntry({ matches: [{ number: 9500, title: `Deferred gate findings for ${REPO}#${PR}`, state: "open", labels: [] }] }),
+      getIssueEntry(9500, `- \`${fp}\` **low** (\`naming\`): casing nit in a local constant`),
+      issueCommentsForFingerprintsEntry(9500, []),
+      // No createFollowUpIssueEntry/appendFollowUpIssueEntry: the fingerprint
+      // is already listed on the existing issue, so nothing is re-filed.
+    ],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.foldedFiled, 0);
+      assert.equal(result.followUpIssueNumber, 9500, "still reports the PR's existing tracked follow-up issue");
+    },
+  ));
+});
+
+// #2263: when the thread pass ALSO files this round, both batches share the
+// SAME follow-up issue — the folded pass never mints a second one.
+test("#2263: the folded-filing pass shares the SAME follow-up issue the thread pass just created this round", async () => {
+  const wfnBody2 = `${buildFindingMarker({ fp: "3333333333333333", severity: "worth-fixing-now", angle: "perf", round: 4 })}\n**medium** (\`perf\`): n+1 query`;
+  const threadFinding = threadNode({ id: "THREAD_MEDIUM", path: "src/perf.mjs", line: 9, commentId: 6300, body: wfnBody2 });
+  const foldedFinding = { severity: "low", angle: "naming", summary: "casing nit in a local constant", operatorVisible: true };
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [foldedFinding] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ issueComments: roundHistory("draft_gate", 4), threads: [threadFinding] }),
+      // Thread pass: files the medium finding, creating the ONE issue.
+      listFollowUpIssuesEntry(),
+      createFollowUpIssueEntry(9700),
+      getReviewCommentEntry(6300, wfnBody2),
+      patchReviewCommentEntry(6300),
+      postReplyEntry(6300, { id: 7400 }),
+      resolveThreadEntry("THREAD_MEDIUM"),
+      // Folded pass: reuses the SAME issue number the thread pass just
+      // resolved (threaded through as existingIssueNumber) — no `gh issue
+      // list` lookup (the number is already known); still reads the issue's
+      // current fingerprints for its own dedup check before appending.
+      getIssueEntry(9700, "no fingerprints listed yet"),
+      issueCommentsForFingerprintsEntry(9700, []),
+      appendFollowUpIssueEntry(9700),
+    ],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.deferredResolved, 1);
+      assert.equal(result.foldedFiled, 1);
+      assert.equal(result.followUpIssueNumber, 9700, "one shared follow-up issue for both batches");
     },
   ));
 });

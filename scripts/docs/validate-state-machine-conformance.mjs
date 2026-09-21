@@ -421,12 +421,16 @@ verified("waiting_for_copilot_review->merge_conflict_resolution", () => {
 // cleanly with no unresolved feedback and no further Copilot pass needed.
 //
 // Gate ENTRY requires an independent `copilotReviewRequestStatus` signal (not derived from
-// `sameHeadCleanConverged`) and refuses `RUN_PRE_APPROVAL_GATE` outright whenever a Copilot
-// review request is still outstanding on the current head — asserted at gate entry, not only
-// downstream at verdict-post time. The `requested` (unsettled) case below pins that refusal;
-// the `none` (settled) case pins the clean-current-head-review -> pre_approval_gate routing.
-// The detector-level reconciliation (`resolveCopilotReviewRequestStatus` in
-// `scripts/loop/_copilot-review-request-status.mjs`) is what produces the settled `none` for a
+// `sameHeadCleanConverged`) and refuses `RUN_PRE_APPROVAL_GATE` outright in two shapes when
+// Copilot is enabled — asserted at gate entry, not only downstream at verdict-post time:
+//   - `requested` (unsettled): a Copilot review request is still outstanding on the current head;
+//   - absent / never-driven (#2146): status `none` with zero completed rounds and no clean
+//     same-head review — no Copilot round was ever requested or received, so a clean pre_approval
+//     verdict would rest on nothing the loop drove.
+// The `none` (settled) case with a clean same-head review pins the
+// clean-current-head-review -> pre_approval_gate routing (and that a legitimate GitHub auto-review
+// still satisfies convergence). The detector-level reconciliation (`resolveCopilotReviewRequestStatus`
+// in `scripts/loop/_copilot-review-request-status.mjs`) is what produces the settled `none` for a
 // lingering `requested` status whose request predates the latest same-head submitted review.
 verified("waiting_for_copilot_review->final_local_preapproval_gate", () => {
   // Even a caller that reports sameHeadCleanConverged: true (e.g. a stale/racy
@@ -444,9 +448,30 @@ verified("waiting_for_copilot_review->final_local_preapproval_gate", () => {
     && unsettled.nextAction === PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW
     && unsettled.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
 
+  // #2146: the absent / never-driven case must ALSO be refused. A grant-y
+  // lifecycleState (low_signal_converged) with status `none`, zero completed
+  // rounds, and no clean same-head review reaches RUN_PRE_APPROVAL_GATE without
+  // any Copilot round the loop drove — the entry guard now fails it closed and
+  // routes to request a round first.
+  const absent = run({
+    prDraft: false,
+    lifecycleState: STATE.LOW_SIGNAL_CONVERGED,
+    ciStatus: "success",
+    sameHeadCleanConverged: false,
+    copilotReviewRequestStatus: "none",
+    copilotReviewRoundCount: 0,
+    maxCopilotRounds: 2,
+    draftGate: CLEAN_GATE,
+    preApprovalGate: gate({ visible: false }),
+  });
+  const absentOk = absent.gateBoundary === PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW
+    && absent.nextAction === PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW
+    && absent.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+
   // Once the review request has genuinely settled (no outstanding request) and the
   // current head converged cleanly, pre_approval_gate entry is legal — the fix does
-  // not regress the real transition the doc requires.
+  // not regress the real transition the doc requires, and a clean same-head review
+  // (incl. GitHub's auto-review) satisfies the #2146 requirement without a re-request.
   const settled = run({
     prDraft: false,
     lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
@@ -458,8 +483,8 @@ verified("waiting_for_copilot_review->final_local_preapproval_gate", () => {
   const settledOk = settled.gateBoundary === PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW
     && settled.nextAction === PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE;
 
-  const ok = unsettledOk && settledOk;
-  return { ok, detail: { unsettled, settled }, result: settled };
+  const ok = unsettledOk && absentOk && settledOk;
+  return { ok, detail: { unsettled, absent, settled }, result: settled };
 });
 
 // final_local_preapproval_gate -> final_gate_remediation: pre-approval gate findings require changes.

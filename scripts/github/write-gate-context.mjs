@@ -739,6 +739,20 @@ export function buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot = "tmp"
   return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".emit-plan.json" });
 }
 
+// Deterministic path for the keyed carry-forward plan artifact
+// (GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED, `resolve-angle-carry-forward.mjs`):
+// the resolver's own plan result persisted as a keyed sibling of the
+// gate-context bundle at the CURRENT head (head B), so its mere presence is the
+// deterministic proof that carry-forward was consulted before dispatch. The
+// fan-out emitter refuses to spawn a reviewer on a re-gate head (a prior
+// findings-log for this gate exists at an earlier head) when this artifact is
+// absent. Mirrors buildGateContextPath (same path-segment params); the body is
+// the resolver's own result object (or a fail-closed full-fallback marker when
+// the resolver refused), so the artifact is self-describing and key-stamped.
+export function buildCarryForwardPlanPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
+  return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".carry-forward-plan.json" });
+}
+
 // Deterministic path for the shared validation-results artifact
 // (GATE-EXEC-VALIDATION-ARTIFACT, `run-gate-validation.mjs`): the record of
 // this round's validation suites, run once and read (not re-run) by every
@@ -1326,12 +1340,12 @@ export function renderBriefingPrefix({
   lines.push(`prefixMode: ${prefixMode}`);
   lines.push("");
   lines.push(
-    `Mandatory: before doing any angle-specific work, run \`node scripts/github/verify-fresh-review-context.mjs --scope ${gateScopePrefix(gate)}<your-dispatch-unit> --context-path ${contextPath} --prefix-file ${briefingPrefixPath}\` once — <your-dispatch-unit> is your angle name for a per-angle dispatch, or \`group-<name>\` for a grouped dispatch (run once for the whole group, never once per angle in it). Refuse to proceed on contamination or a missing artifact.`,
+    `Mandatory: before doing any angle-specific work, run \`dev-loops-run scripts/github/verify-fresh-review-context.mjs --scope ${gateScopePrefix(gate)}<your-dispatch-unit> --context-path ${contextPath} --prefix-file ${briefingPrefixPath}\` once — <your-dispatch-unit> is your angle name for a per-angle dispatch, or \`group-<name>\` for a grouped dispatch (run once for the whole group, never once per angle in it). Refuse to proceed on contamination or a missing artifact.`,
   );
   lines.push("");
   const findingsDir = path.join(worktreeRoot, buildGateReviewsDir({ repo, pr, gate, headSha }));
   lines.push(
-    `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as ONE compound command that enters this worktree first (\`cd "${worktreeRoot}" && node scripts/github/verify-fresh-review-context.mjs ...\`) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${worktreeRoot}" ...\` and every file read via an absolute path under ${worktreeRoot}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
+    `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as ONE compound command that enters this worktree first (\`cd "${worktreeRoot}" && dev-loops-run scripts/github/verify-fresh-review-context.mjs ...\`) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${worktreeRoot}" ...\` and every file read via an absolute path under ${worktreeRoot}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
   );
   lines.push("");
   lines.push(
@@ -2045,7 +2059,7 @@ export function buildGateContextArtifact(options) {
 /**
  * Resolve the diff-derived scope fields shared by `buildGateContext` (the
  * programmatic `{ diff }` path) and the CLI `--base` path: the FULL
- * diff persisted to a deterministic `.diff` file, the parsed `changedFiles`,
+ * diff prepared for a deterministic `.diff` file, the parsed `changedFiles`,
  * and the neutral `adjacentCode` bundle built once from those changed files.
  * Extracted to a single function so both callers stay in sync — see the
  * doc comment on {@link buildGateContext} for the field semantics.
@@ -2059,7 +2073,7 @@ export function buildGateContextArtifact(options) {
  * @param {string} input.tmpRoot
  * @param {number} [input.maxFileBytes]
  * @param {{ repoRoot: string }} opts
- * @returns {Promise<{ diffPath: string|null, changedFiles: string[], adjacentCode: object|null, diffOutput: string|null }>}
+ * @returns {Promise<{ diffPath: string|null, diffToWrite: object|null, changedFiles: string[], adjacentCode: object|null, diffOutput: string|null }>}
  */
 async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFileBytes }, { repoRoot }) {
   const diffOutput = diff?.diffOutput;
@@ -2067,17 +2081,6 @@ async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFil
   const changedFiles = parseChangedFiles(diff?.nameStatusOutput);
   if (typeof diffOutput === "string" && diffOutput.length > 0) {
     diffPath = buildGateDiffPath({ repo, pr, gate, headSha, tmpRoot });
-    const fullDiffPath = path.resolve(repoRoot, diffPath);
-    try {
-      await mkdir(path.dirname(fullDiffPath), { recursive: true });
-      await writeFile(fullDiffPath, diffOutput.endsWith("\n") ? diffOutput : diffOutput + "\n", "utf8");
-    } catch (err) {
-      // Best-effort: a diff-file write failure (disk, permissions) must not block
-      // the context artifact. Degrade to diffPath=null; reviewers reconstruct the
-      // diff with `git diff`. changedFiles (from nameStatusOutput) is unaffected.
-      process.stderr.write(`[gate-context] full-diff capture failed (continuing without scope.diffPath): ${err?.message ?? err}\n`);
-      diffPath = null;
-    }
   }
 
   // Build the deterministic, neutral adjacent-code bundle ONCE: for each
@@ -2101,7 +2104,10 @@ async function resolveDiffScope({ diff, repo, pr, gate, headSha, tmpRoot, maxFil
     }
   }
 
-  return { diffPath, changedFiles, adjacentCode, diffOutput: typeof diffOutput === "string" ? diffOutput : null };
+  // Persistence belongs to writeGateContext, after validation/refusal and
+  // marker invalidation. Both callers must leave prior referenced bytes intact.
+  const diffToWrite = diffPath ? { path: diffPath, text: diffOutput.endsWith("\n") ? diffOutput : diffOutput + "\n" } : null;
+  return { diffPath, diffToWrite, changedFiles, adjacentCode, diffOutput: typeof diffOutput === "string" ? diffOutput : null };
 }
 
 /**
@@ -2309,6 +2315,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // states real content (the same false-spec risk resolvePrSpecContext
   // exists to prevent).
   const briefingVariants = {};
+  const pendingVariants = new Map();
   // Normalize angleScopes into a LOCAL COPY, before the --prefix-file branch,
   // never mutating the caller's own object: a retried write after a transient
   // variant-write failure below must not inherit a downgrade from a previous
@@ -2365,13 +2372,13 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     prefixBytes = Buffer.from(rendered.text, "utf8");
     prefixMode = rendered.prefixMode;
 
-    // AC3: emit one companion file per DISTINCT non-"full" scope actually
+    // AC3: render one companion file per DISTINCT non-"full" scope actually
     // declared by this round's resolved angles (never every GATE_ANGLE_SCOPES
     // value up front — an angle set that never declares "docs-only" gets no
     // docs-only file). Fail-open to full: any error building a variant
     // normalizes the affected angle(s) back to "full" in the local
     // angleScopes copy rather than leaving them dangling — those angles then
-    // read the full prefix already written above.
+    // read the full prefix. Persistence waits until validation/refusal below.
     const declaredScopes = [...new Set(Object.values(angleScopes))].filter((s) => s !== "full");
     for (const scope of declaredScopes) {
       try {
@@ -2395,9 +2402,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
           diffPath: options.diffPath ?? null,
           validationResultsPath: options.validationResultsPath ?? null,
         });
-        const fullScopePath = path.resolve(repoRoot, scopePath);
-        await mkdir(path.dirname(fullScopePath), { recursive: true });
-        await writeFile(fullScopePath, variant.text, "utf8");
+        pendingVariants.set(scope, { path: scopePath, text: variant.text });
         briefingVariants[scope] = scopePath;
       } catch (err) {
         process.stderr.write(
@@ -2411,21 +2416,13 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   }
 
   const fullPath = path.resolve(repoRoot, contextPath);
-  const artifact = {
-    ...buildGateContextArtifact({ ...options, angleScopes, prefixMode, briefingVariants }),
-    loggedAt: new Date().toISOString(),
-  };
-  // Write ORDER matters: prefix, then volatile-tail + dispatch-plan, then the
+  const loggedAt = new Date().toISOString();
+  // Write ORDER matters: stable references and prefix, then volatile-tail + dispatch-plan, then the
   // JSON completion marker LAST — downstream consumers (readGateContext, the
   // --context-path guard) key on the JSON marker's existence to tell a
-  // complete artifact set from a partial one (a re-write whose volatile/plan
-  // write throws after the prefix already overwrote must not leave a
-  // complete-looking set with a sharedPrefixHash that no longer matches disk).
-  // The marker is unlinked up front (below) only when the prefix bytes are
-  // actually changing — writeFile already truncates siblings in place, so any
-  // partial failure after that leaves the marker absent, exactly what
-  // readGateContext treats as incomplete. On a byte-identical rerun the marker
-  // is deliberately kept, since nothing about the prefix is changing.
+  // complete artifact set from a partial one. Changed stable bytes unlink
+  // the old marker up front; unchanged stable bytes keep it available to live
+  // reviewers. Either path removes the marker on a write failure.
   const fullPrefixPath = path.resolve(repoRoot, briefingPrefixPath);
   const fullVolatilePath = path.resolve(repoRoot, volatilePath);
   const fullRequestPlanPath = path.resolve(repoRoot, requestPlanPath);
@@ -2558,17 +2555,6 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     capabilities,
   });
 
-  // Delete the stale JSON marker before overwriting the prefix (see the
-  // write-order note above): first-ever write is a no-op (force rm). Skipped
-  // on a byte-identical rerun — deleting it there would open a fail-closed
-  // window for a concurrent reviewer's --context-path check for no reason,
-  // since nothing about the prefix is actually changing.
-  const markerUnchanged = existingBytes !== null && existingBytes.equals(prefixBytes);
-  if (!markerUnchanged) {
-    await rm(fullPath, { force: true });
-  }
-  await writeFile(fullPrefixPath, prefixBytes);
-
   // AC3 (issue 2175, head-bump re-gate disposition memory): when --prev-head
   // is supplied, seed the angles re-running THIS round (options.angles minus
   // options.carriedAngles) with the prior head's reject/defer-disposed
@@ -2635,29 +2621,72 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     }
   }
 
-  // Volatile tail: physically separate from the stable prefix above.
+  // Render the volatile tail before destructive writes, so malformed inputs
+  // preserve any prior valid context. It is physically separate from the prefix.
   // acceptanceCriteria is deliberately NOT threaded here — see
-  // {@link renderBriefingVolatile} for the rule. No separate unlink: writeFile
-  // overwrites in place, so a failure here happens only after the prefix
-  // write above already landed, consistent with the marker-absence rule above.
+  // {@link renderBriefingVolatile} for the rule.
   const volatileText = renderBriefingVolatile({
     gate: options.gate,
     headSha: options.headSha,
-    loggedAt: artifact.loggedAt,
+    loggedAt,
     validationPosture: options.validationPosture ?? null,
     priorDispositions,
   });
-  // No mkdir here: fullVolatilePath, fullRequestPlanPath, and fullPath all
-  // resolve into the SAME directory as fullPrefixPath (mkdir'd once, above,
-  // before the prefix write) — repeating it per sibling write is a no-op.
-  await writeFile(fullVolatilePath, volatileText, "utf8");
-
-  // Request plan: same rationale as the volatile tail above — writeFile
-  // overwrites it in place after the prefix AND volatile tail have both
-  // already landed.
-  await writeFile(fullRequestPlanPath, JSON.stringify(requestPlan, null, 2) + "\n", "utf8");
-
-  await writeFile(fullPath, JSON.stringify(artifact, null, 2) + "\n", "utf8");
+  const artifact = { ...buildGateContextArtifact({ ...options, angleScopes, prefixMode, briefingVariants }), loggedAt };
+  // Keep the marker available only when prefix AND referenced stable files
+  // are unchanged. A filtered/pointer diff can change without changing the prefix.
+  let markerUnchanged = existingBytes !== null && existingBytes.equals(prefixBytes);
+  const referencedWrites = [...pendingVariants.values(), ...(options.diffToWrite ? [options.diffToWrite] : [])];
+  for (const pending of referencedWrites) {
+    if (!markerUnchanged) break;
+    try {
+      markerUnchanged = (await readFile(path.resolve(repoRoot, pending.path), "utf8")) === pending.text;
+    } catch {
+      markerUnchanged = false;
+    }
+  }
+  if (!markerUnchanged) {
+    await rm(fullPath, { force: true });
+  }
+  try {
+    if (options.diffToWrite) {
+      try {
+        await writeFile(path.resolve(repoRoot, options.diffToWrite.path), options.diffToWrite.text, "utf8");
+      } catch (error) {
+        // Preserve the existing best-effort diff fallback, but rebuild every
+        // pointer/hash/plan without the failed path before publishing a marker.
+        process.stderr.write(`[gate-context] full-diff capture failed (continuing without scope.diffPath): ${error.message}\n`);
+        await rm(fullPath, { force: true });
+        return await writeGateContext({ ...options, diffPath: null, diffToWrite: null }, { repoRoot });
+      }
+    }
+    for (const [scope, variant] of pendingVariants) {
+      try {
+        await writeFile(path.resolve(repoRoot, variant.path), variant.text, "utf8");
+      } catch (error) {
+        await rm(fullPath, { force: true });
+        delete briefingVariants[scope];
+        process.stderr.write(`[gate-context] scope variant "${scope}" failed to build (continuing without it; affected angles fail open to the full briefing): ${error.message}\n`);
+        for (const [angle, s] of Object.entries(angleScopes)) {
+          if (s === scope) angleScopes[angle] = "full";
+        }
+      }
+    }
+    if (Object.keys(briefingVariants).length === 0) delete artifact.briefingVariants;
+    await writeFile(fullPrefixPath, prefixBytes);
+    await writeFile(fullVolatilePath, volatileText, "utf8");
+    await writeFile(fullRequestPlanPath, JSON.stringify(requestPlan, null, 2) + "\n", "utf8");
+    await writeFile(fullPath, JSON.stringify(artifact, null, 2) + "\n", "utf8");
+  } catch (error) {
+    // Retain landed siblings and round history for diagnosis, but never let
+    // readers mistake this failed write for a complete context set.
+    try {
+      await rm(fullPath, { force: true });
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], `Gate-context write failed: ${error.message}; completion-marker cleanup failed: ${cleanupError.message}`, { cause: error });
+    }
+    throw error;
+  }
 
   return {
     ok: true,
@@ -2770,10 +2799,10 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
 
   const tmpRoot = input.tmpRoot || "tmp";
 
-  // Diff-derived scope: persisted FULL diff (scope.diffPath), parsed
+  // Diff-derived scope: prepared FULL diff (scope.diffPath), parsed
   // scope.changedFiles, and the neutral adjacentCode bundle, all built ONCE by
   // the shared resolveDiffScope helper (also used by the CLI --base path).
-  const { diffPath, changedFiles, adjacentCode, diffOutput } = await resolveDiffScope(
+  const { diffPath, diffToWrite, changedFiles, adjacentCode, diffOutput } = await resolveDiffScope(
     { diff: input.diff, repo: input.repo, pr: input.pr, gate: input.gate, headSha: input.headSha, tmpRoot, maxFileBytes: input.maxFileBytes },
     { repoRoot },
   );
@@ -2801,6 +2830,7 @@ export async function buildGateContext(input, { repoRoot = process.cwd() } = {})
       touchedFiles: input.touchedFiles ?? [],
       changedFiles,
       diffPath,
+      diffToWrite,
       diffOutput,
       adjacentCode,
       acceptanceCriteria: input.acceptanceCriteria ?? null,
@@ -3190,6 +3220,7 @@ export async function main(
       }
       options.changedFiles = scope.changedFiles;
       options.diffPath = scope.diffPath;
+      options.diffToWrite = scope.diffToWrite;
       options.adjacentCode = scope.adjacentCode;
       options.diffOutput = scope.diffOutput;
       options.diffSource = "base";

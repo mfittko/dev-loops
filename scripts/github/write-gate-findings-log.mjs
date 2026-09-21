@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { parseArgs } from "node:util";
+import { verifyZeroUnitCarryProvenance } from "./_carried-angles.mjs";
+import { isDeepStrictEqual, parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -11,6 +12,7 @@ import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositio
 // JUDGE_DISPOSITIONS is a frozen array in the core export; wrap as a Set for
 // the validator's membership check so validateFindingsArray stays self-contained.
 import { JUDGE_DISPOSITIONS as _JUDGE_DISPOSITIONS_ARRAY } from "@dev-loops/core/loop/gate-fanin";
+import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
 import { loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
@@ -118,6 +120,12 @@ function validateFindingsArray(parsed, flagLabel) {
       angle: f.angle.trim(),
       summary: f.summary.trim(),
     };
+    if ("recommendation" in f) {
+      if (typeof f.recommendation !== "string" || f.recommendation.trim().length === 0) {
+        throw parseError(`${flagLabel}[${i}].recommendation must be a non-empty string`);
+      }
+      entry.recommendation = f.recommendation.trim();
+    }
     if (Array.isArray(f.files)) {
       // Trimmed, not just filtered: hasLocatableShape only checks non-empty,
       // but every downstream consumer (diff commentable-line lookup, posted
@@ -360,7 +368,7 @@ export async function checkProvenanceAngleCoverage(provenance, gate, { repoRoot 
  * plan. The plan is never used to construct provenance: it only proves that
  * the already-validated fresh rows describe exactly the units actually emitted.
  */
-export async function verifyEmitPlanProvenance(planPath, provenance, round, { repoRoot = process.cwd() } = {}) {
+export async function verifyEmitPlanProvenance(planPath, provenance, round, { repoRoot = process.cwd(), findings } = {}) {
   let plan;
   const fullPath = path.resolve(repoRoot, planPath);
   try {
@@ -373,8 +381,24 @@ export async function verifyEmitPlanProvenance(planPath, provenance, round, { re
   if (plan?.repo !== round.repo || planPr !== round.pr || normalizeGate(plan?.gate) !== round.gate || planHeadSha !== round.headSha) {
     throw parseError(`--emit-plan "${planPath}" is stamped for ${JSON.stringify({ repo: plan?.repo, pr: plan?.pr, gate: plan?.gate, headSha: plan?.headSha })} but this findings log writes ${JSON.stringify(round)} — a stale or foreign emit plan must not be consumed`);
   }
-  if (plan.ok !== true || !Array.isArray(plan.units) || plan.units.length === 0 || plan.count !== plan.units.length) {
-    throw parseError(`cannot verify emit-plan provenance: --emit-plan "${planPath}" must carry a non-empty units array whose length equals count`);
+  const allCarried = plan.pending === true && provenance.perAngle.length > 0
+    && provenance.perAngle.every((entry) => entry.carriedFromHead !== undefined);
+  if (plan.ok !== true || !Array.isArray(plan.units) || (plan.units.length === 0 && !allCarried) || plan.count !== plan.units.length) {
+    throw parseError(`cannot verify emit-plan provenance: --emit-plan "${planPath}" must carry a non-empty units array whose length equals count, or a pending zero-unit plan backed entirely by carried provenance`);
+  }
+  if (plan.units.length === 0) {
+    verifyZeroUnitCarryProvenance(plan.carried, provenance.perAngle);
+    const remaining = Array.isArray(findings) ? [...findings] : [];
+    for (const entry of plan.carried) {
+      for (const prior of entry.findings ?? []) {
+        const index = remaining.findIndex((finding) => finding.angle === entry.angle
+          && ["severity", "summary", "line", "recommendation"].every((key) => finding[key] === prior[key])
+          && isDeepStrictEqual(finding.files, prior.files ?? (prior.file ? [prior.file] : undefined)));
+        if (index < 0) throw parseError(`zero-unit carry proof requires preserved findings for ${entry.angle}`);
+        remaining.splice(index, 1);
+      }
+    }
+    if (remaining.length > 0) throw parseError("zero-unit carry proof rejects unproven findings, including duplicates of preserved findings");
   }
 
   const expected = new Map();
@@ -387,8 +411,15 @@ export async function verifyEmitPlanProvenance(planPath, provenance, round, { re
     if (group !== undefined && (typeof group !== "string" || group.trim().length === 0)) {
       throw parseError(`cannot verify emit-plan provenance: --emit-plan units[${unitIndex}].group must be null or a non-empty string`);
     }
-    if ((unit.angles.length === 1) !== (group === undefined)) {
-      throw parseError(`cannot verify emit-plan provenance: --emit-plan units[${unitIndex}].group must be null for a singleton and non-empty for a multi-angle unit`);
+    // ADR0072: a one-angle split tail retains the original resolved group's name.
+    if (unit.angles.length > 1 && group === undefined) {
+      throw parseError(`cannot verify emit-plan provenance: --emit-plan units[${unitIndex}].group must be non-empty for a multi-angle unit`);
+    }
+    if (unit.angles.length === 1 && group !== undefined) {
+      const previous = plan.units[unitIndex - 1];
+      if (previous?.angles.length !== REVIEWER_UNIT_MAX_ANGLES || previous.group?.trim() !== group.trim()) {
+        throw parseError(`cannot verify emit-plan provenance: --emit-plan units[${unitIndex}] is a grouped singleton without a preceding same-group full-cap split sibling`);
+      }
     }
     for (const rawAngle of unit.angles) {
       if (typeof rawAngle !== "string" || rawAngle.trim().length === 0) {
@@ -715,7 +746,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       pr: options.pr,
       gate: options.gate,
       headSha: options.headSha,
-    }, { repoRoot });
+    }, { repoRoot, findings: rawFindings });
   }
   // Angle-coverage enforcement (fail-closed on missing mandatory angles / foreign
   // angles) only applies when provenance is actually recorded — provenance

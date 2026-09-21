@@ -54,6 +54,7 @@ Before merge, ALL of the following MUST hold:
 7. ✅ Closing-reference state matches artifact backing, each arm owned by a different contract: tracker-backed work — PR body contains `Closes #N` or `Fixes #N` (owned by the PR description contract in [copilot-loop-operations.md](copilot-loop-operations.md)); issue-less lightweight (PR-body-as-spec, no backing issue) — the closing reference is absent by design and `node scripts/loop/validate-pr-body-spec.mjs --repo <owner/name> --pr <number> --no-issue` passes clean (owned by `ARTIFACT-LIGHTWEIGHT-BODY-INVARIANTS` in [Artifact Authority Contract](artifact-authority-contract.md)); plan-file promotion (P4) — the PR body carries the committed plan-doc path as the spec-of-record and, being issue-less by design (`buildPromotionPrBody` neutralizes closing keywords), the closing reference MUST NOT be present
 8. ✅ PR **title** free of merge-blocking markers — see [Title markers](#title-markers) for the exact constructions that count
 9. ✅ Size-budget human-approval requirement satisfied for an escalated/T1 PR — see [Size-budget merge gate](#size-budget-merge-gate-issue-1480)
+10. ✅ Copilot convergence on the current head — the latest current-head Copilot review is not an actionable non-approval. A `🟡 Changes recommended` (or an unrecognized disposition header) refuses the merge fail-closed; a `🔵 Needs a closer look` is conductor-overridable (item 5's unresolved-thread gate still applies, so a `🔵` merges only with zero unresolved threads); a `🟢 Approval recommended`, a stale non-approval at an earlier head, or no current-head Copilot review passes. The merge gate reads the current-head disposition through the SAME `classifyCopilotReviewBodyDisposition` detection the loop's `copilotBodyFeedbackUnresolved` uses, so gate and loop never drift at the detection layer (the `🔵` policy differs by design — the loop self-blocks, the merge gate defers to the conductor).
 
 > Runner-coordination lock: the pre-merge evidence check fails closed on a stale/foreign runner claim for the PR. A completing run releases its claim best-effort at every terminal stop (including the human approval checkpoint), so a merge re-dispatch normally proceeds. The release fires both at Copilot-loop terminal states (`loop handoff`, #1128) and at gate-coordination terminal stops (`detect-pr-gate-coordination-state` — approval checkpoint / merge-ready / done / blocked, #1632), so a run that stops at the approval checkpoint without a Copilot-loop terminal state still releases immediately. If a lock held by a completed/dead run still blocks the merge, take it over explicitly with `node <resolved-skill-scripts>/loop/pr-runner-coordination.mjs takeover --repo <owner/name> --pr <number>`. Never take over a genuinely active (non-stale) run — that fail-closed block is intentional.
 
@@ -63,7 +64,7 @@ Before merge, ALL of the following MUST hold:
 
 ## Sanctioned merge wrapper (issue #1939)
 
-The canonical merge path is the sanctioned wrapper `scripts/github/merge-pr.mjs`
+The canonical agent-executed merge path is the sanctioned wrapper `scripts/github/merge-pr.mjs`
 (`node scripts/github/merge-pr.mjs --repo <owner/name> --pr <n> --human-approved-by <login>`,
 squash by default, `--method` configurable). It runs the full precondition list
 above fail-closed and refuses with a non-zero, machine-readable reason naming the
@@ -181,7 +182,18 @@ practice:
   green `gate-evidence` check **once branch protection on `main` requires it**.
   Until an operator adds it to branch protection, the check runs and reports at
   pre-merge/verdict points on every non-draft PR but does **not** yet block
-  merge — it is reporting-only in that window.
+  merge — it is reporting-only in that window. The workflow is two jobs
+  (`docs/decisions/0076-gate-evidence-reporter-split-always-settles-required-status.md`,
+  amending 0043): `gate-evidence-runner` keeps `cancel-in-progress: true` for
+  waste-avoidance but no longer posts the status itself, and a non-cancelling
+  `gate-evidence-reporter` job always settles the required check at the final
+  head after a burst of review/comment events, closing the gap where the
+  LAST-triggered run of a burst was itself cancelled and no run posted a
+  status. `merge-pr.mjs` surfaces this transitional-period recovery directly:
+  when `gh pr merge` is blocked and the `gate-evidence` context is not
+  `success`, its error names the required check and the same recovery —
+  complete/re-run the latest Gate-evidence run, or edit the current-head
+  verdict comment — instead of only GitHub's generic block message.
 
 The server-side check verifies the same visible, comment-derived verdict fields
 the client-side tooling does (including the light-mode inline exception,
@@ -320,6 +332,11 @@ A standing authorization is valid only when all of the following hold:
   the condition), not only in a chat turn
 - the gate pass is complete at the current head; a gate-incomplete PR stays unauthorized
 
+This recorded authorization's current-head condition is stricter than the general
+one-time draft transition rule in [PR Lifecycle Contract](pr-lifecycle-contract.md).
+The detector accepting an older draft transition record does not establish this
+standing authorization; if its condition is unmet, obtain fresh per-scope approval.
+
 Absent a recorded standing authorization, the per-scope explicit rule above governs.
 
 A standing authorization is surfaced through the same per-run authorization signal the
@@ -338,8 +355,9 @@ human action and this authorization step is **non-overridable**:
   "merge" instruction. The lifecycle resolver therefore never advances to the merge
   state and parks at the `pre_approval_gate` human-merge handoff.
 - The agent still runs the full mechanical pre-merge evidence check and reports
-  merge-ready + gate evidence, then hands off to a human, who merges through the
-  sanctioned wrapper `scripts/github/merge-pr.mjs`. Under `humanMergeOnly` the agent
+  merge-ready + gate evidence, then hands off to a human for the GitHub merge action
+  (ADR 0007). The wrapper also refuses a human invocation while this config is set;
+  do not hand off an unusable wrapper command or change the config to bypass it. Under `humanMergeOnly` the agent
   **never** performs the merge itself — not the wrapper and never a raw `gh pr merge`;
   merge is a human action.
 

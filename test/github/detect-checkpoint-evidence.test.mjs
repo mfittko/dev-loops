@@ -677,6 +677,47 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
   }
 });
 
+test("detect-checkpoint-evidence --fields returns the named top-level scalars as one tab-separated line (#2163)", async () => {
+  // One `--fields` call on this checkpoint-evidence surface returns the named
+  // top-level scalars in a single invocation — no `node -e`, no jq
+  // object-projection. Fresh stub/tempDir: the PATH gh stub advances a counter,
+  // so this cannot piggyback the multi-call success test above.
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-checkpoint-evidence-fields-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    const env = await writeGhStub(tempDir, [
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: `${JSON.stringify([
+          {
+            id: 42,
+            body: ["Gate review: draft_gate", "Reviewed head SHA: abc1234", "Verdict: clean", "Findings summary: no issues found", "Next action: mark ready for review"].join("\n"),
+            updated_at: "2026-05-29T21:00:00Z",
+            html_url: "https://github.com/owner/repo/pull/17#issuecomment-42",
+          },
+          {
+            id: 43,
+            body: ["Gate review: pre_approval_gate", "Reviewed head SHA: abc1234", "Verdict: clean", "Findings summary: no issues found", "Next action: await final human approval", "Size-budget outcome: pass", "Size-budget T1 slice: not touched", "Size-budget waiver: none"].join("\n"),
+            updated_at: "2026-05-29T22:00:00Z",
+            html_url: "https://github.com/owner/repo/pull/17#issuecomment-43",
+          },
+        ])}\n`,
+      },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      {
+        assertArgs: ["api", "graphql"],
+        stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "t1", isResolved: true, comments: { nodes: [] } }] } } } } }) + "\n",
+      },
+    ]);
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--fields", "repo,pr,currentHeadSha"], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout, "owner/repo\t17\tabc1234\n");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("detect-checkpoint-evidence fails pre-merge check when only draft gate exists (no pre-approval)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-checkpoint-evidence-pages-"));
 
@@ -834,7 +875,7 @@ test("detect-checkpoint-evidence always fails before merge when gate comments ar
   }
 });
 
-test("detect-checkpoint-evidence always passes pre-merge check with clean draft and current-head pre-approval gate comments", async () => {
+test("detect-checkpoint-evidence accepts an older clean draft transition with current-head pre-approval", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-gate-review-premerge-clean-"));
 
   try {
@@ -896,6 +937,8 @@ test("detect-checkpoint-evidence always passes pre-merge check with clean draft 
     assert.equal(payload.preMergeGateCheck.ok, true);
     assert.deepEqual(payload.preMergeGateCheck.failures, []);
     assert.equal(payload.evidenceState, EVIDENCE_STATE.SATISFIED);
+    assert.equal(payload.draftGate.headSha, "bcd5678");
+    assert.equal(payload.preApprovalGateMarker.headSha, "abc1234");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

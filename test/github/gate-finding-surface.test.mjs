@@ -11,13 +11,16 @@ import {
   buildFindingMarker,
   buildFollowUpIssueBody,
   buildFollowUpIssueTitle,
+  buildNonLocatableFindingMarker,
   buildReviewHeaderMarker,
   collectSuppressedFingerprints,
   collectVerdictHeadShas,
   createGateReview,
   ensureFollowUpIssue,
+  fetchFollowUpIssueFingerprints,
   findFollowUpIssueOnGitHub,
   fingerprintFinding,
+  isBelowInlineFloor,
   isDeferredAtRound,
   isFileableDeferral,
   isLocatableFinding,
@@ -25,6 +28,7 @@ import {
   normalizePrReviewsPayload,
   parseFindingMarker,
   readGateFindingsLedger,
+  renderFoldedFindingsBlock,
   renderInlineCommentBody,
   renderNonLocatableBlock,
   updateGateReview,
@@ -280,6 +284,58 @@ test("isFileableDeferral: legacy severity spellings behave identically to their 
 });
 
 // ---------------------------------------------------------------------------
+// #2263: isBelowInlineFloor — the FOLDED-vs-INLINE/BODYFILED routing
+// predicate. "Below the floor" is purely a SEVERITY_ORDER rank comparison;
+// locatability is irrelevant here (a caller applies isLocatableFinding
+// separately, only to candidates that pass this floor check).
+// ---------------------------------------------------------------------------
+
+test("isBelowInlineFloor: at the default \"medium\" floor, high/question/medium stay inline and low/nit fold", () => {
+  assert.equal(isBelowInlineFloor("high", "medium"), false);
+  assert.equal(isBelowInlineFloor("question", "medium"), false);
+  assert.equal(isBelowInlineFloor("medium", "medium"), false);
+  assert.equal(isBelowInlineFloor("low", "medium"), true);
+  assert.equal(isBelowInlineFloor("nit", "medium"), true);
+});
+
+test("isBelowInlineFloor: lowering the floor to \"low\" restores low inline, only nit still folds (the escape hatch)", () => {
+  assert.equal(isBelowInlineFloor("medium", "low"), false);
+  assert.equal(isBelowInlineFloor("low", "low"), false);
+  assert.equal(isBelowInlineFloor("nit", "low"), true);
+});
+
+test("isBelowInlineFloor: floor \"nit\" folds nothing (everything posts inline)", () => {
+  for (const severity of ["high", "question", "medium", "low", "nit"]) {
+    assert.equal(isBelowInlineFloor(severity, "nit"), false);
+  }
+});
+
+test("isBelowInlineFloor: an unknown severity or floor fails CLOSED (posts inline, never silently folded)", () => {
+  assert.equal(isBelowInlineFloor("bogus", "medium"), false);
+  assert.equal(isBelowInlineFloor("low", "bogus"), false);
+  assert.equal(isBelowInlineFloor(undefined, "medium"), false);
+});
+
+test("isBelowInlineFloor: legacy severity spellings normalize before ranking", () => {
+  assert.equal(isBelowInlineFloor("nice-to-have", "medium"), true); // low
+  assert.equal(isBelowInlineFloor("worth-fixing-now", "medium"), false); // medium
+  assert.equal(isBelowInlineFloor("must-fix", "medium"), false); // high
+});
+
+// #2295 Copilot review fix 1: a "question" never folds, at ANY floor —
+// including a floor value like "high" that the config schema no longer permits
+// (the enum is constrained to ["medium","low","nit"]). isBelowInlineFloor is a
+// pure function, not schema-bound, so this proves the defense-in-depth guard
+// holds even for a floor the config can never produce. Contrast with
+// "low"/"medium", which DO fold once the floor is raised past them.
+test("isBelowInlineFloor: a \"question\" never folds, even at a floor value (\"high\") the config no longer permits", () => {
+  assert.equal(isBelowInlineFloor("question", "high"), false);
+  assert.equal(isBelowInlineFloor("question", "medium"), false);
+  assert.equal(isBelowInlineFloor("low", "high"), true);
+  assert.equal(isBelowInlineFloor("medium", "high"), true);
+});
+
+// ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
 
@@ -411,6 +467,128 @@ test("renderNonLocatableBlock: the line ref renders inside files[0]'s own code s
     { round: 1 },
   );
   assert.match(block, /^> Location: `src\/a\.mjs:12`, `src\/b\.mjs`$/m);
+});
+
+// ---------------------------------------------------------------------------
+// #2263: renderFoldedFindingsBlock — the collapsed <details> surface for
+// findings folded below the inline severity floor.
+// ---------------------------------------------------------------------------
+
+test("renderFoldedFindingsBlock: empty input renders nothing", () => {
+  assert.equal(renderFoldedFindingsBlock([], { round: 1 }), "");
+});
+
+test("renderFoldedFindingsBlock: renders a collapsed <details> with a per-finding marker and a file:line + summary bullet", () => {
+  const findings = [
+    { severity: "low", angle: "naming", summary: "casing nit", files: ["src/a.mjs"], line: 12 },
+    { severity: "nit", angle: "style", summary: "trailing whitespace" },
+  ];
+  const block = renderFoldedFindingsBlock(findings, { round: 2 });
+  assert.match(block, /^<details>$/m);
+  assert.match(block, /^<summary>Suppressed low\/nit findings \(2\) — below the inline severity floor<\/summary>$/m);
+  assert.match(block, /^<\/details>$/m);
+  assert.match(block, /^- `src\/a\.mjs:12` \*\*low\*\* \(`naming`\): casing nit$/m);
+  assert.match(block, /^- \*\*nit\*\* \(`style`\): trailing whitespace$/m);
+  // Every marker is a parseable line-start `dev-loops:finding` marker, one per
+  // finding, carrying disposition=deferred.
+  const markerLines = block.split("\n").filter((line) => line.startsWith("<!-- dev-loops:finding "));
+  assert.equal(markerLines.length, 2);
+  for (const line of markerLines) {
+    const parsed = parseFindingMarker(line);
+    assert.ok(parsed, `expected a parseable marker, got: ${JSON.stringify(line)}`);
+    assert.equal(parsed.disposition, "deferred");
+  }
+});
+
+test("renderFoldedFindingsBlock: an operatorVisible finding's marker carries ov=1", () => {
+  const findings = [{ severity: "low", angle: "naming", summary: "casing nit", operatorVisible: true }];
+  const block = renderFoldedFindingsBlock(findings, { round: 1 });
+  const markerLine = block.split("\n").find((line) => line.startsWith("<!-- dev-loops:finding "));
+  assert.match(markerLine, /ov=1/);
+  assert.equal(parseFindingMarker(markerLine).operatorVisible, true);
+});
+
+test("renderFoldedFindingsBlock: a folded finding's marker matches buildNonLocatableFindingMarker exactly (shared render path)", () => {
+  const finding = { severity: "nit", angle: "style", summary: "trailing whitespace" };
+  const block = renderFoldedFindingsBlock([finding], { round: 3 });
+  const markerLine = block.split("\n").find((line) => line.startsWith("<!-- dev-loops:finding "));
+  assert.equal(markerLine, buildNonLocatableFindingMarker(finding, { round: 3 }));
+});
+
+test("renderFoldedFindingsBlock: sanitizes a hostile summary/angle and neutralizes a bare Copilot summon", () => {
+  const findings = [{ severity: "low", angle: "naming", summary: "ask @copilot to re-review <script>alert(1)</script>" }];
+  const block = renderFoldedFindingsBlock(findings, { round: 1 });
+  assert.ok(!/<script>/i.test(block), `must never carry a raw HTML tag, got: ${JSON.stringify(block)}`);
+  assert.ok(containsBareCopilotSummon(block) === false, "a bare @copilot summon must be neutralized");
+});
+
+// ---------------------------------------------------------------------------
+// #2263: fetchFollowUpIssueFingerprints — reads already-filed fingerprints
+// off the tracked follow-up issue's body + comments for the folded-filing
+// pass's idempotency dedup.
+// ---------------------------------------------------------------------------
+
+test("fetchFollowUpIssueFingerprints: parses fingerprints from a mocked issue body and comments", async () => {
+  const run = async (ghCommand, args) => {
+    const endpoint = args[args.length - 1];
+    if (endpoint.includes("/comments")) {
+      return {
+        code: 0,
+        stdout: JSON.stringify([[
+          { body: "Additional gate finding(s) deferred to this issue:\n\n- `2222222222222222` **low** (`perf`): stale cache" },
+        ]]),
+        stderr: "",
+      };
+    }
+    return {
+      code: 0,
+      stdout: JSON.stringify({ body: "- `1111111111111111` **low** (`naming`): casing nit" }),
+      stderr: "",
+    };
+  };
+  const result = await fetchFollowUpIssueFingerprints({ repo: "o/r", issueNumber: 101 }, { run });
+  assert.deepEqual([...result].sort(), ["1111111111111111", "2222222222222222"]);
+});
+
+test("fetchFollowUpIssueFingerprints: no fingerprints in body or comments returns an empty set", async () => {
+  const run = async (ghCommand, args) => {
+    const endpoint = args[args.length - 1];
+    if (endpoint.includes("/comments")) return { code: 0, stdout: "[]", stderr: "" };
+    return { code: 0, stdout: JSON.stringify({ body: "no findings recorded yet" }), stderr: "" };
+  };
+  const result = await fetchFollowUpIssueFingerprints({ repo: "o/r", issueNumber: 101 }, { run });
+  assert.deepEqual([...result], []);
+});
+
+// #2295 Copilot review fix 2: ISSUE_FINGERPRINT_RE is anchored to the leading
+// list-bullet shape formatDeferredFindingEntry renders (`- \`<16hex>\` ...`).
+// A stray backtick-wrapped 16-hex token elsewhere in prose (e.g. quoting a
+// commit-ish or an unrelated code span) must NOT be misread as an
+// already-filed fingerprint — under-matching here at worst re-files a
+// harmless duplicate; over-matching would silently skip a genuinely-fileable
+// folded finding.
+test("fetchFollowUpIssueFingerprints: a stray backtick-wrapped 16-hex token in prose (not a leading bullet) is not collected", async () => {
+  const run = async (ghCommand, args) => {
+    const endpoint = args[args.length - 1];
+    if (endpoint.includes("/comments")) {
+      return {
+        code: 0,
+        stdout: JSON.stringify([[
+          { body: "See commit `0123456789abcdef` for context — not a filed fingerprint." },
+        ]]),
+        stderr: "",
+      };
+    }
+    return {
+      code: 0,
+      stdout: JSON.stringify({
+        body: "Mentioned in passing: `fedcba9876543210` is unrelated.\n\n- `1111111111111111` **low** (`naming`): casing nit",
+      }),
+      stderr: "",
+    };
+  };
+  const result = await fetchFollowUpIssueFingerprints({ repo: "o/r", issueNumber: 101 }, { run });
+  assert.deepEqual([...result], ["1111111111111111"]);
 });
 
 // The single visible surface carries the verdict fields AND the body-filed

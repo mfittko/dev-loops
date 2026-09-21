@@ -41,12 +41,12 @@
 import { mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { parseArgs } from "node:util";
+import { isDeepStrictEqual, parseArgs } from "node:util";
 import { requireTokenValue } from "../_cli-primitives.mjs";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { GATE_NAMES } from "../github/_gate-names.mjs";
-import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray } from "../github/_carried-angles.mjs";
+import { normalizeCarriedAngleElements, parseCarriedAnglesJsonArray, validateCarryForwardPlanEntries, validateCarryForwardPlanShape, validateZeroUnitCarryProof } from "../github/_carried-angles.mjs";
 import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { isPostedCommentLimitError, normalizeStructuredFindings, renderStructuredFindings } from "../github/upsert-checkpoint-verdict.mjs";
 import { verifyBriefingPrefixesForHead } from "../github/verify-briefing-prefixes.mjs";
@@ -88,6 +88,8 @@ Optional:
                                  to the overall verdict (default when omitted: ["high"]). When given,
                                  a config that could not be fully loaded/validated FAILS CLOSED (exit 1)
                                  rather than silently falling back to the shipped default severities.
+  --repo <owner/name>          Required with --pr for a zero-unit emit plan; both
+  --pr <number>                  must match its repository/PR round key.
   --out <path>                  Write the nested per-angle "findingsJson" shape (below) to this
                                  path as JSON — the exact input upsert-checkpoint-verdict.mjs's
                                  --findings-json accepts. A round over the gate-comment render
@@ -450,7 +452,7 @@ function normalizeHeadShaValue(value) {
 // "is stamped for ... but this round consolidates ..." family the
 // --cache-telemetry guard uses. A guard only: nothing from the plan flows
 // into any output.
-async function verifyEmitPlanKey(planPath, { gate, headSha }) {
+async function verifyEmitPlanKey(planPath, { repo, pr, gate, headSha, carriedAngles, carryForwardPlan, resolvedAngles }) {
   // The round's --gate must be a canonical supported gate (string membership in
   // VALID_GATES, no String() coercion) BEFORE any compare: a direct
   // programmatic call can pass gate: null/123, and String() coercion would
@@ -490,87 +492,20 @@ async function verifyEmitPlanKey(planPath, { gate, headSha }) {
   if (planHeadSha !== headSha) {
     throw new Error(`--emit-plan "${planPath}" is stamped for head "${planHeadSha}" but this round consolidates head ${headSha} — a stale or foreign emit plan must not be consumed for a different round (fail-closed)`);
   }
-}
-
-// Validate + normalize (in place) a "carried" entries array's per-entry shape:
-// a non-empty "angle" and a "carriedFromHead" that is a 7-64 char hex SHA.
-// Shared by both the parse-time path (validateCarryForwardPlanShape, below)
-// and consolidateGateFanin's own re-check of options.carryForwardPlan, so a
-// programmatic caller that bypasses the parser still fails closed on a
-// malformed entry (e.g. `[{ angle: "x" }]`, missing carriedFromHead) instead
-// of minting an unmarked clean row indistinguishable from a fresh review.
-function validateCarryForwardPlanEntries(carried) {
-  carried.forEach((entry, i) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)
-        || typeof entry.angle !== "string" || entry.angle.trim().length === 0
-        || typeof entry.carriedFromHead !== "string") {
-      throw new Error(`--carry-forward-plan carried[${i}] must be an object with non-empty string "angle" and "carriedFromHead" fields (resolve-angle-carry-forward.mjs's plan.carried shape)`);
+  if (plan.pending === true && Array.isArray(plan.units) && plan.units.length === 0) {
+    if (typeof repo !== "string" || !/^[^/\s]+\/[^/\s]+$/.test(repo)
+        || !Number.isSafeInteger(Number(pr)) || Number(pr) < 1
+        || plan.repo !== repo || Number(plan.pr) !== Number(pr)) {
+      throw new Error("zero-unit emit plan requires matching --repo and --pr round identities");
     }
-    const normalized = entry.carriedFromHead.trim().toLowerCase();
-    if (!CARRIED_FROM_HEAD_RE.test(normalized)) {
-      throw new Error(`--carry-forward-plan carried[${i}].carriedFromHead must be a 7-64 char hex SHA (write-gate-findings-log.mjs's own provenance bound), got ${JSON.stringify(entry.carriedFromHead)}`);
+    const names = resolvedAngles ?? carriedAngles ?? [];
+    const proof = validateZeroUnitCarryProof(plan.carried, names);
+    const supplied = validateZeroUnitCarryProof(carryForwardPlan, names);
+    validateZeroUnitCarryProof(proof, carriedAngles ?? []);
+    if (proof.some((entry) => !isDeepStrictEqual(entry, supplied.find((item) => item.angle === entry.angle)))) {
+      throw new Error("zero-unit carry proof differs from the emitted round's carry-forward plan");
     }
-    entry.carriedFromHead = normalized;
-    // Optional: a carried entry may declare the PRIOR verdict it is carrying
-    // ("clean" or "findings_present"). Absent entirely, the upsert below
-    // defaults to clean/no findings for backward compatibility with an older
-    // plan shape.
-    if (entry.prevVerdict !== undefined) {
-      if (entry.prevVerdict !== "clean" && entry.prevVerdict !== "findings_present") {
-        throw new Error(`--carry-forward-plan carried[${i}].prevVerdict must be "clean" or "findings_present", got ${JSON.stringify(entry.prevVerdict)}`);
-      }
-      // Fail closed both directions here, at the one place every carried
-      // entry passes through: a "findings_present" carry with no findings
-      // would silently drop the real findings it claims to carry, and a
-      // "clean" carry smuggling non-empty findings would hide them behind an
-      // approval — reject both rather than let either surface downstream
-      // where the cause is harder to trace.
-      if (entry.prevVerdict === "findings_present") {
-        if (!Array.isArray(entry.findings) || entry.findings.length === 0) {
-          throw new Error(`--carry-forward-plan carried[${i}] declares prevVerdict "findings_present" but has no non-empty "findings" array to carry — refusing to mint a findings_present carried entry with no findings (fail-closed: this would drop the very findings carry-forward exists to preserve)`);
-        }
-        entry.findings.forEach((f, j) => {
-          if (!f || typeof f !== "object" || Array.isArray(f)
-              || typeof f.severity !== "string" || !VALID_SEVERITIES.has(normalizeSeverity(f.severity.trim()))
-              || typeof f.summary !== "string" || f.summary.trim().length === 0) {
-            throw new Error(`--carry-forward-plan carried[${i}].findings[${j}] must be an object with a valid "severity" (${SEVERITY_ORDER.join("|")}) and a non-empty "summary"`);
-          }
-        });
-      } else if (Array.isArray(entry.findings) && entry.findings.length > 0) {
-        throw new Error(`--carry-forward-plan carried[${i}] declares prevVerdict "clean" but carries a non-empty "findings" array — a clean carry must never smuggle findings through (fail-closed)`);
-      }
-    } else if (entry.findings !== undefined && entry.findings !== null
-        && (!Array.isArray(entry.findings) || entry.findings.length > 0)) {
-      // Symmetric fail-closed case: an entry with no prevVerdict at all must
-      // not be a backdoor around the check above. This also covers a
-      // malformed (non-array) findings payload, not just a non-empty array —
-      // only an explicit prevVerdict: "findings_present" with a well-formed
-      // non-empty findings array is eligible to carry findings through.
-      throw new Error(`--carry-forward-plan carried[${i}] carries a "findings" payload (${Array.isArray(entry.findings) ? "non-empty array" : typeof entry.findings}) but no "prevVerdict": "findings_present" — refusing to upsert it as a clean carry (fail-closed)`);
-    }
-  });
-  return carried;
-}
-
-// Validate --carry-forward-plan's shape at parse time: an object carrying a
-// "carried" array (resolve-angle-carry-forward.mjs's own result object
-// satisfies this directly), or a bare JSON array of carried entries — so the
-// sanctioned invocation can pass that CLI's stdout, or just its "carried"
-// field, straight through. Every entry must carry a non-empty "angle" and a
-// "carriedFromHead" that is a 7-64 char hex SHA; malformed/missing evidence
-// fails closed here rather than silently treating an unmatched name as "not
-// carried" later, or a garbage provenance marker reaching --out.
-// Returns the validated "carried" array (not the whole plan object) — the
-// only part consolidateGateFanin actually consumes.
-function validateCarryForwardPlanShape(raw) {
-  const plan = Array.isArray(raw) ? { carried: raw } : raw;
-  if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
-    throw new Error('--carry-forward-plan must be a JSON object with a "carried" array, or a bare JSON array of carried entries (resolve-angle-carry-forward.mjs\'s own result, or just its "carried" field)');
   }
-  if (!Array.isArray(plan.carried)) {
-    throw new Error('--carry-forward-plan must have a "carried" array (resolve-angle-carry-forward.mjs\'s plan.carried)');
-  }
-  return validateCarryForwardPlanEntries(plan.carried);
 }
 
 export function parseConsolidateFaninCliArgs(argv) {
@@ -601,6 +536,8 @@ export function parseConsolidateFaninCliArgs(argv) {
       "findings-dir": { type: "string" },
       "head-sha": { type: "string" },
       gate: { type: "string" },
+      repo: { type: "string" },
+      pr: { type: "string" },
       out: { type: "string" },
       "ledger-out": { type: "string" },
       "pr-checklist": { type: "string" },
@@ -641,6 +578,10 @@ export function parseConsolidateFaninCliArgs(argv) {
         throw parseError("--head-sha must be a 7-64 char hex SHA");
       }
       options.headSha = headSha;
+      continue;
+    }
+    if (token.name === "repo" || token.name === "pr") {
+      options[token.name] = requireTokenValue(token, parseError).trim();
       continue;
     }
     if (token.name === "gate") {
@@ -1020,7 +961,7 @@ export async function consolidateGateFanin(options) {
   // invocation writes no --out/--ledger-out and fails fastest. Validation does
   // not delete caller-owned files that predate this invocation.
   if (options.emitPlan !== undefined) {
-    await verifyEmitPlanKey(options.emitPlan, { gate: options.gate, headSha: options.headSha });
+    await verifyEmitPlanKey(options.emitPlan, options);
     // The guard already proved this is a canonical string gate. Normalize it
     // for downstream guarded consumers without changing the omission
     // programmatic path, whose legacy pass-through behavior is preserved.

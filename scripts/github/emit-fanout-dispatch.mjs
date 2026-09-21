@@ -1,13 +1,16 @@
 #!/usr/bin/env node
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { validateZeroUnitCarryProof } from "./_carried-angles.mjs";
+import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
-import { gateScopePrefix, normalizeGate } from "./_gate-names.mjs";
+import { gateScopePrefix, LIFECYCLE_GATES, normalizeGate } from "./_gate-names.mjs";
 import { HEAD_SHA_RE, VALID_SCOPE_RE } from "./record-dispatch-prompt-layout.mjs";
-import { buildGateContextPath, buildGateEmitPlanPath } from "./write-gate-context.mjs";
+import { buildCarryForwardPlanPath, buildGateContextPath, buildGateEmitPlanPath, mapGateToConfigKey } from "./write-gate-context.mjs";
+import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
-import { loadDevLoopConfig, resolveFanoutEffectiveConcurrency } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveFanoutEffectiveConcurrency, resolveGateAngleContract } from "@dev-loops/core/config";
 import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 
 const USAGE = `Usage: emit-fanout-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--pending] [--tmp-root <path>] [--help]
@@ -35,7 +38,8 @@ sub-unit's angles stay members of the SAME resolved unit, so the merge guard's
 resolveFanoutGroups re-derivation (detect-checkpoint-evidence.mjs's
 fanoutReviewerPairingError, the fail-closed authority for this) still pairs
 them honestly whether the unit is configured or auto-chunked. A singleton
-records no group.
+from an unsplit single-angle resolved unit records no group; a one-angle split
+tail retains its original unit's group.
 
 The per-unit angle-suffix this emits only NAMES the unit's angle(s) and instructs
 the reviewer to self-resolve each angle's persona/prompt (resolveReviewerRole) —
@@ -46,8 +50,8 @@ scoped angle-review mode), not re-derived here.
 Run write-gate-context.mjs FIRST (it writes the briefing prefix, volatile tail,
 and the fanout dispatch plan this reads). Then dispatch ONE fresh-context \`review\`
 subagent per emitted unit, seeded with that unit's promptPath bytes verbatim, and
-record each unit's \`group\` on Phase 3's provenance (null for a singleton unit; the
-configured group name for a shared unit).
+record each unit's \`group\` on Phase 3's provenance (null for an unsplit singleton;
+the original resolved unit's name for a shared unit or any split sub-unit).
 
 Required:
   --repo <owner/name>        Same vocabulary as write-gate-context.mjs.
@@ -61,8 +65,11 @@ Optional:
                                instead of the full fanout.groups. Falls back to
                                fanout.groups only when pendingGroups is ABSENT (an
                                older artifact); a PRESENT-but-empty pendingGroups
-                               means nothing is pending and refuses with "zero
-                               units" rather than silently re-emitting the full set.
+                               requires every resolved angle to be carried with
+                               --carry-forward-plan proof, or refuses zero units.
+  --carry-forward-plan <json>  Resolver output (or its carried array). Required
+                               for a zero-unit pending round; persisted with the
+                               keyed plan for fan-in and provenance verification.
   --tmp-root <path>            The tmp/ directory the round's gate-context
                                artifacts live under (default: process.cwd()/tmp;
                                must match the write-gate-context.mjs call).
@@ -188,7 +195,7 @@ export function buildAngleNamingSuffix(unit) {
 Budget: at most ${REVIEWER_UNIT_BUDGET.maxModelTurns} model turns and ${REVIEWER_UNIT_BUDGET.maxToolCalls} tool calls for this unit.
 Scope: review ONLY the angle(s) named above — reviewing an unassigned angle is prohibited.
 Prohibited: ${prohibited}.
-If you exceed this budget (more than ${REVIEWER_UNIT_BUDGET.maxModelTurns} model turns or ${REVIEWER_UNIT_BUDGET.maxToolCalls} tool calls) OR cannot finish reviewing every assigned angle within it, do NOT report clean — emit a durable blocked result via: node scripts/github/emit-reviewer-blocked.mjs --run <reviewed head sha> --head-sha <reviewed head sha> --angles <your assigned angles, comma-separated> --completed-angles <angles you finished> --model-turns <model turns you used> --tool-calls <tool calls you used> --findings-dir <the per-angle findings directory named in the briefing prefix above>.`;
+If you exceed this budget (more than ${REVIEWER_UNIT_BUDGET.maxModelTurns} model turns or ${REVIEWER_UNIT_BUDGET.maxToolCalls} tool calls) OR cannot finish reviewing every assigned angle within it, do NOT report clean — emit a durable blocked result via: dev-loops-run scripts/github/emit-reviewer-blocked.mjs --run <reviewed head sha> --head-sha <reviewed head sha> --angles <your assigned angles, comma-separated> --completed-angles <angles you finished> --model-turns <model turns you used> --tool-calls <tool calls you used> --findings-dir <the per-angle findings directory named in the briefing prefix above>.`;
   return `${header}\n\n${body}\n\n${contract}\n`;
 }
 
@@ -309,6 +316,73 @@ export function expandDispatchUnits(units, configuredGroupNames) {
   return out;
 }
 
+/**
+ * List the durable gate-findings-log heads for THIS gate at a head DIFFERENT
+ * from the current one. A prior-round log is the deterministic signal that this
+ * is not the gate's first round — independent of whether the driver passed
+ * `--prev-head`, so a driver cannot evade the carry-forward step by omitting the
+ * flag (the exact defect GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED prevents). Only draft_gate / pre_approval_gate
+ * carry forward (the review gate has no resolver), so the caller guards this to
+ * those gates. A non-empty result makes the current head a re-gate.
+ *
+ * FAIL-CLOSED on the scan: ENOENT (the findings-log directory does not exist)
+ * genuinely means "no prior round" and returns the empty set. Any OTHER readdir
+ * error (EACCES, ENOTDIR, …) is NOT proof of a first round — this is an
+ * enforcement chokepoint, so it rethrows rather than fail-open to "not a re-gate"
+ * and silently skipping the guard.
+ * @returns {Promise<Set<string>>} lowercased full SHAs of prior findings-logs
+ */
+export async function listPriorFindingsLogHeads({ repo, pr, gate, headSha, tmpRoot }) {
+  const dir = path.dirname(buildLogPath({ repo, pr, gate, headSha, tmpRoot }));
+  const want = String(headSha).trim().toLowerCase();
+  const prefix = `${gate}-`;
+  const heads = new Set();
+  let entries;
+  try {
+    entries = await readdir(dir);
+  } catch (err) {
+    if (err?.code === "ENOENT") return heads;
+    throw err;
+  }
+  for (const entry of entries) {
+    if (!entry.startsWith(prefix) || !entry.endsWith(".json")) continue;
+    const sha = entry.slice(prefix.length, -".json".length).toLowerCase();
+    if (!/^[0-9a-f]{7,64}$/.test(sha) || sha === want) continue;
+    // Do NOT trust the filename alone: a stale or arbitrary `<gate>-<sha>.json`
+    // in this directory must not count as a real prior round (that would let a
+    // fabricated carry-forward marker naming a bogus prevHead satisfy the guard).
+    // Require the file to be a genuine keyed findings-log whose OWN recorded
+    // headSha matches the filename before counting it. A non-ENOENT read error
+    // rethrows (fail-closed, like the readdir above); a missing/malformed/
+    // identity-mismatched file is simply not a valid prior round and is skipped.
+    let log;
+    try {
+      log = JSON.parse(await readFile(path.join(dir, entry), "utf8"));
+    } catch (err) {
+      if (err?.code && err.code !== "ENOENT") throw err;
+      continue;
+    }
+    // Validate the FULL ledger identity, not just headSha===filename: a foreign
+    // or mislabeled findings-log whose recorded repo/pr/gate belongs to another
+    // ledger must not count as a prior round for THIS invocation (its head could
+    // otherwise satisfy a marker's prevHead membership check). A field that is
+    // present must match; an absent field is tolerated (older ledger shape), and
+    // the directory itself already segregates by repo/pr. Mirrors
+    // write-gate-context.mjs's own prior-log identity check.
+    if (!log || typeof log !== "object") continue;
+    const recordedHead = typeof log.headSha === "string" ? log.headSha.trim().toLowerCase() : null;
+    const recordedGate = typeof log.gate === "string" ? log.gate.trim() : null;
+    const recordedRepo = typeof log.repo === "string" ? log.repo.trim().toLowerCase() : null;
+    const recordedPr = log.pr;
+    const identityOk = recordedHead === sha
+      && (recordedGate === null || recordedGate === gate)
+      && (recordedRepo === null || recordedRepo === String(repo).trim().toLowerCase())
+      && (recordedPr === undefined || recordedPr === null || String(recordedPr) === String(pr));
+    if (identityOk) heads.add(sha);
+  }
+  return heads;
+}
+
 function resolveFlagValue(argv, flag) {
   const idx = argv.indexOf(flag);
   if (idx === -1) return null;
@@ -416,6 +490,56 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — gate-context artifact at ${JSON.stringify(contextPath)} carries no fanout dispatch plan — re-run write-gate-context.mjs (a thin briefing with no --base emits no fanout plan)` }, false);
   }
 
+  // GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED: on a re-gate head — a
+  // durable findings-log for this gate exists at an EARLIER head — carry-forward
+  // MUST have been consulted before any reviewer is dispatched.
+  // resolve-angle-carry-forward.mjs records its plan (or a fail-closed
+  // full-fallback marker) as the keyed <gate>-<headSha>.carry-forward-plan.json
+  // sibling at the CURRENT head; its ABSENCE means the re-gate skipped the
+  // resolver entirely and would re-fan every angle — the exact amplifier this
+  // issue exists to prevent. Refuse to emit (no reviewer spawned) until the
+  // resolver has run at this head. This is the earliest chokepoint (before the
+  // wasted fan-out), chosen over the post-hoc ledger seam. Only the lifecycle
+  // gates carry forward; the review gate has no resolver, so it never guards
+  // here. Bind to the exported LIFECYCLE_GATES set (not a parallel inline
+  // literal) so a future lifecycle gate is guarded automatically rather than
+  // silently falling open — the same load-bearing derivation _gate-names.mjs
+  // uses for GATE_NAMES.
+  if (LIFECYCLE_GATES.includes(gate)) {
+    const priorHeads = await listPriorFindingsLogHeads({ repo, pr, gate, headSha, tmpRoot });
+    if (priorHeads.size > 0) {
+      let plan = null;
+      try {
+        plan = JSON.parse(await readFile(buildCarryForwardPlanPath({ repo, pr, gate, headSha, tmpRoot }), "utf8"));
+      } catch {
+        plan = null;
+      }
+      // Bind the plan to THIS round's full identity — the same (repo, pr, gate,
+      // headSha) key write-gate-findings-log enforces, plus `prevHead`. Requiring
+      // `prevHead` to be one of the ACTUAL prior findings-log heads is what stops a
+      // wrong/guessed --prev-head (or a plan copied from another PR) from being
+      // laundered into "the resolver ran": a marker whose prevHead names no real
+      // prior round does not satisfy the guard. repo/gate are compared
+      // case-insensitively, matching the findings-log identity check.
+      // Require the artifact to be a genuine resolver OUTCOME, not merely a JSON
+      // object carrying the five identity fields: a hand-written/truncated file
+      // must not satisfy the guard. A valid plan is either a success result
+      // (`ok: true`) or the documented fail-closed full-fallback marker
+      // (`ok: false, fallback: true`) — nothing else.
+      const planOutcomeValid = plan
+        && (plan.ok === true || (plan.ok === false && plan.fallback === true));
+      const planOk = planOutcomeValid
+        && String(plan.headSha ?? "").trim().toLowerCase() === headSha
+        && String(plan.gate ?? "").trim().toLowerCase() === gate
+        && String(plan.repo ?? "").trim().toLowerCase() === repo.trim().toLowerCase()
+        && String(plan.pr ?? "") === String(pr)
+        && priorHeads.has(String(plan.prevHead ?? "").trim().toLowerCase());
+      if (!planOk) {
+        return finish({ ok: false, error: `GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED: refusing — a prior gate findings-log for ${gate} exists at an earlier head (this is a re-gate), but no valid carry-forward plan artifact (keyed to this repo/pr/gate/head with a prevHead naming a real prior round) is recorded at the current head ${headSha}. Run scripts/github/resolve-angle-carry-forward.mjs --repo ${repo} --pr ${pr} --gate ${gate} --prev-head <A> --head-sha ${headSha} from the current-head worktree before dispatch — the resolver records the plan this step requires.` }, false);
+      }
+    }
+  }
+
   // --pending falls back to `groups` ONLY when pendingGroups is genuinely ABSENT
   // (an older artifact). A PRESENT-but-non-array pendingGroups is a malformed
   // plan and refuses — silently falling back would mask a broken plan and
@@ -429,8 +553,28 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   } else {
     units = fanout.groups;
   }
-  if (!Array.isArray(units) || units.length === 0) {
+  // A zero-unit pending plan is valid only when every original angle was
+  // carried. Completed-only resumes and malformed empty plans still refuse;
+  // fan-in independently verifies the carry proof before accepting findings.
+  const carried = new Set(Array.isArray(fanout.preflight?.carriedAngles)
+    ? fanout.preflight.carriedAngles.filter((angle) => typeof angle === "string").map((angle) => angle.trim().toLowerCase()) : []);
+  const allCarried = pendingOnly && Array.isArray(fanout.groups) && fanout.groups.length > 0
+    && fanout.groups.every((unit) => normalizeUnitAngles(unit).length > 0
+      && normalizeUnitAngles(unit).every((angle) => carried.has(angle.trim().toLowerCase())));
+  if (!Array.isArray(units) || (units.length === 0 && !allCarried)) {
     return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — fanout dispatch plan resolves zero units (${pendingOnly ? "pendingGroups" : "groups"}) — nothing to dispatch` }, false);
+  }
+  let carryProof;
+  if (units.length === 0) {
+    try {
+      const angles = fanout.groups.flatMap(normalizeUnitAngles);
+      if (angles.some((angle) => angleReviewSurface(angle).kind !== "kinds")) {
+        throw new Error("zero-unit plan cannot carry mandatory, always-run, or unknown angles");
+      }
+      carryProof = validateZeroUnitCarryProof(JSON.parse(resolveFlagValue(argv, "--carry-forward-plan") ?? "null"), angles);
+    } catch (error) {
+      return finish({ ok: false, error: `zero-unit carry proof refused: ${error.message}` }, false);
+    }
   }
   // An angle-less resolved unit is a malformed plan: refuse rather than silently
   // contribute zero reviewers for it.
@@ -448,6 +592,12 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   let maxConcurrent;
   try {
     const { config } = await loadDevLoopConfig({ repoRoot: process.cwd() });
+    if (carryProof !== undefined) {
+      const alwaysRerun = resolveGateAngleContract(config, mapGateToConfigKey(gate)).mandatoryAngles;
+      if (carryProof.some(({ angle }) => angleReviewSurface(angle, { alwaysRerun }).kind !== "kinds")) {
+        throw new Error("zero-unit plan cannot carry configured mandatory angles");
+      }
+    }
     configuredGroupNames = new Set((config?.gates?.fanout?.groups ?? []).map((g) => g?.name).filter((n) => typeof n === "string" && n.length > 0));
     // The concurrency bound the coordinator MUST wave the EMITTED (split) units
     // by — the artifact's fanout.wavePlan is computed over the UNSPLIT
@@ -497,7 +647,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     if (!result.composed || !result.recorded) {
       return finish({ ok: false, error: `failed to compose reviewer prompt for unit ${JSON.stringify(unit?.name)} (scope ${scope}): ${result.reason}` }, false);
     }
-    emitted.push({ scope, angles, group: angles.length > 1 ? unit.group : null, promptPath: result.promptPath });
+    emitted.push({ scope, angles, group: unit.group, promptPath: result.promptPath });
   }
 
   // GATE-EXEC-FANOUT-DISPATCH-EMIT: success-only persist of the emitted round
@@ -527,6 +677,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // each earlier finish call, all of which run before the persist) is the one
   // complete seam.
   const payload = { ok: true, gate, headSha, repo, pr, pending: pendingOnly, count: emitted.length, maxConcurrent, units: emitted };
+  if (carryProof !== undefined) payload.carried = carryProof;
   const planPath = buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot });
   try {
     await mkdir(path.dirname(planPath), { recursive: true });

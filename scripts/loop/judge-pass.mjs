@@ -4,16 +4,18 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import {
+  GATE_CONFIG_KEY,
   applyJudgeDispositions,
   validateJudgeVerdict,
 } from "@dev-loops/core/loop/gate-fanin";
 import {
-  assertCleanImpliesNoAct,
+  assertCleanImpliesNoBlockingAct,
   clusterFindings,
   clustersFromStampedIds,
   dedupeActListByCluster,
   projectClusterDisposition,
 } from "@dev-loops/core/loop/finding-cluster";
+import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
 import {
   SPEC_AUTHORITY_OUTCOMES,
   buildRevisionIdentity,
@@ -760,6 +762,33 @@ async function writeApprovalsRecord(approvalsPath, specAuthority, roundClean) {
   return approvedCriteria;
 }
 
+/**
+ * Resolve the gate's configured blocking severities from this worktree's config,
+ * the same set the consolidator used to compute overallVerdict. A clean verdict
+ * is only invalidated by an act on one of these severities. loadDevLoopConfig
+ * never throws — on a parse/validation failure it returns shipped defaults plus
+ * an `errors` array — so a failed load is failed closed here rather than silently
+ * degraded to the ["high"] default, mirroring consolidate-fanin.mjs.
+ */
+async function resolveBlockingSeverities(options, resolvedRoot) {
+  const { config, errors } = await loadDevLoopConfig({ repoRoot: resolvedRoot });
+  if (Array.isArray(errors) && errors.length > 0) {
+    throw new Error(
+      `--gate ${options.gate} config (repo-root ${JSON.stringify(resolvedRoot)}) could not be fully loaded/validated: ${JSON.stringify(errors)}`,
+    );
+  }
+  // Resolve the gate's config section via the owned GATE_CONFIG_KEY map (the
+  // single source for gate-name -> config-section) rather than a hand-rolled
+  // ternary, so the two lifecycle gates resolve the SAME section
+  // consolidate-fanin.mjs does. GATE_CONFIG_KEY only covers the two LIFECYCLE
+  // gates; the informational `review` gate has no config section of its own, so
+  // it reuses pre_approval_gate's blocking severities — the exact fallback
+  // consolidate-fanin.mjs's `=== "draft_gate" ? "draft" : "preApproval"` also
+  // takes for review. options.gate is validated against GATE_NAMES above.
+  const gateKey = GATE_CONFIG_KEY[options.gate] ?? "preApproval";
+  return resolveGateConfig(config, gateKey).blockCleanOnFindingSeverities;
+}
+
 export async function judgePassCli(
   options,
   { repoRoot = process.cwd(), env = process.env, ghCommand = "gh", run, createIssue, commentIssue, listIssues } = {},
@@ -814,11 +843,17 @@ export async function judgePassCli(
     result.counts = countByDisposition(result.enriched);
   }
 
-  // A "clean" ledger verdict is invalid the moment any finding was acted on.
-  // Fail closed here, BEFORE any durable side effect (the approvals record or
-  // a follow-up GitHub issue) is written, using the RAW (un-deduped) act
-  // count — any acted finding, clustered or not, prevents clean.
-  assertCleanImpliesNoAct(overallVerdict, result.counts.act);
+  // A "clean" ledger verdict means no finding at a BLOCKING severity remains
+  // open. It is invalid only when a finding at a blocking severity was acted on
+  // — non-blocking act findings (a medium in the fix window, a low the fixer
+  // triages) are expected under a clean verdict per GATE-EXEC-BLOCKING-ONLY-FIX.
+  // Fail closed here, BEFORE any durable side effect (the approvals record or a
+  // follow-up GitHub issue) is written, using the RAW (un-deduped) act list so
+  // any acted blocking finding, clustered or not, prevents clean. The gate's
+  // blocking severities come from the same config the consolidator used to
+  // compute overallVerdict, so the two cannot disagree on what "blocking" means.
+  const blockingSeverities = await resolveBlockingSeverities(options, resolvedRoot);
+  assertCleanImpliesNoBlockingAct(overallVerdict, result.act, blockingSeverities);
 
   // Persist the durable approval record AFTER the act list is finalized, so a
   // round with remaining act findings approves nothing (re-entry stays honest).

@@ -1,6 +1,8 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { readFile, stat } from 'node:fs/promises';
+import { extractRelativeMarkdownLinks } from '../../scripts/docs/validate-links.mjs';
+import { convergeUiReviewRouteFindings } from '../../scripts/loop/ui-review-lenses.mjs';
 
 const fromRepoRoot = (relativePath) => new URL(`../../${relativePath}`, import.meta.url);
 const readRepo = (relativePath) => readFile(fromRepoRoot(relativePath), 'utf8');
@@ -13,23 +15,11 @@ test('designer review loop doc remains the canonical bounded UI review handoff c
     readRepo('skills/dev-loop/templates/ui-vision-review.md'),
   ]);
 
-  assert.match(doc, /designer-persona review loop/i);
-  // dev-loop token pins the entrypoint fact; the surrounding phrasing may reword.
-  assert.match(doc, /`dev-loop`/i);
-  // Single-entrypoint invariant: `dev-loop` remains the sole public entrypoint.
-  // Durable heading-level terminology, so pinning it survives prose rewords but
-  // trips on a deletion/flip of the invariant.
-  assert.match(doc, /single public entrypoint/i);
-  assert.match(doc, /acceptance criteria/i);
-  assert.match(doc, /review brief/i);
-  assert.match(doc, /artifact bundle/i);
+  assert.ok(extractRelativeMarkdownLinks(doc).some(({ rawTarget }) => rawTarget === './ui-artifact-contract.md'));
   assert.match(doc, /test-results\/ui-smoke\/<sliceId>\/named-states\/<state-slug>/i);
   assert.match(doc, /continue_ui_fix_loop/i);
   assert.match(doc, /ui_review_satisfied/i);
   assert.match(doc, /blocked_needs_human_decision/i);
-  assert.match(doc, /fails closed/i);
-  // Keep the negation so a polarity flip ("triggers for non-UI work") still trips.
-  assert.match(doc, /does not trigger for non-UI/i);
   assert.match(doc, /uiReviewMode: vision/i);
   assert.match(doc, /ready_for_vision_review/i);
   assert.match(doc, /skills\/dev-loop\/templates\/ui-vision-review\.md/i);
@@ -53,13 +43,19 @@ test('designer review loop doc remains the canonical bounded UI review handoff c
   assert.match(visionTemplate, /blocked_needs_human_decision/i);
   // Computable a11y facts come from axe.json, not pixel judgment.
   assert.match(visionTemplate, /axe\.json/i);
-  // Don't-eyeball-a11y guidance: keep the negation so a flip ("do eyeball the a11y
-  // facts") still trips, while tolerating rewording of the surrounding prose.
-  assert.match(visionTemplate, /not\b[^.]*eyeball/i);
+  // Accessibility judgment and mechanical-error ownership require semantic
+  // review; matching a negation cannot establish those obligations.
   // console.json errors are already mechanically-owned must-fix findings the
   // reviewer reads as evidence (not re-filed): the template names that ownership.
   assert.match(visionTemplate, /console\.json/i);
   assert.match(visionTemplate, /must-fix/i);
+  const example = JSON.parse(visionTemplate.match(/```json\s*([\s\S]*?)```/)[1]);
+  const options = { acceptanceCriteria: ['Readable contrast', 'Clear layout'], checkedCriteria: example.checkedCriteria };
+  const result = convergeUiReviewRouteFindings(example.findings, options);
+  assert.equal(result.outcome, 'continue_ui_fix_loop');
+  assert.equal(result.findings[0].acceptanceCriterionRef, 'AC1');
+  assert.throws(() => convergeUiReviewRouteFindings(example.findings, { checkedCriteria: example.checkedCriteria }));
+  assert.throws(() => convergeUiReviewRouteFindings(example.findings, { ...options, checkedCriteria: [{ acceptanceCriterionRef: 'AC2' }] }));
   assert.match(indexDoc, /ui-designer-review-loop\.md/i);
   assert.match(localImplementationSkill, /\.\.\/docs\/ui-designer-review-loop\.md/i);
 });

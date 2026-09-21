@@ -4,9 +4,13 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, main, sanitizeScopeSegment, splitSubUnitName } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, listPriorFindingsLogHeads, main, sanitizeScopeSegment, splitSubUnitName } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { buildGateEmitPlanPath, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
+import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
+import { toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
+import { consolidateGateFanin, parseConsolidateFaninCliArgs } from "../../scripts/loop/consolidate-fanin.mjs";
+import { verifyEmitPlanProvenance, writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 
 const emitCliPath = path.resolve("scripts/github/emit-fanout-dispatch.mjs");
@@ -58,6 +62,264 @@ test("emit-fanout-dispatch.mjs --help exits 0", () => {
   const result = runEmitCli(["--help"]);
   assert.equal(result.status, 0);
   assert.match(result.stdout, /emit-fanout-dispatch/);
+});
+
+test("re-gate emit refuses without a carry-forward plan artifact, proceeds once the resolver recorded one (issue #2251 AC2)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const contextDir = await seedBundle(repoRoot);
+    // A prior findings-log for THIS gate at a DIFFERENT head makes head c a re-gate.
+    const priorHead = "d".repeat(40);
+    const findingsDir = path.join(repoRoot, "tmp", "gate-findings", "o-r", "pr-7");
+    await mkdir(findingsDir, { recursive: true });
+    await writeFile(path.join(findingsDir, `${GATE}-${priorHead}.json`), JSON.stringify({
+      headSha: priorHead, gate: GATE, verdict: "findings_present",
+      findings: [{ angle: "contradiction-lens", severity: "low", summary: "x" }],
+      provenance: { perAngle: [{ angle: "contradiction-lens", reviewer: "r" }] },
+    }), "utf8");
+
+    // No carry-forward plan artifact at head c yet -> refuse, spawn zero reviewers.
+    const refused = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(refused.status, 1, refused.stderr || refused.stdout);
+    assert.match(refused.stdout, /GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED/);
+    // A refusal leaves no emit-plan (no reviewer prompt emitted).
+    await assert.rejects(() => readFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.emit-plan.json`), "utf8"));
+
+    // A plan keyed to the right head/gate but naming a BOGUS prior head (not a
+    // real findings-log) does NOT satisfy the guard — a wrong --prev-head cannot
+    // be laundered into "the resolver ran".
+    const planPath = path.join(contextDir, `${GATE}-${HEAD_SHA}.carry-forward-plan.json`);
+    await writeFile(planPath, JSON.stringify({ ok: false, fallback: true, repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, prevHead: "e".repeat(40), carried: [], mustRerun: [] }), "utf8");
+    const stillRefused = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(stillRefused.status, 1, stillRefused.stderr || stillRefused.stdout);
+    assert.match(stillRefused.stdout, /GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED/);
+
+    // Record the resolver's plan keyed at head c, naming the REAL prior head ->
+    // the guard passes, units emit.
+    await writeFile(planPath, JSON.stringify({ ok: true, repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, prevHead: priorHead, carried: [], mustRerun: [] }), "utf8");
+    const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
+    const payload = JSON.parse(await readFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.emit-plan.json`), "utf8"));
+    assert.ok(payload.count > 0);
+  });
+});
+
+test("listPriorFindingsLogHeads rethrows a non-ENOENT readdir error (fail-closed, not laundered into first-round) (issue #2251)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    // Make the findings-log DIR path a regular file so readdir hits ENOTDIR:
+    // the enforcement-critical branch must rethrow, never fail-open to "no
+    // prior round" (which would silently skip the carry-forward guard).
+    const findingsDir = path.join(repoRoot, "tmp", "gate-findings", "o-r", "pr-7");
+    await mkdir(path.dirname(findingsDir), { recursive: true });
+    await writeFile(findingsDir, "not a directory", "utf8");
+    await assert.rejects(
+      () => listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") }),
+      (err) => err && err.code !== "ENOENT",
+    );
+  });
+});
+
+test("listPriorFindingsLogHeads returns the empty set on ENOENT (genuine first round)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const heads = await listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") });
+    assert.equal(heads.size, 0);
+  });
+});
+
+test("listPriorFindingsLogHeads ignores a file whose recorded headSha does not match its filename (no filename trust) (issue #2251)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const findingsDir = path.join(repoRoot, "tmp", "gate-findings", "o-r", "pr-7");
+    await mkdir(findingsDir, { recursive: true });
+    const bogusSha = "d".repeat(40);
+    // A file named like a prior log but whose OWN headSha disagrees with the
+    // filename (or is absent) is not a genuine keyed ledger — it must not count.
+    await writeFile(path.join(findingsDir, `${GATE}-${bogusSha}.json`), JSON.stringify({ headSha: "e".repeat(40), verdict: "clean" }), "utf8");
+    await writeFile(path.join(findingsDir, `${GATE}-${"f".repeat(40)}.json`), "not json at all", "utf8");
+    const heads = await listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") });
+    assert.equal(heads.size, 0, "neither the identity-mismatched nor the unparseable file counts as a prior round");
+    // A file whose headSha matches its filename but whose recorded gate/repo/pr
+    // belongs to another ledger must NOT count (full-identity validation).
+    const foreignSha = "b".repeat(40);
+    await writeFile(path.join(findingsDir, `${GATE}-${foreignSha}.json`), JSON.stringify({ headSha: foreignSha, gate: "draft_gate", repo: REPO, pr: PR, verdict: "clean" }), "utf8");
+    const headsForeign = await listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") });
+    assert.equal(headsForeign.size, 0, "a ledger recording a different gate does not count for this gate");
+    // A genuine keyed ledger (recorded headSha === filename, matching identity) DOES count.
+    const realSha = "a".repeat(40);
+    await writeFile(path.join(findingsDir, `${GATE}-${realSha}.json`), JSON.stringify({ headSha: realSha, gate: GATE, repo: REPO, pr: Number(PR), verdict: "clean" }), "utf8");
+    const heads2 = await listPriorFindingsLogHeads({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: path.join(repoRoot, "tmp") });
+    assert.deepEqual([...heads2], [realSha]);
+  });
+});
+
+test("re-gate emit refuses a plan artifact that is not a genuine resolver outcome (no ok:true / fallback:true) (issue #2251)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const contextDir = await seedBundle(repoRoot);
+    const priorHead = "d".repeat(40);
+    const findingsDir = path.join(repoRoot, "tmp", "gate-findings", "o-r", "pr-7");
+    await mkdir(findingsDir, { recursive: true });
+    await writeFile(path.join(findingsDir, `${GATE}-${priorHead}.json`), JSON.stringify({ headSha: priorHead, gate: GATE, verdict: "clean" }), "utf8");
+    // A hand-written object carrying the five identity fields + a real prevHead,
+    // but NO genuine resolver outcome flag, must not satisfy the guard.
+    await writeFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.carry-forward-plan.json`),
+      JSON.stringify({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, prevHead: priorHead, carried: [], mustRerun: [] }), "utf8");
+    const refused = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(refused.status, 1, refused.stderr || refused.stdout);
+    assert.match(refused.stdout, /GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED/);
+  });
+});
+
+test("first-round emit (no prior findings-log) never requires a carry-forward plan (issue #2251 AC2 negative)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    await seedBundle(repoRoot);
+    // No prior findings-log anywhere -> not a re-gate -> guard does not fire.
+    const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+    assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
+  });
+});
+
+test("write-gate-context --carried-angles records preflight.carriedAngles and excludes the fully-carried unit from pendingGroups (issue #2251 AC3)", async () => {
+  await withTmpDir(async (repoRoot) => {
+    await writeFile(path.join(repoRoot, ".devloops"), "version: 1\ngates:\n  draft:\n    angles:\n      - name: pr-description\n        enabled: false\n", "utf8");
+    const { config, errors } = await loadDevLoopConfig({ repoRoot });
+    assert.deepEqual(errors, []);
+    const carried = ["coverage", "correctness"];
+    const fanout = resolveFanoutDispatch(config, "draft", carried, { carriedAngles: carried });
+    assert.deepEqual([...fanout.preflight.carriedAngles].sort(), [...carried].sort());
+    // Every dispatch unit is fully carried, so none remain pending.
+    assert.deepEqual(fanout.pendingGroups, []);
+    const opts = parseWriteGateContextCliArgs([
+      "--repo", REPO, "--pr", PR, "--gate", "draft_gate", "--head-sha", HEAD_SHA,
+      "--angles", JSON.stringify(carried), "--carried-angles", JSON.stringify(carried),
+    ]);
+    opts.config = config;
+    opts.fanoutDispatch = fanout;
+    await writeGateContext(opts, { repoRoot });
+    const artifact = JSON.parse(await readFile(path.join(repoRoot, "tmp", "gate-context", "o-r", "pr-7", `draft_gate-${HEAD_SHA}.json`), "utf8"));
+    assert.deepEqual([...artifact.fanout.preflight.carriedAngles].sort(), [...carried].sort());
+    assert.deepEqual(artifact.fanout.pendingGroups, []);
+  });
+});
+
+test("all-carried rounds consume the real emitter's keyed zero-unit plan through fan-in and ledger writing", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const gate = "draft_gate";
+    await writeFile(path.join(repoRoot, ".devloops"), "version: 1\ngates:\n  draft:\n    angles:\n      - name: pr-description\n        enabled: false\n", "utf8");
+    const { config, errors } = await loadDevLoopConfig({ repoRoot });
+    assert.deepEqual(errors, []);
+    const findings = [{ angle: "coverage", severity: "high", summary: "Prior coverage defect remains open", recommendation: "Cover the omitted path", files: ["src/a.mjs", "src/b.mjs"], line: 7 }];
+    const plan = buildCarryForwardPlan({
+      log: { headSha: "b".repeat(40), verdict: "findings_present", findings,
+        provenance: { perAngle: ["coverage", "correctness"].map((angle) => ({ angle, reviewer: "prior-reviewer", model: "review-model" })) } },
+      changedFiles: ["docs/readme.md"],
+    });
+    const carriedNames = ["coverage", "correctness"];
+    assert.deepEqual(plan.carried.map((entry) => entry.angle), carriedNames);
+    const fanout = resolveFanoutDispatch(config, "draft", carriedNames, { carriedAngles: carriedNames });
+    assert.deepEqual(fanout.pendingGroups, []);
+    const contextOptions = parseWriteGateContextCliArgs([
+      "--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA,
+      "--angles", JSON.stringify(carriedNames), "--carried-angles", JSON.stringify(carriedNames),
+    ]);
+    contextOptions.config = config;
+    contextOptions.fanoutDispatch = fanout;
+    await writeGateContext(contextOptions, { repoRoot });
+    const contextDir = path.join(repoRoot, "tmp", "gate-context", "o-r", "pr-7");
+    const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--pending", "--carry-forward-plan", JSON.stringify(plan)], { cwd: repoRoot });
+    assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
+    const emitPlan = path.join(contextDir, `${gate}-${HEAD_SHA}.emit-plan.json`);
+    const payload = JSON.parse(await readFile(emitPlan, "utf8"));
+    assert.equal(payload.count, 0);
+    assert.deepEqual(payload.units, []);
+    const findingsDir = path.join(repoRoot, "findings");
+    await mkdir(findingsDir);
+    const faninOptions = { repo: REPO, pr: Number(PR), repoRoot, tmpRoot: path.join(repoRoot, "tmp"), findingsDir, gate, headSha: HEAD_SHA, emitPlan,
+      resolvedAngles: carriedNames, carriedAngles: carriedNames, carryForwardPlan: plan.carried };
+    const parsedRound = parseConsolidateFaninCliArgs(["--findings-dir", findingsDir, "--repo", REPO, "--pr", PR]);
+    assert.equal(parsedRound.repo, REPO);
+    assert.equal(parsedRound.pr, PR);
+    const fanin = await consolidateGateFanin(faninOptions);
+    assert.equal(fanin.overallVerdict, "findings_present");
+    assert.equal(fanin.findingsJson[0].angle, "coverage");
+    const consolidatedFindings = toFindingsLogShape(fanin.findings);
+    assert.deepEqual(consolidatedFindings[0], { ...findings[0], disposition: "accepted-for-fix" });
+    const provenance = { distinctReviewers: 1, perAngle: plan.carried.map(({ angle, reviewer, model, carriedFromHead, prevVerdict }) =>
+      ({ angle, reviewer, model, carriedFromHead, carriedVerdict: prevVerdict })) };
+    const writeOptions = { repo: REPO, pr: Number(PR), gate, headSha: HEAD_SHA,
+      verdict: fanin.overallVerdict, findings: JSON.stringify(consolidatedFindings), executionMode: "fanout_fanin",
+      provenance: JSON.stringify(provenance), emitPlan, tmpRoot: path.join(repoRoot, "tmp") };
+    const written = await writeGateFindingsLog(writeOptions, { repoRoot });
+    assert.deepEqual(written.log.findings, consolidatedFindings);
+    assert.deepEqual(written.log.provenance.perAngle, provenance.perAngle);
+    const newFinding = { ...consolidatedFindings[0], summary: "New High without a fresh review" };
+    for (const extra of [newFinding, consolidatedFindings[0]]) {
+      await assert.rejects(() => writeGateFindingsLog({ ...writeOptions,
+        findings: JSON.stringify([...consolidatedFindings, extra]) }, { repoRoot }), /unproven findings/);
+    }
+    await assert.rejects(() => writeGateFindingsLog({ ...writeOptions, findings: "[]" }, { repoRoot }), /preserved findings/);
+    await assert.rejects(() => writeGateFindingsLog({ ...writeOptions,
+      findings: JSON.stringify(consolidatedFindings.map((finding) => ({ ...finding, recommendation: "changed" }))) }, { repoRoot }), /preserved findings/);
+    await assert.rejects(() => writeGateFindingsLog({ ...writeOptions,
+      findings: JSON.stringify(consolidatedFindings.map((finding) => ({ ...finding, files: ["src/foreign.mjs"] }))) }, { repoRoot }), /preserved findings/);
+    for (const identity of [{ repo: "foreign/repo" }, { pr: Number(PR) + 1 }, { repo: undefined }, { pr: undefined }]) {
+      await assert.rejects(() => consolidateGateFanin({ ...faninOptions, ...identity }), /round identities/);
+    }
+    const invalidCarries = [
+      { name: "foreign angle", rows: [{ ...provenance.perAngle[0], angle: "foreign-angle" }, provenance.perAngle[1]] },
+      { name: "stale prior head", rows: [{ ...provenance.perAngle[0], carriedFromHead: "e".repeat(40) }, provenance.perAngle[1]] },
+      { name: "changed reviewer", rows: [{ ...provenance.perAngle[0], reviewer: "unreviewed-identity" }, provenance.perAngle[1]] },
+      { name: "missing angle", rows: [provenance.perAngle[0]] },
+    ];
+    const acceptedInvalidCarries = [];
+    for (const { name, rows } of invalidCarries) {
+      try {
+        await verifyEmitPlanProvenance(emitPlan, { distinctReviewers: 1, perAngle: rows },
+          { repo: REPO, pr: Number(PR), gate, headSha: HEAD_SHA }, { repoRoot });
+        acceptedInvalidCarries.push(name);
+      } catch { /* Every invalid carried proof must fail closed. */ }
+    }
+    assert.deepEqual(acceptedInvalidCarries, [], "zero-unit plan accepted invalid carry proof");
+    await assert.rejects(() => consolidateGateFanin({ ...faninOptions, carryForwardPlan: [] }), /no proof|not present|carry proof/);
+    for (const replacement of [{ carriedFromHead: "e".repeat(40) }, { reviewer: "unreviewed-identity" }, { findings: [{ ...findings[0], summary: "altered finding" }] }]) {
+      await assert.rejects(() => consolidateGateFanin({ ...faninOptions,
+        carryForwardPlan: [{ ...plan.carried[0], ...replacement }, plan.carried[1]] }), /carry proof/);
+    }
+    await assert.rejects(() => consolidateGateFanin({ ...faninOptions, headSha: "d".repeat(40) }), /stamped for head/);
+    await assert.rejects(() => writeGateFindingsLog({ ...writeOptions,
+      provenance: JSON.stringify({ distinctReviewers: 1, perAngle: [{ angle: "coverage", reviewer: "fresh-reviewer" }] }) }, { repoRoot }), /zero|non-empty|fresh angles/);
+    const cleanPlan = buildCarryForwardPlan({
+      log: { headSha: "b".repeat(40), verdict: "clean", findings: [],
+        provenance: { perAngle: provenance.perAngle.map(({ angle, reviewer, model }) => ({ angle, reviewer, model })) } },
+      changedFiles: ["docs/readme.md"],
+    });
+    const cleanEmitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA,
+      "--pending", "--carry-forward-plan", JSON.stringify(cleanPlan)], { cwd: repoRoot });
+    assert.equal(cleanEmitted.status, 0, cleanEmitted.stderr || cleanEmitted.stdout);
+    const cleanFanin = await consolidateGateFanin({ ...faninOptions, carryForwardPlan: cleanPlan.carried });
+    assert.equal(cleanFanin.overallVerdict, "clean");
+    assert.deepEqual(cleanFanin.findings, []);
+    const cleanWriteOptions = { ...writeOptions, verdict: "clean", findings: "[]",
+      provenance: JSON.stringify({ ...provenance, perAngle: provenance.perAngle.map((entry) => ({ ...entry, carriedVerdict: "clean" })) }) };
+    const cleanWritten = await writeGateFindingsLog(cleanWriteOptions, { repoRoot });
+    assert.deepEqual(cleanWritten.log.findings, []);
+    await assert.rejects(() => writeGateFindingsLog({ ...cleanWriteOptions,
+      verdict: "findings_present", findings: JSON.stringify([newFinding]) }, { repoRoot }), /unproven findings/);
+    assert.deepEqual(JSON.parse(await readFile(cleanWritten.path, "utf8")), cleanWritten.log,
+      "rejected findings must not overwrite the proven ledger");
+    await rm(emitPlan);
+    await assert.rejects(() => consolidateGateFanin(faninOptions), /could not be read/);
+    for (const invalidProof of [null, [], [plan.carried[0]], [plan.carried[0], plan.carried[0]],
+      [{ ...plan.carried[0], carriedFromHead: "bad" }, plan.carried[1]]]) {
+      const refused = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA,
+        "--pending", "--carry-forward-plan", JSON.stringify(invalidProof)], { cwd: repoRoot });
+      assert.equal(refused.status, 1, refused.stderr || refused.stdout);
+      await assert.rejects(() => readFile(emitPlan), { code: "ENOENT" });
+    }
+    for (const carriedAngles of [[], ["different-angle"], "coverage"]) {
+      await seedBundle(repoRoot, { gate, fanout: { ...fanout, preflight: { carriedAngles, completedAngles: ["coverage"] } } });
+      const refused = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", gate, "--head-sha", HEAD_SHA, "--pending"], { cwd: repoRoot });
+      assert.equal(refused.status, 1, refused.stderr || refused.stdout);
+      await assert.rejects(() => readFile(emitPlan), { code: "ENOENT" });
+    }
+  });
 });
 
 test("requires --repo/--pr/--gate/--head-sha", () => {
@@ -187,6 +449,78 @@ test("main(): a configured group OVER the angle cap splits into ceil(N/3) sub-un
     for (const u of splitUnits) assert.equal(u.group, "design-solid");
   });
 });
+
+for (const configured of [true, false]) {
+  test(`C17: ${configured ? "configured" : "auto-chunk"} singleton split tail retains its original group through emission and ledger writing`, async () => {
+    await withTmpDir(async (repoRoot) => {
+      const angles = ["srp", "soc", "ocp", "lsp", "pr-checklist"];
+      await writeFile(path.join(repoRoot, ".devloops"), JSON.stringify({ version: 1, gates: { fanout: {
+        groups: configured ? [{ name: "design-solid", angles: angles.slice(0, 4) }] : [],
+        maxAnglesPerGroup: 4,
+      } } }));
+      const { config, errors } = await loadDevLoopConfig({ repoRoot });
+      assert.deepEqual(errors, []);
+      const fanout = resolveFanoutDispatch(config, mapGateToConfigKey(GATE), angles, {});
+      assert.deepEqual(fanout.groups.map((unit) => unit.angles), [angles.slice(0, 4), angles.slice(4)]);
+      const options = parseWriteGateContextCliArgs([
+        "--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA,
+        "--angles", JSON.stringify(angles),
+      ]);
+      await writeGateContext({ ...options, config, fanoutDispatch: fanout }, { repoRoot });
+      const emitted = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: repoRoot });
+      assert.equal(emitted.status, 0, emitted.stderr || emitted.stdout);
+      const payload = JSON.parse(emitted.stdout);
+      const tmpRoot = path.join(repoRoot, "tmp");
+      const emitPlan = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+      assert.deepEqual(JSON.parse(await readFile(emitPlan, "utf8")), payload);
+      assert.equal(payload.count, 3);
+      assert.deepEqual(payload.units.map((unit) => unit.angles), [angles.slice(0, 3), [angles[3]], [angles[4]]]);
+      const group = fanout.groups[0].name;
+      assert.deepEqual(payload.units.map((unit) => unit.group), [group, group, null]);
+      assert.equal(payload.units[1].scope, "pre-approval-gate-lsp");
+      const provenance = { distinctReviewers: 3, perAngle: payload.units.flatMap((unit, index) =>
+        unit.angles.map((angle) => ({ angle, reviewer: `review-${index}`, ...(unit.group === null ? {} : { group: unit.group }) }))) };
+      const writeOptions = { repo: REPO, pr: Number(PR), gate: GATE, headSha: HEAD_SHA, verdict: "clean",
+        findings: "[]", provenance: JSON.stringify(provenance), emitPlan, tmpRoot };
+      const written = await writeGateFindingsLog(writeOptions, { repoRoot });
+      assert.deepEqual(written.log.provenance, provenance);
+      for (const replacement of [undefined, "wrong-group"]) {
+        const changed = structuredClone(provenance);
+        changed.perAngle[3].group = replacement;
+        await assert.rejects(() => writeGateFindingsLog({ ...writeOptions, provenance: JSON.stringify(changed) }, { repoRoot }), /records group/);
+      }
+      const mixedIdentity = structuredClone(provenance);
+      mixedIdentity.perAngle[0].reviewer = "different-reviewer";
+      mixedIdentity.distinctReviewers = 4;
+      await assert.rejects(() => writeGateFindingsLog({ ...writeOptions, provenance: JSON.stringify(mixedIdentity) }, { repoRoot }), /multiple reviewer identities/);
+      const reusedIdentity = structuredClone(provenance);
+      reusedIdentity.perAngle[3].reviewer = "review-0";
+      reusedIdentity.distinctReviewers = 2;
+      await assert.rejects(() => writeGateFindingsLog({ ...writeOptions, provenance: JSON.stringify(reusedIdentity) }, { repoRoot }), /smaller than/);
+      const nullTail = structuredClone(payload);
+      nullTail.units[1].group = null;
+      await writeFile(emitPlan, JSON.stringify(nullTail));
+      await assert.rejects(() => writeGateFindingsLog(writeOptions, { repoRoot }), /records group/);
+      for (const invalidUnits of [
+        // A matching plan/provenance claim cannot manufacture a split tail.
+        [{ ...payload.units[1], group: "arbitrary-group" }],
+        [payload.units[0], { ...payload.units[1], group: "wrong-group" }],
+        [payload.units[1], payload.units[0]],
+        [{ ...payload.units[0], angles: angles.slice(0, 2) }, payload.units[1]],
+      ]) {
+        await writeFile(emitPlan, JSON.stringify({ ...payload, count: invalidUnits.length, units: invalidUnits }));
+        const invalidProvenance = { distinctReviewers: invalidUnits.length, perAngle: invalidUnits.flatMap((unit, index) =>
+          unit.angles.map((angle) => ({ angle, reviewer: `review-${index}`, group: unit.group }))) };
+        await assert.rejects(() => verifyEmitPlanProvenance(emitPlan, invalidProvenance,
+          { repo: REPO, pr: Number(PR), gate: GATE, headSha: HEAD_SHA }, { repoRoot }), /preceding same-group full-cap split sibling/);
+      }
+      const malformed = structuredClone(payload);
+      malformed.units[0].group = null;
+      await writeFile(emitPlan, JSON.stringify(malformed));
+      await assert.rejects(() => writeGateFindingsLog(writeOptions, { repoRoot }), /non-empty for a multi-angle unit/);
+    });
+  });
+}
 
 // AC9 (issue 2180, Path A) end-to-end exact-count fixture: a NO-config-table
 // angle set (no gates.fanout.groups match at all) routed through the REAL
@@ -1090,4 +1424,9 @@ test("buildAngleNamingSuffix carries the bounded reviewer contract: budget, proh
   assert.match(suffix, /--tool-calls <tool calls you used>/);
   assert.match(suffix, /--findings-dir </);
   assert.doesNotMatch(suffix, /--angles "dry,kiss"/);
+  // #2241: the escape-hatch invocation goes through the dev-loops-run launcher,
+  // never a bare `node scripts/…` path (bare node is not portable to a consumer
+  // plugin install that ships no scripts/ tree).
+  assert.match(suffix, /dev-loops-run scripts\/github\/emit-reviewer-blocked\.mjs/);
+  assert.doesNotMatch(suffix, /node scripts\/github\/emit-reviewer-blocked\.mjs/);
 });

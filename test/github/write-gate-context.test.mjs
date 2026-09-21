@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -2681,6 +2681,22 @@ test("renderBriefingPrefix: under-cap — inline mode, fixed section order, all 
   assert.ok(text.includes("--scope draft-gate-<your-dispatch-unit>"));
 });
 
+// #2241: the fresh-context sentinel must be invoked through the dev-loops-run
+// launcher, never a bare `node scripts/…` path — a consumer plugin install
+// ships without the scripts/ tree, so bare node throws MODULE_NOT_FOUND.
+test("renderBriefingPrefix: emits the fresh-context sentinel via the dev-loops-run launcher, never bare `node scripts/…`, in both the standalone and compound cd forms (#2241)", () => {
+  const { text } = renderBriefingPrefix(renderInput({ worktreeRoot: "/wt/issue-2241" }));
+  // Standalone (line 1329) form: launcher, not bare node.
+  assert.ok(text.includes("dev-loops-run scripts/github/verify-fresh-review-context.mjs"));
+  // Compound `cd … && …` (line 1334) form: launcher inside the worktree cd.
+  assert.ok(text.includes('cd "/wt/issue-2241" && dev-loops-run scripts/github/verify-fresh-review-context.mjs'));
+  // No bare `node scripts/github/…` on the reviewer-briefing dispatch surface.
+  assert.ok(!text.includes("node scripts/github/verify-fresh-review-context.mjs"));
+  // Worktree-locality preserved: reviewer cd's in first, --context-path stays cwd-relative.
+  assert.ok(text.includes('cd "/wt/issue-2241" &&'));
+  assert.ok(text.includes(`--context-path ${renderInput().contextPath}`));
+});
+
 test("renderBriefingPrefix: gate scope hyphenation covers ALL underscores, not just the first", () => {
   const { text } = renderBriefingPrefix(renderInput({ gate: "pre_approval_gate" }));
   assert.ok(text.includes("--scope pre-approval-gate-<your-dispatch-unit>"));
@@ -3290,6 +3306,203 @@ test("writeGateContext failure-ordering: a request-plan-write failure leaves the
   }
 });
 
+for (const failedSibling of ["volatilePath", "requestPlanPath"]) {
+  test(`writeGateContext same-prefix ${failedSibling} failure removes only its completion marker and permits repair`, async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-same-prefix-"));
+    try {
+      const options = parseWriteGateContextCliArgs([
+        "--repo", "owner/repo", "--pr", "73", "--gate", "draft_gate",
+        "--head-sha", "abc1234567890", "--angles", '["scope"]',
+        "--validation-posture", "first posture",
+      ]);
+      const first = await writeGateContext({ ...options }, { repoRoot });
+      const markerInode = (await stat(path.resolve(repoRoot, first.path))).ino;
+      const repeated = await writeGateContext({ ...options }, { repoRoot });
+      assert.equal((await stat(path.resolve(repoRoot, first.path))).ino, markerInode, "successful same-prefix writes must retain the marker in place");
+      assert.deepEqual(await readGateContext(options, { repoRoot }), repeated.artifact);
+      const prior = await writeGateContext({ ...options, headSha: "def1234567890" }, { repoRoot });
+      const otherGate = await writeGateContext({ ...options, gate: "pre_approval_gate" }, { repoRoot });
+      const sentinelPath = path.resolve(repoRoot, "tmp/checkpoint-context-sentinel-draft-gate-scope-abc12345678900000000000000000000000000000.json");
+      await writeFile(sentinelPath, "{\"history\":\"retain\"}\n");
+      const untouchedPaths = [sentinelPath, ...[prior, otherGate].flatMap((result) =>
+        [result.path, result.prefixPath, result.volatilePath, result.requestPlanPath].map((p) => path.resolve(repoRoot, p)))];
+      const untouchedBytes = await Promise.all(untouchedPaths.map((p) => readFile(p)));
+      const prefixBytes = await readFile(path.resolve(repoRoot, first.prefixPath));
+      assert.deepEqual(await readGateContext(options, { repoRoot }), repeated.artifact);
+
+      const blockedPath = path.resolve(repoRoot, first[failedSibling]);
+      await rm(blockedPath);
+      await mkdir(blockedPath);
+      const retryOptions = { ...options, validationPosture: "second posture" };
+      await assert.rejects(writeGateContext({ ...retryOptions }, { repoRoot }), (error) => {
+        assert.equal(error.code, "EISDIR", "preserve the original write failure");
+        assert.equal(error.path, blockedPath);
+        return true;
+      });
+      assert.equal(await readGateContext(options, { repoRoot }), null, "a failed same-prefix rewrite must remove the old marker");
+      assert.equal(existsSync(path.resolve(repoRoot, first.path)), false);
+      assert.deepEqual(await readFile(path.resolve(repoRoot, first.prefixPath)), prefixBytes);
+      if (failedSibling === "requestPlanPath") {
+        assert.match(await readFile(path.resolve(repoRoot, first.volatilePath), "utf8"), /validationPosture: second posture/);
+      }
+      const guard = spawnSync("node", [contextGuardPath, "--scope", "draft-gate-scope",
+        "--context-path", first.path, "--prefix-file", first.prefixPath], { cwd: repoRoot, encoding: "utf8" });
+      assert.equal(guard.status, 1, guard.stderr);
+      assert.equal(JSON.parse(guard.stdout).gateContextPresent, false);
+      assert.equal(JSON.parse(guard.stdout).sentinelCreated, false);
+      assert.deepEqual(await Promise.all(untouchedPaths.map((p) => readFile(p))), untouchedBytes);
+
+      await rm(blockedPath, { recursive: true });
+      const repaired = await writeGateContext({ ...retryOptions }, { repoRoot });
+      assert.deepEqual(await readGateContext(options, { repoRoot }), repaired.artifact);
+      assert.equal(repaired.prefixHash, first.prefixHash);
+      assert.deepEqual(JSON.parse(await readFile(path.resolve(repoRoot, repaired.requestPlanPath), "utf8")), repaired.requestPlan);
+      assert.match(await readFile(path.resolve(repoRoot, repaired.volatilePath), "utf8"), /validationPosture: second posture/);
+      assert.deepEqual(await Promise.all(untouchedPaths.map((p) => readFile(p))), untouchedBytes);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+}
+
+test("writeGateContext preserves the prior complete set when volatile rendering rejects before writes", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-volatile-invalid-"));
+  try {
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "74", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890", "--angles", '["scope"]',
+    ]);
+    const first = await writeGateContext({ ...options }, { repoRoot });
+    const paths = [first.path, first.prefixPath, first.volatilePath, first.requestPlanPath].map((p) => path.resolve(repoRoot, p));
+    const before = await Promise.all(paths.map((p) => readFile(p)));
+    await assert.rejects(writeGateContext({ ...options, prBody: "changed prefix", validationPosture: "invalid\nposture" }, { repoRoot }), /must not contain a newline/);
+    assert.deepEqual(await Promise.all(paths.map((p) => readFile(p))), before);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext reports both write and marker-cleanup failures without deleting a directory blocker", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-cleanup-failure-"));
+  try {
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "75", "--gate", "draft_gate",
+      "--head-sha", "abc1234567890", "--angles", '["scope"]',
+    ]);
+    const first = await writeGateContext({ ...options }, { repoRoot });
+    const markerPath = path.resolve(repoRoot, first.path);
+    await rm(markerPath);
+    await mkdir(markerPath);
+    const evidencePath = path.join(markerPath, "evidence.txt");
+    await writeFile(evidencePath, "retain this blocker");
+    await assert.rejects(writeGateContext({ ...options }, { repoRoot }), (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.equal(error.errors[0].code, "EISDIR");
+      assert.equal(error.cause, error.errors[0]);
+      assert.equal(error.errors[1].path, markerPath);
+      assert.match(error.message, /completion-marker cleanup failed/);
+      return true;
+    });
+    assert.equal(await readFile(evidencePath, "utf8"), "retain this blocker");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+for (const failure of ["plan", "volatile", "live-sentinel", "write"]) {
+  test(`buildGateContext preserves referenced diff and scoped briefing on ${failure} refusal or invalidates before writes`, async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-reference-order-"));
+    try {
+      const config = { gates: { draft: { angles: [{ name: "docs", scope: "docs-only" }], dynamic: { subtractive: false } } } };
+      const input = {
+        repo: "owner/repo", pr: 76, gate: "draft_gate", headSha: "abc1234567890",
+        config, prBody: "original body",
+        diff: { nameStatusOutput: "M\tdocs/example.md\n", diffOutput: "diff --git a/docs/example.md b/docs/example.md\n+original\n" },
+      };
+      const first = await buildGateContext(input, { repoRoot });
+      const variantPath = first.artifact.briefingVariants["docs-only"];
+      const paths = [first.path, first.prefixPath, first.volatilePath, first.requestPlanPath, first.artifact.scope.diffPath, variantPath]
+        .map((p) => path.resolve(repoRoot, p));
+      const before = await Promise.all(paths.map((p) => readFile(p)));
+      const next = { ...input, prBody: "replacement body", diff: { ...input.diff, diffOutput: input.diff.diffOutput.replace("+original", "+replacement") } };
+      let expectedError;
+      if (failure === "plan") {
+        next.config = { gates: { draft: { ...config.gates.draft, angles: [{ name: "docs", scope: "docs-only", model: "inherit" }] } } };
+        expectedError = /collides with the bucket key/;
+      } else if (failure === "volatile") {
+        next.validationPosture = "invalid\nposture";
+        expectedError = /must not contain a newline/;
+      } else if (failure === "live-sentinel") {
+        await writeFile(path.join(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-docs-${input.headSha.padEnd(40, "0")}.json`), "{}\n");
+        expectedError = /Refusing to rebuild.*in flight/;
+      } else {
+        await rm(path.resolve(repoRoot, first.volatilePath));
+        await mkdir(path.resolve(repoRoot, first.volatilePath));
+        expectedError = /EISDIR/;
+      }
+      await assert.rejects(buildGateContext(next, { repoRoot }), expectedError);
+      if (failure === "write") {
+        assert.equal(await readGateContext(input, { repoRoot }), null);
+        assert.match(await readFile(path.resolve(repoRoot, variantPath), "utf8"), /replacement body/);
+        assert.match(await readFile(path.resolve(repoRoot, first.artifact.scope.diffPath), "utf8"), /\+replacement/);
+      } else {
+        assert.deepEqual(await Promise.all(paths.map((p) => readFile(p))), before,
+          "a readable prior marker must retain every referenced byte after refusal");
+        assert.deepEqual(await readGateContext(input, { repoRoot }), first.artifact);
+      }
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+}
+
+test("buildGateContext invalidates the marker for a changed full diff even when filtering keeps the prefix identical", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-filtered-diff-"));
+  try {
+    const input = {
+      repo: "owner/repo", pr: 78, gate: "draft_gate", headSha: "abc1234567890",
+      config: draftConfig({ dynamicAngles: false }),
+      diff: { nameStatusOutput: "M\tpackage-lock.json\n", diffOutput: "diff --git a/package-lock.json b/package-lock.json\n+original\n" },
+    };
+    const first = await buildGateContext(input, { repoRoot });
+    const markerPath = path.resolve(repoRoot, first.path);
+    const retainedMarker = path.join(repoRoot, "prior-marker.json");
+    await link(markerPath, retainedMarker); // Retain the inode so unlink/recreate cannot reuse it.
+    const second = await buildGateContext({ ...input, diff: { ...input.diff, diffOutput: input.diff.diffOutput.replace("+original", "+replacement") } }, { repoRoot });
+    assert.equal(second.prefixHash, first.prefixHash);
+    assert.notEqual((await stat(markerPath)).ino, (await stat(retainedMarker)).ino);
+    assert.match(await readFile(path.resolve(repoRoot, second.artifact.scope.diffPath), "utf8"), /\+replacement/);
+    assert.deepEqual(await readGateContext(input, { repoRoot }), second.artifact);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI --base preserves the prior referenced diff when later volatile validation refuses", async () => {
+  const { repoRoot, baseSha, headSha: priorHead } = await makeBaseDiffRepo();
+  const savedExitCode = process.exitCode;
+  try {
+    await writeFile(path.join(repoRoot, "extra.md"), "extra change\n");
+    git(repoRoot, ["add", "extra.md"]);
+    git(repoRoot, ["commit", "-q", "-m", "extra change"]);
+    const headSha = git(repoRoot, ["rev-parse", "HEAD"]).trim();
+    const args = ["--repo", "owner/repo", "--pr", "77", "--gate", "draft_gate", "--head-sha", headSha, "--angles", '["scope"]'];
+    await main([...args, "--base", priorHead], { repoRoot, run: stubGhRun });
+    assert.equal(process.exitCode, 0);
+    const identity = { repo: "owner/repo", pr: 77, gate: "draft_gate", headSha };
+    const first = await readGateContext(identity, { repoRoot });
+    const diffPath = path.resolve(repoRoot, first.scope.diffPath);
+    const before = await readFile(diffPath);
+    await main([...args, "--base", baseSha, "--validation-posture", "invalid\nposture"], { repoRoot, run: stubGhRun });
+    assert.equal(process.exitCode, 1);
+    assert.deepEqual(await readFile(diffPath), before);
+    assert.deepEqual(await readGateContext(identity, { repoRoot }), first);
+  } finally {
+    process.exitCode = savedExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("writeGateContext: an invalid options.angles entry rejects BEFORE any file write (programmatic caller, bypassing parseAnglesJson)", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-angles-guard-"));
   try {
@@ -3405,9 +3618,9 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       `worktree: ${path.resolve(repoRoot)}`,
       "prefixMode: inline",
       "",
-      "Mandatory: before doing any angle-specific work, run `node scripts/github/verify-fresh-review-context.mjs --scope draft-gate-<your-dispatch-unit> --context-path tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json --prefix-file tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.briefing-prefix.txt` once — <your-dispatch-unit> is your angle name for a per-angle dispatch, or `group-<name>` for a grouped dispatch (run once for the whole group, never once per angle in it). Refuse to proceed on contamination or a missing artifact.",
+      "Mandatory: before doing any angle-specific work, run `dev-loops-run scripts/github/verify-fresh-review-context.mjs --scope draft-gate-<your-dispatch-unit> --context-path tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json --prefix-file tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.briefing-prefix.txt` once — <your-dispatch-unit> is your angle name for a per-angle dispatch, or `group-<name>` for a grouped dispatch (run once for the whole group, never once per angle in it). Refuse to proceed on contamination or a missing artifact.", // secret-scan:allow fixture head SHA in briefing snapshot (not a secret)
       "",
-      `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as ONE compound command that enters this worktree first (\`cd "${path.resolve(repoRoot)}" && node scripts/github/verify-fresh-review-context.mjs ...\`) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${path.resolve(repoRoot)}" ...\` and every file read via an absolute path under ${path.resolve(repoRoot)}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
+      `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as ONE compound command that enters this worktree first (\`cd "${path.resolve(repoRoot)}" && dev-loops-run scripts/github/verify-fresh-review-context.mjs ...\`) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${path.resolve(repoRoot)}" ...\` and every file read via an absolute path under ${path.resolve(repoRoot)}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
       "",
       `Findings write-path invariant: WRITE every findings artifact under THIS worktree's tmp/, never the primary checkout's. Write each per-angle findings artifact to the ABSOLUTE path \`${path.resolve(repoRoot)}/tmp/gate-reviews/owner-repo/pr-80/draft_gate-${options.headSha}/<angle>.json\` (\`<angle>\` = your angle name), and pass \`--tmp-root "${path.resolve(repoRoot)}/tmp"\` to any findings-writer CLI (e.g. \`write-gate-findings-log.mjs\`). Cwd-relative \`tmp/...\` resolves against whatever checkout the command started in — a findings artifact written to the primary checkout's tmp/ is invisible to fan-in and fails the gate as missing evidence.`,
       "",

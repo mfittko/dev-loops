@@ -545,6 +545,21 @@ export async function fetchDeltaChangedFiles({ repo, base, head }, { env = proce
   }
   return changed;
 }
+// The PR's base branch name, for the main-relative convergence exclusion
+// (drop files already on the base at the current head). Kept as a dedicated
+// lightweight read rather than widening the shared prData query. FAIL-OPEN to
+// "" — a missing/unreadable base ref simply skips the exclusion, and the caller
+// keeps the raw delta (fail-closed: a non-doc delta still re-opens the round).
+export async function fetchPrBaseRefName({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
+  let result;
+  try {
+    result = await runChild(ghCommand, ["pr", "view", String(pr), "--repo", repo, "--json", "baseRefName", "--jq", ".baseRefName"], env);
+  } catch {
+    return "";
+  }
+  if (result.code !== 0) return "";
+  return typeof result.stdout === "string" ? result.stdout.trim() : "";
+}
 export function getLastCopilotReviewHeadSha(prData) {
   const reviews = Array.isArray(prData?.reviews) ? prData.reviews : [];
   // Only consider submitted (non-PENDING) Copilot reviews.
@@ -895,18 +910,42 @@ export async function performCopilotReviewRequest(
       });
     }
     // AC2 fail-closed convergence carry-forward: at the round cap, a
-    // post-convergence delta PROVABLY a pure doc/prose bump must not force a
-    // fresh blocking round. DEFAULT-SAFE: the delta lookup fails closed (null)
-    // on any uncertainty, and resolveConvergenceCarryForward returns
+    // post-convergence delta PROVABLY outside Copilot's review surface must not
+    // force a fresh blocking round. DEFAULT-SAFE: the delta lookup fails closed
+    // (null) on any uncertainty, and resolveConvergenceCarryForward returns
     // carryForward:false on any code/test/config/CI or unclassifiable file
-    // (or an empty delta), so every non-pure-doc case re-opens the round
-    // exactly as before.
+    // (or an empty delta without proof), so every uncertain case re-opens the
+    // round exactly as before.
     const deltaChangedFiles = await fetchDeltaChangedFiles(
       { repo: options.repo, base: lastReviewSha, head: currentHeadSha },
       runtime,
     );
     if (deltaChangedFiles !== null) {
-      const convergence = resolveConvergenceCarryForward({ changedFiles: deltaChangedFiles });
+      // Apply the SAME main-relative exclusion the carry-forward resolver
+      // uses — drop files already on the PR's base branch at the current head.
+      // A base-move that only integrates already-merged base commits then
+      // contributes NO PR-own surface, so it must not force a fresh Copilot
+      // round (the round-cap deadlock this fix targets). `deltaComplete` tells
+      // resolveConvergenceCarryForward an EMPTY reduced delta is a PROVEN
+      // integrate-only base-move (carry), not an unavailable one (fail closed).
+      // The base-relative compare fails closed to the raw delta (deltaComplete
+      // stays false) whenever the base ref is unknown or the compare is
+      // unavailable/non-linear/renamed, preserving today's behavior.
+      const baseRef = await fetchPrBaseRefName({ repo: options.repo, pr: options.pr }, runtime);
+      let convergenceDelta = deltaChangedFiles;
+      let deltaComplete = false;
+      if (baseRef.length > 0) {
+        const prOwn = await fetchDeltaChangedFiles(
+          { repo: options.repo, base: baseRef, head: currentHeadSha },
+          runtime,
+        );
+        if (prOwn !== null) {
+          const prOwnSet = new Set(prOwn);
+          convergenceDelta = deltaChangedFiles.filter((file) => prOwnSet.has(file));
+          deltaComplete = true;
+        }
+      }
+      const convergence = resolveConvergenceCarryForward({ changedFiles: convergenceDelta, deltaComplete });
       if (convergence.carryForward) {
         return withConfigWarning({
           ok: true,
@@ -914,7 +953,7 @@ export async function performCopilotReviewRequest(
           repo: options.repo,
           pr: options.pr,
           reviewer: "Copilot",
-          detail: `Post-convergence head bump is a pure doc/prose delta (${convergence.reason}); no fresh Copilot round is forced. The prior converged Copilot review still stands — proceed to the gate.`,
+          detail: `Post-convergence head bump is provably outside Copilot's review surface (${convergence.reason}); no fresh Copilot round is forced. The prior converged Copilot review still stands — proceed to the gate.`,
           completedRounds,
           maxRounds,
         });

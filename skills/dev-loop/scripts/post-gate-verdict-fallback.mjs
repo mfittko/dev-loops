@@ -4,9 +4,7 @@
 // Minimal gate-verdict-comment poster for the fallback path used when the
 // `@dev-loops/core` package is not installed in the consumer repo and the
 // full `scripts/github/upsert-checkpoint-verdict.mjs` helper is therefore
-// unavailable. Posts the same visible comment format as the full helper, but
-// without the full helper's idempotent same-head update, stale-head detection,
-// gate-coordination validation, or internal-only PR short-circuit.
+// unavailable. Posts the same visible comment format with the limitations below.
 //
 // Contract reference: skills/docs/gate-review-comment-contract.md (rendered body must
 // remain parser-stable for gate name and head SHA).

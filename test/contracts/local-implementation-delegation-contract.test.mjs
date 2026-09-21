@@ -5,6 +5,8 @@ import {
   test,
 } from "../imported-assets-helpers.mjs";
 import { assertRuleOwned, assertRulePresent } from "./_rule-helpers.mjs";
+import { parseMarkdownSections } from "../../packages/core/src/loop/issue-refinement-artifact.mjs";
+import { extractRelativeMarkdownLinks } from "../../scripts/docs/validate-links.mjs";
 
 const SKILL_PATH = "skills/local-implementation/SKILL.md";
 
@@ -35,11 +37,18 @@ test("local-implementation skill does not reference the removed coordinator agen
   assert.doesNotMatch(content, /coordinator/i);
 });
 
-test("local-implementation skill owns workflow handoff template delegation", async () => {
+test("local implementation delegates handoff derivation and lifecycle to their owners", async () => {
   const content = await readRepo(SKILL_PATH);
-
-  assert.match(content, /`local-implementation` skill uses this template when delegating/i);
-  assert.doesNotMatch(content, /coordinator must use this template/i);
+  const sections = parseMarkdownSections(content);
+  const section = sections.find(({ bodyLines }) => bodyLines.some((line) => line.includes("../docs/workflow-handoff-contract.md")));
+  assert.ok(section, "missing handoff owner");
+  const body = section.bodyLines.join("\n");
+  const links = extractRelativeMarkdownLinks(body).map(({ rawTarget }) => rawTarget);
+  for (const owner of ["../docs/workflow-handoff-contract.md", "../docs/pr-lifecycle-contract.md"]) {
+    assert.ok(links.includes(owner), `missing owner: ${owner}`);
+  }
+  for (const field of ["requiredReads", "nextAction"]) assert.ok(body.includes(`\`${field}\``));
+  // The real envelope derivation/unknown-strategy checks live in handoff-envelope.test.mjs.
 });
 
 // Cross-harness regression guard: the developer implementation loop must
