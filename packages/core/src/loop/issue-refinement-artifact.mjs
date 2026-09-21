@@ -1044,21 +1044,39 @@ export function validatePrBodySpec({ body = "", expectedIssue = null, issueLess 
     }
   }
 
+  // Checkbox markers are REQUIRED (not just any bullet): the completeness
+  // block (extractPrBodyUncheckedChecklistItems) only ever sees checkbox
+  // items, so a plain bullet here would fail-open the completeness check
+  // even though this validator accepted it.
   const acSection = findSectionByPatterns(sections, ACCEPTANCE_SECTION_PATTERNS);
-  const acItems = acSection ? extractChecklistItems(acSection.bodyLines.join("\n")) : [];
-  if (acItems.length === 0) {
+  const acParsed = acSection ? parseChecklistItems(acSection.bodyLines.join("\n")) : [];
+  const acPlainBullets = acParsed.filter((item) => item.checked === null);
+  const acItems = acParsed.filter((item) => item.checked !== null).map((item) => item.text);
+  if (acParsed.length === 0) {
     errors.push({
       code: "missing_acceptance_criteria",
       message: "Missing testable Acceptance criteria (no checklist items found).",
     });
+  } else if (acPlainBullets.length > 0) {
+    errors.push({
+      code: "acceptance_criteria_not_checkboxes",
+      message: `Acceptance criteria must use checkbox markers ('- [ ]'/'- [x]'), not plain bullets (found ${acPlainBullets.length} plain bullet(s)); plain bullets fail-open the completeness block.`,
+    });
   }
 
   const dodSection = findSectionByPatterns(sections, DOD_SECTION_PATTERNS);
-  const dodItems = dodSection ? extractChecklistItems(dodSection.bodyLines.join("\n")) : [];
-  if (dodItems.length === 0) {
+  const dodParsed = dodSection ? parseChecklistItems(dodSection.bodyLines.join("\n")) : [];
+  const dodPlainBullets = dodParsed.filter((item) => item.checked === null);
+  const dodItems = dodParsed.filter((item) => item.checked !== null).map((item) => item.text);
+  if (dodParsed.length === 0) {
     errors.push({
       code: "missing_definition_of_done",
       message: "Missing Definition of done (no checklist items found).",
+    });
+  } else if (dodPlainBullets.length > 0) {
+    errors.push({
+      code: "definition_of_done_not_checkboxes",
+      message: `Definition of done must use checkbox markers ('- [ ]'/'- [x]'), not plain bullets (found ${dodPlainBullets.length} plain bullet(s)); plain bullets fail-open the completeness block.`,
     });
   }
 

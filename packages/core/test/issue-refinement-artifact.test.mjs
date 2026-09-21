@@ -18,6 +18,7 @@ import {
   extractUncheckedChecklistItems,
   parseMarkdownSections,
   summarizeRefinementGateCheck,
+  validatePrBodySpec,
 } from "../src/loop/issue-refinement-artifact.mjs";
 
 // #1866: a refined tracker-backed issue body carries an explicit Non-goals
@@ -917,5 +918,68 @@ test("#1877 round-7 DoD-alias-symmetry pin: decorated-variant DoD alias headings
   assert.deepEqual(
     extractPrBodyUncheckedChecklistItems({ body: "## Done — core\n\n- [ ] unchecked under done alias\n" }),
     { uncheckedDodItems: ["unchecked under done alias"], uncheckedAcItems: [] },
+  );
+});
+
+// #2333: validatePrBodySpec must REQUIRE checkbox markers for AC/DoD, not
+// merely a bullet. extractPrBodyUncheckedChecklistItems (the completeness
+// block) only ever counts `- [ ]`/`- [x]` items; a plain `- ` bullet is
+// invisible to it. Before this fix validatePrBodySpec accepted plain bullets
+// via extractChecklistItems (which counts both), so a plain-bullet AC/DoD
+// body would pass this validator yet fail-open the completeness block.
+const PR_BODY_SPEC_NARRATIVE = `Closes #123
+
+## Objective
+Because reasons.
+
+## In scope
+- a
+
+## Explicit non-goals
+- b
+
+## Risks
+- none
+`;
+
+function prBodySpecFixture({ ac, dod }) {
+  return `${PR_BODY_SPEC_NARRATIVE}\n## Acceptance criteria\n${ac}\n\n## Definition of done\n${dod}\n`;
+}
+
+test("#2333 validatePrBodySpec rejects a plain-bullet Acceptance criteria section", () => {
+  const body = prBodySpecFixture({ ac: "- works", dod: "- [ ] tested" });
+  const result = validatePrBodySpec({ body, expectedIssue: 123 });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.code === "acceptance_criteria_not_checkboxes"));
+});
+
+test("#2333 validatePrBodySpec rejects a plain-bullet Definition of done section", () => {
+  const body = prBodySpecFixture({ ac: "- [ ] works", dod: "- tested" });
+  const result = validatePrBodySpec({ body, expectedIssue: 123 });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.code === "definition_of_done_not_checkboxes"));
+});
+
+test("#2333 validatePrBodySpec accepts checkbox-form AC/DoD and passes overall", () => {
+  const body = prBodySpecFixture({ ac: "- [ ] works", dod: "- [x] tested" });
+  const result = validatePrBodySpec({ body, expectedIssue: 123 });
+  assert.ok(!result.errors.some((e) => e.code === "acceptance_criteria_not_checkboxes"));
+  assert.ok(!result.errors.some((e) => e.code === "definition_of_done_not_checkboxes"));
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.acItems, ["works"]);
+  assert.deepEqual(result.dodItems, ["tested"]);
+});
+
+test("#2333 regression: a plain-bullet AC/DoD body can never reach the completeness block undetected", () => {
+  // Closes the completeness-block fail-open: validatePrBodySpec now rejects
+  // the exact shape extractPrBodyUncheckedChecklistItems is blind to.
+  const body = prBodySpecFixture({ ac: "- works", dod: "- tested" });
+  const result = validatePrBodySpec({ body, expectedIssue: 123 });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((e) => e.code === "acceptance_criteria_not_checkboxes"));
+  assert.ok(result.errors.some((e) => e.code === "definition_of_done_not_checkboxes"));
+  assert.deepEqual(
+    extractPrBodyUncheckedChecklistItems({ body }),
+    { uncheckedAcItems: [], uncheckedDodItems: [] },
   );
 });
