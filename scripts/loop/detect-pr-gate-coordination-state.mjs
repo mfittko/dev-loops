@@ -28,7 +28,8 @@ import { buildContainmentMap } from "../github/_commit-containment.mjs";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.mjs";
-import { classifyDeltaSinceLastReview, getLastCopilotReviewHeadSha } from "../github/request-copilot-review.mjs";
+import { classifyDeltaSinceLastReview, classifyPrOwnDeltaSinceLastReview, getLastCopilotReviewHeadSha } from "../github/request-copilot-review.mjs";
+import { evaluateCopilotConvergence } from "@dev-loops/core/loop/merge-approval";
 import { readSuppressionMarker } from "./_post-convergence-review-suppression.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
@@ -769,22 +770,54 @@ export async function resolvePostConvergenceReviewSuppressed({ repo, pr, current
     return false;
   }
   const marker = await readSuppressionMarker({ repo, pr, headSha: currentHeadSha }, runtime);
-  if (!marker || marker.headSha !== currentHeadSha) {
+  if (marker) {
+    // Operator-marker path (explicit human authorization), unchanged and FIRST.
+    // A marker whose head no longer matches the current head (a further push
+    // invalidated it) does not suppress and does not silently re-derive around
+    // itself — fail closed, exactly as before.
+    if (marker.headSha !== currentHeadSha) {
+      return false;
+    }
+    // Re-derive the compare BASE live too, not just the classification below —
+    // defense in depth against a stale or hand-edited marker whose
+    // lastReviewedHeadSha no longer names Copilot's actual last submitted
+    // review. A marker that disagrees with the live value must not suppress.
+    const liveLastReviewedHeadSha = getLastCopilotReviewHeadSha(prData);
+    if (!liveLastReviewedHeadSha || liveLastReviewedHeadSha !== marker.lastReviewedHeadSha) {
+      return false;
+    }
+    const reverified = await classifyDeltaSinceLastReview(
+      { repo, base: marker.lastReviewedHeadSha, head: currentHeadSha },
+      runtime,
+    );
+    return reverified.carryForward === true;
+  }
+  // Below-cap live carry-forward recognition (#2345/#2316): no operator marker
+  // applies, so recognize a settled below-cap head by re-verifying LIVE that the
+  // current head's delta since Copilot's last submitted review is a proven
+  // integrate-only base-move / pure-doc carry — the SAME reduction the at-cap
+  // request-copilot-review path uses. The compare base is the LIVE last-reviewed
+  // head (never a stored marker value). Fail closed: an unknown base or an
+  // unproven delta (any code/test/config/CI file) returns false.
+  //
+  // Cheap preconditions (no gh I/O) first, so the compare only runs for the
+  // stuck settled shape this targets: Copilot reviewed an EARLIER head
+  // (copilotReviewPresent) and the current head has advanced past it and is NOT
+  // itself reviewed. A current-head review or an unchanged head needs no carry —
+  // the normal convergence path already covers it — and skipping them keeps the
+  // gate poll from issuing a wasted compare on every PR.
+  if (snapshot.copilotReviewPresent !== true || snapshot.copilotReviewOnCurrentHead === true) {
     return false;
   }
-  // Re-derive the compare BASE live too, not just the classification below —
-  // defense in depth against a stale or hand-edited marker whose
-  // lastReviewedHeadSha no longer names Copilot's actual last submitted
-  // review. A marker that disagrees with the live value must not suppress.
   const liveLastReviewedHeadSha = getLastCopilotReviewHeadSha(prData);
-  if (!liveLastReviewedHeadSha || liveLastReviewedHeadSha !== marker.lastReviewedHeadSha) {
+  if (!liveLastReviewedHeadSha || liveLastReviewedHeadSha === currentHeadSha) {
     return false;
   }
-  const reverified = await classifyDeltaSinceLastReview(
-    { repo, base: marker.lastReviewedHeadSha, head: currentHeadSha },
+  const carry = await classifyPrOwnDeltaSinceLastReview(
+    { repo, pr, base: liveLastReviewedHeadSha, head: currentHeadSha },
     runtime,
   );
-  return reverified.carryForward === true;
+  return carry.carryForward === true;
 }
 
 // GATE-EXEC-FIXER-DISPOSITION-BOUNDARY surface: read the durable checkpoint
@@ -874,6 +907,15 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     currentHeadSha,
   });
   const reviewSummary = summarizeCopilotReviews(prData?.reviews, { headSha: currentHeadSha, draftGateResetAtMs });
+  // Path A (#2345): the gate-ENTRY body-feedback block must consume the SAME
+  // shared convergence eval the MERGE gate uses, not the raw current-head body
+  // finding. `hasBodyFindingOnCurrentHead` is true for BOTH 🟡 CHANGES_RECOMMENDED
+  // and 🔵 NEEDS_CLOSER_LOOK, but evaluateCopilotConvergence treats a thread-clean
+  // 🔵 as converged (ok:true). Block on the body ONLY when convergence fails
+  // (🟡 / unrecognized / unknown head) — fail closed. Unresolved THREADS still
+  // block independently via unresolvedThreadCount, so a 🔵/🟡 with an open thread
+  // still blocks (no regression).
+  const copilotBodyConvergence = evaluateCopilotConvergence({ currentHeadSha, reviews: prData?.reviews });
   const reviewRequestStatus = await resolveCopilotReviewRequestStatus(
     { repo: options.repo, pr: options.pr, reviewSummary, copilotRequested },
     runtime,
@@ -887,7 +929,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     unresolvedThreadCount: parsedThreads.summary.unresolvedThreads,
     actionableThreadCount: parsedThreads.summary.actionableThreads,
     copilotReviewRoundCount: reviewSummary.completedCopilotReviewRounds,
-    copilotBodyFeedbackUnresolved: reviewSummary.hasBodyFindingOnCurrentHead,
+    copilotBodyFeedbackUnresolved: copilotBodyConvergence.ok === false,
   });
   if (snapshot.unresolvedThreadCount > 0
       && !snapshot.copilotReviewOnCurrentHead

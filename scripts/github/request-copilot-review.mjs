@@ -608,6 +608,36 @@ export async function classifyDeltaSinceLastReview({ repo, base, head }, runtime
   }
   return resolveConvergenceCarryForward({ changedFiles: deltaChangedFiles });
 }
+
+// PR-own convergence carry classification: the SAME fail-closed proof the
+// round-cap AC2 check below performs — fetch the delta since Copilot's last
+// reviewed head, then reduce it to PR-own files via the main-relative exclusion
+// (drop files already on the base branch at the current head) so an
+// integrate-only base-move that only replays already-merged base commits
+// contributes an EMPTY reduced delta. An empty reduced delta with
+// `deltaComplete=true` is a PROVEN integrate-only base-move (carry); a pure
+// doc/prose delta also carries. Exposed so detect-pr-gate-coordination-state.mjs
+// reuses this exact reduction for the below-cap gate-ENTRY recognition instead
+// of re-implementing it. Fails closed to `{ carryForward: false }` whenever the
+// delta is unavailable/unproven.
+export async function classifyPrOwnDeltaSinceLastReview({ repo, pr, base, head }, runtime = {}) {
+  const deltaChangedFiles = await fetchDeltaChangedFiles({ repo, base, head }, runtime);
+  if (deltaChangedFiles === null) {
+    return { carryForward: false, reason: "delta since the last reviewed head is unavailable or unproven (fail-closed)" };
+  }
+  const baseRef = await fetchPrBaseRefName({ repo, pr }, runtime);
+  let convergenceDelta = deltaChangedFiles;
+  let deltaComplete = false;
+  if (baseRef.length > 0) {
+    const prOwn = await fetchDeltaChangedFiles({ repo, base: baseRef, head }, runtime);
+    if (prOwn !== null) {
+      const prOwnSet = new Set(prOwn);
+      convergenceDelta = deltaChangedFiles.filter((file) => prOwnSet.has(file));
+      deltaComplete = true;
+    }
+  }
+  return resolveConvergenceCarryForward({ changedFiles: convergenceDelta, deltaComplete });
+}
 function classifyRequestFailure(detail) {
   const normalized = detail.toLowerCase();
   if (
@@ -916,48 +946,29 @@ export async function performCopilotReviewRequest(
     // carryForward:false on any code/test/config/CI or unclassifiable file
     // (or an empty delta without proof), so every uncertain case re-opens the
     // round exactly as before.
-    const deltaChangedFiles = await fetchDeltaChangedFiles(
-      { repo: options.repo, base: lastReviewSha, head: currentHeadSha },
+    // Apply the SAME main-relative exclusion the carry-forward resolver uses —
+    // drop files already on the PR's base branch at the current head. A
+    // base-move that only integrates already-merged base commits then
+    // contributes NO PR-own surface, so it must not force a fresh Copilot round
+    // (the round-cap deadlock this fix targets). The shared reduction fails
+    // closed to the raw delta whenever the base ref is unknown or the compare is
+    // unavailable/non-linear/renamed, preserving today's behavior. This exact
+    // proof is shared with the below-cap gate-ENTRY recognition (#2345).
+    const convergence = await classifyPrOwnDeltaSinceLastReview(
+      { repo: options.repo, pr: options.pr, base: lastReviewSha, head: currentHeadSha },
       runtime,
     );
-    if (deltaChangedFiles !== null) {
-      // Apply the SAME main-relative exclusion the carry-forward resolver
-      // uses — drop files already on the PR's base branch at the current head.
-      // A base-move that only integrates already-merged base commits then
-      // contributes NO PR-own surface, so it must not force a fresh Copilot
-      // round (the round-cap deadlock this fix targets). `deltaComplete` tells
-      // resolveConvergenceCarryForward an EMPTY reduced delta is a PROVEN
-      // integrate-only base-move (carry), not an unavailable one (fail closed).
-      // The base-relative compare fails closed to the raw delta (deltaComplete
-      // stays false) whenever the base ref is unknown or the compare is
-      // unavailable/non-linear/renamed, preserving today's behavior.
-      const baseRef = await fetchPrBaseRefName({ repo: options.repo, pr: options.pr }, runtime);
-      let convergenceDelta = deltaChangedFiles;
-      let deltaComplete = false;
-      if (baseRef.length > 0) {
-        const prOwn = await fetchDeltaChangedFiles(
-          { repo: options.repo, base: baseRef, head: currentHeadSha },
-          runtime,
-        );
-        if (prOwn !== null) {
-          const prOwnSet = new Set(prOwn);
-          convergenceDelta = deltaChangedFiles.filter((file) => prOwnSet.has(file));
-          deltaComplete = true;
-        }
-      }
-      const convergence = resolveConvergenceCarryForward({ changedFiles: convergenceDelta, deltaComplete });
-      if (convergence.carryForward) {
-        return withConfigWarning({
-          ok: true,
-          status: SUPPRESSED_POST_CONVERGENCE_DOCS_ONLY_STATUS,
-          repo: options.repo,
-          pr: options.pr,
-          reviewer: "Copilot",
-          detail: `Post-convergence head bump is provably outside Copilot's review surface (${convergence.reason}); no fresh Copilot round is forced. The prior converged Copilot review still stands — proceed to the gate.`,
-          completedRounds,
-          maxRounds,
-        });
-      }
+    if (convergence.carryForward) {
+      return withConfigWarning({
+        ok: true,
+        status: SUPPRESSED_POST_CONVERGENCE_DOCS_ONLY_STATUS,
+        repo: options.repo,
+        pr: options.pr,
+        reviewer: "Copilot",
+        detail: `Post-convergence head bump is provably outside Copilot's review surface (${convergence.reason}); no fresh Copilot round is forced. The prior converged Copilot review still stands — proceed to the gate.`,
+        completedRounds,
+        maxRounds,
+      });
     }
     // Has new (review-relevant) commits — bypass the round cap and proceed with the request
   }

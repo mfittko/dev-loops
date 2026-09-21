@@ -9,6 +9,7 @@ import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 import { detectPrGateCoordinationState, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, resolvePostConvergenceReviewSuppressed, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
 import { isRoundCapReachedCleanGrant } from "@dev-loops/core/loop/pr-gate-coordination";
+import { evaluateCopilotConvergence } from "@dev-loops/core/loop/merge-approval";
 import { emitResult } from "../../scripts/lib/jq-output.mjs";
 import { formatCliError } from "../../scripts/_core-helpers.mjs";
 import { PR_CHECKPOINT, PR_CHECKPOINT_ACTION, shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-coordination";
@@ -868,6 +869,124 @@ test("detect-pr-gate-coordination-state allows pre_approval_gate (not an impossi
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+// #2345 Path A: a thread-clean current-head Copilot 🔵 "Needs a closer look"
+// review at the round cap must ENTER pre_approval (the merge gate already treats
+// 🔵 as conductor-overridable). Before the fix the gate-ENTRY body-feedback term
+// blocked on ANY current-head body finding (🟡 OR 🔵), dead-ending the loop at
+// the cap. The current head carries the latest Copilot review, so no
+// post-convergence compare fires (last-reviewed head === current head).
+function pathAGhEntries({ reviewBody, threadNodes = [], atCap = true }) {
+  const currentHead = "def56789abcdef";
+  // At the round cap (default) two submitted rounds are present (cap = 2 in the
+  // fixture .devloops); below the cap only the single current-head review exists.
+  const reviews = atCap
+    ? [
+        { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: "1111111111111111111111111111111111111111" }, submittedAt: "2026-05-31T20:00:00Z" },
+        { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: currentHead }, body: reviewBody, submittedAt: "2026-05-31T20:10:00Z" },
+      ]
+    : [
+        { author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: currentHead }, body: reviewBody, submittedAt: "2026-05-31T20:10:00Z" },
+      ];
+  return [
+    {
+      assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+      stdout: jsonLine({
+        number: 266,
+        state: "OPEN",
+        isDraft: false,
+        headRefOid: currentHead,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        reviews,
+      }),
+    },
+    { assertArgs: ["api", "repos/owner/repo/pulls/266/requested_reviewers"], stdout: jsonLine({ users: [], teams: [] }) },
+    { assertArgs: ["api", "graphql", "pr=266"], stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: threadNodes } } } } }) },
+    { assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid"], stdout: jsonLine({ headRefOid: currentHead }) },
+    {
+      assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/266/comments?per_page=100"],
+      stdout: jsonLine([[
+        {
+          id: 21,
+          body: ["Gate review: draft_gate", `Reviewed head SHA: ${currentHead}`, "Verdict: clean", "Findings summary: no issues found", "Next action: mark ready for review"].join("\n"),
+          html_url: "https://example.test/comment/21",
+          updated_at: "2026-05-31T19:00:00Z",
+        },
+      ]]),
+    },
+    { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/266/reviews?per_page=100"], stdout: "[]\n" },
+    { assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'], stdout: "copilot-pull-request-reviewer[bot]\n" },
+  ];
+}
+
+test("detect-pr-gate-coordination-state ENTERS pre_approval for a thread-clean current-head 🔵 at the round cap (#2345)", async () => {
+  const env = writeGhStub(null, pathAGhEntries({ reviewBody: "### 🔵 Needs a closer look\n\nA soft, conductor-overridable non-approval." }));
+  const result = await runNode(["--repo", "owner/repo", "--pr", "266"], { env });
+  assert.equal(result.code, 0);
+  assert.equal(result.stderr, "");
+  const parsed = JSON.parse(result.stdout);
+  // The 🔵 no longer sets copilotBodyFeedbackUnresolved, so the round cap routes
+  // to the clean fallback and pre_approval entry is permitted.
+  assert.equal(parsed.lifecycleState, "round_cap_clean_fallback");
+  assert.equal(parsed.nextAction, "run_pre_approval_gate");
+  assert.ok(parsed.allowedNextActions.includes("run_pre_approval_gate"));
+  assert.ok(!parsed.forbiddenActions.includes("run_pre_approval_gate"));
+});
+
+test("detect-pr-gate-coordination-state still BLOCKS pre_approval for a below-cap current-head 🟡 (#2345 no regression)", async () => {
+  // Below the cap a 🟡 "Changes recommended" body finding is unresolved feedback,
+  // so gate entry is refused — the fix must not open this path (only the 🔵 does).
+  const env = writeGhStub(null, pathAGhEntries({ reviewBody: "### 🟡 Changes recommended\n\nActionable feedback in the body.", atCap: false }));
+  const result = await runNode(["--repo", "owner/repo", "--pr", "266"], { env });
+  assert.equal(result.code, 0);
+  assert.equal(result.stderr, "");
+  const parsed = JSON.parse(result.stdout);
+  assert.notEqual(parsed.lifecycleState, "round_cap_clean_fallback");
+  assert.ok(parsed.forbiddenActions.includes("run_pre_approval_gate"));
+  assert.ok(!parsed.allowedNextActions.includes("run_pre_approval_gate"));
+});
+
+test("detect-pr-gate-coordination-state still BLOCKS pre_approval for a 🔵 with an unresolved thread (#2345 no regression)", async () => {
+  const threadNodes = [
+    {
+      id: "thread-1",
+      isResolved: false,
+      comments: {
+        nodes: [
+          { id: "comment-1", databaseId: 1001, body: "This needs a fix", author: { login: "copilot-pull-request-reviewer", __typename: "Bot" } },
+        ],
+      },
+    },
+  ];
+  const env = writeGhStub(null, pathAGhEntries({ reviewBody: "### 🔵 Needs a closer look\n\nSoft non-approval.", threadNodes }));
+  const result = await runNode(["--repo", "owner/repo", "--pr", "266"], { env });
+  assert.equal(result.code, 0);
+  assert.equal(result.stderr, "");
+  const parsed = JSON.parse(result.stdout);
+  // Unresolved THREADS block independently of the body disposition.
+  assert.notEqual(parsed.lifecycleState, "round_cap_clean_fallback");
+  assert.ok(parsed.forbiddenActions.includes("run_pre_approval_gate"));
+  assert.ok(!parsed.allowedNextActions.includes("run_pre_approval_gate"));
+});
+
+// #2345 AC3: the gate-ENTRY body-feedback term and the MERGE gate consume the
+// SAME evaluateCopilotConvergence. For one {currentHeadSha, reviews} input the
+// shared eval decides both: 🔵 → ok:true (entry allowed), 🟡 → ok:false (blocked).
+test("gate-entry body-feedback and the merge gate agree via the shared evaluateCopilotConvergence (#2345 AC3)", () => {
+  const currentHeadSha = "def56789abcdef";
+  const blueReviews = [{ author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: currentHeadSha }, body: "### 🔵 Needs a closer look", submittedAt: "2026-05-31T20:10:00Z" }];
+  const yellowReviews = [{ author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit: { oid: currentHeadSha }, body: "### 🟡 Changes recommended", submittedAt: "2026-05-31T20:10:00Z" }];
+  const blue = evaluateCopilotConvergence({ currentHeadSha, reviews: blueReviews });
+  const yellow = evaluateCopilotConvergence({ currentHeadSha, reviews: yellowReviews });
+  assert.equal(blue.ok, true);
+  assert.equal(blue.disposition, "needs_closer_look");
+  assert.equal(yellow.ok, false);
+  assert.equal(yellow.disposition, "changes_recommended");
+  // The detector sets copilotBodyFeedbackUnresolved = (convergence.ok === false),
+  // so the 🔵 does NOT block gate entry while the 🟡 does.
+  assert.equal(blue.ok === false, false);
+  assert.equal(yellow.ok === false, true);
 });
 
 test("detect-pr-gate-coordination-state auto-detects local-fix-without-reply (#464) when unresolved threads exist on older review commit", async () => {
@@ -2475,6 +2594,9 @@ describe("resolvePostConvergenceReviewSuppressed (#1441)", () => {
   }
 
   const snapshot = { copilotReviewRequestStatus: "none", unresolvedThreadCount: 0 };
+  // #2345 Path B fires only when Copilot reviewed an EARLIER head and the current
+  // head has advanced past it (not itself reviewed) — the stuck settled shape.
+  const belowCapSnapshot = { copilotReviewRequestStatus: "none", unresolvedThreadCount: 0, copilotReviewPresent: true, copilotReviewOnCurrentHead: false };
 
   // prData carries Copilot's actual last submitted review (commit "oldsha"),
   // matching the marker's claimed lastReviewedHeadSha: resolvePostConvergenceReviewSuppressed
@@ -2496,7 +2618,7 @@ describe("resolvePostConvergenceReviewSuppressed (#1441)", () => {
         },
       ]);
       const suppressed = await resolvePostConvergenceReviewSuppressed(
-        { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot, prData: prDataWithLastReview("oldsha") },
+        { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot: belowCapSnapshot, prData: prDataWithLastReview("oldsha") },
         { env: {}, ghCommand: "gh", runChild, checkpointDir },
       );
       assert.equal(suppressed, true);
@@ -2548,6 +2670,65 @@ describe("resolvePostConvergenceReviewSuppressed (#1441)", () => {
       assert.equal(suppressed, false);
       assert.equal(calls.length, 0);
     });
+  });
+
+  // #2345 Path B: with NO operator marker, recognize a settled below-cap head by
+  // re-verifying LIVE that the current head's delta since Copilot's last submitted
+  // review is a proven integrate-only base-move / pure-doc carry — the SAME PR-own
+  // reduction the at-cap request-copilot-review path uses.
+  it("returns true when no marker exists but the below-cap delta is a proven integrate-only base-move (#2345)", async () => {
+    const { runChild } = makeGhMock([
+      // Raw delta since the last-reviewed head includes a base file (a code file
+      // pulled in by a base-move) …
+      {
+        assertArgs: ["api", "repos/owner/repo/compare/oldsha...newsha"],
+        stdout: jsonLine({ status: "ahead", files: [{ filename: "src/base-only.mjs", status: "modified" }] }),
+      },
+      // … the PR base ref …
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefName", "--jq", ".baseRefName"], stdout: "main\n" },
+      // … and the base-relative compare shows that same file is already on base at
+      // the current head, so the PR-own reduced delta is EMPTY → integrate-only.
+      {
+        assertArgs: ["api", "repos/owner/repo/compare/main...newsha"],
+        stdout: jsonLine({ status: "ahead", files: [] }),
+      },
+    ]);
+    const suppressed = await resolvePostConvergenceReviewSuppressed(
+      { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot: belowCapSnapshot, prData: prDataWithLastReview("oldsha") },
+      { env: {}, ghCommand: "gh", runChild },
+    );
+    assert.equal(suppressed, true);
+  });
+
+  it("returns false when no marker exists and the below-cap delta touches Copilot's code surface (#2345 fail-closed)", async () => {
+    const { runChild } = makeGhMock([
+      {
+        assertArgs: ["api", "repos/owner/repo/compare/oldsha...newsha"],
+        stdout: jsonLine({ status: "ahead", files: [{ filename: "src/feature.mjs", status: "modified" }] }),
+      },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefName", "--jq", ".baseRefName"], stdout: "main\n" },
+      // The changed code file is PR-own (still differs from base), so the reduced
+      // delta keeps it → a code delta must NEVER carry forward.
+      {
+        assertArgs: ["api", "repos/owner/repo/compare/main...newsha"],
+        stdout: jsonLine({ status: "ahead", files: [{ filename: "src/feature.mjs", status: "modified" }] }),
+      },
+    ]);
+    const suppressed = await resolvePostConvergenceReviewSuppressed(
+      { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot: belowCapSnapshot, prData: prDataWithLastReview("oldsha") },
+      { env: {}, ghCommand: "gh", runChild },
+    );
+    assert.equal(suppressed, false);
+  });
+
+  it("returns false without any gh call when no marker exists and Copilot's last-reviewed head is unknown (#2345 fail-closed)", async () => {
+    const { runChild, calls } = makeGhMock([]);
+    const suppressed = await resolvePostConvergenceReviewSuppressed(
+      { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", snapshot: belowCapSnapshot, prData: { reviews: [] } },
+      { env: {}, ghCommand: "gh", runChild },
+    );
+    assert.equal(suppressed, false);
+    assert.equal(calls.length, 0, "no live carry check without a known compare base");
   });
 
   it("returns false when a pending request or unresolved threads exist, without even reading the marker", async () => {

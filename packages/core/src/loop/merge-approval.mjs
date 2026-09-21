@@ -20,7 +20,7 @@
  * precondition, and the aggregate naming.
  */
 
-import { isCopilotLogin, classifyCopilotReviewBodyDisposition, COPILOT_DISPOSITION, SUBMITTED_REVIEW_STATES } from "../github/copilot-helpers.mjs";
+import { isCopilotLogin, classifyCopilotReviewBodyDisposition, COPILOT_DISPOSITION, SUBMITTED_REVIEW_STATES, extractReviewCommitSha } from "../github/copilot-helpers.mjs";
 import { findBlockingTitleMarkers } from "./pr-title-markers.mjs";
 import { resolveSizeBudgetHumanApprovalRequired } from "./size-budget-merge-gate.mjs";
 import { deriveLoopCiStatusFromRollup } from "./copilot-ci-status.mjs";
@@ -82,6 +82,15 @@ function reviewCommit(entry) {
   if (typeof entry?.commit_id === "string" && entry.commit_id.length > 0) return entry.commit_id;
   if (typeof entry?.commitId === "string" && entry.commitId.length > 0) return entry.commitId;
   return null;
+}
+
+// Copilot-only login extraction for evaluateCopilotConvergence: accepts the
+// `gh pr view` GraphQL shape (author.login) in addition to the REST shape
+// (user.login | login) reviewLogin reads. Scoped to the Copilot-convergence
+// eval so verifyFreshHumanApproval's human-approval matching is unchanged.
+function copilotConvergenceReviewLogin(entry) {
+  if (typeof entry?.author?.login === "string" && entry.author.login.length > 0) return entry.author.login;
+  return reviewLogin(entry);
 }
 
 /**
@@ -200,9 +209,16 @@ export function evaluateCopilotConvergence({ currentHeadSha = null, reviews = []
   let latestDisposition = null;
   let latestAt = null;
   for (const entry of Array.isArray(reviews) ? reviews : []) {
-    const login = reviewLogin(entry);
+    // Shape-tolerant Copilot-login + commit extraction: the merge gate feeds
+    // REST-shaped reviews (user.login/commit_id) while the gate-ENTRY detector
+    // feeds `gh pr view` GraphQL-shaped reviews (author.login/commit.oid). This
+    // eval must recognize BOTH so the two call sites share ONE convergence
+    // verdict (#2345). Only Copilot reviews matter here, so broadening the login
+    // read to author.login cannot affect verifyFreshHumanApproval (which keeps
+    // its own REST-only reviewLogin/reviewCommit).
+    const login = copilotConvergenceReviewLogin(entry);
     if (login === null || !isCopilotLogin(login)) continue;
-    if (reviewCommit(entry) !== head) continue; // only current-head reviews
+    if (extractReviewCommitSha(entry) !== head) continue; // only current-head reviews
     const state = typeof entry?.state === "string" ? entry.state.toUpperCase() : "";
     if (state === "PENDING" || !SUBMITTED_REVIEW_STATES.has(state)) continue; // PENDING/unknown never sets the finding
     const disposition = classifyCopilotReviewBodyDisposition(state, entry?.body);
