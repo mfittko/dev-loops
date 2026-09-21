@@ -72,7 +72,12 @@ Output (stdout, JSON):
   A fail-closed refusal (exit 1) emits { "ok": false, "error": "..." } on STDOUT
   (via the shared jq-output emitter); a usage/parse error (exit 2) emits
   { "ok": false, "error": "...", "hint"?: "run with --help for usage" } on STDERR.
-  Every non-success exit leaves NO wave script on disk for this (gate, headSha) key.
+  Every non-success exit AFTER the round key is resolved (a missing emit-plan, a
+  plan with no units, a unit-level refusal, a shape refusal, a script/persist IO
+  failure, or a data-dependent --jq error) leaves NO wave artifact on disk for
+  this (gate, headSha) key. Argument-validation exits that precede the key
+  resolution (bad --repo/--pr/--gate/--head-sha/--tmp-root/--cwd/--timeout-ms)
+  do not touch the key's artifacts.
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Emitted one ready wave script + call body per wave
@@ -140,7 +145,10 @@ export function encodeJsStringLiteral(value) {
  * call, one item per dispatch unit, each item carrying the unit's key and its
  * composed reviewer prompt bytes as `task`. The prompt bytes are INLINED (the
  * script reads nothing at dispatch time) so the conductor never handles them
- * and byte identity is structural. Pure.
+ * and byte identity is structural. The item shape (`key` / `agent` / `context`
+ * / `task`) is the live-verified pi-subagents workflow-script shape; the legacy
+ * top-level `tasks` array input is not an available shape in this version and
+ * is never emitted. Pure.
  * @param {{ gate: string, headSha: string, waveIndex: number, waveCount: number,
  *           units: { key: string, promptBytes: string }[] }} args
  * @returns {string}
@@ -183,12 +191,15 @@ export function waveScriptCallShape(script) {
 
 /**
  * Fail-closed shape validator for a built wave plan. It is the enforcement
- * seam behind the "one runs.all call with unique keys" acceptance criterion:
- * it rejects a plan whose wave partition does not honor `maxConcurrent` (the
- * shape a conductor produces when it emits units as SEPARATE calls), a plan
- * with a missing/blank or duplicated key, and any wave script that is not
- * exactly one `runs.all(...)` call or that carries the rejected legacy
- * `tasks:` top-level input. Pure.
+ * seam behind the "one runs.all call with unique keys" acceptance criterion,
+ * and it is DEFENSE IN DEPTH at runtime: the partitioner that feeds it is
+ * deterministic, so a well-formed round always passes, while a regression in
+ * that partitioner (or a wave plan arriving from elsewhere) is caught before
+ * any script reaches disk. It rejects a plan whose wave partition does not
+ * honor `maxConcurrent` (the shape a conductor produces when it emits units as
+ * SEPARATE calls), a plan with a missing/blank or duplicated key, and any wave
+ * script that is not exactly one `runs.all(...)` call or that carries the
+ * rejected legacy `tasks:` top-level input. Pure.
  * @param {{ waves: { index: number, keys: string[], script: string }[], maxConcurrent: number, count: number }} plan
  * @returns {{ ok: boolean, errors: string[] }}
  */
@@ -437,10 +448,15 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // documented, RECORDED load fallback — a repo that enables it records why
   // parallel execution was impractical. Any OTHER serialization silently
   // degrades a gate that requires fan-out evidence, so it fails closed here
-  // instead of producing single-unit waves nobody justified.
+  // instead of producing single-unit waves nobody justified. That includes the
+  // resolved concurrency collapsing to 1 for a reason other than the recorded
+  // flag (`gates.fanout.maxConcurrent: 1` is a valid config value and would
+  // otherwise serialize every round unnoticed), and an explicit --sequential
+  // request the config does not back.
   const requestedSequential = argv.includes("--sequential");
-  if (requestedSequential && !sequential && requireFanoutEvidence) {
-    return refuse(`GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK: refusing — --sequential was requested but gates.fanout.sequential is not configured, and gates.requireFanoutEvidence is on. Bounded parallelism (up to ${maxConcurrent} units per wave) is the DEFAULT posture; a sequential round must be a justified, recorded load fallback. Set gates.fanout.sequential: true in .devloops to record why parallel execution is impractical for this environment, or drop --sequential to release parallel waves.`);
+  const unjustifiedSerialization = maxConcurrent === 1 && !sequential;
+  if (requireFanoutEvidence && (unjustifiedSerialization || (requestedSequential && !sequential))) {
+    return refuse(`GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK: refusing — ${requestedSequential ? "--sequential was requested" : "the resolved fan-out concurrency is 1 (gates.fanout.maxConcurrent: 1)"} but gates.fanout.sequential is not configured, and gates.requireFanoutEvidence is on. Bounded parallelism is the DEFAULT posture; a sequential round must be a justified, recorded load fallback. Set gates.fanout.sequential: true in .devloops to record why parallel execution is impractical for this environment (and keep gates.fanout.maxConcurrent at its configured value), or drop the serialization to release parallel waves.`);
   }
   if (requestedSequential || sequential) maxConcurrent = 1;
 

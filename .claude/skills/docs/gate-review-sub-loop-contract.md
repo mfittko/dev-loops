@@ -258,8 +258,6 @@ Dispatch one independent, fresh-context `review` agent per emitted unit via the 
 
 Wave the emitted units under the emitter's `maxConcurrent` (`resolveFanoutEffectiveConcurrency`), awaiting a free slot before releasing more. The configured cross-harness default is 4; this repo configures 3. `gates.fanout.sequential: true` resolves to 1, so each reviewer completes and writes evidence before the next starts. Under the Claude harness the effective value is additionally capped at 2; Pi/unknown harnesses retain the configured value. These bounds never collapse independent review into inline review. On Pi each wave is released as **ONE call** — see `GATE-EXEC-FANOUT-WAVE-DISPATCH` below for the emitted wave script and call body.
 
-
-
 If a dispatch still receives 429, follow `GATE-EXEC-DISPATCH-RETRY-BACKOFF` below: retry the same unit under the helper's policy, then halve the batch with `backoffMaxConcurrent` and recompute waves before foreground one-at-a-time fallback. Record degradation in gate evidence/provenance. Never launch all units and rely on retries to impose the bound.
 
 <!-- rule: GATE-EXEC-COLLECTABLE-DISPATCH -->
@@ -543,8 +541,11 @@ bytes inlined VERBATIM as its `task` — so the conductor never handles those by
 `GATE-EXEC-BRIEFING-PREFIX` byte identity is structural, not a relay the conductor can drift. The
 step persists the round's wave plan to the keyed `<gate>-<headSha>.wave-plan.json` sibling of the
 round's artifacts; read THAT path instead of capturing stdout, which a concurrent gate would clobber.
-It refuses (exit 1) on a unit with no key, an unreadable prompt, or a wave partition that would emit
-units as separate calls, and leaves no wave script on disk on any non-success exit.
+It refuses (exit 1) on a unit with no key or an unreadable prompt, and it validates
+the built plan's shape before any script reaches disk — one `runs.all` call per wave, unique
+non-empty keys, the concurrency bound honored, and no separate-call partition — as defense in
+depth over the deterministic partitioner. Every non-success exit after the round key is resolved
+leaves no wave artifact on disk for that key.
 
 "Blocking joins" means awaiting that one call before releasing the next wave — it does NOT mean one
 blocking `subagent` call per dispatch unit. Pi's foreground guard is `subagentInProgress`

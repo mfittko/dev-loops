@@ -19,15 +19,31 @@ import { buildGateEmitPlanPath } from "../../scripts/github/write-gate-context.m
 
 const cliPath = path.resolve("scripts/github/emit-wave-dispatch.mjs");
 
+// resolveFanoutEffectiveConcurrency clamps to CLAUDE_MAX_EFFECTIVE_CONCURRENT
+// under the Claude harness, so the in-process assertions below (which pin the
+// configured 3) must not inherit an ambient CLAUDECODE — the sibling
+// emit-fanout-dispatch suite scrubs it the same way (#1086 cross-harness
+// non-regression: the suite must be green on BOTH harnesses).
+function withoutClaudeHarness() {
+  const previous = process.env.CLAUDECODE;
+  delete process.env.CLAUDECODE;
+  return () => {
+    if (previous === undefined) delete process.env.CLAUDECODE;
+    else process.env.CLAUDECODE = previous;
+  };
+}
+
 function runCli(args = [], opts = {}) {
   return spawnSync("node", [cliPath, ...args], { encoding: "utf8", ...opts });
 }
 
 async function withTmpDir(fn) {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-emit-wave-dispatch-"));
+  const restoreHarness = withoutClaudeHarness();
   try {
     return await fn(tmpDir);
   } finally {
+    restoreHarness();
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 }
@@ -79,7 +95,7 @@ async function seedEmitPlan(tmpDir, { units = DEFAULT_UNITS, maxConcurrent = 3 }
       continue;
     }
     const promptPath = path.join(dir, `${unit.scope ?? unit.name ?? "unit"}.prompt.txt`);
-    await writeFile(promptPath, `PROMPT BYTES for ${unit.scope ?? "unit"}\n`, "utf8");
+    await writeFile(promptPath, typeof unit.promptBytes === "string" ? unit.promptBytes : `PROMPT BYTES for ${unit.scope ?? "unit"}\n`, "utf8");
     withPrompts.push({ ...unit, promptPath });
   }
   await writeFile(planPath, `${JSON.stringify({ ok: true, gate: GATE, headSha: HEAD_SHA, repo: REPO, pr: PR, count: withPrompts.length, maxConcurrent, units: withPrompts }, null, 2)}\n`, "utf8");
@@ -224,6 +240,29 @@ test("serialization is permitted when the gate does not require fan-out evidence
   });
 });
 
+// AC: "any other serialization fails closed." A resolved effective concurrency
+// of 1 that the recorded `gates.fanout.sequential` flag does not back (e.g.
+// `gates.fanout.maxConcurrent: 1`) is the same silent serialization.
+test("a config-level concurrency of 1 without gates.fanout.sequential fails closed", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const { dir } = await seedEmitPlan(tmpDir);
+    const { exitCode, stdout } = await captureStdout(() => main(baseArgs(tmpDir), { loadConfig: configStub({ maxConcurrent: 1, sequential: false, requireFanoutEvidence: true }) }));
+    assert.equal(exitCode, 1);
+    const payload = JSON.parse(stdout);
+    assert.match(payload.error, /GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK/);
+    assert.match(payload.error, /gates\.fanout\.maxConcurrent: 1/);
+    assert.equal(await readFile(path.join(dir, `${GATE}-${HEAD_SHA}.wave-1.js`), "utf8").catch(() => null), null);
+  });
+});
+
+test("a config-level concurrency of 1 is permitted when fan-out evidence is not required", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedEmitPlan(tmpDir);
+    assert.equal(await main(baseArgs(tmpDir), { loadConfig: configStub({ maxConcurrent: 1, sequential: false, requireFanoutEvidence: false }) }), 0);
+    assert.equal((await readPlan(tmpDir)).waves.length, 3);
+  });
+});
+
 // AC: "fails when a unit lacks a key."
 test("refuses when a dispatch unit carries no key", async () => {
   await withTmpDir(async (tmpDir) => {
@@ -337,6 +376,32 @@ test("the generated wave script is loadable JavaScript", async () => {
     assert.deepEqual(out.agents, ["review", "review", "review"]);
     assert.deepEqual(out.contexts, ["fresh", "fresh", "fresh"]);
     assert.equal(out.taskHasPrompt, true);
+  });
+});
+
+// Code generation is the seam most likely to break, so the probe must run on
+// the bytes that break it: quotes, backslashes, template literals, interpolation
+// markers, a script-closing tag, a comment introducer, and a line separator.
+test("the emitted script stays loadable and byte-exact for adversarial prompt bytes", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const nasty = 'quote" back\\slash `tick` ${expr} </script> // comment\nline\u2028sep\u2029par\nreturn runs.all([1]);\ntasks: ["x"]';
+    await seedEmitPlan(tmpDir, { units: [{ scope: "pre-approval-gate-nasty", angles: ["nasty"], group: null, promptBytes: nasty }] });
+    assert.equal(await main(baseArgs(tmpDir), { loadConfig: configStub() }), 0);
+    const plan = await readPlan(tmpDir);
+    const probe = path.join(tmpDir, "nasty-probe.mjs");
+    const outPath = path.join(tmpDir, "nasty-probe-out.json");
+    await writeFile(probe, `import { readFileSync, writeFileSync } from "node:fs";\nconst calls = [];\nconst runs = { all: (items) => { calls.push(items); return items; } };\nconst fn = new Function("runs", readFileSync(${JSON.stringify(plan.waves[0].scriptPath)}, "utf8"));\nconst out = fn(runs);\nwriteFileSync(${JSON.stringify(outPath)}, JSON.stringify({ callCount: calls.length, keys: out.map((i) => i.key), tasks: out.map((i) => i.task) }));\n`, "utf8");
+    const probeResult = spawnSync("node", [probe], { encoding: "utf8" });
+    assert.equal(probeResult.status, 0, probeResult.stderr);
+    const out = JSON.parse(await readFile(outPath, "utf8"));
+    assert.equal(out.callCount, 1);
+    assert.deepEqual(out.keys, ["pre-approval-gate-nasty"]);
+    // Byte-exact delivery: the reviewer receives exactly the composed bytes.
+    assert.equal(out.tasks[0], nasty);
+    // The adversarial prose in the DATA must not be read as the script's own shape.
+    const script = await readFile(plan.waves[0].scriptPath, "utf8");
+    assert.equal(waveScriptCallShape(script).runsAllCalls, 1);
+    assert.equal(waveScriptCallShape(script).hasLegacyTasksInput, false);
   });
 });
 
