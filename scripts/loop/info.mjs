@@ -6,6 +6,7 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { requireTokenValue, parsePositiveInteger } from "../_cli-primitives.mjs";
 import { detectRepoSlug, normalizeRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { runContextEnv } from "@dev-loops/core/loop/run-context";
+import { classifyBenignGateEvidenceUnstable } from "@dev-loops/core/loop/copilot-ci-status";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 
@@ -108,7 +109,7 @@ function formatCiDisplay(ciStatus, ciConclusion) {
   return `CI ${ciStatus}`;
 }
 
-function formatMergeableDisplay(mergeable, mergeStateStatus) {
+function formatMergeableDisplay(mergeable, mergeStateStatus, statusCheckRollup = null) {
   const m = typeof mergeable === "string" ? mergeable.toUpperCase() : null;
   const s = typeof mergeStateStatus === "string" ? mergeStateStatus.toUpperCase() : null;
   if (m === "CONFLICTING" || s === "DIRTY" || s === "CONFLICTING") {
@@ -119,6 +120,16 @@ function formatMergeableDisplay(mergeable, mergeStateStatus) {
   }
   if (m === "UNKNOWN") {
     return "⏳ UNKNOWN — GitHub still computing; recheck before proceeding";
+  }
+  // A benign UNSTABLE is the cosmetic rollup noise from superseded
+  // gate-evidence-runner cancellations while the required gate-evidence status
+  // is itself green; do not mistake it for a real blocker.
+  if (s === "UNSTABLE") {
+    const { benign } = classifyBenignGateEvidenceUnstable(statusCheckRollup, mergeStateStatus);
+    if (benign) {
+      return "✅ MERGEABLE (UNSTABLE — benign: gate-evidence green; noise from superseded gate-evidence-runner cancellations)";
+    }
+    return "⚠️ UNSTABLE — a non-success check other than a superseded gate-evidence-runner run is present; investigate before merge";
   }
   if (m === "MERGEABLE") {
     return `✅ MERGEABLE${s ? ` (${s})` : ""}`;
@@ -132,7 +143,7 @@ function formatPrSummary(prData, handoffResult) {
   lines.push(`  Branch: ${formatBranchDisplay(prData.headRefName, prData.baseRefName)}`);
   lines.push(`  State: ${prData.state}${prData.isDraft ? " (draft)" : ""}`);
   lines.push(`  Author: ${prData.author?.login || "unknown"}`);
-  lines.push(`  Mergeable: ${formatMergeableDisplay(prData.mergeable, prData.mergeStateStatus)}`);
+  lines.push(`  Mergeable: ${formatMergeableDisplay(prData.mergeable, prData.mergeStateStatus, prData.statusCheckRollup)}`);
 
   if (handoffResult?.snapshot) {
     const s = handoffResult.snapshot;
@@ -216,7 +227,7 @@ function formatIssueSummary(issueData, startupBundle, linkedPrData) {
 }
 
 function buildPrInfo(prNumber, repo, cwd) {
-  const prData = ghJson(["pr", "view", String(prNumber), "--repo", repo, "--json", "number,title,body,state,isDraft,headRefName,headRefOid,baseRefName,author,mergedAt,mergeable,mergeStateStatus,url,reviewRequests"], cwd);
+  const prData = ghJson(["pr", "view", String(prNumber), "--repo", repo, "--json", "number,title,body,state,isDraft,headRefName,headRefOid,baseRefName,author,mergedAt,mergeable,mergeStateStatus,statusCheckRollup,url,reviewRequests"], cwd);
   
   let handoffResult = null;
   try {

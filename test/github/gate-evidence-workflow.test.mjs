@@ -362,3 +362,26 @@ test("gate-evidence posts an explicit status to the resolved PR head SHA, not th
   assert.match(reporterDetectStep.run, /--pr "\$\{\{ steps\.pr\.outputs\.number \}\}"/);
   assert.match(reporterDetectStep.run, /evidence_state=/);
 });
+
+// AC1: the main required-status invariant — the required context is the
+// gate-evidence commit STATUS, never the gate-evidence-runner JOB — must stay
+// documented on the merge-preconditions surface, so superseded detector
+// cancellations can never permanently block a merge. No committed
+// branch-ruleset surface exists to assert the live required set against; the
+// documented invariant is the durable pin until one is added.
+test("required-context invariant (status not job) stays documented on the merge-preconditions surface", async () => {
+  const doc = await readRepo("skills/docs/merge-preconditions.md");
+  assert.match(doc, /MERGE-PRECOND-REQUIRED-CONTEXT-IS-STATUS/, "the required-context invariant rule id must be present");
+  assert.match(
+    doc,
+    /required status is the `gate-evidence` commit status and MUST NEVER be the\s*`gate-evidence-runner` job/,
+    "the invariant must name gate-evidence as required and gate-evidence-runner as never required",
+  );
+  // The job the invariant forbids as a required context is exactly one of the
+  // loop-derived checks the CI derivation already excludes — tie the doc claim
+  // to the code so a rename cannot silently drift them apart.
+  assert.ok(
+    LOOP_DERIVED_CI_CHECK_NAMES.includes("gate-evidence-runner"),
+    "gate-evidence-runner must remain a loop-derived (non-required) check",
+  );
+});

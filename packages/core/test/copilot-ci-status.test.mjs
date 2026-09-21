@@ -12,9 +12,53 @@ import {
   deriveLoopCiStatusFromRollup,
   partitionEntriesByCheckName,
   resolveNamedContextState,
+  classifyBenignGateEvidenceUnstable,
   LOOP_DERIVED_CI_CHECK_NAME,
   LOOP_DERIVED_CI_CHECK_NAMES,
 } from "../src/loop/copilot-ci-status.mjs";
+
+// A gate-evidence commit status entry (StatusContext-shaped: `.state`).
+const gateEvidenceSuccess = { context: "gate-evidence", state: "SUCCESS" };
+// A superseded detector run: check-run-shaped, conclusion CANCELLED.
+const supersededRunnerCancel = { name: "gate-evidence-runner", status: "COMPLETED", conclusion: "CANCELLED" };
+const greenCi = { name: "verify", status: "COMPLETED", conclusion: "SUCCESS" };
+
+test("classifyBenignGateEvidenceUnstable: benign when UNSTABLE is only superseded runner cancellations and gate-evidence is green", () => {
+  const rollup = [gateEvidenceSuccess, supersededRunnerCancel, supersededRunnerCancel, greenCi];
+  const result = classifyBenignGateEvidenceUnstable(rollup, "UNSTABLE");
+  assert.equal(result.benign, true);
+});
+
+test("classifyBenignGateEvidenceUnstable: not benign when mergeStateStatus is not UNSTABLE", () => {
+  const rollup = [gateEvidenceSuccess, supersededRunnerCancel];
+  assert.equal(classifyBenignGateEvidenceUnstable(rollup, "CLEAN").benign, false);
+  assert.equal(classifyBenignGateEvidenceUnstable(rollup, null).benign, false);
+});
+
+test("classifyBenignGateEvidenceUnstable: not benign when gate-evidence status is not success", () => {
+  const rollup = [{ context: "gate-evidence", state: "FAILURE" }, supersededRunnerCancel];
+  const result = classifyBenignGateEvidenceUnstable(rollup, "UNSTABLE");
+  assert.equal(result.benign, false);
+  assert.match(result.reason, /gate-evidence status is not success/);
+});
+
+test("classifyBenignGateEvidenceUnstable: not benign when a real check is failing beside the cancellations", () => {
+  const rollup = [gateEvidenceSuccess, supersededRunnerCancel, { name: "verify", status: "COMPLETED", conclusion: "FAILURE" }];
+  const result = classifyBenignGateEvidenceUnstable(rollup, "UNSTABLE");
+  assert.equal(result.benign, false);
+  assert.match(result.reason, /verify/);
+});
+
+test("classifyBenignGateEvidenceUnstable: not benign when a gate-evidence-runner run FAILED (not cancelled)", () => {
+  const rollup = [gateEvidenceSuccess, { name: "gate-evidence-runner", status: "COMPLETED", conclusion: "FAILURE" }];
+  const result = classifyBenignGateEvidenceUnstable(rollup, "UNSTABLE");
+  assert.equal(result.benign, false);
+  assert.match(result.reason, /gate-evidence-runner/);
+});
+
+test("classifyBenignGateEvidenceUnstable: fails closed on an unavailable rollup", () => {
+  assert.equal(classifyBenignGateEvidenceUnstable(null, "UNSTABLE").benign, false);
+});
 
 test("normalizeStatusCheckRollupStatus returns failure over pending for mixed rollup entries", () => {
   const status = normalizeStatusCheckRollupStatus([

@@ -345,6 +345,55 @@ export function normalizeHeadScopedCiContract({
 }
 
 /**
+ * Classify a `mergeStateStatus === "UNSTABLE"` as BENIGN when the required
+ * `gate-evidence` commit status is itself `success` and the ONLY non-success
+ * rollup entries are superseded `gate-evidence-runner` job check-runs
+ * (conclusion `CANCELLED`).
+ *
+ * GitHub's `cancel-in-progress` on the detector job leaves one `cancelled`
+ * check-run per superseded run, so `mergeStateStatus` reads `UNSTABLE` on nearly
+ * every PR even when the required `gate-evidence` status on the head is green.
+ * The cancellation is correct and stays (docs/decisions/0076); this classifier
+ * only lets a reader distinguish that cosmetic noise from a real non-success.
+ *
+ * Fail-closed: only an actual `UNSTABLE` with a `success` `gate-evidence` status
+ * and no other non-success entry is benign. A failed (not cancelled)
+ * gate-evidence-runner, a non-success `gate-evidence` status, or any other
+ * failing/pending check makes it non-benign.
+ *
+ * @param {Array<object>} rollup A `gh pr view --json statusCheckRollup` payload.
+ * @param {string|null} mergeStateStatus
+ * @returns {{ benign: boolean, reason: string }}
+ */
+export function classifyBenignGateEvidenceUnstable(rollup, mergeStateStatus) {
+  const state = typeof mergeStateStatus === "string" ? mergeStateStatus.toUpperCase() : "";
+  if (state !== "UNSTABLE") {
+    return { benign: false, reason: "mergeStateStatus is not UNSTABLE" };
+  }
+  if (!Array.isArray(rollup)) {
+    return { benign: false, reason: "status rollup unavailable" };
+  }
+  if (resolveNamedContextState(rollup, LOOP_DERIVED_CI_CHECK_NAME) !== "success") {
+    return { benign: false, reason: "gate-evidence status is not success" };
+  }
+  const offenders = [];
+  for (const entry of rollup) {
+    if (normalizeStatusCheckRollupStatus([entry]) === "success") continue;
+    const name = checkEntryName(entry);
+    const conclusion = typeof entry?.conclusion === "string" ? entry.conclusion.toUpperCase() : "";
+    if (name === "gate-evidence-runner" && conclusion === "CANCELLED") continue;
+    offenders.push(name || "unknown");
+  }
+  if (offenders.length > 0) {
+    return { benign: false, reason: `non-benign non-success checks present: ${offenders.join(", ")}` };
+  }
+  return {
+    benign: true,
+    reason: "UNSTABLE only from superseded gate-evidence-runner cancellations; gate-evidence status is success",
+  };
+}
+
+/**
  * Derive a loop-safe CI status from a PR `statusCheckRollup` snapshot: the
  * `LOOP_DERIVED_CI_CHECK_NAMES` entries (the `gate-evidence` status and the
  * workflow's own `gate-evidence-runner` check run) are excluded from the

@@ -517,6 +517,10 @@
       "id": "MERGE-PRECOND-REQUIRED"
     },
     {
+      "id": "MERGE-PRECOND-REQUIRED-CONTEXT-IS-STATUS",
+      "enforcement": "doc"
+    },
+    {
       "id": "OPS-DRAFT-FIRST-PR"
     },
     {
