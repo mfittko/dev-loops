@@ -69,6 +69,25 @@ test("classifyBenignGateEvidenceUnstable: fails closed on an unavailable rollup"
   assert.equal(classifyBenignGateEvidenceUnstable(null, "UNSTABLE").benign, false);
 });
 
+test("classifyBenignGateEvidenceUnstable: a success check-run named gate-evidence does NOT stand in for the required status context", () => {
+  // The required gate-evidence is a commit STATUS (.context). A CheckRun (.name)
+  // named the same, with the StatusContext absent, must not satisfy the guard.
+  const gateEvidenceCheckRun = { name: "gate-evidence", status: "COMPLETED", conclusion: "SUCCESS" };
+  const rollup = [gateEvidenceCheckRun, supersededRunnerCancel];
+  const result = classifyBenignGateEvidenceUnstable(rollup, "UNSTABLE");
+  assert.equal(result.benign, false);
+  assert.match(result.reason, /gate-evidence status is not success/);
+});
+
+test("classifyBenignGateEvidenceUnstable: a CANCELLED entry named gate-evidence is not a benign job cancellation", () => {
+  // Only the two Gate-evidence JOB names are benign-cancellation candidates; a
+  // cancelled entry named `gate-evidence` (the status name) is not.
+  const rollup = [gateEvidenceSuccess, { name: "gate-evidence", status: "COMPLETED", conclusion: "CANCELLED" }];
+  const result = classifyBenignGateEvidenceUnstable(rollup, "UNSTABLE");
+  assert.equal(result.benign, false);
+  assert.match(result.reason, /gate-evidence=CANCELLED/);
+});
+
 test("normalizeStatusCheckRollupStatus returns failure over pending for mixed rollup entries", () => {
   const status = normalizeStatusCheckRollupStatus([
     { status: "IN_PROGRESS", conclusion: null },

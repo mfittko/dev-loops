@@ -294,6 +294,62 @@ test("info.mjs --pr produces human-readable output with gh stubs", async () => {
   }
 });
 
+// The Mergeable line forwards prData.statusCheckRollup into
+// classifyBenignGateEvidenceUnstable; these integration cases exercise both the
+// wiring (statusCheckRollup requested + forwarded) and the UNSTABLE branch.
+async function runPrInfoWithRollup(mergeStateStatus, statusCheckRollup) {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "info-test-unstable-"));
+  const repoSlug = "test-owner/test-repo";
+  const prNumber = 42;
+  const ghPath = path.join(tmpDir, "gh");
+  const ghScript = [
+    "#!/usr/bin/env node",
+    "const args = process.argv.slice(2);",
+    `if (args[0] === "pr" && args[1] === "view" && parseInt(args[2]) === ${prNumber}) {`,
+    `  process.stdout.write(JSON.stringify({`,
+    `    number: ${prNumber}, title: "Unstable PR", body: "", state: "OPEN", isDraft: false,`,
+    `    headRefName: "feature-branch", baseRefName: "main", author: { login: "testuser" }, mergedAt: null,`,
+    `    mergeable: "MERGEABLE", mergeStateStatus: ${JSON.stringify(mergeStateStatus)},`,
+    `    statusCheckRollup: ${JSON.stringify(statusCheckRollup)},`,
+    `    url: "https://github.com/${repoSlug}/pull/${prNumber}", reviewRequests: []`,
+    `  }) + "\\n");`,
+    `  process.exit(0);`,
+    `}`,
+    `process.exit(1);`,
+  ].join("\n");
+  await writeFile(ghPath, ghScript);
+  await import("fs").then(fs => fs.promises.chmod(ghPath, 0o755));
+  try {
+    const { code, stdout, stderr } = await runNode(["--pr", String(prNumber), "--repo", repoSlug], {
+      env: { ...process.env, PATH: `${tmpDir}:${process.env.PATH}` },
+      cwd: tmpDir,
+    });
+    return { code, stdout, stderr };
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
+test("info.mjs --pr labels a benign UNSTABLE (gate-evidence green, only superseded job cancellations) as MERGEABLE", async () => {
+  const { code, stdout } = await runPrInfoWithRollup("UNSTABLE", [
+    { context: "gate-evidence", state: "SUCCESS" },
+    { name: "gate-evidence-runner", status: "COMPLETED", conclusion: "CANCELLED" },
+    { name: "gate-evidence-reporter", status: "COMPLETED", conclusion: "CANCELLED" },
+    { name: "verify", status: "COMPLETED", conclusion: "SUCCESS" },
+  ]);
+  assert.equal(code, 0);
+  assert.match(stdout, /Mergeable: .*MERGEABLE \(UNSTABLE — benign/);
+});
+
+test("info.mjs --pr labels a non-benign UNSTABLE (a real failing check) for investigation", async () => {
+  const { code, stdout } = await runPrInfoWithRollup("UNSTABLE", [
+    { context: "gate-evidence", state: "SUCCESS" },
+    { name: "verify", status: "COMPLETED", conclusion: "FAILURE" },
+  ]);
+  assert.equal(code, 0);
+  assert.match(stdout, /Mergeable: .*UNSTABLE — .*investigate before merge/);
+});
+
 test("info.mjs --pr auto-detects repo slug and passes owner/repo to gh", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "info-test-pr-autorepo-"));
   try {

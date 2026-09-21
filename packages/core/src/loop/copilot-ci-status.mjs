@@ -37,6 +37,17 @@ export const LOOP_DERIVED_CI_CHECK_NAMES = Object.freeze([
   "gate-evidence-reporter",
 ]);
 
+/**
+ * The two Gate-evidence JOB check-run names — the detector and the reporter.
+ * These (and ONLY these, never the `gate-evidence` status name) are the runs
+ * whose superseded CANCELLED check-runs `classifyBenignGateEvidenceUnstable`
+ * treats as cosmetic UNSTABLE noise.
+ */
+export const GATE_EVIDENCE_JOB_CHECK_NAMES = Object.freeze([
+  "gate-evidence-runner",
+  "gate-evidence-reporter",
+]);
+
 function checkEntryName(entry) {
   if (typeof entry?.name === "string" && entry.name.length > 0) return entry.name;
   if (typeof entry?.context === "string" && entry.context.length > 0) return entry.context;
@@ -382,7 +393,15 @@ export function classifyBenignGateEvidenceUnstable(rollup, mergeStateStatus) {
   if (!Array.isArray(rollup)) {
     return { benign: false, reason: "status rollup unavailable" };
   }
-  if (resolveNamedContextState(rollup, LOOP_DERIVED_CI_CHECK_NAME) !== "success") {
+  // The required gate-evidence signal is a commit STATUS (a StatusContext,
+  // `.context`), never a check-run (`.name`). Anchor the success guard on the
+  // StatusContext alone so a same-named success check-run can never stand in for
+  // an absent required status (partitionEntriesByCheckName matches `.name` OR
+  // `.context`, so it would otherwise accept either).
+  const gateEvidenceStatusEntries = rollup.filter(
+    (entry) => entry?.context === LOOP_DERIVED_CI_CHECK_NAME && typeof entry?.state === "string",
+  );
+  if (normalizeStatusCheckRollupStatus(gateEvidenceStatusEntries) !== "success") {
     return { benign: false, reason: "gate-evidence status is not success" };
   }
   const offenders = [];
@@ -390,11 +409,12 @@ export function classifyBenignGateEvidenceUnstable(rollup, mergeStateStatus) {
     if (normalizeStatusCheckRollupStatus([entry]) === "success") continue;
     const name = checkEntryName(entry);
     const conclusion = typeof entry?.conclusion === "string" ? entry.conclusion.toUpperCase() : "";
-    // A cancelled Gate-evidence job check-run (runner or reporter) is the
-    // superseded-run artifact this classifier exists to ignore. A StatusContext
-    // carries `.state`, never `.conclusion`, so the required `gate-evidence`
-    // status (guarded success above) can never slip through here.
-    if (LOOP_DERIVED_CI_CHECK_NAMES.includes(name) && conclusion === "CANCELLED") continue;
+    // Only a cancelled Gate-evidence JOB check-run (runner or reporter) is the
+    // superseded-run artifact this classifier ignores — an explicit two-job
+    // allowlist, not LOOP_DERIVED_CI_CHECK_NAMES (which also carries the
+    // `gate-evidence` status name), so a cancelled entry named `gate-evidence`
+    // can never be waved through as benign.
+    if (GATE_EVIDENCE_JOB_CHECK_NAMES.includes(name) && conclusion === "CANCELLED") continue;
     const status = typeof entry?.status === "string" ? entry.status.toUpperCase() : "";
     offenders.push(`${name || "unknown"}=${conclusion || status || "?"}`);
   }
