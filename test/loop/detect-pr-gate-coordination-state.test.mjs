@@ -935,6 +935,27 @@ test("detect-pr-gate-coordination-state ENTERS pre_approval for a thread-clean c
   assert.ok(!parsed.forbiddenActions.includes("run_pre_approval_gate"));
 });
 
+test("detect-pr-gate-coordination-state ENTERS pre_approval for a thread-clean current-head 🔵 BELOW the round cap (round 1, non-terminal) (#2345)", async () => {
+  // Round-count independence: a below-cap round-1 🔵 (single current-head
+  // review, 0 unresolved threads, green CI) must permit pre_approval entry
+  // WITHOUT depending on a terminal at-cap state. Recognition keys only off
+  // convergence (thread-clean + evaluateCopilotConvergence ok), not round
+  // bookkeeping, so the state stays the non-terminal ready_to_rerequest_review
+  // rather than any round_cap_* terminal.
+  const env = writeGhStub(null, pathAGhEntries({ reviewBody: "### 🔵 Needs a closer look\n\nA soft, conductor-overridable non-approval.\n\nFindings: None", atCap: false }));
+  const result = await runNode(["--repo", "owner/repo", "--pr", "266"], { env });
+  assert.equal(result.code, 0);
+  assert.equal(result.stderr, "");
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.copilotReviewRoundCount, 1);
+  // Non-terminal: recognition does not route through a round-cap terminal state.
+  assert.notEqual(parsed.lifecycleState, "round_cap_clean_fallback");
+  assert.notEqual(parsed.lifecycleState, "round_cap_reached");
+  assert.equal(parsed.nextAction, "run_pre_approval_gate");
+  assert.ok(parsed.allowedNextActions.includes("run_pre_approval_gate"));
+  assert.ok(!parsed.forbiddenActions.includes("run_pre_approval_gate"));
+});
+
 test("detect-pr-gate-coordination-state still BLOCKS pre_approval for a below-cap current-head 🟡 (#2345 no regression)", async () => {
   // Below the cap a 🟡 "Changes recommended" body finding is unresolved feedback,
   // so gate entry is refused — the fix must not open this path (only the 🔵 does).
