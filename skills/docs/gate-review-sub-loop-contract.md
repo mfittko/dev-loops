@@ -1325,12 +1325,15 @@ code/test/config/CI file, an unclassifiable file, or an unavailable delta. On th
 integrate-only base-move (proven-empty reduced delta, `deltaComplete`) carries the convergence
 forward too, instead of forcing a fresh blocking round for already-merged main code. An empty
 delta WITHOUT that proof still fails closed. The Copilot
-round-cap path consumes it: at the cap, `request-copilot-review.mjs` fetches the delta since
-the last Copilot-reviewed head (via a single `gh api .../compare`) and, when it is a provable
-linear rename-free pure-doc bump, returns `suppressed_post_convergence_docs_only` instead of
-forcing a fresh blocking round — even under `--force-rerequest-review`. The guard is
-default-safe/fail-closed: a non-linear (rebased/amended) advance, any rename/copy, an
-unavailable compare, or any non-doc/unclassifiable file re-opens the round exactly as before,
+round-cap path AND the below-cap path both consume it, through one shared
+`resolveConvergenceCarry` helper in `request-copilot-review.mjs`: at the cap it fetches the
+delta since the last Copilot-reviewed head (via a single `gh api .../compare`), and below the
+cap the same helper runs for a first request on a head-advanced PR. Either way, when that
+delta is a provable pure-doc/prose bump OR an integrate-only base-move (base-relative
+reduction empties the delta), it returns `suppressed_post_convergence_docs_only` instead of
+forcing a fresh blocking round — at the cap this holds even under `--force-rerequest-review`.
+The guard is default-safe/fail-closed: a non-linear (rebased/amended) advance, any rename/copy,
+an unavailable compare, or any non-doc/unclassifiable file re-opens the round exactly as before,
 preserving the round cap and the significant-post-convergence-change exception
 (`COPILOT-FOLLOWUP-ROUND-CAP` in [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md)).
 
