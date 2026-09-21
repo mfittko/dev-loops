@@ -195,6 +195,31 @@ practice:
   complete/re-run the latest Gate-evidence run, or edit the current-head
   verdict comment — instead of only GitHub's generic block message.
 
+### Required-context invariant: the status, never the job
+
+<!-- rule: MERGE-PRECOND-REQUIRED-CONTEXT-IS-STATUS -->
+`MERGE-PRECOND-REQUIRED-CONTEXT-IS-STATUS`: the `main` branch-protection
+required status is the `gate-evidence` commit status and MUST NEVER be either
+Gate-evidence job (`gate-evidence-runner` or `gate-evidence-reporter`). The
+detector job keeps `cancel-in-progress` (docs/decisions/0076), so a chatty loop
+supersedes and cancels several `gate-evidence-runner` runs; the reporter's group
+is non-cancelling so it never kills a RUNNING reporter, but a still-queued
+reporter superseded by a newer one is cancelled too. Each cancelled run of either
+job leaves its own `cancelled` check-run in the rollup and drives
+`mergeStateStatus` to `UNSTABLE`. Requiring the always-settling `gate-evidence`
+commit status (which the reporter's surviving RUNNING instance posts
+definitively at the final head) — and never a job — keeps those superseded
+cancellations from ever permanently blocking a merge. This is why an `UNSTABLE`
+whose only non-success entries are superseded Gate-evidence job cancellations
+(runner or reporter) is cosmetic noise, not a block, while the `gate-evidence`
+status is `success`: `classifyBenignGateEvidenceUnstable`
+(`@dev-loops/core/loop/copilot-ci-status`) labels it benign for `loop info` so
+an operator is not misled by GitHub's raw `UNSTABLE`. No committed
+branch-ruleset/config-audit surface exists in this repo to assert the
+required-context set against; when one is added, it MUST assert the required
+contexts include `gate-evidence` and exclude both `gate-evidence-runner` and
+`gate-evidence-reporter`.
+
 The server-side check verifies the same visible, comment-derived verdict fields
 the client-side tooling does (including the light-mode inline exception,
 [Gate Review Sub-Loop Contract](./gate-review-sub-loop-contract.md#light-mode-inline-acceptance-under-threshold-micro-prs),

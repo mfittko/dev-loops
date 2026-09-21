@@ -37,6 +37,17 @@ export const LOOP_DERIVED_CI_CHECK_NAMES = Object.freeze([
   "gate-evidence-reporter",
 ]);
 
+/**
+ * The two Gate-evidence JOB check-run names — the detector and the reporter.
+ * These (and ONLY these, never the `gate-evidence` status name) are the runs
+ * whose superseded CANCELLED check-runs `classifyBenignGateEvidenceUnstable`
+ * treats as cosmetic UNSTABLE noise.
+ */
+export const GATE_EVIDENCE_JOB_CHECK_NAMES = Object.freeze([
+  "gate-evidence-runner",
+  "gate-evidence-reporter",
+]);
+
 function checkEntryName(entry) {
   if (typeof entry?.name === "string" && entry.name.length > 0) return entry.name;
   if (typeof entry?.context === "string" && entry.context.length > 0) return entry.context;
@@ -342,6 +353,78 @@ export function normalizeHeadScopedCiContract({
   }
 
   return buildCiContract(overallStatus);
+}
+
+/**
+ * Classify a `mergeStateStatus === "UNSTABLE"` as BENIGN when the required
+ * `gate-evidence` commit status is itself `success` and the ONLY non-success
+ * rollup entries are superseded Gate-evidence job check-runs (the
+ * `gate-evidence-runner` detector OR the `gate-evidence-reporter`, conclusion
+ * `CANCELLED`).
+ *
+ * Both jobs cancel superseded runs: the detector via `cancel-in-progress`, the
+ * reporter via its non-cancelling group cancelling a still-queued run superseded
+ * by a newer one. Each leaves a `cancelled` check-run on the head, so
+ * `mergeStateStatus` reads `UNSTABLE` on nearly every PR even when the required
+ * `gate-evidence` status on the head is green. The cancellation is correct and
+ * stays (docs/decisions/0076); this classifier only lets a reader distinguish
+ * that cosmetic noise from a real non-success.
+ *
+ * Fail-closed: only an actual `UNSTABLE` with a `success` `gate-evidence` status
+ * and no other non-success entry is benign. A failed (not cancelled) Gate-evidence
+ * job, a non-success `gate-evidence` status, or any other failing/pending check
+ * makes it non-benign.
+ *
+ * ponytail: `gh pr view --json statusCheckRollup` returns a single bounded page
+ * (~100 contexts); a very chatty PR could exceed it and hide a real failure,
+ * failing this open. Acceptable because this is a display-only surface — the
+ * merge path never consults it. Do NOT wire this classifier into a merge
+ * decision without adding pagination.
+ *
+ * @param {Array<object>} rollup A `gh pr view --json statusCheckRollup` payload.
+ * @param {string|null} mergeStateStatus
+ * @returns {{ benign: boolean, reason: string }}
+ */
+export function classifyBenignGateEvidenceUnstable(rollup, mergeStateStatus) {
+  const state = typeof mergeStateStatus === "string" ? mergeStateStatus.toUpperCase() : "";
+  if (state !== "UNSTABLE") {
+    return { benign: false, reason: "mergeStateStatus is not UNSTABLE" };
+  }
+  if (!Array.isArray(rollup)) {
+    return { benign: false, reason: "status rollup unavailable" };
+  }
+  // The required gate-evidence signal is a commit STATUS (a StatusContext,
+  // `.context`), never a check-run (`.name`). Anchor the success guard on the
+  // StatusContext alone so a same-named success check-run can never stand in for
+  // an absent required status (partitionEntriesByCheckName matches `.name` OR
+  // `.context`, so it would otherwise accept either).
+  const gateEvidenceStatusEntries = rollup.filter(
+    (entry) => entry?.context === LOOP_DERIVED_CI_CHECK_NAME && typeof entry?.state === "string",
+  );
+  if (normalizeStatusCheckRollupStatus(gateEvidenceStatusEntries) !== "success") {
+    return { benign: false, reason: "gate-evidence status is not success" };
+  }
+  const offenders = [];
+  for (const entry of rollup) {
+    if (normalizeStatusCheckRollupStatus([entry]) === "success") continue;
+    const name = checkEntryName(entry);
+    const conclusion = typeof entry?.conclusion === "string" ? entry.conclusion.toUpperCase() : "";
+    // Only a cancelled Gate-evidence JOB check-run (runner or reporter) is the
+    // superseded-run artifact this classifier ignores — an explicit two-job
+    // allowlist, not LOOP_DERIVED_CI_CHECK_NAMES (which also carries the
+    // `gate-evidence` status name), so a cancelled entry named `gate-evidence`
+    // can never be waved through as benign.
+    if (GATE_EVIDENCE_JOB_CHECK_NAMES.includes(name) && conclusion === "CANCELLED") continue;
+    const status = typeof entry?.status === "string" ? entry.status.toUpperCase() : "";
+    offenders.push(`${name || "unknown"}=${conclusion || status || "?"}`);
+  }
+  if (offenders.length > 0) {
+    return { benign: false, reason: `non-benign non-success checks present: ${offenders.join(", ")}` };
+  }
+  return {
+    benign: true,
+    reason: "no non-success entry other than superseded Gate-evidence job cancellations; gate-evidence status is success",
+  };
 }
 
 /**
