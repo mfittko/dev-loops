@@ -1818,7 +1818,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
     // human-read reason/evidence text for the latter case would be a false CI
     // claim, so describe the actual grant basis instead.
     const ciClause = ciStatus === "success" ? "green CI" : "CI not required by config";
-    if (unresolvedThreadCount === 0 && ciConfirmedGreen && input.copilotConvergenceOk !== false) {
+    if (unresolvedThreadCount === 0 && ciConfirmedGreen && copilotConvergenceOk) {
       if (preApprovalGate.currentHeadClean) {
         // Inline title-marker check, mirroring ROUND_CAP_CLEAN_FALLBACK: the
         // outer post-pass guards FINAL_APPROVAL_READY and
