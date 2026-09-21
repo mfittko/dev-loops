@@ -804,17 +804,20 @@ export function commandContainsCopilotSummonComment(command) {
 
 /**
  * Blank the CONTENTS of quoted string literals ('...' and "...") to a space, EXCEPT a quote that is
- * the payload of an executable-code flag — a short-flag cluster ending in `c` (`sh -c '…'`,
- * `bash -c '…'`, `bash -lc '…'`, `bash -ec '…'`), optionally followed by a `--` terminator
- * (`bash -c -- '…'`), a long `--command` flag, or `eval` — that payload is REAL shell syntax to be
- * executed, not inert data, so blanking it would hide an actual poll-loop construct wrapped in one
- * of these forms. A real poll loop's structural tokens (`while`/`until`/`for`/`do`/`sleep`/`done`, a
- * `[ -f … ]` file test) are UNQUOTED shell syntax; a quoted issue body, `--body` payload, or quoted
- * example that merely mentions them carries them INSIDE quotes as inert data. Blanking those quoted
- * contents is what lets the poll-loop matchers key on an actual loop CONSTRUCT rather than the token
- * sequence appearing anywhere in a command (`gh issue create --body "while … sleep … done"` must not
- * be flagged). The `s` (dotAll) flag lets `.` match a newline too, so a MULTI-LINE quoted `--body`
- * (a real issue body commonly spans lines) is stripped in full, not just its first line.
+ * the payload of an executable-code flag — a short-flag cluster CONTAINING `c` ANYWHERE in the
+ * cluster (`sh -c '…'`, `bash -c '…'`, `bash -lc '…'`, `bash -ec '…'`, `bash -cl '…'`, `bash -ci '…'`,
+ * `bash -cx '…'`) — bash treats ANY `-c`-containing short-flag cluster as command-execution
+ * regardless of where `c` sits in the cluster, not only one that ENDS in `c` — optionally followed by
+ * a `--` terminator (`bash -c -- '…'`), a long `--command` flag, or `eval` — that payload is REAL
+ * shell syntax to be executed, not inert data, so blanking it would hide an actual poll-loop
+ * construct wrapped in one of these forms. A real poll loop's structural tokens
+ * (`while`/`until`/`for`/`do`/`sleep`/`done`, a `[ -f … ]` file test) are UNQUOTED shell syntax; a
+ * quoted issue body, `--body` payload, or quoted example that merely mentions them carries them
+ * INSIDE quotes as inert data. Blanking those quoted contents is what lets the poll-loop matchers key
+ * on an actual loop CONSTRUCT rather than the token sequence appearing anywhere in a command
+ * (`gh issue create --body "while … sleep … done"` must not be flagged). The `s` (dotAll) flag lets
+ * `.` match a newline too, so a MULTI-LINE quoted `--body` (a real issue body commonly spans lines) is
+ * stripped in full, not just its first line.
  * ponytail: blanks balanced quote pairs only, with the `-c`-cluster/`--command`/`eval` exemption
  * above — no full shell tokenizer (mismatched/partial quotes and other exec-wrapper flags stay out
  * of scope). Accepted ceiling: a deliberately quoted structural keyword (e.g. `"sleep"`) placed
@@ -825,7 +828,7 @@ export function commandContainsCopilotSummonComment(command) {
 function stripQuotedLiterals(command) {
   return command.replace(/(['"])((?:(?!\1).)*)\1/gs, (match, _quote, _inner, offset, full) => {
     const before = full.slice(0, offset);
-    if (/(?:^|\s)(?:-[A-Za-z]*c(?:\s+--)?|--command|eval)\s*$/.test(before)) {
+    if (/(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?|--command|eval)\s*$/.test(before)) {
       return match; // executable -c/eval payload — leave the real shell syntax intact
     }
     return " ";

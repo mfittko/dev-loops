@@ -649,6 +649,22 @@ test("H1: stripQuotedLiterals no-regression — bash -lc/-ec/eval poll-loop payl
   assert.equal(commandContainsDetachedWaitTool(fileMarkerCDashDashLoop), true);
 });
 
+// H2 (#2317 follow-up): the H1 widening still required the short-flag cluster to END in `c`
+// (`-[A-Za-z]*c`), but bash executes the quoted payload for ANY cluster CONTAINING `-c`, regardless
+// of position — `bash -cl '…'`, `bash -ci '…'`, `bash -cx '…'` all execute the payload too. Widened
+// to `-[A-Za-z]*c[A-Za-z]*` so `c` may appear anywhere in the cluster.
+test("H2: stripQuotedLiterals no-regression — -c-not-last short-flag clusters (-cl/-ci) still deny", () => {
+  const clLoop = "bash -cl 'until gh pr view 5; do sleep 5; done'";
+  assert.equal(commandIsSleepPollLoop(clLoop), true);
+  assert.equal(commandContainsDetachedWaitTool(clLoop), true);
+
+  const fileMarkerClLoop = "bash -cl 'while [ -f x.done ]; do sleep 5; done'";
+  assert.equal(commandIsFileMarkerPollLoop(fileMarkerClLoop), true);
+
+  const ciLoop = "bash -ci 'until gh pr view 5; do sleep 5; done'";
+  assert.equal(commandContainsDetachedWaitTool(ciLoop), true);
+});
+
 // H1 follow-up: commandIsFileMarkerPollLoop's operator class deliberately excludes string tests
 // (-z/-n) and the numeric/terminal test (-t) — none of those test a marker FILE. A while/sleep loop
 // keyed on one of those must NOT be flagged as a file-marker poll loop.

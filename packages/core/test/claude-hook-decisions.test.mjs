@@ -851,6 +851,19 @@ test("decideBashGate denies a bash -lc-wrapped gh poll loop for BOTH the coordin
   }
 });
 
+// H2 (#2317 follow-up): stripQuotedLiterals's `-c`-cluster exemption required `c` to be the LAST
+// character of the short-flag cluster, but bash executes the quoted payload for ANY cluster
+// CONTAINING `-c`, regardless of position (`bash -cl '…'` executes the payload too). Actor-
+// independent, gate-level no-regression guard for the widened exemption.
+test("decideBashGate denies a bash -cl-wrapped gh poll loop for BOTH the coordinator and a subagent (H2, #2317)", () => {
+  const cmd = "bash -cl 'until gh pr view 5; do sleep 5; done'";
+  for (const agentType of [null, "dev-loop"]) {
+    const d = decideBashGate({ command: cmd, repoSlug: TARGET, inManagedContext: true, managedRepoSlug: TARGET, agentType });
+    assert.equal(d.decision, "deny", `expected deny for agentType=${agentType}`);
+    assert.match(d.reason, /COPILOT-FOLLOWUP-WAIT-TOOLS/);
+  }
+});
+
 // #1622 regression guard: the #2065 OPTION-C rework must NOT narrow the pre-existing unconditional
 // detach-wrapper ban to "detach AND family reference". A family-less nohup/disown/tmux/screen
 // detach still denies outright, for both the main/coordinator (agentType null) and a subagent.
