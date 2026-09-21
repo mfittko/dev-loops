@@ -158,9 +158,11 @@ const PROHIBITED_OPERATION_INSTRUCTIONS = {
 
 /**
  * The deterministic angle-suffix for a dispatch unit: it NAMES the unit's
- * angle(s), instructs the reviewer to self-resolve each angle's persona/focus
- * via resolveReviewerRole and review adversarially per its scoped-mode contract,
- * and carries the bounded reviewer contract (REVIEWER_UNIT_BUDGET, assigned-
+ * angle(s), instructs the reviewer to resolve each angle's persona/focus by
+ * running the sanctioned `dev-loops gate resolve-role --angle <name>` CLI (which
+ * wraps resolveReviewerRole over the fully merged config — a reviewer runs in a
+ * shell and cannot call that function inline) and review adversarially per its
+ * scoped-mode contract, and carries the bounded reviewer contract (REVIEWER_UNIT_BUDGET, assigned-
  * angles-only scope, PROHIBITED_REVIEWER_OPERATIONS, and the escape hatch for
  * BOTH ways a unit can fail its bound — budget exhaustion or incomplete angle
  * coverage, mirroring enforceReviewerUnitBound's own two REVOKE conditions in
@@ -187,8 +189,8 @@ export function buildAngleNamingSuffix(unit) {
     ? `## Your review angle: ${list}`
     : `## Your review angles (dispatch unit "${unit?.name}"): ${list}`;
   const body = single
-    ? `Self-resolve this angle's persona and focus prompt via resolveReviewerRole(config, "${angles[0]}") from @dev-loops/core/config, then review adversarially per your scoped angle-review mode. Write one findings artifact for this angle at its per-angle path.`
-    : `For EACH angle above, self-resolve its persona and focus prompt via resolveReviewerRole(config, <angle>) from @dev-loops/core/config, then review adversarially per your scoped angle-review mode. Write one findings artifact PER ANGLE at its per-angle path — one artifact per angle, never one merged artifact for the unit.`;
+    ? `Resolve this angle's persona and focus prompt by running the sanctioned CLI \`dev-loops gate resolve-role --angle <name>\` (fill <name> with the angle named above), then review adversarially per your scoped angle-review mode. Write one findings artifact for this angle at its per-angle path.`
+    : `For EACH angle above, resolve its persona and focus prompt by running the sanctioned CLI \`dev-loops gate resolve-role --angle <name>\` (once per angle, filling <name> with that angle), then review adversarially per your scoped angle-review mode. Write one findings artifact PER ANGLE at its per-angle path — one artifact per angle, never one merged artifact for the unit.`;
   const prohibited = PROHIBITED_REVIEWER_OPERATIONS
     .map((kind) => PROHIBITED_OPERATION_INSTRUCTIONS[kind] ?? `do not perform ${kind}`)
     .join("; ");

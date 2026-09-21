@@ -37,6 +37,10 @@ its focus prompt, and the authoritative harness-resolved model tier. Use this
 instead of grepping extension-defaults.yaml directly — a raw grep misses the
 .devloops config-layer merge and yields the wrong persona/model.
 
+Role resolution (persona/prompt/model) is gate-independent; --gate only affects
+the reported scope, never the persona/prompt/model — do not assume a per-gate
+persona.
+
 Required:
   --angle <name>         Gate angle / lens name (e.g. correctness, security)
 
@@ -57,6 +61,7 @@ Output (stdout, JSON):
     "model": "…" | null,        // authoritative merged tier (resolveRoleModel, kind:"angle")
     "overrideModel": "…" | null, // bare resolveReviewerRole(...).model override, if any
     "fallback": false,
+    "configErrorCount": 0,       // >0 => .devloops layer errors; ok:false, no role trusted
     "gate": "draft",            // only when --gate given
     "scope": "full"             // only when --gate given
   }
@@ -64,7 +69,8 @@ Output (stdout, JSON):
 ${JQ_OUTPUT_USAGE}
 
 Exit codes:
-  0  resolved
+  0  resolved to a concrete (non-fallback) role with no config-layer errors
+  1  unresolved (unknown angle -> fallback persona) or .devloops config errors present
   2  Argument/runtime error, or invalid --jq filter`;
 
 const parseError = buildParseError(USAGE);
@@ -111,16 +117,27 @@ export function parseResolveReviewerRoleCliArgs(argv, { env = process.env } = {}
 /**
  * Build the resolved-role payload from an already-loaded merged config. Pure —
  * no config I/O — so a test can drive every branch with an injected config.
+ *
+ * Fail-closed: this CLI exists to prevent a WRONG role. Two conditions make the
+ * resolved role untrustworthy, and each sets ok:false (nonzero exit) while still
+ * emitting the payload so a caller can inspect it: (1) `configErrors` from
+ * `loadDevLoopConfig` — a per-layer schema/parse failure drops the `.devloops`
+ * layer and silently falls back to the shipped default, the exact wrong-role bug
+ * this CLI guards against (mirrors scripts/loop/check-size-budget.mjs); (2) an
+ * unknown angle that resolves only to the generic fallback persona.
  * @param {object} config - merged DevLoopConfig
- * @param {{ angle: string, harness: "claude"|"pi", gate?: string|null }} params
+ * @param {{ angle: string, harness: "claude"|"pi", gate?: string|null, configErrors?: Array<unknown> }} params
  */
-export function resolveRolePayload(config, { angle, harness, gate = null }) {
+export function resolveRolePayload(config, { angle, harness, gate = null, configErrors = [] }) {
   const role = resolveReviewerRole(config, angle);
   // Authoritative merged tier per the gate-review-sub-loop contract, NOT the
   // bare resolveReviewerRole(...).model (that is only the entry's override).
   const model = resolveRoleModel(config, { role: angle, harness, kind: "angle" });
+  const configErrorCount = Array.isArray(configErrors) ? configErrors.length : 0;
   const payload = {
-    ok: true,
+    // Fail closed: a dropped `.devloops` layer OR an unresolved (fallback) angle
+    // means the emitted role is not the authoritative one — signal nonzero exit.
+    ok: configErrorCount === 0 && !role.fallback,
     angle,
     harness,
     persona: role.persona,
@@ -128,6 +145,8 @@ export function resolveRolePayload(config, { angle, harness, gate = null }) {
     model,
     overrideModel: role.model,
     fallback: role.fallback,
+    configErrors,
+    configErrorCount,
   };
   if (gate) {
     payload.gate = gate;
@@ -142,13 +161,14 @@ export async function runCli(argv = process.argv.slice(2), { repoRoot = process.
     process.stdout.write(`${USAGE}\n`);
     return { ok: true, help: true };
   }
-  const { config } = await loadDevLoopConfig({ repoRoot });
+  const { config, errors: configErrors } = await loadDevLoopConfig({ repoRoot });
   const result = resolveRolePayload(config, {
     angle: options.angle,
     harness: options.harness,
     gate: options.gate,
+    configErrors,
   });
-  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
+  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, fields: options.fields });
   return result;
 }
 

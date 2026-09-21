@@ -369,7 +369,10 @@ test("shares a reviewer for a configured group AND an auto-chunk bundle alike; o
       const composed = await readFile(unit.promptPath, "utf8");
       assert.ok(composed.startsWith(PREFIX_BYTES), `prefix-first for ${unit.scope}`);
       for (const angle of unit.angles) assert.match(composed, new RegExp(angle));
-      assert.match(composed, /resolveReviewerRole/);
+      // The composed suffix points reviewers at the sanctioned CLI, never an
+      // inline JS function call a shell reviewer cannot make (#2336).
+      assert.match(composed, /dev-loops gate resolve-role --angle/);
+      assert.ok(!composed.includes("resolveReviewerRole(config"), "composed suffix must not tell a shell reviewer to call resolveReviewerRole(config, ...) inline");
     }
   });
 });
@@ -1378,12 +1381,17 @@ test("sanitizeScopeSegment collapses non-alphanumeric runs to single hyphens", (
   assert.equal(sanitizeScopeSegment("--edge--"), "edge");
 });
 
-test("buildAngleNamingSuffix names angles and instructs self-resolution, never inlining persona text", () => {
+test("buildAngleNamingSuffix names angles and points at the resolve-role CLI, never an inline JS call (#2336)", () => {
   const single = buildAngleNamingSuffix({ name: "coverage", angles: ["coverage"] });
   assert.match(single, /coverage/);
-  assert.match(single, /resolveReviewerRole/);
+  // Reviewers run in a shell: the suffix must name the sanctioned CLI, not a
+  // resolveReviewerRole(config, ...) call a shell actor cannot make.
+  assert.match(single, /dev-loops gate resolve-role --angle/);
+  assert.ok(!single.includes("resolveReviewerRole(config"), "suffix must not instruct an inline resolveReviewerRole(config, ...) call");
   const group = buildAngleNamingSuffix({ name: "design-simplicity", angles: ["dry", "kiss"] });
   assert.match(group, /dry, kiss/);
+  assert.match(group, /dev-loops gate resolve-role --angle/);
+  assert.ok(!group.includes("resolveReviewerRole(config"), "suffix must not instruct an inline resolveReviewerRole(config, ...) call");
   assert.match(group, /one findings artifact PER ANGLE/);
 });
 

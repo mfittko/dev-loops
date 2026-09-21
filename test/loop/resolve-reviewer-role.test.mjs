@@ -88,12 +88,69 @@ async function withTempRepo(devloopsYaml, run) {
   }
 }
 
+// Capture process.stdout so the --fields render (written straight to stdout by
+// emitResult) can be asserted without spawning a subprocess.
+async function captureStdout(fn) {
+  const original = process.stdout.write.bind(process.stdout);
+  let out = "";
+  process.stdout.write = (chunk) => {
+    out += typeof chunk === "string" ? chunk : chunk.toString();
+    return true;
+  };
+  try {
+    await fn();
+  } finally {
+    process.stdout.write = original;
+  }
+  return out;
+}
+
 test("CLI resolves a built-in angle against a repo with no .devloops override", async () => {
   await withTempRepo(null, async (repoRoot) => {
     const result = await runCli(["--angle", "correctness", "--harness", "claude"], { repoRoot, env: {} });
     assert.equal(result.ok, true);
     assert.equal(result.persona, "review");
     assert.equal(result.model, "opus");
+  });
+});
+
+// H1: a `.devloops` that fails per-layer schema validation (here: missing
+// `version: 1`) is DROPPED by the loader, so the CLI would otherwise return the
+// shipped default with ok:true — the exact wrong-role bug this CLI prevents.
+// Fail closed: config errors force ok:false and a nonzero exit.
+test("CLI fails closed (ok:false, nonzero exit) when .devloops has config-layer errors", async () => {
+  const brokenDevloops = ["gates:", "  draft:", "    angles: []", ""].join("\n"); // no `version: 1`
+  await withTempRepo(brokenDevloops, async (repoRoot) => {
+    process.exitCode = 0;
+    const result = await runCli(["--angle", "correctness", "--harness", "claude"], { repoRoot, env: {} });
+    assert.equal(result.ok, false, "config-layer errors must force ok:false");
+    assert.ok(result.configErrorCount > 0, "the dropped-layer errors must be surfaced in configErrorCount");
+    assert.notEqual(process.exitCode, 0, "config-layer errors must produce a nonzero exit");
+    process.exitCode = 0;
+  });
+});
+
+// M1: an unknown/typo angle resolves only to the generic fallback persona;
+// silently returning ok:true would let a mis-typed angle pass with the wrong
+// persona. Fail closed: a fallback role sets ok:false.
+test("CLI fails closed (ok:false) for an unknown angle that resolves only to the fallback persona", async () => {
+  await withTempRepo(null, async (repoRoot) => {
+    process.exitCode = 0;
+    const result = await runCli(["--angle", "not-a-real-angle-xyz", "--harness", "claude"], { repoRoot, env: {} });
+    assert.equal(result.fallback, true, "an unknown angle must resolve to the fallback persona");
+    assert.equal(result.ok, false, "a fallback (unresolved) angle must fail closed");
+    assert.notEqual(process.exitCode, 0, "an unresolved angle must produce a nonzero exit");
+    process.exitCode = 0;
+  });
+});
+
+// M2: --fields must be forwarded to emitResult (it was parsed but dropped).
+test("--fields narrows the CLI output to the named top-level scalar fields, tab-separated", async () => {
+  await withTempRepo(null, async (repoRoot) => {
+    const out = await captureStdout(() =>
+      runCli(["--angle", "correctness", "--harness", "claude", "--fields", "persona,model"], { repoRoot, env: {} }),
+    );
+    assert.equal(out.trim(), "review\topus", "--fields persona,model must print exactly those two scalars, tab-separated");
   });
 });
 
