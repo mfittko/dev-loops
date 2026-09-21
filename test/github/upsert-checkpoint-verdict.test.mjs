@@ -7377,9 +7377,9 @@ test("#1808: --gate review on a CLEAN ledger renders with no blocking-severity l
   }, { prefix: "dev-loops-upsert-review-gate-clean-" });
 });
 
-// #2263 regression (review-only): the review gate's hardcoded activeGateConfig
+// Review-only regression guard: the review gate's hardcoded activeGateConfig
 // carried no inlineSeverityFloor, so isBelowInlineFloor failed open and every
-// locatable finding posted inline. The #2263 fold tests above all run on
+// locatable finding posted inline. The fold tests above all run on
 // draft_gate, so they keep passing even if this review-only branch loses the
 // floor again — this case pins it: locatable low/nit findings fold into the
 // verdict body's collapsed <details> block and produce ZERO inline comments.
