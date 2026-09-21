@@ -129,7 +129,7 @@ export function decideBashGate({
         "commands inline. Delegate the verification run to a fresh worker subagent (developer/fixer/" +
         "quality/review), which reports back a compact pass/fail plus any failing-test names — or, when " +
         "checking a pushed commit, prefer CI's structured conclusion (`gh pr checks` / " +
-        "scripts/loop/detect-checkpoint-evidence.mjs) over a local run. See skills/docs/main-agent-contract.md.",
+        "scripts/github/detect-checkpoint-evidence.mjs) over a local run. See skills/docs/main-agent-contract.md.",
     };
   }
   // Normalize (trim + case-fold) so a divergent slug (surrounding whitespace, casing) does not

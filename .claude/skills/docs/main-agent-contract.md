@@ -19,10 +19,10 @@ Claude analogue of the absolute main-agent read-only boundary Pi enforces, enfor
 non-bypassable by the coordinator itself — a tracked-file Write/Edit whose `agent_type` is
 `dev-loop` is denied; a worker subagent's `agent_type` is unaffected. **The coordinator also
 delegates code-verification/build runs** (#2082): it MUST NOT run `bun run verify`/`bun test`/
-`vitest`/`npm test`/`npm run test`/`npm run build` (and the `yarn`/`pnpm` equivalents) inline —
-delegate the run to a fresh worker subagent, which reports back a compact pass/fail plus any
-failing-test names, or, when checking a pushed commit, prefer CI's structured conclusion
-(`gh pr checks` / `scripts/loop/detect-checkpoint-evidence.mjs`) over a local run. Enforced by the
+`vitest`/`npm test`/`npm run test`, and the analogous `build` script across `bun`/`npm`/`yarn`/
+`pnpm`, inline — delegate the run to a fresh worker subagent, which reports back a compact
+pass/fail plus any failing-test names, or, when checking a pushed commit, prefer CI's structured
+conclusion (`gh pr checks` / `scripts/github/detect-checkpoint-evidence.mjs`) over a local run. Enforced by the
 same opt-in `PreToolUse` Bash gate hook and the same `DEVLOOPS_COORDINATOR_READONLY=1` flag; a
 worker subagent's verify/build run is unaffected. The draft-gate `gh pr ready`
 guard still applies (harness-agnostic). A separate, stricter main-agent read-only boundary can

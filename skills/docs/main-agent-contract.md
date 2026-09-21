@@ -19,10 +19,10 @@ Claude analogue of the absolute main-agent read-only boundary Pi enforces, enfor
 non-bypassable by the coordinator itself — a tracked-file Write/Edit whose `agent_type` is
 `dev-loop` is denied; a worker subagent's `agent_type` is unaffected. **The coordinator also
 delegates code-verification/build runs** (#2082): it MUST NOT run `bun run verify`/`bun test`/
-`vitest`/`npm test`/`npm run test`/`npm run build` (and the `yarn`/`pnpm` equivalents) inline —
-delegate the run to a fresh worker subagent, which reports back a compact pass/fail plus any
-failing-test names, or, when checking a pushed commit, prefer CI's structured conclusion
-(`gh pr checks` / `scripts/loop/detect-checkpoint-evidence.mjs`) over a local run. Enforced by the
+`vitest`/`npm test`/`npm run test`, and the analogous `build` script across `bun`/`npm`/`yarn`/
+`pnpm`, inline — delegate the run to a fresh worker subagent, which reports back a compact
+pass/fail plus any failing-test names, or, when checking a pushed commit, prefer CI's structured
+conclusion (`gh pr checks` / `scripts/github/detect-checkpoint-evidence.mjs`) over a local run. Enforced by the
 same opt-in `PreToolUse` Bash gate hook and the same `DEVLOOPS_COORDINATOR_READONLY=1` flag; a
 worker subagent's verify/build run is unaffected. The draft-gate `gh pr ready`
 guard still applies (harness-agnostic). A separate, stricter main-agent read-only boundary can
@@ -159,11 +159,14 @@ clause reinforces that for the `dev-loop` dispatch pattern specifically.
   `DEVLOOPS_COORDINATOR_READONLY=1` (default fail-open); fail-closed once enforced and
   non-bypassable by the coordinator. Ephemeral artifacts (`tmp/`, the scratchpad, sanctioned
   ledger paths) are gitignored/non-repo paths, so they fall through unaffected.
-- **Coordinator verify-command delegation boundary (#2082).** The `PreToolUse` Bash gate hook
-  (`.claude/hooks/pre-tool-use-bash-gate.mjs`) denies a known code-verification/build entrypoint
-  (`bun run verify`/`bun test`/`vitest`/`npm test`/`npm run test`/`npm run build`, and `yarn`/`pnpm`
-  equivalents) when the caller's `agent_type` is the coordinator's own (`dev-loop`) — the
-  coordinator must delegate the run to a fresh worker subagent instead. Gated by the SAME
+- **Coordinator verify-command delegation boundary (#2082).**
+  <!-- rule: COORDINATOR-VERIFY-DELEGATION -->
+  `COORDINATOR-VERIFY-DELEGATION`: the dev-loop coordinator MUST NOT run a known
+  code-verification/build entrypoint (`bun run verify`/`bun test`/`vitest`/`npm test`/
+  `npm run test`, and the analogous `build` script across `bun`/`npm`/`yarn`/`pnpm`) inline; it
+  MUST delegate the run to a fresh worker subagent (`developer`/`fixer`/`quality`/`review`) instead. Enforced by the
+  `PreToolUse` Bash gate hook (`.claude/hooks/pre-tool-use-bash-gate.mjs`), which denies the
+  command when the caller's `agent_type` is the coordinator's own (`dev-loop`). Gated by the SAME
   `DEVLOOPS_COORDINATOR_READONLY=1` flag as the write-guard boundary above (default fail-open); a
   worker subagent's `agent_type` is unaffected.
 - **Scope of mechanical enforcement:** the hook covers the Edit and Write tools. Bash-driven

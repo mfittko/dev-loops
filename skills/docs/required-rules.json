@@ -77,6 +77,10 @@
       "enforcementNote": "Seeking explicit confirmation is agent judgment; no script can require it."
     },
     {
+      "id": "COORDINATOR-VERIFY-DELEGATION",
+      "enforcement": "runtime"
+    },
+    {
       "id": "COPILOT-FOLLOWUP-ADVERSARIAL-BRIEFING",
       "enforcement": "agent",
       "enforcementNote": "Reviewer briefing tone is behavioral, not machine-checkable."
