@@ -256,7 +256,9 @@ Keep reviewer groups separate from `requestGroups`: the latter batch models/requ
 
 Dispatch one independent, fresh-context `review` agent per emitted unit via the plain Agent tool, seeded verbatim with the neutral bundle and its angle prompts. Never inherit the conductor's or a sibling reviewer's context. Follow the [review agent's scoped angle-review mode](../../agents/review.md).
 
-Wave the emitted units under the emitter's `maxConcurrent` (`resolveFanoutEffectiveConcurrency`), awaiting a free slot before releasing more. The configured cross-harness default is 4; this repo configures 3. `gates.fanout.sequential: true` resolves to 1, so each reviewer completes and writes evidence before the next starts. Under the Claude harness the effective value is additionally capped at 2; Pi/unknown harnesses retain the configured value. These bounds never collapse independent review into inline review.
+Wave the emitted units under the emitter's `maxConcurrent` (`resolveFanoutEffectiveConcurrency`), awaiting a free slot before releasing more. The configured cross-harness default is 4; this repo configures 3. `gates.fanout.sequential: true` resolves to 1, so each reviewer completes and writes evidence before the next starts. Under the Claude harness the effective value is additionally capped at 2; Pi/unknown harnesses retain the configured value. These bounds never collapse independent review into inline review. On Pi each wave is released as **ONE call** — see `GATE-EXEC-FANOUT-WAVE-DISPATCH` below for the emitted wave script and call body.
+
+
 
 If a dispatch still receives 429, follow `GATE-EXEC-DISPATCH-RETRY-BACKOFF` below: retry the same unit under the helper's policy, then halve the batch with `backoffMaxConcurrent` and recompute waves before foreground one-at-a-time fallback. Record degradation in gate evidence/provenance. Never launch all units and rely on retries to impose the bound.
 
@@ -460,7 +462,7 @@ Omit `--expected-dispatch-units` at zero, as required by the existing consumer c
 
 | Dispatch | Delivery and limits |
 | --- | --- |
-| Code-driven Pi `runs.all` | The driver reads the file and directly supplies the spawned reviewer's prompt, without agent paraphrase. |
+| Code-driven Pi `runs.all` | `emit-wave-dispatch.mjs` emits one `workflowScriptPath` wave script per wave; the driver passes that path (plus `cwd`, `async: false`, a bounded `timeoutMs`) to ONE `subagent` call per wave, and the script supplies each spawned reviewer's prompt bytes verbatim from its inlined `task`, without agent paraphrase. Never one call per unit. |
 | Agent-driven Claude Code Agent/Task | Run the composer, read the file, and copy its exact bytes into `prompt`, with NO preamble, wrapper or paraphrase. No primitive injects those bytes independently of that agent-authored parameter. |
 | Agent-driven Codex | Uses the generic batch/agent adapter, like Claude Code; only Pi ships a concrete adapter. Fixtures distinguish the generic adapters by environment. Codex production dispatch is NOT independently qualified by this repo. |
 
@@ -529,6 +531,42 @@ the enforcement authority, never silently ignorable). The optional
 `--expected-dispatch-units` flag is unchanged: it still reconciles the EXACT unit count when the
 caller knows it; the plan, not the flag, decides whether units were expected at all. This
 reconciles and closes the records-floor residual carried on #1468.
+
+<!-- rule: GATE-EXEC-FANOUT-WAVE-DISPATCH -->
+`GATE-EXEC-FANOUT-WAVE-DISPATCH`: On Pi a wave is released as **ONE call per wave**, never N
+separate calls. `scripts/github/emit-wave-dispatch.mjs --repo <repo> --pr <n> --gate <gate> --head-sha <sha>`
+turns the round's already-emitted `emit-plan.json` units plus their `promptPath` bytes into a ready
+`subagent({ workflowScriptPath: "<wave>.js", cwd: <worktree>, async: false, timeoutMs: <bounded> })`
+per wave, whose script body returns ONE `runs.all([...])` call carrying one uniquely-keyed,
+non-blank item per dispatch unit (`GATE-EXEC-FANOUT-DISPATCH-KEY`) and each unit's composed prompt
+bytes inlined VERBATIM as its `task` — so the conductor never handles those bytes and
+`GATE-EXEC-BRIEFING-PREFIX` byte identity is structural, not a relay the conductor can drift. The
+step persists the round's wave plan to the keyed `<gate>-<headSha>.wave-plan.json` sibling of the
+round's artifacts; read THAT path instead of capturing stdout, which a concurrent gate would clobber.
+It refuses (exit 1) on a unit with no key, an unreadable prompt, or a wave partition that would emit
+units as separate calls, and leaves no wave script on disk on any non-success exit.
+
+"Blocking joins" means awaiting that one call before releasing the next wave — it does NOT mean one
+blocking `subagent` call per dispatch unit. Pi's foreground guard is `subagentInProgress`
+(`pi-subagents` `subagent-executor.js`, `duplicateSubagentCallResult`): it rejects the second onward
+with "a subagent call is already in progress. Issue exactly ONE subagent call per turn." That guard
+is FOREGROUND-only and the parallelism is available INSIDE one call, so per-unit calls silently
+serialize the round — a sequential round still records per-angle sentinels and distinct reviewers,
+so the records-floor and `requireFanoutProvenance` both pass and only wall-clock regresses, which
+stays invisible until the parent deadline fires. Treating that rejection as "this harness allows only
+one subagent call per turn" is a misdiagnosis, not a reason to serialize.
+
+`tasks: [...]` is NOT an available shape in this `pi-subagents` version — it is rejected outright
+with "Legacy top-level chain and parallel inputs were removed; use workflowScript." Only
+`workflowScript` (inline) or `workflowScriptPath` reach `runs.all`. The emitter never emits it and
+must never document it as an option.
+
+Emitted reviewer prompts carry a bounded tool-call budget plus a MANDATORY artifact-write clause
+("finish within N tool calls and WRITE your artifact — never return without the file written"): a
+reviewer that hits its per-unit timeout mid-thought and writes nothing produces no evidence at all,
+so bounded per-reviewer effort plus the mandatory write is what makes a wave collectable. The
+delivery stays agent-authored on Claude Code / Codex (the per-harness delivery table below); only
+Pi's driver is code-driven, so this rule changes no other harness's dispatch path.
 
 <!-- rule: GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK -->
 `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK`: Bounded parallelism is the DEFAULT dispatch posture:

@@ -80,7 +80,11 @@ Output (stdout, JSON):
   Wave the EMITTED units at most \`maxConcurrent\` at a time (1 when
   gates.fanout.sequential is set). Do NOT use the artifact's fanout.wavePlan to
   bound this step: that plan is computed over the UNSPLIT resolveFanoutGroups
-  units and no longer matches this step's split unit set.
+  units and no longer matches this step's split unit set. Run
+  \`scripts/github/emit-wave-dispatch.mjs\` at the same (repo, pr, gate, headSha)
+  key next: it turns these emitted units into ONE ready \`runs.all(...)\` wave
+  script per wave plus the \`subagent({ workflowScriptPath, ... })\` call body to
+  issue, so the conductor never composes the dispatch call shape itself.
   A fail-closed refusal (exit 1) emits { "ok": false, "error": "..." } on STDOUT
   (via the shared jq-output emitter); a usage/parse error (exit 2) emits
   { "ok": false, "error": "...", "hint"?: "run with --help for usage" } on STDERR.
@@ -194,6 +198,7 @@ export function buildAngleNamingSuffix(unit) {
     .join("; ");
   const contract = `## Bounded reviewer contract
 Budget: at most ${REVIEWER_UNIT_BUDGET.maxModelTurns} model turns and ${REVIEWER_UNIT_BUDGET.maxToolCalls} tool calls for this unit.
+Write: finish within ${REVIEWER_UNIT_BUDGET.maxToolCalls} tool calls and WRITE your findings artifact(s) — never return without the file written. A reviewer that returns without its artifact produces no evidence for this round, so the mandatory write outranks finishing the review.
 Scope: review ONLY the angle(s) named above — reviewing an unassigned angle is prohibited.
 Prohibited: ${prohibited}.
 If you exceed this budget (more than ${REVIEWER_UNIT_BUDGET.maxModelTurns} model turns or ${REVIEWER_UNIT_BUDGET.maxToolCalls} tool calls) OR cannot finish reviewing every assigned angle within it, do NOT report clean — emit a durable blocked result via: dev-loops-run scripts/github/emit-reviewer-blocked.mjs --run <reviewed head sha> --head-sha <reviewed head sha> --angles <your assigned angles, comma-separated> --completed-angles <angles you finished> --model-turns <model turns you used> --tool-calls <tool calls you used> --findings-dir <the per-angle findings directory named in the briefing prefix above>.`;

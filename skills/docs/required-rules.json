@@ -306,6 +306,10 @@
       "id": "GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK"
     },
     {
+      "id": "GATE-EXEC-FANOUT-WAVE-DISPATCH",
+      "enforcement": "runtime"
+    },
+    {
       "id": "GATE-EXEC-FINDING-THREADS"
     },
     {
