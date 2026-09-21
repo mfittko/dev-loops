@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 
-import { decideBashGate, decideWriteGuard, decideCoordinatorWriteGuard, decideSubagentStopGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV } from "../src/claude/hook-decisions.mjs";
+import { decideBashGate, decideWriteGuard, decideCoordinatorWriteGuard, decideSubagentStopGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV, normalizeAgentType } from "../src/claude/hook-decisions.mjs";
 
 const TARGET = "mfittko/dev-loops";
 
@@ -583,6 +583,31 @@ test("decideBashGate ALLOWS a coordinator running a compact orchestration comman
   }
 });
 
+test("decideBashGate DENIES a namespaced dev-loops:dev-loop coordinator running a code-verification entrypoint under strict coordinator enforcement (#2082 pre-PR review)", () => {
+  const d = decideBashGate({
+    command: "bun run verify",
+    repoSlug: TARGET,
+    inManagedContext: true,
+    managedRepoSlug: TARGET,
+    agentType: "dev-loops:dev-loop",
+    enforceCoordinator: true,
+  });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /COORDINATOR-VERIFY-DELEGATION/);
+});
+
+test("decideBashGate ALLOWS a namespaced dev-loops:developer worker running a code-verification entrypoint under strict coordinator enforcement (#2082 pre-PR review)", () => {
+  const d = decideBashGate({
+    command: "bun run verify",
+    repoSlug: TARGET,
+    inManagedContext: true,
+    managedRepoSlug: TARGET,
+    agentType: "dev-loops:developer",
+    enforceCoordinator: true,
+  });
+  assert.equal(d.decision, "allow");
+});
+
 test("decideBashGate ALLOWS a coordinator running a code-verification entrypoint when DEVLOOPS_COORDINATOR_READONLY is unset (fail-open)", () => {
   const d = decideBashGate({
     command: "bun run verify",
@@ -684,6 +709,29 @@ test("decideCoordinatorWriteGuard allows a null agent_type (main agent — the o
     decideCoordinatorWriteGuard({ filePath: "packages/core/src/x.mjs", isRepoMutation: true, enforce: true, agentType: null }).decision,
     "allow",
   );
+});
+
+test("decideCoordinatorWriteGuard denies a namespaced dev-loops:dev-loop coordinator tracked-file mutation under strict enforcement (#2082 pre-PR review)", () => {
+  const d = decideCoordinatorWriteGuard({ filePath: "packages/core/src/x.mjs", isRepoMutation: true, enforce: true, agentType: "dev-loops:dev-loop" });
+  assert.equal(d.decision, "deny");
+  assert.match(d.reason, /Coordinator→worker delegation boundary/);
+});
+
+test("decideCoordinatorWriteGuard allows a namespaced dev-loops:developer worker tracked-file mutation under strict enforcement (#2082 pre-PR review)", () => {
+  const d = decideCoordinatorWriteGuard({ filePath: "packages/core/src/x.mjs", isRepoMutation: true, enforce: true, agentType: "dev-loops:developer" });
+  assert.equal(d.decision, "allow");
+});
+
+// ---------------------------------------------------------------------------
+// normalizeAgentType (#2082 pre-PR review) — plugin-namespaced agent_type discriminator
+// ---------------------------------------------------------------------------
+
+test("normalizeAgentType strips a plugin-name: prefix and passes bare/null/non-string values through", () => {
+  assert.equal(normalizeAgentType("dev-loops:dev-loop"), "dev-loop");
+  assert.equal(normalizeAgentType("dev-loops:developer"), "developer");
+  assert.equal(normalizeAgentType("dev-loop"), "dev-loop");
+  assert.equal(normalizeAgentType(null), null);
+  assert.equal(normalizeAgentType(undefined), undefined);
 });
 
 // ---------------------------------------------------------------------------

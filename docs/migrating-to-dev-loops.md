@@ -60,6 +60,16 @@ you set them (CI config, shell profiles, runner scripts):
 `DEVLOOPS_MAIN_AGENT_READONLY` (opt-in main-agent read-only enforcement) was already
 `DEVLOOPS_`-prefixed and is unchanged.
 
+`DEVLOOPS_COORDINATOR_READONLY` is a new opt-in flag (#2082): under the Claude Code harness it
+enforces the coordinator→worker delegation boundary one level down from
+`DEVLOOPS_MAIN_AGENT_READONLY` — the dev-loop agent (acting as COORDINATOR) must delegate every
+tracked-file implementation edit AND every code-verification/build command (`bun run verify`,
+`vitest`, `npm test`, ...) to a fresh worker subagent, instead of writing or verifying inline.
+Default is **fail-open** (adopt-safe): the boundary is inert until a consumer repo opts in by
+setting `DEVLOOPS_COORDINATOR_READONLY: "1"` in its `.claude/settings.json` `env` block. Once
+enabled, the guard decision logic is **fail-closed and non-bypassable by the agent itself** — see
+[Main Agent Contract](../skills/docs/main-agent-contract.md) for the full boundary contract.
+
 ### Pi harness users: these `PI_*` vars are unchanged
 
 dev-loops reads a small set of `PI_*` variables that the **Pi runtime injects** (it does

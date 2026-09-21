@@ -720,12 +720,46 @@ test("commandContainsCodeVerificationEntrypoint detects known verify/test/build 
   // compact orchestration commands the coordinator may still run inline — must NOT match
   assert.equal(commandContainsCodeVerificationEntrypoint("dev-loops queue list"), false);
   assert.equal(commandContainsCodeVerificationEntrypoint("gh pr checks 5 --json state --jq .state"), false);
-  assert.equal(commandContainsCodeVerificationEntrypoint("node scripts/loop/detect-checkpoint-evidence.mjs --repo x --pr 1"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("node scripts/github/detect-checkpoint-evidence.mjs --repo x --pr 1"), false);
   assert.equal(commandContainsCodeVerificationEntrypoint("git log --oneline -1"), false);
   assert.equal(commandContainsCodeVerificationEntrypoint("git status --short"), false);
   // a path that merely contains the word "test" must not match (over-match guard)
   assert.equal(commandContainsCodeVerificationEntrypoint("cat test/foo.test.mjs"), false);
   assert.equal(commandContainsCodeVerificationEntrypoint("node scripts/test-runner.mjs"), false);
+});
+
+test("commandContainsCodeVerificationEntrypoint matches colon-namespaced sub-scripts, npx/bunx vitest, bun --bun run, and timeout/nice prefixes (#2082 pre-PR review)", () => {
+  // colon-namespaced package-manager sub-scripts (`test:*`/`verify:*`/`build:*`) — the coordinator's
+  // real daily commands, which the plain `(?:\s|$)` tail previously rejected.
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun run test:extension"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun run test:core"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun run test:all"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("npm run test:unit"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("yarn test:ci"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun run verify:docs"), true);
+
+  // vitest via a package-runner or bun's `x` subcommand
+  assert.equal(commandContainsCodeVerificationEntrypoint("bunx vitest"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("npx vitest run"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun x vitest"), true);
+
+  // a binary flag between the binary and the run/script token
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun --bun run verify"), true);
+
+  // prefix-tolerated wrapper commands
+  assert.equal(commandContainsCodeVerificationEntrypoint("timeout 600 bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("nice bun run verify"), true);
+
+  // must still not match compact orchestration commands
+  assert.equal(commandContainsCodeVerificationEntrypoint("dev-loops queue list"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("gh pr checks --json state --jq .state"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("node scripts/github/detect-checkpoint-evidence.mjs --repo x --pr 1"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("git log --oneline -1"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("git status --short"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("node scripts/foo.mjs"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("cat test/foo.test.mjs"), false);
+  // hyphen-form script name (not a `:` sub-script) — deliberately left unmatched, not required
+  assert.equal(commandContainsCodeVerificationEntrypoint("npm run build-docs"), false);
 });
 
 // ---------------------------------------------------------------------------

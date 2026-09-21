@@ -226,15 +226,19 @@ function shellSegments(command) {
 
 /**
  * Leading prefix a command segment may carry before its real executable: a run of `NAME=value`
- * env assignments, optional `command`/`env`/`exec` wrapper words, and an absolute/relative path on
- * the binary (`/usr/bin/gh`, `/usr/bin/git`). Shared by every classifier in this file that must
- * catch its verb behind these forms (`gh pr <verb>`, `git stash`, ...).
+ * env assignments, optional `command`/`env`/`exec`/`timeout <n>`/`nice` wrapper words (any order,
+ * any repetition), and an absolute/relative path on the binary (`/usr/bin/gh`, `/usr/bin/git`).
+ * Shared by every classifier in this file that must catch its verb behind these forms
+ * (`gh pr <verb>`, `git stash`, `bun run verify`, ...). `timeout <n>` and `nice` were added for
+ * COORDINATOR-VERIFY-DELEGATION (#2082): the coordinator's daily verify/build commands are
+ * routinely run behind `timeout 600 bun run verify` / `nice bun run verify`.
  *
  * Note: this is a pragmatic normalizer, not a full shell tokenizer. Subshell
  * `(gh pr create)`, `{ …; }` group, `-R=value` short-flag, and backslash-escaped
  * `\gh` forms are deliberately out of scope.
  */
-const SHELL_EXEC_PREFIX = "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:(?:command|env|exec)\\s+)*(?:\\S*/)?";
+const SHELL_EXEC_PREFIX =
+  "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:(?:command|env|exec)\\s+|timeout\\s+\\S+\\s+|nice\\s+)*(?:\\S*/)?";
 
 /**
  * Build the `gh <subcmd> <verb>` prefix matcher (subcmd = "pr" | "issue").
@@ -973,14 +977,23 @@ export function commandContainsInlineInterpreter(command) {
  * the executable HEAD (env-assignment/wrapper/path prefix tolerated via `SHELL_EXEC_PREFIX`) so a
  * path that merely contains the word "test" (`cat test/foo.test.mjs`) never matches — the head
  * token must literally be one of these four package-manager binaries.
+ *
+ * Tolerates a run of binary flags between the binary and `run`/the script name (`bun --bun run
+ * verify`), and a `:`-namespaced sub-script (`test:extension`, `test:core`, `verify:docs`, ...) —
+ * the tail is `(?:[:\s]|$)` rather than `(?:\s|$)` so `npm run test:unit` / `yarn test:ci` match
+ * while `npm run build-docs` (hyphen form, a genuinely different script name) still does not.
  */
 const PACKAGE_MANAGER_VERIFY_RUN_RE = new RegExp(
-  `^${SHELL_EXEC_PREFIX}(?:bun|npm|yarn|pnpm)\\s+(?:run\\s+)?(?:test|verify|build)(?:\\s|$)`,
+  `^${SHELL_EXEC_PREFIX}(?:bun|npm|yarn|pnpm)(?:\\s+--\\S+)*\\s+(?:run\\s+)?(?:test|verify|build)(?:[:\\s]|$)`,
   "i",
 );
 
-/** `vitest` run directly (any args: `vitest`, `vitest run`, `vitest --coverage`). */
-const VITEST_RE = new RegExp(`^${SHELL_EXEC_PREFIX}vitest(?:\\s|$)`, "i");
+/**
+ * `vitest` run directly (any args: `vitest`, `vitest run`, `vitest --coverage`), or via the
+ * `npx`/`bunx` package-runner (`npx vitest run`, `bunx vitest`) or `bun`'s `x` subcommand
+ * (`bun x vitest`).
+ */
+const VITEST_RE = new RegExp(`^${SHELL_EXEC_PREFIX}(?:(?:npx|bunx)\\s+|bun\\s+x\\s+)?vitest(?:\\s|$)`, "i");
 
 /**
  * COORDINATOR-VERIFY-DELEGATION: whether `command` contains a known code-verification/

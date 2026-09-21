@@ -6,7 +6,11 @@ How dev-loop work is structured depends on the harness.
 COORDINATOR.** The agent invoked for dev-loop work runs git and PR lifecycle operations, runs the
 `dev-loops` CLI (including state-changing `gate` / `pr` / `loop` subcommands), and posts gate
 verdicts under the operating session's identity. There is no separate read-only "main agent" and
-no mandatory async-subagent dispatch: the dev-loop agent owns the work end to end. But for TRACKED
+no mandatory async-subagent dispatch — i.e. no Pi-style main-agent→dev-loop async hop: the dev-loop
+agent is invoked directly and owns the work end to end, at that outer level. This is distinct from
+the coordinator→worker delegation described next: the same dev-loop agent, now acting as
+COORDINATOR one level down, still owes a fresh WORKER subagent for tracked-file edits and
+verification runs. But for TRACKED
 repo files (source, tests, docs) the coordinator is itself read-only, one level down: it MUST
 delegate every tracked-file implementation edit to a fresh WORKER subagent
 (`developer`/`fixer`/`quality`/`docs`). The coordinator MAY still write EPHEMERAL artifacts

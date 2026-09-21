@@ -50,6 +50,12 @@ function runHook(script, payload, env = {}) {
   return { code: res.status, stdout: res.stdout, stderr: res.stderr, json, stderrJson };
 }
 
+test(".claude/settings.json enables DEVLOOPS_COORDINATOR_READONLY — the only thing making the coordinator→worker write/verify boundaries live in this repo (#2082 pre-PR review)", () => {
+  const raw = fs.readFileSync(path.join(repoRoot, ".claude", "settings.json"), "utf8");
+  const settings = JSON.parse(raw);
+  assert.equal(settings.env?.DEVLOOPS_COORDINATOR_READONLY, "1", "DEVLOOPS_COORDINATOR_READONLY must be set to \"1\" in this repo's own .claude/settings.json env");
+});
+
 test(".claude/settings.json is valid JSON and wires the four dev-loop hook registrations", () => {
   const raw = fs.readFileSync(path.join(repoRoot, ".claude", "settings.json"), "utf8");
   const settings = JSON.parse(raw);
@@ -312,6 +318,28 @@ test("bash-gate hook allows a dev-loop coordinator running bun run verify when D
   assert.equal(json, null, "no deny when DEVLOOPS_COORDINATOR_READONLY is unset");
 });
 
+test("bash-gate hook denies a namespaced dev-loops:dev-loop coordinator running bun run verify under strict coordinator enforcement (#2082 pre-PR review, e2e)", () => {
+  const { code, json } = runHook(
+    "pre-tool-use-bash-gate.mjs",
+    { tool_name: "Bash", tool_input: { command: "bun run verify" }, cwd: repoRoot, agent_type: "dev-loops:dev-loop" },
+    { DEVLOOPS_COORDINATOR_READONLY: "1" },
+  );
+  assert.equal(code, 0);
+  assert.ok(json, "expected a structured decision");
+  assert.equal(json.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(json.hookSpecificOutput.permissionDecisionReason, /COORDINATOR-VERIFY-DELEGATION/);
+});
+
+test("bash-gate hook allows a namespaced dev-loops:developer worker running bun run verify under strict coordinator enforcement (#2082 pre-PR review, e2e)", () => {
+  const { code, json } = runHook(
+    "pre-tool-use-bash-gate.mjs",
+    { tool_name: "Bash", tool_input: { command: "bun run verify" }, cwd: repoRoot, agent_type: "dev-loops:developer" },
+    { DEVLOOPS_COORDINATOR_READONLY: "1" },
+  );
+  assert.equal(code, 0);
+  assert.equal(json, null, "namespaced worker subagent must not be denied by the coordinator verify boundary");
+});
+
 test("bash-gate hook allows git stash in a repo with no .devloops config at all (unmanaged, pass-through)", () => {
   const dir = makeManagedConfigRepo(null);
   try {
@@ -403,6 +431,28 @@ test("write-guard hook allows a dev-loop coordinator writing a gitignored tmp/ p
   );
   assert.equal(code, 0);
   assert.equal(json, null, "gitignored tmp/ path must be allowed even for the coordinator");
+});
+
+test("write-guard hook denies a namespaced dev-loops:dev-loop coordinator tracked-file write under strict coordinator enforcement (#2082 pre-PR review)", () => {
+  const { code, json } = runHook(
+    "pre-tool-use-write-guard.mjs",
+    { tool_name: "Write", tool_input: { file_path: path.join(repoRoot, "package.json") }, cwd: repoRoot, agent_type: "dev-loops:dev-loop" },
+    { DEVLOOPS_COORDINATOR_READONLY: "1" },
+  );
+  assert.equal(code, 0);
+  assert.ok(json, "expected a structured decision");
+  assert.equal(json.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(json.hookSpecificOutput.permissionDecisionReason, /Coordinator→worker delegation boundary/);
+});
+
+test("write-guard hook allows a namespaced dev-loops:developer worker tracked-file write under strict coordinator enforcement (#2082 pre-PR review)", () => {
+  const { code, json } = runHook(
+    "pre-tool-use-write-guard.mjs",
+    { tool_name: "Write", tool_input: { file_path: path.join(repoRoot, "package.json") }, cwd: repoRoot, agent_type: "dev-loops:developer" },
+    { DEVLOOPS_COORDINATOR_READONLY: "1" },
+  );
+  assert.equal(code, 0);
+  assert.equal(json, null, "namespaced worker subagent must not be denied by the coordinator boundary");
 });
 
 test("write-guard hook allows a dev-loop coordinator tracked-file write when DEVLOOPS_COORDINATOR_READONLY is unset (fail-open)", () => {

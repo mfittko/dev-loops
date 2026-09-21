@@ -6,7 +6,11 @@ How dev-loop work is structured depends on the harness.
 COORDINATOR.** The agent invoked for dev-loop work runs git and PR lifecycle operations, runs the
 `dev-loops` CLI (including state-changing `gate` / `pr` / `loop` subcommands), and posts gate
 verdicts under the operating session's identity. There is no separate read-only "main agent" and
-no mandatory async-subagent dispatch: the dev-loop agent owns the work end to end. But for TRACKED
+no mandatory async-subagent dispatch — i.e. no Pi-style main-agent→dev-loop async hop: the dev-loop
+agent is invoked directly and owns the work end to end, at that outer level. This is distinct from
+the coordinator→worker delegation described next: the same dev-loop agent, now acting as
+COORDINATOR one level down, still owes a fresh WORKER subagent for tracked-file edits and
+verification runs. But for TRACKED
 repo files (source, tests, docs) the coordinator is itself read-only, one level down: it MUST
 delegate every tracked-file implementation edit to a fresh WORKER subagent
 (`developer`/`fixer`/`quality`/`docs`). The coordinator MAY still write EPHEMERAL artifacts
@@ -112,7 +116,7 @@ asset-generation time (`harness: "claude"`).
 | `git commit -m "..."` | **BREACH** — must delegate to `dev-loop` |
 | `subagent dev-loop` | Allowed — correct delegation |
 | `subagent fixer` | Allowed only when called from within `dev-loop`; describe the task as part of the message |
-| Claude Code: the `dev-loop` coordinator writes `packages/core/src/foo.mjs` directly | **BREACH** — must delegate to a fresh worker subagent (`developer`/`fixer`/`quality`/`docs`) |
+| Claude Code: the `dev-loop` coordinator writes `packages/core/src/foo.mjs` directly | **BREACH** when `DEVLOOPS_COORDINATOR_READONLY=1` is enforced — must delegate to a fresh worker subagent (`developer`/`fixer`/`quality`/`docs`) |
 | Claude Code: the `dev-loop` coordinator writes `tmp/gate-findings/...` (gate evidence) | Allowed — ephemeral/gitignored, not a tracked-file mutation |
 | Claude Code: the `dev-loop` coordinator runs `bun run verify` inline | **BREACH** when `DEVLOOPS_COORDINATOR_READONLY=1` is enforced — delegate the run to a fresh worker subagent |
 | Claude Code: a worker subagent (`developer`/`fixer`/`quality`/`review`) runs `bun run verify` | Allowed — verification runs are the worker's job |
