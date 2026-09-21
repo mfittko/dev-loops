@@ -157,6 +157,21 @@ localImplementation:
     maxFiles: 2
     maxLines: 20 # micro-PR ceiling (#1043)
 
+# Pre-PR review model opt-in (issue #2305, skills/docs/pre-pr-review-contract.md).
+# The pre-PR review pass runs ONE fresh-context general-purpose reviewer before
+# the first push. This repo spends its strongest model on that one call: Fable
+# (claude-fable-5-1) on the Claude-Code harness. Fable is Claude-Code-only, so
+# the tier sets only `claude`; the Pi harness has no entry here and resolves to
+# null (inherit/default), keeping the phase harness-agnostic. The model is never
+# hardcoded in phase prose/tooling — it is resolved via
+# resolveRoleModel(config, { role: "pre-PR-reviewer", harness }).
+models:
+  tiers:
+    pre-pr-strong:
+      claude: claude-fable-5-1
+  roleTiers:
+    pre-PR-reviewer: pre-pr-strong
+
 tracker:
   board:
     number: 3  # https://github.com/users/mfittko/projects/3 (stable; survives project renames)
