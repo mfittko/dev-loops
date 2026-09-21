@@ -16,6 +16,7 @@ import { loadStateColumnMap, LOGICAL_COLUMN } from "@dev-loops/core/loop/queue-b
 import { assertGithubWriteStubbedInTestMode } from "@dev-loops/core/github/test-mode-write-guard";
 import { detectLinkedIssuePr } from "./detect-linked-issue-pr.mjs";
 import { evaluateCommentDiscipline } from "../loop/check-comment-discipline.mjs";
+import { validateTrackerBackedPrBodySpec } from "@dev-loops/core/loop/issue-refinement-artifact";
 const USAGE = `Usage: create-pr.mjs [gh pr create args...]
 Canonical PR-creation wrapper around \`gh pr create\`. Every PR opened through this
 tool is ALWAYS a draft and is self-assigned by default. Never call raw \`gh pr create\`.
@@ -70,7 +71,8 @@ Examples:
   node <resolved-skill-scripts>/github/create-pr.mjs --repo owner/repo --base main --head feature --title "..." --body-file pr.md
 Notes:
   - Use \`gh pr ready\` later to leave draft state; this wrapper never opens a ready PR.
-  - Wrapper-owned validation: \`--ready\` (rejected), \`--issue\` closing-reference enforcement, and the linked-PR duplicate guard; all other argument validation is left to \`gh pr create\`.
+  - Wrapper-owned validation: \`--ready\` (rejected), \`--issue\` closing-reference enforcement, the tracker-backed PR-body spec contract (same \`validate-pr-body-spec\` the ready boundary runs — a non-conformant body fails closed at create), and the linked-PR duplicate guard; all other argument validation is left to \`gh pr create\`.
+  - A tracker-backed PR (a closing issue via \`--issue\`/\`Closes #N\`) must carry the spec-of-record sections (Objective, In scope, Acceptance criteria + Definition of done checklists, explicit Non-goals) or create fails closed; issue-less \`--lightweight\` PRs carry no closing reference and are exempt. Canonical skeleton: \`skills/dev-loop/templates/pr-body.md\`.
   - \`--issue <n>\` makes the closing reference a MUST (refused if missing or mismatched); without \`--issue\` the closing keyword is not enforced.
   - The linked-PR duplicate guard runs for any closing keyword/\`--issue\` and fails closed on ambiguity when the probe cannot run.
 Exit codes:
@@ -177,18 +179,25 @@ const DEFAULT_ASSIGNEE = "@me";
 // and edit-pr compare `Closes #N` / `Fixes #N` against the branch's resolved
 // issue with one implementation. Re-exported here for back-compat consumers.
 export { detectClosingKeyword, extractClosingIssueNumber };
-// Never reads stdin (`gh pr create` doesn't either — body always comes from an
-// explicit --body/--body-file), so allowStdin stays false. An unreadable or
-// empty --body-file FAILS CLOSED (throws) rather than silently substituting ""
-// (which used to let a broken/blank --body-file open a body-less PR unnoticed).
+// Resolves the body value in BOTH the space form (`--body <text>` /
+// `--body-file <path>`) AND the inline form (`--body=<text>` /
+// `--body-file=<path>`) via the same both-forms getFlagValue the other flags
+// use. The inline `=` form MUST NOT bypass the wrapper's body-derived guards
+// (closing-reference enforcement, comment-discipline preflight, tracker-backed
+// PR-body spec): gh honors `--body=<text>`, so a guard that only saw the space
+// form could be sidestepped by writing `--body=`. Never reads stdin (`gh pr
+// create` doesn't either — body always comes from an explicit --body/--body-file).
+// An unreadable or empty --body-file FAILS CLOSED (throws) rather than silently
+// substituting "" (which used to let a broken/blank --body-file open a body-less
+// PR unnoticed).
 async function resolveBody(args) {
-  const bodyIdx = args.indexOf("--body");
-  if (bodyIdx !== -1 && bodyIdx + 1 < args.length) {
-    return args[bodyIdx + 1];
+  const bodyValue = getFlagValue(args, /^--body(?:$|=)/u);
+  if (bodyValue !== null) {
+    return bodyValue;
   }
-  const bodyFileIdx = args.indexOf("--body-file");
-  if (bodyFileIdx !== -1 && bodyFileIdx + 1 < args.length) {
-    return resolveBodyOrFile({ bodyFile: args[bodyFileIdx + 1], allowStdin: false });
+  const bodyFileValue = getFlagValue(args, /^--body-file(?:$|=)/u);
+  if (bodyFileValue !== null) {
+    return resolveBodyOrFile({ bodyFile: bodyFileValue, allowStdin: false });
   }
   return null; // no --body/--body-file given
 }
@@ -547,6 +556,18 @@ export async function main(argv = process.argv.slice(2), runtime = {}) {
   // lets the replacement through.
   const closingIssue = issue ?? extractClosingIssueNumber(body);
   if (closingIssue !== null) {
+    // PR-description spec contract at CREATE time: a tracker-backed PR (a
+    // closing issue is present via --issue or a `Closes #N` keyword) must
+    // independently carry the spec-of-record sections the ready boundary
+    // requires. Run the SAME shared validateTrackerBackedPrBodySpec the ready
+    // boundary uses so a non-conformant body fails closed here with identical
+    // error codes, instead of being discovered only at ready-for-review. One
+    // validator, run at both ends, never drifting. Issue-less --lightweight PRs
+    // carry no closing reference (closingIssue === null) and are exempt.
+    const prBodySpec = validateTrackerBackedPrBodySpec({ body: body ?? "", closingIssues: [closingIssue] });
+    if (!prBodySpec.ok) {
+      throw parseError(`tracker-backed PR body fails the PR-description contract (validate-pr-body-spec: ${prBodySpec.errors.map((e) => e.code).join(", ")}); the body must independently carry Objective, In scope, Acceptance criteria + Definition of done checklists, an explicit Non-goals section, and a Closes #${closingIssue}/Fixes #${closingIssue} reference. See the canonical PR-body skeleton at skills/dev-loop/templates/pr-body.md`);
+    }
     const guard = await resolveLinkedPrGuard({
       repo: getFlagValue(forwardedArgv, REPO_FLAG_PATTERN),
       issue: closingIssue,

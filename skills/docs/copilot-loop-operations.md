@@ -137,11 +137,16 @@ Follow the PR description contract (see [Agent Instructions](../../AGENTS.md) if
 
 Checkbox rule: acceptance criteria, definition-of-done items, and any task list must be rendered as real GitHub markdown checkboxes inside list items (`- [ ]` / `- [x]`, also `* [ ]` / `* [x]`). Do not wrap checkbox markers (e.g. `[x]`) in backticks. Do not place checkbox markers inside table cells — task lists are not interactive there even with a leading `- `.
 
-At draft exit, `ready-for-review.mjs` applies `validateTrackerBackedPrBodySpec`
-(`@dev-loops/core/loop/issue-refinement-artifact`, reusing `validatePrBodySpec`). For a
-PR closing an issue, its OWN body must contain Acceptance criteria and Definition of
-done checklists, explicit Non-goals, and `Closes #N`/`Fixes #N`; otherwise it fails
-closed. A linked issue's criteria or reviewer judgment cannot substitute.
+`validateTrackerBackedPrBodySpec` (`@dev-loops/core/loop/issue-refinement-artifact`,
+reusing `validatePrBodySpec`) runs at BOTH ends of the lifecycle: `create-pr.mjs` fails
+closed at PR-creation time on a non-conformant tracker-backed body, and `ready-for-review.mjs`
+re-checks it at draft exit. One validator, run at both ends, never drifting — author the body
+conformant up front instead of discovering it non-conformant when marking ready. For a PR
+closing an issue, its OWN body must contain an Objective/why section, an In scope section,
+Acceptance criteria and Definition of done checklists, explicit Non-goals, and
+`Closes #N`/`Fixes #N`; otherwise it fails closed. A linked issue's criteria or reviewer
+judgment cannot substitute. The canonical conformant skeleton lives at
+[PR Body Skeleton](../dev-loop/templates/pr-body.md).
 
 <!-- rule: OPS-PR-VALIDATION-STABLE-EVIDENCE -->
 `OPS-PR-VALIDATION-STABLE-EVIDENCE`: For tracker-backed PRs, the PR description's Validation section MUST record each validation command or named check together with its stable pass/fail outcome. It MUST NOT include volatile aggregate test, assertion, or asset counts; skip counts; durations; timestamps; or incidental totals unless an explicit acceptance criterion makes that exact quantity behaviorally significant. Detailed totals MUST live in the head-stamped validation and gate artifacts, where they remain bound to the exact revision that produced them.

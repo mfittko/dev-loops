@@ -35,6 +35,32 @@ async function readGhCalls(logPath) {
   return lines.map((line) => JSON.parse(line));
 }
 
+// A PR body that satisfies the tracker-backed validate-pr-body-spec contract
+// create-pr now enforces at create time (Objective, In scope, Acceptance
+// criteria + Definition of done checklists, Non-goals) plus the given closing
+// reference. Every success-path fixture that opens a tracker-backed PR must
+// carry a conformant body, or the new create-time check fails it closed.
+function conformantBody(closingLine = "Closes #123") {
+  return [
+    "## Objective",
+    "Ship the change.",
+    "",
+    "## In scope",
+    "- the change",
+    "",
+    "## Acceptance criteria",
+    "- [ ] it works",
+    "",
+    "## Definition of done",
+    "- [ ] tests pass",
+    "",
+    "## Non-goals",
+    "- unrelated work",
+    "",
+    closingLine,
+  ].join("\n");
+}
+
 // #1629: linked-PR guard response with NO open linked PR — the happy path a
 // closing-keyword create hits first (detectLinkedIssuePr graphql call) before
 // the `gh pr create` call.
@@ -141,7 +167,7 @@ test("create-pr --issue <n> with a matching Closes #n succeeds and forwards args
       "--head", "feature",
       "--title", "Add feature",
       "--issue", "123",
-      "--body", "Closes #123",
+      "--body", conformantBody("Closes #123"),
     ], { env });
     assert.equal(result.code, 0, result.stderr);
     const ghCalls = await readGhCalls(ghLogPath);
@@ -260,7 +286,7 @@ test("create-pr --issue accepts the =inline form", async () => {
       "--head", "feature",
       "--title", "Add feature",
       "--issue=42",
-      "--body", "Fixes #42",
+      "--body", conformantBody("Fixes #42"),
     ], { env });
     assert.equal(result.code, 0, result.stderr);
     assert.equal((await readGhCalls(ghLogPath)).every((call) => call.includes("--issue") === false), true);
@@ -286,7 +312,7 @@ test("create-pr --body with closing keyword emits no stderr warning", async () =
       "--base", "main",
       "--head", "feature",
       "--title", "Add feature",
-      "--body", "Closes #123",
+      "--body", conformantBody("Closes #123"),
     ], { env });
 
     assert.equal(result.code, 0);
@@ -331,7 +357,7 @@ test("create-pr --body-file with closing keyword emits no stderr warning", async
 
   try {
     const bodyPath = path.join(tempDir, "pr-body.md");
-    await writeFile(bodyPath, "Closes #123\n\nSome description here.", "utf8");
+    await writeFile(bodyPath, conformantBody("Closes #123"), "utf8");
 
     const { env, ghLogPath } = await writeGhStub(tempDir, [
       { stdout: graphqlNoLinkedPrPayload() },
@@ -750,7 +776,7 @@ test("create-pr forwards args in order and preserves gh stdout on success", asyn
     ]);
 
     const bodyPath = path.join(tempDir, "pr-body.md");
-    await writeFile(bodyPath, "Closes #349\n", "utf8");
+    await writeFile(bodyPath, conformantBody("Closes #349"), "utf8");
 
     const result = await runNode([
       "--repo", "owner/repo",
@@ -793,7 +819,7 @@ test("create-pr defaults --assignee @me end-to-end when no assignee flag is give
     ]);
 
     const bodyPath = path.join(tempDir, "pr-body.md");
-    await writeFile(bodyPath, "Closes #894\n", "utf8");
+    await writeFile(bodyPath, conformantBody("Closes #894"), "utf8");
 
     const result = await runNode([
       "--repo", "owner/repo",
@@ -976,7 +1002,7 @@ test("create-pr refuses a closing keyword whose issue already has an open linked
       "--base", "main",
       "--head", "feature",
       "--title", "Add feature",
-      "--body", "Closes #85",
+      "--body", conformantBody("Closes #85"),
     ], { env });
     assert.equal(result.code, 1);
     const stderrPayload = JSON.parse(result.stderr);
@@ -1002,7 +1028,7 @@ test("create-pr --allow-replacement-pr <prior> matching the open linked PR lets 
       "--base", "main",
       "--head", "feature",
       "--title", "Add feature",
-      "--body", "Closes #85",
+      "--body", conformantBody("Closes #85"),
       "--allow-replacement-pr", "90",
     ], { env });
     assert.equal(result.code, 0, result.stderr);
@@ -1029,7 +1055,7 @@ test("create-pr --allow-replacement-pr that does not match the open linked PR is
       "--base", "main",
       "--head", "feature",
       "--title", "Add feature",
-      "--body", "Closes #85",
+      "--body", conformantBody("Closes #85"),
       "--allow-replacement-pr", "99",
     ], { env });
     assert.equal(result.code, 1);
@@ -1051,7 +1077,7 @@ test("create-pr rejects a non-integer --allow-replacement-pr value before invoki
       "--base", "main",
       "--head", "feature",
       "--title", "Add feature",
-      "--body", "Closes #85",
+      "--body", conformantBody("Closes #85"),
       "--allow-replacement-pr", "abc",
     ], { env });
     assert.equal(result.code, 1);
@@ -1073,7 +1099,7 @@ test("create-pr fails closed on ambiguity when the linked-PR probe has no --repo
       "--base", "main",
       "--head", "feature",
       "--title", "Add feature",
-      "--body", "Closes #85",
+      "--body", conformantBody("Closes #85"),
     ], { env });
     assert.equal(result.code, 1);
     const stderrPayload = JSON.parse(result.stderr);
@@ -1098,7 +1124,7 @@ test("create-pr fails closed on ambiguity when --repo is empty/whitespace (#1629
       "--base", "main",
       "--head", "feature",
       "--title", "Add feature",
-      "--body", "Closes #85",
+      "--body", conformantBody("Closes #85"),
     ], { env });
     assert.equal(result.code, 1);
     const stderrPayload = JSON.parse(result.stderr);
@@ -1122,7 +1148,7 @@ test("create-pr refuses a valueless bare --allow-replacement-pr token (#1629)", 
       "--base", "main",
       "--head", "feature",
       "--title", "Add feature",
-      "--body", "Closes #85",
+      "--body", conformantBody("Closes #85"),
       "--allow-replacement-pr",
     ], { env });
     assert.equal(result.code, 1);
@@ -1146,7 +1172,7 @@ test("create-pr fails closed on ambiguity when the GitHub API is unavailable for
       "--base", "main",
       "--head", "feature",
       "--title", "Add feature",
-      "--body", "Closes #85",
+      "--body", conformantBody("Closes #85"),
     ], { env });
     assert.equal(result.code, 1);
     const stderrPayload = JSON.parse(result.stderr);
@@ -1194,7 +1220,7 @@ test("create-pr accepts a correct-match body derived from the --head branch (no 
       "--base", "main",
       "--head", "issue-2110",
       "--title", "Add feature",
-      "--body", "Closes #2110",
+      "--body", conformantBody("Closes #2110"),
     ], { env });
     assert.equal(result.code, 0);
     assert.equal(result.stdout, "https://github.com/owner/repo/pull/1\n");
@@ -1215,7 +1241,7 @@ test("create-pr exempts an issue-less --head branch even when the body carries a
       "--base", "main",
       "--head", "feature/no-issue",
       "--title", "Add feature",
-      "--body", "Closes #85",
+      "--body", conformantBody("Closes #85"),
     ], { env });
     assert.equal(result.code, 0);
   } finally {
@@ -1235,7 +1261,7 @@ test("create-pr --allow-cross-issue waives the branch-derived mismatch for a del
       "--base", "main",
       "--head", "issue-2110",
       "--title", "Add feature",
-      "--body", "Closes #85",
+      "--body", conformantBody("Closes #85"),
       "--allow-cross-issue",
     ], { env });
     assert.equal(result.code, 0);
@@ -1258,7 +1284,7 @@ test("create-pr refuses a space-form --allow-cross-issue value (boolean flag; fa
       "--base", "main",
       "--head", "issue-2110",
       "--title", "Add feature",
-      "--body", "Closes #85",
+      "--body", conformantBody("Closes #85"),
       "--allow-cross-issue", "false",
     ], { env });
     assert.equal(result.code, 1);
@@ -1416,6 +1442,215 @@ test("create-pr skips the LOCAL-COMMENT-DISCIPLINE preflight (only) when --base 
     ], { env, cwd: tempDir });
     assert.equal(result.code, 0, result.stderr);
     assert.equal(result.stdout, "https://github.com/owner/repo/pull/1\n");
+    assert.equal((await readGhCalls(ghLogPath)).length, 1);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// --- tracker-backed PR-body spec contract at CREATE time ---
+
+test("create-pr fails closed at create when a tracker-backed body omits the spec sections, with the same validate-pr-body-spec codes, before invoking gh", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-body-spec-fail-"));
+  try {
+    const { env, counterPath, ghLogPath } = await writeGhStub(tempDir, []);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--base", "main",
+      "--head", "feature",
+      "--title", "Add feature",
+      "--issue", "77",
+      // Tracker-backed (matching closing reference) but missing every
+      // spec-of-record section the ready boundary requires.
+      "--body", "Closes #77",
+    ], { env });
+    assert.equal(result.code, 1);
+    const stderrPayload = JSON.parse(result.stderr);
+    assert.match(stderrPayload.error, /validate-pr-body-spec/);
+    assert.match(stderrPayload.error, /missing_in_scope/);
+    assert.match(stderrPayload.error, /missing_definition_of_done/);
+    assert.match(stderrPayload.error, /missing_explicit_non_goals/);
+    assert.match(stderrPayload.error, /missing_acceptance_criteria/);
+    // Fails closed BEFORE any gh call (not even the linked-PR probe).
+    assert.equal((await readFile(counterPath, "utf8")).trim(), "0");
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr fails closed at create for a keyword-only tracker-backed body (no --issue), same codes, before gh", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-body-spec-keyword-only-"));
+  try {
+    const { env, counterPath, ghLogPath } = await writeGhStub(tempDir, []);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--base", "main",
+      // Issue-less branch so the branch-derived closing-ref guard passes; the
+      // body itself makes the PR tracker-backed via the closing keyword alone.
+      "--head", "feature",
+      "--title", "Add feature",
+      "--body", "Closes #77",
+    ], { env });
+    assert.equal(result.code, 1);
+    const stderrPayload = JSON.parse(result.stderr);
+    assert.match(stderrPayload.error, /validate-pr-body-spec/);
+    assert.match(stderrPayload.error, /missing_in_scope/);
+    assert.match(stderrPayload.error, /missing_acceptance_criteria/);
+    assert.match(stderrPayload.error, /missing_definition_of_done/);
+    assert.match(stderrPayload.error, /missing_explicit_non_goals/);
+    // Fails closed BEFORE any gh call (not even the linked-PR probe).
+    assert.equal((await readFile(counterPath, "utf8")).trim(), "0");
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr fails closed on a non-conformant body passed via the inline --body=<text> form (the = form must not bypass the guard)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-body-spec-inline-form-"));
+  try {
+    const { env, counterPath, ghLogPath } = await writeGhStub(tempDir, []);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--base", "main",
+      "--head", "feature",
+      "--title", "Add feature",
+      // Inline = form: gh honors it, so the body-derived guards must see it too.
+      "--body=Closes #77",
+    ], { env });
+    assert.equal(result.code, 1);
+    const stderrPayload = JSON.parse(result.stderr);
+    assert.match(stderrPayload.error, /validate-pr-body-spec/);
+    assert.match(stderrPayload.error, /missing_in_scope/);
+    // Fails closed BEFORE any gh call.
+    assert.equal((await readFile(counterPath, "utf8")).trim(), "0");
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr fails closed on a non-conformant body passed via the inline --body-file=<path> form", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-body-spec-inline-file-fail-"));
+  try {
+    const bodyPath = path.join(tempDir, "pr-body.md");
+    await writeFile(bodyPath, "Closes #77", "utf8");
+    const { env, counterPath, ghLogPath } = await writeGhStub(tempDir, []);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--base", "main",
+      "--head", "feature",
+      "--title", "Add feature",
+      // Inline = form of --body-file: gh honors it, so the guard must too.
+      `--body-file=${bodyPath}`,
+    ], { env });
+    assert.equal(result.code, 1);
+    const stderrPayload = JSON.parse(result.stderr);
+    assert.match(stderrPayload.error, /validate-pr-body-spec/);
+    assert.match(stderrPayload.error, /missing_in_scope/);
+    assert.equal((await readFile(counterPath, "utf8")).trim(), "0");
+    assert.deepEqual(await readGhCalls(ghLogPath), []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr admits a conformant body passed via the inline --body-file=<path> form", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-body-spec-inline-file-pass-"));
+  try {
+    const bodyPath = path.join(tempDir, "pr-body.md");
+    await writeFile(bodyPath, conformantBody("Closes #77"), "utf8");
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: graphqlNoLinkedPrPayload() },
+      { stdout: "https://github.com/owner/repo/pull/1\n" },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--base", "main",
+      "--head", "feature",
+      "--title", "Add feature",
+      `--body-file=${bodyPath}`,
+    ], { env });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal((await readGhCalls(ghLogPath)).length, 2);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr admits a conformant body passed via the inline --body=<text> form", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-body-spec-inline-pass-"));
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: graphqlNoLinkedPrPayload() },
+      { stdout: "https://github.com/owner/repo/pull/1\n" },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--base", "main",
+      "--head", "feature",
+      "--title", "Add feature",
+      `--body=${conformantBody("Closes #77")}`,
+    ], { env });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal((await readGhCalls(ghLogPath)).length, 2);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr admits a conformant tracker-backed body through create unchanged", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-body-spec-pass-"));
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: graphqlNoLinkedPrPayload() },
+      { stdout: "https://github.com/owner/repo/pull/1\n" },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--base", "main",
+      "--head", "feature",
+      "--title", "Add feature",
+      "--issue", "77",
+      "--body", conformantBody("Closes #77"),
+    ], { env });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout, "https://github.com/owner/repo/pull/1\n");
+    // Passed the spec check, ran the linked-PR probe, then created.
+    assert.equal((await readGhCalls(ghLogPath)).length, 2);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("create-pr never applies the spec check to an issue-less --lightweight PR (no closing reference)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-create-pr-body-spec-lightweight-"));
+  try {
+    const { env, ghLogPath } = await writeGhStub(tempDir, [
+      { stdout: "https://github.com/owner/repo/pull/1\n" },
+    ]);
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--assignee", "@me",
+      "--base", "main",
+      "--head", "feature",
+      "--title", "Add feature",
+      "--lightweight",
+      // Issue-less: no closing reference and none of the tracker spec
+      // sections. The create-time spec check must NOT block it.
+      "--body", "A lightweight PR with no closing reference and no spec sections.",
+    ], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    // No closing keyword -> no linked-PR probe; the create is the only gh call
+    // (the isolated cwd has no configured board, so no enqueue gh call either).
     assert.equal((await readGhCalls(ghLogPath)).length, 1);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
