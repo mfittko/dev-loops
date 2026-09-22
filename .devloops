@@ -166,9 +166,9 @@ localImplementation:
 # (sonnet|opus|haiku|fable); a full model id is rejected at dispatch. The pin is
 # explicit so a session started on another model cannot change the reviewer.
 # The tier sets `claude` to `opus` and `pi` to openai-codex/gpt-5.6-sol — a
-# native OpenAI-Codex child model served by pi's own openai-codex (Codex Responses) provider. The model is
-# never hardcoded in phase prose/tooling — it is resolved via
-# resolveRoleModel(config, { role: "pre-PR-reviewer", harness }).
+# native OpenAI-Codex child model served by pi's own openai-codex (Codex
+# Responses) provider. The model is never hardcoded in phase prose/tooling — it
+# is resolved via resolveRoleModel(config, { role: "pre-PR-reviewer", harness }).
 models:
   tiers:
     pre-pr-strong:
