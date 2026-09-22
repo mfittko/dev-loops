@@ -298,6 +298,15 @@ test("evaluateCopilotConvergence: current-head 🟡 Changes recommended blocks (
   assert.equal(res.disposition, "changes_recommended");
 });
 
+test("evaluateCopilotConvergence: current-head commitId-shaped 🟡 blocks", () => {
+  const res = evaluateCopilotConvergence({
+    currentHeadSha: HEAD,
+    reviews: [{ login: COPILOT, commitId: HEAD, state: "COMMENTED", body: "### 🟡 Changes recommended" }],
+  });
+  assert.equal(res.ok, false);
+  assert.equal(res.disposition, "changes_recommended");
+});
+
 test("evaluateCopilotConvergence: current-head 🔵 Needs a closer look is conductor-overridable (passes)", () => {
   const res = evaluateCopilotConvergence({
     currentHeadSha: HEAD,

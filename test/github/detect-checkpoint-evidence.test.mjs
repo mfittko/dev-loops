@@ -29,6 +29,7 @@ import {
   isGateMachineArtifactBody,
   parseGateReviewCommentMarkerBody,
   parseGateReviewCommentBody,
+  parseReviewThreads,
   summarizeGateReviewCommentMarkers,
   summarizeGateReviewComments,
 } from "../../scripts/_core-helpers.mjs";
@@ -40,6 +41,7 @@ import {
   detectCheckpointEvidence,
   deriveEvidenceState,
   isSizeOutcomeT1Clean,
+  coerceUnresolvedThreadCount,
   EVIDENCE_STATE,
 } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { fetchGithubReviewThreadsPayload } from "../../scripts/github/capture-review-threads.mjs";
@@ -1211,6 +1213,68 @@ test("buildPreMergeGateCheck passes with zero unresolved threads", () => {
   const result = buildPreMergeGateCheck(evidence, 0);
   assert.equal(result.ok, true);
   assert.deepEqual(result.failures, []);
+});
+
+// --- coerceUnresolvedThreadCount (#2310: unknown thread state must fail closed, not read as 0) ---
+
+test("coerceUnresolvedThreadCount returns -1 (unknown, fails closed) for missing/malformed unresolvedThreads", () => {
+  assert.equal(coerceUnresolvedThreadCount(null), -1);
+  assert.equal(coerceUnresolvedThreadCount({}), -1);
+  assert.equal(coerceUnresolvedThreadCount({ summary: {} }), -1);
+  assert.equal(coerceUnresolvedThreadCount({ summary: { unresolvedThreads: undefined } }), -1);
+  assert.equal(coerceUnresolvedThreadCount({ summary: { unresolvedThreads: null } }), -1);
+  assert.equal(coerceUnresolvedThreadCount({ summary: { unresolvedThreads: "3" } }), -1);
+  assert.equal(coerceUnresolvedThreadCount({ summary: { unresolvedThreads: NaN } }), -1);
+  assert.equal(coerceUnresolvedThreadCount({ summary: { unresolvedThreads: -2 } }), -1);
+});
+
+test("coerceUnresolvedThreadCount passes a genuine zero through unchanged (does not fail closed)", () => {
+  assert.equal(coerceUnresolvedThreadCount({ summary: { unresolvedThreads: 0 } }), 0);
+});
+
+test("coerceUnresolvedThreadCount passes a genuine non-zero integer count through unchanged", () => {
+  assert.equal(coerceUnresolvedThreadCount({ summary: { unresolvedThreads: 2 } }), 2);
+});
+
+test("buildPreMergeGateCheck: an unknown thread payload (coerced to -1) fails closed with the fetch-failure message, never a silent pass", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), coerceUnresolvedThreadCount({ summary: {} }));
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("could not fetch review thread state")),
+    "expected fetch-failure message in " + JSON.stringify(result.failures)
+  );
+});
+
+test("buildPreMergeGateCheck: a genuine zero unresolvedThreads (coerced to 0) passes the thread gate", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), coerceUnresolvedThreadCount({ summary: { unresolvedThreads: 0 } }));
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.failures, []);
+});
+
+// Raw-boundary integration (#2310 reviewer follow-up): proves the fail-closed
+// contract end to end against the REAL parseReviewThreads boundary, not just
+// against hand-built parsed shapes. A malformed live payload must throw at
+// parseReviewThreads (so main()'s catch records -1, never a silent 0); a
+// well-formed but EMPTY live payload must parse to a genuine 0 and pass.
+test("raw-boundary: malformed live review-thread payload fails closed end-to-end; a well-formed empty payload is a genuine zero that passes", () => {
+  assert.throws(() => parseReviewThreads({ unexpected: "shape" }), /Could not find review threads/);
+  assert.throws(() => parseReviewThreads(42), /Could not find review threads/);
+
+  assert.equal(coerceUnresolvedThreadCount({ summary: { totalThreads: 0 } }), -1);
+
+  const unknown = buildPreMergeGateCheck(cleanEvidence(), -1);
+  assert.equal(unknown.ok, false);
+  assert.ok(
+    unknown.failures.some((f) => /could not fetch review thread state/.test(f)),
+    JSON.stringify(unknown.failures),
+  );
+
+  const wellFormedEmpty = buildPreMergeGateCheck(
+    cleanEvidence(),
+    coerceUnresolvedThreadCount(parseReviewThreads({ reviewThreads: { nodes: [] } })),
+  );
+  assert.equal(wellFormedEmpty.ok, true);
+  assert.deepEqual(wellFormedEmpty.failures, []);
 });
 
 function cleanEvidence() {
