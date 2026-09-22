@@ -233,7 +233,7 @@ async function queueIfEligible(
 
 
 /**
- * Best-effort main-checkout fast-forward (#1596).
+ * Best-effort main-checkout fast-forward.
  *
  * Resolves the main (primary) checkout via `git worktree list` (first entry) from
  * `pendingRoot`, then runs `syncMainCheckout`'s step-wise flow there: fetch,
@@ -242,7 +242,7 @@ async function queueIfEligible(
  * rewriting history, so a diverged checkout fails the merge step and the caller
  * treats it as warn-and-continue. When `git worktree list` fails, is killed, or its
  * output doesn't parse, `mainCheckout` falls back to `pendingRoot` and the sync
- * still runs there (unchanged from before #2363's `not_on_main` diagnostic). A
+ * still runs there (unchanged from before the `not_on_main` diagnostic split). A
  * resolved checkout that is detached or on another branch emits the
  * `main_checkout_not_on_main` diagnostic at error level; the same outcome against
  * an UNRESOLVED (fallback) checkout stays warning-only instead, since `pendingRoot`
