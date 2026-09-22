@@ -1,0 +1,3 @@
+### Added
+
+- **Pi session token audit skill, offline transcript parser, and Claude skill exclusion (`dev-loops loop audit-session`).** Added `skills/pi-session-audit/SKILL.md` backed by `scripts/loop/audit-pi-session.mjs` and `scripts/lib/audit-pi-session.mjs` to measure token efficiency, detect context snowballing, and break down token consumption across models and roles from Pi session transcripts. Added skill exclusion support in `@dev-loops/core/claude/asset-generation` (`isSkillExcludedFromClaude`) honoring `claude-sync: false`, `pi-only: true`, and `harness: pi` so Pi-specific skills are not mirrored to `.claude/skills/`.
