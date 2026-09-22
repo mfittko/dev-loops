@@ -7462,6 +7462,65 @@ test("#1808: --gate review on a CLEAN ledger renders with no blocking-severity l
   }, { prefix: "dev-loops-upsert-review-gate-clean-" });
 });
 
+// Review-only regression guard: the review gate's hardcoded activeGateConfig
+// carried no inlineSeverityFloor, so isBelowInlineFloor failed open and every
+// locatable finding posted inline. The fold tests above all run on
+// draft_gate, so they keep passing even if this review-only branch loses the
+// floor again — this case pins it: locatable low/nit findings fold into the
+// verdict body's collapsed <details> block and produce ZERO inline comments.
+// Claims-matching (order-independent) keeps the unused PR-files fixture
+// available: with the floor present the all-folded round skips that fetch (the
+// belt-and-suspenders assertion below), and with the floor regressed the fetch
+// simply succeeds and the folded/inline assertions are the ones that fail.
+test("#2263: --gate review --findings-ledger folds locatable low/nit findings at the default floor — ZERO inline comments, folded === 2", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeReviewGateLedger(tempDir, [LOCATABLE_LOW_FINDING, LOCATABLE_NIT_FINDING], { overallVerdict: "findings_present" });
+    const entries = [
+      ...reviewGateFindingSurfaceEntries(),
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        stdout: '{"id":903,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-903"}\n',
+      },
+    ];
+    for (const entry of entries) entry.matchByClaims = true;
+    const { runChild, calls } = makeGhMock(entries);
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "review",
+      headSha: SINGLE_SURFACE_HEAD,
+      nextAction: "none — informational review, no re-gate required",
+      findingsLedger: ledgerPath,
+      executionMode: "fanout_fanin",
+    }, { env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", runChild, repoRoot: tempDir });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.action, "created");
+    assert.equal(result.inlineComments, 0);
+    assert.equal(result.bodyFiled, 0);
+    assert.equal(result.folded, 2);
+    // No draft_gate-shaped blocking-severity gating leaks onto review either.
+    assert.deepEqual(result.blockCleanOnFindingSeverities, []);
+    // An all-folded round needs no locatability decision, so the PR-files diff
+    // round-trip is skipped entirely.
+    assert.ok(!calls.some((c) => c.args.includes("repos/owner/repo/pulls/17/files?per_page=100")));
+
+    const postCall = calls.find((c) => c.args.includes("repos/owner/repo/pulls/17/reviews") && c.args.includes("POST"));
+    const posted = JSON.parse(postCall.stdinText);
+    // Neither folded finding reaches createGateReview's `comments` array at all.
+    assert.equal(posted.comments.length, 0);
+    assert.doesNotMatch(JSON.stringify(posted.comments), /inconsistent casing of a local constant|trailing whitespace/);
+
+    // Both fold into the verdict body's collapsed <details> block instead.
+    assert.match(posted.body, /<details>/);
+    assert.match(posted.body, /<summary>Suppressed low\/nit findings \(2\) — below the inline severity floor<\/summary>/);
+    assert.match(posted.body, /`src\/db\.mjs:2` \*\*low\*\* \(`naming`\): inconsistent casing of a local constant/);
+    assert.match(posted.body, /\*\*nit\*\* \(`style`\): trailing whitespace/);
+    assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=low angle=naming round=1 disposition=deferred -->$/m);
+    assert.match(posted.body, /^<!-- dev-loops:finding [0-9a-f]{16} severity=nit angle=style round=1 disposition=deferred -->$/m);
+  }, { prefix: "dev-loops-upsert-review-gate-fold-" });
+});
+
 // ---------------------------------------------------------------------------
 // #1840 — `--submit <pending|comment|request-changes|approve>` on --gate
 // review only: the create path's GitHub `event`, the review-gate-only
