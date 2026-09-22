@@ -4,6 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 
+import { loadDevLoopConfig, resolveRoleModel } from "@dev-loops/core/config";
+
 import { assertRulePresent, assertRuleOwned } from "./_rule-helpers.mjs";
 
 // Behavioral/contract pins for the pre-PR review phase (issue #2305): a
@@ -90,7 +92,7 @@ test("each pre-PR rule states its invariant with RFC-2119 modality and the right
   }
 });
 
-test("no concrete model token is hardcoded in the phase prose or SKILL step (config-resolved only)", () => {
+test("no concrete model token is hardcoded in the phase prose or SKILL step (config-resolved only)", async () => {
   // The concrete model is a per-repo .devloops opt-in resolved via
   // resolveRoleModel; it must never be baked into the harness-agnostic phase
   // contract or its lifecycle wiring. The contract MAY name the accepted-token
@@ -98,17 +100,38 @@ test("no concrete model token is hardcoded in the phase prose or SKILL step (con
   // so scan every OTHER paragraph for a stray model literal.
   const bareModel = /\b(fable|opus|sonnet|haiku)\b/i;
   const fullId = /claude-[a-z0-9]+-\d/i;
-  // The Claude-family patterns above cannot see a provider-qualified id such as
-  // `openai-codex/gpt-5.6-sol`, so a hardcoded provider/model literal would slip
-  // through. Scan for that shape on the same surfaces.
-  const providerQualifiedModel = /\b[a-z0-9-]+\/[a-z0-9][a-z0-9.-]*\d/i;
+
+  // A harness opt-in may resolve to a provider-qualified model id
+  // (`provider/model`). Assert against the model ids THIS repo actually resolves
+  // rather than a guessed id shape: a shape pattern cannot tell a model id from
+  // an ordinary `dir/name-with-digit` path reference, so it would both over-match
+  // real prose and miss a future id that does not fit the guess.
+  const { config, errors } = await loadDevLoopConfig({ repoRoot: process.cwd() });
+  assert.deepEqual(errors, [], `config load errors: ${JSON.stringify(errors)}`);
+  const resolvedModels = ["claude", "pi"]
+    .map((harness) => resolveRoleModel(config, { role: "pre-PR-reviewer", harness }))
+    .filter((model) => typeof model === "string" && model.length > 0);
+  assert.ok(
+    resolvedModels.length > 0,
+    "this repo must resolve at least one pre-PR reviewer model for this guard to be meaningful",
+  );
+  const namesResolvedModel = (text) => resolvedModels.some((model) => text.includes(model));
+
+  // Positive control: the predicate must DETECT a hardcoded resolved model id, so
+  // a future edit that neuters it cannot pass this pin silently.
+  for (const model of resolvedModels) {
+    assert.ok(
+      namesResolvedModel(`the pre-PR phase runs on ${model}`),
+      `predicate must detect the resolved model id ${model}`,
+    );
+  }
 
   const contract = readRepo(CONTRACT);
   const modelPara = ruleParagraph(contract, "PRE-PR-MODEL-CONFIG-RESOLVED");
   const contractRest = contract.replace(modelPara, "");
   assert.ok(!bareModel.test(contractRest), "contract must not name a concrete model outside the model-resolution rule");
   assert.ok(!fullId.test(contractRest), "contract must not embed a full model id outside the model-resolution rule");
-  assert.ok(!providerQualifiedModel.test(contractRest), "contract must not name a provider-qualified model id outside the model-resolution rule");
+  assert.ok(!namesResolvedModel(contractRest), "contract must not name a resolved harness model id outside the model-resolution rule");
 
   // The SKILL's pre-PR step must not name any concrete model at all.
   const skill = readRepo(SKILL);
@@ -117,5 +140,5 @@ test("no concrete model token is hardcoded in the phase prose or SKILL step (con
   const step = skill.slice(stepStart, stepEnd === -1 ? undefined : stepEnd);
   assert.ok(!bareModel.test(step), "SKILL pre-PR step must not name a concrete model");
   assert.ok(!fullId.test(step), "SKILL pre-PR step must not embed a full model id");
-  assert.ok(!providerQualifiedModel.test(step), "SKILL pre-PR step must not name a provider-qualified model id");
+  assert.ok(!namesResolvedModel(step), "SKILL pre-PR step must not name a resolved harness model id");
 });
