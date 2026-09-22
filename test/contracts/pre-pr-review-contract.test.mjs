@@ -106,8 +106,15 @@ test("no concrete model token is hardcoded in the phase prose or SKILL step (con
   // rather than a guessed id shape: a shape pattern cannot tell a model id from
   // an ordinary `dir/name-with-digit` path reference, so it would both over-match
   // real prose and miss a future id that does not fit the guess.
-  const { config, errors } = await loadDevLoopConfig({ repoRoot: process.cwd() });
+  const { config, errors } = await loadDevLoopConfig({ repoRoot });
   assert.deepEqual(errors, [], `config load errors: ${JSON.stringify(errors)}`);
+  // Non-vacuity: the token set must come from THIS repo's opt-in, not the
+  // built-in fallback (`pre-PR-reviewer` -> high -> `opus`/null), which would
+  // satisfy the floor below while leaving the opted-in Pi token unguarded.
+  assert.ok(
+    config?.models?.tiers?.["pre-pr-strong"]?.pi,
+    "the guard must resolve this repo's .devloops opt-in, not a built-in fallback",
+  );
   const resolvedModels = ["claude", "pi"]
     .map((harness) => resolveRoleModel(config, { role: "pre-PR-reviewer", harness }))
     .filter((model) => typeof model === "string" && model.length > 0);
@@ -115,7 +122,10 @@ test("no concrete model token is hardcoded in the phase prose or SKILL step (con
     resolvedModels.length > 0,
     "this repo must resolve at least one pre-PR reviewer model for this guard to be meaningful",
   );
-  const namesResolvedModel = (text) => resolvedModels.some((model) => text.includes(model));
+  const namesResolvedModel = (text) => {
+    const haystack = text.toLowerCase();
+    return resolvedModels.some((model) => haystack.includes(model.toLowerCase()));
+  };
 
   // Positive control: the predicate must DETECT a hardcoded resolved model id, so
   // a future edit that neuters it cannot pass this pin silently.
@@ -129,6 +139,16 @@ test("no concrete model token is hardcoded in the phase prose or SKILL step (con
   const contract = readRepo(CONTRACT);
   const modelPara = ruleParagraph(contract, "PRE-PR-MODEL-CONFIG-RESOLVED");
   const contractRest = contract.replace(modelPara, "");
+  // The model-resolution paragraph may document the Claude token enum, so it is
+  // excluded from the bare-token scan above. Any resolved token OUTSIDE that
+  // enum is a hardcode, not documentation, and must not appear there.
+  for (const model of resolvedModels.filter((m) => !/^(sonnet|opus|haiku|fable)$/i.test(m))) {
+    assert.ok(
+      !modelPara.toLowerCase().includes(model.toLowerCase()),
+      `model-resolution rule must not name the resolved non-Claude model id ${model}`,
+    );
+  }
+  assert.ok(contractRest.length > 0, "the contract scan surface must be non-empty");
   assert.ok(!bareModel.test(contractRest), "contract must not name a concrete model outside the model-resolution rule");
   assert.ok(!fullId.test(contractRest), "contract must not embed a full model id outside the model-resolution rule");
   assert.ok(!namesResolvedModel(contractRest), "contract must not name a resolved harness model id outside the model-resolution rule");
@@ -138,6 +158,7 @@ test("no concrete model token is hardcoded in the phase prose or SKILL step (con
   const stepStart = skill.indexOf("<!-- rule: LOCAL-PRE-PR-REVIEW-BEFORE-PUSH -->");
   const stepEnd = skill.indexOf("\n12.", stepStart);
   const step = skill.slice(stepStart, stepEnd === -1 ? undefined : stepEnd);
+  assert.ok(step.length > 0, "the SKILL pre-PR step scan surface must be non-empty");
   assert.ok(!bareModel.test(step), "SKILL pre-PR step must not name a concrete model");
   assert.ok(!fullId.test(step), "SKILL pre-PR step must not embed a full model id");
   assert.ok(!namesResolvedModel(step), "SKILL pre-PR step must not name a resolved harness model id");
