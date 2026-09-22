@@ -143,5 +143,10 @@ if (typeof command === "string" && isMergeCapableCommand(command)) {
   }
 }
 
-// Still non-fatal regardless of what ran above: always exit 0.
-process.exit(0);
+// Still non-fatal regardless of what ran above: always exit 0. `exitCode` (not
+// `process.exit(0)`) lets Node drain the stdout pipe before exiting — every call
+// above is synchronous (execFileSync/execSync/readFileSync), so no open handle
+// keeps the process alive once the module body finishes; `process.exit(0)` here
+// could terminate the process while the systemMessage write on line 81 is still
+// buffered in the stdout pipe on some platforms.
+process.exitCode = 0;
