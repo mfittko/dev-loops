@@ -2,11 +2,13 @@
 
 ## Status
 
-Proposed — 2026-09-21 ([issue 2342](https://github.com/mfittko/dev-loops/issues/2342))
+Accepted — 2026-09-23 ([PR 2344](https://github.com/mfittko/dev-loops/pull/2344))
 
 Amends [ADR 0074](./0074-deterministic-reconciliation-owns-mechanical-transitions.md). ADR 0074's authority model and deterministic lifecycle-policy decision remain accepted. This record narrows the execution claim: under the current Pi and Claude harnesses, dev-loops does not own native subagent process I/O.
 
 ## Context
+
+Source: [issue 2342](https://github.com/mfittko/dev-loops/issues/2342).
 
 ADR 0074 correctly moved mechanical lifecycle **policy** out of a long-lived model transcript and into deterministic reconciliation. During implementation planning, #2278/#2279 sharpened that into a proposed “deterministic driver” that would prepare fan-out, spawn reviewers, await them, capture their results, fan-in, invoke a judge, and return only a compact packet to the outer coordinator.
 
