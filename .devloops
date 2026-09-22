@@ -163,15 +163,16 @@ localImplementation:
 # (underlying model identity claude-fable-5-1) on the Claude-Code harness. The
 # value here is the Claude-harness model token `fable` — the only Fable token
 # the Claude Code Agent-tool `model` enum accepts (sonnet|opus|haiku|fable);
-# the full id claude-fable-5-1 is rejected at dispatch. Fable is Claude-only, so
-# the tier sets only `claude`; the Pi harness has no entry here and resolves to
-# null (inherit/default), keeping the phase harness-agnostic. The model is never
-# hardcoded in phase prose/tooling — it is resolved via
+# the full id claude-fable-5-1 is rejected at dispatch. The tier sets `claude` to
+# `fable` and `pi` to openai-codex/gpt-5.6-sol — the native OpenAI-Codex child
+# model, dispatched through the Codex CLI runner. The model is never hardcoded in
+# phase prose/tooling — it is resolved via
 # resolveRoleModel(config, { role: "pre-PR-reviewer", harness }).
 models:
   tiers:
     pre-pr-strong:
       claude: fable
+      pi: openai-codex/gpt-5.6-sol
   roleTiers:
     pre-PR-reviewer: pre-pr-strong
 
