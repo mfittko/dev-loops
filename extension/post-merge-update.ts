@@ -18,13 +18,13 @@ import {
 } from '@dev-loops/core/loop/bash-command-classify';
 import { parseMainWorktreePath } from '@dev-loops/core/loop/worktree-guard';
 import {
-  buildMainCheckoutFastForwardCommand,
   buildWorktreeCleanupCommand,
   buildPostMergeActionsCommand,
   WORKTREE_CLEANUP_TIMEOUT_MS,
   MAIN_CHECKOUT_FF_FETCH_TIMEOUT_MS,
   MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS,
   POST_MERGE_ACTIONS_TIMEOUT_MS,
+  syncMainCheckout,
 } from '@dev-loops/core/loop/main-checkout-ff';
 
 // The bash-command classifiers now live in `@dev-loops/core/loop/bash-command-classify` so the
@@ -261,28 +261,37 @@ async function fastForwardMainCheckout(
     // fall back to pendingRoot
   }
 
-  notify(
-    ctx,
-    `Post-merge main-checkout fast-forward running: ${buildMainCheckoutFastForwardCommand(mainCheckout)}`,
-    'info',
-  );
+  notify(ctx, `Post-merge main-checkout fast-forward running for ${mainCheckout}`, 'info');
 
-  try {
+  const run = async (fwCommand: string): Promise<{ ok: boolean; stdout: string; reason: string }> => {
     const result = await runCommand({
-      command: buildMainCheckoutFastForwardCommand(mainCheckout),
+      command: fwCommand,
       cwd: mainCheckout,
       timeout: MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS,
     });
-    if (result.code === 0 && !result.killed) {
+    const ok = result.code === 0 && !result.killed;
+    return { ok, stdout: result.stdout ?? '', reason: ok ? '' : buildFailureSummary(result) };
+  };
+
+  try {
+    const syncResult = await syncMainCheckout(mainCheckout, run);
+    if (syncResult.status === 'fast_forwarded') {
       notify(
         ctx,
         'Post-merge main-checkout fast-forward completed: local main advanced to origin/main',
         'info',
       );
+    } else if (syncResult.status === 'not_on_main') {
+      const message = syncResult.diagnostic.message;
+      if (ctx.hasUI) {
+        ctx.ui.notify(message, 'error');
+      } else {
+        process.stderr.write(message + '\n');
+      }
     } else {
       notify(
         ctx,
-        `Post-merge main-checkout fast-forward skipped (warning only): ${buildFailureSummary(result)}`,
+        `Post-merge main-checkout fast-forward skipped (warning only): ${syncResult.reason}`,
         'warning',
       );
     }

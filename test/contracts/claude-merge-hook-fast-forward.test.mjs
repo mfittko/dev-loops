@@ -62,6 +62,7 @@ test("post-tool-use-merge hook fast-forwards the main checkout's local main to o
     assert.notEqual(afterSha, beforeSha, "local main actually moved");
 
     assert.match(res.stderr, /fast-forwarded/, "hook must emit a fast-forwarded stderr note");
+    assert.equal(res.stdout.trim(), "", "an on-main fast-forward must not emit a systemMessage");
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
@@ -85,6 +86,7 @@ test("post-tool-use-merge hook skips with a note when the main checkout cannot b
 
     assert.equal(res.status, 0, `hook must exit 0 (got ${res.status}, stderr: ${res.stderr})`);
     assert.match(res.stderr, /could not resolve main checkout/, "hook must note it could not resolve the main checkout");
+    assert.equal(res.stdout.trim(), "", "an unresolved main checkout must not emit a systemMessage");
   } finally {
     await rm(nonGit, { recursive: true, force: true });
   }
@@ -128,6 +130,7 @@ test("post-tool-use-merge hook warns and exits 0 when fast-forward is non-fast-f
 
     assert.equal(res.status, 0, `hook must exit 0 (got ${res.status}, stderr: ${res.stderr})`);
     assert.match(res.stderr, /skipped \(best-effort\)/, "hook must warn and skip on a diverged main");
+    assert.equal(res.stdout.trim(), "", "a diverged main (on main) must not emit a systemMessage");
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
@@ -262,6 +265,192 @@ test("post-tool-use-merge hook is a silent no-op for postMerge.actions when the 
 
     assert.equal(res.status, 0, `hook must exit 0 (got ${res.status}, stderr: ${res.stderr})`);
     assert.doesNotMatch(res.stderr, /post-merge actions/, "a checkout without the runner script must produce zero new log lines");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+// --- main_checkout_not_on_main: detached/other-branch action-required signal ---
+
+function symbolicRefIsDetached(cwd) {
+  const res = spawnSync("git", ["symbolic-ref", "-q", "HEAD"], { cwd, encoding: "utf8" });
+  return res.status !== 0;
+}
+
+test("post-tool-use-merge hook emits a main_checkout_not_on_main systemMessage for a detached, behind/divergent checkout", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ff-hook-detached-"));
+  const originDir = path.join(tmp, "origin");
+  const mainDir = path.join(tmp, "main");
+
+  try {
+    git(tmp, ["init", "-q", originDir]);
+    git(originDir, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(originDir, ["config", "user.email", "test@example.com"]);
+    git(originDir, ["config", "user.name", "Test"]);
+    git(originDir, ["config", "commit.gpgsign", "false"]);
+    git(originDir, ["commit", "--allow-empty", "-q", "-m", "A"]);
+
+    git(tmp, ["clone", "-q", originDir, mainDir]);
+    git(mainDir, ["config", "user.email", "test@example.com"]);
+    git(mainDir, ["config", "user.name", "Test"]);
+    git(mainDir, ["config", "commit.gpgsign", "false"]);
+
+    // Detach mainDir HEAD and add one local-only commit (never pushed).
+    git(mainDir, ["checkout", "-q", "--detach", "HEAD"]);
+    git(mainDir, ["commit", "--allow-empty", "-q", "-m", "local-only"]);
+    const beforeSha = revParse(mainDir, "HEAD");
+    const beforeShortSha = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: mainDir, encoding: "utf8" }).trim();
+    assert.equal(symbolicRefIsDetached(mainDir), true, "test setup must start detached");
+
+    // Origin advances by three commits the local checkout never saw.
+    git(originDir, ["commit", "--allow-empty", "-q", "-m", "B"]);
+    git(originDir, ["commit", "--allow-empty", "-q", "-m", "C"]);
+    git(originDir, ["commit", "--allow-empty", "-q", "-m", "D"]);
+
+    const res = spawnSync("node", [hookScript], {
+      input: JSON.stringify({
+        tool_name: "Bash",
+        tool_input: { command: "gh pr merge 42 --squash --delete-branch" },
+        cwd: mainDir,
+      }),
+      encoding: "utf8",
+      env: { ...process.env },
+      cwd: mainDir,
+    });
+
+    assert.equal(res.status, 0, `hook must exit 0 (got ${res.status}, stderr: ${res.stderr})`);
+    assert.doesNotMatch(res.stderr, /skipped \(best-effort\)/, "the detached case must not also emit the generic warning");
+
+    let parsed;
+    assert.doesNotThrow(() => {
+      parsed = JSON.parse(res.stdout.trim());
+    }, `stdout must be valid JSON, got: ${res.stdout}`);
+    assert.equal(typeof parsed.systemMessage, "string");
+    assert.ok(parsed.systemMessage.length > 0);
+    assert.ok(parsed.systemMessage.includes("main_checkout_not_on_main"), parsed.systemMessage);
+    assert.ok(parsed.systemMessage.includes(mainDir), parsed.systemMessage);
+    assert.ok(parsed.systemMessage.includes(`detached@${beforeShortSha}`), parsed.systemMessage);
+    assert.ok(parsed.systemMessage.includes("3"), parsed.systemMessage);
+
+    const afterSha = revParse(mainDir, "HEAD");
+    assert.equal(afterSha, beforeSha, "HEAD sha must be unchanged");
+    assert.equal(symbolicRefIsDetached(mainDir), true, "checkout must remain detached (never switched/checked out)");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("post-tool-use-merge hook emits a main_checkout_not_on_main systemMessage for another branch at a zero behind count", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ff-hook-other-branch-"));
+  const originDir = path.join(tmp, "origin");
+  const mainDir = path.join(tmp, "main");
+
+  try {
+    git(tmp, ["init", "-q", originDir]);
+    git(originDir, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(originDir, ["config", "user.email", "test@example.com"]);
+    git(originDir, ["config", "user.name", "Test"]);
+    git(originDir, ["config", "commit.gpgsign", "false"]);
+    git(originDir, ["commit", "--allow-empty", "-q", "-m", "A"]);
+
+    git(tmp, ["clone", "-q", originDir, mainDir]);
+    git(mainDir, ["checkout", "-q", "-b", "feature-x"]);
+    const beforeSha = revParse(mainDir, "HEAD");
+    const beforeBranch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: mainDir, encoding: "utf8" }).trim();
+    assert.equal(beforeBranch, "feature-x");
+
+    const res = spawnSync("node", [hookScript], {
+      input: JSON.stringify({
+        tool_name: "Bash",
+        tool_input: { command: "gh pr merge 42 --squash --delete-branch" },
+        cwd: mainDir,
+      }),
+      encoding: "utf8",
+      env: { ...process.env },
+      cwd: mainDir,
+    });
+
+    assert.equal(res.status, 0, `hook must exit 0 (got ${res.status}, stderr: ${res.stderr})`);
+    assert.doesNotMatch(res.stderr, /skipped \(best-effort\)/, "the other-branch case must not also emit the generic warning");
+
+    const parsed = JSON.parse(res.stdout.trim());
+    assert.ok(parsed.systemMessage.includes("feature-x"), parsed.systemMessage);
+    assert.ok(parsed.systemMessage.includes("0"), parsed.systemMessage);
+
+    const afterSha = revParse(mainDir, "HEAD");
+    const afterBranch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: mainDir, encoding: "utf8" }).trim();
+    assert.equal(afterSha, beforeSha, "HEAD sha must be unchanged");
+    assert.equal(afterBranch, "feature-x", "checked-out branch must be unchanged");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("post-tool-use-merge hook stays silent (no systemMessage) for a non-merge command", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ff-hook-nonmerge-"));
+  const originDir = path.join(tmp, "origin");
+  const mainDir = path.join(tmp, "main");
+
+  try {
+    git(tmp, ["init", "-q", originDir]);
+    git(originDir, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(originDir, ["config", "user.email", "test@example.com"]);
+    git(originDir, ["config", "user.name", "Test"]);
+    git(originDir, ["config", "commit.gpgsign", "false"]);
+    git(originDir, ["commit", "--allow-empty", "-q", "-m", "A"]);
+    git(tmp, ["clone", "-q", originDir, mainDir]);
+    git(mainDir, ["checkout", "-q", "--detach", "HEAD"]);
+
+    const res = spawnSync("node", [hookScript], {
+      input: JSON.stringify({
+        tool_name: "Bash",
+        tool_input: { command: "git status" },
+        cwd: mainDir,
+      }),
+      encoding: "utf8",
+      env: { ...process.env },
+      cwd: mainDir,
+    });
+
+    assert.equal(res.status, 0, `hook must exit 0 (got ${res.status}, stderr: ${res.stderr})`);
+    assert.equal(res.stdout.trim(), "", "a non-merge command must never trigger the sync flow or a systemMessage");
+    assert.equal(res.stderr.trim(), "", "a non-merge command must never emit a post-merge stderr note");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("post-tool-use-merge hook keeps the generic warning (no systemMessage) when fetch fails", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ff-hook-fetch-fail-"));
+  const originDir = path.join(tmp, "origin");
+  const mainDir = path.join(tmp, "main");
+
+  try {
+    git(tmp, ["init", "-q", originDir]);
+    git(originDir, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(originDir, ["config", "user.email", "test@example.com"]);
+    git(originDir, ["config", "user.name", "Test"]);
+    git(originDir, ["config", "commit.gpgsign", "false"]);
+    git(originDir, ["commit", "--allow-empty", "-q", "-m", "A"]);
+    git(tmp, ["clone", "-q", originDir, mainDir]);
+
+    // Point origin at a path that no longer exists so `fetch origin main` fails.
+    git(mainDir, ["remote", "set-url", "origin", path.join(tmp, "does-not-exist")]);
+
+    const res = spawnSync("node", [hookScript], {
+      input: JSON.stringify({
+        tool_name: "Bash",
+        tool_input: { command: "gh pr merge 42 --squash --delete-branch" },
+        cwd: mainDir,
+      }),
+      encoding: "utf8",
+      env: { ...process.env },
+      cwd: mainDir,
+    });
+
+    assert.equal(res.status, 0, `hook must exit 0 (got ${res.status}, stderr: ${res.stderr})`);
+    assert.match(res.stderr, /skipped \(best-effort\)/, "a fetch failure must keep the generic warning path");
+    assert.equal(res.stdout.trim(), "", "a fetch failure must never emit a systemMessage");
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }

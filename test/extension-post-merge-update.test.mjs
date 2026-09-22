@@ -15,7 +15,29 @@ import {
   extractRepoFlagFromGhPrReady,
   normalizeGitHubRepoSlug,
 } from "../extension/post-merge-update.ts";
-import { buildMainCheckoutFastForwardCommand, buildWorktreeCleanupCommand, buildPostMergeActionsCommand } from "../packages/core/src/loop/main-checkout-ff.mjs";
+import { buildWorktreeCleanupCommand, buildPostMergeActionsCommand } from "../packages/core/src/loop/main-checkout-ff.mjs";
+
+// Mirrors the private `shellQuotePath` in packages/core/src/loop/main-checkout-ff.mjs so
+// these tests can assert the exact step commands `syncMainCheckout` submits, without
+// re-exporting an internal quoting helper from the shared module.
+function quotePath(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
+function fetchCommand(mainCheckout) {
+  return `git -C ${quotePath(mainCheckout)} fetch origin main`;
+}
+function revParseAbbrevRefCommand(mainCheckout) {
+  return `git -C ${quotePath(mainCheckout)} rev-parse --abbrev-ref HEAD`;
+}
+function mergeFfOnlyCommand(mainCheckout) {
+  return `git -C ${quotePath(mainCheckout)} merge --ff-only origin/main`;
+}
+function revParseShortHeadCommand(mainCheckout) {
+  return `git -C ${quotePath(mainCheckout)} rev-parse --short HEAD`;
+}
+function revListBehindCountCommand(mainCheckout) {
+  return `git -C ${quotePath(mainCheckout)} rev-list --count HEAD..origin/main`;
+}
 
 function createUiCalls() {
   const notifications = [];
@@ -82,6 +104,9 @@ test("successful bash-tool gh pr merge queues and flushes one post-merge update 
     resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
     runCommand: async ({ command, cwd }) => {
       calls.push({ command, cwd });
+      if (command === revParseAbbrevRefCommand("/repo")) {
+        return { code: 0, stdout: "main\n", stderr: "", killed: false };
+      }
       return { code: 0, stdout: "updated", stderr: "", killed: false };
     },
   });
@@ -99,7 +124,9 @@ test("successful bash-tool gh pr merge queues and flushes one post-merge update 
   assert.deepEqual(calls, [
     { command: POST_MERGE_UPDATE_COMMAND, cwd: "/repo" },
     { command: "git worktree list", cwd: "/repo" },
-    { command: buildMainCheckoutFastForwardCommand("/repo"), cwd: "/repo" },
+    { command: fetchCommand("/repo"), cwd: "/repo" },
+    { command: revParseAbbrevRefCommand("/repo"), cwd: "/repo" },
+    { command: mergeFfOnlyCommand("/repo"), cwd: "/repo" },
     { command: "git worktree list", cwd: "/repo" },
     { command: buildWorktreeCleanupCommand("/repo", 373), cwd: "/repo" },
     { command: "git worktree list", cwd: "/repo" },
@@ -108,7 +135,7 @@ test("successful bash-tool gh pr merge queues and flushes one post-merge update 
   assert.deepEqual(notifications, [
     { message: `Post-merge update running: ${POST_MERGE_UPDATE_COMMAND}`, level: "info" },
     { message: `Post-merge update completed: ${POST_MERGE_UPDATE_COMMAND}`, level: "info" },
-    { message: `Post-merge main-checkout fast-forward running: ${buildMainCheckoutFastForwardCommand("/repo")}`, level: "info" },
+    { message: "Post-merge main-checkout fast-forward running for /repo", level: "info" },
     { message: "Post-merge main-checkout fast-forward completed: local main advanced to origin/main", level: "info" },
     { message: "Post-merge worktree cleanup running for PR #373", level: "info" },
     { message: "Post-merge actions: updated", level: "info" },
@@ -116,7 +143,7 @@ test("successful bash-tool gh pr merge queues and flushes one post-merge update 
   assert.equal(hook.getState().pendingPostMergeUpdate, false);
 
   await hook.onAgentEnd({ type: "agent_end", messages: [] }, ctx);
-  assert.equal(calls.length, 7);
+  assert.equal(calls.length, 9);
 });
 
 test("successful user_bash git merge queues and flushes one update", async () => {
@@ -127,6 +154,9 @@ test("successful user_bash git merge queues and flushes one update", async () =>
       calls.push({ command, cwd });
       if (command === "git merge origin/main") {
         return { code: 0, stdout: "Already up to date.", stderr: "", killed: false };
+      }
+      if (command === revParseAbbrevRefCommand("/repo")) {
+        return { code: 0, stdout: "main\n", stderr: "", killed: false };
       }
       return { code: 0, stdout: "updated", stderr: "", killed: false };
     },
@@ -149,7 +179,9 @@ test("successful user_bash git merge queues and flushes one update", async () =>
     { command: "git merge origin/main", cwd: "/repo" },
     { command: POST_MERGE_UPDATE_COMMAND, cwd: "/repo" },
     { command: "git worktree list", cwd: "/repo" },
-    { command: buildMainCheckoutFastForwardCommand("/repo"), cwd: "/repo" },
+    { command: fetchCommand("/repo"), cwd: "/repo" },
+    { command: revParseAbbrevRefCommand("/repo"), cwd: "/repo" },
+    { command: mergeFfOnlyCommand("/repo"), cwd: "/repo" },
     { command: "git worktree list", cwd: "/repo" },
     { command: buildPostMergeActionsCommand("/repo", undefined), cwd: "/repo" },
   ]);
@@ -323,6 +355,9 @@ test("multiple merge signals in one turn still run only one update", async () =>
     resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
     runCommand: async ({ command, cwd }) => {
       calls.push({ command, cwd });
+      if (command === revParseAbbrevRefCommand("/repo")) {
+        return { code: 0, stdout: "main\n", stderr: "", killed: false };
+      }
       return { code: 0, stdout: "ok", stderr: "", killed: false };
     },
   });
@@ -336,7 +371,9 @@ test("multiple merge signals in one turn still run only one update", async () =>
   assert.deepEqual(calls, [
     { command: POST_MERGE_UPDATE_COMMAND, cwd: "/repo" },
     { command: "git worktree list", cwd: "/repo" },
-    { command: buildMainCheckoutFastForwardCommand("/repo"), cwd: "/repo" },
+    { command: fetchCommand("/repo"), cwd: "/repo" },
+    { command: revParseAbbrevRefCommand("/repo"), cwd: "/repo" },
+    { command: mergeFfOnlyCommand("/repo"), cwd: "/repo" },
     { command: "git worktree list", cwd: "/repo" },
     { command: buildWorktreeCleanupCommand("/repo", 373), cwd: "/repo" },
     { command: "git worktree list", cwd: "/repo" },
@@ -359,7 +396,7 @@ test("update failure is warning-only and leaves the session healthy", async () =
   assert.deepEqual(notifications, [
     { message: `Post-merge update running: ${POST_MERGE_UPDATE_COMMAND}`, level: "info" },
     { message: "Post-merge update failed (warning only): permission denied", level: "warning" },
-    { message: `Post-merge main-checkout fast-forward running: ${buildMainCheckoutFastForwardCommand("/repo")}`, level: "info" },
+    { message: "Post-merge main-checkout fast-forward running for /repo", level: "info" },
     { message: "Post-merge main-checkout fast-forward skipped (warning only): permission denied", level: "warning" },
     { message: "Post-merge worktree cleanup running for PR #373", level: "info" },
     { message: "Post-merge worktree cleanup skipped (warning only): permission denied", level: "warning" },
@@ -380,7 +417,7 @@ test("killed post-merge updates surface a clear warning message", async () => {
   assert.deepEqual(notifications, [
     { message: `Post-merge update running: ${POST_MERGE_UPDATE_COMMAND}`, level: "info" },
     { message: "Post-merge update failed (warning only): command was killed before completing", level: "warning" },
-    { message: `Post-merge main-checkout fast-forward running: ${buildMainCheckoutFastForwardCommand("/repo")}`, level: "info" },
+    { message: "Post-merge main-checkout fast-forward running for /repo", level: "info" },
     { message: "Post-merge main-checkout fast-forward skipped (warning only): command was killed before completing", level: "warning" },
     { message: "Post-merge worktree cleanup running for PR #373", level: "info" },
     { message: "Post-merge worktree cleanup skipped (warning only): command was killed before completing", level: "warning" },
@@ -395,6 +432,9 @@ test("onAgentEnd fast-forwards the resolved main checkout to origin/main (#1596)
       calls.push({ command, cwd });
       if (command === "git worktree list") {
         return { code: 0, stdout: "/main/checkout  deadbeef [main]\n/repo  cafebabe [feature]\n", stderr: "", killed: false };
+      }
+      if (command === revParseAbbrevRefCommand("/main/checkout")) {
+        return { code: 0, stdout: "main\n", stderr: "", killed: false };
       }
       return { code: 0, stdout: "ok", stderr: "", killed: false };
     },
@@ -412,8 +452,8 @@ test("onAgentEnd fast-forwards the resolved main checkout to origin/main (#1596)
   const worktreeCall = calls.find((c) => c.command === "git worktree list");
   assert.deepEqual(worktreeCall, { command: "git worktree list", cwd: "/repo" });
 
-  const ffCall = calls.find((c) => c.command === buildMainCheckoutFastForwardCommand("/main/checkout"));
-  assert.deepEqual(ffCall, { command: buildMainCheckoutFastForwardCommand("/main/checkout"), cwd: "/main/checkout" });
+  const ffCall = calls.find((c) => c.command === mergeFfOnlyCommand("/main/checkout"));
+  assert.deepEqual(ffCall, { command: mergeFfOnlyCommand("/main/checkout"), cwd: "/main/checkout" });
 
   assert.ok(
     notifications.some((n) => n.message.includes("Post-merge main-checkout fast-forward completed")),
@@ -432,7 +472,10 @@ test("a non-fast-forwardable main checkout warns and does not block", async () =
       if (command === "git worktree list") {
         return { code: 0, stdout: "/main/checkout  deadbeef [main]\n", stderr: "", killed: false };
       }
-      if (command === buildMainCheckoutFastForwardCommand("/main/checkout")) {
+      if (command === revParseAbbrevRefCommand("/main/checkout")) {
+        return { code: 0, stdout: "main\n", stderr: "", killed: false };
+      }
+      if (command === mergeFfOnlyCommand("/main/checkout")) {
         return { code: 1, stdout: "", stderr: "Not possible to fast-forward", killed: false };
       }
       return { code: 0, stdout: "ok", stderr: "", killed: false };
@@ -453,6 +496,222 @@ test("a non-fast-forwardable main checkout warns and does not block", async () =
   assert.ok(
     notifications.some((n) => n.level === "warning" && n.message.includes("skipped (warning only)")),
     "expected a warning notification for the non-fast-forwardable checkout",
+  );
+});
+
+// --- main_checkout_not_on_main: detached/other-branch action-required signal ---
+
+test("a detached main checkout surfaces an error-level notification and never merges/switches/resets", async () => {
+  const calls = [];
+  const hook = createPostMergeUpdateHook({
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
+    runCommand: async ({ command, cwd }) => {
+      calls.push({ command, cwd });
+      if (command === "git worktree list") {
+        return { code: 0, stdout: "not a worktree listing", stderr: "", killed: false };
+      }
+      if (command === revParseAbbrevRefCommand("/repo")) {
+        return { code: 0, stdout: "HEAD\n", stderr: "", killed: false };
+      }
+      if (command === revParseShortHeadCommand("/repo")) {
+        return { code: 0, stdout: "abc1234\n", stderr: "", killed: false };
+      }
+      if (command === revListBehindCountCommand("/repo")) {
+        return { code: 0, stdout: "6\n", stderr: "", killed: false };
+      }
+      return { code: 0, stdout: "ok", stderr: "", killed: false };
+    },
+  });
+  const { ctx, notifications } = createUiCalls();
+
+  await hook.onToolResult({
+    toolName: "bash",
+    input: { command: "gh pr merge 373 --squash --delete-branch" },
+    isError: false,
+  }, ctx);
+
+  await hook.onAgentEnd({ type: "agent_end", messages: [] }, ctx);
+
+  const errorNotifications = notifications.filter((n) => n.level === "error");
+  assert.equal(errorNotifications.length, 1, JSON.stringify(notifications));
+  const message = errorNotifications[0].message;
+  assert.ok(message.includes("main_checkout_not_on_main"), message);
+  assert.ok(message.includes("/repo"), message);
+  assert.ok(message.includes("detached@abc1234"), message);
+  assert.ok(message.includes("6"), message);
+
+  for (const { command } of calls.filter((c) => c.command.startsWith("git -C "))) {
+    assert.ok(!/\bmerge\b/.test(command), `must not merge: ${command}`);
+    assert.ok(!/\bswitch\b/.test(command), `must not switch: ${command}`);
+    assert.ok(!/\breset\b/.test(command), `must not reset: ${command}`);
+  }
+});
+
+test("an other-branch main checkout surfaces an error-level notification naming the branch and a zero behind count", async () => {
+  const calls = [];
+  const hook = createPostMergeUpdateHook({
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
+    runCommand: async ({ command, cwd }) => {
+      calls.push({ command, cwd });
+      if (command === "git worktree list") {
+        return { code: 0, stdout: "not a worktree listing", stderr: "", killed: false };
+      }
+      if (command === revParseAbbrevRefCommand("/repo")) {
+        return { code: 0, stdout: "feature/x\n", stderr: "", killed: false };
+      }
+      if (command === revListBehindCountCommand("/repo")) {
+        return { code: 0, stdout: "0\n", stderr: "", killed: false };
+      }
+      return { code: 0, stdout: "ok", stderr: "", killed: false };
+    },
+  });
+  const { ctx, notifications } = createUiCalls();
+
+  await hook.onToolResult({
+    toolName: "bash",
+    input: { command: "gh pr merge 373 --squash --delete-branch" },
+    isError: false,
+  }, ctx);
+
+  await hook.onAgentEnd({ type: "agent_end", messages: [] }, ctx);
+
+  const errorNotifications = notifications.filter((n) => n.level === "error");
+  assert.equal(errorNotifications.length, 1, JSON.stringify(notifications));
+  const message = errorNotifications[0].message;
+  assert.ok(message.includes("feature/x"), message);
+  assert.ok(message.includes("0 commit"), message);
+
+  for (const { command } of calls.filter((c) => c.command.startsWith("git -C "))) {
+    assert.ok(!/\bmerge\b/.test(command), `must not merge: ${command}`);
+    assert.ok(!/\bswitch\b/.test(command), `must not switch: ${command}`);
+    assert.ok(!/\breset\b/.test(command), `must not reset: ${command}`);
+  }
+});
+
+test("a not-on-main main checkout falls back to stderr when no UI is available", async () => {
+  const hook = createPostMergeUpdateHook({
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
+    runCommand: async ({ command }) => {
+      if (command === "git worktree list") {
+        return { code: 0, stdout: "not a worktree listing", stderr: "", killed: false };
+      }
+      if (command === revParseAbbrevRefCommand("/repo")) {
+        return { code: 0, stdout: "feature/x\n", stderr: "", killed: false };
+      }
+      if (command === revListBehindCountCommand("/repo")) {
+        return { code: 0, stdout: "2\n", stderr: "", killed: false };
+      }
+      return { code: 0, stdout: "ok", stderr: "", killed: false };
+    },
+  });
+
+  let notifyCalled = false;
+  const ctx = {
+    hasUI: false,
+    cwd: "/repo",
+    ui: {
+      notify() {
+        notifyCalled = true;
+      },
+      setStatus() {},
+      setWidget() {},
+    },
+  };
+
+  const originalWrite = process.stderr.write;
+  const stderrChunks = [];
+  process.stderr.write = (chunk) => {
+    stderrChunks.push(String(chunk));
+    return true;
+  };
+
+  try {
+    await hook.onToolResult({
+      toolName: "bash",
+      input: { command: "gh pr merge 373 --squash --delete-branch" },
+      isError: false,
+    }, ctx);
+
+    await hook.onAgentEnd({ type: "agent_end", messages: [] }, ctx);
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+
+  assert.equal(notifyCalled, false, "ctx.ui.notify must never be called when hasUI is false");
+  const combined = stderrChunks.join("");
+  assert.ok(combined.includes("main_checkout_not_on_main"), combined);
+  assert.ok(combined.includes("feature/x"), combined);
+});
+
+test("fetch failure, rev-parse failure, and behind-count failure stay warning-only (no error-level notification)", async () => {
+  async function runScenario(handler) {
+    const notifications = [];
+    const hook = createPostMergeUpdateHook({
+      resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
+      runCommand: async ({ command }) => {
+        if (command === "git worktree list") {
+          return { code: 0, stdout: "not a worktree listing", stderr: "", killed: false };
+        }
+        return handler(command);
+      },
+    });
+    const ctx = {
+      hasUI: true,
+      cwd: "/repo",
+      ui: {
+        notify(message, level = "info") {
+          notifications.push({ message, level });
+        },
+        setStatus() {},
+        setWidget() {},
+      },
+    };
+    await hook.onToolResult({
+      toolName: "bash",
+      input: { command: "gh pr merge 373 --squash --delete-branch" },
+      isError: false,
+    }, ctx);
+    await hook.onAgentEnd({ type: "agent_end", messages: [] }, ctx);
+    return notifications;
+  }
+
+  const fetchFailNotifications = await runScenario((command) => {
+    if (command === fetchCommand("/repo")) {
+      return { code: 1, stdout: "", stderr: "could not resolve host", killed: false };
+    }
+    return { code: 0, stdout: "ok", stderr: "", killed: false };
+  });
+  assert.equal(fetchFailNotifications.some((n) => n.level === "error"), false);
+  assert.ok(
+    fetchFailNotifications.some((n) => n.level === "warning" && n.message.includes("skipped (warning only)")),
+    JSON.stringify(fetchFailNotifications),
+  );
+
+  const revParseFailNotifications = await runScenario((command) => {
+    if (command === revParseAbbrevRefCommand("/repo")) {
+      return { code: 1, stdout: "", stderr: "not a git repository", killed: false };
+    }
+    return { code: 0, stdout: "ok", stderr: "", killed: false };
+  });
+  assert.equal(revParseFailNotifications.some((n) => n.level === "error"), false);
+  assert.ok(
+    revParseFailNotifications.some((n) => n.level === "warning" && n.message.includes("skipped (warning only)")),
+    JSON.stringify(revParseFailNotifications),
+  );
+
+  const behindCountFailNotifications = await runScenario((command) => {
+    if (command === revParseAbbrevRefCommand("/repo")) {
+      return { code: 0, stdout: "feature/x\n", stderr: "", killed: false };
+    }
+    if (command === revListBehindCountCommand("/repo")) {
+      return { code: 1, stdout: "", stderr: "bad revision", killed: false };
+    }
+    return { code: 0, stdout: "ok", stderr: "", killed: false };
+  });
+  assert.equal(behindCountFailNotifications.some((n) => n.level === "error"), false);
+  assert.ok(
+    behindCountFailNotifications.some((n) => n.level === "warning" && n.message.includes("skipped (warning only)")),
+    JSON.stringify(behindCountFailNotifications),
   );
 });
 
