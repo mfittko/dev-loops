@@ -100,6 +100,70 @@ test("an angle absent from the merged gate config stays ok:false + status:unreso
   assert.equal(payload.status, "unresolved");
 });
 
+// #2336 follow-up: `dynamic.additive` can dispatch an angle that is NOT in the
+// static gate list (it lives only in the additive pool). The fallback
+// classifier must use the SAME additive-aware pool dynamic dispatch uses, or a
+// legitimately dispatched angle is misreported as a typo (ok:false).
+test("a fallback angle reachable only via the additive pool is classified configured, not unresolved", () => {
+  const config = {
+    gates: {
+      anglePool: ["contradiction-lens"],
+      preApproval: { dynamic: { additive: true }, angles: ["acceptance-criteria"] },
+    },
+  };
+  const payload = resolveRolePayload(config, { angle: "contradiction-lens", harness: "claude" });
+  assert.equal(payload.fallback, true, "contradiction-lens has no dedicated persona entry");
+  assert.equal(payload.ok, true, "an additive-pool angle is legitimately dispatchable, not a typo");
+  assert.equal(payload.status, "fallback");
+});
+
+// Complement: additive mode must NOT turn a genuinely unknown angle into a
+// false "configured" — an angle in neither the static list nor the additive
+// pool stays unresolved.
+test("an angle in neither the static list nor the additive pool stays unresolved even with additive on", () => {
+  const config = {
+    gates: {
+      anglePool: ["contradiction-lens"],
+      preApproval: { dynamic: { additive: true }, angles: ["acceptance-criteria"] },
+    },
+  };
+  const payload = resolveRolePayload(config, { angle: "not-a-real-angle-xyz", harness: "claude" });
+  assert.equal(payload.ok, false);
+  assert.equal(payload.status, "unresolved");
+});
+
+// #2336 follow-up: loadDevLoopConfig errors can originate from ANY layer
+// (extensionDefaults, repo defaults, .devloops, or the final merged
+// validation), not only .devloops — the warning must name the affected layer(s)
+// instead of always blaming .devloops.
+test("the config-error warning names the affected layer(s)", () => {
+  const payload = resolveRolePayload({}, {
+    angle: "correctness",
+    harness: "claude",
+    configErrors: [
+      { path: "ext.yaml", message: "x", layer: "extensionDefaults" },
+      { path: "<merged>", message: "y", layer: "merged" },
+      { path: "ext.yaml", message: "z", layer: "extensionDefaults" },
+    ],
+  });
+  assert.equal(payload.status, "config-error");
+  assert.equal(payload.ok, false);
+  assert.ok(
+    payload.warnings.some((w) => /in layer\(s\) extensionDefaults, merged/.test(w)),
+    "the warning must name the affected layer(s), deduped",
+  );
+});
+
+test("the config-error warning degrades gracefully when no layer is present", () => {
+  const payload = resolveRolePayload({}, {
+    angle: "correctness",
+    harness: "claude",
+    configErrors: [{ path: "x", message: "y" }],
+  });
+  assert.equal(payload.status, "config-error");
+  assert.ok(payload.warnings.some((w) => /config-layer error\(s\);/.test(w)));
+});
+
 // A non-fallback angle whose prompt is null/empty (a repo `.devloops` override
 // that sets only `persona`) must be signalled, not silently returned as a
 // usable focus instruction.

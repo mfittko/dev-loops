@@ -22,7 +22,7 @@
  */
 import { parseArgs } from "node:util";
 
-import { loadDevLoopConfig, resolveGateAngleScope, resolveGateAngles, resolveReviewerRole, resolveRoleModel } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveGateAngleContract, resolveGateAngleScope, resolveReviewerRole, resolveRoleModel } from "@dev-loops/core/config";
 import { GATE_CONFIG_KEY } from "@dev-loops/core/loop/gate-fanin";
 import { isClaudeHarness } from "@dev-loops/core/loop/run-context";
 
@@ -67,7 +67,7 @@ Output (stdout, JSON):
     "fallback": false,
     "warnings": [],              // human-readable, non-fatal resolution caveats
     "configErrors": [],          // per-layer config load errors (see configErrorCount)
-    "configErrorCount": 0,       // >0 => .devloops layer errors; ok:false, no role trusted
+    "configErrorCount": 0,       // >0 => config-layer errors; ok:false, no role trusted
     "gate": "draft",            // only when --gate given
     "scope": "full"             // only when --gate given
   }
@@ -152,7 +152,8 @@ export function parseResolveReviewerRoleCliArgs(argv, { env = process.env } = {}
  * the resolved role untrustworthy sets `ok:false` (nonzero exit) while still
  * emitting the payload so a caller can inspect it:
  *   - `configErrors` from `loadDevLoopConfig` — a per-layer schema/parse failure
- *     drops the `.devloops` layer and silently falls back to the shipped default,
+ *     drops that layer (`extensionDefaults`, repo `defaults`, `.devloops`, or the
+ *     final `merged` validation) and silently falls back to the shipped default,
  *     the exact wrong-role bug this CLI guards against (mirrors
  *     scripts/loop/check-size-budget.mjs);
  *   - an UNKNOWN angle absent from the merged gate config, which resolves only to
@@ -180,12 +181,21 @@ export function resolveRolePayload(config, { angle, harness, gate = null, config
   let status;
   let ok;
   if (configErrorCount > 0) {
-    // A dropped `.devloops` layer means the emitted role is not the
-    // authoritative one — signal nonzero exit regardless of what resolved.
+    // Any config-layer failure (`extensionDefaults`, repo `defaults`, `.devloops`,
+    // or the final `merged` validation) drops that layer, so the emitted role may
+    // not be the authoritative one — signal nonzero exit regardless of what
+    // resolved. Name the affected layer(s) so the operator is not sent to the
+    // wrong file.
     status = "config-error";
     ok = false;
+    const layers = [...new Set(
+      (Array.isArray(configErrors) ? configErrors : [])
+        .map((e) => (e && typeof e === "object" && typeof e.layer === "string" ? e.layer : null))
+        .filter(Boolean),
+    )];
+    const where = layers.length > 0 ? ` in layer(s) ${layers.join(", ")}` : "";
     warnings.push(
-      `${configErrorCount} config-layer error(s) dropped the .devloops layer; the resolved role may be the shipped default and must not be trusted.`,
+      `${configErrorCount} config-layer error(s)${where}; the resolved role may be a shipped default and must not be trusted.`,
     );
   } else if (role.fallback) {
     // Distinguish a genuinely unknown angle from a configured gate angle that
@@ -239,12 +249,18 @@ export function resolveRolePayload(config, { angle, harness, gate = null, config
 }
 
 /**
- * True when `angle` is a member of the merged gate config's angle list — the
- * gate named by `--gate` when given, else any of draft/preApproval/spike.
- * `resolveGateAngles` returns null when a gate declares no angles, so a bare
- * config (no configured angles) never counts as "configured". Defensive
- * try/catch: a malformed config already surfaced through `configErrors` must
- * not crash the CLI's fallback-classification path.
+ * True when `angle` is a member of the merged gate config's DISPATCHABLE angle
+ * pool — the gate named by `--gate` when given, else any of draft/preApproval/
+ * spike. Classifies against `resolveGateAngleContract(...).pool` (the
+ * additive-aware pool dynamic dispatch uses: the static angle list widened to
+ * `gates.anglePool` when `dynamic.additive` is on), NOT the static
+ * `resolveGateAngles` list. A consumer can leave an angle out of the static
+ * entries while keeping it in the additive pool; a matching diff still
+ * dispatches it, so a static-only classifier would misreport a legitimate angle
+ * as `unresolved` (nonzero exit). `pool` is null when a gate declares no angles,
+ * so a bare config never counts as "configured". Defensive try/catch: a
+ * malformed config already surfaced through `configErrors` must not crash the
+ * CLI's fallback-classification path.
  * @param {object} config
  * @param {string|null} gate
  * @param {string} angle
@@ -253,13 +269,13 @@ export function resolveRolePayload(config, { angle, harness, gate = null, config
 function angleIsConfigured(config, gate, angle) {
   const gates = gate ? [gate] : ["draft", "preApproval", "spike"];
   for (const g of gates) {
-    let names;
+    let pool;
     try {
-      names = resolveGateAngles(config, g);
+      pool = resolveGateAngleContract(config, g).pool;
     } catch {
       continue;
     }
-    if (Array.isArray(names) && names.includes(angle)) return true;
+    if (Array.isArray(pool) && pool.includes(angle)) return true;
   }
   return false;
 }

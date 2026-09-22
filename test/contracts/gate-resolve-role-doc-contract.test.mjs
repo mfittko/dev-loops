@@ -21,7 +21,17 @@ const SUB_LOOP_CONTRACT = "skills/docs/gate-review-sub-loop-contract.md";
 const COMMENT_CONTRACT = "skills/docs/gate-review-comment-contract.md";
 
 const LAUNCHER_FORM = "dev-loops-run cli/index.mjs gate resolve-role --angle";
+// #2336 follow-up: the Claude launcher form alone is NOT harness-agnostic —
+// `dev-loops-run` is the Claude plugin launcher under `.claude/bin` and is not
+// a package `bin` entry, so a Pi reviewer has no such command. Every pointer
+// must also name the Pi package-root invocation, resolved via the dev-loop
+// SKILL's bounded `<dev-loops-package-root>` contract.
+const DEVLOOPS_PACKAGE_ROOT_FORM = "node <dev-loops-package-root>/cli/index.mjs gate resolve-role --angle";
 const BARE_FORM = "dev-loops gate resolve-role --angle";
+
+// A wrapped prose line can split an invocation across a newline; normalize
+// whitespace before the substring check so a reflow cannot falsely fail it.
+const normalizeWhitespace = (content) => content.replace(/\s+/g, " ");
 
 // Every hand-authored reviewer-facing surface that names the resolve-role CLI.
 const CLI_POINTER_SURFACES = [
@@ -31,20 +41,28 @@ const CLI_POINTER_SURFACES = [
   COMMENT_CONTRACT,
 ];
 
-test("review agent doc points reviewers at the resolve-role CLI in the portable launcher form", async () => {
-  const content = await readRepo(REVIEW_AGENT_DOC);
+test("review agent doc points reviewers at the resolve-role CLI in BOTH harness invocations", async () => {
+  const content = normalizeWhitespace(await readRepo(REVIEW_AGENT_DOC));
   assert.ok(
     content.includes(LAUNCHER_FORM),
     `review.agent.md must instruct reviewers to run \`${LAUNCHER_FORM} <name>\``,
   );
+  assert.ok(
+    content.includes(DEVLOOPS_PACKAGE_ROOT_FORM),
+    `review.agent.md must also name the Pi package-root form \`${DEVLOOPS_PACKAGE_ROOT_FORM} <name>\``,
+  );
 });
 
-test("EVERY reviewer-facing resolve-role surface uses the portable launcher form, never the bare form", async () => {
+test("EVERY reviewer-facing resolve-role surface names BOTH harness invocations, never the bare form", async () => {
   for (const relPath of CLI_POINTER_SURFACES) {
-    const content = await readRepo(relPath);
+    const content = normalizeWhitespace(await readRepo(relPath));
     assert.ok(
       content.includes(LAUNCHER_FORM),
-      `${relPath} must name the portable launcher form \`${LAUNCHER_FORM} <name>\``,
+      `${relPath} must name the Claude launcher form \`${LAUNCHER_FORM} <name>\``,
+    );
+    assert.ok(
+      content.includes(DEVLOOPS_PACKAGE_ROOT_FORM),
+      `${relPath} must name the Pi package-root form \`${DEVLOOPS_PACKAGE_ROOT_FORM} <name>\``,
     );
     assert.ok(
       !content.includes(BARE_FORM),

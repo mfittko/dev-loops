@@ -1393,6 +1393,17 @@ test("buildAngleNamingSuffix names angles and points at the resolve-role CLI, ne
   assert.match(group, /dev-loops-run cli\/index\.mjs gate resolve-role --angle/);
   assert.ok(!group.includes("resolveReviewerRole(config"), "suffix must not instruct an inline resolveReviewerRole(config, ...) call");
   assert.match(group, /one findings artifact PER ANGLE/);
+  // Fail-closed (#2336 follow-up): the non-blocking path is gated on `ok: true`
+  // with an explicit status, so an unknown/typo angle (`ok: false`,
+  // `unresolved`) or a broken config layer (`config-error`) cannot slip through
+  // as a legitimate fallback — the suffix must send the reviewer to the
+  // blocked-reviewer artifact instead.
+  for (const suffix of [single, group]) {
+    assert.match(suffix, /ok: true/);
+    assert.match(suffix, /`status` `fallback` or `prompt-missing`/);
+    assert.match(suffix, /ok: false/);
+    assert.match(suffix, /emit-reviewer-blocked\.mjs/);
+  }
 });
 
 // Issue 2155 AC row 2 (slice b): the emitted suffix also carries the bounded

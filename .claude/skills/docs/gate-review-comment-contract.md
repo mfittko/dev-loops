@@ -247,7 +247,7 @@ This section owns only the comment-visible ledger path per gate:
 
 ## Review-angle ownership and non-substitution rules
 
-Each gate's review angles are defined in the project config (`gates.draft.angles` and `gates.preApproval.angles` in `.pi/dev-loop/defaults.yaml`). Each angle's reviewer persona and focus prompt are resolved from the fully merged config by running the sanctioned `dev-loops-run cli/index.mjs gate resolve-role --angle <name>` CLI (which wraps `resolveReviewerRole` from the gate's own angle entry, falling back to the built-in persona registry in `packages/core/src/config/config.mjs`). Consumer repos may override an angle's persona/prompt via its own `gates.<gate>.angles[]` entry in their config.
+Each gate's review angles are defined in the project config (`gates.draft.angles` and `gates.preApproval.angles` in `.pi/dev-loop/defaults.yaml`). Each angle's reviewer persona and focus prompt are resolved from the fully merged config by running the sanctioned `gate resolve-role` CLI (`node <dev-loops-package-root>/cli/index.mjs gate resolve-role --angle <name>`, or `dev-loops-run cli/index.mjs gate resolve-role --angle <name>` under Claude), which wraps `resolveReviewerRole` from the gate's own angle entry, falling back to the built-in persona registry in `packages/core/src/config/config.mjs`. Consumer repos may override an angle's persona/prompt via its own `gates.<gate>.angles[]` entry in their config.
 
 Resolve angles at runtime with `resolveGateAngles(config, "draft")` and `resolveGateAngles(config, "preApproval")` from `@dev-loops/core/config`. Do not hardcode angle names in skill procedures or review prompts.
 
