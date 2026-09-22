@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 
-import { ChangeCategory, resolveDynamicAngles } from "../src/analysis/change-classifier.mjs";
+import { ALWAYS_INCLUDE, ChangeCategory, resolveDynamicAngles } from "../src/analysis/change-classifier.mjs";
 
 const DRAFT_ANGLES = [
   "scope", "coverage", "correctness", "ci-guard", "contract-surface",
@@ -18,24 +18,35 @@ const PREAPPROVAL_ANGLES = [
 // Fallback
 // ---------------------------------------------------------------------------
 
-test("resolveDynamicAngles: fallbackToAll when ambiguous", () => {
+test("resolveDynamicAngles: ambiguity selects a justified strict subset", () => {
   const result = resolveDynamicAngles({
     configuredAngles: DRAFT_ANGLES,
-    changeCategories: ["LOGIC_CHANGE"],
+    changeCategories: [ChangeCategory.LOGIC_CHANGE],
     ambiguous: true,
   });
-  assert.equal(result.fallbackToAll, true);
-  assert.equal(result.recommendedAngles.length, DRAFT_ANGLES.length);
-  assert.equal(result.skippedAngles.length, 0);
+  assert.equal(result.fallbackToAll, false);
+  assert.ok(result.recommendedAngles.length < DRAFT_ANGLES.length);
+  for (const angle of ALWAYS_INCLUDE) {
+    if (DRAFT_ANGLES.includes(angle)) assert.ok(result.recommendedAngles.includes(angle));
+  }
+  for (const angle of result.skippedAngles) {
+    assert.match(result.reasons[angle], /uncertain classification/);
+  }
 });
 
-test("resolveDynamicAngles: fallbackToAll when no categories", () => {
+test("resolveDynamicAngles: no categories selects always-include lenses only", () => {
   const result = resolveDynamicAngles({
     configuredAngles: DRAFT_ANGLES,
     changeCategories: [],
   });
-  assert.equal(result.fallbackToAll, true);
-  assert.equal(result.recommendedAngles.length, DRAFT_ANGLES.length);
+  assert.equal(result.fallbackToAll, false);
+  assert.ok(result.recommendedAngles.length < DRAFT_ANGLES.length);
+  for (const angle of ALWAYS_INCLUDE) {
+    if (DRAFT_ANGLES.includes(angle)) assert.ok(result.recommendedAngles.includes(angle));
+  }
+  for (const angle of result.skippedAngles) {
+    assert.match(result.reasons[angle], /uncertain classification/);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -321,23 +332,25 @@ test("resolveDynamicAngles: additive mode reports always-include trigger reason"
   assert.equal(result.addedReasons["renderer-security"], "Added: always-include lens not in the configured pool");
 });
 
-test("resolveDynamicAngles: additive is a no-op in ambiguous/no-category fallback branches", () => {
+test("resolveDynamicAngles: additive selection runs under ambiguity and empty categories", () => {
+  const pool = [...NARROW_ANGLES, "ci-guard", "renderer-security"];
   const ambiguousResult = resolveDynamicAngles({
     configuredAngles: NARROW_ANGLES,
     changeCategories: [ChangeCategory.CI_ONLY],
     ambiguous: true,
-    anglePool: [...NARROW_ANGLES, "ci-guard"],
+    anglePool: pool,
   });
-  assert.deepEqual(ambiguousResult.addedAngles, []);
-  assert.deepEqual(ambiguousResult.addedReasons, {});
+  assert.deepEqual(ambiguousResult.addedAngles, ["ci-guard", "renderer-security"]);
+  assert.match(ambiguousResult.addedReasons["ci-guard"], /CI_ONLY/);
+  assert.match(ambiguousResult.addedReasons["renderer-security"], /always-include/);
 
   const noCategoriesResult = resolveDynamicAngles({
     configuredAngles: NARROW_ANGLES,
     changeCategories: [],
-    anglePool: [...NARROW_ANGLES, "ci-guard"],
+    anglePool: pool,
   });
-  assert.deepEqual(noCategoriesResult.addedAngles, []);
-  assert.deepEqual(noCategoriesResult.addedReasons, {});
+  assert.deepEqual(noCategoriesResult.addedAngles, ["renderer-security"]);
+  assert.match(noCategoriesResult.addedReasons["renderer-security"], /always-include/);
 });
 
 // ---------------------------------------------------------------------------
@@ -388,21 +401,24 @@ test("resolveDynamicAngles: undeclared consumer angle stays skipped (unchanged b
   assert.ok(result.skippedAngles.includes("blast-radius"));
 });
 
-test("resolveDynamicAngles: consumer angle still forced under fallback-to-all", () => {
+test("resolveDynamicAngles: declared consumer angle is still selected under uncertainty", () => {
   const ambiguous = resolveDynamicAngles({
     configuredAngles: CONSUMER_ANGLES,
     changeCategories: [ChangeCategory.LOGIC_CHANGE],
     ambiguous: true,
-    angleDeclarations: { "blast-radius": { categories: ["SECURITY_SENSITIVE_SEAM"] } },
+    angleDeclarations: { "blast-radius": { categories: ["LOGIC_CHANGE"] } },
   });
   assert.ok(ambiguous.recommendedAngles.includes("blast-radius"));
+  assert.equal(ambiguous.fallbackToAll, false);
 
   const noCategories = resolveDynamicAngles({
     configuredAngles: CONSUMER_ANGLES,
     changeCategories: [],
-    angleDeclarations: { "blast-radius": { categories: ["SECURITY_SENSITIVE_SEAM"] } },
+    fileKinds: ["config"],
+    angleDeclarations: { "blast-radius": { kinds: ["config"] } },
   });
   assert.ok(noCategories.recommendedAngles.includes("blast-radius"));
+  assert.equal(noCategories.fallbackToAll, false);
 });
 
 test("resolveDynamicAngles: catalog angles + ALWAYS_INCLUDE unchanged when consumer binding present", () => {

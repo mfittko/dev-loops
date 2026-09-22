@@ -1787,26 +1787,27 @@ execution mode/grouping — and it scales reviewer COST to the change's size and
 WITHOUT lowering what is checked: trivial → single combined reviewer
 (`inline_single_agent`, above); small/non-risky → a reduced angle set via a matched
 [diff-class tier](#diff-class-angle-tiers), still dispatched `fanout_fanin`;
-large/risky → the full angle pool, full fan-out. The plan is a pure composition of the
-existing decision functions — `resolveGateDispatchMode` (mode), `resolveGateTier`
+large/risky → full fan-out over the tier-or-best-effort angle set. The plan is a pure
+composition of the existing decision functions — `resolveGateDispatchMode` (mode), `resolveGateTier`
 (angle set AND diff classification), and `resolveFanoutGroups` (dispatch-unit
 grouping) — exposed as ONE testable object (`{ mode, angles, groups, reason, floors }`)
 via `resolveReviewProportionality` (`@dev-loops/core/config`). It performs no I/O
 itself; `resolve-gate-dispatch.mjs` (the primer's dispatch-decision step) is its ONE
 production caller and supplies the diff-derived facts. Whenever a RISK-signal floor
 fires — a risk-path touch, a non-clean/ambiguous size-budget outcome, missing
-changed-file evidence, or an unclassifiable diff — the composer's `angles` is the
-FULL untriered pool, never a matched tier's reduced set. The hard size cap alone
-(`over_threshold`) forces `full_fanout` DISPATCH (one reviewer per emitted unit under
-`GATE-EXEC-FANOUT-DISPATCH-EMIT`, never the light inline path) but KEEPS the diff-class-tier-reduced angle set —
-see the floor-vs-tier precedence in the function's own doc
+changed-file evidence, or an unclassifiable diff — the composer forces `full_fanout`
+DISPATCH but keeps a matched tier's reduced set or, when no tier matched, selects the
+mandatory floor plus the lenses justified by changed-file kinds. The hard size cap
+(`over_threshold`) likewise forces `full_fanout` DISPATCH (one reviewer per emitted
+unit under `GATE-EXEC-FANOUT-DISPATCH-EMIT`, never the light inline path) without
+widening the angle set. See the floor-vs-tier precedence in the function's own doc
 comment. `resolveGateAnglesDynamic` (the resolver `write-gate-context.mjs` calls to
-persist the round's angle set) can opt into this SAME precedence via its
-`checkFloors`/`sizeOutcome` parameters, so a round whose dispatch decision was floored
-never independently persists a tier-reduced angle set through the OTHER angle-
-resolution path — both call sites are wired to the one composer, never two parallel
-floor implementations. The chosen mode/reason is recorded in gate evidence via the
-existing `--inline-reason` marker (above) — the mechanism is unchanged, only the set
+persist the round's angle set) opts into the SAME floor determination via its
+`checkFloors`/`sizeOutcome` parameters: the composer owns floor determination and
+mode, while the persisted round's angle SET comes from the resolver's tier-or-dynamic
+best-effort selection. There are never two parallel floor implementations. The chosen
+mode/reason is recorded in gate evidence via the existing `--inline-reason` marker
+(above) — the mechanism is unchanged, only the set
 of reasons a decision can carry is extended (see below).
 
 **Non-overridable floors.** Proportionality scales cost, never the floor: no flag,
@@ -1820,8 +1821,9 @@ absence-of-evidence-of-risk):
   does NOT ADDITIONALLY force the full untriered angle pool: the diff-class-tier
   mechanism still applies, so an over-cap-but-tier-classifiable diff dispatches full
   fan-out over its matched tier's reduced angle set (the mandatory-angle floor, below,
-  still always applies). The floors below are RISK signals; they additionally force
-  the full untriered angle pool on top of `full_fanout` dispatch.
+  still always applies). The floors below are RISK signals; they also force
+  `full_fanout` dispatch and refuse an explicit angle override, but they never widen
+  the tier-or-best-effort angle set to the full untriered pool.
 - **Risk-path denylist** — `risk_path_touch`: the diff touches a shipped,
   hard-coded, union-of-layers glob floor (`RISK_PATH_DENYLIST_DEFAULT`,
   `packages/core/src/config/config.mjs`) covering the gate/review, security/auth,
@@ -1837,10 +1839,11 @@ absence-of-evidence-of-risk):
   size-budget evidence (`size_outcome_unavailable`) fails the same way.
 - **Unclassifiable diff** — `unclassifiable_diff`: `resolveGateDispatchMode` alone has
   no diff-classification awareness (only `resolveGateTier` does), so the composer
-  additionally forces the full pool whenever `resolveGateTier` reports
+  additionally forces `full_fanout` whenever `resolveGateTier` reports
   `unclassifiable_file` (a changed file `classifyFile` cannot categorize) — an
   unclassifiable diff is ambiguity too, and must never silently reach inline just
-  because the raw dispatch-mode facts alone looked trivial.
+  because the raw dispatch-mode facts alone looked trivial. Its angle set remains
+  the mandatory floor plus any best-effort justified lenses, never the whole pool.
 - **Mandatory-angle floor** — unchanged (above): mandatory angles are always unioned
   into the resolved angle set (`resolveGateAngles`/`resolveGateTier`), whether the
   round is fan-out or inline; on the inline path they are COMBINED under the one
@@ -1875,14 +1878,15 @@ naming a reduced angle set for the diffs it matches. A tier round is FANOUT-ONLY
 normal `fanout_fanin` round with a smaller resolved angle set, produced by a real
 per-angle fan-out, a real findings-log ledger, and real provenance; there is no separate
 evidence path and no new `executionMode`. The resolver unions the gate's mandatory angles
-into every matched tier's set, so `GATE-EXEC-ANGLE-COVERAGE` holds unchanged, and fails
-closed to the untriered angle set on any uncertain input: the `gate:full` label, no
-configured tiers, a changed file whose kind classifyFile cannot resolve, a changed file
-that is a dev-loop config-source path, an unavailable diff/scope, or a tier naming an
-angle outside the gate's resolved pool.
+into every matched tier's set, so `GATE-EXEC-ANGLE-COVERAGE` holds unchanged. A tier
+miss or uncertain input — no configured tiers, an unclassifiable file, a dev-loop
+config-source path, unavailable diff/scope, or an angle outside the gate's resolved
+pool — falls through to dynamic best-effort selection rather than expanding to the
+untriered pool. The `gate:full` label bypasses tier matching but does not weaken the
+mandatory floor.
 
 **Precedence.** `gate:full` label > lightMode inline (dispatch-level) > tier > dynamic
-subtractive reduction > the full resolved pool. The tier is consulted first, and Phase 2's
+subtractive reduction > mandatory-floor best-effort selection. The tier is consulted first, and Phase 2's
 carry-forward subtraction runs second, against whichever set (tiered or full) the tier
 decision left in place. Subtractive reduction alone was insufficient for the diff classes a
 tier targets: `dynamic.subtractive` reduces per CATEGORY, so it still keeps the full

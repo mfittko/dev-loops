@@ -1541,10 +1541,9 @@ test("CLI fails closed to the untriered set when the labels read errors", async 
 
 // GATE-EXEC-PROPORTIONALITY (checkFloors wiring): a docs-classified diff
 // under a shipped risk-path floor entry (docs/decisions/**) matches the same
-// "docs-only" tier makeDocsOnlyDiffRepo's sibling above exercises, but the
-// CLI's --base-derived floor check must force the FULL untriered pool
-// instead — never the tier's reduced set — even though hasFullLabel is a
-// genuine `false` attestation (no gate:full label).
+// "docs-only" tier makeDocsOnlyDiffRepo's sibling above exercises. The
+// CLI's --base-derived floor check forces full_fanout dispatch but leaves the
+// mandatory-complete tier angle set intact.
 async function makeRiskPathDocsDiffRepo() {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-riskdocs-"));
   initGitFixture(repoRoot, { commit: null });
@@ -1560,7 +1559,7 @@ async function makeRiskPathDocsDiffRepo() {
   return { repoRoot, baseSha, headSha };
 }
 
-test("CLI: a risk-path-touching diff that ALSO matches a configured tier persists the FULL untriered angle set (checkFloors wiring)", async () => {
+test("CLI: a risk-path-touching diff that matches a configured tier persists the tier set", async () => {
   const { repoRoot, baseSha, headSha } = await makeRiskPathDocsDiffRepo();
   try {
     await writeDraftDevLoops(repoRoot, { tiers: DOCS_TIER });
@@ -1572,7 +1571,7 @@ test("CLI: a risk-path-touching diff that ALSO matches a configured tier persist
     const artifact = await readGateContext({
       repo: "owner/repo", pr: 62, gate: "draft_gate", headSha,
     }, { repoRoot });
-    assertUntriered(artifact, "a risk-path touch must force the full pool even though the diff matches a configured tier");
+    assert.deepEqual([...artifact.resolvedAngles].sort(), TIERED_ANGLE_SET);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -1585,19 +1584,19 @@ test("CLI: an explicit --angles override does NOT escape a fired risk-path floor
     await main([
       "--repo", "owner/repo", "--pr", "64", "--gate", "draft_gate",
       "--head-sha", headSha, "--base", baseSha,
-      // A caller-supplied subset that names neither the tier's angle nor the
-      // full pool's other angles — if honored verbatim, "coverage" and
-      // "correctness" would be absent from the persisted set.
+      // A caller-supplied subset that names neither the tier's angle nor its
+      // mandatory floor. A fired floor must refuse it.
       "--angles", '["config-drift"]',
     ], { repoRoot, run: stubGhRunWithLabels([]) });
 
     const artifact = await readGateContext({
       repo: "owner/repo", pr: 64, gate: "draft_gate", headSha,
     }, { repoRoot });
+    const { config } = await loadDevLoopConfig({ repoRoot });
+    const staticPool = resolveGateAngles(config, "draft");
     assert.notDeepEqual(artifact.resolvedAngles, ["config-drift"], "a fired risk-path floor must override the explicit --angles set");
-    for (const a of ["coverage", "correctness", "config-drift"]) {
-      assert.ok(artifact.resolvedAngles.includes(a), `${a} present in the floor-forced full pool`);
-    }
+    assert.deepEqual([...artifact.resolvedAngles].sort(), TIERED_ANGLE_SET);
+    assert.ok(artifact.resolvedAngles.length < staticPool.length);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
