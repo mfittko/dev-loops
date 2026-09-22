@@ -18,7 +18,7 @@ import {
   upsertCheckpointVerdict,
 } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
-import { buildFanoutEnforcement, buildPreMergeGateCheck, deriveEvidenceState, EVIDENCE_STATE, evaluateInlineFanoutMode } from "../../scripts/github/detect-checkpoint-evidence.mjs";
+import { buildFanoutEnforcement, buildPreMergeGateCheck, deriveEvidenceState, detectCheckpointEvidence, EVIDENCE_STATE, evaluateInlineFanoutMode } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { buildLogPath } from "../../scripts/github/write-gate-findings-log.mjs";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
 import { renderFallbackGateReviewCommentBody } from "../../skills/dev-loop/scripts/post-gate-verdict-fallback.mjs";
@@ -4286,29 +4286,43 @@ test("upsert-checkpoint-verdict self-heals a ROUND-CAP ready PR via draft transi
     assert.ok(/\["pr","ready","17"/.test(ghLog.replace(/\s/g, "")), "expected a `pr ready` call to restore the ready state");
     assert.ok(/pulls\/17\/reviews/.test(ghLog), "expected a draft_gate verdict review to be posted");
 
-    // #2354 AC2's second clause: once posted, detect-checkpoint-evidence's pure
-    // evaluator must no longer report the gate missing. Feed the just-posted
-    // draft_gate evidence (visible + clean on the current head, mirroring what
-    // detect-checkpoint-evidence would parse from the comment above) into
-    // buildPreMergeGateCheck and assert the "missing visible clean draft_gate
-    // comment" failure is gone.
-    const postedEvidence = {
-      currentHeadSha: headSha,
-      draftGate: { visible: true, verdict: "clean" },
-      preApprovalGateMarker: {
-        visible: true,
-        contractComplete: true,
-        verdict: "clean",
-        headSha,
-        sizeOutcome: "pass",
-        sizeTouchesT1: false,
+    // #2354 AC2's second clause: once posted, detect-checkpoint-evidence's
+    // real evaluator must no longer report the gate missing. Rather than
+    // fabricating evidence, capture the ACTUAL body the poster just POSTed
+    // (the review payload on the mocked `pulls/17/reviews` POST above) and
+    // feed it back through the exported detectCheckpointEvidence detector via
+    // a mocked `pulls/17/reviews` GET, so this pins the poster and the
+    // detector to agree on the same wire body instead of a hand-built stand-in.
+    const postCall = calls.find((call) =>
+      call.args.includes("POST") && call.args.some((arg) => arg.includes("pulls/17/reviews")));
+    assert.ok(postCall, "expected the draft_gate review POST call to be captured");
+    const postedReviewPayload = JSON.parse(postCall.stdinText);
+
+    // Enforcement-agnostic for this detector-level check (mirrors the
+    // detect-checkpoint-evidence.test.mjs convention): the fan-out
+    // ledger/provenance layer is exercised by its own dedicated tests, not
+    // this self-heal scenario, so opt out here to isolate draftGateSatisfied.
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    ghEntries.push(
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: `{"headRefOid":"${headSha}"}\n` },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([[cleanPreApprovalComment]]) + "\n" },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"],
+        stdout: JSON.stringify([[{
+          id: 900,
+          body: postedReviewPayload.body,
+          state: "COMMENTED",
+          user: { login: "dev-loops-bot" },
+          submitted_at: "2026-05-30T18:00:00Z",
+          commit_id: headSha,
+          html_url: "https://github.com/owner/repo/pull/17#pullrequestreview-900",
+        }]]) + "\n",
       },
-    };
-    const preMergeCheck = buildPreMergeGateCheck(postedEvidence, 0, null);
-    assert.ok(
-      !preMergeCheck.failures.some((failure) => failure.includes("missing visible clean draft_gate comment")),
-      JSON.stringify(preMergeCheck.failures),
     );
+
+    const detected = await detectCheckpointEvidence({ repo: "owner/repo", pr: 17 }, { env, cwd: tempDir, runChild });
+    assert.equal(detected.draftGate.verdict, "clean", JSON.stringify(detected.draftGate));
+    assert.equal(detected.draftGateSatisfied, true, JSON.stringify(detected.draftGate));
   }, { prefix: "dev-loops-upsert-self-heal-roundcap-" });
 });
 
