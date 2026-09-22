@@ -44,7 +44,7 @@ tail retains its original unit's group.
 
 The per-unit angle-suffix this emits only NAMES the unit's angle(s) and instructs
 the reviewer to resolve each angle's persona/prompt by running the sanctioned
-CLI (\`node <dev-loops-package-root>/cli/index.mjs gate resolve-role --angle <name> [--gate <lifecycle-gate>]\`, or \`dev-loops-run cli/index.mjs gate resolve-role --angle <name> [--gate <lifecycle-gate>]\` under Claude). Lifecycle dispatches pass their current gate; standalone review dispatches omit it and use the resolver's explicit union of the draft, preApproval, and spike lifecycle gates. The CLI wraps resolveReviewerRole
+CLI (\`node <dev-loops-package-root>/cli/index.mjs gate resolve-role --angle <name> [--gate <lifecycle-gate>]\`, or \`dev-loops-run cli/index.mjs gate resolve-role --angle <name> [--gate <lifecycle-gate>]\` under Claude). Lifecycle dispatches pass their current gate; standalone review dispatches omit it and use the resolver's explicit union of the draft and preApproval lifecycle gates. The CLI wraps resolveReviewerRole
 over the fully merged config — a shell reviewer cannot call the function inline —
 it never inlines persona text extracted by the coordinator. Reviewer composition
 is resolved by the review agent + the neutral bundle (see the review agent's
@@ -161,7 +161,7 @@ const PROHIBITED_OPERATION_INSTRUCTIONS = {
 /**
  * The deterministic angle-suffix for a dispatch unit: it NAMES the unit's
  * angle(s), instructs the reviewer to resolve each angle's persona/focus by
- * running the sanctioned CLI (`node <dev-loops-package-root>/cli/index.mjs gate resolve-role --angle <name> [--gate <lifecycle-gate>]`, or `dev-loops-run cli/index.mjs gate resolve-role --angle <name> [--gate <lifecycle-gate>]` under Claude). Lifecycle dispatches pass their current gate; standalone review dispatches omit it and use the resolver's union of the draft, preApproval, and spike lifecycle gates. The CLI
+ * running the sanctioned CLI (`node <dev-loops-package-root>/cli/index.mjs gate resolve-role --angle <name> [--gate <lifecycle-gate>]`, or `dev-loops-run cli/index.mjs gate resolve-role --angle <name> [--gate <lifecycle-gate>]` under Claude). Lifecycle dispatches pass their current gate; standalone review dispatches omit it and use the resolver's union of the draft and preApproval lifecycle gates. The CLI
  * wraps resolveReviewerRole over the fully merged config — a reviewer runs in a
  * shell and cannot call that function inline — and tells the reviewer to review adversarially per its
  * scoped-mode contract, and carries the bounded reviewer contract (REVIEWER_UNIT_BUDGET, assigned-
@@ -192,7 +192,7 @@ export function buildAngleNamingSuffix(unit, { gate } = {}) {
   const gateOption = lifecycleGate ? ` --gate ${lifecycleGate}` : "";
   const gateSemantics = lifecycleGate
     ? `Membership is checked against the current lifecycle gate, \`${lifecycleGate}\`.`
-    : "No `--gate` is supplied because the standalone `review` gate has no configured angle list; membership is checked against the union of the lifecycle gates (`draft`, `preApproval`, `spike`).";
+    : "No `--gate` is supplied because the standalone `review` gate has no configured angle list; membership is checked against the union of the lifecycle gates (`draft`, `preApproval`).";
   const header = single
     ? `## Your review angle: ${list}`
     : `## Your review angles (dispatch unit "${unit?.name}"): ${list}`;

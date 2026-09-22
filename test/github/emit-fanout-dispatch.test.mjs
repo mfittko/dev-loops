@@ -1400,7 +1400,7 @@ test("buildAngleNamingSuffix names angles, scopes lifecycle membership, and docu
   assert.match(group, /dev-loops-run cli\/index\.mjs gate resolve-role --angle/);
   assert.doesNotMatch(group, /resolve-role --angle <name> --gate/);
   assert.match(group, /standalone `review` gate has no configured angle list/);
-  assert.match(group, /union of the lifecycle gates \(`draft`, `preApproval`, `spike`\)/);
+  assert.match(group, /union of the lifecycle gates \(`draft`, `preApproval`\)/);
   assert.ok(!group.includes("resolveReviewerRole(config"), "suffix must not instruct an inline resolveReviewerRole(config, ...) call");
   assert.match(group, /one findings artifact PER ANGLE/);
   // Fail-closed (#2336 follow-up): the non-blocking path is gated on `ok: true`

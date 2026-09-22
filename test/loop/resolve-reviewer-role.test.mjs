@@ -117,6 +117,17 @@ test("a non-fallback angle outside the gate named by --gate stays unresolved", (
   assert.equal(payload.status, "unresolved");
 });
 
+test("a spike-only angle is excluded from the no-gate review union but resolves with --gate spike", () => {
+  const config = { gates: { spike: { angles: ["spike-only-angle"] } } };
+  const reviewPayload = resolveRolePayload(config, { angle: "spike-only-angle", harness: "claude" });
+  assert.equal(reviewPayload.ok, false);
+  assert.equal(reviewPayload.status, "unresolved");
+
+  const spikePayload = resolveRolePayload(config, { angle: "spike-only-angle", harness: "claude", gate: "spike" });
+  assert.equal(spikePayload.ok, true);
+  assert.equal(spikePayload.status, "fallback");
+});
+
 // #2336 follow-up: `dynamic.additive` can dispatch an angle that is NOT in the
 // static gate list (it lives only in the additive pool). The fallback
 // classifier must use the SAME additive-aware pool dynamic dispatch uses, or a

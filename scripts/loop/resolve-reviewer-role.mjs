@@ -39,9 +39,9 @@ its focus prompt, and the authoritative harness-resolved model tier. Use this
 instead of grepping extension-defaults.yaml directly — a raw grep misses the
 .devloops config-layer merge and yields the wrong persona/model.
 
-Role resolution (persona/prompt/model) is gate-independent; --gate only affects
-the reported scope, never the persona/prompt/model — do not assume a per-gate
-persona.
+Role resolution (persona/prompt/model) is gate-independent; --gate selects the
+gate used for fail-closed angle-membership validation and reported scope, but
+never changes persona/prompt/model.
 
 Required:
   --angle <name>         Gate angle / lens name (e.g. correctness, security)
@@ -252,8 +252,10 @@ function configDeclaresGateAngles(config) {
 
 /**
  * True when `angle` is a member of the merged gate config's DISPATCHABLE angle
- * pool — the gate named by `--gate` when given, else any of draft/preApproval/
- * spike. Classifies against `resolveGateAngleContract(...).pool` (the
+ * pool — the gate named by `--gate` when given, else the standalone `review`
+ * gate's draft + preApproval union. `resolveReviewGateAngles` in
+ * write-gate-context.mjs is the source of truth for that no-gate union.
+ * Classifies against `resolveGateAngleContract(...).pool` (the
  * additive-aware pool dynamic dispatch uses: the static angle list widened to
  * `gates.anglePool` when `dynamic.additive` is on), NOT the static
  * `resolveGateAngles` list. A consumer can leave an angle out of the static
@@ -269,7 +271,7 @@ function configDeclaresGateAngles(config) {
  * @returns {boolean}
  */
 function angleIsConfigured(config, gate, angle) {
-  const gates = gate ? [gate] : ["draft", "preApproval", "spike"];
+  const gates = gate ? [gate] : ["draft", "preApproval"];
   for (const g of gates) {
     let pool;
     try {
