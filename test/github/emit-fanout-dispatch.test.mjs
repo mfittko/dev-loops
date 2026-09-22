@@ -374,6 +374,7 @@ test("shares a reviewer for a configured group AND an auto-chunk bundle alike; o
       // cannot make (#2336).
       assert.match(composed, /node <dev-loops-package-root>\/cli\/index\.mjs gate resolve-role --angle/);
       assert.match(composed, /dev-loops-run cli\/index\.mjs gate resolve-role --angle/);
+      assert.match(composed, /--gate pre_approval_gate/);
       assert.ok(!composed.includes("resolveReviewerRole(config"), "composed suffix must not tell a shell reviewer to call resolveReviewerRole(config, ...) inline");
     }
   });
@@ -1383,19 +1384,23 @@ test("sanitizeScopeSegment collapses non-alphanumeric runs to single hyphens", (
   assert.equal(sanitizeScopeSegment("--edge--"), "edge");
 });
 
-test("buildAngleNamingSuffix names angles and both harness invocations of the resolve-role CLI, never an inline JS call (#2336)", () => {
-  const single = buildAngleNamingSuffix({ name: "coverage", angles: ["coverage"] });
+test("buildAngleNamingSuffix names angles, scopes lifecycle membership, and documents review-gate union semantics (#2336)", () => {
+  const single = buildAngleNamingSuffix({ name: "coverage", angles: ["coverage"] }, { gate: "pre_approval_gate" });
   assert.match(single, /coverage/);
   // Reviewers run in either harness: the suffix must name both sanctioned CLI
   // invocations, not a resolveReviewerRole(config, ...) call a shell actor
   // cannot make.
   assert.match(single, /node <dev-loops-package-root>\/cli\/index\.mjs gate resolve-role --angle/);
   assert.match(single, /dev-loops-run cli\/index\.mjs gate resolve-role --angle/);
+  assert.match(single, /--gate pre_approval_gate/);
   assert.ok(!single.includes("resolveReviewerRole(config"), "suffix must not instruct an inline resolveReviewerRole(config, ...) call");
-  const group = buildAngleNamingSuffix({ name: "design-simplicity", angles: ["dry", "kiss"] });
+  const group = buildAngleNamingSuffix({ name: "design-simplicity", angles: ["dry", "kiss"] }, { gate: "review" });
   assert.match(group, /dry, kiss/);
   assert.match(group, /node <dev-loops-package-root>\/cli\/index\.mjs gate resolve-role --angle/);
   assert.match(group, /dev-loops-run cli\/index\.mjs gate resolve-role --angle/);
+  assert.doesNotMatch(group, /resolve-role --angle <name> --gate/);
+  assert.match(group, /standalone `review` gate has no configured angle list/);
+  assert.match(group, /union of the lifecycle gates \(`draft`, `preApproval`, `spike`\)/);
   assert.ok(!group.includes("resolveReviewerRole(config"), "suffix must not instruct an inline resolveReviewerRole(config, ...) call");
   assert.match(group, /one findings artifact PER ANGLE/);
   // Fail-closed (#2336 follow-up): the non-blocking path is gated on `ok: true`
@@ -1405,10 +1410,14 @@ test("buildAngleNamingSuffix names angles and both harness invocations of the re
   // blocked-reviewer artifact instead.
   for (const suffix of [single, group]) {
     assert.match(suffix, /ok: true/);
-    assert.match(suffix, /`status` `fallback` or `prompt-missing`/);
+    assert.match(suffix, /`status: "resolved"`/);
+    assert.match(suffix, /`status: "fallback"` or `status: "prompt-missing"`/);
     assert.match(suffix, /ok: false/);
     assert.match(suffix, /emit-reviewer-blocked\.mjs/);
   }
+  const noGate = buildAngleNamingSuffix({ name: "coverage", angles: ["coverage"] });
+  assert.doesNotMatch(noGate, /resolve-role --angle <name> --gate/);
+  assert.match(noGate, /standalone `review` gate has no configured angle list/);
 });
 
 // Issue 2155 AC row 2 (slice b): the emitted suffix also carries the bounded
