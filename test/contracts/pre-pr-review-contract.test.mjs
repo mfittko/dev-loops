@@ -98,12 +98,17 @@ test("no concrete model token is hardcoded in the phase prose or SKILL step (con
   // so scan every OTHER paragraph for a stray model literal.
   const bareModel = /\b(fable|opus|sonnet|haiku)\b/i;
   const fullId = /claude-[a-z0-9]+-\d/i;
+  // The Claude-family patterns above cannot see a provider-qualified id such as
+  // `openai-codex/gpt-5.6-sol`, so a hardcoded provider/model literal would slip
+  // through. Scan for that shape on the same surfaces.
+  const providerQualifiedModel = /\b[a-z0-9-]+\/[a-z0-9][a-z0-9.-]*\d/i;
 
   const contract = readRepo(CONTRACT);
   const modelPara = ruleParagraph(contract, "PRE-PR-MODEL-CONFIG-RESOLVED");
   const contractRest = contract.replace(modelPara, "");
   assert.ok(!bareModel.test(contractRest), "contract must not name a concrete model outside the model-resolution rule");
   assert.ok(!fullId.test(contractRest), "contract must not embed a full model id outside the model-resolution rule");
+  assert.ok(!providerQualifiedModel.test(contractRest), "contract must not name a provider-qualified model id outside the model-resolution rule");
 
   // The SKILL's pre-PR step must not name any concrete model at all.
   const skill = readRepo(SKILL);
@@ -112,4 +117,5 @@ test("no concrete model token is hardcoded in the phase prose or SKILL step (con
   const step = skill.slice(stepStart, stepEnd === -1 ? undefined : stepEnd);
   assert.ok(!bareModel.test(step), "SKILL pre-PR step must not name a concrete model");
   assert.ok(!fullId.test(step), "SKILL pre-PR step must not embed a full model id");
+  assert.ok(!providerQualifiedModel.test(step), "SKILL pre-PR step must not name a provider-qualified model id");
 });
