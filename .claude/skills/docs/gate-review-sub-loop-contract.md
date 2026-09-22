@@ -380,7 +380,7 @@ disk, the emitter reads the artifact's fan-out dispatch plan (`artifact.fanout.g
 writes a minimal angle-suffix and drives the composer core above (`composeAndRecordReviewerPrompt`,
 the shared atomic compose-and-record core). It emits one
 `{ scope, angles, group, promptPath }` per DISPATCH unit plus a `maxConcurrent` field; the
-conductor then dispatches those emitted units in ONE call per wave (one fresh-context `review`
+conductor then dispatches those emitted units in one wave (under Pi: ONE call per wave; one fresh-context `review`
 subagent per unit, seeded with that unit's `promptPath` bytes verbatim), records each unit's
 `group` on Phase 3's `--provenance`
 (null for an unsplit single-angle resolved unit; the original resolved unit's own name —
@@ -534,7 +534,7 @@ reconciles and closes the records-floor residual carried on #1468.
 <!-- rule: GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK -->
 `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK`: Bounded parallelism is the DEFAULT dispatch posture:
 fan-out dispatches up to `gates.fanout.maxConcurrent` dispatch units concurrently per wave
-(this repo: 3, aligned with `queue.maxParallel`) in ONE call per wave (Pi: one
+(this repo: 3, aligned with `queue.maxParallel`) in one wave (under Pi: ONE call per wave — one
 `subagent`/`runs.all([...])` call, described above) — the conductor awaits each wave before releasing
 the next. `gates.fanout.sequential:
 true` (effective concurrency 1, above) is the documented LOAD FALLBACK for an environment
