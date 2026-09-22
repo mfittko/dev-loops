@@ -1881,10 +1881,11 @@ test("converged non-draft PR without clean draft_gate evidence is blocked from f
   assert.match(result.reason, /no gate exemptions, #579/i);
 });
 
-// #587: round-cap clean fallback auto-satisfies draft gate requirement
-// When roundCapReached + sameHeadCleanConverged + preApprovalGate clean,
-// missing draft_gate evidence should not block final approval.
-test("round-cap clean fallback allows final approval without draft_gate evidence (#587)", () => {
+// #2354: the round cap never substitutes for draft_gate evidence. A PR at the
+// round cap with no clean draft_gate evidence must reconcile the draft gate,
+// exactly like a below-cap PR (no gate exemptions, #579) — never a forced
+// draftGateAlreadySatisfied: true that hides the missing evidence.
+test("round-cap clean fallback without draft_gate evidence still reconciles the draft gate (#2354)", () => {
   const result = evaluatePrGateCoordination({
     pr: 266,
     currentHeadSha: "abc123456789",
@@ -1901,17 +1902,14 @@ test("round-cap clean fallback allows final approval without draft_gate evidence
     preApprovalGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
   });
 
-  // Round-cap clean fallback = draft gate equivalent → final approval
-  assert.equal(result.gateBoundary, PR_CHECKPOINT.FINAL_APPROVAL_READY);
-  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL);
+  // The round cap does not exempt the draft gate — reconcile it like any other state.
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_GATE_NEEDED);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE);
   assert.equal(result.draftGate.cleanEvidenceExists, false);
-  // draftGateAlreadySatisfied must be true when roundCapReached bypasses draft gate
-  assert.equal(result.draftGateAlreadySatisfied, true);
-  assert.match(result.reason, /round-cap clean fallback/i);
-  assert.match(result.reason, /draft gate equivalent/i);
-  assert.match(result.reason, /5\/5 rounds/i);
-  assert.ok(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL));
-  assert.ok(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE));
+  assert.equal(result.draftGateAlreadySatisfied, false);
+  assert.match(result.reason, /no gate exemptions, #579/i);
+  assert.ok(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE));
+  assert.ok(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL));
 });
 
 // Backward compat: non-round-cap path still requires draft_gate evidence
@@ -1972,6 +1970,144 @@ test("#836: a PR un-drafted externally before draft_gate ran is caught at the me
   assert.match(result.reason, /no gate exemptions, #579/i);
 });
 
+// #2354 AC1: the round cap must never substitute for draft_gate evidence, in
+// every reachable pre-approval/CI-wait/blocked sub-branch of every round-cap
+// state. Each scenario has no clean draft_gate evidence, so
+// draftGateAlreadySatisfied must read false regardless of roundCapReached.
+for (const scenario of [
+  {
+    name: "ROUND_CAP_CLEAN_FALLBACK blocked on failing CI",
+    lifecycleState: STATE.ROUND_CAP_CLEAN_FALLBACK,
+    ciStatus: "failure",
+    expectedGateBoundary: PR_CHECKPOINT.BLOCKED,
+  },
+  {
+    name: "ROUND_CAP_CLEAN_FALLBACK waits for CI",
+    lifecycleState: STATE.ROUND_CAP_CLEAN_FALLBACK,
+    ciStatus: "pending",
+    expectedGateBoundary: PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW,
+  },
+  {
+    name: "ROUND_CAP_CLEAN_FALLBACK reaches pre_approval_gate window",
+    lifecycleState: STATE.ROUND_CAP_CLEAN_FALLBACK,
+    ciStatus: "success",
+    expectedGateBoundary: PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW,
+  },
+  {
+    name: "ROUND_CAP_REACHED grant reaches pre_approval_gate window",
+    lifecycleState: STATE.ROUND_CAP_REACHED,
+    ciStatus: "success",
+    unresolvedThreadCount: 0,
+    copilotConvergenceOk: true,
+    expectedGateBoundary: PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW,
+  },
+  {
+    name: "READY_TO_REREQUEST_REVIEW blocked on failing CI at the round cap",
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    sameHeadCleanConverged: true,
+    ciStatus: "failure",
+    expectedGateBoundary: PR_CHECKPOINT.BLOCKED,
+  },
+  {
+    name: "READY_TO_REREQUEST_REVIEW waits for CI at the round cap",
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    sameHeadCleanConverged: true,
+    ciStatus: "pending",
+    expectedGateBoundary: PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW,
+  },
+  {
+    name: "READY_TO_REREQUEST_REVIEW reaches pre_approval_gate window at the round cap",
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    sameHeadCleanConverged: true,
+    ciStatus: "success",
+    expectedGateBoundary: PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW,
+  },
+  {
+    name: "LOW_SIGNAL_CONVERGED blocked on failing CI",
+    lifecycleState: STATE.LOW_SIGNAL_CONVERGED,
+    ciStatus: "failure",
+    expectedGateBoundary: PR_CHECKPOINT.BLOCKED,
+  },
+  {
+    name: "LOW_SIGNAL_CONVERGED waits for CI",
+    lifecycleState: STATE.LOW_SIGNAL_CONVERGED,
+    ciStatus: "pending",
+    expectedGateBoundary: PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW,
+  },
+  {
+    name: "LOW_SIGNAL_CONVERGED reaches pre_approval_gate window",
+    lifecycleState: STATE.LOW_SIGNAL_CONVERGED,
+    ciStatus: "success",
+    expectedGateBoundary: PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW,
+  },
+]) {
+  test(`round cap never substitutes for draft_gate evidence: ${scenario.name} (#2354)`, () => {
+    const result = evaluatePrGateCoordination({
+      pr: 2354,
+      currentHeadSha: "29aa40b7deadbeef",
+      prDraft: false,
+      lifecycleState: scenario.lifecycleState,
+      loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+      sameHeadCleanConverged: scenario.sameHeadCleanConverged ?? false,
+      ciStatus: scenario.ciStatus,
+      unresolvedThreadCount: scenario.unresolvedThreadCount,
+      copilotConvergenceOk: scenario.copilotConvergenceOk,
+      copilotReviewRoundCount: 5,
+      maxCopilotRounds: 5,
+      draftGate: gate({ visible: false }),
+      draftGateMarker: gate({ visible: false }),
+      preApprovalGate: gate({ visible: false }),
+      preApprovalGateMarker: gate({ visible: false }),
+    });
+
+    assert.equal(result.gateBoundary, scenario.expectedGateBoundary);
+    assert.equal(result.draftGate.cleanEvidenceExists, false);
+    assert.equal(result.draftGateAlreadySatisfied, false);
+  });
+}
+
+// #2354 AC3: draftGateAlreadySatisfied is always the pure function of
+// (prDraft, draftGate.cleanEvidenceExists) — never the round cap — for both
+// draft and ready PRs, with and without clean draft evidence, below and at
+// the round cap.
+for (const scenario of [
+  { name: "draft PR, no draft_gate evidence", prDraft: true, lifecycleState: STATE.PR_DRAFT, cleanDraftEvidence: false },
+  { name: "draft PR, clean draft_gate evidence", prDraft: true, lifecycleState: STATE.PR_DRAFT, cleanDraftEvidence: true },
+  { name: "ready PR, no draft_gate evidence, below the round cap", prDraft: false, lifecycleState: STATE.READY_TO_REREQUEST_REVIEW, sameHeadCleanConverged: true, copilotReviewRoundCount: 2, maxCopilotRounds: 5, cleanDraftEvidence: false },
+  { name: "ready PR, no draft_gate evidence, at the round cap", prDraft: false, lifecycleState: STATE.READY_TO_REREQUEST_REVIEW, sameHeadCleanConverged: true, copilotReviewRoundCount: 5, maxCopilotRounds: 5, cleanDraftEvidence: false },
+  { name: "ready PR, clean draft_gate evidence, below the round cap", prDraft: false, lifecycleState: STATE.READY_TO_REREQUEST_REVIEW, sameHeadCleanConverged: true, copilotReviewRoundCount: 2, maxCopilotRounds: 5, cleanDraftEvidence: true },
+  { name: "ready PR, clean draft_gate evidence, at the round cap", prDraft: false, lifecycleState: STATE.READY_TO_REREQUEST_REVIEW, sameHeadCleanConverged: true, copilotReviewRoundCount: 5, maxCopilotRounds: 5, cleanDraftEvidence: true },
+]) {
+  test(`draftGateAlreadySatisfied === (!prDraft && cleanEvidenceExists): ${scenario.name} (#2354)`, () => {
+    const draftGate = scenario.cleanDraftEvidence
+      ? gate({ visible: true, headSha: "7e0e303b", verdict: "clean" })
+      : gate({ visible: false });
+    const draftGateMarker = scenario.cleanDraftEvidence
+      ? gate({ visible: true, headSha: "7e0e303b", verdict: "clean", contractComplete: true })
+      : gate({ visible: false });
+
+    const result = evaluatePrGateCoordination({
+      pr: 2354,
+      currentHeadSha: "abc123456789",
+      prDraft: scenario.prDraft,
+      lifecycleState: scenario.lifecycleState,
+      loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+      sameHeadCleanConverged: scenario.sameHeadCleanConverged ?? false,
+      ciStatus: "success",
+      copilotReviewRoundCount: scenario.copilotReviewRoundCount ?? 0,
+      maxCopilotRounds: scenario.maxCopilotRounds ?? 5,
+      draftGate,
+      draftGateMarker,
+      preApprovalGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+      preApprovalGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+    });
+
+    assert.equal(
+      result.draftGateAlreadySatisfied,
+      !scenario.prDraft && result.draftGate.cleanEvidenceExists,
+    );
+  });
+}
 
 // ── LOW_SIGNAL_CONVERGED gate routing tests ─────────────────────────────
 
