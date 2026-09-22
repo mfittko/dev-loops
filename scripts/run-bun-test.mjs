@@ -12,10 +12,10 @@ const DEFAULT_ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)))
 const FAILURE_ONLY_FLAG = "--only-failures";
 const DOTS_FLAG = "--dots";
 // Directories under the repo root that hold test files Bun would otherwise
-// discover as this checkout's own. `worktrees/**` is the loop-owned location for
-// a per-unit worktree, so a primary-checkout `verify` used to run ANOTHER
-// branch's test copies and report their failures as this branch's — an honest
-// gate turned dishonest by a blessed layout.
+// discover as this checkout's own. `tmp/**` covers the canonical loop-owned
+// worktrees (`tmp/worktrees/dev-loops/<kind>-<number>`); `worktrees/**` covers
+// the deprecated ad hoc repo-root location, which is gitignored and still used.
+// Bun already skips dot-directories such as `.claude/worktrees/`.
 const PATH_IGNORE_PATTERNS = Object.freeze(["tmp/**", "worktrees/**"]);
 const PATH_IGNORE_FLAGS = Object.freeze(PATH_IGNORE_PATTERNS.map((pattern) => `--path-ignore-patterns=${pattern}`));
 const SUCCESS_TAIL_BYTES = 64 * 1024;

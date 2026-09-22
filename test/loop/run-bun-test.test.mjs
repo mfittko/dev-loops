@@ -8,8 +8,8 @@ import { test } from "bun:test";
 import { buildBunTestArgs, childResult, createOutputCapture, createTestProgress, discoverRepositoryTests, parseBunSummary, PER_TEST_TIMEOUT_BASE_MS, resolveBunTestFiles, resolveBunTestParallelism, resolveBunTestTimeoutMs, runBunTest } from "../../scripts/run-bun-test.mjs";
 
 test("a nested worktree's test copies are never discovered as this checkout's own", () => {
-  // `worktrees/<name>` is the loop-owned location for a per-unit worktree, and it
-  // holds a full copy of every test file. Discovering it made a primary-checkout
+  // Repo-root `worktrees/<name>` is a deprecated ad hoc worktree location (it is
+  // gitignored and still used), and each one holds a full copy of every test file. Discovering it made a primary-checkout
   // `verify` report another branch's failures as this branch's (observed: 18522
   // tests, 78 foreign failures). Both ignore patterns must survive arg building,
   // including when a caller passes one explicitly in either spelling.
@@ -77,7 +77,8 @@ test("launcher centrally deduplicates canonical reporting and discovery flags", 
     "--path-ignore-patterns=generated/**", "example.test.mjs",
   ], {});
   assert.equal(args.filter((arg) => arg === "--only-failures").length, 1);
-  assert.equal(args.filter((arg) => arg === "--path-ignore-patterns=tmp/**", "--path-ignore-patterns=worktrees/**").length, 1);
+  assert.equal(args.filter((arg) => arg === "--path-ignore-patterns=tmp/**").length, 1);
+  assert.equal(args.filter((arg) => arg === "--path-ignore-patterns=worktrees/**").length, 1);
   assert.equal(args.filter((arg) => arg === "tmp/**").length, 0);
   assert.ok(args.includes("--path-ignore-patterns=generated/**"));
 });
@@ -87,7 +88,8 @@ test("explicit dots replaces failure-only reporting while keeping canonical disc
     const args = buildBunTestArgs(["--only-failures", ...reporter, "example.test.mjs"], {});
     assert.equal(args.filter((arg) => arg === "--dots").length, 1);
     assert.ok(!args.includes("--only-failures"));
-    assert.equal(args.filter((arg) => arg === "--path-ignore-patterns=tmp/**", "--path-ignore-patterns=worktrees/**").length, 1);
+    assert.equal(args.filter((arg) => arg === "--path-ignore-patterns=tmp/**").length, 1);
+    assert.equal(args.filter((arg) => arg === "--path-ignore-patterns=worktrees/**").length, 1);
   }
 });
 
