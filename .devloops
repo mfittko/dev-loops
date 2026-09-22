@@ -159,10 +159,11 @@ localImplementation:
 
 # Pre-PR review model opt-in (issue #2305, skills/docs/pre-pr-review-contract.md).
 # The pre-PR review pass runs ONE fresh-context general-purpose reviewer before
-# the first push. On the Claude-Code harness this repo pins that one call to
-# Opus 5.5 (underlying model identity claude-opus-5-5): it reviews code at the
-# level of Fable at lower cost. The value here is the Claude-harness model token
-# `opus`, a member of the Claude Code Agent-tool `model` enum
+# the first push. On the Claude-Code harness this repo runs that one call on the
+# `opus` family token, which current Claude Code resolves to Opus 5.5 (underlying
+# model identity claude-opus-5-5) and which follows the Opus family alias on a
+# Claude Code upgrade. Opus 5.5 reviews code at the level of Fable at lower
+# cost. The token is a member of the Claude Code Agent-tool `model` enum
 # (sonnet|opus|haiku|fable); a full model id is rejected at dispatch. The pin is
 # explicit so a session started on another model cannot change the reviewer.
 # The tier sets `claude` to `opus` and `pi` to openai-codex/gpt-5.6-sol — a
