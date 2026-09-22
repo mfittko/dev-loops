@@ -358,6 +358,36 @@ test("buildCoordinationEvaluatorInput threads postConvergenceReviewSuppressed fr
   assert.equal(missingFieldInput.postConvergenceReviewSuppressed, false);
 });
 
+test("buildCoordinationEvaluatorInput threads Copilot convergence and fails closed when it is absent (#2345)", () => {
+  const coordinationContext = {
+    repo: "owner/repo",
+    pr: 2346,
+    currentHeadSha: "29aa40b7deadbeef",
+    prData: { isDraft: false, state: "OPEN" },
+    interpretation: { state: "unresolved_feedback_present", sameHeadCleanConverged: false },
+    disposition: { loopDisposition: "action_required" },
+    snapshot: { ciStatus: "success", copilotReviewRoundCount: 1, unresolvedThreadCount: 0, copilotReviewOnCurrentHead: true },
+    gateEvidence: {
+      draftGate: { visible: true, headSha: "29aa40b7", verdict: "clean" },
+      draftGateMarker: { visible: true, headSha: "29aa40b7", verdict: "clean", contractComplete: true },
+      preApprovalGate: { visible: false },
+      preApprovalGateMarker: { visible: false },
+    },
+    refinementArtifact: null,
+  };
+  const build = (context) => buildCoordinationEvaluatorInput({
+    coordinationContext: context,
+    maxCopilotRounds: 2,
+    draftGateConfig: { requireCi: true },
+    preApprovalGateConfig: { requireCi: true },
+    reviewMode: null,
+  });
+
+  assert.equal(build({ ...coordinationContext, copilotBodyConvergence: { ok: true } }).copilotConvergenceOk, true);
+  assert.equal(build({ ...coordinationContext, copilotBodyConvergence: { ok: false } }).copilotConvergenceOk, false);
+  assert.equal(build(coordinationContext).copilotConvergenceOk, false);
+});
+
 // The poster is the artifact that WRITES the verdict; like its sibling
 // severity consumers (consolidate-fanin, close-gate-findings,
 // detect-checkpoint-evidence) it must fail closed on a config that failed
@@ -1292,6 +1322,61 @@ const PRE_APPROVAL_READY_REVIEWS = [1, 2, 3, 4, 5].map((i) => ({
   author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED",
   submittedAt: `2026-06-01T20:0${i}:00Z`, commit: { oid: `${i}`.repeat(40) },
 }));
+test("upsert-checkpoint-verdict posts pre_approval for a thread-clean current-head 🔵 at the round cap (#2345)", async () => {
+  await withTempDir(async (tempDir) => {
+    const headSha = "abc1234000000000000000000000000000000000";
+    const env = await writeGhStub(tempDir, [
+      ...buildGateCoordinationEntries({
+        isDraft: false,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        reviews: [
+          {
+            author: { login: "copilot-pull-request-reviewer[bot]" },
+            state: "COMMENTED",
+            submittedAt: "2026-06-01T20:00:00Z",
+            commit: { oid: "1".repeat(40) },
+          },
+          {
+            author: { login: "copilot-pull-request-reviewer[bot]" },
+            state: "COMMENTED",
+            submittedAt: "2026-06-01T20:01:00Z",
+            commit: { oid: headSha },
+            body: "### 🔵 Needs a closer look\n\nFindings: None",
+          },
+        ],
+      }).map((entry) => ({ ...entry, matchByClaims: true })),
+      {
+        matchByClaims: true,
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"],
+        stdout: '{"baseRefOid":"0000000000000000000000000000000000000000","labels":[]}\n',
+      },
+      {
+        matchByClaims: true,
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["### Gate review: `pre_approval_gate`"],
+        stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
+      },
+    ]);
+
+    const result = await runNode([
+      "--repo", "owner/repo",
+      "--pr", "17",
+      "--gate", "pre_approval_gate",
+      "--head-sha", headSha,
+      "--verdict", "clean",
+      "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+      "--findings-summary", "no issues found",
+      "--next-action", "await final human approval",
+    ], {
+      env,
+      evaluatePrSizeBudget: async () => ({ outcome: "pass", t1SliceLoc: 0, waiver: { t1Valid: false, defaultValid: false } }),
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).action, "created");
+  }, { prefix: "dev-loops-upsert-preapproval-blue-" });
+});
+
 test("upsert-checkpoint-verdict auto-derives the size budget for pre_approval_gate when --size-budget-json is omitted (#2185)", async () => {
   await withTempDir(async (tempDir) => {
     const env = await writeGhStub(tempDir, [

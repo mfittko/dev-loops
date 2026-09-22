@@ -254,9 +254,9 @@ Resolve grouping through `resolveFanoutGroups(config, gate, resolvedAngles, { fu
 
 Keep reviewer groups separate from `requestGroups`: the latter batch models/request fingerprints for caching, not reviewer identity. Validate provenance against resolved reviewer groups (`fanoutReviewerPairingError`), never against model/cache groups.
 
-Dispatch one independent, fresh-context `review` agent per emitted unit via the plain Agent tool, seeded verbatim with the neutral bundle and its angle prompts. Never inherit the conductor's or a sibling reviewer's context. Follow the [review agent's scoped angle-review mode](../../agents/review.md).
+Dispatch one independent, fresh-context `review` agent per emitted unit via the plain Agent tool — releasing the wave's units together (under Pi: ONE call per wave, the wave rule below), never N separate blocking calls — seeded verbatim with the neutral bundle and its angle prompts. Never inherit the conductor's or a sibling reviewer's context. Follow the [review agent's scoped angle-review mode](../../agents/review.md).
 
-Wave the emitted units under the emitter's `maxConcurrent` (`resolveFanoutEffectiveConcurrency`), awaiting a free slot before releasing more. The configured cross-harness default is 4; this repo configures 3. `gates.fanout.sequential: true` resolves to 1, so each reviewer completes and writes evidence before the next starts. Under the Claude harness the effective value is additionally capped at 2; Pi/unknown harnesses retain the configured value. These bounds never collapse independent review into inline review.
+Wave the emitted units under the emitter's `maxConcurrent` (`resolveFanoutEffectiveConcurrency`) in ONE call per wave — under Pi a single `subagent({ workflowScriptPath })` call whose script body returns ONE `runs.all([...])` with its own unique `key` per unit (this shape needs pi-subagents ≥0.57; `tasks: [...]` was removed in 0.41.0, and the repo's `Dockerfile` `PI_SUBAGENTS_VERSION` pin is below that floor and must be raised for the shape to run in the declared container) — then join that wave before releasing the next. Never issue N separate blocking per-unit calls for one wave: that is the shape Pi's foreground guard rejects, and it silently serializes the round. The configured cross-harness default is 4; this repo configures 3. `gates.fanout.sequential: true` resolves to 1, so each reviewer completes and writes evidence before the next starts. Under the Claude harness the effective value is additionally capped at 2; Pi/unknown harnesses retain the configured value. These bounds never collapse independent review into inline review.
 
 If a dispatch still receives 429, follow `GATE-EXEC-DISPATCH-RETRY-BACKOFF` below: retry the same unit under the helper's policy, then halve the batch with `backoffMaxConcurrent` and recompute waves before foreground one-at-a-time fallback. Record degradation in gate evidence/provenance. Never launch all units and rely on retries to impose the bound.
 
@@ -380,8 +380,9 @@ disk, the emitter reads the artifact's fan-out dispatch plan (`artifact.fanout.g
 writes a minimal angle-suffix and drives the composer core above (`composeAndRecordReviewerPrompt`,
 the shared atomic compose-and-record core). It emits one
 `{ scope, angles, group, promptPath }` per DISPATCH unit plus a `maxConcurrent` field; the
-conductor then dispatches one fresh-context `review` subagent per emitted unit, seeded with
-that unit's `promptPath` bytes verbatim, records each unit's `group` on Phase 3's `--provenance`
+conductor then dispatches those emitted units in one wave (under Pi: ONE call per wave; one fresh-context `review`
+subagent per unit, seeded with that unit's `promptPath` bytes verbatim), records each unit's
+`group` on Phase 3's `--provenance`
 (null for an unsplit single-angle resolved unit; the original resolved unit's own name —
 configured or auto-chunk — for every split sub-unit, including a one-angle tail, and for an
 unsplit shared unit), and waves the emitted
@@ -463,7 +464,7 @@ Omit `--expected-dispatch-units` at zero, as required by the existing consumer c
 
 | Dispatch | Delivery and limits |
 | --- | --- |
-| Code-driven Pi `runs.all` | The driver reads the file and directly supplies the spawned reviewer's prompt, without agent paraphrase. |
+| Code-driven Pi `runs.all` | ONE `workflowScriptPath` call per wave whose script body returns a single `runs.all([...])`, one item per emitted unit, each with its own unique `key`; the driver reads each unit's file and directly supplies the spawned reviewer's prompt, without agent paraphrase. Never N separate blocking per-unit calls. |
 | Agent-driven Claude Code Agent/Task | Run the composer, read the file, and copy its exact bytes into `prompt`, with NO preamble, wrapper or paraphrase. No primitive injects those bytes independently of that agent-authored parameter. |
 | Agent-driven Codex | Uses the generic batch/agent adapter, like Claude Code; only Pi ships a concrete adapter. Fixtures distinguish the generic adapters by environment. Codex production dispatch is NOT independently qualified by this repo. |
 
@@ -536,8 +537,9 @@ reconciles and closes the records-floor residual carried on #1468.
 <!-- rule: GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK -->
 `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK`: Bounded parallelism is the DEFAULT dispatch posture:
 fan-out dispatches up to `gates.fanout.maxConcurrent` dispatch units concurrently per wave
-(this repo: 3, aligned with `queue.maxParallel`) via the blocking wave-by-wave join described
-above — the conductor awaits each wave before releasing the next. `gates.fanout.sequential:
+(this repo: 3, aligned with `queue.maxParallel`) in one wave (under Pi: ONE call per wave — one
+`subagent`/`runs.all([...])` call, described above) — the conductor awaits each wave before releasing
+the next. `gates.fanout.sequential:
 true` (effective concurrency 1, above) is the documented LOAD FALLBACK for an environment
 that SIGTERMs heavy reviewers under parallel overload (ADR 0049) — a repo that enables it MUST
 record why parallel execution was impractical for its environment; it is a fallback, never the
@@ -1328,12 +1330,15 @@ code/test/config/CI file, an unclassifiable file, or an unavailable delta. On th
 integrate-only base-move (proven-empty reduced delta, `deltaComplete`) carries the convergence
 forward too, instead of forcing a fresh blocking round for already-merged main code. An empty
 delta WITHOUT that proof still fails closed. The Copilot
-round-cap path consumes it: at the cap, `request-copilot-review.mjs` fetches the delta since
-the last Copilot-reviewed head (via a single `gh api .../compare`) and, when it is a provable
-linear rename-free pure-doc bump, returns `suppressed_post_convergence_docs_only` instead of
-forcing a fresh blocking round — even under `--force-rerequest-review`. The guard is
-default-safe/fail-closed: a non-linear (rebased/amended) advance, any rename/copy, an
-unavailable compare, or any non-doc/unclassifiable file re-opens the round exactly as before,
+round-cap path AND the below-cap path both consume it, through one shared
+`resolveConvergenceCarry` helper in `request-copilot-review.mjs`: at the cap it fetches the
+delta since the last Copilot-reviewed head (via a single `gh api .../compare`), and below the
+cap the same helper runs for a first request on a head-advanced PR. Either way, when that
+delta is a provable pure-doc/prose bump OR an integrate-only base-move (base-relative
+reduction empties the delta), it returns `suppressed_post_convergence_docs_only` instead of
+forcing a fresh blocking round — at the cap this holds even under `--force-rerequest-review`.
+The guard is default-safe/fail-closed: a non-linear (rebased/amended) advance, any rename/copy,
+an unavailable compare, or any non-doc/unclassifiable file re-opens the round exactly as before,
 preserving the round cap and the significant-post-convergence-change exception
 (`COPILOT-FOLLOWUP-ROUND-CAP` in [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md)).
 

@@ -29,11 +29,11 @@ Required installed runtime contract docs are shared bundled copies under `../doc
 
 > Under the Claude Code harness the dev-loop runs as a single agent: run these steps directly — no separate async-subagent dispatch. The coordinator has an opt-in read-only boundary for tracked repo files and code-verification/build commands (`DEVLOOPS_COORDINATOR_READONLY=1`, enforced by the guard hooks). See [Main Agent Contract](../docs/main-agent-contract.md).
 
-Resolve authoritative state via the startup resolver (`npx dev-loops@1.0.3 loop startup --issue <n>` for issues, `npx dev-loops@1.0.3 loop startup --pr <n>` for PRs), then immediately build the handoff envelope via `npx dev-loops@1.0.3 loop build-envelope --input <resolver-output.json>`. The envelope determines `requiredReads`, `nextAction`, `stopRules`, and `acceptance` — load only those files, execute only that bounded task. It is the first handoff artifact consumed before loading any route pack. See [Workflow Handoff Contract](../docs/workflow-handoff-contract.md) for the derivation contract.
+Resolve authoritative state via the startup resolver (`npx dev-loops@1.0.4-pre.0 loop startup --issue <n>` for issues, `npx dev-loops@1.0.4-pre.0 loop startup --pr <n>` for PRs), then immediately build the handoff envelope via `npx dev-loops@1.0.4-pre.0 loop build-envelope --input <resolver-output.json>`. The envelope determines `requiredReads`, `nextAction`, `stopRules`, and `acceptance` — load only those files, execute only that bounded task. It is the first handoff artifact consumed before loading any route pack. See [Workflow Handoff Contract](../docs/workflow-handoff-contract.md) for the derivation contract.
 
 **Retrospective checkpoint gate:** the resolver reads `.pi/dev-loop-retrospective-checkpoint.json` (resolved from the repo's main checkout, not cwd-relative, so a worktree and the main checkout always see the same file) and, when the repo config `workflow.requireRetrospective` (set via `.devloops` at repo root) is `true`, bounds newer base-branch commits with local git ancestry and classifies each through GitHub's commit-to-PR association. A `complete`/`skipped` record becomes `missing` only when a newer commit is associated with a PR merged into the configured base branch; direct/release commits, unmerged PRs, and PRs merged into another base do not open a cycle. An unresolvable recorded SHA or unverifiable association fails closed to `missing`. When the resulting state is `missing`, the resolver returns `needs_reconcile`; `loop build-envelope` represents that terminal reconciliation with `selectedStrategy: null` and an actionable stop envelope. Complete or explicitly skip the retrospective before starting, carrying the cycle identity via `checkpoint-contract.mjs --repo`/`--pr`/`--merge-commit` (required for `complete`/`skipped`) and — for `complete` — the fresh-context provenance via `--retro-context fresh --record-source <path>` (mandatory per `RETRO-FRESH-CONTEXT-MANDATORY`; an inline self-authored retro fails the checkpoint).
 
-**Pre-flight PR gate (mandatory):** Before working an existing PR, the dev-loop must run `npx dev-loops@1.0.3 loop handoff --repo <owner/name> --pr <number>` and abort if `action: "stop"`. When `terminal: true`, proceed inline. When `terminal: false`, resolve the blocking condition first.
+**Pre-flight PR gate (mandatory):** Before working an existing PR, the dev-loop must run `npx dev-loops@1.0.4-pre.0 loop handoff --repo <owner/name> --pr <number>` and abort if `action: "stop"`. When `terminal: true`, proceed inline. When `terminal: false`, resolve the blocking condition first.
 
 **Worktree cwd (mandatory):** Always use a worktree checkout for git operations, file reads/writes, and validation commands — never use the `main` checkout.
 
@@ -115,10 +115,10 @@ When `preferredSource` is `worktree` (installed dev-loops CLI older than the cur
 
 ## Read-only info shortcut
 
-Info/handoff requests can be served directly via `npx dev-loops@1.0.3 loop info` (read-only; no full dev-loop run required):
-- `npx dev-loops@1.0.3 loop info --issue <n>` — human-readable issue state summary (strategy, route, linked PR, next action)
-- `npx dev-loops@1.0.3 loop info --pr <n>` — human-readable PR state summary (branch, CI, threads, rounds, action)
-- `npx dev-loops@1.0.3 loop info --issue <n> --json` — machine-readable JSON output
+Info/handoff requests can be served directly via `npx dev-loops@1.0.4-pre.0 loop info` (read-only; no full dev-loop run required):
+- `npx dev-loops@1.0.4-pre.0 loop info --issue <n>` — human-readable issue state summary (strategy, route, linked PR, next action)
+- `npx dev-loops@1.0.4-pre.0 loop info --pr <n>` — human-readable PR state summary (branch, CI, threads, rounds, action)
+- `npx dev-loops@1.0.4-pre.0 loop info --issue <n> --json` — machine-readable JSON output
 
 ## Reading tool output (token-economical convention)
 
@@ -234,7 +234,7 @@ Before gate dispatch, read `ANTIPATTERN-FANIN-WAIT` in [Anti-patterns](../docs/a
 
 **Bounded, exhaustively (dispatch discipline, #1907):** the two guardrails above name the two most-hit failure modes, not the boundary of the rule — every `bash` call this agent launches directly is `timeout`-bounded (or issued through a wrapper that already bounds itself), and every watch/probe carries an explicit `--timeout-ms` (or equivalent bounded flag); an unbounded blocking call is never sanctioned regardless of which command it wraps.
 
-**Gate fan-out dispatch discipline (bounded-parallel default, #1907):** gate fan-out is bounded-parallel by DEFAULT — up to `gates.fanout.maxConcurrent` dispatch units per wave via blocking joins; `gates.fanout.sequential: true` is the documented load fallback for a SIGTERM-prone environment, never the default. A transient dispatch failure (429/5xx) retries the same unit with exponential backoff; a hard 4xx (e.g. `402`) escalates to the supervisor/operator immediately instead of retrying into the same wall; provider choice stays a per-dispatch decision (`STICKY-PROVIDER-PIN`). Post-merge, the only remaining steps are the main-green check, one board-move attempt, and the final report — never re-running consolidation machinery whose artifacts already exist. Owning rules: `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK`, `GATE-EXEC-DISPATCH-RETRY-BACKOFF`, `GATE-EXEC-END-OF-RUN-CONTRACT` in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md); `STICKY-PROVIDER-PIN` in [Anti-patterns](../docs/anti-patterns.md).
+**Gate fan-out dispatch discipline (bounded-parallel default, #1907):** gate fan-out is bounded-parallel by DEFAULT — a wave releases up to `gates.fanout.maxConcurrent` dispatch units together in ONE call, never as N sequential blocking calls. Under Pi that call is `subagent({ workflowScriptPath, cwd, async: false, timeoutMs })` whose script body returns exactly ONE `runs.all([...])` with one item per unit, each carrying a unique non-empty `key`; this shape needs pi-subagents ≥0.57 (`tasks: [...]` was removed in 0.41.0), while the repo's `Dockerfile` `PI_SUBAGENTS_VERSION` pin is below that floor and must be raised for the shape to run in the declared container; N per-unit blocking `subagent` calls for one wave are the shape Pi's foreground guard rejects and MUST never be used. `gates.fanout.sequential: true` is the documented load fallback for a SIGTERM-prone environment, never the default. A transient dispatch failure (429/5xx) retries the same unit with exponential backoff; a hard 4xx (e.g. `402`) escalates to the supervisor/operator immediately instead of retrying into the same wall; provider choice stays a per-dispatch decision (`STICKY-PROVIDER-PIN`). Post-merge, the only remaining steps are the main-green check, one board-move attempt, and the final report — never re-running consolidation machinery whose artifacts already exist. Owning rules: `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK`, `GATE-EXEC-DISPATCH-RETRY-BACKOFF`, `GATE-EXEC-END-OF-RUN-CONTRACT` in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md); `STICKY-PROVIDER-PIN` in [Anti-patterns](../docs/anti-patterns.md).
 
 **Blocking join for a nested single-child step, never sleep-poll (#1907):** when this run's turn is awaiting a nested child IT dispatched — a judge, a fixer, or a single reviewer — join it with a blocking dispatch (`async: false`) or one `bg_wait` nonBlocking subscription. Do not sleep-poll for it and do not end the turn to await it (observed failure: repeated 180/240/300s sleep loops). This is the actionable alternative behind `END-TURN-AND-AWAIT-WAKE` in [Anti-patterns](../docs/anti-patterns.md); see [dev-loop agent — Subagent delegation](../../agents/dev-loop.md#subagent-delegation) for the agent-contract pin of the same rule.
 
@@ -256,7 +256,7 @@ parkedColumn, reason`) without grilling. When pickup is empty, the orchestrator
 must run this bounded sub-loop before idling; deterministic scripts own only the
 park/allow decision and discovery (`OPS-NO-INLINE-INTERPRETER`).
 
-1. **Discover:** `npx dev-loops@1.0.3 queue parked-unrefined --repo <owner/name>`
+1. **Discover:** `npx dev-loops@1.0.4-pre.0 queue parked-unrefined --repo <owner/name>`
    auto-resolves the project from `.devloops` and returns `{ issueNumber, reason, missing }`
    using the enqueue completeness check. Empty list → normal fail-closed idle.
    Process ascending `issueNumber`, at most one grill attempt per item per session.
@@ -264,7 +264,7 @@ park/allow decision and discovery (`OPS-NO-INLINE-INTERPRETER`).
    (repo-local: `/loop-grill <issueNumber> --auto`). Use the skill's synthesis;
    never reimplement it or move LLM grilling into a coordinator script.
 3. **Promote:** after `grill-clean` and confirmation by `detectIssueRefinementArtifact`,
-   run `npx dev-loops@1.0.3 queue move --repo <owner/name> --item <issueNumber> --to-column "<pickup column>"`
+   run `npx dev-loops@1.0.4-pre.0 queue move --repo <owner/name> --item <issueNumber> --to-column "<pickup column>"`
    to the configured Next Up column, then advance. Do not use `add-queue-item`:
    the parked item already exists, so that command is an idempotent no-op.
 4. **Unrefinable:** if unresolved items remain or AC/DoD/linked-doc completeness
