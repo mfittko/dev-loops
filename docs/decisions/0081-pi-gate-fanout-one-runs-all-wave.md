@@ -1,0 +1,25 @@
+# 0081. Pi gate fan-out releases one `runs.all` workflow-script call per wave
+
+## Status
+
+Accepted — 2026-09-21 ([issue #2350](https://github.com/mfittko/dev-loops/issues/2350))
+
+## Context
+
+Under Pi the gate fan-out had no deterministic way to release a wave of reviewers concurrently. Every script that composed a round stopped at per-unit prompt files (`emit-fanout-dispatch.mjs` → one `promptPath` per unit); nothing emitted the dispatch call itself, so the concurrency posture was left to the conductor agent to compose as prose. In practice the conductor reached for N separate blocking `subagent` calls, and pi-subagents rejects the second onward: its `subagentInProgress` guard (`subagent-executor.js`, `duplicateSubagentCallResult`) is FOREGROUND-only and answers "a subagent call is already in progress. Issue exactly ONE subagent call per turn." A 6-unit `draft_gate` round therefore serialized — ~84 minutes at the per-unit ceiling instead of ~28 in two parallel waves — and two consecutive runs died on the parent deadline mid-fan-out with no verdict posted. The second run read that rejection as "this harness allows only one subagent call per turn" and fell back to sequential joins, which is a misdiagnosis: the parallelism is available INSIDE one call. Nothing detected the serialization either — a sequential round still records per-angle sentinels and distinct reviewers, so the records-floor, `requireFanoutProvenance` and `requireFanoutEvidence` all passed and only wall-clock regressed, invisibly, until a parent deadline fired.
+
+## Decision
+
+A gate wave on Pi is released as **ONE call per wave**, never N separate calls. `scripts/github/emit-wave-dispatch.mjs` turns the round's already-emitted `<gate>-<headSha>.emit-plan.json` units plus their `promptPath` bytes into a ready `subagent({ workflowScriptPath: "<wave>.js", cwd: <worktree>, async: false, timeoutMs: <bounded> })` per wave, whose script body returns ONE `runs.all([...])` call with a unique non-empty `key` per dispatch unit and each unit's composed prompt bytes inlined VERBATIM as its `task`. It persists the round's wave plan to the keyed `<gate>-<headSha>.wave-plan.json` sibling, partitions the round by the `maxConcurrent` the emit-plan itself recorded (`resolveFanoutEffectiveConcurrency`), keeps `gates.fanout.sequential: true` as the sanctioned single-unit load fallback, and fails closed on any other serialization rather than silently degrading a `gates.requireFanoutEvidence` gate. Canonical contract: `GATE-EXEC-FANOUT-WAVE-DISPATCH` in `skills/docs/gate-review-sub-loop-contract.md`.
+
+`tasks: [...]` is not an available shape in this pi-subagents version — it is rejected outright with "Legacy top-level chain and parallel inputs were removed; use workflowScript" — so the emitter never emits it and the docs never present it as an option. The emitted reviewer prompts carry a bounded tool-call budget plus a mandatory artifact-write clause, because a reviewer that hits its per-unit timeout mid-thought and writes nothing produces no evidence at all.
+
+We rejected emitting N blocking calls with the conductor composing the join order (the shape Pi rejects, and the observed failure); emitting `tasks: [...]` (not available in this version); making Claude Code / Codex dispatch code-driven (their delivery stays agent-authored per the per-harness delivery table, so this decision changes no other harness's dispatch path); and adding gate-time detection of a conductor that bypasses the emitter entirely — the emitter-scoped refusal is what this record pins, and a bypass remains undetected, recorded as an explicit non-goal rather than an implied guarantee.
+
+## Consequences
+
+A multi-unit Pi round releases concurrently: on its own dogfood round, 6 dispatch units went out as two waves of 3 released by two calls, with each wave's reviewers landing their artifacts in parallel. Wall-clock stops scaling linearly with unit count, which removes the parent-deadline class that motivated the issue.
+
+What gets harder: the wave partition is now a function of the round's own artifact, so a config change between the emit step and the wave step refuses rather than re-partitioning, and the emitter owns more fail-closed surface (missing/blank keys, unreadable or empty prompts, a truncated plan, a recorded-vs-resolved concurrency disagreement, an unjustified serialization) — each of which refuses with exit 1 and leaves no wave artifact on disk. The delivery table and the dev-loop SKILL must state the one-call shape explicitly, because "blocking joins" reads as N separate calls to a conductor and that misreading is the defect this record fixes; a contract test pins the wording so a reword cannot erode it.
+
+Follow-up this commits us to: the bypass gap stays open. A conductor that skips `emit-wave-dispatch.mjs` and composes per-unit calls is still undetected at gate time — the issue records it as "nothing detects the serialization" — and closing it would need a gate-time assertion over the keyed wave plan, which this record does not authorize.
