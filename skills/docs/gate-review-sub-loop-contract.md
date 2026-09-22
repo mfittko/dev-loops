@@ -404,8 +404,10 @@ This is the ONE documented
 dispatch path, and it closes three failure modes prose discipline never held:
 
 - **No coordinator persona re-derivation.** The emitted angle-suffix only NAMES the unit's
-  angle(s) and instructs the reviewer to self-resolve each angle's persona/focus via
-  `resolveReviewerRole` (see the [review agent's scoped angle-review mode](../../agents/review.md)).
+  angle(s) and instructs the reviewer to resolve each angle's persona, focus prompt, and model
+  tier by running the sanctioned `dev-loops-run cli/index.mjs gate resolve-role --angle <name>`
+  CLI (which wraps `resolveReviewerRole` over the fully merged config; see the
+  [review agent's scoped angle-review mode](../../agents/review.md)).
   The conductor never inspects `print-gates.mjs`, `angleScopes`, or hand-authors persona text
   — reviewer composition is resolved by the review agent + the neutral bundle
   (`GATE-EXEC-BUILD-ONCE-SEED`), and the fresh-context sentinel + briefing-prefix hash are
