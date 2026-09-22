@@ -1,0 +1,3 @@
+### Fixed
+
+- **`detect-checkpoint-evidence.mjs` no longer fail-opens on a missing or malformed `unresolvedThreads` payload (issue [#2310](https://github.com/mfittko/dev-loops/issues/2310)).** It previously defaulted a missing/malformed `unresolvedThreads` payload to `0` — a fail-open the Copilot merge-disposition policy leans on for its zero-unresolved-threads requirement. A new exported `coerceUnresolvedThreadCount` helper now coerces a missing/undefined/non-numeric/negative value to `-1`, the existing "unknown thread state" sentinel `buildPreMergeGateCheck` already fails closed on, while a genuine non-negative integer count (including a real `0`) passes through unchanged.

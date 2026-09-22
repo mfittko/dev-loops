@@ -370,6 +370,17 @@ export function evaluateInlineFanoutMode(gate, fanoutEnforcement) {
   }
   return null;
 }
+/**
+ * Coerce the parsed review-thread unresolved count to the value
+ * buildPreMergeGateCheck consumes. A missing/malformed/non-numeric
+ * unresolvedThreads is UNKNOWN, not zero: return -1 (the existing
+ * "unknown thread state" sentinel that fails CLOSED at merge), never 0.
+ * A genuine non-negative integer count passes through unchanged.
+ */
+export function coerceUnresolvedThreadCount(parsedThreads) {
+  const raw = parsedThreads?.summary?.unresolvedThreads;
+  return Number.isInteger(raw) && raw >= 0 ? raw : -1;
+}
 export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, staleRunnerCheck = null, fanoutEnforcement = null, { skipFanoutLedgerCheck = false } = {}) {
   const failures = [];
   const warnings = [];
@@ -1148,7 +1159,7 @@ async function main() {
     try {
       const threadsPayload = await fetchGithubReviewThreadsPayload(options, { env: process.env });
       const parsedThreads = parseReviewThreads(threadsPayload);
-      unresolvedThreadCount = parsedThreads?.summary?.unresolvedThreads ?? 0;
+      unresolvedThreadCount = coerceUnresolvedThreadCount(parsedThreads);
       // The draftGateSatisfied field must assert 0 unresolved
       // gate-authored threads (high, medium, low, question, AND nit),
       // not just a clean verdict. Reuse the same raw thread payload already
