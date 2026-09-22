@@ -92,11 +92,16 @@ export async function runAuditCli(
     return 1;
   }
 
+  if (options.sessionPath && options.latest) {
+    stderr.write(`${formatCliError("Pass either an explicit session path or --latest, not both.", { usage: USAGE })}\n`);
+    return 2;
+  }
+
   let result;
   try {
     let targetPath = options.sessionPath;
 
-    if (!targetPath || options.latest) {
+    if (!targetPath) {
       const latest = findLatestSession();
       if (!latest) {
         stderr.write(`${formatCliError("Could not automatically locate latest Pi session directory.", { usage: USAGE })}\n`);

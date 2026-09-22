@@ -98,6 +98,74 @@ describe("audit-pi-session unit & integration", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  it("coerces finite usage values and rejects non-numeric values", async () => {
+    const tmpDir = createTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    fs.writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({ type: "session_info", name: "subagent-review-unit-0" }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            model: "model-a",
+            usage: {
+              input: "100",
+              output: "20",
+              cacheRead: "not-a-number",
+              cacheWrite: "Infinity",
+              reasoning: "3",
+              totalTokens: "120",
+              cost: { total: "0.5" },
+            },
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+
+    const parsed = await parseTranscriptFile(sessionFile);
+    assert.deepEqual(parsed.turns[0].usage, {
+      input: 100,
+      output: 20,
+      cacheRead: 0,
+      cacheWrite: 0,
+      reasoning: 3,
+      totalTokens: 120,
+      cost: 0.5,
+    });
+
+    const audit = await auditPiSession(sessionFile);
+    assert.equal(audit.summary.totalTokens, 120);
+    assert.equal(audit.summary.estimatedCost, 0.5);
+    assert.equal(typeof audit.summary.totalTokens, "number");
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("aggregates prototype-shaped model names as ordinary model keys", async () => {
+    const tmpDir = createTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    fs.writeFileSync(
+      sessionFile,
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          model: "__proto__",
+          usage: { input: 100, output: 20, cacheRead: 0, cacheWrite: 0 },
+        },
+      }) + "\n",
+    );
+
+    const audit = await auditPiSession(sessionFile);
+    assert.equal(Object.hasOwn(audit.byModel, "__proto__"), true);
+    assert.equal(audit.byModel.__proto__.turns, 1);
+    assert.equal(audit.byModel.__proto__.totalTokens, 120);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
   it("handles empty files gracefully", async () => {
     const tmpDir = createTempDir();
     const emptyFile = path.join(tmpDir, "empty.jsonl");
@@ -310,7 +378,7 @@ describe("audit-pi-session unit & integration", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("skips fork snapshots when their parent transcript is present", async () => {
+  it("excludes a fork's inherited prefix and retains its own turns and role", async () => {
     const tmpDir = createTempDir();
     const runDir = path.join(tmpDir, "run-0");
     const forksDir = path.join(runDir, "session", "forks");
@@ -337,15 +405,53 @@ describe("audit-pi-session unit & integration", () => {
     );
 
     const parsedFork = await parseTranscriptFile(forkFile);
-    assert.equal(parsedFork.sessionInfo.name, "subagent-review-unit-0");
+    assert.equal(parsedFork.isForkSnapshot, true);
+    assert.equal(parsedFork.inheritedTurnCount, 1);
+    assert.equal(parsedFork.sessionInfo.name, "subagent-judge-unit-0");
+    assert.equal(parsedFork.turns.length, 1);
+    assert.equal(parsedFork.turns[0].model, "model-b");
 
     const audit = await auditPiSession(runDir);
-    assert.equal(audit.skippedForkSnapshots, 1);
-    assert.equal(audit.totalFilesExamined, 1);
-    assert.equal(audit.activeSessionsCount, 1);
-    assert.equal(audit.summary.totalTurns, 1);
-    assert.equal(audit.summary.totalTokens, 350);
-    assert.deepEqual(Object.keys(audit.byModel), ["model-a"]);
+    assert.equal(audit.skippedForkSnapshots, 0);
+    assert.equal(audit.forkSnapshotsProcessed, 1);
+    assert.equal(audit.retainedForkTurns, 1);
+    assert.equal(audit.skippedInheritedForkTurns, 1);
+    assert.equal(audit.totalFilesExamined, 2);
+    assert.equal(audit.activeSessionsCount, 2);
+    assert.equal(audit.summary.totalTurns, 2);
+    assert.equal(audit.summary.totalTokens, 1450);
+    assert.equal(audit.byModel["model-a"].turns, 1);
+    assert.equal(audit.byModel["model-b"].turns, 1);
+    assert.equal(audit.sessions.find((session) => session.role === "judge")?.turnCount, 1);
+    assert.match(formatMarkdownSummary(audit), /1 fork-own turns retained; 1 inherited turns excluded/);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("includes a coordinator transcript beside its matching session directory", async () => {
+    const tmpDir = createTempDir();
+    const sessionDir = path.join(tmpDir, "session-id");
+    fs.mkdirSync(path.join(sessionDir, "run-0"), { recursive: true });
+    fs.writeFileSync(
+      `${sessionDir}.jsonl`,
+      [
+        JSON.stringify({ type: "session_info", name: "subagent-dev-loop-unit-0" }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            model: "model-a",
+            usage: { input: 100, output: 50, cacheRead: 0, cacheWrite: 0 },
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+    writeSimpleTranscript(path.join(sessionDir, "run-0", "session.jsonl"));
+
+    const audit = await auditPiSession(sessionDir);
+    assert.equal(audit.totalFilesExamined, 2);
+    assert.equal(audit.activeSessionsCount, 2);
+    assert.equal(audit.sessions.some((session) => session.role === "dev-loop"), true);
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
@@ -403,13 +509,15 @@ describe("audit-pi-session unit & integration", () => {
     assert.doesNotMatch(markdown, /1\.234\.567|1 234 567/);
   });
 
-  it("covers JSON, jq, fields, silent, auto-discovery, and CLI errors", async () => {
+  it("covers structured output, explicit latest, and CLI errors", async () => {
     const tmpDir = createTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");
     const emptyFile = path.join(tmpDir, "empty.jsonl");
+    const emptyDir = path.join(tmpDir, "empty-dir");
     const missingFile = path.join(tmpDir, "missing.jsonl");
     writeSimpleTranscript(sessionFile);
     fs.writeFileSync(emptyFile, "");
+    fs.mkdirSync(emptyDir);
 
     let stdout = captureStream();
     let stderr = captureStream();
@@ -429,6 +537,18 @@ describe("audit-pi-session unit & integration", () => {
     stderr = captureStream();
     assert.equal(
       await runAuditCli(["--json"], {
+        stdout,
+        stderr,
+        findLatestSession: () => sessionFile,
+      }),
+      0,
+    );
+    assert.equal(JSON.parse(stdout.value).summary.totalTokens, 350);
+
+    stdout = captureStream();
+    stderr = captureStream();
+    assert.equal(
+      await runAuditCli(["--latest", "--json"], {
         stdout,
         stderr,
         findLatestSession: () => sessionFile,
@@ -461,6 +581,28 @@ describe("audit-pi-session unit & integration", () => {
       assert.equal(await runAuditCli([invalidPath], { stdout, stderr }), 1);
       assert.notEqual(stderr.value.trim(), "");
     }
+
+    stdout = captureStream();
+    stderr = captureStream();
+    assert.equal(await runAuditCli([emptyDir], { stdout, stderr }), 1);
+    assert.match(stderr.value, /No \.jsonl transcripts found/);
+
+    stdout = captureStream();
+    stderr = captureStream();
+    let latestLookupCalled = false;
+    assert.equal(
+      await runAuditCli([sessionFile, "--latest"], {
+        stdout,
+        stderr,
+        findLatestSession: () => {
+          latestLookupCalled = true;
+          return sessionFile;
+        },
+      }),
+      2,
+    );
+    assert.equal(latestLookupCalled, false);
+    assert.match(stderr.value, /either an explicit session path or --latest/);
 
     stdout = captureStream();
     stderr = captureStream();

@@ -21,7 +21,9 @@
  *   async-dispatch concerns. The user entrypoint under Claude is the dev-loop *skill*.)
  * - Skills keep name/description/allowed-tools (space-separated) and preserve `user-invocable`
  *   (Claude honors it 1:1 — `user-invocable: false` hides the skill from the `/` menu). The
- *   Pi-specific `compatibility` text is dropped (no Claude field).
+ *   Pi-specific `compatibility` text is dropped (no Claude field). Skills marked `claude-sync:
+ *   false`, `pi-only: true`, or exclusively `harness: pi` are excluded as whole files; this is
+ *   distinct from `<!-- pi-only -->` blocks, which remove only marked body sections.
  */
 
 import { parse as parseYaml } from "yaml";

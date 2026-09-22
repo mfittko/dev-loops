@@ -3,6 +3,11 @@ import path from "node:path";
 import os from "node:os";
 import readline from "node:readline";
 
+function toFiniteNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
 /**
  * Find the latest session directory or session file under ~/.pi/agent/sessions/--Users-*-dev-loops--/
  * @param {string} [sessionsBaseDir]
@@ -107,19 +112,9 @@ function collectTranscriptFilesWithMetadata(targetPath) {
     ? rawList.filter((f) => !f.includes(`${path.sep}subagent-artifacts${path.sep}`))
     : rawList;
 
-  // A session/forks/*.jsonl file is a snapshot of the parent session followed by
-  // its own continuation. Counting it beside that parent's session.jsonl would
-  // count the inherited turns twice.
-  let skippedForkSnapshots = 0;
-  const filtered = withoutArtifacts.filter((file) => {
-    if (path.basename(path.dirname(file)) !== "forks") return true;
-    const parentSession = path.join(path.dirname(path.dirname(path.dirname(file))), "session.jsonl");
-    if (!rawList.includes(parentSession)) return true;
-    skippedForkSnapshots += 1;
-    return false;
-  });
-
-  return { files: filtered.sort(), skippedForkSnapshots };
+  // Fork snapshots remain in the audit. parseTranscriptFile removes their inherited
+  // prefix while retaining the fork's own continuation after its second session_info.
+  return { files: withoutArtifacts.sort(), skippedForkSnapshots: 0 };
 }
 
 /**
@@ -133,17 +128,25 @@ export function collectTranscriptFiles(targetPath) {
 /**
  * Parse assistant usage entries from a single jsonl file.
  * @param {string} filePath
- * @returns {Promise<{ turns: any[], sessionInfo: any, agent: string | null }>}
+ * @returns {Promise<{ turns: any[], sessionInfo: any, agent: string | null, isForkSnapshot: boolean, inheritedTurnCount: number }>}
  */
 export async function parseTranscriptFile(filePath) {
   const stat = fs.statSync(filePath);
   if (stat.size === 0) {
-    return { turns: [], sessionInfo: null, agent: null };
+    return {
+      turns: [],
+      sessionInfo: null,
+      agent: null,
+      isForkSnapshot: false,
+      inheritedTurnCount: 0,
+    };
   }
 
-  const turns = [];
+  let turns = [];
   let sessionInfo = null;
+  let sessionInfoCount = 0;
   let fileAgent = null;
+  let inheritedTurnCount = 0;
 
   const rl = readline.createInterface({
     input: fs.createReadStream(filePath, { encoding: "utf8" }),
@@ -156,7 +159,13 @@ export async function parseTranscriptFile(filePath) {
     try {
       const data = JSON.parse(trimmed);
 
-      if (data.type === "session_info" && data.name && !sessionInfo) {
+      if (data.type === "session_info" && data.name) {
+        sessionInfoCount += 1;
+        if (sessionInfoCount > 1) {
+          inheritedTurnCount += turns.length;
+          turns = [];
+          fileAgent = null;
+        }
         sessionInfo = data;
       }
       if (data.agent && !fileAgent) {
@@ -174,18 +183,24 @@ export async function parseTranscriptFile(filePath) {
         if (usage) {
           const model = msg.model || data.model || "unknown";
           const agent = data.agent || fileAgent || null;
+          const input = toFiniteNumber(usage.input);
+          const output = toFiniteNumber(usage.output);
+          const cacheRead = toFiniteNumber(usage.cacheRead);
+          const cacheWrite = toFiniteNumber(usage.cacheWrite);
           turns.push({
             timestamp: data.timestamp || msg.timestamp || null,
             model,
             agent,
             usage: {
-              input: usage.input || 0,
-              output: usage.output || 0,
-              cacheRead: usage.cacheRead || 0,
-              cacheWrite: usage.cacheWrite || 0,
-              reasoning: usage.reasoning || 0,
-              totalTokens: usage.totalTokens || ((usage.input || 0) + (usage.output || 0) + (usage.cacheRead || 0) + (usage.cacheWrite || 0)),
-              cost: usage.cost?.total ?? (typeof usage.cost === "number" ? usage.cost : 0),
+              input,
+              output,
+              cacheRead,
+              cacheWrite,
+              reasoning: toFiniteNumber(usage.reasoning),
+              totalTokens: usage.totalTokens == null
+                ? input + output + cacheRead + cacheWrite
+                : toFiniteNumber(usage.totalTokens),
+              cost: toFiniteNumber(usage.cost?.total ?? usage.cost),
             },
           });
         }
@@ -195,7 +210,13 @@ export async function parseTranscriptFile(filePath) {
     }
   }
 
-  return { turns, sessionInfo, agent: fileAgent };
+  return {
+    turns,
+    sessionInfo,
+    agent: fileAgent,
+    isForkSnapshot: sessionInfoCount > 1,
+    inheritedTurnCount,
+  };
 }
 
 /**
@@ -241,8 +262,11 @@ export async function auditPiSession(targetPath) {
   }
 
   const sessions = [];
-  const modelAggregation = {};
+  const modelAggregation = Object.create(null);
 
+  let forkSnapshotsProcessed = 0;
+  let retainedForkTurns = 0;
+  let skippedInheritedForkTurns = 0;
   let overallTotalInput = 0;
   let overallTotalOutput = 0;
   let overallTotalCacheRead = 0;
@@ -256,6 +280,11 @@ export async function auditPiSession(targetPath) {
       const usage = turn.usage;
       return usage.input + usage.output + usage.cacheRead + usage.cacheWrite > 0;
     });
+    if (parsed.isForkSnapshot) {
+      forkSnapshotsProcessed += 1;
+      retainedForkTurns += usageTurns.length;
+      skippedInheritedForkTurns += parsed.inheritedTurnCount;
+    }
     if (usageTurns.length === 0) continue;
 
     const role = deriveSessionRole(file, parsed);
@@ -363,6 +392,9 @@ export async function auditPiSession(targetPath) {
     targetPath,
     totalFilesExamined: files.length,
     skippedForkSnapshots,
+    forkSnapshotsProcessed,
+    retainedForkTurns,
+    skippedInheritedForkTurns,
     activeSessionsCount: sessions.length,
     summary: {
       totalTurns: overallTurns,
@@ -389,7 +421,14 @@ function formatTokenCount(value) {
 }
 
 export function formatMarkdownSummary(auditResult) {
-  const { summary, byModel, sessions } = auditResult;
+  const {
+    summary,
+    byModel,
+    sessions,
+    forkSnapshotsProcessed = 0,
+    retainedForkTurns = 0,
+    skippedInheritedForkTurns = 0,
+  } = auditResult;
 
   const lines = [];
   lines.push("## Pi Session Token Audit");
@@ -401,6 +440,9 @@ export function formatMarkdownSummary(auditResult) {
   lines.push(`- **Output**: ${formatTokenCount(summary.outputTokens)}`);
   lines.push(`- **Cache Hit Ratio**: ${(summary.cacheHitRatio * 100).toFixed(1)}%`);
   lines.push(`- **Estimated Cost**: $${summary.estimatedCost.toFixed(4)}`);
+  if (forkSnapshotsProcessed > 0) {
+    lines.push(`- **Fork Snapshots**: ${forkSnapshotsProcessed} processed; ${retainedForkTurns} fork-own turns retained; ${skippedInheritedForkTurns} inherited turns excluded`);
+  }
   lines.push("");
 
   lines.push("### Usage by Model");

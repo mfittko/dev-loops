@@ -49,7 +49,7 @@ node scripts/loop/audit-pi-session.mjs --latest --jq '.sessions[] | select(.snow
 ## Interpreting Output
 
 ### 1. Overall Summary
-- **Total Turns**: Sum of all assistant turns recorded in the session transcripts.
+- **Total Turns**: Sum of assistant turns carrying a non-zero token-usage envelope.
 - **Total Tokens**: Sum of `input + output + cacheRead + cacheWrite`.
 - **Uncached Input vs Cached Read**: Demonstrates cache effectiveness.
 - **Cache Hit Ratio**: Calculated as `cachedRead / (uncachedInput + cachedRead)`. In long coordinator sessions with good prefix alignment, this should typically exceed 85-90%.
@@ -61,7 +61,7 @@ Breaks down token volume and cache ratios per model provider (e.g., `gemini-3.8-
 ### 3. Session Breakdown & Context Snowballing
 Each subagent and coordinator session is listed with:
 - **Role**: Inferred agent role (`dev-loop`, `review`, `fixer`, etc.).
-- **Turns**: Turn count for that specific subagent process.
+- **Turns**: Count of assistant turns carrying a non-zero token-usage envelope for that specific subagent process.
 - **Init Prompt**: Size of the prompt (input + cacheRead) on Turn 1.
 - **Final Prompt**: Size of the prompt on the final turn.
 - **Growth**: Growth factor `finalPromptTokens / initialPromptTokens`.
