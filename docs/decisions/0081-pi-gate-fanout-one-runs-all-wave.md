@@ -18,7 +18,7 @@ We rejected emitting N blocking calls with the conductor composing the join orde
 
 ## Consequences
 
-A multi-unit Pi round releases concurrently: on its own dogfood round, 6 dispatch units went out as two waves of 3 released by two calls, with each wave's reviewers landing their artifacts in parallel. Wall-clock stops scaling linearly with unit count, which removes the parent-deadline class that motivated the issue.
+A multi-unit Pi round releases concurrently: the dogfood observation behind this record — 6 dispatch units released as two waves of 3 by two calls, each wave's reviewers landing their artifacts in parallel — is a live-round observation, not yet evidenced by a retained keyed `<gate>-<headSha>.wave-plan.json` plus its fan-in ledger at a recorded head; the DoD's live-round row is therefore not-yet-verified for the current head until that artifact pair is retained. Wall-clock stops scaling linearly with unit count, which removes the parent-deadline class that motivated the issue.
 
 What gets harder: the wave partition is now a function of the round's own artifact, so a config change between the emit step and the wave step refuses rather than re-partitioning, and the emitter owns more fail-closed surface (missing/blank keys, unreadable or empty prompts, a truncated plan, a recorded-vs-resolved concurrency disagreement, an unjustified serialization) — each of which refuses with exit 1 and leaves no wave artifact on disk. The delivery table and the dev-loop SKILL must state the one-call shape explicitly, because "blocking joins" reads as N separate calls to a conductor and that misreading is the defect this record fixes; a contract test pins the wording so a reword cannot erode it.
 

@@ -9,7 +9,7 @@ import { gateScopePrefix, LIFECYCLE_GATES, normalizeGate } from "./_gate-names.m
 import { HEAD_SHA_RE, VALID_SCOPE_RE } from "./record-dispatch-prompt-layout.mjs";
 import { buildCarryForwardPlanPath, buildGateContextPath, buildGateEmitPlanPath, mapGateToConfigKey } from "./write-gate-context.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
-import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
+import { resolveGateArtifactTmpRoot, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
 import { loadDevLoopConfig, resolveFanoutEffectiveConcurrency, resolveGateAngleContract } from "@dev-loops/core/config";
 import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
@@ -80,11 +80,14 @@ Output (stdout, JSON):
   Wave the EMITTED units at most \`maxConcurrent\` at a time (1 when
   gates.fanout.sequential is set). Do NOT use the artifact's fanout.wavePlan to
   bound this step: that plan is computed over the UNSPLIT resolveFanoutGroups
-  units and no longer matches this step's split unit set. Run
+  units and no longer matches this step's split unit set. When this step emitted
+  one or more units, run
   \`scripts/github/emit-wave-dispatch.mjs\` at the same (repo, pr, gate, headSha)
-  key next: it turns these emitted units into ONE ready \`runs.all(...)\` wave
+  key next: it turns those units into ONE ready \`runs.all(...)\` wave
   script per wave plus the \`subagent({ workflowScriptPath, ... })\` call body to
-  issue, so the conductor never composes the dispatch call shape itself.
+  issue, so the conductor never composes the dispatch call shape itself. A
+  zero-unit all-carried pending round (\`{ ok: true, count: 0 }\`) dispatches
+  nothing, so it needs no wave step.
   A fail-closed refusal (exit 1) emits { "ok": false, "error": "..." } on STDOUT
   (via the shared jq-output emitter); a usage/parse error (exit 2) emits
   { "ok": false, "error": "...", "hint"?: "run with --help for usage" } on STDERR.
@@ -607,7 +610,12 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   let configuredGroupNames;
   let maxConcurrent;
   try {
-    const { config } = await loadDevLoopConfig({ repoRoot: process.cwd() });
+    // Load the same config write-gate-context resolved against, through the
+    // SHARED resolveRepoRoot helper so a non-root cwd normalizes to the checkout
+    // root the wave emitter's recorded-vs-resolved guard also resolves against
+    // (a raw `process.cwd()` here would diverge on a subdir cwd and fail a
+    // legitimate round closed at that guard).
+    const { config } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(process.cwd()) });
     if (carryProof !== undefined) {
       const alwaysRerun = resolveGateAngleContract(config, mapGateToConfigKey(gate)).mandatoryAngles;
       if (carryProof.some(({ angle }) => angleReviewSurface(angle, { alwaysRerun }).kind !== "kinds")) {

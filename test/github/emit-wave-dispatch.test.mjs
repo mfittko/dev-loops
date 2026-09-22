@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -401,6 +401,23 @@ test("refuses when the emit-plan's recorded maxConcurrent disagrees with the res
   });
 });
 
+// A recorded maxConcurrent that is PRESENT but not a positive integer (string,
+// float, zero, negative, null) must refuse, not silently fall open to the live
+// resolved value — mirroring the `count` guard and the drift guard's purpose.
+test("refuses a present-but-malformed recorded maxConcurrent instead of falling open", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const { planPath } = await seedEmitPlan(tmpDir);
+    for (const bad of ["3", 2.5, 0, -1, null]) {
+      const plan = JSON.parse(await readFile(planPath, "utf8"));
+      plan.maxConcurrent = bad;
+      await writeFile(planPath, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
+      const { exitCode, stdout } = await captureStdout(() => main(baseArgs(tmpDir), { loadConfig: configStub() }));
+      assert.equal(exitCode, 1, `maxConcurrent=${JSON.stringify(bad)} must refuse`);
+      assert.match(JSON.parse(stdout).error, /records an invalid maxConcurrent/);
+    }
+  });
+});
+
 test("falls back to the resolved concurrency when the emit-plan records none", async () => {
   await withTmpDir(async (tmpDir) => {
     const { planPath } = await seedEmitPlan(tmpDir);
@@ -424,6 +441,9 @@ test("reports the resolved sequential flag and its source", async () => {
     assert.equal(plan.sequential, true);
     assert.equal(plan.sequentialSource, "config-flag");
     assert.equal(plan.maxConcurrent, 1);
+    // The recorded concurrency was already 1, so the override was a no-op and
+    // the emit-plan remains the honest source of the reported value.
+    assert.equal(plan.maxConcurrentSource, "emit-plan");
   });
 });
 
@@ -435,6 +455,9 @@ test("an explicit --sequential without the config flag reports explicit-request,
     assert.equal(plan.sequential, false, "the config flag is off; only the request serialized");
     assert.equal(plan.sequentialSource, "explicit-request");
     assert.equal(plan.maxConcurrent, 1);
+    // The override produced the reported value, so maxConcurrentSource must not
+    // keep naming the emit-plan (which recorded 3).
+    assert.equal(plan.maxConcurrentSource, "explicit-request");
     assert.equal(plan.waves.length, 3);
   });
 });
@@ -481,16 +504,27 @@ test("the Claude harness clamp partitions at 2 without tripping the maxConcurren
 // no wave artifact (a stale script is dispatchable).
 test("clears this key's artifacts when a wave script write fails mid-round", async () => {
   await withTmpDir(async (tmpDir) => {
-    const { dir } = await seedEmitPlan(tmpDir);
+    // 6 units at maxConcurrent 3 partition into TWO waves, so the second write
+    // fails AFTER wave-1.js already landed — the genuinely multi-wave cleanup
+    // path (both scripts and the wave plan must be cleared).
+    const units = Array.from({ length: 6 }, (_, i) => ({ scope: `pre-approval-gate-angle-${i + 1}`, angles: [`angle-${i + 1}`], group: null }));
+    const { dir } = await seedEmitPlan(tmpDir, { units, maxConcurrent: 3 });
+    let writes = 0;
     const exitCode = await main(baseArgs(tmpDir), {
       loadConfig: configStub(),
       writeScript: async (file, data) => {
-        await writeFile(file, data.slice(0, 16), "utf8");
-        throw Object.assign(new Error("simulated partial write"), { code: "ENOSPC" });
+        writes += 1;
+        if (writes === 2) {
+          await writeFile(file, data.slice(0, 16), "utf8");
+          throw Object.assign(new Error("simulated partial write"), { code: "ENOSPC" });
+        }
+        await writeFile(file, data, "utf8");
       },
     });
+    assert.equal(writes, 2, "the failure must land on the SECOND wave, after wave-1 was written");
     assert.equal(exitCode, 2);
     assert.equal(await readFile(path.join(dir, `${GATE}-${HEAD_SHA}.wave-1.js`), "utf8").catch(() => null), null);
+    assert.equal(await readFile(path.join(dir, `${GATE}-${HEAD_SHA}.wave-2.js`), "utf8").catch(() => null), null);
     assert.equal(await readFile(buildWavePlanPath({ planPath: planPathFor(tmpDir), gate: GATE, headSha: HEAD_SHA }), "utf8").catch(() => null), null);
   });
 });
@@ -505,6 +539,21 @@ test("clears this key's artifacts when the wave-plan persist fails", async () =>
       },
     });
     assert.equal(exitCode, 2);
+    assert.equal(await readFile(path.join(dir, `${GATE}-${HEAD_SHA}.wave-1.js`), "utf8").catch(() => null), null);
+    assert.equal(await readFile(buildWavePlanPath({ planPath: planPathFor(tmpDir), gate: GATE, headSha: HEAD_SHA }), "utf8").catch(() => null), null);
+  });
+});
+
+// The non-ENOENT plan-read failure branch (corrupt/truncated emit-plan JSON) is
+// a DIFFERENT error class from the ENOENT refusal: exit 2 on stderr, and still
+// no wave artifact left behind for the key.
+test("a corrupt (non-ENOENT) emit-plan read exits 2 and leaves no wave artifact", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const { dir, planPath } = await seedEmitPlan(tmpDir);
+    await writeFile(planPath, "{", "utf8");
+    const result = runCli(baseArgs(tmpDir));
+    assert.equal(result.status, 2);
+    assert.ok(result.stderr.length > 0, "the filesystem-error tier reports on stderr");
     assert.equal(await readFile(path.join(dir, `${GATE}-${HEAD_SHA}.wave-1.js`), "utf8").catch(() => null), null);
     assert.equal(await readFile(buildWavePlanPath({ planPath: planPathFor(tmpDir), gate: GATE, headSha: HEAD_SHA }), "utf8").catch(() => null), null);
   });
@@ -568,12 +617,38 @@ test("refuses when a unit's promptPath is blank, empty, or unreadable", async ()
   });
 });
 
-test("refuses when the emit-plan carries no units", async () => {
+test("treats an ok:true count:0 plan as a zero-wave success", async () => {
   await withTmpDir(async (tmpDir) => {
-    await seedEmitPlan(tmpDir, { units: [] });
+    const { dir } = await seedEmitPlan(tmpDir, { units: [], count: 0 });
+    assert.equal(await main(baseArgs(tmpDir), { loadConfig: configStub() }), 0);
+    const plan = await readPlan(tmpDir);
+    assert.equal(plan.ok, true);
+    assert.equal(plan.count, 0);
+    assert.deepEqual(plan.waves, []);
+    assert.deepEqual(plan.calls, []);
+    const waveArtifacts = (await readdir(dir)).filter((entry) => entry.endsWith(".js"));
+    assert.deepEqual(waveArtifacts, [], "a zero-unit round leaves no wave script");
+  });
+});
+
+test("refuses when the emit-plan claims units it does not carry", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedEmitPlan(tmpDir, { units: [], count: 3 });
     const { exitCode, stdout } = await captureStdout(() => main(baseArgs(tmpDir), { loadConfig: configStub() }));
     assert.equal(exitCode, 1);
-    assert.match(JSON.parse(stdout).error, /no dispatch units/);
+    assert.match(JSON.parse(stdout).error, /records count 3 but carries 0/);
+  });
+});
+
+test("refuses when the emit-plan carries no units and records no valid count", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const { planPath } = await seedEmitPlan(tmpDir, { units: [] });
+    const plan = JSON.parse(await readFile(planPath, "utf8"));
+    delete plan.count;
+    await writeFile(planPath, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
+    const { exitCode, stdout } = await captureStdout(() => main(baseArgs(tmpDir), { loadConfig: configStub() }));
+    assert.equal(exitCode, 1);
+    assert.match(JSON.parse(stdout).error, /records no valid count/);
   });
 });
 
@@ -739,9 +814,9 @@ test("--timeout-ms refuses unsafe and over-ceiling values", () => {
 
 // An empty value for a value-taking flag is a usage error, not a silent
 // fallback to the default.
-test("empty-value usage exits for --tmp-root, --cwd, --jq, and --fields exit 2", () => {
+test("empty-value usage exits for --tmp-root, --cwd, --timeout-ms, --jq, and --fields exit 2", () => {
   const base = ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA];
-  for (const [flag, pattern] of [["--tmp-root", /--tmp-root/], ["--cwd", /--cwd/]]) {
+  for (const [flag, pattern] of [["--tmp-root", /--tmp-root/], ["--cwd", /--cwd/], ["--timeout-ms", /--timeout-ms/]]) {
     const result = runCli([...base, flag, ""]);
     assert.equal(result.status, 2, `${flag} with an empty value must exit 2`);
     assert.match(result.stderr, pattern);
