@@ -77,6 +77,7 @@ test("built-in angle resolves persona + a model tier from the merged config", ()
   assert.equal(payload.persona, "review");
   assert.equal(payload.model, "opus");
   assert.equal(payload.fallback, false);
+  assert.equal(payload.status, "prompt-missing");
 });
 
 // A configured gate angle that ships only a fallback persona is NOT a typo: it
@@ -97,6 +98,22 @@ test("an angle absent from the merged gate config stays ok:false + status:unreso
   const payload = resolveRolePayload(config, { angle: "not-a-real-angle-xyz", harness: "claude" });
   assert.equal(payload.fallback, true);
   assert.equal(payload.ok, false, "an unknown angle must fail closed");
+  assert.equal(payload.status, "unresolved");
+});
+
+test("a non-fallback built-in angle absent from every declared gate stays unresolved", () => {
+  const config = { gates: { preApproval: { angles: ["contradiction-lens"] } } };
+  const payload = resolveRolePayload(config, { angle: "correctness", harness: "claude" });
+  assert.equal(payload.fallback, false);
+  assert.equal(payload.ok, false);
+  assert.equal(payload.status, "unresolved");
+});
+
+test("a non-fallback angle outside the gate named by --gate stays unresolved", () => {
+  const config = { gates: { draft: { angles: ["correctness"] }, preApproval: { angles: ["security"] } } };
+  const payload = resolveRolePayload(config, { angle: "correctness", harness: "claude", gate: "preApproval" });
+  assert.equal(payload.fallback, false);
+  assert.equal(payload.ok, false);
   assert.equal(payload.status, "unresolved");
 });
 
@@ -318,7 +335,7 @@ test("CLI reports a configured fallback angle distinctly (ok:true, status:fallba
 test("CLI accepts the canonical gate id (--gate pre_approval_gate) and normalizes it", async () => {
   await withTempRepo(null, async (repoRoot) => {
     const result = await runCli(
-      ["--angle", "correctness", "--gate", "pre_approval_gate", "--harness", "claude"],
+      ["--angle", "dry", "--gate", "pre_approval_gate", "--harness", "claude"],
       { repoRoot, env: {} },
     );
     assert.equal(result.gate, "preApproval", "--gate pre_approval_gate must normalize to the config key");

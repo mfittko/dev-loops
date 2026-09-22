@@ -156,8 +156,8 @@ export function parseResolveReviewerRoleCliArgs(argv, { env = process.env } = {}
  *     final `merged` validation) and silently falls back to the shipped default,
  *     the exact wrong-role bug this CLI guards against (mirrors
  *     scripts/loop/check-size-budget.mjs);
- *   - an UNKNOWN angle absent from the merged gate config, which resolves only to
- *     the generic fallback persona (indistinguishable from a typo).
+ *   - an angle that is not a member of the merged gate config (or of the gate
+ *     named by `--gate`), which is untrusted regardless of the resolved persona.
  *
  * A CONFIGURED gate angle that ships only a fallback persona (no dedicated
  * persona/prompt entry) is NOT a typo: it is reported distinctly — `ok:true`
@@ -197,22 +197,18 @@ export function resolveRolePayload(config, { angle, harness, gate = null, config
     warnings.push(
       `${configErrorCount} config-layer error(s)${where}; the resolved role may be a shipped default and must not be trusted.`,
     );
+  } else if (configDeclaresGateAngles(config) && !angleIsConfigured(config, gate, angle)) {
+    status = "unresolved";
+    ok = false;
+    warnings.push(
+      `angle '${angle}' is not a member of the applicable merged gate config; verify the angle name — do not grep extension-defaults.yaml.`,
+    );
   } else if (role.fallback) {
-    // Distinguish a genuinely unknown angle from a configured gate angle that
-    // ships only a fallback persona (no dedicated persona/prompt entry).
-    if (angleIsConfigured(config, gate, angle)) {
-      status = "fallback";
-      ok = true;
-      warnings.push(
-        `angle '${angle}' is configured in the merged gate config but has no dedicated persona/prompt entry; the generic default-reviewer persona is returned. Review the angle by name with no angle-specific focus instruction.`,
-      );
-    } else {
-      status = "unresolved";
-      ok = false;
-      warnings.push(
-        `angle '${angle}' is absent from the merged gate config; the generic default-reviewer persona is returned. Verify the angle name — do not grep extension-defaults.yaml.`,
-      );
-    }
+    status = "fallback";
+    ok = true;
+    warnings.push(
+      `angle '${angle}' is configured in the merged gate config but has no dedicated persona/prompt entry; the generic default-reviewer persona is returned. Review the angle by name with no angle-specific focus instruction.`,
+    );
   } else if (typeof role.prompt !== "string" || role.prompt.trim() === "") {
     // Non-fallback role with a null/empty prompt: a repo `.devloops` entry that
     // overrides only `persona` drops the shipped prompt (merge-by-name). Signal
@@ -246,6 +242,12 @@ export function resolveRolePayload(config, { angle, harness, gate = null, config
     payload.scope = resolveGateAngleScope(config, gate, angle);
   }
   return payload;
+}
+
+// Preserve built-in persona resolution for empty/injected-partial configs.
+function configDeclaresGateAngles(config) {
+  return ["draft", "preApproval", "spike"]
+    .some((gate) => Array.isArray(config?.gates?.[gate]?.angles) && config.gates[gate].angles.length > 0);
 }
 
 /**
