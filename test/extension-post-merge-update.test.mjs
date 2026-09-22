@@ -405,10 +405,8 @@ test("update failure is warning-only and leaves the session healthy", async () =
   assert.deepEqual(notifications, [
     { message: `Post-merge update running: ${POST_MERGE_UPDATE_COMMAND}`, level: "info" },
     { message: "Post-merge update failed (warning only): permission denied", level: "warning" },
-    {
-      message: "Post-merge main-checkout fast-forward skipped (warning only): could not resolve the main checkout via git worktree list",
-      level: "warning",
-    },
+    { message: "Post-merge main-checkout fast-forward running for /repo", level: "info" },
+    { message: "Post-merge main-checkout fast-forward skipped (warning only): permission denied", level: "warning" },
     { message: "Post-merge worktree cleanup running for PR #373", level: "info" },
     { message: "Post-merge worktree cleanup skipped (warning only): permission denied", level: "warning" },
   ]);
@@ -428,10 +426,8 @@ test("killed post-merge updates surface a clear warning message", async () => {
   assert.deepEqual(notifications, [
     { message: `Post-merge update running: ${POST_MERGE_UPDATE_COMMAND}`, level: "info" },
     { message: "Post-merge update failed (warning only): command was killed before completing", level: "warning" },
-    {
-      message: "Post-merge main-checkout fast-forward skipped (warning only): could not resolve the main checkout via git worktree list",
-      level: "warning",
-    },
+    { message: "Post-merge main-checkout fast-forward running for /repo", level: "info" },
+    { message: "Post-merge main-checkout fast-forward skipped (warning only): command was killed before completing", level: "warning" },
     { message: "Post-merge worktree cleanup running for PR #373", level: "info" },
     { message: "Post-merge worktree cleanup skipped (warning only): command was killed before completing", level: "warning" },
   ]);
@@ -759,7 +755,7 @@ test("fetch failure, rev-parse failure, unreadable ref, and behind-count failure
   );
 });
 
-test("an unresolved main worktree stays on the generic warning and never emits main_checkout_not_on_main", async () => {
+test("an unresolved main worktree on another branch stays on the generic warning and never emits main_checkout_not_on_main", async () => {
   const calls = [];
   const hook = createPostMergeUpdateHook({
     resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
@@ -767,15 +763,18 @@ test("an unresolved main worktree stays on the generic warning and never emits m
       calls.push({ command, cwd });
       if (command === "git worktree list") {
         // Unparseable output (failed/killed listing would behave the same): the main
-        // checkout cannot be resolved, so `pendingRoot` (a linked feature worktree, e.g.
-        // `/repo`) must never be treated as the resolved main checkout.
+        // checkout cannot be resolved, so the sync falls back to `pendingRoot` (a
+        // linked feature worktree, e.g. `/repo`) instead of the true main checkout.
         return { code: 0, stdout: "not a worktree listing", stderr: "", killed: false };
       }
-      // If the sync ran anyway against the unresolved cwd, it would classify /repo's
-      // feature branch as other_branch and raise main_checkout_not_on_main — asserted
-      // absent below.
+      // The fallback checkout is on another branch, so syncMainCheckout would
+      // otherwise classify it as `not_on_main` — asserted downgraded to the generic
+      // warning below, since `/repo` is not proven to be the real main checkout.
       if (command === revParseSymbolicFullNameCommand("/repo")) {
         return { code: 0, stdout: "refs/heads/feature/x\n", stderr: "", killed: false };
+      }
+      if (command === revListBehindCountCommand("/repo")) {
+        return { code: 0, stdout: "3\n", stderr: "", killed: false };
       }
       return { code: 0, stdout: "ok", stderr: "", killed: false };
     },
@@ -791,12 +790,12 @@ test("an unresolved main worktree stays on the generic warning and never emits m
   await hook.onAgentEnd({ type: "agent_end", messages: [] }, ctx);
 
   assert.equal(
-    calls.some((c) => c.command.startsWith("git -C ")),
+    notifications.some((n) => n.level === "error"),
     false,
-    "no syncMainCheckout step must run against an unresolved main checkout",
+    "an unresolved worktree must never emit an error-level notification",
   );
   assert.equal(
-    notifications.some((n) => n.level === "error" || n.message.includes("main_checkout_not_on_main")),
+    notifications.some((n) => n.message.includes("main_checkout_not_on_main")),
     false,
     "an unresolved worktree must never emit the action-required signal",
   );
@@ -804,6 +803,13 @@ test("an unresolved main worktree stays on the generic warning and never emits m
     notifications.some((n) => n.level === "warning" && n.message.includes("skipped (warning only)")),
     "expected the generic warning-level skip notification",
   );
+
+  for (const { command } of calls.filter((c) => c.command.startsWith("git -C "))) {
+    assert.ok(!/\bmerge\b/.test(command), `must not merge: ${command}`);
+    assert.ok(!/\bswitch\b/.test(command), `must not switch: ${command}`);
+    assert.ok(!/\bcheckout\b/.test(command), `must not checkout: ${command}`);
+    assert.ok(!/\breset\b/.test(command), `must not reset: ${command}`);
+  }
 });
 
 test("session_start resets post-merge hook state and extension registers lifecycle listeners", async () => {

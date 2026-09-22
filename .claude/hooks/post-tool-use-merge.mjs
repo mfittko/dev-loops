@@ -10,7 +10,7 @@
  * read-only gate scripts (probe-ci-status.mjs, detect-copilot-loop-state.mjs, …) run from the
  * main checkout on stale code — re-introducing the CI-wait stall every PR. This hook resolves
  * the main (primary) checkout via `git worktree list` and runs a best-effort `--ff-only`
- * fast-forward there. Never blocks (always `process.exit(0)`); `--ff-only` refuses a diverged
+ * fast-forward there. Never blocks (always exits 0); `--ff-only` refuses a diverged
  * main without rewriting history, so a diverged checkout warns and continues.
  */
 import { execFileSync, execSync } from "node:child_process";
@@ -147,6 +147,6 @@ if (typeof command === "string" && isMergeCapableCommand(command)) {
 // `process.exit(0)`) lets Node drain the stdout pipe before exiting — every call
 // above is synchronous (execFileSync/execSync/readFileSync), so no open handle
 // keeps the process alive once the module body finishes; `process.exit(0)` here
-// could terminate the process while the systemMessage write on line 81 is still
-// buffered in the stdout pipe on some platforms.
+// could terminate the process while the not_on_main systemMessage write above is
+// still buffered in the stdout pipe on some platforms.
 process.exitCode = 0;
