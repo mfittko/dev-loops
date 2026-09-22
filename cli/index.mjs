@@ -315,6 +315,8 @@ export const SUBCOMMAND_ROUTES = {
     create:             "scripts/github/create-pr.mjs",
     "ready-for-review": "scripts/github/ready-for-review.mjs",
     "reconcile-draft":  "scripts/github/reconcile-draft-gate.mjs",
+    "convert-to-draft": "scripts/github/convert-to-draft.mjs",
+    "restore-ready":    "scripts/github/restore-ready.mjs",
   },
   issue: {
     edit:   "scripts/github/edit-issue.mjs",
@@ -421,6 +423,8 @@ const SUBCOMMAND_DESCRIPTIONS = {
     create: "Create PR (always draft, self-assigned by default)",
     "ready-for-review": "Mark PR ready for review",
     "reconcile-draft": "Reconcile non-draft PR",
+    "convert-to-draft": "Convert a ready PR to draft (idempotent)",
+    "restore-ready": "Restore a transient draft PR to ready while CI is blocking",
   },
   issue: {
     edit: "Edit issue title/body/assignees/milestone/state (close/reopen)",

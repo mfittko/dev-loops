@@ -1787,8 +1787,8 @@ async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRo
       // and knows the PR may be left in draft until restored. (Copilot review)
       throw new Error(
         `draft_gate verdict was posted to ${options.repo}#${options.pr} (comment ${result.commentId ?? "?"}), ` +
-        `but restoring the PR to ready failed; it may be left in draft. Do not re-post the gate — re-run ` +
-        `\`gh pr ready ${options.pr}\` (or the dev-loop) to restore ready. Cause: ` +
+        `but restoring the PR to ready failed; it may be left in draft. Do not re-post the gate — run ` +
+        `\`dev-loops pr restore-ready\` (or the dev-loop) to restore ready. Cause: ` +
         `${restoreError instanceof Error ? restoreError.message : String(restoreError)}`,
       );
     }

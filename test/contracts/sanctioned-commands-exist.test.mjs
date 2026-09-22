@@ -44,6 +44,15 @@ test("sanctioned-commands: forbidden + orchestrator-owned lists are non-empty", 
   assert.ok(SANCTIONED_COMMANDS.orchestratorOwned.length > 0, "orchestrator-owned list must not be empty");
 });
 
+test("sanctioned-commands: ready<->draft transition is reachable through sanctioned wrappers, with the raw undo forbidden", () => {
+  assert.equal(SANCTIONED_COMMANDS.lifecycle["convert-to-draft"], "scripts/github/convert-to-draft.mjs");
+  assert.equal(SANCTIONED_COMMANDS.lifecycle["restore-ready"], "scripts/github/restore-ready.mjs");
+  assert.ok(
+    SANCTIONED_COMMANDS.forbidden.includes("gh pr ready --undo"),
+    "raw `gh pr ready --undo` must be forbidden now that convert-to-draft.mjs is the sanctioned wrapper",
+  );
+});
+
 test("sanctioned-commands: issue creation is orchestrator-owned, never a child-sanctioned edit (#2176)", () => {
   // Binds the map to the agent-contract prose ("the routed child ... never files
   // issues"): create-issue.mjs must appear ONLY in orchestratorOwned, never in

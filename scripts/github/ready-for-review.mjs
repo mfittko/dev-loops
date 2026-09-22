@@ -138,10 +138,13 @@ async function postSizeBudgetWaiverComment({ repo, pr, headSha, sizeBudget, reas
   if (result.code !== 0) throw new Error(`Failed to post size-budget waiver record: ${result.stderr.trim() || `exit code ${result.code}`}`);
 }
 
-export async function readyForReview(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild: runChildImpl = runChild, syncBoardStatus = realSyncBoardStatus, evaluatePrSizeBudget = realEvaluatePrSizeBudget, evaluateAdrTripwire: evaluateAdrTripwireFn = evaluateAdrTripwire, evaluateCommentDiscipline: evaluateCommentDisciplineFn = realEvaluateCommentDiscipline } = {}) {
+// `skipCiPrecondition` is a runtime-only seam (no CLI flag on this script):
+// restore-ready.mjs calls readyForReview() directly with it set, so the CI
+// precondition can never be skipped through this script's own CLI surface.
+export async function readyForReview(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild: runChildImpl = runChild, syncBoardStatus = realSyncBoardStatus, evaluatePrSizeBudget = realEvaluatePrSizeBudget, evaluateAdrTripwire: evaluateAdrTripwireFn = evaluateAdrTripwire, evaluateCommentDiscipline: evaluateCommentDisciplineFn = realEvaluateCommentDiscipline, skipCiPrecondition = false } = {}) {
   const { config } = await loadDevLoopConfig({ repoRoot });
   const draftGateConfig = resolveGateConfig(config, "draft");
-  const requireCi = draftGateConfig?.requireCi !== false;
+  const requireCi = draftGateConfig?.requireCi !== false && skipCiPrecondition !== true;
   const prState = await fetchPrState({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild: runChildImpl });
   const headSha = prState.headRefOid;
   if (!headSha) throw new Error(`Could not resolve head SHA`);
