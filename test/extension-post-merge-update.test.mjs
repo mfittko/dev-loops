@@ -104,6 +104,9 @@ test("successful bash-tool gh pr merge queues and flushes one post-merge update 
     resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
     runCommand: async ({ command, cwd }) => {
       calls.push({ command, cwd });
+      if (command === "git worktree list") {
+        return { code: 0, stdout: "/repo  deadbeef [main]\n", stderr: "", killed: false };
+      }
       if (command === revParseSymbolicFullNameCommand("/repo")) {
         return { code: 0, stdout: "refs/heads/main\n", stderr: "", killed: false };
       }
@@ -154,6 +157,9 @@ test("successful user_bash git merge queues and flushes one update", async () =>
       calls.push({ command, cwd });
       if (command === "git merge origin/main") {
         return { code: 0, stdout: "Already up to date.", stderr: "", killed: false };
+      }
+      if (command === "git worktree list") {
+        return { code: 0, stdout: "/repo  deadbeef [main]\n", stderr: "", killed: false };
       }
       if (command === revParseSymbolicFullNameCommand("/repo")) {
         return { code: 0, stdout: "refs/heads/main\n", stderr: "", killed: false };
@@ -355,6 +361,9 @@ test("multiple merge signals in one turn still run only one update", async () =>
     resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
     runCommand: async ({ command, cwd }) => {
       calls.push({ command, cwd });
+      if (command === "git worktree list") {
+        return { code: 0, stdout: "/repo  deadbeef [main]\n", stderr: "", killed: false };
+      }
       if (command === revParseSymbolicFullNameCommand("/repo")) {
         return { code: 0, stdout: "refs/heads/main\n", stderr: "", killed: false };
       }
@@ -396,8 +405,10 @@ test("update failure is warning-only and leaves the session healthy", async () =
   assert.deepEqual(notifications, [
     { message: `Post-merge update running: ${POST_MERGE_UPDATE_COMMAND}`, level: "info" },
     { message: "Post-merge update failed (warning only): permission denied", level: "warning" },
-    { message: "Post-merge main-checkout fast-forward running for /repo", level: "info" },
-    { message: "Post-merge main-checkout fast-forward skipped (warning only): permission denied", level: "warning" },
+    {
+      message: "Post-merge main-checkout fast-forward skipped (warning only): could not resolve the main checkout via git worktree list",
+      level: "warning",
+    },
     { message: "Post-merge worktree cleanup running for PR #373", level: "info" },
     { message: "Post-merge worktree cleanup skipped (warning only): permission denied", level: "warning" },
   ]);
@@ -417,8 +428,10 @@ test("killed post-merge updates surface a clear warning message", async () => {
   assert.deepEqual(notifications, [
     { message: `Post-merge update running: ${POST_MERGE_UPDATE_COMMAND}`, level: "info" },
     { message: "Post-merge update failed (warning only): command was killed before completing", level: "warning" },
-    { message: "Post-merge main-checkout fast-forward running for /repo", level: "info" },
-    { message: "Post-merge main-checkout fast-forward skipped (warning only): command was killed before completing", level: "warning" },
+    {
+      message: "Post-merge main-checkout fast-forward skipped (warning only): could not resolve the main checkout via git worktree list",
+      level: "warning",
+    },
     { message: "Post-merge worktree cleanup running for PR #373", level: "info" },
     { message: "Post-merge worktree cleanup skipped (warning only): command was killed before completing", level: "warning" },
   ]);
@@ -493,6 +506,11 @@ test("a non-fast-forwardable main checkout warns and does not block", async () =
 
   assert.equal(hook.getState().pendingPostMergeUpdate, false);
   assert.equal(hook.getState().updateInFlight, false);
+  assert.equal(
+    notifications.some((n) => n.level === "error"),
+    false,
+    "a diverged main checkout must never emit an error-level notification",
+  );
   assert.ok(
     notifications.some((n) => n.level === "warning" && n.message.includes("skipped (warning only)")),
     "expected a warning notification for the non-fast-forwardable checkout",
@@ -508,7 +526,7 @@ test("a detached main checkout surfaces an error-level notification and never me
     runCommand: async ({ command, cwd }) => {
       calls.push({ command, cwd });
       if (command === "git worktree list") {
-        return { code: 0, stdout: "not a worktree listing", stderr: "", killed: false };
+        return { code: 0, stdout: "/repo  deadbeef (detached HEAD)\n", stderr: "", killed: false };
       }
       if (command === revParseSymbolicFullNameCommand("/repo")) {
         return { code: 0, stdout: "HEAD\n", stderr: "", killed: false };
@@ -539,6 +557,11 @@ test("a detached main checkout surfaces an error-level notification and never me
   assert.ok(message.includes("/repo"), message);
   assert.ok(message.includes("detached@abc1234"), message);
   assert.ok(message.includes("6 commit(s) behind"), message);
+  assert.equal(
+    notifications.some((n) => n.message.includes("skipped (warning only)")),
+    false,
+    "the action-required signal must never also emit the generic skip warning",
+  );
 
   for (const { command } of calls.filter((c) => c.command.startsWith("git -C "))) {
     assert.ok(!/\bmerge\b/.test(command), `must not merge: ${command}`);
@@ -555,7 +578,7 @@ test("an other-branch main checkout surfaces an error-level notification naming 
     runCommand: async ({ command, cwd }) => {
       calls.push({ command, cwd });
       if (command === "git worktree list") {
-        return { code: 0, stdout: "not a worktree listing", stderr: "", killed: false };
+        return { code: 0, stdout: "/repo  cafebabe [feature/x]\n", stderr: "", killed: false };
       }
       if (command === revParseSymbolicFullNameCommand("/repo")) {
         return { code: 0, stdout: "refs/heads/feature/x\n", stderr: "", killed: false };
@@ -581,6 +604,11 @@ test("an other-branch main checkout surfaces an error-level notification naming 
   const message = errorNotifications[0].message;
   assert.ok(message.includes("feature/x"), message);
   assert.ok(message.includes("0 commit(s) behind"), message);
+  assert.equal(
+    notifications.some((n) => n.message.includes("skipped (warning only)")),
+    false,
+    "the action-required signal must never also emit the generic skip warning",
+  );
 
   for (const { command } of calls.filter((c) => c.command.startsWith("git -C "))) {
     assert.ok(!/\bmerge\b/.test(command), `must not merge: ${command}`);
@@ -595,7 +623,7 @@ test("a not-on-main main checkout falls back to stderr when no UI is available",
     resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
     runCommand: async ({ command }) => {
       if (command === "git worktree list") {
-        return { code: 0, stdout: "not a worktree listing", stderr: "", killed: false };
+        return { code: 0, stdout: "/repo  cafebabe [feature/x]\n", stderr: "", killed: false };
       }
       if (command === revParseSymbolicFullNameCommand("/repo")) {
         return { code: 0, stdout: "refs/heads/feature/x\n", stderr: "", killed: false };
@@ -645,14 +673,14 @@ test("a not-on-main main checkout falls back to stderr when no UI is available",
   assert.ok(combined.includes("feature/x"), combined);
 });
 
-test("fetch failure, rev-parse failure, and behind-count failure stay warning-only (no error-level notification)", async () => {
+test("fetch failure, rev-parse failure, unreadable ref, and behind-count failure stay warning-only (no error-level notification)", async () => {
   async function runScenario(handler) {
     const notifications = [];
     const hook = createPostMergeUpdateHook({
       resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
       runCommand: async ({ command }) => {
         if (command === "git worktree list") {
-          return { code: 0, stdout: "not a worktree listing", stderr: "", killed: false };
+          return { code: 0, stdout: "/repo  cafebabe [feature/x]\n", stderr: "", killed: false };
         }
         return handler(command);
       },
@@ -701,6 +729,20 @@ test("fetch failure, rev-parse failure, and behind-count failure stay warning-on
     JSON.stringify(revParseFailNotifications),
   );
 
+  // rev-parse exits 0 but its output is not a `refs/heads/...` ref — classified
+  // "unreadable" (see classifyMainCheckoutRef), never surfaced as not_on_main.
+  const unreadableRefNotifications = await runScenario((command) => {
+    if (command === revParseSymbolicFullNameCommand("/repo")) {
+      return { code: 0, stdout: "refs/remotes/origin/main\n", stderr: "", killed: false };
+    }
+    return { code: 0, stdout: "ok", stderr: "", killed: false };
+  });
+  assert.equal(unreadableRefNotifications.some((n) => n.level === "error"), false);
+  assert.ok(
+    unreadableRefNotifications.some((n) => n.level === "warning" && n.message.includes("skipped (warning only)")),
+    JSON.stringify(unreadableRefNotifications),
+  );
+
   const behindCountFailNotifications = await runScenario((command) => {
     if (command === revParseSymbolicFullNameCommand("/repo")) {
       return { code: 0, stdout: "refs/heads/feature/x\n", stderr: "", killed: false };
@@ -714,6 +756,53 @@ test("fetch failure, rev-parse failure, and behind-count failure stay warning-on
   assert.ok(
     behindCountFailNotifications.some((n) => n.level === "warning" && n.message.includes("skipped (warning only)")),
     JSON.stringify(behindCountFailNotifications),
+  );
+});
+
+test("an unresolved main worktree stays on the generic warning and never emits main_checkout_not_on_main", async () => {
+  const calls = [];
+  const hook = createPostMergeUpdateHook({
+    resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
+    runCommand: async ({ command, cwd }) => {
+      calls.push({ command, cwd });
+      if (command === "git worktree list") {
+        // Unparseable output (failed/killed listing would behave the same): the main
+        // checkout cannot be resolved, so `pendingRoot` (a linked feature worktree, e.g.
+        // `/repo`) must never be treated as the resolved main checkout.
+        return { code: 0, stdout: "not a worktree listing", stderr: "", killed: false };
+      }
+      // If the sync ran anyway against the unresolved cwd, it would classify /repo's
+      // feature branch as other_branch and raise main_checkout_not_on_main — asserted
+      // absent below.
+      if (command === revParseSymbolicFullNameCommand("/repo")) {
+        return { code: 0, stdout: "refs/heads/feature/x\n", stderr: "", killed: false };
+      }
+      return { code: 0, stdout: "ok", stderr: "", killed: false };
+    },
+  });
+  const { ctx, notifications } = createUiCalls();
+
+  await hook.onToolResult({
+    toolName: "bash",
+    input: { command: "gh pr merge 373 --squash --delete-branch" },
+    isError: false,
+  }, ctx);
+
+  await hook.onAgentEnd({ type: "agent_end", messages: [] }, ctx);
+
+  assert.equal(
+    calls.some((c) => c.command.startsWith("git -C ")),
+    false,
+    "no syncMainCheckout step must run against an unresolved main checkout",
+  );
+  assert.equal(
+    notifications.some((n) => n.level === "error" || n.message.includes("main_checkout_not_on_main")),
+    false,
+    "an unresolved worktree must never emit the action-required signal",
+  );
+  assert.ok(
+    notifications.some((n) => n.level === "warning" && n.message.includes("skipped (warning only)")),
+    "expected the generic warning-level skip notification",
   );
 });
 

@@ -236,10 +236,17 @@ async function queueIfEligible(
  * Best-effort main-checkout fast-forward (#1596).
  *
  * Resolves the main (primary) checkout via `git worktree list` (first entry) from
- * `pendingRoot`, then runs `fetch origin main && merge --ff-only origin/main` there.
- * `--ff-only` refuses a diverged main without rewriting history, so a diverged
- * checkout fails the merge step and the caller treats it as warn-and-continue.
- * Never throws — every failure path emits a warning notification instead.
+ * `pendingRoot`, then runs `syncMainCheckout`'s step-wise flow there: fetch,
+ * `rev-parse --symbolic-full-name HEAD`, and `merge --ff-only origin/main` only when
+ * that ref is `refs/heads/main`. `--ff-only` refuses a diverged main without
+ * rewriting history, so a diverged checkout fails the merge step and the caller
+ * treats it as warn-and-continue. When `git worktree list` fails, is killed, or its
+ * output doesn't parse, the main checkout stays UNRESOLVED — the sync is skipped
+ * entirely (never run against `pendingRoot`, which may be a linked feature
+ * worktree) and the generic warning-level skip notification fires instead. A
+ * resolved checkout that is detached or on another branch emits the
+ * `main_checkout_not_on_main` diagnostic at error level; every other failure path
+ * (fetch, unresolved worktree, etc.) stays warning-only.
  */
 async function fastForwardMainCheckout(
   runCommand: (args: RunCommandArgs) => Promise<RunCommandResult>,
@@ -247,6 +254,7 @@ async function fastForwardMainCheckout(
   ctx: Pick<HarnessContext, 'hasUI' | 'ui'>,
 ): Promise<void> {
   let mainCheckout = pendingRoot;
+  let mainCheckoutResolved = false;
   try {
     const wtResult = await runCommand({
       command: 'git worktree list',
@@ -255,10 +263,22 @@ async function fastForwardMainCheckout(
     });
     if (wtResult.code === 0 && !wtResult.killed) {
       const resolved = parseMainWorktreePath(wtResult.stdout ?? '');
-      if (resolved) mainCheckout = resolved;
+      if (resolved) {
+        mainCheckout = resolved;
+        mainCheckoutResolved = true;
+      }
     }
   } catch {
     // fall back to pendingRoot
+  }
+
+  if (!mainCheckoutResolved) {
+    notify(
+      ctx,
+      'Post-merge main-checkout fast-forward skipped (warning only): could not resolve the main checkout via git worktree list',
+      'warning',
+    );
+    return;
   }
 
   notify(ctx, `Post-merge main-checkout fast-forward running for ${mainCheckout}`, 'info');

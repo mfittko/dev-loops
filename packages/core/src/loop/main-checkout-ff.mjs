@@ -28,13 +28,13 @@
 import path from "node:path";
 
 /**
- * Timeout (ms) for the `git worktree list` resolution step (the fetch-half budget;
- * a separate fetch timeout isn't applied — the fetch runs inline within the merge
- * command under `MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS`).
+ * Timeout (ms) for the `git worktree list` resolution step (the harness hook's own
+ * budget; `syncMainCheckout`'s step-wise `fetch`/`rev-parse`/`merge` commands each
+ * run under `MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS` instead).
  */
 export const MAIN_CHECKOUT_FF_FETCH_TIMEOUT_MS = 60_000;
 
-/** Timeout (ms) for the `git merge --ff-only origin/main` half. */
+/** Timeout (ms) for each step of `syncMainCheckout`'s fetch/rev-parse/merge flow. */
 export const MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS = 60_000;
 
 /** Stable diagnostic kind for a main checkout proven not to be on `main`. */

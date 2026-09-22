@@ -9,12 +9,21 @@ import { fileURLToPath } from "node:url";
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 const hookScript = path.join(repoRoot, ".claude", "hooks", "post-tool-use-merge.mjs");
 
+// Scrub inherited git config so host-side signing/hooks/aliases (e.g. tag.gpgSign,
+// core.warnAmbiguousRefs) cannot steer these fixtures (same convention as the other
+// CLI git-fixture tests, e.g. test/lib/git-delta.test.mjs).
+const GIT_FIXTURE_ENV = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_SYSTEM: "/dev/null",
+};
+
 function git(cwd, args) {
-  execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+  execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], env: GIT_FIXTURE_ENV });
 }
 
 function revParse(cwd, ref) {
-  return execFileSync("git", ["rev-parse", ref], { cwd, encoding: "utf8" }).trim();
+  return execFileSync("git", ["rev-parse", ref], { cwd, encoding: "utf8", env: GIT_FIXTURE_ENV }).trim();
 }
 
 test("post-tool-use-merge hook fast-forwards the main checkout's local main to origin/main (#1596)", async () => {
@@ -51,7 +60,7 @@ test("post-tool-use-merge hook fast-forwards the main checkout's local main to o
         cwd: mainDir,
       }),
       encoding: "utf8",
-      env: { ...process.env },
+      env: GIT_FIXTURE_ENV,
       cwd: mainDir,
     });
 
@@ -90,6 +99,12 @@ test("post-tool-use-merge hook fast-forwards a main checkout even when a tag nam
 
     git(tmp, ["clone", "-q", originDir, mainDir]);
     git(mainDir, ["reset", "--hard", commitASha]);
+    // Force the ambiguity this test exercises rather than relying on git's compiled
+    // default (which a host/distro could override even with global/system config
+    // scrubbed) — without this, a host with core.warnAmbiguousRefs=false would make
+    // `--abbrev-ref HEAD` print an unambiguous `main` too, and the regression this
+    // test guards against would pass vacuously.
+    git(mainDir, ["config", "core.warnAmbiguousRefs", "true"]);
     // A tag literally named `main` makes `--abbrev-ref HEAD` ambiguous (prints `heads/main`).
     git(mainDir, ["tag", "main"]);
 
@@ -100,7 +115,7 @@ test("post-tool-use-merge hook fast-forwards a main checkout even when a tag nam
         cwd: mainDir,
       }),
       encoding: "utf8",
-      env: { ...process.env },
+      env: GIT_FIXTURE_ENV,
       cwd: mainDir,
     });
 
@@ -130,7 +145,7 @@ test("post-tool-use-merge hook skips with a note when the main checkout cannot b
         cwd: nonGit,
       }),
       encoding: "utf8",
-      env: { ...process.env },
+      env: GIT_FIXTURE_ENV,
       cwd: nonGit,
     });
 
@@ -174,7 +189,7 @@ test("post-tool-use-merge hook warns and exits 0 when fast-forward is non-fast-f
         cwd: mainDir,
       }),
       encoding: "utf8",
-      env: { ...process.env },
+      env: GIT_FIXTURE_ENV,
       cwd: mainDir,
     });
 
@@ -220,7 +235,7 @@ test("post-tool-use-merge hook runs post-merge worktree cleanup for the merged P
         cwd: mainDir,
       }),
       encoding: "utf8",
-      env: { ...process.env },
+      env: GIT_FIXTURE_ENV,
       cwd: mainDir,
     });
 
@@ -269,7 +284,7 @@ test("post-tool-use-merge hook invokes the postMerge.actions runner for the merg
         cwd: mainDir,
       }),
       encoding: "utf8",
-      env: { ...process.env },
+      env: GIT_FIXTURE_ENV,
       cwd: mainDir,
     });
 
@@ -309,7 +324,7 @@ test("post-tool-use-merge hook is a silent no-op for postMerge.actions when the 
         cwd: mainDir,
       }),
       encoding: "utf8",
-      env: { ...process.env },
+      env: GIT_FIXTURE_ENV,
       cwd: mainDir,
     });
 
@@ -364,7 +379,7 @@ test("post-tool-use-merge hook emits a main_checkout_not_on_main systemMessage f
         cwd: mainDir,
       }),
       encoding: "utf8",
-      env: { ...process.env },
+      env: GIT_FIXTURE_ENV,
       cwd: mainDir,
     });
 
@@ -416,7 +431,7 @@ test("post-tool-use-merge hook emits a main_checkout_not_on_main systemMessage f
         cwd: mainDir,
       }),
       encoding: "utf8",
-      env: { ...process.env },
+      env: GIT_FIXTURE_ENV,
       cwd: mainDir,
     });
 
@@ -458,7 +473,7 @@ test("post-tool-use-merge hook stays silent (no systemMessage) for a non-merge c
         cwd: mainDir,
       }),
       encoding: "utf8",
-      env: { ...process.env },
+      env: GIT_FIXTURE_ENV,
       cwd: mainDir,
     });
 
@@ -494,7 +509,7 @@ test("post-tool-use-merge hook keeps the generic warning (no systemMessage) when
         cwd: mainDir,
       }),
       encoding: "utf8",
-      env: { ...process.env },
+      env: GIT_FIXTURE_ENV,
       cwd: mainDir,
     });
 
