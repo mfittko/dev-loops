@@ -28,6 +28,7 @@ test("a nested worktree's test copies are never discovered as this checkout's ow
       "a caller-supplied pattern must not be duplicated",
     );
     assert.equal(deduped.at(-1), "example.test.mjs", "the positional test file must survive");
+    assert.equal(deduped.filter((arg) => arg === "worktrees/**").length, 0, "the bare pattern token must be consumed");
   }
 });
 
