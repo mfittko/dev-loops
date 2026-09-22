@@ -1,5 +1,5 @@
 /**
- * Main-checkout fast-forward flow (#1596).
+ * Main-checkout fast-forward flow.
  *
  * The dev-loop merges remotely (`gh pr merge` → origin/main) but neither the merge
  * procedure nor the post-merge hooks fast-forwarded the main checkout's local
@@ -49,27 +49,34 @@ function shellQuotePath(value) {
 }
 
 /**
- * Classify a main checkout's current abbreviated ref (`git rev-parse --abbrev-ref HEAD`
- * output) into one of the four states `syncMainCheckout` acts on.
+ * Classify a main checkout's current full symbolic ref (`git rev-parse
+ * --symbolic-full-name HEAD` output) into one of the four states `syncMainCheckout`
+ * acts on. `--symbolic-full-name` (unlike `--abbrev-ref`) is never subject to
+ * `core.warnAmbiguousRefs` renaming a branch to `heads/<name>` when a tag or other ref
+ * shares its short name.
  *
- * @param {unknown} abbrevRef - Raw (already-trimmed or not) `--abbrev-ref HEAD` output.
+ * @param {unknown} symbolicFullName - Raw (already-trimmed or not) `--symbolic-full-name
+ *   HEAD` output.
  * @returns {"main" | "other_branch" | "detached" | "unreadable"}
  */
-export function classifyMainCheckoutRef(abbrevRef) {
-  if (typeof abbrevRef !== "string") {
+export function classifyMainCheckoutRef(symbolicFullName) {
+  if (typeof symbolicFullName !== "string") {
     return "unreadable";
   }
-  const trimmed = abbrevRef.trim();
+  const trimmed = symbolicFullName.trim();
   if (!trimmed) {
     return "unreadable";
   }
   if (trimmed === "HEAD") {
     return "detached";
   }
-  if (trimmed === "main") {
+  if (trimmed === "refs/heads/main") {
     return "main";
   }
-  return "other_branch";
+  if (trimmed.startsWith("refs/heads/")) {
+    return "other_branch";
+  }
+  return "unreadable";
 }
 
 /**
@@ -153,14 +160,14 @@ export async function syncMainCheckout(mainCheckout, run) {
     return { status: "skipped", reason: fetchResult.reason };
   }
 
-  const refResult = await runStep(run, `git -C ${quoted} rev-parse --abbrev-ref HEAD`);
+  const refResult = await runStep(run, `git -C ${quoted} rev-parse --symbolic-full-name HEAD`);
   if (!refResult.ok) {
     return { status: "skipped", reason: refResult.reason };
   }
-  const abbrevRef = refResult.stdout.trim();
-  const classification = classifyMainCheckoutRef(abbrevRef);
+  const symbolicRef = refResult.stdout.trim();
+  const classification = classifyMainCheckoutRef(symbolicRef);
   if (classification === "unreadable") {
-    return { status: "skipped", reason: `could not determine the current branch (got: ${JSON.stringify(refResult.stdout.trim())})` };
+    return { status: "skipped", reason: `could not determine the current branch (got: ${JSON.stringify(symbolicRef)})` };
   }
 
   if (classification === "main") {
@@ -183,7 +190,7 @@ export async function syncMainCheckout(mainCheckout, run) {
     }
     ref = `detached@${shortSha}`;
   } else {
-    ref = abbrevRef;
+    ref = symbolicRef.slice("refs/heads/".length);
   }
 
   const behindResult = await runStep(run, `git -C ${quoted} rev-list --count HEAD..origin/main`);

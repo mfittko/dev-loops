@@ -14,17 +14,25 @@ import {
 
 // --- classifyMainCheckoutRef ---
 
-test("classifyMainCheckoutRef: main", () => {
-  assert.equal(classifyMainCheckoutRef("main"), "main");
+test("classifyMainCheckoutRef: refs/heads/main", () => {
+  assert.equal(classifyMainCheckoutRef("refs/heads/main"), "main");
 });
 
 test("classifyMainCheckoutRef: HEAD is detached", () => {
   assert.equal(classifyMainCheckoutRef("HEAD"), "detached");
 });
 
-test("classifyMainCheckoutRef: any other branch name", () => {
-  assert.equal(classifyMainCheckoutRef("feature/x"), "other_branch");
-  assert.equal(classifyMainCheckoutRef("issue-2363"), "other_branch");
+test("classifyMainCheckoutRef: any other refs/heads/<name>", () => {
+  assert.equal(classifyMainCheckoutRef("refs/heads/feature/x"), "other_branch");
+  assert.equal(classifyMainCheckoutRef("refs/heads/issue-2363"), "other_branch");
+});
+
+test("classifyMainCheckoutRef: a bare branch name (no refs/heads/ prefix) is unreadable", () => {
+  // `--symbolic-full-name` always prefixes a branch with `refs/heads/`; a bare name like
+  // the legacy `--abbrev-ref` output (e.g. a tag sharing `main`'s short name) must not be
+  // misclassified as `main` or `other_branch`.
+  assert.equal(classifyMainCheckoutRef("main"), "unreadable");
+  assert.equal(classifyMainCheckoutRef("feature/x"), "unreadable");
 });
 
 test("classifyMainCheckoutRef: empty/whitespace/non-string is unreadable", () => {
@@ -52,7 +60,7 @@ test("buildMainCheckoutNotOnMainDiagnostic: full fields for a detached checkout"
   assert.ok(diagnostic.message.includes(MAIN_CHECKOUT_NOT_ON_MAIN_KIND), diagnostic.message);
   assert.ok(diagnostic.message.includes("/Users/x/dev-loops"), diagnostic.message);
   assert.ok(diagnostic.message.includes("detached@abc1234"), diagnostic.message);
-  assert.ok(diagnostic.message.includes("3"), diagnostic.message);
+  assert.ok(diagnostic.message.includes("3 commit(s) behind"), diagnostic.message);
   assert.ok(!/\breset\b/i.test(diagnostic.message), diagnostic.message);
   assert.ok(!/--force\b/i.test(diagnostic.message), diagnostic.message);
 });
@@ -65,7 +73,7 @@ test("buildMainCheckoutNotOnMainDiagnostic: accepts a zero behind count", () => 
   });
   assert.equal(diagnostic.behindCount, 0);
   assert.ok(diagnostic.message.includes("feature/x"), diagnostic.message);
-  assert.ok(diagnostic.message.includes("0"), diagnostic.message);
+  assert.ok(diagnostic.message.includes("0 commit(s) behind"), diagnostic.message);
 });
 
 test("buildMainCheckoutNotOnMainDiagnostic: null when mainCheckout is not absolute", () => {
@@ -147,7 +155,7 @@ function assertNoMutatingCommand(calls) {
 test("syncMainCheckout: on main and fast-forwardable", async () => {
   const { run, calls } = recordingRun([
     [/fetch origin main$/, () => ok()],
-    [/rev-parse --abbrev-ref HEAD$/, () => ok("main\n")],
+    [/rev-parse --symbolic-full-name HEAD$/, () => ok("refs/heads/main\n")],
     [/merge --ff-only origin\/main$/, () => ok()],
   ]);
   const result = await syncMainCheckout("/m", run);
@@ -158,7 +166,7 @@ test("syncMainCheckout: on main and fast-forwardable", async () => {
 test("syncMainCheckout: on main but diverged (merge --ff-only fails) is skipped", async () => {
   const { run } = recordingRun([
     [/fetch origin main$/, () => ok()],
-    [/rev-parse --abbrev-ref HEAD$/, () => ok("main\n")],
+    [/rev-parse --symbolic-full-name HEAD$/, () => ok("refs/heads/main\n")],
     [/merge --ff-only origin\/main$/, () => fail("Not possible to fast-forward")],
   ]);
   const result = await syncMainCheckout("/m", run);
@@ -178,7 +186,7 @@ test("syncMainCheckout: fetch failure is skipped, no further commands", async ()
 test("syncMainCheckout: rev-parse failure is skipped", async () => {
   const { run } = recordingRun([
     [/fetch origin main$/, () => ok()],
-    [/rev-parse --abbrev-ref HEAD$/, () => fail("not a git repository")],
+    [/rev-parse --symbolic-full-name HEAD$/, () => fail("not a git repository")],
   ]);
   const result = await syncMainCheckout("/m", run);
   assert.deepEqual(result, { status: "skipped", reason: "not a git repository" });
@@ -187,7 +195,7 @@ test("syncMainCheckout: rev-parse failure is skipped", async () => {
 test("syncMainCheckout: empty/unreadable ref is skipped", async () => {
   const { run, calls } = recordingRun([
     [/fetch origin main$/, () => ok()],
-    [/rev-parse --abbrev-ref HEAD$/, () => ok("   \n")],
+    [/rev-parse --symbolic-full-name HEAD$/, () => ok("   \n")],
   ]);
   const result = await syncMainCheckout("/m", run);
   assert.equal(result.status, "skipped");
@@ -197,7 +205,7 @@ test("syncMainCheckout: empty/unreadable ref is skipped", async () => {
 test("syncMainCheckout: detached HEAD reports the not_on_main diagnostic", async () => {
   const { run, calls } = recordingRun([
     [/fetch origin main$/, () => ok()],
-    [/rev-parse --abbrev-ref HEAD$/, () => ok("HEAD\n")],
+    [/rev-parse --symbolic-full-name HEAD$/, () => ok("HEAD\n")],
     [/rev-parse --short HEAD$/, () => ok("abc1234\n")],
     [/rev-list --count HEAD\.\.origin\/main$/, () => ok("6\n")],
   ]);
@@ -214,7 +222,7 @@ test("syncMainCheckout: detached HEAD reports the not_on_main diagnostic", async
 test("syncMainCheckout: other named branch reports the not_on_main diagnostic", async () => {
   const { run, calls } = recordingRun([
     [/fetch origin main$/, () => ok()],
-    [/rev-parse --abbrev-ref HEAD$/, () => ok("feature/x\n")],
+    [/rev-parse --symbolic-full-name HEAD$/, () => ok("refs/heads/feature/x\n")],
     [/rev-list --count HEAD\.\.origin\/main$/, () => ok("0\n")],
   ]);
   const result = await syncMainCheckout("/m", run);
@@ -227,7 +235,7 @@ test("syncMainCheckout: other named branch reports the not_on_main diagnostic", 
 test("syncMainCheckout: detached HEAD short-sha failure is skipped", async () => {
   const { run, calls } = recordingRun([
     [/fetch origin main$/, () => ok()],
-    [/rev-parse --abbrev-ref HEAD$/, () => ok("HEAD\n")],
+    [/rev-parse --symbolic-full-name HEAD$/, () => ok("HEAD\n")],
     [/rev-parse --short HEAD$/, () => fail("ambiguous HEAD")],
   ]);
   const result = await syncMainCheckout("/m", run);
@@ -238,7 +246,7 @@ test("syncMainCheckout: detached HEAD short-sha failure is skipped", async () =>
 test("syncMainCheckout: detached HEAD empty short-sha is skipped", async () => {
   const { run } = recordingRun([
     [/fetch origin main$/, () => ok()],
-    [/rev-parse --abbrev-ref HEAD$/, () => ok("HEAD\n")],
+    [/rev-parse --symbolic-full-name HEAD$/, () => ok("HEAD\n")],
     [/rev-parse --short HEAD$/, () => ok("  \n")],
   ]);
   const result = await syncMainCheckout("/m", run);
@@ -248,7 +256,7 @@ test("syncMainCheckout: detached HEAD empty short-sha is skipped", async () => {
 test("syncMainCheckout: behind-count failure is skipped", async () => {
   const { run } = recordingRun([
     [/fetch origin main$/, () => ok()],
-    [/rev-parse --abbrev-ref HEAD$/, () => ok("feature/x\n")],
+    [/rev-parse --symbolic-full-name HEAD$/, () => ok("refs/heads/feature/x\n")],
     [/rev-list --count HEAD\.\.origin\/main$/, () => fail("bad revision")],
   ]);
   const result = await syncMainCheckout("/m", run);
@@ -258,7 +266,7 @@ test("syncMainCheckout: behind-count failure is skipped", async () => {
 test("syncMainCheckout: non-numeric behind-count stdout is skipped", async () => {
   const { run } = recordingRun([
     [/fetch origin main$/, () => ok()],
-    [/rev-parse --abbrev-ref HEAD$/, () => ok("feature/x\n")],
+    [/rev-parse --symbolic-full-name HEAD$/, () => ok("refs/heads/feature/x\n")],
     [/rev-list --count HEAD\.\.origin\/main$/, () => ok("not-a-number\n")],
   ]);
   const result = await syncMainCheckout("/m", run);
@@ -277,7 +285,7 @@ test("syncMainCheckout: every step command POSIX single-quotes a path with a spa
   const path = "/Users/My 'User'/dev-loops";
   const { run, calls } = recordingRun([
     [/fetch origin main$/, () => ok()],
-    [/rev-parse --abbrev-ref HEAD$/, () => ok("HEAD\n")],
+    [/rev-parse --symbolic-full-name HEAD$/, () => ok("HEAD\n")],
     [/rev-parse --short HEAD$/, () => ok("abc1234\n")],
     [/rev-list --count HEAD\.\.origin\/main$/, () => ok("1\n")],
   ]);

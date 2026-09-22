@@ -68,6 +68,56 @@ test("post-tool-use-merge hook fast-forwards the main checkout's local main to o
   }
 });
 
+test("post-tool-use-merge hook fast-forwards a main checkout even when a tag named `main` also exists", async () => {
+  // `git rev-parse --abbrev-ref HEAD` prints the ambiguous `heads/main` (core.warnAmbiguousRefs)
+  // when a tag named `main` also exists, which used to misclassify an on-main checkout as
+  // `other_branch` and wrongly emit a `main_checkout_not_on_main` systemMessage.
+  // `--symbolic-full-name` is immune: it always resolves to `refs/heads/main`.
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ff-hook-ambiguous-ref-"));
+  const originDir = path.join(tmp, "origin");
+  const mainDir = path.join(tmp, "main");
+
+  try {
+    git(tmp, ["init", "-q", originDir]);
+    git(originDir, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(originDir, ["config", "user.email", "test@example.com"]);
+    git(originDir, ["config", "user.name", "Test"]);
+    git(originDir, ["config", "commit.gpgsign", "false"]);
+    git(originDir, ["commit", "--allow-empty", "-q", "-m", "A"]);
+    const commitASha = revParse(originDir, "HEAD");
+    git(originDir, ["commit", "--allow-empty", "-q", "-m", "B"]);
+    const originSha = revParse(originDir, "HEAD");
+
+    git(tmp, ["clone", "-q", originDir, mainDir]);
+    git(mainDir, ["reset", "--hard", commitASha]);
+    // A tag literally named `main` makes `--abbrev-ref HEAD` ambiguous (prints `heads/main`).
+    git(mainDir, ["tag", "main"]);
+
+    const res = spawnSync("node", [hookScript], {
+      input: JSON.stringify({
+        tool_name: "Bash",
+        tool_input: { command: "gh pr merge 42 --squash --delete-branch" },
+        cwd: mainDir,
+      }),
+      encoding: "utf8",
+      env: { ...process.env },
+      cwd: mainDir,
+    });
+
+    assert.equal(res.status, 0, `hook must exit 0 (got ${res.status}, stderr: ${res.stderr})`);
+    // "main" alone is ambiguous once the tag exists; resolve the branch tip explicitly.
+    assert.equal(revParse(mainDir, "refs/heads/main"), originSha, "local main advanced to origin/main despite the ambiguous tag");
+    assert.match(res.stderr, /fast-forwarded/, "hook must emit a fast-forwarded stderr note, not a skip");
+    assert.equal(
+      res.stdout.trim(),
+      "",
+      "a checkout on main must never emit a main_checkout_not_on_main systemMessage, even with an ambiguous `main` tag",
+    );
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test("post-tool-use-merge hook skips with a note when the main checkout cannot be resolved (#1596)", async () => {
   // A NON-git temp directory: `git worktree list` fails → mainCheckout stays null.
   const nonGit = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ff-hook-nogit-"));
@@ -330,7 +380,7 @@ test("post-tool-use-merge hook emits a main_checkout_not_on_main systemMessage f
     assert.ok(parsed.systemMessage.includes("main_checkout_not_on_main"), parsed.systemMessage);
     assert.ok(parsed.systemMessage.includes(mainDir), parsed.systemMessage);
     assert.ok(parsed.systemMessage.includes(`detached@${beforeShortSha}`), parsed.systemMessage);
-    assert.ok(parsed.systemMessage.includes("3"), parsed.systemMessage);
+    assert.ok(parsed.systemMessage.includes("3 commit(s) behind"), parsed.systemMessage);
 
     const afterSha = revParse(mainDir, "HEAD");
     assert.equal(afterSha, beforeSha, "HEAD sha must be unchanged");
@@ -375,7 +425,7 @@ test("post-tool-use-merge hook emits a main_checkout_not_on_main systemMessage f
 
     const parsed = JSON.parse(res.stdout.trim());
     assert.ok(parsed.systemMessage.includes("feature-x"), parsed.systemMessage);
-    assert.ok(parsed.systemMessage.includes("0"), parsed.systemMessage);
+    assert.ok(parsed.systemMessage.includes("0 commit(s) behind"), parsed.systemMessage);
 
     const afterSha = revParse(mainDir, "HEAD");
     const afterBranch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: mainDir, encoding: "utf8" }).trim();

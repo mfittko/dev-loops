@@ -49,12 +49,6 @@ function makeSyncExecRun(mainCheckout) {
   };
 }
 
-// Set to the action-required diagnostic message when the main checkout is proven
-// detached or on another branch. Surfaced as a structured PostToolUse `systemMessage`
-// on stdout AFTER all other hook work, never mixed with the generic stderr warning
-// used for every other skip reason.
-let notOnMainMessage = null;
-
 const input = readHookInput();
 const command = input?.tool_input?.command;
 if (typeof command === "string" && isMergeCapableCommand(command)) {
@@ -72,16 +66,28 @@ if (typeof command === "string" && isMergeCapableCommand(command)) {
       "[dev-loops] post-merge: main-checkout fast-forward skipped (best-effort): could not resolve main checkout from `git worktree list`.\n",
     );
   } else {
-    const syncResult = await syncMainCheckout(mainCheckout, makeSyncExecRun(mainCheckout));
-    if (syncResult.status === "fast_forwarded") {
+    // The action-required `not_on_main` case is surfaced as a structured PostToolUse
+    // `systemMessage` on stdout RIGHT AWAY (the only thing this hook ever writes to
+    // stdout, and never mixed with the generic stderr warning below) — a hook killed by
+    // the harness's default timeout during the worktree-cleanup/postMerge.actions work
+    // further down must not lose this action-required signal.
+    try {
+      const syncResult = await syncMainCheckout(mainCheckout, makeSyncExecRun(mainCheckout));
+      if (syncResult.status === "fast_forwarded") {
+        process.stderr.write(
+          "[dev-loops] post-merge: main checkout fast-forwarded local main to origin/main.\n",
+        );
+      } else if (syncResult.status === "not_on_main") {
+        process.stdout.write(JSON.stringify({ systemMessage: syncResult.diagnostic.message }) + "\n");
+      } else {
+        process.stderr.write(
+          `[dev-loops] post-merge: main-checkout fast-forward skipped (best-effort): ${syncResult.reason}\n`,
+        );
+      }
+    } catch (error) {
+      const reason = error?.message || String(error);
       process.stderr.write(
-        "[dev-loops] post-merge: main checkout fast-forwarded local main to origin/main.\n",
-      );
-    } else if (syncResult.status === "not_on_main") {
-      notOnMainMessage = syncResult.diagnostic.message;
-    } else {
-      process.stderr.write(
-        `[dev-loops] post-merge: main-checkout fast-forward skipped (best-effort): ${syncResult.reason}\n`,
+        `[dev-loops] post-merge: main-checkout fast-forward skipped (best-effort): ${reason}\n`,
       );
     }
   }
@@ -137,11 +143,5 @@ if (typeof command === "string" && isMergeCapableCommand(command)) {
   }
 }
 
-// A detached-or-other-branch main checkout is action-required: after ALL other
-// best-effort hook work has run, surface it as a structured PostToolUse `systemMessage`
-// on stdout. This is the ONLY thing this hook ever writes to stdout, and it never mixes
-// with the generic stderr warning above. Still non-fatal: always exit 0.
-if (notOnMainMessage) {
-  process.stdout.write(JSON.stringify({ systemMessage: notOnMainMessage }) + "\n");
-}
+// Still non-fatal regardless of what ran above: always exit 0.
 process.exit(0);

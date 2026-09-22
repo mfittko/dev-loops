@@ -26,8 +26,8 @@ function quotePath(value) {
 function fetchCommand(mainCheckout) {
   return `git -C ${quotePath(mainCheckout)} fetch origin main`;
 }
-function revParseAbbrevRefCommand(mainCheckout) {
-  return `git -C ${quotePath(mainCheckout)} rev-parse --abbrev-ref HEAD`;
+function revParseSymbolicFullNameCommand(mainCheckout) {
+  return `git -C ${quotePath(mainCheckout)} rev-parse --symbolic-full-name HEAD`;
 }
 function mergeFfOnlyCommand(mainCheckout) {
   return `git -C ${quotePath(mainCheckout)} merge --ff-only origin/main`;
@@ -104,8 +104,8 @@ test("successful bash-tool gh pr merge queues and flushes one post-merge update 
     resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
     runCommand: async ({ command, cwd }) => {
       calls.push({ command, cwd });
-      if (command === revParseAbbrevRefCommand("/repo")) {
-        return { code: 0, stdout: "main\n", stderr: "", killed: false };
+      if (command === revParseSymbolicFullNameCommand("/repo")) {
+        return { code: 0, stdout: "refs/heads/main\n", stderr: "", killed: false };
       }
       return { code: 0, stdout: "updated", stderr: "", killed: false };
     },
@@ -125,7 +125,7 @@ test("successful bash-tool gh pr merge queues and flushes one post-merge update 
     { command: POST_MERGE_UPDATE_COMMAND, cwd: "/repo" },
     { command: "git worktree list", cwd: "/repo" },
     { command: fetchCommand("/repo"), cwd: "/repo" },
-    { command: revParseAbbrevRefCommand("/repo"), cwd: "/repo" },
+    { command: revParseSymbolicFullNameCommand("/repo"), cwd: "/repo" },
     { command: mergeFfOnlyCommand("/repo"), cwd: "/repo" },
     { command: "git worktree list", cwd: "/repo" },
     { command: buildWorktreeCleanupCommand("/repo", 373), cwd: "/repo" },
@@ -155,8 +155,8 @@ test("successful user_bash git merge queues and flushes one update", async () =>
       if (command === "git merge origin/main") {
         return { code: 0, stdout: "Already up to date.", stderr: "", killed: false };
       }
-      if (command === revParseAbbrevRefCommand("/repo")) {
-        return { code: 0, stdout: "main\n", stderr: "", killed: false };
+      if (command === revParseSymbolicFullNameCommand("/repo")) {
+        return { code: 0, stdout: "refs/heads/main\n", stderr: "", killed: false };
       }
       return { code: 0, stdout: "updated", stderr: "", killed: false };
     },
@@ -180,7 +180,7 @@ test("successful user_bash git merge queues and flushes one update", async () =>
     { command: POST_MERGE_UPDATE_COMMAND, cwd: "/repo" },
     { command: "git worktree list", cwd: "/repo" },
     { command: fetchCommand("/repo"), cwd: "/repo" },
-    { command: revParseAbbrevRefCommand("/repo"), cwd: "/repo" },
+    { command: revParseSymbolicFullNameCommand("/repo"), cwd: "/repo" },
     { command: mergeFfOnlyCommand("/repo"), cwd: "/repo" },
     { command: "git worktree list", cwd: "/repo" },
     { command: buildPostMergeActionsCommand("/repo", undefined), cwd: "/repo" },
@@ -355,8 +355,8 @@ test("multiple merge signals in one turn still run only one update", async () =>
     resolveRepoContext: async (cwd) => ({ repoRoot: cwd, repoSlug: TARGET_REPO_SLUG, inManagedContext: true }),
     runCommand: async ({ command, cwd }) => {
       calls.push({ command, cwd });
-      if (command === revParseAbbrevRefCommand("/repo")) {
-        return { code: 0, stdout: "main\n", stderr: "", killed: false };
+      if (command === revParseSymbolicFullNameCommand("/repo")) {
+        return { code: 0, stdout: "refs/heads/main\n", stderr: "", killed: false };
       }
       return { code: 0, stdout: "ok", stderr: "", killed: false };
     },
@@ -372,7 +372,7 @@ test("multiple merge signals in one turn still run only one update", async () =>
     { command: POST_MERGE_UPDATE_COMMAND, cwd: "/repo" },
     { command: "git worktree list", cwd: "/repo" },
     { command: fetchCommand("/repo"), cwd: "/repo" },
-    { command: revParseAbbrevRefCommand("/repo"), cwd: "/repo" },
+    { command: revParseSymbolicFullNameCommand("/repo"), cwd: "/repo" },
     { command: mergeFfOnlyCommand("/repo"), cwd: "/repo" },
     { command: "git worktree list", cwd: "/repo" },
     { command: buildWorktreeCleanupCommand("/repo", 373), cwd: "/repo" },
@@ -433,8 +433,8 @@ test("onAgentEnd fast-forwards the resolved main checkout to origin/main (#1596)
       if (command === "git worktree list") {
         return { code: 0, stdout: "/main/checkout  deadbeef [main]\n/repo  cafebabe [feature]\n", stderr: "", killed: false };
       }
-      if (command === revParseAbbrevRefCommand("/main/checkout")) {
-        return { code: 0, stdout: "main\n", stderr: "", killed: false };
+      if (command === revParseSymbolicFullNameCommand("/main/checkout")) {
+        return { code: 0, stdout: "refs/heads/main\n", stderr: "", killed: false };
       }
       return { code: 0, stdout: "ok", stderr: "", killed: false };
     },
@@ -472,8 +472,8 @@ test("a non-fast-forwardable main checkout warns and does not block", async () =
       if (command === "git worktree list") {
         return { code: 0, stdout: "/main/checkout  deadbeef [main]\n", stderr: "", killed: false };
       }
-      if (command === revParseAbbrevRefCommand("/main/checkout")) {
-        return { code: 0, stdout: "main\n", stderr: "", killed: false };
+      if (command === revParseSymbolicFullNameCommand("/main/checkout")) {
+        return { code: 0, stdout: "refs/heads/main\n", stderr: "", killed: false };
       }
       if (command === mergeFfOnlyCommand("/main/checkout")) {
         return { code: 1, stdout: "", stderr: "Not possible to fast-forward", killed: false };
@@ -510,7 +510,7 @@ test("a detached main checkout surfaces an error-level notification and never me
       if (command === "git worktree list") {
         return { code: 0, stdout: "not a worktree listing", stderr: "", killed: false };
       }
-      if (command === revParseAbbrevRefCommand("/repo")) {
+      if (command === revParseSymbolicFullNameCommand("/repo")) {
         return { code: 0, stdout: "HEAD\n", stderr: "", killed: false };
       }
       if (command === revParseShortHeadCommand("/repo")) {
@@ -538,11 +538,12 @@ test("a detached main checkout surfaces an error-level notification and never me
   assert.ok(message.includes("main_checkout_not_on_main"), message);
   assert.ok(message.includes("/repo"), message);
   assert.ok(message.includes("detached@abc1234"), message);
-  assert.ok(message.includes("6"), message);
+  assert.ok(message.includes("6 commit(s) behind"), message);
 
   for (const { command } of calls.filter((c) => c.command.startsWith("git -C "))) {
     assert.ok(!/\bmerge\b/.test(command), `must not merge: ${command}`);
     assert.ok(!/\bswitch\b/.test(command), `must not switch: ${command}`);
+    assert.ok(!/\bcheckout\b/.test(command), `must not checkout: ${command}`);
     assert.ok(!/\breset\b/.test(command), `must not reset: ${command}`);
   }
 });
@@ -556,8 +557,8 @@ test("an other-branch main checkout surfaces an error-level notification naming 
       if (command === "git worktree list") {
         return { code: 0, stdout: "not a worktree listing", stderr: "", killed: false };
       }
-      if (command === revParseAbbrevRefCommand("/repo")) {
-        return { code: 0, stdout: "feature/x\n", stderr: "", killed: false };
+      if (command === revParseSymbolicFullNameCommand("/repo")) {
+        return { code: 0, stdout: "refs/heads/feature/x\n", stderr: "", killed: false };
       }
       if (command === revListBehindCountCommand("/repo")) {
         return { code: 0, stdout: "0\n", stderr: "", killed: false };
@@ -579,11 +580,12 @@ test("an other-branch main checkout surfaces an error-level notification naming 
   assert.equal(errorNotifications.length, 1, JSON.stringify(notifications));
   const message = errorNotifications[0].message;
   assert.ok(message.includes("feature/x"), message);
-  assert.ok(message.includes("0 commit"), message);
+  assert.ok(message.includes("0 commit(s) behind"), message);
 
   for (const { command } of calls.filter((c) => c.command.startsWith("git -C "))) {
     assert.ok(!/\bmerge\b/.test(command), `must not merge: ${command}`);
     assert.ok(!/\bswitch\b/.test(command), `must not switch: ${command}`);
+    assert.ok(!/\bcheckout\b/.test(command), `must not checkout: ${command}`);
     assert.ok(!/\breset\b/.test(command), `must not reset: ${command}`);
   }
 });
@@ -595,8 +597,8 @@ test("a not-on-main main checkout falls back to stderr when no UI is available",
       if (command === "git worktree list") {
         return { code: 0, stdout: "not a worktree listing", stderr: "", killed: false };
       }
-      if (command === revParseAbbrevRefCommand("/repo")) {
-        return { code: 0, stdout: "feature/x\n", stderr: "", killed: false };
+      if (command === revParseSymbolicFullNameCommand("/repo")) {
+        return { code: 0, stdout: "refs/heads/feature/x\n", stderr: "", killed: false };
       }
       if (command === revListBehindCountCommand("/repo")) {
         return { code: 0, stdout: "2\n", stderr: "", killed: false };
@@ -688,7 +690,7 @@ test("fetch failure, rev-parse failure, and behind-count failure stay warning-on
   );
 
   const revParseFailNotifications = await runScenario((command) => {
-    if (command === revParseAbbrevRefCommand("/repo")) {
+    if (command === revParseSymbolicFullNameCommand("/repo")) {
       return { code: 1, stdout: "", stderr: "not a git repository", killed: false };
     }
     return { code: 0, stdout: "ok", stderr: "", killed: false };
@@ -700,8 +702,8 @@ test("fetch failure, rev-parse failure, and behind-count failure stay warning-on
   );
 
   const behindCountFailNotifications = await runScenario((command) => {
-    if (command === revParseAbbrevRefCommand("/repo")) {
-      return { code: 0, stdout: "feature/x\n", stderr: "", killed: false };
+    if (command === revParseSymbolicFullNameCommand("/repo")) {
+      return { code: 0, stdout: "refs/heads/feature/x\n", stderr: "", killed: false };
     }
     if (command === revListBehindCountCommand("/repo")) {
       return { code: 1, stdout: "", stderr: "bad revision", killed: false };
