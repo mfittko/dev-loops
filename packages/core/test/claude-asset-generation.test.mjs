@@ -36,11 +36,7 @@ test("transformAgent and transformSkill rewrite the package-local CLI form to th
 test("stripPiOnlyBlocks removes <!-- pi-only --> blocks and collapses blank runs; keeps other prose", () => {
   const body = "Keep A.\n\n<!-- pi-only -->\nPi-only line about contact_supervisor.\n<!-- /pi-only -->\n\nKeep B.\n";
   const out = stripPiOnlyBlocks(body);
-  assert.equal(out.includes("contact_supervisor"), false);
-  assert.equal(out.includes("pi-only"), false);
-  assert.match(out, /Keep A\./);
-  assert.match(out, /Keep B\./);
-  assert.equal(out.includes("\n\n\n"), false, "blank-line runs collapsed");
+  assert.equal(out, "Keep A.\n\nKeep B.\n");
 });
 
 test("stripPiOnlyBlocks is a byte-exact no-op without markers, even with pre-existing blank runs", () => {
@@ -52,11 +48,7 @@ test("stripPiOnlyBlocks is a byte-exact no-op without markers, even with pre-exi
 test("stripPiOnlyBlocks removes multiple blocks non-greedily (no over-strip between them)", () => {
   const body = "A\n\n<!-- pi-only -->\nfirst\n<!-- /pi-only -->\n\nKEEP MIDDLE\n\n<!-- pi-only -->\nsecond\n<!-- /pi-only -->\n\nB\n";
   const out = stripPiOnlyBlocks(body);
-  assert.equal(out.includes("first"), false);
-  assert.equal(out.includes("second"), false);
-  assert.match(out, /KEEP MIDDLE/);
-  assert.match(out, /A\n/);
-  assert.match(out, /B\n/);
+  assert.equal(out, "A\n\nKEEP MIDDLE\n\nB\n");
 });
 
 test("transformAgent strips pi-only blocks from the body", () => {
@@ -68,11 +60,17 @@ test("transformAgent strips pi-only blocks from the body", () => {
 });
 
 test("transformSkill strips pi-only blocks from the body too", () => {
-  const raw = `---\nname: s\ndescription: d\nallowed-tools: read bash\n---\nKeep this.\n<!-- pi-only -->\ncontact_supervisor guidance here.\n<!-- /pi-only -->\nAnd keep this.\n`;
-  const out = transformSkill({ source: "skills/s/SKILL.md", raw });
-  assert.equal(out.includes("contact_supervisor"), false);
-  assert.match(out, /Keep this\./);
-  assert.match(out, /And keep this\./);
+  // Fixtures vary wording and wrapping; only markers determine harness scope.
+  for (const [shared, piOnly] of [
+    ["Keep this.", "contact_supervisor guidance here."],
+    ["Retain this shared\nguidance.", "Pi guidance uses\ncontact_supervisor."],
+  ]) {
+    const raw = `---\nname: s\ndescription: d\nallowed-tools: read bash\n---\n${shared}\n<!-- pi-only -->\n${piOnly}\n<!-- /pi-only -->\nAnd keep this.\n`;
+    const out = transformSkill({ source: "skills/s/SKILL.md", raw });
+    const { frontmatter, body } = splitFrontmatter(out);
+    assert.deepEqual(frontmatter, { name: "s", description: "d", "allowed-tools": "Read Bash" });
+    assert.equal(body, `<!-- GENERATED from skills/s/SKILL.md by scripts/claude/generate-claude-assets.mjs — do not edit; edit the source and regenerate. -->\n\n${shared}\nAnd keep this.\n`);
+  }
 });
 
 test("mapTool expands search to Grep+Glob and maps subagent/review_loop to Agent", () => {

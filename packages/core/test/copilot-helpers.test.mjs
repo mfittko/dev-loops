@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "bun:test";
 
 import {
+  classifyCopilotReviewBodyDisposition,
   containsBareCopilotSummon,
   copilotReviewBodySignalsChanges,
+  COPILOT_DISPOSITION,
   extractReviewCommitSha,
   isCopilotLogin,
   isGateMachineArtifactBody,
@@ -41,9 +46,10 @@ test("normalizeTimestamp returns ms for valid ISO strings and null for invalid i
   assert.equal(normalizeTimestamp(42), null);
 });
 
-test("extractReviewCommitSha prefers GraphQL oid over REST commit_id", () => {
+test("extractReviewCommitSha accepts every supported review commit shape and prefers GraphQL oid", () => {
   assert.equal(extractReviewCommitSha({ commit: { oid: "abc123" } }), "abc123");
   assert.equal(extractReviewCommitSha({ commit_id: "def456" }), "def456");
+  assert.equal(extractReviewCommitSha({ commitId: "ghi789" }), "ghi789");
   assert.equal(extractReviewCommitSha({ commit: { oid: "abc123" }, commit_id: "def456" }), "abc123");
   assert.equal(extractReviewCommitSha({}), null);
   assert.equal(extractReviewCommitSha(null), null);
@@ -439,6 +445,29 @@ test("summarizeCopilotReviews ignores non-Copilot reviews", () => {
   assert.equal(result.hasSubmittedReviewOnCurrentHead, false);
 });
 
+test("summarizeCopilotReviews exposes only post-reset reviews to downstream evaluators", () => {
+  const beforeReset = {
+    author: { login: "copilot-pull-request-reviewer" },
+    state: "COMMENTED",
+    commit: { oid: "abc1234" },
+    body: "### 🟡 Changes recommended",
+    submittedAt: "2026-05-30T10:00:00Z",
+  };
+  const afterReset = {
+    author: { login: "copilot-pull-request-reviewer" },
+    state: "COMMENTED",
+    commit: { oid: "def5678" },
+    submittedAt: "2026-06-01T10:00:00Z",
+  };
+  const result = summarizeCopilotReviews([beforeReset, afterReset], {
+    headSha: "abc1234",
+    draftGateResetAtMs: Date.parse("2026-05-31T20:00:00Z"),
+  });
+  assert.deepEqual(result.copilotReviews, [beforeReset, afterReset]);
+  assert.deepEqual(result.effectiveCopilotReviews, [afterReset]);
+  assert.equal(result.hasBodyFindingOnCurrentHead, false);
+});
+
 test("copilotReviewBodySignalsChanges: COMMENTED with a 'Changes recommended' body is a finding", () => {
   assert.equal(
     copilotReviewBodySignalsChanges("COMMENTED", "### 🟡 Changes recommended\n\nSome finding text."),
@@ -525,6 +554,113 @@ test("copilotReviewBodySignalsChanges: 🟡 is authoritative alongside the word 
     copilotReviewBodySignalsChanges("COMMENTED", "### 🟡 Changes recommended\n\nno issues elsewhere though."),
     true,
   );
+});
+
+// Real captured `ccr-overview-v2` bodies, one per disposition. These back the
+// text-matching (not emoji-keyed) contract for all three Copilot dispositions.
+const OVERVIEW_FIXTURE_DIR = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "copilot-overview");
+const readOverviewFixture = (name) => readFileSync(join(OVERVIEW_FIXTURE_DIR, name), "utf8");
+
+test("copilotReviewBodySignalsChanges: captured 🔵 'Needs a closer look' overview signals changes (non-approval)", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", readOverviewFixture("needs-a-closer-look.md")),
+    true,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: captured 🟡 'Changes recommended' overview signals changes", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", readOverviewFixture("changes-recommended.md")),
+    true,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: captured 🟢 'Approval recommended' overview is clean", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", readOverviewFixture("approval-recommended.md")),
+    false,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: 'Changes recommended' is text-matched with the emoji absent", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", "### Changes recommended\n\nA finding without the glyph."),
+    true,
+  );
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", "### 🟡 Changes recommended\n\nA finding with the glyph."),
+    true,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: 'Approval recommended' is clean with the emoji absent", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges("COMMENTED", "### Approval recommended\n\nLooks good."),
+    false,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: a disposition phrase quoted outside the header never false-positives", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges(
+      "COMMENTED",
+      "<!-- ccr-overview-v2 -->\n## Copilot review overview\n\n### 🟢 Approval recommended\n\nNo changes recommended and no closer look needed here.",
+    ),
+    false,
+  );
+});
+
+test("copilotReviewBodySignalsChanges: an unrecognized disposition header fails closed (unresolved feedback)", () => {
+  assert.equal(
+    copilotReviewBodySignalsChanges(
+      "COMMENTED",
+      "<!-- ccr-overview-v2 -->\n## Copilot review overview\n\n### 🟣 Deferred to a domain expert\n\nSome future disposition we do not map yet.",
+    ),
+    true,
+  );
+});
+
+test("classifyCopilotReviewBodyDisposition: distinguishes 🟡, 🔵, 🟢, unrecognized, and none", () => {
+  assert.equal(
+    classifyCopilotReviewBodyDisposition("COMMENTED", readOverviewFixture("changes-recommended.md")),
+    COPILOT_DISPOSITION.CHANGES_RECOMMENDED,
+  );
+  assert.equal(
+    classifyCopilotReviewBodyDisposition("COMMENTED", readOverviewFixture("needs-a-closer-look.md")),
+    COPILOT_DISPOSITION.NEEDS_CLOSER_LOOK,
+  );
+  assert.equal(
+    classifyCopilotReviewBodyDisposition("COMMENTED", readOverviewFixture("approval-recommended.md")),
+    COPILOT_DISPOSITION.CLEAN,
+  );
+  assert.equal(
+    classifyCopilotReviewBodyDisposition("COMMENTED", "### 🟣 Deferred to a domain expert\n\nfuture header"),
+    COPILOT_DISPOSITION.UNRECOGNIZED,
+  );
+  assert.equal(classifyCopilotReviewBodyDisposition("COMMENTED", ""), COPILOT_DISPOSITION.NONE);
+  assert.equal(classifyCopilotReviewBodyDisposition("APPROVED", "### 🟡 Changes recommended"), COPILOT_DISPOSITION.NONE);
+  // A human-style CHANGES_REQUESTED is always actionable regardless of body.
+  assert.equal(classifyCopilotReviewBodyDisposition("CHANGES_REQUESTED", ""), COPILOT_DISPOSITION.CHANGES_RECOMMENDED);
+});
+
+test("classifyCopilotReviewBodyDisposition: signalsChanges agrees with the classification (no drift)", () => {
+  // The boolean loop-block signal is derived from the same classification the
+  // merge-convergence precondition reads, so the two can never diverge.
+  for (const [state, body] of [
+    ["COMMENTED", readOverviewFixture("changes-recommended.md")],
+    ["COMMENTED", readOverviewFixture("needs-a-closer-look.md")],
+    ["COMMENTED", readOverviewFixture("approval-recommended.md")],
+    ["COMMENTED", "### 🟣 Deferred to a domain expert"],
+    ["COMMENTED", ""],
+    ["APPROVED", "### 🟡 Changes recommended"],
+    ["CHANGES_REQUESTED", ""],
+  ]) {
+    const disposition = classifyCopilotReviewBodyDisposition(state, body);
+    const expected = disposition === COPILOT_DISPOSITION.CHANGES_RECOMMENDED
+      || disposition === COPILOT_DISPOSITION.NEEDS_CLOSER_LOOK
+      || disposition === COPILOT_DISPOSITION.UNRECOGNIZED;
+    assert.equal(copilotReviewBodySignalsChanges(state, body), expected, `${disposition} disagreed with signalsChanges`);
+  }
 });
 
 test("summarizeCopilotReviews sets hasBodyFindingOnCurrentHead true for a current-head 🟡 COMMENTED review", () => {

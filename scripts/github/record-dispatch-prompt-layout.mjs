@@ -15,10 +15,12 @@ mechanical to check: whether the prompt actually LEADS with the round's
 byte-identical invariant prefix (inline mode) or its byte-identical pointer
 line (pointer-seeding mode), never angle-first.
 
-The sanctioned fan-out path (issue #1852) calls
-compose-reviewer-prompt.mjs, which composes the prompt AND records this
-capture atomically via this module's exported recordDispatchPromptLayout —
-so a canonical-path dispatch is never left unrecorded by agent discretion.
+The sanctioned fan-out path (issue #1852/#2166) is
+emit-fanout-dispatch.mjs, whose composer core
+(compose-reviewer-prompt.mjs's exported composeAndRecordReviewerPrompt)
+composes the prompt AND records this capture atomically via this module's
+exported recordDispatchPromptLayout — so a canonical-path dispatch is never
+left unrecorded by agent discretion.
 This CLI is the underlying primitive (still directly callable when a caller
 already has an already-composed prompt file on disk); call it ONCE per
 dispatched reviewer/group, right after composing its prompt and BEFORE (or
@@ -66,8 +68,8 @@ Exit codes:
      --head-sha, or --prompt-file is missing/unreadable
   2  Usage or internal error, or invalid --jq filter`.trim();
 
-// Exported so compose-reviewer-prompt.mjs (issue #1852) validates scope/head-sha
-// with the IDENTICAL rules this CLI's own arg parsing uses, never a hand-copied
+// Exported so emit-fanout-dispatch.mjs validates scope/head-sha with the
+// IDENTICAL rules this CLI's own arg parsing uses, never a hand-copied
 // regex that could drift from this one.
 export const HEAD_SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
 export const VALID_SCOPE_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
@@ -117,11 +119,12 @@ export function dispatchPromptLayoutRecordPath(tmpRoot, scope, headSha) {
 
 /**
  * Core record-writing logic, factored out of `main()` so a programmatic
- * caller that already holds the composed prompt TEXT in memory (issue
- * #1852's compose-reviewer-prompt.mjs) never has to round-trip it through a
- * temp file + subprocess argv just to record it — the composer calls this
- * directly. `scope`/`headSha` are assumed ALREADY validated/normalized by the
- * caller (CLI callers validate via VALID_SCOPE_RE/HEAD_SHA_RE + lowercase
+ * caller that already holds the composed prompt TEXT in memory
+ * (compose-reviewer-prompt.mjs, driven by emit-fanout-dispatch.mjs) never
+ * has to round-trip it through a temp file + subprocess argv just to record
+ * it — the composer calls this directly. `scope`/`headSha` are assumed
+ * ALREADY validated/normalized by the caller (CLI callers validate via
+ * VALID_SCOPE_RE/HEAD_SHA_RE + lowercase
  * before reaching here, exactly as `main()` does below); this function's own
  * fail-closed surface is the canonical-basename check
  * (`validateBriefingPrefixPath`) plus a non-empty `promptText`, mirroring

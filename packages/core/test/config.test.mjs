@@ -2715,6 +2715,7 @@ describe("role resolution", () => {
         additiveAngles: false,
         blockCleanOnFindingSeverities: ["high"],
         mediumFixWindow: 3,
+        inlineSeverityFloor: "medium",
         tiers: [],
         angleCategoryBindings: {},
       });
@@ -2737,6 +2738,7 @@ describe("role resolution", () => {
         additiveAngles: false,
         blockCleanOnFindingSeverities: ["high"],
         mediumFixWindow: 3,
+        inlineSeverityFloor: "medium",
         tiers: [],
         angleCategoryBindings: {},
       });
@@ -3217,6 +3219,62 @@ describe("role resolution", () => {
       }
     });
 
+    // inlineSeverityFloor (#2263): mirrors the mediumFixWindow no-schema-default
+    // pattern above — resolveGateConfig, not the schema, supplies the fallback.
+    test("FileConfigSchema accepts every inlineSeverityFloor enum value", () => {
+      for (const floor of ["medium", "low", "nit"]) {
+        const result = FileConfigSchema.safeParse({ version: 1, gates: { draft: { inlineSeverityFloor: floor } } });
+        assert.equal(result.success, true, `expected "${floor}" to be accepted`);
+      }
+    });
+
+    // #2263 non-goal: the floor can never be raised above "medium", so "high"
+    // is schema-invalid — a medium (or higher) finding can never fold.
+    test("FileConfigSchema rejects an out-of-enum inlineSeverityFloor value (including \"high\")", () => {
+      for (const floor of ["high", "bogus"]) {
+        const result = FileConfigSchema.safeParse({ version: 1, gates: { draft: { inlineSeverityFloor: floor } } });
+        assert.equal(result.success, false, `expected "${floor}" to be rejected`);
+      }
+    });
+
+    test("resolveGateConfig resolves inlineSeverityFloor to the default \"medium\" when absent", () => {
+      const config = { version: 1, gates: { draft: {} } };
+      assert.equal(resolveGateConfig(config, "draft").inlineSeverityFloor, "medium");
+    });
+
+    test("resolveGateConfig resolves a configured inlineSeverityFloor", () => {
+      const config = { version: 1, gates: { draft: { inlineSeverityFloor: "low" } } };
+      assert.equal(resolveGateConfig(config, "draft").inlineSeverityFloor, "low");
+    });
+
+    test("resolveGateConfig resolves inlineSeverityFloor independently per gate", () => {
+      const config = {
+        version: 1,
+        gates: { draft: { inlineSeverityFloor: "nit" }, preApproval: {} },
+      };
+      assert.equal(resolveGateConfig(config, "draft").inlineSeverityFloor, "nit");
+      assert.equal(resolveGateConfig(config, "preApproval").inlineSeverityFloor, "medium");
+    });
+
+    // The canonical no-schema-default hazard test (mirrors the mediumFixWindow
+    // alias-only test above): a real .devloops layer setting ONLY this key must
+    // round-trip through the REAL loader, not just a hand-built plain object.
+    test("loadDevLoopConfig + resolveGateConfig honor a real .devloops file's inlineSeverityFloor", async () => {
+      const tmpDir = await mkdtemp(path.join(os.tmpdir(), "devloop-config-inline-floor-"));
+      try {
+        await writeFile(
+          path.join(tmpDir, ".devloops"),
+          "version: 1\ngates:\n  draft:\n    inlineSeverityFloor: low\n",
+        );
+        const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+        const { config, errors } = await loadDevLoopConfig({ repoRoot: tmpDir });
+        assert.deepEqual(errors, []);
+        assert.equal(resolveGateConfig(config, "draft").inlineSeverityFloor, "low");
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
     test("FileConfigSchema accepts every canonical and legacy DEFECT severity spelling, plus the deprecated worthFixingNowFixWindow alias", () => {
       const config = {
         version: 1,
@@ -3465,17 +3523,19 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
       "packaging-runtime", "state-concurrency", "config-drift", "gate-evidence",
       "pr-description", "pr-comments", "contradiction-lens", "code-conformance",
       "semantic-drift", "deslop", // #1442 (ADR 0041 prose half) — deliberate addition atop the pre-#1404 pinned baseline
+      "holistic", // #2307 — independent, un-briefed holistic reviewer added atop the pre-#1404 pinned baseline
     ],
     preApproval: [
       "dry", "kiss", "yagni", "srp", "soc", "deep", "docs", "ocp", "lsp", "isp",
       "dip", "renderer-security", "pr-checklist", "acceptance-criteria",
       "contradiction-lens", "correctness-final", "ui-validation",
+      "holistic", // #2307 — independent, un-briefed holistic reviewer added atop the pre-#1404 pinned baseline
     ],
     spike: ["scope", "docs"],
   };
   const PRE_1404_MANDATORY_SETS = {
-    draft: ["pr-description"],
-    preApproval: ["pr-checklist", "acceptance-criteria", "yagni", "contradiction-lens"],
+    draft: ["pr-description", "holistic"],
+    preApproval: ["pr-checklist", "acceptance-criteria", "yagni", "contradiction-lens", "holistic"],
     spike: [],
   };
   // draft's and preApproval's blocking sets are NOT the pre-#1404 baseline:
@@ -3582,6 +3642,87 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
     assert.equal(threatModel.persona, "review");
     assert.equal(threatModel.prompt, null);
     assert.equal(threatModel.fallback, false);
+  });
+});
+
+// ============================================================================
+// #2307: general-purpose HOLISTIC reviewer angle — independent, un-briefed,
+// spec-driven, fresh-context. Distinct from the developer-briefed Pre-PR
+// reviewer (#2305). Added to the DEFAULT gate fan-out angle set for BOTH
+// draft_gate and pre_approval_gate, dispatched as its own dedicated fan-out
+// unit (never co-batched with a narrow-lens angle).
+// ============================================================================
+
+describe("holistic reviewer angle (#2307)", () => {
+  const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
+
+  // AC1: the default set includes holistic in BOTH gates, and it dispatches
+  // as its own independent fan-out unit in both gates.
+  for (const gate of /** @type {const} */ (["draft", "preApproval"])) {
+    test(`AC1 — ${gate}: resolveGateAngleContract includes "holistic" in both angles and mandatoryAngles`, async () => {
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
+      assert.deepEqual(errors, []);
+      const { mandatoryAngles, pool } = resolveGateAngleContract(config, gate);
+      assert.ok(pool.includes("holistic"), `${gate}: "holistic" must be in the resolved angle pool`);
+      assert.ok(mandatoryAngles.includes("holistic"), `${gate}: "holistic" must be mandatory`);
+    });
+
+    test(`AC1 — ${gate}: resolveFanoutGroups dispatches holistic as its own dedicated unit`, async () => {
+      const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+      const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
+      assert.deepEqual(errors, []);
+      const { pool } = resolveGateAngleContract(config, gate);
+      const units = resolveFanoutGroups(config, gate, pool);
+      const holisticUnit = units.find((u) => u.angles.includes("holistic"));
+      assert.deepEqual(
+        holisticUnit,
+        { name: "holistic", angles: ["holistic"] },
+        `${gate}: holistic must dispatch as its own singleton unit, never co-batched with another angle`,
+      );
+    });
+  }
+
+  // AC2: fresh-context, spec-driven, NOT developer-briefed. Gate angles are
+  // structurally un-briefed — the gate context/dispatch path has no brief
+  // field at all; only the Pre-PR path (skills/docs/pre-pr-review-contract.md)
+  // carries a developer brief. This test pins the SHIPPED prompt text so a
+  // regression that softens the independence wording fails closed.
+  test("AC2 — holistic resolves the review persona and a spec-driven, un-briefed, independent prompt", async () => {
+    const { loadDevLoopConfig, resolveReviewerRole } = await import("../src/config/config.mjs");
+    const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
+    assert.deepEqual(errors, []);
+    const role = resolveReviewerRole(config, "holistic");
+    assert.equal(role.persona, "review");
+    assert.ok(role.prompt, "holistic must resolve a prompt from the shipped config");
+    assert.match(role.prompt, /un-briefed/i);
+    assert.match(role.prompt, /only the spec/i);
+    // No brief-injection placeholder/field (e.g. a "Brief:" label or template
+    // slot) — the shipped prompt is a static string with no brief content to
+    // interpolate, unlike the Pre-PR reviewer's mandatory REVIEW BRIEF field
+    // (skills/docs/pre-pr-review-contract.md). Gate angles are structurally
+    // un-briefed: the gate context/dispatch path (write-gate-context.mjs) has
+    // no brief field at all; only the separate Pre-PR path carries one.
+    assert.doesNotMatch(role.prompt, /\bbrief:/i);
+  });
+
+  // AC2: the holistic prompt is duplicated verbatim in gates.draft.angles and
+  // gates.preApproval.angles. resolveReviewerRole only ever returns the FIRST
+  // gate match (draft), so the preApproval copy's independence wording is
+  // otherwise unguarded — a softened/dropped preApproval copy would never
+  // fail the test above. Pin byte-identity between both copies directly.
+  test("AC2 — draft and preApproval holistic prompts are byte-identical (both gates' independence wording is drift-guarded)", async () => {
+    const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+    const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
+    assert.deepEqual(errors, []);
+    const draftHolistic = config.gates.draft.angles.find((a) => a.name === "holistic");
+    const preApprovalHolistic = config.gates.preApproval.angles.find((a) => a.name === "holistic");
+    assert.ok(draftHolistic?.prompt, "draft gate must have a holistic angle with a prompt");
+    assert.ok(preApprovalHolistic?.prompt, "preApproval gate must have a holistic angle with a prompt");
+    assert.equal(draftHolistic.prompt, preApprovalHolistic.prompt);
+    assert.match(preApprovalHolistic.prompt, /un-briefed/i);
+    assert.match(preApprovalHolistic.prompt, /only the spec/i);
+    assert.doesNotMatch(preApprovalHolistic.prompt, /\bbrief:/i);
   });
 });
 
@@ -6334,6 +6475,9 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
     ["quality", "sonnet", null],
     ["refiner", "opus", null],
     ["review", "opus", null],
+    // Pre-PR reviewer (issue #2305): built-in high tier, so opus/null with zero
+    // config; operators opt into a concrete per-harness model in .devloops.
+    ["pre-PR-reviewer", "opus", null],
     ["dev-loop", null, null], // inherit
     // A critical gate angle resolves high via its `review` persona.
     ["correctness", "opus", null],
@@ -6394,6 +6538,22 @@ describe("resolveRoleModel — built-in policy, both harnesses", () => {
     const config = { models: { tiers: { low: { pi: "somePiId" } } } };
     assert.equal(resolveRoleModel(config, { role: "developer", harness: "pi" }), "somePiId");
     assert.equal(resolveRoleModel(config, { role: "developer", harness: "claude" }), "sonnet");
+  });
+
+  test("pre-PR-reviewer role: per-harness opt-in via tiers/roleTiers (issue #2305)", () => {
+    // Mirrors this repo's .devloops opt-in: Fable on Claude only, Pi inherits.
+    const config = {
+      models: {
+        tiers: { "pre-pr-strong": { claude: "fable" } },
+        roleTiers: { "pre-PR-reviewer": "pre-pr-strong" },
+      },
+    };
+    assert.equal(resolveRoleModel(config, { role: "pre-PR-reviewer", harness: "claude" }), "fable");
+    // Pi has no entry in the tier → null (inherit/default), keeping it harness-agnostic.
+    assert.equal(resolveRoleModel(config, { role: "pre-PR-reviewer", harness: "pi" }), null);
+    // Zero config: built-in high tier is a null no-op on Pi, opus on Claude.
+    assert.equal(resolveRoleModel({}, { role: "pre-PR-reviewer", harness: "pi" }), null);
+    assert.equal(resolveRoleModel({}, { role: "pre-PR-reviewer", harness: "claude" }), "opus");
   });
 
   test("inherit tier resolves null on both harnesses", () => {

@@ -276,6 +276,11 @@ const KNOWN_INTENTIONAL_DUPLICATE_SENTENCES = new Set([
   // agents/dev-loop.agent.md mirrors this CLI-fallback safety line from skills/dev-loop/SKILL.md;
   // each doc's surrounding candidate-resolution list differs per install layout.
   "NEVER fall back to or any unbounded filesystem walk to locate the CLI — it stalls and trips the needs-attention timeout.",
+  // agents/dev-loop.agent.md and skills/dev-loop/SKILL.md carry the same #2145 checkout-walk-up
+  // candidate #1 verbatim (both are duplicate resolver ladders, mirroring dev-loops-run's
+  // checkout-first rule); the shared statement is intentional per the issue, not a restatement bug.
+  "This mirrors 's / so local-checkout precedence is uniform across harnesses: a live checkout wins even over a newer install under , so a dogfooder's live edits always run and a stale user-level install never silently shadows the checkout.",
+  "The walk-up is **bounded** to ancestors and terminates at the filesystem root — never .",
   // commands/loop-auto.command.md and commands/loop-start.command.md — command trigger
   // phrasing is load-bearing verbatim per-command guardrail (c); not a restatement bug.
   "Do not pick an internal strategy name yourself.",

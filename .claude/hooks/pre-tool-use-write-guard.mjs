@@ -15,11 +15,18 @@
  *    tree AND not gitignored when the call originates from the MAIN agent; allowed
  *    inside the dev-loop subagent context (CA2 DEVLOOPS_RUN_ID, or Claude
  *    agent_type === "dev-loop").
+ *
+ * 3. Coordinator→worker delegation boundary (#2082, opt-in via
+ *    DEVLOOPS_COORDINATOR_READONLY=1, default fail-open): the INVERSE of boundary 2, one
+ *    level down. Denies a tracked-repo-file Write/Edit whose Claude agent_type is the
+ *    coordinator's own ("dev-loop"); the coordinator must delegate the edit to a fresh
+ *    worker subagent (developer/fixer/quality/docs). Reuses the same isRepoMutation/
+ *    agentType facts computed for boundary 2.
  */
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 
-import { decideWriteGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV } from "./_hook-decisions.mjs";
+import { decideWriteGuard, decideCoordinatorWriteGuard, decideWorktreeCheckoutGuard, WORKTREE_CHECKOUT_GUARD_OVERRIDE_ENV } from "./_hook-decisions.mjs";
 import { isMainCheckout, isUnderWorktreePath, parseMainWorktreePath, parseAllWorktreePaths, resolveContainingWorktreeRoot, realpathNearestExisting, resolveTrackedFromCheckIgnore } from "./_worktree-guard.mjs";
 
 import { readHookInput, emitDeny, emitAllow } from "./_hook-io.mjs";
@@ -138,4 +145,12 @@ const decision = decideWriteGuard({ filePath, isRepoMutation, enforce, env: proc
 if (decision.decision === "deny") {
   emitDeny(decision.reason);
 }
+
+// --- Boundary 3: coordinator→worker delegation boundary (#2082, opt-in) -----
+const enforceCoordinator = process.env.DEVLOOPS_COORDINATOR_READONLY === "1";
+const coordinatorDecision = decideCoordinatorWriteGuard({ filePath, isRepoMutation, enforce: enforceCoordinator, agentType });
+if (coordinatorDecision.decision === "deny") {
+  emitDeny(coordinatorDecision.reason);
+}
+
 emitAllow();

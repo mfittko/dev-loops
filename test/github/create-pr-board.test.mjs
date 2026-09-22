@@ -315,8 +315,12 @@ test("create-pr --lightweight with a Closes #N body is tracker-backed and byte-i
       { stdout: "https://github.com/owner/repo/pull/42\n" },
     ], { logCalls: true });
 
+    // Tracker-backed (closing keyword) body must satisfy the create-time
+    // validate-pr-body-spec contract: Objective, In scope, AC + DoD checklists,
+    // Non-goals, and the closing reference.
+    const trackerBody = "## Objective\nShip it.\n\n## In scope\n- the change\n\n## Acceptance criteria\n- [ ] it works\n\n## Definition of done\n- [ ] tests pass\n\n## Non-goals\n- unrelated work\n\nCloses #9";
     const result = await runNode(
-      ["--repo", "owner/repo", "--base", "main", "--head", "feature", "--title", "t", "--body", "Closes #9", "--lightweight"],
+      ["--repo", "owner/repo", "--base", "main", "--head", "feature", "--title", "t", "--body", trackerBody, "--lightweight"],
       { env, cwd: tempDir },
     );
 

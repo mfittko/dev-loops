@@ -6,12 +6,26 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { collectGeneratedAssets, checkAssets, writeAssets } from "../../scripts/claude/generate-claude-assets.mjs";
-import { stripPiOnlyBlocks } from "../../packages/core/src/claude/asset-generation.mjs";
+import { stripPiOnlyBlocks, transformSkill } from "../../packages/core/src/claude/asset-generation.mjs";
 
 // #772: the committed .claude tree must be byte-reproducible from the canonical sources.
 // If a source agent/skill changes, the generator must be re-run and the result committed.
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
+
+function assertPiOnlyProjection(source, generated) {
+  const markers = source.match(/<!-- \/?pi-only -->/g) ?? [];
+  assert.ok(markers.length > 0, "source must retain its Pi-only scope");
+  assert.equal(markers.length % 2, 0, "Pi-only markers must be paired");
+  for (let i = 0; i < markers.length; i += 2) {
+    assert.deepEqual(markers.slice(i, i + 2), ["<!-- pi-only -->", "<!-- /pi-only -->"]);
+  }
+  assert.doesNotMatch(generated, /<!-- \/?pi-only -->/);
+  for (const [, block] of source.matchAll(/<!-- pi-only -->([\s\S]*?)<!-- \/pi-only -->/g)) {
+    assert.ok(block.trim(), "Pi-only blocks must not be empty");
+    assert.equal(generated.includes(block.trim()), false, "Pi-only block content must be omitted");
+  }
+}
 
 test("shared docs + dev-loop templates are bundled so generated skill links resolve (#816)", () => {
   // The generated skills reference `../docs/<contract>.md` and `../dev-loop/templates/<t>.md`;
@@ -39,37 +53,22 @@ test("shared docs + dev-loop templates are bundled so generated skill links reso
     );
   }
 
-  // The Claude bundle of main-agent-contract.md must drop the Pi read-only/dispatch contract
-  // (collapsed umbrella, #837) while the source retains it.
+  // Scope is structural; source wording is reviewed, not pinned by this projection test.
   const contract = bundled.find((a) => a.target.endsWith("docs/main-agent-contract.md"));
   assert.ok(contract, "main-agent-contract.md must be bundled");
-  assert.equal(contract.content.includes("Main agent must NEVER"), false, "Claude bundle must drop the Pi read-only contract");
-  assert.match(contract.content, /the dev-loop runs as a single agent/i, "Claude bundle must state the single-agent model");
-  assert.ok(
-    fs.readFileSync(path.join(repoRoot, "skills/docs/main-agent-contract.md"), "utf8").includes("Main agent must NEVER"),
-    "source must retain the Pi read-only contract",
+  assertPiOnlyProjection(
+    fs.readFileSync(path.join(repoRoot, "skills/docs/main-agent-contract.md"), "utf8"),
+    contract.content,
   );
 
-  // The Claude copilot-pr-followup skill must drop the Pi "subagent exits → main session
-  // re-dispatches" persistence model (#838) and state the single-agent inline-loop model,
-  // while the source retains the Pi persistence prose.
+  // Skill projections additionally transform frontmatter and CLI invocations.
   const followup = assets.find((a) => a.target === ".claude/skills/copilot-pr-followup/SKILL.md");
   assert.ok(followup, "copilot-pr-followup skill must be generated");
-  // This exact phrase is intentionally load-bearing, not a stray phrase pin: it is the
-  // literal payload inside the source's `<!-- pi-only -->...<!-- /pi-only -->` block, so
-  // asserting on it verifies the strip transform actually removed that block's content
-  // (not just similar wording) while the source retains the block untouched.
-  assert.equal(
-    followup.content.includes("the subagent exits on the wait boundary; the main session re-dispatches"),
-    false,
-    "Claude copilot-pr-followup must drop the Pi exit/redispatch persistence model",
-  );
-  assert.match(followup.content, /run this loop \*\*inline in a single agent\*\*/i, "Claude bundle must state the inline single-agent loop");
-  assert.ok(
-    fs.readFileSync(path.join(repoRoot, "skills/copilot-pr-followup/SKILL.md"), "utf8")
-      .includes("the subagent exits on the wait boundary; the main session re-dispatches"),
-    "source must retain the Pi persistence model",
-  );
+  const source = "skills/copilot-pr-followup/SKILL.md";
+  const raw = fs.readFileSync(path.join(repoRoot, source), "utf8");
+  const { version } = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+  assertPiOnlyProjection(raw, followup.content);
+  assert.equal(followup.content, transformSkill({ source, raw, version }));
 });
 
 test("Pi-runtime-only prose is stripped from generated assets but retained in source (#817)", () => {
@@ -81,26 +80,22 @@ test("Pi-runtime-only prose is stripped from generated assets but retained in so
   }
 });
 
-test("watch procedure is bundled with shared re-entry and harness-specific persistence", () => {
+test("watch procedure preserves the shared projection and wait_watch route link", () => {
   const assets = collectGeneratedAssets({ repoRoot });
   const source = fs.readFileSync(path.join(repoRoot, "skills/docs/wait-watch-procedure.md"), "utf8");
   const generated = assets.find(a => a.target === ".claude/skills/docs/wait-watch-procedure.md");
   assert.ok(generated);
-  assert.match(source, /Under Pi, a bounded child exits on external wait/);
-  assert.doesNotMatch(generated.content, /Under Pi, a bounded child exits on external wait/);
+  assertPiOnlyProjection(source, generated.content);
+  assert.equal(generated.content, stripPiOnlyBlocks(source));
   for (const content of [source, generated.content]) {
-    assert.match(content, /Under Claude Code, continue pending non-terminal waits inline/);
     assert.match(content, /loop startup --pr/);
     assert.match(content, /loop build-envelope --input/);
-    assert.match(content, /validate it before consuming it/);
-    assert.match(content, /Load the fresh envelope's ordered `requiredReads` before executing/);
-    assert.match(content, /Do not start another cycle to\nevade that exhausted boundary/);
   }
   for (const file of ["skills/dev-loop/SKILL.md", ".claude/skills/dev-loop/SKILL.md"]) {
     const content = file.startsWith(".claude/")
       ? assets.find(a => a.target === file).content
       : fs.readFileSync(path.join(repoRoot, file), "utf8");
-    assert.match(content, /\| `wait_watch` \| \[Wait \/ Watch Procedure\]\(\.\.\/docs\/wait-watch-procedure\.md\) \|/);
+    assert.match(content, /\|\s*`wait_watch`\s*\|\s*\[[^\]]+\]\(\.\.\/docs\/wait-watch-procedure\.md\)\s*\|/);
   }
 });
 

@@ -29,6 +29,7 @@ import {
   isGateMachineArtifactBody,
   parseGateReviewCommentMarkerBody,
   parseGateReviewCommentBody,
+  parseReviewThreads,
   summarizeGateReviewCommentMarkers,
   summarizeGateReviewComments,
 } from "../../scripts/_core-helpers.mjs";
@@ -40,6 +41,7 @@ import {
   detectCheckpointEvidence,
   deriveEvidenceState,
   isSizeOutcomeT1Clean,
+  coerceUnresolvedThreadCount,
   EVIDENCE_STATE,
 } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { fetchGithubReviewThreadsPayload } from "../../scripts/github/capture-review-threads.mjs";
@@ -677,6 +679,47 @@ test("detect-checkpoint-evidence summarizes the newest valid live gate comments 
   }
 });
 
+test("detect-checkpoint-evidence --fields returns the named top-level scalars as one tab-separated line (#2163)", async () => {
+  // One `--fields` call on this checkpoint-evidence surface returns the named
+  // top-level scalars in a single invocation — no `node -e`, no jq
+  // object-projection. Fresh stub/tempDir: the PATH gh stub advances a counter,
+  // so this cannot piggyback the multi-call success test above.
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-checkpoint-evidence-fields-"));
+  try {
+    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    const env = await writeGhStub(tempDir, [
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+      {
+        assertArgs: ["api", "repos/owner/repo/issues/17/comments?per_page=100"],
+        stdout: `${JSON.stringify([
+          {
+            id: 42,
+            body: ["Gate review: draft_gate", "Reviewed head SHA: abc1234", "Verdict: clean", "Findings summary: no issues found", "Next action: mark ready for review"].join("\n"),
+            updated_at: "2026-05-29T21:00:00Z",
+            html_url: "https://github.com/owner/repo/pull/17#issuecomment-42",
+          },
+          {
+            id: 43,
+            body: ["Gate review: pre_approval_gate", "Reviewed head SHA: abc1234", "Verdict: clean", "Findings summary: no issues found", "Next action: await final human approval", "Size-budget outcome: pass", "Size-budget T1 slice: not touched", "Size-budget waiver: none"].join("\n"),
+            updated_at: "2026-05-29T22:00:00Z",
+            html_url: "https://github.com/owner/repo/pull/17#issuecomment-43",
+          },
+        ])}\n`,
+      },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/17/reviews?per_page=100"], stdout: "[]\n" },
+      {
+        assertArgs: ["api", "graphql"],
+        stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "t1", isResolved: true, comments: { nodes: [] } }] } } } } }) + "\n",
+      },
+    ]);
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17", "--fields", "repo,pr,currentHeadSha"], { env, cwd: tempDir });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout, "owner/repo\t17\tabc1234\n");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("detect-checkpoint-evidence fails pre-merge check when only draft gate exists (no pre-approval)", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-checkpoint-evidence-pages-"));
 
@@ -834,7 +877,7 @@ test("detect-checkpoint-evidence always fails before merge when gate comments ar
   }
 });
 
-test("detect-checkpoint-evidence always passes pre-merge check with clean draft and current-head pre-approval gate comments", async () => {
+test("detect-checkpoint-evidence accepts an older clean draft transition with current-head pre-approval", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-gate-review-premerge-clean-"));
 
   try {
@@ -896,6 +939,8 @@ test("detect-checkpoint-evidence always passes pre-merge check with clean draft 
     assert.equal(payload.preMergeGateCheck.ok, true);
     assert.deepEqual(payload.preMergeGateCheck.failures, []);
     assert.equal(payload.evidenceState, EVIDENCE_STATE.SATISFIED);
+    assert.equal(payload.draftGate.headSha, "bcd5678");
+    assert.equal(payload.preApprovalGateMarker.headSha, "abc1234");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -1168,6 +1213,68 @@ test("buildPreMergeGateCheck passes with zero unresolved threads", () => {
   const result = buildPreMergeGateCheck(evidence, 0);
   assert.equal(result.ok, true);
   assert.deepEqual(result.failures, []);
+});
+
+// --- coerceUnresolvedThreadCount (#2310: unknown thread state must fail closed, not read as 0) ---
+
+test("coerceUnresolvedThreadCount returns -1 (unknown, fails closed) for missing/malformed unresolvedThreads", () => {
+  assert.equal(coerceUnresolvedThreadCount(null), -1);
+  assert.equal(coerceUnresolvedThreadCount({}), -1);
+  assert.equal(coerceUnresolvedThreadCount({ summary: {} }), -1);
+  assert.equal(coerceUnresolvedThreadCount({ summary: { unresolvedThreads: undefined } }), -1);
+  assert.equal(coerceUnresolvedThreadCount({ summary: { unresolvedThreads: null } }), -1);
+  assert.equal(coerceUnresolvedThreadCount({ summary: { unresolvedThreads: "3" } }), -1);
+  assert.equal(coerceUnresolvedThreadCount({ summary: { unresolvedThreads: NaN } }), -1);
+  assert.equal(coerceUnresolvedThreadCount({ summary: { unresolvedThreads: -2 } }), -1);
+});
+
+test("coerceUnresolvedThreadCount passes a genuine zero through unchanged (does not fail closed)", () => {
+  assert.equal(coerceUnresolvedThreadCount({ summary: { unresolvedThreads: 0 } }), 0);
+});
+
+test("coerceUnresolvedThreadCount passes a genuine non-zero integer count through unchanged", () => {
+  assert.equal(coerceUnresolvedThreadCount({ summary: { unresolvedThreads: 2 } }), 2);
+});
+
+test("buildPreMergeGateCheck: an unknown thread payload (coerced to -1) fails closed with the fetch-failure message, never a silent pass", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), coerceUnresolvedThreadCount({ summary: {} }));
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.failures.some((f) => f.includes("could not fetch review thread state")),
+    "expected fetch-failure message in " + JSON.stringify(result.failures)
+  );
+});
+
+test("buildPreMergeGateCheck: a genuine zero unresolvedThreads (coerced to 0) passes the thread gate", () => {
+  const result = buildPreMergeGateCheck(cleanEvidence(), coerceUnresolvedThreadCount({ summary: { unresolvedThreads: 0 } }));
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.failures, []);
+});
+
+// Raw-boundary integration (#2310 reviewer follow-up): proves the fail-closed
+// contract end to end against the REAL parseReviewThreads boundary, not just
+// against hand-built parsed shapes. A malformed live payload must throw at
+// parseReviewThreads (so main()'s catch records -1, never a silent 0); a
+// well-formed but EMPTY live payload must parse to a genuine 0 and pass.
+test("raw-boundary: malformed live review-thread payload fails closed end-to-end; a well-formed empty payload is a genuine zero that passes", () => {
+  assert.throws(() => parseReviewThreads({ unexpected: "shape" }), /Could not find review threads/);
+  assert.throws(() => parseReviewThreads(42), /Could not find review threads/);
+
+  assert.equal(coerceUnresolvedThreadCount({ summary: { totalThreads: 0 } }), -1);
+
+  const unknown = buildPreMergeGateCheck(cleanEvidence(), -1);
+  assert.equal(unknown.ok, false);
+  assert.ok(
+    unknown.failures.some((f) => /could not fetch review thread state/.test(f)),
+    JSON.stringify(unknown.failures),
+  );
+
+  const wellFormedEmpty = buildPreMergeGateCheck(
+    cleanEvidence(),
+    coerceUnresolvedThreadCount(parseReviewThreads({ reviewThreads: { nodes: [] } })),
+  );
+  assert.equal(wellFormedEmpty.ok, true);
+  assert.deepEqual(wellFormedEmpty.failures, []);
 });
 
 function cleanEvidence() {
@@ -1711,6 +1818,10 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7): a real l
         "      - kiss",
         "      - name: pr-checklist",
         "        mandatory: true",
+        // Disable the shipped mandatory "holistic" angle so this fixture's
+        // pinned two-fresh-unit floor stays exact.
+        "      - name: holistic",
+        "        enabled: false",
         "  fanout:",
         "    groups:",
         "      - name: process",
@@ -1873,6 +1984,10 @@ test("AC4: a real MIXED (fresh + carried) clean re-gate's fanout_fanin ledger wr
         "        mandatory: true",
         "      - name: dry",
         "      - name: docs",
+        // Disable the shipped mandatory "holistic" angle so this fixture's
+        // single pinned mandatory angle (pr-checklist) stays exact.
+        "      - name: holistic",
+        "        enabled: false",
         "",
       ].join("\n"),
       "utf8",
@@ -2017,6 +2132,10 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck end-to-end (AC7, #1601): t
         "      - kiss",
         "      - name: pr-checklist",
         "        mandatory: true",
+        // Disable the shipped mandatory "holistic" angle so this fixture's
+        // pinned two-fresh-unit floor stays exact.
+        "      - name: holistic",
+        "        enabled: false",
         "  fanout:",
         "    groups:",
         "      - name: process",
@@ -2738,7 +2857,9 @@ test("buildFanoutEnforcement (#1984): a tiny diff whose size-budget outcome touc
 // `pr-checklist` is a built-in mandatory default (BUILT_IN_DEFAULTS) that
 // merges into every preApproval config regardless of this fixture, so every
 // ledger below must also record it or trip an unrelated missing-mandatory
-// failure.
+// failure. The shipped extension-defaults "holistic" angle is also mandatory
+// by default; disable it here so this fixture's rename-class pair stays
+// scoped to the one angle under test.
 const RENAME_CLASS_DEVLOOPS = (mandatoryAngleName) => [
   "version: 1",
   "gates:",
@@ -2749,6 +2870,8 @@ const RENAME_CLASS_DEVLOOPS = (mandatoryAngleName) => [
   "      - kiss",
   `      - name: ${mandatoryAngleName}`,
   "        mandatory: true",
+  "      - name: holistic",
+  "        enabled: false",
   "",
 ].join("\n");
 
@@ -4008,14 +4131,16 @@ function fanoutEvidenceGhEntries(executionMode, inlineReason = null) {
 async function writeLedger(tempDir, gate) {
   const dir = path.join(tempDir, "tmp", "gate-findings", "owner-repo", "pr-17");
   await import("node:fs/promises").then((fs) => fs.mkdir(dir, { recursive: true }));
-  // Provenance covering the shipped extension-defaults mandatory angle for each
-  // gate: fanout_fanin ledgers must record it for merge-evidence angle coverage.
+  // Provenance covering the shipped extension-defaults mandatory angles for
+  // each gate (the per-gate named angle plus "holistic", mandatory in both):
+  // fanout_fanin ledgers must record them for merge-evidence angle coverage.
   const mandatory = gate === "draft_gate" ? "pr-description" : "pr-checklist";
   const provenance = {
-    distinctReviewers: 2,
+    distinctReviewers: 3,
     perAngle: [
       { angle: mandatory, reviewer: "review-a" },
       { angle: gate === "draft_gate" ? "scope" : "dry", reviewer: "review-b" },
+      { angle: "holistic", reviewer: "review-c" },
     ],
   };
   await writeFile(path.join(dir, `${gate}-abc1234.json`), JSON.stringify({ gate, headSha: "abc1234", findings: [], provenance }) + "\n", "utf8");
@@ -4201,6 +4326,10 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck PASSES on an auto-chunked 
         "      - d",
         "      - name: pr-checklist",
         "        mandatory: true",
+        // Disable the shipped mandatory "holistic" angle so this fixture's
+        // pinned three-dispatch-unit round stays exact.
+        "      - name: holistic",
+        "        enabled: false",
         "  fanout:",
         "    maxAnglesPerGroup: 2",
         "",
@@ -4274,6 +4403,11 @@ test("buildFanoutEnforcement + buildPreMergeGateCheck PASSES a ledger built from
         "      - b",
         "      - name: pr-checklist",
         "        mandatory: true",
+        // Disable the shipped mandatory "holistic" angle so this fixture's
+        // explicit ["a", "b", "pr-checklist"] resolved-angle set stays the
+        // whole mandatory-angle picture.
+        "      - name: holistic",
+        "        enabled: false",
         "  fanout:",
         "    maxAnglesPerGroup: 2",
         "",

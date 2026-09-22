@@ -2,6 +2,6 @@
   "name": "dev-loops-plugin",
   "private": true,
   "dependencies": {
-    "dev-loops": "1.0.3"
+    "dev-loops": "1.0.4-pre.0"
   }
 }

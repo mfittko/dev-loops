@@ -41,7 +41,7 @@
  * Exits 0 on full lockstep, 1 on drift/failure, 2 on usage/parse error.
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -49,6 +49,7 @@ import { isDirectCliRun } from "../lib/direct-run.mjs";
 import { emitResult } from "../lib/jq-output.mjs";
 import { extractFullVersion } from "./assert-core-dependency-version.mjs";
 import { extractChangelogSection } from "./extract-changelog-section.mjs";
+import { FRAGMENTS_DIR, assembleFragments, readFragments } from "./assemble-changelog-fragments.mjs";
 
 const CORE_DEP = "@dev-loops/core";
 // A bare full semver token, optionally with a prerelease suffix. Build metadata
@@ -296,12 +297,45 @@ export function bumpVersion({ repoRoot, version, stage = true, silent = false, r
     throw new Error(`target "${version}" is not a bare full version token (parsed as "${full}")`);
   }
 
-  // Surface 6: stamp the CHANGELOG first, so an undocumented release fails
-  // closed before any manifest/lockfile/.claude mutation. Hand-edited like
-  // surfaces 1-3; independent of the regen subprocesses.
+  // Surface 6: assemble pending changeset fragments into ## Unreleased, then
+  // stamp. Fragments (changes/<slug>.md, per LIFECYCLE-CHANGELOG-COMPLETENESS)
+  // are the per-PR changelog
+  // note; the release step folds them into Unreleased and removes the consumed
+  // files, so stampChangelog then promotes Unreleased to ## <version> unchanged.
+  // Assemble+stamp run first so an undocumented release fails closed before any
+  // manifest/lockfile/.claude mutation.
   const changelogPath = path.join(repoRoot, "CHANGELOG.md");
-  const { changelog: stampedChangelog } = stampChangelog(readFileSync(changelogPath, "utf8"), version);
+  const currentChangelog = readFileSync(changelogPath, "utf8");
+  const fragments = readFragments(repoRoot);
+  // Duplicate-heading guard: stampChangelog renames "## Unreleased" to
+  // "## <version>". If a "## <version>" section ALREADY exists, then either
+  // assembling pending fragments into a (possibly freshly created) Unreleased or
+  // stamping an existing Unreleased would produce a SECOND "## <version>"
+  // heading; extractChangelogSection then stops at the first and omits the other
+  // section's entries. Fail closed whenever the target section is already
+  // present AND there is anything to stamp (pending fragments, or a live
+  // Unreleased section from the legacy direct-edit path — e.g. a partial bump).
+  // The pure idempotent re-run (target stamped, no Unreleased, no fragments)
+  // still falls through to stampChangelog's own no-op.
+  // Detect the target heading by PRESENCE, not by populated content: an existing
+  // but empty "## <version>" heading still duplicates when a second is stamped.
+  // Same heading shape extractChangelogSection matches (version, optional "v").
+  const escapedVersion = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const targetAlreadyStamped = new RegExp(`^##\\s+v?${escapedVersion}(?=\\s|$)`, "m").test(currentChangelog);
+  const hasUnreleased = /^##\s+Unreleased\b/im.test(currentChangelog);
+  if (targetAlreadyStamped && (fragments.length > 0 || hasUnreleased)) {
+    throw new Error(
+      `CHANGELOG.md already has a "## ${version}" section; assembling ${fragments.length} pending fragment(s) or stamping the existing "## Unreleased" would duplicate that heading and omit entries. Fold pending notes into the existing section or bump a new version.`,
+    );
+  }
+  const { changelog: assembledChangelog, consumed } = assembleFragments({
+    changelog: currentChangelog,
+    fragments,
+  });
+  const consumedPaths = consumed.map((name) => path.join(repoRoot, FRAGMENTS_DIR, `${name}.md`));
+  const { changelog: stampedChangelog } = stampChangelog(assembledChangelog, version);
   writeFileSync(changelogPath, stampedChangelog);
+  for (const fragmentPath of consumedPaths) rmSync(fragmentPath);
 
   // Surfaces 1-3: hand-edited manifests.
   const manifestPaths = writeManifestSurfaces(repoRoot, version);
@@ -343,9 +377,11 @@ export function bumpVersion({ repoRoot, version, stage = true, silent = false, r
   }
 
   // Stage only the enumerated release paths — never `git add -A` / `git add .`.
+  // Consumed fragment paths are included so `git add --` stages their deletion.
   const stagedPaths = [
     ...manifestPaths,
     changelogPath,
+    ...consumedPaths,
     path.join(repoRoot, "bun.lock"),
     path.join(repoRoot, ".claude"),
   ];

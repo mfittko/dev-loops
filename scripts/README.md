@@ -124,7 +124,7 @@ Success output shape:
 - `{ "ok": true, "status": "requested"|"already-requested"|"unavailable"|"suppressed_same_head_clean"|"blocked_by_copilot_comment"|"round_cap_reached"|"no_changes_since_last_review"|"suppressed_post_convergence_docs_only"|"suppressed_draft", "repo": "owner/name", "pr": 17, "reviewer": "Copilot", ... }`
 - `unavailable` also includes a `detail` string with the normalized GitHub/CLI limitation
 - `round_cap_reached` includes `completedRounds` and `maxRounds` fields
-- `suppressed_post_convergence_docs_only`, like `round_cap_reached`, carries `completedRounds` and `maxRounds` and is a suppressed (non-request) outcome: at the round cap, the post-convergence head bump is a provable pure doc/prose delta since the last Copilot-reviewed head, so no fresh blocking round is forced
+- `suppressed_post_convergence_docs_only` is a suppressed (non-request) outcome returned at the round cap AND, since #2316, below it, whenever the delta since the last Copilot-reviewed head is a provable pure doc/prose bump OR an integrate-only base-move (base-relative reduction empties the delta), so no fresh blocking round is forced. The round-cap return, like `round_cap_reached`, carries `completedRounds` and `maxRounds`; the below-cap return omits both fields
 - `no_changes_since_last_review` is returned by `--force-rerequest-review` when the PR head SHA has not changed since the last Copilot review
 
 Failure behavior:
@@ -759,8 +759,8 @@ Required:
 Optional:
 - `--skip-fanout-ledger-check` — skips only the fan-out findings-log
   ledger/provenance/angle-coverage layer of `gates.requireFanoutEvidence`
-  enforcement (that ledger is a gitignored, worktree-local `tmp/` file, invisible
-  to a stateless remote verifier); the comment-derived executionMode/inlineReason
+  enforcement (that ledger is a gitignored, machine-local `tmp/` file under the
+  main worktree, invisible to a stateless remote verifier); the comment-derived executionMode/inlineReason
   check (including the light-mode inline exception) still applies. Used by the
   `gate-evidence` CI check (`.github/workflows/gate-evidence.yml`); client-side
   callers should omit it.

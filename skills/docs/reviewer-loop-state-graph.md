@@ -2,8 +2,6 @@
 
 Canonical owner for the reviewer-side PR loop state machine.
 
-This document defines the deterministic reviewer-side PR loop state machine.
-
 ## Overview
 
 The reviewer loop captures observable PR/GitHub facts plus explicit local reviewer-loop metadata (planning/run/merge status) into one snapshot and deterministically maps that snapshot to exactly one current state.

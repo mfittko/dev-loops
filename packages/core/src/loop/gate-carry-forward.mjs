@@ -177,10 +177,19 @@ export function angleReviewSurface(angle, { alwaysRerun } = {}) {
  * @param {AngleReviewSurface} [input.angleSurface] — the angle's declared surface;
  *   derived from {@link angleReviewSurface} when omitted.
  * @param {string[]} input.changedFiles — repo-relative paths changed between head
- *   A and head B (the delta, NOT the full PR diff against base).
+ *   A and head B (the delta, NOT the full PR diff against base). For a base-move
+ *   re-gate the caller passes the MAIN-RELATIVE incremental delta: files changed
+ *   since head A whose head-B content is genuinely PR-own (differs from
+ *   origin/main), NOT the raw two-dot A..B delta — so an integrate-only base-move
+ *   that only replays already-merged main commits contributes an empty delta.
  * @param {string} input.prevVerdict — the angle's verdict at head A. "clean" and
  *   "findings_present" are carry-forward-eligible; anything else (e.g.
  *   "blocked", missing) is not.
+ * @param {boolean} [input.deltaComplete=false] — the caller PROVES `changedFiles`
+ *   is the complete, successfully-computed delta (git succeeded and, for a
+ *   base-move, the main-relative reduction ran). Only then does an EMPTY delta
+ *   mean "nothing PR-own changed" and carry forward; without the proof an empty
+ *   delta is indistinguishable from an unavailable one and still fails closed.
  * @returns {{ carryForward: boolean, reason: string }}
  */
 
@@ -207,7 +216,7 @@ export function isDevLoopConfigSourcePath(filePath) {
   return DEV_LOOP_CONFIG_SOURCE_RE.test(filePath.trim().replace(/\\/g, "/"));
 }
 
-export function resolveAngleCarryForward({ angle, angleSurface, changedFiles, prevVerdict }) {
+export function resolveAngleCarryForward({ angle, angleSurface, changedFiles, prevVerdict, deltaComplete = false }) {
   if (!CARRY_FORWARD_ELIGIBLE_VERDICTS.has(prevVerdict)) {
     return {
       carryForward: false,
@@ -221,7 +230,16 @@ export function resolveAngleCarryForward({ angle, angleSurface, changedFiles, pr
   if (surface.kind === "unknown") {
     return { carryForward: false, reason: "angle has no declared review surface (fail-closed)" };
   }
-  if (!Array.isArray(changedFiles) || changedFiles.length === 0) {
+  if (!Array.isArray(changedFiles)) {
+    return { carryForward: false, reason: "delta is unavailable (fail-closed)" };
+  }
+  // A PROVEN-complete empty delta (deltaComplete) means the main-relative
+  // reduction found NO PR-own change since the prior reviewed head — an
+  // integrate-only base-move that only replays already-merged main commits.
+  // That carries forward: the zero-file loop below proves the surface untouched.
+  // Without that proof an empty delta is indistinguishable from an unavailable
+  // one, so it still fails closed.
+  if (changedFiles.length === 0 && !deltaComplete) {
     return { carryForward: false, reason: "delta is empty or unavailable (fail-closed)" };
   }
   for (const file of changedFiles) {
@@ -287,12 +305,22 @@ const COPILOT_REVIEW_SURFACE_KINDS = new Set(["code", "test", "config", "ci"]);
  * re-runs, since classifyFile is path-based). Any code/test/config/CI file, an unclassifiable
  * file, or an empty/unavailable delta -> re-run (fresh blocking round required).
  *
+ * `deltaComplete` mirrors {@link resolveAngleCarryForward}: when the caller PROVES
+ * `changedFiles` is the complete main-relative reduction, an EMPTY delta means an
+ * integrate-only base-move touched no Copilot surface and the convergence carries
+ * forward. Without the proof an empty delta still fails closed.
+ *
  * @param {object} input
  * @param {string[]} input.changedFiles — delta since the converged head
+ * @param {boolean} [input.deltaComplete=false] — proof the empty case is a real
+ *   "nothing PR-own changed", not an unavailable delta
  * @returns {{ carryForward: boolean, reason: string }}
  */
-export function resolveConvergenceCarryForward({ changedFiles }) {
-  if (!Array.isArray(changedFiles) || changedFiles.length === 0) {
+export function resolveConvergenceCarryForward({ changedFiles, deltaComplete = false }) {
+  if (!Array.isArray(changedFiles)) {
+    return { carryForward: false, reason: "delta is unavailable (fail-closed)" };
+  }
+  if (changedFiles.length === 0 && !deltaComplete) {
     return { carryForward: false, reason: "delta is empty or unavailable (fail-closed)" };
   }
   for (const file of changedFiles) {
@@ -304,5 +332,10 @@ export function resolveConvergenceCarryForward({ changedFiles }) {
       return { carryForward: false, reason: `delta touches Copilot's review surface (${kind}): ${file}` };
     }
   }
-  return { carryForward: true, reason: "delta is a pure doc/prose bump, provably outside Copilot's review surface" };
+  return {
+    carryForward: true,
+    reason: changedFiles.length === 0
+      ? "no PR-own change since the converged head (integrate-only base-move), provably outside Copilot's review surface"
+      : "delta is a pure doc/prose bump, provably outside Copilot's review surface",
+  };
 }

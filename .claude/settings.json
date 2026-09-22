@@ -1,4 +1,7 @@
 {
+  "env": {
+    "DEVLOOPS_COORDINATOR_READONLY": "1"
+  },
   "permissions": {
     "allow": [
       "Bash(node scripts/github/edit-issue.mjs:*)",

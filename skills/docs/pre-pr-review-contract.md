@@ -1,0 +1,139 @@
+# Pre-PR review contract
+
+Canonical owner for the pre-PR review phase: a developer-briefed, fresh-context,
+general-purpose review pass that runs before the first push and fixes findings
+in-tree. Other docs MAY link this contract; they MUST NOT redefine it.
+
+## Why this phase exists
+
+Almost all dev-loop churn comes from findings that surface INSIDE the gate.
+Every in-gate fix costs a head bump, a re-gate, and often a forced Copilot round
+plus thread reconciliation. The cheapest place to fix a defect is BEFORE the
+first push: no head bump, no PR thread, no Copilot round, nothing to reconcile.
+
+The pre-PR phase shifts one review left, to that cheapest fix point. One premium
+review call that catches a defect early avoids a downstream full draft-gate
+fan-out (7+ reviewers) plus a Copilot round for each missed finding. That is a
+lopsided economic win.
+
+## Phase position
+
+<!-- rule: PRE-PR-BEFORE-FIRST-PUSH -->
+`PRE-PR-BEFORE-FIRST-PUSH`: the pre-PR review MUST run after local implementation
+is complete and committed, and BEFORE the first push of the branch and before
+`dev-loops pr create`. Its fixes MUST be applied to the working tree, validated
+with the narrowest justified check (re-checked after the final round), and
+committed (a follow-up commit or an amend of the step-11 commit), so the branch
+is pushed once, already cleaned and validated. In the `local-implementation`
+loop it sits between the exit-validation commit (implementation-loop step 11,
+`LOCAL-COMMIT-BEFORE-EXIT`, whose first push is deferred to here) and PR creation
+(implementation-loop step 12). The phase applies to any local-implementation
+session that pushes and opens a PR — tracker-backed OR issue-less `--lightweight`
+(PR-body-as-spec) — since both reach origin via a first push. Only a
+phase-doc-backed session that merges locally has no first push and no pre-PR
+step.
+
+## The review pass
+
+<!-- rule: PRE-PR-ONE-FRESH-REVIEWER -->
+`PRE-PR-ONE-FRESH-REVIEWER`: the developer MUST hand a mandatory REVIEW BRIEF to
+exactly ONE fresh-context, general-purpose reviewer per round (a round-two
+re-review runs one reviewer too; see `PRE-PR-BOUNDED-TWO-ROUNDS`). The brief is a
+developer-authored prompt stating what changed, what to scrutinize, known risks
+and tradeoffs, and where the implementation cut corners. The reviewer MUST NOT be
+a fixed angle: it reviews holistically per the brief. Fresh context is required,
+because the implementer rationalizes their own code and a same-context
+self-review is near-worthless. This is distinct from the single developer
+self-check (`LOCAL-DEV-SELF-CHECK-NO-FANOUT`), which the implementer runs against
+the plan; the pre-PR reviewer MUST be a separate fresh-context agent. The
+reviewer returns findings only and MUST NOT edit the tree; the implementer
+applies the fixes.
+
+The reviewer MUST run with the adversarial-enumeration checklist below so the
+strong model reviews systematically, not ad hoc.
+
+### Harness-specific dispatch
+
+The reviewer is dispatched per harness, always with the brief as the reviewer's
+task and the config-resolved model (see below) passed only when non-null:
+
+- Claude Code: dispatch the built-in `general-purpose` subagent type with the
+  brief as its prompt and the resolved model as the Agent `model` parameter.
+- Pi: dispatch one fresh subagent with the brief as its task (a general-purpose
+  reviewer; the PR-bound `review` gate procedure does not apply). The model stays
+  keyed on the `pre-PR-reviewer` role.
+
+### Adversarial-enumeration checklist
+
+For any new or changed filesystem, parse, or diff seam the brief MUST direct the
+reviewer to enumerate, at minimum:
+
+- errno classes (missing, permission, not-a-directory, already-exists)
+- symlink handling for both a file target and a directory target
+- rename and move across the seam
+- empty input and empty file
+- malformed input (for example a malformed heading in a parsed doc)
+- path normalization (relative, absolute, `..`, trailing slash)
+
+This list is the floor. A seam with other adversarial surface obliges the brief
+to name it too.
+
+## Reviewer model (harness-agnostic, config-resolved)
+
+<!-- rule: PRE-PR-MODEL-CONFIG-RESOLVED -->
+`PRE-PR-MODEL-CONFIG-RESOLVED`: the pre-PR reviewer's model MUST be resolved
+through `resolveRoleModel(config, { role: "pre-PR-reviewer", harness })` from
+`@dev-loops/core/config`. No model literal is hardcoded in this phase's prose,
+tooling, or dispatch. The resolved model MUST be passed to the dispatch only when
+it is non-null (the existing tier-at-dispatch contract); a `null` resolution
+passes no override and inherits the session model. Operators opt into a concrete
+strong model per harness in `.devloops` via `models.tiers.<alias>.<harness>`
+mapped through `models.roleTiers.pre-PR-reviewer` (or a direct `models.roles`
+override). Each harness value MUST be a model token that harness's dispatch
+accepts. On the Claude Code harness the Agent-tool `model` enum accepts only
+`sonnet|opus|haiku|fable`, so an operator opting into Fable sets `fable` (the
+underlying model identity is `claude-fable-5-1`). The phase works unchanged on
+both the Pi and Claude Code harnesses; each harness resolves to its own
+configured model or to `null` (default).
+
+## Findings are ephemeral
+
+<!-- rule: PRE-PR-EPHEMERAL-NO-ARTIFACTS -->
+`PRE-PR-EPHEMERAL-NO-ARTIFACTS`: the pass MUST be ephemeral. Findings are applied
+directly to the working tree and then live and die in the pass. It MUST NOT
+create a pull request, a comment, a review thread, or a Copilot round.
+Ephemerality is the whole point: the phase must not recreate in-gate churn.
+
+## Bounds
+
+<!-- rule: PRE-PR-BOUNDED-TWO-ROUNDS -->
+`PRE-PR-BOUNDED-TWO-ROUNDS`: the pass MUST NOT exceed two internal rounds and
+MUST NOT run more than one general-purpose reviewer per round; after at most two
+rounds the branch is pushed once. It MUST NOT fan out to multiple reviewers. The
+round-two re-review verifies the applied fixes with a fresh-context reviewer: the
+same reviewer continued when the harness supports agent continuation, otherwise
+one new fresh-context dispatch. Either way the reviewer stays fresh relative to
+the implementer, which is the property `PRE-PR-ONE-FRESH-REVIEWER` requires.
+
+## The fan-out gate stays the authority
+
+<!-- rule: PRE-PR-GATE-STILL-AUTHORITY -->
+`PRE-PR-GATE-STILL-AUTHORITY`: the pre-PR pass is a cheap pre-filter, not a
+replacement for the gate. After the push, the full fresh-context fan-out
+`draft_gate` and `pre_approval_gate` lifecycle MUST run unchanged and remains the
+authority for merge readiness.
+
+<!-- rule: PRE-PR-NOT-GATE-EVIDENCE -->
+`PRE-PR-NOT-GATE-EVIDENCE`: the pre-PR pass is NOT a lifecycle-gate fan-out. It
+MUST NOT produce gate evidence: no `resolveGateAngles` run, no fan-in disposition
+ledger, no gate verdict comment. It is consistent with
+`LOCAL-DEV-SELF-CHECK-NO-FANOUT`, which forbids a pre-pull-request gate fan-out.
+The pre-PR pass is one general-purpose reviewer, not the angle set the fan-out
+gate uses.
+
+## Cross-references
+
+- [Local Implementation](../local-implementation/SKILL.md): `LOCAL-PRE-PR-REVIEW-BEFORE-PUSH` wires this phase into the implementation loop; `LOCAL-DEV-SELF-CHECK-NO-FANOUT` and `LOCAL-COMMIT-BEFORE-EXIT` are the adjacent steps.
+- [Main-agent contract](main-agent-contract.md): model tier at dispatch (`resolveRoleModel`, pass the override only when non-null).
+- [PR Lifecycle Contract](pr-lifecycle-contract.md): the post-push gate/Copilot/approval sequence this pass pre-filters.
+- [Gate Review Sub-Loop Contract](gate-review-sub-loop-contract.md): the fan-out gate that remains the authority.

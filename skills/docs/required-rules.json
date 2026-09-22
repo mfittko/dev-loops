@@ -77,6 +77,10 @@
       "enforcementNote": "Seeking explicit confirmation is agent judgment; no script can require it."
     },
     {
+      "id": "COORDINATOR-VERIFY-DELEGATION",
+      "enforcement": "runtime"
+    },
+    {
       "id": "COPILOT-FOLLOWUP-ADVERSARIAL-BRIEFING",
       "enforcement": "agent",
       "enforcementNote": "Reviewer briefing tone is behavioral, not machine-checkable."
@@ -114,7 +118,7 @@
     {
       "id": "COPILOT-FOLLOWUP-WAIT-TOOLS",
       "enforcement": "agent",
-      "enforcementNote": "Choosing a wait tool is behavioral guidance."
+      "enforcementNote": "Choosing a wait tool is behavioral guidance; backgrounding a wait/probe (detach wrappers, while-sleep-poll loops, bare-& probe scripts, or any wrapper around one — timeout/nohup/sh -c/a node loader flag) is mechanically denied by the PreToolUse Bash-gate, actor-independently and fail-closed, for the coordinator and every subagent (#2065)."
     },
     {
       "id": "COPILOT-STATE-ACTIVE-REQUEST-WAIT"
@@ -202,6 +206,11 @@
       "id": "GATE-COMMENT-IDENTITY-DISJOINT"
     },
     {
+      "id": "GATE-COMMENT-INLINE-SEVERITY-FLOOR",
+      "enforcement": "doc",
+      "enforcementNote": "Behavioral routing rule (config schema + isBelowInlineFloor drive real branching), not a fail-closed refusal citing this rule ID in an error message."
+    },
+    {
       "id": "GATE-COMMENT-NON-SUBSTITUTION"
     },
     {
@@ -237,6 +246,10 @@
     },
     {
       "id": "GATE-EXEC-ANGLE-CARRY-FORWARD"
+    },
+    {
+      "id": "GATE-EXEC-CARRY-FORWARD-PLAN-REQUIRED",
+      "enforcement": "runtime"
     },
     {
       "id": "GATE-EXEC-ANGLE-COVERAGE"
@@ -480,6 +493,11 @@
       "id": "LOCAL-PR-CREATE-CANONICAL"
     },
     {
+      "id": "LOCAL-PRE-PR-REVIEW-BEFORE-PUSH",
+      "enforcement": "agent",
+      "enforcementNote": "The pre-PR review pass is agent-executed procedure; the SKILL step ordering and phase contract are pinned by test/contracts/pre-pr-review-contract.test.mjs (#2305)."
+    },
+    {
       "id": "LOCAL-PREFLIGHT-GATE-MANDATORY"
     },
     {
@@ -503,6 +521,10 @@
       "id": "MERGE-PRECOND-REQUIRED"
     },
     {
+      "id": "MERGE-PRECOND-REQUIRED-CONTEXT-IS-STATUS",
+      "enforcement": "doc"
+    },
+    {
       "id": "OPS-DRAFT-FIRST-PR"
     },
     {
@@ -511,6 +533,34 @@
     },
     {
       "id": "OPS-NO-INLINE-INTERPRETER"
+    },
+    {
+      "id": "PRE-PR-BEFORE-FIRST-PUSH",
+      "enforcement": "doc"
+    },
+    {
+      "id": "PRE-PR-BOUNDED-TWO-ROUNDS",
+      "enforcement": "doc"
+    },
+    {
+      "id": "PRE-PR-EPHEMERAL-NO-ARTIFACTS",
+      "enforcement": "doc"
+    },
+    {
+      "id": "PRE-PR-GATE-STILL-AUTHORITY",
+      "enforcement": "doc"
+    },
+    {
+      "id": "PRE-PR-MODEL-CONFIG-RESOLVED",
+      "enforcement": "doc"
+    },
+    {
+      "id": "PRE-PR-NOT-GATE-EVIDENCE",
+      "enforcement": "doc"
+    },
+    {
+      "id": "PRE-PR-ONE-FRESH-REVIEWER",
+      "enforcement": "doc"
     },
     {
       "id": "QUEUE-BOARD-DEVLOOPS-RESOLUTION"
@@ -832,7 +882,7 @@
     {
       "id": "WORKTREE-NO-STASH",
       "enforcement": "agent",
-      "enforcementNote": "No-stash is agent discipline; no mechanical check."
+      "enforcementNote": "Agent discipline across harnesses; the Claude PreToolUse Bash gate additionally refuses git stash."
     },
     {
       "id": "WORKTREE-WRONG-CHECKOUT-GUARD",

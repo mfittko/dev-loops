@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { resolveApprovalState, stripNonAssertionMarkdown, verifyReleaseApproval } from "../../scripts/release/verify-release-approval.mjs";
+import { APPROVAL_CODE_SPAN_FIXTURES } from "../../scripts/lib/code-span-fixtures.mjs";
 
 const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "scripts", "release", "verify-release-approval.mjs");
 const runCli = (args, env = {}) => spawnSync("node", [CLI, ...args], { encoding: "utf8", env: { ...process.env, ...env } });
@@ -264,22 +265,17 @@ test("resolveApprovalState: an un-quoted instructional/handoff occurrence does N
 });
 
 test("resolveApprovalState: a code span whose content contains backticks does NOT count (#1941 review, Copilot fail-open)", () => {
-  // CommonMark longer-delimiter spans, and spans with an inner backtick pair,
-  // must not let the phrase survive backtick blanking as bare prose.
-  for (const body of [
-    "`` `approve release v1.0.0` ``",
-    "`` `x` approve release v1.0.0 ``",
-    "``code ` here`` approve release v1.0.0 ``x``",
-    "`` approve release v1.0.0 ``",
-    "```` `approve release v1.0.0` ````",
-  ]) {
+  // The release gate consumes the SHARED code-span fixture set (#1961) rather
+  // than a private copy, so the internal gate and this gate can never drift on
+  // which CommonMark nested / multi-backtick forms must be treated as code.
+  for (const { name, body } of APPROVAL_CODE_SPAN_FIXTURES) {
     const d = resolveApprovalState({
       version: "1.0.0",
       operator: "op",
       releaseRef: RELEASE_REF,
       comments: [{ author: "op", body, createdAt: AFTER }],
     });
-    assert.equal(d.approved, false, `backtick-content code span must not approve: ${JSON.stringify(body)}`);
+    assert.equal(d.approved, false, `${name} must not approve: ${JSON.stringify(body)}`);
   }
 });
 

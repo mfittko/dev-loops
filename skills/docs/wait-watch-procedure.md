@@ -1,22 +1,22 @@
 # Wait / watch procedure
 
-Execution procedure for the internal `wait_watch` route. Start with the validated
-handoff envelope and the public routing contract already loaded. Use the package
-root resolved by the `dev-loop` entrypoint for the commands below. References here
-identify policy owners; they do not require loading the full follow-up, gate, or
-retrospective procedures before waiting. Startup's retrospective reconciliation
-check still applies.
+Use this procedure for the internal `wait_watch` route after loading the validated
+handoff envelope and public routing contract. Resolve command paths using the
+package root selected by `dev-loop`. The links identify policy owners; do not preload the full
+follow-up, gate or retrospective procedures just to wait. Startup still checks
+retrospective reconciliation.
 
 ## Enter the wait
 
 Use the envelope's artifact identity, `nextAction`, `stopRules`, and timeout policy.
-`wait_watch` is a pure read/observe route (ownership-exempt for that reason): the
-outer wait observes, refreshes, and re-attaches only; it never mutates PR, repo,
-board, or checkpoint state, and it may wait on work it does not own. Preserve the
-existing outer-loop checkpoint reattachment procedure in the public entrypoint;
-checkpoint state is context for a fresh detector, not permission to act on a stale
-head. If facts conflict or a required helper is unavailable, report the concrete
-reconciliation problem.
+The outer wait only observes, refreshes and re-attaches. It never mutates PR, repo,
+board or checkpoint state. This read-only route is ownership-exempt and may wait
+on work owned by someone else.
+
+Follow the public entrypoint's outer-loop checkpoint reattachment procedure. Use
+the checkpoint as context for a fresh detector, never as permission to act on a
+stale head. Report the concrete reconciliation problem if facts conflict or a
+required helper is unavailable.
 
 | Current boundary | Command / action |
 | --- | --- |
@@ -66,17 +66,14 @@ After a watch settles:
    `nextAction`. A destination route restores its own ownership, isolation, gate,
    and retrospective requirements. Never enter fixing or approval from the old
    watch envelope. `stop`/`needs_reconcile` remain terminal decision boundaries.
-4. For feedback, the destination follow-up procedure reads the current unresolved
-   working set with `capture-review-threads.mjs --unresolved --bodies` and the
-   reply/resolve IDs with `list-review-threads.mjs --unresolved-only` (both take
-   `--repo <owner/name> --pr <N>`). Dispatch fixing through its fixer procedure;
-   unresolved feedback is not completion.
+4. For feedback, follow the fresh destination's current-thread capture and fixer
+   procedure. Unresolved feedback is not completion.
 
 Preserve the existing [timeout policy](copilot-loop-operations.md#timeout-and-watch-policy):
 each review watch boundary has a 30-minute maximum budget; a refresh still showing
 `waiting_for_copilot_review` after that budget expires stops with
-`watch timeout — PR #<N> needs manual attention`. Do not start another cycle to
-evade that exhausted boundary. Extending it requires existing user/conductor
+`watch timeout — PR #<N> needs manual attention`. Do not evade the exhausted
+boundary by starting another cycle. An extension requires existing user/conductor
 authorization. Quiet observations before exhaustion are healthy waits, not
 blockers. The initial-implementation seam retains its separate one-hour budget
 and public-contract quiet/activity exceptions. Use explicit bounded timeouts on
@@ -85,12 +82,10 @@ The cycle helper supplies its bounded policy internally; do not pass it unsuppor
 flags such as `--probe-only` or `--poll-interval-ms`. Flag support is command-specific:
 `watch-ci` supports `--poll-interval-ms`; `watch-cycle` does not.
 
-For a zero current-head-suite head, the detector derives CI status automatically
-from GitHub facts and the previous-head rollup; the watch-route CLIs expose no flag
-to assert local validation (the `--local-validation-head-sha` surface was removed
-in the #549 CLI-surface audit to auto-resolve derivable state), so an agent cannot
-force `crediblyGreen` from the wait route. Never infer green from missing CI: a
-refresh still reporting raw `none` routes to CI follow-up, not a self-certified green.
+The watch-route CLIs accept no local-validation evidence input; a normal refresh
+cannot activate the zero-suite `crediblyGreen` exception. Never infer green from
+missing CI. A detector result of `none` follows the existing CI wait/reconciliation
+policy.
 
 Wait only through the deterministic tools in `COPILOT-FOLLOWUP-WAIT-TOOLS`.
 Helper-owned polling is expected; do not create shell sleep/poll loops, detached

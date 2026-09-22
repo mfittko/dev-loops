@@ -157,6 +157,25 @@ localImplementation:
     maxFiles: 2
     maxLines: 20 # micro-PR ceiling (#1043)
 
+# Pre-PR review model opt-in (issue #2305, skills/docs/pre-pr-review-contract.md).
+# The pre-PR review pass runs ONE fresh-context general-purpose reviewer before
+# the first push. This repo spends its strongest model on that one call: Fable
+# (underlying model identity claude-fable-5-1) on the Claude-Code harness. The
+# value here is the Claude-harness model token `fable` — the only Fable token
+# the Claude Code Agent-tool `model` enum accepts (sonnet|opus|haiku|fable);
+# the full id claude-fable-5-1 is rejected at dispatch. The tier sets `claude` to
+# `fable` and `pi` to openai-codex/gpt-5.6-sol — a native OpenAI-Codex child
+# model served by pi's own openai-codex (Codex Responses) provider. The model is
+# never hardcoded in phase prose/tooling — it is resolved via
+# resolveRoleModel(config, { role: "pre-PR-reviewer", harness }).
+models:
+  tiers:
+    pre-pr-strong:
+      claude: fable
+      pi: openai-codex/gpt-5.6-sol
+  roleTiers:
+    pre-PR-reviewer: pre-pr-strong
+
 tracker:
   board:
     number: 3  # https://github.com/users/mfittko/projects/3 (stable; survives project renames)

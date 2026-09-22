@@ -3,19 +3,6 @@
 Issue: #1669. Owner: `dev-loop` (applies to the `local_implementation` and
 routed `dev-loop` subagent dispatch paths under Pi; harness-agnostic core).
 
-## Problem
-
-The rc.5 drive needed 5 interrupt+resume interventions to recover stalled
-dev-loop subagents (#1507 thrash, #1526 hung test, #1537 hung watch, #1525
-hung watch+scale, #1485 GLM stall×2). Interrupt+resume was correct but
-high-latency — it cost a full idle-timeout round-trip. #1631/#1633 handled
-stall detection at the CI/resume and runner-claim layers; the **agent-level**
-stall → auto-fresh-dispatch threshold was still missing.
-
-This contract adds the deterministic agent-level stall detector and documents
-the auto-fresh-dispatch procedure the parent follows when a child is judged
-stalled.
-
 ## What "stalled" means
 
 A dev-loop child (subagent) is **stalled** when:

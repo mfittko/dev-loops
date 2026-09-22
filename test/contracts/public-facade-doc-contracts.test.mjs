@@ -8,7 +8,11 @@ import {
   test,
   USER_FACING_AGENT_SURFACE,
 } from "../imported-assets-helpers.mjs";
-import { assertRuleOwned, extractOwnedText } from "./_rule-helpers.mjs";
+import { fileURLToPath } from "node:url";
+import { collectGeneratedAssets } from "../../scripts/claude/generate-claude-assets.mjs";
+import { extractRelativeMarkdownLinks } from "../../scripts/docs/validate-links.mjs";
+import { parseMarkdownSections } from "../../packages/core/src/loop/issue-refinement-artifact.mjs";
+import { assertNotRestated, assertRuleOwned, extractOwnedText } from "./_rule-helpers.mjs";
 
 const PUBLIC_CONTRACT_PATH = "skills/docs/public-dev-loop-contract.md";
 
@@ -21,39 +25,54 @@ async function readCopilotFollowupSurface() {
   return [skill, operationsDoc, intakeDoc].join("\n\n");
 }
 
-test("installed skill guidance owns packaging guarantees and contract docs stay contract-focused", async () => {
-  const [devLoopSkill, copilotFollowupSkill, publicContract, retrospectiveContract] = await Promise.all([
+function assertBundledContractLinks(content, requiredDocs, targets) {
+  const links = new Set(extractRelativeMarkdownLinks(content).map(({ rawTarget }) => rawTarget.split("#")[0]));
+  for (const doc of requiredDocs) {
+    assert.ok(links.has(`../docs/${doc}`), `missing installed contract link: ${doc}`);
+    assert.ok(targets.has(`.claude/skills/docs/${doc}`), `missing bundled contract: ${doc}`);
+  }
+}
+
+test("installed skills reference bundled contracts and own asset-path rules", async () => {
+  const [devLoopSkill, copilotFollowupSkill, packageJson] = await Promise.all([
     readRepo("skills/dev-loop/SKILL.md"),
     readRepo("skills/copilot-pr-followup/SKILL.md"),
-    readRepo("skills/docs/public-dev-loop-contract.md"),
-    readRepo("skills/docs/retrospective-checkpoint-contract.md"),
+    readRepo("package.json"),
   ]);
-
-  assert.match(devLoopSkill, /Required installed runtime contract docs/i);
-  assert.match(devLoopSkill, /shared bundled copies under `\.\.\/docs\/` from this skill directory/i);
-  assert.match(devLoopSkill, /read those bundled `\.\.\/docs\/` files from the installed skill layout/i);
-  assert.match(devLoopSkill, /packaging\/installer bug/i);
-
-  assert.match(copilotFollowupSkill, /Required bundled runtime contract docs for installed copies of this skill/i);
-  assert.match(copilotFollowupSkill, /required bundled contract docs live under the shared `\.\.\/docs\/` directory next to the installed skill directories/i);
-  assertRuleOwned("ASSET-PATH-INSTALLED-NO-ASSUME", "skills/copilot-pr-followup/SKILL.md");
-  assert.match(copilotFollowupSkill, /ASSET-PATH-INSTALLED-NO-ASSUME/);
-  assert.match(copilotFollowupSkill, /Read those bundled `\.\.\/docs\/` files from the installed skill layout/i);
-  assert.match(copilotFollowupSkill, /packaging\/installer bug/i);
-  assert.match(publicContract, /canonical owner lives in the shipped `skills\/docs\/` surface/i);
-  assert.match(publicContract, /installed skill\/runtime consumers reliably own the skills subtree/i);
-  assert.match(publicContract, /read the same contract via \[Public Dev Loop Contract\]\(\.\.\/docs\/public-dev-loop-contract\.md\) from the installed skill directory/i);
-
-  for (const [label, content] of [
-    ["skills/docs/public-dev-loop-contract.md", publicContract],
-    ["skills/docs/retrospective-checkpoint-contract.md", retrospectiveContract],
-  ]) {
-    assert.doesNotMatch(content, /Packaged \/ installed skill use|Packaged \/ installed agent use/i, `${label} should not restate the shared install contract block`);
-    assert.doesNotMatch(content, /required runtime contract doc for installed/i, `${label} should not duplicate install-contract ownership prose`);
-    assert.doesNotMatch(content, /source-tree canonical ownership/i, `${label} should not duplicate install-contract ownership prose`);
-    assert.doesNotMatch(content, /shared installed copy resolved as `\.\.\/docs\//i, `${label} should not duplicate install-contract ownership prose`);
-    assert.doesNotMatch(content, /packaging\/installer bug/i, `${label} should not duplicate install-contract ownership prose`);
+  const pkg = JSON.parse(packageJson);
+  assert.ok(pkg.files.includes("skills/"), "npm must ship the canonical skills subtree");
+  assert.ok(pkg.files.includes(".claude/skills/"), "npm must ship the Claude skills subtree");
+  assert.ok(pkg.pi.skills.includes("skills"), "Pi must discover the shipped skills subtree");
+  const assets = collectGeneratedAssets({ repoRoot: fileURLToPath(fromRepoRoot("")) });
+  const targets = new Set(assets.map(({ target }) => target));
+  const requiredDocs = [
+    "public-dev-loop-contract.md",
+    "retrospective-checkpoint-contract.md",
+    "issue-intake-procedure.md",
+    "copilot-loop-operations.md",
+  ];
+  for (const [name, source] of [["dev-loop", devLoopSkill], ["copilot-pr-followup", copilotFollowupSkill]]) {
+    const generated = assets.find(({ target }) => target === `.claude/skills/${name}/SKILL.md`);
+    assert.ok(generated, `missing generated skill: ${name}`);
+    const docs = name === "dev-loop" ? ["public-dev-loop-contract.md"] : requiredDocs;
+    for (const content of [source, generated.content]) assertBundledContractLinks(content, docs, targets);
   }
+  // Ownership and literal restatement are checkable; natural-language meaning remains review work.
+  for (const id of ["ASSET-PATH-INSTALLED-NO-ASSUME", "ASSET-PATH-SOURCE-NO-REPO-LOCAL"]) {
+    assertRuleOwned(id, "skills/copilot-pr-followup/SKILL.md");
+    assertNotRestated(id, [PUBLIC_CONTRACT_PATH, "skills/docs/retrospective-checkpoint-contract.md"]);
+  }
+});
+
+test("installed contract link checks accept wording changes and reject missing links or bundles", () => {
+  const doc = "public-dev-loop-contract.md";
+  const targets = new Set([`.claude/skills/docs/${doc}`]);
+  for (const content of [
+    `Read [Public Dev Loop Contract](../docs/${doc}).`,
+    `The installed copy is available here:\n[Routing contract](../docs/${doc}#startup).`,
+  ]) assertBundledContractLinks(content, [doc], targets);
+  assert.throws(() => assertBundledContractLinks("No contract link.", [doc], targets), /missing installed contract link/);
+  assert.throws(() => assertBundledContractLinks(`[Contract](../docs/${doc})`, [doc], new Set()), /missing bundled contract/);
 });
 
 test("root docs path does not become a second semantic owner for the public dev-loop contract", async () => {
@@ -130,8 +149,9 @@ test("repo docs define dev-loop as the public façade and keep internal routed l
   assert.match(devLoopSkill, /@dev-loops\/core\/loop\/public-dev-loop-routing/i);
   assert.match(devLoopSkill, /summary/i);
 
-  assert.match(copilotFollowupSkill, /canonical internal/i, "skills/copilot-pr-followup/SKILL.md should preserve canonical-internal framing");
-  assert.match(copilotFollowupSkill, /public `dev-loop`/i, "skills/copilot-pr-followup/SKILL.md should point back to the public dev-loop façade");
+  assert.equal(parseFrontmatter(copilotFollowupSkill)["user-invocable"], false);
+  assert.ok(extractRelativeMarkdownLinks(copilotFollowupSkill).some(({ rawTarget }) =>
+    rawTarget === "../dev-loop/SKILL.md#guard-rules"));
 });
 
 test("workflow-surface taxonomy stays explicit and guards the entrypoint asset surface", async () => {
@@ -242,7 +262,8 @@ test("copilot-pr-followup mandates upsert helper command for gate comments", asy
   assert.match(copilotFollowupSkill, /--head-sha\s+<current_head_sha>/);
   assert.match(copilotFollowupSkill, /--verdict\s+<clean\|findings_present\|blocked>/);
   assert.match(copilotFollowupSkill, /--gate\s+<draft_gate\|pre_approval_gate>/);
-  assert.match(copilotFollowupSkill, /Do NOT use.*gh pr comment.*gh pr review.*gate verdicts.*upsert-checkpoint-verdict/i);
+  // The owner above defines helper-only posting. Command/flag wiring is
+  // structural evidence; word order cannot prove the agent obeys the ban.
 });
 
 test("public dev-loop contract keeps conflict reconciliation local and context-first", async () => {
@@ -286,50 +307,43 @@ test("public dev-loop contract keeps tracker-backed local work inside local_impl
   assert.match(localImplSkill, /LOCAL-TRACKER-NO-DIRECT-MERGE/);
 });
 
-test("checkpoint review chain contract exists and is referenced by both gates", async () => {
-  const [subLoopContract, copilotFollowupSkill] = await Promise.all([
-    readRepo("skills/docs/gate-review-sub-loop-contract.md"),
-    readRepo("skills/copilot-pr-followup/SKILL.md"),
-  ]);
+test("both lifecycle gates route to the owned review chain", async () => {
+  const skill = await readRepo("skills/copilot-pr-followup/SKILL.md");
+  for (const gate of ["Draft gate", "Pre-approval gate"]) {
+    const section = parseMarkdownSections(skill).find(({ bodyLines }) =>
+      bodyLines.includes(`- **Gate name:** ${gate}`));
+    assert.ok(section);
+    assert.ok(extractRelativeMarkdownLinks(section.bodyLines.join("\n")).some(({ rawTarget }) =>
+      rawTarget === "../docs/gate-review-sub-loop-contract.md"));
+  }
+  for (const id of ["GATE-EXEC-BUILD-ONCE-SEED", "GATE-EXEC-SEPARATE-CHAINS", "GATE-EXEC-NON-SUBSTITUTION"]) {
+    assertRuleOwned(id, "skills/docs/gate-review-sub-loop-contract.md");
+  }
+  // Context-builder/locality and cross-gate evidence behavior are exercised
+  // by write-gate-context, fresh-review-context and checkpoint-evidence tests.
+});
 
-  // Contract doc prescribes the 5 sub-loop phases. The fan-out phase describes
-  // independent reviewers seeded with the build-once neutral bundle — NOT a
-  // fork (the honesty fix, #895).
-  assert.match(subLoopContract, /context-builder/i);
-  assert.match(subLoopContract, /Fan-out: independent reviewers/i);
-  assert.match(subLoopContract, /fan-in.*synthesis/i);
-  assert.match(subLoopContract, /fix/i);
-  assert.match(subLoopContract, /repeat until clean/i);
+function assertDraftBoundary(content) {
+  const section = parseMarkdownSections(content).find(({ bodyLines }) =>
+    bodyLines.includes("<!-- rule: OPS-DRAFT-FIRST-PR -->"))?.bodyLines.join("\n");
+  assert.ok(section, "draft-first owner section must exist");
+  const commands = [...section.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
+  for (const command of ["create-pr.mjs", "--ready", "ready-for-review.mjs"]) {
+    assert.ok(commands.includes(command), `missing draft-boundary API: ${command}`);
+  }
+  // These are API routes, not proof of natural-language MUST/MUST NOT semantics.
+  // create-pr and ready-for-review suites exercise draft creation and missing,
+  // stale or blocking gate-evidence refusal; agent permission needs review.
+}
 
-  // References pi-subagents parallel context-build technique
-  assert.match(subLoopContract, /parallel context-build/i);
-
-  // Worktree isolation is PROHIBITED for per-angle reviewers (#1135): they are
-  // read-only, and isolation both loses the seeded gate-context bundle (gitignored,
-  // worktree-local) and risks reviewing a stale tree checked out from main instead
-  // of the PR head.
-  assert.match(subLoopContract, /worktree isolation is prohibited/i);
-  assert.match(subLoopContract, /--context-path/);
-  assert.match(subLoopContract, /never an isolated worktree/i);
-
-  // Machine-parseable fields
-  assert.match(subLoopContract, /subLoopPhases/i);
-  assert.match(subLoopContract, /contextBuilderRequired/i);
-  assert.match(subLoopContract, /worktreeIsolationProhibited/i);
-  assert.match(subLoopContract, /fixRetryUntilClean/i);
-
-  // Draft gate references the sub-loop contract
-  assert.match(copilotFollowupSkill, /gate-review-sub-loop-contract\.md.*draft gate/i);
-
-  // Pre-approval gate references the sub-loop contract
-  assert.match(copilotFollowupSkill, /gate-review-sub-loop-contract\.md.*pre-approval/i);
-
-  // Contract owns execution shape, not review angles
-  assert.match(subLoopContract, /execution shape/i);
-  assert.match(subLoopContract, /does not own/i);
-
-  // Non-substitution rule between gates
-  assert.match(subLoopContract, /does not satisfy the other gate/i);
+test("draft-boundary routes tolerate rewritten guidance but not missing APIs or owner markers", async () => {
+  const owner = await readRepo("skills/docs/copilot-loop-operations.md");
+  assertDraftBoundary(owner.replace("New PRs MUST open", "Every new PR MUST begin")
+    .replace("gated on clean draft-gate evidence", "after a clean draft gate"));
+  for (const changed of [
+    owner.replace("<!-- rule: OPS-DRAFT-FIRST-PR -->", ""),
+    owner.replaceAll("`ready-for-review.mjs`", "`different-helper.mjs`"),
+  ]) assert.throws(() => assertDraftBoundary(changed));
 });
 
 test("skill docs enforce self-assignment and draft-first rules for create commands", async () => {
@@ -342,13 +356,13 @@ test("skill docs enforce self-assignment and draft-first rules for create comman
   ]);
 
   // copilot-pr-followup routes PR creation through the canonical create-pr wrapper
-  assert.match(copilotFollowupSkill, /MUST use `node <resolved-skill-scripts>\/github\/create-pr\.mjs/i);
+  assert.match(copilotFollowupSkill, /`node <resolved-skill-scripts>\/github\/create-pr\.mjs/i);
   assert.match(copilotFollowupSkill, /gh issue create --repo <resolved-repo> --assignee @me/i);
   assert.match(copilotFollowupSkill, /node <resolved-skill-scripts>\/github\/create-pr\.mjs --repo <owner\/name> --assignee @me --base <base> --head <head> --title/i);
   assert.doesNotMatch(copilotFollowupSkill, /gh pr create --draft --repo <owner\/name> --assignee @me --base <base> --head <head> --title/i);
   assertRuleOwned("OPS-DRAFT-FIRST-PR", "skills/docs/copilot-loop-operations.md");
   assert.match(copilotFollowupSkill, /OPS-DRAFT-FIRST-PR/);
-  assert.match(copilotFollowupSkill, /draft gate inspection is a real workflow boundary/i);
+  assertDraftBoundary(await readRepo("skills/docs/copilot-loop-operations.md"));
 
   // local-implementation: PRs are always draft and always assigned — self-assigned
   // by default (`--assignee @me`), honoring an explicit assignee — via the canonical wrapper

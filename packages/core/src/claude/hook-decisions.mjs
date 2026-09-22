@@ -32,6 +32,7 @@ import {
   commandContainsCopilotSummonComment,
   commandContainsDetachedWaitTool,
   commandContainsInlineInterpreter,
+  commandContainsCodeVerificationEntrypoint,
 } from "../loop/bash-command-classify.mjs";
 
 /**
@@ -62,14 +63,33 @@ function commandContainsEvidenceWrite(command) {
 export const DEV_LOOP_AGENT_TYPE = "dev-loop";
 
 /**
+ * Normalize a Claude `agent_type` hook-payload value that may be PLUGIN-NAMESPACED
+ * (`<plugin-name>:<agent-name>`, e.g. `dev-loops:dev-loop`) to the bare agent name the coordinator
+ * deciders compare against `DEV_LOOP_AGENT_TYPE`. Returns the substring after the last `:` when
+ * present, else `agentType` unchanged (including `null`/non-string, passed through as-is).
+ *
+ * Applied in the coordinator-scoped deciders (`decideBashGate`, `decideCoordinatorWriteGuard`).
+ * Deliberately NOT applied in `decideWriteGuard` — its main-agent allow-set boundary is covered by
+ * the `DEVLOOPS_RUN_ID` run-id check first, and broadening that decider's comparison is out of
+ * scope for the coordinator→worker delegation boundary.
+ * @param {string|null|undefined} agentType @returns {string|null|undefined}
+ */
+export function normalizeAgentType(agentType) {
+  if (typeof agentType !== "string") return agentType;
+  const idx = agentType.lastIndexOf(":");
+  return idx === -1 ? agentType : agentType.slice(idx + 1);
+}
+
+/**
  * Decide whether a PreToolUse Bash command must be blocked by a dev-loop gate boundary.
  *
  * Gated commands on the target repo (each rationale sits inline at its check):
  *   - `gh pr create` — blocked outright; PR creation must flow through the canonical wrapper
  *     (`scripts/github/create-pr.mjs` / `dev-loops pr create`), which always drafts and self-assigns.
  *   - `gh pr ready` — blocked without clean draft_gate evidence.
- *   - `gh pr merge` — blocked without full pre-merge gate evidence (clean current-head draft_gate +
- *     pre_approval_gate).
+ *   - `gh pr merge` — blocked outright; use scripts/github/merge-pr.mjs. Its gate evidence check
+ *     requires a clean draft_gate transition record + current-head pre_approval_gate
+ *     (GATE-COMMENT-DRAFT-REQUIREMENTS in skills/docs/gate-review-comment-contract.md).
  *   - raw `gh issue create` / `gh issue comment` / `gh issue edit` / `gh pr comment` — blocked ONLY
  *     from a SUBAGENT context (`agentType` non-null) on the target repo. Sanctioned external writes
  *     flow through node wrappers; the MAIN AGENT / operator (agentType null) retains direct access.
@@ -92,6 +112,9 @@ export const DEV_LOOP_AGENT_TYPE = "dev-loop";
  *   (`resolveHumanMergeOnly`); when true, `gh pr merge` is refused actor-independently
  *   (STOP-HUMAN-MERGE-001), because the main agent is the actor that performs GitHub writes and a
  *   subagent-only deny would enforce nothing.
+ * @param {boolean} [params.enforceCoordinator] - Strict mode for the COORDINATOR-VERIFY-DELEGATION
+ *   boundary, derived by the hook from `DEVLOOPS_COORDINATOR_READONLY=1` — the SAME flag that
+ *   gates `decideCoordinatorWriteGuard`. Default fail-open (mirrors that boundary).
  * @returns {HookDecision}
  */
 export function decideBashGate({
@@ -103,9 +126,29 @@ export function decideBashGate({
   gateError = null,
   agentType = null,
   humanMergeOnly = false,
+  enforceCoordinator = false,
 }) {
   if (typeof command !== "string") {
     return ALLOW;
+  }
+
+  // COORDINATOR-VERIFY-DELEGATION: a known code-verification/build entrypoint (bun run
+  // verify/test, vitest, npm test/run test/run build, ...) run inline by the dev-loop COORDINATOR
+  // itself (agent_type "dev-loop"). WORKER subagents (developer/fixer/quality/review) may run these
+  // freely — only the coordinator is scoped out, mirroring `decideCoordinatorWriteGuard`'s
+  // agent_type discriminator. Opt-in via the same `DEVLOOPS_COORDINATOR_READONLY=1` flag as the
+  // write-guard boundary; default fail-open. Not scoped to `inManagedRepo` — this is a local
+  // command-invocation boundary (which binary ran), not a GitHub-repo-targeting one.
+  if (enforceCoordinator && normalizeAgentType(agentType) === DEV_LOOP_AGENT_TYPE && commandContainsCodeVerificationEntrypoint(command)) {
+    return {
+      decision: "deny",
+      reason:
+        "COORDINATOR-VERIFY-DELEGATION: the dev-loop coordinator must not run code-verification/build " +
+        "commands inline. Delegate the verification run to a fresh worker subagent (developer/fixer/" +
+        "quality/review), which reports back a compact pass/fail plus any failing-test names — or, when " +
+        "checking a pushed commit, prefer CI's structured conclusion (`gh pr checks` / " +
+        "scripts/github/detect-checkpoint-evidence.mjs) over a local run. See skills/docs/main-agent-contract.md.",
+    };
   }
   // Normalize (trim + case-fold) so a divergent slug (surrounding whitespace, casing) does not
   // silently fail OPEN. A repo is dev-loops-managed when inManagedContext is true (a .devloops
@@ -127,6 +170,29 @@ export function decideBashGate({
         "OPS-NO-INLINE-INTERPRETER: inline interpreters (node -e/--eval/-p, python3 -c, heredoc to " +
         "node/python) are barred in the dev-loop flow. Parse tool output via --jq/--silent and mutate " +
         "files via the editor/patch tools or a --jq-composed --body-file, never an inline interpreter.",
+    };
+  }
+
+  // COPILOT-FOLLOWUP-WAIT-TOOLS: banned detached/polling wait wrappers. Actor-independent: the
+  // coordinator/main agent — not subagents only — is the actor that leaves backgrounded
+  // `until`/`while … sleep … done` poll loops and bare-`&` backgrounded probe shells orphaned
+  // under the Claude Code harness (no async wake to join them), so the gate must deny its
+  // backgrounding too. Evaluated HERE, before the `gh pr ready`/`merge`/`create` classification,
+  // so a compound command that pairs a lifecycle verb with a backgrounded wait
+  // (`gh pr create --repo other/x && node …/probe-copilot-review.mjs … &`) cannot short-circuit
+  // past it via the create/ready ALLOW paths. The sanctioned wait is always a bounded FOREGROUND
+  // inline probe (`probe-copilot-review.mjs` / `wait-pr-checks.mjs` with an explicit
+  // --timeout/--timeout-ms; `gh run watch`; the watch-cycle CLIs).
+  if (inManagedRepo && commandContainsDetachedWaitTool(command)) {
+    return {
+      decision: "deny",
+      reason:
+        "COPILOT-FOLLOWUP-WAIT-TOOLS: wait only through a bounded FOREGROUND probe (scripts/github/" +
+        "probe-copilot-review.mjs or scripts/github/wait-pr-checks.mjs with an explicit --timeout/" +
+        "--timeout-ms; scripts/loop/detect-copilot-loop-state.mjs one-shot; dev-loops loop watch-cycle; " +
+        "gh run watch) — nohup/disown/tmux/screen detach, while-sleep-poll loops, and bare-`&` " +
+        "backgrounding of a probe/wait script are barred for the coordinator and every subagent (a " +
+        "backgrounded wait orphans under Claude Code, which has no async wake to join it).",
     };
   }
 
@@ -237,20 +303,9 @@ export function decideBashGate({
   }
 
   if (!isReady && !isMerge && !isCreate) {
-    // COPILOT-FOLLOWUP-WAIT-TOOLS: banned detached/polling wait wrappers. Subagent-only — the
-    // rule is classified `agent` (behavioral guidance for the dev-loop driving agent); the main
-    // agent/operator retains manual wait tooling. The main agent's own sanctioned wait path is still
-    // the deterministic tools.
-    if (typeof agentType === "string" && inManagedRepo && commandContainsDetachedWaitTool(command)) {
-      return {
-        decision: "deny",
-        reason:
-          "COPILOT-FOLLOWUP-WAIT-TOOLS: wait only through deterministic tools (scripts/loop/detect-copilot-" +
-          "loop-state.mjs one-shot, dev-loops loop watch-cycle persistent, scripts/github/wait-pr-checks.mjs, " +
-          "gh run watch) — nohup/disown/tmux/screen detach and while-sleep-poll loops are barred for the " +
-          "dev-loop driving agent.",
-      };
-    }
+    // The detached-wait deny (COPILOT-FOLLOWUP-WAIT-TOOLS) is evaluated earlier — actor-independently
+    // and BEFORE this lifecycle-verb classification — so a compound command pairing a lifecycle verb
+    // with a backgrounded wait cannot short-circuit past it through the create/ready ALLOW paths.
     return ALLOW;
   }
 
@@ -291,8 +346,7 @@ export function decideBashGate({
       return ALLOW;
     }
   }
-  // When both verbs appear in a compound command, apply the stricter merge gate — if it passes,
-  // the draft_gate (a subset of the pre-merge evidence check) is also satisfied.
+  // When both verbs appear in a compound command, the unconditional raw-merge refusal wins.
   const verb = isMerge ? "gh pr merge" : "gh pr ready";
   // Pass through only when EVERY gated verb segment is PROVEN foreign (explicit repo, managed slug
   // resolves, and demonstrably differs). A segment with no explicit repo, or an unresolvable managed
@@ -408,6 +462,51 @@ export function decideWriteGuard({ filePath, isRepoMutation, enforce = false, en
       `Main-agent read-only boundary: refusing to mutate repository path "${filePath}". ` +
       "All repository mutations must flow through the dev-loop subagent. " +
       "See skills/docs/main-agent-contract.md.",
+  };
+}
+
+/**
+ * Decide whether a PreToolUse Write/Edit must be blocked by the coordinator→worker delegation
+ * boundary — the INVERSE of `decideWriteGuard`, one level down. Under the Claude Code
+ * harness the dev-loop agent itself (Claude `agent_type === "dev-loop"`) acts as a delegating
+ * COORDINATOR: it MUST NOT mutate TRACKED repo files directly — that work is delegated to a fresh
+ * WORKER subagent (`developer`/`fixer`/`quality`/`docs`). `agent_type` is the only discriminator:
+ * `DEVLOOPS_RUN_ID` does not distinguish coordinator from worker (the coordinator mints it and
+ * propagates it to the workers it dispatches), so — unlike `decideWriteGuard` — this decider does
+ * not key on run id at all.
+ *
+ * Denies only when ALL of: strict enforcement is on, the target is a tracked repo mutation, AND
+ * the caller's `agent_type` is the coordinator's (`"dev-loop"`). Every other `agent_type` —
+ * including `null` (the Pi main agent / an interactive Claude session with no subagent context,
+ * which is `decideWriteGuard`'s boundary, not this one) and any worker role — is allowed here.
+ * Strict enforcement is opt-in via `enforce` (the hook derives it from
+ * `DEVLOOPS_COORDINATOR_READONLY=1`); default is fail-open, mirroring `decideWriteGuard`'s
+ * adopt-safe precedent so enabling this boundary does not retroactively break a repo's own
+ * interactive Claude Code dev.
+ *
+ * @param {Object} params
+ * @param {string} params.filePath - Target file path.
+ * @param {boolean} params.isRepoMutation - True if inside the repo working tree AND not gitignored.
+ * @param {boolean} [params.enforce] - Strict mode (DEVLOOPS_COORDINATOR_READONLY=1).
+ * @param {string|null} [params.agentType] - Claude `agent_type` from the hook payload, if any.
+ * @returns {HookDecision}
+ */
+export function decideCoordinatorWriteGuard({ filePath, isRepoMutation, enforce = false, agentType = null }) {
+  if (!enforce) {
+    return ALLOW; // strict enforcement not enabled — fail open
+  }
+  if (!isRepoMutation) {
+    return ALLOW; // non-repo or gitignored path (tmp/, the scratchpad, sanctioned ledger paths)
+  }
+  if (normalizeAgentType(agentType) !== DEV_LOOP_AGENT_TYPE) {
+    return ALLOW; // not the coordinator — a worker subagent, or the main agent (the other boundary)
+  }
+  return {
+    decision: "deny",
+    reason:
+      `Coordinator→worker delegation boundary: refusing to mutate repository path "${filePath}" as the ` +
+      "dev-loop coordinator. Delegate this tracked-file edit to a fresh worker subagent (developer/fixer/" +
+      "quality/docs) instead of writing it directly. See skills/docs/main-agent-contract.md.",
   };
 }
 

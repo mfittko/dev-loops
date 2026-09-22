@@ -370,6 +370,17 @@ export function evaluateInlineFanoutMode(gate, fanoutEnforcement) {
   }
   return null;
 }
+/**
+ * Coerce the parsed review-thread unresolved count to the value
+ * buildPreMergeGateCheck consumes. A missing/malformed/non-numeric
+ * unresolvedThreads is UNKNOWN, not zero: return -1 (the existing
+ * "unknown thread state" sentinel that fails CLOSED at merge), never 0.
+ * A genuine non-negative integer count passes through unchanged.
+ */
+export function coerceUnresolvedThreadCount(parsedThreads) {
+  const raw = parsedThreads?.summary?.unresolvedThreads;
+  return Number.isInteger(raw) && raw >= 0 ? raw : -1;
+}
 export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, staleRunnerCheck = null, fanoutEnforcement = null, { skipFanoutLedgerCheck = false } = {}) {
   const failures = [];
   const warnings = [];
@@ -431,8 +442,9 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
         continue;
       }
       // A stateless remote verifier (the gate-evidence CI check, or a gh-less API
-      // session) never has the gitignored, worktree-local tmp/gate-findings ledger
-      // on disk — only the machine that ran the review does. skipFanoutLedgerCheck
+      // session) never has the gitignored, machine-local tmp/gate-findings ledger
+      // on disk (it lives under the main worktree's tmp/) — only the machine
+      // that ran the review does. skipFanoutLedgerCheck
       // scopes enforcement down to what IS remotely verifiable from the PR's public
       // comment history: the comment-derived executionMode/inlineReason check above
       // (including the light-mode inline exception). The deeper ledger/provenance/
@@ -864,6 +876,14 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   const gates = [];
   for (const spec of gateSpecs) {
     const headSha = spec.marker.headSha ?? currentHeadSha;
+    // Relative on purpose: writeGateFindingsLog anchors the ledger at the MAIN
+    // worktree tmp, and the ledgerExistsInAny / readLedgerProvenanceInAny
+    // scans below resolve this relative path against EVERY enumerated checkout
+    // (resolveLedgerCheckouts, which always includes the main worktree). So the
+    // merge — running from the main checkout — finds the centralized ledger via
+    // the main-worktree entry, while the multi-checkout scan still defends
+    // against a forged per-worktree shadow ledger. Anchoring this read at the
+    // main worktree directly would collapse that shadow-defense scan.
     const ledgerPath = buildLogPath({ repo, pr, gate: spec.name, headSha, tmpRoot: "tmp" });
     // Re-derive scope FAIL-CLOSED for inline verdicts only (the fan-out default
     // path pays no git I/O). scopeUnderThreshold is true ONLY when lightMode is
@@ -1139,7 +1159,7 @@ async function main() {
     try {
       const threadsPayload = await fetchGithubReviewThreadsPayload(options, { env: process.env });
       const parsedThreads = parseReviewThreads(threadsPayload);
-      unresolvedThreadCount = parsedThreads?.summary?.unresolvedThreads ?? 0;
+      unresolvedThreadCount = coerceUnresolvedThreadCount(parsedThreads);
       // The draftGateSatisfied field must assert 0 unresolved
       // gate-authored threads (high, medium, low, question, AND nit),
       // not just a clean verdict. Reuse the same raw thread payload already
@@ -1194,7 +1214,7 @@ async function main() {
         process.stderr.write(`WARNING: ${warning}\n`);
       }
     }
-    process.exitCode = emitResult(output, { jq: options.jq, silent: options.silent });
+    process.exitCode = emitResult(output, { jq: options.jq, silent: options.silent, fields: options.fields });
   } catch (error) {
     if (error && typeof error === "object" && "staleRunner" in error && error.staleRunner) {
       const staleRunnerCheck = {

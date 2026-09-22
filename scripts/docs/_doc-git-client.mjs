@@ -40,6 +40,21 @@ export function createGitClient(root, exec = promisify(execFile)) {
         ? stdout.split("\0").filter(Boolean)
         : stdout.split(/\r?\n/).filter(Boolean);
     },
+    async diffAddedFiles(a, b, { nulDelimited = false } = {}) {
+      // Only genuinely-NEW paths. Rename detection is ON (--find-renames), so a
+      // `git mv changes/old.md changes/new.md` is classified R (rename), NOT A,
+      // and excluded by --diff-filter=A. Without it (--no-renames), the rename's
+      // new path would report as A and let a PR satisfy the new-fragment gate by
+      // renaming another PR's pending fragment. (diffNameOnly keeps --no-renames:
+      // it wants every touched path, rename halves included.)
+      const args = ["diff", "--find-renames", "--diff-filter=A", "--name-only"];
+      if (nulDelimited) args.push("-z");
+      args.push(a, b);
+      const { stdout } = await run(args);
+      return nulDelimited
+        ? stdout.split("\0").filter(Boolean)
+        : stdout.split(/\r?\n/).filter(Boolean);
+    },
     async logSubjects(a, b) {
       const { stdout } = await run(["log", "--format=%s", `${a}..${b}`]);
       return stdout.split(/\r?\n/).filter(Boolean);

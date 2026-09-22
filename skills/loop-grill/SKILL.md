@@ -86,9 +86,7 @@ Additional gaps discovered through semantic reading of the spec are also recorde
 ### Count-based acceptance criteria guardrail
 
 <!-- rule: GRILL-COUNT-AC-UNIT-DISPATCH-MODE -->
-`GRILL-COUNT-AC-UNIT-DISPATCH-MODE`: An acceptance criterion that names a **count** (sentinel count, angle count, dispatch-unit count) MUST specify which unit the count refers to — `sentinel` vs `angle` vs `dispatch-unit` — and MUST be validated against BOTH the per-angle default AND the shipped grouped-dispatch default, not just one. When the repo uses grouped fan-out by default (this repo does — `resolveFanoutGroups` writes ONE sentinel per group; #1579/#1601), the AC MUST call out the grouped-dispatch interaction explicitly, or it will false-fail every grouped round. Detect a count-based AC that omits the unit or the dispatch-mode interaction as a gap before synthesis, and sharpen the unit + dispatch-mode validation into the synthesized `## Acceptance criteria`.
-
-Cautionary case (#1618 AC3): the literal AC "sentinel count short of non-carried angle count" would have regressed the shipped grouped-dispatch default — grouped fan-out writes ONE sentinel per group, so `1 sentinel < N non-carried angles` false-fails every grouped round. A fresh-context reviewer caught it as HIGH; the operator chose Option D (thread `--expected-dispatch-units`). Writing the AC without considering grouped dispatch forced an in-flight scope decision. Count-based ACs that omit the unit + dispatch-mode interaction repeat this failure mode.
+`GRILL-COUNT-AC-UNIT-DISPATCH-MODE`: An acceptance criterion that names a **count** (sentinel count, angle count, dispatch-unit count) MUST specify which unit the count refers to — `sentinel` vs `angle` vs `dispatch-unit` — and MUST be validated against BOTH per-angle dispatch and the shipped grouped-dispatch default, not just one. Grouped fan-out writes one sentinel per emitted dispatch unit, not per angle; the AC MUST call out that interaction. Detect an omitted unit or dispatch-mode interaction as a gap before synthesis, then record the outcome and validation evidence in the authoritative `## AC / DoD matrix` required by Step 4.
 
 For each gap, classify it as either:
 - **Bounded choice** — the answer is one of a small discrete set (e.g. yes/no, A/B/C).
@@ -212,13 +210,9 @@ After write-back (and, for tracker-first, after the above verification passes), 
 - `grill-clean` when no unresolved gaps remain.
 - `N unresolved items` (e.g. `3 unresolved items`) when gaps remain after all questions are answered.
 
-## CONTEXT.md degradation rule
-
-When `CONTEXT.md` is absent from the repo root, skip the context-source check silently. Do not crash. Do not emit a warning. The grill continues with the remaining sources (`codebase`, `docs`, `inferred`).
-
 ## Idempotency guarantee
 
-Running `/loop-grill` twice on the same target must not accumulate duplicate sections: the per-heading replace-section logic replaces the synthesized `## AC / DoD matrix` / `## Non-goals` sections (and any human-readable `## Acceptance criteria` / `## Definition of done` prose) in place. An already-refined target is a zero-iteration `grill_clean` and its body is left unchanged. The raw Q&A transcript is written to a fresh timestamped tmp file per run; the body never carries it.
+Use Step 4's replace-section boundaries; an already-refined target stays unchanged. Write a fresh timestamped tmp transcript per run.
 
 ## Non-goals
 

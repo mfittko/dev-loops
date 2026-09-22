@@ -1,11 +1,16 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { isDirectCliRun } from "../_core-helpers.mjs";
 import { createGitClient, resolveBaseRef } from "./_doc-git-client.mjs";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
+import {
+  FRAGMENTS_DIR,
+  fragmentBodyClosesSection,
+  isChangelogFragmentPath,
+} from "../release/assemble-changelog-fragments.mjs";
 
 const CHANGELOG_PATH = "CHANGELOG.md";
 
@@ -102,34 +107,51 @@ export function isNotableChange({ commitSubjects, files }) {
  * requirement, while keeping the exact item text does not — intermediate
  * churn within the PR is not observed.
  *
+ * A changeset fragment (a NEWLY ADDED `changes/<slug>.md` file) satisfies the
+ * requirement in place of a direct `CHANGELOG.md` edit: uniquely named
+ * fragments never collide, so concurrent PRs stop conflicting on the changelog.
+ * The contract requires a NEW fragment, so only ADDED paths count — a modified
+ * or deleted existing `changes/*.md` does not satisfy the gate. `addedFiles`
+ * carries the base→HEAD `--diff-filter=A` list; it defaults to `files` only for
+ * direct callers that do not separate them (the CLI always passes the added
+ * list). The legacy path (an added `## Unreleased` item) still passes for
+ * backward compatibility.
+ *
  * @param {{
  *   baseChangelog: string,
  *   headChangelog: string,
  *   commitSubjects: string[],
  *   files: string[],
+ *   addedFiles?: string[],
  * }} input
- * @returns {{ notable: boolean, addedItems: string[], errors: string[] }}
+ * @returns {{ notable: boolean, addedItems: string[], addedFragment: boolean, errors: string[] }}
  */
 export function validateChangelogCompleteness({
   baseChangelog,
   headChangelog,
   commitSubjects,
   files,
+  addedFiles,
 }) {
   const notable = isNotableChange({ commitSubjects, files });
-  if (!notable) return { notable, addedItems: [], errors: [] };
+  if (!notable) return { notable, addedItems: [], addedFragment: false, errors: [] };
+
+  const addedPaths = Array.isArray(addedFiles)
+    ? addedFiles
+    : (Array.isArray(files) ? files : []);
+  const addedFragment = addedPaths.some((f) => isChangelogFragmentPath(f));
 
   const baseItems = new Set(extractUnreleasedItems(baseChangelog));
   const headItems = extractUnreleasedItems(headChangelog);
   const addedItems = headItems.filter((item) => !baseItems.has(item));
 
   const errors = [];
-  if (addedItems.length === 0) {
+  if (!addedFragment && addedItems.length === 0) {
     errors.push(
-      "notable change (feat/fix commit or code-file diff) adds no list item under '## Unreleased' in CHANGELOG.md; the PR is blocked until it adds at least one entry describing the user-facing change (LIFECYCLE-CHANGELOG-COMPLETENESS, issue #1864)",
+      "notable change (feat/fix commit or code-file diff) records no changelog note; the PR is blocked until it either adds a changeset fragment (a new changes/<slug>.md file) or adds a list item under '## Unreleased' in CHANGELOG.md (LIFECYCLE-CHANGELOG-COMPLETENESS, issues #1864/#2293)",
     );
   }
-  return { notable, addedItems, errors };
+  return { notable, addedItems, addedFragment, errors };
 }
 
 // createGitClient + resolveBaseRef are shared with validate-decision-records.mjs
@@ -153,16 +175,44 @@ export async function main({ root, env = process.env, log = console, git = creat
     return 0;
   }
 
-  const [commitSubjects, files, headChangelog, baseExists] = await Promise.all([
+  const [commitSubjects, files, addedFiles, headChangelog, baseExists] = await Promise.all([
     git.logSubjects(base, "HEAD"),
     git.diffNameOnly(base, "HEAD", { nulDelimited: true }),
+    git.diffAddedFiles(base, "HEAD", { nulDelimited: true }),
     readFile(path.join(root, CHANGELOG_PATH), "utf8").catch(() => ""),
     git.pathExistsIn(base, CHANGELOG_PATH),
   ]);
   const baseChangelog = baseExists ? await git.show(`${base}:${CHANGELOG_PATH}`) : "";
 
+  // A fragment must be a REGULAR file carrying a real note. Two exclusions keep
+  // the gate consistent with the release assembler (`readFragments`):
+  //  - a symlink is rejected, never followed: an untrusted PR could point
+  //    `changes/x.md` at an arbitrary host file, and reading through it would
+  //    leak that file's contents into CHANGELOG.md (data disclosure).
+  //  - an empty/whitespace fragment passes a path-only check but is dropped by
+  //    the assembler, silently omitting the note.
+  // The `changes/` parent must itself be a real directory (lstat, not followed):
+  // a symlinked `changes/` would make an inner fragment resolve through an
+  // external directory. When it is not a real directory, no fragment is trusted.
+  const changesStat = await lstat(path.join(root, FRAGMENTS_DIR)).catch(() => null);
+  const changesDirIsReal = Boolean(changesStat && changesStat.isDirectory());
+  const addedFilesWithNotes = [];
+  for (const f of addedFiles) {
+    if (isChangelogFragmentPath(f)) {
+      if (!changesDirIsReal) continue;
+      const stat = await lstat(path.join(root, f)).catch(() => null);
+      if (!stat || !stat.isFile()) continue; // missing, symlink, or non-regular
+      const body = await readFile(path.join(root, f), "utf8").catch(() => "");
+      // Reject an empty note, or a body with a level-2 "## " heading that would
+      // truncate the release section at assembly (silently dropping later notes).
+      if (body.trim() === "" || fragmentBodyClosesSection(body)) continue;
+    }
+    addedFilesWithNotes.push(f);
+  }
+
   const { errors } = validateChangelogCompleteness({
     baseChangelog,
+    addedFiles: addedFilesWithNotes,
     headChangelog,
     commitSubjects,
     files,

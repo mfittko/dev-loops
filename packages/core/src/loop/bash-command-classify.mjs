@@ -236,6 +236,34 @@ function shellSegments(command) {
 const SHELL_EXEC_PREFIX = "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:(?:command|env|exec)\\s+)*(?:\\S*/)?";
 
 /**
+ * Leading prefix a code-verification/build command may carry before its real executable: the
+ * shared `SHELL_EXEC_PREFIX` (env assignments, `command`/`env`/`exec` wrapper words, binary path)
+ * plus `nice`/`timeout` process wrappers, scoped to this classifier only so the sibling `gh`/`git`
+ * classifiers above are not broadened by wrapper forms they never need to tolerate. Covers bare
+ * `nice`, `nice -n <N>`, bare `timeout <duration>`, and `timeout` carrying `-s <sig>`/`-k <dur>`/
+ * `--signal=<sig>`/`--kill-after=<dur>`/`--preserve-status`/`--foreground` before the duration —
+ * the wrapper forms the coordinator's daily verify/build commands are routinely run behind
+ * (`timeout 600 bun run verify`, `nice -n 10 bun run verify`). Not a full flag parser: other
+ * `timeout`/`nice` flags are a known, deliberately uncovered ceiling.
+ *
+ * The `env` wrapper word additionally tolerates zero-or-more trailing `NAME=value` assignments
+ * before the real executable (`env CI=1 bun run verify`, `env CI=1 FOO=bar npm test`) — the common
+ * everyday `env VAR=value ... cmd` CI-invocation shape, on top of the bare-leading-assignment form
+ * (`CI=1 bun run verify`) already covered by the shared assignment run at the front of this prefix.
+ * It also tolerates the common `env` OPTION forms (mixed freely with `NAME=value` assignments, in
+ * any order/count): `-i`/`--ignore-environment`, `-u <NAME>`/`--unset=<NAME>`, `-C <dir>`/
+ * `--chdir=<dir>`, `-S <str>`/`--split-string=<str>`, a bare `-`, and `--` — so
+ * `env -u DEVLOOPS_COORDINATOR_READONLY bun run verify`, `env -i bun run verify`, and
+ * `env -u FOO CI=1 npm test` all match. Closes the cheap classifier gap where an `env` flag (rather
+ * than a `NAME=value` assignment) reached the executable unclassified. Not a full `env` flag parser:
+ * any other/exotic `env` option is a known, deliberately uncovered ceiling (documented, not chased).
+ * `command`/`exec` do not get the same trailing-assignment/option tolerance — no known daily
+ * invocation shape needs it, and adding it would only widen the pattern without a use case.
+ */
+const VERIFY_EXEC_PREFIX =
+  "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:env(?:\\s+(?:[A-Za-z_][A-Za-z0-9_]*=\\S*|-i|--ignore-environment|-u\\s+\\S+|--unset=\\S+|-C\\s+\\S+|--chdir=\\S+|-S\\s+\\S+|--split-string=\\S+|--|-))*\\s+|(?:command|exec)\\s+|nice(?:\\s+-n\\s+\\S+)?\\s+|timeout(?:\\s+(?:-s\\s+\\S+|-k\\s+\\S+|--signal=\\S+|--kill-after=\\S+|--preserve-status|--foreground))*\\s+\\S+\\s+)*(?:\\S*/)?";
+
+/**
  * Build the `gh <subcmd> <verb>` prefix matcher (subcmd = "pr" | "issue").
  * Tolerates a leading env-assignment/wrapper/path prefix so `GH_TOKEN=x gh pr create`,
  * `command gh issue create`, and `/usr/bin/gh pr create` are all matched. The same regex
@@ -802,29 +830,197 @@ export function commandContainsCopilotSummonComment(command) {
 }
 
 /**
- * COPILOT-FOLLOWUP-WAIT-TOOLS: a banned detached/polling wait — `nohup`, `disown`, `tmux new-session`,
- * `screen -dm`, or a `while`/`until`/`seq` loop whose body contains both a `sleep` and a gh or
- * loop-state call. Behavioral rule (required-rules classification `agent`): scoped in decideBashGate to the
- * dev-loop driving agent (subagent-only) so the main agent/operator retains manual wait tooling.
+ * Blank the CONTENTS of quoted string literals ('...' and "...") to a space, EXCEPT a quote that is
+ * the payload of an executable-code flag — a short-flag cluster CONTAINING `c` ANYWHERE in the
+ * cluster (`sh -c '…'`, `bash -c '…'`, `bash -lc '…'`, `bash -ec '…'`, `bash -cl '…'`, `bash -ci '…'`,
+ * `bash -cx '…'`) — bash treats ANY `-c`-containing short-flag cluster as command-execution
+ * regardless of where `c` sits in the cluster, not only one that ENDS in `c` — optionally followed by
+ * a `--` terminator (`bash -c -- '…'`), a long `--command` flag, or `eval` — that payload is REAL
+ * shell syntax to be executed, not inert data, so blanking it would hide an actual poll-loop
+ * construct wrapped in one of these forms. A real poll loop's structural tokens
+ * (`while`/`until`/`for`/`do`/`sleep`/`done`, a `[ -f … ]` file test) are UNQUOTED shell syntax; a
+ * quoted issue body, `--body` payload, or quoted example that merely mentions them carries them
+ * INSIDE quotes as inert data. Blanking those quoted contents is what lets the poll-loop matchers key
+ * on an actual loop CONSTRUCT rather than the token sequence appearing anywhere in a command
+ * (`gh issue create --body "while … sleep … done"` must not be flagged). The `s` (dotAll) flag lets
+ * `.` match a newline too, so a MULTI-LINE quoted `--body` (a real issue body commonly spans lines) is
+ * stripped in full, not just its first line.
+ * A quoted string that itself contains a command substitution (`$(...)`) or a backtick (`` `...` ``)
+ * is executable code, not inert data — its inner command runs regardless of the surrounding quotes.
+ * Blanking it would hide a real poll loop such as `while [ "$(gh pr view 5)" != MERGED ]; do sleep 5;
+ * done` that the gh/loop-state ban already denies, so such a quoted literal is PRESERVED (fail-closed
+ * direction) ahead of the `-c`/`--command`/`eval` exemption check below.
+ *
+ * The `-c`-cluster/`--command`/`eval` exemption is intentionally coarse in the fail-closed direction:
+ * it looks only for a `c` anywhere in a preceding short-flag cluster (or `--command`/`eval`), not for
+ * a shell-interpreter anchor. A non-shell command carrying `-c` (e.g. `grep -ci '<loop text>'`,
+ * `wc -c`) may therefore have its quoted argument preserved too and get over-denied — an accepted
+ * benign false positive, because tightening the exemption to a shell-interpreter anchor would risk a
+ * fail-open (missing a real `sh -c` poll loop), the worse direction.
+ *
+ * ponytail: blanks balanced quote pairs only, with the command-substitution/backtick preserve rule
+ * and the `-c`-cluster/`--command`/`eval` exemption above — no full shell tokenizer (mismatched/
+ * partial quotes and other exec-wrapper flags stay out of scope). Accepted ceiling: a deliberately
+ * quoted structural keyword (e.g. `"sleep"`) placed inside a real UNQUOTED loop is blanked like any
+ * other quoted literal and can therefore evade the ban — accepted as a deliberate-evasion class, not
+ * a natural shape a genuine poll loop takes.
+ * @param {string} command @returns {string}
+ */
+function stripQuotedLiterals(command) {
+  return command.replace(/(['"])((?:(?!\1).)*)\1/gs, (match, _quote, inner, offset, full) => {
+    // A quoted string containing a command substitution ($()) or backtick is executable code, not
+    // inert data — its command runs regardless of the surrounding quotes. Blanking it would hide a
+    // real poll loop such as `while [ "$(gh pr view 5)" != MERGED ]; do sleep 5; done` that the
+    // gh/loop-state ban already denied. Preserve it (fail-closed direction).
+    if (/\$\(|`/.test(inner)) {
+      return match;
+    }
+    const before = full.slice(0, offset);
+    if (/(?:^|\s)(?:-[A-Za-z]*c[A-Za-z]*(?:\s+--)?|--command|eval)\s*$/.test(before)) {
+      return match; // executable -c/eval payload — leave the real shell syntax intact
+    }
+    return " ";
+  });
+}
+
+/**
+ * Whether COMMAND is (or contains) a sleep-poll loop over `gh`/`loop-state` — a `while`/`until`/
+ * `for` loop whose body contains both a `sleep` and a `gh` or `loop-state` call. Checked on the
+ * WHOLE command (not per-segment): the loop body is `;`-delimited, so a per-segment split would
+ * separate the loop head from its `sleep`/`gh` body calls and miss the pattern. `gh` must be a
+ * standalone token (not `grep gh-notes`), and `loop-state` must sit at a command-head position
+ * (not a substring inside `grep loop-state x`). Quoted literals are blanked first (see
+ * `stripQuotedLiterals`) so a quoted body/example that merely contains the tokens is not flagged.
+ * @param {string} command @returns {boolean}
+ */
+export function commandIsSleepPollLoop(command) {
+  const whole = stripQuotedLiterals(command.trim());
+  return (
+    /(?:while|until|for)\b/i.test(whole) &&
+    /\bsleep\b/.test(whole) &&
+    /\bgh(?=\s|$)|(?:^|[;&|(])\s*loop-state(?=\s|$)/.test(whole)
+  );
+}
+
+/**
+ * Whether COMMAND is (or contains) a bare FILE-MARKER poll loop: a `while`/`until`/`for` loop that
+ * repeatedly tests for a file's existence/type/permission (`[ -f … ]`, `[[ -e … ]]`, `test -f …`,
+ * `[ -r … ]`, `[ -L … ]`) and sleeps, with NO gated wait-tool. This is the orphan pattern under
+ * Claude Code — a `<tasks>/<id>.done` sentinel Claude Code never writes (completion arrives via
+ * async notification), so the loop never exits and, once backgrounded, orphans with no async wake to
+ * reap it. Distinct from `commandIsSleepPollLoop`, which keys on a `gh`/`loop-state` CALL: this keys
+ * on any bash FILE-test operator (existence, type, or permission — `efsdrwxugkOGLNShb`; string/numeric
+ * tests like `-z`/`-n`/`-t` are deliberately excluded, as those never test a marker FILE), catching a
+ * marker poll that calls no gh/loop-state at all. Verb-independent (while/until/for). Quoted literals
+ * are blanked first (see `stripQuotedLiterals`) so a quoted example or `--body` payload that merely
+ * contains the tokens is NOT flagged.
+ * @param {string} command @returns {boolean}
+ */
+export function commandIsFileMarkerPollLoop(command) {
+  const whole = stripQuotedLiterals(command.trim());
+  return (
+    /(?:while|until|for)\b/i.test(whole) &&
+    /\bsleep\b/.test(whole) &&
+    /(?:\[\[?|\btest\b)\s+(?:!\s+)?-[a-hkprsuwxGLNOS]\b/.test(whole)
+  );
+}
+
+/**
+ * Whether COMMAND contains a bare `&` backgrounding control operator — not `&&` (logical AND) and
+ * not a redirection (`2>&1`, `>&2`, `&>file`, `&>>file`). A coarse whole-string check (no shell
+ * parse): redirection forms are stripped first, then any surviving lone `&` (not immediately
+ * preceded or followed by another `&`) counts.
+ * @param {string} command @returns {boolean}
+ */
+function commandHasBareBackgroundOperator(command) {
+  const withoutRedir = command
+    .replace(/\d*>&\d*-?/g, " ") // 2>&1, 1>&2, >&2, >&-
+    .replace(/&>>?/g, " "); // &>file, &>>file
+  return /(?<!&)&(?!&)/.test(withoutRedir);
+}
+
+/**
+ * The wait/probe helper FAMILY: the Copilot/CI wait tools that MUST run as a bounded FOREGROUND
+ * probe — the `.mjs` helpers (`probe-copilot-review`, `wait-pr-checks`, `detect-copilot-loop-state`,
+ * `run-watch-cycle`, `probe-ci-status` — the sanctioned `ci-status`/`watch-ci` CI-status wait,
+ * skills/dev-loop/SKILL.md's "PR checks/status" entry), `gh run watch`, and the
+ * `dev-loops`/`dev-loops-run` `watch-cycle`/`watch-ci`/`watch-initial`/`gate probe-copilot` CLI
+ * verbs. A coarse ANYWHERE-in-the-string substring/family match (deliberately NOT exec-position
+ * anchored) — see `commandContainsDetachedWaitTool`'s JSDoc for the fail-closed rationale.
+ */
+const WAIT_PROBE_FAMILY_RE = new RegExp(
+  [
+    "probe-copilot-review\\.mjs",
+    "wait-pr-checks\\.mjs",
+    "detect-copilot-loop-state\\.mjs",
+    "run-watch-cycle\\.mjs",
+    "probe-ci-status\\.mjs",
+    "gh\\s+run\\s+watch",
+    "watch-cycle",
+    "watch-ci",
+    "watch-initial",
+    "probe-copilot",
+  ].join("|"),
+  "i",
+);
+
+/**
+ * COPILOT-FOLLOWUP-WAIT-TOOLS: a banned detached/polling wait. This is a UNION of three
+ * independent deny conditions — NOT one big AND (an AND-condition here would inadvertently
+ * narrow the unconditional detach-wrapper ban below to "detach AND family reference", wrongly
+ * allowing a family-less `nohup node build.mjs &`):
+ *
+ *   (1) `nohup`/`disown`/`tmux new-session`/`screen -dm` anywhere in a command segment — denied
+ *       UNCONDITIONALLY, with NO wait/probe-family requirement.
+ *   (2) A `while`/`until`/`for` sleep-poll loop over `gh`/`loop-state` (`commandIsSleepPollLoop`) —
+ *       denied UNCONDITIONALLY — it IS the backgrounding signal.
+ *   (3) OPTION-C, prevention-only scope: a bare `&` background (`commandHasBareBackgroundOperator`,
+ *       including a `timeout …`/`env …`/`sh -c` wrapper of it) that ALSO references the wait/probe
+ *       FAMILY anywhere in the command string (`WAIT_PROBE_FAMILY_RE`) — a coarse substring/family
+ *       match, deliberately NOT exec-position anchored.
+ *
+ * Because (3)'s family match is coarse (anywhere in the string, not the executed token), NO wrapper
+ * can hide the reference from it: `timeout N … &`, `env … &`, `sh -c '… &'`, or a node loader flag
+ * (`node -r ./loader.mjs …/probe-copilot-review.mjs &`, `--require`/`--loader`/`--import`) all still
+ * carry the family token in the backgrounded command text, so all are denied. This trades precision
+ * for guaranteed coverage: a background command that merely MENTIONS a family name as an unrelated
+ * argument (`echo "see probe-copilot-review.mjs" &`) is also denied — a benign false positive,
+ * sanctioned by the issue's non-goals (this is a prevention gate, not an exec-position parser; a
+ * denied benign command simply falls back to the sanctioned foreground path). The precise
+ * exec-position parser this replaced (and the SubagentStop background-shell reaper it fed) is
+ * deferred to a follow-up safety-net effort.
+ *
+ * Actor-independent at the decideBashGate call site: the coordinator/main agent — not only a
+ * subagent — is the actor that leaves these orphaned under Claude Code (no async wake to join a
+ * backgrounded wait), so the gate catches its backgrounding too.
  * @param {string} command @returns {boolean}
  */
 export function commandContainsDetachedWaitTool(command) {
   const whole = command.trim();
-  // Checked on the WHOLE command (not per-segment): the `while`/`until`/`for` loop body is
-  // `;`-delimited, so a per-segment split would separate the loop head from its `sleep`/`gh`
-  // body calls and miss the pattern. `gh` must be a standalone token (not `grep gh-notes`), and
-  // `loop-state` must sit at a command-head position (not a substring inside `grep loop-state x`).
-  if (/(?:while|until|for)\b/i.test(whole) && /\bsleep\b/.test(whole) && /\bgh(?=\s|$)|(?:^|[;&|(])\s*loop-state(?=\s|$)/.test(whole)) {
-    return true;
-  }
-  return shellSegments(command).some((segment) => {
-    // `nohup`/`disown` only detach when they head a command (segment start, or right after a shell
-    // operator) — a bare mention (`cat nohup.out`, `echo "nohup banned"`) is not a detach.
+
+  // (1) Unconditional detach-wrapper ban — no wait/probe-family requirement.
+  const hasDetachWrapper = shellSegments(command).some((segment) => {
+    // `nohup`/`disown` only detach when they head a command (segment start, or right after a
+    // shell operator) — a bare mention (`cat nohup.out`, `echo "nohup banned"`) is not a detach.
     if (/(?:^|[;&|])\s*(?:nohup|disown)\b/.test(segment)) return true;
     if (/^tmux\s+new-session\b/i.test(segment)) return true;
     if (/^screen\s+-dm/i.test(segment)) return true;
     return false;
   });
+  if (hasDetachWrapper) {
+    return true;
+  }
+
+  // (2) Unconditional sleep-poll-loop ban — a gh/loop-state poll OR a bare file-marker poll.
+  if (commandIsSleepPollLoop(whole) || commandIsFileMarkerPollLoop(whole)) {
+    return true;
+  }
+
+  // (3) OPTION-C: bare-`&` background AND a wait/probe family reference.
+  if (!commandHasBareBackgroundOperator(whole)) {
+    return false;
+  }
+  return WAIT_PROBE_FAMILY_RE.test(whole);
 }
 
 /** Build a `node`/`python`/`python3` command-head matcher (env/wrapper/path prefix tolerated). */
@@ -874,4 +1070,45 @@ export function commandContainsInlineInterpreter(command) {
     }
     return false;
   });
+}
+
+/**
+ * A package-manager `test`/`verify`/`build` script/task invocation, the `run` keyword optional
+ * (`npm test`, `npm run test`, `bun run verify`, `yarn build`, `pnpm run build`, ...). Anchored on
+ * the executable HEAD (env-assignment/wrapper/path/nice/timeout prefix tolerated via
+ * `VERIFY_EXEC_PREFIX`) so a path that merely contains the word "test" (`cat test/foo.test.mjs`)
+ * never matches — the head token must literally be one of these four package-manager binaries.
+ *
+ * Tolerates a run of binary flags between the binary and `run`/the script name (`bun --bun run
+ * verify`), and a `:`-namespaced sub-script (`test:extension`, `test:core`, `verify:docs`, ...) —
+ * the tail is `(?:[:\s]|$)` rather than `(?:\s|$)` so `npm run test:unit` / `yarn test:ci` match
+ * while `npm run build-docs` (hyphen form, a genuinely different script name) still does not.
+ */
+const PACKAGE_MANAGER_VERIFY_RUN_RE = new RegExp(
+  `^${VERIFY_EXEC_PREFIX}(?:bun|npm|yarn|pnpm)(?:\\s+--\\S+)*\\s+(?:run\\s+)?(?:test|verify|build)(?:[:\\s]|$)`,
+  "i",
+);
+
+/**
+ * `vitest` run directly (any args: `vitest`, `vitest run`, `vitest --coverage`), or via the
+ * `npx`/`bunx` package-runner (`npx vitest run`, `bunx vitest`) or `bun`'s `x` subcommand
+ * (`bun x vitest`).
+ */
+const VITEST_RE = new RegExp(`^${VERIFY_EXEC_PREFIX}(?:(?:npx|bunx)\\s+|bun\\s+x\\s+)?vitest(?:\\s|$)`, "i");
+
+/**
+ * COORDINATOR-VERIFY-DELEGATION: whether `command` contains a known code-verification/
+ * build entrypoint in ANY shell segment — `bun test`/`bun run verify`/`bun run build`, `vitest`,
+ * `npm test`/`npm run test`/`npm run build`, and the `yarn`/`pnpm` `test`/`build` equivalents
+ * (with or without the `run` keyword). PreToolUse gate use only: the dev-loop COORDINATOR must
+ * delegate these to a fresh WORKER subagent instead of running them inline; a worker subagent may
+ * run them freely (the actor scoping lives in `decideBashGate`, not here).
+ *
+ * Compact orchestration commands the coordinator MAY still run inline never match — their head
+ * token is not a package-manager binary or `vitest` (`dev-loops queue list`, `gh pr checks --json
+ * --jq`, `detect-checkpoint-evidence`, `git log --oneline -1`, `git status --short`).
+ * @param {string} command @returns {boolean}
+ */
+export function commandContainsCodeVerificationEntrypoint(command) {
+  return shellSegments(command).some((segment) => PACKAGE_MANAGER_VERIFY_RUN_RE.test(segment) || VITEST_RE.test(segment));
 }

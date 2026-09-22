@@ -2,8 +2,6 @@
 
 Canonical owner for the async Copilot review/fix loop state machine.
 
-This document defines the deterministic state machine for the async Copilot review/fix loop.
-
 ## Overview
 
 The state machine captures observable PR/GitHub/worktree facts (the **snapshot**) and maps them to exactly one **current state**, a list of **allowed next transitions**, and a **recommended next action**.
