@@ -98,6 +98,17 @@ export const SPEC_AUTHORITY_OUTCOME_VALUES = Object.freeze(
  * three resolve autonomously. Exported so no consumer re-hardcodes the set. */
 export const HUMAN_SPEC_DECISION_OUTCOME = SPEC_AUTHORITY_OUTCOMES.SPEC_CANNOT_DECIDE;
 
+/** The two outcomes that REQUIRE explicit conflict evidence: a non-empty
+ * `conflictingCriteria` array of criterion ids (SPEC-AUTHORITY-CONFLICT-EVIDENCE).
+ * The enforcer and the divergence guard bind to this set directly; the guard
+ * also pins the producer contract prose (`agents/judge.agent.md`) to it, so
+ * producer and enforcer cannot silently diverge. SPEC-AUTHORITY-CONFLICT-EVIDENCE
+ * in this module is the governing rule. */
+export const SPEC_AUTHORITY_CONFLICT_OUTCOMES = Object.freeze([
+  SPEC_AUTHORITY_OUTCOMES.FINDING_CONFLICTS,
+  SPEC_AUTHORITY_OUTCOMES.REMEDIATION_CONFLICTS,
+]);
+
 /**
  * Does an outcome require the loop to stop at the human-spec-decision state?
  * Only `spec_cannot_decide` does — a finding/remediation conflict alone never
@@ -364,15 +375,17 @@ export function validateSpecAuthorityDecision(decision, { specDigest, headSha, c
   // The two conflict outcomes require explicit conflict evidence: a non-empty
   // conflictingCriteria drawn from the spec. Autonomous rejection is only
   // legitimate when it names what the finding/remedy conflicts with.
-  const isConflict =
-    d.outcome === SPEC_AUTHORITY_OUTCOMES.FINDING_CONFLICTS ||
-    d.outcome === SPEC_AUTHORITY_OUTCOMES.REMEDIATION_CONFLICTS;
+  const isConflict = SPEC_AUTHORITY_CONFLICT_OUTCOMES.includes(d.outcome);
   let conflictingCriteria = [];
   if (isConflict) {
-    const conflicts = normalizeIdSet(d.conflictingCriteria, "decision.conflictingCriteria");
-    if (conflicts.size === 0) {
-      throw new Error(`SPEC-AUTHORITY-CONFLICT-EVIDENCE: ${d.outcome} decision requires non-empty conflictingCriteria (explicit conflict evidence; fail closed)`);
+    // Absent, non-array, and empty all mean "no conflict evidence". Route them
+    // to the named rule (not the generic id-set shape error) so a human hitting
+    // this is pointed at the fix — populate the field — rather than a hand-edit;
+    // naming the criteria in `rationale` prose alone does not satisfy it.
+    if (!Array.isArray(d.conflictingCriteria) || d.conflictingCriteria.length === 0) {
+      throw new Error(`SPEC-AUTHORITY-CONFLICT-EVIDENCE: ${d.outcome} decision requires a non-empty conflictingCriteria array of criterion ids (explicit conflict evidence; naming them in rationale prose alone does not satisfy it; fail closed)`);
     }
+    const conflicts = normalizeIdSet(d.conflictingCriteria, "decision.conflictingCriteria");
     const unknownConflicts = [...conflicts].filter((id) => !fullCriteria.has(id));
     if (unknownConflicts.length > 0) {
       throw new Error(`spec-authority decision.conflictingCriteria names unknown criterion id(s): ${unknownConflicts.join(", ")}`);

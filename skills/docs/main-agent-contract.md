@@ -2,14 +2,36 @@
 
 How dev-loop work is structured depends on the harness.
 
-**Under the Claude Code harness, the dev-loop runs as a single agent.** The agent invoked for
-dev-loop work performs the steps directly — it reads and writes repository files, runs git and PR
-lifecycle operations, runs the `dev-loops` CLI (including state-changing `gate` / `pr` / `loop`
-subcommands), and posts gate verdicts under the operating session's identity. There is no separate
-read-only "main agent" and no mandatory async-subagent dispatch: the dev-loop agent owns the work
-end to end. The draft-gate `gh pr ready` guard still applies (harness-agnostic). A read-only
-boundary can be re-imposed optionally via the Write/Edit guard hook — opt-in with
-`DEVLOOPS_MAIN_AGENT_READONLY=1` (default fail-open) — for repos that want it.
+**Under the Claude Code harness, the dev-loop runs as a single agent that acts as a delegating
+COORDINATOR.** The agent invoked for dev-loop work runs git and PR lifecycle operations, runs the
+`dev-loops` CLI (including state-changing `gate` / `pr` / `loop` subcommands), and posts gate
+verdicts under the operating session's identity. There is no separate read-only "main agent" and
+no mandatory async-subagent dispatch — i.e. no Pi-style main-agent→dev-loop async hop: the dev-loop
+agent is invoked directly and owns the work end to end, at that outer level. This is distinct from
+the coordinator→worker delegation described next: the same dev-loop agent, now acting as
+COORDINATOR one level down, is itself read-only for TRACKED repo files (source, tests, docs) and
+MUST delegate every tracked-file implementation edit and verification run to a fresh WORKER
+subagent (`developer`/`fixer`/`quality`/`docs`). The coordinator MAY still write EPHEMERAL artifacts
+directly — `tmp/`, the scratchpad, and sanctioned ledger paths (the PR body markdown, comment
+bodies, dispatch prompts, gate evidence/ledgers under `tmp/gate-findings/`) — because those are
+gitignored/non-repo paths, not tracked-file mutations. This coordinator→worker boundary is the
+Claude analogue of the absolute main-agent read-only boundary Pi enforces, enforced mechanically
+(not by convention) by the same `PreToolUse` Write/Edit guard hook: opt-in via
+`DEVLOOPS_COORDINATOR_READONLY=1` (default fail-open), fail-closed once enforced, and
+non-bypassable BY THE DISPATCHED COORDINATOR (`agent_type: "dev-loop"`) FOR ITS GUARDED SURFACE — a
+tracked-file Write/Edit whose `agent_type` is `dev-loop` is denied; a worker subagent's `agent_type`
+is unaffected. This is a mechanically-guarded, targeted denylist, not an airtight sandbox; see
+"Guarded surface and deliberate ceilings" below for what it does and does not cover. **The coordinator also
+delegates code-verification/build runs** (#2082): it MUST NOT run `bun run verify`/`bun test`/
+`vitest`/`npm test`/`npm run test`, and the analogous `build` script across `bun`/`npm`/`yarn`/
+`pnpm`, inline — delegate the run to a fresh worker subagent, which reports back a compact
+pass/fail plus any failing-test names, or, when checking a pushed commit, prefer CI's structured
+conclusion (`gh pr checks` / `scripts/github/detect-checkpoint-evidence.mjs`) over a local run. Enforced by the
+same opt-in `PreToolUse` Bash gate hook and the same `DEVLOOPS_COORDINATOR_READONLY=1` flag; a
+worker subagent's verify/build run is unaffected. The draft-gate `gh pr ready`
+guard still applies (harness-agnostic). A separate, stricter main-agent read-only boundary can
+also be re-imposed via the same hook — opt-in with `DEVLOOPS_MAIN_AGENT_READONLY=1` (default
+fail-open) — for repos that want it.
 
 <!-- pi-only -->
 > **Absolute read-only boundary (Pi).** The main agent must never mutate files tracked by the repository.
@@ -49,8 +71,11 @@ because "the user said yes," not because it is running from a worktree.
 - ALL git operations (branch, commit, push)
 - ALL PR lifecycle (create, draft, review, merge)
 - Sub-delegation to developer, fixer, review, quality, docs agents. `developer`/`quality`/`docs`/`fixer`
-  sub-delegates COMMIT THEIR OWN WORK before exit (`LOCAL-COMMIT-BEFORE-EXIT`); for tracker-backed
-  sessions they also push. There is no "edit here, commit there" split: an editing sub-delegate is
+  sub-delegates COMMIT THEIR OWN WORK before exit (`LOCAL-COMMIT-BEFORE-EXIT`); for a session
+  that pushes and opens a PR (the scope `local-implementation` SKILL step 11b,
+  `LOCAL-PRE-PR-REVIEW-BEFORE-PUSH`, defines: tracker-backed or issue-less `--lightweight`) the
+  first push is deferred to that step so the branch reaches origin once, already cleaned — a
+  sub-delegate commits but does not push. There is no "edit here, commit there" split: an editing sub-delegate is
   never told not to commit, and a `dev-loop` session that wants a single consolidated commit
   performs the edits itself rather than delegating the edit and keeping the commit. The removed
   `DEVLOOPS_ORCHESTRATOR_OWNS_COMMIT` env-var exemption deadlocked an editing subagent under a
@@ -91,6 +116,10 @@ asset-generation time (`harness: "claude"`).
 | `git commit -m "..."` | **BREACH** — must delegate to `dev-loop` |
 | `subagent dev-loop` | Allowed — correct delegation |
 | `subagent fixer` | Allowed only when called from within `dev-loop`; describe the task as part of the message |
+| Claude Code: the `dev-loop` coordinator writes `packages/core/src/foo.mjs` directly | **BREACH** when `DEVLOOPS_COORDINATOR_READONLY=1` is enforced — must delegate to a fresh worker subagent (`developer`/`fixer`/`quality`/`docs`) |
+| Claude Code: the `dev-loop` coordinator writes `tmp/gate-findings/...` (gate evidence) | Allowed — ephemeral/gitignored, not a tracked-file mutation |
+| Claude Code: the `dev-loop` coordinator runs `bun run verify` inline | **BREACH** when `DEVLOOPS_COORDINATOR_READONLY=1` is enforced — delegate the run to a fresh worker subagent |
+| Claude Code: a worker subagent (`developer`/`fixer`/`quality`/`review`) runs `bun run verify` | Allowed — verification runs are the worker's job |
 
 ## Dev-loop startup
 
@@ -127,11 +156,49 @@ clause reinforces that for the `dev-loop` dispatch pattern specifically.
   Strict enforcement is opt-in via `DEVLOOPS_MAIN_AGENT_READONLY=1` (default fail-open) so
   adopting the harness does not retroactively break a repo's own interactive dev; full run-id
   propagation into the Claude subagent context completes with the headless/agent wiring.
-- **Scope of mechanical enforcement:** the hook covers the Edit and Write tools. Bash-driven
-  repo mutations the contract also forbids (`git commit`/`git push`/branch creation, in-place
-  edits like `sed -i`, shell redirection `> file` / `tee`) run through the Bash tool and remain
-  **convention-enforced** for now; the only Bash command the gate hook blocks is the ungated
-  `gh pr ready`. Tightening Bash-mutation coverage is possible follow-up.
+- **Coordinator→worker delegation boundary (#2082).** The same Write/Edit guard hook also
+  enforces a second, inner boundary under Claude Code: a tracked-file Write/Edit whose
+  `agent_type` is the coordinator's own (`dev-loop`) is denied — the coordinator must delegate
+  the edit to a fresh worker subagent (`developer`/`fixer`/`quality`/`docs`) instead. Opt-in via
+  `DEVLOOPS_COORDINATOR_READONLY=1` (default fail-open); fail-closed once enforced and
+  non-bypassable BY THE DISPATCHED COORDINATOR through the Write/Edit tools it names. Ephemeral
+  artifacts (`tmp/`, the scratchpad, sanctioned ledger paths) are gitignored/non-repo paths, so
+  they fall through unaffected. See "Guarded surface and deliberate ceilings" below for what this
+  does not cover.
+- **Coordinator verify-command delegation boundary (#2082).**
+  <!-- rule: COORDINATOR-VERIFY-DELEGATION -->
+  `COORDINATOR-VERIFY-DELEGATION`: the dev-loop coordinator MUST NOT run a known
+  code-verification/build entrypoint (`bun run verify`/`bun test`/`vitest`/`npm test`/
+  `npm run test`, and the analogous `build` script across `bun`/`npm`/`yarn`/`pnpm`) inline; it
+  MUST delegate the run to a fresh worker subagent (`developer`/`fixer`/`quality`/`review`) instead. Enforced by the
+  `PreToolUse` Bash gate hook (`.claude/hooks/pre-tool-use-bash-gate.mjs`), which denies the
+  command when the caller's `agent_type` is the coordinator's own (`dev-loop`). Gated by the SAME
+  `DEVLOOPS_COORDINATOR_READONLY=1` flag as the write-guard boundary above (default fail-open); a
+  worker subagent's `agent_type` is unaffected. The classifier tolerates a wrapping `env`
+  invocation carrying either `NAME=value` assignments or common `env` options (`-i`, `-u <NAME>`,
+  `-C <dir>`, `-S <str>`, `--`, a bare `-`, and their long forms) before the real executable
+  (`env -u DEVLOOPS_COORDINATOR_READONLY bun run verify` is still denied), on top of the bare
+  leading-assignment and `nice`/`timeout` wrapper forms already covered.
+- **Guarded surface and deliberate ceilings.** Both boundaries above are mechanically enforced and
+  non-bypassable BY THE AGENT for their GUARDED SURFACE — a dispatched coordinator's
+  (`agent_type: "dev-loop"`) `Write`/`Edit` tracked-file mutations, and its use of a recognized
+  code-verification/build command ENTRYPOINT. That guarantee has three deliberate ceilings, not
+  gaps to be read as contradicting "mechanically enforced":
+  1. **Bash-driven tracked mutations remain convention-enforced, not mechanically guarded.** The
+     hook covers the Edit and Write tools only; Bash-driven repo mutations the contract also
+     forbids (`git commit`/`git push`/branch creation, in-place edits like `sed -i`, shell
+     redirection `> file` / `tee`) run through the Bash tool and are not denied by either boundary.
+     Tightening Bash-mutation coverage is possible follow-up.
+  2. **The top-level/inline agent (`agent_type: null`) is out of scope for both boundaries above.**
+     It is governed by the separate main-agent boundary (`DEVLOOPS_MAIN_AGENT_READONLY`) described
+     earlier in this section, not by `DEVLOOPS_COORDINATOR_READONLY`. Full inline-coordinator
+     enforcement depends on the coordinator-dispatch-default work (follow-up); conflating the two
+     boundaries by denying a null `agent_type` here would break the legitimate top-level/interactive
+     case.
+  3. **The verify-command denylist is a targeted classifier, not an exhaustive shell-command
+     parser.** It matches the known daily invocation shapes (package-manager/`vitest` heads, with
+     `env`/`nice`/`timeout` wrapper tolerance as described above); a command expressed via an
+     unrecognized wrapper form is a known, documented ceiling rather than a guaranteed sandbox.
 - A companion `PreToolUse` Bash hook reproduces the `gh pr ready` draft-gate guard.
 - A `dev-loop` async subagent should still reject delegation attempts that bypass the contract.
 

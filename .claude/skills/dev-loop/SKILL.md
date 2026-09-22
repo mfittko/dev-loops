@@ -27,17 +27,17 @@ Required installed runtime contract docs are shared bundled copies under `../doc
 
 ### Resolve authoritative state
 
-> Under the Claude Code harness the dev-loop runs as a single agent: run these steps directly — no read-only boundary and no separate async-subagent dispatch. See [Main Agent Contract](../docs/main-agent-contract.md).
+> Under the Claude Code harness the dev-loop runs as a single agent: run these steps directly — no separate async-subagent dispatch. The coordinator has an opt-in read-only boundary for tracked repo files and code-verification/build commands (`DEVLOOPS_COORDINATOR_READONLY=1`, enforced by the guard hooks). See [Main Agent Contract](../docs/main-agent-contract.md).
 
-Resolve authoritative state via the startup resolver (`npx dev-loops@1.0.3 loop startup --issue <n>` for issues, `npx dev-loops@1.0.3 loop startup --pr <n>` for PRs), then immediately build the handoff envelope via `npx dev-loops@1.0.3 loop build-envelope --input <resolver-output.json>`. The envelope determines `requiredReads`, `nextAction`, `stopRules`, and `acceptance` — load only those files, execute only that bounded task. It is the first handoff artifact consumed before loading any route pack. See [Workflow Handoff Contract](../docs/workflow-handoff-contract.md) for the derivation contract.
+Resolve authoritative state via the startup resolver (`npx dev-loops@1.0.4-pre.0 loop startup --issue <n>` for issues, `npx dev-loops@1.0.4-pre.0 loop startup --pr <n>` for PRs), then immediately build the handoff envelope via `npx dev-loops@1.0.4-pre.0 loop build-envelope --input <resolver-output.json>`. The envelope determines `requiredReads`, `nextAction`, `stopRules`, and `acceptance` — load only those files, execute only that bounded task. It is the first handoff artifact consumed before loading any route pack. See [Workflow Handoff Contract](../docs/workflow-handoff-contract.md) for the derivation contract.
 
 **Retrospective checkpoint gate:** the resolver reads `.pi/dev-loop-retrospective-checkpoint.json` (resolved from the repo's main checkout, not cwd-relative, so a worktree and the main checkout always see the same file) and, when the repo config `workflow.requireRetrospective` (set via `.devloops` at repo root) is `true`, bounds newer base-branch commits with local git ancestry and classifies each through GitHub's commit-to-PR association. A `complete`/`skipped` record becomes `missing` only when a newer commit is associated with a PR merged into the configured base branch; direct/release commits, unmerged PRs, and PRs merged into another base do not open a cycle. An unresolvable recorded SHA or unverifiable association fails closed to `missing`. When the resulting state is `missing`, the resolver returns `needs_reconcile`; `loop build-envelope` represents that terminal reconciliation with `selectedStrategy: null` and an actionable stop envelope. Complete or explicitly skip the retrospective before starting, carrying the cycle identity via `checkpoint-contract.mjs --repo`/`--pr`/`--merge-commit` (required for `complete`/`skipped`) and — for `complete` — the fresh-context provenance via `--retro-context fresh --record-source <path>` (mandatory per `RETRO-FRESH-CONTEXT-MANDATORY`; an inline self-authored retro fails the checkpoint).
 
-**Pre-flight PR gate (mandatory):** Before working an existing PR, the dev-loop must run `npx dev-loops@1.0.3 loop handoff --repo <owner/name> --pr <number>` and abort if `action: "stop"`. When `terminal: true`, proceed inline. When `terminal: false`, resolve the blocking condition first.
+**Pre-flight PR gate (mandatory):** Before working an existing PR, the dev-loop must run `npx dev-loops@1.0.4-pre.0 loop handoff --repo <owner/name> --pr <number>` and abort if `action: "stop"`. When `terminal: true`, proceed inline. When `terminal: false`, resolve the blocking condition first.
 
 **Worktree cwd (mandatory):** Always use a worktree checkout for git operations, file reads/writes, and validation commands — never use the `main` checkout.
 
-A shell's working directory can reset to the primary checkout **silently** — after a subprocess run, or when a `cd` inside a compound command does not persist into the next one. A relative-path `git add && git commit && git push` that runs after such a reset executes in the primary checkout on the default branch, landing the change straight on the remote and skipping the PR flow. `WORKTREE-DEFAULT-USE` in [worktree-guidance.md](../docs/worktree-guidance.md#default-rule-use-a-worktree-for-mutating-local-work) is the owned rule mandating `git -C <absolute-worktree-path> …` and absolute paths for exactly this reason — every mutating flow follows it, not just this skill's own. `ensure-worktree` best-effort installs `pre-commit`/`pre-merge-commit`/`pre-push` guards as defense-in-depth against the same slip — it is not a substitute; see [Default-branch guard](../docs/worktree-guidance.md#default-branch-guard) for the guard's behavior, its no-op paths, and the `DEVLOOPS_ALLOW_MAIN=1` override.
+Read [worktree-guidance.md](../docs/worktree-guidance.md#default-rule-use-a-worktree-for-mutating-local-work) before mutation. `WORKTREE-DEFAULT-USE` requires `git -C <absolute-worktree-path> …` and absolute file paths even if the shell cwd appears correct. The [default-branch guards](../docs/worktree-guidance.md#default-branch-guard) are defense-in-depth, not a substitute.
 
 **Worktree fetch (mandatory):** Always run `git fetch origin` before creating or reusing any worktree.
 
@@ -65,9 +65,6 @@ dev-loop must check the checkpoint before treating the start as a fresh intake o
      rather than guessing or starting fresh.
 4. If no checkpoint exists, or `outerAction` is `done`:
    - Treat as normal fresh startup (the existing startup resolver path).
-
-This eliminates the manual "report-and-resume" or "exit and resume later" pattern when the
-deterministic state already knows the next action.
 
 The outer-loop checkpoint is the canonical re-attachment artifact. Do not rely on chat
 context, local notes, or prose recollection of "where we left off."
@@ -118,10 +115,10 @@ When `preferredSource` is `worktree` (installed dev-loops CLI older than the cur
 
 ## Read-only info shortcut
 
-Info/handoff requests can be served directly via `npx dev-loops@1.0.3 loop info` (read-only; no full dev-loop run required):
-- `npx dev-loops@1.0.3 loop info --issue <n>` — human-readable issue state summary (strategy, route, linked PR, next action)
-- `npx dev-loops@1.0.3 loop info --pr <n>` — human-readable PR state summary (branch, CI, threads, rounds, action)
-- `npx dev-loops@1.0.3 loop info --issue <n> --json` — machine-readable JSON output
+Info/handoff requests can be served directly via `npx dev-loops@1.0.4-pre.0 loop info` (read-only; no full dev-loop run required):
+- `npx dev-loops@1.0.4-pre.0 loop info --issue <n>` — human-readable issue state summary (strategy, route, linked PR, next action)
+- `npx dev-loops@1.0.4-pre.0 loop info --pr <n>` — human-readable PR state summary (branch, CI, threads, rounds, action)
+- `npx dev-loops@1.0.4-pre.0 loop info --issue <n> --json` — machine-readable JSON output
 
 ## Reading tool output (token-economical convention)
 
@@ -132,7 +129,7 @@ When you need a fact from a dev-loops JSON-emitting script, climb this ladder an
 
 1. **Prefer the dev-loops subcommand / concise mode.** Use `loop info` or a script's `--concise`/`--summary` mode (e.g. `run-watch-cycle.mjs --concise`, `probe-copilot-review.mjs --concise`) for a human-readable digest. The concise modes surface loop state, Copilot round count, unresolved/actionable thread counts, round-cap-clean eligibility, CI status, next action, and the current round's new Copilot comment bodies.
 2. **`--silent` / `-s` for a yes/no check.** Reads ZERO output: `… --jq '<predicate>' --silent; echo $?` exits `0` for true / `1` for false. Without `--jq`, `--silent` maps the script's success (`ok:true`) to exit `0`, failure to `1` — unless the tool documents a stricter `--silent` contract in its own usage text (e.g. `request-copilot-review.mjs` exits `0` only for `status: "requested"`). Example: `probe-copilot-review.mjs --repo o/r --pr N --jq '.status=="idle"' -s`.
-3. **`--jq <filter>` to extract a single field.** `--jq`/`--silent` are a BASE-CLI GUARANTEE across every operator-facing JSON-result dev-loops command — each accepts a gh-style `--jq` filter (jq subset: field access, `.[]`/`.[N]`, `|`, `select(...)`, `==`/`!=`/`<`/`<=`/`>`/`>=`, `length`, `keys`), not just a named subset. (A few scripts are out of scope — e.g. build/smoke tooling, dashboard servers, dormant/unwired adapters, and scripts that write JSON to a file rather than stdout — each carried with its reason in the contract test's exclusion list.) It prints only the filtered value. An invalid filter fails closed (stderr + exit `2`), distinct from a clean predicate-false (silent exit `1`). This is enforced by a contract test (`test/contracts/jq-output-base-guarantee-contract.test.mjs`) that fails the build if a new JSON-emitting command ships without wiring the shared `scripts/lib/jq-output.mjs` emit path.
+3. **`--jq <filter>` to extract a single field.** `--jq`/`--silent` are a BASE-CLI GUARANTEE across every operator-facing JSON-result dev-loops command — each accepts a gh-style `--jq` filter (jq subset: field access, `.[]`/`.[N]`, `|`, `select(...)`, `==`/`!=`/`<`/`<=`/`>`/`>=`, `length`, `keys`), not just a named subset. (A few scripts are out of scope — e.g. build/smoke tooling, dashboard servers, dormant/unwired adapters, and scripts that write JSON to a file rather than stdout — each carried with its reason in the contract test's exclusion list.) It prints only the filtered value. An invalid filter fails closed (stderr + exit `2`), distinct from a clean predicate-false (silent exit `1`). This is enforced by a contract test (`test/contracts/jq-output-base-guarantee-contract.test.mjs`) that fails the build if a new JSON-emitting command ships without wiring the shared `scripts/lib/jq-output.mjs` emit path. Need several fields at once instead of one? `--fields a,b,c` returns the named TOP-LEVEL SCALAR fields as one tab-separated line, in the requested order — one call instead of N `--jq` calls. Consume with `cut -f<n>` when a field may be null/empty, e.g. `cut -f2 < <(cmd --fields a,b,c)`: it handles an empty/leading cell correctly. `IFS=$'\t' read -r A B C < <(cmd --fields a,b,c)` is safe only when every cell is known non-empty — empty/leading tabs are IFS whitespace and get collapsed, so a null cell misbinds the rest. Same fail-closed posture as `--jq`: an unknown or non-scalar field, or combining `--fields` with `--jq`/`--silent`, fails closed (stderr + exit `2`).
 4. **Use a dev-loops wrapper for `gh` reads — never an agent-level raw `gh`.** A raw `gh` call is a recorded advisory retro violation (issue #1077: reported, never blocking). If no script covers the read you need, treat it as a tooling gap: file/build a thin wrapper (reuse `scripts/lib/jq-output.mjs`, like the ones below), don't shell out. The reads/edits that already have wrappers:
    - CI run-log tail (a failing PR's job log) → `scripts/github/fetch-ci-logs.mjs --repo <o/r> --pr <n> [--failed-only] [--tail <n>]`, **never raw `gh run view --log`/`--log-failed`**. (`probe-ci-status.mjs` names the failed checks; this returns the LOG.)
    - Issue list/filter → `scripts/github/list-issues.mjs --repo <o/r> [--state <open|closed|all>] [--label <l>] [--limit <n>]`, **never raw `gh issue list`**. (The queue tool lists the project board; this is for arbitrary issue queries.)
@@ -196,15 +193,16 @@ dev-loops-run cli/index.mjs gate consolidate-fanin --findings-dir <dir> --head-s
   --spec-authority <identity-path> --jq '.severityCounts'
 ```
 
-**Judge between fan-in and the fixer (Phase 3.5 wired, #1658):** after fan-in (and after the
-durable ledger is written with `write-gate-findings-log --judge-verdict <verdict-path>
---spec-authority <identity-path>`), dispatch
+**Judge between fan-in and the fixer (Phase 3.5 wired, #1658):** after fan-in, before the
+durable findings-log write, follow [Phase 3.5](../docs/gate-review-sub-loop-contract.md#phase-35--judge-relevance-disposition-1525) and dispatch
 the dedicated `judge` agent (`agents/judge.agent.md`) — seeded with the consolidated ledger, the
 linked issue's AC/DoD/non-goals, the PR's declared scope, the prior-round judge ledgers, and the
 spec-context output (the structured spec at `<spec-path>`, `specDigest`, `contentDigest`) — and
 await its two verdict artifacts: the relevance verdict at
 `tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/judge-verdict.json` and the spec-authority
-verdict at the sibling `spec-authority-verdict.json` (its only writes). Then run the deterministic
+verdict at the sibling `spec-authority-verdict.json` (its only writes). Write the durable ledger
+with `write-gate-findings-log --judge-verdict <verdict-path> --spec-authority <identity-path>`
+using those completed verdicts, before posting the visible gate verdict. Then run the deterministic
 bridge to derive the fixer's act list for Phase 4, always with the spec-authority flags, plus the
 durable-approval flags across re-entry:
 
@@ -226,15 +224,17 @@ finding, mismatched spec-authority identity) means re-run the judge at the curre
 silent severity-only fallback or a silent skip of spec authority. See Gate Review Sub-Loop Contract
 Phase 3.5 and `skills/docs/spec-authority-contract.md` for the enforcement rules these flags carry.
 
-The cross-refs (`ANTIPATTERN-FANIN-WAIT` in [Anti-patterns](../docs/anti-patterns.md), [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md) Phase 3) remain authoritative for the full refusal list and fail-closed cases; this inline emphasis exists so the sanctioned path is visible at the point of dispatch without following a link. A subagent that skipped the cross-ref and hand-rolled `Promise.all` + transcript-tailing burned ~189k tokens and had to be interrupted and restarted fresh — do not repeat that.
+Before gate dispatch, read `ANTIPATTERN-FANIN-WAIT` in [Anti-patterns](../docs/anti-patterns.md) and Phase 3 of [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md) for the full refusal conditions.
 
-**Bounded test runs (enforced — #1650):** Every focused `bun test` invocation an agent launches directly on a suite containing gh-mocking tests MUST be bounded by a hard timeout: `timeout 90 bun test <file>` (or wrap the run in `timeout`). Never invoke an unbounded `bun test` on such a suite. (Piping through `head` is NOT a substitute — it bounds output lines, not execution time; a hung test producing no output is never killed.) Failure mode: a gh-mocking test that hangs on a real `gh`/run-id call blocks the whole drive — #1526 stalled 65+ seconds on `upsert-checkpoint-verdict.test.mjs`, and a retrospective subagent hit the same hang re-running the gate suites. (#1639 stabilizes the environmental suites themselves; this guardrail bounds the run so a single hung test cannot stall a drive.) `bun run verify` already bounds its suites; this applies to ad-hoc / per-file test runs an agent launches directly. Bun is the development runner only; Node `>=24` consumer-runtime and npm publication checks remain explicit exceptions.
+**Bounded test runs (enforced — #1650):** Bound every directly launched focused suite containing gh mocks with `timeout 90 bun test <file>` (or an equivalent hard timeout). Output truncation does not bound execution. `bun run verify` already bounds its suites. Bun is the development runner; Node `>=24` consumer-runtime and npm publication checks remain explicit exceptions.
 
-**Bounded Copilot/CI watch (enforced — #1660):** Copilot/CI watches an agent launches directly MUST be bounded — use `dev-loops-run cli/index.mjs gate probe-copilot --timeout-ms 300000` (5min) + re-check, or `timeout 600 <cmd>` — never an unbounded 30min+ blocking watch. Failure mode: `copilot-pr-handoff.mjs` emits a 30min default wait (`COPILOT_REVIEW_WAIT_TIMEOUT_MS = 1,800,000`); #1537 hung 55min and #1525 hung 20min on unbounded watches, each requiring interrupt+resume. Always pass an explicit bounded timeout on probe/watch commands; re-check on timeout rather than blocking.
+**Bounded Copilot/CI watch (enforced — #1660):** Use `dev-loops-run cli/index.mjs gate probe-copilot --timeout-ms 300000` (5min) or `timeout 600 <cmd>`; pass an explicit bounded timeout and re-check on timeout. Never launch an unbounded blocking watch.
+
+**Foreground inline probe, never a backgrounded sleep-poll (enforced — #2065):** Under the Claude Code harness the Copilot/CI wait MUST be a bounded FOREGROUND inline probe — `probe-copilot-review.mjs` or `wait-pr-checks.mjs` with an explicit `--timeout`/`--timeout-ms` (`0` = a single immediate foreground check). Claude Code has no async wake, so a backgrounded wait is never joined and never exits: a backgrounded `until`/`while … sleep N … done` poll loop, or bare-`&` backgrounding of a probe/wait script (`dev-loops-run scripts/github/probe-copilot-review.mjs … &`), is FORBIDDEN — it orphans the shell past the agent stop. The PreToolUse Bash-gate denies these for the coordinator and every subagent (`commandContainsDetachedWaitTool`), actor-independently and fail-closed. Run the probe in the foreground and re-check on timeout. (A `SubagentStop` background-shell reaper safety-net, for whatever slips past prevention, is tracked as follow-up #2296.)
 
 **Bounded, exhaustively (dispatch discipline, #1907):** the two guardrails above name the two most-hit failure modes, not the boundary of the rule — every `bash` call this agent launches directly is `timeout`-bounded (or issued through a wrapper that already bounds itself), and every watch/probe carries an explicit `--timeout-ms` (or equivalent bounded flag); an unbounded blocking call is never sanctioned regardless of which command it wraps.
 
-**Gate fan-out dispatch discipline (bounded-parallel default, #1907):** gate fan-out is bounded-parallel by DEFAULT — up to `gates.fanout.maxConcurrent` dispatch units per wave via blocking joins; `gates.fanout.sequential: true` is the documented load fallback for a SIGTERM-prone environment, never the default. A transient dispatch failure (429/5xx) retries the same unit with exponential backoff; a hard 4xx (e.g. `402`) escalates to the supervisor/operator immediately instead of retrying into the same wall; provider choice stays a per-dispatch decision (`STICKY-PROVIDER-PIN`). Post-merge, the only remaining steps are the main-green check, one board-move attempt, and the final report — never re-running consolidation machinery whose artifacts already exist. Owning rules: `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK`, `GATE-EXEC-DISPATCH-RETRY-BACKOFF`, `GATE-EXEC-END-OF-RUN-CONTRACT` in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md); `STICKY-PROVIDER-PIN` in [Anti-patterns](../docs/anti-patterns.md).
+**Gate fan-out dispatch discipline (bounded-parallel default, #1907):** gate fan-out is bounded-parallel by DEFAULT — a wave releases up to `gates.fanout.maxConcurrent` dispatch units together in ONE call, never as N sequential blocking calls. Under Pi that call is `subagent({ workflowScriptPath, cwd, async: false, timeoutMs })` whose script body returns exactly ONE `runs.all([...])` with one item per unit, each carrying a unique non-empty `key`; this shape needs pi-subagents ≥0.57 (`tasks: [...]` was removed in 0.41.0), while the repo's `Dockerfile` `PI_SUBAGENTS_VERSION` pin is below that floor and must be raised for the shape to run in the declared container; N per-unit blocking `subagent` calls for one wave are the shape Pi's foreground guard rejects and MUST never be used. `gates.fanout.sequential: true` is the documented load fallback for a SIGTERM-prone environment, never the default. A transient dispatch failure (429/5xx) retries the same unit with exponential backoff; a hard 4xx (e.g. `402`) escalates to the supervisor/operator immediately instead of retrying into the same wall; provider choice stays a per-dispatch decision (`STICKY-PROVIDER-PIN`). Post-merge, the only remaining steps are the main-green check, one board-move attempt, and the final report — never re-running consolidation machinery whose artifacts already exist. Owning rules: `GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK`, `GATE-EXEC-DISPATCH-RETRY-BACKOFF`, `GATE-EXEC-END-OF-RUN-CONTRACT` in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md); `STICKY-PROVIDER-PIN` in [Anti-patterns](../docs/anti-patterns.md).
 
 **Blocking join for a nested single-child step, never sleep-poll (#1907):** when this run's turn is awaiting a nested child IT dispatched — a judge, a fixer, or a single reviewer — join it with a blocking dispatch (`async: false`) or one `bg_wait` nonBlocking subscription. Do not sleep-poll for it and do not end the turn to await it (observed failure: repeated 180/240/300s sleep loops). This is the actionable alternative behind `END-TURN-AND-AWAIT-WAKE` in [Anti-patterns](../docs/anti-patterns.md); see [dev-loop agent — Subagent delegation](../../agents/dev-loop.md#subagent-delegation) for the agent-contract pin of the same rule.
 
@@ -250,14 +250,30 @@ The cross-refs (`ANTIPATTERN-FANIN-WAIT` in [Anti-patterns](../docs/anti-pattern
 
 ## Headless auto-refine of parked un-refined items
 
-Headless/`--auto` only. The enqueue refinement gate never lets an un-refined issue reach the pickup column: in `--auto` mode `add-queue-item.mjs` diverts it to the non-pickup park column with a recorded reason (`refined:false, diverted:true, parkedColumn, reason`), and it deliberately does NOT grill — synthesizing the missing artifact is this orchestrator's job, never the coordinator script's (keeps `OPS-NO-INLINE-INTERPRETER` clean). So a headless auto session that finds the pickup source empty may still have parked issues awaiting refinement. Before idling, run this bounded sub-loop (skip it entirely for interactive runs and for a specific `--issue`/`--pr` target):
+Headless/`--auto` only; skip for interactive runs or a specific `--issue`/`--pr`
+target. `add-queue-item.mjs` parks unrefined issues (`refined:false, diverted:true,
+parkedColumn, reason`) without grilling. When pickup is empty, the orchestrator
+must run this bounded sub-loop before idling; deterministic scripts own only the
+park/allow decision and discovery (`OPS-NO-INLINE-INTERPRETER`).
 
-1. **Discover (deterministic, no LLM).** List parked un-refined issues via `npx dev-loops@1.0.3 queue parked-unrefined --repo <owner/name>` (project auto-resolved from `.devloops`; add `--jq`/`--silent` per the token-economical convention). It reads the park column and runs the same refinement-completeness check as the enqueue gate; each item carries `{ issueNumber, reason, missing }`. Empty list → nothing to refine; proceed to the normal fail-closed idle. Iterate the returned items in **ascending `issueNumber` order**, and attempt each **at most once per session** (steps 2–4). This is what bounds the sub-loop: one grill attempt per discovered item, then idle.
-2. **Auto-refine (the LLM step, here in the orchestrator).** For each discovered item, in order, run `/dev-loops:loop-grill <issueNumber> --auto` (or `/loop-grill <issueNumber> --auto` in the dev-loops repo itself) (the `loop-grill` skill synthesizes AC/DoD/Non-goals into the issue body — do not re-implement grilling, and never move it into a coordinator script).
-3. **Promote via the sanctioned move.** After a `grill-clean` verdict the issue is refined — confirmed by the same completeness check the enqueue gate runs (`detectIssueRefinementArtifact`), so this move admits exactly what the gate would. The item is already on the board in the park column, so **move** it into the pickup column with `npx dev-loops@1.0.3 queue move --repo <owner/name> --item <issueNumber> --to-column "<pickup column>"` (the configured Next Up column). Do NOT use `add-queue-item` here: it is an idempotent no-op for an already-present item and cannot promote it. Then continue to the next discovered item.
-4. **Fail-safe (unrefinable → leave parked, do not re-attempt).** If grilling cannot produce a usable artifact (`N unresolved items`, or the body still lacks AC/DoD/linked-doc), do NOT move the issue into the pickup column. It is already in the park column where discovery found it, so **leave it there** — no move, no re-enqueue — and surface the `reason` from the step-1 discovery output for a human. **Advance to the next discovered item — do NOT re-grill an item already attempted this session**, so a permanently-unrefinable issue can neither spin the loop nor starve the refinable items behind it. Never hand-move an item into the pickup column that grilling could not refine.
+1. **Discover:** `npx dev-loops@1.0.4-pre.0 queue parked-unrefined --repo <owner/name>`
+   auto-resolves the project from `.devloops` and returns `{ issueNumber, reason, missing }`
+   using the enqueue completeness check. Empty list → normal fail-closed idle.
+   Process ascending `issueNumber`, at most one grill attempt per item per session.
+2. **Auto-refine:** run `/dev-loops:loop-grill <issueNumber> --auto`
+   (repo-local: `/loop-grill <issueNumber> --auto`). Use the skill's synthesis;
+   never reimplement it or move LLM grilling into a coordinator script.
+3. **Promote:** after `grill-clean` and confirmation by `detectIssueRefinementArtifact`,
+   run `npx dev-loops@1.0.4-pre.0 queue move --repo <owner/name> --item <issueNumber> --to-column "<pickup column>"`
+   to the configured Next Up column, then advance. Do not use `add-queue-item`:
+   the parked item already exists, so that command is an idempotent no-op.
+4. **Unrefinable:** if unresolved items remain or AC/DoD/linked-doc completeness
+   still fails, leave it parked; no move or re-enqueue. Surface its discovery
+   `reason` and advance, without another grill attempt this session. Never
+   hand-move an unrefined item to pickup.
 
-The sub-loop terminates once every discovered item has had its single attempt (all refinable ones promoted, the rest left parked with a reason), then proceeds to the normal fail-closed idle. A still-parked item is re-attempted only on a later session, not within this one. This wires the auto-refine convenience at the orchestrator (LLM-agent) layer only. The deterministic scripts keep just the park/allow decision and the parked-item discovery.
+After every discovered item has had one attempt, enter normal fail-closed idle.
+Retry still-parked items only in a later session.
 
 ## No gate exemptions
 

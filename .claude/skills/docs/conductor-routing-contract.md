@@ -1,17 +1,8 @@
 # Conductor Routing Contract
 
-Canonical owner for the conductor routing contract governing an already-targeted active run.
-
-This document defines the **conductor routing contract** for an already-targeted active run: which loop family
-owns the next active step, and what machine-readable handoff payload should be emitted.
+Canonical owner for selecting the next loop family and its handoff envelope in an already-targeted active run.
 
 ## Overview
-
-The conductor routing layer answers one specific question after ownership and family-local lifecycle state are
-already known:
-
-> For this active run, which loop family should receive control now, and what exact handoff envelope should
-> downstream workers consume?
 
 This contract starts **after**:
 - the active run has been identified (scope/target resolved)
@@ -35,8 +26,6 @@ remapper.
 | [#57/#58/#59 — inspection/viewer/steering](https://github.com/mfittko/dev-loops/issues/57) | **Adjacent**: read-only inspection surfaces; this contract defines routing policy, not operator UX |
 
 ## Boundary
-
-This contract owns **conductor routing and handoff decisions after ownership and family-local state are already known**.
 
 It does **not** define:
 - which run is active (ownership/idempotency rules; the conductor implementation was retired, see issue #319)

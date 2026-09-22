@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { parseArgs } from "node:util";
+import { verifyZeroUnitCarryProvenance } from "./_carried-angles.mjs";
+import { isDeepStrictEqual, parseArgs } from "node:util";
 import { parsePrNumber, requireTokenValue } from "../_cli-primitives.mjs";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
@@ -11,9 +12,11 @@ import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, applyJudgeDispositio
 // JUDGE_DISPOSITIONS is a frozen array in the core export; wrap as a Set for
 // the validator's membership check so validateFindingsArray stays self-contained.
 import { JUDGE_DISPOSITIONS as _JUDGE_DISPOSITIONS_ARRAY } from "@dev-loops/core/loop/gate-fanin";
+import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
 import { loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
+import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>]
 Write a durable <gate>-<headSha>.json log under deterministic tmp/ paths.
@@ -51,7 +54,9 @@ Optional:
                                  for a gate that configures mandatory angles (gates.<gate>.angles entries
                                  with mandatory: true) FAILS CLOSED (throws, writes no ledger) when neither
                                  an explicit --provenance nor a wrapper-supplied one is present. inline_single_agent
-                                 writes stay exempt and byte-identical to before.
+                                 writes stay exempt from the provenance requirement (they carry no provenance);
+                                 the ledger still records the executionMode field either way, so it is no longer
+                                 byte-identical to the pre-executionMode shape.
   --emit-plan <path>             Optional keyed emit-fanout-dispatch plan. When supplied, requires --provenance and fails closed unless that caller-supplied provenance matches the plan's round key and emitted fresh units exactly. The plan is a guard only; it never supplies provenance or findings. Omitted preserves current behavior.
   --full-label                   The PR carries the gate:full label: dispatch groups resolve to one angle per unit, so any reviewer identity shared across fresh angles is rejected regardless of a declared "group" (mirrors write-gate-context.mjs's --full-label). Only meaningful when --provenance is supplied. Omitted (default false) keeps current behavior.
   --judge-verdict <path>         Path to the judge agent's verdict artifact (JSON). When supplied, the findings are
@@ -61,7 +66,12 @@ Optional:
                                  was consciously not acted on and why (#1525). The verdict must dispose every finding
                                  (one disposition per 0-based ledger position) or the run FAILS CLOSED and writes no
                                  ledger. Optional; when absent the ledger writes byte-identically to before.
-  --tmp-root <path>              Root tmp directory (default: tmp/)
+  --tmp-root <path>              Root tmp directory. Default: the MAIN worktree's tmp/
+                                 — the ledger is anchored at the primary git
+                                 worktree so the merge (running from the main checkout)
+                                 can read it and it survives linked-worktree pruning.
+                                 Do NOT pin this to a linked worktree's tmp/, or the
+                                 ledger is lost on prune and unreadable by the merge.
   --spec-authority <path>        JSON { specDigest, headSha, contentDigest, checkedCriteria }
                                   (issue 2008 / ADR 0061 AC1). When supplied, stamps the log
                                   with the pinned revision identity via the ONE shared stamp
@@ -118,6 +128,12 @@ function validateFindingsArray(parsed, flagLabel) {
       angle: f.angle.trim(),
       summary: f.summary.trim(),
     };
+    if ("recommendation" in f) {
+      if (typeof f.recommendation !== "string" || f.recommendation.trim().length === 0) {
+        throw parseError(`${flagLabel}[${i}].recommendation must be a non-empty string`);
+      }
+      entry.recommendation = f.recommendation.trim();
+    }
     if (Array.isArray(f.files)) {
       // Trimmed, not just filtered: hasLocatableShape only checks non-empty,
       // but every downstream consumer (diff commentable-line lookup, posted
@@ -360,7 +376,7 @@ export async function checkProvenanceAngleCoverage(provenance, gate, { repoRoot 
  * plan. The plan is never used to construct provenance: it only proves that
  * the already-validated fresh rows describe exactly the units actually emitted.
  */
-export async function verifyEmitPlanProvenance(planPath, provenance, round, { repoRoot = process.cwd() } = {}) {
+export async function verifyEmitPlanProvenance(planPath, provenance, round, { repoRoot = process.cwd(), findings } = {}) {
   let plan;
   const fullPath = path.resolve(repoRoot, planPath);
   try {
@@ -373,8 +389,24 @@ export async function verifyEmitPlanProvenance(planPath, provenance, round, { re
   if (plan?.repo !== round.repo || planPr !== round.pr || normalizeGate(plan?.gate) !== round.gate || planHeadSha !== round.headSha) {
     throw parseError(`--emit-plan "${planPath}" is stamped for ${JSON.stringify({ repo: plan?.repo, pr: plan?.pr, gate: plan?.gate, headSha: plan?.headSha })} but this findings log writes ${JSON.stringify(round)} — a stale or foreign emit plan must not be consumed`);
   }
-  if (plan.ok !== true || !Array.isArray(plan.units) || plan.units.length === 0 || plan.count !== plan.units.length) {
-    throw parseError(`cannot verify emit-plan provenance: --emit-plan "${planPath}" must carry a non-empty units array whose length equals count`);
+  const allCarried = plan.pending === true && provenance.perAngle.length > 0
+    && provenance.perAngle.every((entry) => entry.carriedFromHead !== undefined);
+  if (plan.ok !== true || !Array.isArray(plan.units) || (plan.units.length === 0 && !allCarried) || plan.count !== plan.units.length) {
+    throw parseError(`cannot verify emit-plan provenance: --emit-plan "${planPath}" must carry a non-empty units array whose length equals count, or a pending zero-unit plan backed entirely by carried provenance`);
+  }
+  if (plan.units.length === 0) {
+    verifyZeroUnitCarryProvenance(plan.carried, provenance.perAngle);
+    const remaining = Array.isArray(findings) ? [...findings] : [];
+    for (const entry of plan.carried) {
+      for (const prior of entry.findings ?? []) {
+        const index = remaining.findIndex((finding) => finding.angle === entry.angle
+          && ["severity", "summary", "line", "recommendation"].every((key) => finding[key] === prior[key])
+          && isDeepStrictEqual(finding.files, prior.files ?? (prior.file ? [prior.file] : undefined)));
+        if (index < 0) throw parseError(`zero-unit carry proof requires preserved findings for ${entry.angle}`);
+        remaining.splice(index, 1);
+      }
+    }
+    if (remaining.length > 0) throw parseError("zero-unit carry proof rejects unproven findings, including duplicates of preserved findings");
   }
 
   const expected = new Map();
@@ -387,8 +419,15 @@ export async function verifyEmitPlanProvenance(planPath, provenance, round, { re
     if (group !== undefined && (typeof group !== "string" || group.trim().length === 0)) {
       throw parseError(`cannot verify emit-plan provenance: --emit-plan units[${unitIndex}].group must be null or a non-empty string`);
     }
-    if ((unit.angles.length === 1) !== (group === undefined)) {
-      throw parseError(`cannot verify emit-plan provenance: --emit-plan units[${unitIndex}].group must be null for a singleton and non-empty for a multi-angle unit`);
+    // ADR0072: a one-angle split tail retains the original resolved group's name.
+    if (unit.angles.length > 1 && group === undefined) {
+      throw parseError(`cannot verify emit-plan provenance: --emit-plan units[${unitIndex}].group must be non-empty for a multi-angle unit`);
+    }
+    if (unit.angles.length === 1 && group !== undefined) {
+      const previous = plan.units[unitIndex - 1];
+      if (previous?.angles.length !== REVIEWER_UNIT_MAX_ANGLES || previous.group?.trim() !== group.trim()) {
+        throw parseError(`cannot verify emit-plan provenance: --emit-plan units[${unitIndex}] is a grouped singleton without a preceding same-group full-cap split sibling`);
+      }
     }
     for (const rawAngle of unit.angles) {
       if (typeof rawAngle !== "string" || rawAngle.trim().length === 0) {
@@ -467,7 +506,9 @@ export function parseWriteGateFindingsLogCliArgs(argv) {
     findingsFile: undefined,
     fullLabel: false,
     executionMode: undefined,
-    tmpRoot: "tmp",
+    // Left undefined so writeGateFindingsLog's fallback anchors the ledger at
+    // the MAIN worktree tmp. An explicit --tmp-root still overrides.
+    tmpRoot: undefined,
     specAuthority: undefined,
   };
   for (const token of tokens) {
@@ -695,8 +736,8 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // one) — omitting it here is exactly the omitting-conductor bug this guard
   // closes, since it would otherwise silently diverge from the posted
   // verdict comment's own provenance. inline_single_agent stays exempt (it
-  // legitimately carries no provenance, byte-identical to before), and a
-  // gate with no mandatory angles configured has no coverage obligation to
+  // legitimately carries no provenance; the ledger still records executionMode),
+  // and a gate with no mandatory angles configured has no coverage obligation to
   // prove either way.
   const executionMode = options.executionMode ?? DEFAULT_EXECUTION_MODE;
   if (executionMode === "fanout_fanin" && provenance === undefined) {
@@ -715,7 +756,7 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
       pr: options.pr,
       gate: options.gate,
       headSha: options.headSha,
-    }, { repoRoot });
+    }, { repoRoot, findings: rawFindings });
   }
   // Angle-coverage enforcement (fail-closed on missing mandatory angles / foreign
   // angles) only applies when provenance is actually recorded — provenance
@@ -723,12 +764,17 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   const angleCoverage = provenance !== undefined
     ? await checkProvenanceAngleCoverage(provenance, options.gate, { repoRoot })
     : { warning: null };
+  // Default the ledger tmp root to the MAIN worktree: a coordinator
+  // runs the gate inside an ephemeral linked worktree, but the orchestrator's
+  // merge reads this ledger from the main checkout. Anchoring at the primary
+  // worktree lands it in the ONE stable per-repo location both reach, and it
+  // survives linked-worktree pruning. An explicit --tmp-root still wins.
   const logPath = buildLogPath({
     repo: options.repo,
     pr: options.pr,
     gate: options.gate,
     headSha: options.headSha,
-    tmpRoot: options.tmpRoot || "tmp",
+    tmpRoot: options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot),
   });
   const fullPath = path.resolve(repoRoot, logPath);
   const log = {
@@ -738,6 +784,15 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     headSha: options.headSha,
     verdict: persistedVerdict,
     loggedAt: new Date().toISOString(),
+    // Record the round's real execution mode: a fanout_fanin verdict
+    // must never persist a null/absent executionMode. No merge-time reader
+    // consumes this field today (detect-checkpoint-evidence reads executionMode
+    // from the posted verdict COMMENT marker, not the ledger; the stateless
+    // reconciliation path likewise reads the comment, never this machine-local
+    // ledger); it is recorded for provenance/audit completeness only.
+    // Defaults to inline_single_agent (DEFAULT_EXECUTION_MODE) exactly like the
+    // write-time provenance guard above, so the two can never disagree.
+    executionMode,
     findings,
   };
   // `overallVerdict` is optional and additive (absent on a bare-array input);

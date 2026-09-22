@@ -133,6 +133,26 @@ gates:
         mandatory: true
         persona: review
         prompt: 'Review the PR description for completeness, contract fitness, and checkbox formatting before this PR is marked ready for review. The PR body is the implementation contract — it must have: - A Summary section explaining what changed and why - A Scope and context section defining the boundary of the change - An Acceptance criteria section with the linked issue acceptance criteria - A Definition of done section - A Non-goals section - A Validation command section describing exactly how to verify the change - The "Closes #N" line must match the linked issue; flag changes that alter or remove the operator-intended close target Checkboxes (`- [ ]` / `- [x]`, or `* [ ]` / `* [x]`) must appear inside genuine Markdown list items. Flag any checkbox marker used outside a list item (including table cells) as a medium finding. Flag any checkbox marker wrapped in backticks (e.g. `` `[x]` ``) as a medium finding. Flag PRs where the body is a single sentence or lacks any of these sections. Do not block on formatting preferences other than checkbox correctness.'
+      - name: holistic
+        mandatory: true
+        persona: review
+        prompt: >-
+          Review the WHOLE change holistically, on its merits, as a senior
+          engineer doing a final read of the entire diff. You are independent and
+          un-briefed: you receive only the spec (acceptance criteria, definition
+          of done, non-goals) and the diff — no author or developer brief and no
+          steering from the reviewed party. Your mandate is broad, not a single
+          named lens. Read the whole change end to end and judge whether, taken
+          together, it correctly and completely does what the spec asks, is
+          internally coherent, and is safe to ship. Concentrate on CROSS-CUTTING
+          problems that no narrow angle owns: mismatches between parts of the
+          change, gaps between the diff and the acceptance criteria, unintended
+          interactions across modules, missing pieces the spec implies, and
+          defects that would otherwise surface later in Copilot review or a
+          consumer repo. Cite concrete file:line evidence for each finding and
+          give a minimal fix. Respect declared non-goals — do not manufacture
+          scope. If the change is coherent and complete against the spec, return
+          clean.
     # #1442 (ADR 0041 prose half): required fail-closed deslop angle for prose
     # deliverables. Runs the A/B-contrast-removal deslop step (ab-contrast-
     # deslop-step.md) — flag surviving binary-contrast constructions so the gate
@@ -221,6 +241,14 @@ gates:
         angles: [srp, soc, ocp, lsp, isp, dip]
       - name: finalization
         angles: [correctness-final, ui-validation]
+      # The holistic reviewer reads the whole diff, so it gets its own
+      # reviewer rather than being auto-chunked with unrelated leftover
+      # angles — one reviewer reviews the whole change holistically.
+      # A consumer repo that overrides gates.fanout.groups replaces this
+      # table wholesale (shallow merge) and must restate this singleton to
+      # keep holistic un-batched.
+      - name: holistic
+        angles: [holistic]
   preApproval:
     angles:
       - name: dry
@@ -294,6 +322,26 @@ gates:
           require a matrix on the PR — the matrix lives on the issue; the PR carries the derived
           checklists. The boundary is explicit: the deterministic block enforces completeness (nothing
           left unchecked/forgotten); you verify each [x] is real and faithfully derived.
+      - name: holistic
+        mandatory: true
+        persona: review
+        prompt: >-
+          Review the WHOLE change holistically, on its merits, as a senior
+          engineer doing a final read of the entire diff. You are independent and
+          un-briefed: you receive only the spec (acceptance criteria, definition
+          of done, non-goals) and the diff — no author or developer brief and no
+          steering from the reviewed party. Your mandate is broad, not a single
+          named lens. Read the whole change end to end and judge whether, taken
+          together, it correctly and completely does what the spec asks, is
+          internally coherent, and is safe to ship. Concentrate on CROSS-CUTTING
+          problems that no narrow angle owns: mismatches between parts of the
+          change, gaps between the diff and the acceptance criteria, unintended
+          interactions across modules, missing pieces the spec implies, and
+          defects that would otherwise surface later in Copilot review or a
+          consumer repo. Cite concrete file:line evidence for each finding and
+          give a minimal fix. Respect declared non-goals — do not manufacture
+          scope. If the change is coherent and complete against the spec, return
+          clean.
       - contradiction-lens
       - correctness-final
       - ui-validation

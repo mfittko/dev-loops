@@ -124,7 +124,7 @@ Success output shape:
 - `{ "ok": true, "status": "requested"|"already-requested"|"unavailable"|"suppressed_same_head_clean"|"blocked_by_copilot_comment"|"round_cap_reached"|"no_changes_since_last_review"|"suppressed_post_convergence_docs_only"|"suppressed_draft", "repo": "owner/name", "pr": 17, "reviewer": "Copilot", ... }`
 - `unavailable` also includes a `detail` string with the normalized GitHub/CLI limitation
 - `round_cap_reached` includes `completedRounds` and `maxRounds` fields
-- `suppressed_post_convergence_docs_only`, like `round_cap_reached`, carries `completedRounds` and `maxRounds` and is a suppressed (non-request) outcome: at the round cap, the post-convergence head bump is a provable pure doc/prose delta since the last Copilot-reviewed head, so no fresh blocking round is forced
+- `suppressed_post_convergence_docs_only` is a suppressed (non-request) outcome returned at the round cap AND, since #2316, below it, whenever the delta since the last Copilot-reviewed head is a provable pure doc/prose bump OR an integrate-only base-move (base-relative reduction empties the delta), so no fresh blocking round is forced. The round-cap return, like `round_cap_reached`, carries `completedRounds` and `maxRounds`; the below-cap return omits both fields
 - `no_changes_since_last_review` is returned by `--force-rerequest-review` when the PR head SHA has not changed since the last Copilot review
 
 Failure behavior:
@@ -759,8 +759,8 @@ Required:
 Optional:
 - `--skip-fanout-ledger-check` — skips only the fan-out findings-log
   ledger/provenance/angle-coverage layer of `gates.requireFanoutEvidence`
-  enforcement (that ledger is a gitignored, worktree-local `tmp/` file, invisible
-  to a stateless remote verifier); the comment-derived executionMode/inlineReason
+  enforcement (that ledger is a gitignored, machine-local `tmp/` file under the
+  main worktree, invisible to a stateless remote verifier); the comment-derived executionMode/inlineReason
   check (including the light-mode inline exception) still applies. Used by the
   `gate-evidence` CI check (`.github/workflows/gate-evidence.yml`); client-side
   callers should omit it.
@@ -944,18 +944,18 @@ Failure behavior:
 Owned read-only local/operator inspection dashboard layered on `inspect-run`.
 `inspect-run` remains authoritative for inspection/status state; the viewer owns local inbox discovery and read-only presentation/prioritization.
 
-Primary local lifecycle UX now lives in the Pi extension under:
-- `/dev-loops inspect open [--repo <owner/name>]`
-- `/dev-loops inspect resume [--repo <owner/name>]`
-- `/dev-loops inspect status [--repo <owner/name>]`
-- `/dev-loops inspect stop [--repo <owner/name>]`
-- `/dev-loops inspect restart [--repo <owner/name>]`
+Local lifecycle UX is driven from two operator surfaces that share one executor and one managed-instance record — the Pi extension's `/dev-loops inspect <action>` and the shell CLI's `dev-loops inspect <action>`:
+- `open [--repo <owner/name>]`
+- `resume [--repo <owner/name>]`
+- `status [--repo <owner/name>]`
+- `stop [--repo <owner/name>]`
+- `restart [--repo <owner/name>]`
 
 The extension-managed seam stores one narrow repo-local managed-instance record at:
 - `.pi/ui-servers/inspect-run-viewer.json`
 
 Ownership split for this slice:
-- extension owns lifecycle UX, URL discovery, liveness checks, reattach logic, stop/restart, and best-effort browser opening
+- the shared lifecycle executor owns URL discovery, liveness checks, reattach logic, stop/restart, and best-effort browser opening; the extension and the shell CLI are two renderings of that one executor over the same managed-instance record
 - when a repo-scoped command reuses an inbox-first managed viewer, the surfaced URL may include `?scope=<owner/name>` to pre-scope the inbox without replacing the managed instance
 - viewer script still owns HTTP server behavior, rendering, inbox/query behavior, and snapshot loading
 
@@ -978,15 +978,18 @@ Contract:
 - GitHub-first launch boundary: repo scope is optional and PR selection happens through the viewer URL/query state, not a CLI `--pr` flag
 - uses one adapter module (`scripts/loop/_inspect-run-viewer-adapter.mjs`) to load the normalized inspection snapshot
 - adapter is the only viewer integration seam that calls the existing `inspect-run` contract in this source-loaded workspace
-- serves two explicit read-only endpoints:
-  - `/` → operator-facing HTML with an assigned-PR inbox shell and, when a PR is selected via URL or sidebar, the Mermaid-first graph plus current-PR-state banner and supporting textual summary/evidence
+- serves an explicit read-only route set:
+  - `/` → operator-facing HTML with an assigned-PR inbox shell and, when a PR is selected via URL or sidebar, the Mermaid-first graph plus current-PR-state banner and supporting textual summary/evidence. The page render skips the loop-iteration fan-out; the client fills the round-metrics grid from `/round-metrics.html` after first paint
   - `/snapshot.json` → the full authoritative inspection snapshot JSON for the currently selected PR/query target
+  - `/healthz` → `200 ok` as `text/plain; charset=utf-8`, answered from memory with no `gh` call; the managed launcher polls this instead of rendering the dashboard to prove the port is up
+  - `/handoff-envelope.json` → the agent handoff envelope as JSON for the selected target
+  - `/round-metrics.html` and `/handoff-envelope.html` → `text/html; charset=utf-8` deferred fragments for the selected target, resolved from that route's own `?repo=&pr=` rather than from inbox order. Each answers `400` with an HTML placeholder when the request names no target, and `500` with an HTML error card when resolution throws
 - HTML includes a visible link to `/snapshot.json` so machine-readable state no longer depends on an inline full-snapshot dump in the page itself
 - `/snapshot.json` returns `application/json; charset=utf-8` on success and deterministic JSON error output with non-2xx status when snapshot loading throws or yields no snapshot
 - unsupported paths return deterministic `404` without loading a snapshot (even for unsupported methods on unknown paths); `/favicon.ico` returns deterministic `204`; unsupported methods on supported routes return `405 Allow: GET`
 - both primary endpoints send `Cache-Control: no-store` to match the manual-reload workflow
 - the script-local `--restart` flag remains a manual/debug fallback only; the extension-managed path must not depend on killing unknown listeners
-- manual reload only (`window.location.reload()`); no polling/watch/timeout/control semantics
+- reload is operator-driven: the 🔄 Reload control navigates to `?refresh=1` via `window.location.assign`, which forces a live re-fetch of the selected PR's snapshot on the page render only (the deferred fragments keep their own cache windows) and is stripped from the address bar afterwards; the auto-reload period is an explicit operator selection with a 60s floor. No watch/timeout/control semantics
 
 Local manual verification path:
 1. Preferred extension-managed path:

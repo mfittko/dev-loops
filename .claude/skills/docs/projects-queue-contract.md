@@ -129,6 +129,8 @@ Status options.
 <!-- rule: QUEUE-COLUMN-NO-REMOVE -->
 Operators **MUST NOT remove or rename** the four conventional columns — tooling fails closed
 when expected columns are missing.
+This protects canonical names. The authorized `--repair-rename` path below restores
+recognized equivalents to those names; it does not rename a canonical column away.
 
 ## Queue ordering
 
@@ -241,7 +243,7 @@ Auto-repair covers:
 - Status field with entirely non-standard columns (e.g. `Todo`/`Doing`/`Done`)
 - Status field with a mix of standard and non-standard columns
 
-Auto-repair does NOT remove or rename existing columns. Column removal/reordering remains
+Default auto-repair does NOT remove or rename existing columns; `--repair-rename` is the explicit restoration path below. Column removal/reordering remains
 a manual operation via the GitHub Projects UI.
 
 
@@ -484,11 +486,7 @@ One-time manual setup for the GitHub Projects V2 board that `dev-loops queue` he
 
 ### Why a Projects V2 board?
 
-The board provides durable, visible, shared state for queue ordering and item status — complementing the local queue persistence in `.pi/dev-loop-queue.json`. Board state is:
-
-- **Durable** — survives CI restarts, local machine wipes, and session boundaries
-- **Visible** — operators can inspect and reorder the queue from the GitHub UI
-- **Authoritative for membership + ordering when configured** — when a board is configured (`tracker.board`; `number` or `title`), `dev-loops queue run` reconciles the board's `Next Up` items into `.pi/dev-loop-queue.json` before running, so the board (not hand edits) drives **which** issues are worked and their order. Without a configured board, `dev-loops queue` falls back to the local queue file's entry order.
+The board shares queue ordering and item status across sessions and operators. When configured (`tracker.board`; `number` or `title`), it is **authoritative for membership + ordering**: `dev-loops queue run` reconciles its `Next Up` items into `.pi/dev-loop-queue.json` before running. Without a configured board, the local queue file's entry order applies.
 
 > Add work to the queue via the board (`dev-loops queue add ... --column "Next Up"`), not by hand-editing `.pi/dev-loop-queue.json`. With a populated board and an empty local queue, the runner reconciles the board's `Next Up` items in rather than reporting an empty queue. If a board is configured but `Next Up` is empty, the runner reports the canonical "queue empty — prioritize Backlog items into Next Up" (`reason: "next-up-empty"`) — distinct from the unconfigured-and-empty "Queue is empty".
 
@@ -747,7 +745,7 @@ never touched.
 
 #### Repairing drifted Status columns
 
-Real boards drift over time. An operator may rename `Next Up` to `Ready`, or `In Progress` to `Doing`. The bootstrap wrapper can detect these semantically equivalent columns and, with explicit authorization, reconcile them back to the standard names.
+Existing boards may have drifted names such as `Ready` or `Doing`. This is not permission to rename canonical columns: the bootstrap wrapper can detect those equivalents and, with explicit authorization, restore the standard names.
 
 Report drift without mutating (safe default):
 
@@ -783,9 +781,7 @@ command resolve it without `--project`.
 Practical operator's guide for using GitHub Projects V2 as an optional scheduling view for
 `dev-loop` queue work day to day. See [Setup](#setup) above for one-time board bootstrap.
 
-Board state is a human-readable scheduling hint layered on top of local queue persistence —
-see [Why a Projects V2 board?](#why-a-projects-v2-board) above for the durability/visibility/
-authority rationale. When a board **is** configured, `Next Up` is the authoritative,
+When a board **is** configured, `Next Up` is the authoritative,
 fail-closed pickup source per [Queue pickup ordering](#queue-pickup-ordering). When **no**
 board is configured, the queue falls back to its local entry order
 (`.pi/dev-loop-queue.json`).

@@ -9,6 +9,7 @@ import {
   USER_FACING_AGENT_SURFACE,
 } from "../imported-assets-helpers.mjs";
 import { assertRuleOwned } from "./_rule-helpers.mjs";
+import { extractRelativeMarkdownLinks } from "../../scripts/docs/validate-links.mjs";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -166,7 +167,6 @@ test("review workflow resolves pre-approval gate angles from config with explici
   // prescribe it (per LOCAL-DEV-SELF-CHECK-NO-FANOUT); the fan-out sites are
   // the copilot-pr-followup / review surfaces below.
   const gateDocuments = [
-    ["skills/copilot-pr-followup/SKILL.md", copilotFollowupSkill, /default pre-approval gate/i],
     ["agents/review.agent.md", reviewAgent, /default pre-approval gate contract:[\s\S]{0,200}resolveGateAngles/i],
     ["skills/dev-loop/templates/review.md", reviewTemplate, /Default pre-approval gate/i],
     ["skills/docs/reviewer-loop-state-graph.md", reviewerGraph, /default pre-approval gate[\s\S]{0,200}resolveGateAngles/i],
@@ -187,7 +187,8 @@ test("review workflow resolves pre-approval gate angles from config with explici
   assert.match(reviewTemplate, /resolveGateAngles/i);
   assert.match(copilotFollowupSkill, /resolveGateAngles/i);
   assert.match(reviewTemplate, /configured angle checks/i);
-  assert.match(copilotFollowupSkill, /gate-review-sub-loop-contract\.md.*pre-approval/i);
+  assert.ok(extractRelativeMarkdownLinks(copilotFollowupSkill).some(({ rawTarget }) =>
+    rawTarget === "../docs/gate-review-sub-loop-contract.md"));
   assertRuleOwned("GATE-EXEC-BUILD-ONCE-SEED", "skills/docs/gate-review-sub-loop-contract.md");
   assertRuleOwned("GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK", "skills/docs/gate-review-sub-loop-contract.md");
   assert.match(copilotFollowupSkill, /GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK/);
@@ -313,16 +314,12 @@ test("standalone review route stays structurally decoupled from the single-contr
     readRepo("scripts/github/upsert-checkpoint-verdict.mjs"),
   ]);
 
-  // The public router recognizes review intent and short-circuits to the
-  // review skill BEFORE the startup resolver (and its ownership gate) ever
-  // runs — a foreign-owned PR never blocks the review route.
-  assert.match(devLoopSkill, /Review intent short-circuit/i);
-  assert.match(devLoopSkill, /never run `loop startup`\/`resolve-dev-loop-startup\.mjs` for this route/i);
-  assert.match(devLoopSkill, /ownership-exempt by construction/i);
-
-  // review's own doc states the exemption and why (read-only).
-  assert.match(reviewSkill, /Ownership-exempt \(issue #1850\)/i);
-  assert.match(reviewSkill, /never needs the single-contributor ownership gate/i);
+  // Check the actual route/owner links; the differential test above exercises
+  // the foreign-owned review versus write/merge behavior.
+  assert.ok(extractRelativeMarkdownLinks(devLoopSkill).some(({ rawTarget }) =>
+    rawTarget === "../review/SKILL.md"));
+  assert.ok(extractRelativeMarkdownLinks(reviewSkill).some(({ rawTarget }) =>
+    rawTarget === "../docs/public-dev-loop-contract.md#single-contributor-ownership-gate-resolve-dev-loop-startup"));
 
   // The authoritative ownership-gate contract documents review's exemption
   // (distinct mechanism from the ui_review/wait_watch STRATEGY_OWNERSHIP_GATE

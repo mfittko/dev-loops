@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 
-import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig, resolveGateTier } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveGateAngleContract, resolveGateConfig, resolveGateTier, resolveRoleModel } from "@dev-loops/core/config";
 
 // ---------------------------------------------------------------------------
 // gates.<gate>.tiers (GATE-EXEC-DIFF-CLASS-TIER) is a plain string array of
@@ -34,6 +34,26 @@ test("every configured tier angle is inside its gate's resolved angle pool", asy
       }
     }
   }
+});
+
+// Pre-PR review phase (issue #2305): the reviewer model is config-resolved and
+// harness-agnostic — never hardcoded. THIS repo opts the Claude-Code harness's
+// pre-PR-reviewer role into Fable and the Pi harness into the Codex child model.
+// Pins the real merged .devloops so the opt-in cannot silently drift.
+test("this repo's .devloops resolves the pre-PR-reviewer to Fable on Claude and the Codex child model on Pi (issue #2305)", async () => {
+  const { config, errors } = await loadDevLoopConfig({ repoRoot: process.cwd() });
+  assert.deepEqual(errors, [], `config load errors: ${JSON.stringify(errors)}`);
+
+  assert.equal(
+    resolveRoleModel(config, { role: "pre-PR-reviewer", harness: "claude" }),
+    "fable",
+    "Claude-Code harness pre-PR-reviewer must resolve to the Fable model token via .devloops",
+  );
+  assert.equal(
+    resolveRoleModel(config, { role: "pre-PR-reviewer", harness: "pi" }),
+    "openai-codex/gpt-5.6-sol",
+    "Pi harness pre-PR-reviewer must resolve to the configured Codex child model",
+  );
 });
 
 test("a synthetic matching diff resolves a non-empty tier angle set including the gate's mandatory angles", async () => {

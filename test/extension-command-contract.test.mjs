@@ -430,6 +430,7 @@ test('extension treats successful inspect-run stop as an info notification', asy
           url: null,
           detail: 'Stopped the managed inspect-run viewer.',
           warning: null,
+          record: null,
         };
       },
     },

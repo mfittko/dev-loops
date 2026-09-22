@@ -828,6 +828,7 @@ export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities }
           disposition: deriveDisposition(severity, { isBlocking, locatable: hasLocatableShape(f) }),
         };
         if (typeof f.file === "string" && f.file.trim().length > 0) entry.file = f.file.trim();
+        if (Array.isArray(f.files)) entry.files = f.files.filter((file) => typeof file === "string" && file.trim().length > 0).map((file) => file.trim());
         if (typeof f.line === "number" && Number.isFinite(f.line)) entry.line = f.line;
         if (typeof f.recommendation === "string" && f.recommendation.trim().length > 0) {
           entry.recommendation = f.recommendation.trim();
@@ -872,6 +873,38 @@ export function consolidateFanin({ angleResults, blockCleanOnFindingSeverities }
 export const JUDGE_DISPOSITIONS = Object.freeze(["act", "defer", "reject"]);
 
 /**
+ * The `scopeDrift.verdict` vocabulary — the single shared source. The validator
+ * below consumes it directly, and a divergence-guard test asserts the judge
+ * persona surface (`agents/judge.agent.md`) documents exactly this set, so the
+ * producer and enforcer cannot silently drift apart.
+ */
+export const SCOPE_DRIFT_VERDICTS = Object.freeze(["within_scope", "drift_detected"]);
+
+/**
+ * Aliases a persona-following judge reaches for, normalized to the canonical
+ * vocabulary before validation. `none` is the intuitive no-drift spelling; it
+ * maps to `within_scope` so a semantically-correct verdict passes with no
+ * resend or hand-edit, disposition and rationale byte-intact.
+ */
+export const SCOPE_DRIFT_VERDICT_ALIASES = Object.freeze({ none: "within_scope" });
+
+/**
+ * Normalize a `scopeDrift.verdict` alias to its canonical value. Canonical and
+ * unknown values pass through untouched; validation rejects unknowns.
+ * @param {unknown} verdict
+ * @returns {unknown}
+ */
+export function normalizeScopeDriftVerdict(verdict) {
+  // Only a primitive string spelling normalizes. `hasOwnProperty.call` coerces
+  // its key argument, so without this guard a boxed `new String("none")` or an
+  // object whose `toString()` returns `"none"` would alias to `within_scope` —
+  // a fail-open contradicting the validator's non-string-fails-closed contract.
+  return typeof verdict === "string" && Object.prototype.hasOwnProperty.call(SCOPE_DRIFT_VERDICT_ALIASES, verdict)
+    ? SCOPE_DRIFT_VERDICT_ALIASES[verdict]
+    : verdict;
+}
+
+/**
  * Validate a judge verdict artifact shape (the `judge` agent's only write).
  * Pure; throws on a malformed verdict rather than enriching findings with
  * garbage. The judge is the designated memory across rounds, so a malformed
@@ -901,8 +934,9 @@ export function validateJudgeVerdict(verdict) {
     throw new Error("judge verdict.scopeDrift must be an object");
   }
   const sd = /** @type {Record<string, unknown>} */ (v.scopeDrift);
-  if (sd.verdict !== "within_scope" && sd.verdict !== "drift_detected") {
-    throw new Error("judge verdict.scopeDrift.verdict must be 'within_scope' or 'drift_detected'");
+  const normalizedVerdict = normalizeScopeDriftVerdict(sd.verdict);
+  if (!SCOPE_DRIFT_VERDICTS.includes(/** @type {string} */ (normalizedVerdict))) {
+    throw new Error(`judge verdict.scopeDrift.verdict must be one of: ${SCOPE_DRIFT_VERDICTS.join(", ")}`);
   }
   if (typeof sd.rationale !== "string" || sd.rationale.trim().length === 0) {
     throw new Error("judge verdict.scopeDrift.rationale must be a non-empty string");
@@ -949,7 +983,7 @@ export function validateJudgeVerdict(verdict) {
       }
     }
   }
-  return { headSha: v.headSha, scopeDrift: v.scopeDrift, dispositions: v.dispositions };
+  return { headSha: v.headSha, scopeDrift: { ...sd, verdict: normalizedVerdict }, dispositions: v.dispositions };
 }
 
 /**

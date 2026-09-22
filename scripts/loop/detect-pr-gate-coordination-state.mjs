@@ -29,6 +29,7 @@ import { fetchGithubReviewThreadsPayload } from "../github/capture-review-thread
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.mjs";
 import { classifyDeltaSinceLastReview, getLastCopilotReviewHeadSha } from "../github/request-copilot-review.mjs";
+import { evaluateCopilotConvergence } from "@dev-loops/core/loop/merge-approval";
 import { readSuppressionMarker } from "./_post-convergence-review-suppression.mjs";
 import { resolveRepoRoot } from "./_repo-root-resolver.mjs";
 import { releaseAsyncRunnerOwnership } from "./_pr-runner-coordination.mjs";
@@ -874,6 +875,18 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     currentHeadSha,
   });
   const reviewSummary = summarizeCopilotReviews(prData?.reviews, { headSha: currentHeadSha, draftGateResetAtMs });
+  // The gate-ENTRY body-feedback block must consume the same evaluateCopilotConvergence
+  // eval the MERGE gate uses, not the raw current-head body finding.
+  // `hasBodyFindingOnCurrentHead` is true for BOTH 🟡 CHANGES_RECOMMENDED
+  // and 🔵 NEEDS_CLOSER_LOOK, but evaluateCopilotConvergence treats a thread-clean
+  // 🔵 as converged (ok:true). Block on the body ONLY when convergence fails
+  // (🟡 / unrecognized / unknown head) — fail closed. Unresolved THREADS still
+  // block independently via unresolvedThreadCount, so a 🔵/🟡 with an open thread
+  // still blocks (no regression).
+  const copilotBodyConvergence = evaluateCopilotConvergence({
+    currentHeadSha,
+    reviews: reviewSummary.effectiveCopilotReviews,
+  });
   const reviewRequestStatus = await resolveCopilotReviewRequestStatus(
     { repo: options.repo, pr: options.pr, reviewSummary, copilotRequested },
     runtime,
@@ -958,6 +971,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     gateEvidence,
     interpretation,
     disposition,
+    copilotBodyConvergence,
     refinementArtifact,
     refinementConfig: interpreterRefinementConfig,
     postConvergenceReviewSuppressed,
@@ -1035,6 +1049,11 @@ export function buildGateCoordinationEvaluatorInput({
     // than trusting a stale/compound lifecycleState label alone.
     unresolvedThreadCount: context.snapshot?.unresolvedThreadCount ?? null,
     sameHeadCleanConverged: context.interpretation.sameHeadCleanConverged,
+    copilotConvergenceOk: context.copilotBodyConvergence?.ok === true,
+    // Current-head Copilot review evidence, fed alongside sameHeadCleanConverged so
+    // the absent/never-driven entry guard keys on a round driven for THIS head
+    // (never a raw across-PR copilotReviewRoundCount, which counts prior-head rounds).
+    copilotReviewOnCurrentHead: context.snapshot?.copilotReviewOnCurrentHead === true,
     // Operator-authorized post-convergence suppression: see
     // resolvePostConvergenceReviewSuppressed above for how this is verified.
     postConvergenceReviewSuppressed: context.postConvergenceReviewSuppressed === true,
@@ -1249,7 +1268,7 @@ async function main() {
   }
   try {
     const result = await detectPrGateCoordinationState(options);
-    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
+    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, fields: options.fields });
   } catch (error) {
     process.stderr.write(`${formatCliError(error)}\n`);
     process.exitCode = 1;

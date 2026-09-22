@@ -117,6 +117,13 @@ export const ALWAYS_INCLUDE = new Set(["gate-evidence", "renderer-security", "pr
  * When `anglePool` is omitted, additive mode is off and `addedAngles` is
  * always empty.
  *
+ * A configured angle that is NOT in CATEGORY_ANGLE_MAP (a consumer-defined
+ * angle) can still be recommended BY change category or file kind when it
+ * declares `categories`/`kinds` via `angleDeclarations`. This is purely
+ * additive: it can only SELECT such an angle when the diff intersects its
+ * declaration; it never drops any angle the catalog map, ALWAYS_INCLUDE, or the
+ * fallback-to-all path would otherwise recommend.
+ *
  * @param {object} options
  * @param {string[]} options.configuredAngles — all angles configured for this gate
  * @param {string[]} options.changeCategories — from diff analysis
@@ -124,6 +131,11 @@ export const ALWAYS_INCLUDE = new Set(["gate-evidence", "renderer-security", "pr
  * @param {string[]} [options.anglePool] — catalog of angles eligible for additive
  *   selection (caller pre-filters this against excludeAngles); when undefined,
  *   additive selection is disabled
+ * @param {Record<string, {categories?: string[], kinds?: string[]}>} [options.angleDeclarations]
+ *   — per-angle category/file-kind bindings for consumer angles absent from
+ *   CATEGORY_ANGLE_MAP; a match recommends the angle deterministically
+ * @param {string[]} [options.fileKinds] — file kinds present in the diff
+ *   (classifyFile output), used to honor an angle's `kinds` declaration
  * @returns {DynamicAngleResult}
  */
 export function resolveDynamicAngles({
@@ -131,6 +143,8 @@ export function resolveDynamicAngles({
   changeCategories,
   ambiguous = false,
   anglePool,
+  angleDeclarations = {},
+  fileKinds = [],
 }) {
   // Fallback: ambiguous diff → all angles
   if (ambiguous) {
@@ -174,6 +188,27 @@ export function resolveDynamicAngles({
     recommended.add(angle);
     if (!triggers.has(angle)) {
       triggers.set(angle, "always-include");
+    }
+  }
+
+  // Consumer angles bound by declaration: a configured angle absent from
+  // CATEGORY_ANGLE_MAP can name the change-categories / file-kinds that select
+  // it. Recommend it when the diff intersects that declaration, so it need not
+  // be forced `mandatory` to survive dynamic pruning. Additive only: never
+  // removes an angle already recommended above.
+  const changeCatSet = new Set(changeCategories);
+  const fileKindSet = new Set(fileKinds);
+  for (const angle of configuredAngles) {
+    if (recommended.has(angle)) continue;
+    const decl = angleDeclarations[angle];
+    if (!decl) continue;
+    const catHit = (decl.categories ?? []).some((c) => changeCatSet.has(c));
+    const kindHit = (decl.kinds ?? []).some((k) => fileKindSet.has(k));
+    if (catHit || kindHit) {
+      recommended.add(angle);
+      if (!triggers.has(angle)) {
+        triggers.set(angle, catHit ? "declared-category" : "declared-kind");
+      }
     }
   }
 

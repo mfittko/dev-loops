@@ -7,11 +7,15 @@ import {
   resolveMergeApprovalDecision,
   resolveCiGreenFromRollup,
   evaluateMergePreconditions,
+  evaluateCopilotConvergence,
   MERGE_CLASS,
 } from "../src/loop/merge-approval.mjs";
 
 const HEAD = "3f8a1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c";
 const OLD = "0000000000000000000000000000000000000000";
+
+const COPILOT = "copilot-pull-request-reviewer";
+const copilotReview = ({ commit = HEAD, body, state = "COMMENTED", submittedAt = "2024-01-10T00:00:00Z" }) => ({ login: COPILOT, state, commit_id: commit, body, submitted_at: submittedAt });
 
 test("isValidGithubLogin rejects boolean, empty, free text; accepts real logins", () => {
   assert.equal(isValidGithubLogin("mfittko"), true);
@@ -281,4 +285,161 @@ test("evaluateMergePreconditions: escalated PR with a head-pinned APPROVED revie
   }));
   assert.equal(res.ok, true, JSON.stringify(res.failures));
   assert.equal(res.approvalVia, "approved_review");
+});
+
+// --- Copilot-convergence precondition (#2299) ---
+
+test("evaluateCopilotConvergence: current-head 🟡 Changes recommended blocks (actionable)", () => {
+  const res = evaluateCopilotConvergence({
+    currentHeadSha: HEAD,
+    reviews: [copilotReview({ body: "### 🟡 Changes recommended\n\nfix the off-by-one." })],
+  });
+  assert.equal(res.ok, false);
+  assert.equal(res.disposition, "changes_recommended");
+});
+
+test("evaluateCopilotConvergence: current-head commitId-shaped 🟡 blocks", () => {
+  const res = evaluateCopilotConvergence({
+    currentHeadSha: HEAD,
+    reviews: [{ login: COPILOT, commitId: HEAD, state: "COMMENTED", body: "### 🟡 Changes recommended" }],
+  });
+  assert.equal(res.ok, false);
+  assert.equal(res.disposition, "changes_recommended");
+});
+
+test("evaluateCopilotConvergence: current-head 🔵 Needs a closer look is conductor-overridable (passes)", () => {
+  const res = evaluateCopilotConvergence({
+    currentHeadSha: HEAD,
+    reviews: [copilotReview({ body: "### 🔵 Needs a closer look\n\ntake another look here." })],
+  });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.disposition, "needs_closer_look");
+});
+
+test("evaluateCopilotConvergence: current-head 🟢 Approval recommended passes", () => {
+  const res = evaluateCopilotConvergence({
+    currentHeadSha: HEAD,
+    reviews: [copilotReview({ body: "### 🟢 Approval recommended\n\nlooks good." })],
+  });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.disposition, "clean");
+});
+
+test("evaluateCopilotConvergence: a stale 🟡 non-approval at an EARLIER head does not block", () => {
+  const res = evaluateCopilotConvergence({
+    currentHeadSha: HEAD,
+    reviews: [copilotReview({ commit: OLD, body: "### 🟡 Changes recommended\n\nold finding." })],
+  });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.disposition, null);
+});
+
+test("evaluateCopilotConvergence: a later same-head 🟢 supersedes an earlier same-head 🟡", () => {
+  const res = evaluateCopilotConvergence({
+    currentHeadSha: HEAD,
+    reviews: [
+      copilotReview({ body: "### 🟡 Changes recommended\n\nearlier finding.", submittedAt: "2024-01-10T00:00:00Z" }),
+      copilotReview({ body: "### 🟢 Approval recommended\n\nnow clean.", submittedAt: "2024-01-10T01:00:00Z" }),
+    ],
+  });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.disposition, "clean");
+});
+
+test("evaluateCopilotConvergence: an equal-timestamp same-head tie folds toward the blocking 🟡 (fail-closed, order-independent)", () => {
+  const tie = "2024-01-10T00:00:00Z";
+  // Both array orders must block: selection must not depend on array order.
+  for (const reviews of [
+    [copilotReview({ body: "### 🟡 Changes recommended\n\nx", submittedAt: tie }), copilotReview({ body: "### 🟢 Approval recommended", submittedAt: tie })],
+    [copilotReview({ body: "### 🟢 Approval recommended", submittedAt: tie }), copilotReview({ body: "### 🟡 Changes recommended\n\nx", submittedAt: tie })],
+  ]) {
+    const res = evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews });
+    assert.equal(res.ok, false, JSON.stringify(res));
+    assert.equal(res.disposition, "changes_recommended");
+  }
+});
+
+test("evaluateCopilotConvergence: an invalid-timestamp 🟡 is not superseded by a valid-timestamp 🟢 (raw-string compare mirrors the loop; no fail-open)", () => {
+  // The loop's summarizeCopilotReviews compares the RAW submittedAt string, so an
+  // unparseable submittedAt is kept as-is, not coerced to null. Parsing here would
+  // make the malformed 🟡 drop out and let the valid 🟢 supersede — a fail-open.
+  // Both array orders must block, matching the loop.
+  for (const reviews of [
+    [copilotReview({ body: "### 🟡 Changes recommended\n\nx", submittedAt: "not-a-timestamp" }), copilotReview({ body: "### 🟢 Approval recommended", submittedAt: "2024-01-10T00:00:00Z" })],
+    [copilotReview({ body: "### 🟢 Approval recommended", submittedAt: "2024-01-10T00:00:00Z" }), copilotReview({ body: "### 🟡 Changes recommended\n\nx", submittedAt: "not-a-timestamp" })],
+  ]) {
+    const res = evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews });
+    assert.equal(res.ok, false, JSON.stringify(res));
+    assert.equal(res.disposition, "changes_recommended");
+  }
+});
+
+test("evaluateCopilotConvergence: a trailing PENDING draft never clears a submitted current-head 🟡", () => {
+  const res = evaluateCopilotConvergence({
+    currentHeadSha: HEAD,
+    reviews: [
+      copilotReview({ body: "### 🟡 Changes recommended\n\nx", submittedAt: "2024-01-10T00:00:00Z" }),
+      copilotReview({ body: "", state: "PENDING", submittedAt: null }),
+    ],
+  });
+  assert.equal(res.ok, false, JSON.stringify(res));
+  assert.equal(res.disposition, "changes_recommended");
+});
+
+test("evaluateCopilotConvergence: a present current-head headerless review classifies NONE and passes", () => {
+  const res = evaluateCopilotConvergence({
+    currentHeadSha: HEAD,
+    reviews: [copilotReview({ body: "" })],
+  });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.disposition, "none");
+});
+
+test("evaluateCopilotConvergence: an unrecognized current-head disposition fails closed", () => {
+  const res = evaluateCopilotConvergence({
+    currentHeadSha: HEAD,
+    reviews: [copilotReview({ body: "### 🟣 Deferred to a domain expert\n\nfuture header." })],
+  });
+  assert.equal(res.ok, false);
+  assert.equal(res.disposition, "unrecognized");
+});
+
+test("evaluateCopilotConvergence: an unknown head fails closed (cannot pin a disposition)", () => {
+  for (const currentHeadSha of [null, "", "   ", undefined]) {
+    const res = evaluateCopilotConvergence({ currentHeadSha, reviews: [copilotReview({ body: "### 🟢 Approval recommended" })] });
+    assert.equal(res.ok, false, `head=${JSON.stringify(currentHeadSha)} should fail closed`);
+  }
+});
+
+test("evaluateCopilotConvergence: no current-head Copilot review passes (not this precondition's concern)", () => {
+  assert.equal(evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews: [] }).ok, true);
+  // A human review is ignored entirely.
+  assert.equal(
+    evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews: [{ user: { login: "alice" }, state: "APPROVED", commit_id: HEAD }] }).ok,
+    true,
+  );
+});
+
+test("evaluateMergePreconditions: a current-head Copilot 🟡 refuses via the named copilot_convergence precondition", () => {
+  const res = evaluateMergePreconditions(greenFacts({
+    reviews: [copilotReview({ body: "### 🟡 Changes recommended\n\nfix this." })],
+  }));
+  assert.equal(res.ok, false);
+  assert.ok(res.failures.some((f) => f.precondition === "copilot_convergence"), JSON.stringify(res.failures));
+});
+
+test("evaluateMergePreconditions: a current-head Copilot 🔵 does not block (conductor-overridable)", () => {
+  const res = evaluateMergePreconditions(greenFacts({
+    reviews: [copilotReview({ body: "### 🔵 Needs a closer look\n\nhave a look." })],
+  }));
+  assert.equal(res.ok, true, JSON.stringify(res.failures));
+  // The disposition is recorded on the verdict so an overridden 🔵 merge is auditable.
+  assert.equal(res.copilotDisposition, "needs_closer_look");
+});
+
+test("evaluateMergePreconditions: a current-head Copilot 🟢 passes the copilot_convergence precondition", () => {
+  const res = evaluateMergePreconditions(greenFacts({
+    reviews: [copilotReview({ body: "### 🟢 Approval recommended\n\ngood." })],
+  }));
+  assert.equal(res.ok, true, JSON.stringify(res.failures));
 });

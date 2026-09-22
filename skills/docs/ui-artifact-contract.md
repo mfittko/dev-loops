@@ -1,6 +1,6 @@
 # UI screenshot/state artifact contract and auto-scoped CI enforcement
 
-This document defines the bounded screenshot/state artifact contract introduced for issue #125 under umbrella issue #97.
+Canonical owner for the named-state screenshot and evidence bundle.
 
 ## Public entrypoint and scope boundary
 
@@ -42,19 +42,15 @@ These are screenshots or demo captures created for human discussion only.
 
 These are the reusable harness artifacts emitted for named UI states.
 
-For this level, a state artifact bundle is required:
-- `screenshot.png`
-- `state.json`
-- `snapshot.json`
-- `axe.json`
-- `console.json`
+For this level, all five files are required for the same named state:
 
-Why all five are required:
-- the screenshot shows what rendered
-- `state.json` explains which named state it is, which slice produced it, and the minimum metadata needed for review or follow-up automation
-- `snapshot.json` is the semantic accessibility tree captured for the same state — the structured counterpart to the pixels, so a reviewer (or later automation) can reason about roles/names, not just what a screenshot happens to show
-- `axe.json` is the computed accessibility facts (axe-core results) for the same state, so contrast and other computable a11y issues are asserted from a tool, not eyeballed from pixels
-- `console.json` is the console errors and failed network requests attributed to the same state, so a swallowed error (a 500 hidden behind a success toast, an uncaught page error) is a review input rather than something only a live re-run would surface
+| Artifact | Review evidence |
+|---|---|
+| `screenshot.png` | Rendered pixels |
+| `state.json` | Named state, producing slice and review metadata |
+| `snapshot.json` | Semantic accessibility tree: roles and names |
+| `axe.json` | Computed accessibility facts, including contrast |
+| `console.json` | Attributed console errors and failed network requests |
 
 These five artifacts are the evidence base for the four review **lenses** —
 `a11y` (grounded in `axe.json`), `layout-geometry` (`snapshot.json`), `visual`
@@ -149,8 +145,6 @@ The current reusable harness emits `state.json` with this minimum reviewer-facin
 - `metadata.fixture`
 - `metadata.route`
 - `metadata.reviewHint`
-
-This is intentionally minimal. The contract is not trying to describe every possible UI surface; it is only making the current reusable review inputs explicit.
 
 ## `snapshot.json` contract
 

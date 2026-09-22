@@ -69,7 +69,6 @@ const ORPHAN_ALLOWLIST = new Map([
   ["scripts/github/verify-fixer-disposition.mjs", "standalone — GATE-EXEC-FIXER-DISPOSITION-BOUNDARY enforcement CLI (issue #1988), agent-invoked after a fixer push, not code/CI wired"],
   ["scripts/github/reconcile-gate-evidence-status.mjs", "standalone — merge-readiness gate-evidence status reconcile (issue #1935), agent-invoked after the post-drive audit to re-fire a stuck required status"],
   ["scripts/github/manage-sub-issues.mjs", "standalone — agent/operator sub-issue tree command (documented in scripts/README)"],
-  ["scripts/github/resolve-angle-carry-forward.mjs", "standalone — gate angle carry-forward step, agent-invoked"],
   ["scripts/github/withdraw-copilot-review-request.mjs", "standalone — Copilot review withdrawal step, agent-invoked"],
   ["scripts/loop/check-retro-tooling.mjs", "standalone — retrospective-tooling check (whole script); its analyzeTranscript export is separately ratcheted as a predicate orphan"],
   ["scripts/loop/conductor-monitor.mjs", "standalone — agent/operator conductor monitor tool (documented in scripts/README)"],

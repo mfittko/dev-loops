@@ -170,7 +170,7 @@ function renderInboxPagination({ selectedTarget = null, scopeFilter = null, upda
   </nav>`;
 }
 
-export function renderInboxSidebar(items, selectedTarget, { scopeFilter = null, scopeOptions = [], updatedWithinDays = DEFAULT_INBOX_UPDATED_WITHIN_DAYS, state = DEFAULT_INBOX_PR_STATE, mode = DEFAULT_INBOX_MODE, page = DEFAULT_INBOX_PAGE, totalPages = 1 } = {}) {
+export function renderInboxSidebar(items, selectedTarget, { scopeFilter = null, scopeOptions = [], updatedWithinDays = DEFAULT_INBOX_UPDATED_WITHIN_DAYS, state = DEFAULT_INBOX_PR_STATE, mode = DEFAULT_INBOX_MODE, page = DEFAULT_INBOX_PAGE, totalPages = 1, errorMessage = null } = {}) {
   const selectedKey = renderTargetKey(selectedTarget);
   const uniqueScopeOptions = ["All repos", ...dedupeRepoSlugOptions(scopeOptions)].sort((left, right) => {
     if (left === "All repos") {
@@ -250,6 +250,9 @@ export function renderInboxSidebar(items, selectedTarget, { scopeFilter = null, 
         </li>`;
   }).join("")}
     </ul>
+    ${errorMessage === null
+      ? ""
+      : `<p class="assigned-pr-empty assigned-pr-error" data-inbox-error role="alert">⚠️ PR lookup failed: ${escapeHtml(errorMessage)}</p>`}
     <p class="assigned-pr-empty" data-inbox-empty data-empty-default="No assigned PRs are visible in this view." data-empty-search="No assigned PRs match this search." hidden>No assigned PRs are visible in this view.</p>
     ${renderInboxPagination({ selectedTarget, scopeFilter, updatedWithinDays, state, mode, page, totalPages })}
   </aside>`;
@@ -264,6 +267,9 @@ export function renderInboxShellScript() {
       const navSelects = Array.from(document.querySelectorAll("[data-nav-select]"));
       const items = Array.from(document.querySelectorAll("[data-inbox-item]"));
       const empty = document.querySelector("[data-inbox-empty]");
+      // A failed lookup renders its own line; "No assigned PRs are visible in
+      // this view." would contradict it with a claim the failure disproves.
+      const lookupFailed = document.querySelector("[data-inbox-error]") !== null;
       const updateFilter = () => {
         const query = (search?.value ?? "").trim().toLowerCase();
         let visibleCount = 0;
@@ -279,7 +285,7 @@ export function renderInboxShellScript() {
           const defaultMessage = empty.dataset.emptyDefault ?? "No assigned PRs are visible in this view.";
           const searchMessage = empty.dataset.emptySearch ?? "No assigned PRs match this search.";
           empty.textContent = query.length === 0 ? defaultMessage : searchMessage;
-          empty.hidden = visibleCount !== 0;
+          empty.hidden = visibleCount !== 0 || lookupFailed;
         }
       };
       toggle?.addEventListener("click", () => {

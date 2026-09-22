@@ -36,7 +36,10 @@ import {
   commandContainsCopilotRequestBypass,
   commandContainsCopilotSummonComment,
   commandContainsDetachedWaitTool,
+  commandIsSleepPollLoop,
+  commandIsFileMarkerPollLoop,
   commandContainsInlineInterpreter,
+  commandContainsCodeVerificationEntrypoint,
 } from "../src/loop/bash-command-classify.mjs";
 
 test("TARGET_REPO_SLUG is the dev-loops repo", () => {
@@ -542,10 +545,17 @@ test("commandContainsCopilotSummonComment detects bare /copilot summons in gh pr
 });
 
 test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () => {
+  // #1622: a detach mechanism (nohup/disown/tmux/screen) is denied UNCONDITIONALLY — no wait/probe
+  // FAMILY reference required. #2065 OPTION-C's coarse AND-condition had inadvertently narrowed
+  // this to "detach AND family reference"; restored to the pre-#2065 unconditional ban (regression
+  // guard, main/coordinator context — subagent context is covered separately below).
   assert.equal(commandContainsDetachedWaitTool("nohup node scripts/foo.mjs > /tmp/x.log 2>&1 &"), true);
   assert.equal(commandContainsDetachedWaitTool("disown"), true);
   assert.equal(commandContainsDetachedWaitTool("tmux new-session -d -s loop"), true);
   assert.equal(commandContainsDetachedWaitTool("screen -dmS loop"), true);
+  // paired with a wait/probe family reference, the same detach mechanisms still deny.
+  assert.equal(commandContainsDetachedWaitTool("nohup node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1"), true);
+  assert.equal(commandContainsDetachedWaitTool("tmux new-session -d -s loop 'node scripts/github/wait-pr-checks.mjs --pr 5'"), true);
   assert.equal(commandContainsDetachedWaitTool("while ! gh pr view 1 --json state --jq .state; do sleep 5; done"), true);
   assert.equal(commandContainsDetachedWaitTool("npm test"), false);
   assert.equal(commandContainsDetachedWaitTool("gh pr view 1"), false);
@@ -568,6 +578,241 @@ test("commandContainsDetachedWaitTool detects banned detach/poll wrappers", () =
   // loop-state must be a command-head CALL, not a substring of a grep/echo target
   assert.equal(commandContainsDetachedWaitTool("for i in $(seq 1 3); do sleep 1; grep loop-state x; done"), false);
   assert.equal(commandContainsDetachedWaitTool("while true; do sleep 1; loop-state status; done"), true);
+});
+
+// #2317: a bare FILE-MARKER poll loop (no gh/loop-state call — commandIsSleepPollLoop's territory)
+// is a separate orphan pattern under Claude Code: a `<tasks>/<id>.done` sentinel Claude Code never
+// writes, so the loop never exits and, once backgrounded, orphans with no async wake to reap it.
+test("commandIsFileMarkerPollLoop denies bare file-marker poll loops, verb-independent (#2317)", () => {
+  // DENY: two distinct loop verbs (verb-independence) plus [[ ]] and `test -f` forms.
+  const whileLoop = 'while [ ! -f "$TASKS/$AGENT.done" ]; do sleep 5; done';
+  const untilLoop = "until [ -e /tmp/agent.done ]; do sleep 10; done";
+  const forLoop = 'for i in $(seq 1 720); do [ -f done.marker ] && break; sleep 5; done';
+  const doubleBracket = "while [[ -f /tmp/x.done ]]; do sleep 5; done";
+  const testForm = "while test -f /tmp/x.done; do sleep 5; done";
+  for (const cmd of [whileLoop, untilLoop, forLoop, doubleBracket, testForm]) {
+    assert.equal(commandIsFileMarkerPollLoop(cmd), true, `commandIsFileMarkerPollLoop: ${cmd}`);
+    assert.equal(commandContainsDetachedWaitTool(cmd), true, `commandContainsDetachedWaitTool: ${cmd}`);
+  }
+
+  // ALLOW: quoted bodies/examples that merely MENTION the tokens are not a real loop construct.
+  const quotedBody = 'gh issue create --title x --body "while [ -f x.done ]; do sleep 5; done"';
+  const bodyFile = "gh issue create --body-file /tmp/issue-body.md";
+  const quotedExample = 'echo "poll: while [ -f done ]; do sleep 1; done"';
+  for (const cmd of [quotedBody, bodyFile, quotedExample]) {
+    assert.equal(commandIsFileMarkerPollLoop(cmd), false, `commandIsFileMarkerPollLoop: ${cmd}`);
+    assert.equal(commandContainsDetachedWaitTool(cmd), false, `commandContainsDetachedWaitTool: ${cmd}`);
+  }
+
+  // The existing false positive is also fixed: a quoted body containing while/sleep/done no longer
+  // matches commandIsSleepPollLoop (it blocked filing issue #2317 itself).
+  assert.equal(
+    commandIsSleepPollLoop('gh issue create --title x --body "spin: while gh ...; do sleep 5; done"'),
+    false,
+  );
+
+  // No-regression sanity: a gh-call poll loop with no file test stays owned by
+  // commandIsSleepPollLoop, not commandIsFileMarkerPollLoop.
+  assert.equal(commandIsFileMarkerPollLoop("until gh pr view 5; do sleep 5; done"), false);
+});
+
+// H1 (#2317 follow-up): the `-c` exemption in stripQuotedLiterals was too narrow — only a bare `-c`
+// preserved its quoted payload, so `bash -lc '…'`, `bash -ec '…'`, `bash -c -- '…'`, `bash --command
+// '…'`, and `eval '…'` all blanked their REAL shell payload, letting a genuine poll loop wrapped in
+// one of these forms slip through the ban undetected. Widened to any short-flag cluster ending in
+// `c`, an optional `--` terminator, `--command`, or `eval`.
+test("H1: stripQuotedLiterals no-regression — bash -lc/-ec/eval poll-loop payloads are still denied", () => {
+  const lcLoop = "bash -lc 'until gh pr view 5 --json state; do sleep 5; done'";
+  assert.equal(commandIsSleepPollLoop(lcLoop), true);
+  assert.equal(commandContainsDetachedWaitTool(lcLoop), true);
+
+  const evalLoop = "eval 'until gh pr view 5; do sleep 5; done'";
+  assert.equal(commandIsSleepPollLoop(evalLoop), true);
+  assert.equal(commandContainsDetachedWaitTool(evalLoop), true);
+
+  const fileMarkerLcLoop = "bash -lc 'while [ -f x.done ]; do sleep 5; done'";
+  assert.equal(commandIsFileMarkerPollLoop(fileMarkerLcLoop), true);
+  assert.equal(commandContainsDetachedWaitTool(fileMarkerLcLoop), true);
+
+  // --command (long flag) and -c -- (short flag + terminator) are separate alternatives in the
+  // exemption regex — untested until now, so a regression to either one would silently blank the
+  // real payload and let the loop slip the deny (fail OPEN).
+  const commandFlagLoop = "bash --command 'until gh pr view 5; do sleep 5; done'";
+  assert.equal(commandIsSleepPollLoop(commandFlagLoop), true);
+  assert.equal(commandContainsDetachedWaitTool(commandFlagLoop), true);
+
+  const cDashDashLoop = "bash -c -- 'until gh pr view 5; do sleep 5; done'";
+  assert.equal(commandIsSleepPollLoop(cDashDashLoop), true);
+  assert.equal(commandContainsDetachedWaitTool(cDashDashLoop), true);
+
+  const fileMarkerCDashDashLoop = "bash -c -- 'while [ -f x.done ]; do sleep 5; done'";
+  assert.equal(commandIsFileMarkerPollLoop(fileMarkerCDashDashLoop), true);
+  assert.equal(commandContainsDetachedWaitTool(fileMarkerCDashDashLoop), true);
+});
+
+// H2 (#2317 follow-up): the H1 widening still required the short-flag cluster to END in `c`
+// (`-[A-Za-z]*c`), but bash executes the quoted payload for ANY cluster CONTAINING `-c`, regardless
+// of position — `bash -cl '…'`, `bash -ci '…'`, `bash -cx '…'` all execute the payload too. Widened
+// to `-[A-Za-z]*c[A-Za-z]*` so `c` may appear anywhere in the cluster.
+test("H2: stripQuotedLiterals no-regression — -c-not-last short-flag clusters (-cl/-ci) still deny", () => {
+  const clLoop = "bash -cl 'until gh pr view 5; do sleep 5; done'";
+  assert.equal(commandIsSleepPollLoop(clLoop), true);
+  assert.equal(commandContainsDetachedWaitTool(clLoop), true);
+
+  const fileMarkerClLoop = "bash -cl 'while [ -f x.done ]; do sleep 5; done'";
+  assert.equal(commandIsFileMarkerPollLoop(fileMarkerClLoop), true);
+
+  const ciLoop = "bash -ci 'until gh pr view 5; do sleep 5; done'";
+  assert.equal(commandContainsDetachedWaitTool(ciLoop), true);
+});
+
+// H1 follow-up: commandIsFileMarkerPollLoop's operator class deliberately excludes string tests
+// (-z/-n) and the numeric/terminal test (-t) — none of those test a marker FILE. A while/sleep loop
+// keyed on one of those must NOT be flagged as a file-marker poll loop.
+test("H1: commandIsFileMarkerPollLoop excludes string (-z/-n) test operators", () => {
+  assert.equal(commandIsFileMarkerPollLoop('while [ -z "$x" ]; do sleep 5; done'), false);
+  assert.equal(commandIsFileMarkerPollLoop('while [ -n "$x" ]; do sleep 5; done'), false);
+});
+
+// M1 (#2317 follow-up): stripQuotedLiterals only matched a quoted literal WITHOUT the `s` (dotAll)
+// flag, so a newline inside a quoted `--body` broke the match and a normal MULTI-LINE issue body
+// still false-positive-denied (AC2 only held for single-line bodies).
+test("M1: a multi-line quoted --body is stripped and does not false-positive deny", () => {
+  const multiLineBody = `gh issue create --title t --body "Repro steps:\nwhile [ -f x.done ]; do sleep 5; done\nEnd of repro."`;
+  assert.equal(commandIsSleepPollLoop(multiLineBody), false);
+  assert.equal(commandIsFileMarkerPollLoop(multiLineBody), false);
+  assert.equal(commandContainsDetachedWaitTool(multiLineBody), false);
+});
+
+// M3 (#2317 follow-up): commandIsFileMarkerPollLoop's operator class was too narrow ([efsd] only),
+// missing common bash FILE-test operators like -e (default) and -r (readable) that a marker-poll
+// loop may plausibly use.
+test("M3: commandIsFileMarkerPollLoop denies additional bash FILE-test operators (-e, -r)", () => {
+  assert.equal(commandIsFileMarkerPollLoop("until [ -e /tmp/a.done ]; do sleep 5; done"), true);
+  assert.equal(commandIsFileMarkerPollLoop('while [ -r "$m.done" ]; do sleep 5; done'), true);
+});
+
+// M2 replacement (#2317 follow-up): the pre-existing `--body-file /path` ALLOW case proves nothing —
+// a bare path never carries loop tokens in the first place. A MEANINGFUL false-positive ALLOW must
+// have the poll-loop-shaped tokens live ONLY inside a quoted flag value (here --title), with a
+// separate --body-file pointing at a path.
+test("M2: gh issue create with poll-loop tokens only inside a quoted --title (not --body-file) allows", () => {
+  const cmd = 'gh issue create --title "poll: while [ -f x.done ]; do sleep 5; done" --body-file /tmp/b.md';
+  assert.equal(commandIsSleepPollLoop(cmd), false);
+  assert.equal(commandIsFileMarkerPollLoop(cmd), false);
+  assert.equal(commandContainsDetachedWaitTool(cmd), false);
+});
+
+// H3 (#2317 Copilot follow-up regression): stripQuotedLiterals blanked the CONTENTS of every quoted
+// literal, including a double-quoted command substitution ($(...)) or backtick. But $(...)/backtick
+// content executes regardless of the surrounding quotes — it is not inert data — so a natural poll
+// idiom like `while [ "$(gh pr view 5)" != MERGED ]; do sleep 5; done` lost its `gh` token and evaded
+// the pre-existing gh/loop-state ban. A quoted literal containing $(...) or a backtick is now
+// preserved (fail-closed direction) ahead of the -c/eval exemption check.
+test("H3: stripQuotedLiterals preserves a quoted command substitution/backtick — no regression on the gh/loop-state ban", () => {
+  const cmdSubstLoop = 'while [ "$(gh pr view 5)" != MERGED ]; do sleep 5; done';
+  assert.equal(commandIsSleepPollLoop(cmdSubstLoop), true);
+  assert.equal(commandContainsDetachedWaitTool(cmdSubstLoop), true);
+
+  const backtickLoop = 'until [ "' + "`gh pr view 5`" + '" = OPEN ]; do sleep 5; done';
+  assert.equal(commandIsSleepPollLoop(backtickLoop), true);
+
+  const loopStateCmdSubstLoop = 'while [ "$(loop-state status)" != done ]; do sleep 5; done';
+  assert.equal(commandIsSleepPollLoop(loopStateCmdSubstLoop), true);
+
+  // AC2 still holds: a quoted --body with NO command substitution is still blanked.
+  const quotedBodyNoSubst = 'gh issue create --title x --body "while [ -f x.done ]; do sleep 5; done"';
+  assert.equal(commandIsSleepPollLoop(quotedBodyNoSubst), false);
+  assert.equal(commandIsFileMarkerPollLoop(quotedBodyNoSubst), false);
+});
+
+test("commandContainsDetachedWaitTool detects bare-& backgrounded wait/probe scripts (#2065)", () => {
+  // Backgrounding a bounded probe/wait helper is the orphaned-shell form this rule prevents.
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --repo o/r --pr 5 --timeout-ms 300000 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/wait-pr-checks.mjs --pr 5 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("gh run watch 123 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("dev-loops loop watch-cycle --repo o/r --pr 5 &"), true);
+  // probe-ci-status.mjs (#2290 follow-up): sanctioned foreground CI-status wait
+  // (skills/dev-loop/SKILL.md's `ci-status`/`watch-ci` entry) — a backgrounded `&` invocation is
+  // an orphanable wait exactly like the other family members and must be denied.
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-ci-status.mjs --repo o/r --pr 5 &"), true);
+  // FOREGROUND probes (no background &) are allowed — the sanctioned form.
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --repo o/r --pr 5 --timeout-ms 300000"), false);
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/wait-pr-checks.mjs --pr 5"), false);
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-ci-status.mjs --repo o/r --pr 5 --timeout-ms 0"), false);
+  // `&&` (logical AND) after a probe is NOT backgrounding.
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5 && echo done"), false);
+  // redirections that use `&` (2>&1, &>) are not backgrounding by themselves.
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5 > /tmp/x.log 2>&1"), false);
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5 &> /tmp/x.log"), false);
+  // a bare `&` on a NON-wait command is not this rule's concern.
+  assert.equal(commandContainsDetachedWaitTool("node scripts/build.mjs &"), false);
+  // COARSE + FAIL-CLOSED (#2065 OPTION-C): the family match is a plain substring/family scan, not
+  // exec-position anchored — a backgrounded job that merely MENTIONS a family basename as an
+  // argument (grep/echo/a comment) is now ALSO denied. This is a deliberate, accepted tradeoff
+  // (benign false positive), not a regression: it is what makes the gate un-bypassable by a
+  // wrapper (see the wrapper cases below) and it just forces the sanctioned foreground path.
+  assert.equal(commandContainsDetachedWaitTool("grep probe-copilot-review.mjs docs &"), true);
+  assert.equal(commandContainsDetachedWaitTool('echo "see wait-pr-checks.mjs" &'), true);
+  assert.equal(commandContainsDetachedWaitTool("cat notes-about-probe-copilot-review.mjs.txt &"), true);
+  // the invocation forms (node/bun runner, direct script head, gh run watch, dev-loops) still deny
+  assert.equal(commandContainsDetachedWaitTool("bun scripts/github/probe-copilot-review.mjs --pr 5 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("./scripts/github/wait-pr-checks.mjs --pr 5 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("dev-loops gate probe-copilot --pr 5 &"), true);
+  // backgrounding a DIFFERENT job while a probe mentions/runs elsewhere in the same command string
+  // is ALSO denied under the coarse family scan (accepted tradeoff, see above).
+  assert.equal(commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5; echo done &"), true);
+  // an unrelated bare-& command with no family reference at all is unaffected.
+  assert.equal(commandContainsDetachedWaitTool("node scripts/other.mjs --pr 5; echo done &"), false);
+  // the Claude plugin launcher form of the CLI verbs
+  assert.equal(commandContainsDetachedWaitTool("dev-loops-run cli/index.mjs loop watch-cycle --repo o/r --pr 5 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("dev-loops-run cli/index.mjs gate probe-copilot --pr 5 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("dev-loops-run scripts/github/probe-copilot-review.mjs --pr 5 &"), true);
+  assert.equal(commandContainsDetachedWaitTool("dev-loops-run cli/index.mjs loop watch-cycle --repo o/r --pr 5"), false);
+  // a backgrounded PIPELINE denies too — the family reference appears anywhere in the string.
+  assert.equal(
+    commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5 --timeout-ms 0 | tee /tmp/x.log &"),
+    true,
+  );
+  assert.equal(commandContainsDetachedWaitTool("gh run watch 123 | tee /tmp/x.log &"), true);
+  // a piped foreground probe (no trailing `&`) is not backgrounded at all
+  assert.equal(
+    commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --pr 5 --timeout-ms 0 | tee /tmp/x.log"),
+    false,
+  );
+  // an unrelated piped pipeline backgrounded, with no family reference, is not denied
+  assert.equal(commandContainsDetachedWaitTool("cat foo.txt | tee /tmp/x.log &"), false);
+  // AC2: no wrapper can hide the family reference from the coarse scan — `timeout … &`, `nohup`,
+  // `sh -c '… &'`, and a value-taking node loader flag (-r/--require/--loader/--import) are all
+  // denied, because the family token still appears somewhere in the command text.
+  assert.equal(
+    commandContainsDetachedWaitTool("node scripts/github/probe-copilot-review.mjs --repo o/r --pr 5 &"),
+    true,
+  );
+  assert.equal(
+    commandContainsDetachedWaitTool("timeout 600 node scripts/github/probe-copilot-review.mjs --pr 5 &"),
+    true,
+  );
+  assert.equal(
+    commandContainsDetachedWaitTool("nohup node scripts/github/probe-copilot-review.mjs --pr 5 &"),
+    true,
+  );
+  assert.equal(
+    commandContainsDetachedWaitTool("sh -c 'node scripts/github/probe-copilot-review.mjs --pr 5 &'"),
+    true,
+  );
+  assert.equal(
+    commandContainsDetachedWaitTool("node --require ./loader.mjs scripts/github/probe-copilot-review.mjs --pr 5 &"),
+    true,
+  );
+  // AC3: a sleep-poll wait loop denies outright, ambiguous/wrapped or not (fails closed).
+  assert.equal(
+    commandContainsDetachedWaitTool("timeout 600 sh -c 'until gh pr view 5 --json state; do sleep 5; done'"),
+    true,
+  );
+  // a `timeout`-wrapped NON-wait command is unaffected (no family reference at all)
+  assert.equal(commandContainsDetachedWaitTool("timeout 600 npm test &"), false);
 });
 
 test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, and heredocs", () => {
@@ -598,6 +843,127 @@ test("commandContainsInlineInterpreter detects node -e/--eval/-p, python3 -c, an
   assert.equal(commandContainsInlineInterpreter('node --require ./setup.js -e "console.log(1)"'), true);
   assert.equal(commandContainsInlineInterpreter('node -r ./x.js --eval "1+1"'), true);
   assert.equal(commandContainsInlineInterpreter('node --import ./m.mjs -p "1+1"'), true);
+});
+
+test("commandContainsCodeVerificationEntrypoint detects known verify/test/build entrypoints and does not over-match compact orchestration commands (#2082)", () => {
+  // known verify/test/build entrypoints — must match
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun test"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun run build"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("vitest"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("vitest run --coverage"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("npm test"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("npm run test"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("npm run build"), true);
+  // yarn/pnpm equivalents (trivial to add, both with and without the `run` keyword)
+  assert.equal(commandContainsCodeVerificationEntrypoint("yarn test"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("yarn build"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("pnpm run test"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("pnpm build"), true);
+  // caught anywhere in a compound command, and behind an env-assignment/wrapper/path prefix
+  assert.equal(commandContainsCodeVerificationEntrypoint("git status --short && bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("CI=1 npm test"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("command bun run verify"), true);
+
+  // compact orchestration commands the coordinator may still run inline — must NOT match
+  assert.equal(commandContainsCodeVerificationEntrypoint("dev-loops queue list"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("gh pr checks 5 --json state --jq .state"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("node scripts/github/detect-checkpoint-evidence.mjs --repo x --pr 1"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("git log --oneline -1"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("git status --short"), false);
+  // a path that merely contains the word "test" must not match (over-match guard)
+  assert.equal(commandContainsCodeVerificationEntrypoint("cat test/foo.test.mjs"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("node scripts/test-runner.mjs"), false);
+});
+
+test("commandContainsCodeVerificationEntrypoint matches colon-namespaced sub-scripts, npx/bunx vitest, bun --bun run, and timeout/nice prefixes (#2082 pre-PR review)", () => {
+  // colon-namespaced package-manager sub-scripts (`test:*`/`verify:*`/`build:*`) — the coordinator's
+  // real daily commands, which the plain `(?:\s|$)` tail previously rejected.
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun run test:extension"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun run test:core"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun run test:all"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("npm run test:unit"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("yarn test:ci"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun run verify:docs"), true);
+
+  // vitest via a package-runner or bun's `x` subcommand
+  assert.equal(commandContainsCodeVerificationEntrypoint("bunx vitest"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("npx vitest run"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun x vitest"), true);
+
+  // a binary flag between the binary and the run/script token
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun --bun run verify"), true);
+
+  // prefix-tolerated wrapper commands
+  assert.equal(commandContainsCodeVerificationEntrypoint("timeout 600 bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("nice bun run verify"), true);
+  // widened nice/timeout forms: nice -n <N>, and timeout carrying a leading flag before the
+  // duration (-s <sig>, -k <dur>, --signal=, --kill-after=, --preserve-status, --foreground)
+  assert.equal(commandContainsCodeVerificationEntrypoint("nice -n 10 bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("timeout -k 30 600 bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("timeout -s TERM 600 bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("timeout --preserve-status 600 bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("timeout --kill-after=30 600 bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("timeout --foreground 600 vitest"), true);
+  // multiple leading timeout flags combine in any order
+  assert.equal(commandContainsCodeVerificationEntrypoint("timeout -k 30 -s TERM 600 bun run verify"), true);
+
+  // must still not match compact orchestration commands
+  assert.equal(commandContainsCodeVerificationEntrypoint("dev-loops queue list"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("gh pr checks --json state --jq .state"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("node scripts/github/detect-checkpoint-evidence.mjs --repo x --pr 1"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("git log --oneline -1"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("git status --short"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("node scripts/foo.mjs"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("cat test/foo.test.mjs"), false);
+  // hyphen-form script name (not a `:` sub-script) — deliberately left unmatched, not required
+  assert.equal(commandContainsCodeVerificationEntrypoint("npm run build-docs"), false);
+  // deliberately fail-open ceiling forms — pinned as explicit negatives, not just narration
+  assert.equal(commandContainsCodeVerificationEntrypoint("bun run vitest"), false);
+  assert.equal(commandContainsCodeVerificationEntrypoint("npm --prefix ./x run test"), false);
+});
+
+test("commandContainsCodeVerificationEntrypoint tolerates an `env` wrapper carrying trailing VAR=value assignments (Copilot review, #2082)", () => {
+  // the common everyday `env VAR=value ... cmd` CI-invocation shape — the `env` wrapper word
+  // followed by zero-or-more `NAME=value` assignments before the package-manager/vitest head.
+  assert.equal(commandContainsCodeVerificationEntrypoint("env CI=1 bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env FOO=bar npm test"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env CI=1 vitest"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env CI=1 FOO=bar bun run verify"), true);
+  // bare leading assignments (no `env` wrapper word) already matched — still does
+  assert.equal(commandContainsCodeVerificationEntrypoint("CI=1 bun run verify"), true);
+  // a quoted/echoed mention is not an invocation and must not match
+  assert.equal(commandContainsCodeVerificationEntrypoint('echo "env CI=1 bun run verify"'), false);
+});
+
+test("commandContainsCodeVerificationEntrypoint tolerates common `env` OPTION forms before the executable, not just VAR=value assignments (Copilot round-2 review, #2326)", () => {
+  // `env -u DEVLOOPS_COORDINATOR_READONLY bun run verify` was the reported bypass: the `env`
+  // branch only tolerated trailing NAME=value assignments, so a leading `env` OPTION reached the
+  // executable unclassified and the command fell through un-denied.
+  assert.equal(commandContainsCodeVerificationEntrypoint("env -u DEVLOOPS_COORDINATOR_READONLY bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env -i bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env -u FOO CI=1 npm test"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env --ignore-environment bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env --unset=FOO bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env -C /tmp bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env --chdir=/tmp bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint('env -S "CI=1" bun run verify'), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env -- bun run verify"), true);
+  assert.equal(commandContainsCodeVerificationEntrypoint("env - bun run verify"), true);
+  // a quoted/echoed mention is not an invocation and must not match
+  assert.equal(commandContainsCodeVerificationEntrypoint('echo "env -u FOO bun run verify"'), false);
+  // a bare env-option run with no trailing command is not an invocation
+  assert.equal(commandContainsCodeVerificationEntrypoint("env -u FOO"), false);
+});
+
+test("commandContainsGitStash and the gh classifiers do NOT gain the verify-wrapper nice/timeout tolerance (#2082)", () => {
+  // The widened nice/timeout wrapper tolerance is scoped to VERIFY_EXEC_PREFIX
+  // (commandContainsCodeVerificationEntrypoint only) and must not leak into the shared
+  // SHELL_EXEC_PREFIX classifiers used by git stash and the gh pr/issue/api matchers.
+  assert.equal(commandContainsGitStash("timeout 600 git stash"), false);
+  assert.equal(commandContainsGitStash("nice -n 10 git stash"), false);
+  assert.equal(commandContainsGhPrCreate("timeout 600 gh pr create --fill"), false);
+  assert.equal(commandContainsGhPrMerge("nice -n 10 gh pr merge 1"), false);
 });
 
 // ---------------------------------------------------------------------------

@@ -5,7 +5,54 @@ import {
   buildInspectionMermaidGraph,
   renderInspectRunViewerHtml,
 } from "../../scripts/loop/inspect-run-viewer.mjs";
+import { renderInboxShellScript } from "../../scripts/loop/inspect-run-viewer/inbox.mjs";
+import { renderCurrentStateBanner } from "../../scripts/loop/inspect-run-viewer/status.mjs";
 import { makeSnapshot } from "./inspect-run-viewer-test-helpers.mjs";
+test("renderInspectRunViewerHtml emits the round-metrics fragment URL as a JS string, not HTML-escaped", () => {
+  const html = renderInspectRunViewerHtml({
+    repo: "owner/repo",
+    target: { repo: "owner/repo", pr: 55 },
+    snapshot: makeSnapshot({
+      loopIterations: { available: false, source: "github_pr_timeline", reason: "deferred_by_caller" },
+    }),
+    inboxItems: [],
+  });
+
+  // Script content is raw text: an HTML-escaped `&` would ship literally and
+  // the server would see a junk `amp;pr` key with no `pr`.
+  assert.match(html, /fetch\("\/round-metrics\.html\?repo=owner%2Frepo&pr=55"/);
+  assert.doesNotMatch(html, /round-metrics\.html\?[^"]*&amp;/);
+  // The handoff link lives in an HTML attribute, where entities ARE decoded.
+  assert.match(html, /data-handoff-src="\/handoff-envelope\.html\?repo=owner%2Frepo&amp;pr=55"/);
+  // The two hooks the client script requires before it fetches anything: lose
+  // either and no fetch is issued, no error is shown, and the grid sits on
+  // "Loading round metrics…" forever with a green suite.
+  assert.match(html, /<div data-round-metrics-slot>/);
+  assert.match(
+    html,
+    /<div data-round-metrics-slot>[\s\S]*?data-round-metrics-status[\s\S]*?<\/div>/,
+    "the slot's own content must carry the status hook the client reads",
+  );
+  // Deferred must read as deferred in the Copilot layer too, never as missing
+  // evidence while the Overview grid shows real counts.
+  assert.match(html, /deferred to the Overview tab, which loads them after first paint/);
+});
+
+test("renderInspectRunViewerHtml offers the 3d default inbox window alongside the wider presets", () => {
+  const html = renderInspectRunViewerHtml({
+    repo: null,
+    target: null,
+    snapshot: null,
+    inboxItems: [],
+    inboxUpdatedWithinDays: 3,
+  });
+
+  assert.match(html, /selected\s*>3d<\/option>/);
+  for (const label of ["7d", "30d", "90d", "All"]) {
+    assert.match(html, new RegExp(`>${label}</option>`));
+  }
+});
+
 test("renderInspectRunViewerHtml keeps the empty inbox copy generic across state and paging filters", () => {
   const html = renderInspectRunViewerHtml({
     repo: null,
@@ -963,4 +1010,153 @@ test("renderInspectRunViewerHtml fail-closes the graph for unavailable snapshots
 
   assert.match(html, /Snapshot unavailable, so no state graph can be rendered yet/);
   assert.doesNotMatch(html, /class="mermaid-state-graph mermaid"/);
+});
+
+// The sidebar shell script is a string with no DOM behind it in this suite, so
+// it is executed against a minimal stub document instead of being pattern-matched.
+function runInboxShellScript({ hasError }) {
+  const empty = { dataset: {}, textContent: "", hidden: false };
+  const document = {
+    querySelector(selector) {
+      if (selector === "[data-inbox-empty]") {
+        return empty;
+      }
+      if (selector === "[data-inbox-error]") {
+        return hasError ? { tagName: "P" } : null;
+      }
+      return null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+  const source = renderInboxShellScript().replace(/^<script>/, "").replace(/<\/script>$/, "");
+  new Function("document", source)(document);
+  return empty;
+}
+
+test("renderInboxShellScript keeps the empty-inbox line hidden when the lookup failed", () => {
+  // A failed lookup already renders `⚠️ PR lookup failed: …`; claiming "No
+  // assigned PRs are visible in this view." underneath it is the exact message
+  // the failure line exists to replace.
+  assert.equal(runInboxShellScript({ hasError: true }).hidden, true);
+  assert.equal(runInboxShellScript({ hasError: false }).hidden, false);
+});
+
+// The deferred handoff panel's only trigger is this client script, so it is
+// executed against stub globals the same way the inbox shell script is above.
+function runHandoffLazyScript(fetchImpl) {
+  const status = { textContent: "" };
+  const container = {
+    dataset: { handoffSrc: "/handoff-envelope.html?repo=owner%2Frepo&pr=55" },
+    innerHTML: "",
+    querySelector: (selector) => (selector === "[data-handoff-status]" ? status : null),
+  };
+  const listeners = [];
+  const document = {
+    addEventListener(name, handler) { listeners.push({ name, handler }); },
+    querySelector: (selector) => (selector === "[data-handoff-lazy]" ? container : null),
+  };
+  const html = renderInspectRunViewerHtml({
+    repo: "owner/repo",
+    target: { repo: "owner/repo", pr: 55 },
+    snapshot: makeSnapshot(),
+    inboxItems: [],
+  });
+  const source = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+    .map((match) => match[1])
+    .find((body) => body.includes("loadHandoffPanel"));
+  new Function("document", "fetch", source)(document, fetchImpl);
+  return { container, status, listeners };
+}
+
+test("the deferred handoff panel fetches on its own tabchange only, and a failed fetch stays retryable", async () => {
+  const calls = [];
+  let respond = () => Promise.resolve({ ok: true, text: async () => "<p>envelope</p>" });
+  const run = runHandoffLazyScript((url) => {
+    calls.push(url);
+    return respond();
+  });
+
+  // The event name graph.mjs dispatches. Rename either half and the tab sits on
+  // "Loading the handoff envelope…" forever with a green suite.
+  assert.deepEqual(run.listeners.map((entry) => entry.name), ["inspect-run-viewer:tabchange"]);
+  const dispatch = async (detail) => {
+    run.listeners[0].handler({ detail });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+
+  // Every tab switch fires this event; only the handoff tab may spend a
+  // resolver spawn, which is the whole point of deferring the panel.
+  await dispatch({ tabName: "graph" });
+  await dispatch(undefined);
+  assert.deepEqual(calls, []);
+
+  respond = () => Promise.reject(new Error("boom"));
+  await dispatch({ tabName: "handoff" });
+  assert.deepEqual(calls, ["/handoff-envelope.html?repo=owner%2Frepo&pr=55"]);
+  assert.match(run.status.textContent, /Could not resolve the handoff envelope: boom\. Reopen the tab to retry\./);
+
+  // The failure resets the latch, so the shipped "Reopen the tab to retry." is
+  // true: without the reset one transient failure wedges the panel for the life
+  // of the page.
+  respond = () => Promise.resolve({ ok: true, text: async () => "<p>envelope</p>" });
+  await dispatch({ tabName: "handoff" });
+  assert.equal(calls.length, 2);
+  assert.equal(run.container.innerHTML, "<p>envelope</p>");
+
+  // A resolved panel stays latched: reopening the tab must not re-spawn.
+  await dispatch({ tabName: "handoff" });
+  assert.equal(calls.length, 2);
+});
+
+// The `?refresh=1` round trip has two client halves and no DOM in this suite, so
+// the banner script is executed against stub globals the same way the inbox
+// shell script is above.
+function runCurrentStateBannerScript(href) {
+  const replaceStateCalls = [];
+  const select = {
+    options: [{ value: "off" }, { value: "60000" }, { value: "300000" }, { value: "900000" }],
+    value: "off",
+    addEventListener() {},
+  };
+  const manualButton = { hidden: false, addEventListener() {} };
+  const document = {
+    querySelector(selector) {
+      if (selector === "[data-auto-reload-select]") return select;
+      if (selector === "[data-auto-reload-manual]") return manualButton;
+      return null;
+    },
+  };
+  const window = {
+    location: { href },
+    history: { replaceState(_state, _title, url) { replaceStateCalls.push(url); } },
+    localStorage: { getItem: () => null },
+    setInterval: () => 1,
+    clearInterval() {},
+    addEventListener() {},
+  };
+  const html = renderCurrentStateBanner(makeSnapshot(), { repo: "owner/repo", pr: 55 }, "Waiting");
+  const source = /<script>([\s\S]*)<\/script>/.exec(html)[1];
+  new Function("document", "window", source)(document, window);
+  return { html, replaceStateCalls };
+}
+
+test("the current-state banner strips ?refresh=1 from the address bar after the forced load", () => {
+  // Auto-reload ticks and plain F5 re-send the current URL verbatim, so a
+  // surviving `refresh=1` forces a live fan-out on every tick and permanently
+  // defeats the snapshot memo. CHANGELOG.md and scripts/README.md ship the strip
+  // as contract, and it sits inside a silent try/catch.
+  const stripped = runCurrentStateBannerScript("http://localhost:7331/?repo=owner%2Frepo&pr=55&refresh=1");
+  assert.equal(stripped.replaceStateCalls.length, 1);
+  assert.doesNotMatch(stripped.replaceStateCalls[0], /refresh/);
+  assert.match(stripped.replaceStateCalls[0], /pr=55/);
+
+  // A URL without the flag must not rewrite history at all.
+  const untouched = runCurrentStateBannerScript("http://localhost:7331/?repo=owner%2Frepo&pr=55");
+  assert.deepEqual(untouched.replaceStateCalls, []);
+
+  // The producing half: the Reload control is what puts the flag on the URL.
+  assert.match(untouched.html, /searchParams\.set\('refresh', '1'\)/);
+  assert.match(untouched.html, /window\.location\.assign\(/);
 });

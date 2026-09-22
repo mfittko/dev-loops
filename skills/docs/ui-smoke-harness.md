@@ -1,8 +1,7 @@
 # Local Playwright/WebKit smoke harness for UI slices
 
-This document defines the minimal reusable local WebKit config/server/capture seam
-introduced for issue #124 under umbrella issue #97. It is the **lower layer**
-the shared UI-e2e harness builds on: `test/playwright/harness/deck-fit-harness.mjs`
+This reusable WebKit config/server/capture seam underpins the shared UI-e2e harness:
+`test/playwright/harness/deck-fit-harness.mjs`
 and `test/playwright/harness/inspect-run-viewer-harness.mjs` import this module's
 config, fixture-server, and named-state capture helpers.
 

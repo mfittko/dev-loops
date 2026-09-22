@@ -21,10 +21,7 @@ informational `review` pass — see the review-intent short-circuit carve-out in
 
 ## Purpose
 
-Gate-review verdicts make the workflow auditable and transparent from the PR
-conversation alone. A reviewer or maintainer can inspect which gate ran, which head
-commit was reviewed, whether it passed cleanly, and whether a result is current for
-the latest head — without relying on local or session-only artifacts.
+Gate-review verdicts expose the gate, reviewed head, result and currency in the PR conversation.
 
 <!-- rule: GATE-COMMENT-SINGLE-SURFACE -->
 `GATE-COMMENT-SINGLE-SURFACE`: A gate round produces exactly ONE new visible surface: a single PR
@@ -35,8 +32,22 @@ bulleted list below; an invisible per-finding fingerprint+disposition marker, ne
 visible text, is what `GATE-EXEC-FINDING-THREADS`'s cross-round suppression/deferral tracking
 actually reads back) ([Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#finding-threads-and-disposition)).
 No separate verdict issue comment, no separate findings review, and no deferred-summary comment
-is posted. The body's per-angle breakdown is TWO TRACKS by locatability, rendered at TOP LEVEL,
-NEVER a markdown table:
+is posted.
+
+`GATE-COMMENT-SUPERSEDE-OUTDATED`: A gate round posts its verdict review at that round's head, so
+a multi-round gate accumulates one stale verdict review per prior head. When a new `draft_gate`
+(resp. `pre_approval_gate`) verdict is created, `upsert-checkpoint-verdict.mjs` folds the SAME
+gate's prior verdict reviews recorded at EARLIER heads via GitHub's `minimizeComment(classifier:
+OUTDATED)`. It runs only when the poster already holds evidence of a prior same-gate verdict at a
+different head (never on a first-ever verdict), never touches the just-posted current-head verdict
+or the OTHER gate's verdicts, skips already-minimized reviews, and is bounded by a cap. It is
+BEST-EFFORT and fail-open: a minimize failure logs a `minimizeWarning` on the result and never
+fails the verdict post. Minimizing collapses, never deletes, so the audit trail is intact and the
+fold is reversible.
+
+The body's per-angle breakdown is up to THREE TRACKS, rendered at TOP LEVEL, NEVER a markdown
+table (the third, folded, track is severity-gated rather than locatability-gated — see
+`GATE-COMMENT-INLINE-SEVERITY-FLOOR` below):
 1. **Locatable findings** (each carried by its own inline PR review comment) are never
    enumerated per-finding in the body — no reference row, no restated text. The body states only
    one aggregate `**Inline findings:**` line: the count, a severity breakdown (leading emoji per
@@ -48,6 +59,33 @@ NEVER a markdown table:
    🟡 low · ⚪ nit · 🔵 question, alongside the severity word), the finding's summary, its
    `file:line` linked to the blob at the reviewed head SHA when known, and its contributing
    angle(s) in trailing brackets.
+
+<!-- rule: GATE-COMMENT-INLINE-SEVERITY-FLOOR -->
+`GATE-COMMENT-INLINE-SEVERITY-FLOOR` (#2263): a finding whose severity ranks below
+`gates.<gate>.inlineSeverityFloor` skips both tracks and folds into a THIRD track instead,
+regardless of locatability. The floor's valid values are `medium` (default), `low`, `nit`: it can
+never be raised above `medium` (the severity rank order is high, question, medium, low, nit), so
+`medium`/`high`/`question` always post inline and only `low`/`nit` can ever fold. This enforces the
+issue's non-goal ("never suppress medium or high from inline") by construction and keeps the
+folded-block `low/nit` summary label accurate. Folding produces one
+collapsed `<details><summary>Suppressed low/nit findings (N) — below the inline severity
+floor</summary>...</details>` block, its own top-level section rendered after the body-only list
+and clean-angle roster, before the gate-evidence note. Each folded finding renders as a
+`file:line`-prefixed (when locatable) severity/angle/summary bullet plus its own INVISIBLE
+fingerprint+`disposition=deferred` marker — the same shape a body-filed marker carries — so
+cross-round fingerprint suppression still applies and a folded finding renders exactly once. A
+folded finding creates NO gate-authored review thread of its own and therefore never enters
+`unresolvedGateThreadCount` (`GATE-EXEC-FINDING-THREADS`,
+[Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#finding-threads-and-disposition)).
+Lowering `inlineSeverityFloor` (e.g. to `"low"` or `"nit"`) is the documented escape hatch back to
+full inline/body-filed posting; an out-of-vocabulary value — including `"high"`, which the enum no
+longer permits — is rejected by the config schema, and an unrecognized severity fails OPEN (posts
+inline, never silently folded). A `question` NEVER folds at any floor: a question is
+answered (never deferred), and its resolvable thread is what blocks gate-close until answered
+(`GATE-EXEC-THREAD-DISPOSITION`), so folding it away would let an unanswered question slip past
+ready-for-review. `blockCleanOnFindingSeverities`
+semantics are unaffected — the verdict is computed upstream from the ledger, never from which track
+a finding renders on.
 
 Every clean (zero-finding) angle is collapsed into one trailing comma-joined `**Clean (N):**`
 line, never a list/table row. A finding's full text always lives in EXACTLY ONE reader-reachable
@@ -63,11 +101,7 @@ corrected on its own surface (back-compat read).
 `GATE-EVIDENCE-AUDIT-TWO-SURFACES`: any gate-evidence completeness audit or reporting path MUST
 scan BOTH verdict surfaces — the PR-review stream (`pulls/<n>/reviews`, the primary surface per
 GATE-COMMENT-SINGLE-SURFACE) and the visible issue-comment stream (`issues/<n>/comments`, the
-back-compat read). Scanning the issue-comment stream alone reports a legitimately-posted
-PR-review verdict as "missing": the post-drive audit that filed #1674 falsely concluded #1614's
-round-2 `draft_gate` and `pre_approval_gate` verdicts were unposted because it read only
-`issues/1614/comments`, where no verdict body lives (the verdicts existed as PR reviews at the
-merged head). The deterministic post-drive audit helper is
+back-compat read). The deterministic post-drive audit helper is
 `scripts/github/audit-gate-evidence.mjs` — it reads both surfaces through
 `fetchGateEvidenceComments` and reports each gate's verdict as visible regardless of which
 surface carries it, so a verdict posted only as a PR review is never reported missing. The
@@ -91,8 +125,7 @@ body carrying a known machine-artifact marker token (owned by the artifact filte
 `copilot-helpers.mjs`, delimiter-anchored so no suffixed `<token>-<x>` variant matches) as a
 non-candidate UNLESS it also carries the producer-owned verdict body heading — which is how the
 round's own review, marker and all, stays claimable while the findings comment (which never
-carries that heading) never is. That silent replacement previously destroyed a full round's
-visible findings record seconds after it was posted. Within its OWN claim key each tool keys
+carries that heading) never is. Within its OWN claim key each tool keys
 identity as it needs (the findings comment's marker is deliberately gate-only).
 
 <!-- rule: GATE-COMMENT-SCOPE-ONLY -->

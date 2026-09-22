@@ -1,4 +1,4 @@
-import { executeDevLoopsCommand } from '../lib/dev-loops-core.mjs';
+import { executeDevLoopsCommand, inspectResultSeverity } from '../lib/dev-loops-core.mjs';
 import { createExtensionCoreRuntime } from './checks.ts';
 import { createPostMergeUpdateHook } from './post-merge-update.ts';
 import { createPiExtensionAdapter, type ExtensionAPI } from './pi-extension-adapter.ts';
@@ -96,14 +96,8 @@ export default function (pi: ExtensionAPI, runtimeOverrides: ExtensionRuntimeOve
           ctx.ui.notify('Gate angles printed to console. Run `dev-loops gates` in a terminal to see review prompts.', 'info');
           return;
         case 'inspect_result': {
-          const structuredStoppedSuccess = result.state === 'stopped'
-            && result.record === null
-            && (result.action === 'stop' || result.action === 'status');
-          const fallbackStoppedSuccess = result.state === 'stopped'
-            && ((result.action === 'stop' && /stopped the managed inspect-run viewer/i.test(result.detail ?? ''))
-              || (result.action === 'status' && /no managed inspect-run viewer is recorded/i.test(result.detail ?? '')));
-          const informationalStopped = structuredStoppedSuccess || fallbackStoppedSuccess;
-          const notificationLevel = informationalStopped || result.state === 'running' ? 'info' : 'error';
+          // Severity is shared with the CLI surface so both classify identically.
+          const notificationLevel = inspectResultSeverity(result);
           ctx.ui.setWidget(WIDGET_KEY, buildInspectLines(result.action as InspectAction, result), {
             placement: 'belowEditor',
           });

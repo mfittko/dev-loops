@@ -11,20 +11,71 @@ import { trimmedOrNull } from "../loop/normalize.mjs";
 // review is.
 export const SUBMITTED_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"]);
 
-// Copilot's COMMENTED review summary opens with a disposition header whose
-// emoji is the authoritative signal: "### 🟡 Changes recommended" (findings)
-// vs "### 🟢 Approval recommended" (clean). Keying on the 🟡 marker means a
-// clean body that merely quotes the phrase "changes recommended" — with or
-// without markdown emphasis ("No **changes recommended**", "No _changes
-// recommended_") — is never a false finding. The strong no-emoji signal is
-// already covered by the CHANGES_REQUESTED state.
-const COPILOT_CHANGES_RECOMMENDED_MARKER = "🟡";
+// Copilot's `ccr-overview-v2` COMMENTED review opens with ONE of three
+// disposition headers: "### 🟢 Approval recommended" (clean), "### 🟡 Changes
+// recommended" (findings), or "### 🔵 Needs a closer look" (non-approval, the
+// reviewer is uncertain). All Copilot reviews are COMMENTED, so this header is
+// the only body signal. We match the disposition by its TEXT, not the emoji:
+// the old 🟡-only key read the 🔵 "Needs a closer look" non-approval as clean
+// and would fail-open on any future glyph change. Line-anchor the disposition
+// header (`^###\s+`, multiline) with the emoji optional so a body merely
+// QUOTING a phrase ("No changes recommended") never false-positives.
+const COPILOT_DISPOSITION_HEADER_RE = /^###\s+(.+)$/mu;
+// Strip a leading emoji/glyph run (any leading non-letters) so the text alone
+// is compared, then lowercase for a case-insensitive disposition lookup.
+const COPILOT_DISPOSITION_LEADING_GLYPHS_RE = /^[^\p{L}]+/u;
+const COPILOT_CLEAN_DISPOSITION = "approval recommended";
+const COPILOT_CHANGES_RECOMMENDED_DISPOSITION = "changes recommended";
+const COPILOT_NEEDS_CLOSER_LOOK_DISPOSITION = "needs a closer look";
+
+// Canonical current-head Copilot review body dispositions. `changes_recommended`
+// (🟡) and `unrecognized` are actionable non-approvals; `needs_closer_look` (🔵)
+// is a soft, conductor-overridable non-approval; `clean` (🟢) and `none` (no
+// disposition header) are not findings. Both the loop-block signal
+// (copilotReviewBodySignalsChanges) and the merge-convergence precondition read
+// the SAME classification, so the two can never drift.
+export const COPILOT_DISPOSITION = Object.freeze({
+  CLEAN: "clean",
+  CHANGES_RECOMMENDED: "changes_recommended",
+  NEEDS_CLOSER_LOOK: "needs_closer_look",
+  UNRECOGNIZED: "unrecognized",
+  NONE: "none",
+});
+
+/**
+ * Classify a Copilot review's current-head body disposition. Text-matched (not
+ * emoji-keyed) so a glyph change never silently reclassifies. Fails closed: an
+ * unrecognized `### ` disposition header returns UNRECOGNIZED (an actionable
+ * non-approval), so a future format change degrades safe.
+ */
+export function classifyCopilotReviewBodyDisposition(state, body) {
+  const normalizedState = typeof state === "string" ? state.toUpperCase() : "";
+  // A human-style CHANGES_REQUESTED is always actionable regardless of body.
+  if (normalizedState === "CHANGES_REQUESTED") return COPILOT_DISPOSITION.CHANGES_RECOMMENDED;
+  if (normalizedState !== "COMMENTED") return COPILOT_DISPOSITION.NONE;
+  if (typeof body !== "string") return COPILOT_DISPOSITION.NONE;
+
+  const headerMatch = body.match(COPILOT_DISPOSITION_HEADER_RE);
+  // No disposition header at all (empty body, generic footer, legacy format):
+  // no body signal, so this is not a finding.
+  if (!headerMatch) return COPILOT_DISPOSITION.NONE;
+
+  const disposition = headerMatch[1]
+    .replace(COPILOT_DISPOSITION_LEADING_GLYPHS_RE, "")
+    .trim()
+    .toLowerCase();
+  if (disposition === COPILOT_CLEAN_DISPOSITION) return COPILOT_DISPOSITION.CLEAN;
+  if (disposition === COPILOT_CHANGES_RECOMMENDED_DISPOSITION) return COPILOT_DISPOSITION.CHANGES_RECOMMENDED;
+  if (disposition === COPILOT_NEEDS_CLOSER_LOOK_DISPOSITION) return COPILOT_DISPOSITION.NEEDS_CLOSER_LOOK;
+  // Fail closed on an unrecognized disposition header on the current head.
+  return COPILOT_DISPOSITION.UNRECOGNIZED;
+}
 
 export function copilotReviewBodySignalsChanges(state, body) {
-  const normalizedState = typeof state === "string" ? state.toUpperCase() : "";
-  if (normalizedState === "CHANGES_REQUESTED") return true;
-  if (normalizedState !== "COMMENTED") return false;
-  return typeof body === "string" && body.includes(COPILOT_CHANGES_RECOMMENDED_MARKER);
+  const disposition = classifyCopilotReviewBodyDisposition(state, body);
+  return disposition === COPILOT_DISPOSITION.CHANGES_RECOMMENDED
+    || disposition === COPILOT_DISPOSITION.NEEDS_CLOSER_LOOK
+    || disposition === COPILOT_DISPOSITION.UNRECOGNIZED;
 }
 const GATE_REVIEW_NAMES = new Set(["draft_gate", "pre_approval_gate"]);
 // `review` is a RECOGNIZED gate header that carries no draft/pre-approval
@@ -259,7 +310,8 @@ export function normalizeTimestamp(value) {
 export function extractReviewCommitSha(review) {
   const graphqlSha = typeof review?.commit?.oid === "string" ? review.commit.oid.trim() : "";
   const restSha = typeof review?.commit_id === "string" ? review.commit_id.trim() : "";
-  const sha = graphqlSha || restSha;
+  const camelCaseSha = typeof review?.commitId === "string" ? review.commitId.trim() : "";
+  const sha = graphqlSha || restSha || camelCaseSha;
   return sha.length > 0 ? sha : null;
 }
 
@@ -757,6 +809,7 @@ export function summarizeCopilotReviews(reviews, { headSha, draftGateResetAtMs }
 
   return {
     copilotReviews,
+    effectiveCopilotReviews: effectiveReviews,
     copilotReviewIds: copilotReviews
       .map((review) => review?.id)
       .filter((id) => id !== null && id !== undefined)

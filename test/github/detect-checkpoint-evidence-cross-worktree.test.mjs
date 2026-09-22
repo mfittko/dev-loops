@@ -35,6 +35,23 @@ const CONFIG = {
 const HEAD = "abc1234def5678";
 const MARKER = { visible: true, headSha: HEAD, executionMode: "fanout_fanin" };
 
+// The shipped extension-defaults layer also configures a mandatory "holistic"
+// preApproval angle. HEAD above is never a resolvable git commit in these
+// fixtures, so buildFanoutEnforcement's read-side angle-contract resolution
+// (resolveAngleLayerConfig) always falls back to the test's own passed-in
+// config (PROV_CONFIG/ANGLE_CONFIG below, which never declare "holistic") —
+// but writeGateFindingsLog's WRITE-time mandatory-angle check resolves the
+// real merged config straight from repoRoot's disk, so it still sees the
+// shipped "holistic" default. Disable it at the write-time repoRoot so these
+// pre-existing single-mandatory-angle (pr-checklist) fixtures stay exact.
+async function disableHolisticMandatory(repoRoot) {
+  await writeFile(
+    path.join(repoRoot, ".devloops"),
+    "version: 1\ngates:\n  preApproval:\n    angles:\n      - name: holistic\n        enabled: false\n",
+    "utf8",
+  );
+}
+
 test("cross-worktree: ledger written in worktree A is found when checked from worktree B (#1050)", async () => {
   const { base, repoA, repoB } = await makeRepoWithWorktrees();
   try {
@@ -113,6 +130,7 @@ function cleanEvidenceFor(headSha) {
 test("round-trip: write valid provenance -> buildFanoutEnforcement reads it -> pre-merge check PASSES", async () => {
   const { base, repoA, repoB } = await makeRepoWithWorktrees();
   try {
+    await disableHolisticMandatory(repoA);
     await writeGateFindingsLog(
       {
         repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: "[]",
@@ -143,6 +161,7 @@ test("round-trip: write valid provenance -> buildFanoutEnforcement reads it -> p
 test("round-trip: a below-floor (distinctReviewers:1) ledger FAILS closed", async () => {
   const { base, repoA, repoB } = await makeRepoWithWorktrees();
   try {
+    await disableHolisticMandatory(repoA);
     await writeGateFindingsLog(
       {
         repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: "[]",
@@ -176,6 +195,7 @@ test("shadow-bug: a provenance-less ledger in an earlier checkout does NOT shado
       { repoRoot: repoB },
     );
     // repoA (enumerated later) carries the valid provenance-bearing ledger.
+    await disableHolisticMandatory(repoA);
     await writeGateFindingsLog(
       {
         repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: "[]",
@@ -203,6 +223,7 @@ test("residual shadow: a below-floor ledger in cwd checkout does NOT shadow a sa
   try {
     // repoB (== cwd, enumerated FIRST) carries a write-time-valid (one fresh
     // angle, one reviewer) but READ-floor-BELOW ledger (distinctReviewers:1).
+    await disableHolisticMandatory(repoB);
     await writeGateFindingsLog(
       {
         repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: "[]",
@@ -211,6 +232,7 @@ test("residual shadow: a below-floor ledger in cwd checkout does NOT shadow a sa
       { repoRoot: repoB },
     );
     // repoA (enumerated later) carries the SATISFYING >=2 ledger.
+    await disableHolisticMandatory(repoA);
     await writeGateFindingsLog(
       {
         repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: "[]",
@@ -262,6 +284,7 @@ test("selector scaled floor: a hand-crafted 3-fresh-angle/2-reviewer shadow does
         { angle: "pr-checklist", reviewer: "review-c" },
       ],
     });
+    await disableHolisticMandatory(repoA);
     await writeGateFindingsLog(
       {
         repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: "[]",
@@ -294,6 +317,7 @@ test("selector pairing: a hand-crafted PADDED shadow (cardinality met, one revie
         { angle: "pr-checklist", reviewer: "review-c" },
       ],
     });
+    await disableHolisticMandatory(repoA);
     await writeGateFindingsLog(
       {
         repo: "owner/repo", pr: "42", gate: "pre_approval_gate", headSha: HEAD, verdict: "clean", findings: "[]",

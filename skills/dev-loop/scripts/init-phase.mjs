@@ -20,12 +20,9 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const skillRoot = path.resolve(scriptDir, "..");
 const templateRoot = path.join(skillRoot, "templates");
 
-// ARTIFACT-TRACKER-FIRST-NO-DUP (#1628): an issue-keyed worktree
-// (tmp/worktrees/dev-loops/issue-<n>) is by construction a tracker-backed
-// session — the tracker issue is the durable spec-of-record and no duplicate
-// local phase doc should be minted for it. Detect that layout here so
-// initializePhase refuses the durable docs/phases/phase-<n>.md mint while
-// still allowing the ephemeral tmp/phases scaffold.
+// ARTIFACT-TRACKER-FIRST-NO-DUP: issue-keyed worktrees
+// (tmp/worktrees/dev-loops/issue-<n>) are tracker-backed. Refuse a duplicate
+// durable phase doc; keep the ephemeral tmp/phases scaffold.
 const ISSUE_KEYED_WORKTREE_PATTERN = /[\\/]tmp[\\/]worktrees[\\/]dev-loops[\\/]issue-\d+[\\/]?$/u;
 
 export function isTrackerIssueKeyedWorktree(projectRoot) {
@@ -74,10 +71,7 @@ export async function initializePhase(projectRoot, phase, patch = {}) {
     ...result,
     generated: outputs.map(([, outputPath]) => path.relative(projectRoot, outputPath)),
     trackerBacked,
-    // Each refusal names the rule it upholds (AC6, #1628). The tracker-backed
-    // durable phase-doc mint is refused by making the caller aware of the rule
-    // it upholds (ARTIFACT-TRACKER-FIRST-NO-DUP) rather than dropping the file
-    // silently.
+    // Report every refusal with its rule; never silently omit a file.
     refusals: trackerBacked
       ? [{ rule: "ARTIFACT-TRACKER-FIRST-NO-DUP", reason: "tracker-backed (issue-keyed) worktree; refusing durable phase-doc mint" }]
       : [],

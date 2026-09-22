@@ -34,12 +34,19 @@ const ANGLE_CONTRACT_DEVLOOPS = [
   "      - coverage",
   "      - name: pr-description",
   "        mandatory: true",
+  // The shipped extension-defaults.yaml also configures a mandatory
+  // "holistic" angle in both gates, merged by name (D3) — disable it here so
+  // this fixture's minimal, fully controlled angle contract stays exact.
+  "      - name: holistic",
+  "        enabled: false",
   "  preApproval:",
   "    angles:",
   "      - dry",
   "      - kiss",
   "      - name: pr-checklist",
   "        mandatory: true",
+  "      - name: holistic",
+  "        enabled: false",
   "",
 ].join("\n");
 
@@ -75,7 +82,9 @@ test("parseWriteGateFindingsLogCliArgs parses all required args", () => {
     findingsFile: undefined,
     fullLabel: false,
     executionMode: "inline_single_agent",
-    tmpRoot: "tmp",
+    // default left undefined so writeGateFindingsLog anchors the ledger
+    // at the MAIN worktree tmp; an explicit --tmp-root still overrides.
+    tmpRoot: undefined,
     specAuthority: undefined,
   });
 });
@@ -1227,6 +1236,7 @@ test("writeGateFindingsLog records a findings_present carried angle's provenance
         perAngle: [
           { angle: "coverage", reviewer: "review-b", carriedFromHead: "b".repeat(40), carriedVerdict: "findings_present" },
           { angle: "pr-description", reviewer: "review-c" },
+          { angle: "holistic", reviewer: "review-d" },
         ],
       }),
       tmpRoot: dir,
@@ -1434,6 +1444,8 @@ test("writeGateFindingsLog accepts a grouped-dispatch ledger where one reviewer 
         "      - kiss",
         "      - name: pr-checklist",
         "        mandatory: true",
+        "      - name: holistic",
+        "        enabled: false",
         "  fanout:",
         "    groups:",
         "      - name: process",
@@ -1490,6 +1502,8 @@ test("writeGateFindingsLog accepts a grouped-provenance ledger under --full-labe
         "      - kiss",
         "      - name: pr-checklist",
         "        mandatory: true",
+        "      - name: holistic",
+        "        enabled: false",
         "  fanout:",
         "    groups:",
         "      - name: process",
@@ -1598,16 +1612,16 @@ test("writeGateFindingsLog records provenance in the ledger when passed", async 
       verdict: "clean",
       findings: "[]",
       // Angles must cover the shipped extension-defaults preApproval mandatory
-      // angle (pr-checklist) and stay within its configured pool — this
-      // test isolates repoRoot from any repo-local .devloops via tmpDir, but
-      // the packaged extension defaults still apply regardless of repoRoot.
-      provenance: JSON.stringify({ distinctReviewers: 3, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }, { angle: "pr-checklist", reviewer: "review-c" }] }),
+      // angles (pr-checklist, holistic) and stay within its configured pool —
+      // this test isolates repoRoot from any repo-local .devloops via tmpDir,
+      // but the packaged extension defaults still apply regardless of repoRoot.
+      provenance: JSON.stringify({ distinctReviewers: 4, perAngle: [{ angle: "dry", reviewer: "review-a" }, { angle: "kiss", reviewer: "review-b" }, { angle: "pr-checklist", reviewer: "review-c" }, { angle: "holistic", reviewer: "review-d" }] }),
       tmpRoot: tmpDir,
     }, { repoRoot: tmpDir });
     const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-7", "pre_approval_gate-abc1234567890abcdef000000000000000000000.json");
     const parsed = JSON.parse(await readFile(fullPath, "utf8"));
-    assert.equal(parsed.provenance.distinctReviewers, 3);
-    assert.equal(parsed.provenance.perAngle.length, 3);
+    assert.equal(parsed.provenance.distinctReviewers, 4);
+    assert.equal(parsed.provenance.perAngle.length, 4);
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
@@ -1752,8 +1766,9 @@ test("writeGateFindingsLog stays unaffected on a fanout_fanin write with no prov
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-no-mandatory-out-"));
   try {
     // The shipped extension defaults always mark draft_gate's "pr-description"
-    // angle mandatory; disable it explicitly (same pattern the angle-contract
-    // fixtures above use) so this gate truly configures NO mandatory angle.
+    // and "holistic" angles mandatory; disable both explicitly (same pattern
+    // the angle-contract fixtures above use) so this gate truly configures NO
+    // mandatory angle.
     await writeFile(
       path.join(repoRoot, ".devloops"),
       [
@@ -1762,6 +1777,8 @@ test("writeGateFindingsLog stays unaffected on a fanout_fanin write with no prov
         "  draft:",
         "    angles:",
         "      - name: pr-description",
+        "        enabled: false",
+        "      - name: holistic",
         "        enabled: false",
         "",
       ].join("\n"),
@@ -1913,6 +1930,8 @@ test("checkProvenanceAngleCoverage: a mandatory angle disabled via enabled:false
       "      - name: yagni",
       "        mandatory: true",
       "        enabled: false",
+      "      - name: holistic",
+      "        enabled: false",
       "",
     ].join("\n"), "utf8");
     // Assert the override actually loaded (not silently dropped against
@@ -1951,6 +1970,8 @@ test("checkProvenanceAngleCoverage: additiveAngles widens the enforcement pool t
       // here so this test's minimal contract (dry + the additive catalog) is
       // the whole mandatory-angle picture.
       "      - name: pr-checklist",
+      "        enabled: false",
+      "      - name: holistic",
       "        enabled: false",
       "    dynamic:",
       "      additive: true",
@@ -2410,6 +2431,53 @@ test("writeGateFindingsLog enriches findings from --judge-verdict and records sc
     assert.equal(parsed.findings[1].judgeDisposition, "reject");
     assert.equal(parsed.scopeDrift.verdict, "drift_detected");
     assert.deepEqual(parsed.scopeDrift.driftedAreas, ["cli surface"]);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// #2246: the sanctioned shape from the PR 2243 round — a consolidator `clean`
+// wrapper (no blocking-severity finding) whose findings the judge acts on at
+// non-blocking severities only. write-gate-findings-log must ACCEPT it: the
+// caller's --verdict clean matches the wrapper's overallVerdict clean, and the
+// act dispositions merely enrich the findings; the ledger is written clean.
+test("writeGateFindingsLog accepts a clean wrapper with non-blocking judge-act findings (#2246)", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "gate-findings-clean-act-"));
+  try {
+    const headSha = "abc1234567890abcdef000000000000000000000";
+    const judgeVerdictPath = path.join(tmpDir, "judge-verdict.json");
+    await writeFile(judgeVerdictPath, JSON.stringify({
+      headSha,
+      scopeDrift: { verdict: "within_scope", rationale: "within AC", driftedAreas: [] },
+      dispositions: [
+        { index: 0, disposition: "act", rationale: "medium in the fix window", criterion: "AC-1" },
+        { index: 1, disposition: "act", rationale: "cheap polish while here", criterion: "AC-1" },
+      ],
+    }), "utf8");
+
+    const result = await writeGateFindingsLog({
+      repo: "owner/repo",
+      pr: 2243,
+      gate: "draft_gate",
+      headSha,
+      verdict: "clean",
+      findings: JSON.stringify({
+        overallVerdict: "clean",
+        findings: [
+          { severity: "medium", angle: "correctness", summary: "worth fixing now", disposition: "accepted-for-fix" },
+          { severity: "low", angle: "docs", summary: "rename variable", disposition: "accepted-for-fix" },
+        ],
+      }),
+      judgeVerdict: judgeVerdictPath,
+      tmpRoot: tmpDir,
+    });
+
+    assert.equal(result.ok, true);
+    const fullPath = path.join(tmpDir, "gate-findings", "owner-repo", "pr-2243", `draft_gate-${headSha}.json`);
+    const parsed = JSON.parse(await readFile(fullPath, "utf8"));
+    assert.equal(parsed.verdict, "clean");
+    assert.equal(parsed.findings[0].judgeDisposition, "act");
+    assert.equal(parsed.findings[1].judgeDisposition, "act");
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }

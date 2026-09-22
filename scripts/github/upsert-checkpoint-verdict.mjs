@@ -6,10 +6,11 @@ import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
 import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, checkFanoutAngleCoverage, normalizeSeverity, normalizeSeverityCounts, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
 import { parseArgs } from "node:util";
-import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
+import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken, preflightFieldsSpec } from "../lib/jq-output.mjs";
 import { parseAllowedRefsCsv, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { ghJson as runGhJson } from "@dev-loops/core/github/gh";
+import { ghGraphql as runGhGraphql, ghJson as runGhJson } from "@dev-loops/core/github/gh";
+import { minimizeSupersededGateReviews } from "./_minimize-superseded-verdicts.mjs";
 import { loadPrGateCoordinationContext } from "../loop/detect-pr-gate-coordination-state.mjs";
 import { buildFanoutEnforcement, evaluateInlineFanoutMode } from "./detect-checkpoint-evidence.mjs";
 import { evaluatePrGateCoordination, PR_CHECKPOINT_ACTION } from "@dev-loops/core/loop/pr-gate-coordination";
@@ -33,9 +34,11 @@ import {
   findOwnPendingReview,
   findOwnSubmittedReview,
   fingerprintFinding,
+  isBelowInlineFloor,
   isLocatableFinding,
   listPrReviews,
   readGateFindingsLedger,
+  renderFoldedFindingsBlock,
   renderInlineCommentBody,
   resolveGateRound,
   submitPendingReview,
@@ -1476,7 +1479,7 @@ function renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, 
 // `nonLocatableFindings` also drives an invisible fingerprint+disposition
 // marker per finding, load-bearing for GATE-EXEC-FINDING-THREADS's
 // cross-round suppression/deferral tracking.
-export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings }) {
+export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings, foldedFindings }) {
   const lines = [
     `### Gate review: \`${gate}\``,
   ];
@@ -1544,6 +1547,15 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
     if (angles) {
       const cleanLine = renderCleanRosterLine(angles);
       if (cleanLine) lines.push("", cleanLine);
+    }
+    // Findings below the inline severity floor (GATE-COMMENT-INLINE-SEVERITY-FLOOR) render as their own
+    // top-level collapsed section, after the body-only list and clean roster
+    // and before the gate-evidence note. renderFoldedFindingsBlock already
+    // stamps its own invisible marker per finding, so the trailing
+    // nonLocatableFindings marker loop below (scoped to that array only, which
+    // never includes a folded finding) never double-stamps one.
+    if (Array.isArray(foldedFindings) && foldedFindings.length > 0) {
+      lines.push("", renderFoldedFindingsBlock(foldedFindings, { round }));
     }
   } else if (angles) {
     lines.push("", renderStructuredFindings(angles));
@@ -1814,6 +1826,11 @@ export function buildCoordinationEvaluatorInput({
     // rather than trusting a stale/compound lifecycleState label alone.
     unresolvedThreadCount: coordinationContext.snapshot?.unresolvedThreadCount ?? null,
     sameHeadCleanConverged: coordinationContext.interpretation.sameHeadCleanConverged,
+    copilotConvergenceOk: coordinationContext.copilotBodyConvergence?.ok === true,
+    // Current-head Copilot review evidence, fed alongside sameHeadCleanConverged so
+    // the absent/never-driven entry guard keys on a round driven for THIS head
+    // (never a raw across-PR copilotReviewRoundCount, which counts prior-head rounds).
+    copilotReviewOnCurrentHead: coordinationContext.snapshot?.copilotReviewOnCurrentHead === true,
     // Operator-authorized post-convergence suppression: computed and
     // verified once in loadPrGateCoordinationContext (resolvePostConvergenceReviewSuppressed)
     // — see detect-pr-gate-coordination-state.mjs.
@@ -1945,7 +1962,7 @@ async function loadMatchingFindingsLedger(options, headSha) {
   }
   return ledger;
 }
-async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, preloadedLedger }, gh) {
+async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, preloadedLedger, inlineSeverityFloor }, gh) {
   // The withheld-tier coverage check above already loaded and validated this
   // same --findings-ledger file for this same round; reuse it instead of
   // reading it a second time (undefined means it was never preloaded, e.g. a
@@ -1974,19 +1991,35 @@ async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, pre
     repoRoot,
   });
   const candidates = ledger.findings.filter((f) => !suppressed.has(fingerprintFinding(f)));
+  // Findings below the inline severity floor (GATE-COMMENT-INLINE-SEVERITY-FLOOR) never post inline or
+  // body-file — they fold into the verdict body's collapsed <details> block
+  // instead (see renderFoldedFindingsBlock), regardless of locatability.
+  const folded = candidates.filter((f) => isBelowInlineFloor(f.severity, inlineSeverityFloor));
+  const nonFolded = candidates.filter((f) => !isBelowInlineFloor(f.severity, inlineSeverityFloor));
   const surface = {
     round,
     suppressedCount: ledger.findings.length - candidates.length,
     locatable: [],
-    nonLocatable: candidates,
+    // An update cannot add inline comments (GitHub exposes no endpoint to add
+    // one to an already-submitted review), so every still-at-or-above-floor
+    // candidate body-files on that path — same as before folding existed.
+    nonLocatable: nonFolded,
+    folded,
   };
-  if (isUpdate || candidates.length === 0) {
+  // Skip the diff/locatability split when there is nothing to split: an update
+  // (cannot add inline comments), no candidates at all, OR an all-folded round
+  // (every candidate ranks below the inline floor, so none needs a locatability
+  // decision). Guarding the all-folded case on nonFolded.length avoids an
+  // unnecessary fetchPrFiles round-trip — and, more importantly, keeps a
+  // transient PR-files listing failure from failing an all-folded verdict post
+  // that never needed the diff.
+  if (isUpdate || candidates.length === 0 || nonFolded.length === 0) {
     return surface;
   }
   const commentableSet = buildCommentableLineSet(await fetchPrFiles({ repo: options.repo, pr: options.pr }, gh));
   surface.locatable = [];
   surface.nonLocatable = [];
-  for (const finding of candidates) {
+  for (const finding of nonFolded) {
     (isLocatableFinding(finding, commentableSet) ? surface.locatable : surface.nonLocatable).push(finding);
   }
   return surface;
@@ -2306,7 +2339,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // review carries no gate obligations, so no configured blocking severities
   // apply to it (a "clean" review claim is advisory, never merge-blocking).
   const activeGateConfig = isReviewGate
-    ? { blockCleanOnFindingSeverities: [] }
+    ? { blockCleanOnFindingSeverities: [], inlineSeverityFloor: "medium" }
     : (options.gate === "draft_gate" ? draftGateConfig : preApprovalGateConfig);
   // Normalized at the CONSUME site, not only in the CLI parser: a direct
   // programmatic caller may pass legacy-keyed counts, and the guard below
@@ -2817,7 +2850,14 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // rendered, since the body carries the round number, the body-filed findings,
   // and the reduced per-angle digest that depends on them.
   const findingSurface = await resolveFindingSurface(
-    { options, headSha: canonicalHeadSha, repoRoot, isUpdate: existing !== null, preloadedLedger: preloadedFindingsLedger },
+    {
+      options,
+      headSha: canonicalHeadSha,
+      repoRoot,
+      isUpdate: existing !== null,
+      preloadedLedger: preloadedFindingsLedger,
+      inlineSeverityFloor: activeGateConfig.inlineSeverityFloor,
+    },
     gh,
   );
   const desiredBody = renderGateReviewCommentBody({
@@ -2827,7 +2867,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     structuredFindings,
     gateEvidenceNote: coordination?.gateEvidenceNote ?? null,
     blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
-    ...(findingSurface ? { round: findingSurface.round, nonLocatableFindings: findingSurface.nonLocatable, locatableFindings: findingSurface.locatable } : {}),
+    ...(findingSurface ? { round: findingSurface.round, nonLocatableFindings: findingSurface.nonLocatable, locatableFindings: findingSurface.locatable, foldedFindings: findingSurface.folded } : {}),
   });
   // ISSUE/PR-ID GUARD: the rendered gate verdict body must never emit a
   // raw issue/PR id (fail-closed unless explicitly allowlisted). Guarded here at
@@ -2840,6 +2880,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         round: findingSurface.round,
         inlineComments: findingSurface.locatable.length,
         bodyFiled: findingSurface.nonLocatable.length,
+        folded: findingSurface.folded.length,
         suppressed: findingSurface.suppressedCount,
       }
     : {};
@@ -2961,8 +3002,11 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   // still unposted, so a round carrying one is never a noop, whatever the fields
   // say. A rerun of the same ledger suppresses all of its findings against the
   // posted review/threads and reaches zero here.
+  // Folded findings (GATE-COMMENT-INLINE-SEVERITY-FLOOR) count toward "unposted" too: a rerun that adds a
+  // brand-new below-floor finding never before fingerprinted must still force
+  // a re-post (the new folded <details> entry), not fall through to noop.
   const unpostedFindings = findingSurface
-    ? findingSurface.locatable.length + findingSurface.nonLocatable.length
+    ? findingSurface.locatable.length + findingSurface.nonLocatable.length + findingSurface.folded.length
     : 0;
   // Size-budget fields (phase 3 of the fail-closed PR size budget) join the noop comparison so a
   // waiver granted (or a size-budget evaluation run for the first time) at an
@@ -3104,6 +3148,24 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (escalateGateFullLabel) {
     await applyGateFullLabel({ repo: options.repo, pr: options.pr }, gh);
   }
+  // A new same-gate verdict just landed at this head, so the prior rounds' verdict
+  // reviews are superseded — fold them as OUTDATED per GATE-COMMENT-SUPERSEDE-OUTDATED
+  // (skills/docs/gate-review-comment-contract.md). Best-effort and
+  // fail-open: this never throws, and its warning never blocks the verdict result.
+  // Only run the enumerating GraphQL sweep when the poster already has evidence of
+  // a prior same-gate verdict at a different head (the created path guarantees any
+  // visible prior verdict is at a different head, since a same-head one would have
+  // taken the `existing` branch). This saves a call on a first-ever verdict.
+  const hasSupersededPrior = !isReviewGate && (
+    (gateEvidence?.strict?.visible === true && !!gateEvidence.strict.headSha && gateEvidence.strict.headSha !== canonicalHeadSha)
+    || (gateEvidence?.marker?.visible === true && !!gateEvidence.marker.headSha && gateEvidence.marker.headSha !== canonicalHeadSha)
+  );
+  const minimizeWarning = !hasSupersededPrior
+    ? null
+    : (await minimizeSupersededGateReviews(
+        { ...parseRepoSlug(options.repo), pr: options.pr, gate: options.gate, currentHeadSha: canonicalHeadSha },
+        { env, runChild, ghGraphqlImpl: runGhGraphql },
+      )).warning ?? null;
   return {
     ok: true,
     action: "created",
@@ -3123,6 +3185,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     ...(warning ? { warning } : {}),
     ...(findingsLedgerWarning ? { findingsLedgerWarning } : {}),
     ...(verificationWarning ? { verificationWarning } : {}),
+    ...(minimizeWarning ? { minimizeWarning } : {}),
     ...(escalateGateFullLabel ? { gateFullLabelApplied: true } : {}),
     ...(specAuthority ? { specAuthority } : {}),
   };
@@ -3148,6 +3211,15 @@ async function main() {
     process.stdout.write(`${USAGE}\n`);
     return;
   }
+  // Reject a syntactically invalid/conflicting --fields BEFORE the mutation
+  // below (createGateReview posts to GitHub), so a malformed --fields or a
+  // --fields+--jq/--silent conflict can never post the verdict then fail at
+  // emit time — mirrors preflightJqFilter's use in the other mutation CLIs.
+  const fieldsPreflightError = preflightFieldsSpec(options.fields, { jq: options.jq, silent: options.silent });
+  if (fieldsPreflightError !== undefined) {
+    process.exitCode = fieldsPreflightError;
+    return;
+  }
   const inlineWarning = buildInlineExecutionWarning(options.executionMode, options.inlineReason);
   try {
     const result = await upsertCheckpointVerdict(options);
@@ -3163,7 +3235,7 @@ async function main() {
     if (result?.findingsLedgerWarning && !options.silent) {
       process.stderr.write(`${result.findingsLedgerWarning}\n`);
     }
-    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent });
+    process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, fields: options.fields });
   } catch (error) {
     // formatCliError surfaces `error.usage` when present, so an over-limit
     // posted-comment field thrown from execution context (findings-file, gate

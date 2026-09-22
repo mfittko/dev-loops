@@ -11,9 +11,82 @@ import {
   normalizeHeadScopedCiContract,
   deriveLoopCiStatusFromRollup,
   partitionEntriesByCheckName,
+  resolveNamedContextState,
+  classifyBenignGateEvidenceUnstable,
   LOOP_DERIVED_CI_CHECK_NAME,
   LOOP_DERIVED_CI_CHECK_NAMES,
 } from "../src/loop/copilot-ci-status.mjs";
+
+// A gate-evidence commit status entry (StatusContext-shaped: `.state`).
+const gateEvidenceSuccess = { context: "gate-evidence", state: "SUCCESS" };
+// A superseded detector run: check-run-shaped, conclusion CANCELLED.
+const supersededRunnerCancel = { name: "gate-evidence-runner", status: "COMPLETED", conclusion: "CANCELLED" };
+// A superseded queued reporter run is cancelled too (non-cancelling group only
+// spares a RUNNING reporter); it leaves the same cosmetic cancelled check-run.
+const supersededReporterCancel = { name: "gate-evidence-reporter", status: "COMPLETED", conclusion: "CANCELLED" };
+const greenCi = { name: "verify", status: "COMPLETED", conclusion: "SUCCESS" };
+
+test("classifyBenignGateEvidenceUnstable: benign when UNSTABLE is only superseded runner cancellations and gate-evidence is green", () => {
+  const rollup = [gateEvidenceSuccess, supersededRunnerCancel, supersededRunnerCancel, greenCi];
+  const result = classifyBenignGateEvidenceUnstable(rollup, "UNSTABLE");
+  assert.equal(result.benign, true);
+});
+
+test("classifyBenignGateEvidenceUnstable: benign when superseded gate-evidence-reporter cancellations are in the rollup too", () => {
+  const rollup = [gateEvidenceSuccess, supersededRunnerCancel, supersededReporterCancel, supersededReporterCancel, greenCi];
+  const result = classifyBenignGateEvidenceUnstable(rollup, "UNSTABLE");
+  assert.equal(result.benign, true);
+});
+
+test("classifyBenignGateEvidenceUnstable: not benign when mergeStateStatus is not UNSTABLE", () => {
+  const rollup = [gateEvidenceSuccess, supersededRunnerCancel];
+  assert.equal(classifyBenignGateEvidenceUnstable(rollup, "CLEAN").benign, false);
+  assert.equal(classifyBenignGateEvidenceUnstable(rollup, null).benign, false);
+});
+
+test("classifyBenignGateEvidenceUnstable: not benign when gate-evidence status is not success", () => {
+  const rollup = [{ context: "gate-evidence", state: "FAILURE" }, supersededRunnerCancel];
+  const result = classifyBenignGateEvidenceUnstable(rollup, "UNSTABLE");
+  assert.equal(result.benign, false);
+  assert.match(result.reason, /gate-evidence status is not success/);
+});
+
+test("classifyBenignGateEvidenceUnstable: not benign when a real check is failing beside the cancellations", () => {
+  const rollup = [gateEvidenceSuccess, supersededRunnerCancel, { name: "verify", status: "COMPLETED", conclusion: "FAILURE" }];
+  const result = classifyBenignGateEvidenceUnstable(rollup, "UNSTABLE");
+  assert.equal(result.benign, false);
+  assert.match(result.reason, /verify/);
+});
+
+test("classifyBenignGateEvidenceUnstable: not benign when a gate-evidence-runner run FAILED (not cancelled)", () => {
+  const rollup = [gateEvidenceSuccess, { name: "gate-evidence-runner", status: "COMPLETED", conclusion: "FAILURE" }];
+  const result = classifyBenignGateEvidenceUnstable(rollup, "UNSTABLE");
+  assert.equal(result.benign, false);
+  assert.match(result.reason, /gate-evidence-runner/);
+});
+
+test("classifyBenignGateEvidenceUnstable: fails closed on an unavailable rollup", () => {
+  assert.equal(classifyBenignGateEvidenceUnstable(null, "UNSTABLE").benign, false);
+});
+
+test("classifyBenignGateEvidenceUnstable: a success check-run named gate-evidence does NOT stand in for the required status context", () => {
+  // The required gate-evidence is a commit STATUS (.context). A CheckRun (.name)
+  // named the same, with the StatusContext absent, must not satisfy the guard.
+  const gateEvidenceCheckRun = { name: "gate-evidence", status: "COMPLETED", conclusion: "SUCCESS" };
+  const rollup = [gateEvidenceCheckRun, supersededRunnerCancel];
+  const result = classifyBenignGateEvidenceUnstable(rollup, "UNSTABLE");
+  assert.equal(result.benign, false);
+  assert.match(result.reason, /gate-evidence status is not success/);
+});
+
+test("classifyBenignGateEvidenceUnstable: a CANCELLED entry named gate-evidence is not a benign job cancellation", () => {
+  // Only the two Gate-evidence JOB names are benign-cancellation candidates; a
+  // cancelled entry named `gate-evidence` (the status name) is not.
+  const rollup = [gateEvidenceSuccess, { name: "gate-evidence", status: "COMPLETED", conclusion: "CANCELLED" }];
+  const result = classifyBenignGateEvidenceUnstable(rollup, "UNSTABLE");
+  assert.equal(result.benign, false);
+  assert.match(result.reason, /gate-evidence=CANCELLED/);
+});
 
 test("normalizeStatusCheckRollupStatus returns failure over pending for mixed rollup entries", () => {
   const status = normalizeStatusCheckRollupStatus([
@@ -248,8 +321,20 @@ test("LOOP_DERIVED_CI_CHECK_NAME is the gate-evidence check", () => {
   assert.equal(LOOP_DERIVED_CI_CHECK_NAME, "gate-evidence");
 });
 
-test("LOOP_DERIVED_CI_CHECK_NAMES covers the status context and the workflow's check run", () => {
-  assert.deepEqual([...LOOP_DERIVED_CI_CHECK_NAMES], ["gate-evidence", "gate-evidence-runner"]);
+test("LOOP_DERIVED_CI_CHECK_NAMES covers the status context and both workflow jobs' check runs", () => {
+  assert.deepEqual([...LOOP_DERIVED_CI_CHECK_NAMES], ["gate-evidence", "gate-evidence-runner", "gate-evidence-reporter"]);
+});
+
+test("resolveNamedContextState resolves one named context's own state, independent of the rest of the rollup", () => {
+  const rollup = [
+    { status: "COMPLETED", conclusion: "SUCCESS", name: "verify" },
+    { state: "PENDING", context: "gate-evidence" },
+  ];
+  assert.equal(resolveNamedContextState(rollup, "gate-evidence"), "pending");
+  assert.equal(resolveNamedContextState(rollup, "verify"), "success");
+  assert.equal(resolveNamedContextState(rollup, "missing-context"), "none");
+  assert.equal(resolveNamedContextState([{ state: "SUCCESS", context: "gate-evidence" }], "gate-evidence"), "success");
+  assert.equal(resolveNamedContextState(null, "gate-evidence"), "none");
 });
 
 test("partitionEntriesByCheckName accepts several names and still accepts one", () => {

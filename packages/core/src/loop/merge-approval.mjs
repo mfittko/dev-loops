@@ -11,13 +11,16 @@
  *
  * It reuses, never re-derives, the existing precondition set:
  * `resolveSizeBudgetHumanApprovalRequired` (size-budget-merge-gate),
- * `findBlockingTitleMarkers` (pr-title-markers), and the detect-checkpoint-evidence
+ * `findBlockingTitleMarkers` (pr-title-markers), the detect-checkpoint-evidence
  * `preMergeGateCheck` bundle (draft/pre-approval verdicts, threads, runner lock,
- * fan-out provenance). This module adds ONLY the human-approver identity, the
- * merge-class split, and the aggregate naming.
+ * fan-out provenance), and `classifyCopilotReviewBodyDisposition` (copilot-helpers,
+ * the same current-head Copilot disposition detection the loop's
+ * `copilotBodyFeedbackUnresolved` reads). This module adds ONLY the
+ * human-approver identity, the merge-class split, the Copilot-convergence
+ * precondition, and the aggregate naming.
  */
 
-import { isCopilotLogin } from "../github/copilot-helpers.mjs";
+import { isCopilotLogin, classifyCopilotReviewBodyDisposition, COPILOT_DISPOSITION, SUBMITTED_REVIEW_STATES, extractReviewCommitSha } from "../github/copilot-helpers.mjs";
 import { findBlockingTitleMarkers } from "./pr-title-markers.mjs";
 import { resolveSizeBudgetHumanApprovalRequired } from "./size-budget-merge-gate.mjs";
 import { deriveLoopCiStatusFromRollup } from "./copilot-ci-status.mjs";
@@ -79,6 +82,15 @@ function reviewCommit(entry) {
   if (typeof entry?.commit_id === "string" && entry.commit_id.length > 0) return entry.commit_id;
   if (typeof entry?.commitId === "string" && entry.commitId.length > 0) return entry.commitId;
   return null;
+}
+
+// Copilot-only login extraction for evaluateCopilotConvergence: accepts the
+// `gh pr view` GraphQL shape (author.login) in addition to the REST shape
+// (user.login | login) reviewLogin reads. Scoped to the Copilot-convergence
+// eval so verifyFreshHumanApproval's human-approval matching is unchanged.
+function copilotConvergenceReviewLogin(entry) {
+  if (typeof entry?.author?.login === "string" && entry.author.login.length > 0) return entry.author.login;
+  return reviewLogin(entry);
 }
 
 /**
@@ -148,6 +160,108 @@ export function verifyFreshHumanApproval({ approvedBy, currentHeadSha, reviews =
     via: null,
     reason: `no fresh ${approvedBy} approval on head ${head} (need an APPROVED review or an "approve merge ${head}" operator comment)`,
   };
+}
+
+/**
+ * Shared Copilot-convergence evaluation for pre-approval entry and merge.
+ * Both treat a thread-clean 🔵 as conductor-overridable; unresolved threads
+ * still block independently. Fail-closed.
+ *
+ * Only the LATEST Copilot review pinned to `currentHeadSha` is judged, so a
+ * stale non-approval at an earlier head never blocks and a later same-head 🟢
+ * clears an earlier same-head finding.
+ *
+ * Policy (operator-resolved during the v1.0.4 drain):
+ *   🟡 "Changes recommended" on the current head -> BLOCK (actionable; the review
+ *      body is unresolved feedback even with zero inline threads — the exact
+ *      body-only fail-open the loop detects and this precondition enforces at merge).
+ *   🔵 "Needs a closer look" -> conductor-OVERRIDABLE (soft), NOT blocked here.
+ *      Unresolved threads still gate it (detect-checkpoint-evidence refuses any
+ *      unresolved review thread), so a 🔵 merges only with zero unresolved
+ *      threads — the conductor's override is choosing to run the merge on a
+ *      thread-clean 🔵.
+ *   unrecognized disposition -> BLOCK (fail closed on a Copilot format change).
+ *   🟢 clean / no current-head Copilot review / stale earlier-head -> PASS.
+ *
+ * @returns {{ ok: boolean, disposition: string|null, reason: string|null }}
+ */
+export function evaluateCopilotConvergence({ currentHeadSha = null, reviews = [] } = {}) {
+  const head = typeof currentHeadSha === "string" ? currentHeadSha.trim() : "";
+  // Head unknown: no current-head review can be pinned. Fail closed (matches
+  // verifyFreshHumanApproval), so this precondition can never pass without a
+  // known head to pin the Copilot disposition to.
+  if (head.length === 0) return { ok: false, disposition: null, reason: "current head SHA is unknown; cannot pin a Copilot review to it" };
+
+  // Mirror summarizeCopilotReviews' current-head finding selection BYTE-FOR-BYTE
+  // so the merge gate and the loop can never diverge (they already share
+  // classifyCopilotReviewBodyDisposition at the detection layer). Use the SAME
+  // comparison the loop uses — the RAW submittedAt string (a non-string is null),
+  // compared with `>`/`===`, NOT a parsed timestamp: parsing would diverge on a
+  // malformed/mixed-offset submittedAt (an invalid-timestamp 🟡 that the loop
+  // keeps as latest could otherwise be superseded here — a fail-open). Consider
+  // only SUBMITTED current-head reviews, skip PENDING drafts (a PENDING never
+  // sets the finding), pick the latest by submittedAt string, and on an
+  // equal-string tie (or both-null) fold toward the most-blocking disposition so
+  // array order never silently drops a finding.
+  let latestDisposition = null;
+  let latestAt = null;
+  for (const entry of Array.isArray(reviews) ? reviews : []) {
+    // Shape-tolerant Copilot-login + commit extraction: the merge gate feeds
+    // REST-shaped reviews (user.login/commit_id) while the gate-ENTRY detector
+    // feeds `gh pr view` GraphQL-shaped reviews (author.login/commit.oid). Both
+    // call sites route through this one evaluateCopilotConvergence, so it must
+    // recognize BOTH shapes to produce ONE convergence verdict. Only Copilot
+    // reviews matter here, so broadening the login read to author.login cannot
+    // affect verifyFreshHumanApproval (which keeps its own REST-only
+    // reviewLogin/reviewCommit).
+    const login = copilotConvergenceReviewLogin(entry);
+    if (login === null || !isCopilotLogin(login)) continue;
+    if (extractReviewCommitSha(entry) !== head) continue; // only current-head reviews
+    const state = typeof entry?.state === "string" ? entry.state.toUpperCase() : "";
+    if (state === "PENDING" || !SUBMITTED_REVIEW_STATES.has(state)) continue; // PENDING/unknown never sets the finding
+    const disposition = classifyCopilotReviewBodyDisposition(state, entry?.body);
+    const submittedAt = typeof entry?.submittedAt === "string"
+      ? entry.submittedAt
+      : (typeof entry?.submitted_at === "string" ? entry.submitted_at : null);
+    if (submittedAt !== null && (latestAt === null || submittedAt > latestAt)) {
+      latestDisposition = disposition; // a lexicographically-later submittedAt supersedes (matches summarize)
+      latestAt = submittedAt;
+    } else if (submittedAt !== null && submittedAt === latestAt) {
+      latestDisposition = latestDisposition === null ? disposition : moreBlockingDisposition(latestDisposition, disposition);
+    } else if (submittedAt === null && latestAt === null) {
+      latestDisposition = latestDisposition === null ? disposition : moreBlockingDisposition(latestDisposition, disposition);
+    }
+    // a null submittedAt once a non-null latest exists is ignored (mirrors summarize)
+  }
+  if (latestDisposition === null) return { ok: true, disposition: null, reason: null };
+
+  if (latestDisposition === COPILOT_DISPOSITION.CHANGES_RECOMMENDED) {
+    return { ok: false, disposition: latestDisposition, reason: `current-head Copilot review is "Changes recommended" (🟡, actionable non-approval); converge to "Approval recommended" (🟢) or resolve the feedback before merge` };
+  }
+  if (latestDisposition === COPILOT_DISPOSITION.UNRECOGNIZED) {
+    return { ok: false, disposition: latestDisposition, reason: `current-head Copilot review carries an unrecognized disposition header (fail closed); a recognized "Approval recommended" (🟢) is required` };
+  }
+  // CLEAN, NONE, and NEEDS_CLOSER_LOOK (🔵, conductor-overridable) pass.
+  return { ok: true, disposition: latestDisposition, reason: null };
+}
+
+// Disposition blocking precedence, most-blocking first. Used to fold an
+// equal-timestamp same-head tie toward the most-blocking disposition so a tied
+// 🟡/unrecognized is never silently dropped by a co-timestamped 🟢/🔵.
+const COPILOT_DISPOSITION_BLOCKING_ORDER = [
+  COPILOT_DISPOSITION.CHANGES_RECOMMENDED,
+  COPILOT_DISPOSITION.UNRECOGNIZED,
+  COPILOT_DISPOSITION.NEEDS_CLOSER_LOOK,
+  COPILOT_DISPOSITION.CLEAN,
+  COPILOT_DISPOSITION.NONE,
+];
+function moreBlockingDisposition(a, b) {
+  const ia = COPILOT_DISPOSITION_BLOCKING_ORDER.indexOf(a);
+  const ib = COPILOT_DISPOSITION_BLOCKING_ORDER.indexOf(b);
+  // A value absent from the order (defensive) sorts last.
+  const ra = ia === -1 ? COPILOT_DISPOSITION_BLOCKING_ORDER.length : ia;
+  const rb = ib === -1 ? COPILOT_DISPOSITION_BLOCKING_ORDER.length : ib;
+  return ra <= rb ? a : b;
 }
 
 /**
@@ -273,11 +387,27 @@ export function evaluateMergePreconditions({
     failures.push({ precondition: "size_budget_human_approval", reason: "size-budget requires a human APPROVED review OR a head-pinned \"approve merge <headSha>\" operator comment, with zero unresolved CHANGES_REQUESTED, for this escalated/T1 PR" });
   }
 
+  // Copilot-convergence precondition: refuse a current-head Copilot non-approval
+  // body disposition, mirroring the loop's copilotBodyFeedbackUnresolved.
+  const copilotConvergence = evaluateCopilotConvergence({ currentHeadSha, reviews });
+  if (!copilotConvergence.ok) {
+    failures.push({ precondition: "copilot_convergence", reason: copilotConvergence.reason });
+  }
+
   const mergeClass = resolveMergeClass({ sizeOutcome, touchesT1, stableRelease });
   const decision = resolveMergeApprovalDecision({ mergeClass, standingAuthorized, freshApproval });
   if (!decision.authorized) {
     failures.push({ precondition: "merge_approval", reason: decision.reason });
   }
 
-  return { ok: failures.length === 0, failures, mergeClass, approvalVia: decision.authorized ? decision.via : null };
+  return {
+    ok: failures.length === 0,
+    failures,
+    mergeClass,
+    approvalVia: decision.authorized ? decision.via : null,
+    // Audit trace: the current-head Copilot disposition this verdict saw, so a
+    // merge that ran on a conductor-overridable 🔵 (or any disposition) is
+    // recorded on the machine-readable result rather than being invisible.
+    copilotDisposition: copilotConvergence.disposition,
+  };
 }

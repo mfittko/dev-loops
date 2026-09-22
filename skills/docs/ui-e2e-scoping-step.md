@@ -114,13 +114,6 @@ couples it to incidental layout numbers.
 
 ## An assertion must be able to fail on the defect
 
-A UI assertion that is **true for the broken state validates the bug**. Real
-example (the layout regression this rule comes from): a check asserted
-`margin-left > 1px` on the prose to prove it was "centered" — but the visible bug
-*was* the prose floating in a narrow centered measure, misaligned from the
-full-width boxes beside it. `margin-left` was large in exactly the broken state, so
-the check passed green on every gate while the page rendered visibly broken.
-
 Before trusting any UI assertion, confirm it **fails on the defect**: run it against
 the broken layout, or inject the defect (e.g. shove one block's left edge) and check
 that the assertion goes red. An assertion that cannot fail on the bug it names is

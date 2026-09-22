@@ -13,6 +13,7 @@ import { test } from "bun:test";
 import { LEGACY_SEVERITY_ALIASES, NON_DEFECT_SEVERITIES, SEVERITY_ORDER } from "@dev-loops/core/loop/gate-fanin";
 import { BLOCKING_SEVERITY_SPELLINGS } from "@dev-loops/core/config";
 import { VALID_DISPOSITIONS } from "../../scripts/github/write-gate-findings-log.mjs";
+import { parseMarkdownSections } from "../../packages/core/src/loop/issue-refinement-artifact.mjs";
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -35,10 +36,11 @@ test("agents/review.agent.md's findings-artifact severity enum has the same valu
 
 test("skills/docs/gate-review-sub-loop-contract.md's classification list names every SEVERITY_ORDER value", async () => {
   const text = await readFile(`${repoRoot}skills/docs/gate-review-sub-loop-contract.md`, "utf8");
-  const start = text.indexOf("- classify each finding:");
-  assert.ok(start !== -1, "expected a '- classify each finding:' bullet in the contract doc");
-  const nextBullet = text.indexOf("\n- ", start + 1);
-  const paragraph = text.slice(start, nextBullet === -1 ? undefined : nextBullet);
+  const section = parseMarkdownSections(text).find(({ bodyLines }) =>
+    bodyLines.includes("<!-- rule: GATE-EXEC-POST-BEFORE-FIX -->"));
+  assert.ok(section, "expected the consolidation owner section");
+  const paragraph = section.bodyLines.join("\n").match(/^- [^\n]*`high`[\s\S]*?(?=\n- )/m)?.[0];
+  assert.ok(paragraph, "expected a severity enumeration list item");
   const missing = SEVERITY_ORDER.filter((s) => !paragraph.includes(`\`${s}\``));
   assert.deepEqual(
     missing,
@@ -77,7 +79,7 @@ test("config.mjs's BLOCKING_SEVERITY_SPELLINGS matches SEVERITY_ORDER's defect s
 
 test("skills/docs/gate-review-sub-loop-contract.md's disposition ledger enumeration matches VALID_DISPOSITIONS", async () => {
   const text = await readFile(`${repoRoot}skills/docs/gate-review-sub-loop-contract.md`, "utf8");
-  const match = text.match(/disposition \(([a-z_,\- ]+?)\)/);
+  const match = text.match(/disposition\s*\(([a-z_,\-\s]+?)\)/);
   assert.ok(match, "expected a 'disposition (a, b, ...)' enumeration in the contract doc's fan-in consolidation list");
   const declared = match[1].split(",").map((s) => s.trim().replace(/^or /, ""));
   assert.deepEqual(

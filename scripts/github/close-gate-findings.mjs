@@ -9,7 +9,11 @@ import {
   MEDIUM_FIX_WINDOW,
   countUnresolvedGateAuthoredThreads,
   ensureFollowUpIssue,
+  fetchFollowUpIssueFingerprints,
   fetchThreadsWithFullBodies,
+  findFollowUpIssueOnGitHub,
+  fingerprintFinding,
+  isBelowInlineFloor,
   isDeferredAtRound,
   isFileableDeferral,
   listPrReviews,
@@ -18,6 +22,7 @@ import {
   resolveGateRound,
 } from "./_gate-finding-surface.mjs";
 import { replyAndMaybeResolve } from "./_review-thread-mutations.mjs";
+import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
 import { GATE_CONFIG_KEY } from "@dev-loops/core/loop/gate-fanin";
 
@@ -68,7 +73,8 @@ Required:
                                 repo/pr/gate/headSha are derived from the ledger itself.
 Optional:
   --tmp-root <path>            Root tmp directory for the local findings-log fallback
-                                count (default: tmp/)
+                                count. Omitted, it resolves to the MAIN worktree's tmp/
+                                (the stable per-repo ledger location); an explicit path overrides.
   --allowed-refs <csv>         Explicit allowlist of issue/PR ids a disposition reply
                                 body may cite (same shape/semantics as
                                 reply-resolve-review-thread): the bare-#N comment-id
@@ -80,8 +86,9 @@ Optional:
 Output (stdout, JSON):
   { "ok": true, "repo": "...", "pr": 42, "gate": "...", "headSha": "...", "round": N,
     "deferredResolved": <disposition reply+resolve count>,
-    "unresolvedGateThreadCount": <gate-authored threads still unresolved after the defer pass; the gate-close assertion (fetchDraftGateEvidence / ready-for-review) refuses ready-for-review while non-zero (#1585)>,
-    "followUpIssueNumber"?: <the PR's one tracked follow-up issue number; present only when this pass deferred at least one thread (#1807)>,
+    "unresolvedGateThreadCount": <gate-authored threads still unresolved after the defer pass; the gate-close assertion (fetchDraftGateEvidence / ready-for-review) refuses ready-for-review while non-zero (#1585); folded findings (#2263) never create a thread, so they never enter this count>,
+    "foldedFiled": <#2263: operator-visible folded (below gates.<gate>.inlineSeverityFloor) low findings filed to the follow-up issue this pass, from the ledger directly (they carry no thread of their own); a nit or a non-operator-visible low is never filed>,
+    "followUpIssueNumber"?: <the PR's one tracked follow-up issue number; present when the thread pass deferred a fileable target OR the folded pass filed one (#1807, #2263)>,
     "dispositionFailures"?: [ { "commentId": ..., "threadId": "...", "severity": "...", "angle": "...", "error": "..." } ] <present only when a target's reply could not be built/posted; that thread stays unresolved rather than deadlocking the batch (#1882)> }
 
 ${JQ_OUTPUT_USAGE}
@@ -437,11 +444,59 @@ async function runDispositionPass({ repo, pr, round, threads, snapshot, login, m
 }
 
 // ---------------------------------------------------------------------------
+// Folded-filing pass (GATE-COMMENT-INLINE-SEVERITY-FLOOR)
+// ---------------------------------------------------------------------------
+//
+// A finding below the gate's inlineSeverityFloor never gets an inline/
+// body-filed thread of its own — upsert-checkpoint-verdict.mjs folds it into
+// the verdict body's collapsed <details> block instead (renderFoldedFindingsBlock),
+// so it never reaches selectDispositionTargets/runDispositionPass above (there
+// is no thread to resolve). The net-reduction filing bar (isFileableDeferral)
+// still applies: an operator-visible folded low is filed to the PR's ONE
+// tracked follow-up issue, exactly like a fileable THREAD target would be — a
+// nit or a non-operator-visible low is never filed (already recorded, visible,
+// in the folded <details> block itself; that IS its resolved-with-rationale
+// record). Shares the SAME follow-up issue with the thread pass via
+// `existingIssueNumber` — never mints a second issue for the same PR/round.
+async function runFoldedFilingPass({ repo, pr, findings, round, floor, mediumFixWindow, existingIssueNumber }, { env, ghCommand, runChild }) {
+  const folded = findings.filter((f) => isBelowInlineFloor(f.severity, floor));
+  const fileable = folded.filter((f) => isFileableDeferral(f.severity, f.operatorVisible === true, round, mediumFixWindow));
+  if (fileable.length === 0) {
+    return { foldedFiled: 0 };
+  }
+  // Idempotency: never re-file a fingerprint the follow-up issue already
+  // lists, across a close-gate-findings re-run or a re-listed ledger.
+  const resolvedExistingIssueNumber = Number.isInteger(existingIssueNumber) && existingIssueNumber > 0
+    ? existingIssueNumber
+    : await findFollowUpIssueOnGitHub({ repo, pr }, { env, ghCommand, run: runChild });
+  const alreadyFiled = resolvedExistingIssueNumber !== null
+    ? await fetchFollowUpIssueFingerprints({ repo, issueNumber: resolvedExistingIssueNumber }, { env, ghCommand, run: runChild })
+    : new Set();
+  const unfiled = fileable.filter((f) => !alreadyFiled.has(fingerprintFinding(f)));
+  if (unfiled.length === 0) {
+    return {
+      foldedFiled: 0,
+      ...(resolvedExistingIssueNumber !== null ? { followUpIssueNumber: resolvedExistingIssueNumber } : {}),
+    };
+  }
+  const entries = unfiled.map((f) => ({ fingerprint: fingerprintFinding(f), severity: f.severity, angle: f.angle, summary: f.summary }));
+  const { issueNumber } = await ensureFollowUpIssue(
+    { repo, pr, entries, existingIssueNumber: resolvedExistingIssueNumber },
+    { env, ghCommand, run: runChild },
+  );
+  return { foldedFiled: unfiled.length, followUpIssueNumber: issueNumber };
+}
+
+// ---------------------------------------------------------------------------
 // CLI args
 // ---------------------------------------------------------------------------
 
 export function parseCloseGateFindingsCliArgs(argv) {
-  const options = { help: false, ledgerPath: undefined, tmpRoot: "tmp", allowedRefs: [] };
+  // tmpRoot defaults to undefined (not "tmp") so an OMITTED --tmp-root falls
+  // through to the main-worktree ledger anchor in closeGateFindings; an explicit
+  // --tmp-root still overrides. A literal "tmp" default would make that fallback
+  // dead for the normal CLI path and keep the round cross-check worktree-relative.
+  const options = { help: false, ledgerPath: undefined, tmpRoot: undefined, allowedRefs: [] };
   const { tokens } = parseArgs({
     args: [...argv],
     options: {
@@ -500,8 +555,12 @@ export function parseCloseGateFindingsCliArgs(argv) {
 // ---------------------------------------------------------------------------
 
 export async function closeGateFindings(options, { env = process.env, ghCommand = "gh", runChild, repoRoot = process.cwd() } = {}) {
-  const { repo, pr, gate, headSha } = await readGateFindingsLedger(options.ledgerPath, { errorFactory: parseError });
-  const tmpRoot = options.tmpRoot || "tmp";
+  const { repo, pr, gate, headSha, findings } = await readGateFindingsLedger(options.ledgerPath, { errorFactory: parseError });
+  // The findings-log ledger (resolveGateRound's local-count cross-check) is
+  // anchored at the MAIN worktree; default there so a close running
+  // inside a linked worktree still counts the centralized prior-round ledgers.
+  // An explicit --tmp-root still wins.
+  const tmpRoot = options.tmpRoot || resolveGateArtifactTmpRoot(repoRoot);
   const gh = { env, ghCommand, runChild };
 
   // 1. The authenticated login — the trust boundary for the gate-authored
@@ -514,32 +573,45 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
   const issueComments = await listIssueComments({ repo, pr }, gh);
   const round = await resolveGateRound({ repo, pr, gate, headSha, reviews, issueComments, tmpRoot, repoRoot });
 
-  // 3. Resolve this gate's per-gate medium fix window. loadDevLoopConfig
-  // never throws; on schema-validation failure it returns the merged config
-  // with a non-empty errors array — fall back to the built-in
-  // MEDIUM_FIX_WINDOW then, rather than trust an unvalidated value.
+  // 3. Resolve this gate's per-gate medium fix window and inline severity
+  // floor (GATE-COMMENT-INLINE-SEVERITY-FLOOR) together. loadDevLoopConfig never throws; on
+  // schema-validation failure it returns the merged config with a non-empty
+  // errors array — fall back to the built-in defaults then, rather than trust
+  // an unvalidated value.
   const { config, errors } = await loadDevLoopConfig({ repoRoot });
   const gateConfigKey = GATE_CONFIG_KEY[gate] ?? gate;
-  const mediumFixWindow =
-    errors.length > 0
-      ? MEDIUM_FIX_WINDOW
-      : resolveGateConfig(config, gateConfigKey).mediumFixWindow;
+  const resolvedGateConfig = errors.length > 0 ? null : resolveGateConfig(config, gateConfigKey);
+  const mediumFixWindow = resolvedGateConfig?.mediumFixWindow ?? MEDIUM_FIX_WINDOW;
+  const inlineSeverityFloor = resolvedGateConfig?.inlineSeverityFloor ?? "medium";
 
   // 4. Thread snapshot for the disposition pass. A carried-open thread from an
   // earlier round must be reconciled against THIS round regardless of whether
   // this round posted anything of its own.
   const { threads, snapshot } = await fetchThreadsWithFullBodies({ repo, pr }, gh);
-  const { deferredResolved, followUpIssueNumber, dispositionFailures } = await runDispositionPass(
+  const { deferredResolved, followUpIssueNumber: threadFollowUpIssueNumber, dispositionFailures } = await runDispositionPass(
     { repo, pr, round, threads, snapshot, login, mediumFixWindow, allowedRefs: options.allowedRefs ?? [] },
     gh,
   );
+
+  // 5. Folded-filing pass (GATE-COMMENT-INLINE-SEVERITY-FLOOR): a finding below the inline severity floor
+  // never gets a thread of its own, so the net-reduction filing above never
+  // sees it — file the operator-visible folded lows directly from the
+  // ledger, sharing the SAME follow-up issue the thread pass may have just
+  // resolved (never minting a second issue for this PR/round).
+  const { foldedFiled, followUpIssueNumber: foldedFollowUpIssueNumber } = await runFoldedFilingPass(
+    { repo, pr, findings, round, floor: inlineSeverityFloor, mediumFixWindow, existingIssueNumber: threadFollowUpIssueNumber },
+    gh,
+  );
+  const followUpIssueNumber = threadFollowUpIssueNumber ?? foldedFollowUpIssueNumber;
 
   // Gate-authored threads still unresolved AFTER the defer pass: the pre-defer
   // total minus deferredResolved (only the targets runDispositionPass actually
   // replied+resolved — a per-target failure is recorded in dispositionFailures
   // and stays counted here rather than deadlocking the batch). This is high
   // not yet fix-closed, in-window medium, an unanswered question, or any
-  // triaged-but-not-closed gate-authored thread. The gate-close assertion
+  // triaged-but-not-closed gate-authored thread. Folded findings never create
+  // a thread (they fold into the verdict body's <details> block instead), so
+  // they never enter this count either way. The gate-close assertion
   // (fetchDraftGateEvidence / ready-for-review) refuses ready-for-review while
   // this is non-zero. `threads` is the PRE-DEFER snapshot; runDispositionPass
   // resolves threads via the GitHub API but does not mutate this in-memory
@@ -547,9 +619,10 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
   // so (GATE-EXEC-FINDING-THREADS).
   const unresolvedGateThreadCount = countUnresolvedGateAuthoredThreads(threads, login) - deferredResolved;
 
-  const result = { ok: true, repo, pr, gate, headSha, round, deferredResolved, unresolvedGateThreadCount };
-  // GATE-EXEC-DEFERRAL-RECORD: only present when this pass actually deferred something — a round
-  // with nothing to defer creates no follow-up issue and reports none.
+  const result = { ok: true, repo, pr, gate, headSha, round, deferredResolved, unresolvedGateThreadCount, foldedFiled };
+  // GATE-EXEC-DEFERRAL-RECORD: only present when either pass actually filed
+  // something — a round with nothing to defer/file creates no follow-up issue
+  // and reports none.
   if (followUpIssueNumber !== undefined) {
     result.followUpIssueNumber = followUpIssueNumber;
   }
