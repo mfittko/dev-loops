@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
@@ -14,7 +14,7 @@ import {
   resolveRequireFanoutEvidence,
 } from "@dev-loops/core/config";
 
-const USAGE = `Usage: emit-wave-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--tmp-root <path>] [--cwd <path>] [--timeout-ms <ms>] [--sequential] [--help]
+const USAGE = `Usage: emit-wave-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--tmp-root <path>] [--cwd <path>] [--timeout-ms <ms>] [--max-concurrent <n>] [--primer-key <key>] [--sequential] [--help]
 The SANCTIONED wave-dispatch step (GATE-EXEC-FANOUT-WAVE-DISPATCH): turns the
 keyed emit-plan.json a completed emit-fanout-dispatch.mjs run already wrote into
 the READY parallel dispatch body for each wave, so the conductor never composes
@@ -69,17 +69,39 @@ Optional:
   --timeout-ms <ms>            Bounded per-wave dispatch deadline in ms
                                (default: 900000). Must be a safe integer
                                between 1 and 86400000 (24h).
+  --max-concurrent <n>         Bounded DEGRADATION of the round's concurrency
+                               (GATE-EXEC-DISPATCH-RETRY-BACKOFF): emits this
+                               run's waves at most n units wide. n must be a
+                               positive integer no GREATER than the emit-plan's
+                               recorded maxConcurrent — a degradation may only
+                               reduce the batch, never raise it — and the wave
+                               plan records it (maxConcurrentSource:
+                               "explicit-degradation") as an explicit, justified
+                               fallback rather than a silent re-partition.
+  --primer-key <key>           The dispatch unit that IS the round's primer under
+                               GATE-EXEC-PRIME's DEFAULT one-reviewer-as-primer
+                               form. It is excluded from the remaining partition
+                               and emitted as its OWN single-unit FIRST wave, so
+                               awaiting calls[0] is the primer barrier and the
+                               remaining waves release after it — the primer is
+                               never double-dispatched inside wave 1. Refused
+                               (exit 1) when the key is absent from the emit-plan
+                               or matches more than one unit. Omit it for the
+                               dedicated angle-less <gate>-prime primer (which is
+                               not an emitted unit).
   --sequential                 Request single-unit waves. Refused (exit 1) unless
                                \`gates.fanout.sequential\` is configured or
                                \`gates.requireFanoutEvidence\` is off.
 Output (stdout, JSON):
   { "ok": true, "gate": "...", "headSha": "...", "repo": "...", "pr": "...",
-    "count": <n>, "maxConcurrent": <n>, "maxConcurrentSource": "emit-plan|config|explicit-request",
-    "sequential": <bool>, "sequentialSource": "config-flag|explicit-request|maxConcurrent:1|null",
+    "count": <n>, "maxConcurrent": <n>, "maxConcurrentSource": "emit-plan|config|explicit-request|explicit-degradation",
+    "sequential": <bool>, "sequentialSource": "config-flag|explicit-request|explicit-degradation|maxConcurrent:1|null",
+    "primerKey"?: "...",
     "waves": [ { "index": <1-based>, "count": <n>, "keys": ["..."], "scriptPath": "..." } ],
     "calls": [ { "workflowScriptPath": "...", "cwd": "...", "async": false, "timeoutMs": <ms> } ] }
   Issue ONE subagent call per entry in \`calls\`, in order, awaiting each wave
-  before releasing the next.
+  before releasing the next. With --primer-key, \`calls[0]\` is the primer's own
+  single-unit wave: awaiting it IS the GATE-EXEC-PRIME barrier.
   A fail-closed refusal (exit 1) emits { "ok": false, "error": "..." } on STDOUT
   (via the shared jq-output emitter); a usage/parse error (exit 2) emits
   { "ok": false, "error": "...", "hint"?: "run with --help for usage" } on STDERR.
@@ -93,18 +115,22 @@ Output (stdout, JSON):
   artifacts.
 ${JQ_OUTPUT_USAGE}
 Exit codes:
-  0  Emitted one ready wave script + call body per wave
+  0  Emitted one ready wave script + call body per wave (a zero-unit all-carried
+     plan emits zero waves/calls and exits 0)
   1  Refused: no emit-plan.json at this key (run emit-fanout-dispatch.mjs first),
-     the plan carries no units, records no valid count, or records a count that
-     disagrees with its units,
+     the plan carries no units while ok is not true, records no valid count, or
+     records a count that disagrees with its units,
      the plan's recorded maxConcurrent is present but not a positive integer,
      the plan's recorded maxConcurrent disagrees with the resolved effective
-     concurrency, a unit carries no key, a unit's promptPath is
+     concurrency, --max-concurrent exceeds the round's recorded maxConcurrent,
+     --primer-key is not a dispatch unit in the plan (or matches more than one),
+     a unit carries no key, a unit's promptPath is
      missing/empty/unreadable, the plan's wave partition does not honor the
      concurrency bound, or the requested serialization is not the sanctioned
      \`gates.fanout.sequential\` fallback
   2  Usage or internal error (bad --repo/--pr/--gate/--head-sha/--timeout-ms
-     shape, filesystem error, or invalid --jq filter)`.trim();
+     shape, a --cwd that is not an existing directory, filesystem error, or
+     invalid --jq filter)`.trim();
 
 const parseError = buildParseError(USAGE);
 
@@ -224,17 +250,24 @@ export function waveScriptCallShape(script) {
  * SEPARATE calls), a plan with a missing/blank or duplicated key, and any wave
  * script that is not exactly one `runs.all(...)` call or that carries the
  * rejected legacy `tasks:` top-level input. Pure.
- * @param {{ waves: { index: number, keys: string[], script: string }[], maxConcurrent: number, count: number }} plan
+ * @param {{ waves: { index: number, keys: string[], script: string }[], maxConcurrent: number, count: number, hasPrimerWave?: boolean }} plan
  * @returns {{ ok: boolean, errors: string[] }}
  */
-export function validateWaveDispatchPlan({ waves, maxConcurrent, count } = {}) {
+export function validateWaveDispatchPlan({ waves, maxConcurrent, count, hasPrimerWave = false } = {}) {
   const errors = [];
   const waveList = Array.isArray(waves) ? waves : [];
   if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1) errors.push(`maxConcurrent must be a positive integer (got ${JSON.stringify(maxConcurrent)})`);
   if (!Number.isInteger(count) || count < 1) errors.push(`count must be a positive integer (got ${JSON.stringify(count)})`);
   if (waveList.length === 0) errors.push("plan carries no waves");
+  if (hasPrimerWave && (Array.isArray(waveList[0]?.keys) ? waveList[0].keys.length : 0) !== 1) {
+    errors.push("the primer wave must carry exactly the one primer unit");
+  }
   if (Number.isInteger(maxConcurrent) && maxConcurrent >= 1 && Number.isInteger(count) && count >= 1) {
-    const expected = Math.ceil(count / maxConcurrent);
+    // With --primer-key the primer unit is emitted as its OWN first wave (the
+    // primer barrier), so the expected count is that wave plus the standard
+    // partition of the REMAINING units.
+    const primerWaves = hasPrimerWave ? 1 : 0;
+    const expected = primerWaves + Math.ceil((count - primerWaves) / maxConcurrent);
     if (waveList.length !== expected) {
       errors.push(`plan resolves ${waveList.length} wave(s) for ${count} unit(s) at maxConcurrent ${maxConcurrent}; expected ${expected} — units partitioned into separate calls instead of one runs.all call per wave`);
     }
@@ -387,6 +420,23 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     return 2;
   }
   const cwd = path.resolve(cwdArg ?? resolveDefaultCwd(tmpRoot));
+  // --cwd is BOTH the emitted child cwd and the config root the concurrency is
+  // resolved against, and loadDevLoopConfig treats a missing <root>/.devloops as
+  // a warning (silently BUILT_IN_DEFAULTS), so a nonexistent --cwd would either
+  // refuse with a message blaming the emit-plan and a remediation that cannot
+  // change the resolved root, or emit a "ready" call body whose cwd cannot
+  // launch. Fail loudly at the CLI boundary instead. The DERIVED default is not
+  // checked here: it is the round's artifact root, so a missing --tmp-root
+  // already fails loudly on the plan read (ENOENT) and that refusal names the
+  // real cause.
+  if (cwdArg !== null) {
+    try {
+      if (!(await stat(cwd)).isDirectory()) throw new Error("not a directory");
+    } catch {
+      process.stderr.write(`${formatCliError(parseError(`Invalid --cwd value: ${JSON.stringify(cwd)} is not an existing directory.`))}\n`);
+      return 2;
+    }
+  }
   const timeoutArg = resolveFlagValue(argv, "--timeout-ms");
   if (timeoutArg === "") {
     process.stderr.write(`${formatCliError(parseError("Invalid --timeout-ms value: must be a positive integer."))}\n`);
@@ -401,6 +451,26 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     }
     timeoutMs = parsedTimeout;
   }
+  const maxConcurrentArg = resolveFlagValue(argv, "--max-concurrent");
+  if (maxConcurrentArg === "") {
+    process.stderr.write(`${formatCliError(parseError("Invalid --max-concurrent value: must be a positive integer."))}\n`);
+    return 2;
+  }
+  let requestedMaxConcurrent = null;
+  if (maxConcurrentArg !== null) {
+    const parsed = Number(maxConcurrentArg);
+    if (!/^[0-9]+$/.test(maxConcurrentArg) || !Number.isSafeInteger(parsed) || parsed < 1) {
+      process.stderr.write(`${formatCliError(parseError(`--max-concurrent must be a positive safe integer${maxConcurrentArg ? ` (got ${JSON.stringify(maxConcurrentArg)})` : ""}.`))}\n`);
+      return 2;
+    }
+    requestedMaxConcurrent = parsed;
+  }
+  const primerKeyArg = resolveFlagValue(argv, "--primer-key");
+  if (primerKeyArg === "") {
+    process.stderr.write(`${formatCliError(parseError("Invalid --primer-key value: must be non-empty."))}\n`);
+    return 2;
+  }
+  const primerKey = primerKeyArg === null ? null : primerKeyArg.trim();
   let planPath;
   try {
     planPath = buildGateEmitPlanPath({ repo, pr, gate, headSha, tmpRoot });
@@ -476,7 +546,6 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // `{ ok: true, count: 0, units: [] }` from emit-fanout-dispatch.mjs — a
   // zero-wave SUCCESS (nothing to dispatch), not a refusal. It is reachable
   // only here, after the count guards proved the plan is not truncated.
-  const zeroUnit = units.length === 0;
 
   // The units must each carry a key and a readable promptPath before anything
   // is written; a unit that cannot be seeded is a malformed round, not a
@@ -502,6 +571,30 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     }
     keyed.push({ key, promptBytes });
   }
+
+  // GATE-EXEC-PRIME reconciliation: under the DEFAULT one-reviewer-as-primer
+  // form the primer IS one of the emitted dispatch units, and the conductor
+  // dispatches it FIRST and awaits its prefix write. Re-releasing it inside
+  // wave 1 would double-dispatch the same per-angle artifact path and spend a
+  // concurrency slot on the duplicate. --primer-key names that unit; it is
+  // emitted as its OWN single-unit first wave (the existing "issue ONE call per
+  // entry in calls, in order, awaiting each wave" contract IS the primer
+  // barrier) and excluded from the remaining partition.
+  let primerUnit = null;
+  if (primerKey !== null) {
+    const matches = keyed.filter((unit) => unit.key === primerKey);
+    if (matches.length === 0) {
+      return refuse(`GATE-EXEC-FANOUT-WAVE-DISPATCH: refusing — --primer-key ${JSON.stringify(primerKey)} is not a dispatch unit in the emit-plan at ${JSON.stringify(planPath)} — the one-reviewer-as-primer unit must be one of the emitted units; omit --primer-key for the dedicated angle-less <gate>-prime primer`);
+    }
+    if (matches.length > 1) {
+      return refuse(`GATE-EXEC-FANOUT-WAVE-DISPATCH: refusing — --primer-key ${JSON.stringify(primerKey)} matches ${matches.length} dispatch units — every runs.all item needs a UNIQUE key`);
+    }
+    primerUnit = matches[0];
+  }
+  const waveable = primerUnit ? keyed.filter((unit) => unit !== primerUnit) : keyed;
+  // A zero-WAVE round: nothing left to release (either the all-carried zero-unit
+  // plan, or a round whose only unit is the primer). Distinct from a refusal.
+  const zeroWave = keyed.length === 0;
 
   let resolvedMaxConcurrent;
   let sequential;
@@ -530,7 +623,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     maxConcurrentSource = "config";
   } else if (Number.isInteger(plan.maxConcurrent) && plan.maxConcurrent >= 1) {
     if (plan.maxConcurrent !== resolvedMaxConcurrent) {
-      return refuse(`GATE-EXEC-FANOUT-WAVE-DISPATCH: refusing — the emit-plan at ${JSON.stringify(planPath)} records maxConcurrent ${plan.maxConcurrent} but the resolved effective fan-out concurrency is ${resolvedMaxConcurrent} — a re-run at this key must not partition the round differently; re-run emit-fanout-dispatch.mjs`);
+      return refuse(`GATE-EXEC-FANOUT-WAVE-DISPATCH: refusing — the emit-plan at ${JSON.stringify(planPath)} records maxConcurrent ${plan.maxConcurrent} but the resolved effective fan-out concurrency is ${resolvedMaxConcurrent} (resolved against config root ${JSON.stringify(cwd)}) — a re-run at this key must not partition the round differently; re-run emit-fanout-dispatch.mjs at that config root`);
     }
     maxConcurrent = plan.maxConcurrent;
     maxConcurrentSource = "emit-plan";
@@ -540,6 +633,21 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     // round against a config that may have drifted underneath it, defeating the
     // very drift guard the recorded-vs-resolved equality check exists for.
     return refuse(`GATE-EXEC-FANOUT-WAVE-DISPATCH: refusing — the emit-plan at ${JSON.stringify(planPath)} records an invalid maxConcurrent (maxConcurrent=${JSON.stringify(plan.maxConcurrent)}) — a recorded value that is present but not a positive integer must not silently fall back; re-run emit-fanout-dispatch.mjs`);
+  }
+
+  // GATE-EXEC-DISPATCH-RETRY-BACKOFF: after a transient 429/5xx exhausts its
+  // retries the contract halves the active batch via `backoffMaxConcurrent` and
+  // recomputes the waves. That degradation is expressible here as a BOUNDED
+  // override — it may only REDUCE the round's recorded bound, never raise it —
+  // and the wave plan records it as an explicit, justified fallback rather than
+  // a silent re-partition.
+  let degradation = null;
+  if (requestedMaxConcurrent !== null && requestedMaxConcurrent < maxConcurrent) {
+    degradation = requestedMaxConcurrent;
+    maxConcurrent = requestedMaxConcurrent;
+    maxConcurrentSource = "explicit-degradation";
+  } else if (requestedMaxConcurrent !== null && requestedMaxConcurrent > maxConcurrent) {
+    return refuse(`GATE-EXEC-FANOUT-WAVE-DISPATCH: refusing — --max-concurrent ${requestedMaxConcurrent} exceeds the round's recorded maxConcurrent ${maxConcurrent} — a degradation may only REDUCE the batch, never raise it; re-run emit-fanout-dispatch.mjs at the higher concurrency instead`);
   }
 
   // GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK: `gates.fanout.sequential: true` is the
@@ -552,8 +660,8 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // otherwise serialize every round unnoticed), and an explicit --sequential
   // request the config does not back.
   const requestedSequential = argv.includes("--sequential");
-  const unjustifiedSerialization = maxConcurrent === 1 && !sequential;
-  if (!zeroUnit && requireFanoutEvidence && (unjustifiedSerialization || (requestedSequential && !sequential))) {
+  const unjustifiedSerialization = maxConcurrent === 1 && !sequential && degradation === null;
+  if (!zeroWave && requireFanoutEvidence && (unjustifiedSerialization || (requestedSequential && !sequential))) {
     return refuse(`GATE-EXEC-FANOUT-SEQUENTIAL-FALLBACK: refusing — ${requestedSequential ? "--sequential was requested" : "the resolved fan-out concurrency is 1 (gates.fanout.maxConcurrent: 1)"} but gates.fanout.sequential is not configured, and gates.requireFanoutEvidence is on. Bounded parallelism is the DEFAULT posture; a sequential round must be a justified, recorded load fallback. Set gates.fanout.sequential: true in .devloops to record why parallel execution is impractical for this environment (and keep gates.fanout.maxConcurrent at its configured value), or drop the serialization to release parallel waves.`);
   }
   if (requestedSequential || sequential) {
@@ -570,9 +678,12 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   let sequentialSource = null;
   if (sequential === true) sequentialSource = "config-flag";
   else if (requestedSequential) sequentialSource = "explicit-request";
+  else if (degradation !== null && maxConcurrent === 1) sequentialSource = "explicit-degradation";
   else if (resolvedMaxConcurrent === 1) sequentialSource = "maxConcurrent:1";
 
-  const waves = zeroUnit ? [] : partitionWaves(keyed, maxConcurrent);
+  const waves = zeroWave
+    ? []
+    : [...(primerUnit ? [[primerUnit]] : []), ...partitionWaves(waveable, maxConcurrent)];
   const waveCount = waves.length;
   const built = [];
   for (let i = 0; i < waveCount; i += 1) {
@@ -583,7 +694,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
 
   // Fail closed on the shape BEFORE anything reaches disk, so a plan that would
   // serialize units into separate calls never produces a dispatchable script.
-  const validation = zeroUnit ? { ok: true, errors: [] } : validateWaveDispatchPlan({ waves: built, maxConcurrent, count: plan.count });
+  const validation = zeroWave ? { ok: true, errors: [] } : validateWaveDispatchPlan({ waves: built, maxConcurrent, count: keyed.length, hasPrimerWave: Boolean(primerUnit) });
   if (!validation.ok) {
     return refuse(`GATE-EXEC-FANOUT-WAVE-DISPATCH: refusing — emitted wave plan failed its shape check: ${validation.errors.join("; ")}`);
   }
@@ -614,6 +725,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     maxConcurrentSource,
     sequential: sequential === true,
     sequentialSource,
+    ...(primerUnit ? { primerKey: primerUnit.key } : {}),
     waves: built.map(({ index, keys, scriptPath }) => ({ index, count: keys.length, keys, scriptPath })),
     calls: built.map(({ scriptPath }) => ({ workflowScriptPath: scriptPath, cwd, async: false, timeoutMs })),
   };

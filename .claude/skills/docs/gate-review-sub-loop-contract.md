@@ -556,6 +556,29 @@ conductor that bypasses `emit-wave-dispatch.mjs` and composes its own per-unit c
 at gate time (the issue's open "nothing detects the serialization" residual, not a claim of this
 rule).
 
+A legitimately empty all-carried `--pending` round (`{ ok: true, count: 0, units: [] }`) is a
+zero-wave SUCCESS, not a refusal: the emitter writes no wave script, emits zero waves/calls and
+exits 0. The exit-1 "carries no units" refusal is qualified — it fires only when the plan's `ok`
+is not `true`.
+
+The PRIMER is reconciled through this seam rather than left to the conductor. Under
+`GATE-EXEC-PRIME`'s DEFAULT one-reviewer-as-primer form the primer IS one of the emitted dispatch
+units, so the conductor passes that unit's key as `--primer-key <key>`. The emitter excludes the
+primer from the remaining partition and emits it as its OWN single-unit FIRST wave, so awaiting
+`calls[0]` IS the primer barrier and the remaining waves release only after it — the primer is
+never double-dispatched inside wave 1 and no concurrency slot is spent on a duplicate. It refuses
+(exit 1) when `--primer-key` names a key absent from the emit-plan or matching more than one unit.
+The dedicated angle-less `<gate>-prime` primer is not an emitted unit, so no `--primer-key` is
+passed for it.
+
+`GATE-EXEC-DISPATCH-RETRY-BACKOFF`'s degradation is expressible through the same seam:
+`--max-concurrent <n>` re-partitions this run's waves at most `n` units wide, but only as a
+BOUNDED degradation — `n` must be a positive integer no GREATER than the emit-plan's recorded
+`maxConcurrent` (it may reduce the batch, never raise it) — and the wave plan records it as
+`maxConcurrentSource: "explicit-degradation"`, so a backoff-reduced round is explicit and
+justified rather than a silent re-partition. This override changes no other harness's dispatch
+path and leaves the resolved concurrency DEFAULT and its resolution order untouched.
+
 "Blocking joins" means awaiting that one call before releasing the next wave — it does NOT mean one
 blocking `subagent` call per dispatch unit. Pi's foreground guard is `subagentInProgress`
 (`pi-subagents` `subagent-executor.js`, `duplicateSubagentCallResult`): it rejects the second onward

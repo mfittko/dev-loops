@@ -614,6 +614,29 @@ test("emits the configured (unclamped) maxConcurrent under a non-Claude env (#19
   });
 });
 
+// The emit step's config anchor is the round's artifact root (--tmp-root's
+// parent), NOT the ambient shell cwd — so a run whose shell sits in a DIFFERENT
+// (configless) directory still reads the same .devloops the wave emitter's
+// recorded-vs-resolved guard resolves against.
+test("anchors config at --tmp-root's artifact root, not the shell cwd", async () => {
+  await withTmpDir(async (repoRoot) => {
+    await seedBundle(repoRoot);
+    await writeFile(path.join(repoRoot, ".devloops"), "version: 1\ngates:\n  fanout:\n    maxConcurrent: 2\n", "utf8");
+    const elsewhere = path.join(repoRoot, "elsewhere");
+    await mkdir(elsewhere, { recursive: true });
+    const nonClaudeEnv = { ...process.env };
+    delete nonClaudeEnv.CLAUDECODE;
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--tmp-root", path.join(repoRoot, "tmp")],
+      { cwd: elsewhere, env: nonClaudeEnv },
+    );
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const payload = JSON.parse(result.stdout);
+    // The round's own .devloops wins over the configless shell checkout.
+    assert.equal(payload.maxConcurrent, 2);
+  });
+});
+
 test("--pending emits only the pendingGroups subset", async () => {
   await withTmpDir(async (tmpDir) => {
     await seedBundle(tmpDir);

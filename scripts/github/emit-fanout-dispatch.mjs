@@ -610,12 +610,18 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   let configuredGroupNames;
   let maxConcurrent;
   try {
-    // Load the same config write-gate-context resolved against, through the
-    // SHARED resolveRepoRoot helper so a non-root cwd normalizes to the checkout
-    // root the wave emitter's recorded-vs-resolved guard also resolves against
-    // (a raw `process.cwd()` here would diverge on a subdir cwd and fail a
-    // legitimate round closed at that guard).
-    const { config } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(process.cwd()) });
+    // Anchor config at the SAME root the wave emitter's recorded-vs-resolved
+    // guard resolves against: the round's artifact root — the directory holding
+    // the round's `tmp/` (`--tmp-root`'s parent), NOT the ambient shell cwd.
+    // emit-wave-dispatch.mjs derives its emitted-call `cwd` (and therefore its
+    // config root) as `resolveRepoRoot(dirname(--tmp-root))`, so with the wave
+    // emitter's OWN documented `--tmp-root <worktree>/tmp` remedy the two steps
+    // would otherwise read `.devloops` from DIFFERENT checkouts (the shell's
+    // checkout here vs. the worktree there) and the guard would refuse a
+    // legitimate round with a remediation that cannot change the recorded value.
+    // The shared resolveRepoRoot normalizes a non-root anchor to its checkout
+    // root.
+    const { config } = await loadDevLoopConfig({ repoRoot: resolveRepoRoot(path.dirname(path.resolve(tmpRoot))) });
     if (carryProof !== undefined) {
       const alwaysRerun = resolveGateAngleContract(config, mapGateToConfigKey(gate)).mandatoryAngles;
       if (carryProof.some(({ angle }) => angleReviewSurface(angle, { alwaysRerun }).kind !== "kinds")) {

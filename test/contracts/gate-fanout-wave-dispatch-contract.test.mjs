@@ -51,3 +51,16 @@ test("the SKILL.md dispatch-discipline paragraph carries the one-call shape", as
     assert.ok(paragraph.includes(token), `dispatch-discipline paragraph must carry the one-call shape: ${token}`);
   }
 });
+
+// AC-6 names TWO surfaces: the SKILL.md dispatch guidance AND the per-harness
+// delivery table. Reverting that table's Code-driven Pi row to the old
+// "driver reads the file and directly supplies the spawned reviewer's prompt"
+// wording must fail.
+test("the per-harness delivery table's Code-driven Pi row carries the one-call shape", async () => {
+  const contract = await readRepo(CONTRACT_PATH);
+  const row = contract.split("\n").find((line) => line.startsWith("| Code-driven Pi"));
+  assert.ok(row, "the delivery table must carry a `| Code-driven Pi` row");
+  for (const token of ["workflowScriptPath", "ONE `subagent` call per wave", "Never one call per unit"]) {
+    assert.ok(row.includes(token), `the Code-driven Pi row must carry: ${token}`);
+  }
+});

@@ -174,8 +174,10 @@ test("emits ONE runs.all call per wave with a unique non-empty key per unit", as
     assert.equal(plan.calls[0].async, false);
     assert.equal(plan.calls[0].timeoutMs, DEFAULT_WAVE_TIMEOUT_MS);
     assert.equal(plan.calls[0].workflowScriptPath, plan.waves[0].scriptPath);
-    assert.equal(typeof plan.calls[0].cwd, "string");
-    assert.ok(plan.calls[0].cwd.length > 0);
+    // GATE-EXEC-NO-CWD-DEPENDENCE: the DEFAULT emitted-call cwd is the round's
+    // artifact root, not the ambient shell cwd. The fixture tmp dir is not a git
+    // checkout, so resolveRepoRoot(tmpDir) deterministically returns tmpDir.
+    assert.equal(plan.calls[0].cwd, path.resolve(tmpDir));
     // The partition is a function of the round's own recorded artifact.
     assert.equal(plan.maxConcurrentSource, "emit-plan");
     assert.equal(plan.sequential, false);
@@ -186,16 +188,28 @@ test("emits ONE runs.all call per wave with a unique non-empty key per unit", as
 test("honors an explicit --cwd and --timeout-ms in the emitted call body and config root", async () => {
   await withTmpDir(async (tmpDir) => {
     await seedEmitPlan(tmpDir);
+    const worktree = path.join(tmpDir, "worktree");
+    await mkdir(worktree, { recursive: true });
     const configCalls = [];
-    assert.equal(await main([...baseArgs(tmpDir), "--cwd", "/some/worktree", "--timeout-ms", "12345"], { loadConfig: configStub({ calls: configCalls }) }), 0);
+    assert.equal(await main([...baseArgs(tmpDir), "--cwd", worktree, "--timeout-ms", "12345"], { loadConfig: configStub({ calls: configCalls }) }), 0);
     const plan = await readPlan(tmpDir);
-    assert.equal(plan.calls[0].cwd, "/some/worktree");
+    assert.equal(plan.calls[0].cwd, worktree);
     assert.equal(plan.calls[0].timeoutMs, 12345);
     // GATE-EXEC-NO-CWD-DEPENDENCE: the config root the concurrency is resolved
     // against follows --cwd, not the ambient shell cwd.
     assert.equal(configCalls.length, 1);
-    assert.equal(configCalls[0].repoRoot, "/some/worktree");
+    assert.equal(configCalls[0].repoRoot, worktree);
   });
+});
+
+// --cwd is both the emitted child cwd and the config root, so a nonexistent
+// value must fail loudly at the CLI boundary instead of silently resolving
+// BUILT_IN_DEFAULTS or emitting a "ready" body whose cwd cannot launch.
+test("--cwd that is not an existing directory exits 2", () => {
+  const result = runCli([...baseArgs(os.tmpdir()), "--cwd", "/nonexistent-worktree-dir"]);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /--cwd/);
+  assert.match(result.stderr, /not an existing directory/);
 });
 
 // The config root follows --cwd even when the ambient cwd is a different
@@ -223,6 +237,11 @@ test("cross-script: the real emit-fanout-dispatch plan drives one runs.all wave 
   await withTmpDir(async (repoRoot) => {
     const contextDir = path.join(repoRoot, "tmp", "gate-context", "o-r", "pr-7");
     await mkdir(contextDir, { recursive: true });
+    // Pin the round's fan-out config at the fixture root so the REAL emit step's
+    // concurrency resolution is hermetic: it anchors config at --tmp-root's
+    // parent, not the ambient checkout's .devloops (the coupling that made this
+    // test depend on the developer's local config).
+    await writeFile(path.join(repoRoot, ".devloops"), "version: 1\ngates:\n  fanout:\n    maxConcurrent: 3\n", "utf8");
     await writeFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.briefing-prefix.txt`), "## Invariant prefix\nrepo: o/r\nhead: c\n", "utf8");
     await writeFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.briefing-volatile.txt`), "# volatile tail\ngate: pre_approval_gate\n", "utf8");
     // Four dispatch units at the repo's effective concurrency (3) → two waves,
@@ -640,6 +659,38 @@ test("refuses when the emit-plan claims units it does not carry", async () => {
   });
 });
 
+// A refusal-shaped emit-plan (the sibling emitter recorded ok: false) must
+// never dispatch as a complete round: the plan-validity chokepoint is
+// fail-closed, not a fail-open on the count guards alone.
+test("refuses a refusal-shaped emit-plan (ok: false) instead of dispatching it", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const { planPath } = await seedEmitPlan(tmpDir);
+    const plan = JSON.parse(await readFile(planPath, "utf8"));
+    plan.ok = false;
+    await writeFile(planPath, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
+    const { exitCode, stdout } = await captureStdout(() => main(baseArgs(tmpDir), { loadConfig: configStub() }));
+    assert.equal(exitCode, 1);
+    const payload = JSON.parse(stdout);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /carries no dispatch units/);
+    assert.match(payload.error, /re-run emit-fanout-dispatch\.mjs/);
+  });
+});
+
+// The !zeroWave carve-out in the serialization guard is the one path where the
+// guard is deliberately skipped: an all-carried zero-unit round combined with
+// --sequential and requireFanoutEvidence must still succeed.
+test("a zero-unit round with --sequential still succeeds when requireFanoutEvidence is on", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedEmitPlan(tmpDir, { units: [], count: 0 });
+    assert.equal(await main([...baseArgs(tmpDir), "--sequential"], { loadConfig: configStub({ sequential: false, requireFanoutEvidence: true }) }), 0);
+    const plan = await readPlan(tmpDir);
+    assert.equal(plan.ok, true);
+    assert.deepEqual(plan.waves, []);
+    assert.deepEqual(plan.calls, []);
+  });
+});
+
 test("refuses when the emit-plan carries no units and records no valid count", async () => {
   await withTmpDir(async (tmpDir) => {
     const { planPath } = await seedEmitPlan(tmpDir, { units: [] });
@@ -649,6 +700,89 @@ test("refuses when the emit-plan carries no units and records no valid count", a
     const { exitCode, stdout } = await captureStdout(() => main(baseArgs(tmpDir), { loadConfig: configStub() }));
     assert.equal(exitCode, 1);
     assert.match(JSON.parse(stdout).error, /records no valid count/);
+  });
+});
+
+// GATE-EXEC-PRIME reconciliation: under the default one-reviewer-as-primer
+// form the primer IS an emitted unit, so --primer-key emits it as its own first
+// wave and excludes it from the remaining partition — never double-dispatched.
+test("--primer-key emits the primer as its own first wave and excludes it from the rest", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const units = [
+      { scope: "pre-approval-gate-holistic", angles: ["holistic"], group: null },
+      { scope: "pre-approval-gate-coverage", angles: ["coverage"], group: null },
+      { scope: "pre-approval-gate-correctness", angles: ["correctness"], group: null },
+      { scope: "pre-approval-gate-dry", angles: ["dry"], group: null },
+    ];
+    await seedEmitPlan(tmpDir, { units, maxConcurrent: 3 });
+    assert.equal(await main([...baseArgs(tmpDir), "--primer-key", "pre-approval-gate-holistic"], { loadConfig: configStub({ maxConcurrent: 3 }) }), 0);
+    const plan = await readPlan(tmpDir);
+    assert.equal(plan.primerKey, "pre-approval-gate-holistic");
+    assert.deepEqual(plan.waves[0].keys, ["pre-approval-gate-holistic"], "wave 1 is the primer alone");
+    assert.equal(plan.waves[0].count, 1);
+    assert.equal(plan.waves.length, 2, "primer wave + ceil(3/3) remaining waves");
+    const rest = plan.waves.slice(1).flatMap((wave) => wave.keys);
+    assert.equal(rest.includes("pre-approval-gate-holistic"), false, "the primer must not reappear in a later wave");
+    assert.deepEqual(new Set(rest), new Set(["pre-approval-gate-coverage", "pre-approval-gate-correctness", "pre-approval-gate-dry"]));
+    assert.equal(plan.calls.length, plan.waves.length, "one ready call per wave");
+    for (const wave of plan.waves) {
+      assert.equal(waveScriptCallShape(await readFile(wave.scriptPath, "utf8")).runsAllCalls, 1);
+    }
+  });
+});
+
+test("--primer-key refuses a key that is not an emitted unit or matches more than one", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedEmitPlan(tmpDir);
+    let result = await captureStdout(() => main([...baseArgs(tmpDir), "--primer-key", "not-a-unit"], { loadConfig: configStub() }));
+    assert.equal(result.exitCode, 1);
+    assert.match(JSON.parse(result.stdout).error, /is not a dispatch unit/);
+    // Duplicate keys: two units sharing the primer key.
+    await seedEmitPlan(tmpDir, { units: [
+      { scope: "pre-approval-gate-holistic", angles: ["holistic"], group: null },
+      { key: "dup", scope: "pre-approval-gate-coverage", angles: ["coverage"], group: null },
+      { key: "dup", scope: "pre-approval-gate-correctness", angles: ["correctness"], group: null },
+    ] });
+    result = await captureStdout(() => main([...baseArgs(tmpDir), "--primer-key", "dup"], { loadConfig: configStub() }));
+    assert.equal(result.exitCode, 1);
+    assert.match(JSON.parse(result.stdout).error, /matches 2 dispatch units/);
+  });
+});
+
+// GATE-EXEC-DISPATCH-RETRY-BACKOFF: the backoff-reduced batch is expressible as
+// a bounded --max-concurrent degradation, recorded rather than silent.
+test("--max-concurrent degrades the wave width within the recorded bound", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const units = Array.from({ length: 6 }, (_, i) => ({ scope: `pre-approval-gate-angle-${i + 1}`, angles: [`angle-${i + 1}`], group: null }));
+    await seedEmitPlan(tmpDir, { units, maxConcurrent: 4 });
+    assert.equal(await main([...baseArgs(tmpDir), "--max-concurrent", "2"], { loadConfig: configStub({ maxConcurrent: 4 }) }), 0);
+    const plan = await readPlan(tmpDir);
+    assert.equal(plan.maxConcurrent, 2);
+    assert.equal(plan.maxConcurrentSource, "explicit-degradation");
+    assert.equal(plan.waves.length, 3);
+    assert.deepEqual(plan.waves.map((w) => w.count), [2, 2, 2]);
+  });
+});
+
+test("--max-concurrent 1 is a recorded degradation, not an unjustified serialization", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const units = Array.from({ length: 3 }, (_, i) => ({ scope: `pre-approval-gate-angle-${i + 1}`, angles: [`angle-${i + 1}`], group: null }));
+    await seedEmitPlan(tmpDir, { units, maxConcurrent: 3 });
+    assert.equal(await main([...baseArgs(tmpDir), "--max-concurrent", "1"], { loadConfig: configStub({ maxConcurrent: 3, requireFanoutEvidence: true }) }), 0, "a bounded degradation to 1 must be permitted, not refused");
+    const plan = await readPlan(tmpDir);
+    assert.equal(plan.maxConcurrent, 1);
+    assert.equal(plan.sequential, false);
+    assert.equal(plan.sequentialSource, "explicit-degradation");
+    assert.equal(plan.waves.length, 3);
+  });
+});
+
+test("--max-concurrent above the round's recorded bound refuses", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedEmitPlan(tmpDir, { maxConcurrent: 2 });
+    const { exitCode, stdout } = await captureStdout(() => main([...baseArgs(tmpDir), "--max-concurrent", "3"], { loadConfig: configStub({ maxConcurrent: 2 }) }));
+    assert.equal(exitCode, 1);
+    assert.match(JSON.parse(stdout).error, /exceeds the round's recorded maxConcurrent 2/);
   });
 });
 
@@ -814,9 +948,9 @@ test("--timeout-ms refuses unsafe and over-ceiling values", () => {
 
 // An empty value for a value-taking flag is a usage error, not a silent
 // fallback to the default.
-test("empty-value usage exits for --tmp-root, --cwd, --timeout-ms, --jq, and --fields exit 2", () => {
+test("an empty value for --tmp-root, --cwd, --timeout-ms, --max-concurrent, --primer-key, --jq, and --fields exits 2", () => {
   const base = ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA];
-  for (const [flag, pattern] of [["--tmp-root", /--tmp-root/], ["--cwd", /--cwd/], ["--timeout-ms", /--timeout-ms/]]) {
+  for (const [flag, pattern] of [["--tmp-root", /--tmp-root/], ["--cwd", /--cwd/], ["--timeout-ms", /--timeout-ms/], ["--max-concurrent", /--max-concurrent/], ["--primer-key", /--primer-key/]]) {
     const result = runCli([...base, flag, ""]);
     assert.equal(result.status, 2, `${flag} with an empty value must exit 2`);
     assert.match(result.stderr, pattern);
