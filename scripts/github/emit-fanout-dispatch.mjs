@@ -44,7 +44,7 @@ tail retains its original unit's group.
 
 The per-unit angle-suffix this emits only NAMES the unit's angle(s) and instructs
 the reviewer to resolve each angle's persona/prompt by running the sanctioned
-\`dev-loops-run cli/index.mjs gate resolve-role --angle <name>\` CLI (which wraps resolveReviewerRole
+CLI (\`node <dev-loops-package-root>/cli/index.mjs gate resolve-role --angle <name>\`, or \`dev-loops-run cli/index.mjs gate resolve-role --angle <name>\` under Claude) (which wraps resolveReviewerRole
 over the fully merged config — a shell reviewer cannot call the function inline) —
 it never inlines persona text extracted by the coordinator. Reviewer composition
 is resolved by the review agent + the neutral bundle (see the review agent's
@@ -161,7 +161,7 @@ const PROHIBITED_OPERATION_INSTRUCTIONS = {
 /**
  * The deterministic angle-suffix for a dispatch unit: it NAMES the unit's
  * angle(s), instructs the reviewer to resolve each angle's persona/focus by
- * running the sanctioned `dev-loops-run cli/index.mjs gate resolve-role --angle <name>` CLI (which
+ * running the sanctioned CLI (`node <dev-loops-package-root>/cli/index.mjs gate resolve-role --angle <name>`, or `dev-loops-run cli/index.mjs gate resolve-role --angle <name>` under Claude) (which
  * wraps resolveReviewerRole over the fully merged config — a reviewer runs in a
  * shell and cannot call that function inline) and review adversarially per its
  * scoped-mode contract, and carries the bounded reviewer contract (REVIEWER_UNIT_BUDGET, assigned-
@@ -191,8 +191,8 @@ export function buildAngleNamingSuffix(unit) {
     ? `## Your review angle: ${list}`
     : `## Your review angles (dispatch unit "${unit?.name}"): ${list}`;
   const body = single
-    ? `Resolve this angle's persona and focus prompt by running the sanctioned CLI \`dev-loops-run cli/index.mjs gate resolve-role --angle <name>\` (fill <name> with the angle named above), then review adversarially per your scoped angle-review mode. Continue without a blocked reviewer ONLY when the CLI returns \`ok: true\` with \`status\` \`fallback\` or \`prompt-missing\`; in that case review the angle by name with no angle-specific focus instruction — never grep the shipped defaults. For ANY other outcome (\`ok: false\`, or any other \`status\` such as \`unresolved\` for an unknown/typo angle or \`config-error\` for a broken config layer), STOP and emit the blocked-reviewer artifact via \`scripts/github/emit-reviewer-blocked.mjs\` rather than proceeding with an untrusted role. Write one findings artifact for this angle at its per-angle path.`
-    : `For EACH angle above, resolve its persona and focus prompt by running the sanctioned CLI \`dev-loops-run cli/index.mjs gate resolve-role --angle <name>\` (once per angle, filling <name> with that angle), then review adversarially per your scoped angle-review mode. Continue without a blocked reviewer for an angle ONLY when the CLI returns \`ok: true\` with \`status\` \`fallback\` or \`prompt-missing\`; in that case review that angle by name with no angle-specific focus instruction — never grep the shipped defaults. For ANY other outcome for an angle (\`ok: false\`, or any other \`status\` such as \`unresolved\` for an unknown/typo angle or \`config-error\` for a broken config layer), STOP and emit the blocked-reviewer artifact via \`scripts/github/emit-reviewer-blocked.mjs\` rather than proceeding with an untrusted role. Write one findings artifact PER ANGLE at its per-angle path — one artifact per angle, never one merged artifact for the unit.`;
+    ? `Resolve this angle's persona and focus prompt by running the sanctioned CLI (\`node <dev-loops-package-root>/cli/index.mjs gate resolve-role --angle <name>\`, or \`dev-loops-run cli/index.mjs gate resolve-role --angle <name>\` under Claude) (fill <name> with the angle named above), then review adversarially per your scoped angle-review mode. Continue without a blocked reviewer ONLY when the CLI returns \`ok: true\` with \`status\` \`fallback\` or \`prompt-missing\`; in that case review the angle by name with no angle-specific focus instruction — never grep the shipped defaults. For ANY other outcome (\`ok: false\`, or any other \`status\` such as \`unresolved\` for an unknown/typo angle or \`config-error\` for a broken config layer), STOP and emit the blocked-reviewer artifact via \`scripts/github/emit-reviewer-blocked.mjs\` rather than proceeding with an untrusted role. Write one findings artifact for this angle at its per-angle path.`
+    : `For EACH angle above, resolve its persona and focus prompt by running the sanctioned CLI (\`node <dev-loops-package-root>/cli/index.mjs gate resolve-role --angle <name>\`, or \`dev-loops-run cli/index.mjs gate resolve-role --angle <name>\` under Claude) (once per angle, filling <name> with that angle), then review adversarially per your scoped angle-review mode. Continue without a blocked reviewer for an angle ONLY when the CLI returns \`ok: true\` with \`status\` \`fallback\` or \`prompt-missing\`; in that case review that angle by name with no angle-specific focus instruction — never grep the shipped defaults. For ANY other outcome for an angle (\`ok: false\`, or any other \`status\` such as \`unresolved\` for an unknown/typo angle or \`config-error\` for a broken config layer), STOP and emit the blocked-reviewer artifact via \`scripts/github/emit-reviewer-blocked.mjs\` rather than proceeding with an untrusted role. Write one findings artifact PER ANGLE at its per-angle path — one artifact per angle, never one merged artifact for the unit.`;
   const prohibited = PROHIBITED_REVIEWER_OPERATIONS
     .map((kind) => PROHIBITED_OPERATION_INSTRUCTIONS[kind] ?? `do not perform ${kind}`)
     .join("; ");
