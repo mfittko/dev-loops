@@ -6,6 +6,7 @@ import path from "node:path";
 import { test } from "bun:test";
 import {
   DEFAULT_WAVE_TIMEOUT_MS,
+  MAX_WAVE_TIMEOUT_MS,
   buildWavePlanPath,
   buildWaveScriptPath,
   main,
@@ -15,6 +16,7 @@ import {
   waveDispatchKey,
   waveScriptCallShape,
 } from "../../scripts/github/emit-wave-dispatch.mjs";
+import { main as emitFanoutMain } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { buildGateEmitPlanPath } from "../../scripts/github/write-gate-context.mjs";
 
 const cliPath = path.resolve("scripts/github/emit-wave-dispatch.mjs");
@@ -115,10 +117,13 @@ async function readPlan(tmpDir) {
  * `requireFanoutEvidence` mirrors the gate enforcement toggle the
  * fail-closed serialization guard keys on.
  */
-function configStub({ maxConcurrent = 3, sequential = false, requireFanoutEvidence = true } = {}) {
-  return async () => ({
-    config: { gates: { requireFanoutEvidence, fanout: { maxConcurrent, ...(sequential ? { sequential: true } : {}) } } },
-  });
+function configStub({ maxConcurrent = 3, sequential = false, requireFanoutEvidence = true, calls } = {}) {
+  return async (opts) => {
+    calls?.push(opts);
+    return {
+      config: { gates: { requireFanoutEvidence, fanout: { maxConcurrent, ...(sequential ? { sequential: true } : {}) } } },
+    };
+  };
 }
 
 test("emit-wave-dispatch.mjs --help exits 0", () => {
@@ -178,13 +183,91 @@ test("emits ONE runs.all call per wave with a unique non-empty key per unit", as
   });
 });
 
-test("honors an explicit --cwd and --timeout-ms in the emitted call body", async () => {
+test("honors an explicit --cwd and --timeout-ms in the emitted call body and config root", async () => {
   await withTmpDir(async (tmpDir) => {
     await seedEmitPlan(tmpDir);
-    assert.equal(await main([...baseArgs(tmpDir), "--cwd", "/some/worktree", "--timeout-ms", "12345"], { loadConfig: configStub() }), 0);
+    const configCalls = [];
+    assert.equal(await main([...baseArgs(tmpDir), "--cwd", "/some/worktree", "--timeout-ms", "12345"], { loadConfig: configStub({ calls: configCalls }) }), 0);
     const plan = await readPlan(tmpDir);
     assert.equal(plan.calls[0].cwd, "/some/worktree");
     assert.equal(plan.calls[0].timeoutMs, 12345);
+    // GATE-EXEC-NO-CWD-DEPENDENCE: the config root the concurrency is resolved
+    // against follows --cwd, not the ambient shell cwd.
+    assert.equal(configCalls.length, 1);
+    assert.equal(configCalls[0].repoRoot, "/some/worktree");
+  });
+});
+
+// The config root follows --cwd even when the ambient cwd is a different
+// checkout: a real .devloops in the --cwd directory is the one read.
+test("resolves the config root from --cwd, reading a .devloops in that directory", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const configRoot = path.join(tmpDir, "config-root");
+    await mkdir(configRoot, { recursive: true });
+    await writeFile(path.join(configRoot, ".devloops"), "version: 1\ngates:\n  fanout:\n    maxConcurrent: 2\n", "utf8");
+    // The emit-plan records the same effective concurrency, so a config root
+    // that ignored --cwd (falling back to the default 4) would refuse on the
+    // recorded-vs-resolved disagreement.
+    await seedEmitPlan(tmpDir, { maxConcurrent: 2 });
+    assert.equal(await main([...baseArgs(tmpDir), "--cwd", configRoot]), 0);
+    const plan = await readPlan(tmpDir);
+    assert.equal(plan.maxConcurrent, 2);
+    assert.equal(plan.maxConcurrentSource, "emit-plan");
+  });
+});
+
+// Cross-script integration: the REAL emit-fanout-dispatch.mjs main writes the
+// keyed emit-plan.json, and the REAL wave emitter consumes THAT plan — so a
+// field rename on either side fails here, not silently at dispatch time.
+test("cross-script: the real emit-fanout-dispatch plan drives one runs.all wave per wave", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const contextDir = path.join(repoRoot, "tmp", "gate-context", "o-r", "pr-7");
+    await mkdir(contextDir, { recursive: true });
+    await writeFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.briefing-prefix.txt`), "## Invariant prefix\nrepo: o/r\nhead: c\n", "utf8");
+    await writeFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.briefing-volatile.txt`), "# volatile tail\ngate: pre_approval_gate\n", "utf8");
+    // Four dispatch units at the repo's effective concurrency (3) → two waves,
+    // so the per-wave runs.all shape and cross-wave key uniqueness are both
+    // exercised.
+    const fanout = {
+      groups: [
+        { name: "design-simplicity", angles: ["dry", "kiss"] },
+        { name: "group:determinism+state-concurrency", angles: ["determinism", "state-concurrency"] },
+        { name: "contradiction-lens", angles: ["contradiction-lens"] },
+        { name: "coverage", angles: ["coverage"] },
+      ],
+    };
+    await writeFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.json`), JSON.stringify({ fanout }), "utf8");
+
+    const tmpRoot = path.join(repoRoot, "tmp");
+    // First round: no prior findings-log, so no carry-forward plan is required.
+    assert.equal(await emitFanoutMain(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA, "--tmp-root", tmpRoot, "--silent"]), 0, "the real emitter must emit the round plan");
+    const planPath = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    const emitted = JSON.parse(await readFile(planPath, "utf8"));
+    // The emit-plan SHAPE the wave emitter consumes is the emitter's own contract.
+    assert.equal(emitted.ok, true);
+    assert.equal(emitted.count, emitted.units.length);
+    assert.ok(emitted.count > 1, "the seeded bundle must resolve more than one dispatch unit");
+    assert.ok(Number.isInteger(emitted.maxConcurrent) && emitted.maxConcurrent >= 1);
+    for (const unit of emitted.units) {
+      assert.equal(typeof unit.scope, "string");
+      assert.equal(typeof unit.promptPath, "string");
+      assert.ok(unit.promptPath.length > 0);
+    }
+
+    // Now the real wave emitter consumes that plan.
+    assert.equal(await main(baseArgs(repoRoot), { loadConfig: configStub({ maxConcurrent: emitted.maxConcurrent }) }), 0);
+    const plan = await readPlan(repoRoot);
+    assert.equal(plan.ok, true);
+    assert.equal(plan.count, emitted.count);
+    assert.equal(plan.waves.length, Math.ceil(emitted.count / emitted.maxConcurrent));
+    assert.equal(plan.calls.length, plan.waves.length, "one ready call per wave");
+    const keys = plan.waves.flatMap((wave) => wave.keys);
+    assert.equal(new Set(keys).size, keys.length, "keys are unique across the whole round");
+    for (const wave of plan.waves) {
+      const shape = waveScriptCallShape(await readFile(wave.scriptPath, "utf8"));
+      assert.equal(shape.runsAllCalls, 1, "each wave is exactly ONE runs.all call");
+      assert.equal(shape.hasLegacyTasksInput, false);
+    }
   });
 });
 
@@ -283,6 +366,26 @@ test("refuses when the emit-plan's recorded count disagrees with its units", asy
     const payload = JSON.parse(stdout);
     assert.equal(payload.ok, false);
     assert.match(payload.error, /records count 2 but carries 3/);
+  });
+});
+
+// A plan whose recorded count is missing or malformed must be refused EARLY,
+// naming the emit-plan, rather than later blamed on the emitted wave.
+test("refuses when the emit-plan records no valid count", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const { planPath } = await seedEmitPlan(tmpDir);
+    for (const badCount of [undefined, "3", 2.5, null]) {
+      const plan = JSON.parse(await readFile(planPath, "utf8"));
+      if (badCount === undefined) delete plan.count;
+      else plan.count = badCount;
+      await writeFile(planPath, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
+      const { exitCode, stdout } = await captureStdout(() => main(baseArgs(tmpDir), { loadConfig: configStub() }));
+      assert.equal(exitCode, 1, `count=${JSON.stringify(badCount)} must refuse`);
+      const payload = JSON.parse(stdout);
+      assert.equal(payload.ok, false);
+      assert.match(payload.error, /records no valid count/);
+      assert.match(payload.error, /emit-plan/);
+    }
   });
 });
 
@@ -443,12 +546,25 @@ test("refuses when a dispatch unit carries no key", async () => {
   });
 });
 
-test("refuses when a unit's promptPath is missing or unreadable", async () => {
+test("refuses when a unit's promptPath is blank, empty, or unreadable", async () => {
   await withTmpDir(async (tmpDir) => {
+    // Unreadable path.
     await seedEmitPlan(tmpDir, { units: [{ scope: "pre-approval-gate-holistic", angles: ["holistic"], group: null, promptPath: "/nonexistent/prompt.txt" }] });
-    const { exitCode, stdout } = await captureStdout(() => main(baseArgs(tmpDir), { loadConfig: configStub() }));
-    assert.equal(exitCode, 1);
-    assert.match(JSON.parse(stdout).error, /unreadable/);
+    let result = await captureStdout(() => main(baseArgs(tmpDir), { loadConfig: configStub() }));
+    assert.equal(result.exitCode, 1);
+    assert.match(JSON.parse(result.stdout).error, /unreadable/);
+
+    // Blank promptPath — a distinct script branch from the unreadable read.
+    await seedEmitPlan(tmpDir, { units: [{ scope: "pre-approval-gate-holistic", angles: ["holistic"], group: null, promptPath: "   " }] });
+    result = await captureStdout(() => main(baseArgs(tmpDir), { loadConfig: configStub() }));
+    assert.equal(result.exitCode, 1);
+    assert.match(JSON.parse(result.stdout).error, /carries no promptPath/);
+
+    // Empty prompt file — the third branch (readable but empty).
+    await seedEmitPlan(tmpDir, { units: [{ scope: "pre-approval-gate-holistic", angles: ["holistic"], group: null, promptBytes: "" }] });
+    result = await captureStdout(() => main(baseArgs(tmpDir), { loadConfig: configStub() }));
+    assert.equal(result.exitCode, 1);
+    assert.match(JSON.parse(result.stdout).error, /is empty/);
   });
 });
 
@@ -607,4 +723,47 @@ test("CLI usage errors exit 2 with a stderr hint", () => {
   const badGate = runCli(["--repo", REPO, "--pr", PR, "--gate", "nope", "--head-sha", HEAD_SHA]);
   assert.equal(badGate.status, 2);
   assert.match(badGate.stderr, /--gate/);
+});
+
+// --timeout-ms must be a safe integer within the documented ceiling.
+test("--timeout-ms refuses unsafe and over-ceiling values", () => {
+  const base = ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA];
+  for (const bad of ["0", "9007199254740993", "99999999999999999999", String(MAX_WAVE_TIMEOUT_MS + 1)]) {
+    const result = runCli([...base, "--timeout-ms", bad]);
+    assert.equal(result.status, 2, `--timeout-ms ${bad} must exit 2`);
+    assert.match(result.stderr, /--timeout-ms/);
+  }
+  const ok = runCli([...base, "--tmp-root", "/nonexistent-tmp-root", "--timeout-ms", String(MAX_WAVE_TIMEOUT_MS)]);
+  assert.equal(ok.status, 1, "the ceiling itself is accepted (then refuses on the missing emit-plan)");
+});
+
+// An empty value for a value-taking flag is a usage error, not a silent
+// fallback to the default.
+test("empty-value usage exits for --tmp-root, --cwd, --jq, and --fields exit 2", () => {
+  const base = ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA];
+  for (const [flag, pattern] of [["--tmp-root", /--tmp-root/], ["--cwd", /--cwd/]]) {
+    const result = runCli([...base, flag, ""]);
+    assert.equal(result.status, 2, `${flag} with an empty value must exit 2`);
+    assert.match(result.stderr, pattern);
+  }
+  for (const [flag, pattern] of [["--jq", /--jq/], ["--fields", /--fields/]]) {
+    const result = runCli([...base, "--tmp-root", path.join(os.tmpdir(), "dev-loops-empty-flag-tmp"), flag, ""]);
+    assert.equal(result.status, 2, `${flag} with an empty value must exit 2`);
+    assert.match(result.stderr, pattern);
+  }
+});
+
+// The --jq validation runs AFTER the start-of-flow clear, so an empty filter
+// (exit 2, before the plan is read) leaves no stale wave artifact for the key.
+test('--jq "" exits 2 and leaves no wave artifact for the key', async () => {
+  await withTmpDir(async (tmpDir) => {
+    const { dir } = await seedEmitPlan(tmpDir);
+    await writeFile(path.join(dir, `${GATE}-${HEAD_SHA}.wave-1.js`), "stale script", "utf8");
+    await writeFile(buildWavePlanPath({ planPath: planPathFor(tmpDir), gate: GATE, headSha: HEAD_SHA }), "{}", "utf8");
+    const result = runCli([...baseArgs(tmpDir), "--jq", ""]);
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /--jq/);
+    assert.equal(await readFile(path.join(dir, `${GATE}-${HEAD_SHA}.wave-1.js`), "utf8").catch(() => null), null);
+    assert.equal(await readFile(buildWavePlanPath({ planPath: planPathFor(tmpDir), gate: GATE, headSha: HEAD_SHA }), "utf8").catch(() => null), null);
+  });
 });

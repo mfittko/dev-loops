@@ -385,7 +385,7 @@ that unit's `promptPath` bytes verbatim, records each unit's `group` on Phase 3'
 (null for an unsplit single-angle resolved unit; the original resolved unit's own name —
 configured or auto-chunk — for every split sub-unit, including a one-angle tail, and for an
 unsplit shared unit), and waves the emitted
-units at most `maxConcurrent` at a time. The conductor MUST bound this step by the emitter's
+units at most `maxConcurrent` at a time. On Pi the emitted units are released by `emit-wave-dispatch.mjs` as ONE `runs.all` wave per wave (see `GATE-EXEC-FANOUT-WAVE-DISPATCH` below); the agent-authored harnesses (Claude Code / Codex) keep relaying `promptPath` bytes per the per-harness delivery table. The conductor MUST bound this step by the emitter's
 `maxConcurrent` (`resolveFanoutEffectiveConcurrency`, 1 when `gates.fanout.sequential`), NOT by
 `artifact.fanout.wavePlan`: that wave plan is computed over the UNSPLIT `resolveFanoutGroups`
 units and no longer matches this step's split unit set (an over-cap unit the emitter cap-splits
@@ -544,8 +544,10 @@ round's artifacts; read THAT path instead of capturing stdout, which a concurren
 It refuses (exit 1) on a unit with no key or an unreadable prompt, and it validates
 the built plan's shape before any script reaches disk — one `runs.all` call per wave, unique
 non-empty keys, the concurrency bound honored, and no separate-call partition — as defense in
-depth over the deterministic partitioner. Every non-success exit after the round key is resolved
-leaves no wave artifact on disk for that key. It refuses (exit 1) on either serialization trigger —
+depth over the deterministic partitioner. The start-of-flow clear removes this key's prior wave
+artifacts at the start of every run, and every refusal/IO/persist failure and every
+data-dependent `--jq` error (exit 2) re-clears them; a falsy `--jq` predicate (exit 1) is an
+emitted-round result and leaves the round's artifacts in place. It refuses (exit 1) on either serialization trigger —
 an explicit `--sequential` not backed by `gates.fanout.sequential`, or a resolved effective
 concurrency of 1 (`gates.fanout.maxConcurrent: 1`) while `gates.requireFanoutEvidence` is on — and
 the remediation is to set `gates.fanout.sequential: true` in `.devloops` to record the sanctioned

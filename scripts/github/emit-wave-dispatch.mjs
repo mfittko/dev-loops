@@ -6,6 +6,7 @@ import { JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output
 import { LIFECYCLE_GATES, REVIEW_GATE, normalizeGate } from "./_gate-names.mjs";
 import { HEAD_SHA_RE } from "./record-dispatch-prompt-layout.mjs";
 import { buildGateEmitPlanPath } from "./write-gate-context.mjs";
+import { resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
 import {
   loadDevLoopConfig,
   resolveFanoutEffectiveConcurrency,
@@ -55,14 +56,17 @@ Optional:
                                under (default: process.cwd()/tmp; must match the
                                emit-fanout-dispatch.mjs call).
   --cwd <path>                 The worktree the emitted call must run in,
-                               resolved to an ABSOLUTE path (default:
-                               process.cwd()) — written into the emitted call
+                               resolved to an ABSOLUTE path (default: the
+                               resolved repository root — the worktree root,
+                               via resolveRepoRoot — never the raw shell cwd)
+                               — written into the emitted call
                                body's \`cwd\` AND used as the config root the
                                round's fan-out concurrency is resolved against
                                (GATE-EXEC-NO-CWD-DEPENDENCE: the shell may sit
                                in the primary checkout).
   --timeout-ms <ms>            Bounded per-wave dispatch deadline in ms
-                               (default: 900000). Must be a positive integer.
+                               (default: 900000). Must be a safe integer
+                               between 1 and 86400000 (24h).
   --sequential                 Request single-unit waves. Refused (exit 1) unless
                                \`gates.fanout.sequential\` is configured or
                                \`gates.requireFanoutEvidence\` is off.
@@ -77,19 +81,20 @@ Output (stdout, JSON):
   A fail-closed refusal (exit 1) emits { "ok": false, "error": "..." } on STDOUT
   (via the shared jq-output emitter); a usage/parse error (exit 2) emits
   { "ok": false, "error": "...", "hint"?: "run with --help for usage" } on STDERR.
-  Every non-success exit AFTER the round key is resolved (a missing emit-plan, a
-  plan with no units or a recorded count that disagrees with its units, a
-  maxConcurrent recorded by the emit-plan that disagrees with the resolved
-  effective concurrency, a unit-level refusal, a shape refusal, a script/persist
-  IO failure, an empty/invalid --jq, or a data-dependent --jq error) leaves NO
-  wave artifact on disk for this (gate, headSha) key. Argument-validation exits
-  that precede the key resolution (bad --repo/--pr/--gate/--head-sha/--tmp-root/
-  --cwd/--timeout-ms) do not touch the key's artifacts.
+  The start-of-flow clear removes this key's prior wave artifacts at the START
+  of every run, and every refusal/IO/persist failure and every data-dependent
+  --jq error (exit 2) re-clears them, so those non-success exits leave NO wave
+  artifact on disk for this (gate, headSha) key. A falsy --jq predicate (exit 1)
+  is an emitted-round result: the round's artifacts are persisted and left in
+  place. Argument-validation exits that precede the key resolution (bad --repo/
+  --pr/--gate/--head-sha/--tmp-root/--cwd/--timeout-ms) do not touch the key's
+  artifacts.
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Emitted one ready wave script + call body per wave
   1  Refused: no emit-plan.json at this key (run emit-fanout-dispatch.mjs first),
-     the plan carries no units or records a count that disagrees with its units,
+     the plan carries no units, records no valid count, or records a count that
+     disagrees with its units,
      the plan's recorded maxConcurrent disagrees with the resolved effective
      concurrency, a unit carries no key, a unit's promptPath is
      missing/empty/unreadable, the plan's wave partition does not honor the
@@ -102,6 +107,13 @@ const parseError = buildParseError(USAGE);
 
 /** Default bounded per-wave dispatch deadline, in ms. */
 export const DEFAULT_WAVE_TIMEOUT_MS = 900000;
+
+/**
+ * Hard ceiling for --timeout-ms: 24 hours. A deadline beyond this is a caller
+ * bug (an effectively unbounded wait), not a longer review, so it refuses
+ * rather than silently accepting it.
+ */
+export const MAX_WAVE_TIMEOUT_MS = 86400000;
 
 /**
  * The `runs.all` item `key` for a dispatch unit: the unit's own `key` when it
@@ -283,6 +295,22 @@ function resolveFlagValue(argv, flag) {
 }
 
 /**
+ * Default emitted-call cwd when --cwd is omitted: the checkout's repository
+ * root (the worktree root), NOT the ambient shell cwd — GATE-EXEC-NO-CWD-
+ * DEPENDENCE, since the shell may sit in the primary checkout while the round
+ * belongs to a linked worktree. Falls back to process.cwd() only if the
+ * resolver itself throws.
+ * @returns {string}
+ */
+function resolveDefaultCwd() {
+  try {
+    return resolveRepoRoot(process.cwd());
+  } catch {
+    return process.cwd();
+  }
+}
+
+/**
  * Remove every wave artifact this step generates for a (gate, headSha) key:
  * the generated scripts and the keyed wave plan. Called before writing and on
  * every non-success exit, so a failed or refused run never leaves a stale
@@ -341,13 +369,13 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     process.stderr.write(`${formatCliError(parseError("Invalid --tmp-root value: must be non-empty."))}\n`);
     return 2;
   }
-  const tmpRoot = tmpRootArg ?? tmpRootDefault;
+  const tmpRoot = path.resolve(tmpRootArg ?? tmpRootDefault);
   const cwdArg = resolveFlagValue(argv, "--cwd");
   if (cwdArg === "") {
     process.stderr.write(`${formatCliError(parseError("Invalid --cwd value: must be non-empty."))}\n`);
     return 2;
   }
-  const cwd = path.resolve(cwdArg ?? process.cwd());
+  const cwd = path.resolve(cwdArg ?? resolveDefaultCwd());
   const timeoutArg = resolveFlagValue(argv, "--timeout-ms");
   if (timeoutArg === "") {
     process.stderr.write(`${formatCliError(parseError("Invalid --timeout-ms value: must be a positive integer."))}\n`);
@@ -355,11 +383,12 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   }
   let timeoutMs = DEFAULT_WAVE_TIMEOUT_MS;
   if (timeoutArg !== null) {
-    if (!/^[0-9]+$/.test(timeoutArg) || Number(timeoutArg) < 1) {
-      process.stderr.write(`${formatCliError(parseError(`--timeout-ms must be a positive integer${timeoutArg ? ` (got ${JSON.stringify(timeoutArg)})` : ""}.`))}\n`);
+    const parsedTimeout = Number(timeoutArg);
+    if (!/^[0-9]+$/.test(timeoutArg) || !Number.isSafeInteger(parsedTimeout) || parsedTimeout < 1 || parsedTimeout > MAX_WAVE_TIMEOUT_MS) {
+      process.stderr.write(`${formatCliError(parseError(`--timeout-ms must be a safe integer between 1 and ${MAX_WAVE_TIMEOUT_MS} (24h)${timeoutArg ? ` (got ${JSON.stringify(timeoutArg)})` : ""}.`))}\n`);
       return 2;
     }
-    timeoutMs = Number(timeoutArg);
+    timeoutMs = parsedTimeout;
   }
   let planPath;
   try {
@@ -426,7 +455,10 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // The emit-plan records the round's unit count. A plan whose recorded count
   // disagrees with the units it actually carries is truncated/partial and must
   // not dispatch as a complete round.
-  if (Number.isInteger(plan.count) && plan.count !== units.length) {
+  if (!Number.isInteger(plan.count)) {
+    return refuse(`GATE-EXEC-FANOUT-WAVE-DISPATCH: refusing — the emit-plan at ${JSON.stringify(planPath)} records no valid count (count=${JSON.stringify(plan.count)}) — a plan whose recorded count is missing or malformed must not dispatch as a complete round; re-run emit-fanout-dispatch.mjs`);
+  }
+  if (plan.count !== units.length) {
     return refuse(`GATE-EXEC-FANOUT-WAVE-DISPATCH: refusing — the emit-plan at ${JSON.stringify(planPath)} records count ${plan.count} but carries ${units.length} dispatch unit(s) — a truncated or partial plan must not dispatch as a complete round; re-run emit-fanout-dispatch.mjs`);
   }
 
