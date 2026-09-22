@@ -496,9 +496,8 @@ function t0PresentSurfaceCategories(t0) {
 function inferCategoriesFromT0(t0) {
   const categories = t0FileCategories(t0);
   // Pure code-only change (all files classify as code, not a rename) is a
-  // LOGIC_CHANGE. Without this an all-code diff yields no category, which
-  // resolveDynamicAngles treats as unclassifiable → fallback-to-all, regressing
-  // the primary case: a code-only PR must resolve to the LOGIC_CHANGE subset.
+  // LOGIC_CHANGE. Without this an all-code diff yields no category and loses
+  // the justified code-review core from best-effort selection.
   if (!t0.renameOnly && t0.files.length > 0 && t0.files.every((f) => classifyFile(f) === "code")) {
     categories.push("LOGIC_CHANGE");
   }
@@ -530,12 +529,17 @@ export function analyzeDiff({ nameStatusOutput, diffOutput }) {
   // When t1 is null (unambiguous diff), infer categories from t0
   // so dynamic angle resolution can narrow for config-only / test-only etc.
   if (!t1) {
-    // A genuinely MIXED diff whose T1 never ran (no diffOutput) must NOT get a
-    // T0-only category: non-empty categories set ambiguous=false, so it would
-    // under-select and drop the code-review core. T0-only inference is safe only
-    // for unambiguous diffs; a mixed diff without hunk content is unclassifiable,
-    // so return empty categories and fall back to the full angle set (fail closed).
-    const changeCategories = t0Ambiguous ? [] : inferCategoriesFromT0(t0);
+    // A genuinely MIXED diff whose T1 never ran (no diffOutput) still has
+    // honest T0 surface evidence. Reuse the same surface-presence categories
+    // as the hunk path, and add LOGIC_CHANGE when code is present, so
+    // best-effort selection retains the code-review core without widening to
+    // the full pool.
+    const changeCategories = t0Ambiguous
+      ? [
+          ...t0PresentSurfaceCategories(t0),
+          ...(t0.files.some((f) => classifyFile(f) === "code") ? ["LOGIC_CHANGE"] : []),
+        ]
+      : inferCategoriesFromT0(t0);
     t1 = {
       changeCategories,
       hunkCount: 0,
@@ -551,10 +555,9 @@ export function analyzeDiff({ nameStatusOutput, diffOutput }) {
   }
 
   // `ambiguous` flags one case: a diff T0 could not classify (mixed categories)
-  // AND whose hunk analysis produced no category. It is NOT the only fallback
-  // trigger — resolveDynamicAngles also falls back whenever changeCategories is
-  // empty. A mixed diff that yields a category (e.g. LOGIC_CHANGE) is classified
-  // and not ambiguous, so LOGIC_CHANGE never forces fallback-to-all via this flag.
+  // AND its available analysis produced no category. Empty categories resolve
+  // through mandatory-floor best-effort selection, while a hunk-less mixed diff
+  // with T0 surface evidence stays classified and keeps its justified core.
   const ambiguous = t0Ambiguous && t1.changeCategories.length === 0;
 
   return { t0, t1, ambiguous };

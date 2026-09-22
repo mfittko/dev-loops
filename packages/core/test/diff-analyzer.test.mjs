@@ -562,21 +562,30 @@ test("analyzeDiff: T0 ambiguous with diff + no classifiable change → ambiguous
   assert.equal(result.ambiguous, true);
 });
 
-test("analyzeDiff: T0 ambiguous without diff → no T1, ambiguous", () => {
+test("analyzeDiff: hunk-less mixed code+docs diff infers the T0 surfaces and code core", () => {
   const result = analyzeDiff({ nameStatusOutput: "M\tsrc/foo.mjs\nM\tdocs/specs/bar.md" });
-  assert.deepEqual(result.t1.changeCategories, []);
-  assert.equal(result.ambiguous, true);
+  assert.deepEqual(result.t1.changeCategories, ["DOCS_ONLY", "LOGIC_CHANGE"]);
+  assert.equal(result.ambiguous, false);
 });
 
-test("analyzeDiff: mixed code+prose WITHOUT diff stays ambiguous (fail-closed, #1442)", () => {
-  // A prose file must not let a mixed code+prose diff under-select. With no
-  // diffOutput the hunk-level T1 never runs, and a T0-only PROSE_PRESENT would
-  // mark it "classified" -> ambiguous=false -> deslop + always-include only,
-  // dropping the code surface. It must instead stay ambiguous and fall back to
-  // the full angle set (deslop still runs there).
+test("analyzeDiff: hunk-less mixed code+prose keeps prose and the code-review core", () => {
+  // Without diffOutput the hunk-level T1 never runs. T0 presence inference
+  // retains both the peripheral prose lenses and LOGIC_CHANGE, so best-effort
+  // selection cannot drop the code surface or widen to the full pool.
   const r = analyzeDiff({ nameStatusOutput: "M\tsrc/foo.mjs\nM\tdocs/articles/bar.md" });
-  assert.equal(r.t1.changeCategories.length, 0, "mixed no-diffOutput must not be PROSE_PRESENT-only");
-  assert.equal(r.ambiguous, true);
+  assert.deepEqual(r.t1.changeCategories, ["DOCS_ONLY", "PROSE_PRESENT", "LOGIC_CHANGE"]);
+  assert.equal(r.ambiguous, false);
+
+  const dyn = resolveDynamicAngles({
+    configuredAngles: DRAFT_ANGLES,
+    changeCategories: r.t1.changeCategories,
+    ambiguous: r.ambiguous,
+  });
+  for (const angle of ["correctness", "coverage", "determinism", "contract-surface", "link-check"]) {
+    assert.ok(dyn.recommendedAngles.includes(angle), `expected ${angle} in hunk-less mixed subset`);
+  }
+  assert.ok(dyn.recommendedAngles.length < DRAFT_ANGLES.length);
+  assert.equal(dyn.fallbackToAll, false);
 });
 
 test("analyzeDiff: rename-only → unambiguous", () => {

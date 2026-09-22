@@ -192,11 +192,11 @@ export async function run(argv) {
         sizeOutcome = null; // fails CLOSED — the composer treats null as ambiguous
       }
     }
-    // GATE-EXEC-PROPORTIONALITY: the composer is the ONE place mode, angle
-    // set, and grouping are combined — resolveGateDispatchMode alone (the
-    // mode-only decision) is never called directly here, so this CLI's
-    // emitted plan and write-gate-context.mjs's persisted angle set can never
-    // independently drift onto two different floor implementations.
+    // GATE-EXEC-PROPORTIONALITY: the composer is the ONE place mode, the
+    // provisional angle set, and grouping are combined. Its no-tier set is a
+    // file-kind-based lower bound of write-gate-context.mjs's authoritative
+    // category-aware set, except that gate:full returns the full static pool
+    // here. Both entry points still share this composer's floor determination.
     const decision = resolveReviewProportionality(config, opts.gate, {
       scope,
       changedFiles,

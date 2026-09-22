@@ -1828,23 +1828,25 @@ test("writeDraftDevLoops honors an excludeAngles override (emitted excludeAngles
   }
 });
 
-test("CLI --angles '[]' is used VERBATIM (empty escape hatch bypasses dynamic resolution)", async () => {
+test("CLI --angles '[]' fails closed instead of writing a zero-review gate", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-empty-angles-"));
+  const priorExitCode = process.exitCode;
   try {
-    await writeDraftDevLoops(repoRoot); // dynamicAngles: true; static pool is non-empty
+    process.exitCode = undefined;
+    await writeDraftDevLoops(repoRoot);
     await main([
       "--repo", "owner/repo", "--pr", "62", "--gate", "draft_gate",
       "--head-sha", "abc1234567890",
       "--angles", "[]",
     ], { repoRoot, run: stubGhRun });
+    assert.equal(process.exitCode, 1);
 
     const artifact = await readGateContext({
       repo: "owner/repo", pr: 62, gate: "draft_gate", headSha: "abc1234567890",
     }, { repoRoot });
-
-    assert.ok(artifact, "artifact written for an explicit empty override");
-    assert.deepEqual(artifact.resolvedAngles, [], "empty array override used verbatim, not the configured pool");
+    assert.equal(artifact, null);
   } finally {
+    process.exitCode = priorExitCode;
     await rm(repoRoot, { recursive: true, force: true });
   }
 });
@@ -1898,16 +1900,10 @@ test("CLI without --angles + malformed .devloops: warns to stderr and proceeds w
   }
 });
 
-test("CLI without --angles + a gate with no configured angles/mandatoryAngles: warns of zero resolved angles and still writes the artifact (warn-and-proceed, not fail-closed)", async () => {
+test("CLI without --angles + a gate with no configured angles fails closed", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-emptyresolved-"));
+  const priorExitCode = process.exitCode;
   try {
-    // draft gate explicitly configured with EMPTY angles (overriding the
-    // extension-defaults angle pool): resolveGateAnglesDynamic resolves an
-    // empty recommendedAngles — the hollow gate-evidence path this warning
-    // exists to flag. Angle arrays merge BY NAME across layers (D3), so an
-    // empty `angles: []` here is a no-op against the shipped extension
-    // defaults' non-empty draft pool — reaching a genuinely empty resolved
-    // set requires disabling every angle that pool actually configures.
     const { config: shippedConfig } = await loadDevLoopConfig({ repoRoot });
     const shippedDraftAngles = resolveGateAngles(shippedConfig, "draft") ?? [];
     const disableLines = shippedDraftAngles.map((name) => `      - name: ${name}\n        enabled: false`);
@@ -1922,6 +1918,7 @@ test("CLI without --angles + a gate with no configured angles/mandatoryAngles: w
       "utf8",
     );
 
+    process.exitCode = undefined;
     const origErr = process.stderr.write;
     const stderrChunks = [];
     process.stderr.write = (chunk) => { stderrChunks.push(String(chunk)); return true; };
@@ -1934,19 +1931,14 @@ test("CLI without --angles + a gate with no configured angles/mandatoryAngles: w
       process.stderr.write = origErr;
     }
 
-    const stderrText = stderrChunks.join("");
-    assert.match(
-      stderrText,
-      /angle resolution produced zero angles for gate draft_gate/,
-      "warns to stderr when angle resolution yields zero angles",
-    );
-
+    assert.equal(process.exitCode, 1);
+    assert.match(stderrChunks.join(""), /Angle resolution produced zero angles for gate draft_gate/);
     const artifact = await readGateContext({
       repo: "owner/repo", pr: 64, gate: "draft_gate", headSha: "abc1234567890",
     }, { repoRoot });
-    assert.ok(artifact, "artifact still written despite zero resolved angles (warn-and-proceed)");
-    assert.deepEqual(artifact.resolvedAngles, [], "resolvedAngles is empty, matching the resolver's null->[] mapping");
+    assert.equal(artifact, null);
   } finally {
+    process.exitCode = priorExitCode;
     await rm(repoRoot, { recursive: true, force: true });
   }
 });

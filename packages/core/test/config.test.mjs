@@ -4699,6 +4699,43 @@ describe("resolveReviewProportionality (#1984 — primer-owned deterministic pla
     assert.ok(plan.angles.length < staticPool.length);
   });
 
+  test("no-tier best-effort selection honors a consumer angle's declared file kind", () => {
+    const config = preApprovalTierConfig();
+    config.gates.preApproval.angles.push({ name: "config-consumer", kinds: ["config"] });
+    const plan = resolveReviewProportionality(config, "preApproval", {
+      scope: { filesChanged: 1, linesChanged: 2 },
+      changedFiles: [".devloops"],
+      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+    });
+    assert.ok(plan.angles.includes("config-consumer"));
+  });
+
+  test("an empty best-effort selection falls back to the static pool", () => {
+    const config = {
+      version: 1,
+      gates: { preApproval: { angles: ["kiss"] } },
+    };
+    const plan = resolveReviewProportionality(config, "preApproval", {
+      scope: { filesChanged: 1, linesChanged: 1 },
+      changedFiles: ["assets/blob.bin"],
+      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+    });
+    assert.deepEqual(plan.angles, ["kiss"]);
+  });
+
+  test("a gate with no configured angles preserves the null skill-default sentinel", () => {
+    const plan = resolveReviewProportionality({ version: 1 }, "preApproval", {});
+    assert.equal(plan.angles, null);
+    assert.deepEqual(plan.groups, []);
+  });
+
+  test("malformed changedFiles entries do not throw from best-effort classification", () => {
+    const config = preApprovalTierConfig();
+    assert.doesNotThrow(() => resolveReviewProportionality(config, "preApproval", {
+      changedFiles: [null, 42, {}, ""],
+    }));
+  });
+
   test("a gate:full label still forces the full configured pool (ADR 0048 escape hatch, unchanged)", () => {
     const config = preApprovalTierConfig();
     const staticPool = resolveGateAngles(config, "preApproval");
@@ -5945,19 +5982,61 @@ describe("resolveGateAnglesDynamic", () => {
     assert.deepEqual(new Set(result.recommendedAngles), new Set(["pr-description", "docs"]));
   });
 
-  test("checkFloors:true + explicitAngles — a fired floor refuses the override but keeps the justified set", async () => {
+  test("checkFloors:true + explicitAngles — every fired floor term refuses the override", async () => {
     const config = tieredRiskyConfig();
-    const staticPool = resolveGateAngles(config, "draft");
-    const result = await resolveGateAnglesDynamic(config, "draft", {
-      diff: { nameStatusOutput: `M\t${riskyDocPath}`, diffOutput: oneLineDiffOutput(riskyDocPath) },
-      checkFloors: true,
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
-      explicitAngles: ["docs"],
-    });
-    assert.equal(result.dynamicAnglesActive, true);
-    assert.deepEqual(new Set(result.recommendedAngles), new Set(["pr-description", "docs"]));
-    assert.ok(result.recommendedAngles.length > 1, "mandatory floor widens the tier-only angle set");
-    assert.ok(result.recommendedAngles.length < staticPool.length);
+    const scenarios = [
+      {
+        name: "riskPath",
+        floor: "riskPath",
+        options: {
+          diff: { nameStatusOutput: `M\t${riskyDocPath}`, diffOutput: oneLineDiffOutput(riskyDocPath) },
+          sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+        },
+      },
+      {
+        name: "sizeOutcome",
+        floor: "sizeOutcome",
+        options: {
+          diff: { nameStatusOutput: `M\t${nonRiskyDocPath}`, diffOutput: oneLineDiffOutput(nonRiskyDocPath) },
+          sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 5 } },
+        },
+      },
+      {
+        name: "ambiguity",
+        floor: "ambiguity",
+        options: {
+          diff: { nameStatusOutput: `M\t${nonRiskyDocPath}`, diffOutput: oneLineDiffOutput(nonRiskyDocPath) },
+          sizeOutcome: null,
+        },
+      },
+      {
+        name: "unclassifiable",
+        floor: "unclassifiable",
+        options: {
+          diff: { nameStatusOutput: "M\tassets/blob.bin", diffOutput: oneLineDiffOutput("assets/blob.bin") },
+          sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+        },
+      },
+    ];
+    for (const scenario of scenarios) {
+      const diff = scenario.options.diff;
+      const changedFiles = diff ? diff.nameStatusOutput.trim().split("\n").map((line) => line.split("\t").at(-1)) : undefined;
+      const plan = resolveReviewProportionality(config, "draft", {
+        scope: diff ? { filesChanged: changedFiles.length, linesChanged: diff.diffOutput ? 2 : undefined } : undefined,
+        changedFiles,
+        sizeOutcome: scenario.options.sizeOutcome,
+      });
+      assert.equal(plan.floors[scenario.floor], true, scenario.name);
+
+      const result = await resolveGateAnglesDynamic(config, "draft", {
+        ...scenario.options,
+        checkFloors: true,
+        explicitAngles: ["docs"],
+      });
+      assert.equal(result.dynamicAnglesActive, true, scenario.name);
+      assert.ok(result.recommendedAngles.includes("pr-description"), `${scenario.name}: mandatory floor missing`);
+      assert.notDeepEqual(result.recommendedAngles, ["docs"], `${scenario.name}: explicit override was not refused`);
+    }
   });
 
   test("checkFloors:true + explicitAngles — no floor fired keeps the explicit override verbatim", async () => {
@@ -6008,8 +6087,22 @@ describe("resolveGateAnglesDynamic", () => {
     });
     assert.ok(result.recommendedAngles.length < staticPool.length);
     assert.ok(result.recommendedAngles.includes("pr-description"));
+    assert.equal(result.dynamicAnglesActive, true);
     assert.equal(result.fallbackToAll, false);
     for (const angle of result.skippedAngles) assert.ok(result.reasons[angle]);
+  });
+
+  test("checkFloors:true with NO diff keeps the static pool when dynamic resolution is disabled", async () => {
+    const config = tieredRiskyConfig();
+    config.gates.draft.dynamic = { subtractive: false };
+    const staticPool = resolveGateAngles(config, "draft");
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      checkFloors: true,
+      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+    });
+    assert.deepEqual(result.recommendedAngles, staticPool);
+    assert.deepEqual(result.skippedAngles, []);
+    assert.equal(result.dynamicAnglesActive, false);
   });
 
   test("checkFloors omitted with NO diff keeps the static pool unchanged (documented degraded path)", async () => {

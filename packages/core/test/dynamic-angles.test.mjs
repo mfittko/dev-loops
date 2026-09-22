@@ -30,7 +30,8 @@ test("resolveDynamicAngles: ambiguity selects a justified strict subset", () => 
     if (DRAFT_ANGLES.includes(angle)) assert.ok(result.recommendedAngles.includes(angle));
   }
   for (const angle of result.skippedAngles) {
-    assert.match(result.reasons[angle], /uncertain classification/);
+    assert.match(result.reasons[angle], /analysis remained ambiguous despite detected categories \(LOGIC_CHANGE\)/);
+    assert.doesNotMatch(result.reasons[angle], /no change category could be established/);
   }
 });
 

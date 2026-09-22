@@ -114,7 +114,8 @@ export const ALWAYS_INCLUDE = new Set(["gate-evidence", "renderer-security", "pr
  *
  * `configuredAngles` is the caller's candidate pool (mandatory angles have
  * already been removed), so an uncertain diff may legitimately resolve to an
- * empty candidate set. The caller's mandatory floor keeps coverage non-empty.
+ * empty candidate set. The caller combines this with its mandatory floor and
+ * falls back to the static pool if that combined selection would be empty.
  *
  * When `anglePool` is provided (additive mode, see #1048), catalog angles in
  * the pool that the change categories recommend but that are not already in
@@ -199,11 +200,12 @@ export function resolveDynamicAngles({
 
   // Build reasons
   const reasons = {};
-  const uncertain = ambiguous || changeCategories.length === 0;
   for (const angle of skippedAngles) {
-    reasons[angle] = uncertain
+    reasons[angle] = changeCategories.length === 0
       ? "Skipped: no change category could be established (uncertain classification)"
-      : `Skipped: detected categories (${changeCategories.join(", ")}) do not trigger this angle`;
+      : ambiguous
+        ? `Skipped: analysis remained ambiguous despite detected categories (${changeCategories.join(", ")})`
+        : `Skipped: detected categories (${changeCategories.join(", ")}) do not trigger this angle`;
   }
 
   // Additive: pull in recommended catalog angles not already configured (#1048)

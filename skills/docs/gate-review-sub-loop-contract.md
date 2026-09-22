@@ -75,7 +75,9 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
   mandatory one, and is a hard ceiling against later additions.
   - `dynamic.subtractive` defaults ON: retain relevant angles and record each
     dropped angle's rationale. Enabled `mandatory: true` entries always survive.
-    Off, or without a diff, use the static pool unchanged.
+    When explicitly off, use the static pool unchanged. Without a diff, an
+    ordinary caller also keeps the static pool; a floor-aware caller uses the
+    mandatory floor plus justified lenses.
   - `gate:full` forces the full untriered set but retains grouped dispatch.
     To restore the full static per-angle fan-out, disable subtractive selection AND
     set `gates.fanout.mode: per-angle`; `gate:full` alone never selects per-angle dispatch.
@@ -1782,8 +1784,8 @@ disabled, or whose scope is underivable remains rejected exactly as before.
 
 <!-- rule: GATE-EXEC-PROPORTIONALITY -->
 `GATE-EXEC-PROPORTIONALITY`: The primer OWNS a deterministic, mandatory, auditable
-dispatch plan computed from the diff for every gate round — the angle set AND the
-execution mode/grouping — and it scales reviewer COST to the change's size and risk
+dispatch plan computed from the diff for every gate round — execution mode/grouping
+plus a provisional angle set — and it scales reviewer COST to the change's size and risk
 WITHOUT lowering what is checked: trivial → single combined reviewer
 (`inline_single_agent`, above); small/non-risky → a reduced angle set via a matched
 [diff-class tier](#diff-class-angle-tiers), still dispatched `fanout_fanin`;
@@ -1804,8 +1806,10 @@ widening the angle set. See the floor-vs-tier precedence in the function's own d
 comment. `resolveGateAnglesDynamic` (the resolver `write-gate-context.mjs` calls to
 persist the round's angle set) opts into the SAME floor determination via its
 `checkFloors`/`sizeOutcome` parameters: the composer owns floor determination and
-mode, while the persisted round's angle SET comes from the resolver's tier-or-dynamic
-best-effort selection. There are never two parallel floor implementations. The chosen
+mode, while the persisted round's authoritative angle SET comes from the resolver's
+tier-or-dynamic best-effort selection. The composer's no-tier set is a file-kind-based
+lower bound of that authoritative set, except that `gate:full` deliberately returns the
+full static pool in the composer. There are never two parallel floor implementations. The chosen
 mode/reason is recorded in gate evidence via the existing `--inline-reason` marker
 (above) — the mechanism is unchanged, only the set
 of reasons a decision can carry is extended (see below).
@@ -1887,16 +1891,16 @@ mandatory floor.
 
 **Precedence.** `gate:full` label > lightMode inline (dispatch-level) > tier > dynamic
 subtractive reduction > mandatory-floor best-effort selection. The tier is consulted first, and Phase 2's
-carry-forward subtraction runs second, against whichever set (tiered or full) the tier
-decision left in place. Subtractive reduction alone was insufficient for the diff classes a
+carry-forward subtraction runs second, against whichever tiered or mandatory-floor
+best-effort set the tier decision left in place. Subtractive reduction alone was insufficient for the diff classes a
 tier targets: `dynamic.subtractive` reduces per CATEGORY, so it still keeps the full
 per-category width for a triggered category (a docs change still runs every doc-inclusive
 angle); a tier instead caps the whole set for a diff class known in advance to be small or
 non-code, which subtractive reduction by category cannot express.
 
-The handoff envelope built for the fan-out advertises the gate's UNTRIERED run-set; tier
-reduction is applied when the per-round context artifact is built, not reflected back into
-the envelope's own advertised angle set.
+The handoff envelope built for the fan-out advertises the composer's tiered or file-kind
+best-effort set. The per-round context resolver may widen that lower bound with lenses
+justified by hunk-derived change categories; its persisted set is authoritative for review.
 
 ### Fan-out provenance (closing the self-produced-artifact loophole)
 

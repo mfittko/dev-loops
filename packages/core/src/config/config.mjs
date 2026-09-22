@@ -184,9 +184,9 @@ const GateTier = z.strictObject({
 });
 
 const GateDynamicConfig = z.strictObject({
-  // Diff-driven dynamic angle PRUNING, ON by default. mandatory:true
-  // angles stay a hard always-run floor; fallbackToAll degrades to the full
-  // static pool when classification is ambiguous.
+  // Diff-driven dynamic angle PRUNING, ON by default. mandatory:true angles
+  // stay a hard always-run floor. fallbackToAll is retained in resolver output
+  // for compatibility but is always false; uncertainty never widens the set.
   subtractive: z.boolean().default(true).describe("Enable diff-driven dynamic angle PRUNING for this gate (ON by default; set false to restore the full static angle pool). Was gates.<gate>.dynamicAngles."),
   // Additive counterpart to the subtractive path: when true, the
   // context-builder may also ADD catalog angles (from resolveAnglePool) that
@@ -2490,24 +2490,28 @@ export function resolveGateTier(config, gate, { changedFiles, filesChanged, line
  * category/kind binding intersects the diff — never the whole pool.
  *
  * This composer has no diff TEXT (only the changed-file list), so it can bind
- * on file kinds but not on hunk-derived change categories. It is therefore a
- * strict lower bound: the round's authoritative angle set is resolved by
- * resolveGateAnglesDynamic, which binds on the diff's real change categories
- * and returns a superset of this set.
+ * on file kinds but not on hunk-derived change categories. Except for the
+ * `gate:full` path, it is therefore a lower bound: the round's authoritative
+ * angle set is resolved by resolveGateAnglesDynamic, which can add lenses bound
+ * to real change categories. On `gate:full`, the composer deliberately returns
+ * the full static pool and is instead a superset of the dynamic resolver.
  */
 function selectFloorPlusJustifiedAngles(config, gate, changedFiles) {
   const gateConfig = resolveGateConfig(config, gate);
   const { mandatoryAngles } = resolveGateAngleContract(config, gate);
   const pool = resolveGateAngles(config, gate) ?? [];
   const candidatePool = pool.filter((a) => !mandatoryAngles.includes(a));
-  const fileKinds = [...new Set((Array.isArray(changedFiles) ? changedFiles : []).map((f) => classifyFile(f)))];
+  const validChangedFiles = (Array.isArray(changedFiles) ? changedFiles : [])
+    .filter((f) => typeof f === "string" && f.trim().length > 0);
+  const fileKinds = [...new Set(validChangedFiles.map((f) => classifyFile(f)))];
   const { recommendedAngles } = resolveDynamicAngles({
     configuredAngles: candidatePool,
     changeCategories: [],
     fileKinds,
     angleDeclarations: gateConfig.angleCategoryBindings,
   });
-  return [...new Set([...mandatoryAngles, ...recommendedAngles])];
+  const selected = [...new Set([...mandatoryAngles, ...recommendedAngles])];
+  return selected.length > 0 ? selected : pool;
 }
 
 /**
@@ -2586,9 +2590,10 @@ export function resolveReviewProportionality(config, gate, {
   // escape hatch (ADR 0048): it keeps forcing the full configured pool, which
   // is also what resolveGateTier's gate_full_label bypass left in place before
   // best-effort selection existed.
+  const staticAngles = resolveGateAngles(config, gate);
   const angles = hasFullLabel
-    ? resolveGateAngles(config, gate)
-    : (tier.angles ?? selectFloorPlusJustifiedAngles(config, gate, changedFiles));
+    ? staticAngles
+    : (tier.angles ?? (staticAngles === null ? null : selectFloorPlusJustifiedAngles(config, gate, changedFiles)));
   const groups = resolveFanoutGroups(config, gate, angles ?? [], { fullLabel: hasFullLabel });
   return Object.freeze({
     mode,
@@ -2603,9 +2608,10 @@ export function resolveReviewProportionality(config, gate, {
  * Resolve gate angles dynamically when `dynamicAngles` is enabled.
  *
  * Diff analysis (../analysis/*) filters the configured angle list to angles
- * relevant to the change set. When `dynamic.subtractive: false` or no
- * diff is given, returns the full configured list. When `additiveAngles` is on,
- * catalog angles from resolveAnglePool may also be added, with
+ * relevant to the change set. When `dynamic.subtractive: false`, returns the
+ * full configured list. Without a diff, ordinary callers keep that static pool
+ * while floor-aware callers use mandatory-floor best-effort selection. When
+ * `additiveAngles` is on, catalog angles from resolveAnglePool may also be added, with
  * `excludeAngles` a hard ceiling.
  *
  * Diff-class tiers (resolveGateTier) are consulted FIRST: a tier match returns
@@ -2707,11 +2713,12 @@ export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabe
   if (!gateConfig.dynamicAngles || !diff) {
     // No diff to select on (a thin briefing) or dynamic resolution explicitly
     // disabled by config. An explicitly disabled resolver keeps its static pool
-    // — that is the config asking for every angle. A floor-aware caller that
-    // simply has no diff still gets the composer's mandatory-floor-plus-
-    // justified set rather than the whole pool, so absence of evidence never
-    // widens the angle set either.
-    const recommendedAngles = !diff && plan ? (plan.angles ?? staticAngles) : staticAngles;
+    // — that is the config asking for every angle. When dynamic resolution is
+    // enabled, a floor-aware caller that simply has no diff still gets the
+    // composer's mandatory-floor-plus-justified set rather than the whole pool,
+    // so absence of evidence never widens the angle set either.
+    const bestEffortWithoutDiff = Boolean(!diff && plan && gateConfig.dynamicAngles);
+    const recommendedAngles = bestEffortWithoutDiff ? (plan.angles ?? staticAngles) : staticAngles;
     const recommended = new Set(recommendedAngles);
     const skippedAngles = staticAngles.filter((a) => !recommended.has(a));
     return {
@@ -2721,7 +2728,7 @@ export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabe
         skippedAngles.map((a) => [a, "Skipped: no diff is available to select on; the mandatory floor plus justified lenses were selected instead"]),
       ),
       fallbackToAll: false,
-      dynamicAnglesActive: false,
+      dynamicAnglesActive: bestEffortWithoutDiff,
       addedAngles: [],
       addedReasons: {},
     };

@@ -199,10 +199,10 @@ test("block, no waiver possible: config errors present, regardless of waiver", (
   assert.ok(result.reasons.some((r) => r.includes("config errors present")));
 });
 
-test("block, no waiver possible: unclassifiable (ambiguous) diff", () => {
-  // A mixed diff with NO hunk content to classify from (e.g. the best-effort
-  // full-diff capture degraded to empty) is unclassifiable per the shared
-  // classifier — mirrors write-gate-context.mjs's documented degrade path.
+test("hunk-less mixed code+test diff uses T0 surfaces instead of becoming unclassifiable", () => {
+  // Best-effort full-diff capture may degrade to empty while name-status still
+  // supplies honest surfaces. The shared classifier keeps the code-review core
+  // plus test lenses without widening to every optional angle.
   const result = computeSizeBudget({
     nameStatusOutput: MIXED_NAME_STATUS,
     diffOutput: "",
@@ -211,9 +211,9 @@ test("block, no waiver possible: unclassifiable (ambiguous) diff", () => {
     waived: true,
     approvedBy: "Jane Reviewer",
   });
-  assert.equal(result.outcome, "block");
-  assert.equal(result.ambiguous, true);
-  assert.ok(result.reasons.some((r) => r.includes("unclassifiable")));
+  assert.equal(result.outcome, "pass");
+  assert.equal(result.ambiguous, false);
+  assert.ok(result.reasons.every((reason) => !reason.includes("unclassifiable")));
 });
 
 test("block: T1 slice over sliceHardLoc, not waived", () => {

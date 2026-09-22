@@ -10,9 +10,9 @@
  *
  * Angle resolution is NOT re-implemented here. The single source of truth is
  * `resolveGateAnglesDynamic(config, gate, { diff })` from @dev-loops/core/config:
- * it honors the mandatory-angle floor and falls back to the static configured
- * pool when dynamic angle resolution is off or no diff is available. This
- * module only maps that resolver's output into the persisted artifact fields
+ * it honors the mandatory-angle floor, keeps the static pool when dynamic
+ * resolution is disabled, and lets floor-aware no-diff callers use mandatory-
+ * floor best-effort selection. This module only maps that resolver's output
  * (see `rationaleFromResolver`).
  *
  * The artifact records the resolved angle set + rationale + change scope
@@ -204,7 +204,7 @@ Required:
   --gate <draft_gate|pre_approval_gate|review>
   --head-sha <sha>
 Optional:
-  --angles <json>               JSON array of review-angle name strings. OPTIONAL: when omitted, angles resolve dynamically from the loaded config (.devloops) + the --base diff via resolveGateAnglesDynamic (the same path buildGateContext uses). When supplied, the list is used VERBATIM as an explicit override (dynamic resolution is bypassed) — an escape hatch for forcing a specific angle set.
+  --angles <json>               JSON array of review-angle name strings. OPTIONAL: when omitted, angles resolve dynamically from the loaded config (.devloops) + the --base diff via resolveGateAnglesDynamic (the same path buildGateContext uses). When supplied, the list is a verbatim explicit override only when no proportionality floor fires; a fired floor refuses it and continues with tier-or-best-effort selection.
   --rationale <json>             JSON array of {angle, action, reason} entries
   --branch <name>                Source branch name
   --touched-files <json>         JSON array of changed file path strings (separate from the diff-derived scope.changedFiles)
@@ -3244,12 +3244,10 @@ export async function main(
     // GATE-EXEC-PROPORTIONALITY: with a genuine --base diff to hand, also read
     // this same diff's size-budget outcome so angle resolution below can opt
     // into the composer's floor-vs-tier precedence (resolveReviewProportionality,
-    // via resolveGateAnglesDynamic's checkFloors) — a risk-path touch or a
-    // non-clean/ambiguous size-budget outcome must never leave this artifact
-    // carrying a tier-reduced angle set. A --prefix-file/no-base thin briefing
-    // has no diff to evaluate a size outcome against; checkFloors stays off
-    // there (unaffected — the no-diff path already resolves the full static
-    // pool regardless).
+    // via resolveGateAnglesDynamic's checkFloors). A fired floor forces
+    // full_fanout dispatch but leaves the angle set at the matched tier or
+    // dynamic best-effort selection. A --prefix-file/no-base thin briefing has
+    // no diff to evaluate a size outcome against, so checkFloors stays off.
     let sizeOutcome = null;
     if (options.base) {
       try {
@@ -3279,11 +3277,11 @@ export async function main(
     // loaded config (.devloops) + the captured --base diff — the SAME path the
     // programmatic buildGateContext API uses (resolveGateAnglesDynamic). When
     // --angles IS supplied, it is used as an explicit selector, BUT the
-    // GATE-EXEC-PROPORTIONALITY floors and the mandatory-angle floor are
-    // non-overridable: draft/preApproval always run explicit angles through
-    // resolveGateAnglesDynamic's explicitAngles handling below, which forces
-    // the full untriered pool over a fired floor and unions in any mandatory
-    // angle the explicit set omitted. review has no floor contract and keeps
+    // GATE-EXEC-PROPORTIONALITY floors are non-overridable: draft/preApproval
+    // always run explicit angles through resolveGateAnglesDynamic's handling
+    // below. With no floor the override is verbatim; a fired floor refuses it
+    // and continues with the matched tier or dynamic best-effort selection,
+    // including the mandatory floor. review has no floor contract and keeps
     // its dedicated union resolver, verbatim-override included, unchanged.
     const explicitAngleReview = options.gate === "review" && Array.isArray(options.angles);
     if (!explicitAngleReview) {
@@ -3337,8 +3335,8 @@ export async function main(
       }
       const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
       if (resolvedAngles.length === 0) {
-        process.stderr.write(
-          `[write-gate-context] warning: angle resolution produced zero angles for gate ${options.gate}; the gate-context bundle carries no review angles. Check the gate's configured angles/mandatoryAngles.\n`,
+        throw new Error(
+          `Angle resolution produced zero angles for gate ${options.gate}; refusing to write a gate-context bundle with no review coverage. Check the gate's configured angles/mandatoryAngles.`,
         );
       }
       options.angles = resolvedAngles;
