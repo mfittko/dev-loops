@@ -32,7 +32,7 @@ The skill is backed by `scripts/loop/audit-pi-session.mjs` (available directly o
 node scripts/loop/audit-pi-session.mjs --latest
 
 # Or using the dev-loops CLI:
-node cli/index.mjs loop audit-session --latest
+dev-loops loop audit-session --latest
 
 # Audit a specific session directory or session file:
 node scripts/loop/audit-pi-session.mjs ~/.pi/agent/sessions/--Users-user-dev-loops--/<session-id>

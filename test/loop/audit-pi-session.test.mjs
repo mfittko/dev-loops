@@ -12,9 +12,37 @@ import {
   auditPiSession,
   formatMarkdownSummary,
 } from "../../scripts/lib/audit-pi-session.mjs";
+import { runAuditCli } from "../../scripts/loop/audit-pi-session.mjs";
 
 function createTempDir(prefix = "pi-audit-test-") {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+function captureStream() {
+  return {
+    value: "",
+    write(chunk) {
+      this.value += String(chunk);
+      return true;
+    },
+  };
+}
+
+function writeSimpleTranscript(filePath) {
+  fs.writeFileSync(
+    filePath,
+    [
+      JSON.stringify({ type: "session_info", name: "subagent-review-unit-0" }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          model: "model-a",
+          usage: { input: 100, output: 50, cacheRead: 200, cacheWrite: 0 },
+        },
+      }),
+    ].join("\n") + "\n",
+  );
 }
 
 describe("audit-pi-session unit & integration", () => {
@@ -57,7 +85,6 @@ describe("audit-pi-session unit & integration", () => {
     fs.writeFileSync(sessionFile, lines.join("\n") + "\n");
 
     const parsed = await parseTranscriptFile(sessionFile);
-    assert.equal(parsed.empty, false);
     assert.equal(parsed.turns.length, 2);
     assert.equal(parsed.turns[0].model, "gemini-3.8-flash");
     assert.equal(parsed.turns[0].usage.input, 1000);
@@ -77,7 +104,6 @@ describe("audit-pi-session unit & integration", () => {
     fs.writeFileSync(emptyFile, "");
 
     const parsed = await parseTranscriptFile(emptyFile);
-    assert.equal(parsed.empty, true);
     assert.equal(parsed.turns.length, 0);
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -158,7 +184,51 @@ describe("audit-pi-session unit & integration", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("traverses multi-subagent sessions correctly", async () => {
+  it("ignores trailing zero-usage turns for snowball endpoints and turn counts", async () => {
+    const tmpDir = createTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    fs.writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            model: "model-a",
+            usage: { input: 100, output: 10, cacheRead: 0, cacheWrite: 0 },
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            model: "model-a",
+            usage: { input: 200, output: 20, cacheRead: 1800, cacheWrite: 0 },
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            model: "model-a",
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+
+    const audit = await auditPiSession(sessionFile);
+    assert.equal(audit.summary.totalTurns, 2);
+    assert.equal(audit.sessions[0].turnCount, 2);
+    assert.equal(audit.sessions[0].snowball.initialPromptTokens, 100);
+    assert.equal(audit.sessions[0].snowball.finalPromptTokens, 2000);
+    assert.equal(audit.sessions[0].snowball.promptGrowthFactor, 20);
+    assert.match(formatMarkdownSummary(audit), /Severe context growth/);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("traverses multi-subagent sessions correctly without mirrored artifacts", async () => {
     const tmpDir = createTempDir();
     const sessionDir = path.join(tmpDir, "session-root");
     const subagent1Dir = path.join(sessionDir, "run-dev-loop");
@@ -215,6 +285,13 @@ describe("audit-pi-session unit & integration", () => {
       ].join("\n") + "\n"
     );
 
+    const artifactsDir = path.join(sessionDir, "subagent-artifacts");
+    fs.mkdirSync(artifactsDir);
+    fs.copyFileSync(
+      path.join(sessionDir, "session.jsonl"),
+      path.join(artifactsDir, "session.jsonl"),
+    );
+
     const audit = await auditPiSession(sessionDir);
     assert.equal(audit.ok, true);
     assert.equal(audit.sessions.length, 3);
@@ -225,6 +302,7 @@ describe("audit-pi-session unit & integration", () => {
 
     assert.equal(audit.byModel["model-a"].turns, 2);
     assert.equal(audit.byModel["model-b"].turns, 1);
+    assert.equal(audit.totalFilesExamined, 3);
 
     const roles = audit.sessions.map((s) => s.role).sort();
     assert.deepEqual(roles, ["dev-loop", "fixer", "review"]);
@@ -232,11 +310,56 @@ describe("audit-pi-session unit & integration", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("findLatestPiSession locates latest modified directory", () => {
+  it("skips fork snapshots when their parent transcript is present", async () => {
+    const tmpDir = createTempDir();
+    const runDir = path.join(tmpDir, "run-0");
+    const forksDir = path.join(runDir, "session", "forks");
+    fs.mkdirSync(forksDir, { recursive: true });
+    const parentFile = path.join(runDir, "session.jsonl");
+    writeSimpleTranscript(parentFile);
+
+    const forkFile = path.join(forksDir, "fork.jsonl");
+    fs.writeFileSync(
+      forkFile,
+      fs.readFileSync(parentFile, "utf8") +
+        [
+          JSON.stringify({ type: "session_info", name: "subagent-judge-unit-0" }),
+          JSON.stringify({
+            type: "message",
+            message: {
+              role: "assistant",
+              model: "model-b",
+              usage: { input: 500, output: 100, cacheRead: 500, cacheWrite: 0 },
+            },
+          }),
+        ].join("\n") +
+        "\n",
+    );
+
+    const parsedFork = await parseTranscriptFile(forkFile);
+    assert.equal(parsedFork.sessionInfo.name, "subagent-review-unit-0");
+
+    const audit = await auditPiSession(runDir);
+    assert.equal(audit.skippedForkSnapshots, 1);
+    assert.equal(audit.totalFilesExamined, 1);
+    assert.equal(audit.activeSessionsCount, 1);
+    assert.equal(audit.summary.totalTurns, 1);
+    assert.equal(audit.summary.totalTokens, 350);
+    assert.deepEqual(Object.keys(audit.byModel), ["model-a"]);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("findLatestPiSession locates the latest canonical repository session", () => {
     const tmpDir = createTempDir();
     const fakeSessionsBase = path.join(tmpDir, "sessions");
     const repoSessions = path.join(fakeSessionsBase, "--Users-tester-dev-loops--");
+    const worktreeSessions = path.join(
+      fakeSessionsBase,
+      "--Users-tester-dev-loops-tmp-worktrees-feature--",
+    );
     fs.mkdirSync(repoSessions, { recursive: true });
+    fs.mkdirSync(worktreeSessions, { recursive: true });
 
     const dir1 = path.join(repoSessions, "session-1");
     const dir2 = path.join(repoSessions, "session-2");
@@ -249,8 +372,109 @@ describe("audit-pi-session unit & integration", () => {
     fs.writeFileSync(path.join(dir2, "session.jsonl"), "test2");
     fs.utimesSync(dir2, futureTime, futureTime);
 
+    const worktreeDir = path.join(worktreeSessions, "newer-worktree-session");
+    fs.mkdirSync(worktreeDir);
+    const evenLater = new Date(Date.now() + 20000);
+    fs.utimesSync(worktreeDir, evenLater, evenLater);
+
     const latest = findLatestPiSession(fakeSessionsBase);
     assert.equal(latest, dir2);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("formats token counts deterministically with ASCII comma separators", () => {
+    const result = {
+      summary: {
+        totalTurns: 1,
+        totalTokens: 1234567,
+        inputTokens: 1234567,
+        cacheReadTokens: 0,
+        outputTokens: 0,
+        cacheHitRatio: 0,
+        estimatedCost: 0,
+      },
+      byModel: {},
+      sessions: [],
+    };
+
+    const markdown = formatMarkdownSummary(result);
+    assert.match(markdown, /1,234,567/);
+    assert.doesNotMatch(markdown, /1\.234\.567|1 234 567/);
+  });
+
+  it("covers JSON, jq, fields, silent, auto-discovery, and CLI errors", async () => {
+    const tmpDir = createTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const emptyFile = path.join(tmpDir, "empty.jsonl");
+    const missingFile = path.join(tmpDir, "missing.jsonl");
+    writeSimpleTranscript(sessionFile);
+    fs.writeFileSync(emptyFile, "");
+
+    let stdout = captureStream();
+    let stderr = captureStream();
+    assert.equal(await runAuditCli([sessionFile, "--json"], { stdout, stderr }), 0);
+    assert.equal(JSON.parse(stdout.value).summary.totalTokens, 350);
+    assert.equal(stderr.value, "");
+
+    stdout = captureStream();
+    stderr = captureStream();
+    assert.equal(
+      await runAuditCli([sessionFile, "--jq", ".summary.totalTokens"], { stdout, stderr }),
+      0,
+    );
+    assert.equal(stdout.value, "350\n");
+
+    stdout = captureStream();
+    stderr = captureStream();
+    assert.equal(
+      await runAuditCli(["--json"], {
+        stdout,
+        stderr,
+        findLatestSession: () => sessionFile,
+      }),
+      0,
+    );
+    assert.equal(JSON.parse(stdout.value).summary.totalTokens, 350);
+
+    stdout = captureStream();
+    stderr = captureStream();
+    assert.equal(
+      await runAuditCli([sessionFile, "--fields", "ok,totalFilesExamined"], { stdout, stderr }),
+      0,
+    );
+    assert.equal(stdout.value, "true\t1\n");
+
+    stdout = captureStream();
+    stderr = captureStream();
+    assert.equal(await runAuditCli([sessionFile, "--silent"], { stdout, stderr }), 0);
+    assert.equal(stdout.value, "");
+
+    stdout = captureStream();
+    stderr = captureStream();
+    assert.equal(await runAuditCli([sessionFile, "--jq", ".bad("], { stdout, stderr }), 2);
+    assert.match(stderr.value, /BASE-JQ-OUTPUT-GUARANTEE/);
+
+    for (const invalidPath of [missingFile, emptyFile]) {
+      stdout = captureStream();
+      stderr = captureStream();
+      assert.equal(await runAuditCli([invalidPath], { stdout, stderr }), 1);
+      assert.notEqual(stderr.value.trim(), "");
+    }
+
+    stdout = captureStream();
+    stderr = captureStream();
+    assert.equal(
+      await runAuditCli([], {
+        stdout,
+        stderr,
+        findLatestSession: () => {
+          throw new Error("session tree unavailable");
+        },
+      }),
+      1,
+    );
+    assert.match(stderr.value, /session tree unavailable/);
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });

@@ -14,7 +14,7 @@ export function findLatestPiSession(sessionsBaseDir = path.join(os.homedir(), ".
   // Find candidate directories matching --Users-*-dev-loops--
   const entries = fs.readdirSync(sessionsBaseDir, { withFileTypes: true });
   const matchingDirs = entries
-    .filter((e) => e.isDirectory() && e.name.startsWith("--Users-") && e.name.includes("dev-loops"))
+    .filter((e) => e.isDirectory() && /^--Users-.*-dev-loops--$/.test(e.name))
     .map((e) => path.join(sessionsBaseDir, e.name));
 
   if (matchingDirs.length === 0) return null;
@@ -60,16 +60,16 @@ export function findLatestPiSession(sessionsBaseDir = path.join(os.homedir(), ".
  * Collect all canonical session.jsonl files under the target path,
  * preferring true session.jsonl over mirrored/duplicated subagent-artifacts.
  * @param {string} targetPath
- * @returns {string[]}
+ * @returns {{ files: string[], skippedForkSnapshots: number }}
  */
-export function collectTranscriptFiles(targetPath) {
+function collectTranscriptFilesWithMetadata(targetPath) {
   if (!fs.existsSync(targetPath)) {
     throw new Error(`Path does not exist: ${targetPath}`);
   }
 
   const stat = fs.statSync(targetPath);
   if (stat.isFile()) {
-    return [targetPath];
+    return { files: [targetPath], skippedForkSnapshots: 0 };
   }
 
   const files = [];
@@ -101,24 +101,44 @@ export function collectTranscriptFiles(targetPath) {
 
   const rawList = Array.from(new Set(files));
 
-  // If there are true session.jsonl files, deduplicate out identical subagent-artifacts transcripts
-  const hasRealSessions = rawList.some((f) => f.endsWith("session.jsonl"));
-  const filtered = hasRealSessions
-    ? rawList.filter((f) => !f.includes("/subagent-artifacts/") && !f.includes("\\subagent-artifacts\\"))
+  // If there are true session.jsonl files, deduplicate mirrored subagent artifacts.
+  const hasRealSessions = rawList.some((f) => path.basename(f) === "session.jsonl");
+  const withoutArtifacts = hasRealSessions
+    ? rawList.filter((f) => !f.includes(`${path.sep}subagent-artifacts${path.sep}`))
     : rawList;
 
-  return filtered.sort();
+  // A session/forks/*.jsonl file is a snapshot of the parent session followed by
+  // its own continuation. Counting it beside that parent's session.jsonl would
+  // count the inherited turns twice.
+  let skippedForkSnapshots = 0;
+  const filtered = withoutArtifacts.filter((file) => {
+    if (path.basename(path.dirname(file)) !== "forks") return true;
+    const parentSession = path.join(path.dirname(path.dirname(path.dirname(file))), "session.jsonl");
+    if (!rawList.includes(parentSession)) return true;
+    skippedForkSnapshots += 1;
+    return false;
+  });
+
+  return { files: filtered.sort(), skippedForkSnapshots };
+}
+
+/**
+ * @param {string} targetPath
+ * @returns {string[]}
+ */
+export function collectTranscriptFiles(targetPath) {
+  return collectTranscriptFilesWithMetadata(targetPath).files;
 }
 
 /**
  * Parse assistant usage entries from a single jsonl file.
  * @param {string} filePath
- * @returns {Promise<{ turns: any[], sessionInfo: any, agent: string | null, empty: boolean }>}
+ * @returns {Promise<{ turns: any[], sessionInfo: any, agent: string | null }>}
  */
 export async function parseTranscriptFile(filePath) {
   const stat = fs.statSync(filePath);
   if (stat.size === 0) {
-    return { turns: [], sessionInfo: null, agent: null, empty: true };
+    return { turns: [], sessionInfo: null, agent: null };
   }
 
   const turns = [];
@@ -136,7 +156,7 @@ export async function parseTranscriptFile(filePath) {
     try {
       const data = JSON.parse(trimmed);
 
-      if (data.type === "session_info" && data.name) {
+      if (data.type === "session_info" && data.name && !sessionInfo) {
         sessionInfo = data;
       }
       if (data.agent && !fileAgent) {
@@ -175,7 +195,7 @@ export async function parseTranscriptFile(filePath) {
     }
   }
 
-  return { turns, sessionInfo, agent: fileAgent, empty: false };
+  return { turns, sessionInfo, agent: fileAgent };
 }
 
 /**
@@ -206,9 +226,6 @@ export function deriveSessionRole(filePath, parsed) {
   if (basename.includes("_quality_") || basename.includes("quality")) return "quality";
   if (basename.includes("_docs_") || basename.includes("docs")) return "docs";
   if (basename.includes("_refiner_") || basename.includes("refiner")) return "refiner";
-  if (filePath.endsWith(".jsonl") && !filePath.includes("/")) return "main-session";
-  const norm = filePath.replace(/\\/g, "/");
-  if (norm.split("/").length <= 2 && !norm.includes("/run-")) return "main-session";
   return "coordinator";
 }
 
@@ -218,7 +235,7 @@ export function deriveSessionRole(filePath, parsed) {
  * @returns {Promise<object>}
  */
 export async function auditPiSession(targetPath) {
-  const files = collectTranscriptFiles(targetPath);
+  const { files, skippedForkSnapshots } = collectTranscriptFilesWithMetadata(targetPath);
   if (files.length === 0) {
     throw new Error(`No .jsonl transcripts found in ${targetPath}`);
   }
@@ -235,7 +252,11 @@ export async function auditPiSession(targetPath) {
 
   for (const file of files) {
     const parsed = await parseTranscriptFile(file);
-    if (parsed.turns.length === 0) continue;
+    const usageTurns = parsed.turns.filter((turn) => {
+      const usage = turn.usage;
+      return usage.input + usage.output + usage.cacheRead + usage.cacheWrite > 0;
+    });
+    if (usageTurns.length === 0) continue;
 
     const role = deriveSessionRole(file, parsed);
     let sessionInput = 0;
@@ -246,7 +267,7 @@ export async function auditPiSession(targetPath) {
 
     const modelsInSession = new Set();
 
-    for (const turn of parsed.turns) {
+    for (const turn of usageTurns) {
       const u = turn.usage;
       sessionInput += u.input;
       sessionOutput += u.output;
@@ -276,8 +297,10 @@ export async function auditPiSession(targetPath) {
       m.cost += u.cost;
     }
 
-    const firstTurn = parsed.turns[0];
-    const lastTurn = parsed.turns[parsed.turns.length - 1];
+    const promptTurns = usageTurns.filter((turn) => turn.usage.input + turn.usage.cacheRead > 0);
+    const endpointTurns = promptTurns.length > 0 ? promptTurns : usageTurns;
+    const firstTurn = endpointTurns[0];
+    const lastTurn = endpointTurns[endpointTurns.length - 1];
 
     const initialPromptTokens = firstTurn.usage.input + firstTurn.usage.cacheRead;
     const finalPromptTokens = lastTurn.usage.input + lastTurn.usage.cacheRead;
@@ -295,7 +318,7 @@ export async function auditPiSession(targetPath) {
       role,
       sessionName: parsed.sessionInfo?.name || null,
       models: Array.from(modelsInSession),
-      turnCount: parsed.turns.length,
+      turnCount: usageTurns.length,
       inputTokens: sessionInput,
       outputTokens: sessionOutput,
       cacheReadTokens: sessionCacheRead,
@@ -315,7 +338,7 @@ export async function auditPiSession(targetPath) {
     overallTotalCacheRead += sessionCacheRead;
     overallTotalCacheWrite += sessionCacheWrite;
     overallTotalCost += sessionCost;
-    overallTurns += parsed.turns.length;
+    overallTurns += usageTurns.length;
   }
 
   if (sessions.length === 0) {
@@ -339,6 +362,7 @@ export async function auditPiSession(targetPath) {
     ok: true,
     targetPath,
     totalFilesExamined: files.length,
+    skippedForkSnapshots,
     activeSessionsCount: sessions.length,
     summary: {
       totalTurns: overallTurns,
@@ -360,6 +384,10 @@ export async function auditPiSession(targetPath) {
  * @param {object} auditResult
  * @returns {string}
  */
+function formatTokenCount(value) {
+  return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
 export function formatMarkdownSummary(auditResult) {
   const { summary, byModel, sessions } = auditResult;
 
@@ -367,10 +395,10 @@ export function formatMarkdownSummary(auditResult) {
   lines.push("## Pi Session Token Audit");
   lines.push("");
   lines.push(`- **Total Turns**: ${summary.totalTurns}`);
-  lines.push(`- **Total Tokens**: ${summary.totalTokens.toLocaleString()} (${(summary.totalTokens / 1_000_000).toFixed(2)}M)`);
-  lines.push(`- **Uncached Input**: ${summary.inputTokens.toLocaleString()}`);
-  lines.push(`- **Cached Read**: ${summary.cacheReadTokens.toLocaleString()}`);
-  lines.push(`- **Output**: ${summary.outputTokens.toLocaleString()}`);
+  lines.push(`- **Total Tokens**: ${formatTokenCount(summary.totalTokens)} (${(summary.totalTokens / 1_000_000).toFixed(2)}M)`);
+  lines.push(`- **Uncached Input**: ${formatTokenCount(summary.inputTokens)}`);
+  lines.push(`- **Cached Read**: ${formatTokenCount(summary.cacheReadTokens)}`);
+  lines.push(`- **Output**: ${formatTokenCount(summary.outputTokens)}`);
   lines.push(`- **Cache Hit Ratio**: ${(summary.cacheHitRatio * 100).toFixed(1)}%`);
   lines.push(`- **Estimated Cost**: $${summary.estimatedCost.toFixed(4)}`);
   lines.push("");
@@ -381,7 +409,7 @@ export function formatMarkdownSummary(auditResult) {
   lines.push("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |");
   for (const [model, data] of Object.entries(byModel)) {
     lines.push(
-      `| \`${model}\` | ${data.turns} | ${data.input.toLocaleString()} | ${data.cacheRead.toLocaleString()} | ${data.output.toLocaleString()} | ${(data.cacheHitRatio * 100).toFixed(1)}% | ${data.totalTokens.toLocaleString()} | $${data.cost.toFixed(4)} |`
+      `| \`${model}\` | ${data.turns} | ${formatTokenCount(data.input)} | ${formatTokenCount(data.cacheRead)} | ${formatTokenCount(data.output)} | ${(data.cacheHitRatio * 100).toFixed(1)}% | ${formatTokenCount(data.totalTokens)} | $${data.cost.toFixed(4)} |`
     );
   }
   lines.push("");
@@ -393,7 +421,7 @@ export function formatMarkdownSummary(auditResult) {
   for (const s of sessions) {
     const modelsStr = s.models.map((m) => `\`${m}\``).join(", ");
     lines.push(
-      `| **${s.role}** | ${s.turnCount} | ${modelsStr} | ${s.totalTokens.toLocaleString()} | ${(s.snowball.cacheHitRatio * 100).toFixed(1)}% | ${s.snowball.initialPromptTokens.toLocaleString()} | ${s.snowball.finalPromptTokens.toLocaleString()} | ${s.snowball.promptGrowthFactor}x |`
+      `| **${s.role}** | ${s.turnCount} | ${modelsStr} | ${formatTokenCount(s.totalTokens)} | ${(s.snowball.cacheHitRatio * 100).toFixed(1)}% | ${formatTokenCount(s.snowball.initialPromptTokens)} | ${formatTokenCount(s.snowball.finalPromptTokens)} | ${s.snowball.promptGrowthFactor}x |`
     );
   }
   lines.push("");
@@ -405,7 +433,7 @@ export function formatMarkdownSummary(auditResult) {
       warnings.push(`- ⚠️ **High turn count**: Session \`${s.role}\` ran for ${s.turnCount} turns. Monolithic coordinators risk severe context snowballing.`);
     }
     if (s.snowball.promptGrowthFactor > 15) {
-      warnings.push(`- ⚠️ **Severe context growth**: Session \`${s.role}\` grew by ${s.snowball.promptGrowthFactor}x from initial prompt (${s.snowball.initialPromptTokens.toLocaleString()} to ${s.snowball.finalPromptTokens.toLocaleString()} tokens).`);
+      warnings.push(`- ⚠️ **Severe context growth**: Session \`${s.role}\` grew by ${s.snowball.promptGrowthFactor}x from initial prompt (${formatTokenCount(s.snowball.initialPromptTokens)} to ${formatTokenCount(s.snowball.finalPromptTokens)} tokens).`);
     }
     if (s.snowball.cacheHitRatio < 0.70 && s.totalTokens >= 500_000) {
       warnings.push(`- ⚠️ **Low cache hit ratio**: Session \`${s.role}\` has ${(s.snowball.cacheHitRatio * 100).toFixed(1)}% cache hit ratio with >500k tokens.`);
