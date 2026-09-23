@@ -257,13 +257,13 @@ export function dedupeActListByCluster(actFindings, clusters, allFindings) {
 }
 
 /**
- * A "clean" verdict means no finding at a BLOCKING severity remains open. It is
- * invalid only when a finding at a blocking severity was acted on — that is
- * unresolved blocking work, so the round cannot be clean. Acting on a
- * NON-BLOCKING finding (a medium in the fix window, a low the fixer triages) is
- * expected under a clean verdict per `GATE-EXEC-BLOCKING-ONLY-FIX`: the fix
- * cycle covers non-blocking findings even though they never block clean, so a
- * clean verdict routinely carries non-blocking act findings.
+ * A "clean" ledger severity verdict means no finding at a BLOCKING severity
+ * remains open. It is invalid only when a finding at a blocking severity was
+ * acted on — that is unresolved blocking work, so the round cannot be clean.
+ * The ledger's severity verdict may stay clean with NON-BLOCKING act findings
+ * (a medium in the fix window, a low the fixer triages). The posted review
+ * verdict is composed with the act list (ADR 0089), so such a round posts
+ * findings_present until its act items are fixed.
  *
  * Throws a clear Error on `overallVerdict === "clean"` with any act finding at a
  * blocking severity; returns `overallVerdict` unchanged otherwise.
@@ -288,8 +288,8 @@ export function assertCleanImpliesNoBlockingAct(overallVerdict, actFindings, blo
     const severities = [...new Set(offending.map((f) => normalizeSeverity(f?.severity)))].join(", ");
     throw new Error(
       `clean verdict is invalid with ${offending.length} acted finding(s) at a blocking severity (${severities}): ` +
-        `a blocking-severity finding acted on this round cannot be clean. Non-blocking act findings are allowed under ` +
-        `a clean verdict (GATE-EXEC-BLOCKING-ONLY-FIX).`,
+        `a blocking-severity finding acted on this round cannot be clean. The ledger's severity verdict may be clean with ` +
+        `non-blocking act findings; the posted review verdict is composed with the act list (ADR 0089).`,
     );
   }
   return overallVerdict;
