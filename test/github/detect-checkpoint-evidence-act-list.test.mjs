@@ -127,11 +127,22 @@ test("an unjudged fanout_fanin ledger with findings fails closed", async () => {
   });
 });
 
-test("zero findings and inline ledgers need no judge", async () => {
-  for (const ledger of [{ findings: [] }, { executionMode: "inline_single_agent", findings: [{ severity: "low", angle: "x", summary: "s" }] }]) {
+test("zero findings and inline rounds need no judge", async () => {
+  const inlineMarker = { ...PA_MARKER, executionMode: "inline_single_agent" };
+  const cases = [[{ findings: [] }, PA_MARKER], [{ executionMode: "inline_single_agent", findings: [{ severity: "low", angle: "x", summary: "s" }] }, inlineMarker]];
+  for (const [ledger, marker] of cases) {
     await withLedgerRepos([ledger], async (repo) => {
-      const { check } = await probe(repo);
+      const { check } = await probe(repo, CONFIG_NO_FANOUT, marker);
       assert.ok(!check.failures.some((f) => f.includes("judge act list")), JSON.stringify(check.failures));
+    });
+  }
+});
+
+test("an unjudged ledger under a fanout_fanin marker fails closed whatever the ledger's own executionMode", async () => {
+  for (const executionMode of [undefined, "inline_single_agent"]) {
+    await withLedgerRepos([{ executionMode, findings: [{ severity: "medium", angle: "x", summary: "s" }] }], async (repo) => {
+      const { check } = await probe(repo, CONFIG_NO_FANOUT);
+      assert.ok(check.failures.some((f) => f.includes("judge act list unknown")), JSON.stringify(check.failures));
     });
   }
 });

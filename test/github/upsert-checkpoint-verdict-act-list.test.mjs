@@ -43,11 +43,11 @@ const finding = (severity, judgeDisposition) => ({
   judgeRationale: "test rationale",
 });
 
-async function writeLedger(tempDir, { overallVerdict, findings }) {
+async function writeLedger(tempDir, { overallVerdict, verdict = overallVerdict, findings }) {
   const ledgerPath = path.join(tempDir, "ledger.json");
   await writeFile(ledgerPath, JSON.stringify({
     repo: "owner/repo", pr: 17, gate: "draft_gate", headSha: HEAD,
-    verdict: overallVerdict, overallVerdict, loggedAt: "2026-09-23T00:00:00.000Z", findings,
+    verdict, overallVerdict, loggedAt: "2026-09-23T00:00:00.000Z", findings,
   }), "utf8");
   return ledgerPath;
 }
@@ -121,6 +121,17 @@ test("medium and low findings all rejected or deferred derive clean", async () =
     assert.match(derived.body, /\*\*Verdict:\*\* clean/);
     assert.equal((await post(ledgerPath, "clean")).error, undefined);
   }, { prefix: "dev-loops-act-list-clean-" });
+});
+
+test("a ledger without overallVerdict refuses an explicit clean over an open act item", async () => {
+  await withTempDir(async (tempDir) => {
+    const ledgerPath = await writeLedger(tempDir, { overallVerdict: undefined, verdict: "findings_present", findings: [finding("medium", "act"), finding("low", "reject")] });
+    const explicitClean = await post(ledgerPath, "clean");
+    assert.match(explicitClean.error, /--verdict "clean"/);
+    assert.match(explicitClean.error, /1 open judge act item\(s\)/);
+    assert.match(explicitClean.error, /\[medium\] medium finding judged act/);
+    assert.equal((await post(ledgerPath, "findings_present")).error, undefined);
+  }, { prefix: "dev-loops-act-list-bare-" });
 });
 
 test("a high finding judged reject still keeps the round from clean", async () => {

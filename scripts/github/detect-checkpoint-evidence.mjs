@@ -58,7 +58,9 @@ Optional:
                               verifier (the gate-evidence CI check; a gh-less API
                               session) can never see it. The comment-derived
                               executionMode/inlineReason check (including the
-                              light-mode inline exception) still applies. Intended
+                              light-mode inline exception) still applies. Also
+                              skips the judge act-list merge checks (open,
+                              unjudged, or unreadable act list). Intended
                               for server-side/CI callers only; client-side callers
                               should omit this flag to keep full enforcement.
 Output (stdout, JSON; always includes preMergeGateCheck):
@@ -704,9 +706,11 @@ async function readLedgerProvenanceInAny(checkouts, ledgerPath, criteria = {}) {
  * copy that does not parse to an object with a `findings` array is
  * `unreadable`, even when another copy parses. The first copy with open act
  * items (or with unjudged fan-out findings) wins, so a copy with an empty act
- * list can never shadow one that still has them.
+ * list can never shadow one that still has them. `markerExecutionMode` is the
+ * posted pre_approval_gate marker's mode; the ledger's own field defaults to
+ * inline when unset, so it never grants the no-judge exemption.
  */
-async function readActListInAny(checkouts, ledgerPath) {
+async function readActListInAny(checkouts, ledgerPath, markerExecutionMode) {
   let exists = false;
   let unreadable = null;
   let open = null;
@@ -730,9 +734,9 @@ async function readActListInAny(checkouts, ledgerPath) {
     }
     const items = listOpenActItems(parsed.findings);
     if (!open && items.length > 0) open = { path: full, items };
-    // An inline (light-mode) ledger carries no judge pass, so only fan-out is checked.
+    // An inline (light-mode) round carries no judge pass, so only a non-inline marker is checked.
     const unjudgedCount = parsed.findings.filter((f) => !f?.judgeDisposition).length;
-    if (!unjudged && parsed.executionMode === "fanout_fanin" && unjudgedCount > 0) unjudged = { path: full, count: unjudgedCount };
+    if (!unjudged && markerExecutionMode !== "inline_single_agent" && unjudgedCount > 0) unjudged = { path: full, count: unjudgedCount };
   }
   return exists ? { ledgerPath, unreadable, open, unjudged } : null;
 }
@@ -877,7 +881,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   // only added when the current-head pre_approval_gate ledger exists.
   const paHead = preApprovalGateMarker?.headSha ?? currentHeadSha;
   const actList = preApprovalGateMarker?.visible && paHead === currentHeadSha
-    ? await readActListInAny(checkouts, buildLogPath({ repo, pr, gate: "pre_approval_gate", headSha: paHead, tmpRoot: "tmp" }))
+    ? await readActListInAny(checkouts, buildLogPath({ repo, pr, gate: "pre_approval_gate", headSha: paHead, tmpRoot: "tmp" }), preApprovalGateMarker.executionMode)
     : null;
   const withActList = (enforcement) => (actList ? { ...enforcement, actList } : enforcement);
   if (config == null || !resolveRequireFanoutEvidence(config)) {

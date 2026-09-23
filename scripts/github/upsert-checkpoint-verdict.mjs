@@ -2478,6 +2478,10 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     throw new Error(
       `--verdict is required for ${options.gate} @ ${canonicalHeadSha}${options.findingsLedger ? `: --findings-ledger "${options.findingsLedger}" carries no overallVerdict to derive it from` : ""}. Pass --verdict, or supply a --findings-ledger written from a consolidate-fanin --ledger-out that carries overallVerdict.`,
     );
+  } else if (options.verdict === "clean" && listOpenActItems(preloadedFindingsLedger?.findings).length > 0) {
+    // ADR 0089: a ledger without overallVerdict still carries its judge act list.
+    const actItems = listOpenActItems(preloadedFindingsLedger.findings);
+    throw new Error(`--verdict "clean" for ${options.gate} @ ${canonicalHeadSha} contradicts ${actItems.length} open judge act item(s) in --findings-ledger "${options.findingsLedger}" (ADR 0089): ${actItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}. Post "findings_present" or fix the act items first.`);
   }
   if (
     options.verdict === "clean"

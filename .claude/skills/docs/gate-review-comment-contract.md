@@ -330,13 +330,16 @@ This rule is enforced at write time and at post time, not just documented:
 `write-gate-findings-log.mjs` refuses a `--verdict` that contradicts the
 `--findings`/`--findings-file` wrapper's `overallVerdict` before any ledger is
 written, and `upsert-checkpoint-verdict.mjs` refuses a `--verdict` that
-contradicts the consolidated ledger's `overallVerdict` for the same head and
-gate (#1616). The consolidator (`consolidate-fanin.mjs`) already computes
-`overallVerdict` from this rule's definitions; it threads through
-`--ledger-out`'s `{ overallVerdict, findings }` wrapper into the durable ledger
-(`write-gate-findings-log.mjs`), and `upsert-checkpoint-verdict.mjs` reads it
-and derives the verdict by default (passing no `--verdict` is valid), accepts
-a matching explicit value, and refuses a contradiction citing this rule. No
+contradicts the consolidated ledger's `overallVerdict` composed with the
+ledger's judge act list (ADR 0089) for the same head and gate (#1616). The
+consolidator (`consolidate-fanin.mjs`) computes the severity `overallVerdict`;
+it threads through `--ledger-out`'s `{ overallVerdict, findings }` wrapper into
+the durable ledger (`write-gate-findings-log.mjs`). `upsert-checkpoint-verdict.mjs`
+composes it with the ledger's open judge act items, derives the verdict by
+default (passing no `--verdict` is valid), accepts a matching explicit value,
+and refuses a contradiction citing this rule. A ledger without
+`overallVerdict` still refuses an explicit `clean` while its act list is not
+empty. No
 override flag — a round whose verdict genuinely differs from the computed one
 is a consolidator bug to fix, not an operator decision to override.
 A `blocked` verdict may sit over a completed `clean` or `findings_present`

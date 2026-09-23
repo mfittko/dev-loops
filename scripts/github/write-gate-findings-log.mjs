@@ -834,10 +834,10 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     loggedAt: new Date().toISOString(),
     // Record the round's real execution mode: a fanout_fanin verdict
     // must never persist a null/absent executionMode. No merge-time reader
-    // consumes this field today (detect-checkpoint-evidence reads executionMode
-    // from the posted verdict COMMENT marker, not the ledger; the stateless
-    // reconciliation path likewise reads the comment, never this machine-local
-    // ledger); it is recorded for provenance/audit completeness only.
+    // consumes this field: detect-checkpoint-evidence reads executionMode
+    // (including for the unjudged act-list exemption) from the posted verdict
+    // COMMENT marker, not the ledger, and the stateless reconciliation path
+    // likewise reads the comment. It is recorded for provenance/audit only.
     // Defaults to inline_single_agent (DEFAULT_EXECUTION_MODE) exactly like the
     // write-time provenance guard above, so the two can never disagree.
     executionMode,
