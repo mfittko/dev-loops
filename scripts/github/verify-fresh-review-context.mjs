@@ -69,12 +69,16 @@ Options:
                   hashes its raw bytes (sha256) and records the digest same
                   as --prefix-hash. Fails closed (exit 1) if the file is
                   missing. Mutually exclusive with --prefix-hash.
-  --same-head-retry  Sanctioned same-head retry for any scenario that re-runs a
-                  reviewer for the SAME scope+head without a rebuilt briefing:
-                  a PR-body/description-only fix (which never changes the head
-                  SHA), a reviewer interrupted or killed after sentinel
-                  creation but before writing its findings artifact, or a
-                  harness crash. Requires --prefix-hash/--prefix-file.
+  --same-head-retry  Sanctioned same-head retry that re-runs a reviewer for the
+                  SAME scope+head without a rebuilt briefing, only for a
+                  reviewer interrupted or killed after sentinel creation but
+                  before writing its findings artifact, or a harness crash.
+                  The retry replays the build-time evidence file and
+                  known-findings snapshot, so it never sees a PR-body edit or
+                  a thread posted after the build. A PR-body-only fix, or a
+                  retry that must see newly posted threads, uses
+                  GATE-EXEC-ROUND-RETIREMENT (retire, then rebuild) instead.
+                  Requires --prefix-hash/--prefix-file.
                   When a sentinel already exists for this exact scope+round
                   (the normal contamination trip), this flag permits
                   overwriting it ONLY when the given prefix hash matches the
@@ -479,12 +483,13 @@ async function main(argv = process.argv.slice(2)) {
   const existing = await checkSentinelExists(scope, round);
   if (existing.exists) {
     // Sanctioned same-head retry (skills/docs/gate-review-sub-loop-contract.md,
-    // "Sentinel lifecycle"): some legitimate re-runs never earn a new round key
-    // — a PR-body/description-only fix (the round is keyed by head SHA, which a
-    // body edit never changes), a reviewer interrupted after sentinel creation
-    // but before writing its findings artifact, or a harness crash. In all of
-    // them a same-scope + same-head re-entry would otherwise trip the
-    // contamination guard. Permit ONE narrow exception: overwrite the existing
+    // "Sentinel lifecycle"): a reviewer interrupted after sentinel creation but
+    // before writing its findings artifact, or a harness crash, re-runs on the
+    // same round key, so a same-scope + same-head re-entry would otherwise trip
+    // the contamination guard. The retry replays the build-time evidence and
+    // known-findings snapshot; a PR-body-only fix, or a retry that must see
+    // newly posted threads, goes through GATE-EXEC-ROUND-RETIREMENT (retire,
+    // then rebuild) instead. Permit ONE narrow exception: overwrite the existing
     // sentinel ONLY when the given prefix hash matches its recorded one exactly —
     // proof the seeded briefing (GATE-EXEC-BRIEFING-PREFIX) was NOT rebuilt, so
     // the round's byte-identity invariant stays fully intact for every other
