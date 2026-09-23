@@ -19,7 +19,7 @@ import {
 } from "@dev-loops/core/loop/merge-approval";
 import { summarizeCopilotReviews, resolveDraftGateRoundResetMs } from "@dev-loops/core/github/copilot-helpers";
 import { isCopilotReviewObservableViaGraphql } from "./request-copilot-review.mjs";
-import { getLastCopilotReviewHeadSha, fetchDeltaChangedFiles, resolveCarriedConvergence } from "../loop/_copilot-convergence-carry.mjs";
+import { getLastCopilotReview, getLastCopilotReviewHeadSha, fetchDeltaChangedFiles, resolveCarriedConvergence } from "../loop/_copilot-convergence-carry.mjs";
 import { resolveCurrentHeadBodyFeedback } from "./_copilot-body-disposition.mjs";
 import { detectPostConvergenceSignificantChange } from "../loop/_post-convergence-change.mjs";
 import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
@@ -78,7 +78,8 @@ Preconditions (each refuses with a machine-readable reason naming the failing on
   or unrecognized non-approval disposition (🔵 "Needs a closer look" is
   conductor-overridable; unresolved threads still gate it). A trusted
   copilot-body-disposition record for the current head clears a current-head
-  body finding. With no current-head
+  body finding. A later Copilot review on an earlier commit that is not
+  converged refuses even when the current head has its own review. With no current-head
   Copilot review it passes only via a sanctioned disposition for the current
   head: copilot_gate_disabled (round cap 0, or an internal-only PR),
   converged_once (default mode: the latest Copilot review converged on an
@@ -274,6 +275,19 @@ async function resolveCopilotAbsentReviewDisposition({ repo, pr, currentHeadSha,
   return (await isInternalOnlyPr({ repo, pr, patterns: config?.internalPathPatterns }, runtime)) ? pinned(COPILOT_ABSENT_REVIEW_DISPOSITION.COPILOT_GATE_DISABLED) : null;
 }
 
+// Returns a copilot_convergence refusal reason when a current-head Copilot
+// review exists but the latest submitted Copilot review sits on an earlier
+// commit and is not converged by the shared predicate; null otherwise.
+async function resolveLaterCopilotReviewRefusal({ repo, pr, currentHeadSha, rawReviews, rawConvergenceState }, runtime) {
+  if (rawConvergenceState === null || rawConvergenceState === COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW) return null;
+  const prData = { reviews: toSharedReviewShape(rawReviews) };
+  const latestHead = getLastCopilotReviewHeadSha(prData);
+  if (latestHead === null || latestHead === currentHeadSha) return null;
+  const carried = await resolveCarriedConvergence({ repo, pr, currentHeadSha, prData, copilotReviewRequestStatus: "none" }, runtime);
+  if (carried.carried) return null;
+  return `a later Copilot review ${getLastCopilotReview(prData)?.id ?? "(unknown id)"} on an earlier commit (${latestHead}) is not converged and supersedes the current-head review: ${carried.reason}`;
+}
+
 // The shared loop helpers read the GraphQL review shape (`id` is the review's
 // node id, the id a copilot-body-disposition record names).
 function toSharedReviewShape(rawReviews) {
@@ -437,6 +451,15 @@ export async function mergePr(options, runtime = {}) {
       reviewSummary: summarizeCopilotReviews(toSharedReviewShape(rawReviews), { headSha: currentHeadSha }),
     }, { env, ghCommand, runChild })).bodyDisposition
     : null;
+  // The latest review decides: when a current-head review exists but the
+  // latest submitted Copilot review sits on an earlier commit (Copilot reviewed
+  // an older commit after the current head), judge that later review by the
+  // shared predicate, as the loop does. The converged-once form applies in
+  // both modes: the current head has its own review, so no delta is carried.
+  const copilotLaterReviewRefusal = await resolveLaterCopilotReviewRefusal(
+    { repo: options.repo, pr: options.pr, currentHeadSha, rawReviews, rawConvergenceState },
+    { env, ghCommand, runChild },
+  );
 
   const verdict = evaluateMergePreconditions({
     humanApprovedBy: options.humanApprovedBy,
@@ -460,6 +483,7 @@ export async function mergePr(options, runtime = {}) {
     stableRelease: options.stableRelease === true,
     copilotAbsentReviewDisposition,
     copilotBodyDisposition,
+    copilotLaterReviewRefusal,
   });
 
   if (!verdict.ok) {

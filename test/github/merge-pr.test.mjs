@@ -179,6 +179,34 @@ test("a current-head Copilot 🟢 merges and records the disposition for audit",
 const OLD_HEAD = "0".repeat(40);
 const copilotAt = (commit, body, submittedAt) => ({ user: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", commit_id: commit, body, submitted_at: submittedAt });
 
+// Latest review wins: a clean current-head review does not hold against a
+// LATER Copilot review on an older commit that is not converged.
+for (const strict of [false, true]) {
+  const mode = strict ? "strict" : "converged-once";
+  const laterOnOlder = (body) => [
+    { ...copilotAt(HEAD, "### 🟢 Approval recommended", "2026-01-02T00:00:00Z"), node_id: "PRR_head" },
+    { ...copilotAt(OLD_HEAD, body, "2026-01-03T00:00:00Z"), node_id: "PRR_later" },
+  ];
+
+  test(`${mode}: a later body-only 🟡 review on an older commit refuses despite a clean current-head review`, async () => {
+    const { runtime, calls } = makeRuntime({ maxCopilotRounds: 5, strict, reviews: laterOnOlder("### 🟡 Changes recommended\n\nfix it.") });
+    let threw = null;
+    try { await mergePr(baseOptions(), runtime); } catch (e) { threw = e; }
+    assert.ok(threw, "a later non-converged review must refuse");
+    const failure = threw.mergePrFailure.failures.find((f) => f.precondition === "copilot_convergence");
+    assert.ok(failure, JSON.stringify(threw.mergePrFailure.failures));
+    assert.match(failure.reason, /later Copilot review PRR_later on an earlier commit \(0{40}\) is not converged and supersedes the current-head review: the prior Copilot review is body-only/);
+    assert.equal(calls.runChild.filter((c) => c.args[0] === "pr" && c.args[1] === "merge").length, 0);
+  });
+
+  test(`${mode}: a later clean review on an older commit keeps the clean current-head merge`, async () => {
+    const { runtime } = makeRuntime({ maxCopilotRounds: 5, strict, reviews: laterOnOlder("### 🟢 Approval recommended") });
+    const result = await mergePr(baseOptions(), runtime);
+    assert.equal(result.merged, true);
+    assert.equal(result.copilotConvergenceState, "current_head_clean");
+  });
+}
+
 test("no current-head Copilot review with the Copilot gate disabled merges via copilot_gate_disabled", async () => {
   const { runtime } = makeRuntime({ maxCopilotRounds: 0 });
   const result = await mergePr(baseOptions(), runtime);

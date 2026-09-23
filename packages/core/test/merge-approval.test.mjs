@@ -234,6 +234,7 @@ test("evaluateMergePreconditions: each missing precondition is named individuall
     [{ gateEvidence: { ok: false, failures: ["missing visible clean draft_gate comment"] } }, "gate_evidence"],
     [{ sizeOutcome: "escalate", standingAuthorized: true }, "size_budget_human_approval"],
     [{ standingAuthorized: false }, "merge_approval"],
+    [{ copilotLaterReviewRefusal: "a later Copilot review is not converged" }, "copilot_convergence"],
   ];
   for (const [override, expected] of cases) {
     const res = evaluateMergePreconditions(greenFacts(override));

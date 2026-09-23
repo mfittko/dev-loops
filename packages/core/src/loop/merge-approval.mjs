@@ -404,6 +404,10 @@ export function evaluateMergePreconditions({
   stableRelease = false,
   copilotAbsentReviewDisposition = null,
   copilotBodyDisposition = null,
+  // Refusal reason when a Copilot review submitted after the current-head
+  // verdict review sits on an earlier commit and is not converged (the latest
+  // review decides); null otherwise.
+  copilotLaterReviewRefusal = null,
 } = {}) {
   const failures = [];
 
@@ -465,6 +469,8 @@ export function evaluateMergePreconditions({
     && String(copilotBodyDisposition.reviewId) === copilotConvergence.reviewId;
   if (!copilotConvergence.ok && !bodyCleared) {
     failures.push({ precondition: "copilot_convergence", reason: copilotConvergence.reason });
+  } else if (typeof copilotLaterReviewRefusal === "string") {
+    failures.push({ precondition: "copilot_convergence", reason: copilotLaterReviewRefusal });
   }
 
   const mergeClass = resolveMergeClass({ sizeOutcome, touchesT1, stableRelease });
