@@ -315,7 +315,8 @@ test("work order: the worst case (maximal worktree path, every read kind, maxima
   // 3-byte UTF-8 characters: the largest byte count per UTF-16 unit the char bound allows.
   const volatileBytes = Buffer.byteLength(renderBriefingVolatile({
     gate: GATE, headSha: HEAD_SHA, loggedAt: new Date().toISOString(), validationPosture: "中".repeat(VALIDATION_POSTURE_MAX_LENGTH),
-    priorDispositionsRead: { ...read("prior-dispositions", ".prior-dispositions.json", true), entries: 99999999 }, worktreeRoot,
+    priorDispositionsRead: { ...read("prior-dispositions", ".prior-dispositions.json", true), entries: 99999999 },
+    knownFindingsRead: { ...read("known-findings", ".known-findings.json", true), entries: 99999999 }, worktreeRoot,
   }));
   const defaults = parseYaml(await readFile(path.resolve("packages/core/src/config/extension-defaults.yaml"), "utf8"));
   const longest = shippedPrompts(defaults).slice(0, 3);
