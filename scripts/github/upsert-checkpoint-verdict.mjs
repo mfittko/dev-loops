@@ -2,7 +2,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { buildParseError, formatCliError, isDirectCliRun, parseJsonText, sanitizeCopilotSummonTokens } from "../_core-helpers.mjs";
-import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
+import { guardCommentBodyNoIssuePrIds, neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 import { GATE_FULL_LABEL, loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRefinementConfig, resolveRejectForeignAngles, resolveRequireFanoutEvidence } from "@dev-loops/core/config";
 import { GATE_CONFIG_KEY, SEVERITY_ORDER, VALID_SEVERITIES, checkFanoutAngleCoverage, normalizeSeverity, normalizeSeverityCounts, provenanceConsistencyError, resolveFindingFile, severityRank } from "@dev-loops/core/loop/gate-fanin";
 import { parseArgs } from "node:util";
@@ -1479,7 +1479,7 @@ function renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, 
 // `nonLocatableFindings` also drives an invisible fingerprint+disposition
 // marker per finding, load-bearing for GATE-EXEC-FINDING-THREADS's
 // cross-round suppression/deferral tracking.
-export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings, foldedFindings }) {
+export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, findingsSummary, nextAction, blockCleanOnFindingSeverities, executionMode, inlineReason, sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy, structuredFindings, findingsSeverityCounts, gateEvidenceNote, round, nonLocatableFindings, locatableFindings, foldedFindings, reviewVerdict, gateBlockers }) {
   const lines = [
     `### Gate review: \`${gate}\``,
   ];
@@ -1495,6 +1495,11 @@ export function renderGateReviewCommentBody({ gate, headSha, repo, verdict, find
     "",
     `**Reviewed head SHA:** \`${headSha}\``,
     `**Verdict:** ${verdict}`,
+    // GATE-COMMENT-VERDICT-VALUES: a checkpoint composed over a completed
+    // ledger records the underlying review verdict and the proven blockers.
+    // Neither label matches a parsed field, so the parse contract is unchanged.
+    ...(reviewVerdict ? [`**Review verdict:** ${reviewVerdict}`] : []),
+    ...(Array.isArray(gateBlockers) && gateBlockers.length > 0 ? [`**Gate blockers:** ${formatGateBlockers(gateBlockers)}`] : []),
     renderExecutionModeLine(executionMode, inlineReason),
     ...renderSizeBudgetLines({ sizeOutcome, sizeTouchesT1, sizeWaiverGranted, sizeWaiverApprovedBy }),
   );
@@ -2046,6 +2051,48 @@ async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, pre
   return surface;
 }
 
+// ACCEPT-CRITERIA-VERIFY-AND-REFLECT deterministic pre-approval blockers: the
+// unticked items from the same three sources the pre_approval_gate `clean`
+// guards read (spec-of-record AC, PR-body AC, PR-body DoD). Pure; an artifact
+// that resolved no AC data yields no blockers. Scoped to pre_approval_gate:
+// any other gate yields no blockers whatever the artifact carries.
+const PRE_APPROVAL_BLOCKER_SOURCES = [
+  ["uncheckedAcItems", "unticked spec-of-record Acceptance criteria"],
+  ["prBodyUncheckedAcItems", "unchecked PR-body Acceptance criteria"],
+  ["prBodyUncheckedDodItems", "unchecked PR-body Definition of done"],
+];
+export function collectPreApprovalGateBlockers(gate, refinementArtifact) {
+  const blockers = [];
+  if (gate !== "pre_approval_gate") return blockers;
+  for (const [field, kind] of PRE_APPROVAL_BLOCKER_SOURCES) {
+    const items = refinementArtifact?.[field];
+    if (!Array.isArray(items)) continue;
+    for (const item of items) {
+      if (typeof item === "string" && item.trim() !== "") blockers.push({ kind, item });
+    }
+  }
+  return blockers;
+}
+
+// GATE-COMMENT-VERDICT-VALUES layer composition: the fan-in ledger's
+// overallVerdict is the REVIEW verdict; the checkpoint verdict composes it with
+// deterministic gate blockers. A blocked review stays blocked, any proven
+// blocker yields blocked, otherwise the review verdict stands unchanged.
+export function composeCheckpointVerdict({ reviewVerdict, blockers = [] }) {
+  if (reviewVerdict === "blocked" || blockers.length > 0) return "blocked";
+  return reviewVerdict;
+}
+
+const MAX_RENDERED_GATE_BLOCKERS = 10;
+function formatGateBlockers(blockers) {
+  const rendered = blockers
+    .slice(0, MAX_RENDERED_GATE_BLOCKERS)
+    .map(({ kind, item }) => `${kind}: \`${sanitizeCodeSpan(neutralizeBareIssuePrIds(item))}\``)
+    .join("; ");
+  const hidden = blockers.length - MAX_RENDERED_GATE_BLOCKERS;
+  return hidden > 0 ? `${rendered}; +${hidden} more` : rendered;
+}
+
 // GATE-COMMENT-DRAFT-REQUIREMENTS / GATE-COMMENT-PREAPPROVAL-REQUIREMENTS
 // (skills/docs/gate-review-comment-contract.md): a non-clean verdict must not
 // carry an advancing next action. The mandated next action for a round that
@@ -2384,24 +2431,41 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   if (options.findingsLedger) {
     preloadedFindingsLedger = await loadMatchingFindingsLedger(options, canonicalHeadSha);
   }
+  // Set only when the posted checkpoint verdict differs from the ledger's review
+  // verdict (a proven pre-approval blocker over a completed ledger), so the
+  // render records both layers. The ledger object itself is never mutated.
+  let checkpointComposition = null;
   if (preloadedFindingsLedger && preloadedFindingsLedger.overallVerdict) {
     const ledgerVerdict = preloadedFindingsLedger.overallVerdict;
+    // GATE-COMMENT-VERDICT-VALUES: the ledger carries the REVIEW verdict; for
+    // pre_approval_gate it composes with the deterministic AC/DoD blockers.
+    const gateBlockers = collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact);
+    const composedVerdict = composeCheckpointVerdict({ reviewVerdict: ledgerVerdict, blockers: gateBlockers });
     if (options.verdict === undefined) {
       // Derive: the caller need not pass --verdict at all when the ledger
       // carries the consolidator's verdict (AC: "passing no --verdict
       // is valid and correct").
-      options.verdict = ledgerVerdict;
-    } else if (options.verdict !== ledgerVerdict) {
-      // Refuse the contradiction, naming both values and the head, citing the
+      options.verdict = composedVerdict;
+    } else if (options.verdict !== composedVerdict) {
+      // Refuse the contradiction, naming both layers and the head, citing the
       // rule whose meaning the consolidator's computation already implements.
       // No override flag (AC): a round whose verdict genuinely differs
       // from the computed one is a consolidator bug to fix, not an operator
-      // decision to override.
+      // decision to override. `blocked` over a completed ledger is accepted
+      // only through a proven blocker, i.e. only when it IS the composed value.
+      const compositionNote = composedVerdict !== ledgerVerdict
+        ? ` Composed with ${gateBlockers.length} deterministic pre-approval blocker(s) (${formatGateBlockers(gateBlockers)}), the checkpoint verdict is "${composedVerdict}".`
+        : (options.verdict === "blocked"
+          ? ` No deterministic pre-approval blocker is proven, so "blocked" cannot sit over this completed ledger; the composed checkpoint verdict is "${composedVerdict}".`
+          : "");
       throw new Error(
-        `--verdict "${options.verdict}" for ${options.gate} @ ${canonicalHeadSha} contradicts the consolidated ledger's overallVerdict "${ledgerVerdict}" (from --findings-ledger "${options.findingsLedger}" for ${preloadedFindingsLedger.repo}#${preloadedFindingsLedger.pr} ${preloadedFindingsLedger.gate} @ ${preloadedFindingsLedger.headSha}). The verdict must match the fan-in consolidator's computed value — GATE-COMMENT-VERDICT-VALUES (skills/docs/gate-review-comment-contract.md): "clean" = no findings at a blocking severity remain; "findings_present" = the gate found issues at blocking severities. Re-run the gate fan-in (dev-loops gate consolidate-fanin) and let its overallVerdict flow through, or post the matching verdict. A contradicting posted verdict is a contract breach this script refuses to record.`,
+        `--verdict "${options.verdict}" for ${options.gate} @ ${canonicalHeadSha} contradicts the consolidated ledger's overallVerdict "${ledgerVerdict}" (from --findings-ledger "${options.findingsLedger}" for ${preloadedFindingsLedger.repo}#${preloadedFindingsLedger.pr} ${preloadedFindingsLedger.gate} @ ${preloadedFindingsLedger.headSha}).${compositionNote} The verdict must match the fan-in consolidator's computed value composed with any deterministic gate blocker — GATE-COMMENT-VERDICT-VALUES (skills/docs/gate-review-comment-contract.md): "clean" = no findings at a blocking severity remain; "findings_present" = the gate found issues at blocking severities; "blocked" = the fan-in could not complete or a proven deterministic gate blocker (unchecked AC/DoD) prevents crossing. Re-run the gate fan-in (dev-loops gate consolidate-fanin) and let its overallVerdict flow through, or omit --verdict to post the composed verdict. A contradicting posted verdict is a contract breach this script refuses to record.`,
       );
     }
     // else: a matching explicit --verdict is accepted unchanged.
+    if (composedVerdict !== ledgerVerdict) {
+      checkpointComposition = { reviewVerdict: ledgerVerdict, blockers: gateBlockers };
+    }
   } else if (options.verdict === undefined) {
     // --findings-ledger absent OR present without overallVerdict (a legacy/
     // inline ledger): --verdict is still required. The parser allows omitting
@@ -2892,6 +2956,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     structuredFindings,
     gateEvidenceNote: coordination?.gateEvidenceNote ?? null,
     blockCleanOnFindingSeverities: activeGateConfig.blockCleanOnFindingSeverities,
+    ...(checkpointComposition ? { reviewVerdict: checkpointComposition.reviewVerdict, gateBlockers: checkpointComposition.blockers } : {}),
     ...(findingSurface ? { round: findingSurface.round, nonLocatableFindings: findingSurface.nonLocatable, locatableFindings: findingSurface.locatable, foldedFindings: findingSurface.folded } : {}),
   });
   // ISSUE/PR-ID GUARD: the rendered gate verdict body must never emit a
@@ -2989,6 +3054,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     }
   }
   const desiredExecutionMode = options.executionMode ?? DEFAULT_EXECUTION_MODE;
+  const compositionResultFields = checkpointComposition
+    ? { reviewVerdict: checkpointComposition.reviewVerdict, gateBlockers: checkpointComposition.blockers }
+    : {};
   // GATE-EXEC-LIGHT-ESCALATION: an inline round that surfaces a blocking
   // finding escalates the next round to full fan-out by applying the gate:full
   // PR label. Applied (not a post refusal) so it never collides with
@@ -3004,7 +3072,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     && resolveRequireFanoutEvidence(config)
     && desiredExecutionMode === "inline_single_agent"
     && roundCarriesBlockingSeverity({
-      verdict: options.verdict,
+      // A composed checkpoint verdict (blocked over a findings_present review)
+      // still carries the review's blocking findings, so judge the review layer.
+      verdict: checkpointComposition?.reviewVerdict ?? options.verdict,
       structuredFindings,
       findingsSeverityCounts: options.findingsSeverityCounts,
       activeGateConfig,
@@ -3055,6 +3125,13 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     && (existing.sizeWaiverGranted ?? null) === desiredSizeWaiverGranted
     && (existing.sizeWaiverApprovedBy ?? null) === desiredSizeWaiverApprovedBy
     && unpostedFindings === 0
+    // ponytail: the existing summary carries no body, so the review-verdict /
+    // gate-blockers lines cannot be compared. A composed checkpoint always
+    // re-renders in place. A prior composed body is always `blocked`, so a
+    // non-composed `blocked` pre-approval rerun also re-renders to drop stale
+    // lines. Carry the body into the summary if these extra updates matter.
+    && checkpointComposition === null
+    && !(options.gate === "pre_approval_gate" && options.verdict === "blocked")
   ) {
     // GATE-EXEC-LIGHT-ESCALATION: a same-head noop rerun must still
     // ensure the gate:full label is on the PR — if the original post succeeded
@@ -3083,6 +3160,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       ...(findingsLedgerWarning ? { findingsLedgerWarning } : {}),
       ...(escalateGateFullLabel ? { gateFullLabelApplied: true } : {}),
       ...(specAuthority ? { specAuthority } : {}),
+      ...compositionResultFields,
     };
   }
   if (existing) {
@@ -3133,6 +3211,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       ...(updateVerificationWarning ? { verificationWarning: updateVerificationWarning } : {}),
       ...(escalateGateFullLabel ? { gateFullLabelApplied: true } : {}),
       ...(specAuthority ? { specAuthority } : {}),
+      ...compositionResultFields,
     };
   }
   const createdReview = await createGateReview({
@@ -3213,6 +3292,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     ...(minimizeWarning ? { minimizeWarning } : {}),
     ...(escalateGateFullLabel ? { gateFullLabelApplied: true } : {}),
     ...(specAuthority ? { specAuthority } : {}),
+    ...compositionResultFields,
   };
 }
 export function buildInlineExecutionWarning(executionMode, inlineReason) {
