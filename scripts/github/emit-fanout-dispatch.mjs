@@ -110,12 +110,15 @@ const parseError = buildParseError(USAGE);
 /**
  * Derive the reviewer-sentinel/prompt-layout scope for a resolved dispatch unit.
  * A singleton unit dispatches under its angle name (`<gatePrefix><angle>`); a
- * multi-angle unit dispatches under `<gatePrefix>group-<sanitized name>`. Unit
- * names from resolveFanoutGroups can carry `:`/`+`/`#` (auto-chunk units like
- * `group:a+b+c`), which VALID_SCOPE_RE forbids, so a multi-angle scope sanitizes
- * the name to alphanumeric/hyphen. The scope keys the sentinel/prompt layout
- * only; the EXACT unit name is carried separately as the provenance `group`.
- * Pure.
+ * multi-angle unit dispatches under `<gatePrefix>group-<segment>`, where
+ * `<segment>` is unitScopeSegment(unit.name) — the leading `group:` auto-chunk
+ * marker (see resolveFanoutGroups' chunk naming) is stripped BEFORE
+ * sanitizing, whatever the unit's origin: a configured group's name is not
+ * guaranteed marker-free either (e.g. a split sub-unit's base name can itself
+ * be an auto-chunk name carrying the marker), so this never special-cases
+ * "came from config" vs "auto-chunked". The scope keys the sentinel/prompt
+ * layout only; the EXACT unit name is carried separately as the provenance
+ * `group`. Pure.
  * @param {string} gate normalized gate id
  * @param {{ name: string, angles: string[] }} unit
  * @returns {string}
@@ -124,7 +127,7 @@ export function dispatchUnitScope(gate, unit) {
   const prefix = gateScopePrefix(gate);
   const angles = Array.isArray(unit?.angles) ? unit.angles : [];
   if (angles.length === 1) return `${prefix}${sanitizeScopeSegment(angles[0])}`;
-  return `${prefix}group-${sanitizeScopeSegment(unit?.name ?? "")}`;
+  return `${prefix}group-${unitScopeSegment(unit?.name)}`;
 }
 
 /**
@@ -139,6 +142,37 @@ export function sanitizeScopeSegment(value) {
     .replace(/[^a-zA-Z0-9]+/g, "-")
     .replace(/^-+/, "")
     .replace(/-+$/, "");
+}
+
+/**
+ * The shared scope-segment derivation for a unit name: strip a leading
+ * `group:` auto-chunk marker — otherwise the marker's `:` would sanitize to
+ * its own `group-` segment and double up into `group-group-<angles>` — then
+ * sanitize with sanitizeScopeSegment. The strip applies whatever the unit's
+ * origin: a configured group's name is not guaranteed marker-free either
+ * (e.g. a split sub-unit's base name can itself be an auto-chunk name), so
+ * this never special-cases config vs auto-chunk. If the stripped result
+ * sanitizes to an EMPTY string (a unit literally named `group:` or
+ * `group:!!`, whose only content is the marker and/or characters
+ * sanitizeScopeSegment strips), fall back to sanitizing the UNSTRIPPED name —
+ * this recovers a non-empty segment for a marker-only name like `group:`, but
+ * an empty or entirely-non-alphanumeric name (`""`, `undefined` coerced to
+ * `""`, or e.g. `"!!"`) still sanitizes to `""` either way, so the segment is
+ * NOT guaranteed non-empty. An empty segment collapses `<prefix>group-` to a
+ * scope VALID_SCOPE_RE rejects — the caller (dispatchUnitScope's VALID_SCOPE_RE
+ * check in main) then refuses the plan fail-closed rather than dispatching
+ * under a malformed scope. Shared by
+ * dispatchUnitScope (deriving a unit's dispatch scope) and splitSubUnitName
+ * (disambiguating a split sub-unit's name against configured group names on
+ * exactly the string the scope uses). Pure.
+ * @param {string} name a resolved unit's name (may carry the `group:` marker)
+ * @returns {string}
+ */
+export function unitScopeSegment(name) {
+  const rawName = name ?? "";
+  const stripped = rawName.startsWith("group:") ? rawName.slice("group:".length) : rawName;
+  const sanitizedStripped = sanitizeScopeSegment(stripped);
+  return sanitizedStripped.length > 0 ? sanitizedStripped : sanitizeScopeSegment(rawName);
 }
 
 // Human phrasing for each PROHIBITED_REVIEWER_OPERATIONS kind. The RENDERED
@@ -175,17 +209,34 @@ const PROHIBITED_OPERATION_INSTRUCTIONS = {
  * findings directory named earlier in the briefing) — it never interpolates
  * a concrete angle name (or any other concrete value) into the shell-command
  * text, since an angle name is only required to be a non-empty string and
- * could otherwise carry shell metacharacters into a copy-pasted command.
+ * could otherwise carry shell metacharacters into a copy-pasted command. It
+ * also states the unit's own emitted `scope` (from dispatchUnitScope) as the
+ * exact `--scope` value for the mandatory verify-fresh-review-context.mjs
+ * sentinel named in the invariant prefix, verbatim — the reviewer never
+ * derives it from the unit name, which for an auto-chunk unit would carry
+ * `:`/`+` that VALID_SCOPE_RE rejects. The caller MUST pass a scope already
+ * validated against VALID_SCOPE_RE — main validates the emitted scope before
+ * calling this — so this function does not itself re-validate the scope
+ * shape, but it DOES fail closed if `scope` is missing entirely (not a
+ * non-empty string): omitting it would otherwise render the literal string
+ * `undefined` into the `--scope` instruction handed to the reviewer, which
+ * would then be silently wrong rather than caught.
  * @param {{ name: string, angles: string[] }} unit
+ * @param {string} scope this unit's emitted dispatchUnitScope value, already
+ *   validated against VALID_SCOPE_RE by the caller
  * @returns {string}
  */
-export function buildAngleNamingSuffix(unit) {
+export function buildAngleNamingSuffix(unit, scope) {
+  if (typeof scope !== "string" || scope.length === 0) {
+    throw new TypeError(`buildAngleNamingSuffix requires a non-empty scope string, got ${JSON.stringify(scope)}`);
+  }
   const angles = Array.isArray(unit?.angles) ? unit.angles : [];
   const list = angles.join(", ");
   const single = angles.length === 1;
   const header = single
     ? `## Your review angle: ${list}`
     : `## Your review angles (dispatch unit "${unit?.name}"): ${list}`;
+  const scopeLine = `Dispatch scope: pass \`--scope ${scope}\` verbatim to the mandatory \`verify-fresh-review-context.mjs\` sentinel named in the briefing prefix above — this is your dispatch unit's exact emitted scope, never composed from the unit name.`;
   const body = single
     ? `Self-resolve this angle's persona and focus prompt via resolveReviewerRole(config, "${angles[0]}") from @dev-loops/core/config, then review adversarially per your scoped angle-review mode. Write one findings artifact for this angle at its per-angle path.`
     : `For EACH angle above, self-resolve its persona and focus prompt via resolveReviewerRole(config, <angle>) from @dev-loops/core/config, then review adversarially per your scoped angle-review mode. Write one findings artifact PER ANGLE at its per-angle path — one artifact per angle, never one merged artifact for the unit.`;
@@ -197,31 +248,32 @@ Budget: at most ${REVIEWER_UNIT_BUDGET.maxModelTurns} model turns and ${REVIEWER
 Scope: review ONLY the angle(s) named above — reviewing an unassigned angle is prohibited.
 Prohibited: ${prohibited}.
 If you exceed this budget (more than ${REVIEWER_UNIT_BUDGET.maxModelTurns} model turns or ${REVIEWER_UNIT_BUDGET.maxToolCalls} tool calls) OR cannot finish reviewing every assigned angle within it, do NOT report clean — emit a durable blocked result via: dev-loops-run scripts/github/emit-reviewer-blocked.mjs --run <reviewed head sha> --head-sha <reviewed head sha> --angles <your assigned angles, comma-separated> --completed-angles <angles you finished> --model-turns <model turns you used> --tool-calls <tool calls you used> --findings-dir <the per-angle findings directory named in the briefing prefix above>.`;
-  return `${header}\n\n${body}\n\n${contract}\n`;
+  return `${header}\n\n${scopeLine}\n\n${body}\n\n${contract}\n`;
 }
 
 /**
  * Generate a split sub-unit's scope-distinguishing name: `${baseName}-part${n}`,
- * disambiguated against `configuredGroupNames` on their SANITIZED form — the
- * same sanitizeScopeSegment dispatchUnitScope applies when deriving a
- * multi-angle unit's scope. Comparing raw names is not enough: a
+ * disambiguated against `configuredGroupNames` on their unitScopeSegment form —
+ * the SAME helper dispatchUnitScope applies when deriving a multi-angle unit's
+ * scope (strip a leading `group:` auto-chunk marker, then sanitize), so this
+ * checks exactly the string the scope uses. Comparing raw names is not enough: a
  * separately-configured "backend_part1" group sanitizes to the SAME
  * "group-backend-part1" scope as a generated "backend-part1" sub-unit even
  * though the raw strings differ, so the collision must be caught here too —
- * while the candidate's sanitized form is itself a configured group's
- * sanitized name, append a further suffix until it is not. The dispatch
- * loop's seenScopes guard below remains the final backstop for any residual
- * collision this cannot see. Deterministic, pure.
+ * while the candidate's unitScopeSegment form is itself a configured group's
+ * unitScopeSegment form, append a further suffix until it is not. The
+ * dispatch loop's seenScopes guard below remains the final backstop for any
+ * residual collision this cannot see. Deterministic, pure.
  * @param {string} baseName configured group name being split
  * @param {number} n 1-based split index
  * @param {Set<string>} configuredGroupNames configured gates.fanout.groups names
  * @returns {string}
  */
 export function splitSubUnitName(baseName, n, configuredGroupNames) {
-  const sanitizedConfiguredNames = new Set(Array.from(configuredGroupNames, (name) => sanitizeScopeSegment(name)));
+  const configuredSegments = new Set(Array.from(configuredGroupNames, (name) => unitScopeSegment(name)));
   let candidate = `${baseName}-part${n}`;
   let bump = 0;
-  while (sanitizedConfiguredNames.has(sanitizeScopeSegment(candidate))) {
+  while (configuredSegments.has(unitScopeSegment(candidate))) {
     bump += 1;
     candidate = `${baseName}-part${n}-x${bump}`;
   }
@@ -642,7 +694,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     const suffixPath = path.join(path.dirname(contextPath), `${gate}-${headSha}.angle-suffix-${scope}.txt`);
     try {
       await mkdir(path.dirname(suffixPath), { recursive: true });
-      await writeFile(suffixPath, buildAngleNamingSuffix(unit), "utf8");
+      await writeFile(suffixPath, buildAngleNamingSuffix(unit, scope), "utf8");
     } catch (err) {
       process.stderr.write(`${formatCliError(err)}\n`);
       return 2;
