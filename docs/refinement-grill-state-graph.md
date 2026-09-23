@@ -83,7 +83,7 @@ The `--body-file` mode computes the deterministic AC-presence signal via `detect
 
 Success output:
 
-- `{ "ok": true, "snapshot": { ... }, "state": "...", "allowedTransitions": [...], "nextAction": "...", "reason": "..."|null, "bypass": false }`
+- `{ "ok": true, "snapshot": { ... }, "state": "...", "allowedTransitions": [...], "nextAction": "...", "reason": "..."|null, "bypass": true|false }`
 
 Failure output:
 

@@ -269,6 +269,16 @@ test("Step 1 names the deterministic comments fetch, the detector invocation, an
   );
   assert.match(
     step1,
+    /view-issue\.mjs --repo <owner\/repo> --issue <n> --json body --jq '\.issue\.body' > <body-path>/,
+    "Step 1 must name the exact view-issue.mjs --jq extraction into a body file",
+  );
+  assert.match(
+    step1,
+    /view-pr\.mjs --repo <owner\/repo> --pr <n> --json body --jq '\.pr\.body' > <body-path>/,
+    "Step 1 must name the exact view-pr.mjs --jq extraction into a body file",
+  );
+  assert.match(
+    step1,
     /node scripts\/loop\/detect-refinement-grill-state\.mjs --body-file <body-path> --surface <issue\|pr> --comments-file <comments-path>/,
     "Step 1 must name the exact detector invocation",
   );
