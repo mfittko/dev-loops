@@ -2054,14 +2054,16 @@ async function resolveFindingSurface({ options, headSha, repoRoot, isUpdate, pre
 // ACCEPT-CRITERIA-VERIFY-AND-REFLECT deterministic pre-approval blockers: the
 // unticked items from the same three sources the pre_approval_gate `clean`
 // guards read (spec-of-record AC, PR-body AC, PR-body DoD). Pure; an artifact
-// that resolved no AC data yields no blockers.
+// that resolved no AC data yields no blockers. Scoped to pre_approval_gate:
+// any other gate yields no blockers whatever the artifact carries.
 const PRE_APPROVAL_BLOCKER_SOURCES = [
   ["uncheckedAcItems", "unticked spec-of-record Acceptance criteria"],
   ["prBodyUncheckedAcItems", "unchecked PR-body Acceptance criteria"],
   ["prBodyUncheckedDodItems", "unchecked PR-body Definition of done"],
 ];
-export function collectPreApprovalGateBlockers(refinementArtifact) {
+export function collectPreApprovalGateBlockers(gate, refinementArtifact) {
   const blockers = [];
+  if (gate !== "pre_approval_gate") return blockers;
   for (const [field, kind] of PRE_APPROVAL_BLOCKER_SOURCES) {
     const items = refinementArtifact?.[field];
     if (!Array.isArray(items)) continue;
@@ -2437,9 +2439,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     const ledgerVerdict = preloadedFindingsLedger.overallVerdict;
     // GATE-COMMENT-VERDICT-VALUES: the ledger carries the REVIEW verdict; for
     // pre_approval_gate it composes with the deterministic AC/DoD blockers.
-    const gateBlockers = options.gate === "pre_approval_gate"
-      ? collectPreApprovalGateBlockers(coordinationContext?.refinementArtifact)
-      : [];
+    const gateBlockers = collectPreApprovalGateBlockers(options.gate, coordinationContext?.refinementArtifact);
     const composedVerdict = composeCheckpointVerdict({ reviewVerdict: ledgerVerdict, blockers: gateBlockers });
     if (options.verdict === undefined) {
       // Derive: the caller need not pass --verdict at all when the ledger

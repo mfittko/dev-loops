@@ -10096,12 +10096,13 @@ test("#2389: composeCheckpointVerdict implements the pre-approval composition ta
 });
 
 test("#2389: collectPreApprovalGateBlockers reads the three clean-guard sources and nothing else", () => {
-  assert.deepEqual(collectPreApprovalGateBlockers(null), []);
-  assert.deepEqual(collectPreApprovalGateBlockers({ linkedIssues: [900] }), []);
-  assert.deepEqual(collectPreApprovalGateBlockers({ prBodyUncheckedDodItems: [42, null, "  ", "real"] }), [
+  const gate = "pre_approval_gate";
+  assert.deepEqual(collectPreApprovalGateBlockers(gate, null), []);
+  assert.deepEqual(collectPreApprovalGateBlockers(gate, { linkedIssues: [900] }), []);
+  assert.deepEqual(collectPreApprovalGateBlockers(gate, { prBodyUncheckedDodItems: [42, null, "  ", "real"] }), [
     { kind: "unchecked PR-body Definition of done", item: "real" },
   ]);
-  assert.deepEqual(collectPreApprovalGateBlockers({
+  assert.deepEqual(collectPreApprovalGateBlockers(gate, {
     uncheckedAcItems: ["spec ac"],
     prBodyUncheckedAcItems: ["pr ac"],
     prBodyUncheckedDodItems: ["pr dod"],
@@ -10110,6 +10111,18 @@ test("#2389: collectPreApprovalGateBlockers reads the three clean-guard sources 
     { kind: "unchecked PR-body Acceptance criteria", item: "pr ac" },
     { kind: "unchecked PR-body Definition of done", item: "pr dod" },
   ]);
+});
+
+test("#2389: collectPreApprovalGateBlockers yields no blockers outside pre_approval_gate, even with unchecked items", () => {
+  const artifact = {
+    uncheckedAcItems: ["spec ac"],
+    prBodyUncheckedAcItems: ["pr ac"],
+    prBodyUncheckedDodItems: ["pr dod"],
+  };
+  for (const gate of ["draft_gate", "review", undefined]) {
+    assert.deepEqual(collectPreApprovalGateBlockers(gate, artifact), [], `gate ${gate}`);
+  }
+  assert.equal(collectPreApprovalGateBlockers("pre_approval_gate", artifact).length, 3);
 });
 
 test("#2389 regression: a clean ledger plus an unchecked PR-body DoD item posts blocked at the current head with no --verdict, before any fix", async () => {
@@ -10223,8 +10236,9 @@ test("#2389 negative: an arbitrary blocked over a completed ledger is refused wh
   }
 });
 
-test("#2389: draft_gate is unchanged — blocked over a clean draft ledger is refused even with unchecked PR-body boxes", async () => {
-  // DEFAULT_TEST_PR_BODY is a valid draft spec whose AC and DoD boxes are unchecked.
+test("#2389: draft_gate ledger-consistency is unchanged — blocked over a clean draft ledger is still refused", async () => {
+  // The draft coordination path populates no unchecked fields, so this pins the
+  // refusal only; gate scoping is proven by the pure collectPreApprovalGateBlockers test.
   await withCompositionRound({ overallVerdict: "clean", prBody: DEFAULT_TEST_PR_BODY, gate: "draft_gate" }, async ({ post }) => {
     await assert.rejects(() => post({ verdict: "blocked" }), /contradicts the consolidated ledger's overallVerdict "clean"/);
   });
@@ -10257,6 +10271,19 @@ test("#2389: an inline findings_present review composed to blocked still escalat
     assert.match(postedBody(), /\*\*Verdict:\*\* blocked/);
     assert.equal(result.gateFullLabelApplied, true);
     assert.ok(calls.some((c) => c.args[0] === "pr" && c.args[1] === "edit" && c.args.includes("--add-label") && c.args.includes("gate:full")), "gate:full label added");
+  });
+});
+
+test("#2389: an inline clean review composed to blocked does not escalate gate:full", async () => {
+  await withCompositionRound({ overallVerdict: "clean", prBody: COMPOSITION_UNCHECKED_DOD_PR_BODY, requireFanoutEvidence: true }, async ({ post, postedBody, calls }) => {
+    // No findingsJson, no findingsSeverityCounts: a severity-clean review must
+    // not escalate just because the composed checkpoint verdict is blocked.
+    const result = await post();
+    assert.equal(result.action, "created");
+    assert.match(postedBody(), /\*\*Verdict:\*\* blocked/);
+    assert.equal(result.reviewVerdict, "clean");
+    assert.equal("gateFullLabelApplied" in result, false);
+    assert.equal(calls.some((c) => c.args.includes("--add-label")), false, "no label added");
   });
 });
 
