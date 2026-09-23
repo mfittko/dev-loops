@@ -27,7 +27,7 @@ import { isGhBinaryMissing, restFetchPrView, restGetPaginatedJson } from "./_gh-
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
 import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, isSizeOutcomeT1Clean, loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance, touchesRiskPath } from "@dev-loops/core/config";
-import { FANOUT_UNAVAILABLE_MESSAGE, GATE_CONFIG_KEY, JUDGE_DISPOSITIONS, checkFanoutAngleCoverage, countFreshDispatchUnits, fanoutReviewerPairingError, freshAngleNames, listOpenActItems, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { FANOUT_UNAVAILABLE_MESSAGE, GATE_CONFIG_KEY, JUDGE_DISPOSITIONS, VALID_SEVERITIES, checkFanoutAngleCoverage, countFreshDispatchUnits, fanoutReviewerPairingError, freshAngleNames, listOpenActItems, normalizeSeverity, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 import { detectMergeBaseChangedFiles, detectMergeBaseScope, isEligibleForLightMode } from "../loop/detect-change-scope.mjs";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
@@ -728,10 +728,12 @@ async function readActListInAny(checkouts, ledgerPath, markerExecutionMode) {
       continue;
     }
     exists = true;
-    // A finding that is not a plain object, lacks a string summary, or carries a
-    // disposition outside the canonical set is malformed, not judged.
+    // A finding that is not a plain object, lacks a string summary, a canonical
+    // severity, or a non-empty angle, or carries a disposition outside the
+    // canonical set is malformed, not judged.
     if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.findings)
       || parsed.findings.some((f) => !f || typeof f !== "object" || Array.isArray(f) || typeof f.summary !== "string"
+        || !VALID_SEVERITIES.has(normalizeSeverity(f.severity)) || typeof f.angle !== "string" || f.angle.trim().length === 0
         || (f.judgeDisposition != null && !JUDGE_DISPOSITIONS.includes(f.judgeDisposition)))) {
       unreadable ??= { path: full };
       continue;

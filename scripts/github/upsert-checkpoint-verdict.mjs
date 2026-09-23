@@ -2600,6 +2600,11 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     if (!structuredFindings) {
       throw new Error(`--findings-json "${options.findingsJson}" did not contain any renderable findings (expected a non-empty per-angle array of { angle, findings } entries, or a flat per-finding array of { severity, summary, angle? } entries)`);
     }
+    // ADR 0089: without a ledger, the structured findings carry the judge act list.
+    const actItems = preloadedFindingsLedger ? [] : listOpenActItems(flattenAnglesForBodyList(structuredFindings));
+    if (options.verdict === "clean" && actItems.length > 0) {
+      throw new Error(`--verdict "clean" for ${options.gate} @ ${canonicalHeadSha} contradicts ${actItems.length} open judge act item(s) in --findings-json "${options.findingsJson}" (GATE-COMMENT-VERDICT-VALUES, skills/docs/gate-review-comment-contract.md; ADR 0089): ${actItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}. Post "findings_present" or fix the act items first.`);
+    }
   }
   // The clean-verdict guard above trusts --findings-severity-counts alone, so a
   // caller could hand-type an all-zero counts object even when --findings-json's

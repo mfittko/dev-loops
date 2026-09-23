@@ -145,3 +145,21 @@ test("a high finding judged reject still keeps the round from clean", async () =
     assert.match((await post(ledgerPath, "clean", 1)).error, /--verdict "clean"/);
   }, { prefix: "dev-loops-act-list-high-" });
 });
+
+test("--findings-json without a ledger refuses an explicit clean over an open act item", async () => {
+  await withTempDir(async (tempDir) => {
+    const jsonPath = path.join(tempDir, "findings.json");
+    await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [finding("low", "act")] }]), "utf8");
+    const args = [
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", HEAD,
+      "--findings-json", jsonPath, "--next-action", "follow the verdict", "--inline-reason", "act list test",
+      "--findings-severity-counts", JSON.stringify({ high: 0, medium: 0, low: 1, question: 0, nit: 0 }), "--verdict", "clean",
+    ];
+    await assert.rejects(
+      () => upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), {
+        env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: makeRunChild([]),
+      }),
+      /--verdict "clean".*1 open judge act item\(s\) in --findings-json.*GATE-COMMENT-VERDICT-VALUES.*\[low\] low finding judged act/s,
+    );
+  }, { prefix: "dev-loops-act-list-json-" });
+});

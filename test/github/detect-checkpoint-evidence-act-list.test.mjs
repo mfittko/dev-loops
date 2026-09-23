@@ -212,9 +212,9 @@ test("a disposition outside act/defer/reject is malformed in any execution mode"
   }
 });
 
-test("a finding that is not an object or lacks a string summary is malformed in any execution mode", async () => {
+test("a finding that is not an object or lacks a string summary, canonical severity, or angle is malformed in any execution mode", async () => {
   const inlineMarker = { ...PA_MARKER, executionMode: "inline_single_agent" };
-  for (const bad of [null, "act", ["x"], { severity: "low", angle: "x" }]) {
+  for (const bad of [null, "act", ["x"], { severity: "low", angle: "x" }, { severity: "urgent", angle: "x", summary: "s" }, { severity: "low", summary: "s" }, { severity: "low", angle: " ", summary: "s" }]) {
     for (const marker of [PA_MARKER, inlineMarker]) {
       await withLedgerRepos([{ findings: [bad] }], async (repo, roots) => {
         const { check } = await probe(repo, CONFIG_NO_FANOUT, marker);
