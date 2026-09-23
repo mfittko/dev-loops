@@ -1,0 +1,3 @@
+### Added
+
+- **`dev-loops loop startup` now briefs the orchestrator on the sanctioned tooling surface (issue [2351](https://github.com/mfittko/dev-loops/issues/2351)).** Every `ok: true` startup result carries a static `operatorBriefing` field. The field points to `scripts/loop/sanctioned-commands.mjs` and to the new `## Sanctioned tooling` section of `skills/docs/main-agent-contract.md`. Both harnesses receive that section. It names the orchestrator-owned operations: merge, board status transitions, and issue creation. The Pi-only lines of the contract that contradicted the index now name the sanctioned wrappers.
