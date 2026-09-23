@@ -66,7 +66,7 @@ Phase 1.2 carry-forward, the Phase 1.5 primer, the Phase 2 wave dispatch of `rev
 Phase 3 fan-in and durable ledger write, the Phase 3.5 judge, and `judge-pass`. A light-mode
 `inline_single_agent` round also runs inside the gate coordinator. Inside a round, "conductor" in
 this contract means the gate coordinator. The dev-loop coordinator dispatches the gate
-coordinator with the round's arguments, including the prior head for this gate that it keeps in
+coordinator with the round's arguments, including the prior heads for this gate that it keeps in
 run state, and awaits it with a blocking join (`END-TURN-AND-AWAIT-WAKE` in
 [Anti-patterns](./anti-patterns.md)). The gate coordinator reads the prior rounds' ledgers,
 judge verdicts, and prior-approvals record for this gate from their deterministic on-disk paths,
