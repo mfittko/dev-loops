@@ -26,7 +26,7 @@ delegates code-verification/build runs** (#2082): it MUST NOT run `bun run verif
 `vitest`/`npm test`/`npm run test`, and the analogous `build` script across `bun`/`npm`/`yarn`/
 `pnpm`, inline — delegate the run to a fresh worker subagent, which reports back a compact
 pass/fail plus any failing-test names, or, when checking a pushed commit, prefer CI's structured
-conclusion (`gh pr checks` / `scripts/github/detect-checkpoint-evidence.mjs`) over a local run. Enforced by the
+conclusion (`scripts/github/probe-ci-status.mjs` / `scripts/github/detect-checkpoint-evidence.mjs`) over a local run. Enforced by the
 same opt-in `PreToolUse` Bash gate hook and the same `DEVLOOPS_COORDINATOR_READONLY=1` flag; a
 worker subagent's verify/build run is unaffected. The draft-gate `gh pr ready`
 guard still applies (harness-agnostic). A separate, stricter main-agent read-only boundary can
@@ -44,7 +44,7 @@ The index marks three operations as orchestrator-owned. A spawned `dev-loop` sub
 performs them:
 
 - Merge, through `scripts/github/merge-pr.mjs`.
-- Board status transitions, through `scripts/projects/sync-item-status.mjs` or `move-queue-item`.
+- Board status transitions, through `scripts/projects/sync-item-status.mjs` or `scripts/projects/move-queue-item.mjs`.
 - Issue creation, through `scripts/github/create-issue.mjs`.
 
 Every `ok: true` result of `dev-loops loop startup` carries an `operatorBriefing` field that points

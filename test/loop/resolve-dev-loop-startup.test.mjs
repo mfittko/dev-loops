@@ -24,14 +24,14 @@ import {
   shouldRunStartupReconcile,
   OPERATOR_BRIEFING,
 } from "../../scripts/loop/resolve-dev-loop-startup.mjs";
+import { buildDevLoopHandoffEnvelope, validateHandoffEnvelope } from "@dev-loops/core/loop/handoff-envelope";
 
-// Issue 2351: every ok:true startup result carries the static operatorBriefing pointer.
+// Every ok:true startup result carries the static operatorBriefing pointer.
 function assertOperatorBriefing(parsed) {
   assert.equal(typeof parsed.operatorBriefing, "string");
   assert.ok(parsed.operatorBriefing.length > 0);
   assert.equal(parsed.operatorBriefing, OPERATOR_BRIEFING);
 }
-import { buildDevLoopHandoffEnvelope, validateHandoffEnvelope } from "@dev-loops/core/loop/handoff-envelope";
 
 const scriptPath = path.resolve("scripts/loop/resolve-dev-loop-startup.mjs");
 
@@ -1413,6 +1413,7 @@ test("runCli --issue resolves linked-PR detection module-relative even when the 
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.bundle.issueLinkageResolution, "resolved_no_open_pr");
     assert.doesNotMatch(result.stderr, /Cannot find module/);
+    assertOperatorBriefing(parsed);
   }, { prefix: "resolve-dev-loop-linkage-module-relative-" });
 });
 

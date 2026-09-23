@@ -11,7 +11,7 @@ import { resolverTestEnv } from "../_helpers.mjs";
 import { OPERATOR_BRIEFING } from "../../scripts/loop/resolve-dev-loop-startup.mjs";
 import { SANCTIONED_COMMANDS } from "../../scripts/loop/sanctioned-commands.mjs";
 
-// Issue 2351: the orchestrator is briefed on the sanctioned tooling surface
+// The orchestrator is briefed on the sanctioned tooling surface
 // through (1) a shared `## Sanctioned tooling` section in the main-agent
 // contract and (2) a static `operatorBriefing` pointer in every ok:true
 // startup result. Per-mode presence is asserted in test/loop/resolve-dev-loop-startup*.test.mjs.
@@ -42,10 +42,24 @@ for (const rel of ["skills/docs/main-agent-contract.md", ".claude/skills/docs/ma
   });
 }
 
+const count = (doc, needle) => doc.split(needle).length - 1;
+const sharedText = (doc) => doc.replace(/<!-- pi-only -->[\s\S]*?<!-- \/pi-only -->/g, "");
+
 test("Sanctioned tooling section sits outside the pi-only block", () => {
   const doc = read("skills/docs/main-agent-contract.md");
-  const outside = doc.replace(/<!-- pi-only -->[\s\S]*?<!-- \/pi-only -->/g, "");
-  assert.ok(outside.includes("\n## Sanctioned tooling\n"));
+  const opens = count(doc, "<!-- pi-only -->");
+  assert.ok(opens > 0, "doc must have a pi-only block");
+  assert.equal(count(doc, "<!-- /pi-only -->"), opens, "pi-only markers must be balanced");
+  assert.equal(count(doc, "\n## Sanctioned tooling\n"), 1);
+  assert.ok(sharedText(doc).includes("\n## Sanctioned tooling\n"));
+});
+
+test("shared (non-pi-only) main-agent contract text names no forbidden raw command", () => {
+  const shared = sharedText(read("skills/docs/main-agent-contract.md"));
+  assert.ok(SANCTIONED_COMMANDS.forbidden.length > 0);
+  for (const raw of SANCTIONED_COMMANDS.forbidden) {
+    assert.equal(shared.includes(raw), false, `shared text names forbidden ${raw}`);
+  }
 });
 
 test("main-agent contract Pi-only lines do not contradict the index", () => {

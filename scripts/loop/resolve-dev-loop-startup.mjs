@@ -124,7 +124,7 @@ const STARTUP_RECONCILE_BUDGET_MS = 20000;
 export function shouldRunStartupReconcile(options) {
   return options.reconcile !== false && (options.issue !== undefined || options.pr !== undefined);
 }
-// Static pointer for whichever session runs `loop startup` (issue 2351). It names
+// Static pointer for whichever session runs `loop startup`. It names
 // where the sanctioned tooling surface is documented and never copies the list, so
 // a wrapper added to SANCTIONED_COMMANDS needs no edit here.
 export const OPERATOR_BRIEFING =
