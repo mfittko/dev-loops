@@ -36,6 +36,11 @@ function makeRuntime({
   // The GraphQL reviewRequests/review-node read: a pull-request object, an
   // Error (runChild throws), or { code, stdout } for a raw result.
   graphql = { reviewRequests: { nodes: [] }, reviews: { nodes: [] } },
+  // The review-thread list the carried-convergence predicate reads.
+  reviewThreads = [],
+  // Issue comments on the `--jq .[]` stream the copilot-body-disposition
+  // resolver reads.
+  dispositionComments = [],
 } = {}) {
   const calls = { ghJson: [], runChild: [] };
   const view = {
@@ -66,10 +71,16 @@ function makeRuntime({
       // passed positionally, not wrapped in an options object.
       runChild: async (cmd, args, env) => {
         calls.runChild.push({ cmd, args, env });
+        if (args[0] === "api" && args[1] === "graphql" && args.some((a) => String(a).includes("reviewThreads"))) {
+          return { stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: reviewThreads, pageInfo: { hasNextPage: false, endCursor: null } } } } } }), stderr: "", code: 0 };
+        }
         if (args[0] === "api" && args[1] === "graphql") {
           if (graphql instanceof Error) throw graphql;
           if ("code" in graphql) return { stderr: "", ...graphql };
           return { stdout: JSON.stringify({ data: { repository: { pullRequest: graphql } } }), stderr: "", code: 0 };
+        }
+        if (args[0] === "api" && String(args[1]).endsWith("/comments") && args.includes("--jq")) {
+          return { stdout: dispositionComments.map((c) => JSON.stringify(c)).join("\n"), stderr: "", code: 0 };
         }
         if (String(args[1]).includes("/compare/")) {
           if (compare.code) return { stdout: "", stderr: "compare failed", code: compare.code };
@@ -357,6 +368,58 @@ test("docs_only_suppression refuses on an unproven or findings-bearing baseline"
     compareFiles: ["docs/guide.md"],
     reviews: [copilotAt(OLD_HEAD, "### 🟡 Changes recommended", "2026-01-01T00:00:00Z")],
   });
+});
+
+// The loop's copilot-body-disposition record, as a trusted issue comment.
+const dispositionRecord = ({ reviewId, head = HEAD, association = "OWNER" }) => ({
+  id: 901,
+  body: `Disposition recorded.\n<!-- dev-loops:copilot-body-disposition review=${reviewId} head=${head} operator -->`,
+  user: { login: "mfittko", type: "User" },
+  author_association: association,
+});
+const withNodeId = (review, nodeId) => ({ ...review, node_id: nodeId });
+const YELLOW_BODY = "### 🟡 Changes recommended";
+
+test("docs_only_suppression through the loop's carried convergence names the source review and its commit", async () => {
+  const docsOnly = { maxCopilotRounds: 3, compareFiles: ["docs/guide.md"] };
+  const clean = await mergePr(baseOptions(), makeRuntime({ ...docsOnly, reviews: [withNodeId(copilotAt(OLD_HEAD, "### 🟢 Approval recommended", "2026-01-01T00:00:00Z"), "PRR_prior")] }).runtime);
+  assert.equal(clean.copilotDisposition, "docs_only_suppression");
+  assert.deepEqual(clean.copilotCarriedConvergence, { source: "carried", sourceReviewId: "PRR_prior", sourceHeadSha: OLD_HEAD, bodyDisposition: null });
+
+  // A body-only changes-recommended prior review carries only through a trusted record naming it.
+  const yellow = [withNodeId(copilotAt(OLD_HEAD, YELLOW_BODY, "2026-01-01T00:00:00Z"), "PRR_prior")];
+  const recorded = await mergePr(baseOptions(), makeRuntime({ ...docsOnly, reviews: yellow, dispositionComments: [dispositionRecord({ reviewId: "PRR_prior" })] }).runtime);
+  assert.equal(recorded.copilotDisposition, "docs_only_suppression");
+  assert.equal(recorded.copilotCarriedConvergence.sourceReviewId, "PRR_prior");
+  assert.equal(recorded.copilotCarriedConvergence.sourceHeadSha, OLD_HEAD);
+  assert.equal(recorded.copilotCarriedConvergence.bodyDisposition.reviewId, "PRR_prior");
+  assert.equal(recorded.copilotCarriedConvergence.bodyDisposition.headSha, HEAD);
+
+  const refused = await expectCopilotRefusal("untrusted record", { ...docsOnly, reviews: yellow, dispositionComments: [dispositionRecord({ reviewId: "PRR_prior", association: "CONTRIBUTOR" })] });
+  assert.equal(refused.mergePrFailure.copilotCarriedConvergence, null);
+});
+
+test("a current-head body finding cleared by a trusted copilot-body-disposition record merges and names the record", async () => {
+  const headYellow = [withNodeId(copilotAt(HEAD, YELLOW_BODY, "2026-01-01T00:00:00Z"), "PRR_head")];
+  const result = await mergePr(baseOptions(), makeRuntime({ maxCopilotRounds: 3, reviews: headYellow, dispositionComments: [dispositionRecord({ reviewId: "PRR_head" })] }).runtime);
+  assert.equal(result.merged, true);
+  assert.equal(result.copilotConvergenceState, "current_head_findings");
+  assert.equal(result.copilotBodyDisposition.reviewId, "PRR_head");
+  assert.equal(result.copilotBodyDisposition.headSha, HEAD);
+
+  for (const [label, record] of [
+    ["record for a stale head", dispositionRecord({ reviewId: "PRR_head", head: OLD_HEAD })],
+    ["record naming another review", dispositionRecord({ reviewId: "PRR_other" })],
+    ["untrusted record", dispositionRecord({ reviewId: "PRR_head", association: "NONE" })],
+  ]) {
+    const { runtime, calls } = makeRuntime({ maxCopilotRounds: 3, reviews: headYellow, dispositionComments: [record] });
+    let threw = null;
+    try { await mergePr(baseOptions(), runtime); } catch (e) { threw = e; }
+    assert.ok(threw, `${label}: must refuse`);
+    assert.deepEqual(threw.mergePrFailure.failures.map((f) => f.precondition), ["copilot_convergence"], label);
+    assert.equal(threw.mergePrFailure.copilotBodyDisposition, null, label);
+    assert.ok(!calls.runChild.some((c) => c.args[0] === "pr" && c.args[1] === "merge"), `${label}: no merge`);
+  }
 });
 
 test("a clean draft_gate on an older head resets the round count below the cap and refuses", async () => {

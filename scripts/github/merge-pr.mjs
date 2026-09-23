@@ -19,7 +19,8 @@ import {
 } from "@dev-loops/core/loop/merge-approval";
 import { summarizeCopilotReviews, resolveDraftGateRoundResetMs } from "@dev-loops/core/github/copilot-helpers";
 import { isCopilotReviewObservableViaGraphql } from "./request-copilot-review.mjs";
-import { getLastCopilotReviewHeadSha, classifyDeltaSinceLastReview, fetchDeltaChangedFiles } from "../loop/_copilot-convergence-carry.mjs";
+import { getLastCopilotReviewHeadSha, fetchDeltaChangedFiles, resolveCarriedConvergence } from "../loop/_copilot-convergence-carry.mjs";
+import { resolveCurrentHeadBodyFeedback } from "./_copilot-body-disposition.mjs";
 import { detectPostConvergenceSignificantChange } from "../loop/_post-convergence-change.mjs";
 import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
 import { resolveNamedContextState, LOOP_DERIVED_CI_CHECK_NAME } from "@dev-loops/core/loop/copilot-ci-status";
@@ -75,13 +76,15 @@ Preconditions (each refuses with a machine-readable reason naming the failing on
   copilot_convergence, size_budget_human_approval, merge_approval.
   copilot_convergence refuses a current-head Copilot "Changes recommended" (🟡)
   or unrecognized non-approval disposition (🔵 "Needs a closer look" is
-  conductor-overridable; unresolved threads still gate it). With no current-head
+  conductor-overridable; unresolved threads still gate it). A trusted
+  copilot-body-disposition record for the current head clears a current-head
+  body finding. With no current-head
   Copilot review it passes only via a sanctioned disposition for the current
   head: copilot_gate_disabled (round cap 0, or an internal-only PR),
   round_cap_clean_fallback (round cap reached, unless the last review was clean
-  and a significant change landed since), or docs_only_suppression (last
-  reviewed head clean, the delta since then outside Copilot's review surface,
-  and no Copilot review outstanding on the current head). gate_evidence reuses
+  and a significant change landed since), or docs_only_suppression (the loop's
+  carried convergence holds across a docs-only or integrate-only delta, and no
+  Copilot review is outstanding on the current head). gate_evidence reuses
   detect-checkpoint-evidence (draft_gate + current-head pre_approval_gate with
   fan-out provenance, zero unresolved threads, a non-stale/non-foreign runner lock).
 
@@ -94,11 +97,15 @@ Merge classes:
              satisfy it. Fresh approval = a head-pinned APPROVED review by
              <login>, else a head-pinned operator comment "approve merge <headSha>".
 
-Output (stdout, JSON): { ok, merged, mergeCommit, approvedBy, mergeClass, approvalVia, method, repo, pr, headSha, copilotConvergenceState, copilotDisposition }
+Output (stdout, JSON): { ok, merged, mergeCommit, approvedBy, mergeClass, approvalVia, method, repo, pr, headSha, copilotConvergenceState, copilotDisposition, copilotCarriedConvergence, copilotBodyDisposition }
   copilotConvergenceState: current_head_clean | current_head_findings | no_current_head_review,
   or null when the current head SHA is unknown
   copilotDisposition: the current-head review disposition, or for
   no_current_head_review the sanctioned disposition that satisfied it
+  copilotCarriedConvergence: for docs_only_suppression, the carried review
+  { source, sourceReviewId, sourceHeadSha, bodyDisposition }; else null
+  copilotBodyDisposition: the copilot-body-disposition record that cleared a
+  current-head body finding; else null
 ${JQ_OUTPUT_USAGE}
 Exit codes:
   0  Merge succeeded
@@ -207,18 +214,19 @@ function defaultDetectEvidence({ repo, pr, env, cwd }) {
 
 // Resolve the sanctioned disposition that lets a head WITHOUT a current-head
 // Copilot review converge, in order: the Copilot gate is disabled (cap 0); the
-// round cap is exhausted (round-cap clean fallback); or the last Copilot-reviewed
-// head was clean and the delta since then is outside Copilot's review surface
-// (docs-only suppression). Returns `{ kind, headSha }` pinned to the current
-// head, or null (copilot_convergence then refuses). Last, an internal-only PR
-// (the loop's reviewMode internal_only, which skips the Copilot cycle) maps to
+// round cap is exhausted (round-cap clean fallback); or the loop's shared
+// carried-convergence predicate carries the prior Copilot review across a
+// docs-only or integrate-only delta (docs-only suppression). Returns
+// `{ kind, headSha }` pinned to the current head, plus `carriedConvergence`
+// (the source review and its commit) for docs-only suppression, or null
+// (copilot_convergence then refuses). Last, an internal-only PR (the loop's
+// reviewMode internal_only, which skips the Copilot cycle) maps to
 // copilot_gate_disabled.
 async function resolveCopilotAbsentReviewDisposition({ repo, pr, currentHeadSha, rawReviews, config, draftGate, lightweight }, runtime) {
   const pinned = (kind) => ({ kind, headSha: currentHeadSha });
   const cap = resolveEffectiveCopilotRoundCap(config ?? { version: 1 }, { lightweight });
   if (cap === 0) return pinned(COPILOT_ABSENT_REVIEW_DISPOSITION.COPILOT_GATE_DISABLED);
-  // The shared round/last-head helpers read the GraphQL review shape.
-  const reviews = rawReviews.map((r) => ({ ...r, author: { login: r.login }, submittedAt: r.submitted_at }));
+  const reviews = toSharedReviewShape(rawReviews);
   const lastReviewedHead = getLastCopilotReviewHeadSha({ reviews });
   const lastReviewConverged = lastReviewedHead !== null && lastReviewedHead !== currentHeadSha
     && evaluateCopilotConvergence({ currentHeadSha: lastReviewedHead, reviews }).state === COPILOT_CONVERGENCE_STATE.CURRENT_HEAD_CLEAN;
@@ -233,12 +241,21 @@ async function resolveCopilotAbsentReviewDisposition({ repo, pr, currentHeadSha,
     if (!lastReviewConverged || !(await hasSignificantChangeSinceLastReview({ repo, pr, currentHeadSha, reviews }, runtime))) {
       return pinned(COPILOT_ABSENT_REVIEW_DISPOSITION.ROUND_CAP_CLEAN_FALLBACK);
     }
-  } else if (lastReviewConverged
-    && (await classifyDeltaSinceLastReview({ repo, base: lastReviewedHead, head: currentHeadSha }, runtime)).carryForward === true
-    && !(await isCopilotReviewOutstanding({ repo, pr, currentHeadSha, rawReviews }, runtime))) {
-    return pinned(COPILOT_ABSENT_REVIEW_DISPOSITION.DOCS_ONLY_SUPPRESSION);
+  } else {
+    // The request status is checked separately below, with merge-side fail-closed reads.
+    const carried = await resolveCarriedConvergence({ repo, pr, currentHeadSha, prData: { reviews }, copilotReviewRequestStatus: "none" }, runtime);
+    if (carried.carried && !(await isCopilotReviewOutstanding({ repo, pr, currentHeadSha, rawReviews }, runtime))) {
+      const { source, sourceReviewId, sourceHeadSha, bodyDisposition } = carried;
+      return { ...pinned(COPILOT_ABSENT_REVIEW_DISPOSITION.DOCS_ONLY_SUPPRESSION), carriedConvergence: { source, sourceReviewId, sourceHeadSha, bodyDisposition } };
+    }
   }
   return (await isInternalOnlyPr({ repo, pr, patterns: config?.internalPathPatterns }, runtime)) ? pinned(COPILOT_ABSENT_REVIEW_DISPOSITION.COPILOT_GATE_DISABLED) : null;
+}
+
+// The shared loop helpers read the GraphQL review shape (`id` is the review's
+// node id, the id a copilot-body-disposition record names).
+function toSharedReviewShape(rawReviews) {
+  return rawReviews.map((r) => ({ ...r, author: { login: r.login }, submittedAt: r.submitted_at }));
 }
 
 // The loop's round-cap new-cycle rule, reusing its shared significance helper.
@@ -341,7 +358,7 @@ export async function mergePr(options, runtime = {}) {
   const rawReviews = flattenPaginatedSlurp(await ghJson(
     ["api", "--paginate", "--slurp", `repos/${options.repo}/pulls/${options.pr}/reviews?per_page=100`],
     { env, ghCommand, runChild },
-  )).map((r) => ({ login: r?.user?.login ?? null, state: r?.state ?? null, commit_id: r?.commit_id ?? null, type: r?.user?.type ?? null, body: r?.body ?? "", submitted_at: r?.submitted_at ?? null }));
+  )).map((r) => ({ id: r?.node_id ?? null, login: r?.user?.login ?? null, state: r?.state ?? null, commit_id: r?.commit_id ?? null, type: r?.user?.type ?? null, body: r?.body ?? "", submitted_at: r?.submitted_at ?? null }));
   const comments = flattenPaginatedSlurp(await ghJson(
     ["api", "--paginate", "--slurp", `repos/${options.repo}/issues/${options.pr}/comments?per_page=100`],
     { env, ghCommand, runChild },
@@ -386,11 +403,25 @@ export async function mergePr(options, runtime = {}) {
 
   // Only a head without a current-head Copilot review needs a sanctioned
   // disposition, so the extra config/compare work runs only then.
-  const copilotAbsentReviewDisposition = evaluateCopilotConvergence({ currentHeadSha, reviews: rawReviews }).state === COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW
+  const rawConvergenceState = evaluateCopilotConvergence({ currentHeadSha, reviews: rawReviews }).state;
+  const copilotAbsentReviewDisposition = rawConvergenceState === COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW
     ? await resolveCopilotAbsentReviewDisposition(
       { repo: options.repo, pr: options.pr, currentHeadSha, rawReviews, config: configLoad?.config, draftGate: evidence.draftGate, lightweight: options.lightweight === true },
       { env, ghCommand, runChild, ghJson, detectInternalOnlyPr },
     )
+    : null;
+  // A current-head body finding clears through the same trusted
+  // copilot-body-disposition record the loop and gate entry honor.
+  const copilotBodyDisposition = rawConvergenceState === COPILOT_CONVERGENCE_STATE.CURRENT_HEAD_FINDINGS
+    ? (await resolveCurrentHeadBodyFeedback({
+      repo: options.repo,
+      pr: options.pr,
+      headSha: currentHeadSha,
+      reviewSummary: summarizeCopilotReviews(toSharedReviewShape(rawReviews), {
+        headSha: currentHeadSha,
+        draftGateResetAtMs: resolveDraftGateRoundResetMs({ draftGate: evidence.draftGate, currentHeadSha }),
+      }),
+    }, { env, ghCommand, runChild })).bodyDisposition
     : null;
 
   const verdict = evaluateMergePreconditions({
@@ -414,6 +445,7 @@ export async function mergePr(options, runtime = {}) {
     standingAuthorized,
     stableRelease: options.stableRelease === true,
     copilotAbsentReviewDisposition,
+    copilotBodyDisposition,
   });
 
   if (!verdict.ok) {
@@ -441,6 +473,8 @@ export async function mergePr(options, runtime = {}) {
       failures,
       copilotConvergenceState: verdict.copilotConvergenceState,
       copilotDisposition: verdict.copilotDisposition,
+      copilotCarriedConvergence: copilotAbsentReviewDisposition?.carriedConvergence ?? null,
+      copilotBodyDisposition: verdict.copilotBodyDisposition,
     };
     throw error;
   }
@@ -512,6 +546,8 @@ export async function mergePr(options, runtime = {}) {
     headSha: currentHeadSha,
     copilotConvergenceState: verdict.copilotConvergenceState,
     copilotDisposition: verdict.copilotDisposition,
+    copilotCarriedConvergence: copilotAbsentReviewDisposition?.carriedConvergence ?? null,
+    copilotBodyDisposition: verdict.copilotBodyDisposition,
   };
 }
 

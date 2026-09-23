@@ -381,6 +381,7 @@ export function evaluateMergePreconditions({
   standingAuthorized = false,
   stableRelease = false,
   copilotAbsentReviewDisposition = null,
+  copilotBodyDisposition = null,
 } = {}) {
   const failures = [];
 
@@ -429,8 +430,15 @@ export function evaluateMergePreconditions({
 
   // Copilot-convergence precondition: refuse a current-head Copilot non-approval
   // body disposition, mirroring the loop's copilotBodyFeedbackUnresolved.
+  // A trusted copilot-body-disposition record resolved for the current head
+  // (`{ headSha, reviewId, ... }`) clears a current-head finding, as it does
+  // at gate entry.
   const copilotConvergence = evaluateCopilotConvergence({ currentHeadSha, reviews, absentReviewDisposition: copilotAbsentReviewDisposition });
-  if (!copilotConvergence.ok) {
+  const head = typeof currentHeadSha === "string" ? currentHeadSha.trim().toLowerCase() : "";
+  const bodyCleared = copilotConvergence.state === COPILOT_CONVERGENCE_STATE.CURRENT_HEAD_FINDINGS
+    && head.length > 0
+    && typeof copilotBodyDisposition?.headSha === "string" && copilotBodyDisposition.headSha.toLowerCase() === head;
+  if (!copilotConvergence.ok && !bodyCleared) {
     failures.push({ precondition: "copilot_convergence", reason: copilotConvergence.reason });
   }
 
@@ -451,5 +459,6 @@ export function evaluateMergePreconditions({
     // or without a current-head review is recorded, never invisible.
     copilotConvergenceState: copilotConvergence.state,
     copilotDisposition: copilotConvergence.disposition,
+    copilotBodyDisposition: bodyCleared ? copilotBodyDisposition : null,
   };
 }
