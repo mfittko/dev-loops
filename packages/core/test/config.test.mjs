@@ -3611,9 +3611,16 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
     "pr-checklist": ["review", "Verify the PR carries self-contained list-form"],
     "acceptance-criteria": ["review", "Verify that each acceptance criterion and definition-of-done item"],
   };
-  // Angles used by the shipped gates that never had a personas[angle] entry
-  // pre-#1404 — must keep falling back to default-reviewer with a null prompt.
-  const FALLBACK_ANGLES = ["contradiction-lens", "code-conformance", "semantic-drift", "correctness-final", "ui-validation"];
+  // Invariant: every resolved gate angle carries a persona + prompt from its
+  // gate entry, never a null-prompt fallback. These five resolve their own
+  // persona + prompt, same as the map above.
+  const NEWLY_PROMPTED_ANGLES = {
+    "contradiction-lens": ["review", "Apply STYLE-CONTRADICTION-LENS when the repo defines it"],
+    "code-conformance": ["review", "Review this change for conformance to existing repo code conventions"],
+    "semantic-drift": ["review", "Review this change for semantic drift between code and its documented behavior"],
+    "correctness-final": ["review", "Perform a final correctness pass on the current head"],
+    "ui-validation": ["review", "Review this change against the repo's UI validation contract"],
+  };
 
   test("every pre-#1404 personas[angle] entry still resolves the same persona + prompt from its gate entry", async () => {
     const { loadDevLoopConfig, resolveReviewerRole } = await import("../src/config/config.mjs");
@@ -3624,10 +3631,10 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
       assert.equal(role.persona, persona, `${angle} persona`);
       assert.ok(role.prompt && role.prompt.startsWith(promptStart), `${angle} prompt should start with ${JSON.stringify(promptStart)}, got ${JSON.stringify(role.prompt?.slice(0, 60))}`);
     }
-    for (const angle of FALLBACK_ANGLES) {
+    for (const [angle, [persona, promptStart]] of Object.entries(NEWLY_PROMPTED_ANGLES)) {
       const role = resolveReviewerRole(config, angle);
-      assert.equal(role.persona, "default-reviewer", `${angle} persona`);
-      assert.equal(role.prompt, null, `${angle} prompt`);
+      assert.equal(role.persona, persona, `${angle} persona`);
+      assert.ok(role.prompt && role.prompt.startsWith(promptStart), `${angle} prompt should start with ${JSON.stringify(promptStart)}, got ${JSON.stringify(role.prompt?.slice(0, 60))}`);
     }
 
     // "threat-model" is genuinely disabled (dropped) from every one of this
@@ -3645,6 +3652,50 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
     assert.equal(threatModel.persona, "review");
     assert.equal(threatModel.prompt, null);
     assert.equal(threatModel.fallback, false);
+  });
+
+  // gate(angles): every angle a gate actually resolves must carry a non-empty
+  // prompt, both under this repo's shipped .devloops and under defaults alone
+  // (no .pi/dev-loop/defaults.* layer exists in this repo to interfere with
+  // the defaults-only load below).
+  test("every angle resolved for draft and preApproval has a non-empty prompt, under this repo's .devloops and under defaults only", async () => {
+    const { loadDevLoopConfig, resolveGateAngles, resolveReviewerRole } = await import("../src/config/config.mjs");
+
+    const withDevloops = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
+    assert.deepEqual(withDevloops.errors, []);
+    const defaultsOnly = await loadDevLoopConfig({ repoRoot: REPO_ROOT, devloopsOverride: { raw: null } });
+    assert.deepEqual(defaultsOnly.errors, []);
+
+    for (const { config, label } of [
+      { config: withDevloops.config, label: "this repo's .devloops" },
+      { config: defaultsOnly.config, label: "defaults only" },
+    ]) {
+      for (const gate of /** @type {const} */ (["draft", "preApproval"])) {
+        const angles = resolveGateAngles(config, gate);
+        assert.ok(angles.length > 0, `${label}: ${gate} gate must resolve at least one angle`);
+        for (const angle of angles) {
+          const role = resolveReviewerRole(config, angle);
+          assert.ok(
+            typeof role.prompt === "string" && role.prompt.trim().length > 0,
+            `${label}: ${gate} gate angle "${angle}" must resolve a non-empty prompt`,
+          );
+        }
+      }
+    }
+  });
+
+  // #2374 pre-PR review fix: the draft-gate and preApproval contradiction-lens
+  // entries must carry the exact same prompt — one shared lens definition,
+  // not two copies that can silently drift apart.
+  test("draft and preApproval contradiction-lens entries carry an identical, non-empty prompt", async () => {
+    const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+    const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT, devloopsOverride: { raw: null } });
+    assert.deepEqual(errors, []);
+    const draftEntry = config.gates.draft.angles.find((a) => a.name === "contradiction-lens");
+    const preApprovalEntry = config.gates.preApproval.angles.find((a) => a.name === "contradiction-lens");
+    assert.ok(draftEntry?.prompt, "draft contradiction-lens entry must have a non-empty prompt");
+    assert.ok(preApprovalEntry?.prompt, "preApproval contradiction-lens entry must have a non-empty prompt");
+    assert.equal(draftEntry.prompt, preApprovalEntry.prompt, "draft and preApproval contradiction-lens prompts must be identical");
   });
 });
 

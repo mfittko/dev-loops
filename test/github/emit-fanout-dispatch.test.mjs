@@ -6,7 +6,7 @@ import path from "node:path";
 import { test } from "bun:test";
 import { buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, listPriorFindingsLogHeads, main, sanitizeScopeSegment, splitSubUnitName } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { buildGateEmitPlanPath, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
-import { loadDevLoopConfig } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveReviewerRole } from "@dev-loops/core/config";
 import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
 import { toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 import { consolidateGateFanin, parseConsolidateFaninCliArgs } from "../../scripts/loop/consolidate-fanin.mjs";
@@ -371,6 +371,40 @@ test("shares a reviewer for a configured group AND an auto-chunk bundle alike; o
       for (const angle of unit.angles) assert.match(composed, new RegExp(angle));
       assert.match(composed, /resolveReviewerRole/);
     }
+  });
+});
+
+// Invariant: every resolved gate angle carries a persona + prompt, and the
+// emitter names the angle in the composed prompt rather than copying its
+// prompt text — the contradiction-lens singleton unit's composed prompt
+// instructs the reviewer to self-resolve via resolveReviewerRole(config,
+// "contradiction-lens"). Prove that call, against the same shipped
+// extension-defaults config the emitter dispatches with, actually returns a
+// non-null prompt, so a dispatched reviewer receives a defined task.
+test("contradiction-lens's emitted unit leads with the invariant prefix, and its self-resolve instruction now resolves the new default prompt", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    const unit = payload.units.find((u) => u.scope === "pre-approval-gate-contradiction-lens");
+    assert.ok(unit, "contradiction-lens singleton unit must be emitted");
+    const composed = await readFile(unit.promptPath, "utf8");
+    assert.ok(composed.startsWith(PREFIX_BYTES), "composed prompt must lead with the invariant prefix");
+    assert.match(composed, /resolveReviewerRole\(config, "contradiction-lens"\)/);
+
+    // tmpDir has no .devloops of its own, so this resolves the shipped
+    // extension-defaults — the same layer a real reviewer resolves from.
+    const { config, errors } = await loadDevLoopConfig({ repoRoot: tmpDir });
+    assert.deepEqual(errors, []);
+    const role = resolveReviewerRole(config, "contradiction-lens");
+    assert.equal(role.persona, "review");
+    assert.ok(role.prompt && role.prompt.length > 0, "contradiction-lens must resolve a non-empty prompt");
+    assert.match(role.prompt, /contradict/i);
+    assert.ok(!composed.includes(role.prompt), "emitter must not copy the angle prompt");
   });
 });
 
