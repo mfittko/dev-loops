@@ -1407,16 +1407,16 @@ code/test/config/CI file, an unclassifiable file, or an unavailable delta. On th
 `resolve-angle-carry-forward.mjs` path the same main-relative delta basis applies (issue #2292): an
 integrate-only base-move (proven-empty reduced delta, `deltaComplete`) carries the convergence
 forward too, instead of forcing a fresh blocking round for already-merged main code. An empty
-delta WITHOUT that proof still fails closed. The Copilot
-round-cap path AND the below-cap path both consume it, through one shared
-`resolveConvergenceCarry` helper in `request-copilot-review.mjs`: at the cap it fetches the
-delta since the last Copilot-reviewed head (via a single `gh api .../compare`), and below the
-cap the same helper runs for a first request on a head-advanced PR. Either way, when that
-delta is a provable pure-doc/prose bump OR an integrate-only base-move (base-relative
-reduction empties the delta), it returns `suppressed_post_convergence_docs_only` instead of
-forcing a fresh blocking round — at the cap this holds even under `--force-rerequest-review`.
-The guard is default-safe/fail-closed: a non-linear (rebased/amended) advance, any rename/copy,
-an unavailable compare, or any non-doc/unclassifiable file re-opens the round exactly as before,
+delta WITHOUT that proof still fails closed. The Copilot request tool (at and below the
+round cap) and the gate coordination detector consume it through the one shared
+carried-convergence predicate owned by `COPILOT-STATE-CARRIED-CONVERGENCE` in
+[Copilot Loop State Graph](copilot-loop-state-graph.md): the request tool never
+re-requests on a head the detector reports as carried (`postConvergenceReviewSuppressed`,
+which allows `pre_approval_gate`), and the detector never reports carried on a head where
+the request tool would re-request. On a carried head the request tool returns
+`suppressed_post_convergence_docs_only` below the cap and at the cap under
+`--force-rerequest-review`; at the cap without that flag it returns `round_cap_reached`. An unresolved review thread, a non-linear (rebased/amended) advance, any
+rename/copy, an unavailable compare, or any non-doc/unclassifiable file re-opens the round,
 preserving the round cap and the significant-post-convergence-change exception
 (`COPILOT-FOLLOWUP-ROUND-CAP` in [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md)).
 

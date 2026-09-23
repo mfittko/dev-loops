@@ -667,11 +667,12 @@ function applyUnsettledCopilotReviewEntryGuard(input, result) {
   //     grant boundary here after gating CI/threads, and a significant
   //     post-convergence change routes to a rerequest (a new cycle) before this
   //     guard runs, so this exemption cannot mask a genuinely-unreviewed change;
-  //   - postConvergenceReviewSuppressed: an operator verified (via
-  //     withdraw-copilot-review-request) that the current-head delta since
-  //     Copilot's last submitted review is a pure doc/prose bump, so the prior
-  //     converged review stands for this head — the core grants pre_approval on
-  //     the same basis (never derived here from other snapshot facts).
+  //   - postConvergenceReviewSuppressed: the caller verified a carried
+  //     convergence (or an operator suppression marker) for this head: no
+  //     outstanding request, zero unresolved threads, and a provably docs-only
+  //     or integrate-only delta since Copilot's last submitted review, so the
+  //     prior converged review stands for this head (never derived here from
+  //     other snapshot facts).
   // Fail closed on ANY non-outstanding status, not only the literal "none":
   // this is the independent gate-ENTRY re-check, so it must not trust the
   // caller's status string. A non-canonical/unknown value ("", "unavailable",
@@ -887,13 +888,14 @@ function evaluatePrGateCoordinationCore(input = {}) {
   const prClosed = input.prClosed === true;
   const prMerged = input.prMerged === true;
   const copilotConvergenceOk = input.copilotConvergenceOk === true;
-  // Operator-authorized post-convergence suppression: set only when the
-  // caller has verified an explicit prior withdrawal (withdraw-copilot-review-
-  // request.mjs) recorded a suppression marker for this EXACT head, proving the
-  // delta since Copilot's last submitted review is a pure doc/prose bump. Never
-  // derived here from other snapshot facts — this evaluator trusts the caller's
-  // verification rather than re-deriving it, so it cannot become an automatic
-  // loosening of the round-below-cap precondition.
+  // Carried convergence: set only when the caller verified, through the
+  // shared carried-convergence predicate the Copilot request tool also uses,
+  // that the prior converged Copilot review still stands for this head (no
+  // outstanding request, zero unresolved threads, a provably docs-only or
+  // integrate-only delta), or that an operator suppression marker re-verifies
+  // on the same terms. Never derived here from other snapshot facts: this
+  // evaluator trusts the caller's verification, so the request tool and the
+  // gate cannot disagree about the same head.
   const postConvergenceReviewSuppressed = input.postConvergenceReviewSuppressed === true;
   // maxCopilotRounds: 0 disables the external Copilot review gate entirely
   // (for repos without Copilot / local-harness-only review). It reuses the
@@ -1810,7 +1812,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
       reason: roundCapReached
         ? `The Copilot round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}), and the current head has zero unresolved threads with ${describeAcceptedCiState(ciStatus, preApprovalRequireCi)}, so \`pre_approval_gate\` fallback is now the next legal boundary.`
         : (postConvergenceReviewSuppressed && !sameHeadCleanConverged
-          ? "An operator explicitly withdrew a stranded Copilot review request for this exact head, whose delta since Copilot's last submitted review is a provable pure doc/prose bump; the prior converged Copilot review still stands, so `pre_approval_gate` is now the next legal boundary."
+          ? "The current head carries the prior converged Copilot review: no request is outstanding, no review thread is unresolved, and the delta since Copilot's last submitted review is provably docs-only or integrate-only, so `pre_approval_gate` is now the next legal boundary."
           : (ciStatus === "crediblyGreen"
             ? "The current head has a clean settled post-draft review cycle, and its zero-suite CI state is accepted as credibly green, so `pre_approval_gate` is now the next legal boundary."
             : "The current head has a clean settled post-draft review cycle, so `pre_approval_gate` is now the next legal boundary.")),
@@ -2010,8 +2012,12 @@ function evaluatePrGateCoordinationCore(input = {}) {
     // No current-head Copilot review at the cap IS the round-cap clean
     // fallback, so the convergence evaluator's absent-review refusal must not
     // block this grant; a current-head review with findings still does. An
-    // unknown head never opens the absent-review branch.
-    if (unresolvedThreadCount === 0 && ciConfirmedGreen && (copilotConvergenceOk || (currentHeadSha !== null && input.copilotReviewOnCurrentHead === false))) {
+    // unknown head never opens the absent-review branch. Nor does an
+    // earlier-head body-only finding without a disposition record: the caller
+    // must state it absent (fail closed when the fact is missing).
+    const absentReviewFallback = currentHeadSha !== null && input.copilotReviewOnCurrentHead === false
+      && input.copilotPriorHeadBodyFeedbackUnresolved === false;
+    if (unresolvedThreadCount === 0 && ciConfirmedGreen && (copilotConvergenceOk || absentReviewFallback)) {
       if (preApprovalGate.currentHeadClean) {
         // Inline title-marker check, mirroring ROUND_CAP_CLEAN_FALLBACK: the
         // outer post-pass guards FINAL_APPROVAL_READY and

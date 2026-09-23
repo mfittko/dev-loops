@@ -34,10 +34,11 @@
 // alone would just make the loop re-request Copilot on that new head and strand
 // again the same way, since Copilot still will not re-engage a change it
 // already effectively approved. This is eligible ONLY when the delta since
-// Copilot's last SUBMITTED review is provably a pure doc/prose bump (the same
-// fail-closed classifier request-copilot-review.mjs already trusts for its own
-// round-cap suppression, reused here via classifyDeltaSinceLastReview — see
-// resolveConvergenceCarryForward in @dev-loops/core/loop/gate-carry-forward).
+// Copilot's last SUBMITTED review is provably a pure doc/prose bump, per the
+// raw-delta classifyDeltaSinceLastReview in _copilot-convergence-carry.mjs.
+// That check is stricter than the base-relative resolveConvergenceCarry the
+// suppression decisions use: it skips the base-relative reduction, so an
+// integrate-only base move that the carry predicate accepts still refuses here.
 // Any code/test/config/CI or unclassifiable delta, a non-linear advance, or an
 // unavailable compare REFUSES exactly like the round-cap check does — this tool
 // never widens what counts as "provably docs-only". On success it also writes
@@ -60,7 +61,7 @@ import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
-import { classifyDeltaSinceLastReview, getLastCopilotReviewHeadSha } from "./request-copilot-review.mjs";
+import { classifyDeltaSinceLastReview, getLastCopilotReviewHeadSha } from "../loop/_copilot-convergence-carry.mjs";
 import { writeSuppressionMarker } from "../loop/_post-convergence-review-suppression.mjs";
 
 // The requested-reviewers read that verifies a `gh pr edit --remove-reviewer`
@@ -206,7 +207,7 @@ async function collectState(args, { env, runChild }) {
     ? pr.headRefOid.trim()
     : null;
   // Tolerate both GraphQL commit.oid and REST commit_id shapes, mirroring
-  // getLastCopilotReviewHeadSha in request-copilot-review.mjs.
+  // getLastCopilotReviewHeadSha in _copilot-convergence-carry.mjs.
   const hasSubmittedReviewOnCurrentHead = currentHeadSha !== null
     && submittedCopilotReviews.some((review) => {
       const sha = review?.commit?.oid ?? review?.commit_id;

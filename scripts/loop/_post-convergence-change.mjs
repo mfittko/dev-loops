@@ -8,33 +8,14 @@
 // It lives in scripts/loop/ (not packages/core) because significance is derived
 // from a `gh api .../compare` diff — gh I/O that does not belong in core.
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
-import { extractReviewCommitSha, isCopilotLogin, parseJsonText } from "../_core-helpers.mjs";
+import { extractReviewCommitSha, parseJsonText } from "../_core-helpers.mjs";
+import { resolveLatestCopilotReview } from "../github/_copilot-body-disposition.mjs";
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 
+// The latest review comes from the canonical selector, so this probe compares
+// from the same review that carried convergence and the body resolver use.
 export function getLatestSubmittedCopilotReviewHeadSha(reviews) {
-  const copilotSubmitted = (Array.isArray(reviews) ? reviews : [])
-    .filter((review) => {
-      const login = review?.author?.login;
-      const state = String(review?.state ?? "").toUpperCase();
-      return isCopilotLogin(login) && state !== "PENDING";
-    })
-    .map((review, index) => {
-      const submittedAt = review?.submittedAt ?? review?.submitted_at;
-      const submittedAtMs = typeof submittedAt === "string" ? Date.parse(submittedAt) : Number.NaN;
-      return { review, submittedAtMs, index };
-    })
-    .sort((left, right) => {
-      const leftValid = !Number.isNaN(left.submittedAtMs);
-      const rightValid = !Number.isNaN(right.submittedAtMs);
-      if (leftValid && rightValid) {
-        return right.submittedAtMs - left.submittedAtMs;
-      }
-      if (leftValid !== rightValid) {
-        return leftValid ? -1 : 1;
-      }
-      return right.index - left.index;
-    });
-  const latest = copilotSubmitted[0]?.review;
+  const latest = resolveLatestCopilotReview({ reviews }).review;
   const sha = extractReviewCommitSha(latest);
   return typeof sha === "string" && sha.trim().length > 0 ? sha.trim() : null;
 }

@@ -124,6 +124,14 @@
       "id": "COPILOT-STATE-ACTIVE-REQUEST-WAIT"
     },
     {
+      "id": "COPILOT-STATE-BODY-DISPOSITION-RECORD",
+      "enforcement": "runtime"
+    },
+    {
+      "id": "COPILOT-STATE-CARRIED-CONVERGENCE",
+      "enforcement": "runtime"
+    },
+    {
       "id": "COPILOT-STATE-REPLY-BEFORE-REREQUEST"
     },
     {

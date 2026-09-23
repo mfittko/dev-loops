@@ -11,6 +11,7 @@ import {
   isCommentOnlyFileChange,
   isTrivialDocumentationOnlyPath,
 } from "../../scripts/loop/_post-convergence-change.mjs";
+import { resolveLatestCopilotReview } from "../../scripts/github/_copilot-body-disposition.mjs";
 
 // Minimal unified-diff patch builder: each line carries its diff marker —
 // `+` (added), `-` (removed), or a leading space (context line).
@@ -274,6 +275,23 @@ test("getLatestSubmittedCopilotReviewHeadSha tie-break: a valid timestamp beats 
     { author: { login: "someone-else" }, state: "COMMENTED", submittedAt: "2026-06-02T23:00:00Z", commit: { oid: "human" } },
   ]);
   assert.equal(sha, "dated");
+});
+
+test("getLatestSubmittedCopilotReviewHeadSha selects the same review as resolveLatestCopilotReview (raw submittedAt ordering)", () => {
+  // Date.parse would pick "offset" (10:00Z); the raw string order picks "zulu",
+  // exactly as the carried-convergence and body resolvers do.
+  const reviews = [
+    { author: { login: COPILOT }, state: "COMMENTED", submittedAt: "2026-06-02T09:00:00Z", commit: { oid: "zulu" } },
+    { author: { login: COPILOT }, state: "COMMENTED", submittedAt: "2026-06-02T08:00:00-02:00", commit: { oid: "offset" } },
+  ];
+  assert.equal(getLatestSubmittedCopilotReviewHeadSha(reviews), resolveLatestCopilotReview({ reviews }).review.commit.oid);
+  assert.equal(getLatestSubmittedCopilotReviewHeadSha(reviews), "zulu");
+  // A malformed later timestamp: raw string order still wins over Date.parse.
+  const malformed = [
+    { author: { login: COPILOT }, state: "COMMENTED", submittedAt: "2026-06-02T09:00:00Z", commit: { oid: "valid" } },
+    { author: { login: COPILOT }, state: "COMMENTED", submittedAt: "not-a-date", commit: { oid: "malformed" } },
+  ];
+  assert.equal(getLatestSubmittedCopilotReviewHeadSha(malformed), resolveLatestCopilotReview({ reviews: malformed }).review.commit.oid);
 });
 
 test("isTrivialDocumentationOnlyPath classifies prose docs as trivial but a docs/-hosted code/config/test file as non-trivial", () => {
