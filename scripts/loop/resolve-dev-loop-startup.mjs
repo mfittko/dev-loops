@@ -137,6 +137,7 @@ const STRATEGY_REQUIRED_READS = {
     "skills/copilot-pr-followup/SKILL.md",
     "skills/docs/copilot-loop-operations.md",
     "skills/docs/issue-intake-procedure.md",
+    "skills/docs/pre-pr-review-contract.md",
   ],
   copilot_pr_followup: [
     SHARED_PUBLIC_CONTRACT,

@@ -162,6 +162,11 @@ Use `create-pr.mjs` only after authoritative issue↔PR resolution finds no open
 PR; otherwise reuse/update that PR. The wrapper preserves `gh pr create`'s output
 contract and defaults to self-assignment (`--assignee @me`).
 
+A session that creates the branch and PR itself MUST run the pre-PR review per
+`PRE-PR-BEFORE-FIRST-PUSH` in [Pre-PR review contract](./pre-pr-review-contract.md)
+before the branch's first push and before `create-pr.mjs`; until then, the session
+and its sub-delegates commit locally and do not push.
+
 MUST use `node <resolved-skill-scripts>/github/create-pr.mjs --repo <owner/name> --assignee @me --base <base> --head <head> --title "..." --body-file <body-file>` (always draft, self-assigned by default; `--assignee @me` is the default).
 
 <!-- rule: CLOSING-REF-BRANCH-MISMATCH -->

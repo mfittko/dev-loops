@@ -126,6 +126,7 @@ test("resolve-dev-loop-startup success stdout keeps documented JSON shape", asyn
       "skills/copilot-pr-followup/SKILL.md",
       "skills/docs/copilot-loop-operations.md",
       "skills/docs/issue-intake-procedure.md",
+      "skills/docs/pre-pr-review-contract.md",
     ]);
     assert.deepEqual(Object.keys(parsed.canonicalStateSummary), [
       "target",
