@@ -74,6 +74,8 @@ The outer coordinator receives compact typed results and references only.
 
 The capsule is an executor under ADR 0074 Section 12: it follows the deterministic dispatch plan only, and on any non-happy observation (dispatch failure, a blocked or missing unit, fan-in failure, or a head change) it stops and returns a typed observation to refresh/reconciliation rather than choosing the next step itself.
 
+A gate round (dispatch, fan-out, fan-in, judge) is one bounded ADR 0074 Section 5 semantic transition: the deterministic dispatch plan pre-commits the judge step before fan-out begins, and the capsule re-validates head identity immediately before invoking the judge, consistent with the Section 12 executor sentence above — a head change at that check stops the capsule with a typed observation instead of invoking the judge.
+
 ### 3. Artifacts are semantic inputs; harness handback is non-authoritative
 
 Reviewers and judges continue to emit validated artifacts/envelopes.
@@ -100,7 +102,7 @@ Model-free observation remains the preferred mechanism where the harness/runtime
 
 Where a native harness does not expose enough identity/lifetime control to reconstruct a child after coordinator loss, the adapter SHALL report an explicit unsupported or ambiguous capability and fail closed. It SHALL NOT fabricate durable worker identity or claim process ownership.
 
-This amends the interpretation of ADR 0074 Sections 10, 11, 12, 16, and 17 without changing their fail-closed intent.
+This amends the interpretation of ADR 0074 Sections 5, 10, 11, 12, 16, and 17 without changing their fail-closed intent.
 
 ### 6. v1.2.0 owns the process/session I/O seam
 
@@ -144,7 +146,7 @@ The post-cutover benchmark therefore separates:
 
 Zero model-selected mechanical transitions remains required. Zero model turns for native harness spawn/join is not a v1.0.5 requirement.
 
-This amends ADR 0074 Sections 23 and 24 and the "Verification and cutover criteria" consequence: the migration/cutover target and the post-cutover benchmark are narrowed as stated above, without changing their fixture-first, exclusive-authority intent.
+This amends ADR 0074 Sections 5, 23, and 24 and the "Verification and cutover criteria" consequence: the migration/cutover target and the post-cutover benchmark are narrowed as stated above, without changing their fixture-first, exclusive-authority intent.
 
 ## Consequences
 
