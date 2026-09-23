@@ -46,7 +46,9 @@ function makeRuntime(detectEvidence) {
       },
       runChild: async (cmd, args, env) => { calls.runChild.push({ cmd, args, env }); return { stdout: "", stderr: "", code: 0 }; },
       detectEvidence,
-      loadConfig: async () => ({ config: { autonomy: { humanMergeOnly: false } }, errors: [] }),
+      // Copilot gate disabled (maxCopilotRounds 0): a head without a current-head
+      // Copilot review converges via copilot_gate_disabled, isolating gate_evidence.
+      loadConfig: async () => ({ config: { autonomy: { humanMergeOnly: false }, refinement: { maxCopilotRounds: 0 } }, errors: [] }),
       cwd: process.cwd(),
     },
   };
@@ -70,5 +72,6 @@ test("merge passes gate_evidence once the act list is empty", async () => {
   const result = await mergePr(OPTIONS, runtime);
   assert.equal(result.ok, true);
   assert.equal(result.merged, true);
+  assert.equal(result.copilotDisposition, "copilot_gate_disabled");
   assert.equal(calls.runChild.length, 1);
 });
