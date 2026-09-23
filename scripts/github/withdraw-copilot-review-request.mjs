@@ -45,8 +45,9 @@
 // an operator-authorized suppression marker (scripts/loop/_post-convergence-
 // review-suppression.mjs), scoped to this EXACT head, so request-copilot-
 // review.mjs recognizes the same head as already-settled instead of
-// re-requesting — reusing the existing `suppressed_post_convergence_docs_only`
-// status rather than inventing a parallel mechanism. Any further push
+// re-requesting — reusing the existing post-convergence suppression status
+// (`suppressed_post_convergence` by default, `suppressed_post_convergence_docs_only`
+// in strict mode) rather than inventing a parallel mechanism. Any further push
 // invalidates the marker (new head no longer matches).
 import { setTimeout as delay } from "node:timers/promises";
 import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";

@@ -91,9 +91,10 @@ Request statuses:
                                 opened a thread of its own or a trusted copilot-body-disposition record names it.
                                 The delta since that head is not checked; pre_approval_gate reviews the current head.
                                 The gate coordination detector reports the same carried convergence
-                                (carriedConvergence.source "converged_once").
-  suppressed_post_convergence_docs_only  Strict mode (refinement.requireCopilotConvergenceAtLatestHead: true), or an
-                                operator suppression marker in either mode. Carried convergence, at or below the
+                                (carriedConvergence.source "converged_once"). An operator suppression marker in this mode
+                                also returns this status.
+  suppressed_post_convergence_docs_only  Strict mode (refinement.requireCopilotConvergenceAtLatestHead: true), including
+                                an operator suppression marker in that mode. Carried convergence, at or below the
                                 round cap. Returned only when
                                 all of these hold: no request is outstanding, zero review threads are unresolved,
                                 the delta since the last Copilot-reviewed head is a provable pure doc/prose bump OR an
@@ -695,9 +696,15 @@ export async function performCopilotReviewRequest(
       { ...runtime, checkpointDir: options.checkpointDir },
     );
     if (markerCarry.carried) {
+      // The status names the mode, as carriedStatus below does. An unreadable
+      // config keeps the default converged-once mode.
+      const strict = await loadDevLoopConfig({ repoRoot }).then(
+        ({ config, errors }) => (!errors || errors.length === 0) && resolveRequireCopilotConvergenceAtLatestHead(config),
+        () => false,
+      );
       return {
         ok: true,
-        status: SUPPRESSED_POST_CONVERGENCE_DOCS_ONLY_STATUS,
+        status: strict ? SUPPRESSED_POST_CONVERGENCE_DOCS_ONLY_STATUS : SUPPRESSED_POST_CONVERGENCE_STATUS,
         repo: options.repo,
         pr: options.pr,
         reviewer: "Copilot",
@@ -726,11 +733,11 @@ export async function performCopilotReviewRequest(
   const carriedStatus = (convergence) => (convergence.source === "converged_once"
     ? {
       status: SUPPRESSED_POST_CONVERGENCE_STATUS,
-      detail: `The latest Copilot review converged on an earlier head (); no fresh Copilot round is opened. Proceed to the gate: pre_approval_gate reviews the current head.`,
+      detail: `The latest Copilot review converged on an earlier head (${convergence.reason}); no fresh Copilot round is opened. Proceed to the gate: pre_approval_gate reviews the current head.`,
     }
     : {
       status: SUPPRESSED_POST_CONVERGENCE_DOCS_ONLY_STATUS,
-      detail: `Post-convergence head bump is provably outside Copilot's review surface (); no fresh Copilot round is forced. The prior converged Copilot review still stands — proceed to the gate.`,
+      detail: `Post-convergence head bump is provably outside Copilot's review surface (${convergence.reason}); no fresh Copilot round is forced. The prior converged Copilot review still stands — proceed to the gate.`,
     });
   let refinementConfig = { maxCopilotRounds: 5 };
   let maxRounds = 5; // Built-in default; overridden by config when loadable
