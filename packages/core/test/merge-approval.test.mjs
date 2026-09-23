@@ -17,7 +17,7 @@ const HEAD = "3f8a1c9d2b7e4a6f0c5d8e1b3a7f2c9d5e8b1a4c";
 const OLD = "0000000000000000000000000000000000000000";
 
 const COPILOT = "copilot-pull-request-reviewer";
-const copilotReview = ({ commit = HEAD, body, state = "COMMENTED", submittedAt = "2024-01-10T00:00:00Z" }) => ({ login: COPILOT, state, commit_id: commit, body, submitted_at: submittedAt });
+const copilotReview = ({ commit = HEAD, body, state = "COMMENTED", submittedAt = "2024-01-10T00:00:00Z", id }) => ({ ...(id === undefined ? {} : { id }), login: COPILOT, state, commit_id: commit, body, submitted_at: submittedAt });
 
 test("isValidGithubLogin rejects boolean, empty, free text; accepts real logins", () => {
   assert.equal(isValidGithubLogin("mfittko"), true);
@@ -526,4 +526,56 @@ test("evaluateMergePreconditions: a current-head Copilot 🟢 passes the copilot
     reviews: [copilotReview({ body: "### 🟢 Approval recommended\n\ngood." })],
   }));
   assert.equal(res.ok, true, JSON.stringify(res.failures));
+});
+
+// ── Converged-once disposition and id-bound body-disposition records ────────
+
+test("evaluateMergePreconditions: converged_once is a sanctioned absent-review disposition pinned to the current head", () => {
+  assert.equal(COPILOT_ABSENT_REVIEW_DISPOSITION.CONVERGED_ONCE, "converged_once");
+  const pinned = evaluateMergePreconditions(greenFacts({ copilotAbsentReviewDisposition: { kind: "converged_once", headSha: HEAD } }));
+  assert.equal(pinned.ok, true, JSON.stringify(pinned.failures));
+  assert.equal(pinned.copilotConvergenceState, COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW);
+  assert.equal(pinned.copilotDisposition, "converged_once");
+  const stale = evaluateMergePreconditions(greenFacts({ copilotAbsentReviewDisposition: { kind: "converged_once", headSha: OLD } }));
+  assert.deepEqual(stale.failures.map((f) => f.precondition), ["copilot_convergence"]);
+});
+
+test("evaluateCopilotConvergence names the review that owns the current-head verdict", () => {
+  const yellow = "### 🟡 Changes recommended\n\nfix this.";
+  const res = evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews: [copilotReview({ id: "R_head", body: yellow })] });
+  assert.equal(res.reviewId, "R_head");
+  // A tied clean review never takes ownership from the blocking one, in either order.
+  const clean = copilotReview({ id: "R_clean", body: "" });
+  const blocking = copilotReview({ id: "R_yellow", body: yellow });
+  assert.equal(evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews: [clean, blocking] }).reviewId, "R_yellow");
+  assert.equal(evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews: [blocking, clean] }).reviewId, "R_yellow");
+  // Two tied blocking reviews have no single owner.
+  const tied = evaluateCopilotConvergence({ currentHeadSha: HEAD, reviews: [blocking, copilotReview({ id: "R_other", body: yellow })] });
+  assert.equal(tied.reviewId, null);
+});
+
+test("evaluateMergePreconditions: a body-disposition record clears a current-head finding only for the review it names", () => {
+  const yellow = "### 🟡 Changes recommended\n\nfix this.";
+  const headReview = copilotReview({ id: "R_head", body: yellow, submittedAt: "2024-01-10T00:00:00Z" });
+  const named = evaluateMergePreconditions(greenFacts({ reviews: [headReview], copilotBodyDisposition: { headSha: HEAD, reviewId: "R_head" } }));
+  assert.equal(named.ok, true, JSON.stringify(named.failures));
+  assert.equal(named.copilotBodyDisposition.reviewId, "R_head");
+
+  const other = evaluateMergePreconditions(greenFacts({ reviews: [headReview], copilotBodyDisposition: { headSha: HEAD, reviewId: "R_other" } }));
+  assert.deepEqual(other.failures.map((f) => f.precondition), ["copilot_convergence"]);
+  assert.match(other.failures[0].reason, /Changes recommended/);
+  assert.equal(other.copilotBodyDisposition, null);
+
+  // Copilot reviews an older commit AFTER the current-head review. A record
+  // naming that later older-commit review does not clear the current-head finding.
+  const laterOlder = copilotReview({ id: "R_old", commit: OLD, body: yellow, submittedAt: "2024-01-11T00:00:00Z" });
+  const olderNamed = evaluateMergePreconditions(greenFacts({ reviews: [headReview, laterOlder], copilotBodyDisposition: { headSha: HEAD, reviewId: "R_old" } }));
+  assert.equal(olderNamed.copilotConvergenceState, COPILOT_CONVERGENCE_STATE.CURRENT_HEAD_FINDINGS);
+  assert.deepEqual(olderNamed.failures.map((f) => f.precondition), ["copilot_convergence"]);
+  assert.equal(olderNamed.copilotBodyDisposition, null);
+
+  // Two tied blocking current-head reviews: no record clears them.
+  const tied = [headReview, copilotReview({ id: "R_twin", body: yellow, submittedAt: "2024-01-10T00:00:00Z" })];
+  const tiedNamed = evaluateMergePreconditions(greenFacts({ reviews: tied, copilotBodyDisposition: { headSha: HEAD, reviewId: "R_head" } }));
+  assert.deepEqual(tiedNamed.failures.map((f) => f.precondition), ["copilot_convergence"]);
 });
