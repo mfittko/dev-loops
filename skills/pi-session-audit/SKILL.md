@@ -55,7 +55,8 @@ node scripts/loop/audit-pi-session.mjs --latest --jq '.sessions[] | select(.snow
 - **Total Tokens**: Sum of `input + output + cacheRead + cacheWrite` when those provider dimensions are reported.
 - **Uncached Input vs Cached Read**: Demonstrates cache effectiveness.
 - **Cache Hit Ratio**: Calculated as `cachedRead / (uncachedInput + cachedRead)`. JSON reports a 0-1 fraction; Markdown reports a percentage. In long coordinator sessions with good prefix alignment, this should typically exceed 85-90%.
-- **Estimated Cost**: Total provider billed cost when reported in message usage envelopes. Unreported dimensions render as `n/a`, not zero.
+- **Estimated Cost**: Sum of provider billed costs from message usage envelopes that report cost.
+- **Partial usage data**: Known values are still summed when only some envelopes report a dimension. JSON exposes each metric's `availability` as `complete`, `partial`, or `unavailable`, and Markdown appends `(partial)` to incomplete sums. A dimension renders as `n/a` only when no envelope reports it.
 - **Fork Snapshots**: Reports snapshots processed, fork-own turns retained, and inherited replay turns excluded in both JSON counters (`forkSnapshotsProcessed`, `retainedForkTurns`, and `skippedInheritedForkTurns`) and the Markdown summary.
 
 ### 2. Usage by Model

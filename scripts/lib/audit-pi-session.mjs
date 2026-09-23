@@ -180,11 +180,11 @@ export async function parseTranscriptFile(filePath) {
 
   let turns = [];
   let sessionInfo = null;
-  let sessionInfoCount = 0;
   let currentAgent = null;
   let segmentId = 0;
   let isForkSnapshot = false;
   let sessionHeaderSeen = false;
+  let forkCreatedAt = null;
   let forkBoundarySeen = false;
   let inheritedTurnCount = 0;
   let malformedLineCount = 0;
@@ -204,13 +204,25 @@ export async function parseTranscriptFile(filePath) {
       // run-0 transcript may contain many session_info records and is not a fork.
       if (data.type === "session" && !sessionHeaderSeen) {
         sessionHeaderSeen = true;
-        isForkSnapshot = data.parentSession !== null && data.parentSession !== undefined;
+        isForkSnapshot = typeof data.parentSession === "string" && data.parentSession.length > 0;
+        if (isForkSnapshot) {
+          const parsedTimestamp = Date.parse(data.timestamp);
+          forkCreatedAt = Number.isFinite(parsedTimestamp) ? parsedTimestamp : null;
+        }
       }
 
       if (data.type === "session_info" && data.name) {
-        sessionInfoCount += 1;
         segmentId += 1;
-        if (isForkSnapshot && !forkBoundarySeen && sessionInfoCount > 1) {
+        // A fork replays its parent's prefix verbatim. The first marker at or after
+        // the fork header's creation time starts the fork's own continuation.
+        const sessionInfoTimestamp = Date.parse(data.timestamp);
+        if (
+          isForkSnapshot &&
+          !forkBoundarySeen &&
+          forkCreatedAt !== null &&
+          Number.isFinite(sessionInfoTimestamp) &&
+          sessionInfoTimestamp >= forkCreatedAt
+        ) {
           inheritedTurnCount = turns.filter(isUsageBearing).length;
           turns = [];
           forkBoundarySeen = true;
@@ -304,7 +316,8 @@ function createUsageAggregate() {
   return {
     turns: 0,
     values: Object.fromEntries(AGGREGATE_DIMENSIONS.map((dimension) => [dimension, 0])),
-    available: Object.fromEntries(AGGREGATE_DIMENSIONS.map((dimension) => [dimension, true])),
+    reported: Object.fromEntries(AGGREGATE_DIMENSIONS.map((dimension) => [dimension, 0])),
+    missing: Object.fromEntries(AGGREGATE_DIMENSIONS.map((dimension) => [dimension, 0])),
   };
 }
 
@@ -313,15 +326,21 @@ function addUsageToAggregate(aggregate, usage) {
   for (const dimension of AGGREGATE_DIMENSIONS) {
     const value = usage[dimension];
     if (value === null) {
-      aggregate.available[dimension] = false;
+      aggregate.missing[dimension] += 1;
     } else {
       aggregate.values[dimension] += value;
+      aggregate.reported[dimension] += 1;
     }
   }
 }
 
 function aggregateValue(aggregate, dimension) {
-  return aggregate.available[dimension] ? aggregate.values[dimension] : null;
+  return aggregate.reported[dimension] > 0 ? aggregate.values[dimension] : null;
+}
+
+function aggregateAvailability(aggregate, dimension) {
+  if (aggregate.reported[dimension] === 0) return "unavailable";
+  return aggregate.missing[dimension] > 0 ? "partial" : "complete";
 }
 
 function aggregateCacheHitRatio(aggregate) {
@@ -331,8 +350,27 @@ function aggregateCacheHitRatio(aggregate) {
   return Number((cacheRead / (input + cacheRead)).toFixed(4));
 }
 
+function aggregateCacheHitRatioAvailability(aggregate) {
+  if (aggregateCacheHitRatio(aggregate) === null) return "unavailable";
+  return ["input", "cacheRead"].some(
+    (dimension) => aggregateAvailability(aggregate, dimension) !== "complete",
+  ) ? "partial" : "complete";
+}
+
 function roundCost(value) {
   return value === null ? null : Number(value.toFixed(4));
+}
+
+function sessionAvailability(aggregate) {
+  return {
+    inputTokens: aggregateAvailability(aggregate, "input"),
+    outputTokens: aggregateAvailability(aggregate, "output"),
+    cacheReadTokens: aggregateAvailability(aggregate, "cacheRead"),
+    cacheWriteTokens: aggregateAvailability(aggregate, "cacheWrite"),
+    totalTokens: aggregateAvailability(aggregate, "totalTokens"),
+    cacheHitRatio: aggregateCacheHitRatioAvailability(aggregate),
+    estimatedCost: aggregateAvailability(aggregate, "cost"),
+  };
 }
 
 function splitTurnsByAgentSegment(turns) {
@@ -427,6 +465,7 @@ export async function auditPiSession(targetPath) {
         cacheWriteTokens: aggregateValue(sessionAggregate, "cacheWrite"),
         totalTokens: aggregateValue(sessionAggregate, "totalTokens"),
         cost: roundCost(aggregateValue(sessionAggregate, "cost")),
+        availability: sessionAvailability(sessionAggregate),
         snowball: {
           initialPromptTokens,
           finalPromptTokens,
@@ -452,6 +491,15 @@ export async function auditPiSession(targetPath) {
       totalTokens: aggregateValue(aggregate, "totalTokens"),
       cost: roundCost(aggregateValue(aggregate, "cost")),
       cacheHitRatio: aggregateCacheHitRatio(aggregate),
+      availability: {
+        input: aggregateAvailability(aggregate, "input"),
+        output: aggregateAvailability(aggregate, "output"),
+        cacheRead: aggregateAvailability(aggregate, "cacheRead"),
+        cacheWrite: aggregateAvailability(aggregate, "cacheWrite"),
+        totalTokens: aggregateAvailability(aggregate, "totalTokens"),
+        cost: aggregateAvailability(aggregate, "cost"),
+        cacheHitRatio: aggregateCacheHitRatioAvailability(aggregate),
+      },
     };
   }
 
@@ -473,6 +521,7 @@ export async function auditPiSession(targetPath) {
       totalTokens: aggregateValue(overallAggregate, "totalTokens"),
       cacheHitRatio: aggregateCacheHitRatio(overallAggregate),
       estimatedCost: roundCost(aggregateValue(overallAggregate, "cost")),
+      availability: sessionAvailability(overallAggregate),
       malformedLines,
     },
     byModel: modelAggregation,
@@ -485,18 +534,25 @@ export async function auditPiSession(targetPath) {
  * @param {object} auditResult
  * @returns {string}
  */
-function formatTokenCount(value) {
-  return value === null || value === undefined
+function markPartial(value, availability) {
+  return availability === "partial" ? `${value} (partial)` : value;
+}
+
+function formatTokenCount(value, availability) {
+  const formatted = value === null || value === undefined
     ? "n/a"
     : String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return markPartial(formatted, availability);
 }
 
-function formatRatio(value) {
-  return value === null || value === undefined ? "n/a" : `${(value * 100).toFixed(1)}%`;
+function formatRatio(value, availability) {
+  const formatted = value === null || value === undefined ? "n/a" : `${(value * 100).toFixed(1)}%`;
+  return markPartial(formatted, availability);
 }
 
-function formatCost(value) {
-  return value === null || value === undefined ? "n/a" : `$${value.toFixed(4)}`;
+function formatCost(value, availability) {
+  const formatted = value === null || value === undefined ? "n/a" : `$${value.toFixed(4)}`;
+  return markPartial(formatted, availability);
 }
 
 function escapeMarkdown(value) {
@@ -527,12 +583,12 @@ export function formatMarkdownSummary(auditResult) {
   const totalMillions = summary.totalTokens === null || summary.totalTokens === undefined
     ? "n/a"
     : `${(summary.totalTokens / 1_000_000).toFixed(2)}M`;
-  lines.push(`- **Total Tokens**: ${formatTokenCount(summary.totalTokens)} (${totalMillions})`);
-  lines.push(`- **Uncached Input**: ${formatTokenCount(summary.inputTokens)}`);
-  lines.push(`- **Cached Read**: ${formatTokenCount(summary.cacheReadTokens)}`);
-  lines.push(`- **Output**: ${formatTokenCount(summary.outputTokens)}`);
-  lines.push(`- **Cache Hit Ratio**: ${formatRatio(summary.cacheHitRatio)}`);
-  lines.push(`- **Estimated Cost**: ${formatCost(summary.estimatedCost)}`);
+  lines.push(`- **Total Tokens**: ${formatTokenCount(summary.totalTokens, summary.availability?.totalTokens)} (${totalMillions})`);
+  lines.push(`- **Uncached Input**: ${formatTokenCount(summary.inputTokens, summary.availability?.inputTokens)}`);
+  lines.push(`- **Cached Read**: ${formatTokenCount(summary.cacheReadTokens, summary.availability?.cacheReadTokens)}`);
+  lines.push(`- **Output**: ${formatTokenCount(summary.outputTokens, summary.availability?.outputTokens)}`);
+  lines.push(`- **Cache Hit Ratio**: ${formatRatio(summary.cacheHitRatio, summary.availability?.cacheHitRatio)}`);
+  lines.push(`- **Estimated Cost**: ${formatCost(summary.estimatedCost, summary.availability?.estimatedCost)}`);
   lines.push(`- **Fork Snapshots**: ${forkSnapshotsProcessed} processed; ${retainedForkTurns} fork-own turns retained; ${skippedInheritedForkTurns} inherited turns excluded`);
   if (malformedLines > 0) {
     lines.push(`- **Malformed Lines**: ${malformedLines} skipped while parsing; totals may be incomplete`);
@@ -545,7 +601,7 @@ export function formatMarkdownSummary(auditResult) {
   lines.push("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |");
   for (const [model, data] of Object.entries(byModel)) {
     lines.push(
-      `| \`${escapeMarkdown(model)}\` | ${data.turns} | ${formatTokenCount(data.input)} | ${formatTokenCount(data.cacheRead)} | ${formatTokenCount(data.output)} | ${formatRatio(data.cacheHitRatio)} | ${formatTokenCount(data.totalTokens)} | ${formatCost(data.cost)} |`
+      `| \`${escapeMarkdown(model)}\` | ${data.turns} | ${formatTokenCount(data.input, data.availability?.input)} | ${formatTokenCount(data.cacheRead, data.availability?.cacheRead)} | ${formatTokenCount(data.output, data.availability?.output)} | ${formatRatio(data.cacheHitRatio, data.availability?.cacheHitRatio)} | ${formatTokenCount(data.totalTokens, data.availability?.totalTokens)} | ${formatCost(data.cost, data.availability?.cost)} |`
     );
   }
   lines.push("");
@@ -558,7 +614,7 @@ export function formatMarkdownSummary(auditResult) {
     const modelsStr = s.models.map((model) => `\`${escapeMarkdown(model)}\``).join(", ");
     const growth = s.snowball.promptGrowthFactor === null ? "n/a" : `${s.snowball.promptGrowthFactor}x`;
     lines.push(
-      `| **${escapeMarkdown(s.role)}** | ${s.turnCount} | ${modelsStr} | ${formatTokenCount(s.totalTokens)} | ${formatRatio(s.snowball.cacheHitRatio)} | ${formatTokenCount(s.snowball.initialPromptTokens)} | ${formatTokenCount(s.snowball.finalPromptTokens)} | ${growth} |`
+      `| **${escapeMarkdown(s.role)}** | ${s.turnCount} | ${modelsStr} | ${formatTokenCount(s.totalTokens, s.availability?.totalTokens)} | ${formatRatio(s.snowball.cacheHitRatio, s.availability?.cacheHitRatio)} | ${formatTokenCount(s.snowball.initialPromptTokens)} | ${formatTokenCount(s.snowball.finalPromptTokens)} | ${growth} |`
     );
   }
   lines.push("");

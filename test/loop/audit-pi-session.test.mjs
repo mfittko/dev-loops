@@ -32,8 +32,8 @@ function writeSimpleTranscript(filePath) {
   fs.writeFileSync(
     filePath,
     [
-      JSON.stringify({ type: "session", parentSession: null }),
-      JSON.stringify({ type: "session_info", name: "subagent-review-unit-0" }),
+      JSON.stringify({ type: "session", parentSession: null, timestamp: "2026-01-01T00:00:00.000Z" }),
+      JSON.stringify({ type: "session_info", name: "subagent-review-unit-0", timestamp: "2026-01-01T00:00:00.100Z" }),
       JSON.stringify({
         type: "message",
         message: {
@@ -132,6 +132,60 @@ describe("audit-pi-session unit & integration", () => {
     assert.match(markdown, /Cache Hit Ratio\*\*: n\/a/);
     assert.match(markdown, /Estimated Cost\*\*: n\/a/);
     assert.doesNotMatch(markdown, /Low cache hit ratio/);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("keeps known aggregate values and marks partially reported dimensions", async () => {
+    const tmpDir = createTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    fs.writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            model: "model-a",
+            usage: { input: 100, output: 20, cacheRead: 300, cacheWrite: 0, cost: 0.04 },
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            model: "model-a",
+            usage: { input: 50, output: 10, cacheRead: 150, cacheWrite: 0 },
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            model: "model-a",
+            usage: { input: 25, output: 5, totalTokens: 30, cost: 0.01 },
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+
+    const audit = await auditPiSession(sessionFile);
+    assert.equal(audit.summary.inputTokens, 175);
+    assert.equal(audit.summary.cacheReadTokens, 450);
+    assert.equal(audit.summary.totalTokens, 660);
+    assert.equal(audit.summary.cacheHitRatio, 0.72);
+    assert.equal(audit.summary.estimatedCost, 0.05);
+    assert.equal(audit.summary.availability.inputTokens, "complete");
+    assert.equal(audit.summary.availability.cacheReadTokens, "partial");
+    assert.equal(audit.summary.availability.totalTokens, "complete");
+    assert.equal(audit.summary.availability.cacheHitRatio, "partial");
+    assert.equal(audit.summary.availability.estimatedCost, "partial");
+    assert.equal(audit.sessions[0].availability.estimatedCost, "partial");
+    assert.equal(audit.byModel["model-a"].availability.cacheRead, "partial");
+    const markdown = formatMarkdownSummary(audit);
+    assert.match(markdown, /Cached Read\*\*: 450 \(partial\)/);
+    assert.match(markdown, /Cache Hit Ratio\*\*: 72\.0% \(partial\)/);
+    assert.match(markdown, /Estimated Cost\*\*: \$0\.0500 \(partial\)/);
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
@@ -395,6 +449,16 @@ describe("audit-pi-session unit & integration", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  it("derives a non-fallback role from a production-shaped session name", () => {
+    const role = deriveSessionRole("/tmp/session.jsonl", {
+      sessionInfo: {
+        name: "subagent-coverage-76d71d14-7ff3-465f-a877-2729a80a4c87-1",
+      },
+      agent: null,
+    });
+    assert.equal(role, "coverage");
+  });
+
   it("excludes a fork's inherited prefix and retains its own turns and role", async () => {
     const tmpDir = createTempDir();
     const runDir = path.join(tmpDir, "run-0");
@@ -408,9 +472,17 @@ describe("audit-pi-session unit & integration", () => {
     fs.writeFileSync(
       forkFile,
       [
-        JSON.stringify({ type: "session", parentSession: "parent-session-id" }),
+        JSON.stringify({
+          type: "session",
+          parentSession: "parent-session-id",
+          timestamp: "2026-01-01T01:00:00.000Z",
+        }),
         ...parentReplay,
-        JSON.stringify({ type: "session_info", name: "subagent-judge-unit-0" }),
+        JSON.stringify({
+          type: "session_info",
+          name: "subagent-judge-unit-0",
+          timestamp: "2026-01-01T01:00:00.100Z",
+        }),
         JSON.stringify({
           type: "message",
           message: {
@@ -448,6 +520,88 @@ describe("audit-pi-session unit & integration", () => {
     assert.equal(directForkAudit.retainedForkTurns, 1);
     assert.equal(directForkAudit.skippedInheritedForkTurns, 1);
     assert.equal(directForkAudit.summary.totalTurns, 1);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("excludes a multi-segment parent replay using the fork timestamp boundary", async () => {
+    const tmpDir = createTempDir();
+    const forkFile = path.join(tmpDir, "fork.jsonl");
+    fs.writeFileSync(
+      forkFile,
+      [
+        JSON.stringify({ type: "session", parentSession: "/tmp/parent.jsonl", timestamp: "2026-01-02T00:00:00.000Z" }),
+        JSON.stringify({ type: "session_info", name: "subagent-review-parent-0", timestamp: "2026-01-01T00:00:00.000Z" }),
+        JSON.stringify({ type: "message", message: { role: "assistant", model: "model-a", usage: { input: 100, output: 10, cacheRead: 0, cacheWrite: 0 } } }),
+        JSON.stringify({ type: "session_info", name: "subagent-dev-loop-parent-0", timestamp: "2026-01-01T12:00:00.000Z" }),
+        JSON.stringify({ type: "message", message: { role: "assistant", model: "model-a", usage: { input: 200, output: 20, cacheRead: 0, cacheWrite: 0 } } }),
+        JSON.stringify({ type: "session_info", name: "subagent-coverage-76d71d14-7ff3-465f-a877-2729a80a4c87-1", timestamp: "2026-01-02T00:00:00.500Z" }),
+        JSON.stringify({ type: "message", message: { role: "assistant", model: "model-b", usage: { input: 300, output: 30, cacheRead: 0, cacheWrite: 0 } } }),
+      ].join("\n") + "\n",
+    );
+
+    const parsed = await parseTranscriptFile(forkFile);
+    assert.equal(parsed.isForkSnapshot, true);
+    assert.equal(parsed.inheritedTurnCount, 2);
+    assert.equal(parsed.turns.length, 1);
+    assert.equal(parsed.turns[0].agent, "subagent-coverage-76d71d14-7ff3-465f-a877-2729a80a4c87-1");
+
+    const audit = await auditPiSession(forkFile);
+    assert.equal(audit.summary.totalTurns, 1);
+    assert.equal(audit.summary.totalTokens, 330);
+    assert.equal(audit.retainedForkTurns, 1);
+    assert.equal(audit.skippedInheritedForkTurns, 2);
+    assert.deepEqual(audit.sessions.map((session) => session.role), ["coverage"]);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("excludes a fork replay with no session_info before the fork's own segment", async () => {
+    const tmpDir = createTempDir();
+    const forkFile = path.join(tmpDir, "fork.jsonl");
+    fs.writeFileSync(
+      forkFile,
+      [
+        JSON.stringify({ type: "session", parentSession: "/tmp/parent.jsonl", timestamp: "2026-01-02T00:00:00.000Z" }),
+        JSON.stringify({ type: "message", agent: "parent", message: { role: "assistant", model: "model-a", usage: { input: 100, output: 10, cacheRead: 0, cacheWrite: 0 } } }),
+        JSON.stringify({ type: "message", agent: "parent", message: { role: "assistant", model: "model-a", usage: { input: 200, output: 20, cacheRead: 0, cacheWrite: 0 } } }),
+        JSON.stringify({ type: "session_info", name: "subagent-judge-fork-0", timestamp: "2026-01-02T00:00:00.000Z" }),
+        JSON.stringify({ type: "message", message: { role: "assistant", model: "model-b", usage: { input: 400, output: 40, cacheRead: 0, cacheWrite: 0 } } }),
+      ].join("\n") + "\n",
+    );
+
+    const parsed = await parseTranscriptFile(forkFile);
+    assert.equal(parsed.isForkSnapshot, true);
+    assert.equal(parsed.inheritedTurnCount, 2);
+    assert.equal(parsed.turns.length, 1);
+    assert.equal(parsed.turns[0].agent, "subagent-judge-fork-0");
+
+    const audit = await auditPiSession(forkFile);
+    assert.equal(audit.summary.totalTurns, 1);
+    assert.equal(audit.summary.totalTokens, 440);
+    assert.equal(audit.retainedForkTurns, 1);
+    assert.equal(audit.skippedInheritedForkTurns, 2);
+    assert.deepEqual(audit.sessions.map((session) => session.role), ["judge"]);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("does not classify falsy non-string parentSession values as forks", async () => {
+    const tmpDir = createTempDir();
+    for (const [index, parentSession] of ["", 0, false].entries()) {
+      const sessionFile = path.join(tmpDir, `session-${index}.jsonl`);
+      fs.writeFileSync(
+        sessionFile,
+        [
+          JSON.stringify({ type: "session", parentSession, timestamp: "2026-01-02T00:00:00.000Z" }),
+          JSON.stringify({ type: "session_info", name: "subagent-review-unit-0", timestamp: "2026-01-02T00:00:00.100Z" }),
+          JSON.stringify({ type: "message", message: { role: "assistant", model: "model-a", usage: { input: 100, output: 10, cacheRead: 0, cacheWrite: 0 } } }),
+        ].join("\n") + "\n",
+      );
+      const parsed = await parseTranscriptFile(sessionFile);
+      assert.equal(parsed.isForkSnapshot, false);
+      assert.equal(parsed.turns.length, 1);
+    }
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
@@ -531,12 +685,15 @@ describe("audit-pi-session unit & integration", () => {
     const repoDir = path.join(repoSessions, "repo-session");
     const worktreeDir = path.join(worktreeSessions, "worktree-session");
     const otherRepoDir = path.join(otherRepoSessions, "wrong-repo-session");
+    const artifactsDir = path.join(repoSessions, "subagent-artifacts");
     fs.mkdirSync(repoDir);
     fs.mkdirSync(worktreeDir);
     fs.mkdirSync(otherRepoDir);
+    fs.mkdirSync(artifactsDir);
     fs.utimesSync(repoDir, new Date(Date.now() + 10000), new Date(Date.now() + 10000));
     fs.utimesSync(worktreeDir, new Date(Date.now() + 20000), new Date(Date.now() + 20000));
     fs.utimesSync(otherRepoDir, new Date(Date.now() + 30000), new Date(Date.now() + 30000));
+    fs.utimesSync(artifactsDir, new Date(Date.now() + 40000), new Date(Date.now() + 40000));
 
     const latest = findLatestPiSession(fakeSessionsBase, "/Users/tester/dev-loops");
     assert.equal(latest, worktreeDir);
@@ -681,6 +838,21 @@ describe("audit-pi-session unit & integration", () => {
 
     let stdout = captureStream();
     let stderr = captureStream();
+    assert.equal(await runAuditCli(["--help"], { stdout, stderr }), 0);
+    assert.match(stdout.value, /Usage:/);
+    assert.equal(stderr.value, "");
+
+    stdout = captureStream();
+    stderr = captureStream();
+    assert.equal(
+      await runAuditCli([], { stdout, stderr, findLatestSession: () => null }),
+      1,
+    );
+    assert.equal(stdout.value, "");
+    assert.match(stderr.value, /Could not automatically locate latest Pi session directory/);
+
+    stdout = captureStream();
+    stderr = captureStream();
     assert.equal(await runAuditCli([sessionFile, "--json"], { stdout, stderr }), 0);
     assert.equal(JSON.parse(stdout.value).summary.totalTokens, 350);
     assert.equal(stderr.value, "");
