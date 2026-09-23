@@ -67,7 +67,8 @@ export async function ghJson(args, { env, ghCommand = "gh", runChild = defaultRu
  * @param {typeof defaultRunChild} [runChild] - injectable child-exec seam.
  * @param {object} [opts]
  * @param {boolean} [opts.allowErrors] - when true, a GraphQL `errors` array
- *   in the response is returned instead of thrown.
+ *   in the response is returned instead of thrown. This includes a non-zero
+ *   `gh` exit whose stdout is JSON with an `errors` array.
  */
 export async function ghGraphql(query, vars, env, runChild = defaultRunChild, { allowErrors = false } = {}) {
   const fieldArgs = [];
@@ -80,6 +81,18 @@ export async function ghGraphql(query, vars, env, runChild = defaultRunChild, { 
     env,
   );
   if (result.code !== 0) {
+    // `gh api graphql` exits non-zero when the response carries GraphQL
+    // `errors` (e.g. NOT_FOUND) but still prints the JSON on stdout. With
+    // allowErrors the caller wants that errors array, so return it.
+    if (allowErrors) {
+      let errorPayload = null;
+      try {
+        errorPayload = JSON.parse(result.stdout);
+      } catch {
+        // not JSON: fall through to GH_API_ERROR
+      }
+      if (Array.isArray(errorPayload?.errors)) return errorPayload;
+    }
     const detail = result.stderr.trim() || `exit code ${result.code}`;
     throw Object.assign(new Error(`gh api graphql failed: ${detail}`), { code: "GH_API_ERROR" });
   }

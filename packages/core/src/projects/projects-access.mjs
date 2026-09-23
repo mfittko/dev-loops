@@ -200,3 +200,127 @@ export function extractStatus(node) {
   }
   return null;
 }
+
+// ── Single item resolution ─────────────────────────────────────────────────
+
+// Item projection shared by both lookups. It matches the board listing node
+// shape (id, fieldValues, content) so `extractStatus` works on the result.
+const ITEM_FIELDS = [
+  "id isArchived project { id }",
+  "fieldValues(first:20) {",
+  "  nodes {",
+  "    ... on ProjectV2ItemFieldSingleSelectValue {",
+  "      field { ... on ProjectV2SingleSelectField { id name } }",
+  "      name",
+  "    }",
+  "  }",
+  "}",
+  "content {",
+  "  ... on Issue { __typename number repository { nameWithOwner } }",
+  "  ... on PullRequest { __typename number repository { nameWithOwner } }",
+  "}",
+].join("\n");
+
+const GET_ITEMS_BY_CONTENT_NUMBER = [
+  "query($owner:String!, $name:String!, $number:Int!, $after:String) {",
+  "  repository(owner:$owner, name:$name) {",
+  "    issueOrPullRequest(number:$number) {",
+  `      ... on Issue { projectItems(first:100, after:$after, includeArchived:false) { pageInfo { hasNextPage endCursor } nodes { ${ITEM_FIELDS} } } }`,
+  `      ... on PullRequest { projectItems(first:100, after:$after, includeArchived:false) { pageInfo { hasNextPage endCursor } nodes { ${ITEM_FIELDS} } } }`,
+  "    }",
+  "  }",
+  "}",
+].join("\n");
+
+const GET_ITEM_BY_ID = [
+  "query($id:ID!) {",
+  `  node(id:$id) { ... on ProjectV2Item { ${ITEM_FIELDS} } }`,
+  "}",
+].join("\n");
+
+function itemNotFound(message) {
+  return Object.assign(new Error(message), { code: "ITEM_NOT_FOUND" });
+}
+
+/**
+ * Throw GRAPHQL_ERROR for any GraphQL error in `payload` other than NOT_FOUND.
+ * Use it on a `ghGraphql(..., { allowErrors: true })` payload where NOT_FOUND
+ * means "no such entity" and every other error must keep its message.
+ */
+export function assertOnlyNotFoundErrors(payload) {
+  const other = (payload?.errors ?? []).filter((e) => e?.type !== "NOT_FOUND");
+  if (other.length > 0) {
+    throw Object.assign(
+      new Error(`GraphQL errors: ${other.map((e) => e.message).join("; ")}`),
+      { code: "GRAPHQL_ERROR" },
+    );
+  }
+}
+
+/**
+ * Resolve one project item without the whole-board `ProjectV2.items` listing,
+ * which can lag behind GitHub by hours and omit newly added items.
+ *
+ *   - number ref: read the issue or PR's own `projectItems` and pick the
+ *     unarchived item on `projectId`.
+ *   - id ref: look the item node up directly, then verify that it belongs to
+ *     `projectId` and that its content is in `repo`.
+ *
+ * Every miss or mismatch fails closed with code ITEM_NOT_FOUND. Returns a node
+ * in the listing shape: `{ id, isArchived, project, fieldValues, content }`.
+ *
+ * @param {object} opts
+ * @param {string} opts.projectId
+ * @param {string} [opts.projectTitle]  shown in ITEM_NOT_FOUND messages when present
+ * @param {string} opts.repo  validated `owner/name`
+ * @param {{kind:"number"|"id", value:number|string}} opts.itemRef  from parseItemRef
+ * @param {object} opts.env
+ * @param {Function} opts.runChild
+ */
+export async function resolveProjectItem({ projectId, projectTitle, repo, itemRef, env, runChild }) {
+  const projectLabel = projectTitle ?? projectId;
+  if (itemRef.kind === "number") {
+    const [owner, name] = repo.split("/");
+    let after = null;
+    while (true) {
+      const vars = { owner, name, number: itemRef.value };
+      if (after) vars.after = after;
+      const payload = await ghGraphql(GET_ITEMS_BY_CONTENT_NUMBER, vars, env, runChild, { allowErrors: true });
+      const connection = payload?.data?.repository?.issueOrPullRequest?.projectItems;
+      const match = (connection?.nodes ?? []).find((n) => n && n.project?.id === projectId && !n.isArchived);
+      // A partial response can carry errors for other boards the token cannot
+      // read (e.g. FORBIDDEN). A match on the configured board wins; the error
+      // is raised only when no page holds a match.
+      if (match) return match;
+      const pageInfo = connection?.pageInfo ?? {};
+      if (!pageInfo.hasNextPage) {
+        assertOnlyNotFoundErrors(payload);
+        throw itemNotFound(`Item #${itemRef.value} not found in project "${projectLabel}" for repo "${repo}"`);
+      }
+      if (!pageInfo.endCursor) {
+        throw Object.assign(
+          new Error("Invalid projectItems payload: hasNextPage is true but endCursor is missing"),
+          { code: "GH_API_ERROR" },
+        );
+      }
+      after = pageInfo.endCursor;
+    }
+  }
+
+  const payload = await ghGraphql(GET_ITEM_BY_ID, { id: itemRef.value }, env, runChild, { allowErrors: true });
+  assertOnlyNotFoundErrors(payload);
+  const node = payload?.data?.node;
+  if (!node?.id || node.isArchived) {
+    throw itemNotFound(`Item "${itemRef.value}" not found in project "${projectLabel}" for repo "${repo}"`);
+  }
+  if (node.project?.id !== projectId) {
+    throw itemNotFound(
+      `Item "${itemRef.value}" belongs to project "${node.project?.id ?? "(unknown)"}", not "${projectId}"`,
+    );
+  }
+  const itemRepo = node.content?.repository?.nameWithOwner ?? null;
+  if (itemRepo !== repo) {
+    throw itemNotFound(`Item "${itemRef.value}" is for repo "${itemRepo ?? "(none)"}", not "${repo}"`);
+  }
+  return node;
+}

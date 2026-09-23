@@ -209,7 +209,7 @@ to every durable record writer this round invokes — `consolidate-fanin --spec-
 carry-forward record pins both revision identities and the checked criteria, re-entry-safe from
 any record type. Full per-writer flag detail: Gate Review Sub-Loop Contract Phase 3.5.
 
-**Gate fan-out dispatch (inline imperative — #1637):** When you dispatch the `draft_gate` / `pre_approval_gate` fan-out (parallel fresh-context reviewers seeded from the one neutral context bundle), you MUST join their results through the sanctioned fan-in CLI — not by hand-rolling the wait. Never hand-roll reviewer dispatch via `Promise.all(runs.run)` + transcript-tailing; await each reviewer's findings artifact at its deterministic output path (`tmp/gate-reviews/<repo-slug>/pr-<N>/<gate>-<headSha>/<angle>.json`) and consolidate via ONE call, always with `--spec-authority <identity-path>` from above:
+**Gate fan-out dispatch (inline imperative — #1637):** When the gate coordinator (`GATE-EXEC-GATE-COORDINATOR` in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md)) dispatches the `draft_gate` / `pre_approval_gate` fan-out (parallel fresh-context reviewers seeded from the one neutral context bundle), it MUST join their results through the sanctioned fan-in CLI — not by hand-rolling the wait. Never hand-roll reviewer dispatch via `Promise.all(runs.run)` + transcript-tailing; await each reviewer's findings artifact at its deterministic output path (`tmp/gate-reviews/<repo-slug>/pr-<N>/<gate>-<headSha>/<angle>.json`) and consolidate via ONE call, always with `--spec-authority <identity-path>` from above:
 
 ```sh
 dev-loops gate consolidate-fanin --findings-dir <dir> --head-sha <current_head_sha> --gate <gate> \
@@ -218,15 +218,17 @@ dev-loops gate consolidate-fanin --findings-dir <dir> --head-sha <current_head_s
 ```
 
 **Judge between fan-in and the fixer (Phase 3.5 wired, #1658):** after fan-in, before the
-durable findings-log write, follow [Phase 3.5](../docs/gate-review-sub-loop-contract.md#phase-35--judge-relevance-disposition-1525) and dispatch
-the dedicated `judge` agent (`agents/judge.agent.md`) — seeded with the consolidated ledger, the
-linked issue's AC/DoD/non-goals, the PR's declared scope, the prior-round judge ledgers, and the
-spec-context output (the structured spec at `<spec-path>`, `specDigest`, `contentDigest`) — and
-await its two verdict artifacts: the relevance verdict at
+durable findings-log write, the gate coordinator (`GATE-EXEC-GATE-COORDINATOR`) follows
+[Phase 3.5](../docs/gate-review-sub-loop-contract.md#phase-35--judge-relevance-disposition-1525)
+and dispatches the dedicated `judge` agent (`agents/judge.agent.md`) — seeded with the
+consolidated ledger, the linked issue's AC/DoD/non-goals, the PR's declared scope, the
+prior-round judge ledgers, and the spec-context output (the structured spec at `<spec-path>`,
+`specDigest`, `contentDigest`) — and awaits its two verdict artifacts: the relevance verdict at
 `tmp/gate-judge/<repo-slug>/pr-<N>/<gate>-<headSha>/judge-verdict.json` and the spec-authority
-verdict at the sibling `spec-authority-verdict.json` (its only writes). Write the durable ledger
-with `write-gate-findings-log --judge-verdict <verdict-path> --spec-authority <identity-path>`
-using those completed verdicts, before posting the visible gate verdict. Then run the deterministic
+verdict at the sibling `spec-authority-verdict.json` (its only writes). The gate coordinator
+writes the durable ledger with `write-gate-findings-log --judge-verdict <verdict-path>
+--spec-authority <identity-path>` using those completed verdicts; posting the visible gate
+verdict stays with the dev-loop coordinator. The gate coordinator then runs the deterministic
 bridge to derive the fixer's act list for Phase 4, always with the spec-authority flags, plus the
 durable-approval flags across re-entry:
 
