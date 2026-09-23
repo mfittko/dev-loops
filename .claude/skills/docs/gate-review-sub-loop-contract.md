@@ -1790,29 +1790,38 @@ WITHOUT lowering what is checked: trivial → single combined reviewer
 (`inline_single_agent`, above); small/non-risky → a reduced angle set via a matched
 [diff-class tier](#diff-class-angle-tiers), still dispatched `fanout_fanin`;
 large/risky → full fan-out over the tier-or-best-effort angle set. The plan is a pure
-composition of the existing decision functions — `resolveGateDispatchMode` (mode), `resolveGateTier`
-(angle set AND diff classification), and `resolveFanoutGroups` (dispatch-unit
-grouping) — exposed as ONE testable object (`{ mode, angles, groups, reason, floors }`)
-via `resolveReviewProportionality` (`@dev-loops/core/config`). It performs no I/O
-itself; `resolve-gate-dispatch.mjs` (the primer's dispatch-decision step) is its ONE
-production caller and supplies the diff-derived facts. Whenever a RISK-signal floor
-fires — a risk-path touch, a non-clean/ambiguous size-budget outcome, missing
-changed-file evidence, or an unclassifiable diff — the composer forces `full_fanout`
-DISPATCH but keeps a matched tier's reduced set or, when no tier matched, selects the
-mandatory floor plus the lenses justified by changed-file kinds. The hard size cap
-(`over_threshold`) likewise forces `full_fanout` DISPATCH (one reviewer per emitted
-unit under `GATE-EXEC-FANOUT-DISPATCH-EMIT`, never the light inline path) without
-widening the angle set. See the floor-vs-tier precedence in the function's own doc
-comment. `resolveGateAnglesDynamic` (the resolver `write-gate-context.mjs` calls to
-persist the round's angle set) opts into the SAME floor determination via its
-`checkFloors`/`sizeOutcome` parameters: the composer owns floor determination and
-mode, while the persisted round's authoritative angle SET comes from the resolver's
-tier-or-dynamic best-effort selection. The composer's no-tier set is a file-kind-based
-lower bound of that authoritative set, except that `gate:full` deliberately returns the
-full static pool in the composer. There are never two parallel floor implementations. The chosen
-mode/reason is recorded in gate evidence via the existing `--inline-reason` marker
-(above) — the mechanism is unchanged, only the set
-of reasons a decision can carry is extended (see below).
+composition of the existing decision functions — `resolveGateDispatchMode` (mode),
+`resolveGateTier` (diff classification, and the angle set for a matched tier),
+`selectFloorPlusJustifiedAngles` (the angle set for a no-tier diff), and
+`resolveFanoutGroups` (dispatch-unit grouping) — exposed as ONE testable object
+(`{ mode, angles, groups, reason, floors }`) via `resolveReviewProportionality`
+(`@dev-loops/core/config`). It performs no I/O itself; `resolve-gate-dispatch.mjs`
+(the primer's dispatch-decision step) is one of its two production callers and
+supplies the diff-derived facts. Whenever a RISK-signal floor fires — a risk-path
+touch, a non-clean/ambiguous size-budget outcome, missing changed-file evidence, or an
+unclassifiable diff — the composer forces `full_fanout` DISPATCH but keeps a matched
+tier's reduced set or, when no tier matched, selects the mandatory floor plus the
+always-include angles present in the gate's pool and any consumer angle whose declared
+`categories`/`kinds` intersects the diff. Kind-justified selection only bites where a
+repo declares per-angle `categories`/`kinds`; this repo's own `.devloops` declares
+none, so its composer no-tier set is the mandatory floor plus the always-include
+angles (the resolver, which also sees the diff TEXT, may widen that set with
+change-category-justified lenses). The hard size cap (`over_threshold`) likewise
+forces `full_fanout` DISPATCH (one reviewer per emitted unit under
+`GATE-EXEC-FANOUT-DISPATCH-EMIT`, never the light inline path) without widening the
+angle set. See the floor-vs-tier precedence in the function's own doc comment.
+`resolveGateAnglesDynamic` (the resolver `write-gate-context.mjs` calls to persist the
+round's angle set) is the composer's second production caller and opts into the SAME
+floor determination via its `checkFloors`/`sizeOutcome` parameters: the composer owns
+floor determination and mode, while the persisted round's authoritative angle SET
+comes from the resolver's tier-or-dynamic best-effort selection. The composer's no-tier
+set is a lower bound of that authoritative set, except that a degenerate pool whose
+best-effort selection is empty falls back to the whole static pool by design
+(fail-closed — more angles, not fewer) and `gate:full` deliberately returns the full
+static pool in the composer. There are never two parallel floor implementations. The
+chosen mode/reason is recorded in gate evidence via the existing `--inline-reason`
+marker (above) — the mechanism is unchanged, only the set of reasons a decision can
+carry is extended (see below).
 
 **Non-overridable floors.** Proportionality scales cost, never the floor: no flag,
 waiver, prompt, or LLM judgment can lower any of these, and ambiguity resolves toward
@@ -1827,7 +1836,9 @@ absence-of-evidence-of-risk):
   fan-out over its matched tier's reduced angle set (the mandatory-angle floor, below,
   still always applies). The floors below are RISK signals; they also force
   `full_fanout` dispatch and refuse an explicit angle override, but they never widen
-  the tier-or-best-effort angle set to the full untriered pool.
+  the tier-or-best-effort angle set to the full untriered pool — the sole exception is
+  the degenerate gate whose best-effort selection is empty, which falls back to the
+  whole static pool by design (fail-closed: more angles, not fewer).
 - **Risk-path denylist** — `risk_path_touch`: the diff touches a shipped,
   hard-coded, union-of-layers glob floor (`RISK_PATH_DENYLIST_DEFAULT`,
   `packages/core/src/config/config.mjs`) covering the gate/review, security/auth,
@@ -1847,7 +1858,9 @@ absence-of-evidence-of-risk):
   `unclassifiable_file` (a changed file `classifyFile` cannot categorize) — an
   unclassifiable diff is ambiguity too, and must never silently reach inline just
   because the raw dispatch-mode facts alone looked trivial. Its angle set remains
-  the mandatory floor plus any best-effort justified lenses, never the whole pool.
+  the mandatory floor plus any best-effort justified lenses — the whole static pool
+  only for a degenerate pool whose best-effort selection is empty (the intended
+  fail-closed fallback).
 - **Mandatory-angle floor** — unchanged (above): mandatory angles are always unioned
   into the resolved angle set (`resolveGateAngles`/`resolveGateTier`), whether the
   round is fan-out or inline; on the inline path they are COMBINED under the one
