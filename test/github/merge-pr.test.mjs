@@ -828,4 +828,16 @@ test("a record naming a later older-commit review does not clear a current-head 
   assert.equal(threw.mergePrFailure.copilotConvergenceState, "current_head_findings");
   assert.deepEqual(threw.mergePrFailure.failures.map((f) => f.precondition), ["copilot_convergence"]);
   assert.equal(threw.mergePrFailure.copilotBodyDisposition, null);
+
+  // Positive case under the same reset evidence: records naming both reviews
+  // clear them, and the body disposition names PRR_head. A reset-filtered
+  // resolver list drops PRR_head and cannot report it.
+  const merged = await mergePr(baseOptions(), makeRuntime({
+    maxCopilotRounds: 3,
+    reviews,
+    dispositionComments: [dispositionRecord({ reviewId: "PRR_head" }), { ...dispositionRecord({ reviewId: "PRR_old" }), id: 902 }],
+    evidence: { ok: true, sizeOutcome: "pass", touchesT1: false, failures: [], draftGate: { verdict: "clean", headSha: MID_HEAD, updatedAt: "2026-01-02T00:00:00Z" } },
+  }).runtime);
+  assert.equal(merged.merged, true);
+  assert.equal(merged.copilotBodyDisposition.reviewId, "PRR_head");
 });

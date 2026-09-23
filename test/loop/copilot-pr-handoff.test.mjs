@@ -3086,6 +3086,54 @@ test("copilot-pr-handoff in converged-once mode does not reopen the cycle at the
   }
 });
 
+test("copilot-pr-handoff in converged-once mode still reopens the cycle at the cap when the latest review is unconverged", async () => {
+  // The latest review carries a body-only 🟡 with no own thread and no record,
+  // so it is not converged: the significance probe runs and reopens as before.
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-converged-once-unconverged-"));
+  const reviews = CAP_REVIEWS.map((review, index) => (index === 4 ? { ...review, body: "### 🟡 Changes recommended\n\nfix the off-by-one." } : review));
+  const prView = JSON.stringify({ headRefOid: "newsha", isDraft: false, state: "OPEN", number: 17, reviews, statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n";
+
+  try {
+    const { env, ghLogPath: logPath } = await writeGhStubHelper(tempDir, [
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo"], stdout: prView },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
+      { assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
+      { assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,reviews,files"],
+        stdout: JSON.stringify({ headRefOid: "newsha", reviews, files: [{ path: "packages/core/src/loop/foo.mjs" }] }) + "\n",
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/compare/oldsha-5...newsha"],
+        stdout: JSON.stringify({ files: [{ filename: "packages/core/src/loop/foo.mjs", changes: 670 }] }) + "\n",
+      },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: prView },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: prView },
+    ], { matchMode: "claims", logCalls: true });
+    env.DEVLOOPS_RUN_ID = "";
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: convergedOnceRepoRoot });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.action, "watch");
+    assert.equal(output.state, "waiting_for_copilot_review");
+    assert.equal(output.reviewRequestStatus, "requested");
+    assert.equal(output.roundCapCleanEligible, false);
+    assert.equal(output.terminal, false);
+    const log = await readFile(logPath, "utf8");
+    assert.ok(log.includes("compare/oldsha-5...newsha"), "the significance probe ran");
+    assert.ok(log.split("\n").some(isCopilotRequestPost), "the reopened cycle placed a Copilot request");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("copilot-pr-handoff in converged-once mode places no request below the cap after a code change", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-converged-once-below-cap-"));
   const reviews = [{ id: "r-1", author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", body: "", submittedAt: "2026-06-02T08:00:00Z", commit: { oid: "oldsha" } }];

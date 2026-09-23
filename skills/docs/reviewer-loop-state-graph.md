@@ -183,4 +183,4 @@ State distinctness, invalidation, terminal/handoff boundary, and fail-closed gua
 defined by [State Definitions](#state-definitions), [Required transitions](#required-transitions),
 and `REVIEWER-BOUNDARY-CONTRACT` above; this section does not restate them.
 
-- round-cap exhaustion in a concluded Copilot cycle is not a blanket stop: the post-convergence new-cycle re-request carve-out is owned by `COPILOT-FOLLOWUP-ROUND-CAP` in [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md)
+- round-cap exhaustion in a concluded Copilot cycle is not a blanket stop: the strict-mode (`refinement.requireCopilotConvergenceAtLatestHead: true`) post-convergence new-cycle re-request carve-out is owned by `COPILOT-FOLLOWUP-ROUND-CAP` in [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md)

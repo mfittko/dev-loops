@@ -2672,4 +2672,38 @@ describe("converged-once mode suppresses a post-convergence request as suppresse
     assert.equal(result.status, "requested");
     assert.equal(calls.some(isCopilotRequestCall), true);
   });
+
+  // At the cap, an unconverged latest review falls through to the existing
+  // round-cap paths: round_cap_reached without the force flag, and the
+  // --force-rerequest-review reopen with it.
+  const UNRESOLVED_THREAD_ENTRY = { assertArgs: ["api", "graphql"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"t-1","isResolved":false,"comments":{"nodes":[]}}]}}}}}\n' };
+
+  it("at the round cap with an unconverged latest review returns round_cap_reached", async () => {
+    const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17"], [
+      REQUESTED_NONE_ENTRY,
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      EMPTY_REVIEW_STREAM_ENTRY,
+      UNRESOLVED_THREAD_ENTRY,
+    ], convergedOnce);
+    assert.notEqual(result.status, "suppressed_post_convergence");
+    assert.equal(result.status, "round_cap_reached");
+    assert.equal(calls.some(isCopilotRequestCall), false);
+  });
+
+  it("at the round cap with an unconverged latest review, --force-rerequest-review reopens the round", async () => {
+    const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17", "--force-rerequest-review"], [
+      REQUESTED_NONE_ENTRY,
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      EMPTY_REVIEW_STREAM_ENTRY,
+      UNRESOLVED_THREAD_ENTRY,
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
+    ], convergedOnce);
+    assert.notEqual(result.status, "suppressed_post_convergence");
+    assert.equal(result.status, "requested");
+    assert.equal(calls.some(isCopilotRequestCall), true);
+  });
 });
