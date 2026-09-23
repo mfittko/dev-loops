@@ -891,8 +891,8 @@ function evaluatePrGateCoordinationCore(input = {}) {
   // Carried convergence: set only when the caller verified, through the
   // shared carried-convergence predicate the Copilot request tool also uses,
   // that the prior converged Copilot review still stands for this head (no
-  // outstanding request, zero unresolved threads, a provably docs-only or
-  // integrate-only delta), or that an operator suppression marker re-verifies
+  // outstanding request, zero unresolved threads, and in strict mode a
+  // provably docs-only or integrate-only delta), or that an operator suppression marker re-verifies
   // on the same terms. Never derived here from other snapshot facts: this
   // evaluator trusts the caller's verification, so the request tool and the
   // gate cannot disagree about the same head.
@@ -1812,7 +1812,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
       reason: roundCapReached
         ? `The Copilot round limit is exhausted (${copilotReviewRoundCount}/${maxCopilotRounds}), and the current head has zero unresolved threads with ${describeAcceptedCiState(ciStatus, preApprovalRequireCi)}, so \`pre_approval_gate\` fallback is now the next legal boundary.`
         : (postConvergenceReviewSuppressed && !sameHeadCleanConverged
-          ? "The current head carries the prior converged Copilot review: no request is outstanding, no review thread is unresolved, and the delta since Copilot's last submitted review is provably docs-only or integrate-only, so `pre_approval_gate` is now the next legal boundary."
+          ? "The current head carries the prior converged Copilot review (carriedConvergence names the source review): no request is outstanding, no review thread is unresolved, and the carry rule holds (converged-once by default; a provably docs-only or integrate-only delta under refinement.requireCopilotConvergenceAtLatestHead), so `pre_approval_gate` is now the next legal boundary."
           : (ciStatus === "crediblyGreen"
             ? "The current head has a clean settled post-draft review cycle, and its zero-suite CI state is accepted as credibly green, so `pre_approval_gate` is now the next legal boundary."
             : "The current head has a clean settled post-draft review cycle, so `pre_approval_gate` is now the next legal boundary.")),

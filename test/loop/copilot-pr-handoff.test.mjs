@@ -25,7 +25,11 @@ let gitStubDir = null;
 // repoRoot mirroring the real .devloops with maxCopilotRounds pinned to 2, not
 // the ambient .devloops (the repo pins maxCopilotRounds to 2 for test
 // isolation). Assertions are unchanged.
+// The fixture also pins the strict Copilot convergence mode
+// (refinement.requireCopilotConvergenceAtLatestHead: true), the behavior these
+// tests were written against; convergedOnceRepoRoot pins the default mode.
 let capFixtureRepoRoot = null;
+let convergedOnceRepoRoot = null;
 before(async () => {
   gitStubDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-gitstub-"));
   const gitStubPath = path.join(gitStubDir, "git");
@@ -33,11 +37,14 @@ before(async () => {
   await chmod(gitStubPath, 0o755);
   capFixtureRepoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-cap-fixture-"));
   const realDevloops = await readFile(path.resolve(".devloops"), "utf8");
-  await writeFile(path.join(capFixtureRepoRoot, ".devloops"), realDevloops.replace(/maxCopilotRounds: *\d+/, "maxCopilotRounds: 2"), "utf8");
+  await writeFile(path.join(capFixtureRepoRoot, ".devloops"), realDevloops.replace(/maxCopilotRounds: *\d+/, "maxCopilotRounds: 2\n  requireCopilotConvergenceAtLatestHead: true"), "utf8");
+  convergedOnceRepoRoot = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-converged-once-fixture-"));
+  await writeFile(path.join(convergedOnceRepoRoot, ".devloops"), realDevloops.replace(/maxCopilotRounds: *\d+/, "maxCopilotRounds: 2"), "utf8");
 });
 after(async () => {
   if (gitStubDir) await rm(gitStubDir, { recursive: true, force: true });
   if (capFixtureRepoRoot) await rm(capFixtureRepoRoot, { recursive: true, force: true });
+  if (convergedOnceRepoRoot) await rm(convergedOnceRepoRoot, { recursive: true, force: true });
 });
 
 // Marker key: the local writeGhStub stashes its gh `entries` on the returned env
@@ -3024,5 +3031,99 @@ test("runHandoff integrates a DIRTY head, re-baselines at the CLEAN new head, an
     assert.ok(result.watchArgs, "expected watchArgs on the proceed path");
   } finally {
     process.env.PATH = originalPath;
+  }
+});
+
+// Converged-once mode (refinement.requireCopilotConvergenceAtLatestHead:
+// false, the default): after a converged Copilot review, a code change neither
+// reopens the cycle at the cap nor places a request below it.
+const isCopilotRequestPost = (line) => line.includes("requested_reviewers") && line.includes("POST");
+
+test("copilot-pr-handoff in converged-once mode does not reopen the cycle at the cap after a significant change", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-converged-once-cap-"));
+
+  try {
+    const { env, ghLogPath: logPath } = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo"],
+        stdout: JSON.stringify({
+          isDraft: false, state: "OPEN", number: 17, headRefOid: "newsha",
+          reviews: CAP_REVIEWS,
+          statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }],
+        }) + "\n",
+      },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
+      { assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
+      { assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,reviews,files"],
+        stdout: JSON.stringify({ headRefOid: "newsha", reviews: CAP_REVIEWS, files: [{ path: "packages/core/src/loop/foo.mjs" }] }) + "\n",
+      },
+      // Declared so a reopen would be observable; converged-once never reads it.
+      {
+        assertArgs: ["api", "repos/owner/repo/compare/oldsha-5...newsha"],
+        stdout: JSON.stringify({ files: [{ filename: "packages/core/src/loop/foo.mjs", changes: 670 }] }) + "\n",
+      },
+    ], { matchMode: "claims", logCalls: true });
+    env.DEVLOOPS_RUN_ID = "";
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: convergedOnceRepoRoot });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.action, "stop");
+    assert.equal(output.state, "round_cap_clean_fallback");
+    assert.equal(output.terminal, true);
+    assert.equal(output.reviewRequestStatus, undefined);
+    const log = await readFile(logPath, "utf8");
+    assert.ok(log.includes("headRefOid,reviews,files"), "the reopen facts were read");
+    assert.ok(!log.includes("compare/oldsha-5...newsha"), "no significant-change compare, so no forced reopen");
+    assert.ok(!log.split("\n").some(isCopilotRequestPost), "no Copilot request");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("copilot-pr-handoff in converged-once mode places no request below the cap after a code change", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-handoff-converged-once-below-cap-"));
+  const reviews = [{ id: "r-1", author: { login: "copilot-pull-request-reviewer[bot]" }, state: "COMMENTED", body: "", submittedAt: "2026-06-02T08:00:00Z", commit: { oid: "oldsha" } }];
+
+  try {
+    const { env, ghLogPath: logPath } = await writeGhStubHelper(tempDir, [
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo"],
+        stdout: JSON.stringify({ isDraft: false, state: "OPEN", number: 17, headRefOid: "newsha", reviews, statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
+      },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
+      { assertArgs: ["api", "repos/owner/repo/commits/newsha/check-runs?per_page=100"], stdout: '{"check_runs":[{"status":"COMPLETED","conclusion":"SUCCESS","name":"ci"}]}\n' },
+      { assertArgs: ["api", "repos/owner/repo/commits/newsha/status?per_page=100"], stdout: '{"statuses":[]}\n' },
+      // request-copilot-review: before-state, then the converged-once predicate's thread read.
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      {
+        assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"],
+        stdout: JSON.stringify({ headRefOid: "newsha", isDraft: false, state: "OPEN", number: 17, reviews, statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS", name: "ci" }] }) + "\n",
+      },
+      { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
+    ], { matchMode: "claims", logCalls: true });
+    env.DEVLOOPS_RUN_ID = "";
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: convergedOnceRepoRoot });
+
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.reviewRequestStatus, "suppressed_post_convergence");
+    assert.equal(output.suppressedPostConvergence, true);
+    assert.notEqual(output.action, "watch");
+    assert.notEqual(output.state, "waiting_for_copilot_review");
+    assert.equal(output.requestWatchContract.requestStatus, "none");
+    const log = await readFile(logPath, "utf8");
+    assert.ok(log.includes("headRefOid,isDraft,state,number,reviews,statusCheckRollup"), "the request tool ran");
+    assert.ok(!log.split("\n").some(isCopilotRequestPost), "no Copilot request");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
   }
 });
