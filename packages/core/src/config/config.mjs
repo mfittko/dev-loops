@@ -2793,12 +2793,24 @@ export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabe
     Object.entries(dynamicResult.addedReasons ?? {}).filter(([a]) => !mandatory.has(a))
   );
 
-  const recommendedAngles = [...new Set([...filteredMandatory, ...dynamicResult.recommendedAngles, ...addedAngles])];
+  const mergedAngles = [...new Set([...filteredMandatory, ...dynamicResult.recommendedAngles, ...addedAngles])];
+
+  // Degenerate-pool fail-closed: a gate whose configured pool holds neither a
+  // mandatory nor an always-include angle (e.g. `angles: ["kiss"]`) can legally
+  // resolve to zero angles for an unclassifiable diff. Never resolve zero
+  // angles — fall back to the static pool (already excludeAngles-filtered),
+  // mirroring selectFloorPlusJustifiedAngles and the composer, so the resolver
+  // and the composer agree for the identical input. The whole pool is selected,
+  // so nothing is skipped and no angle carries a skip reason.
+  const degenerateFallback = mergedAngles.length === 0;
+  const recommendedAngles = degenerateFallback ? [...staticAngles] : mergedAngles;
+  const skippedAngles = degenerateFallback ? [] : dynamicResult.skippedAngles;
+  const reasons = degenerateFallback ? {} : dynamicResult.reasons;
 
   return {
     recommendedAngles,
-    skippedAngles: dynamicResult.skippedAngles,
-    reasons: dynamicResult.reasons,
+    skippedAngles,
+    reasons,
     fallbackToAll: dynamicResult.fallbackToAll,
     dynamicAnglesActive: true,
     addedAngles,

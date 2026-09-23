@@ -4724,6 +4724,32 @@ describe("resolveReviewProportionality (#1984 — primer-owned deterministic pla
     assert.deepEqual(plan.angles, ["kiss"]);
   });
 
+  test("an empty dynamic selection for a degenerate pool falls back to the pool (resolver agrees with the composer)", async () => {
+    // Degenerate but LEGAL pool: no mandatory angle and no always-include
+    // angle, so a dynamic pass over an unclassifiable diff can prune every
+    // candidate. The resolver must never resolve zero angles — it falls back to
+    // the static pool, exactly like the composer above (and like the pre-#2361
+    // behaviour), so the two callers agree for the identical input instead of
+    // one returning [] (which makes write-gate-context.mjs refuse to write the
+    // bundle for a gate whose angle set genuinely IS configured).
+    const config = { version: 1, gates: { draft: { angles: ["kiss"] } } };
+    const diff = { nameStatusOutput: "M\tassets/blob.bin" };
+    const result = await resolveGateAnglesDynamic(config, "draft", { diff });
+    assert.notDeepEqual(result.recommendedAngles, [], "must not resolve zero angles");
+    assert.deepEqual(result.recommendedAngles, ["kiss"]);
+    // Whole pool selected → nothing is skipped and no skip reason is invented.
+    assert.deepEqual(result.skippedAngles, []);
+    assert.deepEqual(result.reasons, {});
+
+    const plan = resolveReviewProportionality(config, "draft", {
+      scope: { filesChanged: 1, linesChanged: 1 },
+      changedFiles: ["assets/blob.bin"],
+      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+    });
+    assert.deepEqual(plan.angles, ["kiss"]);
+    assert.deepEqual(result.recommendedAngles, plan.angles, "resolver and composer must agree");
+  });
+
   test("dynamic.subtractive:false restores the full static pool for a no-tier diff (composer agrees with the resolver)", () => {
     // The documented opt-out (config.mjs schema describe: "set false to restore
     // the full static angle pool") must hold for the composer too, not just
@@ -5487,7 +5513,7 @@ describe("resolveGateAnglesDynamic", () => {
       version: 1,
       gates: {
         draft: {
-          angles: ["scope", "custom-lens"],
+          angles: ["scope", "docs", "custom-lens"],
           dynamic: { subtractive: true },
         },
       },
@@ -5500,7 +5526,9 @@ describe("resolveGateAnglesDynamic", () => {
     assert.equal(result.dynamicAnglesActive, true);
     // custom-lens is a candidate (like configured angles), not a mandatory
     // floor: an unrecognized custom angle is pruned by the docs-only diff,
-    // same as "scope" would be if it weren't relevant.
+    // same as "scope" is. `docs` stays selected, so the set is non-empty and
+    // the degenerate-pool fallback does not mask the pruning.
+    assert.ok(result.recommendedAngles.includes("docs"));
     assert.ok(result.skippedAngles.includes("custom-lens"));
     assert.ok(!result.recommendedAngles.includes("custom-lens"));
   });
