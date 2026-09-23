@@ -14,7 +14,7 @@ import path from "node:path";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { matchGateReviewCommentHeader } from "@dev-loops/core/github/copilot-helpers";
 import { createIssue as coreCreateIssue, commentIssue as coreCommentIssue, listIssues as coreListIssues } from "@dev-loops/core/github/issue-ops";
-import { SEVERITY_ORDER, VALID_SEVERITIES, hasLocatableShape, normalizeSeverity, resolveFindingFile } from "@dev-loops/core/loop/gate-fanin";
+import { JUDGE_DISPOSITIONS, SEVERITY_ORDER, VALID_SEVERITIES, hasLocatableShape, normalizeSeverity, resolveFindingFile } from "@dev-loops/core/loop/gate-fanin";
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import {
   parseJsonText,
@@ -666,6 +666,10 @@ export async function readGateFindingsLedger(ledgerPath, { errorFactory = (messa
     }
     if ("line" in f && f.line !== undefined && (!Number.isInteger(f.line) || f.line < 1)) {
       throw fail(`Gate findings ledger "${ledgerPath}" findings[${i}].line must be a positive integer`);
+    }
+    // A non-canonical judge disposition must never reach the composed verdict.
+    if (f.judgeDisposition != null && !JUDGE_DISPOSITIONS.includes(f.judgeDisposition)) {
+      throw fail(`Gate findings ledger "${ledgerPath}" findings[${i}].judgeDisposition must be one of: ${JUDGE_DISPOSITIONS.join(", ")}`);
     }
     // The operator-visibility signal (see buildFindingMarker's own doc) is
     // optional, boolean-only. A malformed value fails closed here instead of

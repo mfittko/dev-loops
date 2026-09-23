@@ -16,6 +16,7 @@ import { REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bou
 const JUDGE_DISPOSITIONS = new Set(_JUDGE_DISPOSITIONS_ARRAY);
 import { loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveRejectForeignAngles } from "@dev-loops/core/config";
 import { readSpecAuthorityIdentity, stampOptionalSpecAuthority } from "../lib/spec-authority-stamp.mjs";
+import { SPEC_AUTHORITY_OUTCOMES, rejectFindingConflicts, validateSpecAuthorityVerdict } from "@dev-loops/core/loop/spec-authority";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { GATE_NAMES, normalizeGate as normalizeGateShared, normalizeVerdict as normalizeVerdictShared } from "./_gate-names.mjs";
 const USAGE = `Usage: write-gate-findings-log.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> --verdict <clean|findings_present|blocked> (--findings <json> | --findings-file <path>) [--tmp-root <path>]
@@ -66,6 +67,10 @@ Optional:
                                  was consciously not acted on and why (#1525). The verdict must dispose every finding
                                  (one disposition per 0-based ledger position) or the run FAILS CLOSED and writes no
                                  ledger. Optional; when absent the ledger writes byte-identically to before.
+                                 With --spec-authority, a sibling spec-authority-verdict.json next to the judge
+                                 verdict is validated against that identity, and each finding_conflicts finding is
+                                 written as judgeDisposition reject (ADR 0089). An invalid or mismatched sibling
+                                 FAILS CLOSED; an absent one changes nothing.
   --tmp-root <path>              Root tmp directory. Default: the MAIN worktree's tmp/
                                  — the ledger is anchored at the primary git
                                  worktree so the merge (running from the main checkout)
@@ -630,6 +635,43 @@ export function buildLogPath({ repo, pr, gate, headSha, tmpRoot }) {
   const repoSlug = parts.join("-");
   return path.join(tmpRoot, "gate-findings", repoSlug, `pr-${pr}`, `${gate}-${headSha}.json`);
 }
+/**
+ * ADR 0089: carry the judge pass's spec-authority `finding_conflicts` reject
+ * into the durable ledger. The spec-authority verdict is the fixed sibling
+ * `spec-authority-verdict.json` of the judge verdict. An absent sibling is a
+ * no-op. An unreadable, invalid, or identity-mismatched one fails closed.
+ */
+async function applySiblingSpecAuthorityVerdict(findings, judgePath, identity) {
+  const verdictPath = path.join(path.dirname(judgePath), "spec-authority-verdict.json");
+  let raw;
+  try {
+    raw = await readFile(verdictPath, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return findings;
+    throw parseError(`spec-authority verdict ${verdictPath} could not be read: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  let validated;
+  try {
+    validated = validateSpecAuthorityVerdict(JSON.parse(raw), {
+      findingsCount: findings.length,
+      criterionIds: identity?.checkedCriteria,
+    });
+  } catch (error) {
+    throw parseError(`spec-authority verdict ${verdictPath} failed validation: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  for (const key of ["specDigest", "headSha", "contentDigest"]) {
+    if (validated[key] !== identity[key]) {
+      throw parseError(`spec-authority verdict ${verdictPath} ${key} ${JSON.stringify(validated[key])} does not match --spec-authority ${JSON.stringify(identity[key])} (fail closed)`);
+    }
+  }
+  if (validated.humanDecisionRequired) {
+    throw parseError(`SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT: spec-authority verdict ${verdictPath} needs a human spec decision for finding index(es) ${validated.humanDecisionIndices.join(", ")}; stop at the human-spec-decision state (fail closed, no ledger written)`);
+  }
+  const conflicts = validated.decisions
+    .filter((d) => d.outcome === SPEC_AUTHORITY_OUTCOMES.FINDING_CONFLICTS)
+    .map((d) => d.index);
+  return rejectFindingConflicts(findings, conflicts);
+}
 export async function writeGateFindingsLog(options, { repoRoot = process.cwd() } = {}) {
   const { findings: rawFindings, overallVerdict, provenance: wrapperProvenance } = await resolveFindings(options);
   // When a judge verdict artifact is supplied, enrich the findings with the
@@ -638,6 +680,10 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // out-of-range index, or dispositions that do not cover every finding.
   let findings = rawFindings;
   let scopeDrift;
+  const specAuthorityIdentity = await readSpecAuthorityIdentity(
+    options.specAuthority !== undefined ? path.resolve(repoRoot, options.specAuthority) : undefined,
+    parseError,
+  );
   if (options.judgeVerdict) {
     const judgePath = path.resolve(repoRoot, options.judgeVerdict);
     let judgeVerdict;
@@ -649,6 +695,9 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     const enriched = applyJudgeDispositions(rawFindings, judgeVerdict);
     findings = enriched.findings;
     scopeDrift = enriched.scopeDrift;
+    if (specAuthorityIdentity !== undefined) {
+      findings = await applySiblingSpecAuthorityVerdict(findings, judgePath, specAuthorityIdentity);
+    }
   }
   // The consolidator's own computed verdict (consolidate-fanin.mjs's
   // `overallVerdict`) threads through `--ledger-out`'s wrapper into here — a
@@ -684,13 +733,15 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     // Fail closed on a caller-passed --verdict that contradicts the
     // consolidator's computed verdict (GATE-COMMENT-VERDICT-VALUES).
     // The judge only enriches findings with act/defer/reject dispositions —
-    // it never revises the round verdict — so this comparison runs the same
+    // it never revises the ledger's severity verdict, which may be clean with
+    // non-blocking act items; the posted review verdict is composed with the
+    // act list (ADR 0089) — so this comparison runs the same
     // with or without --judge-verdict. A --judge-verdict run can still fail
     // earlier: an unreadable, malformed, or incomplete-coverage judge
     // artifact throws its own error before this contradiction check runs.
     if (callerVerdict !== normalizedOverallVerdict) {
       throw parseError(
-        `--verdict ${JSON.stringify(callerVerdict)} contradicts the wrapper's "overallVerdict" ${JSON.stringify(normalizedOverallVerdict)} (GATE-COMMENT-VERDICT-VALUES; skills/docs/gate-review-comment-contract.md) — the consolidator's computed round verdict, which judge dispositions from --judge-verdict never alter`,
+        `--verdict ${JSON.stringify(callerVerdict)} contradicts the wrapper's "overallVerdict" ${JSON.stringify(normalizedOverallVerdict)} (GATE-COMMENT-VERDICT-VALUES; skills/docs/gate-review-comment-contract.md) — the consolidator's computed round verdict (the severity verdict), which judge dispositions from --judge-verdict never alter; the posted review verdict is composed with the judge act list (ADR 0089)`,
       );
     }
   }
@@ -786,10 +837,10 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     loggedAt: new Date().toISOString(),
     // Record the round's real execution mode: a fanout_fanin verdict
     // must never persist a null/absent executionMode. No merge-time reader
-    // consumes this field today (detect-checkpoint-evidence reads executionMode
-    // from the posted verdict COMMENT marker, not the ledger; the stateless
-    // reconciliation path likewise reads the comment, never this machine-local
-    // ledger); it is recorded for provenance/audit completeness only.
+    // consumes this field: detect-checkpoint-evidence reads executionMode
+    // (including for the unjudged act-list exemption) from the posted verdict
+    // COMMENT marker, not the ledger, and the stateless reconciliation path
+    // likewise reads the comment. It is recorded for provenance/audit only.
     // Defaults to inline_single_agent (DEFAULT_EXECUTION_MODE) exactly like the
     // write-time provenance guard above, so the two can never disagree.
     executionMode,
@@ -814,10 +865,6 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
   // AC1 (issue 2008 / ADR 0061): optional --spec-authority stamps the pinned
   // revision identity + checked criteria onto the log via the ONE shared
   // helper. Pure no-op (byte-identical log) when the flag is absent.
-  const specAuthorityIdentity = await readSpecAuthorityIdentity(
-    options.specAuthority !== undefined ? path.resolve(repoRoot, options.specAuthority) : undefined,
-    parseError,
-  );
   const stampedLog = stampOptionalSpecAuthority(log, specAuthorityIdentity);
   await mkdir(path.dirname(fullPath), { recursive: true });
   await writeFile(fullPath, JSON.stringify(stampedLog, null, 2) + "\n", "utf8");

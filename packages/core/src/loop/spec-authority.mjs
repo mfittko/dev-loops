@@ -499,6 +499,27 @@ export function validateSpecAuthorityVerdict(verdict, { findingsCount, criterion
 }
 
 /**
+ * Dispose every spec-authority `finding_conflicts` finding `reject`, whatever
+ * its relevance disposition. Mutates the judge-enriched findings in place; the
+ * judge pass and the durable findings-log writer share it so the ledger's
+ * `judgeDisposition` matches what the judge pass enforces.
+ *
+ * @param {object[]} findings — judge-enriched findings, indexed as the verdict
+ * @param {Iterable<number>} conflictIndices — the `finding_conflicts` indexes
+ * @returns {object[]} the same `findings` array
+ */
+export function rejectFindingConflicts(findings, conflictIndices) {
+  const rejected = new Set(conflictIndices);
+  for (const [i, f] of findings.entries()) {
+    if (rejected.has(i) && f.judgeDisposition !== "reject") {
+      f.judgeRationale = `spec-authority finding_conflicts: rejected against the spec (was relevance-${f.judgeDisposition}) — ${f.judgeRationale ?? ""}`.trim();
+      f.judgeDisposition = "reject";
+    }
+  }
+  return findings;
+}
+
+/**
  * Resolve which prior criterion approvals survive a revision change. This is the
  * one authority for both invalidation rules:
  *

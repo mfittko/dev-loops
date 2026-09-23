@@ -774,6 +774,7 @@ test("readGateFindingsLedger rejects a malformed finding entry, naming its index
   await rejects(withFinding({ severity: "nice-to-have", angle: "coverage", summary: "x", files: "src/a.mjs" }), /findings\[1\]\.files must be an array/);
   await rejects(withFinding({ severity: "nice-to-have", angle: "coverage", summary: "x", files: { path: "src/a.mjs" } }), /findings\[1\]\.files must be an array/);
   await rejects(withFinding({ severity: "low", angle: "coverage", summary: "x", operatorVisible: "true" }), /findings\[1\]\.operatorVisible must be a boolean/);
+  await rejects(withFinding({ severity: "low", angle: "coverage", summary: "x", judgeDisposition: "fix" }), /findings\[1\]\.judgeDisposition must be one of: act, defer, reject/);
 });
 
 // #1846: a "low" finding's own operatorVisible signal survives the ledger

@@ -24,6 +24,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const CONTRACT_DOC = path.join(REPO_ROOT, "skills/docs/gate-review-comment-contract.md");
 const UPSERT_SCRIPT = path.join(REPO_ROOT, "scripts/github/upsert-checkpoint-verdict.mjs");
 const CONSOLIDATE_SCRIPT = path.join(REPO_ROOT, "scripts/loop/consolidate-fanin.mjs");
+const EVIDENCE_SCRIPT = path.join(REPO_ROOT, "scripts/github/detect-checkpoint-evidence.mjs");
 const WRITE_GATE_FINDINGS_SCRIPT = path.join(REPO_ROOT, "scripts/github/write-gate-findings-log.mjs");
 
 test("GATE-COMMENT-VERDICT-VALUES states the clean/findings_present meanings the consolidator computes", async () => {
@@ -31,10 +32,12 @@ test("GATE-COMMENT-VERDICT-VALUES states the clean/findings_present meanings the
   // The rule ID is present and owns the verdict-value definitions.
   assert.match(doc, /<!-- rule: GATE-COMMENT-VERDICT-VALUES -->/);
   // The stated meaning of "clean" matches what consolidate-fanin computes
-  // (no findings at a blocking severity remain).
-  assert.match(doc, /\| `clean` \| No findings with a severity in the gate's `blockCleanOnFindingSeverities` remain \|/);
-  // The stated meaning of "findings_present" matches (blocking findings found).
-  assert.match(doc, /\| `findings_present` \| The gate found issues at blocking severities/);
+  // (no findings at a blocking severity remain), composed with the judge act
+  // list at post time (ADR 0089).
+  assert.match(doc, /\| `clean` \| No findings with a severity in the gate's `blockCleanOnFindingSeverities` remain, and the judge act list is empty \|/);
+  // The stated meaning of "findings_present" matches (blocking findings found
+  // or a non-empty act list).
+  assert.match(doc, /\| `findings_present` \| The gate found issues at blocking severities, or the judge act list is not empty/);
 });
 
 test("upsert-checkpoint-verdict's refusal error cites GATE-COMMENT-VERDICT-VALUES so it points at the rule it upholds", async () => {
@@ -83,4 +86,15 @@ test("upsert-checkpoint-verdict derives the verdict from the ledger's overallVer
   // No override flag is added (the contradiction is a consolidator bug to fix,
   // not an operator decision to override) — the refusal has no escape hatch.
   assert.doesNotMatch(src, /--override-verdict|--allow-contradiction|--force-verdict/);
+});
+
+test("the act-list refusals cite GATE-COMMENT-VERDICT-VALUES", async () => {
+  const upsert = await readFile(UPSERT_SCRIPT, "utf8");
+  // The explicit-clean refusal over open judge act items cites the rule and its doc.
+  assert.match(upsert, /open judge act item\(s\) in --findings-ledger "\$\{options\.findingsLedger\}" \(GATE-COMMENT-VERDICT-VALUES, skills\/docs\/gate-review-comment-contract\.md;/);
+  const evidence = await readFile(EVIDENCE_SCRIPT, "utf8");
+  // The unreadable, unjudged, and open-act merge refusals each cite the rule.
+  assert.match(evidence, /cannot verify the judge act list \(GATE-COMMENT-VERDICT-VALUES\)`/);
+  assert.match(evidence, /carry no judge disposition\); write the ledger with --judge-verdict \(GATE-COMMENT-VERDICT-VALUES\)`/);
+  assert.match(evidence, /and re-post the verdict \(GATE-COMMENT-VERDICT-VALUES\)`/);
 });
