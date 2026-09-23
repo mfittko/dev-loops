@@ -72,11 +72,13 @@ run state, and awaits it with a blocking join (`END-TURN-AND-AWAIT-WAKE` in
 judge verdicts, and prior-approvals record for this gate from their deterministic on-disk paths,
 keyed by the prior heads the dev-loop coordinator passes in the dispatch arguments, so
 `GATE-EXEC-JUDGE-NOT-FRESH` inputs and `judge-pass`'s `--prior-approvals` survive the fresh
-context. It never runs these steps in its own context. The gate
-coordinator returns only the round's typed result: the verdict, the severity counts, the fan-in
-output path, the durable findings-log path, the act-list path, and the judge summary. Reviewer
-and judge outputs stay in the gate coordinator's context and never propagate to the dev-loop
-coordinator. The gate coordinator never posts the verdict comment, flips ready, pushes, or
+context. The dev-loop coordinator never runs these steps in its own context. The gate
+coordinator returns only the round's typed result: the verdict, the execution mode
+(`fanout_fanin` or `inline_single_agent`, plus the inline reason and findings summary when the
+round resolves to `inline_single_agent`), the severity counts, the fan-in output path, the
+durable findings-log path, the act-list path, the spec-authority identity path, and the judge
+summary. Reviewer and judge outputs stay in the gate coordinator's context and never propagate
+to the dev-loop coordinator. The gate coordinator never posts the verdict comment, flips ready, pushes, or
 merges; these reserved lifecycle writes stay with the dev-loop coordinator. On a head change, a
 dispatch failure that `GATE-EXEC-DISPATCH-RETRY-BACKOFF` does not recover, or a fan-in failure,
 the gate coordinator stops and returns a typed observation instead of choosing the next step. If

@@ -2,18 +2,14 @@
 // round must run in a dedicated, fresh-context gate coordinator agent. This
 // is the only sanctioned round shape (GATE-EXEC-GATE-COORDINATOR). Fails if
 // the rule text, its registration, or its cross-harness mirrors regress.
-import { lstatSync, readFileSync, readlinkSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { FANOUT_UNAVAILABLE_MESSAGE } from "@dev-loops/core/loop/gate-fanin";
 
+import { renderPiAgent } from "../../extension/sync-packaged-agents.ts";
 import { assert, readRepo, test } from "../imported-assets-helpers.mjs";
 import { assertRuleOwned, assertRulePresent } from "./_rule-helpers.mjs";
 
 const CONTRACT_DOC = "skills/docs/gate-review-sub-loop-contract.md";
 const MARKER = "<!-- rule: GATE-EXEC-GATE-COORDINATOR -->";
-const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 
 // The rule's own section: from its marker to the next `### ` heading, so the
 // slice tracks the prose instead of a fixed, wrap-dependent character count.
@@ -69,10 +65,13 @@ test("the rule lists the returned fields and keeps reviewer/judge output in the 
   const section = ruleSection(content);
   for (const field of [
     "verdict",
+    "the execution mode",
+    "inline reason and findings summary",
     "severity counts",
     "fan-in\noutput path",
     "durable findings-log path",
     "act-list path",
+    "spec-authority identity path",
     "judge summary",
   ]) {
     const pattern = new RegExp(field.replace(/\s+/g, "\\s+"));
@@ -139,13 +138,19 @@ test("the rule states the fail-closed fan-out-unavailable path and never degradi
 
 test("agents/dev-loop.agent.md's sub-loop bullet names the gate coordinator and the rule, and drops the ambiguous phrase", async () => {
   const content = await readRepo("agents/dev-loop.agent.md");
+  // Scope to the sub-loop bullet line itself (not the whole file): the join
+  // bullet a few lines down also says "gate coordinator", so a whole-file
+  // match would still pass if the sub-loop bullet stopped naming it (AC2).
+  const lines = content.split("\n");
+  const subLoopLine = lines.find((line) => line.trimStart().startsWith("- Every sub-loop"));
+  assert.ok(subLoopLine, "expected a bullet line starting with '- Every sub-loop'");
   assert.match(
-    content,
+    subLoopLine,
     /Every sub-loop[\s\S]{0,120}runs in its own dedicated fresh-context agent/i,
     "expected the sub-loop bullet's opening clause to survive",
   );
-  assert.match(content, /gate coordinator/, "expected the sub-loop bullet to name the gate coordinator");
-  assert.match(content, /GATE-EXEC-GATE-COORDINATOR/, "expected the sub-loop bullet to link the new rule");
+  assert.match(subLoopLine, /gate coordinator/, "expected the sub-loop bullet to name the gate coordinator");
+  assert.match(subLoopLine, /GATE-EXEC-GATE-COORDINATOR/, "expected the sub-loop bullet to link the new rule");
   assert.equal(
     content.includes("review fan-out, judge"),
     false,
@@ -174,42 +179,34 @@ test("the Claude surfaces mirror the rule id and gate-coordinator wording", asyn
   );
 });
 
-// Pi reads agents/skills through the tracked .pi/agents -> ../agents and
-// .pi/skills -> ../skills symlinks, never the source paths directly. A test
-// that only re-reads agents/dev-loop.agent.md and the contract source (also
-// asserted above) proves nothing about the Pi read path. Assert the symlinks
-// resolve to the expected targets, then read THROUGH them, so a broken or
-// re-pointed symlink fails this test instead of silently passing.
-test("the Pi surface (agents/skills reached through the tracked .pi symlinks) carries the same rule id", () => {
-  const piAgentsLink = path.join(repoRoot, ".pi", "agents");
-  const piSkillsLink = path.join(repoRoot, ".pi", "skills");
+// Pi's actual read path does not depend on `.pi/agents`/`.pi/skills` checkout
+// state: extension/sync-packaged-agents.ts's syncPackagedAgents (#1606) can
+// replace a `.pi/agents` symlink with a real directory of Pi-rendered copies
+// after any Pi session, so asserting on the symlink is checkout-state-dependent
+// and does not model what Pi actually reads. Assert on the two deterministic,
+// checkout-independent seams instead:
+//   1. package.json's `pi` manifest names "agents" and "skills" as the
+//      packaged source roots Pi loads from.
+//   2. Pi's agent read path renders the source through renderPiAgent (the
+//      same function syncPackagedAgents calls); the skills read path has no
+//      render step, so the source file is read as-is.
+test("the Pi surface (package.json's pi manifest and the rendered agent) carries the same rule id", async () => {
+  const pkg = JSON.parse(await readRepo("package.json"));
+  assert.deepEqual(pkg.pi?.agents, ["agents"], "expected package.json's pi.agents manifest to name the agents/ source root");
+  assert.deepEqual(pkg.pi?.skills, ["skills"], "expected package.json's pi.skills manifest to name the skills/ source root");
 
-  assert.ok(
-    lstatSync(piAgentsLink).isSymbolicLink(),
-    "expected .pi/agents to be a symlink (tracked in git); it must exist in this checkout",
-  );
-  assert.equal(readlinkSync(piAgentsLink), "../agents", "expected .pi/agents to point at ../agents");
-
-  assert.ok(
-    lstatSync(piSkillsLink).isSymbolicLink(),
-    "expected .pi/skills to be a symlink (tracked in git); it must exist in this checkout",
-  );
-  assert.equal(readlinkSync(piSkillsLink), "../skills", "expected .pi/skills to point at ../skills");
-
-  const piAgentContent = readFileSync(path.join(piAgentsLink, "dev-loop.agent.md"), "utf8");
+  const devLoopAgentSource = await readRepo("agents/dev-loop.agent.md");
+  const renderedForPi = renderPiAgent(devLoopAgentSource);
   assert.match(
-    piAgentContent,
+    renderedForPi,
     /GATE-EXEC-GATE-COORDINATOR/,
-    "expected agents/dev-loop.agent.md, read through .pi/agents, to link the rule",
+    "expected agents/dev-loop.agent.md, rendered through renderPiAgent (Pi's actual read path), to link the rule",
   );
 
-  const piContractContent = readFileSync(
-    path.join(piSkillsLink, "docs", "gate-review-sub-loop-contract.md"),
-    "utf8",
-  );
+  const piContractContent = await readRepo(CONTRACT_DOC);
   assert.match(
     piContractContent,
     /GATE-EXEC-GATE-COORDINATOR/,
-    "expected the contract doc, read through .pi/skills, to carry the rule id",
+    "expected the contract doc under the pi.skills manifest root to carry the rule id",
   );
 });
