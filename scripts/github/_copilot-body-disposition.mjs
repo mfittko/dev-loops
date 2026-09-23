@@ -16,7 +16,12 @@
 // head, an unreadable comment stream, or a marker inside code or a quote all
 // leave the finding blocking. Nothing here writes a record.
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
-import { isCopilotLogin, stripMarkdownCodeForScan } from "@dev-loops/core/github/copilot-helpers";
+import {
+  classifyCopilotReviewBodyDisposition,
+  COPILOT_DISPOSITION,
+  isCopilotLogin,
+  stripMarkdownCodeForScan,
+} from "@dev-loops/core/github/copilot-helpers";
 import { isCommitContainedByHead } from "./_commit-containment.mjs";
 
 const MARKER_RE = /<!--\s*dev-loops:copilot-body-disposition\s+review=(\S+)\s+head=([0-9a-fA-F]{40})\s+(?:fix=([0-9a-fA-F]{40})|operator)\s*-->/;
@@ -122,24 +127,112 @@ export async function resolveCopilotBodyDisposition({ repo, pr, headSha, reviewI
   return notCleared("no trusted disposition record names this review for the current head; the body finding stays blocked (COPILOT-STATE-BODY-DISPOSITION-RECORD)");
 }
 
-/**
- * The shared current-head body-feedback resolver used by both detectors.
- * `reviewSummary` comes from summarizeCopilotReviews. The comment stream is
- * read only when a current-head body finding exists.
- *
- * @returns {Promise<{ copilotBodyFeedbackUnresolved: boolean, bodyDisposition: object|null }>}
- */
-export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, reviewSummary }, runtime = {}) {
-  if (reviewSummary?.hasBodyFindingOnCurrentHead !== true) {
-    return { copilotBodyFeedbackUnresolved: false, bodyDisposition: null };
+const BODY_ONLY_BLOCKING_DISPOSITIONS = new Set([
+  COPILOT_DISPOSITION.CHANGES_RECOMMENDED,
+  COPILOT_DISPOSITION.UNRECOGNIZED,
+]);
+
+export function isBodyOnlyBlockingReview(review) {
+  return BODY_ONLY_BLOCKING_DISPOSITIONS.has(classifyCopilotReviewBodyDisposition(review?.state, review?.body));
+}
+
+function reviewTimestamp(review) {
+  for (const value of [review?.submittedAt, review?.submitted_at]) {
+    if (typeof value === "string") {
+      const parsed = Date.parse(value);
+      if (!Number.isNaN(parsed)) return parsed;
+    }
   }
-  // The finding sits on a review of the current head, so its review commit is
-  // the head: only an `operator` record can clear it.
-  const record = await resolveCopilotBodyDisposition(
-    { repo, pr, headSha, reviewId: reviewSummary.bodyFindingReviewId, reviewCommitSha: headSha },
-    runtime,
-  );
+  return NaN;
+}
+
+/**
+ * The most recent SUBMITTED (non-PENDING) Copilot review. A PENDING review on
+ * a stale head is never selected. Tolerates GraphQL (commit.oid, submittedAt)
+ * and REST (commit_id, submitted_at) shapes; a missing timestamp falls back to
+ * array position (later = more recent).
+ *
+ * FAIL CLOSED on an equal-timestamp tie: a tied changes-recommended or
+ * unrecognized review wins over a tied clean one, so array order never drops
+ * a body finding. `ambiguousBlockingTie` is true when two or more tied latest
+ * reviews are body-blocking: no single review owns the finding, so no
+ * disposition record can clear it.
+ *
+ * @returns {{ review: object|null, ambiguousBlockingTie: boolean }}
+ */
+export function resolveLatestCopilotReview(prData) {
+  const reviews = Array.isArray(prData?.reviews) ? prData.reviews : [];
+  const indexed = reviews
+    .filter((r) => r?.state !== "PENDING" && isCopilotLogin(r?.author?.login))
+    .map((review, index) => ({ review, index, ts: reviewTimestamp(review) }));
+  if (indexed.length === 0) return { review: null, ambiguousBlockingTie: false };
+  indexed.sort((a, b) => {
+    if (!Number.isNaN(a.ts) && !Number.isNaN(b.ts) && a.ts !== b.ts) return b.ts - a.ts;
+    if (Number.isNaN(a.ts) !== Number.isNaN(b.ts)) return Number.isNaN(a.ts) ? 1 : -1;
+    return b.index - a.index;
+  });
+  const top = indexed[0];
+  const tied = Number.isNaN(top.ts) ? [top] : indexed.filter((entry) => entry.ts === top.ts);
+  const blocking = tied.filter((entry) => isBodyOnlyBlockingReview(entry.review));
+  return {
+    review: (blocking[0] ?? top).review,
+    ambiguousBlockingTie: blocking.length > 1,
+  };
+}
+
+// Whether `reviewId` opened at least one review thread. A thread with no
+// review attribution (reviewId null) never counts, so unknown attribution
+// fails closed.
+export function reviewHasOwnThread(reviewThreads, reviewId) {
+  return reviewId !== null && Array.isArray(reviewThreads) && reviewThreads.some((thread) => thread?.reviewId === reviewId);
+}
+
+/**
+ * The shared body-feedback resolver used by both detectors and the request
+ * tool. `reviewSummary` comes from summarizeCopilotReviews; `reviewThreads`
+ * is the parsed thread list (parseReviewThreads().threads).
+ *
+ * Current head: a body finding on a current-head review stays unresolved
+ * unless an `operator` record names it (its review commit is the head, so no
+ * `fix` commit can be after it).
+ *
+ * Earlier head: when the latest Copilot review sits on an earlier head and is
+ * body-only changes-recommended or unrecognized (no thread of its own), its
+ * body feedback stays unresolved (`copilotPriorHeadBodyFeedbackUnresolved`)
+ * until a trusted record names it: a `fix` record whose commit is after that
+ * review's commit and in the head, or an `operator` record for the current
+ * head. The loop interpreter consumes this only at the round cap, where no
+ * fresh Copilot review can supersede the earlier one.
+ *
+ * The comment stream is read only when one of those two findings exists.
+ *
+ * @returns {Promise<{ copilotBodyFeedbackUnresolved: boolean, copilotPriorHeadBodyFeedbackUnresolved: boolean, bodyDisposition: object|null }>}
+ */
+export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, reviewSummary, reviewThreads }, runtime = {}) {
+  const settled = { copilotBodyFeedbackUnresolved: false, copilotPriorHeadBodyFeedbackUnresolved: false, bodyDisposition: null };
+  if (reviewSummary?.hasBodyFindingOnCurrentHead === true) {
+    const record = await resolveCopilotBodyDisposition(
+      { repo, pr, headSha, reviewId: reviewSummary.bodyFindingReviewId, reviewCommitSha: headSha },
+      runtime,
+    );
+    return record.cleared
+      ? { ...settled, bodyDisposition: record.disposition }
+      : { ...settled, copilotBodyFeedbackUnresolved: true };
+  }
+  const { review, ambiguousBlockingTie } = resolveLatestCopilotReview({ reviews: reviewSummary?.effectiveCopilotReviews });
+  const reviewCommitSha = review?.commit?.oid ?? review?.commit_id ?? null;
+  if (!review || typeof headSha !== "string" || reviewCommitSha === headSha || !isBodyOnlyBlockingReview(review)) {
+    return settled;
+  }
+  if (ambiguousBlockingTie) {
+    return { ...settled, copilotPriorHeadBodyFeedbackUnresolved: true };
+  }
+  const reviewId = review.id !== null && review.id !== undefined ? String(review.id) : null;
+  if (reviewHasOwnThread(reviewThreads, reviewId)) {
+    return settled;
+  }
+  const record = await resolveCopilotBodyDisposition({ repo, pr, headSha, reviewId, reviewCommitSha }, runtime);
   return record.cleared
-    ? { copilotBodyFeedbackUnresolved: false, bodyDisposition: record.disposition }
-    : { copilotBodyFeedbackUnresolved: true, bodyDisposition: null };
+    ? { ...settled, bodyDisposition: record.disposition }
+    : { ...settled, copilotPriorHeadBodyFeedbackUnresolved: true };
 }

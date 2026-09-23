@@ -46,6 +46,7 @@ test("normalizeSnapshot returns safe defaults for an empty object", () => {
     failureDetails: [],
     excludedFailureDetails: [],
     copilotBodyFeedbackUnresolved: false,
+    copilotPriorHeadBodyFeedbackUnresolved: false,
   });
 });
 

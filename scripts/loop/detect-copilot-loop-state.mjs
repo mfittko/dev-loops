@@ -296,11 +296,13 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
   let unresolvedThreadCount = 0;
   let actionableThreadCount = 0;
   let lastCopilotRoundMaxSignal = null;
+  let reviewThreads = [];
   try {
     const threadsPayload = await fetchGithubReviewThreadsPayload({ repo, pr }, { env, ghCommand, runChild });
     const parsed = parseReviewThreads(threadsPayload);
     unresolvedThreadCount = parsed.summary.unresolvedThreads;
     actionableThreadCount = parsed.summary.actionableThreads;
+    reviewThreads = parsed.threads;
     lastCopilotRoundMaxSignal = classifyReviewThreadsSignal(parsed, isCopilotLogin);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -337,10 +339,10 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
       currentHeadCiStatus = "crediblyGreen";
     }
   }
-  // Shared with detect-pr-gate-coordination-state.mjs: a trusted
-  // copilot-body-disposition record for the current head clears the body finding.
+  // Shared with detect-pr-gate-coordination-state.mjs and the request tool: a
+  // trusted copilot-body-disposition record clears the body finding.
   const bodyFeedback = await resolveCurrentHeadBodyFeedback(
-    { repo, pr, headSha: prHeadSha, reviewSummary },
+    { repo, pr, headSha: prHeadSha, reviewSummary, reviewThreads },
     { env, ghCommand, runChild },
   );
   const snapshot = buildSnapshotFromPrFacts({
@@ -357,6 +359,7 @@ export async function autoDetectSnapshot({ repo, pr, reviewRequestStatusOverride
     failureDetails,
     excludedFailureDetails,
     copilotBodyFeedbackUnresolved: bodyFeedback.copilotBodyFeedbackUnresolved,
+    copilotPriorHeadBodyFeedbackUnresolved: bodyFeedback.copilotPriorHeadBodyFeedbackUnresolved,
   });
   // Merge-state facts drive the base-integration preflight (never CI-wait on a
   // CONFLICTING/DIRTY branch — GitHub cannot dispatch CI there). Carried as

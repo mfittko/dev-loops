@@ -198,6 +198,7 @@ export function buildSnapshotFromPrFacts({
   failureDetails = [],
   excludedFailureDetails,
   copilotBodyFeedbackUnresolved = false,
+  copilotPriorHeadBodyFeedbackUnresolved = false,
 }) {
   const prState = typeof prData?.state === "string" ? prData.state.toUpperCase() : "OPEN";
   const prMerged = prState === "MERGED";
@@ -228,6 +229,7 @@ export function buildSnapshotFromPrFacts({
     failureDetails,
     excludedFailureDetails: excludedFailureDetails ?? rollupDerivation.excludedFailureDetails,
     copilotBodyFeedbackUnresolved,
+    copilotPriorHeadBodyFeedbackUnresolved,
   });
 }
 
@@ -298,6 +300,10 @@ export function normalizeSnapshot(raw) {
     failureDetails: Array.isArray(raw.failureDetails) ? raw.failureDetails : [],
     excludedFailureDetails: Array.isArray(raw.excludedFailureDetails) ? raw.excludedFailureDetails : [],
     copilotBodyFeedbackUnresolved: Boolean(raw.copilotBodyFeedbackUnresolved),
+    // A body-only changes-recommended/unrecognized latest Copilot review on an
+    // earlier head with no trusted disposition record. Consumed only at the
+    // round cap, where no fresh Copilot review can supersede it.
+    copilotPriorHeadBodyFeedbackUnresolved: Boolean(raw.copilotPriorHeadBodyFeedbackUnresolved),
   };
 }
 
@@ -407,7 +413,9 @@ export function interpretLoopState(snapshot, refinementConfig) {
       && state !== STATE.PR_DRAFT && state !== STATE.REVIEW_REQUEST_UNAVAILABLE
       && state !== STATE.BLOCKED_NEEDS_USER_DECISION) {
     const ciClean = s.ciStatus === "success" || s.ciStatus === "crediblyGreen" || !preApprovalRequireCi;
-    const cleanThreads = s.unresolvedThreadCount === 0 && !s.copilotBodyFeedbackUnresolved;
+    const cleanThreads = s.unresolvedThreadCount === 0
+      && !s.copilotBodyFeedbackUnresolved
+      && !s.copilotPriorHeadBodyFeedbackUnresolved;
     if (cleanThreads && ciClean) {
       state = STATE.ROUND_CAP_CLEAN_FALLBACK;
     } else if (!reviewInFlight) {

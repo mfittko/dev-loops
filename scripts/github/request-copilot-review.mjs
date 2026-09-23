@@ -22,6 +22,7 @@ import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveRefinement }
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { resolveCopilotReviewRequestStatus } from "../loop/_copilot-review-request-status.mjs";
 import { getLastCopilotReviewHeadSha, resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "../loop/_copilot-convergence-carry.mjs";
+import { resolveCurrentHeadBodyFeedback } from "./_copilot-body-disposition.mjs";
 const BLOCKED_BY_COPILOT_COMMENT_STATUS = "blocked_by_copilot_comment";
 const SUPPRESSED_SAME_HEAD_CLEAN_STATUS = "suppressed_same_head_clean";
 const ROUND_CAP_REACHED_STATUS = "round_cap_reached";
@@ -87,8 +88,8 @@ Request statuses:
                                 integrate-only base-move (base-relative reduction empties the delta), and the prior
                                 review is not a body-only changes-recommended/unrecognized review (unless that
                                 review opened a thread of its own, or a trusted copilot-body-disposition record
-                                names it for the current head). The gate coordination detector reports
-                                postConvergenceReviewSuppressed from the same shared predicate: this tool never
+                                names it for the current head). The gate coordination detector derives
+                                postConvergenceReviewSuppressed (emitted as carriedConvergence) from the same shared predicate: this tool never
                                 re-requests on a head the detector reports as carried, and the detector never
                                 reports carried on a head where this tool would re-request. Any unresolved
                                 thread or code/test/config/CI/unclassifiable delta re-opens the round. The round-cap
@@ -221,6 +222,7 @@ function parseReviewsPayload(text, { draftGateResetAtMs = null } = {}) {
     latestSubmittedReviewOnCurrentHeadAt: reviewSummary.latestSubmittedReviewOnCurrentHeadAt ?? null,
     completedCopilotReviewRounds: reviewSummary.completedCopilotReviewRounds,
     hasBodyFindingOnCurrentHead: reviewSummary.hasBodyFindingOnCurrentHead,
+    reviewSummary,
   };
 }
 async function fetchRequestedReviewers({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
@@ -393,6 +395,26 @@ async function fetchCopilotReviewState(options, runtime) {
     latestSubmittedReviewOnCurrentHeadAt: reviews.latestSubmittedReviewOnCurrentHeadAt ?? null,
     completedCopilotReviewRounds: reviews.completedCopilotReviewRounds,
     hasBodyFindingOnCurrentHead: reviews.hasBodyFindingOnCurrentHead ?? false,
+    reviewSummary: reviews.reviewSummary ?? null,
+  };
+}
+// The body-feedback snapshot fields, through the resolver both detectors use,
+// so a trusted copilot-body-disposition record settles the same head here as
+// there. Without a review summary (injected test state) the raw current-head
+// flag stands.
+async function resolveBodyFeedbackFacts(options, runtime, priorReviewState, reviewThreads) {
+  const { prData = null, reviewSummary = null, hasBodyFindingOnCurrentHead = false } = priorReviewState;
+  if (reviewSummary === null) {
+    return { copilotBodyFeedbackUnresolved: hasBodyFindingOnCurrentHead, copilotPriorHeadBodyFeedbackUnresolved: false };
+  }
+  const headSha = typeof prData?.headRefOid === "string" ? prData.headRefOid.trim() : null;
+  const bodyFeedback = await resolveCurrentHeadBodyFeedback(
+    { repo: options.repo, pr: options.pr, headSha, reviewSummary, reviewThreads },
+    runtime,
+  );
+  return {
+    copilotBodyFeedbackUnresolved: bodyFeedback.copilotBodyFeedbackUnresolved,
+    copilotPriorHeadBodyFeedbackUnresolved: bodyFeedback.copilotPriorHeadBodyFeedbackUnresolved,
   };
 }
 async function detectSameHeadCleanConvergence(options, runtime, priorReviewState = {}, refinementConfig = {}) {
@@ -403,7 +425,6 @@ async function detectSameHeadCleanConvergence(options, runtime, priorReviewState
     hasPendingReviewOnCurrentHead = false,
     hasSubmittedReviewOnCurrentHead = false,
     latestSubmittedReviewOnCurrentHeadAt = null,
-    hasBodyFindingOnCurrentHead = false,
   } = priorReviewState;
   if (typeof options.sameHeadCleanConverged === "boolean") {
     return options.sameHeadCleanConverged;
@@ -435,7 +456,7 @@ async function detectSameHeadCleanConvergence(options, runtime, priorReviewState
       unresolvedThreadCount: parsedThreads.summary.unresolvedThreads,
       actionableThreadCount: parsedThreads.summary.actionableThreads,
       copilotReviewRoundCount: priorReviewState.completedCopilotReviewRounds ?? 0,
-      copilotBodyFeedbackUnresolved: hasBodyFindingOnCurrentHead,
+      ...(await resolveBodyFeedbackFacts(options, runtime, priorReviewState, parsedThreads.threads)),
     });
     const interpretation = interpretLoopState(snapshot, refinementConfig);
     return interpretation.sameHeadCleanConverged;
@@ -455,7 +476,6 @@ async function detectRoundCapAutoRerequestEligibility(options, runtime, priorRev
     hasPendingReviewOnCurrentHead = false,
     hasSubmittedReviewOnCurrentHead = false,
     latestSubmittedReviewOnCurrentHeadAt = null,
-    hasBodyFindingOnCurrentHead = false,
   } = priorReviewState;
   if (prData === null) {
     return { eligible: false, interpretation: null };
@@ -484,7 +504,7 @@ async function detectRoundCapAutoRerequestEligibility(options, runtime, priorRev
       unresolvedThreadCount: parsedThreads.summary.unresolvedThreads,
       actionableThreadCount: parsedThreads.summary.actionableThreads,
       copilotReviewRoundCount: priorReviewState.completedCopilotReviewRounds ?? 0,
-      copilotBodyFeedbackUnresolved: hasBodyFindingOnCurrentHead,
+      ...(await resolveBodyFeedbackFacts(options, runtime, priorReviewState, parsedThreads.threads)),
     });
     const interpretation = interpretLoopState(snapshot, refinementConfig);
     return {

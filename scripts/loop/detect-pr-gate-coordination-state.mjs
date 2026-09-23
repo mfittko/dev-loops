@@ -886,21 +886,25 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   // block independently via unresolvedThreadCount, so a 🔵/🟡 with an open thread
   // still blocks (no regression).
   //
-  // A trusted copilot-body-disposition record naming the current-head review
-  // that raised the body finding clears both the loop's body-feedback signal
-  // and this gate-entry block, for the current head only. The resolver is
-  // shared with detect-copilot-loop-state.mjs so both detectors agree.
+  // A trusted copilot-body-disposition record naming the review that raised
+  // the body finding clears both the loop's body-feedback signal and this
+  // gate-entry block. The resolver is shared with detect-copilot-loop-state.mjs
+  // and request-copilot-review.mjs so all three agree. An earlier-head
+  // body-only finding without a record also fails the convergence check, so
+  // the round-cap grant in the evaluator cannot pass it.
   const bodyFeedback = await resolveCurrentHeadBodyFeedback(
-    { repo: options.repo, pr: options.pr, headSha: currentHeadSha, reviewSummary },
+    { repo: options.repo, pr: options.pr, headSha: currentHeadSha, reviewSummary, reviewThreads: parsedThreads.threads },
     runtime,
   );
   const evaluatedBodyConvergence = evaluateCopilotConvergence({
     currentHeadSha,
     reviews: reviewSummary.effectiveCopilotReviews,
   });
-  const copilotBodyConvergence = bodyFeedback.bodyDisposition && !evaluatedBodyConvergence.ok
-    ? { ...evaluatedBodyConvergence, ok: true, reason: "body finding cleared by a recorded copilot-body-disposition", bodyDisposition: bodyFeedback.bodyDisposition }
-    : evaluatedBodyConvergence;
+  const copilotBodyConvergence = bodyFeedback.copilotPriorHeadBodyFeedbackUnresolved
+    ? { ...evaluatedBodyConvergence, ok: false, reason: "the latest Copilot review, on an earlier head, carries body-only feedback with no trusted copilot-body-disposition record" }
+    : (bodyFeedback.bodyDisposition && !evaluatedBodyConvergence.ok
+      ? { ...evaluatedBodyConvergence, ok: true, reason: "body finding cleared by a recorded copilot-body-disposition", bodyDisposition: bodyFeedback.bodyDisposition }
+      : evaluatedBodyConvergence);
   const reviewRequestStatus = await resolveCopilotReviewRequestStatus(
     { repo: options.repo, pr: options.pr, reviewSummary, copilotRequested },
     runtime,
@@ -915,6 +919,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     actionableThreadCount: parsedThreads.summary.actionableThreads,
     copilotReviewRoundCount: reviewSummary.completedCopilotReviewRounds,
     copilotBodyFeedbackUnresolved: bodyFeedback.copilotBodyFeedbackUnresolved,
+    copilotPriorHeadBodyFeedbackUnresolved: bodyFeedback.copilotPriorHeadBodyFeedbackUnresolved,
   });
   if (snapshot.unresolvedThreadCount > 0
       && !snapshot.copilotReviewOnCurrentHead
@@ -979,6 +984,9 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     unresolvedThreadCount: snapshot.unresolvedThreadCount,
     reviewThreads: parsedThreads.threads,
   };
+  // ponytail: the carry predicate re-reads the disposition comment stream the
+  // body-feedback resolver above already read; share the result if gh call
+  // volume matters.
   const markerCarry = await resolvePostConvergenceReviewSuppressed(suppressionFacts, runtime);
   const carried = markerCarry.carried ? markerCarry : await resolveCarriedConvergence(suppressionFacts, runtime);
   const carriedConvergence = carried.carried

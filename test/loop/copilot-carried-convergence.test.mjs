@@ -19,6 +19,7 @@ import {
   isTrustedDispositionAuthor,
   parseCopilotBodyDispositionMarker,
   resolveCopilotBodyDisposition,
+  resolveLatestCopilotReview,
 } from "../../scripts/github/_copilot-body-disposition.mjs";
 import { resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "../../scripts/loop/_copilot-convergence-carry.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
@@ -83,20 +84,31 @@ const compareEntry = (base, head, status) => ({ matchByClaims: true, assertArgs:
 // A fix record for PRR_prior: FIX is after PRIOR and contained in HEAD.
 const FIX_AFTER_PRIOR = [compareEntry(PRIOR, FIX, "ahead"), compareEntry(FIX, HEAD, "ahead")];
 
+const commentsEntry = (dispositions) => ({ matchByClaims: true, assertArgs: ["api", `repos/${REPO}/issues/${PR}/comments`, "--jq", ".[]"], stdout: dispositions.map(line).join("") });
+// The PR's base branch, declared so the base-relative reduction runs on every
+// row instead of failing open on an unmatched call.
+const BASE_REF_ENTRY = { matchByClaims: true, assertArgs: ["pr", "view", String(PR), "--json", "baseRefName"], stdout: "main\n" };
+
 // The single scenario table: prior Copilot review on PRIOR, current head HEAD.
-function scenario({ priorBody = "", threads = [], delta = DOCS_DELTA, dispositions = [], olderReviews = [], extraShared = [] } = {}) {
-  const reviews = [...olderReviews, { id: "PRR_prior", author: { login: COPILOT }, state: "COMMENTED", body: priorBody, commit: { oid: PRIOR }, submittedAt: "2026-09-22T10:00:00Z" }];
+// `prOwn` is the PR's own diff (compare main...HEAD); it defaults to the delta.
+// The comment stream is declared twice: the body-feedback resolver and the
+// carry predicate each read it once.
+function scenario({ priorBody = "", threads = [], delta = DOCS_DELTA, prOwn = delta, dispositions = [], olderReviews = [], extraShared = [], reviews: reviewsOverride = null } = {}) {
+  const reviews = reviewsOverride ?? [...olderReviews, { id: "PRR_prior", author: { login: COPILOT }, state: "COMMENTED", body: priorBody, commit: { oid: PRIOR }, submittedAt: "2026-09-22T10:00:00Z" }];
   const shared = [
     ...extraShared,
     { matchByClaims: true, assertArgs: ["api", `repos/${REPO}/compare/${PRIOR}...${HEAD}`], stdout: line(delta) },
+    BASE_REF_ENTRY,
+    { matchByClaims: true, assertArgs: ["api", `repos/${REPO}/compare/main...${HEAD}`], stdout: line(prOwn) },
     { matchByClaims: true, assertArgs: ["api", "graphql"], assertArgContains: ["reviewThreads"], stdout: line({ data: { repository: { pullRequest: { reviewThreads: { nodes: threads } } } } }) },
-    { matchByClaims: true, assertArgs: ["api", `repos/${REPO}/issues/${PR}/comments`, "--jq", ".[]"], stdout: dispositions.map(line).join("") },
+    commentsEntry(dispositions),
+    commentsEntry(dispositions),
   ];
   return { reviews, shared };
 }
 
 function requestEntries({ reviews, shared }) {
-  const prView = { matchByClaims: true, assertArgs: ["pr", "view", String(PR), "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: line({ headRefOid: HEAD, isDraft: false, state: "OPEN", number: PR, reviews }) };
+  const prView = { matchByClaims: true, assertArgs: ["pr", "view", String(PR), "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: line({ headRefOid: HEAD, isDraft: false, state: "OPEN", number: PR, reviews, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }) };
   return [
     { matchByClaims: true, assertArgs: ["api", `repos/${REPO}/pulls/${PR}/requested_reviewers`, "-X", "POST"], stdout: line({ requested_reviewers: [{ login: COPILOT }] }) },
     { matchByClaims: true, assertArgs: ["api", `repos/${REPO}/pulls/${PR}/requested_reviewers`], stdout: line({ users: [], teams: [] }) },
@@ -169,7 +181,7 @@ const CASES = [
   },
   {
     name: "docs-only delta, body-only changes-recommended, trusted fix record after the review commit",
-    fixture: { priorBody: YELLOW, dispositions: [dispositionComment({ reviewId: "PRR_prior", kind: FIX })], extraShared: FIX_AFTER_PRIOR },
+    fixture: { priorBody: YELLOW, dispositions: [dispositionComment({ reviewId: "PRR_prior", kind: FIX })], extraShared: [...FIX_AFTER_PRIOR, ...FIX_AFTER_PRIOR] },
     carried: true,
     bodyDisposition: true,
   },
@@ -181,6 +193,9 @@ const CASES = [
   // An unresolved thread keeps the pre-existing route: resolve the thread first.
   { name: "docs-only delta, one unresolved thread", fixture: { threads: [thread({ isResolved: false })] }, carried: false, nextAction: PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS },
   { name: "code delta, one resolved thread", fixture: { threads: [thread({ isResolved: true })], delta: CODE_DELTA }, carried: false },
+  // Integrate-only: the code file changed since PRIOR came from the base, so
+  // the base-relative reduction empties the delta.
+  { name: "integrate-only base move: code delta outside the PR's own diff", fixture: { threads: [thread({ isResolved: true })], delta: CODE_DELTA, prOwn: DOCS_DELTA }, carried: true },
   { name: "docs-only delta, body-only changes-recommended, no record", fixture: { priorBody: YELLOW }, carried: false },
   {
     name: "docs-only delta, body-only changes-recommended, trusted operator record",
@@ -424,5 +439,108 @@ describe("summarizeCopilotReviews body-finding owner on a timestamp tie", () => 
     const summary = summarizeCopilotReviews([review("R_a", YELLOW), review("R_b", YELLOW)], { headSha: HEAD });
     assert.equal(summary.hasBodyFindingOnCurrentHead, true);
     assert.equal(summary.bodyFindingReviewId, null);
+  });
+});
+
+describe("current-head body finding: request tool and detector agree through the shared resolver", () => {
+  const headYellow = [{ id: "PRR_head", author: { login: COPILOT }, state: "COMMENTED", body: YELLOW, commit: { oid: HEAD }, submittedAt: "2026-09-22T10:00:00Z" }];
+  const fixture = (dispositions) => scenario({ reviews: headYellow, dispositions });
+
+  it("an operator record settles the head: the tool does not re-request and the detector opens pre_approval_gate", async () => {
+    const dispositions = [dispositionComment({ reviewId: "PRR_head" })];
+    const request = await runRequestTool(fixture(dispositions), { root: wideRoot });
+    const detected = await runDetector(fixture(dispositions), { root: wideRoot });
+    assert.equal(request.status, "suppressed_same_head_clean");
+    assert.equal(detected.copilotBodyDisposition.reviewId, "PRR_head");
+    assert.ok(!detected.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+    assert.notEqual(detected.nextAction, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW);
+  });
+
+  it("without a record the body finding stays unresolved in both", async () => {
+    const request = await runRequestTool(fixture([]), { root: wideRoot });
+    const detected = await runDetector(fixture([]), { root: wideRoot });
+    assert.notEqual(request.status, "suppressed_same_head_clean");
+    assert.equal(detected.copilotBodyDisposition, null);
+    assert.ok(detected.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  });
+});
+
+// Round cap (cap = 2), earlier head: both rounds on PRIOR, the latest a
+// body-only changes-recommended review with no thread; the head advanced to
+// HEAD with a docs-only fix.
+describe("round cap: an earlier-head body-only finding clears only through a recorded disposition", () => {
+  const priorRounds = [
+    { id: "PRR_round1", author: { login: COPILOT }, state: "COMMENTED", body: "", commit: { oid: PRIOR }, submittedAt: "2026-09-22T10:00:00Z" },
+    { id: "PRR_round2", author: { login: COPILOT }, state: "COMMENTED", body: YELLOW, commit: { oid: PRIOR }, submittedAt: "2026-09-22T11:00:00Z" },
+  ];
+  const PRIOR_CAP_CASES = [
+    { name: "no disposition record", dispositions: [], cleared: false },
+    // The resolver and the carry predicate each verify the fix commit.
+    { name: "trusted fix record after the review commit", dispositions: [dispositionComment({ reviewId: "PRR_round2", kind: FIX })], extra: [...FIX_AFTER_PRIOR, ...FIX_AFTER_PRIOR], cleared: true },
+    { name: "trusted operator record for the current head", dispositions: [dispositionComment({ reviewId: "PRR_round2" })], cleared: true },
+    { name: "operator record naming the earlier clean review", dispositions: [dispositionComment({ reviewId: "PRR_round1" })], cleared: false },
+  ];
+  for (const { name, dispositions, extra = [], cleared } of PRIOR_CAP_CASES) {
+    const fixture = () => scenario({ reviews: priorRounds, dispositions, extraShared: extra });
+
+    it(`gate coordination detector: ${name}`, async () => {
+      const detected = await runDetector(fixture());
+      if (cleared) {
+        assert.equal(detected.lifecycleState, "round_cap_clean_fallback");
+        assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+      } else {
+        assert.equal(detected.lifecycleState, "round_cap_reached");
+        assert.ok(detected.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+        assert.equal(detected.carriedConvergence, null);
+      }
+    });
+
+    it(`copilot loop detector: ${name}`, async () => {
+      const { reviews, shared } = fixture();
+      const { runChild } = makeGhMock([
+        { matchByClaims: true, assertArgs: ["pr", "view", String(PR)], stdout: line({ number: PR, state: "OPEN", isDraft: false, headRefOid: HEAD, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }], reviews }) },
+        ...shared,
+      ]);
+      const snapshot = await autoDetectSnapshot({ repo: REPO, pr: PR, reviewRequestStatusOverride: "none" }, { env: {}, ghCommand: "gh", runChild });
+      assert.equal(snapshot.copilotBodyFeedbackUnresolved, false);
+      assert.equal(snapshot.copilotPriorHeadBodyFeedbackUnresolved, !cleared);
+      const interpretation = interpretLoopState({ ...snapshot, ciStatus: "success" }, { maxCopilotRounds: 2 });
+      assert.equal(interpretation.state, cleared ? "round_cap_clean_fallback" : "round_cap_reached");
+      // Below the cap the earlier-head finding does not change routing: a fresh
+      // Copilot review can still supersede it.
+      assert.notEqual(interpretLoopState({ ...snapshot, ciStatus: "success" }, { maxCopilotRounds: 5 }).state, "round_cap_reached");
+    });
+
+    it(`request tool never re-requests: ${name}`, async () => {
+      const request = await runRequestTool(fixture());
+      assert.equal(request.status, "round_cap_reached");
+    });
+  }
+});
+
+describe("latest-review timestamp tie fails closed", () => {
+  const tied = (id, body) => ({ id, author: { login: COPILOT }, state: "COMMENTED", body, commit: { oid: PRIOR }, submittedAt: "2026-09-22T10:00:00Z" });
+  const carry = async (reviews) => {
+    const fixture = scenario({ reviews });
+    const { runtime } = runtimeFor(fixture.shared, { root: wideRoot });
+    return resolveCarriedConvergence(
+      { repo: REPO, pr: PR, currentHeadSha: HEAD, prData: { reviews }, copilotReviewRequestStatus: "none", unresolvedThreadCount: 0, reviewThreads: [] },
+      runtime,
+    );
+  };
+
+  it("a changes-recommended review tied with a clean one blocks the carry in either array order", async () => {
+    assert.equal((await carry([tied("R_clean", ""), tied("R_yellow", YELLOW)])).carried, false);
+    assert.equal((await carry([tied("R_yellow", YELLOW), tied("R_clean", "")])).carried, false);
+  });
+
+  it("names the blocking review as the latest, and flags two tied blocking reviews as ambiguous", () => {
+    assert.equal(resolveLatestCopilotReview({ reviews: [tied("R_yellow", YELLOW), tied("R_clean", "")] }).review.id, "R_yellow");
+    const ambiguous = resolveLatestCopilotReview({ reviews: [tied("R_a", YELLOW), tied("R_b", YELLOW)] });
+    assert.equal(ambiguous.ambiguousBlockingTie, true);
+  });
+
+  it("two tied clean reviews still carry", async () => {
+    assert.equal((await carry([tied("R_a", ""), tied("R_b", "")])).carried, true);
   });
 });

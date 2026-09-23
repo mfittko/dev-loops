@@ -15,14 +15,14 @@
 // refuse to carry.
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { resolveConvergenceCarryForward } from "@dev-loops/core/loop/gate-carry-forward";
-import {
-  classifyCopilotReviewBodyDisposition,
-  COPILOT_DISPOSITION,
-  isCopilotLogin,
-} from "@dev-loops/core/github/copilot-helpers";
 import { parseReviewThreads } from "@dev-loops/core/github/review-threads";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
-import { resolveCopilotBodyDisposition } from "../github/_copilot-body-disposition.mjs";
+import {
+  isBodyOnlyBlockingReview,
+  resolveCopilotBodyDisposition,
+  resolveLatestCopilotReview,
+  reviewHasOwnThread,
+} from "../github/_copilot-body-disposition.mjs";
 import { readSuppressionMarker } from "./_post-convergence-review-suppression.mjs";
 
 // The compare API caps `files` at 300 entries per page; a returned list AT
@@ -85,32 +85,10 @@ export async function fetchPrBaseRefName({ repo, pr }, { env = process.env, ghCo
   return typeof result.stdout === "string" ? result.stdout.trim() : "";
 }
 
-// The most recent SUBMITTED (non-PENDING) Copilot review. A PENDING review on a
-// stale head must never be selected as "most recent". Tolerates GraphQL
-// (commit.oid, submittedAt) and REST (commit_id, submitted_at) shapes; a
-// missing timestamp falls back to array position (later = more recent).
+// The most recent SUBMITTED Copilot review (resolveLatestCopilotReview owns
+// the selection and its fail-closed tie rule).
 export function getLastCopilotReview(prData) {
-  const reviews = Array.isArray(prData?.reviews) ? prData.reviews : [];
-  const copilotReviews = reviews.filter((r) => r?.state !== "PENDING" && isCopilotLogin(r?.author?.login));
-  if (copilotReviews.length === 0) return null;
-  const parseTs = (r) => {
-    for (const value of [r?.submittedAt, r?.submitted_at]) {
-      if (typeof value === "string") {
-        const parsed = Date.parse(value);
-        if (!Number.isNaN(parsed)) return parsed;
-      }
-    }
-    return NaN;
-  };
-  const indexed = copilotReviews.map((review, index) => ({ review, index }));
-  indexed.sort((a, b) => {
-    const aTs = parseTs(a.review);
-    const bTs = parseTs(b.review);
-    if (!Number.isNaN(aTs) && !Number.isNaN(bTs)) return bTs - aTs;
-    if (Number.isNaN(aTs) && Number.isNaN(bTs)) return b.index - a.index;
-    return Number.isNaN(aTs) ? 1 : -1;
-  });
-  return indexed[0].review;
+  return resolveLatestCopilotReview(prData).review;
 }
 
 export function getLastCopilotReviewHeadSha(prData) {
@@ -171,24 +149,14 @@ async function fetchThreadFacts({ repo, pr }, runtime) {
   }
 }
 
-const BODY_ONLY_BLOCKING_DISPOSITIONS = new Set([
-  COPILOT_DISPOSITION.CHANGES_RECOMMENDED,
-  COPILOT_DISPOSITION.UNRECOGNIZED,
-]);
-
-// Whether `reviewId` opened at least one review thread. A thread with no
-// review attribution (reviewId null) never counts, so unknown attribution
-// fails closed.
-function reviewHasOwnThread(reviewThreads, reviewId) {
-  return reviewId !== null && reviewThreads.some((thread) => thread?.reviewId === reviewId);
-}
-
 // The shared tail of both carry paths, run after the delta carries: zero
 // unresolved threads, then the body-only condition on the prior review.
-async function finishCarry({ repo, pr, currentHeadSha, priorReview, sourceHeadSha, delta, source, unresolvedThreadCount, reviewThreads }, runtime) {
+// `prData` supplies the prior review through resolveLatestCopilotReview, so a
+// timestamp tie with two body-blocking latest reviews refuses to carry.
+async function finishCarry({ repo, pr, currentHeadSha, prData, sourceHeadSha, delta, source, unresolvedThreadCount, reviewThreads }, runtime) {
+  const { review: priorReview, ambiguousBlockingTie } = resolveLatestCopilotReview(prData);
   const sourceReviewId = priorReview?.id !== null && priorReview?.id !== undefined ? String(priorReview.id) : null;
-  const disposition = classifyCopilotReviewBodyDisposition(priorReview?.state, priorReview?.body);
-  const bodyBlocking = BODY_ONLY_BLOCKING_DISPOSITIONS.has(disposition);
+  const bodyBlocking = isBodyOnlyBlockingReview(priorReview);
   let threadFacts = { unresolvedThreadCount, reviewThreads };
   if (typeof unresolvedThreadCount !== "number" || (bodyBlocking && !Array.isArray(reviewThreads))) {
     threadFacts = await fetchThreadFacts({ repo, pr }, runtime);
@@ -198,6 +166,9 @@ async function finishCarry({ repo, pr, currentHeadSha, priorReview, sourceHeadSh
   }
   if (threadFacts.unresolvedThreadCount !== 0) {
     return { carried: false, reason: `${threadFacts.unresolvedThreadCount} unresolved review thread(s) remain; carried convergence refused (COPILOT-STATE-CARRIED-CONVERGENCE)` };
+  }
+  if (ambiguousBlockingTie) {
+    return { carried: false, reason: "two or more latest Copilot reviews share a timestamp and carry a body finding; no single review owns it" };
   }
   const carried = { carried: true, source, sourceReviewId, sourceHeadSha, reason: delta.reason, bodyDisposition: null };
   if (!bodyBlocking || reviewHasOwnThread(threadFacts.reviewThreads, sourceReviewId)) {
@@ -210,7 +181,7 @@ async function finishCarry({ repo, pr, currentHeadSha, priorReview, sourceHeadSh
   if (!record.cleared) {
     return {
       carried: false,
-      reason: `the prior Copilot review is body-only "${disposition}" with no thread of its own and no trusted disposition record naming it`,
+      reason: `the prior Copilot review is body-only changes-recommended or unrecognized with no thread of its own and no trusted disposition record naming it`,
     };
   }
   return { ...carried, bodyDisposition: record.disposition };
@@ -260,7 +231,7 @@ export async function resolveCarriedConvergence({
     return { carried: false, reason: "the delta since the prior reviewed head is not provably docs-only or integrate-only" };
   }
   return finishCarry(
-    { repo, pr, currentHeadSha, priorReview, sourceHeadSha: lastReviewSha, delta, source: "carried", unresolvedThreadCount, reviewThreads },
+    { repo, pr, currentHeadSha, prData, sourceHeadSha: lastReviewSha, delta, source: "carried", unresolvedThreadCount, reviewThreads },
     runtime,
   );
 }
@@ -302,7 +273,7 @@ export async function resolvePostConvergenceReviewSuppressed({
       repo,
       pr,
       currentHeadSha,
-      priorReview: getLastCopilotReview(prData),
+      prData,
       sourceHeadSha: marker.lastReviewedHeadSha,
       delta,
       source: "marker",

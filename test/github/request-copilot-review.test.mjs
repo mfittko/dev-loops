@@ -2250,6 +2250,30 @@ test("request-copilot-review --force-rerequest-review STILL re-opens when a genu
   assert.equal(result.status, "requested");
 });
 
+test("request-copilot-review --force-rerequest-review at the cap places a request when a docs-only delta still has an unresolved thread", async () => {
+  // Carried convergence needs zero unresolved threads, so the cap site does
+  // not suppress: the forced over-cap request is placed.
+  const { result, calls } = await runInProcess(["--repo", "owner/repo", "--pr", "17", "--force-rerequest-review"], [
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      EMPTY_REVIEW_STREAM_ENTRY,
+      {
+        assertArgs: ["api", "repos/owner/repo/compare/sha5...newsha"],
+        stdout: JSON.stringify({ status: "ahead", files: [{ filename: "docs/guide.md", status: "modified" }] }) + "\n",
+      },
+      NO_BASE_REF_ENTRY,
+      { assertArgs: ["api", "graphql"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"t-1","isResolved":false,"comments":{"nodes":[]}}]}}}}}\n' },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers", "-X", "POST", "-f", "reviewers[]=copilot-pull-request-reviewer[bot]"], stdout: '{"requested_reviewers":[{"login":"copilot-pull-request-reviewer[bot]"}]}\n' },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[{"login":"Copilot"}],"teams":[]}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: fiveCopilotReviewsAt("newsha") },
+    ]);
+
+  assert.notEqual(result.status, "suppressed_post_convergence_docs_only");
+  assert.equal(result.status, "requested");
+  assert.equal(calls.some(isCopilotRequestCall), true);
+});
+
 // #2316: the same convergence-carry decision must also fire BELOW the round
 // cap (not just at the cap under --force-rerequest-review). One prior
 // COMMENTED Copilot review on an old commit keeps completedRounds (1) under
