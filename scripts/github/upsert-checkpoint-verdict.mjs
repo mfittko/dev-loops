@@ -2065,7 +2065,9 @@ export function collectPreApprovalGateBlockers(refinementArtifact) {
   for (const [field, kind] of PRE_APPROVAL_BLOCKER_SOURCES) {
     const items = refinementArtifact?.[field];
     if (!Array.isArray(items)) continue;
-    for (const item of items) blockers.push({ kind, item: String(item) });
+    for (const item of items) {
+      if (typeof item === "string" && item.trim() !== "") blockers.push({ kind, item });
+    }
   }
   return blockers;
 }
@@ -2079,10 +2081,14 @@ export function composeCheckpointVerdict({ reviewVerdict, blockers = [] }) {
   return reviewVerdict;
 }
 
+const MAX_RENDERED_GATE_BLOCKERS = 10;
 function formatGateBlockers(blockers) {
-  return blockers
+  const rendered = blockers
+    .slice(0, MAX_RENDERED_GATE_BLOCKERS)
     .map(({ kind, item }) => `${kind}: \`${sanitizeCodeSpan(neutralizeBareIssuePrIds(item))}\``)
     .join("; ");
+  const hidden = blockers.length - MAX_RENDERED_GATE_BLOCKERS;
+  return hidden > 0 ? `${rendered}; +${hidden} more` : rendered;
 }
 
 // GATE-COMMENT-DRAFT-REQUIREMENTS / GATE-COMMENT-PREAPPROVAL-REQUIREMENTS
@@ -3048,6 +3054,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     }
   }
   const desiredExecutionMode = options.executionMode ?? DEFAULT_EXECUTION_MODE;
+  const compositionResultFields = checkpointComposition
+    ? { reviewVerdict: checkpointComposition.reviewVerdict, gateBlockers: checkpointComposition.blockers }
+    : {};
   // GATE-EXEC-LIGHT-ESCALATION: an inline round that surfaces a blocking
   // finding escalates the next round to full fan-out by applying the gate:full
   // PR label. Applied (not a post refusal) so it never collides with
@@ -3063,7 +3072,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     && resolveRequireFanoutEvidence(config)
     && desiredExecutionMode === "inline_single_agent"
     && roundCarriesBlockingSeverity({
-      verdict: options.verdict,
+      // A composed checkpoint verdict (blocked over a findings_present review)
+      // still carries the review's blocking findings, so judge the review layer.
+      verdict: checkpointComposition?.reviewVerdict ?? options.verdict,
       structuredFindings,
       findingsSeverityCounts: options.findingsSeverityCounts,
       activeGateConfig,
@@ -3114,11 +3125,13 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     && (existing.sizeWaiverGranted ?? null) === desiredSizeWaiverGranted
     && (existing.sizeWaiverApprovedBy ?? null) === desiredSizeWaiverApprovedBy
     && unpostedFindings === 0
-    // ponytail: the parser does not read the review-verdict / gate-blockers
-    // lines, so a composed checkpoint always re-renders in place instead of
-    // noop-ing on a possibly stale blocker list. Parse those lines into the
-    // compare if the extra same-head update ever matters.
+    // ponytail: the existing summary carries no body, so the review-verdict /
+    // gate-blockers lines cannot be compared. A composed checkpoint always
+    // re-renders in place. A prior composed body is always `blocked`, so a
+    // non-composed `blocked` pre-approval rerun also re-renders to drop stale
+    // lines. Carry the body into the summary if these extra updates matter.
     && checkpointComposition === null
+    && !(options.gate === "pre_approval_gate" && options.verdict === "blocked")
   ) {
     // GATE-EXEC-LIGHT-ESCALATION: a same-head noop rerun must still
     // ensure the gate:full label is on the PR — if the original post succeeded
@@ -3147,6 +3160,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       ...(findingsLedgerWarning ? { findingsLedgerWarning } : {}),
       ...(escalateGateFullLabel ? { gateFullLabelApplied: true } : {}),
       ...(specAuthority ? { specAuthority } : {}),
+      ...compositionResultFields,
     };
   }
   if (existing) {
@@ -3197,6 +3211,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
       ...(updateVerificationWarning ? { verificationWarning: updateVerificationWarning } : {}),
       ...(escalateGateFullLabel ? { gateFullLabelApplied: true } : {}),
       ...(specAuthority ? { specAuthority } : {}),
+      ...compositionResultFields,
     };
   }
   const createdReview = await createGateReview({
@@ -3277,6 +3292,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     ...(minimizeWarning ? { minimizeWarning } : {}),
     ...(escalateGateFullLabel ? { gateFullLabelApplied: true } : {}),
     ...(specAuthority ? { specAuthority } : {}),
+    ...compositionResultFields,
   };
 }
 export function buildInlineExecutionWarning(executionMode, inlineReason) {

@@ -10033,7 +10033,7 @@ const COMPOSITION_UNCHECKED_AC_PR_BODY = [
   "- none", "",
 ].join("\n");
 
-function makeCompositionRunChild(prBody) {
+function makeCompositionRunChild(prBody, extraComments = []) {
   return makeAcRunChild({
     isDraft: false,
     closingIssues: [{ number: 900 }],
@@ -10052,18 +10052,18 @@ function makeCompositionRunChild(prBody) {
       }),
       html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
       updated_at: "2026-06-01T19:55:00Z",
-    }],
+    }, ...extraComments],
   });
 }
 
-async function withCompositionRound({ overallVerdict, prBody, gate = "pre_approval_gate" }, fn) {
-  const repoRoot = await stageConfigRepoRoot(false);
+async function withCompositionRound({ overallVerdict, prBody, gate = "pre_approval_gate", requireFanoutEvidence = false, extraComments = [] }, fn) {
+  const repoRoot = await stageConfigRepoRoot(requireFanoutEvidence);
   try {
     const ledgerPath = await writeVerdictLedger(repoRoot, { overallVerdict, gate });
     const ledgerBefore = await readFile(ledgerPath, "utf8");
     const { runChild, calls } = gate === "draft_gate"
       ? makeAcRunChild({ isDraft: true, prBody })
-      : makeCompositionRunChild(prBody);
+      : makeCompositionRunChild(prBody, extraComments);
     const post = (overrides = {}) => upsertCheckpointVerdict({
       repo: "owner/repo", pr: 17, gate, headSha: GATE_FULL_HEAD,
       findingsSummary: "review round summary",
@@ -10098,6 +10098,9 @@ test("#2389: composeCheckpointVerdict implements the pre-approval composition ta
 test("#2389: collectPreApprovalGateBlockers reads the three clean-guard sources and nothing else", () => {
   assert.deepEqual(collectPreApprovalGateBlockers(null), []);
   assert.deepEqual(collectPreApprovalGateBlockers({ linkedIssues: [900] }), []);
+  assert.deepEqual(collectPreApprovalGateBlockers({ prBodyUncheckedDodItems: [42, null, "  ", "real"] }), [
+    { kind: "unchecked PR-body Definition of done", item: "real" },
+  ]);
   assert.deepEqual(collectPreApprovalGateBlockers({
     uncheckedAcItems: ["spec ac"],
     prBodyUncheckedAcItems: ["pr ac"],
@@ -10121,6 +10124,8 @@ test("#2389 regression: a clean ledger plus an unchecked PR-body DoD item posts 
     assert.match(body, /\*\*Review verdict:\*\* clean/);
     assert.match(body, /\*\*Gate blockers:\*\* unchecked PR-body Definition of done: `post-merge smoke run recorded`/);
     assert.match(body, /\*\*Next action:\*\* rerun gate/);
+    assert.equal(result.reviewVerdict, "clean");
+    assert.deepEqual(result.gateBlockers, [{ kind: "unchecked PR-body Definition of done", item: "post-merge smoke run recorded" }]);
     // Posted before any fixer mutation: no PR-body edit ran in this call.
     assert.equal(calls.some((c) => c.args[0] === "pr" && c.args[1] === "edit" && c.args.includes("--body-file")), false);
   });
@@ -10241,6 +10246,58 @@ test("#2389: the review-verdict and gate-blockers lines leave the parsed gate/he
   assert.match(composed, /\*\*Gate blockers:\*\* unchecked PR-body Definition of done: `Verdict: clean`/);
   assert.deepEqual(parseGateReviewCommentBody(composed), parseGateReviewCommentBody(plain));
   assert.equal(parseGateReviewCommentBody(composed).verdict, "blocked");
+});
+
+test("#2389: an inline findings_present review composed to blocked still escalates gate:full via the review verdict", async () => {
+  await withCompositionRound({ overallVerdict: "findings_present", prBody: COMPOSITION_UNCHECKED_DOD_PR_BODY, requireFanoutEvidence: true }, async ({ post, postedBody, calls }) => {
+    // No findingsJson, no findingsSeverityCounts: the escalation check falls back
+    // to the verdict, which must be the review verdict, not the composed one.
+    const result = await post();
+    assert.equal(result.action, "created");
+    assert.match(postedBody(), /\*\*Verdict:\*\* blocked/);
+    assert.equal(result.gateFullLabelApplied, true);
+    assert.ok(calls.some((c) => c.args[0] === "pr" && c.args[1] === "edit" && c.args.includes("--add-label") && c.args.includes("gate:full")), "gate:full label added");
+  });
+});
+
+test("#2389: a same-head non-composed blocked rerun over a composed comment updates in place instead of keeping stale layer lines", async () => {
+  const composedBody = renderGateReviewCommentBody({
+    gate: "pre_approval_gate", headSha: GATE_FULL_HEAD, verdict: "blocked",
+    findingsSummary: "review round summary", nextAction: "rerun gate",
+    executionMode: "inline_single_agent", inlineReason: "composition test",
+    reviewVerdict: "clean",
+    gateBlockers: [{ kind: "unchecked PR-body Definition of done", item: "post-merge smoke run recorded" }],
+  });
+  const extraComments = [{
+    id: 92, body: composedBody,
+    html_url: "https://github.com/owner/repo/pull/17#issuecomment-92",
+    updated_at: "2026-06-01T19:58:00Z",
+  }];
+  await withCompositionRound({ overallVerdict: "blocked", prBody: FULLY_TICKED_PR_BODY, extraComments }, async ({ post, calls }) => {
+    const result = await post({ nextAction: "rerun gate" });
+    assert.equal(result.action, "updated");
+    assert.equal(result.reviewVerdict, undefined);
+    const patch = calls.find((c) => c.args.includes("PATCH") && c.args.some((x) => x.includes("issues/comments/92")));
+    assert.ok(patch, "the composed comment was corrected in place");
+    assert.doesNotMatch(patch.stdinText, /\*\*Review verdict:\*\*|\*\*Gate blockers:\*\*/);
+  });
+});
+
+test("#2389: gate blockers render at most ten items with a +N more suffix", async () => {
+  const prBody = [
+    "## Acceptance criteria", "",
+    "- [x] first AC is done", "",
+    "## Definition of done", "",
+    ...Array.from({ length: 12 }, (_, i) => `- [ ] dod item ${i + 1}`), "",
+    "## Non-goals", "",
+    "- none", "",
+  ].join("\n");
+  await withCompositionRound({ overallVerdict: "clean", prBody }, async ({ post, postedBody }) => {
+    await post();
+    const body = postedBody();
+    assert.match(body, /`dod item 10`; \+2 more/);
+    assert.doesNotMatch(body, /dod item 11/);
+  });
 });
 
 test("#1621: an inline free-text-only findings_present round (no structuredFindings, no counts) escalates gate:full via the verdict fallback", async () => {
