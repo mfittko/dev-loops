@@ -289,6 +289,30 @@ test("Step 1 names the deterministic comments fetch, the detector invocation, an
   );
 });
 
+// Operator-authorized bypass exception (#2364 round 4): Step 1 item 4 and
+// Step 4's bypass definition must not contradict each other. The exit is
+// unconditional UNLESS the operator explicitly authorizes a re-grill of an
+// already-provenanced target (a bypass), in which case Steps 2-4 run and the
+// results comment records the bypass line.
+test("Step 1 names the operator-authorized bypass exception to the grill_clean exit", () => {
+  const step1 = skill.split("## Step 1 — Load the target")[1]?.split("## Step 1b")[0] ?? "";
+  assert.match(
+    step1,
+    /UNLESS the operator explicitly authorizes a re-grill of this already-provenanced target, which is a bypass \(Step 4\)/,
+    "Step 1 must name the operator-authorized re-grill exception as a bypass deferring to Step 4",
+  );
+  assert.match(
+    step1,
+    /run Steps 2–4 anyway, and the results comment records the `bypass: operator-authorized by <handle>` line per Step 4/,
+    "Step 1 must state the bypassed run proceeds through Steps 2-4 and records the bypass line",
+  );
+  assert.match(
+    step1,
+    /Without that explicit authorization, the exit is unconditional/,
+    "Step 1 must state the exit is unconditional absent explicit operator authorization",
+  );
+});
+
 // No-rewrite/no-comment on the zero-iteration exit (#2382 round 2): the
 // provenance-recorded exit's no-mutation contract must be pinned in Step 1
 // (no body rewrite, no new comment) and Step 4 (no rationale to post, skips
