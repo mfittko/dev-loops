@@ -199,10 +199,15 @@ test("block, no waiver possible: config errors present, regardless of waiver", (
   assert.ok(result.reasons.some((r) => r.includes("config errors present")));
 });
 
-test("hunk-less mixed code+test diff uses T0 surfaces instead of becoming unclassifiable", () => {
+test("block, no waiver possible: a mixed diff whose full-diff capture is absent", () => {
   // Best-effort full-diff capture may degrade to empty while name-status still
-  // supplies honest surfaces. The shared classifier keeps the code-review core
-  // plus test lenses without widening to every optional angle.
+  // supplies honest surfaces. Angle selection legitimately classifies that from
+  // its T0 surfaces (analyzeDiff keeps `ambiguous` false so the code-review
+  // core stays in the best-effort subset) — but the size gate needs the FULL
+  // diff, so it must stay fail-closed on the missing evidence instead of
+  // inheriting the angle path's T0 fallback. wholeLogicLoc comes solely from
+  // numstat, so absent full-diff evidence could otherwise read 0 and pass for
+  // an arbitrarily large change.
   const result = computeSizeBudget({
     nameStatusOutput: MIXED_NAME_STATUS,
     diffOutput: "",
@@ -211,9 +216,32 @@ test("hunk-less mixed code+test diff uses T0 surfaces instead of becoming unclas
     waived: true,
     approvedBy: "Jane Reviewer",
   });
-  assert.equal(result.outcome, "pass");
-  assert.equal(result.ambiguous, false);
-  assert.ok(result.reasons.every((reason) => !reason.includes("unclassifiable")));
+  assert.equal(result.outcome, "block");
+  assert.equal(result.ambiguous, false, "angle selection still classifies from T0 surfaces");
+  assert.equal(result.fullDiffMissing, true, "the size gate has its OWN evidence-availability signal");
+  assert.ok(result.reasons.some((r) => r.includes("full-diff capture is absent") && r.includes("no waiver possible")));
+  assert.equal(result.waiver.defaultValid, false);
+});
+
+test("block, no waiver possible: unclassifiable (ambiguous) diff with a present but category-less full diff", () => {
+  // The `diffAnalysis.ambiguous` fail-closed branch: a mixed diff WITH a
+  // full-diff capture whose hunks establish no category (context-only hunk) is
+  // genuinely unclassifiable. This is the branch the hunk-less-mixed change
+  // must not silently disable, so it keeps its own pin independent of the
+  // fullDiffMissing signal above.
+  const result = computeSizeBudget({
+    nameStatusOutput: "M\tsrc/foo.mjs\nM\tassets/logo.png",
+    diffOutput: "@@ -1,1 +1,1 @@\n unchanged context line\n",
+    numstatOutput: numstatZ([[3, 0, "src/foo.mjs"]]),
+    sizeConfig: SIZE_CONFIG,
+    waived: true,
+    approvedBy: "Jane Reviewer",
+  });
+  assert.equal(result.outcome, "block");
+  assert.equal(result.ambiguous, true);
+  assert.equal(result.fullDiffMissing, false);
+  assert.ok(result.reasons.some((r) => r.includes("unclassifiable") && r.includes("no waiver possible")));
+  assert.equal(result.waiver.defaultValid, false);
 });
 
 test("block: T1 slice over sliceHardLoc, not waived", () => {

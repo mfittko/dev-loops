@@ -2229,6 +2229,21 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   if (options.angles !== undefined) {
     options.angles = validateAngleList(options.angles);
   }
+  // Zero-review-coverage refusal at the SHARED writer boundary every documented
+  // entry point routes through (the CLI, buildGateContext, and a direct
+  // writeGateContext call). Placed here, not in main(), because main() only
+  // covers the CLI's dynamic-resolution path: `--gate review --angles '[]'`
+  // takes the verbatim-override branch (validateAngleList accepts `[]`) and the
+  // programmatic callers never pass through main() at all, so an entry-point-
+  // local guard let a zero-angle bundle be persisted with zero dispatch groups
+  // and zero review coverage — the exact hollow gate this refusal exists to
+  // prevent. validateAngleList has already deduped, so an empty array is the
+  // only empty outcome.
+  if (Array.isArray(options.angles) && options.angles.length === 0) {
+    throw new Error(
+      `Angle resolution produced zero angles for gate ${options.gate}; refusing to write a gate-context bundle with no review coverage. Check the gate's configured angles/mandatoryAngles.`,
+    );
+  }
   const contextPath = buildGateContextPath({
     repo: options.repo,
     pr: options.pr,
@@ -3334,11 +3349,10 @@ export async function main(
         });
       }
       const { resolvedAngles, rationale } = rationaleFromResolver(resolverResult);
-      if (resolvedAngles.length === 0) {
-        throw new Error(
-          `Angle resolution produced zero angles for gate ${options.gate}; refusing to write a gate-context bundle with no review coverage. Check the gate's configured angles/mandatoryAngles.`,
-        );
-      }
+      // The zero-review-coverage refusal is enforced by writeGateContext (the
+      // shared writer every entry point routes through), so it covers this
+      // dynamic-resolution path AND the review gate's verbatim `--angles`
+      // override AND the programmatic callers — one guard, one message.
       options.angles = resolvedAngles;
       // Resolver-derived rationale is authoritative here: it reflects whatever
       // the resolver actually decided (dynamic selection, a floor override, or

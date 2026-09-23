@@ -443,6 +443,8 @@ export function analyzeT1(diffOutput, t0) {
  * @property {T0Result} t0
  * @property {T1Result | null} t1
  * @property {boolean} ambiguous — true when heuristics cannot confidently classify
+ * @property {boolean} fullDiffMissing — true when a mixed diff needed hunk-level
+ *   analysis but the full-diff capture was absent/empty (see analyzeDiff)
  */
 
 /**
@@ -560,5 +562,16 @@ export function analyzeDiff({ nameStatusOutput, diffOutput }) {
   // with T0 surface evidence stays classified and keeps its justified core.
   const ambiguous = t0Ambiguous && t1.changeCategories.length === 0;
 
-  return { t0, t1, ambiguous };
+  // Evidence-availability signal, SEPARATE from `ambiguous` on purpose. A mixed
+  // diff whose hunk-level analysis never ran (no full-diff capture) legitimately
+  // classifies through its honest T0 surfaces for ANGLE SELECTION — that is what
+  // keeps the code-review core in the best-effort subset without widening to the
+  // whole pool. But a fail-closed gate that needs the FULL diff (the size
+  // budget's unwaivable block) must not read that angle-selection fallback as
+  // complete evidence: `ambiguous` is now false for this case, so such a gate
+  // would silently downgrade. Consumers that need the diff itself key off THIS
+  // flag instead of piggybacking on the angle classifier's ambiguity flag.
+  const fullDiffMissing = t0Ambiguous && !diffOutput;
+
+  return { t0, t1, ambiguous, fullDiffMissing };
 }

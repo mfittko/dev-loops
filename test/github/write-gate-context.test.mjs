@@ -1943,6 +1943,65 @@ test("CLI without --angles + a gate with no configured angles fails closed", asy
   }
 });
 
+test("writeGateContext refuses a zero-angle bundle at the shared writer boundary every entry point routes through", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-zeroangles-writer-"));
+  try {
+    // The programmatic path never passes through main(), so the refusal must
+    // live in writeGateContext itself: validateAngleList accepts `[]`, and a
+    // direct caller (or buildGateContext) would otherwise persist a bundle with
+    // resolvedAngles: [] and zero dispatch groups — zero review coverage.
+    const options = parseWriteGateContextCliArgs([
+      "--repo", "owner/repo", "--pr", "66", "--gate", "review",
+      "--head-sha", "abc1234567890",
+      "--angles", "[]",
+    ]);
+    await assert.rejects(
+      () => writeGateContext(options, { repoRoot }),
+      /Angle resolution produced zero angles for gate review; refusing to write a gate-context bundle with no review coverage/,
+    );
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 66, gate: "review", headSha: "abc1234567890",
+    }, { repoRoot });
+    assert.equal(artifact, null, "no zero-coverage bundle may be persisted");
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("CLI --gate review --angles '[]' fails closed instead of writing a zero-coverage bundle", async () => {
+  // `--angles '[]'` is the review gate's verbatim-override branch: it used to
+  // skip the dynamic-resolution refusal entirely, so the CLI must now fail
+  // closed through the shared writer. A NON-empty explicit list still passes
+  // through verbatim (see the review-gate tripwire tests above).
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-review-emptyangles-"));
+  const priorExitCode = process.exitCode;
+  try {
+    process.exitCode = undefined;
+    const origErr = process.stderr.write;
+    const stderrChunks = [];
+    process.stderr.write = (chunk) => { stderrChunks.push(String(chunk)); return true; };
+    try {
+      await main([
+        "--repo", "owner/repo", "--pr", "66", "--gate", "review",
+        "--head-sha", "abc1234567890",
+        "--angles", "[]",
+      ], { repoRoot, run: stubGhRun });
+    } finally {
+      process.stderr.write = origErr;
+    }
+
+    assert.equal(process.exitCode, 1);
+    assert.match(stderrChunks.join(""), /Angle resolution produced zero angles for gate review/);
+    const artifact = await readGateContext({
+      repo: "owner/repo", pr: 66, gate: "review", headSha: "abc1234567890",
+    }, { repoRoot });
+    assert.equal(artifact, null, "no zero-coverage bundle may be persisted");
+  } finally {
+    process.exitCode = priorExitCode;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("CLI --base <ref> that fails to resolve fails closed (no artifact written, non-zero exit)", async () => {
   const { repoRoot, headSha } = await makeBaseDiffRepo();
   try {

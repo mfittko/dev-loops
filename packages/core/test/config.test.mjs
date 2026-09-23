@@ -5984,6 +5984,11 @@ describe("resolveGateAnglesDynamic", () => {
 
   test("checkFloors:true + explicitAngles — every fired floor term refuses the override", async () => {
     const config = tieredRiskyConfig();
+    // AC3's second half — a fired floor never widens the angle set to the full
+    // untiered pool. Pin it as a STRICT subset of the static pool for every
+    // floored term: asserting only `notDeepEqual(recommendedAngles, ["docs"])`
+    // would still pass for a regression that returned the whole static pool.
+    const staticPool = resolveGateAngles(config, "draft");
     const scenarios = [
       {
         name: "riskPath",
@@ -6036,6 +6041,11 @@ describe("resolveGateAnglesDynamic", () => {
       assert.equal(result.dynamicAnglesActive, true, scenario.name);
       assert.ok(result.recommendedAngles.includes("pr-description"), `${scenario.name}: mandatory floor missing`);
       assert.notDeepEqual(result.recommendedAngles, ["docs"], `${scenario.name}: explicit override was not refused`);
+      assert.equal(result.fallbackToAll, false, `${scenario.name}: must never fall back to all angles`);
+      assert.ok(
+        result.recommendedAngles.length < staticPool.length,
+        `${scenario.name}: a fired floor must not return the full untiered pool`,
+      );
     }
   });
 
