@@ -2883,7 +2883,7 @@ test("renderBriefingPrefix and renderScopedBriefingVariant: the Reviewer token d
   }
 });
 
-test("renderBriefingEvidence and renderScopedBriefingVariant: the Validation results section is byte-identical across the full prefix and every scoped variant", () => {
+test("renderBriefingEvidence and renderScopedBriefingVariant: the Validation results section is byte-identical across the full evidence file and every scoped variant", () => {
   const validationResultsPath = "/abs/tmp/gate-context/owner-repo/pr-9/draft_gate-abc1234567890.validation.json";
   const { text: fullText } = renderBriefingEvidence(renderInput({ validationResultsPath }));
   const extractSection = (text) => text.slice(text.indexOf("## Validation results at this head"));
@@ -4458,7 +4458,7 @@ test("#1537 regression: an ALLOWED rebuild re-resolves the spec-of-record so the
     process.exitCode = 0;
     const evidencePath = buildGateBriefingEvidencePath({ repo: "owner/repo", pr: 81, gate: "draft_gate", headSha });
     const firstPrefix = await readFile(path.resolve(repoRoot, evidencePath), "utf8");
-    assert.ok(firstPrefix.includes("first-build body"), "first build wrote its PR body into the prefix bytes");
+    assert.ok(firstPrefix.includes("first-build body"), "first build wrote its PR body into the evidence file bytes");
     const firstArtifact = await readGateContext({ repo: "owner/repo", pr: 81, gate: "draft_gate", headSha }, { repoRoot });
     assert.equal(firstArtifact.scope.acceptanceCriteria, "#42");
     assert.equal(firstArtifact.scope.acceptanceCriteriaSource, "linked-issue");
@@ -4471,7 +4471,7 @@ test("#1537 regression: an ALLOWED rebuild re-resolves the spec-of-record so the
 
     // AC5: assert BOTH the prefix bytes...
     const rebuiltPrefix = await readFile(path.resolve(repoRoot, evidencePath), "utf8");
-    assert.ok(rebuiltPrefix.includes("second-build body"), "rebuild wrote the NEW PR body into the prefix bytes (no stale reuse)");
+    assert.ok(rebuiltPrefix.includes("second-build body"), "rebuild wrote the NEW PR body into the evidence file bytes (no stale reuse)");
     assert.ok(!rebuiltPrefix.includes("first-build body"), "the prior body was overwritten, not preserved by a reuse path");
     // ...AND the artifact's spec fields (AC4: no reuse path skips resolvePrSpecContext).
     const rebuiltArtifact = await readGateContext({ repo: "owner/repo", pr: 81, gate: "draft_gate", headSha }, { repoRoot });
