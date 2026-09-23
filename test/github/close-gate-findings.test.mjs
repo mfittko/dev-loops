@@ -1019,12 +1019,47 @@ test("an answered, judge-rejected question found only in a PRIOR local ledger is
       await mkdir(findingsDir, { recursive: true });
       await writeFile(
         path.join(findingsDir, `draft_gate-${nthHeadSha(1)}.json`),
-        JSON.stringify({ findings: [finding] }),
+        JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", loggedAt: "2026-08-03T00:00:00.000Z", findings: [finding] }),
         "utf8",
       );
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
       assert.equal(result.rejectClosed, 1);
       assert.equal(result.unresolvedGateThreadCount, 0);
+    },
+  ));
+});
+
+// ADR 0088 tier ordering: the CURRENT ledger's own finding (tier 1) always
+// wins over a PRIOR local ledger for the same fingerprint (tier 2) —
+// resolveJudgeRejection never even calls findJudgeDispositionForFingerprint
+// when a current match exists, so a stale local ledger can never override
+// the round's own judge verdict.
+test("tier 1 (current ledger) wins over a disagreeing tier 2 (prior local ledger): current act blocks reject-close", async () => {
+  const currentFinding = { severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "act", judgeRationale: "Worth fixing after all." };
+  const priorFinding = { severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "reject", judgeRationale: "Stale prior-round rejection." };
+  const fp = fingerprintFinding(currentFinding);
+  assert.equal(fp, fingerprintFinding(priorFinding)); // same summary → same fingerprint, by construction
+  const questionBody = `${buildFindingMarker({ fp, severity: "question", angle: "scope", round: 2 })}\n**question** (\`scope\`): why this approach?`;
+  const thread = threadNode({
+    id: "THREAD_Q_TIER1_WINS",
+    commentId: 6276,
+    body: questionBody,
+    replies: [{ body: "Answering now.", author: "operator" }],
+  });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [currentFinding] }), (ledgerPath) => withGhStub(
+    // No reply/resolve entries: tier 1's "act" must win and skip reject-close.
+    roundEntries({ issueComments: roundHistory("draft_gate", 2), threads: [thread] }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
+      await mkdir(findingsDir, { recursive: true });
+      await writeFile(
+        path.join(findingsDir, `draft_gate-${nthHeadSha(1)}.json`),
+        JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", loggedAt: "2026-08-03T00:00:00.000Z", findings: [priorFinding] }),
+        "utf8",
+      );
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.rejectClosed, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
     },
   ));
 });

@@ -1573,11 +1573,15 @@ high finding uses, since `isDeferredAtRound` never selects it for auto-deferral 
 enforced and tested). Which of the three replies a fixer sends — a plain answer, a
 promoting-to-defect-severity answer, or an escalation to the author — is a per-thread fixer
 judgment call, not a state machine this codebase drives or unit-tests; only the
-never-auto-deferred invariant above is. ONE reject-close exception (ADR 0088, issue #2381): a
+never-auto-deferred invariant above is. ONE reject-close exception (ADR 0088): a
 question the judge disposed `reject` never reaches the fixer's act list, so the fixer's own
 answer-and-resolve path above never runs for it — once the thread carries a resolving answer
-reply from someone other than the gate itself, `close-gate-findings.mjs` closes it directly,
-citing the judge's rejection rationale in the reply. This is still a reply-and-resolve, never a
+reply, `close-gate-findings.mjs` closes it directly, citing the judge's rejection rationale in
+the reply. A resolving answer reply is identified by WHAT IT IS, never by WHO POSTED IT (a
+non-empty, non-bot, non-System/ghost comment that is not the gate's own automation output and
+not a bare `@copilot` summon): a single-account setup can post the finding and every reply
+under the same authenticated login, so "posted by someone other than the gate" is never the
+criterion. This is still a reply-and-resolve, never a
 `disposition=deferred` stamp, and a question is still never fileable; an unanswered question, or
 one the judge disposed `act`/`defer`, is untouched by this exception and still follows the paths
 above. A nit thread is

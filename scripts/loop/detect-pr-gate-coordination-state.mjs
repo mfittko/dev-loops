@@ -27,6 +27,7 @@ import { buildLogPath } from "../github/write-gate-findings-log.mjs";
 import { buildContainmentMap } from "../github/_commit-containment.mjs";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
 import { countUnresolvedGateAuthoredThreadsFromRawNodes } from "../github/_gate-finding-surface.mjs";
+import { resolveAuthenticatedLogin } from "../github/post-gate-findings.mjs";
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.mjs";
 import { classifyDeltaSinceLastReview, getLastCopilotReviewHeadSha } from "../github/request-copilot-review.mjs";
@@ -863,16 +864,30 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   const threadsPayload = await fetchGithubReviewThreadsPayload(options, runtime);
   const parsedThreads = parseReviewThreads(threadsPayload);
   // Gate-authored unresolved thread count (ADR 0088), reusing the SAME
-  // raw thread payload already fetched above — no extra gh round-trip. This
-  // is the exact predicate close-gate-findings.mjs/ready-for-review.mjs's own
-  // gate-close assertion uses (countUnresolvedGateAuthoredThreadsFromRawNodes,
-  // marker-only fail-closed proxy); feeding it into evaluatePrGateCoordination
+  // raw thread payload already fetched above. This must count the EXACT SAME
+  // set close-gate-findings.mjs/ready-for-review.mjs's own gate-close
+  // assertion counts — author identity, not the marker-only superset — or
+  // the two can disagree on which threads are "unresolved gate-authored" for
+  // the identical PR state. A login-resolution failure fails closed (-1),
+  // same as an unreadable thread payload: the detector must never guess a
+  // marker-only (broader) count when the exact-author count is unavailable.
+  // The `gh api user` round-trip to resolve that login only runs when the
+  // cheap marker-only pass below finds at least one candidate: author
+  // identity can only NARROW that count (never widen it), so a marker-only
+  // 0 already proves the exact-author count is 0 too, with no gh call
+  // needed. Feeding this into evaluatePrGateCoordination
   // (buildGateCoordinationEvaluatorInput below) is what reconciles this
   // detector with detect-checkpoint-evidence.mjs: neither can report
   // mark_ready_for_review/clean while the other reports unresolved threads.
   let unresolvedGateThreadCount;
   try {
-    unresolvedGateThreadCount = countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload);
+    const markerOnlyCount = countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload);
+    if (markerOnlyCount === 0) {
+      unresolvedGateThreadCount = 0;
+    } else {
+      const login = await resolveAuthenticatedLogin(runtime);
+      unresolvedGateThreadCount = countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload, login);
+    }
   } catch {
     unresolvedGateThreadCount = -1;
   }

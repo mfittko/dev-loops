@@ -38,6 +38,12 @@ const REJECTED_FINDING = {
 const FP = fingerprintFinding(REJECTED_FINDING);
 const QUESTION_MARKER_BODY = `${buildFindingMarker({ fp: FP, severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): why this approach?`;
 
+const DEFECT_COMMENT_ID = 5101;
+const DEFECT_THREAD_ID = "THREAD_AGREEMENT_DEFECT";
+const DEFECT_FINDING = { severity: "high", angle: "security", summary: "missing auth check" };
+const DEFECT_FP = fingerprintFinding(DEFECT_FINDING);
+const DEFECT_MARKER_BODY = `${buildFindingMarker({ fp: DEFECT_FP, severity: "high", angle: "security", round: 1 })}\n**high** (\`security\`): missing auth check`;
+
 const DRAFT_GATE_BODY = renderGateReviewCommentBody({
   gate: "draft_gate",
   headSha: HEAD_SHA,
@@ -65,10 +71,13 @@ function threadNodeFromState(threadState) {
 }
 
 // One stateful mock shared across BOTH scripts: reply/resolve calls from
-// close-gate-findings mutate `threadState`, and a LATER ready-for-review read
-// observes that mutation — exactly like two separate calls against the real
-// GitHub API would.
-function buildSharedMock(threadState) {
+// close-gate-findings mutate the matching `threadState` (by threadId), and a
+// LATER ready-for-review read observes that mutation — exactly like two
+// separate calls against the real GitHub API would. Generalized to N threads
+// so a mixed question+defect fixture can drive both scripts over the SAME
+// PR state; buildSharedMock (single thread) is a thin wrapper kept for the
+// two pre-existing single-thread tests.
+function buildSharedMockForThreads(threadStates) {
   const calls = [];
   const runChild = async (cmd, args = [], _env, stdinText = "") => {
     calls.push({ cmd, args, stdinText });
@@ -89,11 +98,14 @@ function buildSharedMock(threadState) {
       };
     }
     if (args[0] === "api" && args[1] === "graphql" && joined.includes("resolveReviewThread")) {
-      threadState.isResolved = true;
-      return { code: 0, stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: threadState.threadId, isResolved: true } } } })}\n`, stderr: "" };
+      const threadIdArg = args.find((a) => typeof a === "string" && a.startsWith("threadId="));
+      const targetId = threadIdArg?.slice("threadId=".length);
+      const target = threadStates.find((t) => t.threadId === targetId) ?? threadStates[0];
+      target.isResolved = true;
+      return { code: 0, stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: target.threadId, isResolved: true } } } })}\n`, stderr: "" };
     }
     if (args[0] === "api" && args[1] === "graphql" && joined.includes("reviewThreads")) {
-      const nodes = [threadNodeFromState(threadState)];
+      const nodes = threadStates.map(threadNodeFromState);
       return {
         code: 0,
         stdout: `${JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } } } })}\n`,
@@ -131,6 +143,25 @@ function buildSharedMock(threadState) {
   return { runChild, calls };
 }
 
+function buildSharedMock(threadState) {
+  return buildSharedMockForThreads([threadState]);
+}
+
+// A gh failure reading the review-thread listing (e.g. an API outage) — both
+// scripts must fail CLOSED (unresolvedGateThreadCount: -1), never silently
+// proceed as if 0 threads were unresolved.
+function buildUnreadableThreadsMock(threadStates) {
+  const base = buildSharedMockForThreads(threadStates);
+  const runChild = async (cmd, args = [], env, stdinText = "") => {
+    const joined = args.join(" ");
+    if (cmd === "gh" && args[0] === "api" && args[1] === "graphql" && joined.includes("reviewThreads")) {
+      return { code: 1, stdout: "", stderr: "gh: API rate limit exceeded\n" };
+    }
+    return base.runChild(cmd, args, env, stdinText);
+  };
+  return { runChild, calls: base.calls };
+}
+
 function passingSizeBudget() {
   return { ok: true, outcome: "pass", wholeLogicLoc: 0, t1SliceLoc: 0, reasons: [], waiver: { requested: false, approvedBy: null, t1Valid: false, defaultValid: false } };
 }
@@ -141,13 +172,13 @@ function passingCommentDiscipline() {
   return { ok: true, outcome: "pass", findings: [], reasons: [] };
 }
 
-async function withLedgerFile(fn) {
+async function withLedgerFile(fn, { findings = [REJECTED_FINDING] } = {}) {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "agreement-ledger-"));
   try {
     const ledgerPath = path.join(tmpDir, "ledger.json");
     await writeFile(ledgerPath, JSON.stringify({
       repo: REPO, pr: PR, gate: "draft_gate", headSha: HEAD_SHA, verdict: "findings_present",
-      findings: [REJECTED_FINDING],
+      findings,
     }), "utf8");
     return await fn(ledgerPath);
   } finally {
@@ -230,6 +261,187 @@ test("#2381 shared fixture: an UNANSWERED, judge-rejected question — close-gat
       ),
       /1 unresolved gate-authored review thread/,
     );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// #2381 item 9: a defect (high) thread never auto-resolves — close-gate-findings
+// and ready-for-review must agree it stays unresolved, and the refusal names
+// the defect remedy (fixer fix-close / disposition-pass defer-close), never
+// the question remedy.
+test("#2381 shared fixture: a defect (high) thread — close-gate-findings never auto-resolves it, and ready-for-review agrees it stays unresolved", async () => {
+  const threadState = {
+    threadId: DEFECT_THREAD_ID,
+    isResolved: false,
+    comments: [
+      { databaseId: DEFECT_COMMENT_ID, body: DEFECT_MARKER_BODY, author: LOGIN },
+    ],
+  };
+  const mock = buildSharedMockForThreads([threadState]);
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "agreement-repo-root-defect-"));
+  try {
+    const closeResult = await withLedgerFile(
+      (ledgerPath) => closeGateFindings({ ledgerPath }, { env: runIdFreeEnv(), ghCommand: "gh", runChild: mock.runChild, repoRoot }),
+      { findings: [DEFECT_FINDING] },
+    );
+    assert.equal(closeResult.rejectClosed, 0);
+    assert.equal(closeResult.deferredResolved, 0);
+    assert.equal(closeResult.unresolvedGateThreadCount, 1);
+    assert.equal(threadState.isResolved, false);
+
+    await assert.rejects(
+      () => readyForReview(
+        { repo: REPO, pr: PR, waiveSizeBudget: false, reason: null, approvedBy: null },
+        {
+          env: runIdFreeEnv(),
+          ghCommand: "gh",
+          repoRoot,
+          runChild: mock.runChild,
+          syncBoardStatus: async () => ({ ok: true, skipped: true, reason: "test seam" }),
+          evaluatePrSizeBudget: async () => passingSizeBudget(),
+          evaluateAdrTripwire: async () => passingAdrTripwire(),
+          evaluateCommentDiscipline: async () => passingCommentDiscipline(),
+        },
+      ),
+      /1 unresolved gate-authored review thread\(s\): 1 open defect thread\(s\)/,
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// Mixed case: an answered, judge-rejected question (reject-closed) PLUS an
+// open defect thread (never auto-resolved) on the same PR — the reported
+// count/refusal must reflect ONLY the still-open defect thread, and the
+// refusal text must name the defect remedy, not the (already-cleared)
+// question remedy.
+test("#2381 shared fixture: a mixed question+defect PR — the question reject-closes, the defect thread stays unresolved, and the refusal names only the defect remedy", async () => {
+  const questionThreadState = {
+    threadId: QUESTION_THREAD_ID,
+    isResolved: false,
+    comments: [
+      { databaseId: QUESTION_COMMENT_ID, body: QUESTION_MARKER_BODY, author: LOGIN },
+      { databaseId: QUESTION_COMMENT_ID + 1, body: "Answered: see the linked issue's discussion.", author: "operator" },
+    ],
+  };
+  const defectThreadState = {
+    threadId: DEFECT_THREAD_ID,
+    isResolved: false,
+    comments: [
+      { databaseId: DEFECT_COMMENT_ID, body: DEFECT_MARKER_BODY, author: LOGIN },
+    ],
+  };
+  const mock = buildSharedMockForThreads([questionThreadState, defectThreadState]);
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "agreement-repo-root-mixed-"));
+  try {
+    const closeResult = await withLedgerFile(
+      (ledgerPath) => closeGateFindings({ ledgerPath }, { env: runIdFreeEnv(), ghCommand: "gh", runChild: mock.runChild, repoRoot }),
+      { findings: [REJECTED_FINDING, DEFECT_FINDING] },
+    );
+    assert.equal(closeResult.rejectClosed, 1);
+    assert.equal(closeResult.unresolvedGateThreadCount, 1);
+    assert.equal(questionThreadState.isResolved, true, "the question thread must have been reject-closed");
+    assert.equal(defectThreadState.isResolved, false, "the defect thread must stay open");
+
+    await assert.rejects(
+      () => readyForReview(
+        { repo: REPO, pr: PR, waiveSizeBudget: false, reason: null, approvedBy: null },
+        {
+          env: runIdFreeEnv(),
+          ghCommand: "gh",
+          repoRoot,
+          runChild: mock.runChild,
+          syncBoardStatus: async () => ({ ok: true, skipped: true, reason: "test seam" }),
+          evaluatePrSizeBudget: async () => passingSizeBudget(),
+          evaluateAdrTripwire: async () => passingAdrTripwire(),
+          evaluateCommentDiscipline: async () => passingCommentDiscipline(),
+        },
+      ),
+      (error) => {
+        assert.match(error.message, /1 unresolved gate-authored review thread\(s\): 1 open defect thread\(s\)/);
+        assert.doesNotMatch(error.message, /question thread/);
+        return true;
+      },
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// The -1 unreadable case: a gh failure reading the review-thread listing
+// must fail CLOSED on both surfaces, never silently proceed as if 0 threads
+// were unresolved.
+test("#2381 shared fixture: an unreadable thread state (-1) refuses ready-for-review with its own distinct message", async () => {
+  const threadState = {
+    threadId: QUESTION_THREAD_ID,
+    isResolved: false,
+    comments: [
+      { databaseId: QUESTION_COMMENT_ID, body: QUESTION_MARKER_BODY, author: LOGIN },
+      { databaseId: QUESTION_COMMENT_ID + 1, body: "Answered: see the linked issue's discussion.", author: "operator" },
+    ],
+  };
+  const mock = buildUnreadableThreadsMock([threadState]);
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "agreement-repo-root-unreadable-"));
+  try {
+    await assert.rejects(
+      () => readyForReview(
+        { repo: REPO, pr: PR, waiveSizeBudget: false, reason: null, approvedBy: null },
+        {
+          env: runIdFreeEnv(),
+          ghCommand: "gh",
+          repoRoot,
+          runChild: mock.runChild,
+          syncBoardStatus: async () => ({ ok: true, skipped: true, reason: "test seam" }),
+          evaluatePrSizeBudget: async () => passingSizeBudget(),
+          evaluateAdrTripwire: async () => passingAdrTripwire(),
+          evaluateCommentDiscipline: async () => passingCommentDiscipline(),
+        },
+      ),
+      /could not read review-thread state/,
+    );
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// An answer authored by THE GATE'S OWN LOGIN (single-account setup, #2381
+// item 1) must still count as a resolving answer reply — identity is never
+// the criterion.
+test("#2381 shared fixture: an answer authored by the gate's own login still reject-closes the question (single-account setup)", async () => {
+  const threadState = {
+    threadId: QUESTION_THREAD_ID,
+    isResolved: false,
+    comments: [
+      { databaseId: QUESTION_COMMENT_ID, body: QUESTION_MARKER_BODY, author: LOGIN },
+      { databaseId: QUESTION_COMMENT_ID + 1, body: "Answered: see the linked issue's discussion.", author: LOGIN },
+    ],
+  };
+  const mock = buildSharedMockForThreads([threadState]);
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "agreement-repo-root-samelogin-"));
+  try {
+    const closeResult = await withLedgerFile((ledgerPath) =>
+      closeGateFindings({ ledgerPath }, { env: runIdFreeEnv(), ghCommand: "gh", runChild: mock.runChild, repoRoot }),
+    );
+    assert.equal(closeResult.rejectClosed, 1);
+    assert.equal(closeResult.unresolvedGateThreadCount, 0);
+    assert.equal(threadState.isResolved, true);
+
+    const readyResult = await readyForReview(
+      { repo: REPO, pr: PR, waiveSizeBudget: false, reason: null, approvedBy: null },
+      {
+        env: runIdFreeEnv(),
+        ghCommand: "gh",
+        repoRoot,
+        runChild: mock.runChild,
+        syncBoardStatus: async () => ({ ok: true, skipped: true, reason: "test seam" }),
+        evaluatePrSizeBudget: async () => passingSizeBudget(),
+        evaluateAdrTripwire: async () => passingAdrTripwire(),
+        evaluateCommentDiscipline: async () => passingCommentDiscipline(),
+      },
+    );
+    assert.equal(readyResult.ok, true);
+    assert.equal(readyResult.action, "marked_ready");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

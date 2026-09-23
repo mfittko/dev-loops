@@ -123,6 +123,7 @@ function toGateStatus(comment, marker, currentHeadSha, unresolvedGateThreadCount
   const cleanEvidenceExists = normalizedComment.visible && normalizedComment.verdict === "clean" && normalizedComment.headSha !== null;
   const hasThreadSignal = Number.isInteger(unresolvedGateThreadCount);
   const gateThreadsClean = !hasThreadSignal || unresolvedGateThreadCount === 0;
+  const markerVerdictClean = normalizedMarker.visible && markerHeadMatches && normalizedMarker.verdict === "clean" && normalizedMarker.contractComplete;
 
   return {
     visible: normalizedComment.visible,
@@ -134,7 +135,13 @@ function toGateStatus(comment, marker, currentHeadSha, unresolvedGateThreadCount
     findingsSummary: normalizedComment.findingsSummary ?? normalizedMarker.findingsSummary,
     nextAction: normalizedComment.nextAction ?? normalizedMarker.nextAction,
     contractComplete: normalizedMarker.visible && markerHeadMatches && normalizedMarker.contractComplete,
-    currentHeadClean: normalizedMarker.visible && markerHeadMatches && normalizedMarker.verdict === "clean" && normalizedMarker.contractComplete && gateThreadsClean,
+    currentHeadClean: markerVerdictClean && gateThreadsClean,
+    // ADR 0088: the marker verdict is clean on its own terms, but a
+    // gate-authored thread still dangles — distinct from "not clean at all"
+    // (draftGate below uses this to name the thread blocker directly rather
+    // than re-running the draft gate or blocking on CI, neither of which can
+    // ever clear a dangling thread).
+    markerCleanThreadsUnresolved: markerVerdictClean && !gateThreadsClean,
     cleanEvidenceExists,
   };
 }
@@ -1230,6 +1237,43 @@ function evaluatePrGateCoordinationCore(input = {}) {
       PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
       PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
     ];
+
+    // ADR 0088: the round's draft_gate marker verdict is ALREADY clean — CI
+    // pending/failing or re-running draft_gate can never clear a dangling
+    // gate-authored thread (e.g. an answered, judge-rejected `question`
+    // close-gate-findings has not yet reject-closed), so this must run BEFORE
+    // the CI-status checks below: neither a CI-blocked nor a run_draft_gate
+    // result would name the real blocker, and a loop that followed
+    // run_draft_gate would re-run a gate round that already passed.
+    // reply_resolve_review_threads (FEEDBACK_RESOLUTION) is reused as-is —
+    // resolving the thread (reject-close or fixer triage) is exactly what
+    // this action already means on the post-draft path.
+    if (draftGate.markerCleanThreadsUnresolved) {
+      pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS]);
+      pushUnique(forbiddenActions, [
+        PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+        ...draftReviewForbidden,
+      ]);
+      return buildResult({
+        repo: input.repo ?? null,
+        pr: Number.isInteger(input.pr) ? input.pr : null,
+        currentHeadSha,
+        lifecycleState: lifecycleState || STATE.PR_DRAFT,
+        loopDisposition: DISPOSITION.UNRESOLVED_FEEDBACK,
+        gateBoundary: PR_CHECKPOINT.FEEDBACK_RESOLUTION,
+        draftGateAlreadySatisfied,
+        draftGate,
+        preApprovalGate,
+        allowedNextActions,
+        forbiddenActions,
+        nextAction: PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS,
+        reason: "The PR is still draft and this round's draft_gate verdict is clean, but a gate-authored review thread is still unresolved (ADR 0088) — reply/resolve it (close-gate-findings' reject-close pass for an answered, judge-rejected question, or fixer triage for an open defect thread) rather than re-running the draft gate.",
+        mergeStateStatus,
+        conflictFiles,
+        refinementArtifact,
+        copilotReviewRoundCount,
+      });
+    }
 
     if (!draftGate.currentHeadClean && draftGateRequireCi) {
       if (ciStatus === "failure") {

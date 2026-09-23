@@ -106,8 +106,14 @@ export function describeUnresolvedGateThreadReasons(breakdown, fallbackCount) {
     );
   }
   if (other > 0) {
+    // Honest about the ceiling: a judge-rejected high (never deferred) or
+    // in-window medium (not yet past its fix window) thread can be cleared
+    // by NEITHER remedy named here — no sanctioned tool auto-resolves a
+    // judge-rejected defect, unlike the question case above. Naming a third,
+    // human remedy for that case is more honest than implying fix-close or
+    // defer-close always applies.
     reasons.push(
-      `${other} open defect thread(s) (high/medium/low/nit): resolve via fixer fix-close, or the disposition pass's defer-close (close-gate-findings)`,
+      `${other} open defect thread(s) (high/medium/low/nit): resolve via fixer fix-close, or the disposition pass's defer-close (close-gate-findings) once it is eligible (medium past its fix window, low/nit at gate close) — a judge-rejected high or in-window medium is cleared by neither and needs an operator decision`,
     );
   }
   if (reasons.length === 0) {

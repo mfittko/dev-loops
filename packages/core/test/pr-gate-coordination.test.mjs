@@ -64,10 +64,35 @@ test("#2381: a clean draft_gate marker with a dangling unresolvedGateThreadCount
     unresolvedGateThreadCount: 1,
   });
 
+  // The marker verdict is already clean — re-running draft_gate (run_draft_gate)
+  // can never clear a dangling thread, so this must name the real blocker
+  // instead (markerCleanThreadsUnresolved / reply_resolve_review_threads),
+  // never RUN_DRAFT_GATE.
   assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
-  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
+  assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS);
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.FEEDBACK_RESOLUTION);
   assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+  assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
   assert.equal(result.draftGate.currentHeadClean, false);
+  assert.equal(result.draftGate.markerCleanThreadsUnresolved, true);
+});
+
+test("#2381: a clean draft_gate marker with a dangling unresolvedGateThreadCount names the thread blocker even while CI is pending (the marker blocker is never masked by CI)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 10,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    ciStatus: "pending",
+    draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+    unresolvedGateThreadCount: 1,
+  });
+
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS);
+  assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.WAIT_FOR_CI);
 });
 
 test("#2381: unresolvedGateThreadCount: 0 still allows mark_ready_for_review (positive counterpart)", () => {
@@ -2313,6 +2338,7 @@ test("guard rewrite deep-equals the exact expected shape when no draft_gate comm
     nextAction: null,
     contractComplete: false,
     currentHeadClean: false,
+    markerCleanThreadsUnresolved: false,
     cleanEvidenceExists: false,
   };
 
@@ -2379,6 +2405,7 @@ test("guard rewrite deep-equals the exact expected shape when a non-clean draft_
       nextAction: null,
       contractComplete: true,
       currentHeadClean: false,
+      markerCleanThreadsUnresolved: false,
       cleanEvidenceExists: false,
     },
     preApprovalGate: {
@@ -2392,6 +2419,7 @@ test("guard rewrite deep-equals the exact expected shape when a non-clean draft_
       nextAction: null,
       contractComplete: false,
       currentHeadClean: false,
+      markerCleanThreadsUnresolved: false,
       cleanEvidenceExists: false,
     },
     allowedNextActions: [PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE],

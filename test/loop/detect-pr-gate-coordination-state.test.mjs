@@ -9,7 +9,7 @@ import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 import { detectPrGateCoordinationState, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, resolvePostConvergenceReviewSuppressed, countPrChangedLines, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { detectPostConvergenceSignificantChange } from "../../scripts/loop/_post-convergence-change.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
-import { buildFindingMarker, countUnresolvedGateAuthoredThreadsFromRawNodes } from "../../scripts/github/_gate-finding-surface.mjs";
+import { buildFindingMarker } from "../../scripts/github/_gate-finding-surface.mjs";
 import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { isRoundCapReachedCleanGrant } from "@dev-loops/core/loop/pr-gate-coordination";
 import { evaluateMergePreconditions } from "@dev-loops/core/loop/merge-approval";
@@ -277,6 +277,7 @@ test("detect-pr-gate-coordination-state allows post-draft flow for non-draft PRs
         nextAction: "mark ready for review",
         contractComplete: false,
         currentHeadClean: false,
+        markerCleanThreadsUnresolved: false,
         cleanEvidenceExists: true,
       },
       preApprovalGate: {
@@ -290,6 +291,7 @@ test("detect-pr-gate-coordination-state allows post-draft flow for non-draft PRs
         nextAction: null,
         contractComplete: false,
         currentHeadClean: false,
+        markerCleanThreadsUnresolved: false,
         cleanEvidenceExists: false,
       },
       allowedNextActions: ["request_copilot_review"],
@@ -452,6 +454,14 @@ test("detect-pr-gate-coordination-state routes a ready PR with only unresolved g
         }),
       },
       {
+        // ADR 0088: at least one candidate (marker-bearing) thread was found
+        // above, so the detector resolves the authenticated login to narrow
+        // the count to author identity — same login the gate-authored
+        // thread's own comment carries, so the count stays 1.
+        assertArgs: ["api", "user"],
+        stdout: jsonLine({ login: "dev-loops-gate[bot]" }),
+      },
+      {
         assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid"],
         stdout: jsonLine({ headRefOid: "def56789abcdef" }),
       },
@@ -548,6 +558,10 @@ test("#2381: a DRAFT PR with a clean draft_gate marker but ONE unresolved gate-a
       },
       { stdout: "{\"users\":[]}\n" },
       { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [questionThreadNode], pageInfo: { hasNextPage: false } } } } } }) },
+      // ADR 0088: a candidate (marker-bearing) thread was found, so the
+      // detector resolves the authenticated login before narrowing the count
+      // to author identity — matches the thread's own gate-authored login.
+      { stdout: jsonLine({ login: "dev-loops-gate[bot]" }) },
       { stdout: jsonLine({ headRefOid: headSha }) },
       { stdout: jsonLine([[{ id: 11, body: cleanDraftGateBody, html_url: "https://example.test/comment/11", updated_at: "2026-05-31T20:00:00Z" }]]) },
       { stdout: "[]\n" }, // detectCheckpointEvidence's own PR-reviews read
@@ -571,10 +585,15 @@ test("#2381: a DRAFT PR with a clean draft_gate marker but ONE unresolved gate-a
     assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
     assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
 
-    // The evidence detector (detect-checkpoint-evidence.mjs) reports the SAME
-    // raw thread payload as 1 unresolved gate-authored thread — the two
-    // detectors now agree: neither reports the PR ready.
-    assert.equal(countUnresolvedGateAuthoredThreadsFromRawNodes([questionThreadNode]), 1);
+    // Assert the detector's OWN actual output (the exact predicate
+    // detect-checkpoint-evidence.mjs's own thread counter uses,
+    // countUnresolvedGateAuthoredThreadsFromRawNodes, run through the real gh
+    // pipeline this test already stubbed) — not a redundant direct call with
+    // a hand-built single-node array, which would prove nothing about the
+    // detector's own wiring. Both detectors now agree: neither reports the
+    // PR ready.
+    const context = await loadPrGateCoordinationContext({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env));
+    assert.equal(context.unresolvedGateThreadCount, 1);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

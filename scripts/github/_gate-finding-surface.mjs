@@ -836,11 +836,17 @@ export function countUnresolvedGateAuthoredThreadsBySeverity(threads, login) {
  * Map the raw GraphQL review-thread nodes `fetchGithubReviewThreadsPayload`
  * (capture-review-threads.mjs) returns onto the `{ author, body, isResolved }`
  * shape `countUnresolvedGateAuthoredThreads` consumes, then count unresolved
- * gate-authored threads MARKER-ONLY (`login=null`). Lets a caller that already
- * fetched the raw thread payload reuse it for the gate-close assertion instead
- * of issuing a second thread walk.
+ * gate-authored threads. `login` defaults to `null` (MARKER-ONLY, the
+ * pre-existing fail-closed proxy every caller that never resolves a login
+ * keeps getting unchanged) — a caller that HAS resolved the authenticated
+ * login (ADR 0088: detect-pr-gate-coordination-state.mjs, to count the exact
+ * same set close-gate-findings.mjs/ready-for-review.mjs count, not a wider
+ * marker-only superset) passes it through to narrow the count to AUTHOR
+ * identity, same as `countUnresolvedGateAuthoredThreads` itself. Lets a
+ * caller that already fetched the raw thread payload reuse it for the
+ * gate-close assertion instead of issuing a second thread walk.
  */
-export function countUnresolvedGateAuthoredThreadsFromRawNodes(rawNodes) {
+export function countUnresolvedGateAuthoredThreadsFromRawNodes(rawNodes, login = null) {
   // A non-array `rawNodes` is a caller contract violation; fail CLOSED — let
   // the TypeError propagate (detect-checkpoint-evidence sets
   // unresolvedGateThreadCount = -1/blocked) rather than silently coerce to
@@ -858,7 +864,7 @@ export function countUnresolvedGateAuthoredThreadsFromRawNodes(rawNodes) {
       isResolved: Boolean(node?.isResolved),
     };
   });
-  return countUnresolvedGateAuthoredThreads(threads, null);
+  return countUnresolvedGateAuthoredThreads(threads, login);
 }
 
 /**
@@ -1217,21 +1223,10 @@ async function countLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, re
   return filenames.length;
 }
 
-/**
- * Tier 2 of the reject-close judge-disposition lookup (close-gate-findings.mjs,
- * ADR 0088): scan every LOCAL findings-log ledger file for this repo/pr/gate
- * (any head/round — the judge may have rejected the finding several rounds
- * ago, and a re-raised finding is suppressed from the CURRENT ledger once
- * already posted, per collectSuppressedFingerprints) for a finding whose
- * fingerprint matches `fp` and carries a `judgeDisposition`. Returns
- * `{ disposition, rationale }` (rationale `null` when absent) for the first
- * match, or `null` when no local ledger carries one — the caller falls back
- * to parseRenderedJudgeDisposition (tier 3) then, which has no rationale.
- * A corrupt/unreadable local ledger file is skipped, never thrown — a stale
- * or hand-edited local artifact must not block the lookup.
- */
-export async function findJudgeDispositionForFingerprint({ repo, pr, gate, headSha, tmpRoot, repoRoot, fp }) {
-  const { dir, filenames } = await listLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot });
+// Every judge-disposition match found across every local ledger file, before
+// findJudgeDispositionForFingerprint below picks a winner among them.
+async function collectLocalJudgeDispositionMatches({ dir, filenames, repo, pr, gate, fp }) {
+  const matches = [];
   for (const filename of filenames) {
     let parsed;
     try {
@@ -1239,24 +1234,77 @@ export async function findJudgeDispositionForFingerprint({ repo, pr, gate, headS
     } catch {
       continue;
     }
-    const findings = Array.isArray(parsed?.findings) ? parsed.findings : [];
+    if (!parsed || typeof parsed !== "object") continue;
+    // A ledger's directory placement alone does not prove it belongs to
+    // this repo/pr/gate: buildLogPath's repo slug collapses "owner/a-b" and
+    // "owner-a/b" to the same directory segment, and a stale/hand-copied
+    // ledger can otherwise land in the right directory with the wrong
+    // content — cross-check the ledger's OWN recorded repo/pr/gate before
+    // trusting any finding inside it.
+    if (parsed.repo !== repo || String(parsed.pr) !== String(pr) || parsed.gate !== gate) continue;
+    const loggedAtMs = typeof parsed.loggedAt === "string" ? Date.parse(parsed.loggedAt) : NaN;
+    const findings = Array.isArray(parsed.findings) ? parsed.findings : [];
     for (const finding of findings) {
       if (!finding || typeof finding !== "object") continue;
       if (typeof finding.judgeDisposition !== "string" || finding.judgeDisposition.trim().length === 0) continue;
-      let matches;
+      let fpMatches;
       try {
-        matches = fingerprintFinding(finding) === fp;
+        fpMatches = fingerprintFinding(finding) === fp;
       } catch {
         continue; // A malformed finding (no summary) can never fingerprint-match.
       }
-      if (!matches) continue;
+      if (!fpMatches) continue;
       const rationale = typeof finding.judgeRationale === "string" && finding.judgeRationale.trim().length > 0
         ? finding.judgeRationale.trim()
         : null;
-      return { disposition: finding.judgeDisposition.trim(), rationale };
+      matches.push({
+        disposition: finding.judgeDisposition.trim(),
+        rationale,
+        loggedAtMs: Number.isFinite(loggedAtMs) ? loggedAtMs : null,
+      });
     }
   }
-  return null;
+  return matches;
+}
+
+/**
+ * Tier 2 of the reject-close judge-disposition lookup (close-gate-findings.mjs,
+ * ADR 0088): scan every LOCAL findings-log ledger file for this repo/pr/gate
+ * (any head/round — the judge may have rejected the finding several rounds
+ * ago, and a re-raised finding is suppressed from the CURRENT ledger once
+ * already posted, per collectSuppressedFingerprints) for a finding whose
+ * fingerprint matches `fp` and carries a `judgeDisposition`. Multiple prior
+ * ledgers can carry the SAME fingerprint with DIFFERENT dispositions (a
+ * finding re-raised and re-judged across rounds) — this picks the match with
+ * the GREATEST `loggedAt` (the most recently written ledger wins), never the
+ * first one `readdir` happens to return (directory order is filesystem/SHA
+ * order, not chronological). When the greatest `loggedAt` is unreadable/tied
+ * across more than one candidate AND those candidates disagree on the
+ * disposition, this fails closed (`null`, no reject-close) rather than
+ * guessing — an unordered disagreement must never let a rejected disposition
+ * win by accident, or vice versa. A corrupt/unreadable local ledger file, or
+ * one whose own recorded repo/pr/gate does not match the inputs, is skipped,
+ * never thrown — a stale/foreign/hand-edited local artifact must not block
+ * or poison the lookup.
+ */
+export async function findJudgeDispositionForFingerprint({ repo, pr, gate, headSha, tmpRoot, repoRoot, fp }) {
+  const { dir, filenames } = await listLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot });
+  const matches = await collectLocalJudgeDispositionMatches({ dir, filenames, repo, pr, gate, fp });
+  if (matches.length === 0) return null;
+  const allAgree = matches.every((m) => m.disposition === matches[0].disposition);
+  const timestamped = matches.filter((m) => m.loggedAtMs !== null);
+  if (timestamped.length !== matches.length) {
+    // At least one candidate ledger carries no usable loggedAt: "greatest" is
+    // undecidable across the full set. Safe to proceed only when every
+    // candidate already agrees on the disposition regardless of order.
+    return allAgree ? { disposition: matches[0].disposition, rationale: matches[0].rationale } : null;
+  }
+  const maxLoggedAtMs = Math.max(...timestamped.map((m) => m.loggedAtMs));
+  const winners = timestamped.filter((m) => m.loggedAtMs === maxLoggedAtMs);
+  if (winners.length > 1 && !winners.every((m) => m.disposition === winners[0].disposition)) {
+    return null; // Tied on the greatest loggedAt, and those tied candidates disagree.
+  }
+  return { disposition: winners[0].disposition, rationale: winners[0].rationale };
 }
 
 // Tier 3 (last-resort) of the reject-close judge-disposition lookup: parses
@@ -1267,7 +1315,20 @@ export async function findJudgeDispositionForFingerprint({ repo, pr, gate, headS
 // survives every later round and a fresh worktree/clone with no local ledger
 // history — at the cost of the rationale text, which is never rendered here,
 // only the disposition token.
-const RENDERED_JUDGE_DISPOSITION_RE = /^\*\*[^*\n]+\*\*\s+\(`[^`\n]+`\):.*—\s*judge:\s*([a-z][a-z0-9_-]*)\s*$/mu;
+//
+// The suffix shape is matched EXACTLY as renderFindingLine emits it — a
+// single space, then a literal EM DASH, then a single space, "judge:", a
+// single space, the disposition token, then end-of-line (no trailing
+// whitespace: the suffix is the line's last content, never followed by
+// anything renderFindingLine adds). A looser `\s*` on either side would also
+// match an unrelated (e.g. LLM-authored) summary that merely CONTAINS the
+// same words with different spacing — this is a best-effort narrowing, not a
+// full fix: a summary whose text happens to end with this BYTE-IDENTICAL
+// shape (single spaces, no trailing content) is still indistinguishable from
+// the genuine suffix by string shape alone; closing that gap fully would
+// need a render-time change (e.g. a distinguishing token) in
+// upsert-checkpoint-verdict.mjs / renderFindingLine, out of scope here.
+const RENDERED_JUDGE_DISPOSITION_RE = /^\*\*[^*\n]+\*\*\s+\(`[^`\n]+`\):.* — judge: ([a-z][a-z0-9_-]*)$/mu;
 
 export function parseRenderedJudgeDisposition(body) {
   const match = typeof body === "string" ? body.match(RENDERED_JUDGE_DISPOSITION_RE) : null;

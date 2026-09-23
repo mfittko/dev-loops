@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 
 import { containsBareCopilotSummon } from "../../scripts/_core-helpers.mjs";
 import { guardCommentBodyNoIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
@@ -872,6 +872,8 @@ import {
   countUnresolvedGateAuthoredThreads,
   countUnresolvedGateAuthoredThreadsBySeverity,
   countUnresolvedGateAuthoredThreadsFromRawNodes,
+  findJudgeDispositionForFingerprint,
+  parseRenderedJudgeDisposition,
 } from "../../scripts/github/_gate-finding-surface.mjs";
 
 const GATE_LOGIN = "gate-bot";
@@ -963,6 +965,86 @@ test("#2381: countUnresolvedGateAuthoredThreadsBySeverity splits question from e
 
 test("#2381: countUnresolvedGateAuthoredThreadsBySeverity throws (fail-closed) on a non-array threads input", () => {
   assert.throws(() => countUnresolvedGateAuthoredThreadsBySeverity(null, GATE_LOGIN), /threads must be an array/);
+});
+
+// ---------------------------------------------------------------------------
+// ADR 0088: findJudgeDispositionForFingerprint — tier 2 (prior local ledger)
+// disagreement resolution
+// ---------------------------------------------------------------------------
+
+const JDF_REPO = "owner/repo";
+const JDF_PR = 42;
+const JDF_GATE = "draft_gate";
+const JDF_SUMMARY = "why this approach?";
+const JDF_FP = fingerprintFinding({ summary: JDF_SUMMARY });
+
+async function withLocalLedgerFiles(ledgers, fn) {
+  const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "gate-finding-surface-ledgers-"));
+  try {
+    const dir = path.join(tmpRoot, "gate-findings", JDF_REPO.replace("/", "-"), `pr-${JDF_PR}`);
+    await mkdir(dir, { recursive: true });
+    for (const [filename, content] of Object.entries(ledgers)) {
+      await writeFile(path.join(dir, filename), JSON.stringify(content), "utf8");
+    }
+    return await fn(tmpRoot);
+  } finally {
+    await rm(tmpRoot, { recursive: true, force: true });
+  }
+}
+
+function jdfLedger({ repo = JDF_REPO, pr = JDF_PR, gate = JDF_GATE, loggedAt, disposition, rationale }) {
+  return {
+    repo,
+    pr,
+    gate,
+    loggedAt,
+    findings: [{ severity: "question", angle: "scope", summary: JDF_SUMMARY, judgeDisposition: disposition, judgeRationale: rationale }],
+  };
+}
+
+test("#2381: findJudgeDispositionForFingerprint picks the disposition from the ledger with the GREATEST loggedAt when two prior ledgers disagree", async () => {
+  await withLocalLedgerFiles(
+    {
+      [`${JDF_GATE}-headA.json`]: jdfLedger({ loggedAt: "2026-09-01T00:00:00.000Z", disposition: "reject", rationale: "old reasoning" }),
+      [`${JDF_GATE}-headB.json`]: jdfLedger({ loggedAt: "2026-09-10T00:00:00.000Z", disposition: "act", rationale: "new reasoning" }),
+    },
+    async (tmpRoot) => {
+      const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
+      assert.deepEqual(result, { disposition: "act", rationale: "new reasoning" });
+    },
+  );
+});
+
+test("#2381: findJudgeDispositionForFingerprint ignores a ledger whose own recorded repo/pr/gate does not match the inputs", async () => {
+  await withLocalLedgerFiles(
+    {
+      [`${JDF_GATE}-headA.json`]: jdfLedger({ pr: 999, loggedAt: "2026-09-10T00:00:00.000Z", disposition: "act", rationale: "foreign PR" }),
+      [`${JDF_GATE}-headB.json`]: jdfLedger({ loggedAt: "2026-09-01T00:00:00.000Z", disposition: "reject", rationale: "this PR's own reasoning" }),
+    },
+    async (tmpRoot) => {
+      const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
+      assert.deepEqual(result, { disposition: "reject", rationale: "this PR's own reasoning" });
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// ADR 0088: parseRenderedJudgeDisposition tier 3 — only the exact
+// renderFindingLine suffix shape counts
+// ---------------------------------------------------------------------------
+
+test("#2381: parseRenderedJudgeDisposition parses the exact renderFindingLine suffix shape", () => {
+  const body = "**question** (`scope`): why this approach? — judge: reject";
+  assert.equal(parseRenderedJudgeDisposition(body), "reject");
+});
+
+test("#2381: parseRenderedJudgeDisposition does NOT parse a quoted 'judge: reject' phrase with looser spacing than the exact render suffix", () => {
+  // An LLM-authored summary that discusses "judge: reject" in its own prose,
+  // with double spaces around the separators (never what renderFindingLine
+  // itself emits — always exactly one space on each side) — must not be
+  // misread as a genuine rendered disposition suffix.
+  const body = "**question** (`scope`): the review notes say the panel's rule is  —  judge:  reject";
+  assert.equal(parseRenderedJudgeDisposition(body), null);
 });
 
 test("#1585: countUnresolvedGateAuthoredThreadsFromRawNodes throws (fail-closed) on a non-array rawNodes", () => {

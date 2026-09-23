@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { parseAllowedRefsCsv, requireTokenValue } from "../_cli-primitives.mjs";
-import { formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
+import { containsBareCopilotSummon, formatCliError, isDirectCliRun } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { listIssueComments, resolveAuthenticatedLogin, runGhJson, sanitizeInline } from "./post-gate-findings.mjs";
 import {
@@ -41,11 +41,14 @@ and is replied-to + resolved ("deferred at gate close") from the next round on;
 low is replied-to + resolved at gate close (after the Phase 5 fixer
 triage; #1585). question always stays open too — it is answered, never deferred,
 so an unanswered question blocks gate-close exactly like an open defect — with
-ONE reject-close exception (#2381): a question thread is closed here when BOTH
-hold: (a) it carries a resolving ANSWER REPLY — a non-empty comment on the
-thread other than its own finding/marker comment, authored by someone other
-than this gate's own login (an unanswered question carries no such comment and
-keeps blocking); and (b) the judge's own disposition for that finding was
+ONE reject-close exception (ADR 0088): a question thread is closed here when BOTH
+hold: (a) it carries a resolving ANSWER REPLY — a non-empty, non-automation, non-bot
+comment on the thread other than its own finding/marker comment (identity is never
+"author != this gate's login": a single-account setup can post the finding AND every
+reply under the same login, so the reply is recognized by what it is — not gate
+automation output, not a bot/System comment, not a bare @copilot summon — never by
+who posted it; an unanswered question carries no such comment and keeps blocking);
+and (b) the judge's own disposition for that finding was
 \`reject\` (resolved current-ledger-first, then a prior local findings-log
 ledger for the same PR/gate, then the \` — judge: reject\` suffix already
 rendered on the thread's own posted comment as a last resort — see
@@ -100,7 +103,7 @@ Optional:
 Output (stdout, JSON):
   { "ok": true, "repo": "...", "pr": 42, "gate": "...", "headSha": "...", "round": N,
     "deferredResolved": <disposition reply+resolve count>,
-    "rejectClosed": <answered, judge-rejected question threads reply+resolved this pass (#2381); 0 when none qualify>,
+    "rejectClosed": <answered, judge-rejected question threads reply+resolved this pass (ADR 0088); 0 when none qualify>,
     "unresolvedGateThreadCount": <gate-authored threads still unresolved after the defer + reject-close passes; the gate-close assertion (fetchDraftGateEvidence / ready-for-review) refuses ready-for-review while non-zero (#1585); folded findings (#2263) never create a thread, so they never enter this count>,
     "foldedFiled": <#2263: operator-visible folded (below gates.<gate>.inlineSeverityFloor) low findings filed to the follow-up issue this pass, from the ledger directly (they carry no thread of their own); a nit or a non-operator-visible low is never filed>,
     "followUpIssueNumber"?: <the PR's one tracked follow-up issue number; present when the thread pass deferred a fileable target OR the folded pass filed one (#1807, #2263)>,
@@ -178,6 +181,24 @@ function windowReason(severity, mediumFixWindow) {
   return "low findings are deferred at gate close after the fixer triaged them (fix-if-cheap-in-the-same-commit, else defer)";
 }
 
+// The three reply-body prefixes THIS FILE ITSELF posts (dispositionMessage,
+// unfiledResolutionMessage, rejectCloseMessage below) — the single source
+// hasAnswerReply's automation-reply exclusion (ADR 0088) reads, so that
+// exclusion can never drift from what these builders actually emit.
+const GATE_DEFERRED_REPLY_PREFIX = "Deferred at gate close (";
+const GATE_UNFILED_RESOLUTION_REPLY_PREFIX = "Resolved at gate close (";
+const GATE_REJECT_CLOSE_REPLY_PREFIX = "Closed at gate close (";
+const GATE_AUTOMATION_REPLY_PREFIXES = Object.freeze([
+  GATE_DEFERRED_REPLY_PREFIX,
+  GATE_UNFILED_RESOLUTION_REPLY_PREFIX,
+  GATE_REJECT_CLOSE_REPLY_PREFIX,
+]);
+
+function isGateAutomationReply(body) {
+  const trimmed = body.trim();
+  return GATE_AUTOMATION_REPLY_PREFIXES.some((prefix) => trimmed.startsWith(prefix));
+}
+
 // Only ever called for a FILEABLE target (isFileableDeferral true) — see
 // unfiledResolutionMessage for the nit/non-operator-visible-low reply. Each
 // reply is distinct by construction (fingerprint/severity/angle plus the
@@ -185,7 +206,7 @@ function windowReason(severity, mediumFixWindow) {
 // the thread marker + ephemeral tmp ledger (GATE-EXEC-DEFERRAL-RECORD).
 function dispositionMessage({ fp, severity, angle, round, mediumFixWindow, repo, issueNumber, body, operatorVisible }) {
   const meritRationale = buildMeritRationale({ body, severity, operatorVisible, round, mediumFixWindow });
-  return `Deferred at gate close (round ${round}, fingerprint ${fp}, severity ${severity}, angle ${angle}): ${meritRationale} ${windowReason(severity, mediumFixWindow)}; tracked in follow-up issue https://github.com/${repo}/issues/${issueNumber}.`;
+  return `${GATE_DEFERRED_REPLY_PREFIX}round ${round}, fingerprint ${fp}, severity ${severity}, angle ${angle}): ${meritRationale} ${windowReason(severity, mediumFixWindow)}; tracked in follow-up issue https://github.com/${repo}/issues/${issueNumber}.`;
 }
 
 // Reply for a thread RESOLVED this round but that does NOT clear the
@@ -230,7 +251,7 @@ export function buildMeritRationale({ body, severity, operatorVisible = false, r
 
 function unfiledResolutionMessage({ fp, severity, angle, round, body, operatorVisible, mediumFixWindow }) {
   const meritRationale = buildMeritRationale({ body, severity, operatorVisible, round, mediumFixWindow });
-  return `Resolved at gate close (round ${round}, fingerprint ${fp}, severity ${severity}, angle ${angle}): ${meritRationale} ${unfiledResolutionReason(severity)}.`;
+  return `${GATE_UNFILED_RESOLUTION_REPLY_PREFIX}round ${round}, fingerprint ${fp}, severity ${severity}, angle ${angle}): ${meritRationale} ${unfiledResolutionReason(severity)}.`;
 }
 
 // Every currently-unresolved gate-authored thread — newly posted this round
@@ -473,21 +494,39 @@ async function runDispositionPass({ repo, pr, round, threads, snapshot, login, m
 // question the judge did NOT reject, is untouched and keeps blocking.
 
 // A resolving ANSWER REPLY: a non-empty comment on the thread OTHER than its
-// own finding/marker comment (thread.commentId), authored by someone OTHER
-// than this gate's own login. `comments` is the FULL per-thread comment list
-// (fetchThreadsWithFullBodies' underlying snapshot.comments) — every comment
-// past the thread's own first (marker) comment is structurally a reply
-// (GitHub review threads have exactly one top-level comment). An unanswered
-// question carries no such comment.
-function hasAnswerReply(thread, comments, login) {
+// own finding/marker comment (thread.commentId). `comments` is the FULL
+// per-thread comment list (fetchThreadsWithFullBodies' underlying
+// snapshot.comments) — every comment past the thread's own first (marker)
+// comment is structurally a reply (GitHub review threads have exactly one
+// top-level comment). An unanswered question carries no such comment.
+//
+// Identity is NEVER "author != this gate's login" (a single-account setup —
+// the gate, the fixer, and the operator all posting as the same authenticated
+// login — makes that check untrue for every reply on the reproducing PR: the
+// finding AND every reply share one login, so the pass could never fire).
+// Instead this asks "is this reply itself gate automation output, or a
+// genuine reply": c.isActionable (packages/core/src/github/review-threads.mjs)
+// already excludes a bot author (isBot/`[bot]` login/Bot typename) and a
+// System/ghost author (empty login) and an empty-or-whitespace-only body —
+// reused here rather than re-implementing the same three checks. On top of
+// that: a comment carrying the gate's own finding-marker shape
+// (parseFindingMarker) or starting with one of this file's own automation
+// reply prefixes (GATE_AUTOMATION_REPLY_PREFIXES — the disposition, reject-
+// close, or nit/low resolution replies this file itself posts) is the gate
+// talking to itself, not an answer; and a reply that is nothing but a bare
+// `@copilot`/`/copilot*` summon (containsBareCopilotSummon) is a re-review
+// trigger, not an answer either.
+function hasAnswerReply(thread, comments) {
   const markerCommentId = String(thread.commentId);
-  return comments.some((c) =>
-    c.threadId === thread.threadId
-    && c.databaseId !== null
-    && c.databaseId !== markerCommentId
-    && c.body.trim().length > 0
-    && c.author.login !== login,
-  );
+  return comments.some((c) => {
+    if (c.threadId !== thread.threadId) return false;
+    if (c.databaseId === null || c.databaseId === markerCommentId) return false;
+    if (!c.isActionable) return false;
+    if (parseFindingMarker(c.body)) return false;
+    if (isGateAutomationReply(c.body)) return false;
+    if (containsBareCopilotSummon(c.body)) return false;
+    return true;
+  });
 }
 
 // Every unresolved, gate-authored QUESTION thread — narrowed to "answered"
@@ -547,7 +586,7 @@ const NO_JUDGE_RATIONALE_TEXT = "the judge rejected this finding on its merits; 
 
 function rejectCloseMessage({ fp, angle, round, rationale }) {
   const rationaleText = sanitizeInline(rationale ?? NO_JUDGE_RATIONALE_TEXT);
-  return `Closed at gate close (round ${round}, fingerprint ${fp}, severity question, angle ${angle}): this question was answered, and the judge rejected the finding — ${rationaleText}.`;
+  return `${GATE_REJECT_CLOSE_REPLY_PREFIX}round ${round}, fingerprint ${fp}, severity question, angle ${angle}): this question was answered, and the judge rejected the finding — ${rationaleText}.`;
 }
 
 // Reply + resolve every answered, judge-rejected question candidate. Never
@@ -560,7 +599,7 @@ async function runQuestionRejectClosePass({ repo, pr, gate, headSha, round, thre
   let rejectClosed = 0;
   const dispositionFailures = [];
   for (const candidate of candidates) {
-    if (!hasAnswerReply(candidate, snapshot.comments, login)) continue;
+    if (!hasAnswerReply(candidate, snapshot.comments)) continue;
     let judgement;
     try {
       judgement = await resolveJudgeRejection({ fp: candidate.fp, threadBody: candidate.body, findings, repo, pr, gate, headSha, tmpRoot, repoRoot });
