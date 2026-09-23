@@ -27,7 +27,7 @@ import { isGhBinaryMissing, restFetchPrView, restGetPaginatedJson } from "./_gh-
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
 import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, isSizeOutcomeT1Clean, loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance, touchesRiskPath } from "@dev-loops/core/config";
-import { FANOUT_UNAVAILABLE_MESSAGE, GATE_CONFIG_KEY, checkFanoutAngleCoverage, countFreshDispatchUnits, fanoutReviewerPairingError, freshAngleNames, listOpenActItems, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { FANOUT_UNAVAILABLE_MESSAGE, GATE_CONFIG_KEY, JUDGE_DISPOSITIONS, checkFanoutAngleCoverage, countFreshDispatchUnits, fanoutReviewerPairingError, freshAngleNames, listOpenActItems, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 import { detectMergeBaseChangedFiles, detectMergeBaseScope, isEligibleForLightMode } from "../loop/detect-change-scope.mjs";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
@@ -551,15 +551,15 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
   const actList = fanoutEnforcement?.actList;
   if (actList && !skipFanoutLedgerCheck) {
     if (actList.unreadable) {
-      failures.push(`pre_approval_gate: findings-log ledger is unreadable or malformed (${actList.unreadable.path}); cannot verify the judge act list`);
+      failures.push(`pre_approval_gate: findings-log ledger is unreadable or malformed (${actList.unreadable.path}); cannot verify the judge act list (GATE-COMMENT-VERDICT-VALUES)`);
     }
     if (actList.unjudged) {
-      failures.push(`pre_approval_gate: judge act list unknown in ${actList.unjudged.path} (${actList.unjudged.count} finding(s) carry no judge disposition); write the ledger with --judge-verdict`);
+      failures.push(`pre_approval_gate: judge act list unknown in ${actList.unjudged.path} (${actList.unjudged.count} finding(s) carry no judge disposition); write the ledger with --judge-verdict (GATE-COMMENT-VERDICT-VALUES)`);
     }
     if (actList.open) {
       const { path: openPath, items } = actList.open;
       failures.push(
-        `pre_approval_gate: judge act list is not empty in ${openPath} (${items.length} open act item(s): ${items.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}); fix each item and re-gate, or, for an item closed without a commit, rerun the judge at this head, rewrite the ledger with --judge-verdict, and re-post the verdict`,
+        `pre_approval_gate: judge act list is not empty in ${openPath} (${items.length} open act item(s): ${items.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}); fix each item and re-gate, or, for an item closed without a commit, rerun the judge at this head, rewrite the ledger with --judge-verdict, and re-post the verdict (GATE-COMMENT-VERDICT-VALUES)`,
       );
     }
   }
@@ -728,7 +728,9 @@ async function readActListInAny(checkouts, ledgerPath, markerExecutionMode) {
       continue;
     }
     exists = true;
-    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.findings)) {
+    // A present disposition outside the canonical set is malformed, not judged.
+    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.findings)
+      || parsed.findings.some((f) => f?.judgeDisposition != null && !JUDGE_DISPOSITIONS.includes(f.judgeDisposition))) {
       unreadable ??= { path: full };
       continue;
     }

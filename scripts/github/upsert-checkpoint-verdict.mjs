@@ -2481,7 +2481,7 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
   } else if (options.verdict === "clean" && listOpenActItems(preloadedFindingsLedger?.findings).length > 0) {
     // ADR 0089: a ledger without overallVerdict still carries its judge act list.
     const actItems = listOpenActItems(preloadedFindingsLedger.findings);
-    throw new Error(`--verdict "clean" for ${options.gate} @ ${canonicalHeadSha} contradicts ${actItems.length} open judge act item(s) in --findings-ledger "${options.findingsLedger}" (ADR 0089): ${actItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}. Post "findings_present" or fix the act items first.`);
+    throw new Error(`--verdict "clean" for ${options.gate} @ ${canonicalHeadSha} contradicts ${actItems.length} open judge act item(s) in --findings-ledger "${options.findingsLedger}" (GATE-COMMENT-VERDICT-VALUES, skills/docs/gate-review-comment-contract.md; ADR 0089): ${actItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}. Post "findings_present" or fix the act items first.`);
   }
   if (
     options.verdict === "clean"

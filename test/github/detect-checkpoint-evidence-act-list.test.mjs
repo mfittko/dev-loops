@@ -37,7 +37,7 @@ function actListEnforcement(actList) {
 test("buildPreMergeGateCheck refuses a non-empty act list and names the ledger and items", () => {
   const check = buildPreMergeGateCheck(cleanEvidenceFor(HEAD), 0, null, actListEnforcement({ open: { path: "/w/tmp/ledger.json", items: [ACT_ITEM] } }));
   assert.equal(check.ok, false);
-  assert.deepEqual(check.failures, ["pre_approval_gate: judge act list is not empty in /w/tmp/ledger.json (1 open act item(s): [medium] retry loop never backs off); fix each item and re-gate, or, for an item closed without a commit, rerun the judge at this head, rewrite the ledger with --judge-verdict, and re-post the verdict"]);
+  assert.deepEqual(check.failures, ["pre_approval_gate: judge act list is not empty in /w/tmp/ledger.json (1 open act item(s): [medium] retry loop never backs off); fix each item and re-gate, or, for an item closed without a commit, rerun the judge at this head, rewrite the ledger with --judge-verdict, and re-post the verdict (GATE-COMMENT-VERDICT-VALUES)"]);
 });
 
 test("buildPreMergeGateCheck passes once the act list is empty", () => {
@@ -106,7 +106,7 @@ test("a malformed ledger fails closed with one unreadable-ledger failure", async
     await withLedgerRepos([body], async (repo, roots) => {
       const { check } = await probe(repo);
       const hits = check.failures.filter((f) => f.includes("judge act list"));
-      assert.deepEqual(hits, [`pre_approval_gate: findings-log ledger is unreadable or malformed (${path.join(roots[0], LEDGER_REL)}); cannot verify the judge act list`]);
+      assert.deepEqual(hits, [`pre_approval_gate: findings-log ledger is unreadable or malformed (${path.join(roots[0], LEDGER_REL)}); cannot verify the judge act list (GATE-COMMENT-VERDICT-VALUES)`]);
     });
   }
 });
@@ -123,7 +123,7 @@ test("a missing ledger adds no act-list failure", async () => {
 test("an unjudged fanout_fanin ledger with findings fails closed", async () => {
   await withLedgerRepos([{ findings: [REJECTED_ITEM, { severity: "medium", angle: "x", summary: "s" }] }], async (repo, roots) => {
     const { check } = await probe(repo);
-    assert.ok(check.failures.includes(`pre_approval_gate: judge act list unknown in ${path.join(roots[0], LEDGER_REL)} (1 finding(s) carry no judge disposition); write the ledger with --judge-verdict`), JSON.stringify(check.failures));
+    assert.ok(check.failures.includes(`pre_approval_gate: judge act list unknown in ${path.join(roots[0], LEDGER_REL)} (1 finding(s) carry no judge disposition); write the ledger with --judge-verdict (GATE-COMMENT-VERDICT-VALUES)`), JSON.stringify(check.failures));
   });
 });
 
@@ -187,7 +187,7 @@ test("only a visible current-head pre_approval_gate marker reads the act list", 
 test("a judged copy never shadows an unjudged copy in another checkout", async () => {
   await withLedgerRepos([{ findings: [REJECTED_ITEM] }, { findings: [{ severity: "medium", angle: "x", summary: "s" }] }], async (repo, roots) => {
     const { check } = await probe(repo);
-    assert.ok(check.failures.includes(`pre_approval_gate: judge act list unknown in ${path.join(roots[1], LEDGER_REL)} (1 finding(s) carry no judge disposition); write the ledger with --judge-verdict`), JSON.stringify(check.failures));
+    assert.ok(check.failures.includes(`pre_approval_gate: judge act list unknown in ${path.join(roots[1], LEDGER_REL)} (1 finding(s) carry no judge disposition); write the ledger with --judge-verdict (GATE-COMMENT-VERDICT-VALUES)`), JSON.stringify(check.failures));
   });
 });
 
@@ -195,6 +195,19 @@ test("a malformed copy fails closed even when another checkout's copy parses", a
   await withLedgerRepos(["{not json", { findings: [] }], async (repo, roots) => {
     const { check } = await probe(repo);
     const hits = check.failures.filter((f) => f.includes("judge act list"));
-    assert.deepEqual(hits, [`pre_approval_gate: findings-log ledger is unreadable or malformed (${path.join(roots[0], LEDGER_REL)}); cannot verify the judge act list`]);
+    assert.deepEqual(hits, [`pre_approval_gate: findings-log ledger is unreadable or malformed (${path.join(roots[0], LEDGER_REL)}); cannot verify the judge act list (GATE-COMMENT-VERDICT-VALUES)`]);
   });
+});
+
+test("a disposition outside act/defer/reject is malformed in any execution mode", async () => {
+  const inlineMarker = { ...PA_MARKER, executionMode: "inline_single_agent" };
+  for (const judgeDisposition of ["bogus", " ", ""]) {
+    for (const marker of [PA_MARKER, inlineMarker]) {
+      await withLedgerRepos([{ findings: [REJECTED_ITEM, { ...ACT_ITEM, judgeDisposition }] }], async (repo, roots) => {
+        const { check } = await probe(repo, CONFIG_NO_FANOUT, marker);
+        const hits = check.failures.filter((f) => f.includes("judge act list"));
+        assert.deepEqual(hits, [`pre_approval_gate: findings-log ledger is unreadable or malformed (${path.join(roots[0], LEDGER_REL)}); cannot verify the judge act list (GATE-COMMENT-VERDICT-VALUES)`]);
+      });
+    }
+  }
 });

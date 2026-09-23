@@ -129,6 +129,7 @@ test("a ledger without overallVerdict refuses an explicit clean over an open act
     const explicitClean = await post(ledgerPath, "clean");
     assert.match(explicitClean.error, /--verdict "clean"/);
     assert.match(explicitClean.error, /1 open judge act item\(s\)/);
+    assert.match(explicitClean.error, /GATE-COMMENT-VERDICT-VALUES, skills\/docs\/gate-review-comment-contract\.md/);
     assert.match(explicitClean.error, /\[medium\] medium finding judged act/);
     assert.equal((await post(ledgerPath, "findings_present")).error, undefined);
   }, { prefix: "dev-loops-act-list-bare-" });
