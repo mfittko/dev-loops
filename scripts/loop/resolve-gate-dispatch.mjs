@@ -18,10 +18,11 @@ const USAGE = `Usage: resolve-gate-dispatch.mjs --gate <draft|preApproval> [--ba
 Compute the primer-owned deterministic review-proportionality plan
 (GATE-EXEC-PROPORTIONALITY, resolveReviewProportionality): mode (inline vs
 full fan-out) + resolved angle set + fan-out grouping, from lightMode config +
-PR facts. Under the size cap, ALSO fails closed to full fan-out (with the
-FULL untriered angle set, never a tier-reduced one) when the diff touches a
-risk path, its size-budget outcome is not a clean non-T1 pass, or the diff is
-unclassifiable — see gate-review-sub-loop-contract.md.
+PR facts. Under the size cap, ALSO fails closed to full_fanout DISPATCH (keeping the
+matched tier's reduced set, or the mandatory-floor-plus-justified-lenses best-effort
+set — never the full untiered pool, except the gate:full escape hatch) when the diff
+touches a risk path, its size-budget outcome is not a clean non-T1 pass, or the diff
+is unclassifiable — see gate-review-sub-loop-contract.md.
 Options:
   --gate <draft|preApproval>   Gate to resolve dispatch for (required)
   --base <ref>                 Base ref for scope detection (default: HEAD~1)
@@ -154,7 +155,8 @@ export async function run(argv) {
     // The changed-file list feeds BOTH the risk-path floor AND resolveGateTier's
     // diff-classification (which the composer needs for its angle set — an
     // over-cap diff can still legitimately match a reduced tier, and an
-    // unclassifiable diff must force the full pool regardless of cap state) —
+    // unclassifiable diff must force full_fanout DISPATCH while keeping the
+    // mandatory-floor best-effort angle set, never the full untiered pool) —
     // so it is always read, unlike the heavier size-budget evaluation below.
     const changedFiles = detectChangedFiles({ base: opts.base, head: opts.head, cwd: process.cwd() });
     // The size-budget outcome only ever changes an already-under-cap decision

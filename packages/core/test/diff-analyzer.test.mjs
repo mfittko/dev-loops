@@ -549,6 +549,10 @@ test("analyzeDiff: T0 ambiguous with diff + logic change → classified, not amb
   assert.ok(result.t1 !== null);
   assert.ok(result.t1.changeCategories.includes("LOGIC_CHANGE"));
   assert.equal(result.ambiguous, false); // LOGIC_CHANGE is now a classified category
+  // A mixed diff WITH a full-diff capture has its hunk evidence — the separate
+  // evidence-availability signal (which keys the size gate's unwaivable block)
+  // stays false.
+  assert.equal(result.fullDiffMissing, false);
 });
 
 test("analyzeDiff: T0 ambiguous with diff + no classifiable change → ambiguous", () => {
@@ -566,6 +570,11 @@ test("analyzeDiff: hunk-less mixed code+docs diff infers the T0 surfaces and cod
   const result = analyzeDiff({ nameStatusOutput: "M\tsrc/foo.mjs\nM\tdocs/specs/bar.md" });
   assert.deepEqual(result.t1.changeCategories, ["DOCS_ONLY", "LOGIC_CHANGE"]);
   assert.equal(result.ambiguous, false);
+  // The angle classifier stays confident (from T0 surfaces), but the mixed diff
+  // had no full-diff capture to analyze: the separate evidence-availability
+  // signal records that, so the size gate's unwaivable fail-closed block still
+  // fires rather than silently downgrading to pass.
+  assert.equal(result.fullDiffMissing, true);
 });
 
 test("analyzeDiff: hunk-less mixed code+prose keeps prose and the code-review core", () => {

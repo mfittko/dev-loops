@@ -204,7 +204,7 @@ Required:
   --gate <draft_gate|pre_approval_gate|review>
   --head-sha <sha>
 Optional:
-  --angles <json>               JSON array of review-angle name strings. OPTIONAL: when omitted, angles resolve dynamically from the loaded config (.devloops) + the --base diff via resolveGateAnglesDynamic (the same path buildGateContext uses). When supplied, the list is a verbatim explicit override only when no proportionality floor fires; a fired floor refuses it and continues with tier-or-best-effort selection.
+  --angles <json>               JSON array of review-angle name strings. OPTIONAL: when omitted, angles resolve dynamically from the loaded config (.devloops) + the --base diff via resolveGateAnglesDynamic (the same path buildGateContext uses). When supplied, the list is a verbatim explicit override only when no proportionality floor fires; a fired floor refuses it and continues with tier-or-best-effort selection. An empty list (\`[]\`) is refused (exit 1, no artifact written) at every entry point — the CLI dynamic path, this flag, and the exported buildGateContext/writeGateContext API — because a gate-context bundle must carry at least one review angle; the non-empty verbatim/floor behavior is unchanged.
   --rationale <json>             JSON array of {angle, action, reason} entries
   --branch <name>                Source branch name
   --touched-files <json>         JSON array of changed file path strings (separate from the diff-derived scope.changedFiles)

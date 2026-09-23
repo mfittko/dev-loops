@@ -1898,9 +1898,13 @@ per-category width for a triggered category (a docs change still runs every doc-
 angle); a tier instead caps the whole set for a diff class known in advance to be small or
 non-code, which subtractive reduction by category cannot express.
 
-The handoff envelope built for the fan-out advertises the composer's tiered or file-kind
-best-effort set. The per-round context resolver may widen that lower bound with lenses
-justified by hunk-derived change categories; its persisted set is authoritative for review.
+The handoff envelope built for the fan-out advertises the gate's UNTRIERED run-set; tier
+reduction is applied when the per-round context artifact is built, not reflected back into
+the envelope's own advertised angle set. The primer's dispatch-decision output
+(`resolve-gate-dispatch.mjs`) instead carries the composer's tiered or file-kind best-effort
+set — a lower bound. The per-round context resolver (`resolveGateAnglesDynamic`) may widen
+that lower bound with lenses justified by hunk-derived change categories; its persisted set
+is authoritative for review.
 
 ### Fan-out provenance (closing the self-produced-artifact loophole)
 

@@ -60,6 +60,7 @@ import {
   resolveTrackerBoard,
   resolvePostMergeActions,
 } from "../src/config/config.mjs";
+import { analyzeDiff } from "../src/analysis/diff-analyzer.mjs";
 // #1592: a few fixtures below deliberately keep pre-rename severity spellings
 // ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
 // intentional backward-compat coverage (normalizeSeverity normalizes them on
@@ -4723,6 +4724,32 @@ describe("resolveReviewProportionality (#1984 — primer-owned deterministic pla
     assert.deepEqual(plan.angles, ["kiss"]);
   });
 
+  test("dynamic.subtractive:false restores the full static pool for a no-tier diff (composer agrees with the resolver)", () => {
+    // The documented opt-out (config.mjs schema describe: "set false to restore
+    // the full static angle pool") must hold for the composer too, not just
+    // resolveGateAnglesDynamic — both callers share one selection contract.
+    const config = {
+      version: 1,
+      gates: {
+        preApproval: {
+          dynamic: { subtractive: false },
+          angles: [
+            { name: "yagni", mandatory: true },
+            "correctness", "renderer-security", "link-check", "docs",
+          ],
+        },
+      },
+    };
+    const staticPool = resolveGateAngles(config, "preApproval");
+    const plan = resolveReviewProportionality(config, "preApproval", {
+      scope: { filesChanged: 1, linesChanged: 2 },
+      changedFiles: [".devloops"],
+      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+    });
+    assert.ok(staticPool.length > 1, "precondition: pool has optional angles to drop");
+    assert.deepStrictEqual(new Set(plan.angles), new Set(staticPool));
+  });
+
   test("a gate with no configured angles preserves the null skill-default sentinel", () => {
     const plan = resolveReviewProportionality({ version: 1 }, "preApproval", {});
     assert.equal(plan.angles, null);
@@ -6141,8 +6168,18 @@ describe("resolveGateAnglesDynamic", () => {
     const staticPool = resolveGateAngles(config, "draft");
     const cases = [
       {
+        // Genuinely ambiguous: mixed file kinds (code + unknown asset) AND a
+        // category-less full-diff capture (context-only hunk → no added/deleted
+        // lines → no change category). The precondition assertion below pins
+        // that this case cannot silently degrade into a classified one again.
         name: "ambiguous",
-        options: { diff: { nameStatusOutput: "M\tsrc/main.mjs\nM\tconfig/app.yml" } },
+        expectAmbiguous: true,
+        options: {
+          diff: {
+            nameStatusOutput: "M\tsrc/foo.mjs\nM\tassets/logo.png",
+            diffOutput: "@@ -1,1 +1,1 @@\n unchanged context line\n",
+          },
+        },
       },
       {
         name: "empty categories / unclassifiable",
@@ -6166,6 +6203,16 @@ describe("resolveGateAnglesDynamic", () => {
       },
     ];
     for (const scenario of cases) {
+      if (scenario.expectAmbiguous) {
+        assert.equal(
+          analyzeDiff({
+            nameStatusOutput: scenario.options.diff.nameStatusOutput,
+            diffOutput: scenario.options.diff.diffOutput,
+          }).ambiguous,
+          true,
+          `${scenario.name}: precondition — fixture must be genuinely ambiguous`,
+        );
+      }
       const result = await resolveGateAnglesDynamic(config, "draft", scenario.options);
       assert.equal(result.dynamicAnglesActive, true, scenario.name);
       assert.equal(result.fallbackToAll, false, scenario.name);

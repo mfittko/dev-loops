@@ -2487,7 +2487,15 @@ export function resolveGateTier(config, gate, { changedFiles, filesChanged, line
  * unclassifiable file, a dev-loop config-source delta, or no tier configured).
  * Uncertainty selects the mandatory floor plus the lenses the diff still
  * justifies — the always-include lens and any consumer angle whose declared
- * category/kind binding intersects the diff — never the whole pool.
+ * category/kind binding intersects the diff. It is never the whole pool,
+ * except for the degenerate gate whose pool holds neither a mandatory nor an
+ * always-include angle: an empty best-effort selection falls back to the static
+ * pool (fail-closed — more angles, not fewer) rather than returning nothing.
+ *
+ * `dynamic.subtractive: false` is the documented opt-out ("restore the full
+ * static angle pool"); this returns the static pool unchanged, mirroring
+ * resolveGateAnglesDynamic's `!gateConfig.dynamicAngles` branch so the composer
+ * and the resolver agree for the same diff.
  *
  * This composer has no diff TEXT (only the changed-file list), so it can bind
  * on file kinds but not on hunk-derived change categories. Except for the
@@ -2498,6 +2506,11 @@ export function resolveGateTier(config, gate, { changedFiles, filesChanged, line
  */
 function selectFloorPlusJustifiedAngles(config, gate, changedFiles) {
   const gateConfig = resolveGateConfig(config, gate);
+  // Documented opt-out: `dynamic.subtractive: false` restores the full static
+  // pool. Mirror resolveGateAnglesDynamic's `!gateConfig.dynamicAngles` branch
+  // so the composer and the resolver never disagree under an explicit operator
+  // config (both are callers of the same selection contract).
+  if (!gateConfig.dynamicAngles) return resolveGateAngles(config, gate) ?? [];
   const { mandatoryAngles } = resolveGateAngleContract(config, gate);
   const pool = resolveGateAngles(config, gate) ?? [];
   const candidatePool = pool.filter((a) => !mandatoryAngles.includes(a));
