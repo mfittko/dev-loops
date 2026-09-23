@@ -343,25 +343,32 @@ function buildClaudeTurn(data, msg, usage, currentAgent, segmentId) {
   };
 }
 
-function resolveClaudeMetaSidecarPath(filePath) {
-  let resolvedPath;
+function resolveClaudeTranscriptRealPath(filePath) {
   try {
-    resolvedPath = fs.realpathSync(filePath);
+    return fs.realpathSync(filePath);
   } catch {
-    resolvedPath = filePath;
+    return filePath;
   }
+}
+
+function resolveClaudeMetaSidecarPath(resolvedPath) {
   const base = path.basename(resolvedPath).replace(/\.(jsonl|output)$/, "");
   return path.join(path.dirname(resolvedPath), `${base}.meta.json`);
 }
 
 /**
  * Read the `agent-<id>.meta.json` sidecar of a Claude subagent transcript (resolving
- * symlinks first, since task dirs hold `.output` symlinks to the real transcript).
+ * symlinks first, since task dirs hold `.output` symlinks to the real transcript). A
+ * meta-less `agent-<id>.jsonl` transcript is still a subagent invocation (its sidecar
+ * just wasn't persisted), so it defaults to role "subagent" rather than falling through
+ * to deriveSessionRole's generic "coordinator" bucket, which is reserved for
+ * main-session Claude transcripts (`<uuid>.jsonl`).
  * @param {string} filePath
  * @returns {{ role: string | null, sessionName: string | null }}
  */
 function readClaudeMetaSidecar(filePath) {
-  const metaPath = resolveClaudeMetaSidecarPath(filePath);
+  const resolvedPath = resolveClaudeTranscriptRealPath(filePath);
+  const metaPath = resolveClaudeMetaSidecarPath(resolvedPath);
   try {
     const data = JSON.parse(fs.readFileSync(metaPath, "utf8"));
     return {
@@ -369,7 +376,8 @@ function readClaudeMetaSidecar(filePath) {
       sessionName: typeof data.description === "string" && data.description ? data.description : null,
     };
   } catch {
-    return { role: null, sessionName: null };
+    const isAgentTranscript = /^agent-.+\.jsonl$/.test(path.basename(resolvedPath));
+    return { role: isAgentTranscript ? "subagent" : null, sessionName: null };
   }
 }
 

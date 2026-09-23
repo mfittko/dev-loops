@@ -69,8 +69,9 @@ subagent transcript's prompt size is `input + cacheRead + cacheCreate` on its fi
 turn (Pi's is `input + cacheRead`, unchanged); this is the only place the two harnesses'
 metric definitions differ, per the issue that introduced Claude support. Role and session
 name come from the sibling `agent-<id>.meta.json` (`agentType` / `description`) when
-present; a Claude subagent transcript without a meta sidecar falls back to `coordinator`,
-the same unclassified default used across roles. A background-task `.output` file is only
+present; a Claude `agent-<id>.jsonl` transcript without a meta sidecar defaults to
+`subagent` instead, since the `coordinator` fallback is reserved for main-session Claude
+transcripts (`<uuid>.jsonl`). A background-task `.output` file is only
 collected when its first non-empty line parses as a JSON object shaped like a transcript
 record (a string `type`, or an object `message`); a plain-text or non-transcript-JSON
 `.output` file (e.g. `{"ok":true}`) is skipped rather than surfaced as malformed lines.

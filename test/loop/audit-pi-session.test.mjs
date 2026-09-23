@@ -1367,7 +1367,7 @@ describe("audit-pi-session unit & integration", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("classifies a Claude agent-<id>.jsonl transcript without a meta sidecar as coordinator, not a generic subagent bucket", async () => {
+  it("classifies a Claude agent-<id>.jsonl transcript without a meta sidecar as subagent", async () => {
     const tmpDir = createTempDir();
     const claudeFile = path.join(tmpDir, "agent-nometa123.jsonl");
     writeClaudeTranscript(claudeFile, [
@@ -1375,7 +1375,7 @@ describe("audit-pi-session unit & integration", () => {
     ]);
 
     const audit = await auditPiSession(claudeFile);
-    assert.equal(audit.sessions[0].role, "coordinator");
+    assert.equal(audit.sessions[0].role, "subagent");
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
