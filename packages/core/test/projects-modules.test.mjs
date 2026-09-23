@@ -73,8 +73,10 @@ function makeContent(type, number, repo = "mfittko/dev-loops") {
   return { __typename: type === "PR" ? "PullRequest" : "Issue", number, repository: { nameWithOwner: repo } };
 }
 
-function getItemsByContentResponse(items) {
-  return { data: { node: { items: { nodes: items, pageInfo: { hasNextPage: false, endCursor: null } } } } };
+// The issue-side lookup envelope: `issueOrPullRequest(n).projectItems` on the project.
+function issueSideItemsResponse(items) {
+  const nodes = items.map((n) => ({ isArchived: false, project: { id: EXISTING_PROJECT.id }, ...n }));
+  return { data: { repository: { issueOrPullRequest: { projectItems: { nodes } } } } };
 }
 
 function getItemsResponse(items) {
@@ -174,7 +176,7 @@ describe("move-queue-item", () => {
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
       { payload: getFieldsResponse([STATUS_FIELD]) },
-      { payload: getItemsByContentResponse([makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog")]) },
+      { payload: issueSideItemsResponse([makeItemNode("PVTI_1", makeContent("Issue", 10), "Backlog")]) },
       { payload: updateItemFieldResponse() },
     ];
     const result = await moveQueueItem(
@@ -191,7 +193,7 @@ describe("move-queue-item", () => {
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
       { payload: getFieldsResponse([STATUS_FIELD]) },
-      { payload: getItemsByContentResponse([makeItemNode("PVTI_1", makeContent("Issue", 10), "Next Up")]) },
+      { payload: issueSideItemsResponse([makeItemNode("PVTI_1", makeContent("Issue", 10), "Next Up")]) },
     ];
     const result = await moveQueueItem(
       { repo: "mfittko/dev-loops", project: "1", item: "10", toColumn: "Next Up" },
@@ -206,7 +208,7 @@ describe("move-queue-item", () => {
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
       { payload: getFieldsResponse([STATUS_FIELD]) },
-      { payload: getItemsByContentResponse([]) },
+      { payload: issueSideItemsResponse([]) },
     ];
     await assert.rejects(
       () => moveQueueItem(
