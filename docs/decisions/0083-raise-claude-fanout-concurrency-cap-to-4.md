@@ -7,8 +7,8 @@ Accepted — 2026-09-23 ([issue 2366](https://github.com/mfittko/dev-loops/issue
 Amends [0069](./0069-claude-harness-fanout-concurrency-clamp.md): the clamp mechanism <!-- secret-scan:allow relative ADR filename cross-reference links, not credentials -->
 (`resolveFanoutEffectiveConcurrency` scoping `CLAUDE_MAX_EFFECTIVE_CONCURRENT` to
 `isClaudeHarness(env)`) stands unchanged; this record raises only the constant's value, from 2
-to 4, because the retry/backoff policy 0069 itself introduced already absorbs the 429 risk that
-motivated the lower value.
+to 4, because the retry/backoff policy 0069 itself introduced is expected to absorb the 429 risk
+that motivated the lower value, backed by the measured round below.
 
 ## Context
 
@@ -52,6 +52,10 @@ does accept: a consumer repo running the shipped default of 4 now dispatches dri
 Claude, unclamped relative to before (`min(4, 4) = 4` instead of `min(4, 2) = 2`), bounded by
 the same retry policy.
 
+Adherence to the retry helper remains conductor-behavioral: ADR 0069's Consequences already note
+that no script seam forces the conductor to call `planDispatchRetry`, so the measured gate round
+below is the evidence that the backstop holds in practice, not a mechanical guarantee.
+
 ### Measured gate round
 
 MEASUREMENT-PENDING: the draft_gate round on this PR at effective concurrency 3 is recorded here before merge.
@@ -59,8 +63,8 @@ MEASUREMENT-PENDING: the draft_gate round on this PR at effective concurrency 3 
 ## Consequences
 
 - This repo's Claude effective concurrency rises from 2 to 3 (driver + 3), reducing the number
-  of waves a multi-unit gate round needs (issue 2366's PR-2250 example: 5 units would now run
-  as primer + 3 + 2 or similar, fewer waves than before).
+  of waves a multi-unit gate round needs (issue 2366's PR-2250 example: 5 units now need two
+  waves, `[3][2]`, with the lead reviewer as the first unit of wave 1, instead of three).
 - Pi and unknown-harness behavior is unchanged: `resolveFanoutEffectiveConcurrency` returns the
   configured value unclamped for both, exactly as under 0069.
 - 0069's retry/backoff policy (`planDispatchRetry`, `backoffMaxConcurrent`,

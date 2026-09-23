@@ -13,8 +13,8 @@ import {
   BUILT_IN_DEFAULTS,
   BLOCKING_SEVERITY_SPELLINGS,
 } from "../src/config/config.mjs";
-import { LEGACY_SEVERITY_ALIASES } from "../src/loop/gate-fanin.mjs";
-import { RUN_ID_MARKERS } from "../src/loop/run-context.mjs";
+import { backoffMaxConcurrent, LEGACY_SEVERITY_ALIASES } from "../src/loop/gate-fanin.mjs";
+import { NEUTRAL_RUN_ID_VAR, RUN_ID_MARKERS } from "../src/loop/run-context.mjs";
 import {
   resolveConductorModel,
   resolveAutonomyStopAt,
@@ -4983,6 +4983,13 @@ test("resolveFanoutSequential / resolveFanoutEffectiveConcurrency: serial bound 
 
 test("resolveFanoutEffectiveConcurrency: Claude-harness-scoped concurrency clamp (#1971, raised to 4 by #2366)", () => {
   assert.equal(CLAUDE_MAX_EFFECTIVE_CONCURRENT, 4);
+  // The Pi-runtime-injected run-id alias (no CLAUDECODE): the one RUN_ID_MARKERS entry that
+  // is not the neutral var. Selected by name, not index, and built from RUN_ID_MARKERS (not a
+  // literal token here) so this file stays outside the harness-adapter allowlist
+  // (test/contracts/cli-harness-agnostic.test.mjs).
+  const piMarker = RUN_ID_MARKERS.find((m) => m !== NEUTRAL_RUN_ID_VAR);
+  assert.ok(piMarker);
+  const piEnv = { [piMarker]: "pi-run-1" };
   // 1. Claude harness, default config → clamped to 4 (== the shipped default; min(4, 4)).
   assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }, { CLAUDECODE: "1" }), 4);
   // 2. Claude harness, .devloops-style maxConcurrent: 3 → stays 3 (min(3, 4)).
@@ -4993,12 +5000,20 @@ test("resolveFanoutEffectiveConcurrency: Claude-harness-scoped concurrency clamp
   assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 2 } } }, { CLAUDECODE: "1" }), 2);
   // 5. Claude harness, maxConcurrent: 8 → clamped to 4 (min(8, 4)).
   assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 8 } } }, { CLAUDECODE: "1" }), 4);
+  // 5b. Sweep the clamp boundary: configured value resolves unchanged under the Pi env and
+  // under {}, and to Math.min(m, 4) under Claude — for m at, below, and above the cap.
+  for (const m of [2, 3, 4, 8]) {
+    const config = { gates: { fanout: { maxConcurrent: m } } };
+    assert.equal(resolveFanoutEffectiveConcurrency(config, piEnv), m);
+    assert.equal(resolveFanoutEffectiveConcurrency(config, {}), m);
+    assert.equal(resolveFanoutEffectiveConcurrency(config, { CLAUDECODE: "1" }), Math.min(m, 4));
+  }
+  // 5c. maxConcurrent: 0 (the resolver's defensive fallback to the shipped default 4) still
+  // resolves to 4 under Claude (min(4, 4)).
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 0 } } }, { CLAUDECODE: "1" }), 4);
   // 6. Claude harness, sequential: true → stays 1 (sequential already forces one unit per wave).
   assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { sequential: true } } }, { CLAUDECODE: "1" }), 1);
-  // 7. Pi harness (the Pi-runtime-injected run-id alias, no CLAUDECODE) → returns the
-  // configured value unchanged. Built from RUN_ID_MARKERS (not a literal token here) so
-  // this file stays outside the harness-adapter allowlist (test/contracts/cli-harness-agnostic.test.mjs).
-  const piEnv = { [RUN_ID_MARKERS[1]]: "pi-run-1" };
+  // 7. Pi harness → returns the configured value unchanged.
   assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }, piEnv), 4);
   assert.equal(
     resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 8 } } }, piEnv),
@@ -5019,8 +5034,7 @@ test("resolveFanoutEffectiveConcurrency: Claude-harness-scoped concurrency clamp
   }
 });
 
-test("backoffMaxConcurrent: halves the Claude-clamped concurrency of 4 to 2 (#2366)", async () => {
-  const { backoffMaxConcurrent } = await import("../src/loop/gate-fanin.mjs");
+test("backoffMaxConcurrent: halves the Claude-clamped concurrency of 4 to 2 (#2366)", () => {
   const effective = resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 8 } } }, { CLAUDECODE: "1" });
   assert.equal(effective, 4);
   assert.equal(backoffMaxConcurrent(effective), 2);
