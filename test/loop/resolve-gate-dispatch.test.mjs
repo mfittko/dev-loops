@@ -128,7 +128,7 @@ test("the emitted plan carries angles + groups + floors (GATE-EXEC-PROPORTIONALI
   }
 });
 
-test("a risky diff that ALSO matches a configured tier resolves the FULL untriered angle set, not the tier's reduced set", async () => {
+test("a risk-path touch forces full_fanout while preserving the configured tier's angle set", async () => {
   const devloops = `${LIGHT_DEVLOOPS}gates:\n  draft:\n    tiers:\n      - name: docs\n        match:\n          kinds: [docs]\n        angles: [link-check]\n`;
   // Non-risky control: a docs diff OUTSIDE any risk path matches the "docs"
   // tier and gets its REDUCED angle set (mandatory pr-description + docs).
@@ -144,12 +144,9 @@ test("a risky diff that ALSO matches a configured tier resolves the FULL untrier
     const riskyResult = runDispatch(risky.fixture);
     assert.equal(riskyResult.mode, "full_fanout");
     assert.equal(riskyResult.reason, "risk_path_touch");
-    // The floored angle set is a strict superset of the tier's reduced set —
-    // proof the full untriered pool was used, not the tier's reduction.
-    assert.ok(riskyResult.angles.length > controlResult.angles.length, JSON.stringify({ risky: riskyResult.angles, control: controlResult.angles }));
-    for (const angle of controlResult.angles) {
-      assert.ok(riskyResult.angles.includes(angle), `expected floored angle set to still include tier angle ${angle}`);
-    }
+    // The floor changes dispatch mode, not selection: both diffs keep the
+    // mandatory-complete tier set.
+    assert.deepEqual(new Set(riskyResult.angles), new Set(controlResult.angles));
   } finally {
     await rm(control.tmp, { recursive: true, force: true });
     await rm(risky.tmp, { recursive: true, force: true });

@@ -549,6 +549,10 @@ test("analyzeDiff: T0 ambiguous with diff + logic change → classified, not amb
   assert.ok(result.t1 !== null);
   assert.ok(result.t1.changeCategories.includes("LOGIC_CHANGE"));
   assert.equal(result.ambiguous, false); // LOGIC_CHANGE is now a classified category
+  // A mixed diff WITH a full-diff capture has its hunk evidence — the separate
+  // evidence-availability signal (which keys the size gate's unwaivable block)
+  // stays false.
+  assert.equal(result.fullDiffMissing, false);
 });
 
 test("analyzeDiff: T0 ambiguous with diff + no classifiable change → ambiguous", () => {
@@ -562,21 +566,57 @@ test("analyzeDiff: T0 ambiguous with diff + no classifiable change → ambiguous
   assert.equal(result.ambiguous, true);
 });
 
-test("analyzeDiff: T0 ambiguous without diff → no T1, ambiguous", () => {
+test("analyzeDiff: hunk-less mixed code+docs diff infers the T0 surfaces and code core", () => {
   const result = analyzeDiff({ nameStatusOutput: "M\tsrc/foo.mjs\nM\tdocs/specs/bar.md" });
-  assert.deepEqual(result.t1.changeCategories, []);
-  assert.equal(result.ambiguous, true);
+  assert.deepEqual(result.t1.changeCategories, ["DOCS_ONLY", "LOGIC_CHANGE"]);
+  assert.equal(result.ambiguous, false);
+  // The angle classifier stays confident (from T0 surfaces), but the mixed diff
+  // had no full-diff capture to analyze: the separate evidence-availability
+  // signal records that, so the size gate's unwaivable fail-closed block still
+  // fires rather than silently downgrading to pass.
+  assert.equal(result.fullDiffMissing, true);
 });
 
-test("analyzeDiff: mixed code+prose WITHOUT diff stays ambiguous (fail-closed, #1442)", () => {
-  // A prose file must not let a mixed code+prose diff under-select. With no
-  // diffOutput the hunk-level T1 never runs, and a T0-only PROSE_PRESENT would
-  // mark it "classified" -> ambiguous=false -> deslop + always-include only,
-  // dropping the code surface. It must instead stay ambiguous and fall back to
-  // the full angle set (deslop still runs there).
+test("analyzeDiff: whitespace-only full-diff capture takes the fail-closed path", () => {
+  // A whitespace-only diffOutput is truthy, so a falsy test would run T1 with no
+  // hunks and leave fullDiffMissing false — silently downgrading the size gate's
+  // unwaivable block. The trimmed predicate must make it behave EXACTLY like an
+  // absent/empty capture: T1 skipped, fullDiffMissing true. This contrasts with a
+  // genuinely non-empty capture, which has its hunk evidence and stays false.
+  const nameStatusOutput = "M\tsrc/foo.mjs\nM\tdocs/specs/bar.md";
+
+  const ws = analyzeDiff({ nameStatusOutput, diffOutput: "   \n" });
+  assert.equal(ws.fullDiffMissing, true, "whitespace-only capture is missing diff evidence");
+  // The T0 surface fallback still classifies (see the hunk-less case above), so
+  // the angle classifier stays confident while the evidence flag fails closed.
+  assert.equal(ws.ambiguous, false);
+  assert.deepEqual(ws.t1.changeCategories, ["DOCS_ONLY", "LOGIC_CHANGE"]);
+
+  const real = analyzeDiff({
+    nameStatusOutput,
+    diffOutput: "@@ -1,1 +1,1 @@\n+const x = 1;\n",
+  });
+  assert.equal(real.fullDiffMissing, false, "a non-empty capture has its hunk evidence");
+});
+
+test("analyzeDiff: hunk-less mixed code+prose keeps prose and the code-review core", () => {
+  // Without diffOutput the hunk-level T1 never runs. T0 presence inference
+  // retains both the peripheral prose lenses and LOGIC_CHANGE, so best-effort
+  // selection cannot drop the code surface or widen to the full pool.
   const r = analyzeDiff({ nameStatusOutput: "M\tsrc/foo.mjs\nM\tdocs/articles/bar.md" });
-  assert.equal(r.t1.changeCategories.length, 0, "mixed no-diffOutput must not be PROSE_PRESENT-only");
-  assert.equal(r.ambiguous, true);
+  assert.deepEqual(r.t1.changeCategories, ["DOCS_ONLY", "PROSE_PRESENT", "LOGIC_CHANGE"]);
+  assert.equal(r.ambiguous, false);
+
+  const dyn = resolveDynamicAngles({
+    configuredAngles: DRAFT_ANGLES,
+    changeCategories: r.t1.changeCategories,
+    ambiguous: r.ambiguous,
+  });
+  for (const angle of ["correctness", "coverage", "determinism", "contract-surface", "link-check"]) {
+    assert.ok(dyn.recommendedAngles.includes(angle), `expected ${angle} in hunk-less mixed subset`);
+  }
+  assert.ok(dyn.recommendedAngles.length < DRAFT_ANGLES.length);
+  assert.equal(dyn.fallbackToAll, false);
 });
 
 test("analyzeDiff: rename-only → unambiguous", () => {

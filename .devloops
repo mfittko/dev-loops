@@ -40,7 +40,7 @@ gates:
     # Ordered, first-match-wins diff-class angle tiers (GATE-EXEC-DIFF-CLASS-TIER).
     # A tier round is a normal fanout_fanin round with a reduced angle set: the
     # mandatory floor is unioned in regardless, and a config-source-touching or
-    # unclassifiable delta always falls through to the full pool.
+    # unclassifiable delta falls through to mandatory-floor best-effort selection.
     tiers:
       - name: docs-only
         match: { kinds: [docs], maxLines: 300 }

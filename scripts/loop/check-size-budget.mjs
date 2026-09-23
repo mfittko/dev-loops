@@ -297,7 +297,9 @@ const UNCLASSIFIED_BLOCK_RATIO = 0.5;
  * @param {object} input
  * @param {string} [input.nameStatusOutput] — `git diff --name-status` output
  * @param {string} [input.diffOutput] — full unified diff (feeds the change
- *   classifier's ambiguity detection; per-file LOC comes from numstatOutput)
+ *   classifier's ambiguity detection; per-file LOC comes from numstatOutput).
+ *   An absent/empty value while nameStatusOutput names a MIXED change is an
+ *   unwaivable block: the budget would be computed from incomplete evidence.
  * @param {string} [input.numstatOutput] — `git diff --numstat -z` output
  * @param {{ testDiscount?: number, absoluteHardLoc?: number, tiers?: { default?: object, t1?: object, t3?: object } }} [input.sizeConfig]
  * @param {Array<unknown>} [input.configErrors] — `loadDevLoopConfig` errors; non-empty blocks with no waiver
@@ -396,6 +398,18 @@ export function computeSizeBudget({
     outcome = "block";
     reasons.push("diff is unclassifiable (ambiguous change categories); size budget cannot be computed safely — no waiver possible");
   }
+  // Evidence-availability guard, deliberately NOT piggybacking on the angle
+  // classifier's `ambiguous` flag: a hunk-less mixed diff now classifies from
+  // its T0 surfaces (so `ambiguous` is false) to keep the code-review core in
+  // best-effort angle selection, but the size budget needs the FULL diff. When
+  // name-status names a mixed change and the full-diff capture is absent, the
+  // budget is being computed from incomplete evidence — wholeLogicLoc comes
+  // solely from numstat, so an arbitrarily large change can read 0 and pass.
+  // Key the unwaivable block on that missing evidence directly.
+  if (diffAnalysis.fullDiffMissing) {
+    outcome = "block";
+    reasons.push("full-diff capture is absent for a mixed diff (the hunk-level analysis could not run); size budget cannot be computed safely — no waiver possible");
+  }
   if (substantiallyUnclassified) {
     outcome = "block";
     reasons.push(
@@ -412,7 +426,7 @@ export function computeSizeBudget({
   // Every branch above blocks with no waiver possible; a waiver flag must
   // never read true once one of them has already fired, or a Phase-2
   // consumer keying off waiver.*Valid could mis-record a hard-blocked PR.
-  const unwaivableBlock = configErrorCount > 0 || diffAnalysis.ambiguous || substantiallyUnclassified || wholeLoc > absoluteHardLoc;
+  const unwaivableBlock = configErrorCount > 0 || diffAnalysis.ambiguous || diffAnalysis.fullDiffMissing || substantiallyUnclassified || wholeLoc > absoluteHardLoc;
 
   let t1WaiverValid = false;
   if (t1Tier && typeof t1Tier.sliceHardLoc === "number" && t1SliceLoc > t1Tier.sliceHardLoc) {
@@ -465,6 +479,7 @@ export function computeSizeBudget({
       t1: t1Tier ? { sliceHardLoc: t1Tier.sliceHardLoc ?? null } : null,
     },
     ambiguous: diffAnalysis.ambiguous,
+    fullDiffMissing: diffAnalysis.fullDiffMissing,
     configErrorCount,
     waiver: {
       requested: waived === true,
