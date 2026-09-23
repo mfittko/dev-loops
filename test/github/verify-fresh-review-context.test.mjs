@@ -956,3 +956,33 @@ test("verify-fresh-review-context --prefix-file refuses a manifest and evidence 
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 });
+
+test("verify-fresh-review-context --prefix-file refuses a hashless or malformed manifest line and accepts the writer's own lines", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  try {
+    const { ctxRelPath } = await seedRequiredReads(tmpDir);
+    const artifact = JSON.parse(await readFile(path.join(tmpDir, ctxRelPath), "utf8"));
+    const lines = artifact.requiredReads.map((read) => renderRequiredReadLine(read, tmpDir));
+    const evidenceLine = lines[artifact.requiredReads.findIndex((read) => read.kind === "evidence")];
+    const hashless = evidenceLine.replace(/ \(sha256 [^)]*\)$/, "");
+    const cases = [
+      ["writer lines incl. hashless context", lines, 0],
+      ["no-reads marker", ["- (no required reads recorded)"], 0],
+      ["hashless replacement", lines.map((line) => (line === evidenceLine ? hashless : line)), 1],
+      ["malformed line", [...lines, evidenceLine.replace("(sha256 ", "(sha256:")], 1],
+    ];
+    for (const [label, manifest, status] of cases) {
+      await rm(path.join(tmpDir, "tmp", "checkpoint-context-sentinel-draft-gate-coverage.json"), { force: true });
+      await writeFile(path.join(tmpDir, "prefix.txt"), `# Prefix\n\n## Required reads\n\nIntro.\n\n${manifest.join("\n")}\n`, "utf8");
+      const result = runScript(["--scope", "draft-gate-coverage", "--prefix-file", "prefix.txt"], { cwd: tmpDir });
+      assert.equal(result.status, status, `${label}: ${result.stderr || result.stdout}`);
+      if (status === 1) {
+        const output = JSON.parse(result.stdout.trim());
+        assert.equal(output.sentinelCreated, false, label);
+        assert.match(output.reason, /does not match the required-read grammar/, label);
+      }
+    }
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});

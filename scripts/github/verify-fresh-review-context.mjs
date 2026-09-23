@@ -6,6 +6,7 @@ import path from "node:path";
 import { buildParseError, isDirectCliRun, formatCliError } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { canonicalizeScope } from "./_gate-names.mjs";
+import { renderRequiredReadLine } from "./write-gate-context.mjs";
 const USAGE = `Usage: verify-fresh-review-context.mjs [--help] [--scope <name>] [--context-path <path>]
        [--prefix-hash <sha256>|--prefix-file <path>] [--same-head-retry]
 Verify that the current scoped-reviewer session has fresh context.
@@ -268,13 +269,36 @@ async function verifyRequiredReads(contextPath, cwd) {
 // the context JSON is mutable. Verify every hashed read line of the prefix's
 // `## Required reads` section against disk directly, so replacing a manifest
 // entry and its file together cannot pass. Returns null or a reason.
-const PREFIX_READ_LINE_RE = /^- (?:required|optional) (\S+): `([^`]+)` \(sha256 ([0-9a-f]{64}), (\d+) bytes\)$/;
+// Every manifest line must match a shape the writer's own
+// renderRequiredReadLine emits: a hashed entry, the hashless `context` entry,
+// or the no-reads marker. Any other `- ` or `required`/`optional` line is
+// refused, so a bound line cannot be swapped for a hashless or malformed one.
+// The patterns are rendered from placeholders so writer and verifier cannot drift.
+const NO_REQUIRED_READS_LINE = "- (no required reads recorded)";
+function readLinePattern(read, captures) {
+  let source = renderRequiredReadLine({ ...read, path: "/\u0000P" }, "/").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  for (const [token, capture] of captures) source = source.replace(token, capture);
+  return new RegExp(`^${source}$`);
+}
+const HASHED_READ_LINE_RES = [true, false].map((required) => readLinePattern(
+  { kind: "\u0000K", sha256: "\u0000H", bytes: "\u0000B", required },
+  [["\u0000K", "(\\S+)"], ["/\u0000P", "([^`]+)"], ["\u0000H", "([0-9a-f]{64})"], ["\u0000B", "(\\d+)"]],
+));
+const CONTEXT_READ_LINE_RE = readLinePattern({ kind: "context", required: false }, [["/\u0000P", "[^`]+"]]);
+const MANIFEST_LIKE_LINE_RE = /^\s*(?:-|\*|(?:required|optional)\b)/;
 async function verifyPrefixRequiredReads(prefixText) {
   const start = prefixText.indexOf("\n## Required reads\n");
   if (start === -1) return null;
-  for (const line of prefixText.slice(start).split("\n")) {
-    const match = PREFIX_READ_LINE_RE.exec(line);
-    if (!match) continue;
+  const sectionLines = prefixText.slice(start + 1).split("\n");
+  const end = sectionLines.findIndex((line, index) => index > 0 && line.startsWith("## "));
+  for (const line of end === -1 ? sectionLines : sectionLines.slice(0, end)) {
+    const match = HASHED_READ_LINE_RES.map((re) => re.exec(line)).find(Boolean);
+    if (!match) {
+      if (MANIFEST_LIKE_LINE_RE.test(line) && line !== NO_REQUIRED_READS_LINE && !CONTEXT_READ_LINE_RE.test(line)) {
+        return `prefix manifest line ${JSON.stringify(line)} does not match the required-read grammar the writer emits`;
+      }
+      continue;
+    }
     const [, kind, readPath, sha256, byteCount] = match;
     const label = `prefix-bound required read ${kind} "${readPath}"`;
     let bytes;
