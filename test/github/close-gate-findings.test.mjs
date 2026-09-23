@@ -1152,7 +1152,7 @@ test("an answered, judge-rejected question found only in a PRIOR local ledger is
       await mkdir(findingsDir, { recursive: true });
       await writeFile(
         path.join(findingsDir, `draft_gate-${nthHeadSha(1)}.json`),
-        JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", loggedAt: "2026-08-03T00:00:00.000Z", findings: [finding] }),
+        JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", verdict: "findings_present", loggedAt: "2026-08-03T00:00:00.000Z", findings: [finding] }),
         "utf8",
       );
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
@@ -1187,7 +1187,7 @@ test("tier 1 (current ledger) wins over a disagreeing tier 2 (prior local ledger
       await mkdir(findingsDir, { recursive: true });
       await writeFile(
         path.join(findingsDir, `draft_gate-${nthHeadSha(1)}.json`),
-        JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", loggedAt: "2026-08-03T00:00:00.000Z", findings: [priorFinding] }),
+        JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", verdict: "findings_present", loggedAt: "2026-08-03T00:00:00.000Z", findings: [priorFinding] }),
         "utf8",
       );
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
@@ -1228,6 +1228,46 @@ test("#2381: two current-ledger findings sharing a fingerprint with disagreeing 
   ));
 });
 
+// Copilot review (PR 2402): a CURRENT-ledger finding matching this
+// fingerprint but carrying a missing/empty judgeDisposition (not yet judged
+// this round) is a fail-closed STOP at tier 1, never a tier-1 "cache miss"
+// that falls through to a PRIOR round's ledger — even when that prior
+// ledger carries a `reject` for the identical fingerprint. Falling through
+// here would resolve the thread off stale evidence and violate both tier-1
+// precedence and the no-resolution-without-a-recorded-disposition rule
+// (ADR 0088). No reply/resolve gh call is stubbed, so a regression that
+// reject-closes here overflows the stub and fails the test.
+test("#2381: a current-ledger fingerprint match with a missing judgeDisposition fails closed — never falls through to a prior ledger's reject", async () => {
+  const undisposedFinding = { severity: "question", angle: "scope", summary: "why this approach?" };
+  const priorRejectedFinding = { severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "reject", judgeRationale: "Stale prior-round rejection." };
+  const fp = fingerprintFinding(undisposedFinding);
+  assert.equal(fp, fingerprintFinding(priorRejectedFinding)); // same summary → same fingerprint, by construction
+  const questionBody = `${buildFindingMarker({ fp, severity: "question", angle: "scope", round: 2 })}\n**question** (\`scope\`): why this approach?`;
+  const thread = threadNode({
+    id: "THREAD_Q_TIER1_MISSING_DISPOSITION",
+    commentId: 6280,
+    body: questionBody,
+    replies: [{ body: "Answering now.", author: "operator" }],
+  });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [undisposedFinding] }), (ledgerPath) => withGhStub(
+    // No reply/resolve entries: the missing-disposition current match must
+    // stop tier 1 and never reach tier 2's prior-ledger reject.
+    roundEntries({ issueComments: roundHistory("draft_gate", 2), threads: [thread] }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
+      await mkdir(findingsDir, { recursive: true });
+      await writeFile(
+        path.join(findingsDir, `draft_gate-${nthHeadSha(1)}.json`),
+        JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", verdict: "findings_present", loggedAt: "2026-08-03T00:00:00.000Z", findings: [priorRejectedFinding] }),
+        "utf8",
+      );
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.rejectClosed, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+    },
+  ));
+});
+
 // #2381: tier 2's ambiguous result (a tied or undecidable disagreement across
 // prior local ledgers) must STOP resolveJudgeRejection, never fall through to
 // a stale tier-3 render-time suffix — even when that suffix says reject. Both
@@ -1252,12 +1292,12 @@ test("#2381: a TIED loggedAt disagreement across prior ledgers is ambiguous — 
       await mkdir(findingsDir, { recursive: true });
       await writeFile(
         path.join(findingsDir, `draft_gate-${nthHeadSha(1)}.json`),
-        JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", loggedAt: "2026-09-10T00:00:00.000Z", findings: [{ severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "reject", judgeRationale: "tied A" }] }),
+        JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", verdict: "findings_present", loggedAt: "2026-09-10T00:00:00.000Z", findings: [{ severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "reject", judgeRationale: "tied A" }] }),
         "utf8",
       );
       await writeFile(
         path.join(findingsDir, `draft_gate-${nthHeadSha(2)}.json`),
-        JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", loggedAt: "2026-09-10T00:00:00.000Z", findings: [{ severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "act", judgeRationale: "tied B" }] }),
+        JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", verdict: "findings_present", loggedAt: "2026-09-10T00:00:00.000Z", findings: [{ severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "act", judgeRationale: "tied B" }] }),
         "utf8",
       );
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
@@ -1285,12 +1325,12 @@ test("#2381: a MISSING-loggedAt disagreement across prior ledgers is ambiguous �
       await writeFile(
         path.join(findingsDir, `draft_gate-${nthHeadSha(1)}.json`),
         // No `loggedAt` at all: "greatest" is undecidable across the set.
-        JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", findings: [{ severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "reject", judgeRationale: "no timestamp" }] }),
+        JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", verdict: "findings_present", findings: [{ severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "reject", judgeRationale: "no timestamp" }] }),
         "utf8",
       );
       await writeFile(
         path.join(findingsDir, `draft_gate-${nthHeadSha(2)}.json`),
-        JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", loggedAt: "2026-09-10T00:00:00.000Z", findings: [{ severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "act", judgeRationale: "timestamped" }] }),
+        JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", verdict: "findings_present", loggedAt: "2026-09-10T00:00:00.000Z", findings: [{ severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "act", judgeRationale: "timestamped" }] }),
         "utf8",
       );
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });

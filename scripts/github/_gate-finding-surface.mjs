@@ -1247,6 +1247,14 @@ async function collectLocalJudgeDispositionMatches({ dir, filenames, repo, pr, g
     // content — cross-check the ledger's OWN recorded repo/pr/gate before
     // trusting any finding inside it.
     if (parsed.repo !== repo || String(parsed.pr) !== String(pr) || parsed.gate !== gate) continue;
+    // Same carry-forward eligibility gate write-gate-context.mjs applies before
+    // trusting a prior ledger's dispositions (buildCarryForwardPlan,
+    // resolve-angle-carry-forward.mjs): only `clean` or `findings_present` is a
+    // genuinely CLOSED round. A `blocked`/other/missing verdict means a
+    // truncated write, an aborted round, or a hand-edited ledger — its
+    // findings' judgeDisposition fields carry no such guarantee, so a stale
+    // `reject` from an unsettled round must never surface here either.
+    if (parsed.verdict !== "clean" && parsed.verdict !== "findings_present") continue;
     const loggedAtMs = typeof parsed.loggedAt === "string" ? Date.parse(parsed.loggedAt) : NaN;
     const findings = Array.isArray(parsed.findings) ? parsed.findings : [];
     for (const finding of findings) {
@@ -1293,10 +1301,14 @@ async function collectLocalJudgeDispositionMatches({ dir, filenames, repo, pr, g
  * snapshot of whatever disposition the FIRST posting of this finding
  * rendered, which can be stale relative to the very disagreement tier 2 just
  * detected, and letting it win on tier 2's ambiguity would defeat the
- * fail-closed intent (ADR 0088). A corrupt/unreadable local ledger file, or one
- * whose own recorded repo/pr/gate does not match the inputs, is skipped,
- * never thrown — a stale/foreign/hand-edited local artifact must not block
- * or poison the lookup.
+ * fail-closed intent (ADR 0088). A corrupt/unreadable local ledger file, one
+ * whose own recorded repo/pr/gate does not match the inputs, or one whose
+ * own `verdict` is not `clean`/`findings_present` (the same carry-forward
+ * eligibility gate write-gate-context.mjs applies, buildCarryForwardPlan in
+ * resolve-angle-carry-forward.mjs — a `blocked`/other/missing verdict means
+ * an unsettled round whose dispositions carry no guarantee), is skipped,
+ * never thrown — a stale/foreign/hand-edited/unsettled local artifact must
+ * not block or poison the lookup.
  */
 export async function findJudgeDispositionForFingerprint({ repo, pr, gate, headSha, tmpRoot, repoRoot, fp }) {
   const { dir, filenames } = await listLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot });

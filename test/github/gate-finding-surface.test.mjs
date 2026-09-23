@@ -992,11 +992,12 @@ async function withLocalLedgerFiles(ledgers, fn) {
   }
 }
 
-function jdfLedger({ repo = JDF_REPO, pr = JDF_PR, gate = JDF_GATE, loggedAt, disposition, rationale }) {
+function jdfLedger({ repo = JDF_REPO, pr = JDF_PR, gate = JDF_GATE, verdict = "findings_present", loggedAt, disposition, rationale }) {
   return {
     repo,
     pr,
     gate,
+    verdict,
     loggedAt,
     findings: [{ severity: "question", angle: "scope", summary: JDF_SUMMARY, judgeDisposition: disposition, judgeRationale: rationale }],
   };
@@ -1044,6 +1045,29 @@ test("#2381: findJudgeDispositionForFingerprint ignores a ledger whose own recor
     async (tmpRoot) => {
       const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
       assert.deepEqual(result, { disposition: "reject", rationale: "this PR's own reasoning" });
+    },
+  );
+});
+
+// Copilot review (PR 2402): the SAME carry-forward eligibility gate
+// write-gate-context.mjs applies to a prior ledger (buildCarryForwardPlan,
+// resolve-angle-carry-forward.mjs — only `clean`/`findings_present` is a
+// genuinely CLOSED round) must apply here too, or a `blocked`/partial local
+// ledger can surface a stale `judgeDisposition: reject` for a round that
+// never produced a settled verdict.
+test("#2381: findJudgeDispositionForFingerprint ignores a ledger whose own verdict is not clean/findings_present (blocked, or missing)", async () => {
+  await withLocalLedgerFiles(
+    {
+      [`${JDF_GATE}-headA.json`]: jdfLedger({ verdict: "blocked", loggedAt: "2026-09-10T00:00:00.000Z", disposition: "reject", rationale: "stale, unsettled round" }),
+      // Explicit undefined would just re-trigger jdfLedger's own default
+      // parameter (verdict = "findings_present") — override the RETURNED
+      // object's field instead so JSON.stringify genuinely drops it,
+      // exercising the "missing verdict key entirely" case.
+      [`${JDF_GATE}-headB.json`]: { ...jdfLedger({ loggedAt: "2026-09-11T00:00:00.000Z", disposition: "reject", rationale: "missing verdict field" }), verdict: undefined },
+    },
+    async (tmpRoot) => {
+      const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
+      assert.equal(result, null, "neither a blocked nor a verdict-less ledger is carry-eligible; both must be skipped, not surfaced");
     },
   );
 });

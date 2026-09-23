@@ -1130,9 +1130,33 @@ async function gatherCheckpointEvidenceRaw(options, { env = process.env, ghComma
  * detect-pr-gate-coordination-state.mjs, which stores this whole result
  * under `gateEvidence`) — kept off every public projection regardless of how
  * many comments the PR has accumulated.
+ *
+ * ADR 0088 fold: `draftGateSatisfied` must assert 0
+ * unresolved gate-authored threads, not just a clean verdict marker — the
+ * same invariant main() below computes (its own fetch + login-narrowed
+ * count). Previously this library entry point returned ONLY the
+ * marker-only value, so the identical unresolved gate-authored question
+ * could read `draftGateSatisfied: true` here (e.g. via
+ * detect-pr-gate-coordination-state.mjs's own `gateEvidence`) while the CLI
+ * reported it blocked.
+ *
+ * Deliberately caller-INJECTED rather than self-fetched here:
+ * `ctx.unresolvedGateThreadCount`, when a finite number, folds it in; when
+ * omitted, this returns the unchanged marker-only value. This entry point
+ * never spends an unconditional extra thread-payload fetch (and conditional
+ * `gh api user` round-trip) on every caller regardless of whether that
+ * caller even reads `draftGateSatisfied` (most don't — e.g.
+ * reconcile-draft-gate.mjs never does). detect-pr-gate-coordination-state.mjs
+ * already resolves this identical login-narrowed count for its own
+ * unrelated bookkeeping (ADR 0088) and injects it here, so the fold costs it
+ * no second thread-payload fetch or second `gh api user` round-trip for the
+ * same fact.
  */
 export async function detectCheckpointEvidence(options, ctx) {
   const { reviews: _reviews, comments: _comments, ...publicResult } = await gatherCheckpointEvidenceRaw(options, ctx);
+  if (typeof ctx?.unresolvedGateThreadCount === "number") {
+    publicResult.draftGateSatisfied = publicResult.draftGateSatisfied && ctx.unresolvedGateThreadCount === 0;
+  }
   return publicResult;
 }
 async function main() {

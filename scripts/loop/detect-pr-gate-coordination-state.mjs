@@ -891,9 +891,14 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   } catch {
     unresolvedGateThreadCount = -1;
   }
+  // Injects the login-narrowed count computed just above so
+  // detectCheckpointEvidence's own draftGateSatisfied fold (ADR 0088) agrees
+  // with this detector without a second thread-payload fetch or a second
+  // `gh api user` round-trip for the identical fact.
   const gateEvidence = await detectCheckpointEvidence(options, {
     ...runtime,
     cwd: runtime.cwd ?? runtime.repoRoot,
+    unresolvedGateThreadCount,
   });
   // When draft gate was re-passed on a different head, use its timestamp
   // to reset the Copilot round count — only reviews after the re-pass count.

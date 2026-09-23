@@ -573,6 +573,15 @@ function findingFingerprintMatches(finding, fp) {
 // comment; tier 3 alone would always find the disposition but never the
 // rationale.
 //
+// Tier 1 STOPS (returns null, never falls through to tier 2/3) the moment the
+// CURRENT ledger has ANY finding matching this fingerprint, whether or not
+// that finding carries a usable judgeDisposition: a missing/empty/ambiguous
+// disposition on a fingerprint the current round already knows about is not
+// a cache miss, and letting an older ledger or a stale rendered suffix
+// resolve it would violate tier-1 precedence (ADR 0088). Tier 2/3 are only
+// ever reached when the current ledger has NO match for the fingerprint at
+// all.
+//
 // Tier 2 (findJudgeDispositionForFingerprint) returns a distinct
 // `{ ambiguous: true }` shape when prior ledgers disagree with no decidable
 // winner (a tie on the greatest loggedAt, or a disagreement with no usable
@@ -583,24 +592,37 @@ function findingFingerprintMatches(finding, fp) {
 // pass cannot actually resolve on the merits. A plain `null` (no matching
 // prior ledger at all) is a genuine cache miss and still falls through.
 async function resolveJudgeRejection({ fp, threadBody, findings, repo, pr, gate, headSha, tmpRoot, repoRoot }) {
-  const currentMatches = findings.filter((f) =>
-    f && typeof f.judgeDisposition === "string" && f.judgeDisposition.trim().length > 0 && findingFingerprintMatches(f, fp),
-  );
+  // Fingerprint match FIRST, independent of whether judgeDisposition is
+  // present — a current-ledger finding this round already knows about (by
+  // fingerprint) is never a tier-2/3 cache miss, even when the judge hasn't
+  // disposed it yet (or its disposition field is malformed/empty). Filtering
+  // on a non-empty judgeDisposition in the SAME pass as the fingerprint match
+  // (the prior shape) made an undisposed current-ledger finding invisible to
+  // `currentMatches`, so it fell through to a PRIOR round's ledger or the
+  // rendered `judge: reject` suffix — stale evidence, and a violation of
+  // tier-1 precedence / the no-resolution-without-a-recorded-disposition
+  // rule (ADR 0088).
+  const currentMatches = findings.filter((f) => f && findingFingerprintMatches(f, fp));
   if (currentMatches.length > 0) {
     // fingerprintFinding hashes only files[0] + the normalized summary, and
     // the ledger does not dedupe by fingerprint — two angles can share one
     // fingerprint with different judge dispositions in the SAME ledger.
     // findings.find() would pick whichever comes first in array order,
     // fail open on ng:0 for one of the two, and disagree with tier 2's own
-    // `{ ambiguous: true }` stop on the identical case. Collect every match
-    // and stop, same as tier 2, when they disagree.
-    const dispositions = new Set(currentMatches.map((f) => f.judgeDisposition.trim()));
-    if (dispositions.size > 1) return null;
+    // `{ ambiguous: true }` stop on the identical case. Collect every
+    // disposition (missing/empty normalized to "") and stop — fail closed,
+    // never fall through to tier 2/3 — when ANY match lacks a disposition or
+    // when the present dispositions disagree.
+    const dispositions = currentMatches.map((f) =>
+      typeof f.judgeDisposition === "string" ? f.judgeDisposition.trim() : "",
+    );
+    if (dispositions.some((d) => d.length === 0)) return null;
+    if (new Set(dispositions).size > 1) return null;
     const current = currentMatches[0];
     const rationale = typeof current.judgeRationale === "string" && current.judgeRationale.trim().length > 0
       ? current.judgeRationale.trim()
       : null;
-    return { disposition: current.judgeDisposition.trim(), rationale };
+    return { disposition: dispositions[0], rationale };
   }
   const prior = await findJudgeDispositionForFingerprint({ repo, pr, gate, headSha, tmpRoot, repoRoot, fp });
   if (prior?.ambiguous) return null;

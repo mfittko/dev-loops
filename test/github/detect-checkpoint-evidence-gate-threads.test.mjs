@@ -5,6 +5,7 @@ import path from "node:path";
 import { onTestFinished, test } from "bun:test";
 import { runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 import { buildFindingMarker, countUnresolvedGateAuthoredThreadsFromRawNodes } from "../../scripts/github/_gate-finding-surface.mjs";
+import { detectCheckpointEvidence } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
 
 const scriptPath = path.resolve("scripts/github/detect-checkpoint-evidence.mjs");
@@ -253,6 +254,59 @@ test("#2381: a login-resolution failure (after a marker-only candidate is found)
   // would produce by clobbering unresolvedThreadCount back to -1.
   assert.match(failureText, /unresolved review threads present \(1\)/i);
   assert.doesNotMatch(failureText, /could not fetch review thread state/i);
+});
+
+// #2381: the exported detectCheckpointEvidence() library path (used by
+// detect-pr-gate-coordination-state.mjs) must be ABLE to fold the same
+// unresolved-gate-authored-thread invariant into draftGateSatisfied that the
+// CLI's own main() computes — previously this library entry point returned
+// only gatherCheckpointEvidenceRaw's marker-only value regardless of what
+// its caller knew, so the SAME unresolved gate-authored question could read
+// draftGateSatisfied: true here while the CLI reported it blocked. The fold
+// is caller-INJECTED (ctx.unresolvedGateThreadCount), never self-fetched —
+// this library entry point must never spend an unconditional extra
+// thread-payload fetch (and conditional `gh api user` round-trip) on every
+// caller regardless of whether that caller even reads draftGateSatisfied
+// (most don't). Only 3 gh calls are stubbed (no graphql thread fetch, no
+// `api user` call) in every case below; an unwanted extra call overflows
+// the stub and fails the test.
+function stubMinimalCleanDraftGate(tempDir) {
+  return writeGhStubHelper(tempDir, [
+    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+    {
+      assertArgs: ["api", "repos/owner/repo/issues/17/comments?per_page=100"],
+      stdout: JSON.stringify([
+        { id: 42, body: cleanGateBody("draft_gate", "abc1234"), updated_at: "2026-05-29T21:00:00Z" },
+        { id: 43, body: cleanGateBody("pre_approval_gate", "abc1234"), updated_at: "2026-05-29T22:00:00Z" },
+      ]) + "\n",
+    },
+    { stdout: "[]" },
+  ]);
+}
+
+test("#2381: detectCheckpointEvidence() without an injected count returns the unchanged marker-only draftGateSatisfied (no thread fetch, no api user call)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-2381-lib-noop-"));
+  onTestFinished(() => rm(tempDir, { recursive: true, force: true }));
+  await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+
+  const { env } = await stubMinimalCleanDraftGate(tempDir);
+  const result = await detectCheckpointEvidence({ repo: "owner/repo", pr: 17 }, { env, cwd: tempDir });
+  assert.equal(result.draftGate.verdict, "clean");
+  assert.equal(result.draftGateSatisfied, true, "absent an injected count, the library path keeps the unchanged marker-only value");
+});
+
+test("#2381: detectCheckpointEvidence() folds an injected unresolvedGateThreadCount into draftGateSatisfied (no extra thread-payload fetch or api user call)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-2381-lib-override-"));
+  onTestFinished(() => rm(tempDir, { recursive: true, force: true }));
+  await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+
+  const { env } = await stubMinimalCleanDraftGate(tempDir);
+  const blocked = await detectCheckpointEvidence({ repo: "owner/repo", pr: 17 }, { env, cwd: tempDir, unresolvedGateThreadCount: 1 });
+  assert.equal(blocked.draftGateSatisfied, false, "a nonzero injected count must fold draftGateSatisfied to false");
+
+  const { env: env2 } = await stubMinimalCleanDraftGate(tempDir);
+  const clean = await detectCheckpointEvidence({ repo: "owner/repo", pr: 17 }, { env: env2, cwd: tempDir, unresolvedGateThreadCount: 0 });
+  assert.equal(clean.draftGateSatisfied, true, "an injected count of 0 must leave the marker-only clean value satisfied");
 });
 
 test("runIdFreeEnv strips ambient markers, drops undefined overrides, and lets explicit overrides win", () => {

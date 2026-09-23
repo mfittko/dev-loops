@@ -629,7 +629,7 @@ test("describeUnresolvedGateThreadReasons: names both remedies when both buckets
   const both = describeUnresolvedGateThreadReasons({ question: 1, other: 2 }, 3);
   assert.match(both, /1 question thread\(s\)/);
   assert.match(both, /2 open defect thread\(s\)/);
-  assert.match(both, /ambiguous or unrecorded needs an operator decision/);
+  assert.match(both, /the judge deferred, or whose judge disposition is ambiguous or unrecorded, needs an operator decision/);
   const fallback = describeUnresolvedGateThreadReasons({ question: 0, other: 0 }, 5);
   assert.match(fallback, /5 unresolved gate-authored review thread\(s\)/);
 });
