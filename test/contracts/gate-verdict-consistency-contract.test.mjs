@@ -76,8 +76,10 @@ test("write-gate-findings-log rejects a --verdict contradicting the wrapper over
 test("upsert-checkpoint-verdict derives the verdict from the ledger's overallVerdict by default (#1616 AC: no --verdict is valid)", async () => {
   const src = await readFile(UPSERT_SCRIPT, "utf8");
   // The derive path: when --verdict is omitted and the ledger carries
-  // overallVerdict, the verdict is derived from it.
-  assert.match(src, /options\.verdict = ledgerVerdict/);
+  // overallVerdict, the verdict is derived from it, composed with any proven
+  // pre-approval blocker (#2389).
+  assert.match(src, /composeCheckpointVerdict\(\{ reviewVerdict: ledgerVerdict, blockers: gateBlockers \}\)/);
+  assert.match(src, /options\.verdict = composedVerdict/);
   // No override flag is added (the contradiction is a consolidator bug to fix,
   // not an operator decision to override) — the refusal has no escape hatch.
   assert.doesNotMatch(src, /--override-verdict|--allow-contradiction|--force-verdict/);

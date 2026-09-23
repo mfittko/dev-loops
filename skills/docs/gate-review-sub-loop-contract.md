@@ -1314,7 +1314,8 @@ Each gate chain exits when one of these conditions is met:
 | Condition | Result |
 |---|---|
 | Consolidated verdict is `clean` (no findings at any blocking severity) | Gate passes; proceed to next boundary |
-| `blocked` verdict (gate could not complete) | Stop; escalate to operator |
+| `pre_approval_gate` checkpoint `blocked` composed from a deterministic AC/DoD blocker over a completed review ledger (the comment records a **Review verdict** and **Gate blockers**) | Tick verified items or finish the open work, then rerun the gate (the writer's next action is "rerun gate") |
+| `blocked` verdict from the review/fan-in itself (gate could not complete) | Stop; escalate to operator |
 | Maximum retry cycles exhausted without reaching `clean` | Stop; escalate to operator |
 | Fix cycle produces no net progress (same findings after fix attempt) | Stop; escalate to operator |
 
