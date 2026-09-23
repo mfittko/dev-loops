@@ -45,6 +45,8 @@ import {
   EVIDENCE_STATE,
 } from "../../scripts/github/detect-checkpoint-evidence.mjs";
 import { fetchGithubReviewThreadsPayload } from "../../scripts/github/capture-review-threads.mjs";
+import { evaluatePrGateCoordination } from "@dev-loops/core/loop/pr-gate-coordination";
+import { STATE, DISPOSITION } from "@dev-loops/core/loop/copilot-loop-state";
 import { claimRunnerOwnership } from "../../scripts/loop/_pr-runner-coordination.mjs";
 import { execFileSync } from "node:child_process";
 import { mkdir } from "node:fs/promises";
@@ -1214,6 +1216,56 @@ test("buildPreMergeGateCheck passes with zero unresolved threads", () => {
   assert.equal(result.ok, true);
   assert.deepEqual(result.failures, []);
 });
+
+// #2354 AC4: at the round-cap-clean state, evaluatePrGateCoordination's
+// draftGateAlreadySatisfied flag must agree with buildPreMergeGateCheck's
+// independent draft-gate verdict — no draft_gate comment fails both closed,
+// a clean draft_gate comment satisfies both. The round cap must never make
+// these two evaluators disagree.
+for (const row of [
+  { name: "no draft_gate comment", lifecycleState: STATE.ROUND_CAP_CLEAN_FALLBACK, sameHeadCleanConverged: false, draftGateEvidence: { visible: false, verdict: null, headSha: null } },
+  { name: "clean draft_gate comment", lifecycleState: STATE.ROUND_CAP_CLEAN_FALLBACK, sameHeadCleanConverged: false, draftGateEvidence: { visible: true, verdict: "clean", headSha: "7e0e303b" } },
+  // The READY_TO_REREQUEST_REVIEW branch (sameHeadCleanConverged true, at the
+  // round cap, clean pre_approval evidence) used to force
+  // draftGateAlreadySatisfied true even with no draft_gate evidence, while
+  // buildPreMergeGateCheck independently reported the comment missing — the
+  // two evaluators disagreed. Both must now agree false/not-satisfied.
+  { name: "ready-to-rerequest-review at the round cap, no draft_gate comment", lifecycleState: STATE.READY_TO_REREQUEST_REVIEW, sameHeadCleanConverged: true, draftGateEvidence: { visible: false, verdict: null, headSha: null } },
+]) {
+  test(`round-cap-clean state: evaluator draftGateAlreadySatisfied agrees with detect-checkpoint-evidence (${row.name}) (#2354)`, () => {
+    const { draftGateEvidence } = row;
+    const cleanEvidenceExists = draftGateEvidence.visible && draftGateEvidence.verdict === "clean";
+    const coordination = evaluatePrGateCoordination({
+      pr: 2354,
+      currentHeadSha: "abc1234deadbeef",
+      prDraft: false,
+      lifecycleState: row.lifecycleState,
+      loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+      sameHeadCleanConverged: row.sameHeadCleanConverged,
+      ciStatus: "success",
+      copilotReviewRoundCount: 5,
+      maxCopilotRounds: 5,
+      draftGate: draftGateEvidence,
+      draftGateMarker: draftGateEvidence,
+      preApprovalGate: { visible: true, headSha: "abc1234", verdict: "clean" },
+      preApprovalGateMarker: { visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true },
+    });
+
+    const preMergeGateCheck = buildPreMergeGateCheck({
+      currentHeadSha: "abc1234",
+      draftGate: draftGateEvidence,
+      preApprovalGateMarker: { visible: true, contractComplete: true, verdict: "clean", headSha: "abc1234", sizeOutcome: "pass", sizeTouchesT1: false },
+    }, 0);
+
+    assert.equal(coordination.draftGateAlreadySatisfied, cleanEvidenceExists);
+    assert.equal(
+      preMergeGateCheck.failures.includes("missing visible clean draft_gate comment"),
+      !cleanEvidenceExists,
+    );
+    // Both evaluators must reach the same overall draft-gate verdict.
+    assert.equal(coordination.draftGateAlreadySatisfied, preMergeGateCheck.failures.length === 0);
+  });
+}
 
 // --- coerceUnresolvedThreadCount (#2310: unknown thread state must fail closed, not read as 0) ---
 

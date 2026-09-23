@@ -11,7 +11,13 @@ import { fileURLToPath } from "node:url";
 const DEFAULT_ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const FAILURE_ONLY_FLAG = "--only-failures";
 const DOTS_FLAG = "--dots";
-const TMP_IGNORE_FLAG = "--path-ignore-patterns=tmp/**";
+// Directories under the repo root that hold test files Bun would otherwise
+// discover as this checkout's own. `tmp/**` covers the canonical loop-owned
+// worktrees (`tmp/worktrees/dev-loops/<kind>-<number>`); `worktrees/**` covers
+// the deprecated ad hoc repo-root location, which is gitignored and still used.
+// Bun already skips dot-directories such as `.claude/worktrees/`.
+const PATH_IGNORE_PATTERNS = Object.freeze(["tmp/**", "worktrees/**"]);
+const PATH_IGNORE_FLAGS = Object.freeze(PATH_IGNORE_PATTERNS.map((pattern) => `--path-ignore-patterns=${pattern}`));
 const SUCCESS_TAIL_BYTES = 64 * 1024;
 const HEARTBEAT_MS = 15_000;
 const TTY_REFRESH_MS = 250;
@@ -70,8 +76,8 @@ export function buildBunTestArgs(args, env = process.env) {
       pushDots();
       continue;
     }
-    if (arg === FAILURE_ONLY_FLAG || arg === TMP_IGNORE_FLAG) continue;
-    if (arg === "--path-ignore-patterns" && args[index + 1] === "tmp/**") {
+    if (arg === FAILURE_ONLY_FLAG || PATH_IGNORE_FLAGS.includes(arg)) continue;
+    if (arg === "--path-ignore-patterns" && PATH_IGNORE_PATTERNS.includes(args[index + 1])) {
       index += 1;
       continue;
     }
@@ -91,7 +97,7 @@ export function buildBunTestArgs(args, env = process.env) {
     callerArgs.push(arg);
   }
   const reporting = dotsSeen ? [] : [FAILURE_ONLY_FLAG];
-  return ["test", ...reporting, TMP_IGNORE_FLAG, `--parallel=${resolveBunTestParallelism(env)}`, `--timeout=${resolveBunTestTimeoutMs(env)}`, "--no-isolate", ...callerArgs];
+  return ["test", ...reporting, ...PATH_IGNORE_FLAGS, `--parallel=${resolveBunTestParallelism(env)}`, `--timeout=${resolveBunTestTimeoutMs(env)}`, "--no-isolate", ...callerArgs];
 }
 
 function hasDotsReporter(args) {

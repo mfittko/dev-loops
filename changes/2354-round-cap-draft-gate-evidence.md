@@ -1,0 +1,3 @@
+### Fixed
+
+- **The Copilot round cap no longer forces `draftGateAlreadySatisfied: true` without clean `draft_gate` evidence, which deadlocked ready PRs at the cap (issue [#2354](https://github.com/mfittko/dev-loops/issues/2354)).** `evaluatePrGateCoordination` derived a truthful `draftGateAlreadySatisfied` flag from `draftGate.cleanEvidenceExists`, but the round-cap return sites then overrode it to `true` regardless of evidence, and `upsert-checkpoint-verdict.mjs` treated that forced `true` as an idempotent noop instead of routing through the reconcile draft-transition path. The evaluator now always reports the evidence-derived flag, and a round-cap PR without clean `draft_gate` evidence reconciles the draft gate exactly like any other state (no gate exemptions).
