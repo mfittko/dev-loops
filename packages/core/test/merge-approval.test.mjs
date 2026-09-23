@@ -319,6 +319,7 @@ test("evaluateCopilotConvergence: current-head 🔵 Needs a closer look is condu
   });
   assert.equal(res.ok, true, JSON.stringify(res));
   assert.equal(res.disposition, "needs_closer_look");
+  assert.equal(res.state, COPILOT_CONVERGENCE_STATE.CURRENT_HEAD_CLEAN);
 });
 
 test("evaluateCopilotConvergence: current-head 🟢 Approval recommended passes", () => {
@@ -450,6 +451,7 @@ test("evaluateCopilotConvergence: an unrecognized current-head disposition fails
   });
   assert.equal(res.ok, false);
   assert.equal(res.disposition, "unrecognized");
+  assert.equal(res.state, COPILOT_CONVERGENCE_STATE.CURRENT_HEAD_FINDINGS);
 });
 
 test("evaluateCopilotConvergence: an unknown head fails closed (cannot pin a disposition)", () => {
