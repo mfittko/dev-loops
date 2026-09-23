@@ -164,17 +164,19 @@ test("no concrete model token is hardcoded in the phase prose or SKILL step (con
   assert.ok(!namesResolvedModel(step), "SKILL pre-PR step must not name a resolved harness model id");
 });
 
-// Issue #2357: the pre-PR trigger is a session property (pushes and opens a
+// The pre-PR trigger is a session property (pushes and opens a
 // PR), not a route property. GitHub-first routes reach the same step at
 // OPS-DRAFT-FIRST-PR; the local route keeps step 11b.
 const OPS = "skills/docs/copilot-loop-operations.md";
 
 test("PRE-PR-BEFORE-FIRST-PUSH is route-neutral and names the GitHub-first placement", () => {
   const para = ruleParagraph(readRepo(CONTRACT), "PRE-PR-BEFORE-FIRST-PUSH");
-  assert.ok(!para.includes("local-implementation session that pushes"), "scope must not be limited to local-implementation sessions");
+  const flat = para.replace(/\s+/g, " ");
+  assert.ok(!flat.includes("local-implementation session that pushes"), "scope must not be limited to local-implementation sessions");
+  assert.ok(flat.includes("whichever route the startup resolver selected"), "rule must state the scope is route-neutral");
   assert.ok(para.includes("OPS-DRAFT-FIRST-PR"), "rule must name the GitHub-first placement");
   assert.ok(para.includes("copilot-loop-operations.md"), "rule must link Copilot Loop Operations");
-  assert.ok(/opens no PR has no pre-PR step/.test(para), "rule must state that a session opening no PR has no pre-PR step");
+  assert.ok(/opens no PR has no pre-PR step/.test(flat), "rule must state that a session opening no PR has no pre-PR step");
 });
 
 test("OPS-DRAFT-FIRST-PR references the pre-PR review before the create-pr.mjs MUST-use line", () => {
@@ -187,7 +189,7 @@ test("OPS-DRAFT-FIRST-PR references the pre-PR review before the create-pr.mjs M
   assert.ok(block.includes("pre-pr-review-contract.md"), "block must link the pre-PR review contract before create-pr.mjs");
 });
 
-test("every PR-creating route loads a pack that carries the pre-PR step", () => {
+test("every PR-creating route loads Copilot Loop Operations or the local SKILL", () => {
   const skill = readRepo("skills/dev-loop/SKILL.md");
   const row = (route) => {
     const line = skill.split("\n").find((l) => l.startsWith(`| \`${route}\` |`));

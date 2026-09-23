@@ -23,8 +23,8 @@ lopsided economic win.
 is complete and committed, and BEFORE the first push of the branch and before
 `dev-loops pr create`. Its fixes MUST be applied to the working tree, validated
 with the narrowest justified check (re-checked after the final round), and
-committed (a follow-up commit or an amend of the step-11 commit), so the branch
-is pushed once, already cleaned and validated. In the `local-implementation`
+committed (a follow-up commit or an amend of the last implementation commit), so
+the branch is pushed once, already cleaned and validated. In the `local-implementation`
 loop it sits between the exit-validation commit (implementation-loop step 11,
 `LOCAL-COMMIT-BEFORE-EXIT`, whose first push is deferred to here) and PR creation
 (implementation-loop step 12). The phase applies to any session that pushes and
@@ -34,8 +34,8 @@ session on a GitHub-first route that creates the branch and PR itself. On the
 GitHub-first routes the step sits before the first push and before `create-pr.mjs`
 at `OPS-DRAFT-FIRST-PR` in [Copilot Loop Operations](copilot-loop-operations.md).
 A session that opens no PR has no pre-PR step: a phase-doc-backed session that
-merges locally, a follow-up session on a PR that already exists, or a
-Copilot-authored PR.
+merges locally, a follow-up session on a PR that already exists, or a session on
+a Copilot-authored PR.
 
 ## The review pass
 
