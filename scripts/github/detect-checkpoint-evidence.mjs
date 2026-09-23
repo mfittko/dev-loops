@@ -728,9 +728,11 @@ async function readActListInAny(checkouts, ledgerPath, markerExecutionMode) {
       continue;
     }
     exists = true;
-    // A present disposition outside the canonical set is malformed, not judged.
+    // A finding that is not a plain object, lacks a string summary, or carries a
+    // disposition outside the canonical set is malformed, not judged.
     if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.findings)
-      || parsed.findings.some((f) => f?.judgeDisposition != null && !JUDGE_DISPOSITIONS.includes(f.judgeDisposition))) {
+      || parsed.findings.some((f) => !f || typeof f !== "object" || Array.isArray(f) || typeof f.summary !== "string"
+        || (f.judgeDisposition != null && !JUDGE_DISPOSITIONS.includes(f.judgeDisposition)))) {
       unreadable ??= { path: full };
       continue;
     }

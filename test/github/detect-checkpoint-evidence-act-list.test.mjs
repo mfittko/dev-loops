@@ -211,3 +211,16 @@ test("a disposition outside act/defer/reject is malformed in any execution mode"
     }
   }
 });
+
+test("a finding that is not an object or lacks a string summary is malformed in any execution mode", async () => {
+  const inlineMarker = { ...PA_MARKER, executionMode: "inline_single_agent" };
+  for (const bad of [null, "act", ["x"], { severity: "low", angle: "x" }]) {
+    for (const marker of [PA_MARKER, inlineMarker]) {
+      await withLedgerRepos([{ findings: [bad] }], async (repo, roots) => {
+        const { check } = await probe(repo, CONFIG_NO_FANOUT, marker);
+        const hits = check.failures.filter((f) => f.includes("judge act list"));
+        assert.deepEqual(hits, [`pre_approval_gate: findings-log ledger is unreadable or malformed (${path.join(roots[0], LEDGER_REL)}); cannot verify the judge act list (GATE-COMMENT-VERDICT-VALUES)`]);
+      });
+    }
+  }
+});
