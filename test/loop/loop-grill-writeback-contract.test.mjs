@@ -279,6 +279,33 @@ test("Step 1 names the deterministic comments fetch, the detector invocation, an
   );
 });
 
+// No-rewrite/no-comment on the zero-iteration exit (#2382 round 2): the
+// provenance-recorded exit's no-mutation contract must be pinned in Step 1
+// (no body rewrite, no new comment) and Step 4 (no rationale to post, skips
+// the step) so a re-run can never loop or mutate an already-clean target.
+test("Step 1 states the provenance-recorded grill_clean exit does not rewrite the body or post a new comment", () => {
+  const step1 = skill.split("## Step 1 — Load the target")[1]?.split("## Step 1b")[0] ?? "";
+  assert.match(
+    step1,
+    /does not rewrite the body/,
+    "Step 1 must state the zero-iteration exit does not rewrite the body",
+  );
+  assert.match(
+    step1,
+    /posts no new results comment/,
+    "Step 1 must state the zero-iteration exit posts no new results comment",
+  );
+});
+
+test("Step 4 states the provenance-recorded zero-iteration exit has no rationale to post and skips this step", () => {
+  const step4 = skill.split("## Step 4 — Write back")[1]?.split("## Output artifact format")[0] ?? "";
+  assert.match(
+    step4,
+    /has no rationale to post and skips this step/,
+    "Step 4 must state the provenance-recorded zero-iteration exit skips the write-back step",
+  );
+});
+
 // Bypass definition (#2364): a bypass is skipping an AVAILABLE zero-iteration
 // exit (already shape-clean AND already provenanced), never the now-mandated
 // first pass on an unprovenanced shape-clean target.
