@@ -27,7 +27,7 @@ import { isGhBinaryMissing, restFetchPrView, restGetPaginatedJson } from "./_gh-
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { ghJson } from "@dev-loops/core/github/gh";
 import { FANOUT_PROVENANCE_MIN_REVIEWERS, GATE_FULL_LABEL, isSizeOutcomeT1Clean, loadDevLoopConfig, resolveFanoutGroups, resolveGateAngleContract, resolveGateConfig, resolveLightMode, resolveRejectForeignAngles, resolveRequireFanoutEvidence, resolveRequireFanoutProvenance, touchesRiskPath } from "@dev-loops/core/config";
-import { FANOUT_UNAVAILABLE_MESSAGE, GATE_CONFIG_KEY, checkFanoutAngleCoverage, countFreshDispatchUnits, fanoutReviewerPairingError, freshAngleNames, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
+import { FANOUT_UNAVAILABLE_MESSAGE, GATE_CONFIG_KEY, checkFanoutAngleCoverage, countFreshDispatchUnits, fanoutReviewerPairingError, freshAngleNames, listOpenActItems, provenanceConsistencyError } from "@dev-loops/core/loop/gate-fanin";
 import { detectMergeBaseChangedFiles, detectMergeBaseScope, isEligibleForLightMode } from "../loop/detect-change-scope.mjs";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
@@ -459,6 +459,14 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
         );
         continue;
       }
+      // ADR 0089: a non-empty judge act list on the current-head ledger keeps
+      // the round from clean, so merge refuses it.
+      const openActItems = Array.isArray(gate.openActItems) ? gate.openActItems : [];
+      if (openActItems.length > 0) {
+        failures.push(
+          `${gate.name}: judge act list is not empty (${openActItems.length} open act item(s): ${openActItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")})`,
+        );
+      }
       // Opt-in provenance enforcement (gates.requireFanoutProvenance), layered on
       // top of fan-out evidence. When off (default) requireProvenance is falsy so
       // NO new failure is added — behavior is byte-identical to today. When on, a
@@ -679,6 +687,23 @@ async function readLedgerProvenanceInAny(checkouts, ledgerPath, criteria = {}) {
     }
   }
   return firstNonNull;
+}
+/**
+ * The judge act list of a ledger across the enumerated checkouts. Fails
+ * closed: the first readable copy with open act items wins, so a copy with an
+ * empty act list can never shadow one that still has them.
+ */
+async function readOpenActItemsInAny(checkouts, ledgerPath) {
+  for (const root of checkouts) {
+    try {
+      const parsed = JSON.parse(await readFile(path.resolve(root, ledgerPath), "utf8"));
+      const items = listOpenActItems(parsed?.findings);
+      if (items.length > 0) return items;
+    } catch {
+      // Missing/unreadable/malformed ledger in this checkout — try the next.
+    }
+  }
+  return [];
 }
 // A committed `.devloops` is a small hand-authored config file; 8 MiB is
 // already many times larger than any legitimate one, so bounding `git show`
@@ -935,6 +960,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
       scopeUnderThreshold,
       ledgerPath,
       ledgerExists: await ledgerExistsInAny(checkouts, ledgerPath),
+      openActItems: spec.name === "pre_approval_gate" ? await readOpenActItemsInAny(checkouts, ledgerPath) : [],
       provenance,
       // The dispatch units THIS ledger's own fresh angles actually resolve to
       // (grouped or singleton, mode/gate:full-aware) — buildPreMergeGateCheck

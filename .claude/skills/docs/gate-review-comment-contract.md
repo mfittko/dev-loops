@@ -322,8 +322,8 @@ with the fixed meaning below:
 
 | Verdict | Meaning |
 |---|---|
-| `clean` | No findings with a severity in the gate's `blockCleanOnFindingSeverities` remain |
-| `findings_present` | The gate found issues at blocking severities; fixes are required before the gate boundary can be crossed |
+| `clean` | No findings with a severity in the gate's `blockCleanOnFindingSeverities` remain, and the judge act list is empty |
+| `findings_present` | The gate found issues at blocking severities, or the judge act list is not empty; fixes are required before the gate boundary can be crossed |
 | `blocked` | The gate could not complete or a hard blocker prevented a verdict |
 
 This rule is enforced at write time and at post time, not just documented:
@@ -349,8 +349,11 @@ compares `--verdict` against the wrapper's `overallVerdict` — the
 consolidator's computed round verdict — whether or not `--judge-verdict` was
 also supplied. The judge only enriches findings with `act`/`defer`/`reject`
 dispositions (see [Checkpoint Review Chain Contract](./gate-review-sub-loop-contract.md#phase-35--judge-relevance-disposition-1525));
-it never revises the round verdict, so a `--judge-verdict` run is held to the
-exact same contradiction check as a run without one.
+it never revises the ledger's `overallVerdict`, so a `--judge-verdict` run is held to the
+exact same contradiction check as a run without one. The ledger's `overallVerdict`
+stays the consolidator's severity verdict; `upsert-checkpoint-verdict.mjs` composes
+the review verdict with the act list, so a non-empty act list yields
+`findings_present` (ADR 0089).
 
 ## Disposition ledger
 

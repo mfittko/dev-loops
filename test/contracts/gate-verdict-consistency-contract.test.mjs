@@ -31,10 +31,12 @@ test("GATE-COMMENT-VERDICT-VALUES states the clean/findings_present meanings the
   // The rule ID is present and owns the verdict-value definitions.
   assert.match(doc, /<!-- rule: GATE-COMMENT-VERDICT-VALUES -->/);
   // The stated meaning of "clean" matches what consolidate-fanin computes
-  // (no findings at a blocking severity remain).
-  assert.match(doc, /\| `clean` \| No findings with a severity in the gate's `blockCleanOnFindingSeverities` remain \|/);
-  // The stated meaning of "findings_present" matches (blocking findings found).
-  assert.match(doc, /\| `findings_present` \| The gate found issues at blocking severities/);
+  // (no findings at a blocking severity remain), composed with the judge act
+  // list at post time (ADR 0089).
+  assert.match(doc, /\| `clean` \| No findings with a severity in the gate's `blockCleanOnFindingSeverities` remain, and the judge act list is empty \|/);
+  // The stated meaning of "findings_present" matches (blocking findings found
+  // or a non-empty act list).
+  assert.match(doc, /\| `findings_present` \| The gate found issues at blocking severities, or the judge act list is not empty/);
 });
 
 test("upsert-checkpoint-verdict's refusal error cites GATE-COMMENT-VERDICT-VALUES so it points at the rule it upholds", async () => {

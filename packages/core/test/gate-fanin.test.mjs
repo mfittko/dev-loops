@@ -3,6 +3,8 @@ import { describe, test } from "bun:test";
 
 import {
   consolidateFanin,
+  composeReviewVerdict,
+  listOpenActItems,
   toFindingsLogShape,
   planFanoutBatches,
   DEFAULT_MAX_FANOUT_REVIEWERS,
@@ -1667,5 +1669,33 @@ describe("resolveFindingFile (#1900): one shared file resolver for both shapes",
     assert.equal(hasLocatableShape({ files: ["src/a.mjs"], line: 1 }), true);
     assert.equal(hasLocatableShape({ file: "   ", line: 1 }), false);
     assert.equal(hasLocatableShape({ file: "src/a.mjs" }), false);
+  });
+});
+
+describe("composeReviewVerdict / listOpenActItems", () => {
+  const medium = (judgeDisposition) => ({ severity: "medium", angle: "correctness", summary: "medium issue", judgeDisposition });
+  const low = (judgeDisposition) => ({ severity: "low", angle: "docs", summary: "low issue", judgeDisposition });
+
+  test("a clean round with one judged act finding becomes findings_present", () => {
+    const findings = [medium("act"), low("reject")];
+    assert.equal(composeReviewVerdict("clean", findings), "findings_present");
+    assert.deepEqual(listOpenActItems(findings), [findings[0]]);
+  });
+
+  test("medium and low findings all rejected or deferred stay clean", () => {
+    const findings = [medium("reject"), low("defer")];
+    assert.equal(composeReviewVerdict("clean", findings), "clean");
+    assert.deepEqual(listOpenActItems(findings), []);
+  });
+
+  test("never lowers findings_present or blocked", () => {
+    assert.equal(composeReviewVerdict("findings_present", [medium("reject")]), "findings_present");
+    assert.equal(composeReviewVerdict("blocked", []), "blocked");
+    assert.equal(composeReviewVerdict("blocked", [medium("act")]), "blocked");
+  });
+
+  test("tolerates a missing findings list", () => {
+    assert.equal(composeReviewVerdict("clean", undefined), "clean");
+    assert.deepEqual(listOpenActItems(null), []);
   });
 });

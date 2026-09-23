@@ -1,0 +1,3 @@
+### Fixed
+
+- **A gate round with a non-empty judge act list no longer posts `clean`, and merge refuses it (issue [#2409](https://github.com/mfittko/dev-loops/issues/2409)).** `upsert-checkpoint-verdict.mjs` composes the ledger's severity `overallVerdict` with the judge act list (`composeReviewVerdict` in `@dev-loops/core/loop/gate-fanin`): a `clean` severity verdict with any finding disposed `act` becomes `findings_present`, and an explicit `--verdict clean` is refused. `blockCleanOnFindingSeverities` stays a floor. `detect-checkpoint-evidence.mjs`, the evidence probe `merge-pr.mjs` runs, refuses a current-head `pre_approval_gate` ledger with open act items and names them. ADR 0089 records the decision as an amendment of ADR 0078.
