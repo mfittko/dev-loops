@@ -769,6 +769,11 @@ export function summarizeCopilotReviews(reviews, { headSha, draftGateResetAtMs }
   let hasSubmittedReviewOnCurrentHead = false;
   let latestSubmittedReviewOnCurrentHeadAt = null;
   let hasBodyFindingOnCurrentHead = false;
+  // The id of the review whose body set hasBodyFindingOnCurrentHead: the
+  // review a copilot-body-disposition record must name to clear the finding.
+  // Updated on every branch that updates hasBodyFindingOnCurrentHead so the two
+  // never drift.
+  let bodyFindingReviewId = null;
   let completedCopilotReviewRounds = 0;
 
   for (const review of effectiveReviews) {
@@ -794,15 +799,25 @@ export function summarizeCopilotReviews(reviews, { headSha, draftGateResetAtMs }
       const submittedAt = typeof review?.submittedAt === "string"
         ? review.submittedAt
         : (typeof review?.submitted_at === "string" ? review.submitted_at : null);
+      const reviewId = review?.id !== null && review?.id !== undefined ? String(review.id) : null;
       if (submittedAt !== null && (latestSubmittedReviewOnCurrentHeadAt === null || submittedAt > latestSubmittedReviewOnCurrentHeadAt)) {
         latestSubmittedReviewOnCurrentHeadAt = submittedAt;
         hasBodyFindingOnCurrentHead = copilotReviewBodySignalsChanges(state, review?.body);
+        bodyFindingReviewId = hasBodyFindingOnCurrentHead ? reviewId : null;
       } else if (submittedAt !== null && submittedAt === latestSubmittedReviewOnCurrentHeadAt) {
         // Equal-timestamp tie on the same head: fail toward surfacing so array
         // order never silently drops a finding when two reviews share a timestamp.
-        hasBodyFindingOnCurrentHead = hasBodyFindingOnCurrentHead || copilotReviewBodySignalsChanges(state, review?.body);
+        const tieSignals = copilotReviewBodySignalsChanges(state, review?.body);
+        if (tieSignals && !hasBodyFindingOnCurrentHead) {
+          bodyFindingReviewId = reviewId;
+        }
+        hasBodyFindingOnCurrentHead = hasBodyFindingOnCurrentHead || tieSignals;
       } else if (submittedAt === null && latestSubmittedReviewOnCurrentHeadAt === null) {
-        hasBodyFindingOnCurrentHead = hasBodyFindingOnCurrentHead || copilotReviewBodySignalsChanges(state, review?.body);
+        const nullTsSignals = copilotReviewBodySignalsChanges(state, review?.body);
+        if (nullTsSignals && !hasBodyFindingOnCurrentHead) {
+          bodyFindingReviewId = reviewId;
+        }
+        hasBodyFindingOnCurrentHead = hasBodyFindingOnCurrentHead || nullTsSignals;
       }
     }
   }
@@ -820,5 +835,6 @@ export function summarizeCopilotReviews(reviews, { headSha, draftGateResetAtMs }
     hasSubmittedReviewOnCurrentHead,
     latestSubmittedReviewOnCurrentHeadAt,
     hasBodyFindingOnCurrentHead,
+    bodyFindingReviewId,
   };
 }

@@ -8,7 +8,7 @@ import { main, parseCliArgs, runCli } from "../../scripts/github/withdraw-copilo
 import { interpretLoopState } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluatePrGateCoordination } from "@dev-loops/core/loop/pr-gate-coordination";
 import { readSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
-import { resolvePostConvergenceReviewSuppressed } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { resolvePostConvergenceReviewSuppressed } from "../../scripts/loop/_copilot-convergence-carry.mjs";
 
 function collectingStream() {
   const chunks = [];
@@ -705,7 +705,7 @@ describe("withdraw-copilot-review-request", () => {
             repo: "o/n",
             pr: 17,
             currentHeadSha: "newsha",
-            snapshot: { copilotReviewRequestStatus: "none", unresolvedThreadCount: 0 },
+            copilotReviewRequestStatus: "none", unresolvedThreadCount: 0,
             prData: { headRefOid: "newsha", reviews: SUBMITTED_COPILOT_REVIEW_OLD_HEAD },
           },
           { env: {}, runChild: gh.runChild, checkpointDir: dir },

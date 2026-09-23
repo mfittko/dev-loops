@@ -2157,6 +2157,11 @@ test("the draft-gate round reset sees a clean verdict that lives only in the rev
   assert.equal(result.status, "requested");
 });
 
+// The carried-convergence predicate reads the live thread list only after the
+// delta carries; a carried convergence needs zero unresolved threads.
+const NO_THREADS_ENTRY = { assertArgs: ["api", "graphql"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' };
+const NO_BASE_REF_ENTRY = { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefName", "--jq", ".baseRefName"], stdout: "" };
+
 // AC2 (#1326): at the round cap, a post-convergence head bump whose delta since the
 // last Copilot-reviewed head is a PROVABLE pure doc/prose bump must NOT force a fresh
 // blocking Copilot round — even under --force-rerequest-review with new commits.
@@ -2175,6 +2180,8 @@ test("request-copilot-review --force-rerequest-review suppresses a pure doc/pros
         assertArgs: ["api", "repos/owner/repo/compare/sha5...newsha"],
         stdout: JSON.stringify({ status: "ahead", files: [{ filename: "docs/guide.md", status: "modified" }, { filename: "README.md", status: "modified" }] }) + "\n",
       },
+      NO_BASE_REF_ENTRY,
+      NO_THREADS_ENTRY,
     ]);
 
   assert.equal(result.status, "suppressed_post_convergence_docs_only");
@@ -2208,6 +2215,7 @@ test("request-copilot-review --force-rerequest-review suppresses an INTEGRATE-ON
         assertArgs: ["api", "repos/owner/repo/compare/main...newsha"],
         stdout: JSON.stringify({ status: "ahead", files: [] }) + "\n",
       },
+      NO_THREADS_ENTRY,
     ]);
 
   assert.equal(result.status, "suppressed_post_convergence_docs_only");
@@ -2268,6 +2276,7 @@ test("request-copilot-review suppresses an integrate-only base-move BELOW the ro
         assertArgs: ["api", "repos/owner/repo/compare/main...newsha"],
         stdout: JSON.stringify({ status: "ahead", files: [] }) + "\n",
       },
+      NO_THREADS_ENTRY,
     ]);
 
   assert.equal(result.status, "suppressed_post_convergence_docs_only");
@@ -2446,6 +2455,8 @@ describe("operator-authorized post-convergence suppression marker (#1441)", () =
           assertArgs: ["api", "repos/owner/repo/compare/oldsha...newsha"],
           stdout: JSON.stringify({ status: "ahead", files: [{ filename: "docs/adr-0041.md", status: "modified" }] }) + "\n",
         },
+        NO_BASE_REF_ENTRY,
+        NO_THREADS_ENTRY,
       ], { repeatLastOnOverflow: true });
       const result = await performCopilotReviewRequest(
         { repo: "owner/repo", pr: 17, checkpointDir },
@@ -2514,10 +2525,16 @@ describe("operator-authorized post-convergence suppression marker (#1441)", () =
           assertArgs: ["api", "repos/owner/repo/compare/oldsha...newsha"],
           stdout: JSON.stringify({ status: "ahead", files: [{ filename: "src/foo.mjs", status: "modified" }] }) + "\n",
         },
-        // #2316: the marker check doesn't suppress (carryForward false above),
-        // so falls through to the below-cap convergence-carry consumption,
-        // which independently re-derives the same delta (and the base-relative
-        // reduction) — still a genuine code file, so the request is still placed.
+        // The marker re-verification uses the shared delta basis, so it also
+        // runs the base-relative reduction: still a PR-own code file.
+        { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefName", "--jq", ".baseRefName"], stdout: "main\n" },
+        {
+          assertArgs: ["api", "repos/owner/repo/compare/main...newsha"],
+          stdout: JSON.stringify({ status: "ahead", files: [{ filename: "src/foo.mjs", status: "modified" }] }) + "\n",
+        },
+        // The marker check doesn't suppress, so the flow falls through to the
+        // below-cap carried-convergence check, which independently re-derives
+        // the same delta — still a genuine code file, so the request is placed.
         {
           assertArgs: ["api", "repos/owner/repo/compare/oldsha...newsha"],
           stdout: JSON.stringify({ status: "ahead", files: [{ filename: "src/foo.mjs", status: "modified" }] }) + "\n",

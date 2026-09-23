@@ -1510,6 +1510,9 @@ test("copilot-pr-handoff treats a suppressed_post_convergence_docs_only request 
         assertArgs: ["api", "repos/owner/repo/compare/oldsha-5...newsha"],
         stdout: JSON.stringify({ status: "ahead", files: [{ filename: "docs/guide.md", status: "modified" }, { filename: "README.md", status: "modified" }] }) + "\n",
       },
+      // The carried-convergence predicate re-reads the thread list after the
+      // delta carries: zero unresolved threads keeps the suppression.
+      { assertArgs: ["api", "graphql"], stdout: EMPTY_THREADS + "\n" },
     ], { matchMode: "claims" });
     env.DEVLOOPS_RUN_ID = "";
 

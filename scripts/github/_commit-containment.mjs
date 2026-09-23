@@ -7,7 +7,7 @@ import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 // authorize the reply/resolve steps in fixer-disposition.mjs's evaluator.
 //
 // One `gh api repos/{repo}/compare/{commitSha}...{headSha}` call, reusing the
-// same compare-status pattern as request-copilot-review.mjs's
+// same compare-status pattern as _copilot-convergence-carry.mjs's
 // fetchDeltaChangedFiles. GitHub's compare status describes HEAD relative to
 // BASE (base=commitSha, head=headSha here):
 //   - "identical": commitSha === headSha (trivially contained)
