@@ -2,13 +2,12 @@
  * review-operation
  *
  * The ONE operation-scoped authority for the legal dispatchable-angle pool and
- * the reviewer role it authorizes. Dispatch/planning and defensive
- * reviewer-role validation both consume this module instead of
- * reconstructing membership/eligibility rules of their own — a duplicated,
- * partial eligibility implementation (fallback roles, missing prompts,
- * config errors, additive pools, disabled angles, gate-specific membership,
- * standalone-review membership, and spike membership resolved independently
- * in more than one place) is exactly what this single authority replaces.
+ * the reviewer role it authorizes. write-gate-context.mjs's standalone-review
+ * angle union and the `dev-loops gate resolve-role` CLI both consume this
+ * module instead of reconstructing membership/eligibility rules of their own.
+ * The draft/pre-approval/spike dispatch paths keep calling
+ * `resolveGateAngleContract` directly for their pool, which this module wraps
+ * (see `resolveOperationAnglePool` below) rather than duplicating.
  *
  * `resolveOperationAnglePool` owns only the legal CANDIDATE catalog for an
  * operation. Diff-/tier-/PR-fact-driven SELECTION from that catalog (which
@@ -17,9 +16,9 @@
  * `resolveReviewGateAngles`, which imports this module for its union instead
  * of recomputing it).
  *
- * `resolveOperationReviewerRole` is the ONE authoritative exit-code boundary a
- * reviewer role source — a CLI, dispatch/planning, or defensive validation —
- * must consume: `ok` is fail-closed true only when the merged config loaded
+ * `resolveOperationReviewerRole` is the authoritative exit-code boundary the
+ * `dev-loops gate resolve-role` CLI consumes for standalone/defensive role
+ * resolution: `ok` is fail-closed true only when the merged config loaded
  * with no errors AND the requested angle is a legal member of the named
  * operation's pool. `status` is a DIAGNOSTIC field only (never a second
  * reviewer decision surface); see skills/docs/gate-review-comment-contract.md

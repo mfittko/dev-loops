@@ -21,9 +21,12 @@
  *
  * The reviewer boundary is exit code plus the optional returned `prompt`:
  * exit 0 means consume `persona`/`model`, use `prompt` when present,
- * otherwise review the authorized angle by name; a nonzero exit means stop
- * and emit the blocked result via `emit-reviewer-blocked.mjs`. `status` is a
- * DIAGNOSTIC field only — it is never a second reviewer decision branch.
+ * otherwise review the authorized angle by name; a nonzero exit means stop.
+ * Inside a fan-out unit (defensively re-validating a carried role), emit the
+ * blocked result via `emit-reviewer-blocked.mjs`; running standalone, instead
+ * report the angle as blocked in the review verdict output (owning rule: the
+ * Persona mapping bullet in skills/copilot-pr-followup/SKILL.md). `status` is
+ * a DIAGNOSTIC field only — it is never a second reviewer decision branch.
  */
 import { parseArgs } from "node:util";
 
@@ -74,6 +77,10 @@ Output (stdout, JSON):
   }
 
 ${JQ_OUTPUT_USAGE}
+
+Note: for this command, --silent's exit code always reflects \`ok\`, never the
+--jq predicate's truthiness (the reviewer safety boundary overrides the
+shared --jq/--silent composition described above).
 
 Exit codes:
   0  ok: true  — config errors absent AND the angle is a legal member of the operation's pool
