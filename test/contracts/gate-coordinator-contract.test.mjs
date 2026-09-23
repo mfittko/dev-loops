@@ -1,7 +1,7 @@
-// Doc-drift guard for issue 2370: every gate review round must run in a
-// dedicated, fresh-context gate coordinator agent. This is the only
-// sanctioned round shape (GATE-EXEC-GATE-COORDINATOR). Fails if the rule
-// text, its registration, or its cross-harness mirrors regress.
+// Doc-drift guard for issue 2370: every draft_gate / pre_approval_gate review
+// round must run in a dedicated, fresh-context gate coordinator agent. This
+// is the only sanctioned round shape (GATE-EXEC-GATE-COORDINATOR). Fails if
+// the rule text, its registration, or its cross-harness mirrors regress.
 import { FANOUT_UNAVAILABLE_MESSAGE } from "@dev-loops/core/loop/gate-fanin";
 
 import { assert, readRepo, test } from "../imported-assets-helpers.mjs";
@@ -10,6 +10,16 @@ import { assertRuleOwned, assertRulePresent } from "./_rule-helpers.mjs";
 const CONTRACT_DOC = "skills/docs/gate-review-sub-loop-contract.md";
 const MARKER = "<!-- rule: GATE-EXEC-GATE-COORDINATOR -->";
 
+// The rule's own section: from its marker to the next `### ` heading, so the
+// slice tracks the prose instead of a fixed, wrap-dependent character count.
+function ruleSection(content) {
+  const idx = content.indexOf(MARKER);
+  assert.ok(idx !== -1, "expected the GATE-EXEC-GATE-COORDINATOR marker in the contract doc");
+  const nextHeadingIdx = content.indexOf("\n### ", idx);
+  const end = nextHeadingIdx === -1 ? content.length : nextHeadingIdx;
+  return content.slice(idx, end);
+}
+
 test("GATE-EXEC-GATE-COORDINATOR is defined once, owned by the gate-review sub-loop contract", () => {
   assertRulePresent("GATE-EXEC-GATE-COORDINATOR");
   assertRuleOwned("GATE-EXEC-GATE-COORDINATOR", CONTRACT_DOC);
@@ -17,11 +27,29 @@ test("GATE-EXEC-GATE-COORDINATOR is defined once, owned by the gate-review sub-l
 
 test("the rule states it is the only sanctioned round shape", async () => {
   const content = await readRepo(CONTRACT_DOC);
-  const idx = content.indexOf(MARKER);
-  assert.ok(idx !== -1, "expected the GATE-EXEC-GATE-COORDINATOR marker in the contract doc");
-  const section = content.slice(idx, idx + 1200);
+  const section = ruleSection(content);
   assert.match(section, /GATE-EXEC-GATE-COORDINATOR/, "expected the rule id restated in its own prose");
-  assert.match(section, /only sanctioned round shape/, "expected the rule to name itself as the only sanctioned round shape");
+  assert.match(section, /only sanctioned round\s+shape/, "expected the rule to name itself as the only sanctioned round shape");
+});
+
+test("the rule scopes to draft_gate and pre_approval_gate lifecycle rounds", async () => {
+  const content = await readRepo(CONTRACT_DOC);
+  const section = ruleSection(content);
+  assert.match(
+    section,
+    /Every `draft_gate` and `pre_approval_gate` review round MUST run/,
+    "expected the rule to scope itself to the two lifecycle gates",
+  );
+});
+
+test("the rule covers the light-mode inline_single_agent round", async () => {
+  const content = await readRepo(CONTRACT_DOC);
+  const section = ruleSection(content);
+  assert.match(
+    section,
+    /A light-mode\s+`inline_single_agent` round also runs inside the gate coordinator/,
+    "expected the rule to state the light-mode round also runs inside the gate coordinator",
+  );
 });
 
 test("skills/docs/required-rules.json registers GATE-EXEC-GATE-COORDINATOR", async () => {
@@ -33,33 +61,48 @@ test("skills/docs/required-rules.json registers GATE-EXEC-GATE-COORDINATOR", asy
 
 test("the rule lists the returned fields and keeps reviewer/judge output in the gate coordinator's context", async () => {
   const content = await readRepo(CONTRACT_DOC);
-  const idx = content.indexOf(MARKER);
-  const section = content.slice(idx, idx + 1600);
-  for (const field of ["verdict", "findings artifact path", "judge summary"]) {
-    assert.ok(section.includes(field), `expected the returned-result field "${field}" in the rule`);
+  const section = ruleSection(content);
+  for (const field of [
+    "verdict",
+    "severity counts",
+    "fan-in\noutput path",
+    "durable findings-log path",
+    "act-list path",
+    "judge summary",
+  ]) {
+    const pattern = new RegExp(field.replace(/\s+/g, "\\s+"));
+    assert.match(section, pattern, `expected the returned-result field "${field}" in the rule`);
   }
   assert.match(
     section,
-    /[Rr]eviewer and judge outputs stay in the gate[\s\S]{0,20}coordinator's context/,
+    /[Rr]eviewer\s+and judge outputs stay in the gate coordinator's context/,
     "expected the rule to state reviewer/judge outputs never propagate to the dev-loop coordinator",
   );
 });
 
 test("the rule pins the reserved-lifecycle-writes sentence", async () => {
   const content = await readRepo(CONTRACT_DOC);
-  const idx = content.indexOf(MARKER);
-  const section = content.slice(idx, idx + 1600);
+  const section = ruleSection(content);
   assert.match(
     section,
-    /never posts the verdict comment, flips ready, pushes, or merges/,
+    /never posts the verdict comment, flips ready, pushes, or\s+merges/,
     "expected the rule to pin that the gate coordinator never performs these reserved lifecycle writes",
+  );
+});
+
+test("the rule states the typed-observation stop on head change, dispatch/fan-in failure, or failed judge-pass", async () => {
+  const content = await readRepo(CONTRACT_DOC);
+  const section = ruleSection(content);
+  assert.match(
+    section,
+    /On a head change, a\s+dispatch or fan-in failure, or a failed `judge-pass`, the gate coordinator stops and returns a\s+typed observation instead of choosing the next step/,
+    "expected the rule to state the typed-observation stop condition",
   );
 });
 
 test("the rule states the fail-closed fan-out-unavailable path and never degrading to inline review", async () => {
   const content = await readRepo(CONTRACT_DOC);
-  const idx = content.indexOf(MARKER);
-  const section = content.slice(idx, idx + 1600);
+  const section = ruleSection(content);
   assert.match(section, /FANOUT_UNAVAILABLE_MESSAGE/, "expected the rule to name the fail-closed signal");
   assert.match(section, /never degrades to inline review/, "expected the rule to forbid inline-review degradation");
 
@@ -75,7 +118,7 @@ test("the rule states the fail-closed fan-out-unavailable path and never degradi
   );
   assert.match(
     failClosedSection,
-    /Under `GATE-EXEC-GATE-COORDINATOR`, the gate coordinator returns this signal to the dev-loop\s*\ncoordinator as the round's result/,
+    /Under `GATE-EXEC-GATE-COORDINATOR`, the gate coordinator returns this signal to the dev-loop\s+coordinator as the round's result/,
     "expected the fail-closed section to route the signal through the gate coordinator to the dev-loop coordinator",
   );
 });
@@ -93,6 +136,11 @@ test("agents/dev-loop.agent.md's sub-loop bullet names the gate coordinator and 
     content.includes("review fan-out, judge"),
     false,
     "expected the ambiguous 'review fan-out, judge' phrase to be gone",
+  );
+  assert.equal(
+    content.includes("(refine, implement, review fan-out"),
+    false,
+    "expected the ambiguous '(refine, implement, review fan-out' phrase to be gone",
   );
 });
 

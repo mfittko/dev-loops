@@ -209,7 +209,7 @@ to every durable record writer this round invokes — `consolidate-fanin --spec-
 carry-forward record pins both revision identities and the checked criteria, re-entry-safe from
 any record type. Full per-writer flag detail: Gate Review Sub-Loop Contract Phase 3.5.
 
-**Gate fan-out dispatch (inline imperative — #1637):** When you dispatch the `draft_gate` / `pre_approval_gate` fan-out (parallel fresh-context reviewers seeded from the one neutral context bundle), you MUST join their results through the sanctioned fan-in CLI — not by hand-rolling the wait. Never hand-roll reviewer dispatch via `Promise.all(runs.run)` + transcript-tailing; await each reviewer's findings artifact at its deterministic output path (`tmp/gate-reviews/<repo-slug>/pr-<N>/<gate>-<headSha>/<angle>.json`) and consolidate via ONE call, always with `--spec-authority <identity-path>` from above:
+**Gate fan-out dispatch (inline imperative — #1637):** When the gate coordinator (`GATE-EXEC-GATE-COORDINATOR` in [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md)) dispatches the `draft_gate` / `pre_approval_gate` fan-out (parallel fresh-context reviewers seeded from the one neutral context bundle), it MUST join their results through the sanctioned fan-in CLI — not by hand-rolling the wait. Never hand-roll reviewer dispatch via `Promise.all(runs.run)` + transcript-tailing; await each reviewer's findings artifact at its deterministic output path (`tmp/gate-reviews/<repo-slug>/pr-<N>/<gate>-<headSha>/<angle>.json`) and consolidate via ONE call, always with `--spec-authority <identity-path>` from above:
 
 ```sh
 dev-loops gate consolidate-fanin --findings-dir <dir> --head-sha <current_head_sha> --gate <gate> \
