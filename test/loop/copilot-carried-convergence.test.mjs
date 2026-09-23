@@ -165,7 +165,7 @@ function requestEntries({ reviews, shared }) {
   ];
 }
 
-function detectorEntries({ reviews, shared }, { extra = [], files } = {}) {
+function detectorEntries({ reviews, shared }, { extra = [], files, formallyRequested = true } = {}) {
   return [
     {
       matchByClaims: true,
@@ -176,7 +176,7 @@ function detectorEntries({ reviews, shared }, { extra = [], files } = {}) {
     { matchByClaims: true, assertArgs: ["pr", "view", String(PR), "--json", "headRefOid"], stdout: line({ headRefOid: HEAD }) },
     gateEvidenceEntry(),
     REVIEWS_ENTRY,
-    { matchByClaims: true, assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'], stdout: `${COPILOT}\n` },
+    { matchByClaims: true, assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'], stdout: formallyRequested ? `${COPILOT}\n` : "" },
     ...shared,
     ...extra,
   ];
@@ -851,6 +851,13 @@ describe("converged-once: the detector routes a post-convergence change to pre_a
       assert.equal(detected.carriedConvergence.sourceReviewId, "PRR_prior");
     });
   }
+
+  it("a ruleset auto-review with no formal Copilot request still routes to pre_approval_gate", async () => {
+    const detected = await runDetector(fixture([clean("PRR_prior", "2026-09-22T10:00:00Z")]), { root: convergedOnceWideRoot, files, formallyRequested: false });
+    assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+    for (const action of NEVER) assert.ok(!detected.allowedNextActions.includes(action), action);
+    assert.equal(detected.carriedConvergence.source, "converged_once");
+  });
 
   it("strict mode at the cap still reopens the cycle on a significant change", async () => {
     const detected = await runDetector(fixture([clean("PRR_round1", "2026-09-22T09:00:00Z"), clean("PRR_prior", "2026-09-22T10:00:00Z")]), { files });

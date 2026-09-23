@@ -510,6 +510,9 @@ function buildResult({
  * @param {boolean} [params.postConvergenceSignificantChange=false] - significant
  *   post-convergence changes on a newer head start a new review cycle and must
  *   not be treated as round-cap clean-fallback suppression.
+ * @param {boolean} [params.postConvergenceReviewSuppressed=false] - the caller
+ *   verified a carried convergence for this head, so no further Copilot request
+ *   is due (mirrors applyUnsettledCopilotReviewEntryGuard).
  * @param {string} params.gateBoundary - current gate boundary
  * @returns {boolean}
  */
@@ -521,6 +524,7 @@ export function shouldGuardCopilotReviewRequest({
   sameHeadCleanConverged = false,
   roundCapCleanFallback = false,
   postConvergenceSignificantChange = false,
+  postConvergenceReviewSuppressed = false,
   gateBoundary,
 }) {
   const gateBoundariesRequiringCopilotFormalRequest = new Set([
@@ -538,6 +542,11 @@ export function shouldGuardCopilotReviewRequest({
     return false;
   }
   if (copilotReviewRequestStatus !== "none") {
+    return false;
+  }
+  // A carried convergence settles this head without a new Copilot round; the
+  // request tool would return a suppressed status, so a forced request livelocks.
+  if (postConvergenceReviewSuppressed === true) {
     return false;
   }
   // Durable signal: if Copilot was ever formally requested as a reviewer,
@@ -669,17 +678,19 @@ function applyUnsettledCopilotReviewEntryGuard(input, result) {
   //     guard runs, so this exemption cannot mask a genuinely-unreviewed change;
   //   - postConvergenceReviewSuppressed: the caller verified a carried
   //     convergence (or an operator suppression marker) for this head: no
-  //     outstanding request, zero unresolved threads, and a provably docs-only
-  //     or integrate-only delta since Copilot's last submitted review, so the
-  //     prior converged review stands for this head (never derived here from
-  //     other snapshot facts).
+  //     outstanding request, zero unresolved threads, and a converged latest
+  //     Copilot review on an earlier head. By default that review carries
+  //     whatever the delta (converged-once); under the strict setting only a
+  //     provably docs-only or integrate-only delta carries. The prior converged
+  //     review then stands for this head (never derived here from other
+  //     snapshot facts).
   // Fail closed on ANY non-outstanding status, not only the literal "none":
   // this is the independent gate-ENTRY re-check, so it must not trust the
   // caller's status string. A non-canonical/unknown value ("", "unavailable",
   // "failed", a typo) with a grant-y lifecycleState and no current-head review
   // fails closed rather than slipping through the "none"-only default. Only a
-  // driven current-head review (or the impossible-further-round cap state, or an
-  // operator-verified pure-doc-bump suppression) exempts, so an agent that skips
+  // driven current-head review (or the impossible-further-round cap state, or a
+  // caller-verified carried convergence) exempts, so an agent that skips
   // the explicit Copilot round cannot reach a clean pre_approval verdict via any
   // grant-y lifecycleState (e.g. a stale/racy low_signal_converged label, or one
   // carried by prior-head rounds).

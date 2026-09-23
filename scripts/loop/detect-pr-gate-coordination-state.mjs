@@ -1241,6 +1241,8 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     // returns false here — skip the timeline fetch it would never need.
     // (Restores the suppression the roundCapReached predicate swap dropped.)
     && maxCopilotRounds !== 0
+    // A carried convergence exempts the guard, so skip its timeline fetch too.
+    && context.postConvergenceReviewSuppressed !== true
     && !(roundCapReached
       && (sameHeadCleanConverged || roundCapCleanFallback)
       && !postConvergenceSignificantChange)
@@ -1257,6 +1259,7 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     sameHeadCleanConverged,
     roundCapCleanFallback,
     postConvergenceSignificantChange,
+    postConvergenceReviewSuppressed: context.postConvergenceReviewSuppressed === true,
     gateBoundary: result.gateBoundary,
   })) {
     result.gateBoundary = PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW;
