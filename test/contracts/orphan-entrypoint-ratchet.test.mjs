@@ -55,7 +55,7 @@ import { test } from "bun:test";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const SCRIPTS_DIR = path.join(REPO_ROOT, "scripts");
-const SKIP_DIR_NAMES = new Set(["node_modules", ".git", "vendor", "site", "tmp", "test"]);
+const SKIP_DIR_NAMES = new Set(["node_modules", ".git", "vendor", "site", "tmp", "test", "worktrees"]);
 
 // Explicit current orphan inventory (scripts/): *path* -> one-line disposition.
 // Re-sync by running the test with a deliberately-added/removed entry, or by
