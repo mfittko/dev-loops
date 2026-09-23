@@ -3611,9 +3611,9 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
     "pr-checklist": ["review", "Verify the PR carries self-contained list-form"],
     "acceptance-criteria": ["review", "Verify that each acceptance criterion and definition-of-done item"],
   };
-  // Every resolved gate angle now carries a prompt (gate(angles) issue): these
-  // five were previously fallback-only (default-reviewer, null prompt) and
-  // now resolve their own persona + prompt, same as the map above.
+  // Invariant: every resolved gate angle carries a persona + prompt from its
+  // gate entry, never a null-prompt fallback. These five resolve their own
+  // persona + prompt, same as the map above.
   const NEWLY_PROMPTED_ANGLES = {
     "contradiction-lens": ["review", "Apply STYLE-CONTRADICTION-LENS when the repo defines it"],
     "code-conformance": ["review", "Review this change for conformance to existing repo code conventions"],

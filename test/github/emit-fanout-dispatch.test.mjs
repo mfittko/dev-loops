@@ -374,12 +374,13 @@ test("shares a reviewer for a configured group AND an auto-chunk bundle alike; o
   });
 });
 
-// gate(angles): the contradiction-lens singleton unit's composed prompt
+// Invariant: every resolved gate angle carries a persona + prompt, and the
+// emitter names the angle in the composed prompt rather than copying its
+// prompt text — the contradiction-lens singleton unit's composed prompt
 // instructs the reviewer to self-resolve via resolveReviewerRole(config,
-// "contradiction-lens") — prove that call, against the same shipped
-// extension-defaults config the emitter dispatches with, now actually returns
-// a non-null default prompt (previously this angle had no prompt anywhere,
-// so a dispatched reviewer received no defined task).
+// "contradiction-lens"). Prove that call, against the same shipped
+// extension-defaults config the emitter dispatches with, actually returns a
+// non-null prompt, so a dispatched reviewer receives a defined task.
 test("contradiction-lens's emitted unit leads with the invariant prefix, and its self-resolve instruction now resolves the new default prompt", async () => {
   await withTmpDir(async (tmpDir) => {
     await seedBundle(tmpDir);
