@@ -1654,7 +1654,8 @@ low findings (#1585), except a low the judge disposed `act`, which is a fix targ
 only on reproduction grounds (`GATE-EXEC-JUDGE-AUTHORITY-SPLIT`) — and answers every gate-authored question. Fix-close is the fixer's role; the disposition pass
 (`close-gate-findings`) then resolves every still-open DEFERRABLE gate-authored thread
 (low, nit, and out-of-window medium) as the closing sweep AFTER the fixer's
-triage — it never fix-closes, and it deliberately leaves high, question, and in-window
+triage — it never fix-closes, and it deliberately leaves high, question (except an
+answered, judge-rejected question, which it reject-closes per ADR 0088), and in-window
 medium threads unresolved (they keep `unresolvedGateThreadCount` non-zero, which
 blocks gate close until the fixer/fix-loop resolves them). Resolving and FILING (to the tracked
 follow-up issue, stamping `disposition=deferred`) are two separate decisions (#1846): out-of-window

@@ -1296,7 +1296,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS,
-        reason: "The PR is still draft and this round's draft_gate verdict is clean, but a gate-authored review thread is still unresolved (ADR 0088) — reply/resolve it (close-gate-findings' reject-close pass for an answered, judge-rejected question, or fixer triage for an open defect thread) rather than re-running the draft gate. An UNANSWERED question has its own remedy: answer it in-thread (reply_resolve_review_threads, or a plain reply) and rerun close-gate-findings, or stop for the operator if it cannot be answered.",
+        reason: "The PR is still draft and this round's draft_gate verdict is clean, but a gate-authored review thread is still unresolved (ADR 0088) — reply/resolve it rather than re-running the draft gate. An open defect thread is resolved via fixer fix-close, or the disposition pass's defer-close (close-gate-findings) once eligible. A question thread's remedy depends on the judge's disposition: unanswered — post an answer reply, then rerun close-gate-findings, which reject-closes it if the judge disposed it reject; answered and judge-disposed reject — rerun close-gate-findings to reject-close it; answered and judge-disposed act — resolved by the fixer's own answer-and-resolve path; judge-deferred, or ambiguous/unrecorded disposition — needs an operator decision, no automated path.",
         mergeStateStatus,
         conflictFiles,
         refinementArtifact,
