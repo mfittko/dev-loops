@@ -21,7 +21,10 @@
  *   async-dispatch concerns. The user entrypoint under Claude is the dev-loop *skill*.)
  * - Skills keep name/description/allowed-tools (space-separated) and preserve `user-invocable`
  *   (Claude honors it 1:1 — `user-invocable: false` hides the skill from the `/` menu). The
- *   Pi-specific `compatibility` text is dropped (no Claude field).
+ *   Pi-specific `compatibility` text is dropped (no Claude field). Whole-file skill exclusion is
+ *   applied by `collectGeneratedAssets` in scripts/claude/generate-claude-assets.mjs before these
+ *   transforms run; this is distinct from `<!-- pi-only -->` blocks, which remove only marked body
+ *   sections.
  */
 
 import { parse as parseYaml } from "yaml";
@@ -293,6 +296,38 @@ export function transformCommand({ source, raw, version = "latest" }) {
   lines.push(GENERATED_NOTE(source));
   lines.push("");
   return `${lines.join("\n")}\n${body}`;
+}
+
+/**
+ * Check whether a skill should be excluded from Claude asset generation.
+ * Supports:
+ * - `claude-sync: false`
+ * - `harness: pi` (or `harness: ["pi"]`)
+ * - `pi-only: true`
+ *
+ * @param {Record<string, unknown> | undefined} frontmatter
+ * @returns {boolean}
+ */
+export function isSkillExcludedFromClaude(frontmatter) {
+  if (!frontmatter || typeof frontmatter !== "object") {
+    return false;
+  }
+  const claudeSync = frontmatter["claude-sync"];
+  if (claudeSync === false || (typeof claudeSync === "string" && claudeSync.trim().toLowerCase() === "false")) {
+    return true;
+  }
+  const piOnly = frontmatter["pi-only"];
+  if (piOnly === true || (typeof piOnly === "string" && piOnly.trim().toLowerCase() === "true")) {
+    return true;
+  }
+  const harness = frontmatter.harness;
+  if (typeof harness === "string" && harness.trim().toLowerCase() === "pi") {
+    return true;
+  }
+  if (Array.isArray(harness) && harness.length === 1 && String(harness[0]).trim().toLowerCase() === "pi") {
+    return true;
+  }
+  return false;
 }
 
 /**
