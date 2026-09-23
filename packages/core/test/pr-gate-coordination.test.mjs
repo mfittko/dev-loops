@@ -3780,6 +3780,37 @@ for (const [label, copilotConvergenceOk] of [["yellow", false], ["unknown", unde
   });
 }
 
+for (const [label, copilotReviewOnCurrentHead, granted, currentHeadSha = "29aa40b7deadbeef"] of [
+  ["absent", false, true],
+  ["findings", true, false],
+  ["absent (unknown head)", false, false, null],
+]) {
+  test(`round_cap_reached with no-convergence and a ${label} current-head review ${granted ? "grants" : "blocks"} the round-cap fallback`, () => {
+    // An absent current-head review at the cap IS the round-cap clean fallback;
+    // the convergence evaluator's absent-review refusal must not block entry.
+    // An unknown head never opens that fallback.
+    const result = evaluatePrGateCoordination({
+      pr: 2392,
+      currentHeadSha,
+      prDraft: false,
+      lifecycleState: STATE.ROUND_CAP_REACHED,
+      loopDisposition: DISPOSITION.BLOCKED,
+      ciStatus: "success",
+      copilotReviewRoundCount: 2,
+      maxCopilotRounds: 2,
+      unresolvedThreadCount: 0,
+      copilotConvergenceOk: false,
+      copilotReviewOnCurrentHead,
+      draftGate: gate({ visible: true, headSha: "7e0e303b", verdict: "clean" }),
+      draftGateMarker: gate({ visible: true, headSha: "7e0e303b", verdict: "clean", contractComplete: true }),
+      preApprovalGate: gate({ visible: false }),
+      preApprovalGateMarker: gate({ visible: false }),
+    });
+
+    assert.equal(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE), !granted);
+  });
+}
+
 // #1472 defer: when preApprovalRequireCi is false, ciConfirmedGreen is true
 // regardless of the actual CI status, so a "failure" head can still reach this
 // grant. The reason/gateEvidenceNote must not claim the CI is green in that
