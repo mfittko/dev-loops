@@ -545,9 +545,9 @@ test("detect-pr-gate-coordination-state flags draft_gate_needed for non-draft PR
   }
 });
 
-// The core evaluator now owns the missing-draft_gate-evidence rule directly
-// (no detector post-pass rewrites it), so the detector's output for a
-// no-draft-evidence state must equal a direct evaluatePrGateCoordination
+// The core evaluator owns the missing-draft_gate-evidence rule directly; the
+// detector applies no post-pass that rewrites it, so the detector's output
+// for a no-draft-evidence state must equal a direct evaluatePrGateCoordination
 // call fed the SAME production evaluator input — built via the same exported
 // buildGateCoordinationEvaluatorInput wiring detectPrGateCoordinationState
 // itself uses, not a hand-reconstructed guess.

@@ -724,13 +724,9 @@ function applyUnsettledCopilotReviewEntryGuard(input, result) {
 }
 
 /**
- * Boundaries at which a non-draft PR must carry clean draft_gate evidence.
- * Mirrors the (now-deleted) draftGateEvidenceMissing post-pass that used to
- * live only in detect-pr-gate-coordination-state.mjs: without clean evidence
- * at any of these five boundaries, the only legal next action is
- * reconcile_draft_gate — the core evaluator now owns this rule directly so
- * every caller (including upsert-checkpoint-verdict.mjs, which reads the core
- * evaluator directly) sees the same answer as the detector.
+ * Boundaries at which a PR must carry clean draft_gate evidence; without it
+ * the only legal next action is reconcile_draft_gate
+ * (skills/docs/pr-lifecycle-contract.md, LIFECYCLE-FAIL-CLOSED).
  */
 const DRAFT_GATE_EVIDENCE_GUARDED_BOUNDARIES = Object.freeze([
   PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW,
