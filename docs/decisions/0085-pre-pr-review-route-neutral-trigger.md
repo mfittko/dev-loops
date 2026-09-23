@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-09-23 ([issue #2357](https://github.com/mfittko/dev-loops/issues/2357))
+Accepted — 2026-09-23 ([issue #2357](https://github.com/mfittko/dev-loops/issues/2357), [PR 2386](https://github.com/mfittko/dev-loops/pull/2386))
 
 Amends the placement of [0079](./0079-pre-pr-review-phase.md). It keeps the rest of that decision and [0082](./0082-pre-pr-reviewer-opus.md) unchanged.
 
