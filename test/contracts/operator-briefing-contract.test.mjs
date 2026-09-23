@@ -52,6 +52,7 @@ test("Sanctioned tooling section sits outside the pi-only block", () => {
   assert.equal(count(doc, "<!-- /pi-only -->"), opens, "pi-only markers must be balanced");
   assert.equal(count(doc, "\n## Sanctioned tooling\n"), 1);
   assert.ok(sharedText(doc).includes("\n## Sanctioned tooling\n"));
+  assert.equal(count(read(".claude/skills/docs/main-agent-contract.md"), "\n## Sanctioned tooling\n"), 1);
 });
 
 test("shared (non-pi-only) main-agent contract text names no forbidden raw command", () => {
