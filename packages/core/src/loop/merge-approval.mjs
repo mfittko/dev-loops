@@ -162,6 +162,20 @@ export function verifyFreshHumanApproval({ approvedBy, currentHeadSha, reviews =
   };
 }
 
+export const COPILOT_CONVERGENCE_STATE = Object.freeze({
+  CURRENT_HEAD_CLEAN: "current_head_clean",
+  CURRENT_HEAD_FINDINGS: "current_head_findings",
+  NO_CURRENT_HEAD_REVIEW: "no_current_head_review",
+});
+
+/** ADR 0012 end states that may satisfy convergence without a current-head review. */
+export const COPILOT_ABSENT_REVIEW_DISPOSITION = Object.freeze({
+  ROUND_CAP_CLEAN_FALLBACK: "round_cap_clean_fallback",
+  DOCS_ONLY_SUPPRESSION: "docs_only_suppression",
+  COPILOT_GATE_DISABLED: "copilot_gate_disabled",
+});
+const SANCTIONED_ABSENT_REVIEW_DISPOSITIONS = new Set(Object.values(COPILOT_ABSENT_REVIEW_DISPOSITION));
+
 /**
  * Shared Copilot-convergence evaluation for pre-approval entry and merge.
  * Both treat a thread-clean 🔵 as conductor-overridable; unresolved threads
@@ -181,16 +195,28 @@ export function verifyFreshHumanApproval({ approvedBy, currentHeadSha, reviews =
  *      threads — the conductor's override is choosing to run the merge on a
  *      thread-clean 🔵.
  *   unrecognized disposition -> BLOCK (fail closed on a Copilot format change).
- *   🟢 clean / no current-head Copilot review / stale earlier-head -> PASS.
+ *   🟢 clean / headerless -> PASS.
  *
- * @returns {{ ok: boolean, disposition: string|null, reason: string|null }}
+ * Three distinct states (`state` on the result):
+ *   current_head_clean     a current-head review passes (🟢 / headerless / 🔵);
+ *   current_head_findings  a current-head review blocks (🟡 / unrecognized);
+ *   no_current_head_review no current-head Copilot review exists (none yet, or
+ *                          every review is on an earlier head). This state
+ *                          passes ONLY through a sanctioned disposition recorded
+ *                          for the current head (`absentReviewDisposition`
+ *                          `{ kind, headSha }`, kind in
+ *                          COPILOT_ABSENT_REVIEW_DISPOSITION). Absence alone never
+ *                          converges, and a stale earlier-head review is never
+ *                          inherited as the current-head verdict.
+ *
+ * @returns {{ ok: boolean, state: string|null, disposition: string|null, reason: string|null }}
  */
-export function evaluateCopilotConvergence({ currentHeadSha = null, reviews = [] } = {}) {
+export function evaluateCopilotConvergence({ currentHeadSha = null, reviews = [], absentReviewDisposition = null } = {}) {
   const head = typeof currentHeadSha === "string" ? currentHeadSha.trim() : "";
   // Head unknown: no current-head review can be pinned. Fail closed (matches
   // verifyFreshHumanApproval), so this precondition can never pass without a
   // known head to pin the Copilot disposition to.
-  if (head.length === 0) return { ok: false, disposition: null, reason: "current head SHA is unknown; cannot pin a Copilot review to it" };
+  if (head.length === 0) return { ok: false, state: null, disposition: null, reason: "current head SHA is unknown; cannot pin a Copilot review to it" };
 
   // Mirror summarizeCopilotReviews' current-head finding selection BYTE-FOR-BYTE
   // so the merge gate and the loop can never diverge (they already share
@@ -233,16 +259,29 @@ export function evaluateCopilotConvergence({ currentHeadSha = null, reviews = []
     }
     // a null submittedAt once a non-null latest exists is ignored (mirrors summarize)
   }
-  if (latestDisposition === null) return { ok: true, disposition: null, reason: null };
+  if (latestDisposition === null) {
+    const absent = COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW;
+    const kind = absentReviewDisposition?.kind;
+    if (SANCTIONED_ABSENT_REVIEW_DISPOSITIONS.has(kind) && absentReviewDisposition?.headSha === head) {
+      return { ok: true, state: absent, disposition: kind, reason: null };
+    }
+    return {
+      ok: false,
+      state: absent,
+      disposition: null,
+      reason: `no current-head Copilot review exists on head ${head}; convergence requires a clean current-head review or a sanctioned disposition recorded for this head (${[...SANCTIONED_ABSENT_REVIEW_DISPOSITIONS].join(", ")})`,
+    };
+  }
 
+  const findings = COPILOT_CONVERGENCE_STATE.CURRENT_HEAD_FINDINGS;
   if (latestDisposition === COPILOT_DISPOSITION.CHANGES_RECOMMENDED) {
-    return { ok: false, disposition: latestDisposition, reason: `current-head Copilot review is "Changes recommended" (🟡, actionable non-approval); converge to "Approval recommended" (🟢) or resolve the feedback before merge` };
+    return { ok: false, state: findings, disposition: latestDisposition, reason: `current-head Copilot review is "Changes recommended" (🟡, actionable non-approval); converge to "Approval recommended" (🟢) or resolve the feedback before merge` };
   }
   if (latestDisposition === COPILOT_DISPOSITION.UNRECOGNIZED) {
-    return { ok: false, disposition: latestDisposition, reason: `current-head Copilot review carries an unrecognized disposition header (fail closed); a recognized "Approval recommended" (🟢) is required` };
+    return { ok: false, state: findings, disposition: latestDisposition, reason: `current-head Copilot review carries an unrecognized disposition header (fail closed); a recognized "Approval recommended" (🟢) is required` };
   }
   // CLEAN, NONE, and NEEDS_CLOSER_LOOK (🔵, conductor-overridable) pass.
-  return { ok: true, disposition: latestDisposition, reason: null };
+  return { ok: true, state: COPILOT_CONVERGENCE_STATE.CURRENT_HEAD_CLEAN, disposition: latestDisposition, reason: null };
 }
 
 // Disposition blocking precedence, most-blocking first. Used to fold an
@@ -341,6 +380,7 @@ export function evaluateMergePreconditions({
   comments = [],
   standingAuthorized = false,
   stableRelease = false,
+  copilotAbsentReviewDisposition = null,
 } = {}) {
   const failures = [];
 
@@ -389,7 +429,7 @@ export function evaluateMergePreconditions({
 
   // Copilot-convergence precondition: refuse a current-head Copilot non-approval
   // body disposition, mirroring the loop's copilotBodyFeedbackUnresolved.
-  const copilotConvergence = evaluateCopilotConvergence({ currentHeadSha, reviews });
+  const copilotConvergence = evaluateCopilotConvergence({ currentHeadSha, reviews, absentReviewDisposition: copilotAbsentReviewDisposition });
   if (!copilotConvergence.ok) {
     failures.push({ precondition: "copilot_convergence", reason: copilotConvergence.reason });
   }
@@ -405,9 +445,11 @@ export function evaluateMergePreconditions({
     failures,
     mergeClass,
     approvalVia: decision.authorized ? decision.via : null,
-    // Audit trace: the current-head Copilot disposition this verdict saw, so a
-    // merge that ran on a conductor-overridable 🔵 (or any disposition) is
-    // recorded on the machine-readable result rather than being invisible.
+    // Audit trace: which convergence state applied and what settled it (the
+    // current-head review disposition, or the sanctioned disposition kind when
+    // no current-head review exists), so a merge on a conductor-overridable 🔵
+    // or without a current-head review is recorded, never invisible.
+    copilotConvergenceState: copilotConvergence.state,
     copilotDisposition: copilotConvergence.disposition,
   };
 }

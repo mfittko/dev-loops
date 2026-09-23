@@ -339,6 +339,10 @@ and derives the verdict by default (passing no `--verdict` is valid), accepts
 a matching explicit value, and refuses a contradiction citing this rule. No
 override flag — a round whose verdict genuinely differs from the computed one
 is a consolidator bug to fix, not an operator decision to override.
+A `blocked` verdict may sit over a completed `clean` or `findings_present`
+ledger only when the writer proves a deterministic pre-approval blocker
+(unchecked AC/DoD), and the comment then records the review verdict and the
+named blockers.
 
 `write-gate-findings-log.mjs`'s write-time contradiction refusal always
 compares `--verdict` against the wrapper's `overallVerdict` — the

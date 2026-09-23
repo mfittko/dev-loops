@@ -23,15 +23,19 @@ lopsided economic win.
 is complete and committed, and BEFORE the first push of the branch and before
 `dev-loops pr create`. Its fixes MUST be applied to the working tree, validated
 with the narrowest justified check (re-checked after the final round), and
-committed (a follow-up commit or an amend of the step-11 commit), so the branch
-is pushed once, already cleaned and validated. In the `local-implementation`
+committed (a follow-up commit or an amend of the last implementation commit), so
+the branch is pushed once, already cleaned and validated. In the `local-implementation`
 loop it sits between the exit-validation commit (implementation-loop step 11,
 `LOCAL-COMMIT-BEFORE-EXIT`, whose first push is deferred to here) and PR creation
-(implementation-loop step 12). The phase applies to any local-implementation
-session that pushes and opens a PR — tracker-backed OR issue-less `--lightweight`
-(PR-body-as-spec) — since both reach origin via a first push. Only a
-phase-doc-backed session that merges locally has no first push and no pre-PR
-step.
+(implementation-loop step 12). The phase applies to any session that pushes and
+opens a PR, whichever route the startup resolver selected: a tracker-backed or
+issue-less `--lightweight` (PR-body-as-spec) session on the local route, and any
+session on a GitHub-first route that creates the branch and PR itself. On the
+GitHub-first routes the step sits before the first push and before `create-pr.mjs`
+at `OPS-DRAFT-FIRST-PR` in [Copilot Loop Operations](copilot-loop-operations.md).
+A session that opens no PR has no pre-PR step: a phase-doc-backed session that
+merges locally, a follow-up session on a PR that already exists, or a session on
+a Copilot-authored PR.
 
 ## The review pass
 
@@ -134,6 +138,7 @@ gate uses.
 ## Cross-references
 
 - [Local Implementation](../local-implementation/SKILL.md): `LOCAL-PRE-PR-REVIEW-BEFORE-PUSH` wires this phase into the implementation loop; `LOCAL-DEV-SELF-CHECK-NO-FANOUT` and `LOCAL-COMMIT-BEFORE-EXIT` are the adjacent steps.
+- [Copilot Loop Operations](copilot-loop-operations.md): `OPS-DRAFT-FIRST-PR` reaches this phase on the GitHub-first routes, before the first push and before `create-pr.mjs`.
 - [Main-agent contract](main-agent-contract.md): model tier at dispatch (`resolveRoleModel`, pass the override only when non-null).
 - [PR Lifecycle Contract](pr-lifecycle-contract.md): the post-push gate/Copilot/approval sequence this pass pre-filters.
 - [Gate Review Sub-Loop Contract](gate-review-sub-loop-contract.md): the fan-out gate that remains the authority.

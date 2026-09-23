@@ -5,7 +5,7 @@ import { resolveProjectSelector, findProject, applyDevloopsBoard, parseItemRef }
 import { parseArgs } from "node:util";
 import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToken } from "../lib/jq-output.mjs";
 import { ghGraphql, resolveOwner } from "@dev-loops/core/github/gh";
-import { validateProjectsRepo, discoverProjects, paginateNodes, extractStatus } from "@dev-loops/core/projects/projects-access";
+import { validateProjectsRepo, discoverProjects, paginateNodes, extractStatus, resolveProjectItem } from "@dev-loops/core/projects/projects-access";
 
 const USAGE = `Usage:
   dev-loops queue reorder --repo <owner/name> --project <number|id|board-uri> --item <number|node-id> [--after <number|node-id>]
@@ -211,36 +211,11 @@ async function snapshotOrder(projectId, repo, statusFilter, env, runChild) {
   return snapshotFromItems(items, repo, statusFilter);
 }
 
-// Resolve a ref (number or item node ID) against a pre-fetched item list,
-// enforcing the same repo scope for BOTH number and id refs so a cross-project
-// ref fails closed with ITEM_NOT_FOUND.
-function resolveFromItems(items, itemRef, repo) {
-  let match;
-  if (itemRef.kind === "id") {
-    match = items.find(
-      (it) => it.id === itemRef.value && it.content?.repository?.nameWithOwner === repo,
-    );
-    if (!match) {
-      throw Object.assign(
-        new Error(`Item "${itemRef.value}" not found in project for repo "${repo}"`),
-        { code: "ITEM_NOT_FOUND" },
-      );
-    }
-  } else {
-    match = items.find(
-      (it) =>
-        it.content &&
-        it.content.repository?.nameWithOwner === repo &&
-        it.content.number === itemRef.value,
-    );
-    if (!match) {
-      throw Object.assign(
-        new Error(`Item #${itemRef.value} not found in project for repo "${repo}"`),
-        { code: "ITEM_NOT_FOUND" },
-      );
-    }
-  }
-  return describeItem(match);
+// Resolve a ref (number or item node ID) from the issue side or by node, never
+// from the board listing, which can lag behind GitHub and omit new items.
+// Project and repo scope mismatches fail closed with ITEM_NOT_FOUND.
+async function resolveRef(itemRef, { projectId, projectTitle, repo, env, child }) {
+  return describeItem(await resolveProjectItem({ projectId, projectTitle, repo, itemRef, env, runChild: child }));
 }
 
 // ── Exit code classification ────────────────────────────────────────────
@@ -283,16 +258,12 @@ async function mainFlagForm(args, { env, child, repo, project }) {
   let afterRef = null;
   if (args.after !== undefined) afterRef = parseItemRef(args.after, "--after");
 
-  // Fetch the board item list ONCE, then resolve item/afterItem (and the
-  // dry-run snapshot) from that single list — mirrors mainSubcommand, avoiding
-  // up to 3 full-board re-scans (item lookup, after-item lookup, before snapshot).
-  const items = await fetchAllItems(project.id, env, child);
-
-  const item = resolveFromItems(items, itemRef, repo);
+  const scope = { projectId: project.id, projectTitle: project.title, repo, env, child };
+  const item = await resolveRef(itemRef, scope);
 
   let afterItem = null;
   if (afterRef) {
-    afterItem = resolveFromItems(items, afterRef, repo);
+    afterItem = await resolveRef(afterRef, scope);
     if (afterItem.itemId === item.itemId) {
       throw Object.assign(new Error("Cannot reorder an item after itself"), { code: "INVALID_AFTER" });
     }
@@ -302,8 +273,7 @@ async function mainFlagForm(args, { env, child, repo, project }) {
 
   if (args.dryRun) {
     // Include the before snapshot for parity with the subcommand dry-run form.
-    // Reuses the already-fetched list (no extra fetch).
-    const before = snapshotFromItems(items, repo, item.status ?? null);
+    const before = await snapshotOrder(project.id, repo, item.status ?? null, env, child);
     return {
       ok: true,
       dryRun: true,
@@ -355,14 +325,12 @@ async function mainSubcommand(args, { env, child, repo, project }) {
   const positional = args._positional ?? [];
   requirePositionals(subcommand, positional);
 
-  // Fetch the board item list ONCE, then resolve every ref (number or id) from
-  // that single list — avoids N full-board scans for N refs and enforces the
-  // same repo scope for both ref kinds (cross-project refs fail closed).
-  const items = await fetchAllItems(project.id, env, child);
-
   // Resolve all referenced items up-front (fail closed before any mutation).
+  // The board listing is read only for the before/after snapshot.
   const refs = positional.map((p) => parseItemRef(p, "<ref>"));
-  const resolved = refs.map((ref) => resolveFromItems(items, ref, repo));
+  const scope = { projectId: project.id, projectTitle: project.title, repo, env, child };
+  const resolved = [];
+  for (const ref of refs) resolved.push(await resolveRef(ref, scope));
 
   // Reordering positions within a single Status column. The before/after snapshot is scoped
   // to one column, and a cross-column move plan is misleading/invalid — so fail closed unless
@@ -402,9 +370,8 @@ async function mainSubcommand(args, { env, child, repo, project }) {
   const mutations = plan.map((m) => executePosition(project.id, m.item.itemId, m.afterItem ? m.afterItem.itemId : null));
 
   // Status column for the diff snapshot: use the primary moved item's status.
-  // Reuse the already-fetched list for the before-snapshot (no extra fetch).
   const statusFilter = resolved[0].status ?? null;
-  const before = snapshotFromItems(items, repo, statusFilter);
+  const before = await snapshotOrder(project.id, repo, statusFilter, env, child);
 
   if (args.dryRun) {
     return { ok: true, dryRun: true, mutations, before };

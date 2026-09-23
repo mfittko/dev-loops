@@ -6,7 +6,7 @@ import { parse as parseYaml } from "yaml";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { classifyFile } from "../analysis/diff-analyzer.mjs";
-import { ChangeCategory } from "../analysis/change-classifier.mjs";
+import { ChangeCategory, resolveDynamicAngles } from "../analysis/change-classifier.mjs";
 import { isDevLoopConfigSourcePath } from "../loop/gate-carry-forward.mjs";
 import { isClaudeHarness } from "../loop/run-context.mjs";
 import { trimmedOrNull } from "../loop/normalize.mjs";
@@ -184,9 +184,9 @@ const GateTier = z.strictObject({
 });
 
 const GateDynamicConfig = z.strictObject({
-  // Diff-driven dynamic angle PRUNING, ON by default. mandatory:true
-  // angles stay a hard always-run floor; fallbackToAll degrades to the full
-  // static pool when classification is ambiguous.
+  // Diff-driven dynamic angle PRUNING, ON by default. mandatory:true angles
+  // stay a hard always-run floor. fallbackToAll is retained in resolver output
+  // for compatibility but is always false; uncertainty never widens the set.
   subtractive: z.boolean().default(true).describe("Enable diff-driven dynamic angle PRUNING for this gate (ON by default; set false to restore the full static angle pool). Was gates.<gate>.dynamicAngles."),
   // Additive counterpart to the subtractive path: when true, the
   // context-builder may also ADD catalog angles (from resolveAnglePool) that
@@ -2205,12 +2205,15 @@ export function resolveFanoutSequential(config) {
 
 /**
  * Claude-harness-scoped cap on effective fan-out concurrency (per ADR
- * docs/decisions/0069-claude-harness-fanout-concurrency-clamp.md). The
- * shipped cross-harness `gates.fanout.maxConcurrent` default (4) plus the
- * driver's own call still 429s a single-driver Claude session; other
- * harnesses (pi, unknown) are unaffected — see `resolveFanoutEffectiveConcurrency`.
+ * docs/decisions/0069-claude-harness-fanout-concurrency-clamp.md, amended by
+ * docs/decisions/0083-raise-claude-fanout-concurrency-cap-to-4.md). The
+ * `GATE-EXEC-DISPATCH-RETRY-BACKOFF` retry/backoff policy turns a single 429
+ * into latency instead of a failed drive, so this cap only bounds the
+ * steady-state per-wave burst (driver + dispatch units) for a single-driver
+ * Claude session; other harnesses (pi, unknown) are unaffected — see
+ * `resolveFanoutEffectiveConcurrency`.
  */
-export const CLAUDE_MAX_EFFECTIVE_CONCURRENT = 2;
+export const CLAUDE_MAX_EFFECTIVE_CONCURRENT = 4;
 
 /**
  * Resolve the effective fan-out concurrency (dispatch units per wave): 1 when
@@ -2483,31 +2486,76 @@ export function resolveGateTier(config, gate, { changedFiles, filesChanged, line
 }
 
 /**
+ * Best-effort angle selection for a diff no diff-class tier matched (an
+ * unclassifiable file, a dev-loop config-source delta, or no tier configured).
+ * Uncertainty selects the mandatory floor plus the lenses the diff still
+ * justifies — the always-include lens and any consumer angle whose declared
+ * category/kind binding intersects the diff. It is never the whole pool,
+ * except for the degenerate gate whose pool holds neither a mandatory nor an
+ * always-include angle: an empty best-effort selection falls back to the static
+ * pool (fail-closed — more angles, not fewer) rather than returning nothing.
+ *
+ * `dynamic.subtractive: false` is the documented opt-out ("restore the full
+ * static angle pool"); this returns the static pool unchanged, mirroring
+ * resolveGateAnglesDynamic's `!gateConfig.dynamicAngles` branch so the composer
+ * and the resolver agree for the same diff.
+ *
+ * This composer has no diff TEXT (only the changed-file list), so it can bind
+ * on file kinds but not on hunk-derived change categories. Except for the
+ * `gate:full` path, it is therefore a lower bound: the round's authoritative
+ * angle set is resolved by resolveGateAnglesDynamic, which can add lenses bound
+ * to real change categories. On `gate:full`, the composer deliberately returns
+ * the full static pool and is instead a superset of the dynamic resolver.
+ */
+function selectFloorPlusJustifiedAngles(config, gate, changedFiles) {
+  const gateConfig = resolveGateConfig(config, gate);
+  // Documented opt-out: `dynamic.subtractive: false` restores the full static
+  // pool. Mirror resolveGateAnglesDynamic's `!gateConfig.dynamicAngles` branch
+  // so the composer and the resolver never disagree under an explicit operator
+  // config (both are callers of the same selection contract).
+  if (!gateConfig.dynamicAngles) return resolveGateAngles(config, gate) ?? [];
+  const { mandatoryAngles } = resolveGateAngleContract(config, gate);
+  const pool = resolveGateAngles(config, gate) ?? [];
+  const candidatePool = pool.filter((a) => !mandatoryAngles.includes(a));
+  const validChangedFiles = (Array.isArray(changedFiles) ? changedFiles : [])
+    .filter((f) => typeof f === "string" && f.trim().length > 0);
+  const fileKinds = [...new Set(validChangedFiles.map((f) => classifyFile(f)))];
+  const { recommendedAngles } = resolveDynamicAngles({
+    configuredAngles: candidatePool,
+    changeCategories: [],
+    fileKinds,
+    angleDeclarations: gateConfig.angleCategoryBindings,
+  });
+  const selected = [...new Set([...mandatoryAngles, ...recommendedAngles])];
+  return selected.length > 0 ? selected : pool;
+}
+
+/**
  * The primer-owned deterministic review-proportionality plan
  * (GATE-EXEC-PROPORTIONALITY, gate-review-sub-loop-contract.md): a single,
  * pure composition of the existing decision functions so "the plan" (angle
  * set + execution mode + grouping) is one testable, persistable object.
  * Delegates entirely to {@link resolveGateDispatchMode} (mode, including the
  * non-overridable size-cap/risk-path/size-outcome/ambiguity floors),
- * {@link resolveGateTier} (angle set AND diff-classification), and
- * {@link resolveFanoutGroups} (dispatch-unit grouping). No git I/O, no logic
+ * {@link resolveGateTier} (angle set AND diff-classification),
+ * {@link resolveDynamicAngles} (no-tier best-effort selection), and {@link
+ * resolveFanoutGroups} (dispatch-unit grouping). No git I/O, no logic
  * of its own beyond the floor-vs-tier precedence below: this is the ONE place
  * the primer (emit) and the merge gate (re-verify) compose mode + angles +
  * grouping, so they can never drift onto two different floor implementations.
  *
- * Floor-vs-tier precedence: a fired RISK-signal floor — the risk-path
- * denylist (`risk_path_touch`), a non-clean/ambiguous size-budget outcome
- * (`size_outcome_*`, `size_outcome_unavailable`), missing changed-file
- * evidence (`changed_files_unavailable`), or an unclassifiable diff
- * (`resolveGateTier`'s `unclassifiable_file`) — ALWAYS forces `full_fanout`
- * with the FULL untriered angle pool, never a matched tier's reduced set. The
- * hard size cap (`over_threshold`) differs: it ALWAYS forces `full_fanout`
- * MODE (distinct-reviewer-per-angle, never the light single-combined path)
- * but does NOT force the full untriered pool — a merely-over-cap-but-tier-
- * classifiable diff keeps its diff-class-tier-reduced angle set (the
- * pre-existing, orthogonal mechanism), untouched for a `gate:full`-labelled
- * PR (resolveGateTier self-bypasses) or a repo with light mode disabled
- * (`light_mode_disabled` is not a floor).
+ * Floor-vs-tier precedence: every fired floor affects DISPATCH only. A
+ * RISK-signal floor — the risk-path denylist (`risk_path_touch`), a non-clean/
+ * ambiguous size-budget outcome (`size_outcome_*`,
+ * `size_outcome_unavailable`), missing changed-file evidence
+ * (`changed_files_unavailable`), or an unclassifiable diff
+ * (`resolveGateTier`'s `unclassifiable_file`) — ALWAYS forces `full_fanout`,
+ * as does the hard size cap (`over_threshold`). The angle SET remains the
+ * matched tier or, when no tier matched, the mandatory floor plus the lenses
+ * justified by the changed-file kinds. It never widens to the full untriered
+ * pool merely because a floor fired. A `gate:full` label (which self-bypasses
+ * tier matching) and disabled light mode continue to govern dispatch mode
+ * independently; `light_mode_disabled` is not a floor.
  *
  * @param {DevLoopConfig} config
  * @param {"draft"|"preApproval"} gate
@@ -2544,23 +2592,24 @@ export function resolveReviewProportionality(config, gate, {
     // dispatch-mode facts alone looked trivial.
     unclassifiable: tier.reason === "unclassifiable_file",
   });
-  // sizeCap (over_threshold) is deliberately EXCLUDED from the forced-full-
-  // pool set: it predates this change's risk/ambiguity floors and pre-existing
-  // behavior (the diff-class-tier mechanism) keeps a merely-over-the-tiny-
-  // inline-cap-but-still-tier-classifiable diff on its reduced tier set — see
-  // resolveGateTier's "small non-risky diff outside the inline cap but
-  // matching a tier" contract. Only a genuine RISK signal (a risk-path touch,
-  // a non-clean/ambiguous size-budget outcome, or an unclassifiable diff)
-  // forces the full untriered pool.
+  // sizeCap (over_threshold) is deliberately EXCLUDED from the risk-signal
+  // floor set: it predates the risk/ambiguity floors. Every floor affects the
+  // dispatch mode only; angle selection remains tiered or best-effort.
   const dispatchFloorFired = floors.riskPath || floors.sizeOutcome || floors.ambiguity;
   const floored = dispatchFloorFired || floors.unclassifiable;
   const mode = floored ? "full_fanout" : dispatch.mode;
   const reason = floored && !dispatchFloorFired ? "unclassifiable_diff" : dispatch.reason;
   // The mandatory-angle floor is present either way: a tier match already
-  // unions mandatoryAngles in (resolveGateTier), and the no-tier fallback
-  // (resolveGateAngles) does the same union — see AC-4 "mandatory angles
-  // combined, never dropped".
-  const angles = floored ? resolveGateAngles(config, gate) : (tier.angles ?? resolveGateAngles(config, gate));
+  // unions mandatoryAngles in (resolveGateTier), and the no-tier best-effort
+  // selection does the same union — see AC-4 "mandatory angles combined,
+  // never dropped". A `gate:full` label is the explicit "run everything"
+  // escape hatch (ADR 0048): it keeps forcing the full configured pool, which
+  // is also what resolveGateTier's gate_full_label bypass left in place before
+  // best-effort selection existed.
+  const staticAngles = resolveGateAngles(config, gate);
+  const angles = hasFullLabel
+    ? staticAngles
+    : (tier.angles ?? (staticAngles === null ? null : selectFloorPlusJustifiedAngles(config, gate, changedFiles)));
   const groups = resolveFanoutGroups(config, gate, angles ?? [], { fullLabel: hasFullLabel });
   return Object.freeze({
     mode,
@@ -2575,9 +2624,10 @@ export function resolveReviewProportionality(config, gate, {
  * Resolve gate angles dynamically when `dynamicAngles` is enabled.
  *
  * Diff analysis (../analysis/*) filters the configured angle list to angles
- * relevant to the change set. When `dynamic.subtractive: false` or no
- * diff is given, returns the full configured list. When `additiveAngles` is on,
- * catalog angles from resolveAnglePool may also be added, with
+ * relevant to the change set. When `dynamic.subtractive: false`, returns the
+ * full configured list. Without a diff, ordinary callers keep that static pool
+ * while floor-aware callers use mandatory-floor best-effort selection. When
+ * `additiveAngles` is on, catalog angles from resolveAnglePool may also be added, with
  * `excludeAngles` a hard ceiling.
  *
  * Diff-class tiers (resolveGateTier) are consulted FIRST: a tier match returns
@@ -2586,15 +2636,14 @@ export function resolveReviewProportionality(config, gate, {
  *
  * GATE-EXEC-PROPORTIONALITY floor-awareness (opt-in via `checkFloors`): when
  * the caller supplies `checkFloors: true` (and, when available, `sizeOutcome`
- * from check-size-budget.mjs), this delegates to {@link
+ * from check-size-budget.mjs), this delegates floor determination to {@link
  * resolveReviewProportionality} — the SAME composer resolve-gate-dispatch.mjs
- * uses — over the SAME diff-derived changed-file/scope facts, so a diff whose
- * dispatch decision is floored (risk-path touch, a non-clean/ambiguous
- * size-budget outcome, or an unclassifiable diff) NEVER keeps a tier's
- * reduced (or dynamically-pruned) angle set here: it gets the full untriered
- * pool, exactly like the primer's own dispatch-decision step. Omitted
- * (default), this resolves exactly as before — a caller that does not have
- * size-budget evidence to hand is unaffected.
+ * uses — over the SAME diff-derived changed-file/scope facts. A fired floor
+ * forces `full_fanout` DISPATCH and refuses an explicit override, but the angle
+ * SET is always the tier-or-dynamic best-effort selection below; uncertainty
+ * never widens it to the full untriered pool. Omitted (default), this resolves
+ * exactly as before — a caller that does not have size-budget evidence to hand
+ * is unaffected.
  *
  * @param {import("./types.js").DevLoopConfig} config
  * @param {"draft"|"preApproval"} gate
@@ -2603,7 +2652,7 @@ export function resolveReviewProportionality(config, gate, {
  * @param {boolean} [options.hasFullLabel] — `gate:full` label present on the PR (bypasses tier resolution)
  * @param {boolean} [options.checkFloors] — opt into the GATE-EXEC-PROPORTIONALITY floor check above
  * @param {{ outcome?: "pass"|"escalate"|"block", tierLogicLoc?: { t1?: number } }|null} [options.sizeOutcome] — only consulted when `checkFloors` is true
- * @param {string[]} [options.explicitAngles] — caller-supplied verbatim override (e.g. CLI `--angles`); wins over tier/dynamic resolution but NEVER over a fired floor above (a fired floor's full pool, mandatory angles included via resolveGateAngles, is returned instead)
+ * @param {string[]} [options.explicitAngles] — caller-supplied verbatim override (e.g. CLI `--angles`); wins over tier/dynamic resolution but NEVER over a fired floor above (a fired floor refuses the override and continues to tier/dynamic best-effort selection)
  * @returns {{ recommendedAngles: string[] | null, skippedAngles: string[], reasons: Record<string,string>, fallbackToAll: boolean, dynamicAnglesActive: boolean, addedAngles: string[], addedReasons: Record<string,string> }}
  */
 export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabel = false, checkFloors = false, sizeOutcome, explicitAngles } = {}) {
@@ -2625,30 +2674,20 @@ export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabe
       linesChanged = lineStats.added + lineStats.deleted;
     }
   }
-  if (checkFloors) {
-    const plan = resolveReviewProportionality(config, gate, {
-      scope: { filesChanged, linesChanged },
-      changedFiles,
-      sizeOutcome,
-      hasFullLabel,
-    });
-    if (plan.floors.riskPath || plan.floors.sizeOutcome || plan.floors.ambiguity || plan.floors.unclassifiable) {
-      return {
-        recommendedAngles: plan.angles ?? [],
-        skippedAngles: [],
-        reasons: {},
-        fallbackToAll: false,
-        dynamicAnglesActive: false,
-        addedAngles: [],
-        addedReasons: {},
-      };
-    }
-  }
-  // A fired floor above always wins (its full pool already includes the
-  // mandatory floor via resolveGateAngles) — an explicit --angles override is
-  // only honored once no floor fired, matching its documented "verbatim,
-  // dynamic resolution bypassed" contract.
-  if (Array.isArray(explicitAngles)) {
+  const plan = checkFloors
+    ? resolveReviewProportionality(config, gate, {
+        scope: { filesChanged, linesChanged },
+        changedFiles,
+        sizeOutcome,
+        hasFullLabel,
+      })
+    : null;
+  const floorFired = plan !== null && (
+    plan.floors.riskPath || plan.floors.sizeOutcome || plan.floors.ambiguity || plan.floors.unclassifiable
+  );
+  // A fired floor refuses an explicit --angles override. Selection falls
+  // through to the same tier/dynamic best-effort path as every other diff.
+  if (Array.isArray(explicitAngles) && !floorFired) {
     return {
       recommendedAngles: explicitAngles,
       skippedAngles: [],
@@ -2688,12 +2727,24 @@ export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabe
   }
 
   if (!gateConfig.dynamicAngles || !diff) {
+    // No diff to select on (a thin briefing) or dynamic resolution explicitly
+    // disabled by config. An explicitly disabled resolver keeps its static pool
+    // — that is the config asking for every angle. When dynamic resolution is
+    // enabled, a floor-aware caller that simply has no diff still gets the
+    // composer's mandatory-floor-plus-justified set rather than the whole pool,
+    // so absence of evidence never widens the angle set either.
+    const bestEffortWithoutDiff = Boolean(!diff && plan && gateConfig.dynamicAngles);
+    const recommendedAngles = bestEffortWithoutDiff ? (plan.angles ?? staticAngles) : staticAngles;
+    const recommended = new Set(recommendedAngles);
+    const skippedAngles = staticAngles.filter((a) => !recommended.has(a));
     return {
-      recommendedAngles: staticAngles,
-      skippedAngles: [],
-      reasons: {},
+      recommendedAngles,
+      skippedAngles,
+      reasons: Object.fromEntries(
+        skippedAngles.map((a) => [a, "Skipped: no diff is available to select on; the mandatory floor plus justified lenses were selected instead"]),
+      ),
       fallbackToAll: false,
-      dynamicAnglesActive: false,
+      dynamicAnglesActive: bestEffortWithoutDiff,
       addedAngles: [],
       addedReasons: {},
     };
@@ -2724,8 +2775,7 @@ export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabe
     ? resolveAnglePool(config).filter(a => !excluded.has(a))
     : undefined;
 
-  const { resolveDynamicAngles: resolve } = await import("../analysis/change-classifier.mjs");
-  const dynamicResult = resolve({
+  const dynamicResult = resolveDynamicAngles({
     configuredAngles: candidatePool,
     changeCategories: categories,
     ambiguous: analysis.ambiguous,
@@ -2746,12 +2796,24 @@ export async function resolveGateAnglesDynamic(config, gate, { diff, hasFullLabe
     Object.entries(dynamicResult.addedReasons ?? {}).filter(([a]) => !mandatory.has(a))
   );
 
-  const recommendedAngles = [...new Set([...filteredMandatory, ...dynamicResult.recommendedAngles, ...addedAngles])];
+  const mergedAngles = [...new Set([...filteredMandatory, ...dynamicResult.recommendedAngles, ...addedAngles])];
+
+  // Degenerate-pool fail-closed: a gate whose configured pool holds neither a
+  // mandatory nor an always-include angle (e.g. `angles: ["kiss"]`) can legally
+  // resolve to zero angles for an unclassifiable diff. Never resolve zero
+  // angles — fall back to the static pool (already excludeAngles-filtered),
+  // mirroring selectFloorPlusJustifiedAngles and the composer, so the resolver
+  // and the composer agree for the identical input. The whole pool is selected,
+  // so nothing is skipped and no angle carries a skip reason.
+  const degenerateFallback = mergedAngles.length === 0;
+  const recommendedAngles = degenerateFallback ? [...staticAngles] : mergedAngles;
+  const skippedAngles = degenerateFallback ? [] : dynamicResult.skippedAngles;
+  const reasons = degenerateFallback ? {} : dynamicResult.reasons;
 
   return {
     recommendedAngles,
-    skippedAngles: dynamicResult.skippedAngles,
-    reasons: dynamicResult.reasons,
+    skippedAngles,
+    reasons,
     fallbackToAll: dynamicResult.fallbackToAll,
     dynamicAnglesActive: true,
     addedAngles,

@@ -26,6 +26,8 @@ import {
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
 import { buildContainmentMap } from "../github/_commit-containment.mjs";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
+import { countUnresolvedGateAuthoredThreadsFromRawNodes } from "../github/_gate-finding-surface.mjs";
+import { resolveAuthenticatedLogin } from "../github/post-gate-findings.mjs";
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.mjs";
 import { classifyDeltaSinceLastReview, getLastCopilotReviewHeadSha } from "../github/request-copilot-review.mjs";
@@ -861,9 +863,42 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   const copilotRequested = await fetchCopilotRequested(options, runtime);
   const threadsPayload = await fetchGithubReviewThreadsPayload(options, runtime);
   const parsedThreads = parseReviewThreads(threadsPayload);
+  // Gate-authored unresolved thread count (ADR 0088), reusing the SAME
+  // raw thread payload already fetched above. This must count the EXACT SAME
+  // set close-gate-findings.mjs/ready-for-review.mjs's own gate-close
+  // assertion counts — author identity, not the marker-only superset — or
+  // the two can disagree on which threads are "unresolved gate-authored" for
+  // the identical PR state. A login-resolution failure fails closed (-1),
+  // same as an unreadable thread payload: the detector must never guess a
+  // marker-only (broader) count when the exact-author count is unavailable.
+  // The `gh api user` round-trip to resolve that login only runs when the
+  // cheap marker-only pass below finds at least one candidate: author
+  // identity can only NARROW that count (never widen it), so a marker-only
+  // 0 already proves the exact-author count is 0 too, with no gh call
+  // needed. Feeding this into evaluatePrGateCoordination
+  // (buildGateCoordinationEvaluatorInput below) is what reconciles this
+  // detector with detect-checkpoint-evidence.mjs: neither can report
+  // mark_ready_for_review/clean while the other reports unresolved threads.
+  let unresolvedGateThreadCount;
+  try {
+    const markerOnlyCount = countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload);
+    if (markerOnlyCount === 0) {
+      unresolvedGateThreadCount = 0;
+    } else {
+      const login = await resolveAuthenticatedLogin(runtime);
+      unresolvedGateThreadCount = countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload, login);
+    }
+  } catch {
+    unresolvedGateThreadCount = -1;
+  }
+  // Injects the login-narrowed count computed just above so
+  // detectCheckpointEvidence's own draftGateSatisfied fold (ADR 0088) agrees
+  // with this detector without a second thread-payload fetch or a second
+  // `gh api user` round-trip for the identical fact.
   const gateEvidence = await detectCheckpointEvidence(options, {
     ...runtime,
     cwd: runtime.cwd ?? runtime.repoRoot,
+    unresolvedGateThreadCount,
   });
   // When draft gate was re-passed on a different head, use its timestamp
   // to reset the Copilot round count — only reviews after the re-pass count.
@@ -969,6 +1004,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     prData,
     snapshot,
     gateEvidence,
+    unresolvedGateThreadCount,
     interpretation,
     disposition,
     copilotBodyConvergence,
@@ -1048,6 +1084,14 @@ export function buildGateCoordinationEvaluatorInput({
     // "zero unresolved threads" (the exhaustion note's own promise) rather
     // than trusting a stale/compound lifecycleState label alone.
     unresolvedThreadCount: context.snapshot?.unresolvedThreadCount ?? null,
+    // Gate-authored unresolved thread count (ADR 0088) — distinct from the
+    // generic unresolvedThreadCount above (every open PR review thread): this
+    // is the SAME count close-gate-findings.mjs/ready-for-review.mjs's own
+    // gate-close assertion uses, folded ONLY into draftGate.currentHeadClean
+    // (toGateStatus, pr-gate-coordination.mjs) so it reconciles this
+    // detector's MARK_READY_FOR_REVIEW decision with detect-checkpoint-
+    // evidence.mjs's own unresolved-thread report for the same PR state.
+    unresolvedGateThreadCount: context.unresolvedGateThreadCount ?? null,
     sameHeadCleanConverged: context.interpretation.sameHeadCleanConverged,
     copilotConvergenceOk: context.copilotBodyConvergence?.ok === true,
     // Current-head Copilot review evidence, fed alongside sameHeadCleanConverged so
@@ -1205,32 +1249,6 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     result.nextAction = PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE;
     result.reason = "No contract-complete pre_approval_gate marker exists for the current head SHA; run pre_approval_gate before proceeding.";
     result.allowedNextActions = [PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE];
-  }
-  const draftGateEvidenceMissing = !(result.draftGate?.cleanEvidenceExists);
-  const gateBoundariesExpectingDraftGate = new Set([
-    PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW,
-    PR_CHECKPOINT.FEEDBACK_RESOLUTION,
-    PR_CHECKPOINT.PRE_APPROVAL_GATE_NEEDED,
-    PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW,
-    PR_CHECKPOINT.FINAL_APPROVAL_READY,
-  ]);
-  if (draftGateEvidenceMissing && gateBoundariesExpectingDraftGate.has(result.gateBoundary)) {
-    result.gateBoundary = PR_CHECKPOINT.DRAFT_GATE_NEEDED;
-    result.nextAction = PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE;
-    result.reason = result.draftGate?.anyVisible
-      ? "Clean draft_gate evidence is required before merge (no gate exemptions, #579). A draft_gate comment exists but is not clean; convert the PR back to draft before re-running draft_gate, or clear the existing evidence before running reconcile_draft_gate."
-      : "Clean draft_gate evidence is required before merge (no gate exemptions, #579). No visible clean draft_gate comment exists for this PR; run reconcile_draft_gate before proceeding.";
-    result.allowedNextActions = [PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE];
-    result.forbiddenActions = [
-      PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
-      PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
-      PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
-      PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW,
-      PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
-      PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
-      PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
-    ];
-    result.gateEvidenceNote = null;
   }
   // Expose effective round count in output for testability
   result.copilotReviewRoundCount = context.snapshot?.copilotReviewRoundCount ?? 0;

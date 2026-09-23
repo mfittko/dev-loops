@@ -228,6 +228,8 @@ test("pr-gate-coordination #1190 fix: gate entry is refused when a Copilot revie
     // independent cross-check so the caller-supplied flag alone can no longer open the gate.
     sameHeadCleanConverged: true,
     copilotReviewRequestStatus: "requested",
+    draftGate: { visible: true, headSha: "deadbee", verdict: "clean", contractComplete: false },
+    draftGateMarker: { visible: true, headSha: "deadbee", verdict: "clean", contractComplete: true },
     preApprovalGate: { visible: false, headSha: null, verdict: null, contractComplete: false },
   });
 

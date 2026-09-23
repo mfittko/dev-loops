@@ -13,7 +13,8 @@ import {
   BUILT_IN_DEFAULTS,
   BLOCKING_SEVERITY_SPELLINGS,
 } from "../src/config/config.mjs";
-import { LEGACY_SEVERITY_ALIASES } from "../src/loop/gate-fanin.mjs";
+import { backoffMaxConcurrent, LEGACY_SEVERITY_ALIASES } from "../src/loop/gate-fanin.mjs";
+import { NEUTRAL_RUN_ID_VAR, RUN_ID_MARKERS } from "../src/loop/run-context.mjs";
 import {
   resolveConductorModel,
   resolveAutonomyStopAt,
@@ -23,6 +24,7 @@ import {
   resolveRefinementConfig,
   resolveRefinement,
   resolveGateConfig,
+  loadDevLoopConfig,
   resolveGateAngles,
   resolveGateAngleContract,
   resolveRejectForeignAngles,
@@ -59,6 +61,7 @@ import {
   resolveTrackerBoard,
   resolvePostMergeActions,
 } from "../src/config/config.mjs";
+import { analyzeDiff } from "../src/analysis/diff-analyzer.mjs";
 // #1592: a few fixtures below deliberately keep pre-rename severity spellings
 // ("must-fix"/"worth-fixing-now"/"nice-to-have") as INPUT — this is
 // intentional backward-compat coverage (normalizeSeverity normalizes them on
@@ -3608,9 +3611,16 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
     "pr-checklist": ["review", "Verify the PR carries self-contained list-form"],
     "acceptance-criteria": ["review", "Verify that each acceptance criterion and definition-of-done item"],
   };
-  // Angles used by the shipped gates that never had a personas[angle] entry
-  // pre-#1404 — must keep falling back to default-reviewer with a null prompt.
-  const FALLBACK_ANGLES = ["contradiction-lens", "code-conformance", "semantic-drift", "correctness-final", "ui-validation"];
+  // Invariant: every resolved gate angle carries a persona + prompt from its
+  // gate entry, never a null-prompt fallback. These five resolve their own
+  // persona + prompt, same as the map above.
+  const NEWLY_PROMPTED_ANGLES = {
+    "contradiction-lens": ["review", "Apply STYLE-CONTRADICTION-LENS when the repo defines it"],
+    "code-conformance": ["review", "Review this change for conformance to existing repo code conventions"],
+    "semantic-drift": ["review", "Review this change for semantic drift between code and its documented behavior"],
+    "correctness-final": ["review", "Perform a final correctness pass on the current head"],
+    "ui-validation": ["review", "Review this change against the repo's UI validation contract"],
+  };
 
   test("every pre-#1404 personas[angle] entry still resolves the same persona + prompt from its gate entry", async () => {
     const { loadDevLoopConfig, resolveReviewerRole } = await import("../src/config/config.mjs");
@@ -3621,10 +3631,10 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
       assert.equal(role.persona, persona, `${angle} persona`);
       assert.ok(role.prompt && role.prompt.startsWith(promptStart), `${angle} prompt should start with ${JSON.stringify(promptStart)}, got ${JSON.stringify(role.prompt?.slice(0, 60))}`);
     }
-    for (const angle of FALLBACK_ANGLES) {
+    for (const [angle, [persona, promptStart]] of Object.entries(NEWLY_PROMPTED_ANGLES)) {
       const role = resolveReviewerRole(config, angle);
-      assert.equal(role.persona, "default-reviewer", `${angle} persona`);
-      assert.equal(role.prompt, null, `${angle} prompt`);
+      assert.equal(role.persona, persona, `${angle} persona`);
+      assert.ok(role.prompt && role.prompt.startsWith(promptStart), `${angle} prompt should start with ${JSON.stringify(promptStart)}, got ${JSON.stringify(role.prompt?.slice(0, 60))}`);
     }
 
     // "threat-model" is genuinely disabled (dropped) from every one of this
@@ -3642,6 +3652,50 @@ describe("shipped .devloops + extension-defaults.yaml resolve byte-identically t
     assert.equal(threatModel.persona, "review");
     assert.equal(threatModel.prompt, null);
     assert.equal(threatModel.fallback, false);
+  });
+
+  // gate(angles): every angle a gate actually resolves must carry a non-empty
+  // prompt, both under this repo's shipped .devloops and under defaults alone
+  // (no .pi/dev-loop/defaults.* layer exists in this repo to interfere with
+  // the defaults-only load below).
+  test("every angle resolved for draft and preApproval has a non-empty prompt, under this repo's .devloops and under defaults only", async () => {
+    const { loadDevLoopConfig, resolveGateAngles, resolveReviewerRole } = await import("../src/config/config.mjs");
+
+    const withDevloops = await loadDevLoopConfig({ repoRoot: REPO_ROOT });
+    assert.deepEqual(withDevloops.errors, []);
+    const defaultsOnly = await loadDevLoopConfig({ repoRoot: REPO_ROOT, devloopsOverride: { raw: null } });
+    assert.deepEqual(defaultsOnly.errors, []);
+
+    for (const { config, label } of [
+      { config: withDevloops.config, label: "this repo's .devloops" },
+      { config: defaultsOnly.config, label: "defaults only" },
+    ]) {
+      for (const gate of /** @type {const} */ (["draft", "preApproval"])) {
+        const angles = resolveGateAngles(config, gate);
+        assert.ok(angles.length > 0, `${label}: ${gate} gate must resolve at least one angle`);
+        for (const angle of angles) {
+          const role = resolveReviewerRole(config, angle);
+          assert.ok(
+            typeof role.prompt === "string" && role.prompt.trim().length > 0,
+            `${label}: ${gate} gate angle "${angle}" must resolve a non-empty prompt`,
+          );
+        }
+      }
+    }
+  });
+
+  // #2374 pre-PR review fix: the draft-gate and preApproval contradiction-lens
+  // entries must carry the exact same prompt — one shared lens definition,
+  // not two copies that can silently drift apart.
+  test("draft and preApproval contradiction-lens entries carry an identical, non-empty prompt", async () => {
+    const { loadDevLoopConfig } = await import("../src/config/config.mjs");
+    const { config, errors } = await loadDevLoopConfig({ repoRoot: REPO_ROOT, devloopsOverride: { raw: null } });
+    assert.deepEqual(errors, []);
+    const draftEntry = config.gates.draft.angles.find((a) => a.name === "contradiction-lens");
+    const preApprovalEntry = config.gates.preApproval.angles.find((a) => a.name === "contradiction-lens");
+    assert.ok(draftEntry?.prompt, "draft contradiction-lens entry must have a non-empty prompt");
+    assert.ok(preApprovalEntry?.prompt, "preApproval contradiction-lens entry must have a non-empty prompt");
+    assert.equal(draftEntry.prompt, preApprovalEntry.prompt, "draft and preApproval contradiction-lens prompts must be identical");
   });
 });
 
@@ -4302,6 +4356,11 @@ describe("touchesRiskPath (risk-path denylist floor)", () => {
     assert.equal(touchesRiskPath(["skills/docs/gate-review-sub-loop-contract.md"]), true);
   });
 
+  test("the whole contract-test tree trips the floor (deliberately over-inclusive, ADR 0071)", () => {
+    assert.equal(touchesRiskPath(["test/contracts/gate-fanout-dispatch-key-contract.test.mjs"]), true);
+    assert.equal(touchesRiskPath(["test/contracts/pre-pr-review-contract.test.mjs"]), true);
+  });
+
   test("a release/publish path trips the floor", () => {
     assert.equal(touchesRiskPath(["scripts/release/verify-release-approval.mjs"]), true);
     assert.equal(touchesRiskPath([".github/workflows/release.yml"]), true);
@@ -4577,15 +4636,17 @@ describe("resolveReviewProportionality (#1984 — primer-owned deterministic pla
     assert.deepStrictEqual(new Set(plan.angles), new Set(["link-check", "yagni", "contradiction-lens"]));
   });
 
-  test("large/risky diff → full_fanout with the FULL configured angle pool (fan-out path unchanged — cross-harness non-regression)", () => {
+  test("large/risky diff → full_fanout with a mandatory-complete best-effort subset", () => {
     const config = preApprovalTierConfig();
+    const staticPool = resolveGateAngles(config, "preApproval");
     const plan = resolveReviewProportionality(config, "preApproval", {
       scope: { filesChanged: 20, linesChanged: 2000 },
       changedFiles: ["packages/core/src/loop/gate-fanin.mjs"],
       sizeOutcome: { outcome: "block", tierLogicLoc: { t1: 50 } },
     });
     assert.equal(plan.mode, "full_fanout");
-    assert.deepStrictEqual(new Set(plan.angles), new Set(["yagni", "contradiction-lens", "correctness", "renderer-security", "link-check"]));
+    assert.deepStrictEqual(new Set(plan.angles), new Set(["yagni", "contradiction-lens", "renderer-security"]));
+    assert.ok(plan.angles.length < staticPool.length);
   });
 
   test("floors report which one fired, for auditability", () => {
@@ -4623,21 +4684,21 @@ describe("resolveReviewProportionality (#1984 — primer-owned deterministic pla
     assert.equal(plan.mode, "full_fanout");
   });
 
-  test("a risky diff that ALSO matches a tier yields the FULL untriered angle set, never the tier's reduced set (risk-path)", () => {
+  test("a risk-path floor keeps full_fanout while preserving a matched tier's set", () => {
     const config = preApprovalTierConfig();
     const plan = resolveReviewProportionality(config, "preApproval", {
-      // Trivially small AND classifies as "docs" (would match the docs tier),
-      // but ALSO touches the risk-path denylist — the floor must win.
+      // Trivially small AND classifies as "docs" (matches the docs tier), but
+      // also touches the risk-path denylist. The floor changes dispatch only.
       scope: { filesChanged: 1, linesChanged: 1 },
       changedFiles: ["docs/decisions/0001-example.md"],
       sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
     });
     assert.equal(plan.mode, "full_fanout");
     assert.equal(plan.reason, "risk_path_touch");
-    assert.deepStrictEqual(new Set(plan.angles), new Set(["yagni", "contradiction-lens", "correctness", "renderer-security", "link-check"]));
+    assert.deepStrictEqual(new Set(plan.angles), new Set(["yagni", "contradiction-lens", "link-check"]));
   });
 
-  test("a risky diff that ALSO matches a tier yields the FULL untriered angle set, never the tier's reduced set (size-outcome)", () => {
+  test("a size-outcome floor keeps full_fanout while preserving a matched tier's set", () => {
     const config = preApprovalTierConfig();
     const plan = resolveReviewProportionality(config, "preApproval", {
       scope: { filesChanged: 1, linesChanged: 1 },
@@ -4646,7 +4707,7 @@ describe("resolveReviewProportionality (#1984 — primer-owned deterministic pla
     });
     assert.equal(plan.mode, "full_fanout");
     assert.equal(plan.reason, "size_outcome_t1");
-    assert.deepStrictEqual(new Set(plan.angles), new Set(["yagni", "contradiction-lens", "correctness", "renderer-security", "link-check"]));
+    assert.deepStrictEqual(new Set(plan.angles), new Set(["yagni", "contradiction-lens", "link-check"]));
   });
 
   test("over-cap alone (no other risk signal) still honors a matched tier's REDUCED set — pre-existing diff-class-tier behavior is unaffected", () => {
@@ -4661,21 +4722,139 @@ describe("resolveReviewProportionality (#1984 — primer-owned deterministic pla
     assert.deepStrictEqual(new Set(plan.angles), new Set(["link-check", "yagni", "contradiction-lens"]));
   });
 
-  test("an unclassifiable diff forces full_fanout with the full pool even though the raw dispatch-mode facts alone look trivial", () => {
+  test("an unclassifiable diff forces full_fanout with a mandatory-complete best-effort subset", () => {
     const config = preApprovalTierConfig();
+    const staticPool = resolveGateAngles(config, "preApproval");
     const plan = resolveReviewProportionality(config, "preApproval", {
       scope: { filesChanged: 1, linesChanged: 1 },
       // An unrecognized binary/asset extension → classifyFile reports "unknown"
       // → resolveGateTier returns unclassifiable_file — resolveGateDispatchMode
       // alone has no classification awareness and would otherwise stay inline.
-      // (A genuine unknown, not a now-classified manifest like Makefile.)
       changedFiles: ["assets/logo.bin"],
       sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
     });
     assert.equal(plan.mode, "full_fanout");
     assert.equal(plan.reason, "unclassifiable_diff");
     assert.equal(plan.floors.unclassifiable, true);
-    assert.deepStrictEqual(new Set(plan.angles), new Set(["yagni", "contradiction-lens", "correctness", "renderer-security", "link-check"]));
+    assert.deepStrictEqual(new Set(plan.angles), new Set(["yagni", "contradiction-lens", "renderer-security"]));
+    assert.ok(plan.angles.length < staticPool.length);
+  });
+
+  test("a no-tier-match config-source delta resolves to a mandatory-complete strict subset", () => {
+    const config = preApprovalTierConfig();
+    const staticPool = resolveGateAngles(config, "preApproval");
+    const plan = resolveReviewProportionality(config, "preApproval", {
+      scope: { filesChanged: 1, linesChanged: 2 },
+      changedFiles: [".devloops"],
+      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+    });
+    assert.deepStrictEqual(new Set(plan.angles), new Set(["yagni", "contradiction-lens", "renderer-security"]));
+    assert.ok(plan.angles.length < staticPool.length);
+  });
+
+  test("no-tier best-effort selection honors a consumer angle's declared file kind", () => {
+    const config = preApprovalTierConfig();
+    config.gates.preApproval.angles.push({ name: "config-consumer", kinds: ["config"] });
+    const plan = resolveReviewProportionality(config, "preApproval", {
+      scope: { filesChanged: 1, linesChanged: 2 },
+      changedFiles: [".devloops"],
+      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+    });
+    assert.ok(plan.angles.includes("config-consumer"));
+  });
+
+  test("an empty best-effort selection falls back to the static pool", () => {
+    const config = {
+      version: 1,
+      gates: { preApproval: { angles: ["kiss"] } },
+    };
+    const plan = resolveReviewProportionality(config, "preApproval", {
+      scope: { filesChanged: 1, linesChanged: 1 },
+      changedFiles: ["assets/blob.bin"],
+      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+    });
+    assert.deepEqual(plan.angles, ["kiss"]);
+  });
+
+  test("an empty dynamic selection for a degenerate pool falls back to the pool (resolver agrees with the composer)", async () => {
+    // Degenerate but LEGAL pool: no mandatory angle and no always-include
+    // angle, so a dynamic pass over an unclassifiable diff can prune every
+    // candidate. The resolver must never resolve zero angles — it falls back to
+    // the static pool, exactly like the composer above (and like the pre-#2361
+    // behaviour), so the two callers agree for the identical input instead of
+    // one returning [] (which makes write-gate-context.mjs refuse to write the
+    // bundle for a gate whose angle set genuinely IS configured).
+    const config = { version: 1, gates: { draft: { angles: ["kiss"] } } };
+    const diff = { nameStatusOutput: "M\tassets/blob.bin" };
+    const result = await resolveGateAnglesDynamic(config, "draft", { diff });
+    assert.notDeepEqual(result.recommendedAngles, [], "must not resolve zero angles");
+    assert.deepEqual(result.recommendedAngles, ["kiss"]);
+    // Whole pool selected → nothing is skipped and no skip reason is invented.
+    assert.deepEqual(result.skippedAngles, []);
+    assert.deepEqual(result.reasons, {});
+
+    const plan = resolveReviewProportionality(config, "draft", {
+      scope: { filesChanged: 1, linesChanged: 1 },
+      changedFiles: ["assets/blob.bin"],
+      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+    });
+    assert.deepEqual(plan.angles, ["kiss"]);
+    assert.deepEqual(result.recommendedAngles, plan.angles, "resolver and composer must agree");
+  });
+
+  test("dynamic.subtractive:false restores the full static pool for a no-tier diff (composer agrees with the resolver)", () => {
+    // The documented opt-out (config.mjs schema describe: "set false to restore
+    // the full static angle pool") must hold for the composer too, not just
+    // resolveGateAnglesDynamic — both callers share one selection contract.
+    const config = {
+      version: 1,
+      gates: {
+        preApproval: {
+          dynamic: { subtractive: false },
+          angles: [
+            { name: "yagni", mandatory: true },
+            "correctness", "renderer-security", "link-check", "docs",
+          ],
+        },
+      },
+    };
+    const staticPool = resolveGateAngles(config, "preApproval");
+    const plan = resolveReviewProportionality(config, "preApproval", {
+      scope: { filesChanged: 1, linesChanged: 2 },
+      changedFiles: [".devloops"],
+      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+    });
+    assert.ok(staticPool.length > 1, "precondition: pool has optional angles to drop");
+    assert.deepStrictEqual(new Set(plan.angles), new Set(staticPool));
+  });
+
+  test("a gate with no configured angles preserves the null skill-default sentinel", () => {
+    const plan = resolveReviewProportionality({ version: 1 }, "preApproval", {});
+    assert.equal(plan.angles, null);
+    assert.deepEqual(plan.groups, []);
+  });
+
+  test("malformed changedFiles entries do not throw from best-effort classification", () => {
+    const config = preApprovalTierConfig();
+    assert.doesNotThrow(() => resolveReviewProportionality(config, "preApproval", {
+      changedFiles: [null, 42, {}, ""],
+    }));
+  });
+
+  test("a gate:full label still forces the full configured pool (ADR 0048 escape hatch, unchanged)", () => {
+    const config = preApprovalTierConfig();
+    const staticPool = resolveGateAngles(config, "preApproval");
+    // The same trivially small docs diff that matches the docs tier above, and
+    // even a risky one: gate:full must not be narrowed by best-effort selection.
+    for (const changedFiles of [["docs/guide.md"], ["docs/decisions/0001-example.md"], ["packages/core/src/loop/gate-fanin.mjs"]]) {
+      const plan = resolveReviewProportionality(config, "preApproval", {
+        scope: { filesChanged: 1, linesChanged: 1 },
+        changedFiles,
+        sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+        hasFullLabel: true,
+      });
+      assert.deepStrictEqual(new Set(plan.angles), new Set(staticPool), JSON.stringify(changedFiles));
+    }
   });
 
   test("the plan carries grouping (angle set + execution mode + grouping, per GATE-EXEC-PROPORTIONALITY)", () => {
@@ -4980,20 +5159,49 @@ test("resolveFanoutSequential / resolveFanoutEffectiveConcurrency: serial bound 
   assert.equal(resolveFanoutSequential({ gates: { fanout: { sequential: "yes" } } }), false);
 });
 
-test("resolveFanoutEffectiveConcurrency: Claude-harness-scoped concurrency clamp (#1971)", () => {
-  assert.equal(CLAUDE_MAX_EFFECTIVE_CONCURRENT, 2);
-  // 1. Claude harness, default config → clamped to 2, not the shipped default (4).
-  assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }, { CLAUDECODE: "1" }), 2);
-  // 2. Claude harness, .devloops-style maxConcurrent: 3 → still clamped to 2.
-  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 3 } } }, { CLAUDECODE: "1" }), 2);
-  // 3. Claude harness, maxConcurrent: 1 → stays 1 (min(1, 2)).
+test("resolveFanoutEffectiveConcurrency: Claude-harness-scoped concurrency clamp (#1971, raised to 4 by #2366)", () => {
+  assert.equal(CLAUDE_MAX_EFFECTIVE_CONCURRENT, 4);
+  // The Pi-runtime-injected run-id alias (no CLAUDECODE): the one RUN_ID_MARKERS entry that
+  // is not the neutral var. Selected by name, not index, and built from RUN_ID_MARKERS (not a
+  // literal token here) so this file stays outside the harness-adapter allowlist
+  // (test/contracts/cli-harness-agnostic.test.mjs).
+  const piMarker = RUN_ID_MARKERS.find((m) => m !== NEUTRAL_RUN_ID_VAR);
+  assert.ok(piMarker);
+  const piEnv = { [piMarker]: "pi-run-1" };
+  // 1. Claude harness, default config → clamped to 4 (== the shipped default; min(4, 4)).
+  assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }, { CLAUDECODE: "1" }), 4);
+  // 2. Claude harness, .devloops-style maxConcurrent: 3 → stays 3 (min(3, 4)).
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 3 } } }, { CLAUDECODE: "1" }), 3);
+  // 3. Claude harness, maxConcurrent: 1 → stays 1 (min(1, 4)).
   assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 1 } } }, { CLAUDECODE: "1" }), 1);
-  // 4. Claude harness, sequential: true → stays 1 (sequential already forces one unit per wave).
+  // 4. Claude harness, maxConcurrent: 2 → stays 2 (min(2, 4)).
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 2 } } }, { CLAUDECODE: "1" }), 2);
+  // 5. Claude harness, maxConcurrent: 8 → clamped to 4 (min(8, 4)).
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 8 } } }, { CLAUDECODE: "1" }), 4);
+  // 5b. Sweep the clamp boundary: configured value resolves unchanged under the Pi env and
+  // under {}, and to Math.min(m, 4) under Claude — for m at, below, and above the cap.
+  for (const m of [2, 3, 4, 8]) {
+    const config = { gates: { fanout: { maxConcurrent: m } } };
+    assert.equal(resolveFanoutEffectiveConcurrency(config, piEnv), m);
+    assert.equal(resolveFanoutEffectiveConcurrency(config, {}), m);
+    assert.equal(resolveFanoutEffectiveConcurrency(config, { CLAUDECODE: "1" }), Math.min(m, 4));
+  }
+  // 5c. maxConcurrent: 0 (the resolver's defensive fallback to the shipped default 4) still
+  // resolves to 4 under Claude (min(4, 4)).
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 0 } } }, { CLAUDECODE: "1" }), 4);
+  // 6. Claude harness, sequential: true → stays 1 (sequential already forces one unit per wave).
   assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { sequential: true } } }, { CLAUDECODE: "1" }), 1);
-  // 5. Non-Claude env → returns the configured value unchanged (cross-harness non-regression).
+  // 7. Pi harness → returns the configured value unchanged.
+  assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }, piEnv), 4);
+  assert.equal(
+    resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 8 } } }, piEnv),
+    8,
+  );
+  // 8. Unknown/no-marker env → returns the configured value unchanged (cross-harness non-regression).
   assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }, {}), 4);
   assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 3 } } }, { CLAUDECODE: "0" }), 3);
-  // 6. No env passed on a non-Claude process → unchanged base value.
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 8 } } }, {}), 8);
+  // 9. No env passed on a non-Claude process → unchanged base value.
   const originalClaudecode = process.env.CLAUDECODE;
   delete process.env.CLAUDECODE;
   try {
@@ -5002,6 +5210,12 @@ test("resolveFanoutEffectiveConcurrency: Claude-harness-scoped concurrency clamp
     if (originalClaudecode === undefined) delete process.env.CLAUDECODE;
     else process.env.CLAUDECODE = originalClaudecode;
   }
+});
+
+test("backoffMaxConcurrent: halves the Claude-clamped concurrency of 4 to 2 (#2366)", () => {
+  const effective = resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 8 } } }, { CLAUDECODE: "1" });
+  assert.equal(effective, 4);
+  assert.equal(backoffMaxConcurrent(effective), 2);
 });
 
 test("gates.fanout.groups schema validation: duplicate group names are rejected", async () => {
@@ -5386,7 +5600,7 @@ describe("resolveGateAnglesDynamic", () => {
       version: 1,
       gates: {
         draft: {
-          angles: ["scope", "custom-lens"],
+          angles: ["scope", "docs", "custom-lens"],
           dynamic: { subtractive: true },
         },
       },
@@ -5399,7 +5613,9 @@ describe("resolveGateAnglesDynamic", () => {
     assert.equal(result.dynamicAnglesActive, true);
     // custom-lens is a candidate (like configured angles), not a mandatory
     // floor: an unrecognized custom angle is pruned by the docs-only diff,
-    // same as "scope" would be if it weren't relevant.
+    // same as "scope" is. `docs` stays selected, so the set is non-empty and
+    // the degenerate-pool fallback does not mask the pruning.
+    assert.ok(result.recommendedAngles.includes("docs"));
     assert.ok(result.skippedAngles.includes("custom-lens"));
     assert.ok(!result.recommendedAngles.includes("custom-lens"));
   });
@@ -5826,10 +6042,7 @@ describe("resolveGateAnglesDynamic", () => {
     assert.equal(result.fallbackToAll, false);
   });
 
-  test("#1579 default config + ambiguous diff → fallbackToAll restores the full pool (graceful degradation)", async () => {
-    // The CHANGELOG pins this as the graceful-degradation route for the new
-    // default: an unclassifiable (ambiguous) diff falls back to the full static
-    // pool with fallbackToAll:true, dynamicAnglesActive:true.
+  test("#1579 default config + ambiguous diff → best-effort strict subset", async () => {
     const config = {
       version: 1,
       gates: { draft: { angles: ["scope", "coverage", "docs", "deep", "kiss"] } },
@@ -5838,9 +6051,10 @@ describe("resolveGateAnglesDynamic", () => {
       diff: { nameStatusOutput: "M\tsrc/foo.mjs\nM\tdocs/specs/bar.md" },
     });
     assert.equal(result.dynamicAnglesActive, true);
-    assert.equal(result.fallbackToAll, true);
-    assert.deepEqual(result.recommendedAngles, ["scope", "coverage", "docs", "deep", "kiss"]);
-    assert.deepEqual(result.skippedAngles, []);
+    assert.equal(result.fallbackToAll, false);
+    assert.ok(result.recommendedAngles.length < 5);
+    assert.ok(result.skippedAngles.length > 0);
+    for (const angle of result.skippedAngles) assert.ok(result.reasons[angle]);
   });
 
   // ── checkFloors (GATE-EXEC-PROPORTIONALITY wiring): resolveGateAnglesDynamic
@@ -5878,15 +6092,15 @@ describe("resolveGateAnglesDynamic", () => {
     assert.deepEqual(new Set(result.recommendedAngles), new Set(["pr-description", "docs"]));
   });
 
-  test("checkFloors:true — a risk-path-touching diff that ALSO matches a tier resolves the FULL untriered pool instead", async () => {
+  test("checkFloors:true — a risk-path floor keeps a matching tier's angle set", async () => {
     const config = tieredRiskyConfig();
     const result = await resolveGateAnglesDynamic(config, "draft", {
       diff: { nameStatusOutput: `M\t${riskyDocPath}`, diffOutput: oneLineDiffOutput(riskyDocPath) },
       checkFloors: true,
       sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
     });
-    assert.equal(result.dynamicAnglesActive, false);
-    assert.deepEqual(new Set(result.recommendedAngles), new Set(["pr-description", "docs", "link-check", "correctness"]));
+    assert.equal(result.dynamicAnglesActive, true);
+    assert.deepEqual(new Set(result.recommendedAngles), new Set(["pr-description", "docs"]));
   });
 
   test("checkFloors:true — a non-risky, tier-matching diff still gets the tier's reduced set (floor did not fire)", async () => {
@@ -5899,25 +6113,82 @@ describe("resolveGateAnglesDynamic", () => {
     assert.deepEqual(new Set(result.recommendedAngles), new Set(["pr-description", "docs"]));
   });
 
-  test("checkFloors:true — a malformed sizeOutcome (ambiguous) forces the full pool even for a small, non-risk-path diff", async () => {
+  test("checkFloors:true — a malformed sizeOutcome keeps the matching tier's angle set", async () => {
     const config = tieredRiskyConfig();
     const result = await resolveGateAnglesDynamic(config, "draft", {
       diff: { nameStatusOutput: `M\t${nonRiskyDocPath}`, diffOutput: oneLineDiffOutput(nonRiskyDocPath) },
       checkFloors: true,
       sizeOutcome: null,
     });
-    assert.deepEqual(new Set(result.recommendedAngles), new Set(["pr-description", "docs", "link-check", "correctness"]));
+    assert.equal(result.dynamicAnglesActive, true);
+    assert.deepEqual(new Set(result.recommendedAngles), new Set(["pr-description", "docs"]));
   });
 
-  test("checkFloors:true + explicitAngles — a fired risk-path floor forces the full pool over the explicit override (non-overridable floor)", async () => {
+  test("checkFloors:true + explicitAngles — every fired floor term refuses the override", async () => {
     const config = tieredRiskyConfig();
-    const result = await resolveGateAnglesDynamic(config, "draft", {
-      diff: { nameStatusOutput: `M\t${riskyDocPath}`, diffOutput: oneLineDiffOutput(riskyDocPath) },
-      checkFloors: true,
-      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
-      explicitAngles: ["docs"],
-    });
-    assert.deepEqual(new Set(result.recommendedAngles), new Set(["pr-description", "docs", "link-check", "correctness"]));
+    // AC3's second half — a fired floor never widens the angle set to the full
+    // untiered pool. Pin it as a STRICT subset of the static pool for every
+    // floored term: asserting only `notDeepEqual(recommendedAngles, ["docs"])`
+    // would still pass for a regression that returned the whole static pool.
+    const staticPool = resolveGateAngles(config, "draft");
+    const scenarios = [
+      {
+        name: "riskPath",
+        floor: "riskPath",
+        options: {
+          diff: { nameStatusOutput: `M\t${riskyDocPath}`, diffOutput: oneLineDiffOutput(riskyDocPath) },
+          sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+        },
+      },
+      {
+        name: "sizeOutcome",
+        floor: "sizeOutcome",
+        options: {
+          diff: { nameStatusOutput: `M\t${nonRiskyDocPath}`, diffOutput: oneLineDiffOutput(nonRiskyDocPath) },
+          sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 5 } },
+        },
+      },
+      {
+        name: "ambiguity",
+        floor: "ambiguity",
+        options: {
+          diff: { nameStatusOutput: `M\t${nonRiskyDocPath}`, diffOutput: oneLineDiffOutput(nonRiskyDocPath) },
+          sizeOutcome: null,
+        },
+      },
+      {
+        name: "unclassifiable",
+        floor: "unclassifiable",
+        options: {
+          diff: { nameStatusOutput: "M\tassets/blob.bin", diffOutput: oneLineDiffOutput("assets/blob.bin") },
+          sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+        },
+      },
+    ];
+    for (const scenario of scenarios) {
+      const diff = scenario.options.diff;
+      const changedFiles = diff ? diff.nameStatusOutput.trim().split("\n").map((line) => line.split("\t").at(-1)) : undefined;
+      const plan = resolveReviewProportionality(config, "draft", {
+        scope: diff ? { filesChanged: changedFiles.length, linesChanged: diff.diffOutput ? 2 : undefined } : undefined,
+        changedFiles,
+        sizeOutcome: scenario.options.sizeOutcome,
+      });
+      assert.equal(plan.floors[scenario.floor], true, scenario.name);
+
+      const result = await resolveGateAnglesDynamic(config, "draft", {
+        ...scenario.options,
+        checkFloors: true,
+        explicitAngles: ["docs"],
+      });
+      assert.equal(result.dynamicAnglesActive, true, scenario.name);
+      assert.ok(result.recommendedAngles.includes("pr-description"), `${scenario.name}: mandatory floor missing`);
+      assert.notDeepEqual(result.recommendedAngles, ["docs"], `${scenario.name}: explicit override was not refused`);
+      assert.equal(result.fallbackToAll, false, `${scenario.name}: must never fall back to all angles`);
+      assert.ok(
+        result.recommendedAngles.length < staticPool.length,
+        `${scenario.name}: a fired floor must not return the full untiered pool`,
+      );
+    }
   });
 
   test("checkFloors:true + explicitAngles — no floor fired keeps the explicit override verbatim", async () => {
@@ -5929,6 +6200,142 @@ describe("resolveGateAnglesDynamic", () => {
       explicitAngles: ["docs"],
     });
     assert.deepEqual(result.recommendedAngles, ["docs"]);
+  });
+
+  test("a config-source plus gate-contract diff under the cap resolves a mandatory-complete strict subset", async () => {
+    const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
+    const { config } = await loadDevLoopConfig({ repoRoot });
+    const staticPool = resolveGateAngles(config, "draft");
+    const { mandatoryAngles } = resolveGateAngleContract(config, "draft");
+    const changedFiles = [".devloops", "test/contracts/devloops-tier-config.test.mjs"];
+    const diffOutput = changedFiles.map((file) => [
+      `diff --git a/${file} b/${file}`,
+      `--- a/${file}`,
+      `+++ b/${file}`,
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+    ].join("\n")).join("\n");
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      diff: {
+        nameStatusOutput: changedFiles.map((file) => `M\t${file}`).join("\n"),
+        diffOutput,
+      },
+      checkFloors: true,
+      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+    });
+    assert.equal(result.dynamicAnglesActive, true);
+    assert.equal(result.fallbackToAll, false);
+    assert.ok(result.recommendedAngles.length < staticPool.length);
+    for (const angle of mandatoryAngles) assert.ok(result.recommendedAngles.includes(angle));
+  });
+
+  test("checkFloors:true with NO diff resolves the mandatory floor plus justified lenses, not the static pool", async () => {
+    const config = tieredRiskyConfig();
+    const staticPool = resolveGateAngles(config, "draft");
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      checkFloors: true,
+      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+    });
+    assert.ok(result.recommendedAngles.length < staticPool.length);
+    assert.ok(result.recommendedAngles.includes("pr-description"));
+    assert.equal(result.dynamicAnglesActive, true);
+    assert.equal(result.fallbackToAll, false);
+    for (const angle of result.skippedAngles) assert.ok(result.reasons[angle]);
+  });
+
+  test("checkFloors:true with NO diff keeps the static pool when dynamic resolution is disabled", async () => {
+    const config = tieredRiskyConfig();
+    config.gates.draft.dynamic = { subtractive: false };
+    const staticPool = resolveGateAngles(config, "draft");
+    const result = await resolveGateAnglesDynamic(config, "draft", {
+      checkFloors: true,
+      sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+    });
+    assert.deepEqual(result.recommendedAngles, staticPool);
+    assert.deepEqual(result.skippedAngles, []);
+    assert.equal(result.dynamicAnglesActive, false);
+  });
+
+  test("checkFloors omitted with NO diff keeps the static pool unchanged (documented degraded path)", async () => {
+    const config = tieredRiskyConfig();
+    const staticPool = resolveGateAngles(config, "draft");
+    const result = await resolveGateAnglesDynamic(config, "draft", {});
+    assert.deepEqual(result.recommendedAngles, staticPool);
+    assert.deepEqual(result.skippedAngles, []);
+    assert.equal(result.dynamicAnglesActive, false);
+  });
+
+  test("the mandatory floor survives every uncertain dynamic-selection path", async () => {
+    const config = {
+      version: 1,
+      localImplementation: { lightMode: { enabled: true, maxFiles: 5, maxLines: 100 } },
+      gates: {
+        draft: {
+          angles: [
+            { name: "pr-description", mandatory: true },
+            { name: "holistic", mandatory: true },
+            "scope", "coverage", "docs", "gate-evidence", "config-drift", "kiss",
+          ],
+        },
+      },
+    };
+    const staticPool = resolveGateAngles(config, "draft");
+    const cases = [
+      {
+        // Genuinely ambiguous: mixed file kinds (code + unknown asset) AND a
+        // category-less full-diff capture (context-only hunk → no added/deleted
+        // lines → no change category). The precondition assertion below pins
+        // that this case cannot silently degrade into a classified one again.
+        name: "ambiguous",
+        expectAmbiguous: true,
+        options: {
+          diff: {
+            nameStatusOutput: "M\tsrc/foo.mjs\nM\tassets/logo.png",
+            diffOutput: "@@ -1,1 +1,1 @@\n unchanged context line\n",
+          },
+        },
+      },
+      {
+        name: "empty categories / unclassifiable",
+        options: { diff: { nameStatusOutput: "M\tassets/blob.bin" } },
+      },
+      {
+        name: "risk-path floor",
+        options: {
+          diff: { nameStatusOutput: `M\t${riskyDocPath}`, diffOutput: oneLineDiffOutput(riskyDocPath) },
+          checkFloors: true,
+          sizeOutcome: { outcome: "pass", tierLogicLoc: { t1: 0 } },
+        },
+      },
+      {
+        name: "size-outcome floor",
+        options: {
+          diff: { nameStatusOutput: `M\t${nonRiskyDocPath}`, diffOutput: oneLineDiffOutput(nonRiskyDocPath) },
+          checkFloors: true,
+          sizeOutcome: null,
+        },
+      },
+    ];
+    for (const scenario of cases) {
+      if (scenario.expectAmbiguous) {
+        assert.equal(
+          analyzeDiff({
+            nameStatusOutput: scenario.options.diff.nameStatusOutput,
+            diffOutput: scenario.options.diff.diffOutput,
+          }).ambiguous,
+          true,
+          `${scenario.name}: precondition — fixture must be genuinely ambiguous`,
+        );
+      }
+      const result = await resolveGateAnglesDynamic(config, "draft", scenario.options);
+      assert.equal(result.dynamicAnglesActive, true, scenario.name);
+      assert.equal(result.fallbackToAll, false, scenario.name);
+      assert.ok(result.recommendedAngles.length < staticPool.length, scenario.name);
+      for (const angle of ["pr-description", "holistic"]) {
+        assert.ok(result.recommendedAngles.includes(angle), `${scenario.name}: missing ${angle}`);
+      }
+    }
   });
 
   // #1938 Gap 2: a consumer angle absent from CATEGORY_ANGLE_MAP can bind to
@@ -6004,7 +6411,7 @@ describe("resolveGateAnglesDynamic", () => {
     assert.ok(!result.skippedAngles.includes("blast-radius"));
   });
 
-  test("consumer angle with a non-matching category binding is still included under fallback-to-all (#1938 Gap 2)", async () => {
+  test("consumer angle with a non-matching binding is skipped under uncertainty (#1938 Gap 2)", async () => {
     const config = {
       version: 1,
       gates: {
@@ -6014,12 +6421,12 @@ describe("resolveGateAnglesDynamic", () => {
         },
       },
     };
-    // Mixed code+config diff with no diffOutput → ambiguous → fallback-to-all.
     const result = await resolveGateAnglesDynamic(config, "draft", {
       diff: { nameStatusOutput: "M\tsrc/main.mjs\nM\tconfig/app.yml" },
     });
-    assert.equal(result.fallbackToAll, true);
-    assert.ok(result.recommendedAngles.includes("blast-radius"));
+    assert.equal(result.fallbackToAll, false);
+    assert.ok(!result.recommendedAngles.includes("blast-radius"));
+    assert.ok(result.skippedAngles.includes("blast-radius"));
   });
 });
 describe("resolveGateTier (issue #1550 — diff-class angle tiers)", () => {

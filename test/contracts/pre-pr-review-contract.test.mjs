@@ -163,3 +163,68 @@ test("no concrete model token is hardcoded in the phase prose or SKILL step (con
   assert.ok(!fullId.test(step), "SKILL pre-PR step must not embed a full model id");
   assert.ok(!namesResolvedModel(step), "SKILL pre-PR step must not name a resolved harness model id");
 });
+
+// The pre-PR trigger is a session property (pushes and opens a
+// PR), not a route property. GitHub-first routes reach the same step at
+// OPS-DRAFT-FIRST-PR; the local route keeps step 11b.
+const OPS = "skills/docs/copilot-loop-operations.md";
+
+test("PRE-PR-BEFORE-FIRST-PUSH is route-neutral and names the GitHub-first placement", () => {
+  const para = ruleParagraph(readRepo(CONTRACT), "PRE-PR-BEFORE-FIRST-PUSH");
+  const flat = para.replace(/\s+/g, " ");
+  assert.ok(!flat.includes("local-implementation session that pushes"), "scope must not be limited to local-implementation sessions");
+  assert.ok(flat.includes("whichever route the startup resolver selected"), "rule must state the scope is route-neutral");
+  assert.ok(para.includes("OPS-DRAFT-FIRST-PR"), "rule must name the GitHub-first placement");
+  assert.ok(para.includes("copilot-loop-operations.md"), "rule must link Copilot Loop Operations");
+  assert.ok(/opens no PR has no pre-PR step/.test(flat), "rule must state that a session opening no PR has no pre-PR step");
+});
+
+test("OPS-DRAFT-FIRST-PR references the pre-PR review before the create-pr.mjs MUST-use line", () => {
+  const ops = readRepo(OPS);
+  const start = ops.indexOf("<!-- rule: OPS-DRAFT-FIRST-PR -->");
+  const createIdx = ops.indexOf("MUST use `node <resolved-skill-scripts>/github/create-pr.mjs --repo", start);
+  assert.ok(start !== -1 && createIdx !== -1, "OPS-DRAFT-FIRST-PR block and its create-pr.mjs line must exist");
+  const block = ops.slice(start, createIdx);
+  assert.ok(block.includes("PRE-PR-BEFORE-FIRST-PUSH"), "block must cite PRE-PR-BEFORE-FIRST-PUSH before create-pr.mjs");
+  assert.ok(block.includes("pre-pr-review-contract.md"), "block must link the pre-PR review contract before create-pr.mjs");
+});
+
+test("every PR-creating route loads Copilot Loop Operations or the local SKILL", () => {
+  const skill = readRepo("skills/dev-loop/SKILL.md");
+  const row = (route) => {
+    const line = skill.split("\n").find((l) => l.startsWith(`| \`${route}\` |`));
+    assert.ok(line, `route table must have a ${route} row`);
+    return line;
+  };
+  assert.ok(row("local_implementation").includes("../local-implementation/SKILL.md"));
+  assert.ok(readRepo(SKILL).includes("<!-- rule: LOCAL-PRE-PR-REVIEW-BEFORE-PUSH -->"));
+  for (const route of ["issue_intake", "copilot_pr_followup"]) {
+    assert.ok(row(route).includes("copilot-loop-operations.md"), `${route} must load Copilot Loop Operations`);
+  }
+  for (const route of ["external_pr_followup", "reviewer_fixer", "final_approval"]) {
+    assert.ok(row(route).includes("same as `copilot_pr_followup`"), `${route} must inherit the copilot_pr_followup pack`);
+  }
+  // Runtime requiredReads: STRATEGY_REQUIRED_READS is not exported, so slice
+  // each strategy entry from the resolver source text.
+  const resolver = readRepo("scripts/loop/resolve-dev-loop-startup.mjs");
+  for (const route of ["issue_intake", "copilot_pr_followup", "external_pr_followup", "reviewer_fixer", "final_approval"]) {
+    const start = resolver.indexOf(`  ${route}: [`);
+    const end = start === -1 ? -1 : resolver.indexOf("],", start);
+    assert.ok(start !== -1 && end !== -1, `STRATEGY_REQUIRED_READS entry for ${route} must exist in the startup resolver`);
+    assert.ok(
+      resolver.slice(start, end).includes('"skills/docs/copilot-loop-operations.md"'),
+      `${route} runtime requiredReads must include skills/docs/copilot-loop-operations.md`,
+    );
+  }
+  // issue_intake is the GitHub-first route that starts with no PR, so it loads the contract.
+  const intakeStart = resolver.indexOf("  issue_intake: [");
+  assert.ok(
+    resolver.slice(intakeStart, resolver.indexOf("],", intakeStart)).includes('"skills/docs/pre-pr-review-contract.md"'),
+    "issue_intake runtime requiredReads must include skills/docs/pre-pr-review-contract.md",
+  );
+});
+
+test("main-agent contract cites the route-neutral PRE-PR-BEFORE-FIRST-PUSH scope", () => {
+  const doc = readRepo("skills/docs/main-agent-contract.md").replace(/\s+/g, " ");
+  assert.ok(/that pushes and opens a PR \(the scope `PRE-PR-BEFORE-FIRST-PUSH`/.test(doc), "sub-delegate sentence must cite PRE-PR-BEFORE-FIRST-PUSH");
+});

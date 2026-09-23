@@ -42,6 +42,11 @@ to build a per-status digest — the summary mode is the sanctioned one-call pat
 
 --summary is mutually exclusive with --column and --limit (both exit 1).
 
+Known limit: GitHub's whole-board item listing can lag behind GitHub and leave
+out newly added items for hours. This command reads that listing and cannot
+work around the lag. \`queue move\` and \`queue reorder\` do not depend on it:
+they look items up from the issue side or by item node ID.
+
 Output (stdout):
   flat:    { ok: true, items: [{ issueNumber, prNumber, title, url, itemId, contentId, status }, ...] }
   summary: { ok: true, groups: { "<Status>": { count, items: [ <item>, ... ] }, ... } }

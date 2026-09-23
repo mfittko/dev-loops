@@ -126,9 +126,15 @@ gates:
             implementation bugs, logic errors, contract violations, or security
             issues
           - Unresolved review threads that raise implementation concerns Flag any unresolved comment that identifies a concrete implementation problem as a blocking finding (severity: high or medium). Do not flag: - Resolved threads - Style nits, formatting suggestions, or cosmetic feedback - Comments from non-collaborators or bots - Outdated comments that were already addressed in a later commit If no unresolved implementation concerns exist, return clean.
-      - contradiction-lens
-      - code-conformance
-      - semantic-drift
+      - name: contradiction-lens
+        persona: review
+        prompt: "Apply STYLE-CONTRADICTION-LENS when the repo defines it (dev-loops: skills/docs/contract-style-guide.md): check every added or changed normative rule (MUST/SHOULD/MAY) against the repo's rule registry for opposing modality or a weaker restatement. Also flag statements in the diff, the PR body, touched contracts, or accepted decision records (for example docs/decisions/) that contradict each other. Cite both sides of each contradiction with file:line."
+      - name: code-conformance
+        persona: review
+        prompt: Review this change for conformance to existing repo code conventions and patterns. Compare naming, module layout, and helper reuse against neighboring code in the same package. Flag ad hoc patterns that diverge from an established convention without a stated reason.
+      - name: semantic-drift
+        persona: review
+        prompt: Review this change for semantic drift between code and its documented behavior. Compare the diff's actual logic against the intent stated in touched docs, contracts, and comments. Flag a documented behavior that no longer matches what the code does, or code whose behavior no longer matches what a touched doc or contract claims.
       - name: pr-description
         mandatory: true
         persona: review
@@ -342,9 +348,15 @@ gates:
           give a minimal fix. Respect declared non-goals — do not manufacture
           scope. If the change is coherent and complete against the spec, return
           clean.
-      - contradiction-lens
-      - correctness-final
-      - ui-validation
+      - name: contradiction-lens
+        persona: review
+        prompt: "Apply STYLE-CONTRADICTION-LENS when the repo defines it (dev-loops: skills/docs/contract-style-guide.md): check every added or changed normative rule (MUST/SHOULD/MAY) against the repo's rule registry for opposing modality or a weaker restatement. Also flag statements in the diff, the PR body, touched contracts, or accepted decision records (for example docs/decisions/) that contradict each other. Cite both sides of each contradiction with file:line."
+      - name: correctness-final
+        persona: review
+        prompt: Perform a final correctness pass on the current head. Flag residual logic errors, contract violations, and behavior mismatches introduced or left unfixed since the draft gate.
+      - name: ui-validation
+        persona: review
+        prompt: "Review this change against the repo's UI validation contract when it defines one (dev-loops: skills/docs/ui-validation-contract.md and skills/docs/ui-e2e-scoping-step.md). When the changed-file set matches the UI e2e scoping globs, verify passing UI e2e coverage exists and that each touched rendered artifact is registered; an unregistered new artifact is a blocking finding. Return clean when no changed path matches or the repo defines no UI validation contract."
     required: true
   # Relaxed spike gate profile (#965). A spike's deliverable is a findings doc,
   # not production code, so it is intentionally lighter than the production

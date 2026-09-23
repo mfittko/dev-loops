@@ -22,8 +22,16 @@ import {
   ownershipGateAppliesToStrategy,
   runCli,
   shouldRunStartupReconcile,
+  OPERATOR_BRIEFING,
 } from "../../scripts/loop/resolve-dev-loop-startup.mjs";
 import { buildDevLoopHandoffEnvelope, validateHandoffEnvelope } from "@dev-loops/core/loop/handoff-envelope";
+
+// Every ok:true startup result carries the static operatorBriefing pointer.
+function assertOperatorBriefing(parsed) {
+  assert.equal(typeof parsed.operatorBriefing, "string");
+  assert.ok(parsed.operatorBriefing.length > 0);
+  assert.equal(parsed.operatorBriefing, OPERATOR_BRIEFING);
+}
 
 const scriptPath = path.resolve("scripts/loop/resolve-dev-loop-startup.mjs");
 
@@ -956,6 +964,7 @@ test("resolver returns needs_reconcile for local_implementation from main checko
     assert.equal(result.bundle.bundleKind, "needs_reconcile");
     assert.equal(result.bundle.routeKind, "needs_reconcile");
     assert.equal(result.bundle.selectedStrategy, null);
+    assertOperatorBriefing(result);
     const envelope = buildDevLoopHandoffEnvelope(result, loadDevLoopConfig(tempDir), {}, {
       repoSlug: "mfittko/dev-loops",
       repoRoot: tempDir,
@@ -1338,6 +1347,7 @@ test("runCli --issue uses config inputSource=phase-docs to choose phase-doc loca
     assert.equal(parsed.selectedStrategy, "local_implementation");
     assert.equal(parsed.bundle.issueLinkageResolution, "not_applicable");
     assert.match(parsed.bundle.nextAction, /current branch or phase slice/i);
+    assertOperatorBriefing(parsed);
   }, { prefix: "resolve-dev-loop-phase-doc-input-source-" });
 });
 
@@ -1403,6 +1413,7 @@ test("runCli --issue resolves linked-PR detection module-relative even when the 
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.bundle.issueLinkageResolution, "resolved_no_open_pr");
     assert.doesNotMatch(result.stderr, /Cannot find module/);
+    assertOperatorBriefing(parsed);
   }, { prefix: "resolve-dev-loop-linkage-module-relative-" });
 });
 
@@ -1830,6 +1841,7 @@ test("--pr assigned to copilot-swe-agent takes the unchanged copilot path, not t
     assert.equal(result.code, 0, result.stderr);
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.ok, true);
+    assertOperatorBriefing(parsed);
   }, { prefix: "resolve-dev-loop-ownership-pr-copilot-" });
 });
 
@@ -2352,6 +2364,7 @@ test("runCli --lightweight ALONE (no --issue): under-threshold change resolves i
     assert.equal(parsed.selectedStrategy, "local_implementation");
     assert.equal(parsed.canonicalSpecSource, "pr_body");
     assert.equal(parsed.canonicalStateSummary.target.issue, null);
+    assertOperatorBriefing(parsed);
   }, { prefix: "resolve-dev-loop-issueless-" });
 });
 

@@ -6,6 +6,7 @@ import path from "node:path";
 import { buildParseError, isDirectCliRun, formatCliError } from "../_core-helpers.mjs";
 import { JQ_OUTPUT_USAGE, emitResult } from "../lib/jq-output.mjs";
 import { canonicalizeScope } from "./_gate-names.mjs";
+import { renderRequiredReadLine } from "./write-gate-context.mjs";
 const USAGE = `Usage: verify-fresh-review-context.mjs [--help] [--scope <name>] [--context-path <path>]
        [--prefix-hash <sha256>|--prefix-file <path>] [--same-head-retry]
 Verify that the current scoped-reviewer session has fresh context.
@@ -68,12 +69,16 @@ Options:
                   hashes its raw bytes (sha256) and records the digest same
                   as --prefix-hash. Fails closed (exit 1) if the file is
                   missing. Mutually exclusive with --prefix-hash.
-  --same-head-retry  Sanctioned same-head retry for any scenario that re-runs a
-                  reviewer for the SAME scope+head without a rebuilt briefing:
-                  a PR-body/description-only fix (which never changes the head
-                  SHA), a reviewer interrupted or killed after sentinel
-                  creation but before writing its findings artifact, or a
-                  harness crash. Requires --prefix-hash/--prefix-file.
+  --same-head-retry  Sanctioned same-head retry that re-runs a reviewer for the
+                  SAME scope+head without a rebuilt briefing, only for a
+                  reviewer interrupted or killed after sentinel creation but
+                  before writing its findings artifact, or a harness crash.
+                  The retry replays the build-time evidence file and
+                  known-findings snapshot, so it never sees a PR-body edit or
+                  a thread posted after the build. A PR-body-only fix, or a
+                  retry that must see newly posted threads, uses
+                  GATE-EXEC-ROUND-RETIREMENT (retire, then rebuild) instead.
+                  Requires --prefix-hash/--prefix-file.
                   When a sentinel already exists for this exact scope+round
                   (the normal contamination trip), this flag permits
                   overwriting it ONLY when the given prefix hash matches the
@@ -99,6 +104,8 @@ Output (stdout, JSON):
   { "ok": true, "fresh": true, "sentinelCreated": true, "round": "...", "repoRoot": "...", "sameHeadRetry": true, "prBodyFixRetry": true, "prefixHash": "..." }
   { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "reason": "..." }
   { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "gateContextPath": "...", "gateContextPresent": false, "reason": "..." }
+  { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "gateContextPath": "...", "gateContextPresent": true, "reason": "required read <kind> ..." }
+  { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "gateContextPath": "...", "gateContextPresent": true, "reason": "gate-context artifact is unreadable ..." }
   repoRoot (fresh runs only) is the directory the sentinel ran in. With
   --context-path it is worktree-local (the locality guard proved it); without
   that flag it is simply the invocation cwd, unvalidated. Reviewer shells
@@ -113,8 +120,12 @@ Exit codes:
      recorded hash
   1  Refuse to review: contaminated (prior session detected), OR (with
      --context-path) the seeded gate-context artifact is missing or resolves
-     outside the reviewer's working directory, OR (with --prefix-file) the
-     prefix file is missing, OR (with --same-head-retry) the existing
+     outside the reviewer's working directory, OR (with --context-path) a
+     requiredReads entry of that artifact is missing or unreadable, or a
+     hashed one no longer matches its recorded sha256 or byte count, OR (with
+     --context-path) the artifact itself is not parseable JSON, OR (with --prefix-file) the
+     prefix file is missing, or a hashed line of its "## Required reads"
+     section no longer matches the file on disk, OR (with --same-head-retry) the existing
      sentinel's recorded prefix hash does not match the given one (or records
      none at all)
   2  Usage or internal error, invalid --jq filter, invalid/conflicting
@@ -228,6 +239,85 @@ async function readSentinelPrefixHash(sentinelPath) {
     return null;
   }
 }
+// Returns null when every `requiredReads` entry carrying a sha256 reads back
+// with that hash and byte count, and every other `required: true` entry is
+// readable, else a reason naming the failing read. An unparseable artifact is
+// a failure: its required reads cannot be proven.
+async function verifyRequiredReads(contextPath, cwd) {
+  let artifact;
+  try {
+    artifact = JSON.parse(await readFile(contextPath, "utf8"));
+  } catch (err) {
+    return `gate-context artifact is unreadable (${err.code ?? err.message}), so its required reads cannot be verified`;
+  }
+  const reads = Array.isArray(artifact?.requiredReads) ? artifact.requiredReads : [];
+  for (const read of reads) {
+    const hashed = typeof read?.sha256 === "string";
+    if (!hashed && read?.required !== true) continue;
+    const label = `required read ${read.kind} "${read.path}"`;
+    let bytes;
+    try {
+      bytes = await readFile(path.resolve(cwd, String(read.path)));
+    } catch (err) {
+      return `${label} is unreadable (${err.code ?? "error"})`;
+    }
+    if (!hashed) continue;
+    const actual = createHash("sha256").update(bytes).digest("hex");
+    if (actual !== read.sha256 || (typeof read.bytes === "number" && bytes.length !== read.bytes)) {
+      return `${label} does not match its recorded sha256 ${read.sha256} (found ${actual}, ${bytes.length} bytes)`;
+    }
+  }
+  return null;
+}
+// The prefix is the hash-bound copy of the manifest the reviewer reads from;
+// the context JSON is mutable. Verify every hashed read line of the prefix's
+// `## Required reads` section against disk directly, so replacing a manifest
+// entry and its file together cannot pass. Returns null or a reason.
+// Every manifest line must match a shape the writer's own
+// renderRequiredReadLine emits: a hashed entry, the hashless `context` entry,
+// or the no-reads marker. Any other `- ` or `required`/`optional` line is
+// refused, so a bound line cannot be swapped for a hashless or malformed one.
+// The patterns are rendered from placeholders so writer and verifier cannot drift.
+const NO_REQUIRED_READS_LINE = "- (no required reads recorded)";
+function readLinePattern(read, captures) {
+  let source = renderRequiredReadLine({ ...read, path: "/\u0000P" }, "/").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  for (const [token, capture] of captures) source = source.replace(token, capture);
+  return new RegExp(`^${source}$`);
+}
+const HASHED_READ_LINE_RES = [true, false].map((required) => readLinePattern(
+  { kind: "\u0000K", sha256: "\u0000H", bytes: "\u0000B", required },
+  [["\u0000K", "(\\S+)"], ["/\u0000P", "([^`]+)"], ["\u0000H", "([0-9a-f]{64})"], ["\u0000B", "(\\d+)"]],
+));
+const CONTEXT_READ_LINE_RE = readLinePattern({ kind: "context", required: false }, [["/\u0000P", "[^`]+"]]);
+const MANIFEST_LIKE_LINE_RE = /^\s*(?:-|\*|(?:required|optional)\b)/;
+async function verifyPrefixRequiredReads(prefixText) {
+  const start = prefixText.indexOf("\n## Required reads\n");
+  if (start === -1) return null;
+  const sectionLines = prefixText.slice(start + 1).split("\n");
+  const end = sectionLines.findIndex((line, index) => index > 0 && line.startsWith("## "));
+  for (const line of end === -1 ? sectionLines : sectionLines.slice(0, end)) {
+    const match = HASHED_READ_LINE_RES.map((re) => re.exec(line)).find(Boolean);
+    if (!match) {
+      if (MANIFEST_LIKE_LINE_RE.test(line) && line !== NO_REQUIRED_READS_LINE && !CONTEXT_READ_LINE_RE.test(line)) {
+        return `prefix manifest line ${JSON.stringify(line)} does not match the required-read grammar the writer emits`;
+      }
+      continue;
+    }
+    const [, kind, readPath, sha256, byteCount] = match;
+    const label = `prefix-bound required read ${kind} "${readPath}"`;
+    let bytes;
+    try {
+      bytes = await readFile(readPath);
+    } catch (err) {
+      return `${label} is unreadable (${err.code ?? "error"})`;
+    }
+    const actual = createHash("sha256").update(bytes).digest("hex");
+    if (actual !== sha256 || bytes.length !== Number(byteCount)) {
+      return `${label} does not match the sha256 ${sha256} the prefix binds (found ${actual}, ${bytes.length} bytes)`;
+    }
+  }
+  return null;
+}
 async function main(argv = process.argv.slice(2)) {
   if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(`${USAGE}\n`);
@@ -333,6 +423,21 @@ async function main(argv = process.argv.slice(2)) {
         reason: `Seeded gate-context artifact missing at "${contextPathArg}" — refusing to review without the build-once neutral context bundle. Per-angle gate reviewers must run in the PR's actual worktree/head (never an isolated worktree checked out from stale main), which is where the context-builder preamble wrote this gitignored artifact.`,
       }, false);
     }
+    // Reference seeding: every hashed required read the builder bound into the
+    // prefix must still match, before the sentinel exists. An artifact without
+    // requiredReads (legacy or --prefix-file) has nothing to check.
+    const readFailure = await verifyRequiredReads(resolvedContextPath, cwd);
+    if (readFailure !== null) {
+      return finish({
+        ok: true,
+        fresh: false,
+        sentinelCreated: false,
+        round: round ?? null,
+        gateContextPath: contextPathArg,
+        gateContextPresent: true,
+        reason: `${readFailure} — refusing to review from missing or stale evidence. Emit a blocked result via emit-reviewer-blocked.mjs (omit --completed-angles); never judge from a summary or partial read.`,
+      }, false);
+    }
   }
   // Resolve the invariant-briefing prefix hash (GATE-EXEC-BRIEFING-PREFIX) before
   // sentinel creation, same ordering rationale as --context-path above: a failure
@@ -356,6 +461,17 @@ async function main(argv = process.argv.slice(2)) {
       }, false);
     }
     prefixHash = createHash("sha256").update(prefixFileBytes).digest("hex");
+    const prefixReadFailure = await verifyPrefixRequiredReads(prefixFileBytes.toString("utf8"));
+    if (prefixReadFailure !== null) {
+      return finish({
+        ok: true,
+        fresh: false,
+        sentinelCreated: false,
+        round: round ?? null,
+        ...(contextPathArg !== null ? { gateContextPath: contextPathArg, gateContextPresent: true } : {}),
+        reason: `${prefixReadFailure} — refusing to review from evidence the prefix does not bind. Emit a blocked result via emit-reviewer-blocked.mjs (omit --completed-angles); never judge from a summary or partial read.`,
+      }, false);
+    }
   }
   const sentinelPath = path.resolve(process.cwd(), sentinelRelative(scope, round));
   try {
@@ -367,12 +483,13 @@ async function main(argv = process.argv.slice(2)) {
   const existing = await checkSentinelExists(scope, round);
   if (existing.exists) {
     // Sanctioned same-head retry (skills/docs/gate-review-sub-loop-contract.md,
-    // "Sentinel lifecycle"): some legitimate re-runs never earn a new round key
-    // — a PR-body/description-only fix (the round is keyed by head SHA, which a
-    // body edit never changes), a reviewer interrupted after sentinel creation
-    // but before writing its findings artifact, or a harness crash. In all of
-    // them a same-scope + same-head re-entry would otherwise trip the
-    // contamination guard. Permit ONE narrow exception: overwrite the existing
+    // "Sentinel lifecycle"): a reviewer interrupted after sentinel creation but
+    // before writing its findings artifact, or a harness crash, re-runs on the
+    // same round key, so a same-scope + same-head re-entry would otherwise trip
+    // the contamination guard. The retry replays the build-time evidence and
+    // known-findings snapshot; a PR-body-only fix, or a retry that must see
+    // newly posted threads, goes through GATE-EXEC-ROUND-RETIREMENT (retire,
+    // then rebuild) instead. Permit ONE narrow exception: overwrite the existing
     // sentinel ONLY when the given prefix hash matches its recorded one exactly —
     // proof the seeded briefing (GATE-EXEC-BRIEFING-PREFIX) was NOT rebuilt, so
     // the round's byte-identity invariant stays fully intact for every other

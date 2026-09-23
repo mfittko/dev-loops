@@ -99,7 +99,7 @@ export const ALWAYS_INCLUDE = new Set(["gate-evidence", "renderer-security", "pr
  *   merges addedAngles on top to form the full effective run set
  * @property {string[]} skippedAngles — angles skipped with reasons
  * @property {Record<string, string>} reasons — why each angle was skipped
- * @property {boolean} fallbackToAll — true when ambiguous → all angles recommended
+ * @property {boolean} fallbackToAll — retained for compatibility; always false
  * @property {string[]} addedAngles — catalog angles added (additive mode only, see #1048)
  * @property {Record<string, string>} addedReasons — why each added angle was added
  */
@@ -108,8 +108,14 @@ export const ALWAYS_INCLUDE = new Set(["gate-evidence", "renderer-security", "pr
  * Resolve which gate angles to run based on detected change categories.
  *
  * When the diff is ambiguous (no detected categories / analysis failure),
- * all configured angles are recommended (fallback-to-all). A LOGIC_CHANGE
- * diff resolves to its core review subset, not fallback-to-all.
+ * uncertainty still resolves through the same best-effort selection as a
+ * classified diff; it never expands to every configured angle. A LOGIC_CHANGE
+ * diff likewise resolves to its core review subset.
+ *
+ * `configuredAngles` is the caller's candidate pool (mandatory angles have
+ * already been removed), so an uncertain diff may legitimately resolve to an
+ * empty candidate set. The caller combines this with its mandatory floor and
+ * falls back to the static pool if that combined selection would be empty.
  *
  * When `anglePool` is provided (additive mode, see #1048), catalog angles in
  * the pool that the change categories recommend but that are not already in
@@ -121,8 +127,8 @@ export const ALWAYS_INCLUDE = new Set(["gate-evidence", "renderer-security", "pr
  * angle) can still be recommended BY change category or file kind when it
  * declares `categories`/`kinds` via `angleDeclarations`. This is purely
  * additive: it can only SELECT such an angle when the diff intersects its
- * declaration; it never drops any angle the catalog map, ALWAYS_INCLUDE, or the
- * fallback-to-all path would otherwise recommend.
+ * declaration; it never drops any angle the catalog map or ALWAYS_INCLUDE
+ * would otherwise recommend.
  *
  * @param {object} options
  * @param {string[]} options.configuredAngles — all angles configured for this gate
@@ -146,30 +152,6 @@ export function resolveDynamicAngles({
   angleDeclarations = {},
   fileKinds = [],
 }) {
-  // Fallback: ambiguous diff → all angles
-  if (ambiguous) {
-    return {
-      recommendedAngles: [...configuredAngles],
-      skippedAngles: [],
-      reasons: {},
-      fallbackToAll: true,
-      addedAngles: [],
-      addedReasons: {},
-    };
-  }
-
-  // No change categories → all angles (defensive)
-  if (changeCategories.length === 0) {
-    return {
-      recommendedAngles: [...configuredAngles],
-      skippedAngles: [],
-      reasons: {},
-      fallbackToAll: true,
-      addedAngles: [],
-      addedReasons: {},
-    };
-  }
-
   // Build recommended set from category union, tracking the first trigger per angle
   const recommended = new Set();
   const triggers = new Map();
@@ -219,7 +201,11 @@ export function resolveDynamicAngles({
   // Build reasons
   const reasons = {};
   for (const angle of skippedAngles) {
-    reasons[angle] = `Skipped: detected categories (${changeCategories.join(", ") || "none"}) do not trigger this angle`;
+    reasons[angle] = changeCategories.length === 0
+      ? "Skipped: no change category could be established (uncertain classification)"
+      : ambiguous
+        ? `Skipped: analysis remained ambiguous despite detected categories (${changeCategories.join(", ")})`
+        : `Skipped: detected categories (${changeCategories.join(", ")}) do not trigger this angle`;
   }
 
   // Additive: pull in recommended catalog angles not already configured (#1048)
