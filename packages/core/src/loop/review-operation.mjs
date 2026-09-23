@@ -94,6 +94,13 @@ export function resolveOperationReviewerRole(loadResult, { operation, angle, har
   const config = loadResult?.config;
   const configErrors = Array.isArray(loadResult?.errors) ? loadResult.errors : [];
   const configErrorPresent = configErrors.length > 0;
+  // An unrecognized operation is a closed-vocabulary argument failure, not a
+  // config-layer concern; it must throw unconditionally, even when a config
+  // error is also on record — never degraded to a misleading config-error
+  // result below. Validate before the try so this throw is never swallowed.
+  if (!REVIEW_OPERATIONS.includes(operation)) {
+    throw new Error(`Unknown review operation: ${JSON.stringify(operation)} (expected one of ${REVIEW_OPERATIONS.join(", ")})`);
+  }
   let pool;
   try {
     pool = resolveOperationAnglePool(config, operation);

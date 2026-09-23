@@ -214,6 +214,15 @@ describe("resolveOperationReviewerRole — pool-resolution throw handling", () =
     const loadResult = { config, errors: [] };
     assert.throws(() => resolveOperationReviewerRole(loadResult, { operation: "draft_gate", angle: "correctness", harness: "claude" }));
   });
+
+  test("an unknown operation throws even when configErrors is non-empty, never degraded to a config-error result", () => {
+    const config = { gates: { draft: { angles: [], blockCleanOnFindingSeverities: [] } } };
+    const loadResult = { config, errors: [{ path: ".devloops", message: "boom", layer: "devloops" }] };
+    assert.throws(
+      () => resolveOperationReviewerRole(loadResult, { operation: "not_a_real_operation", angle: "correctness", harness: "claude" }),
+      /Unknown review operation/,
+    );
+  });
 });
 
 describe("resolveOperationReviewerRole — payload shape", () => {
