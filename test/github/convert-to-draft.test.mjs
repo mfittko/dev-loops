@@ -62,7 +62,7 @@ test("converts a ready PR to draft", async () => {
 
   const result = await convertToDraft({ repo: "owner/repo", pr: 17 }, { env: {}, ghCommand: "gh", runChild });
 
-  assert.deepEqual(result, { ok: true, action: "converted", repo: "owner/repo", pr: 17, isDraft: true });
+  assert.deepEqual(result, { ok: true, action: "converted", alreadyDraft: false, repo: "owner/repo", pr: 17, isDraft: true });
   const ghCalls = calls.filter((c) => c.command === "gh");
   assert.equal(ghCalls.length, 2, `expected resolve + convert mutation calls, got ${JSON.stringify(ghCalls)}`);
 });
@@ -72,7 +72,7 @@ test("is idempotent when the PR is already draft (no mutation call)", async () =
 
   const result = await convertToDraft({ repo: "owner/repo", pr: 17 }, { env: {}, ghCommand: "gh", runChild });
 
-  assert.deepEqual(result, { ok: true, action: "already_draft", repo: "owner/repo", pr: 17, isDraft: true });
+  assert.deepEqual(result, { ok: true, action: "already_draft", alreadyDraft: true, repo: "owner/repo", pr: 17, isDraft: true });
   const ghCalls = calls.filter((c) => c.command === "gh");
   assert.equal(ghCalls.length, 1, `expected only the resolve call, got ${JSON.stringify(ghCalls)}`);
 });

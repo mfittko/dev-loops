@@ -155,10 +155,11 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   const gate = await fetchDraftGateEvidence({ repo: options.repo, pr: options.pr, headSha }, { env, ghCommand, runChild: runChildImpl });
   // skipCiPrecondition (restore-ready's seam) requires the STRICT marker
   // verdict (currentHeadClean), never the legacy plain-text fallback
-  // (legacyHeadMatch, folded into effectiveHeadClean): the legacy match is
-  // unauthored free-text and never carried the gates.draft.requireCi
-  // precondition the way a contract-complete marker verdict does. Ordinary
-  // ready-for-review (skipCiPrecondition=false) keeps accepting either.
+  // (legacyHeadMatch, folded into effectiveHeadClean): currentHeadClean is an
+  // exact full current-head-SHA match against a contract-complete `draft_gate`
+  // marker verdict, while legacyHeadMatch is a prefix match on an abbreviated
+  // SHA and is not contract-complete. Ordinary ready-for-review
+  // (skipCiPrecondition=false) keeps accepting either.
   const gateHeadClean = skipCiPrecondition === true ? gate.currentHeadClean : gate.effectiveHeadClean;
   if (!gate.cleanEvidenceExists && !gateHeadClean) throw new Error(`No visible clean draft_gate evidence on ${headSha.slice(0,7)}`);
   if (!gateHeadClean) { const mv = gate.draftGateMarker?.visible; const mh = gate.draftGateMarker?.headSha; throw new Error(mv && mh ? `PR #${options.pr} draft_gate marker does not match current head ${headSha.slice(0,7)}. Re-run draft gate.` : `PR #${options.pr} draft_gate marker is missing or incomplete on current head ${headSha.slice(0,7)}. Re-run draft gate.`); }

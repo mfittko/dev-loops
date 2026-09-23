@@ -1739,8 +1739,10 @@ async function verifyPostedSurface({ repo, pr, surface, commentId }, { env, ghCo
 //
 // Durability note: a process crash in the window between convertPrToDraft and
 // markPrReady leaves the PR in draft until a later dev-loop run (or a manual
-// `dev-loops pr restore-ready`) restores it — the next run re-enters as a draft, posts
-// normally, and restores ready. The convert/markPrReady mutations are
+// `dev-loops pr reconcile-draft`) restores it — no verdict has been posted yet in
+// this window, so `restore-ready` (which requires clean current-head evidence)
+// would refuse here; the next run re-enters as a draft, posts normally, and
+// restores ready. The convert/markPrReady mutations are
 // individually idempotent, so concurrent cooperating runners cause at most a
 // transient draft flicker, never a stuck draft (only a hard crash mid-transition
 // can leave one).
@@ -1785,11 +1787,18 @@ async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRo
       // The verdict WAS posted successfully; only the ready-restore failed. Make that
       // explicit so the caller does not re-post the gate (the comment already exists)
       // and knows the PR may be left in draft until restored. (Copilot review)
+      // The hint depends on what was actually posted: restore-ready requires a
+      // clean current-head marker verdict and refuses on findings_present/blocked
+      // or on unresolved gate-authored threads, so it is only an executable
+      // remedy after a clean post.
+      const restoreHint = options.verdict === "clean"
+        ? `run \`dev-loops pr restore-ready --repo ${options.repo} --pr ${options.pr}\` to restore ready`
+        : `resolve the posted findings and restore ready through \`dev-loops pr ready-for-review\` ` +
+          `(or the dev-loop) — \`dev-loops pr restore-ready\` refuses on a non-clean verdict`;
       throw new Error(
         `draft_gate verdict was posted to ${options.repo}#${options.pr} (comment ${result.commentId ?? "?"}), ` +
-        `but restoring the PR to ready failed; it may be left in draft. Do not re-post the gate — run ` +
-        `\`dev-loops pr restore-ready\` (or the dev-loop) to restore ready. Cause: ` +
-        `${restoreError instanceof Error ? restoreError.message : String(restoreError)}`,
+        `but restoring the PR to ready failed; it may be left in draft. Do not re-post the gate — ${restoreHint}. ` +
+        `Cause: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`,
       );
     }
     process.stderr.write(`[draft_gate] restored ${options.repo}#${options.pr} to ready after posting draft_gate evidence.\n`);
@@ -2312,7 +2321,6 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         `to post the verdict, but GitHub still reports it as non-draft on re-entry (draft-state read lagged ` +
         `the conversion mutation, or the conversion did not take). Not recursing. Re-run the draft_gate post ` +
         `once the PR reflects the draft state, or reconcile with ` +
-        `\`dev-loops pr restore-ready --repo ${options.repo} --pr ${options.pr}\` / ` +
         `\`dev-loops pr reconcile-draft --repo ${options.repo} --pr ${options.pr}\`.`,
       );
     }

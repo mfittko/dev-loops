@@ -15,7 +15,7 @@ Required:
   --repo <owner/name>   Repository slug (e.g. owner/repo)
   --pr <number>         Pull request number
 Output (stdout, JSON):
-  { "ok": true, "action": "converted"|"already_draft", "repo": "owner/repo", "pr": 17, "isDraft": true }
+  { "ok": true, "action": "converted"|"already_draft", "alreadyDraft": false, "repo": "owner/repo", "pr": 17, "isDraft": true }
 Error output (stderr, JSON):
   { "ok": false, "error": "...", "usage": "..." }
 ${JQ_OUTPUT_USAGE}
@@ -53,6 +53,7 @@ export async function convertToDraft(options, { env = process.env, ghCommand = "
   return {
     ok: true,
     action: result.alreadyDraft ? "already_draft" : "converted",
+    alreadyDraft: result.alreadyDraft === true,
     repo: options.repo,
     pr: options.pr,
     isDraft: true,
