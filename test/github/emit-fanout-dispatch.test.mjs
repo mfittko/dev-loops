@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { REVIEWER_WORK_ORDER_MAX_BYTES, buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, listPriorFindingsLogHeads, main, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "../../scripts/github/emit-fanout-dispatch.mjs";
-import { buildGateEmitPlanPath, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
+import { buildGateEmitPlanPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { loadDevLoopConfig, resolveReviewerRole } from "@dev-loops/core/config";
 import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
 import { toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
@@ -1162,6 +1162,21 @@ test("fails closed (exit 1) when two distinct singleton units derive a colliding
     );
     assert.equal(result.status, 1, result.stderr);
     assert.match(JSON.parse(result.stdout).error, /collides with an earlier unit/);
+  });
+});
+
+test("work-order outputRefs use the canonical sanitized per-angle filename and stay inside the findings dir", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const angle = "../evil/x";
+    await writeAnglePrompts(tmpDir, [angle]);
+    await seedBundle(tmpDir, { fanout: { groups: [{ name: "evil", angles: [angle] }] } });
+    const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const [unit] = JSON.parse(result.stdout).units;
+    const [ref] = unit.workOrder.outputRefs;
+    const reviewsDir = buildGateReviewsDir({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: "tmp" });
+    assert.ok(ref.endsWith(path.join(reviewsDir, `${sanitizeScopeSegment(angle) || "angle"}.json`)), ref);
+    assert.ok(!ref.includes("/evil/"), ref);
   });
 });
 

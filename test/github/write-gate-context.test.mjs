@@ -6934,6 +6934,36 @@ test("writeGateContext --prev-head (programmatic): an oversized prior findings-l
   }
 });
 
+test("writeGateContext: a same-head rebuild that changes only the prior dispositions invalidates the completion marker", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prior-dispositions-marker-"));
+  try {
+    const prevHead = "4".repeat(40);
+    const logPath = path.resolve(repoRoot, buildLogPath({ repo: "owner/repo", pr: 67, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(logPath), { recursive: true });
+    const writeLog = (summary) => writeFile(logPath, JSON.stringify({
+      headSha: prevHead, verdict: "findings_present",
+      findings: [{ angle: "correctness", severity: "medium", summary, judgeDisposition: "reject" }],
+    }), "utf8");
+    const args = [
+      "--repo", "owner/repo", "--pr", "67", "--gate", "draft_gate", "--head-sha", "abc1234567890",
+      "--angles", '["correctness"]', "--prev-head", prevHead,
+    ];
+    await writeLog("first-disposition");
+    const first = await writeGateContext(parseWriteGateContextCliArgs(args), { repoRoot });
+    const markerPath = path.resolve(repoRoot, first.path);
+    const retainedMarker = path.join(repoRoot, "prior-marker.json");
+    await link(markerPath, retainedMarker); // Retain the inode so unlink/recreate cannot reuse it.
+    await writeLog("second-disposition");
+    const second = await writeGateContext(parseWriteGateContextCliArgs(args), { repoRoot });
+    assert.equal(second.prefixHash, first.prefixHash, "the shared prefix never lists the prior dispositions");
+    assert.notEqual((await stat(markerPath)).ino, (await stat(retainedMarker)).ino, "the old marker must be removed before the dispositions file is overwritten");
+    const read = second.artifact.requiredReads.find((r) => r.kind === "prior-dispositions");
+    assert.match(await readFile(path.resolve(repoRoot, read.path), "utf8"), /second-disposition/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("resolvePriorDispositions: a reject-disposed finding on a re-running angle is surfaced; an act-disposed finding is NOT (only reject/defer are do-not-re-raise memory)", () => {
   const log = {
     headSha: "a".repeat(40),

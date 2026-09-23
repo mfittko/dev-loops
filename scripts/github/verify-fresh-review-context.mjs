@@ -119,7 +119,8 @@ Exit codes:
      requiredReads entry of that artifact is missing or unreadable, or a
      hashed one no longer matches its recorded sha256 or byte count, OR (with
      --context-path) the artifact itself is not parseable JSON, OR (with --prefix-file) the
-     prefix file is missing, OR (with --same-head-retry) the existing
+     prefix file is missing, or a hashed line of its "## Required reads"
+     section no longer matches the file on disk, OR (with --same-head-retry) the existing
      sentinel's recorded prefix hash does not match the given one (or records
      none at all)
   2  Usage or internal error, invalid --jq filter, invalid/conflicting
@@ -259,6 +260,32 @@ async function verifyRequiredReads(contextPath, cwd) {
     const actual = createHash("sha256").update(bytes).digest("hex");
     if (actual !== read.sha256 || (typeof read.bytes === "number" && bytes.length !== read.bytes)) {
       return `${label} does not match its recorded sha256 ${read.sha256} (found ${actual}, ${bytes.length} bytes)`;
+    }
+  }
+  return null;
+}
+// The prefix is the hash-bound copy of the manifest the reviewer reads from;
+// the context JSON is mutable. Verify every hashed read line of the prefix's
+// `## Required reads` section against disk directly, so replacing a manifest
+// entry and its file together cannot pass. Returns null or a reason.
+const PREFIX_READ_LINE_RE = /^- (?:required|optional) (\S+): `([^`]+)` \(sha256 ([0-9a-f]{64}), (\d+) bytes\)$/;
+async function verifyPrefixRequiredReads(prefixText) {
+  const start = prefixText.indexOf("\n## Required reads\n");
+  if (start === -1) return null;
+  for (const line of prefixText.slice(start).split("\n")) {
+    const match = PREFIX_READ_LINE_RE.exec(line);
+    if (!match) continue;
+    const [, kind, readPath, sha256, byteCount] = match;
+    const label = `prefix-bound required read ${kind} "${readPath}"`;
+    let bytes;
+    try {
+      bytes = await readFile(readPath);
+    } catch (err) {
+      return `${label} is unreadable (${err.code ?? "error"})`;
+    }
+    const actual = createHash("sha256").update(bytes).digest("hex");
+    if (actual !== sha256 || bytes.length !== Number(byteCount)) {
+      return `${label} does not match the sha256 ${sha256} the prefix binds (found ${actual}, ${bytes.length} bytes)`;
     }
   }
   return null;
@@ -406,6 +433,17 @@ async function main(argv = process.argv.slice(2)) {
       }, false);
     }
     prefixHash = createHash("sha256").update(prefixFileBytes).digest("hex");
+    const prefixReadFailure = await verifyPrefixRequiredReads(prefixFileBytes.toString("utf8"));
+    if (prefixReadFailure !== null) {
+      return finish({
+        ok: true,
+        fresh: false,
+        sentinelCreated: false,
+        round: round ?? null,
+        ...(contextPathArg !== null ? { gateContextPath: contextPathArg, gateContextPresent: true } : {}),
+        reason: `${prefixReadFailure} — refusing to review from evidence the prefix does not bind. Emit a blocked result via emit-reviewer-blocked.mjs (omit --completed-angles); never judge from a summary or partial read.`,
+      }, false);
+    }
   }
   const sentinelPath = path.resolve(process.cwd(), sentinelRelative(scope, round));
   try {

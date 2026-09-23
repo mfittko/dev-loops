@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
+import { renderRequiredReadLine } from "../../scripts/github/write-gate-context.mjs";
 
 const scriptPath = path.resolve("scripts/github/verify-fresh-review-context.mjs");
 
@@ -917,6 +918,40 @@ test("verify-fresh-review-context --context-path accepts a readable required rea
     await writeFile(path.join(tmpDir, ctxRelPath), JSON.stringify(artifact), "utf8");
     const result = runScript(["--scope", "draft-gate-coverage", "--context-path", ctxRelPath, "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
     assert.equal(result.status, 0, result.stderr);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("verify-fresh-review-context --prefix-file refuses a manifest and evidence file replaced together, since the prefix still binds the original hash", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  try {
+    const { ctxRelPath, files } = await seedRequiredReads(tmpDir);
+    const artifact = JSON.parse(await readFile(path.join(tmpDir, ctxRelPath), "utf8"));
+    const prefixReads = artifact.requiredReads.filter((read) => read.kind !== "scoped-evidence");
+    const prefixText = `# Prefix\n\n## Required reads\n\nIntro.\n\n${prefixReads.map((read) => renderRequiredReadLine(read, tmpDir)).join("\n")}\n`;
+    await writeFile(path.join(tmpDir, "prefix.txt"), prefixText, "utf8");
+    const args = ["--scope", "draft-gate-coverage", "--context-path", ctxRelPath, "--prefix-file", "prefix.txt"];
+
+    const clean = runScript(args, { cwd: tmpDir });
+    assert.equal(clean.status, 0, clean.stderr || clean.stdout);
+    await rm(path.join(tmpDir, "tmp"), { recursive: true, force: true });
+    await seedRequiredReads(tmpDir);
+
+    const replaced = "## PR body\nreplaced evidence\n";
+    await writeFile(path.join(tmpDir, files.evidence[0]), replaced, "utf8");
+    const evidenceRead = artifact.requiredReads.find((read) => read.kind === "evidence");
+    evidenceRead.sha256 = createHash("sha256").update(replaced).digest("hex");
+    evidenceRead.bytes = Buffer.byteLength(replaced);
+    await writeFile(path.join(tmpDir, ctxRelPath), JSON.stringify(artifact) + "\n", "utf8");
+
+    const result = runScript(args, { cwd: tmpDir });
+    assert.equal(result.status, 1, result.stderr || result.stdout);
+    const output = JSON.parse(result.stdout.trim());
+    assert.equal(output.sentinelCreated, false);
+    assert.match(output.reason, /prefix-bound required read evidence .*does not match/);
+    const sentinels = (await readdir(path.join(tmpDir, "tmp"))).filter((n) => n.startsWith("checkpoint-context-sentinel"));
+    assert.deepEqual(sentinels, []);
   } finally {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }

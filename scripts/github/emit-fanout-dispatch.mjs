@@ -795,7 +795,7 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
         assignedAngles: angles,
         angleInstructions,
         requiredReads: unitReads.length > 0 ? [...sharedReads.filter((read) => read.kind !== "evidence"), ...unitReads] : sharedReads,
-        outputRefs: angles.map((angle) => path.join(findingsDir, `${angle}.json`)),
+        outputRefs: angles.map((angle) => path.join(findingsDir, `${sanitizeScopeSegment(angle) || "angle"}.json`)),
         executionRules: { budget: REVIEWER_UNIT_BUDGET, prohibited: PROHIBITED_REVIEWER_OPERATIONS },
       },
     });

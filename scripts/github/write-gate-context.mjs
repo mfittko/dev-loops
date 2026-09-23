@@ -2741,7 +2741,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // Keep the marker available only when prefix AND referenced stable files
   // are unchanged on disk (the prefix hash-binds the evidence and full diff).
   let markerUnchanged = existingBytes !== null && existingBytes.equals(prefixBytes);
-  const referencedWrites = [...(pendingEvidence ? [pendingEvidence] : []), ...pendingVariants.values(), ...(options.diffToWrite ? [options.diffToWrite] : [])];
+  const referencedWrites = [...(pendingEvidence ? [pendingEvidence] : []), ...pendingVariants.values(), ...(options.diffToWrite ? [options.diffToWrite] : []), ...(pendingDispositions ? [pendingDispositions] : [])];
   for (const pending of referencedWrites) {
     if (!markerUnchanged) break;
     try {
