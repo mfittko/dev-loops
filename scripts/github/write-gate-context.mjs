@@ -2532,16 +2532,12 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   } catch (err) {
     if (err.code !== "ENOENT") readError = err;
   }
-  let rebuildWarning = null;
-  if (readError !== null) {
-    rebuildWarning = `Could not read the existing briefing prefix (${readError.code ?? readError.message}) before overwriting it — if the new bytes differ and reviewer sentinels of ${options.gate} exist for head ${options.headSha}, every one of them now fails closed. Retire the round explicitly before re-fanning: ${retireCommand}`;
-    process.stderr.write(`WARNING: ${rebuildWarning}\n`);
-  } else if (existingBytes !== null && !existingBytes.equals(prefixBytes)) {
-    // The rebuild would CHANGE the recorded prefix bytes. Scan THIS gate's live
-    // reviewer sentinels for the head (the other gate's live round at the same
-    // head is not invalidated by this rebuild), matched on the trailing
-    // full-SHA filename component with startsWith so a legitimately abbreviated
-    // --head-sha still detects them.
+  // THIS gate's live reviewer sentinels for the head (the other gate's live
+  // round at the same head is not invalidated by this rebuild), matched on the
+  // trailing full-SHA filename component with startsWith so a legitimately
+  // abbreviated --head-sha still detects them. Only a missing tmp/ dir means
+  // "no sentinels"; any other scan failure is returned as scanError.
+  const scanLiveSentinels = async () => {
     const sentinelScopePrefix = `${CHECKPOINT_SENTINEL_PREFIX}${gateScopePrefix(options.gate)}`;
     const headPrefix = String(options.headSha).trim().toLowerCase();
     let scanError = null;
@@ -2550,11 +2546,20 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       scanError = err;
       return [];
     });
-    const liveSentinelNames = tmpDirEntries.filter((e) => {
+    const names = tmpDirEntries.filter((e) => {
       if (!e.isFile() || !e.name.startsWith(sentinelScopePrefix) || !e.name.endsWith(".json")) return false;
       const shaComponent = e.name.slice(0, -".json".length).split("-").at(-1) ?? "";
       return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(shaComponent) && shaComponent.startsWith(headPrefix);
     }).map((e) => e.name);
+    return { names, scanError };
+  };
+  let rebuildWarning = null;
+  if (readError !== null) {
+    rebuildWarning = `Could not read the existing briefing prefix (${readError.code ?? readError.message}) before overwriting it — if the new bytes differ and reviewer sentinels of ${options.gate} exist for head ${options.headSha}, every one of them now fails closed. Retire the round explicitly before re-fanning: ${retireCommand}`;
+    process.stderr.write(`WARNING: ${rebuildWarning}\n`);
+  } else if (existingBytes !== null && !existingBytes.equals(prefixBytes)) {
+    // The rebuild would CHANGE the recorded prefix bytes.
+    const { names: liveSentinelNames, scanError } = await scanLiveSentinels();
     const priorPrefixHash = createHash("sha256").update(existingBytes).digest("hex");
     const newPrefixHash = createHash("sha256").update(prefixBytes).digest("hex");
     // Only a missing tmp/ dir means "no sentinels". Any other scan failure
@@ -2723,6 +2728,28 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       kind: "prior-dispositions", path: dispositionsPath, sha256: createHash("sha256").update(text).digest("hex"), bytes: Buffer.byteLength(text), entries: priorDispositions.length, required: true,
     };
     (requiredReads ??= []).push(priorDispositionsRead);
+  }
+  // The prefix never lists the prior-dispositions or scoped-variant reads, so
+  // the prefix-byte guard above cannot see them change. Refuse the same way
+  // when a same-head rebuild would rewrite one under live sentinels: reviewers
+  // past the sentinel would read bytes that differ from the sha256 their work
+  // order names. An unreadable existing file counts as changed (fail closed).
+  const changedOutOfPrefix = [];
+  for (const pending of [...pendingVariants.values(), ...(pendingDispositions ? [pendingDispositions] : [])]) {
+    try {
+      if ((await readFile(path.resolve(repoRoot, pending.path), "utf8")) !== pending.text) changedOutOfPrefix.push(pending.path);
+    } catch (err) {
+      if (err.code !== "ENOENT") changedOutOfPrefix.push(pending.path);
+    }
+  }
+  if (changedOutOfPrefix.length > 0) {
+    const { names, scanError } = await scanLiveSentinels();
+    if (scanError !== null || names.length > 0) {
+      const cause = scanError !== null
+        ? `the live-sentinel scan failed (${scanError.code ?? scanError.message}), so an in-flight fan-out cannot be ruled out`
+        : `${names.length} reviewer sentinel(s) of ${options.gate} for head ${options.headSha} exist: ${names.map((n) => `tmp/${n}`).sort().join(", ")}`;
+      throw new Error(`Refusing to rewrite required read(s) ${changedOutOfPrefix.join(", ")} with DIFFERENT bytes while a fan-out for head ${options.headSha} may be in flight (${options.gate}): ${cause}. Retire the round explicitly before rebuilding: ${retireCommand}`);
+    }
   }
 
   // Render the volatile tail before destructive writes, so malformed inputs

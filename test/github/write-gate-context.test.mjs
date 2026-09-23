@@ -3072,7 +3072,6 @@ test("renderBriefingEvidence: an unbalanced code fence inside the PR/issue body 
 test("renderBriefingEvidence: fully empty optional input (no PR/issue/diff/changed-files/adjacentCode) renders without crashing", () => {
   const { text, prefixMode } = renderBriefingEvidence({
     repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
-    worktreeRoot: "/repo", contextPath: "tmp/x.json", briefingPrefixPath: "tmp/x.briefing-prefix.txt",
   });
   assert.equal(prefixMode, "inline");
   assert.ok(text.includes(PR_BODY_ABSENT_SENTINEL));
@@ -3886,7 +3885,6 @@ test("writeGateContext: --prefix-file fails closed (throws) on an empty file", a
 test("renderBriefingEvidence: validationResultsPath absent renders byte-identical to before (no trailing section)", () => {
   const base = {
     repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
-    worktreeRoot: "/repo", contextPath: "tmp/x.json", briefingPrefixPath: "tmp/x.txt",
   };
   const withoutFlag = renderBriefingEvidence(base);
   const withNullFlag = renderBriefingEvidence({ ...base, validationResultsPath: null });
@@ -3897,7 +3895,6 @@ test("renderBriefingEvidence: validationResultsPath absent renders byte-identica
 test("renderBriefingEvidence: validationResultsPath present appends the section LAST with exact wording, path verbatim, deterministic across two renders", () => {
   const input = {
     repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
-    worktreeRoot: "/repo", contextPath: "tmp/x.json", briefingPrefixPath: "tmp/x.txt",
     validationResultsPath: "/abs/tmp/gate-context/owner-repo/pr-1/draft_gate-abc1234.validation.json",
   };
   const r1 = renderBriefingEvidence(input);
@@ -5152,7 +5149,6 @@ test("renderBriefingEvidence (AC8): a diff over the inline cap raw that collapse
   const capBytes = Math.floor((rawBytes + collapsedBytes) / 2); // strictly between raw and collapsed
   const input = {
     repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
-    worktreeRoot: "/repo", contextPath: "tmp/x.json", briefingPrefixPath: "tmp/x.txt",
     diffOutput, diffPath: "tmp/x.diff", capBytes,
   };
   const result = renderBriefingEvidence(input);
@@ -5180,7 +5176,6 @@ test("renderBriefingEvidence (AC8): a qualifying (length >= 2) pure substitution
   ].join("\n");
   const input = {
     repo: "owner/repo", pr: 1, gate: "draft_gate", headSha: "abc1234",
-    worktreeRoot: "/repo", contextPath: "tmp/x.json", briefingPrefixPath: "tmp/x.txt",
     diffOutput, diffPath: "tmp/x.diff",
   };
   const r1 = renderBriefingEvidence(input);
@@ -6959,6 +6954,37 @@ test("writeGateContext: a same-head rebuild that changes only the prior disposit
     assert.notEqual((await stat(markerPath)).ino, (await stat(retainedMarker)).ino, "the old marker must be removed before the dispositions file is overwritten");
     const read = second.artifact.requiredReads.find((r) => r.kind === "prior-dispositions");
     assert.match(await readFile(path.resolve(repoRoot, read.path), "utf8"), /second-disposition/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("writeGateContext REFUSES a same-head rebuild that would rewrite the prior dispositions while reviewer sentinels are live", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prior-dispositions-live-"));
+  try {
+    const prevHead = "4".repeat(40);
+    const logPath = path.resolve(repoRoot, buildLogPath({ repo: "owner/repo", pr: 67, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" }));
+    await mkdir(path.dirname(logPath), { recursive: true });
+    const writeLog = (summary) => writeFile(logPath, JSON.stringify({
+      headSha: prevHead, verdict: "findings_present",
+      findings: [{ angle: "correctness", severity: "medium", summary, judgeDisposition: "reject" }],
+    }), "utf8");
+    const args = [
+      "--repo", "owner/repo", "--pr", "67", "--gate", "draft_gate", "--head-sha", "abc1234567890",
+      "--angles", '["correctness"]', "--prev-head", prevHead,
+    ];
+    await writeLog("first-disposition");
+    const first = await writeGateContext(parseWriteGateContextCliArgs(args), { repoRoot });
+    const read = first.artifact.requiredReads.find((r) => r.kind === "prior-dispositions");
+    const markerPath = path.resolve(repoRoot, first.path);
+    await writeFile(path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-correctness-${"abc1234567890".padEnd(40, "0")}.json`), "{}\n", "utf8");
+    await writeLog("second-disposition");
+    await assert.rejects(
+      writeGateContext(parseWriteGateContextCliArgs(args), { repoRoot }),
+      /Refusing to rewrite required read\(s\) .*prior-dispositions\.json with DIFFERENT bytes while a fan-out for head abc1234567890 may be in flight \(draft_gate\).*retire-gate-round\.mjs/,
+    );
+    assert.match(await readFile(path.resolve(repoRoot, read.path), "utf8"), /first-disposition/, "the in-flight reviewers keep the bytes their work order hashes");
+    await stat(markerPath); // the completion marker survives the refusal
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
