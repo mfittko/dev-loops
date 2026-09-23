@@ -762,7 +762,9 @@ Optional:
   ledger/provenance/angle-coverage layer of `gates.requireFanoutEvidence`
   enforcement (that ledger is a gitignored, machine-local `tmp/` file under the
   main worktree, invisible to a stateless remote verifier); the comment-derived executionMode/inlineReason
-  check (including the light-mode inline exception) still applies. Used by the
+  check (including the light-mode inline exception) still applies. The flag
+  also skips the judge act-list merge checks (open, unjudged, or unreadable act
+  list), which otherwise run even with `requireFanoutEvidence` off. Used by the
   `gate-evidence` CI check (`.github/workflows/gate-evidence.yml`); client-side
   callers should omit it.
 
