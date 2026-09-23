@@ -208,7 +208,7 @@ export function collectTranscriptFiles(targetPath) {
 /**
  * Parse assistant usage entries from a single jsonl file.
  * @param {string} filePath
- * @returns {Promise<{ turns: any[], sessionInfo: any, agent: string | null, isForkSnapshot: boolean, inheritedTurnCount: number, malformedLineCount: number }>}
+ * @returns {Promise<{ turns: any[], sessionInfo: any, agent: string | null, isForkSnapshot: boolean, inheritedTurnCount: number, unresolvedForkBoundary: boolean, malformedLineCount: number }>}
  */
 export async function parseTranscriptFile(filePath) {
   const stat = fs.statSync(filePath);
@@ -219,6 +219,7 @@ export async function parseTranscriptFile(filePath) {
       agent: null,
       isForkSnapshot: false,
       inheritedTurnCount: 0,
+      unresolvedForkBoundary: false,
       malformedLineCount: 0,
     };
   }
@@ -320,6 +321,7 @@ export async function parseTranscriptFile(filePath) {
     agent: currentAgent,
     isForkSnapshot,
     inheritedTurnCount,
+    unresolvedForkBoundary: isForkSnapshot && !forkBoundarySeen,
     malformedLineCount,
   };
 }
@@ -449,12 +451,14 @@ export async function auditPiSession(targetPath) {
   let forkSnapshotsProcessed = 0;
   let retainedForkTurns = 0;
   let skippedInheritedForkTurns = 0;
+  let unresolvedForkBoundaries = 0;
   let malformedLines = 0;
 
   for (const file of files) {
     const parsed = await parseTranscriptFile(file);
     const usageTurns = parsed.turns.filter(isUsageBearing);
     malformedLines += parsed.malformedLineCount;
+    if (parsed.unresolvedForkBoundary) unresolvedForkBoundaries += 1;
     if (parsed.isForkSnapshot) {
       forkSnapshotsProcessed += 1;
       retainedForkTurns += usageTurns.length;
@@ -536,15 +540,7 @@ export async function auditPiSession(targetPath) {
       totalTokens: aggregateValue(aggregate, "totalTokens"),
       cost: roundCost(aggregateValue(aggregate, "cost")),
       cacheHitRatio: aggregateCacheHitRatio(aggregate),
-      availability: {
-        input: aggregateAvailability(aggregate, "input"),
-        output: aggregateAvailability(aggregate, "output"),
-        cacheRead: aggregateAvailability(aggregate, "cacheRead"),
-        cacheWrite: aggregateAvailability(aggregate, "cacheWrite"),
-        totalTokens: aggregateAvailability(aggregate, "totalTokens"),
-        cost: aggregateAvailability(aggregate, "cost"),
-        cacheHitRatio: aggregateCacheHitRatioAvailability(aggregate),
-      },
+      availability: sessionAvailability(aggregate),
     };
   }
 
@@ -555,6 +551,7 @@ export async function auditPiSession(targetPath) {
     forkSnapshotsProcessed,
     retainedForkTurns,
     skippedInheritedForkTurns,
+    unresolvedForkBoundaries,
     malformedLines,
     activeSessionsCount: sessions.length,
     summary: {
@@ -568,6 +565,7 @@ export async function auditPiSession(targetPath) {
       estimatedCost: roundCost(aggregateValue(overallAggregate, "cost")),
       availability: sessionAvailability(overallAggregate),
       malformedLines,
+      unresolvedForkBoundaries,
     },
     byModel: modelAggregation,
     sessions,
@@ -603,6 +601,7 @@ function formatCost(value, availability) {
 function escapeMarkdown(value) {
   return String(value)
     .replace(/&/g, "&amp;")
+    .replace(/[\u0000-\u0009\u000B\u000C\u000E-\u001F\u007F]/g, (character) => `&#${character.charCodeAt(0)};`)
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/\\/g, "&#92;")
@@ -624,6 +623,7 @@ export function formatMarkdownSummary(auditResult) {
     forkSnapshotsProcessed = 0,
     retainedForkTurns = 0,
     skippedInheritedForkTurns = 0,
+    unresolvedForkBoundaries = summary.unresolvedForkBoundaries ?? 0,
     malformedLines = summary.malformedLines ?? 0,
   } = auditResult;
 
@@ -631,6 +631,7 @@ export function formatMarkdownSummary(auditResult) {
   lines.push("## Pi Session Token Audit");
   lines.push("");
   lines.push(`- **Resolved Target**: \`${escapeMarkdown(targetPath ?? "unknown")}\``);
+  lines.push(`- **Transcript Files Examined**: ${auditResult.totalFilesExamined ?? "unknown"}`);
   lines.push(`- **Total Turns**: ${summary.totalTurns}`);
   const totalMillions = summary.totalTokens === null || summary.totalTokens === undefined
     ? "n/a"
@@ -642,6 +643,9 @@ export function formatMarkdownSummary(auditResult) {
   lines.push(`- **Cache Hit Ratio**: ${formatRatio(summary.cacheHitRatio, summary.availability?.cacheHitRatio)}`);
   lines.push(`- **Estimated Cost**: ${formatCost(summary.estimatedCost, summary.availability?.estimatedCost)}`);
   lines.push(`- **Fork Snapshots**: ${forkSnapshotsProcessed} processed; ${retainedForkTurns} fork-own turns retained; ${skippedInheritedForkTurns} inherited turns excluded`);
+  if (unresolvedForkBoundaries > 0) {
+    lines.push(`- **Unresolved Fork Boundaries**: ${unresolvedForkBoundaries}; inherited replay could not be excluded and totals may be incomplete`);
+  }
   if (malformedLines > 0) {
     lines.push(`- **Malformed Lines**: ${malformedLines} skipped while parsing; totals may be incomplete`);
   }
@@ -653,7 +657,7 @@ export function formatMarkdownSummary(auditResult) {
   lines.push("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |");
   for (const [model, data] of Object.entries(byModel)) {
     lines.push(
-      `| \`${escapeMarkdown(model)}\` | ${data.turns} | ${formatTokenCount(data.input, data.availability?.input)} | ${formatTokenCount(data.cacheRead, data.availability?.cacheRead)} | ${formatTokenCount(data.output, data.availability?.output)} | ${formatRatio(data.cacheHitRatio, data.availability?.cacheHitRatio)} | ${formatTokenCount(data.totalTokens, data.availability?.totalTokens)} | ${formatCost(data.cost, data.availability?.cost)} |`
+      `| \`${escapeMarkdown(model)}\` | ${data.turns} | ${formatTokenCount(data.input, data.availability?.inputTokens)} | ${formatTokenCount(data.cacheRead, data.availability?.cacheReadTokens)} | ${formatTokenCount(data.output, data.availability?.outputTokens)} | ${formatRatio(data.cacheHitRatio, data.availability?.cacheHitRatio)} | ${formatTokenCount(data.totalTokens, data.availability?.totalTokens)} | ${formatCost(data.cost, data.availability?.estimatedCost)} |`
     );
   }
   lines.push("");

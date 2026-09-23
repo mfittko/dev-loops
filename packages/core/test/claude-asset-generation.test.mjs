@@ -154,8 +154,10 @@ test("transformSkill maps allowed-tools (space), preserves user-invocable, drops
 test("isSkillExcludedFromClaude detects exclusion flags", () => {
   assert.equal(isSkillExcludedFromClaude({ "claude-sync": false }), true);
   assert.equal(isSkillExcludedFromClaude({ "claude-sync": "false" }), true);
+  assert.equal(isSkillExcludedFromClaude({ "claude-sync": "False" }), true);
   assert.equal(isSkillExcludedFromClaude({ "pi-only": true }), true);
   assert.equal(isSkillExcludedFromClaude({ "pi-only": "true" }), true);
+  assert.equal(isSkillExcludedFromClaude({ "pi-only": "TRUE" }), true);
   assert.equal(isSkillExcludedFromClaude({ harness: "pi" }), true);
   assert.equal(isSkillExcludedFromClaude({ harness: ["pi"] }), true);
 

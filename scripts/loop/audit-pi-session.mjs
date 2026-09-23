@@ -33,7 +33,8 @@ detect context snowballing, and report per-agent token breakdowns.
 
 Arguments:
   [session-path]    Path to a session directory, coordinator session.jsonl,
-                    or subagent run folder. If omitted, defaults to --latest.
+                    or subagent run folder. A single transcript file is audited
+                    alone. If omitted, defaults to --latest.
 
 Options:
   --latest          Automatically find and inspect the latest session for this
@@ -106,7 +107,7 @@ export async function runAuditCli(
     let targetPath = options.sessionPath;
 
     if (!targetPath) {
-      const latest = findLatestSession();
+      const latest = findLatestSession(undefined, cwd);
       if (!latest) {
         stderr.write(`${formatCliError("Could not automatically locate latest Pi session directory.", { usage: USAGE })}\n`);
         return 1;

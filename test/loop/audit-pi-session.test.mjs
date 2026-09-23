@@ -209,7 +209,10 @@ describe("audit-pi-session unit & integration", () => {
     assert.equal(audit.summary.availability.cacheHitRatio, "partial");
     assert.equal(audit.summary.availability.estimatedCost, "partial");
     assert.equal(audit.sessions[0].availability.estimatedCost, "partial");
-    assert.equal(audit.byModel["model-a"].availability.cacheRead, "partial");
+    assert.equal(audit.byModel["model-a"].availability.cacheReadTokens, "partial");
+    assert.equal(audit.byModel["model-a"].availability.estimatedCost, "partial");
+    assert.equal(Object.hasOwn(audit.byModel["model-a"].availability, "cacheRead"), false);
+    assert.equal(Object.hasOwn(audit.byModel["model-a"].availability, "cost"), false);
     const markdown = formatMarkdownSummary(audit);
     assert.match(markdown, /Cached Read\*\*: 450 \(partial\)/);
     assert.match(markdown, /Cache Hit Ratio\*\*: 72\.0% \(partial\)/);
@@ -324,6 +327,7 @@ describe("audit-pi-session unit & integration", () => {
     assert.ok(md.includes("dev-loop"));
     assert.ok(md.includes("30x"));
     assert.ok(md.includes("Severe context growth"));
+    assert.match(md, /Transcript Files Examined\*\*: 1/);
     assert.match(md, /\| Role \| Turns \| Models \| Total Tokens \| Cache Write \|/);
     assert.match(md, /\| 41,325 \| 25 \| 85\.4% \|/);
 
@@ -623,6 +627,34 @@ describe("audit-pi-session unit & integration", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  it("reports a fork whose timestamp boundary cannot be resolved", async () => {
+    const tmpDir = createTempDir();
+    const forkFile = path.join(tmpDir, "fork.jsonl");
+    fs.writeFileSync(
+      forkFile,
+      [
+        JSON.stringify({ type: "session", parentSession: "/tmp/parent.jsonl" }),
+        JSON.stringify({ type: "session_info", name: "subagent-review-parent-0", timestamp: "2026-01-01T00:00:00.000Z" }),
+        JSON.stringify({ type: "message", message: { role: "assistant", model: "model-a", usage: { input: 100, output: 10, cacheRead: 0, cacheWrite: 0 } } }),
+        JSON.stringify({ type: "session_info", name: "subagent-judge-fork-0", timestamp: "2026-01-02T00:00:00.000Z" }),
+        JSON.stringify({ type: "message", message: { role: "assistant", model: "model-b", usage: { input: 200, output: 20, cacheRead: 0, cacheWrite: 0 } } }),
+      ].join("\n") + "\n",
+    );
+
+    const parsed = await parseTranscriptFile(forkFile);
+    assert.equal(parsed.isForkSnapshot, true);
+    assert.equal(parsed.unresolvedForkBoundary, true);
+    assert.equal(parsed.inheritedTurnCount, 0);
+    assert.equal(parsed.turns.length, 2);
+
+    const audit = await auditPiSession(forkFile);
+    assert.equal(audit.unresolvedForkBoundaries, 1);
+    assert.equal(audit.summary.unresolvedForkBoundaries, 1);
+    assert.match(formatMarkdownSummary(audit), /Unresolved Fork Boundaries\*\*: 1;.*totals may be incomplete/);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
   it("does not classify falsy non-string parentSession values as forks", async () => {
     const tmpDir = createTempDir();
     for (const [index, parentSession] of ["", 0, false].entries()) {
@@ -717,6 +749,13 @@ describe("audit-pi-session unit & integration", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  it("findLatestPiSession returns null when the sessions base does not exist", () => {
+    const tmpDir = createTempDir();
+    const repoCwd = path.join(tmpDir, "repo");
+    assert.equal(findLatestPiSession(path.join(tmpDir, "absent"), repoCwd), null);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
   it("findLatestPiSession scopes discovery to this repository and includes worktrees", () => {
     const tmpDir = createTempDir();
     const fakeSessionsBase = path.join(tmpDir, "sessions");
@@ -791,7 +830,7 @@ describe("audit-pi-session unit & integration", () => {
   });
 
   it("escapes transcript-controlled role and model values in Markdown", () => {
-    const unsafe = "name|injected\n`code` <img src=x> [text](url)";
+    const unsafe = "name|injected\n`code` <img src=x> [text](url)\u0000\u0009\u001b\u007f";
     const result = {
       targetPath: "/tmp/session",
       summary: {
@@ -820,6 +859,8 @@ describe("audit-pi-session unit & integration", () => {
     assert.doesNotMatch(markdown, /name\|injected\n/);
     assert.match(markdown, /name\\\|injected<br>&#96;code&#96; &lt;img src=x&gt; &#91;text&#93;&#40;url&#41;/);
     assert.doesNotMatch(markdown, /<img src=x>|\[text\]\(url\)/);
+    assert.doesNotMatch(markdown, /\u0000|\u0009|\u001b|\u007f/);
+    assert.match(markdown, /&#0;&#9;&#27;&#127;/);
     assert.match(markdown, /High turn count/);
   });
 
@@ -892,6 +933,7 @@ describe("audit-pi-session unit & integration", () => {
     let stderr = captureStream();
     assert.equal(await runAuditCli(["--help"], { stdout, stderr }), 0);
     assert.match(stdout.value, /Usage:/);
+    assert.match(stdout.value, /A single transcript file is audited\s+alone\./);
     assert.equal(stderr.value, "");
 
     stdout = captureStream();
@@ -923,7 +965,12 @@ describe("audit-pi-session unit & integration", () => {
       await runAuditCli(["--json"], {
         stdout,
         stderr,
-        findLatestSession: () => sessionFile,
+        cwd: tmpDir,
+        findLatestSession: (sessionsBaseDir, repositoryCwd) => {
+          assert.equal(sessionsBaseDir, undefined);
+          assert.equal(repositoryCwd, tmpDir);
+          return sessionFile;
+        },
       }),
       0,
     );
