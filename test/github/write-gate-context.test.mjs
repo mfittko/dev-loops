@@ -3150,7 +3150,8 @@ test("buildGateContext falls back to pointer mode when the diff exceeds the inli
 
     const onDisk = await readFile(path.resolve(repoRoot, result.evidencePath), "utf8");
     assert.ok(!onDisk.includes(bigDiffBody), "over-cap diff body must not be inlined");
-    assert.ok(onDisk.includes(result.artifact.scope.diffPath), "evidence discloses the diffPath pointer");
+    const filteredRead = result.artifact.requiredReads.find((read) => read.kind === "diff");
+    assert.ok(onDisk.includes(filteredRead.path), "evidence discloses the filtered diff pointer");
     assert.ok(onDisk.includes("prefixMode: pointer"));
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
@@ -3777,7 +3778,7 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       "",
       "## Required reads",
       "",
-      "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. The `context` entry's `.adjacentCode` is an optional navigation aid, never a required full read: query it on demand with `jq '.adjacentCode' <path>`, never `cat`. Every `optional` entry is for widening only. Your angle section may name a scoped evidence read that replaces the shared `evidence` read for your unit.",
+      "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. The `context` entry's `.adjacentCode` is an optional navigation aid, never a required full read: query it on demand with `jq '.adjacentCode' <path>`, never `cat`. Every `optional` entry is for widening only. The `diff` entry is the filtered diff, with lockfiles and generated trees excluded; the optional `raw-diff` entry is the unfiltered `.diff`. Your angle section may name a scoped evidence read that replaces the shared `evidence` read for your unit.",
       "",
       `- required evidence: \`${path.resolve(repoRoot)}/tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.briefing-evidence.txt\` (sha256 ${evidenceSha}, ${Buffer.byteLength(expectedEvidence)} bytes)`, // secret-scan:allow fixture head SHA in briefing snapshot (not a secret)
       `- optional context: \`${path.resolve(repoRoot)}/tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json\``, // secret-scan:allow fixture head SHA in briefing snapshot (not a secret)
@@ -7398,14 +7399,16 @@ test("writeGateContext persists the evidence file and binds it, the diff, and va
     const evidencePath = buildGateBriefingEvidencePath({ repo: "o/r", pr: 3, gate: "draft_gate", headSha: "abc1234" });
     assert.equal(result.evidencePath, evidencePath);
     const reads = Object.fromEntries(result.artifact.requiredReads.map((r) => [r.kind, r]));
-    assert.deepEqual(Object.keys(reads).sort(), ["context", "diff", "evidence", "validation"]);
+    assert.deepEqual(Object.keys(reads).sort(), ["context", "diff", "evidence", "raw-diff", "validation"]);
     assert.equal(reads.evidence.path, evidencePath);
     assert.equal(reads.evidence.required, true);
-    assert.equal(reads.diff.required, false, "inline mode: the full diff is optional widening");
+    assert.equal(reads.diff.required, true, "inline mode: the filtered diff is a required read");
+    assert.equal(reads["raw-diff"].path, diffPath);
+    assert.equal(reads["raw-diff"].required, false, "the unfiltered diff is optional widening");
     assert.equal(reads.validation.required, false, "validation is read by field via jq, never whole");
     assert.equal(reads.context.path, result.path);
     assert.equal(reads.context.sha256, undefined);
-    for (const read of [reads.evidence, reads.diff, reads.validation]) {
+    for (const read of [reads.evidence, reads.diff, reads["raw-diff"], reads.validation]) {
       const bytes = await readFile(path.resolve(repoRoot, read.path));
       assert.equal(read.sha256, createHash("sha256").update(bytes).digest("hex"), read.kind);
       assert.equal(read.bytes, bytes.length, read.kind);
@@ -7419,23 +7422,40 @@ test("writeGateContext persists the evidence file and binds it, the diff, and va
   }
 });
 
-test("writeGateContext: an over-cap diff makes the full diff a required read", async () => {
-  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-required-diff-"));
-  try {
-    const diffOutput = `diff --git a/x.mjs b/x.mjs\n${"+line\n".repeat(Math.ceil(BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES / 6) + 10)}`;
-    const diffPath = buildGateDiffPath({ repo: "o/r", pr: 3, gate: "draft_gate", headSha: "abc1234" });
-    const result = await writeGateContext({
-      ...parseWriteGateContextCliArgs(["--repo", "o/r", "--pr", "3", "--gate", "draft_gate", "--head-sha", "abc1234", "--angles", '["scope"]']),
-      diffOutput, diffPath, diffToWrite: { path: diffPath, text: diffOutput },
-    }, { repoRoot });
-    assert.equal(result.prefixMode, "pointer");
-    assert.equal(result.artifact.requiredReads.find((r) => r.kind === "diff").required, true);
-  } finally {
-    await rm(repoRoot, { recursive: true, force: true });
+test("writeGateContext: a large lockfile hunk never enters the required diff read, in inline or pointer mode", async () => {
+  const lockHunk = `diff --git a/package-lock.json b/package-lock.json\n${"+LOCKFILE-MARKER\n".repeat(Math.ceil(BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES / 16) * 3)}`;
+  for (const [mode, sourceLines] of [["inline", 1], ["pointer", Math.ceil(BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES / 15) + 10]]) {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), `gate-context-filtered-diff-${mode}-`));
+    try {
+      const diffOutput = `diff --git a/src/app.mjs b/src/app.mjs\n${"+SOURCE-MARKER\n".repeat(sourceLines)}${lockHunk}`;
+      const diffPath = buildGateDiffPath({ repo: "o/r", pr: 3, gate: "draft_gate", headSha: "abc1234" });
+      const result = await writeGateContext({
+        ...parseWriteGateContextCliArgs(["--repo", "o/r", "--pr", "3", "--gate", "draft_gate", "--head-sha", "abc1234", "--angles", '["scope"]']),
+        diffOutput, diffPath, diffToWrite: { path: diffPath, text: diffOutput }, changedFiles: ["src/app.mjs", "package-lock.json"],
+      }, { repoRoot });
+      assert.equal(result.prefixMode, mode);
+      const reads = Object.fromEntries(result.artifact.requiredReads.map((r) => [r.kind, r]));
+      assert.equal(reads.diff.required, true, mode);
+      assert.ok(reads.diff.path.endsWith("draft_gate-abc1234.filtered.diff"), reads.diff.path);
+      const filtered = await readFile(path.resolve(repoRoot, reads.diff.path), "utf8");
+      assert.equal(reads.diff.sha256, createHash("sha256").update(filtered).digest("hex"), mode);
+      assert.equal(reads.diff.bytes, Buffer.byteLength(filtered), mode);
+      assert.ok(filtered.includes("+SOURCE-MARKER") && !filtered.includes("LOCKFILE-MARKER"), mode);
+      assert.equal(reads["raw-diff"].path, diffPath);
+      assert.equal(reads["raw-diff"].required, false, mode);
+      assert.equal(reads["raw-diff"].sha256, createHash("sha256").update(diffOutput).digest("hex"), mode);
+      const prefix = await readFile(path.resolve(repoRoot, result.prefixPath), "utf8");
+      assert.ok(prefix.includes(reads.diff.sha256) && prefix.includes(reads["raw-diff"].sha256), mode);
+      const evidence = await readFile(path.resolve(repoRoot, reads.evidence.path), "utf8");
+      assert.ok(!evidence.includes("LOCKFILE-MARKER"), mode);
+      if (mode === "pointer") assert.ok(evidence.includes(`Read the filtered diff from:\n  ${reads.diff.path}`));
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
   }
 });
 
-test("writeGateContext: a pointer-mode diffPath the call does not write binds the on-disk diff, and refuses when it is missing", async () => {
+test("writeGateContext: a diffPath the call does not write binds the on-disk diff as an optional raw-diff read, and omits it when missing", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-pointer-ondisk-"));
   try {
     const diffOutput = `diff --git a/src/big.mjs b/src/big.mjs\n+${"x".repeat(BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES + 1024)}\n`;
@@ -7444,14 +7464,16 @@ test("writeGateContext: a pointer-mode diffPath the call does not write binds th
       parseWriteGateContextCliArgs(["--repo", "owner/repo", "--pr", "72", "--gate", "draft_gate", "--head-sha", "abc1234567890", "--angles", '["scope"]']),
       { diffOutput, diffPath, changedFiles: ["src/big.mjs"] },
     );
-    await assert.rejects(() => writeGateContext(options(), { repoRoot }), /diffPath .* is unreadable/);
+    const missing = await writeGateContext(options(), { repoRoot });
+    assert.equal(missing.artifact.requiredReads.find((read) => read.kind === "raw-diff"), undefined);
+    assert.equal(missing.artifact.requiredReads.find((read) => read.kind === "diff").required, true);
     await mkdir(path.dirname(path.resolve(repoRoot, diffPath)), { recursive: true });
     await writeFile(path.resolve(repoRoot, diffPath), diffOutput, "utf8");
     const result = await writeGateContext(options(), { repoRoot });
     assert.equal(result.prefixMode, "pointer");
-    const diffRead = result.artifact.requiredReads.find((read) => read.kind === "diff");
+    const diffRead = result.artifact.requiredReads.find((read) => read.kind === "raw-diff");
     assert.equal(diffRead.sha256, createHash("sha256").update(diffOutput).digest("hex"));
-    assert.equal(diffRead.required, true);
+    assert.equal(diffRead.required, false);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

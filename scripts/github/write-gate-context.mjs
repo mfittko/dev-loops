@@ -1312,7 +1312,7 @@ function renderRequiredReadsSection(requiredReads, worktreeRoot) {
   return [
     "## Required reads",
     "",
-    "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. The `context` entry's `.adjacentCode` is an optional navigation aid, never a required full read: query it on demand with `jq '.adjacentCode' <path>`, never `cat`. Every `optional` entry is for widening only. Your angle section may name a scoped evidence read that replaces the shared `evidence` read for your unit.",
+    "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. The `context` entry's `.adjacentCode` is an optional navigation aid, never a required full read: query it on demand with `jq '.adjacentCode' <path>`, never `cat`. Every `optional` entry is for widening only. The `diff` entry is the filtered diff, with lockfiles and generated trees excluded; the optional `raw-diff` entry is the unfiltered `.diff`. Your angle section may name a scoped evidence read that replaces the shared `evidence` read for your unit.",
     "",
     ...(reads.length > 0 ? reads.map((read) => renderRequiredReadLine(read, worktreeRoot)) : ["- (no required reads recorded)"]),
   ].join("\n");
@@ -1402,7 +1402,7 @@ export function renderBriefingPrefix({
  * @param {string|null} [input.issueBody] — single-issue body, rendered under `issueRef` with no `### <label>` sub-heading. Ignored when `issueSections` is given.
  * @param {{label: string, body: string}[]|null} [input.issueSections] — per-issue bodies for a multi-issue PR (structured, never pre-joined): each renders as a renderer-emitted `### <label>` line OUTSIDE any fence, followed by that issue's OWN pickFence-sized fenced block. Takes precedence over `issueBody` when non-empty.
  * @param {string|null} [input.diffOutput] — full diff text, when captured
- * @param {string|null} [input.diffPath] — persisted `.diff` pointer (pointer-mode fallback)
+ * @param {string|null} [input.diffPath] — persisted filtered-diff pointer (pointer-mode fallback)
  * @param {string[]} [input.changedFiles]
  * @param {object|null} [input.adjacentCode] — buildAdjacentBundle output
  * @param {string|null} [input.validationResultsPath] — absolute path to the
@@ -1493,7 +1493,7 @@ export function renderBriefingEvidence({
     lines.push(diffFence);
   } else {
     lines.push(
-      `Diff exceeds the ${capBytes}-byte inline cap (${diffBytes} bytes) — pointer mode. Read the full diff from:`,
+      `Diff exceeds the ${capBytes}-byte inline cap (${diffBytes} bytes) — pointer mode. Read the filtered diff from:`,
     );
     lines.push(`  ${diffPath ?? "(diff pointer unavailable — re-derive with git diff)"}`);
   }
@@ -1553,7 +1553,8 @@ export function renderBriefingEvidence({
  * @param {string|null} [input.issueBody]
  * @param {{label: string, body: string}[]|null} [input.issueSections]
  * @param {string|null} [input.diffOutput] — full diff text, when captured
- * @param {string|null} [input.diffPath] — persisted `.diff` pointer (changed-files pointer-mode fallback), also linked unconditionally in the widen-back paragraph
+ * @param {string|null} [input.diffPath] — persisted unfiltered `.diff`, linked unconditionally in the widen-back paragraph
+ * @param {string|null} [input.filteredDiffPath] — persisted filtered diff (changed-files pointer-mode target; falls back to diffPath)
  * @param {string|null} [input.validationResultsPath]
  * @param {number} [input.capBytes] — default BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES; only consulted for "changed-files"
  * @returns {{ text: string }}
@@ -1562,6 +1563,7 @@ export function renderScopedBriefingVariant(scope, {
   repo, pr, gate, headSha, evidencePath, contextPath = null, worktreeRoot = null,
   prBody = null, issueRef = null, issueBody = null, issueSections = null,
   diffOutput = null, diffPath = null,
+  filteredDiffPath = null,
   validationResultsPath = null,
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
 }) {
@@ -1664,9 +1666,9 @@ export function renderScopedBriefingVariant(scope, {
       lines.push(diffFence);
     } else {
       lines.push(
-        `Diff exceeds the ${capBytes}-byte inline cap (${diffBytes} bytes) — pointer mode. Read the full diff from:`,
+        `Diff exceeds the ${capBytes}-byte inline cap (${diffBytes} bytes) — pointer mode. Read the filtered diff from:`,
       );
-      lines.push(`  ${diffPath ?? "(diff pointer unavailable — re-derive with git diff)"}`);
+      lines.push(`  ${filteredDiffPath ?? diffPath ?? "(diff pointer unavailable — re-derive with git diff)"}`);
     }
   }
 
@@ -2388,6 +2390,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   let prefixBytes;
   let prefixMode;
   let pendingEvidence = null;
+  let pendingFilteredDiff = null;
   let requiredReads = null;
   // AC3: scope.<name> -> emitted companion-file path. Only built in
   // self-rendered mode — under --prefix-file the CLI never resolves
@@ -2421,17 +2424,22 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     }
     prefixMode = "file";
   } else {
-    // The diff INLINED into the invariant prefix (and its
-    // scoped "changed-files" variant below) is FILTERED — lockfiles,
-    // generated/vendored trees, and any --diff-exclude-glob configured here
-    // are dropped whole-file, so a lockfile-heavy diff no longer dominates
-    // the shared per-head block. The FULL, unfiltered diff stays persisted
-    // at options.diffPath (scope.diffPath) — an excluded file remains
-    // readable on demand from there, or via `git diff` in the reviewed
-    // worktree; only the INLINED copy is narrowed.
+    // The diff under review is FILTERED — lockfiles, generated/vendored
+    // trees, and any --diff-exclude-glob configured here are dropped
+    // whole-file. The evidence file inlines it (or points to it above the
+    // cap), and `<gate>-<headSha>.filtered.diff` persists it as the required
+    // `diff` read in both modes, so the required read never scales with
+    // lockfile churn. The unfiltered diff stays at options.diffPath
+    // (scope.diffPath) as the optional `raw-diff` widening read.
     const inlineDiffOutput = typeof options.diffOutput === "string" && options.diffOutput.length > 0
       ? filterDiffForInline(options.diffOutput, { excludeGlobs: options.diffExcludeGlobs ?? [] }).filteredDiff
       : (options.diffOutput ?? null);
+    pendingFilteredDiff = typeof inlineDiffOutput === "string" && inlineDiffOutput.length > 0
+      ? {
+        path: buildGateArtifactPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp", suffix: ".filtered.diff" }),
+        text: inlineDiffOutput.endsWith("\n") ? inlineDiffOutput : `${inlineDiffOutput}\n`,
+      }
+      : null;
     const evidence = renderBriefingEvidence({
       repo: options.repo,
       pr: options.pr,
@@ -2442,7 +2450,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       issueBody: options.issueBody ?? null,
       issueSections: options.issueSections ?? null,
       diffOutput: inlineDiffOutput,
-      diffPath: options.diffPath ?? null,
+      diffPath: pendingFilteredDiff?.path ?? null,
       changedFiles: options.changedFiles ?? [],
       adjacentCode: options.adjacentCode ?? null,
       validationResultsPath: options.validationResultsPath ?? null,
@@ -2457,19 +2465,13 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       kind, path: readPath, sha256: createHash("sha256").update(bytes).digest("hex"), bytes: Buffer.byteLength(bytes), required,
     });
     requiredReads = [hashed("evidence", evidencePath, evidence.text, true)];
+    if (pendingFilteredDiff) requiredReads.push(hashed("diff", pendingFilteredDiff.path, pendingFilteredDiff.text, true));
     if (options.diffPath) {
-      // The filtered, collapsed diff inside the evidence file is the review
-      // surface; the full `.diff` is required only when the evidence points to it.
-      // A pointer to a diff this call does not write binds the on-disk bytes.
+      // Optional widening read. A diff this call does not write binds the
+      // on-disk bytes; an unreadable one is omitted, never required.
       let diffBytes = options.diffToWrite?.text;
-      if (diffBytes === undefined && prefixMode === "pointer") {
-        try {
-          diffBytes = await readFile(path.resolve(repoRoot, options.diffPath));
-        } catch (err) {
-          throw new Error(`diffPath ${JSON.stringify(options.diffPath)} is unreadable (${err?.code ?? err?.message}) — refusing to point the evidence at an unbound diff`);
-        }
-      }
-      if (diffBytes !== undefined) requiredReads.push(hashed("diff", options.diffPath, diffBytes, prefixMode === "pointer"));
+      if (diffBytes === undefined) diffBytes = await readFile(path.resolve(repoRoot, options.diffPath)).catch(() => undefined);
+      if (diffBytes !== undefined) requiredReads.push(hashed("raw-diff", options.diffPath, diffBytes, false));
     }
     if (validationBytes !== null) {
       const relative = path.relative(path.resolve(repoRoot), options.validationResultsPath);
@@ -2519,6 +2521,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
           issueSections: options.issueSections ?? null,
           diffOutput: inlineDiffOutput,
           diffPath: options.diffPath ?? null,
+          filteredDiffPath: pendingFilteredDiff?.path ?? null,
           validationResultsPath: options.validationResultsPath ?? null,
         });
         pendingVariants.set(scope, { path: scopePath, text: variant.text });
@@ -2834,7 +2837,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // Keep the marker available only when prefix AND referenced stable files
   // are unchanged on disk (the prefix hash-binds the evidence and full diff).
   let markerUnchanged = existingBytes !== null && existingBytes.equals(prefixBytes);
-  const referencedWrites = [...(pendingEvidence ? [pendingEvidence] : []), ...pendingVariants.values(), ...(options.diffToWrite ? [options.diffToWrite] : []), ...pendingRoundReads];
+  const referencedWrites = [...(pendingEvidence ? [pendingEvidence] : []), ...(pendingFilteredDiff ? [pendingFilteredDiff] : []), ...pendingVariants.values(), ...(options.diffToWrite ? [options.diffToWrite] : []), ...pendingRoundReads];
   for (const pending of referencedWrites) {
     if (!markerUnchanged) break;
     try {
@@ -2858,6 +2861,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
         return await writeGateContext({ ...options, diffPath: null, diffToWrite: null }, { repoRoot });
       }
     }
+    if (pendingFilteredDiff) await writeFile(path.resolve(repoRoot, pendingFilteredDiff.path), pendingFilteredDiff.text, "utf8");
     if (pendingEvidence) await writeFile(path.resolve(repoRoot, pendingEvidence.path), pendingEvidence.text, "utf8");
     for (const [scope, variant] of pendingVariants) {
       try {
