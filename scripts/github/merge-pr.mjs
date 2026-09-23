@@ -235,19 +235,21 @@ async function resolveCopilotAbsentReviewDisposition({ repo, pr, currentHeadSha,
     headSha: currentHeadSha,
     draftGateResetAtMs: resolveDraftGateRoundResetMs({ draftGate, currentHeadSha }),
   });
-  if (completedCopilotReviewRounds >= cap) {
-    // ADR 0012: a significant change after a converged review opens a new cycle
-    // regardless of the spent cap. A fix pushed after a findings review keeps the fallback.
-    if (!lastReviewConverged || !(await hasSignificantChangeSinceLastReview({ repo, pr, currentHeadSha, reviews }, runtime))) {
-      return pinned(COPILOT_ABSENT_REVIEW_DISPOSITION.ROUND_CAP_CLEAN_FALLBACK);
-    }
-  } else {
-    // The request status is checked separately below, with merge-side fail-closed reads.
-    const carried = await resolveCarriedConvergence({ repo, pr, currentHeadSha, prData: { reviews }, copilotReviewRequestStatus: "none" }, runtime);
-    if (carried.carried && !(await isCopilotReviewOutstanding({ repo, pr, currentHeadSha, rawReviews }, runtime))) {
-      const { source, sourceReviewId, sourceHeadSha, bodyDisposition } = carried;
-      return { ...pinned(COPILOT_ABSENT_REVIEW_DISPOSITION.DOCS_ONLY_SUPPRESSION), carriedConvergence: { source, sourceReviewId, sourceHeadSha, bodyDisposition } };
-    }
+  // ADR 0012: at the cap, a significant change after a converged review opens a
+  // new cycle regardless of the spent cap. A fix pushed after a findings review
+  // keeps the fallback.
+  if (completedCopilotReviewRounds >= cap
+    && (!lastReviewConverged || !(await hasSignificantChangeSinceLastReview({ repo, pr, currentHeadSha, reviews }, runtime)))) {
+    return pinned(COPILOT_ABSENT_REVIEW_DISPOSITION.ROUND_CAP_CLEAN_FALLBACK);
+  }
+  // Below the cap, or at the cap after the raw significance probe reopened the
+  // cycle: the loop honors a carried convergence in both cases (the raw probe
+  // skips the base-relative reduction), so merge consults the same predicate.
+  // The request status is checked separately, with merge-side fail-closed reads.
+  const carried = await resolveCarriedConvergence({ repo, pr, currentHeadSha, prData: { reviews }, copilotReviewRequestStatus: "none" }, runtime);
+  if (carried.carried && !(await isCopilotReviewOutstanding({ repo, pr, currentHeadSha, rawReviews }, runtime))) {
+    const { source, sourceReviewId, sourceHeadSha, bodyDisposition } = carried;
+    return { ...pinned(COPILOT_ABSENT_REVIEW_DISPOSITION.DOCS_ONLY_SUPPRESSION), carriedConvergence: { source, sourceReviewId, sourceHeadSha, bodyDisposition } };
   }
   return (await isInternalOnlyPr({ repo, pr, patterns: config?.internalPathPatterns }, runtime)) ? pinned(COPILOT_ABSENT_REVIEW_DISPOSITION.COPILOT_GATE_DISABLED) : null;
 }

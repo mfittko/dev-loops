@@ -41,6 +41,10 @@ function makeRuntime({
   // Issue comments on the `--jq .[]` stream the copilot-body-disposition
   // resolver reads.
   dispositionComments = [],
+  // The PR base branch and its base...head delta, for the base-relative
+  // reduction the carried-convergence predicate applies. Unset skips it.
+  baseRefName = "",
+  prOwnFiles = [],
 } = {}) {
   const calls = { ghJson: [], runChild: [] };
   const view = {
@@ -82,6 +86,10 @@ function makeRuntime({
         if (args[0] === "api" && String(args[1]).endsWith("/comments") && args.includes("--jq")) {
           return { stdout: dispositionComments.map((c) => JSON.stringify(c)).join("\n"), stderr: "", code: 0 };
         }
+        if (baseRefName && String(args[1]).includes(`/compare/${baseRefName}...`)) {
+          return { stdout: JSON.stringify({ status: "ahead", files: prOwnFiles.map((filename) => ({ filename, status: "modified" })) }), stderr: "", code: 0 };
+        }
+        if (args[0] === "pr" && args[1] === "view" && args.includes("baseRefName")) return { stdout: baseRefName, stderr: "", code: 0 };
         if (String(args[1]).includes("/compare/")) {
           if (compare.code) return { stdout: "", stderr: "compare failed", code: compare.code };
           if (compare.stdout !== undefined) return { stdout: compare.stdout, stderr: "", code: 0 };
@@ -289,6 +297,19 @@ const CONVERGED_AT_CAP = [copilotAt(MID_HEAD, "### 🟡 Changes recommended", "2
 
 test("at the round cap a significant change after a converged review opens a new cycle and refuses", async () => {
   await expectCopilotRefusal("converged then code push", { maxCopilotRounds: 2, reviews: CONVERGED_AT_CAP, compareFiles: ["src/a.mjs", "src/b.mjs"] });
+});
+
+test("at the round cap an integrate-only base move after a converged review merges via docs_only_suppression", async () => {
+  const { runtime } = makeRuntime({
+    maxCopilotRounds: 2,
+    reviews: CONVERGED_AT_CAP.map((r, i) => withNodeId(r, `PRR_${i}`)),
+    compareFiles: ["src/a.mjs", "src/b.mjs"],
+    baseRefName: "main",
+    prOwnFiles: ["docs/guide.md"],
+  });
+  const result = await mergePr(baseOptions(), runtime);
+  assert.equal(result.copilotDisposition, "docs_only_suppression");
+  assert.deepEqual(result.copilotCarriedConvergence, { source: "carried", sourceReviewId: "PRR_1", sourceHeadSha: OLD_HEAD, bodyDisposition: null });
 });
 
 test("at the round cap a compare failure after a converged review fails closed", async () => {

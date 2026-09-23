@@ -34,10 +34,11 @@
 // alone would just make the loop re-request Copilot on that new head and strand
 // again the same way, since Copilot still will not re-engage a change it
 // already effectively approved. This is eligible ONLY when the delta since
-// Copilot's last SUBMITTED review is provably a pure doc/prose bump (the same
-// fail-closed classifier _copilot-convergence-carry.mjs owns for the
-// suppression decisions, reused here via classifyDeltaSinceLastReview — see
-// resolveConvergenceCarryForward in @dev-loops/core/loop/gate-carry-forward).
+// Copilot's last SUBMITTED review is provably a pure doc/prose bump, per the
+// raw-delta classifyDeltaSinceLastReview in _copilot-convergence-carry.mjs.
+// That check is stricter than the base-relative resolveConvergenceCarry the
+// suppression decisions use: it skips the base-relative reduction, so an
+// integrate-only base move that the carry predicate accepts still refuses here.
 // Any code/test/config/CI or unclassifiable delta, a non-linear advance, or an
 // unavailable compare REFUSES exactly like the round-cap check does — this tool
 // never widens what counts as "provably docs-only". On success it also writes
