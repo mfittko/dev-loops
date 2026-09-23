@@ -317,6 +317,7 @@ test("detect-pr-gate-coordination-state allows post-draft flow for non-draft PRs
       },
       carriedConvergence: null,
       copilotBodyDisposition: null,
+      copilotBodyDispositionRequired: null,
     });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -953,11 +954,13 @@ test("detect-pr-gate-coordination-state output equals a direct evaluatePrGateCoo
     assert.equal(parsed.draftGateAlreadySatisfied, directResult.draftGateAlreadySatisfied);
     assert.ok("gateEvidenceNote" in parsed);
     assert.equal(parsed.gateEvidenceNote ?? null, directResult.gateEvidenceNote ?? null);
-    // carriedConvergence and copilotBodyDisposition are detector-owned records
-    // (null here: no prior-head review and no body finding).
+    // carriedConvergence, copilotBodyDisposition, and
+    // copilotBodyDispositionRequired are detector-owned records (null here: no
+    // prior-head review and no body finding).
     assert.equal(parsed.carriedConvergence, null);
     assert.equal(parsed.copilotBodyDisposition, null);
-    const { carriedConvergence: _carried, copilotBodyDisposition: _bodyDisposition, ...evaluatorOwned } = parsed;
+    assert.equal(parsed.copilotBodyDispositionRequired, null);
+    const { carriedConvergence: _carried, copilotBodyDisposition: _bodyDisposition, copilotBodyDispositionRequired: _dispositionRequired, ...evaluatorOwned } = parsed;
     assert.deepEqual({ ...evaluatorOwned, copilotReviewRoundCount: directResult.copilotReviewRoundCount }, directResult);
   } finally {
     await rm(tempDir, { recursive: true, force: true });

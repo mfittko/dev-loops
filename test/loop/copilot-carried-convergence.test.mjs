@@ -281,13 +281,12 @@ function capFixture(dispositions = []) {
   };
 }
 
-const FIX_CONTAINED = { matchByClaims: true, assertArgs: ["api", `repos/${REPO}/compare/${FIX}...${HEAD}`], stdout: line({ status: "ahead" }) };
-
 const CAP_CASES = [
   { name: "no disposition record", dispositions: [], cleared: false },
   { name: "trusted operator record for the current head", dispositions: [dispositionComment({ reviewId: "PRR_round2" })], cleared: true },
   // The finding sits on a current-head review, so no fix commit can be after it: only the operator form clears.
-  { name: "trusted fix record for a current-head review", dispositions: [dispositionComment({ reviewId: "PRR_round2", kind: FIX })], extra: [FIX_CONTAINED], cleared: false },
+  // The compare from the review commit (HEAD) to FIX reports `behind`.
+  { name: "trusted fix record for a current-head review", dispositions: [dispositionComment({ reviewId: "PRR_round2", kind: FIX })], extra: [compareEntry(HEAD, FIX, "behind")], cleared: false },
   { name: "record for a stale head", dispositions: [dispositionComment({ reviewId: "PRR_round2", head: PRIOR })], cleared: false },
   { name: "record naming a different review", dispositions: [dispositionComment({ reviewId: "PRR_round1" })], cleared: false },
   { name: "record by an untrusted author", dispositions: [dispositionComment({ reviewId: "PRR_round2", association: "NONE" })], cleared: false },
@@ -308,16 +307,30 @@ describe("round cap: body-only Copilot feedback clears only through a recorded d
         assert.ok(detected.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
         assert.equal(detected.copilotBodyDisposition, null);
       }
+      assert.deepEqual(detected.copilotBodyDispositionRequired, cleared ? null : {
+        reviewId: "PRR_round2",
+        reviewCommitSha: HEAD,
+        reason: "the current-head Copilot review carries body feedback with no trusted operator copilot-body-disposition record",
+      });
     });
 
     it(`copilot loop detector: ${name}`, async () => {
       const fixture = capFixture(dispositions);
-      const { runChild } = makeGhMock([
+      const mock = makeGhMock([
         { matchByClaims: true, assertArgs: ["pr", "view", String(PR)], stdout: line({ number: PR, state: "OPEN", isDraft: false, headRefOid: HEAD, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }], reviews: fixture.reviews }) },
         ...fixture.shared,
         ...extra,
       ]);
+      // Every gh call must match a declared fixture: no row may pass on the
+      // mock's unmatched-call exit code.
+      const unmatched = [];
+      const runChild = async (...args) => {
+        const result = await mock.runChild(...args);
+        if (result.code === 97) unmatched.push(args[1].join(" "));
+        return result;
+      };
       const snapshot = await autoDetectSnapshot({ repo: REPO, pr: PR, reviewRequestStatusOverride: "none" }, { env: {}, ghCommand: "gh", runChild });
+      assert.deepEqual(unmatched, []);
       assert.equal(snapshot.copilotBodyFeedbackUnresolved, !cleared);
       const interpretation = interpretLoopState(snapshot, { maxCopilotRounds: 2 });
       assert.equal(interpretation.state === "round_cap_clean_fallback", cleared);
@@ -488,10 +501,17 @@ describe("round cap: an earlier-head body-only finding clears only through a rec
       if (cleared) {
         assert.equal(detected.lifecycleState, "round_cap_clean_fallback");
         assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+        assert.equal(detected.copilotBodyDispositionRequired, null);
       } else {
         assert.equal(detected.lifecycleState, "round_cap_reached");
         assert.ok(detected.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
         assert.equal(detected.carriedConvergence, null);
+        // The output names the sanctioned exit: a record for this review.
+        assert.deepEqual(detected.copilotBodyDispositionRequired, {
+          reviewId: "PRR_round2",
+          reviewCommitSha: PRIOR,
+          reason: "the latest Copilot review, on an earlier head, carries body-only feedback with no trusted copilot-body-disposition record",
+        });
       }
     });
 
@@ -520,8 +540,8 @@ describe("round cap: an earlier-head body-only finding clears only through a rec
 
 describe("latest-review timestamp tie fails closed", () => {
   const tied = (id, body) => ({ id, author: { login: COPILOT }, state: "COMMENTED", body, commit: { oid: PRIOR }, submittedAt: "2026-09-22T10:00:00Z" });
-  const carry = async (reviews) => {
-    const fixture = scenario({ reviews });
+  const carry = async (reviews, dispositions = []) => {
+    const fixture = scenario({ reviews, dispositions });
     const { runtime } = runtimeFor(fixture.shared, { root: wideRoot });
     return resolveCarriedConvergence(
       { repo: REPO, pr: PR, currentHeadSha: HEAD, prData: { reviews }, copilotReviewRequestStatus: "none", unresolvedThreadCount: 0, reviewThreads: [] },
@@ -543,4 +563,38 @@ describe("latest-review timestamp tie fails closed", () => {
   it("two tied clean reviews still carry", async () => {
     assert.equal((await carry([tied("R_a", ""), tied("R_b", "")])).carried, true);
   });
+
+  it("a trusted record naming one of two tied changes-recommended reviews clears neither the carry nor the round-cap block", async () => {
+    const reviews = [
+      { id: "R_round1", author: { login: COPILOT }, state: "COMMENTED", body: "", commit: { oid: PRIOR }, submittedAt: "2026-09-22T09:00:00Z" },
+      tied("R_a", YELLOW),
+      tied("R_b", YELLOW),
+    ];
+    // Name the review the resolver selects, so only the tie guard refuses.
+    const owner = resolveLatestCopilotReview({ reviews }).review.id;
+    const dispositions = [dispositionComment({ reviewId: owner })];
+    const carried = await carry(reviews, dispositions);
+    assert.equal(carried.carried, false);
+    assert.match(carried.reason, /share a timestamp/);
+
+    const { shared } = scenario({ reviews, dispositions });
+    const { runChild } = makeGhMock([
+      { matchByClaims: true, assertArgs: ["pr", "view", String(PR)], stdout: line({ number: PR, state: "OPEN", isDraft: false, headRefOid: HEAD, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }], reviews }) },
+      ...shared,
+    ]);
+    const snapshot = await autoDetectSnapshot({ repo: REPO, pr: PR, reviewRequestStatusOverride: "none" }, { env: {}, ghCommand: "gh", runChild });
+    assert.equal(snapshot.copilotPriorHeadBodyFeedbackUnresolved, true);
+    assert.equal(interpretLoopState({ ...snapshot, ciStatus: "success" }, { maxCopilotRounds: 2 }).state, "round_cap_reached");
+  });
+});
+
+test("resolveCarriedConvergence refuses a docs-only carry when the review-thread list is unreadable", async () => {
+  const { reviews, shared } = scenario();
+  const unreadable = shared.map((entry) => (entry.assertArgContains?.includes("reviewThreads") ? { ...entry, stdout: "", exitCode: 1 } : entry));
+  const { runtime } = runtimeFor(unreadable, { root: wideRoot });
+  const carried = await resolveCarriedConvergence(
+    { repo: REPO, pr: PR, currentHeadSha: HEAD, prData: { reviews }, copilotReviewRequestStatus: "none" },
+    runtime,
+  );
+  assert.deepEqual(carried, { carried: false, reason: "the review-thread list is unavailable" });
 });

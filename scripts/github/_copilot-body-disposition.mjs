@@ -206,10 +206,15 @@ export function reviewHasOwnThread(reviewThreads, reviewId) {
  *
  * The comment stream is read only when one of those two findings exists.
  *
- * @returns {Promise<{ copilotBodyFeedbackUnresolved: boolean, copilotPriorHeadBodyFeedbackUnresolved: boolean, bodyDisposition: object|null }>}
+ * `dispositionRequired` names the exit when either flag blocks: the review a
+ * copilot-body-disposition record must name (`reviewId`, null for an
+ * ambiguous tie that no record can clear), its commit, and the reason. It is
+ * null when neither flag blocks.
+ *
+ * @returns {Promise<{ copilotBodyFeedbackUnresolved: boolean, copilotPriorHeadBodyFeedbackUnresolved: boolean, bodyDisposition: object|null, dispositionRequired: { reviewId: string|null, reviewCommitSha: string|null, reason: string }|null }>}
  */
 export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, reviewSummary, reviewThreads }, runtime = {}) {
-  const settled = { copilotBodyFeedbackUnresolved: false, copilotPriorHeadBodyFeedbackUnresolved: false, bodyDisposition: null };
+  const settled = { copilotBodyFeedbackUnresolved: false, copilotPriorHeadBodyFeedbackUnresolved: false, bodyDisposition: null, dispositionRequired: null };
   if (reviewSummary?.hasBodyFindingOnCurrentHead === true) {
     const record = await resolveCopilotBodyDisposition(
       { repo, pr, headSha, reviewId: reviewSummary.bodyFindingReviewId, reviewCommitSha: headSha },
@@ -217,7 +222,15 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
     );
     return record.cleared
       ? { ...settled, bodyDisposition: record.disposition }
-      : { ...settled, copilotBodyFeedbackUnresolved: true };
+      : {
+        ...settled,
+        copilotBodyFeedbackUnresolved: true,
+        dispositionRequired: {
+          reviewId: reviewSummary.bodyFindingReviewId ?? null,
+          reviewCommitSha: headSha,
+          reason: "the current-head Copilot review carries body feedback with no trusted operator copilot-body-disposition record",
+        },
+      };
   }
   const { review, ambiguousBlockingTie } = resolveLatestCopilotReview({ reviews: reviewSummary?.effectiveCopilotReviews });
   const reviewCommitSha = review?.commit?.oid ?? review?.commit_id ?? null;
@@ -225,7 +238,15 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
     return settled;
   }
   if (ambiguousBlockingTie) {
-    return { ...settled, copilotPriorHeadBodyFeedbackUnresolved: true };
+    return {
+      ...settled,
+      copilotPriorHeadBodyFeedbackUnresolved: true,
+      dispositionRequired: {
+        reviewId: null,
+        reviewCommitSha,
+        reason: "two or more tied latest Copilot reviews carry body-only feedback, so no single copilot-body-disposition record can clear it",
+      },
+    };
   }
   const reviewId = review.id !== null && review.id !== undefined ? String(review.id) : null;
   if (reviewHasOwnThread(reviewThreads, reviewId)) {
@@ -234,5 +255,13 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
   const record = await resolveCopilotBodyDisposition({ repo, pr, headSha, reviewId, reviewCommitSha }, runtime);
   return record.cleared
     ? { ...settled, bodyDisposition: record.disposition }
-    : { ...settled, copilotPriorHeadBodyFeedbackUnresolved: true };
+    : {
+      ...settled,
+      copilotPriorHeadBodyFeedbackUnresolved: true,
+      dispositionRequired: {
+        reviewId,
+        reviewCommitSha,
+        reason: "the latest Copilot review, on an earlier head, carries body-only feedback with no trusted copilot-body-disposition record",
+      },
+    };
 }

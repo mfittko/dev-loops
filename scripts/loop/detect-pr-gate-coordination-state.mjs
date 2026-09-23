@@ -1022,6 +1022,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     postConvergenceReviewSuppressed,
     carriedConvergence,
     copilotBodyDisposition: bodyFeedback.bodyDisposition,
+    copilotBodyDispositionRequired: bodyFeedback.dispositionRequired,
     fixerDisposition,
   };
 }
@@ -1265,8 +1266,11 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
   result.copilotReviewRoundCount = context.snapshot?.copilotReviewRoundCount ?? 0;
   // Recorded dispositions: the carried convergence (source review and head)
   // and the body-feedback disposition record, each null when none applies.
+  // copilotBodyDispositionRequired names the review a disposition record must
+  // name while a body-feedback flag blocks; null otherwise.
   result.carriedConvergence = context.carriedConvergence ?? null;
   result.copilotBodyDisposition = context.copilotBodyDisposition ?? null;
+  result.copilotBodyDispositionRequired = context.copilotBodyDispositionRequired ?? null;
   // Auto-release the runner-coordination lock at gate-coordination terminal stop
   // boundaries — see TERMINAL_RUNNER_RELEASE_ACTIONS above for the rationale
   // (success-or-stop release vs 30-min TTL; env-aware, best-effort,
