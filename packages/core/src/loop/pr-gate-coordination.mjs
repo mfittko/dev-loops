@@ -2009,7 +2009,11 @@ function evaluatePrGateCoordinationCore(input = {}) {
     // human-read reason/evidence text for the latter case would be a false CI
     // claim, so describe the actual grant basis instead.
     const ciClause = ciStatus === "success" ? "green CI" : "CI not required by config";
-    if (unresolvedThreadCount === 0 && ciConfirmedGreen && copilotConvergenceOk) {
+    // No current-head Copilot review at the cap IS the round-cap clean
+    // fallback, so the convergence evaluator's absent-review refusal must not
+    // block this grant; a current-head review with findings still does. An
+    // unknown head never opens the absent-review branch.
+    if (unresolvedThreadCount === 0 && ciConfirmedGreen && (copilotConvergenceOk || (currentHeadSha !== null && input.copilotReviewOnCurrentHead === false))) {
       if (preApprovalGate.currentHeadClean) {
         // Inline title-marker check, mirroring ROUND_CAP_CLEAN_FALLBACK: the
         // outer post-pass guards FINAL_APPROVAL_READY and
