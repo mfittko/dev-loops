@@ -1390,7 +1390,7 @@ export async function findJudgeDispositionForFingerprint({ repo, pr, gate, headS
 // shape (single spaces, no trailing content) is still indistinguishable from
 // the genuine suffix by string shape alone; closing that gap fully would
 // need a render-time change (e.g. a distinguishing token) in
-// upsert-checkpoint-verdict.mjs / renderFindingLine, out of scope here.
+// renderFindingLine itself, out of scope here.
 const RENDERED_JUDGE_DISPOSITION_RE = /^\*\*[^*\n]+\*\*\s+\(`[^`\n]+`\):.* — judge: ([a-z][a-z0-9_-]*)$/mu;
 
 export function parseRenderedJudgeDisposition(body) {

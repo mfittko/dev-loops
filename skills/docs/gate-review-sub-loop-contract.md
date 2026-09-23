@@ -929,8 +929,10 @@ Consolidation:
   `close-gate-findings.mjs` reject-closes it instead, citing the judge's rejection rationale
   in the closing reply; this is a reply-and-resolve, never a `disposition=deferred` stamp,
   and files no follow-up issue (a question is never fileable). Still unanswered, it still
-  blocks; still judge-`act`/`defer`, it is still owned by the fixer/judge-pass paths above,
-  unchanged. A NON-LOCATABLE `question` has no resolvable
+  blocks; still judge-`act`, it is still owned by the fixer's own answer-and-resolve path,
+  unchanged. Still judge-`defer`, judge-pass only files the follow-up issue for it — no path
+  resolves the thread, so an answered, judge-deferred question needs an operator decision.
+  A NON-LOCATABLE `question` has no resolvable
   thread to answer through — it is body-filed and deferred by construction, exactly like
   every other non-`high` body-filed finding (`GATE-EXEC-DEFERRAL-RECORD`). A `nit` is a
   cosmetic, non-defect finding resolved-with-rationale immediately, with no fixer cycle
