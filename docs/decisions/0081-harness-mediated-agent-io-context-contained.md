@@ -58,7 +58,8 @@ flowchart TD
     I --> J[Harness-mediated fresh judge]
     J --> K[Compact typed result + refs]
 
-    K --> O
+    K --> R2[Refresh / reconciliation]
+    R2 --> O
 
     H[Unavoidable harness child handback]
     H -. may enter .-> C
@@ -68,6 +69,8 @@ flowchart TD
 The capsule MAY receive unavoidable child handback in its own transcript because the harness owns that delivery. The capsule SHALL be short-lived and SHALL NOT propagate raw reviewer/judge transcripts or bulk findings into the outer coordinator.
 
 The outer coordinator receives compact typed results and references only.
+
+The capsule is an executor under ADR 0074 Section 12: it follows the deterministic dispatch plan only, and on any non-happy observation (dispatch failure, a blocked or missing unit, fan-in failure, or a head change) it stops and returns a typed observation to refresh/reconciliation rather than choosing the next step itself.
 
 ### 3. Artifacts are semantic inputs; harness handback is non-authoritative
 
@@ -87,7 +90,7 @@ Reference-based handoff is appropriate between the outer coordinator and the cap
 
 It is **not** a replacement for the existing reviewer briefing contract.
 
-Where `GATE-EXEC-BRIEFING-PREFIX` and #1462 require the canonical shared prefix to be inline and byte-identical in the actual reviewer request, the capsule SHALL dispatch the sanctioned emitted prompt bytes unchanged. A path-only reviewer request is not equivalent and would break request-prefix/cache semantics.
+Where `GATE-EXEC-BRIEFING-PREFIX` requires the canonical shared prefix to be inline and byte-identical in the actual reviewer request, the capsule SHALL dispatch the sanctioned emitted prompt bytes unchanged. A path-only reviewer request is not equivalent and would break request-prefix/cache semantics. (Issue #1462 separately keeps the handoff-envelope prefix byte-stable; it does not govern this inline reviewer-request rule.)
 
 ### 5. Observation and recovery are capability-honest
 
@@ -95,7 +98,7 @@ Model-free observation remains the preferred mechanism where the harness/runtime
 
 Where a native harness does not expose enough identity/lifetime control to reconstruct a child after coordinator loss, the adapter SHALL report an explicit unsupported or ambiguous capability and fail closed. It SHALL NOT fabricate durable worker identity or claim process ownership.
 
-This amends the interpretation of ADR 0074 Sections 10, 11, 12, and 17 without changing their fail-closed intent.
+This amends the interpretation of ADR 0074 Sections 10, 11, 12, 16, and 17 without changing their fail-closed intent.
 
 ### 6. v1.2.0 owns the process/session I/O seam
 
@@ -138,6 +141,8 @@ The post-cutover benchmark therefore separates:
 - deterministic tool calls.
 
 Zero model-selected mechanical transitions remains required. Zero model turns for native harness spawn/join is not a v1.0.5 requirement.
+
+This amends ADR 0074 Sections 23 and 24 and the "Verification and cutover criteria" consequence: the migration/cutover target and the post-cutover benchmark are narrowed as stated above, without changing their fixture-first, exclusive-authority intent.
 
 ## Consequences
 
