@@ -26,6 +26,7 @@ import {
 import { buildLogPath } from "../github/write-gate-findings-log.mjs";
 import { buildContainmentMap } from "../github/_commit-containment.mjs";
 import { fetchGithubReviewThreadsPayload } from "../github/capture-review-threads.mjs";
+import { countUnresolvedGateAuthoredThreadsFromRawNodes } from "../github/_gate-finding-surface.mjs";
 import { detectPostConvergenceSignificantChange } from "./_post-convergence-change.mjs";
 import { detectCheckpointEvidence } from "../github/detect-checkpoint-evidence.mjs";
 import { classifyDeltaSinceLastReview, getLastCopilotReviewHeadSha } from "../github/request-copilot-review.mjs";
@@ -861,6 +862,20 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
   const copilotRequested = await fetchCopilotRequested(options, runtime);
   const threadsPayload = await fetchGithubReviewThreadsPayload(options, runtime);
   const parsedThreads = parseReviewThreads(threadsPayload);
+  // Gate-authored unresolved thread count (ADR 0088), reusing the SAME
+  // raw thread payload already fetched above — no extra gh round-trip. This
+  // is the exact predicate close-gate-findings.mjs/ready-for-review.mjs's own
+  // gate-close assertion uses (countUnresolvedGateAuthoredThreadsFromRawNodes,
+  // marker-only fail-closed proxy); feeding it into evaluatePrGateCoordination
+  // (buildGateCoordinationEvaluatorInput below) is what reconciles this
+  // detector with detect-checkpoint-evidence.mjs: neither can report
+  // mark_ready_for_review/clean while the other reports unresolved threads.
+  let unresolvedGateThreadCount;
+  try {
+    unresolvedGateThreadCount = countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload);
+  } catch {
+    unresolvedGateThreadCount = -1;
+  }
   const gateEvidence = await detectCheckpointEvidence(options, {
     ...runtime,
     cwd: runtime.cwd ?? runtime.repoRoot,
@@ -969,6 +984,7 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     prData,
     snapshot,
     gateEvidence,
+    unresolvedGateThreadCount,
     interpretation,
     disposition,
     copilotBodyConvergence,
@@ -1048,6 +1064,14 @@ export function buildGateCoordinationEvaluatorInput({
     // "zero unresolved threads" (the exhaustion note's own promise) rather
     // than trusting a stale/compound lifecycleState label alone.
     unresolvedThreadCount: context.snapshot?.unresolvedThreadCount ?? null,
+    // Gate-authored unresolved thread count (ADR 0088) — distinct from the
+    // generic unresolvedThreadCount above (every open PR review thread): this
+    // is the SAME count close-gate-findings.mjs/ready-for-review.mjs's own
+    // gate-close assertion uses, folded ONLY into draftGate.currentHeadClean
+    // (toGateStatus, pr-gate-coordination.mjs) so it reconciles this
+    // detector's MARK_READY_FOR_REVIEW decision with detect-checkpoint-
+    // evidence.mjs's own unresolved-thread report for the same PR state.
+    unresolvedGateThreadCount: context.unresolvedGateThreadCount ?? null,
     sameHeadCleanConverged: context.interpretation.sameHeadCleanConverged,
     copilotConvergenceOk: context.copilotBodyConvergence?.ok === true,
     // Current-head Copilot review evidence, fed alongside sameHeadCleanConverged so

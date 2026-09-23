@@ -870,6 +870,7 @@ test("readGateFindingsLedger normalizes the legacy severity spelling on read", a
 
 import {
   countUnresolvedGateAuthoredThreads,
+  countUnresolvedGateAuthoredThreadsBySeverity,
   countUnresolvedGateAuthoredThreadsFromRawNodes,
 } from "../../scripts/github/_gate-finding-surface.mjs";
 
@@ -945,6 +946,23 @@ test("#1585: an empty-string login falls back to the marker-only fail-closed pro
   // "" must behave like null (marker-only: over-counts a foreign quote, blocks safely).
   assert.equal(countUnresolvedGateAuthoredThreads([thread], ""), 1);
   assert.equal(countUnresolvedGateAuthoredThreads([thread], null), 1);
+});
+
+// #2381: countUnresolvedGateAuthoredThreadsBySeverity — same predicate,
+// split into a "question" and an "other" bucket for ready-for-review.mjs's
+// per-reason refusal text.
+test("#2381: countUnresolvedGateAuthoredThreadsBySeverity splits question from every other severity, and the total always matches countUnresolvedGateAuthoredThreads", () => {
+  const question = thread({ body: `${buildFindingMarker({ fp: "e".repeat(16), severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): why?` });
+  const high = thread({ body: `${buildFindingMarker({ fp: "f".repeat(16), severity: "must-fix", angle: "sec", round: 1 })}\n**must-fix** (\`sec\`): x` });
+  const resolvedQuestion = thread({ body: `${buildFindingMarker({ fp: "1".repeat(16), severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): resolved already`, isResolved: true });
+  const threads = [question, high, resolvedQuestion];
+  const breakdown = countUnresolvedGateAuthoredThreadsBySeverity(threads, GATE_LOGIN);
+  assert.deepEqual(breakdown, { total: 2, question: 1, other: 1 });
+  assert.equal(breakdown.total, countUnresolvedGateAuthoredThreads(threads, GATE_LOGIN));
+});
+
+test("#2381: countUnresolvedGateAuthoredThreadsBySeverity throws (fail-closed) on a non-array threads input", () => {
+  assert.throws(() => countUnresolvedGateAuthoredThreadsBySeverity(null, GATE_LOGIN), /threads must be an array/);
 });
 
 test("#1585: countUnresolvedGateAuthoredThreadsFromRawNodes throws (fail-closed) on a non-array rawNodes", () => {

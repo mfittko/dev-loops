@@ -9,6 +9,8 @@ import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 import { detectPrGateCoordinationState, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, resolvePostConvergenceReviewSuppressed, countPrChangedLines, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { detectPostConvergenceSignificantChange } from "../../scripts/loop/_post-convergence-change.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
+import { buildFindingMarker, countUnresolvedGateAuthoredThreadsFromRawNodes } from "../../scripts/github/_gate-finding-surface.mjs";
+import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { isRoundCapReachedCleanGrant } from "@dev-loops/core/loop/pr-gate-coordination";
 import { evaluateMergePreconditions } from "@dev-loops/core/loop/merge-approval";
 import { emitResult } from "../../scripts/lib/jq-output.mjs";
@@ -489,6 +491,90 @@ test("detect-pr-gate-coordination-state routes a ready PR with only unresolved g
     assert.equal(parsed.nextAction, "address_review_feedback");
     assert.ok(parsed.forbiddenActions.includes("run_pre_approval_gate"));
     assert.ok(!parsed.allowedNextActions.includes("run_pre_approval_gate"));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// #2381: the previously deadlocked state — a DRAFT PR with a clean,
+// current-head, contract-complete draft_gate marker, but ONE unresolved
+// gate-authored thread (an answered, judge-rejected question
+// close-gate-findings has not yet reject-closed). Before this fix,
+// draftGate.currentHeadClean ignored the thread count entirely, so this
+// detector returned mark_ready_for_review while detect-checkpoint-evidence.mjs's
+// own unresolved-gate-authored-thread count (countUnresolvedGateAuthoredThreadsFromRawNodes,
+// the SAME predicate close-gate-findings.mjs/ready-for-review.mjs assert
+// against) reports 1 for the identical raw thread payload.
+test("#2381: a DRAFT PR with a clean draft_gate marker but ONE unresolved gate-authored thread does NOT return mark_ready_for_review", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-2381-deadlock-"));
+  try {
+    const headSha = "abc1234567";
+    const questionMarker = buildFindingMarker({ fp: "a".repeat(16), severity: "question", angle: "scope", round: 1 });
+    const questionThreadNode = {
+      id: "PRRT_Q1",
+      isResolved: false,
+      isOutdated: false,
+      path: "src/scope.mjs",
+      line: 4,
+      comments: {
+        nodes: [{
+          id: "PRRC_Q1",
+          databaseId: 9001,
+          body: `${questionMarker}\n**question** (\`scope\`): why this approach?`,
+          author: { login: "dev-loops-gate[bot]", __typename: "Bot" },
+        }],
+      },
+    };
+    const cleanDraftGateBody = renderGateReviewCommentBody({
+      gate: "draft_gate",
+      headSha,
+      verdict: "clean",
+      findingsSummary: "no blocking issues found",
+      nextAction: "mark ready for review",
+    });
+    const env = await writeGhStub(tempDir, [
+      {
+        stdout: JSON.stringify({
+          number: 10,
+          state: "OPEN",
+          isDraft: true,
+          headRefOid: headSha,
+          mergeStateStatus: "CLEAN",
+          body: "## Objective\n\nShip.\n\n## In scope\n\n- x\n\n## Explicit non-goals\n\n- y\n\n## Acceptance criteria\n\n- [ ] x\n\n## Definition of done\n\n- [ ] tests pass\n",
+          closingIssuesReferences: [],
+          reviews: [],
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }) + "\n",
+      },
+      { stdout: "{\"users\":[]}\n" },
+      { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [questionThreadNode], pageInfo: { hasNextPage: false } } } } } }) },
+      { stdout: jsonLine({ headRefOid: headSha }) },
+      { stdout: jsonLine([[{ id: 11, body: cleanDraftGateBody, html_url: "https://example.test/comment/11", updated_at: "2026-05-31T20:00:00Z" }]]) },
+      { stdout: "[]\n" }, // detectCheckpointEvidence's own PR-reviews read
+      {
+        assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],
+        stdout: "\n",
+      },
+    ]);
+
+    const result = await detectPrGateCoordinationState(
+      { repo: "owner/repo", pr: 10 },
+      buildMockRuntime(env),
+    );
+    assert.equal(result.ok, true);
+    // The draft_gate marker itself is clean and current-head, so the ONLY
+    // reason mark_ready_for_review must not appear is the dangling thread.
+    assert.equal(result.draftGate.currentHead, true);
+    assert.equal(result.draftGate.verdict, "clean");
+    assert.equal(result.draftGate.contractComplete, true);
+    assert.equal(result.draftGate.currentHeadClean, false);
+    assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
+    assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+
+    // The evidence detector (detect-checkpoint-evidence.mjs) reports the SAME
+    // raw thread payload as 1 unresolved gate-authored thread — the two
+    // detectors now agree: neither reports the PR ready.
+    assert.equal(countUnresolvedGateAuthoredThreadsFromRawNodes([questionThreadNode]), 1);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

@@ -100,7 +100,19 @@ function normalizeGateComment(summary = null) {
   };
 }
 
-function toGateStatus(comment, marker, currentHeadSha) {
+// `unresolvedGateThreadCount` (ADR 0088): the gate-authored review-thread
+// invariant close-gate-findings.mjs/ready-for-review.mjs already enforce
+// (GATE-EXEC-FINDING-THREADS) — a clean marker verdict alone is not
+// sufficient while a gate-authored thread (e.g. an unanswered or
+// not-yet-judge-rejected `question`) still dangles. Folded ONLY into
+// `currentHeadClean` here, never `cleanEvidenceExists`: `undefined`/`null`
+// (the caller did not supply the signal — preApprovalGate's own
+// toGateStatus call never does) preserves the marker-only definition
+// exactly, so only draftGate's `currentHeadClean` — the one field that
+// gates MARK_READY_FOR_REVIEW below — gains this guard. -1 (fail-closed
+// "could not read thread state") counts as NOT clean, same as any positive
+// count.
+function toGateStatus(comment, marker, currentHeadSha, unresolvedGateThreadCount) {
   const normalizedComment = normalizeGateComment(comment);
   const normalizedMarker = normalizeGateComment(marker);
   const markerHeadMatches = normalizedMarker.headSha !== null
@@ -109,6 +121,8 @@ function toGateStatus(comment, marker, currentHeadSha) {
   const anyVisible = normalizedComment.visible || normalizedMarker.visible;
 
   const cleanEvidenceExists = normalizedComment.visible && normalizedComment.verdict === "clean" && normalizedComment.headSha !== null;
+  const hasThreadSignal = Number.isInteger(unresolvedGateThreadCount);
+  const gateThreadsClean = !hasThreadSignal || unresolvedGateThreadCount === 0;
 
   return {
     visible: normalizedComment.visible,
@@ -120,7 +134,7 @@ function toGateStatus(comment, marker, currentHeadSha) {
     findingsSummary: normalizedComment.findingsSummary ?? normalizedMarker.findingsSummary,
     nextAction: normalizedComment.nextAction ?? normalizedMarker.nextAction,
     contractComplete: normalizedMarker.visible && markerHeadMatches && normalizedMarker.contractComplete,
-    currentHeadClean: normalizedMarker.visible && markerHeadMatches && normalizedMarker.verdict === "clean" && normalizedMarker.contractComplete,
+    currentHeadClean: normalizedMarker.visible && markerHeadMatches && normalizedMarker.verdict === "clean" && normalizedMarker.contractComplete && gateThreadsClean,
     cleanEvidenceExists,
   };
 }
@@ -736,8 +750,19 @@ const DRAFT_GATE_EVIDENCE_GUARDED_BOUNDARIES = Object.freeze([
   PR_CHECKPOINT.FINAL_APPROVAL_READY,
 ]);
 
-function applyDraftGateEvidenceGuard(result) {
+function applyDraftGateEvidenceGuard(result, { prDraft = false } = {}) {
   if (!result || typeof result !== "object") {
+    return result;
+  }
+  // The PR is still draft: absent/not-yet-clean draft_gate evidence is the
+  // EXPECTED state while draft_gate remediation is in progress (e.g. a fixer
+  // mid-way through COMPLETE_FIXER_DISPOSITION for threads it tackled from an
+  // earlier draft_gate round) — the PR_DRAFT branch above already owns this
+  // state (RUN_DRAFT_GATE / MARK_READY_FOR_REVIEW). This guard exists for the
+  // POST-draft merge-path boundaries only (mirrors the wrapper's own
+  // prDraft skip for the title-marker guard, below); rewriting an in-progress
+  // draft-side result to reconcile_draft_gate would misdirect the fixer.
+  if (prDraft) {
     return result;
   }
   if (result.draftGate?.cleanEvidenceExists === true) {
@@ -785,29 +810,31 @@ function applyDraftGateEvidenceGuard(result) {
  * Invariant: every return path passes through `applyDraftGateEvidenceGuard`,
  * which rewrites the five DRAFT_GATE_EVIDENCE_GUARDED_BOUNDARIES boundaries to
  * DRAFT_GATE_NEEDED / reconcile_draft_gate whenever clean draft_gate evidence
- * is absent.
+ * is absent — a still-draft PR is exempted (ADR 0088): absent/not-yet-clean
+ * draft_gate evidence is the normal state while draft_gate remediation is in
+ * progress, and the PR_DRAFT branch already owns that state.
  */
 export function evaluatePrGateCoordination(input = {}) {
   const result = evaluatePrGateCoordinationCore(input);
+  const prDraft = input.prDraft === true;
 
   const unsettledReviewResult = applyUnsettledCopilotReviewEntryGuard(input, result);
   if (unsettledReviewResult) {
-    return applyDraftGateEvidenceGuard(unsettledReviewResult);
+    return applyDraftGateEvidenceGuard(unsettledReviewResult, { prDraft });
   }
 
-  const prDraft = input.prDraft === true;
   const prTitle = typeof input.prTitle === "string" ? input.prTitle : "";
   // Draft PRs may legitimately carry a WIP title; the marker only blocks once
   // the PR has left draft and is at a pre-approval/final-approval boundary.
   if (prDraft || !result || typeof result !== "object") {
-    return applyDraftGateEvidenceGuard(result);
+    return applyDraftGateEvidenceGuard(result, { prDraft });
   }
   if (!TITLE_MARKER_GUARDED_BOUNDARIES.includes(result.gateBoundary)) {
-    return applyDraftGateEvidenceGuard(result);
+    return applyDraftGateEvidenceGuard(result, { prDraft });
   }
   const markers = findBlockingTitleMarkers(prTitle);
   if (markers.length === 0) {
-    return applyDraftGateEvidenceGuard(result);
+    return applyDraftGateEvidenceGuard(result, { prDraft });
   }
 
   return applyDraftGateEvidenceGuard(buildTitleMarkerBlockedResult({
@@ -820,7 +847,7 @@ export function evaluatePrGateCoordination(input = {}) {
     conflictFiles: result.conflictFiles ?? [],
     markers,
     refinementArtifact: result.refinementArtifact ?? null,
-  }));
+  }), { prDraft });
 }
 
 function evaluatePrGateCoordinationCore(input = {}) {
@@ -901,7 +928,7 @@ function evaluatePrGateCoordinationCore(input = {}) {
         : lifecycleState);
   const sameHeadCleanConverged = input.sameHeadCleanConverged === true || gateEntryConverged;
 
-  const draftGate = toGateStatus(input.draftGate, input.draftGateMarker, currentHeadSha);
+  const draftGate = toGateStatus(input.draftGate, input.draftGateMarker, currentHeadSha, input.unresolvedGateThreadCount);
   const preApprovalGate = toGateStatus(input.preApprovalGate, input.preApprovalGateMarker, currentHeadSha);
   const draftGateAlreadySatisfied = !prDraft && (draftGate?.cleanEvidenceExists ?? false);
 
@@ -1766,11 +1793,12 @@ function evaluatePrGateCoordinationCore(input = {}) {
       }
       // Mirror LOW_SIGNAL_CONVERGED: a clean current head with no clean
       // draft_gate evidence must reconcile the draft gate rather than jump to
-      // final approval. This keeps the core handler consistent with the
-      // detect-pr-gate-coordination-state post-pass, which unconditionally
-      // downgrades FINAL_APPROVAL_READY → DRAFT_GATE_NEEDED when
-      // draftGate.cleanEvidenceExists is false (no ROUND_CAP_CLEAN_FALLBACK
-      // exemption). Without this guard the final-approval-without-draft-gate
+      // final approval. This is the SAME rule applyDraftGateEvidenceGuard
+      // enforces generically for every DRAFT_GATE_EVIDENCE_GUARDED_BOUNDARIES
+      // boundary on a non-draft PR (draftGate.cleanEvidenceExists false →
+      // reconcile_draft_gate); this inline check covers the same outcome for
+      // FINAL_APPROVAL_READY specifically, before that wrapper-level guard
+      // runs. Without this guard the final-approval-without-draft-gate
       // branch is dead through the real script and asserts behavior it never
       // produces.
       if (!draftGate.cleanEvidenceExists) {

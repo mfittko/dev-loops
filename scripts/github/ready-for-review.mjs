@@ -87,6 +87,40 @@ export function parseReadyForReviewCliArgs(argv) {
   return opts;
 }
 
+// ADR 0088: names only remedies that can actually clear each reported blocking
+// reason — the count alone ("run the disposition pass + fixer triage") was
+// wrong for a judge-rejected question: neither the disposition pass
+// (selectDispositionTargets never selects a question) nor fixer triage (a
+// judge-rejected finding never enters the fixer's act list, by design — see
+// close-gate-findings.mjs's reject-close pass) can clear that count. A
+// `question` bucket splits from every other gate-authored severity because
+// the two need genuinely different remedies. Exported for direct assertion
+// (the refusal text is asserted per blocking reason).
+export function describeUnresolvedGateThreadReasons(breakdown, fallbackCount) {
+  const question = breakdown?.question ?? 0;
+  const other = breakdown?.other ?? 0;
+  const reasons = [];
+  if (question > 0) {
+    reasons.push(
+      `${question} question thread(s): if unanswered, post a resolving answer reply, then rerun close-gate-findings — it reject-closes an answered question the judge rejected (citing the judge's rejection rationale); an answered question the judge did not reject is resolved by the fixer's own answer-and-resolve path`,
+    );
+  }
+  if (other > 0) {
+    reasons.push(
+      `${other} open defect thread(s) (high/medium/low/nit): resolve via fixer fix-close, or the disposition pass's defer-close (close-gate-findings)`,
+    );
+  }
+  if (reasons.length === 0) {
+    // The caller (fetchDraftGateEvidence) only supplies a zero-everywhere
+    // breakdown on a fail-closed (-1) read, which is refused earlier with its
+    // own distinct message — this is a defensive fallback for a breakdown
+    // that somehow undercounts the reported total, never expected in normal
+    // operation.
+    reasons.push(`${fallbackCount} unresolved gate-authored review thread(s): run the disposition pass (close-gate-findings) + fixer triage to resolve (fix-close or defer-close) every gate-authored thread`);
+  }
+  return reasons.join("; ");
+}
+
 async function fetchPrState({ repo, pr }, { env, ghCommand, runChild: runChildImpl }) {
   const [owner, name] = repo.split("/");
   const r = await runGhJson(["api", "graphql", "-f", `query=${PR_VIEW_QUERY}`, "-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${pr}`], { env, ghCommand, runChild: runChildImpl });
@@ -169,7 +203,7 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   // own that; this assertion is the ready-for-review backstop that refuses to
   // mark ready while any gate-authored thread still dangles (the #1584 bug).
   if (gate.unresolvedGateThreadCount === -1) throw new Error(`PR #${options.pr} could not read review-thread state from GitHub; re-run when API connectivity is restored`);
-  if (gate.unresolvedGateThreadCount !== 0) throw new Error(`PR #${options.pr} has ${gate.unresolvedGateThreadCount} unresolved gate-authored review thread(s); run the disposition pass (close-gate-findings) + fixer triage to resolve (fix-close or defer-close) every gate-authored thread before marking ready for review`);
+  if (gate.unresolvedGateThreadCount !== 0) throw new Error(`PR #${options.pr} has ${gate.unresolvedGateThreadCount} unresolved gate-authored review thread(s): ${describeUnresolvedGateThreadReasons(gate.unresolvedGateThreadBreakdown, gate.unresolvedGateThreadCount)}`);
   // Fail-closed PR size budget (gates.size): the sole enforcement point plus
   // pre-pr-ready-gate.mjs's mirror of the same check on the raw `gh pr ready`
   // path. A waiver is only ever accepted here (never on the raw path) — see

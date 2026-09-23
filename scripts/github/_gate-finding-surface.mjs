@@ -804,6 +804,35 @@ export function countUnresolvedGateAuthoredThreads(threads, login) {
 }
 
 /**
+ * Same predicate as countUnresolvedGateAuthoredThreads, split by severity
+ * bucket ("question" vs every other gate-authored severity) so a refusal
+ * surface (ready-for-review.mjs) can name a remedy specific to each reported
+ * blocking reason, instead of one generic instruction that cannot clear
+ * every case (a judge-rejected-but-unanswered question cannot be cleared by
+ * fixer triage alone — GATE-EXEC-FINDING-THREADS, ADR 0088). `total`
+ * always equals countUnresolvedGateAuthoredThreads's own result for the SAME
+ * threads/login — this only changes how the total is split, never the total
+ * itself, so the two functions can never disagree on the count.
+ */
+export function countUnresolvedGateAuthoredThreadsBySeverity(threads, login) {
+  if (!Array.isArray(threads)) {
+    throw new Error(`countUnresolvedGateAuthoredThreadsBySeverity: threads must be an array, got ${typeof threads}`);
+  }
+  const loginKnown = typeof login === "string" && login.length > 0;
+  let question = 0;
+  let other = 0;
+  for (const thread of threads) {
+    if (thread.isResolved) continue;
+    if (loginKnown && thread.author !== login) continue;
+    const marker = parseFindingMarker(thread.body);
+    if (!marker) continue;
+    if (marker.severity === "question") question += 1;
+    else other += 1;
+  }
+  return { total: question + other, question, other };
+}
+
+/**
  * Map the raw GraphQL review-thread nodes `fetchGithubReviewThreadsPayload`
  * (capture-review-threads.mjs) returns onto the `{ author, body, isResolved }`
  * shape `countUnresolvedGateAuthoredThreads` consumes, then count unresolved
@@ -833,18 +862,35 @@ export function countUnresolvedGateAuthoredThreadsFromRawNodes(rawNodes) {
 }
 
 /**
- * Fetch the unresolved gate-authored thread count for a PR. Resolves the
- * authenticated login once (the trust boundary for the gate-authored
- * provenance decision, identical to `selectDispositionTargets`' author check)
- * and lists review threads, then counts the unresolved gate-authored ones.
- * Throws on gh failure — callers (fetchDraftGateEvidence) catch and treat the
- * unreadable state as fail-closed (-1): the gate cannot assert 0 unresolved, so
- * it blocks rather than guessing clean.
+ * Fetch the unresolved gate-authored thread count AND its severity breakdown
+ * for a PR, from ONE thread fetch. Resolves the authenticated login once (the
+ * trust boundary for the gate-authored provenance decision, identical to
+ * `selectDispositionTargets`' author check) and lists review threads once,
+ * reusing that same fetch for both countUnresolvedGateAuthoredThreads (the
+ * total fetchUnresolvedGateThreadCount below returns) and
+ * countUnresolvedGateAuthoredThreadsBySeverity (the breakdown
+ * fetchDraftGateEvidence's `unresolvedGateThreadBreakdown` field returns) — no
+ * extra gh round-trip for the breakdown. Throws on gh failure — callers
+ * (fetchDraftGateEvidence) catch and treat the unreadable state as
+ * fail-closed (-1): the gate cannot assert 0 unresolved, so it blocks rather
+ * than guessing clean.
  */
-export async function fetchUnresolvedGateThreadCount({ repo, pr }, gh) {
+async function fetchUnresolvedGateThreadState({ repo, pr }, gh) {
   const login = await resolveAuthenticatedLogin(gh);
   const threads = await fetchAllReviewThreads({ repo, pr }, gh);
-  return countUnresolvedGateAuthoredThreads(threads, login);
+  return {
+    count: countUnresolvedGateAuthoredThreads(threads, login),
+    breakdown: countUnresolvedGateAuthoredThreadsBySeverity(threads, login),
+  };
+}
+
+/**
+ * Fetch the unresolved gate-authored thread count for a PR (fetchDraftGateEvidence's
+ * `unresolvedGateThreadCount` field, and this module's own public shorthand
+ * for a caller that needs only the count).
+ */
+export async function fetchUnresolvedGateThreadCount({ repo, pr }, gh) {
+  return (await fetchUnresolvedGateThreadState({ repo, pr }, gh)).count;
 }
 
 /**
@@ -872,9 +918,15 @@ export async function fetchDraftGateEvidence({ repo, pr, headSha }, gh) {
   // (pre-pr-ready-gate / ready-for-review) assert alongside it. Fail-closed
   // (-1) when the thread/login state is unreadable: the
   // callers treat a non-zero count (including -1) as gate-close-blocked.
+  // `unresolvedGateThreadBreakdown` (ADR 0088) lets a caller (ready-for-review.mjs)
+  // name a remedy specific to each reported blocking reason; it stays the
+  // all-zero default on a fail-closed (-1) read, same as the count.
   let unresolvedGateThreadCount;
+  let unresolvedGateThreadBreakdown = { total: 0, question: 0, other: 0 };
   try {
-    unresolvedGateThreadCount = await fetchUnresolvedGateThreadCount({ repo, pr }, gh);
+    const state = await fetchUnresolvedGateThreadState({ repo, pr }, gh);
+    unresolvedGateThreadCount = state.count;
+    unresolvedGateThreadBreakdown = state.breakdown;
   } catch {
     unresolvedGateThreadCount = -1;
   }
@@ -892,6 +944,7 @@ export async function fetchDraftGateEvidence({ repo, pr, headSha }, gh) {
     draftGate,
     draftGateMarker,
     unresolvedGateThreadCount,
+    unresolvedGateThreadBreakdown,
     currentHeadClean,
     cleanEvidenceExists,
     effectiveHeadClean: currentHeadClean || legacyHeadMatch,
@@ -1142,17 +1195,83 @@ function crossCheckRoundFromReviewBodies(bodies, gate) {
   return max;
 }
 
-async function countLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot }) {
+// Shared by the round cross-check (countLocalFindingsLogFiles) and the
+// reject-close judge-disposition lookup (findJudgeDispositionForFingerprint,
+// below) — both need the same repo/pr/gate local findings-log directory and
+// filename set, and must never resolve a different one for the same inputs.
+async function listLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot }) {
   const samplePath = buildLogPath({ repo, pr, gate, headSha, tmpRoot });
   const dir = path.resolve(repoRoot, path.dirname(samplePath));
   let entries;
   try {
     entries = await readdir(dir);
   } catch {
-    return 0;
+    return { dir, filenames: [] };
   }
   const prefix = `${gate}-`;
-  return entries.filter((name) => name.startsWith(prefix) && name.endsWith(".json")).length;
+  return { dir, filenames: entries.filter((name) => name.startsWith(prefix) && name.endsWith(".json")) };
+}
+
+async function countLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot }) {
+  const { filenames } = await listLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot });
+  return filenames.length;
+}
+
+/**
+ * Tier 2 of the reject-close judge-disposition lookup (close-gate-findings.mjs,
+ * ADR 0088): scan every LOCAL findings-log ledger file for this repo/pr/gate
+ * (any head/round — the judge may have rejected the finding several rounds
+ * ago, and a re-raised finding is suppressed from the CURRENT ledger once
+ * already posted, per collectSuppressedFingerprints) for a finding whose
+ * fingerprint matches `fp` and carries a `judgeDisposition`. Returns
+ * `{ disposition, rationale }` (rationale `null` when absent) for the first
+ * match, or `null` when no local ledger carries one — the caller falls back
+ * to parseRenderedJudgeDisposition (tier 3) then, which has no rationale.
+ * A corrupt/unreadable local ledger file is skipped, never thrown — a stale
+ * or hand-edited local artifact must not block the lookup.
+ */
+export async function findJudgeDispositionForFingerprint({ repo, pr, gate, headSha, tmpRoot, repoRoot, fp }) {
+  const { dir, filenames } = await listLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot });
+  for (const filename of filenames) {
+    let parsed;
+    try {
+      parsed = JSON.parse(await readFile(path.join(dir, filename), "utf8"));
+    } catch {
+      continue;
+    }
+    const findings = Array.isArray(parsed?.findings) ? parsed.findings : [];
+    for (const finding of findings) {
+      if (!finding || typeof finding !== "object") continue;
+      if (typeof finding.judgeDisposition !== "string" || finding.judgeDisposition.trim().length === 0) continue;
+      let matches;
+      try {
+        matches = fingerprintFinding(finding) === fp;
+      } catch {
+        continue; // A malformed finding (no summary) can never fingerprint-match.
+      }
+      if (!matches) continue;
+      const rationale = typeof finding.judgeRationale === "string" && finding.judgeRationale.trim().length > 0
+        ? finding.judgeRationale.trim()
+        : null;
+      return { disposition: finding.judgeDisposition.trim(), rationale };
+    }
+  }
+  return null;
+}
+
+// Tier 3 (last-resort) of the reject-close judge-disposition lookup: parses
+// the ` — judge: <disposition>` suffix renderFindingLine stamps onto a
+// finding's OWN posted comment at render time. That suffix is a snapshot of
+// whatever the ledger recorded when the comment was FIRST posted, and the
+// comment body is never edited afterward (only replies are added), so it
+// survives every later round and a fresh worktree/clone with no local ledger
+// history — at the cost of the rationale text, which is never rendered here,
+// only the disposition token.
+const RENDERED_JUDGE_DISPOSITION_RE = /^\*\*[^*\n]+\*\*\s+\(`[^`\n]+`\):.*—\s*judge:\s*([a-z][a-z0-9_-]*)\s*$/mu;
+
+export function parseRenderedJudgeDisposition(body) {
+  const match = typeof body === "string" ? body.match(RENDERED_JUDGE_DISPOSITION_RE) : null;
+  return match ? match[1].toLowerCase() : null;
 }
 
 /**

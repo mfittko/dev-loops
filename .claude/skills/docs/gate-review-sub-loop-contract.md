@@ -886,7 +886,14 @@ Consolidation:
   canonical replacement on read. A LOCATABLE `question` is answered, never deferred: the
   fixer replies (an answer that reveals a defect promotes it to `high`/`medium`/`low`; an
   unanswerable question escalates to the author), and an unanswered question blocks
-  gate-close exactly like an open defect. A NON-LOCATABLE `question` has no resolvable
+  gate-close exactly like an open defect. ONE exception (ADR 0088): a `question` the judge
+  disposed `reject` never enters the fixer's act list, so a question the operator or fixer
+  answers on the merits AFTER the judge rejected it has no reply-and-resolve actor left —
+  `close-gate-findings.mjs` reject-closes it instead, citing the judge's rejection rationale
+  in the closing reply; this is a reply-and-resolve, never a `disposition=deferred` stamp,
+  and files no follow-up issue (a question is never fileable). Still unanswered, it still
+  blocks; still judge-`act`/`defer`, it is still owned by the fixer/judge-pass paths above,
+  unchanged. A NON-LOCATABLE `question` has no resolvable
   thread to answer through — it is body-filed and deferred by construction, exactly like
   every other non-`high` body-filed finding (`GATE-EXEC-DEFERRAL-RECORD`). A `nit` is a
   cosmetic, non-defect finding resolved-with-rationale immediately, with no fixer cycle
@@ -1566,7 +1573,14 @@ high finding uses, since `isDeferredAtRound` never selects it for auto-deferral 
 enforced and tested). Which of the three replies a fixer sends — a plain answer, a
 promoting-to-defect-severity answer, or an escalation to the author — is a per-thread fixer
 judgment call, not a state machine this codebase drives or unit-tests; only the
-never-auto-deferred invariant above is. A nit thread is
+never-auto-deferred invariant above is. ONE reject-close exception (ADR 0088, issue #2381): a
+question the judge disposed `reject` never reaches the fixer's act list, so the fixer's own
+answer-and-resolve path above never runs for it — once the thread carries a resolving answer
+reply from someone other than the gate itself, `close-gate-findings.mjs` closes it directly,
+citing the judge's rejection rationale in the reply. This is still a reply-and-resolve, never a
+`disposition=deferred` stamp, and a question is still never fileable; an unanswered question, or
+one the judge disposed `act`/`defer`, is untouched by this exception and still follows the paths
+above. A nit thread is
 resolved-with-rationale immediately at round 1 by `close-gate-findings.mjs` — the fixer owes it no
 triage cycle (unlike low, it is not handed to the fixer as a fix/triage target on the severity
 axis; the one exception is a judge `act` on a nit, which reaches the fixer through judge-pass's

@@ -12,12 +12,14 @@ import {
   fetchFollowUpIssueFingerprints,
   fetchThreadsWithFullBodies,
   findFollowUpIssueOnGitHub,
+  findJudgeDispositionForFingerprint,
   fingerprintFinding,
   isBelowInlineFloor,
   isDeferredAtRound,
   isFileableDeferral,
   listPrReviews,
   parseFindingMarker,
+  parseRenderedJudgeDisposition,
   readGateFindingsLedger,
   resolveGateRound,
 } from "./_gate-finding-surface.mjs";
@@ -38,7 +40,19 @@ ${MEDIUM_FIX_WINDOW}, set per gate via gates.<gate>.mediumFixWindow)
 and is replied-to + resolved ("deferred at gate close") from the next round on;
 low is replied-to + resolved at gate close (after the Phase 5 fixer
 triage; #1585). question always stays open too — it is answered, never deferred,
-so an unanswered question blocks gate-close exactly like an open defect; nit is
+so an unanswered question blocks gate-close exactly like an open defect — with
+ONE reject-close exception (#2381): a question thread is closed here when BOTH
+hold: (a) it carries a resolving ANSWER REPLY — a non-empty comment on the
+thread other than its own finding/marker comment, authored by someone other
+than this gate's own login (an unanswered question carries no such comment and
+keeps blocking); and (b) the judge's own disposition for that finding was
+\`reject\` (resolved current-ledger-first, then a prior local findings-log
+ledger for the same PR/gate, then the \` — judge: reject\` suffix already
+rendered on the thread's own posted comment as a last resort — see
+resolveJudgeRejection). The closing reply cites the judge's rejection
+rationale when known, or a generic on-the-merits note when only the rendered
+disposition token survived. This never stamps disposition=deferred and never
+files a follow-up issue (a question is never fileable); nit is
 replied-to + resolved immediately, with no fixer cycle. Every resolve-without-fix
 above is ALSO gated on the net-reduction filing bar (#1846): resolving a thread and
 FILING it to a tracked follow-up issue are separate decisions. nit is NEVER filed —
@@ -86,7 +100,8 @@ Optional:
 Output (stdout, JSON):
   { "ok": true, "repo": "...", "pr": 42, "gate": "...", "headSha": "...", "round": N,
     "deferredResolved": <disposition reply+resolve count>,
-    "unresolvedGateThreadCount": <gate-authored threads still unresolved after the defer pass; the gate-close assertion (fetchDraftGateEvidence / ready-for-review) refuses ready-for-review while non-zero (#1585); folded findings (#2263) never create a thread, so they never enter this count>,
+    "rejectClosed": <answered, judge-rejected question threads reply+resolved this pass (#2381); 0 when none qualify>,
+    "unresolvedGateThreadCount": <gate-authored threads still unresolved after the defer + reject-close passes; the gate-close assertion (fetchDraftGateEvidence / ready-for-review) refuses ready-for-review while non-zero (#1585); folded findings (#2263) never create a thread, so they never enter this count>,
     "foldedFiled": <#2263: operator-visible folded (below gates.<gate>.inlineSeverityFloor) low findings filed to the follow-up issue this pass, from the ledger directly (they carry no thread of their own); a nit or a non-operator-visible low is never filed>,
     "followUpIssueNumber"?: <the PR's one tracked follow-up issue number; present when the thread pass deferred a fileable target OR the folded pass filed one (#1807, #2263)>,
     "dispositionFailures"?: [ { "commentId": ..., "threadId": "...", "severity": "...", "angle": "...", "error": "..." } ] <present only when a target's reply could not be built/posted; that thread stays unresolved rather than deadlocking the batch (#1882)> }
@@ -444,6 +459,135 @@ async function runDispositionPass({ repo, pr, round, threads, snapshot, login, m
 }
 
 // ---------------------------------------------------------------------------
+// Reject-close pass: an answered, judge-rejected `question` thread (ADR 0088)
+// ---------------------------------------------------------------------------
+//
+// A `question` thread is NEVER selected by selectDispositionTargets above
+// (isDeferredAtRound returns false for severity=question, at every round) —
+// it is answered, never deferred. Without this pass, a question the judge
+// REJECTED (so it never entered the fixer's act list, and the fixer's own
+// answer-and-resolve path is never invoked for it — GATE-EXEC-ACT-LIST-SCOPE,
+// out of scope to change) had no sanctioned resolution path at all once
+// someone answered it: unresolvedGateThreadCount could never reach 0. This
+// pass closes ONLY that one case; an unanswered question, or an answered
+// question the judge did NOT reject, is untouched and keeps blocking.
+
+// A resolving ANSWER REPLY: a non-empty comment on the thread OTHER than its
+// own finding/marker comment (thread.commentId), authored by someone OTHER
+// than this gate's own login. `comments` is the FULL per-thread comment list
+// (fetchThreadsWithFullBodies' underlying snapshot.comments) — every comment
+// past the thread's own first (marker) comment is structurally a reply
+// (GitHub review threads have exactly one top-level comment). An unanswered
+// question carries no such comment.
+function hasAnswerReply(thread, comments, login) {
+  const markerCommentId = String(thread.commentId);
+  return comments.some((c) =>
+    c.threadId === thread.threadId
+    && c.databaseId !== null
+    && c.databaseId !== markerCommentId
+    && c.body.trim().length > 0
+    && c.author.login !== login,
+  );
+}
+
+// Every unresolved, gate-authored QUESTION thread — narrowed to "answered"
+// (hasAnswerReply) and "judge-rejected" (resolveJudgeRejection) by the
+// caller below, not here: this selection step only needs identity/marker
+// shape, mirroring selectDispositionTargets above.
+function selectAnsweredQuestionCandidates(threads, login) {
+  const candidates = [];
+  for (const thread of threads) {
+    if (thread.isResolved) continue;
+    if (thread.author !== login) continue;
+    const marker = parseFindingMarker(thread.body);
+    if (!marker || marker.severity !== "question") continue;
+    if (!Number.isInteger(thread.commentId) || thread.commentId <= 0) continue;
+    candidates.push({ threadId: thread.threadId, commentId: thread.commentId, fp: marker.fp, angle: marker.angle, body: thread.body });
+  }
+  return candidates;
+}
+
+function findingFingerprintMatches(finding, fp) {
+  try {
+    return fingerprintFinding(finding) === fp;
+  } catch {
+    return false; // A malformed finding (no usable summary) can never fingerprint-match.
+  }
+}
+
+// Tiered judge-disposition/rationale lookup for a reject-close candidate's
+// fingerprint: (1) the CURRENT round's own ledger findings (cheapest, already
+// in memory); (2) a PRIOR round's local findings-log ledger file for the SAME
+// repo/pr/gate (findJudgeDispositionForFingerprint, _gate-finding-surface.mjs
+// — the judge may have rejected the finding several rounds ago); (3) the
+// ` — judge: <disposition>` suffix already rendered on the thread's own
+// posted comment (parseRenderedJudgeDisposition), which survives a fresh
+// worktree/clone with no local ledger history but carries no rationale text.
+// Every tier is tried in this order because judgeRationale — needed for the
+// closing reply's citation — lives ONLY in the ledger, never in the rendered
+// comment; tier 3 alone would always find the disposition but never the
+// rationale.
+async function resolveJudgeRejection({ fp, threadBody, findings, repo, pr, gate, headSha, tmpRoot, repoRoot }) {
+  const current = findings.find((f) =>
+    f && typeof f.judgeDisposition === "string" && f.judgeDisposition.trim().length > 0 && findingFingerprintMatches(f, fp),
+  );
+  if (current) {
+    const rationale = typeof current.judgeRationale === "string" && current.judgeRationale.trim().length > 0
+      ? current.judgeRationale.trim()
+      : null;
+    return { disposition: current.judgeDisposition.trim(), rationale };
+  }
+  const prior = await findJudgeDispositionForFingerprint({ repo, pr, gate, headSha, tmpRoot, repoRoot, fp });
+  if (prior) return prior;
+  const rendered = parseRenderedJudgeDisposition(threadBody);
+  return rendered ? { disposition: rendered, rationale: null } : null;
+}
+
+const NO_JUDGE_RATIONALE_TEXT = "the judge rejected this finding on its merits; no rationale text is recorded for it";
+
+function rejectCloseMessage({ fp, angle, round, rationale }) {
+  const rationaleText = sanitizeInline(rationale ?? NO_JUDGE_RATIONALE_TEXT);
+  return `Closed at gate close (round ${round}, fingerprint ${fp}, severity question, angle ${angle}): this question was answered, and the judge rejected the finding — ${rationaleText}.`;
+}
+
+// Reply + resolve every answered, judge-rejected question candidate. Never
+// stamps disposition=deferred (this is not a deferral) and never files a
+// follow-up issue (a question is never fileable, isFileableDeferral). A
+// per-candidate failure is recorded in dispositionFailures rather than
+// deadlocking the batch, mirroring runDispositionPass.
+async function runQuestionRejectClosePass({ repo, pr, gate, headSha, round, threads, snapshot, login, findings, tmpRoot, repoRoot, allowedRefs = [] }, { env, ghCommand, runChild }) {
+  const candidates = selectAnsweredQuestionCandidates(threads, login);
+  let rejectClosed = 0;
+  const dispositionFailures = [];
+  for (const candidate of candidates) {
+    if (!hasAnswerReply(candidate, snapshot.comments, login)) continue;
+    let judgement;
+    try {
+      judgement = await resolveJudgeRejection({ fp: candidate.fp, threadBody: candidate.body, findings, repo, pr, gate, headSha, tmpRoot, repoRoot });
+    } catch (err) {
+      dispositionFailures.push({ commentId: candidate.commentId, threadId: candidate.threadId, severity: "question", angle: candidate.angle, error: err instanceof Error ? err.message : String(err) });
+      continue;
+    }
+    if (!judgement || judgement.disposition !== "reject") continue;
+    const message = rejectCloseMessage({ fp: candidate.fp, angle: candidate.angle, round, rationale: judgement.rationale });
+    try {
+      await replyAndMaybeResolve(
+        { repo, pr, commentId: candidate.commentId, threadId: candidate.threadId, body: message, resolve: true, validatedSnapshot: snapshot, allowedRefs },
+        { env, ghCommand, runChild },
+      );
+      rejectClosed += 1;
+    } catch (err) {
+      dispositionFailures.push({ commentId: candidate.commentId, threadId: candidate.threadId, severity: "question", angle: candidate.angle, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  const result = { rejectClosed };
+  if (dispositionFailures.length > 0) {
+    result.dispositionFailures = dispositionFailures;
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Folded-filing pass (GATE-COMMENT-INLINE-SEVERITY-FLOOR)
 // ---------------------------------------------------------------------------
 //
@@ -593,6 +737,17 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
     gh,
   );
 
+  // 4b. Reject-close pass (ADR 0088): an answered, judge-rejected `question`
+  // thread has no other sanctioned resolution path (selectDispositionTargets
+  // never selects a question). Runs against the SAME pre-defer `threads`
+  // snapshot as the disposition pass above — a question thread is never a
+  // disposition-pass target, so the two passes never contend for the same
+  // thread.
+  const { rejectClosed, dispositionFailures: rejectCloseFailures } = await runQuestionRejectClosePass(
+    { repo, pr, gate, headSha, round, threads, snapshot, login, findings, tmpRoot, repoRoot, allowedRefs: options.allowedRefs ?? [] },
+    gh,
+  );
+
   // 5. Folded-filing pass (GATE-COMMENT-INLINE-SEVERITY-FLOOR): a finding below the inline severity floor
   // never gets a thread of its own, so the net-reduction filing above never
   // sees it — file the operator-visible folded lows directly from the
@@ -616,10 +771,13 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
   // this is non-zero. `threads` is the PRE-DEFER snapshot; runDispositionPass
   // resolves threads via the GitHub API but does not mutate this in-memory
   // array's `isResolved` flags — re-fetch here if a future change makes it do
-  // so (GATE-EXEC-FINDING-THREADS).
-  const unresolvedGateThreadCount = countUnresolvedGateAuthoredThreads(threads, login) - deferredResolved;
+  // so (GATE-EXEC-FINDING-THREADS). rejectClosed (ADR 0088) subtracts the same
+  // way deferredResolved does: both passes reply+resolve a thread this count
+  // would otherwise still include.
+  const unresolvedGateThreadCount = countUnresolvedGateAuthoredThreads(threads, login) - deferredResolved - rejectClosed;
+  const combinedDispositionFailures = [...(dispositionFailures ?? []), ...(rejectCloseFailures ?? [])];
 
-  const result = { ok: true, repo, pr, gate, headSha, round, deferredResolved, unresolvedGateThreadCount, foldedFiled };
+  const result = { ok: true, repo, pr, gate, headSha, round, deferredResolved, rejectClosed, unresolvedGateThreadCount, foldedFiled };
   // GATE-EXEC-DEFERRAL-RECORD: only present when either pass actually filed
   // something — a round with nothing to defer/file creates no follow-up issue
   // and reports none.
@@ -629,8 +787,8 @@ export async function closeGateFindings(options, { env = process.env, ghCommand 
   // GATE-EXEC-THREAD-DISPOSITION: surface any target whose reply could not be built/posted this pass,
   // so a malformed thread body is diagnosable instead of silently swallowed
   // (it also keeps unresolvedGateThreadCount non-zero, blocking gate close).
-  if (dispositionFailures !== undefined) {
-    result.dispositionFailures = dispositionFailures;
+  if (combinedDispositionFailures.length > 0) {
+    result.dispositionFailures = combinedDispositionFailures;
   }
   return result;
 }
