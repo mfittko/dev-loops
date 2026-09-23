@@ -548,18 +548,17 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
   // and client-side only: a stateless verifier has no ledger on disk.
   const actList = fanoutEnforcement?.actList;
   if (actList && !skipFanoutLedgerCheck) {
-    if (!actList.readable) {
-      failures.push(`pre_approval_gate: findings-log ledger is unreadable or malformed (${actList.ledgerPath}); cannot verify the judge act list`);
-    } else {
-      if (actList.unjudged) {
-        failures.push(`pre_approval_gate: judge act list unknown (${actList.unjudged.count} finding(s) carry no judge disposition); write the ledger with --judge-verdict`);
-      }
-      if (actList.open) {
-        const { path: openPath, items } = actList.open;
-        failures.push(
-          `pre_approval_gate: judge act list is not empty in ${openPath} (${items.length} open act item(s): ${items.map((f) => `[${f.severity}] ${f.summary}`).join("; ")})`,
-        );
-      }
+    if (actList.unreadable) {
+      failures.push(`pre_approval_gate: findings-log ledger is unreadable or malformed (${actList.unreadable.path}); cannot verify the judge act list`);
+    }
+    if (actList.unjudged) {
+      failures.push(`pre_approval_gate: judge act list unknown in ${actList.unjudged.path} (${actList.unjudged.count} finding(s) carry no judge disposition); write the ledger with --judge-verdict`);
+    }
+    if (actList.open) {
+      const { path: openPath, items } = actList.open;
+      failures.push(
+        `pre_approval_gate: judge act list is not empty in ${openPath} (${items.length} open act item(s): ${items.map((f) => `[${f.severity}] ${f.summary}`).join("; ")}); fix each item and re-gate, or, for an item closed without a commit, rerun the judge at this head, rewrite the ledger with --judge-verdict, and re-post the verdict`,
+      );
     }
   }
   if (typeof unresolvedThreadCount === "number" && unresolvedThreadCount !== 0) {
@@ -701,14 +700,15 @@ async function readLedgerProvenanceInAny(checkouts, ledgerPath, criteria = {}) {
 }
 /**
  * The judge act list of the pre_approval_gate ledger across the enumerated
- * checkouts, or null when no copy exists. Fails closed: `readable` is true
- * when any copy parses to an object with a `findings` array, and the first
- * copy with open act items (or with unjudged fan-out findings) wins, so a
- * copy with an empty act list can never shadow one that still has them.
+ * checkouts, or null when no copy exists. Fails closed: the first existing
+ * copy that does not parse to an object with a `findings` array is
+ * `unreadable`, even when another copy parses. The first copy with open act
+ * items (or with unjudged fan-out findings) wins, so a copy with an empty act
+ * list can never shadow one that still has them.
  */
 async function readActListInAny(checkouts, ledgerPath) {
   let exists = false;
-  let readable = false;
+  let unreadable = null;
   let open = null;
   let unjudged = null;
   for (const root of checkouts) {
@@ -717,19 +717,24 @@ async function readActListInAny(checkouts, ledgerPath) {
     try {
       parsed = JSON.parse(await readFile(full, "utf8"));
     } catch (error) {
-      if (error?.code !== "ENOENT") exists = true;
+      if (error?.code !== "ENOENT") {
+        exists = true;
+        unreadable ??= { path: full };
+      }
       continue;
     }
     exists = true;
-    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.findings)) continue;
-    readable = true;
+    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.findings)) {
+      unreadable ??= { path: full };
+      continue;
+    }
     const items = listOpenActItems(parsed.findings);
     if (!open && items.length > 0) open = { path: full, items };
     // An inline (light-mode) ledger carries no judge pass, so only fan-out is checked.
     const unjudgedCount = parsed.findings.filter((f) => !f?.judgeDisposition).length;
     if (!unjudged && parsed.executionMode === "fanout_fanin" && unjudgedCount > 0) unjudged = { path: full, count: unjudgedCount };
   }
-  return exists ? { ledgerPath, readable, open, unjudged } : null;
+  return exists ? { ledgerPath, unreadable, open, unjudged } : null;
 }
 // A committed `.devloops` is a small hand-authored config file; 8 MiB is
 // already many times larger than any legitimate one, so bounding `git show`

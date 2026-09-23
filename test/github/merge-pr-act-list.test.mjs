@@ -20,7 +20,7 @@ function probeWithActList(openActItems) {
     },
     0,
     null,
-    { required: false, gates: [], actList: { ledgerPath: "tmp/ledger.json", readable: true, unjudged: null, open: openActItems.length > 0 ? { path: "tmp/ledger.json", items: openActItems } : null } },
+    { required: false, gates: [], actList: { ledgerPath: "tmp/ledger.json", unreadable: null, unjudged: null, open: openActItems.length > 0 ? { path: "tmp/ledger.json", items: openActItems } : null } },
   );
   return async () => ({ ok: check.ok, sizeOutcome: "pass", touchesT1: false, currentHeadSha: HEAD, failures: check.failures });
 }

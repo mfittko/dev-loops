@@ -19,6 +19,7 @@ import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
 import {
   SPEC_AUTHORITY_OUTCOMES,
   buildRevisionIdentity,
+  rejectFindingConflicts,
   resolveAffectedCriteria,
   resolveCriterionInvalidation,
   specCriterionIds,
@@ -827,13 +828,9 @@ export async function judgePassCli(
   //    its PROPOSED remedy is rejected — the act entry is flagged so the fixer
   //    routes to a spec-compliant alternative instead of applying it as written.
   if (specAuthority) {
-    const rejected = new Set(specAuthority.findingConflictIndices);
+    rejectFindingConflicts(result.enriched, specAuthority.findingConflictIndices);
     const remedyRejected = new Set(specAuthority.remediationConflictIndices);
     for (const [i, f] of result.enriched.entries()) {
-      if (rejected.has(i) && f.judgeDisposition !== "reject") {
-        f.judgeRationale = `spec-authority finding_conflicts: rejected against the spec (was relevance-${f.judgeDisposition}) — ${f.judgeRationale ?? ""}`.trim();
-        f.judgeDisposition = "reject";
-      }
       if (remedyRejected.has(i)) {
         f.remediationRejected = true;
         f.judgeRationale = `spec-authority remediation_conflicts: finding valid, proposed remedy rejected — route to a spec-compliant alternative. ${f.judgeRationale ?? ""}`.trim();
