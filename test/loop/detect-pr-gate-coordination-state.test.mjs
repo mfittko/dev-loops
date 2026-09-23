@@ -636,6 +636,23 @@ test("detect-pr-gate-coordination-state output equals a direct evaluatePrGateCoo
     assert.deepEqual(parsed.allowedNextActions, directResult.allowedNextActions);
     assert.deepEqual(parsed.forbiddenActions, directResult.forbiddenActions);
     assert.equal(parsed.reason, directResult.reason);
+
+    // Whole-result parity: every field the detector returns must match the
+    // core evaluator's result, not just the five spot-checked above, so a
+    // detector-only change to any other field (lifecycleState,
+    // loopDisposition, draftGateAlreadySatisfied, gateEvidenceNote, ...)
+    // fails this test too.
+    // copilotReviewRoundCount is the sole detector-owned field: the detector
+    // overwrites it after evaluatePrGateCoordination() returns, from its own
+    // post-call snapshot read, so it is compared explicitly and then
+    // normalized before the full-object diff.
+    assert.equal(parsed.copilotReviewRoundCount, directResult.copilotReviewRoundCount);
+    assert.equal(parsed.lifecycleState, directResult.lifecycleState);
+    assert.equal(parsed.loopDisposition, directResult.loopDisposition);
+    assert.equal(parsed.draftGateAlreadySatisfied, directResult.draftGateAlreadySatisfied);
+    assert.ok("gateEvidenceNote" in parsed);
+    assert.equal(parsed.gateEvidenceNote ?? null, directResult.gateEvidenceNote ?? null);
+    assert.deepEqual({ ...parsed, copilotReviewRoundCount: directResult.copilotReviewRoundCount }, directResult);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
