@@ -721,6 +721,54 @@ describe("move-queue-item", () => {
       );
     });
 
+    it("fails closed for an archived item node ID without a mutation", async () => {
+      const calls = [];
+      await assert.rejects(
+        () => main(
+          { repo: "mfittko/dev-loops", project: "1", item: "PVTI_new", toColumn: "Next Up" },
+          {
+            env: {},
+            runChild: recordingRunChild(responsesWith(
+              itemNodeResponse({ ...makeItemNode("PVTI_new", makeContent("Issue", 2392), "Backlog"), isArchived: true }),
+              [],
+            ), calls),
+          },
+        ),
+        (err) => err.code === "ITEM_NOT_FOUND",
+      );
+      assert.equal(calls.filter((c) => c.query && c.query.includes("mutation")).length, 0);
+    });
+
+    // A partial response: the token cannot read another board the issue is on.
+    function partialForbidden(nodes) {
+      const payload = issueSideItemsResponse(nodes);
+      payload.errors = [{ type: "FORBIDDEN", message: "Resource not accessible by integration" }];
+      return { raw: { code: 1, stdout: JSON.stringify(payload), stderr: "gh: Resource not accessible by integration" } };
+    }
+
+    it("resolves a match on the configured board despite a FORBIDDEN error for another board", async () => {
+      const result = await main(
+        { repo: "mfittko/dev-loops", project: "1", item: "2392", toColumn: "Next Up" },
+        {
+          env: {},
+          runChild: mockRunChild(responsesWith(partialForbidden([
+            makeItemNode("PVTI_new", makeContent("Issue", 2392), "Backlog"),
+          ]))),
+        },
+      );
+      assert.equal(result.item.itemId, "PVTI_new");
+    });
+
+    it("keeps a FORBIDDEN error as GRAPHQL_ERROR when no match exists", async () => {
+      await assert.rejects(
+        () => main(
+          { repo: "mfittko/dev-loops", project: "1", item: "2392", toColumn: "Next Up" },
+          { env: {}, runChild: mockRunChild(responsesWith(partialForbidden([]), [])) },
+        ),
+        (err) => err.code === "GRAPHQL_ERROR" && /Resource not accessible/.test(err.message),
+      );
+    });
+
     it("item lookup query requests __typename and never references ProjectV2.item or an unused $itemId", async () => {
       const calls = [];
       await main(

@@ -193,8 +193,9 @@ miss them. This is a known limit of the listing, and tooling does not work aroun
 Move and reorder do not depend on the listing to find an item. A number ref is looked up
 from the issue side (`issueOrPullRequest(number).projectItems`, filtered to the configured
 project and to unarchived items). An item node ID ref is looked up directly with
-`node(id)` and must belong to the configured project and repository. Any other result
-fails closed with `ITEM_NOT_FOUND`.
+`node(id)` and must belong to the configured project and repository. A lookup miss, a
+project mismatch, a repository mismatch, or an archived item fails closed with
+`ITEM_NOT_FOUND` (exit 3). Any other GraphQL error stays `GRAPHQL_ERROR` (exit 2).
 
 ## Fail-closed behavior
 
@@ -896,7 +897,7 @@ exit-code matrix.
 On failure, helpers emit structured JSON on stderr:
 
 ```json
-{"ok": false, "error": "Item #999 not found in project for repo \"owner/name\"", "code": "ITEM_NOT_FOUND"}
+{"ok": false, "error": "Item #999 not found in project \"<title>\" for repo \"owner/name\"", "code": "ITEM_NOT_FOUND"}
 ```
 
 Exit codes (from each helper's `classifyExitCode`):

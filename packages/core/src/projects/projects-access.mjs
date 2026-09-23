@@ -243,19 +243,19 @@ function itemNotFound(message) {
   return Object.assign(new Error(message), { code: "ITEM_NOT_FOUND" });
 }
 
-// Run a lookup query where a GraphQL NOT_FOUND error means "no such item".
-// Any other GraphQL error still fails as GRAPHQL_ERROR.
-async function lookupGraphql(query, vars, env, runChild) {
-  const payload = await ghGraphql(query, vars, env, runChild, { allowErrors: true });
-  const errors = payload.errors ?? [];
-  const other = errors.filter((e) => e?.type !== "NOT_FOUND");
+/**
+ * Throw GRAPHQL_ERROR for any GraphQL error in `payload` other than NOT_FOUND.
+ * Use it on a `ghGraphql(..., { allowErrors: true })` payload where NOT_FOUND
+ * means "no such entity" and every other error must keep its message.
+ */
+export function assertOnlyNotFoundErrors(payload) {
+  const other = (payload?.errors ?? []).filter((e) => e?.type !== "NOT_FOUND");
   if (other.length > 0) {
     throw Object.assign(
       new Error(`GraphQL errors: ${other.map((e) => e.message).join("; ")}`),
       { code: "GRAPHQL_ERROR" },
     );
   }
-  return payload;
 }
 
 /**
@@ -282,21 +282,27 @@ export async function resolveProjectItem({ projectId, projectTitle, repo, itemRe
   const projectLabel = projectTitle ?? projectId;
   if (itemRef.kind === "number") {
     const [owner, name] = repo.split("/");
-    const payload = await lookupGraphql(
+    const payload = await ghGraphql(
       GET_ITEMS_BY_CONTENT_NUMBER,
       { owner, name, number: itemRef.value },
       env,
       runChild,
+      { allowErrors: true },
     );
     const nodes = payload?.data?.repository?.issueOrPullRequest?.projectItems?.nodes ?? [];
     const match = nodes.find((n) => n && n.project?.id === projectId && !n.isArchived);
     if (!match) {
+      // A partial response can carry errors for other boards the token cannot
+      // read (e.g. FORBIDDEN). A match on the configured board wins; the error
+      // is raised only when no match exists.
+      assertOnlyNotFoundErrors(payload);
       throw itemNotFound(`Item #${itemRef.value} not found in project "${projectLabel}" for repo "${repo}"`);
     }
     return match;
   }
 
-  const payload = await lookupGraphql(GET_ITEM_BY_ID, { id: itemRef.value }, env, runChild);
+  const payload = await ghGraphql(GET_ITEM_BY_ID, { id: itemRef.value }, env, runChild, { allowErrors: true });
+  assertOnlyNotFoundErrors(payload);
   const node = payload?.data?.node;
   if (!node?.id || node.isArchived) {
     throw itemNotFound(`Item "${itemRef.value}" not found in project "${projectLabel}" for repo "${repo}"`);
