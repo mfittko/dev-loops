@@ -229,7 +229,7 @@ export async function resolveCarriedConvergence({
     }
   }
   if (threadFacts.unresolvedThreadCount !== 0) {
-    return { carried: false, reason: `${threadFacts.unresolvedThreadCount} unresolved review thread(s) remain` };
+    return { carried: false, reason: `${threadFacts.unresolvedThreadCount} unresolved review thread(s) remain; carried convergence refused (COPILOT-STATE-CARRIED-CONVERGENCE)` };
   }
   const sourceReviewId = priorReview.id !== null && priorReview.id !== undefined ? String(priorReview.id) : null;
   const carried = { carried: true, sourceReviewId, sourceHeadSha: lastReviewSha, reason: delta.reason, bodyDisposition: null };

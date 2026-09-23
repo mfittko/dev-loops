@@ -97,7 +97,7 @@ export async function resolveCopilotBodyDisposition({ repo, pr, headSha, reviewI
       return { cleared: true, disposition: marker, reason: `fix commit ${marker.fixSha} disposes review ${marker.reviewId} at head ${normalizedHead}` };
     }
   }
-  return notCleared("no trusted disposition record names this review for the current head");
+  return notCleared("no trusted disposition record names this review for the current head; the body finding stays blocked (COPILOT-STATE-BODY-DISPOSITION-RECORD)");
 }
 
 /**

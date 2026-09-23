@@ -88,7 +88,7 @@ The snapshot is the set of observable facts that the interpreter uses to determi
 | `copilotReviewOnCurrentHead` | `boolean` | Whether a submitted (non-PENDING) Copilot review exists for the current head commit; this proves review activity exists for the head, but an active `requested` / `already-requested` request still keeps the wait open until the request state settles |
 | `unresolvedThreadCount` | `number` | Total unresolved review-thread count |
 | `actionableThreadCount` | `number` | Unresolved threads with non-bot actionable comments |
-| `copilotBodyFeedbackUnresolved` | `boolean` | Whether the latest current-head Copilot review carries an unresolved BODY-level finding (a `CHANGES_REQUESTED` review, or a `COMMENTED` review whose body signals "Changes recommended"), independent of inline threads. Unioned with `unresolvedThreadCount` so a body-only finding with zero inline threads still routes to unresolved feedback |
+| `copilotBodyFeedbackUnresolved` | `boolean` | Whether the latest current-head Copilot review carries an unresolved BODY-level finding (a `CHANGES_REQUESTED` review, or a `COMMENTED` review whose body signals "Changes recommended"), independent of inline threads. Unioned with `unresolvedThreadCount` so a body-only finding with zero inline threads still routes to unresolved feedback. A trusted disposition record for the current head clears it (`COPILOT-STATE-BODY-DISPOSITION-RECORD`) |
 | `ciStatus` | `"success" \| "failure" \| "pending" \| "none"` | Current CI check rollup; `none` means no usable CI readiness signal yet and is not treated as green |
 | `agentFixStatus` | `"applied" \| null` | Agent-provided: `"applied"` when code has been fixed |
 
@@ -159,6 +159,23 @@ When rule 11 yields `ready_to_rerequest_review`, the interpreter also emits two 
 When the current head already has a submitted Copilot review, the unresolved thread count is 0, and CI is not in a blocked wait/failure state, automatic follow-up re-request is suppressed for that head (clean convergence on current head, automatic re-request suppressed). Automatic re-request becomes eligible again only after a meaningful remediation event changes the review basis (for this loop: a newer head without a submitted Copilot review on that head). Explicit operator/manual re-request remains allowed, but the direct request helper now suppresses same-head clean re-requests by default unless `--force-rerequest-review` is provided.
 
 Clean convergence is a behavioral indicator (`sameHeadCleanConverged`) emitted while the state remains `ready_to_rerequest_review` — it is not a transition to `done` or `pre_approval_gate`. The handoff to `pre_approval_gate` is owned by the broader PR-lifecycle/gate-coordination layer, which consumes the `sameHeadCleanConverged` indicator (and the shared `resolveCopilotReviewRequestStatus` reconciliation that settles a stale `requested` status to `none` when the request predates the latest same-head submitted review) to grant `RUN_PRE_APPROVAL_GATE` instead of dead-ending into `stop` (#1588).
+
+### Carried convergence after a docs-only head bump
+
+<!-- rule: COPILOT-STATE-CARRIED-CONVERGENCE -->
+`COPILOT-STATE-CARRIED-CONVERGENCE`: A head without its own Copilot review MUST carry the prior converged Copilot review forward only when all of these hold: no Copilot review request is outstanding; the latest submitted Copilot review is on an earlier head that the current head advances linearly from; the delta since that head is provably docs-only or integrate-only (base-relative reduction empties it); zero review threads are unresolved; and the prior review is not a body-only changes-recommended or unrecognized review, unless the PR has at least one (now resolved) thread or a trusted disposition record (`COPILOT-STATE-BODY-DISPOSITION-RECORD`) names that review for the current head. `request-copilot-review.mjs` and `detect-pr-gate-coordination-state.mjs` MUST decide this through the one shared predicate in `scripts/loop/_copilot-convergence-carry.mjs`: the request tool returns `suppressed_post_convergence_docs_only` exactly when the detector reports `postConvergenceReviewSuppressed` and records `carriedConvergence` (`sourceReviewId`, `sourceHeadSha`, `reason`, `bodyDisposition`; `null` when not carried), so `pre_approval_gate` is legal on exactly the heads the request tool suppresses. Any unresolved thread, a non-docs-only delta, or an unproven delta MUST re-open the Copilot round. The operator suppression marker written by `withdraw-copilot-review-request.mjs` MUST be honored only under the same request-status, thread, and delta checks.
+
+### Body-only Copilot feedback disposition record
+
+<!-- rule: COPILOT-STATE-BODY-DISPOSITION-RECORD -->
+`COPILOT-STATE-BODY-DISPOSITION-RECORD`: A body-only Copilot finding (`copilotBodyFeedbackUnresolved` with no inline thread to reply to or resolve) MUST clear only through a PR issue comment that carries one of these markers:
+
+```text
+<!-- dev-loops:copilot-body-disposition review=<review id> head=<40-hex current head> fix=<40-hex commit> -->
+<!-- dev-loops:copilot-body-disposition review=<review id> head=<40-hex current head> operator -->
+```
+
+`review` is the Copilot review's `id` as `gh pr view --json reviews` reports it. `head` MUST equal the current head. `fix` names the fixing commit, which MUST be the head or one of its ancestors; `operator` records an explicit human disposition with no fixing commit. The comment author MUST be a human with `OWNER`, `MEMBER`, or `COLLABORATOR` association; bot logins, Copilot included, are never trusted. A trusted record that names the current-head review which raised the finding clears `copilotBodyFeedbackUnresolved` in `detect-copilot-loop-state.mjs` and `detect-pr-gate-coordination-state.mjs` (one shared resolver in `scripts/github/_copilot-body-disposition.mjs`) and clears the gate-entry body block, for that head only, so `round_cap_clean_fallback` becomes reachable at the round cap. The gate coordination output records the record used as `copilotBodyDisposition`. No record, a record for another head, a different review id, an untrusted author, an unreachable fix commit, or an unreadable comment stream MUST leave the finding blocking. No tool writes this record automatically; the operator or the fixer posts it.
 
 ### `unavailable` stops the loop only when no in-progress evidence exists
 
