@@ -49,12 +49,17 @@ const OUTPUT_SNIFF_BYTES = 64 * 1024;
  */
 function looksLikeTranscriptOutputFile(filePath) {
   let prefix;
+  let prefixIsFull;
   try {
     const fd = fs.openSync(filePath, "r");
     try {
       const buffer = Buffer.alloc(OUTPUT_SNIFF_BYTES);
       const bytesRead = fs.readSync(fd, buffer, 0, OUTPUT_SNIFF_BYTES, 0);
       prefix = buffer.toString("utf8", 0, bytesRead);
+      // Compare the byte count read, not the decoded string length: a multibyte UTF-8
+      // character decodes to fewer UTF-16 code units than the bytes it occupies, so
+      // prefix.length would under-report a fully-read buffer.
+      prefixIsFull = bytesRead === OUTPUT_SNIFF_BYTES;
     } finally {
       fs.closeSync(fd);
     }
@@ -63,7 +68,6 @@ function looksLikeTranscriptOutputFile(filePath) {
   }
 
   const rawLines = prefix.split("\n");
-  const prefixIsFull = prefix.length === OUTPUT_SNIFF_BYTES;
   let firstLine;
   let firstLineTruncated = false;
   for (let i = 0; i < rawLines.length; i += 1) {
@@ -697,11 +701,45 @@ export async function auditPiSession(targetPath, { harness = "auto" } = {}) {
   const overallAggregate = createUsageAggregate();
   const harnessesSeen = new Set();
   const detectedOtherHarnesses = new Set();
+
+  const parsedByFile = new Map();
+  for (const file of files) {
+    parsedByFile.set(file, await parseTranscriptFile(file, { harness }));
+  }
+
   // A resumed Claude session can replay prior history sharing one message.id + requestId
-  // with an earlier file. `files` is processed in sorted order (see
-  // collectTranscriptFilesWithMetadata), so the first occurrence of a given key wins and
-  // every later occurrence across any file is skipped.
-  const seenClaudeTurnKeys = new Set();
+  // with an earlier file. Claude session/agent file names are random ids, so the plain
+  // path-sorted `files` order used below to emit sessions is not chronological. Decide
+  // which file keeps a shared dedupeKey by each file's earliest usage-turn timestamp
+  // instead (path as tie-breaker), so a resumed file that happens to sort first doesn't
+  // steal the original session's replayed turns. Pi turns never set dedupeKey, so this
+  // only affects Claude attribution; the emitted session order stays path-sorted.
+  function firstUsageTurnTimestamp(parsed) {
+    for (const turn of parsed.turns) {
+      if (!isUsageBearing(turn)) continue;
+      const parsedTimestamp = typeof turn.timestamp === "string" ? Date.parse(turn.timestamp) : NaN;
+      if (Number.isFinite(parsedTimestamp)) return parsedTimestamp;
+    }
+    return null;
+  }
+  const dedupeOrder = [...files].sort((a, b) => {
+    const timestampA = firstUsageTurnTimestamp(parsedByFile.get(a));
+    const timestampB = firstUsageTurnTimestamp(parsedByFile.get(b));
+    if (timestampA !== null && timestampB !== null && timestampA !== timestampB) {
+      return timestampA - timestampB;
+    }
+    if (timestampA !== null && timestampB === null) return -1;
+    if (timestampA === null && timestampB !== null) return 1;
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+  const winningFileForDedupeKey = new Map();
+  for (const file of dedupeOrder) {
+    for (const turn of parsedByFile.get(file).turns) {
+      if (turn.dedupeKey && !winningFileForDedupeKey.has(turn.dedupeKey)) {
+        winningFileForDedupeKey.set(turn.dedupeKey, file);
+      }
+    }
+  }
 
   let forkSnapshotsProcessed = 0;
   let retainedForkTurns = 0;
@@ -710,16 +748,13 @@ export async function auditPiSession(targetPath, { harness = "auto" } = {}) {
   let malformedLines = 0;
 
   for (const file of files) {
-    const parsed = await parseTranscriptFile(file, { harness });
+    const parsed = parsedByFile.get(file);
     if (parsed.harness) harnessesSeen.add(parsed.harness);
     for (const other of parsed.detectedOtherHarnesses) detectedOtherHarnesses.add(other);
     const claudeMeta = parsed.harness === "claude" ? readClaudeMetaSidecar(file) : null;
-    const usageTurns = parsed.turns.filter(isUsageBearing).filter((turn) => {
-      if (!turn.dedupeKey) return true;
-      if (seenClaudeTurnKeys.has(turn.dedupeKey)) return false;
-      seenClaudeTurnKeys.add(turn.dedupeKey);
-      return true;
-    });
+    const usageTurns = parsed.turns.filter(isUsageBearing).filter((turn) => (
+      !turn.dedupeKey || winningFileForDedupeKey.get(turn.dedupeKey) === file
+    ));
     malformedLines += parsed.malformedLineCount;
     if (parsed.unresolvedForkBoundary) unresolvedForkBoundaries += 1;
     if (parsed.isForkSnapshot) {

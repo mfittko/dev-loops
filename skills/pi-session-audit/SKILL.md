@@ -62,9 +62,10 @@ present, the error names the detected shape and suggests `--harness auto`.
 Claude Code streams one JSONL record per content block; records sharing one `message.id`
 (including interleaved, not just adjacent, repeats) are deduped to a single turn in
 first-appearance order, keeping the last record's usage. A resumed Claude session can also
-replay prior history across files sharing one `message.id` + `requestId`; transcript files
-are audited in sorted order and the first file to carry a given `message.id`:`requestId`
-pair wins, so later replays of the same turn in a later file are skipped. A Claude Code
+replay prior history across files sharing one `message.id` + `requestId`; the file whose
+earliest usage turn is chronologically first wins a shared `message.id`:`requestId` pair
+(path order as tie-breaker), so later replays of the same turn in other files are skipped
+regardless of the files' name-sorted order. A Claude Code
 transcript's prompt size is `input + cacheRead + cacheCreate` on its first/last
 turn (Pi's is `input + cacheRead`, unchanged); this is the only place the two harnesses'
 metric definitions differ, per the issue that introduced Claude support. Role and session
@@ -79,7 +80,7 @@ record (a string `type`, or an object `message`); a plain-text or non-transcript
 ## Interpreting Output
 
 ### 1. Overall Summary
-- **Harness**: Top-level `harness` field reports `pi`, `claude`, or `mixed`. `mixed` covers both a single file whose records match both shapes and a directory audit whose transcript files individually resolve to different harnesses. The Markdown heading follows this value (`Pi Session Token Audit`, `Claude Code Session Token Audit`, or `Session Token Audit` for `mixed`). Claude transcripts never report a cost, so **Estimated Cost** is always `n/a` (`unavailable`) in Claude or mixed mode.
+- **Harness**: Top-level `harness` field reports `pi`, `claude`, or `mixed`. `mixed` covers both a single file whose records match both shapes and a directory audit whose transcript files individually resolve to different harnesses. The Markdown heading follows this value (`Pi Session Token Audit`, `Claude Code Session Token Audit`, or `Session Token Audit` for `mixed`). Claude transcripts never report a cost, so **Estimated Cost** is always `n/a` (`unavailable`) in pure Claude mode; in `mixed` mode the Pi turns still carry cost, so it reports a `partial` sum covering only those turns.
 - **Resolved Target**: Absolute session path selected by `--latest` or supplied explicitly. A single transcript file target is audited alone; **Transcript Files Examined** makes that scope visible in Markdown.
 - **Total Turns**: Sum of assistant turns carrying a non-zero usage envelope (any of `input`, `output`, `cacheRead`, `cacheWrite`, `totalTokens`, or `cost`). For a genuine fork transcript (its `session` header has a non-empty string `parentSession`), this excludes the inherited replay prefix and includes the fork's own turns; multiple `session_info` records in an ordinary transcript are all retained.
 - **Total Tokens**: Sum of `input + output + cacheRead + cacheWrite` when those provider dimensions are reported.

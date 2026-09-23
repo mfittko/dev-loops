@@ -1343,6 +1343,41 @@ describe("audit-pi-session unit & integration", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  it("attributes a replayed turn to the chronologically earlier file even when the resumed file sorts first by path", async () => {
+    const tmpDir = createTempDir();
+    const sessionDir = path.join(tmpDir, "session-root");
+    fs.mkdirSync(sessionDir, { recursive: true });
+
+    // Path-sort order would put the resumed file first ("aaa-..." < "zzz-..."), but its
+    // replayed turn is chronologically later than the original session's own record of
+    // it; the dedupe must keep the shared turn on the original (chronologically first)
+    // file regardless of the files' name-sorted order.
+    const resumedFile = path.join(sessionDir, "aaa-resumed.jsonl");
+    const originalFile = path.join(sessionDir, "zzz-original.jsonl");
+    writeClaudeTranscript(originalFile, [
+      { id: "msg_shared", requestId: "req_shared", timestamp: "2026-01-01T00:00:00.000Z", usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+      { id: "msg_original_only", requestId: "req_original_only", timestamp: "2026-01-01T00:00:01.000Z", usage: { input_tokens: 4, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+    ]);
+    writeClaudeTranscript(resumedFile, [
+      { id: "msg_shared", requestId: "req_shared", timestamp: "2026-01-01T00:05:00.000Z", usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+      { id: "msg_new", requestId: "req_new", timestamp: "2026-01-01T00:05:01.000Z", usage: { input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+    ]);
+
+    const audit = await auditPiSession(sessionDir);
+    assert.equal(audit.summary.totalTurns, 3);
+    assert.equal(audit.summary.inputTokens, 17);
+
+    // The emitted session order stays path-sorted: aaa-resumed.jsonl first. Its
+    // turnCount must be 1 (only msg_new), not 2: the shared turn was attributed to the
+    // chronologically earlier zzz-original.jsonl.
+    assert.equal(audit.sessions[0].file.endsWith("aaa-resumed.jsonl"), true);
+    assert.equal(audit.sessions[0].turnCount, 1);
+    assert.equal(audit.sessions[1].file.endsWith("zzz-original.jsonl"), true);
+    assert.equal(audit.sessions[1].turnCount, 2);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
   it("keeps both turns when the same message.id appears with a different requestId across files", async () => {
     const tmpDir = createTempDir();
     const sessionDir = path.join(tmpDir, "session-root");
@@ -1404,6 +1439,55 @@ describe("audit-pi-session unit & integration", () => {
     assert.deepEqual(collectTranscriptFiles(tasksDir), [outputFile]);
 
     const audit = await auditPiSession(tasksDir);
+    assert.equal(audit.summary.totalTurns, 1);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("collects a .output file whose oversized first record contains non-ASCII text, via the byte-based sniff fallback", async () => {
+    const tmpDir = createTempDir();
+    const tasksDir = path.join(tmpDir, "tasks");
+    fs.mkdirSync(tasksDir, { recursive: true });
+
+    // A multi-byte UTF-8 character decodes to fewer UTF-16 code units than the bytes it
+    // occupies, so comparing the decoded prefix's `.length` (not `bytesRead`) to the 64
+    // KiB byte budget would wrongly report the buffer as not full and skip the structural
+    // fallback below. "é" is 2 bytes per character, common in real Claude prompt text.
+    const largeFirstRecord = JSON.stringify({
+      type: "assistant",
+      message: {
+        model: "claude-opus-5-5",
+        id: "msg_large_unicode",
+        role: "assistant",
+        usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      },
+      largePrompt: "é".repeat(70_000),
+    });
+    assert.ok(Buffer.byteLength(largeFirstRecord, "utf8") > 64 * 1024);
+    const outputFile = path.join(tasksDir, "task-unicode.output");
+    fs.writeFileSync(outputFile, `${largeFirstRecord}\n`);
+
+    assert.deepEqual(collectTranscriptFiles(tasksDir), [outputFile]);
+
+    const audit = await auditPiSession(tasksDir);
+    assert.equal(audit.summary.totalTurns, 1);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("collects a regular (non-symlink) .output file whose first record is a complete, non-truncated Claude transcript record", async () => {
+    const tmpDir = createTempDir();
+    const tasksDir = path.join(tmpDir, "tasks");
+    fs.mkdirSync(tasksDir, { recursive: true });
+    const outputFile = path.join(tasksDir, "task-plain.output");
+    writeClaudeTranscript(outputFile, [
+      { id: "msg_plain", requestId: "req_plain", usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+    ]);
+
+    assert.deepEqual(collectTranscriptFiles(tasksDir), [outputFile]);
+
+    const audit = await auditPiSession(tasksDir);
+    assert.equal(audit.harness, "claude");
     assert.equal(audit.summary.totalTurns, 1);
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
