@@ -224,7 +224,11 @@ export async function main({ root, env = process.env, log = console, git = creat
   if (changesDirIsReal) {
     for (const f of files.filter((file) => isChangelogFragmentPath(file))) {
       const stat = await lstat(path.join(root, f)).catch(() => null);
-      if (!stat || !stat.isFile()) continue;
+      if (!stat) continue; // deleted at HEAD
+      if (!stat.isFile()) {
+        errors.push(`${f}: regular-file rule: a fragment must be a regular file, not a symlink or other file type`);
+        continue;
+      }
       const body = await readFile(path.join(root, f), "utf8").catch(() => "");
       for (const error of fragmentFormatErrors(body)) errors.push(`${f}: ${error}`);
     }

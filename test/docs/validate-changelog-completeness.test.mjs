@@ -469,6 +469,23 @@ describe("fragment format rule", () => {
     assert.match(output, /no-bold-lead rule/);
   });
 
+  it("rejects a fragment in the diff that is a symlink at HEAD with a named error", async () => {
+    await withTempChangelog(async (root) => {
+      await mkdir(path.join(root, "changes"), { recursive: true });
+      await writeFile(path.join(root, "changes", "new.md"), "- Conforming note (#3)\n", "utf8");
+      await writeFile(path.join(root, "target.md"), "- Linked note (#4)\n", "utf8");
+      await symlink(path.join(root, "target.md"), path.join(root, "changes", "linked.md"));
+      const git = makeFakeGit({ symbolicRef: "refs/remotes/origin/main", mergeBase: "abc123" }, {
+        logSubjects: async () => ["feat: x"],
+        diffNameOnly: async () => ["packages/core/src/x.mjs", "changes/linked.md", "changes/new.md"],
+        diffAddedFiles: async () => ["packages/core/src/x.mjs", "changes/new.md"],
+      });
+      const log = capturingLog();
+      assert.equal(await main({ root, git, env: {}, log }), 1);
+      assert.match(log.lines.join("\n"), /changes\/linked\.md: regular-file rule/);
+    });
+  });
+
   it("does not re-check consumed history in CHANGELOG.md or deleted fragments", async () => {
     const legacy = BASE_CHANGELOG.replace(
       "## 1.0.0-rc.7",

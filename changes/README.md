@@ -15,7 +15,8 @@ regular file (not a symlink).
 
 - The first line may be one section line: `### Added`, `### Changed` or
   `### Fixed`. Without it, the section is `Changed`.
-- Every other line is one entry: `- <user-visible effect> (#<issue-or-PR>)`.
+- Every other non-blank line is one entry: `- <user-visible effect> (#<issue-or-PR>)`.
+  The link ends the line.
 - An entry is at most 200 characters and never wraps onto a continuation line.
 - An entry has no bold lead and no rule ids. It names a function or file only
   when that name is the user-facing command or config key.
@@ -33,14 +34,17 @@ Example:
 The changelog-completeness gate
 (`scripts/docs/validate-changelog-completeness.mjs`) accepts an added fragment
 in place of a direct `CHANGELOG.md` edit. It rejects an empty or symlinked
-fragment, and it rejects any new or changed fragment that breaks the format.
-Each rejection names the broken rule.
+fragment. It rejects any new or changed fragment that breaks the format or is
+not a regular file. Each rejection names the broken rule.
 
 ## Release assembly
 
 At release, `scripts/release/bump-version.mjs` (via
 `scripts/release/assemble-changelog-fragments.mjs`) folds every pending fragment
 into the `## Unreleased` section of `CHANGELOG.md` under one `### Added`, one
-`### Changed` and one `### Fixed` heading, in that order. It removes the
-consumed fragment files and stamps `## Unreleased` to `## <version>`. This
+`### Changed` and one `### Fixed` heading, in that order. Existing Unreleased
+entries merge into the same headings, ahead of fragment entries. Assembly stops
+with an error on a fragment that breaks the format, or on existing Unreleased
+text it cannot group. It removes the consumed fragment files and stamps
+`## Unreleased` to `## <version>`. This
 `README.md` is never treated as a fragment.

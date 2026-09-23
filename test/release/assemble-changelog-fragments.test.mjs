@@ -99,6 +99,31 @@ test("assembleFragments merges repeated and missing section lines into one Added
   );
 });
 
+test("assembleFragments merges existing Unreleased headings with fragment sections", () => {
+  const { changelog } = assembleFragments({
+    changelog: "# Changelog\n\n## Unreleased\n\n### Fixed\n- legacy (#9)\n\n## 1.0.3\n\n- Old.\n",
+    fragments: [
+      { name: "a", content: "### Fixed\n- new fix (#10)\n" },
+      { name: "b", content: "### Added\n- new add (#11)\n" },
+    ],
+  });
+  const section = changelog.slice(changelog.indexOf("## Unreleased"), changelog.indexOf("## 1.0.3"));
+  assert.deepEqual(section.match(/^### .*$/gm), ["### Added", "### Fixed"]);
+  assert.equal(section, "## Unreleased\n\n### Added\n\n- new add (#11)\n\n### Fixed\n\n- legacy (#9)\n- new fix (#10)\n\n");
+});
+
+test("assembleFragments fails closed on existing Unreleased content it cannot group", () => {
+  const frag = [{ name: "a", content: "- x (#1)\n" }];
+  assert.throws(
+    () => assembleFragments({ changelog: "## Unreleased\n\n### Security\n- y (#2)\n", fragments: frag }),
+    /existing "## Unreleased" section/,
+  );
+  assert.throws(
+    () => assembleFragments({ changelog: "## Unreleased\n\nSome paragraph.\n", fragments: frag }),
+    /existing "## Unreleased" section/,
+  );
+});
+
 test("assembleFragments omits empty section headings", () => {
   const { changelog } = assembleFragments({
     changelog: "# Changelog\n",
@@ -116,19 +141,34 @@ test("fragmentFormatErrors names the rule for each violation and passes a confor
   assert.match(fragmentFormatErrors("### Added\n- a (#1)\n### Fixed\n- b (#2)").join("\n"), /more than one section heading/);
   assert.match(fragmentFormatErrors("- a (#1)\n### Fixed").join("\n"), /section-heading rule/);
   assert.match(fragmentFormatErrors("### Fixed\n").join("\n"), /no entries/);
+  assert.match(fragmentFormatErrors("- see (#1) for x").join("\n"), /link rule/);
+  assert.match(fragmentFormatErrors("- __Bold__ x (#1)").join("\n"), /no-bold-lead rule/);
+  assert.match(fragmentFormatErrors("-  **Bold** x (#1)").join("\n"), /entry-prefix rule/);
+  assert.match(fragmentFormatErrors("-  **Bold** x (#1)").join("\n"), /no-bold-lead rule/);
+});
+
+test("readFragments fails closed on a fragment that breaks the format, naming its path", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "frag-format-"));
+  try {
+    mkdirSync(path.join(root, "changes"));
+    writeFileSync(path.join(root, "changes", "nolink.md"), "- A change with no link\n");
+    assert.throws(() => readFragments(root), /changes\/nolink\.md breaks the fragment format: .*link rule/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("readFragments reads changes/*.md sorted, skipping README and non-md", () => {
   const root = mkdtempSync(path.join(tmpdir(), "frag-read-"));
   try {
     mkdirSync(path.join(root, "changes"));
-    writeFileSync(path.join(root, "changes", "zeta.md"), "- z\n");
-    writeFileSync(path.join(root, "changes", "alpha.md"), "- a\n");
+    writeFileSync(path.join(root, "changes", "zeta.md"), "- z (#1)\n");
+    writeFileSync(path.join(root, "changes", "alpha.md"), "- a (#2)\n");
     writeFileSync(path.join(root, "changes", "README.md"), "docs\n");
     writeFileSync(path.join(root, "changes", "notes.txt"), "nope\n");
     const frags = readFragments(root);
     assert.deepEqual(frags.map((f) => f.name), ["alpha", "zeta"]);
-    assert.equal(frags[0].content, "- a\n");
+    assert.equal(frags[0].content, "- a (#2)\n");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -150,7 +190,7 @@ test("readFragments EXCLUDES a symlinked fragment (never follows it — security
   try {
     mkdirSync(path.join(root, "changes"));
     writeFileSync(path.join(root, "real-note.md"), "- Linked note.\n");
-    writeFileSync(path.join(root, "changes", "real.md"), "- A regular note.\n");
+    writeFileSync(path.join(root, "changes", "real.md"), "- A regular note (#1)\n");
     symlinkSync(path.join(root, "real-note.md"), path.join(root, "changes", "linked.md"));
     const frags = readFragments(root);
     assert.deepEqual(frags.map((f) => f.name), ["real"]); // linked symlink excluded
