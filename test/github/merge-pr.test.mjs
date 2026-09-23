@@ -290,6 +290,13 @@ test("at the round cap a readable compare payload without a files array fails cl
   }
 });
 
+test("at the round cap a compare file entry without a filename fails closed", async () => {
+  for (const files of [[{ status: "modified" }], [{ filename: "", status: "modified" }], [{ filename: "docs/guide.md", status: "modified" }, { status: "modified" }]]) {
+    const stdout = JSON.stringify({ status: "ahead", files });
+    await expectCopilotRefusal(`compare payload ${stdout}`, { maxCopilotRounds: 2, reviews: CONVERGED_AT_CAP, compare: { stdout } });
+  }
+});
+
 test("at the round cap an empty compare delta after a converged review keeps round_cap_clean_fallback", async () => {
   const { runtime } = makeRuntime({ maxCopilotRounds: 2, reviews: CONVERGED_AT_CAP, compare: { stdout: JSON.stringify({ status: "ahead", files: [] }) } });
   const result = await mergePr(baseOptions(), runtime);
