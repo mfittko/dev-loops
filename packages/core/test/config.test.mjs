@@ -13,7 +13,8 @@ import {
   BUILT_IN_DEFAULTS,
   BLOCKING_SEVERITY_SPELLINGS,
 } from "../src/config/config.mjs";
-import { LEGACY_SEVERITY_ALIASES } from "../src/loop/gate-fanin.mjs";
+import { backoffMaxConcurrent, LEGACY_SEVERITY_ALIASES } from "../src/loop/gate-fanin.mjs";
+import { NEUTRAL_RUN_ID_VAR, RUN_ID_MARKERS } from "../src/loop/run-context.mjs";
 import {
   resolveConductorModel,
   resolveAutonomyStopAt,
@@ -4980,20 +4981,49 @@ test("resolveFanoutSequential / resolveFanoutEffectiveConcurrency: serial bound 
   assert.equal(resolveFanoutSequential({ gates: { fanout: { sequential: "yes" } } }), false);
 });
 
-test("resolveFanoutEffectiveConcurrency: Claude-harness-scoped concurrency clamp (#1971)", () => {
-  assert.equal(CLAUDE_MAX_EFFECTIVE_CONCURRENT, 2);
-  // 1. Claude harness, default config → clamped to 2, not the shipped default (4).
-  assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }, { CLAUDECODE: "1" }), 2);
-  // 2. Claude harness, .devloops-style maxConcurrent: 3 → still clamped to 2.
-  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 3 } } }, { CLAUDECODE: "1" }), 2);
-  // 3. Claude harness, maxConcurrent: 1 → stays 1 (min(1, 2)).
+test("resolveFanoutEffectiveConcurrency: Claude-harness-scoped concurrency clamp (#1971, raised to 4 by #2366)", () => {
+  assert.equal(CLAUDE_MAX_EFFECTIVE_CONCURRENT, 4);
+  // The Pi-runtime-injected run-id alias (no CLAUDECODE): the one RUN_ID_MARKERS entry that
+  // is not the neutral var. Selected by name, not index, and built from RUN_ID_MARKERS (not a
+  // literal token here) so this file stays outside the harness-adapter allowlist
+  // (test/contracts/cli-harness-agnostic.test.mjs).
+  const piMarker = RUN_ID_MARKERS.find((m) => m !== NEUTRAL_RUN_ID_VAR);
+  assert.ok(piMarker);
+  const piEnv = { [piMarker]: "pi-run-1" };
+  // 1. Claude harness, default config → clamped to 4 (== the shipped default; min(4, 4)).
+  assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }, { CLAUDECODE: "1" }), 4);
+  // 2. Claude harness, .devloops-style maxConcurrent: 3 → stays 3 (min(3, 4)).
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 3 } } }, { CLAUDECODE: "1" }), 3);
+  // 3. Claude harness, maxConcurrent: 1 → stays 1 (min(1, 4)).
   assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 1 } } }, { CLAUDECODE: "1" }), 1);
-  // 4. Claude harness, sequential: true → stays 1 (sequential already forces one unit per wave).
+  // 4. Claude harness, maxConcurrent: 2 → stays 2 (min(2, 4)).
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 2 } } }, { CLAUDECODE: "1" }), 2);
+  // 5. Claude harness, maxConcurrent: 8 → clamped to 4 (min(8, 4)).
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 8 } } }, { CLAUDECODE: "1" }), 4);
+  // 5b. Sweep the clamp boundary: configured value resolves unchanged under the Pi env and
+  // under {}, and to Math.min(m, 4) under Claude — for m at, below, and above the cap.
+  for (const m of [2, 3, 4, 8]) {
+    const config = { gates: { fanout: { maxConcurrent: m } } };
+    assert.equal(resolveFanoutEffectiveConcurrency(config, piEnv), m);
+    assert.equal(resolveFanoutEffectiveConcurrency(config, {}), m);
+    assert.equal(resolveFanoutEffectiveConcurrency(config, { CLAUDECODE: "1" }), Math.min(m, 4));
+  }
+  // 5c. maxConcurrent: 0 (the resolver's defensive fallback to the shipped default 4) still
+  // resolves to 4 under Claude (min(4, 4)).
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 0 } } }, { CLAUDECODE: "1" }), 4);
+  // 6. Claude harness, sequential: true → stays 1 (sequential already forces one unit per wave).
   assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { sequential: true } } }, { CLAUDECODE: "1" }), 1);
-  // 5. Non-Claude env → returns the configured value unchanged (cross-harness non-regression).
+  // 7. Pi harness → returns the configured value unchanged.
+  assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }, piEnv), 4);
+  assert.equal(
+    resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 8 } } }, piEnv),
+    8,
+  );
+  // 8. Unknown/no-marker env → returns the configured value unchanged (cross-harness non-regression).
   assert.equal(resolveFanoutEffectiveConcurrency({ version: 1 }, {}), 4);
   assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 3 } } }, { CLAUDECODE: "0" }), 3);
-  // 6. No env passed on a non-Claude process → unchanged base value.
+  assert.equal(resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 8 } } }, {}), 8);
+  // 9. No env passed on a non-Claude process → unchanged base value.
   const originalClaudecode = process.env.CLAUDECODE;
   delete process.env.CLAUDECODE;
   try {
@@ -5002,6 +5032,12 @@ test("resolveFanoutEffectiveConcurrency: Claude-harness-scoped concurrency clamp
     if (originalClaudecode === undefined) delete process.env.CLAUDECODE;
     else process.env.CLAUDECODE = originalClaudecode;
   }
+});
+
+test("backoffMaxConcurrent: halves the Claude-clamped concurrency of 4 to 2 (#2366)", () => {
+  const effective = resolveFanoutEffectiveConcurrency({ gates: { fanout: { maxConcurrent: 8 } } }, { CLAUDECODE: "1" });
+  assert.equal(effective, 4);
+  assert.equal(backoffMaxConcurrent(effective), 2);
 });
 
 test("gates.fanout.groups schema validation: duplicate group names are rejected", async () => {
