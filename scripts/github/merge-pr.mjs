@@ -94,7 +94,8 @@ Merge classes:
              <login>, else a head-pinned operator comment "approve merge <headSha>".
 
 Output (stdout, JSON): { ok, merged, mergeCommit, approvedBy, mergeClass, approvalVia, method, repo, pr, headSha, copilotConvergenceState, copilotDisposition }
-  copilotConvergenceState: current_head_clean | current_head_findings | no_current_head_review
+  copilotConvergenceState: current_head_clean | current_head_findings | no_current_head_review,
+  or null when the current head SHA is unknown
   copilotDisposition: the current-head review disposition, or for
   no_current_head_review the sanctioned disposition that satisfied it
 ${JQ_OUTPUT_USAGE}
@@ -236,7 +237,7 @@ async function resolveCopilotAbsentReviewDisposition({ repo, pr, currentHeadSha,
     && !(await isCopilotReviewOutstanding({ repo, pr, currentHeadSha, rawReviews }, runtime))) {
     return pinned(COPILOT_ABSENT_REVIEW_DISPOSITION.DOCS_ONLY_SUPPRESSION);
   }
-  return (await isInternalOnlyPr({ repo, pr }, runtime)) ? pinned(COPILOT_ABSENT_REVIEW_DISPOSITION.COPILOT_GATE_DISABLED) : null;
+  return (await isInternalOnlyPr({ repo, pr, patterns: config?.internalPathPatterns }, runtime)) ? pinned(COPILOT_ABSENT_REVIEW_DISPOSITION.COPILOT_GATE_DISABLED) : null;
 }
 
 // The loop's round-cap new-cycle rule, reusing its shared significance helper.
@@ -273,12 +274,17 @@ async function isCopilotReviewOutstanding({ repo, pr, currentHeadSha, rawReviews
   }
 }
 
-// Same detection the loop uses to route reviewMode internal_only. A detection
-// error fails closed (not internal-only).
-async function isInternalOnlyPr({ repo, pr }, { env, ghCommand, runChild }) {
+// Same whitelist rule the loop uses to route reviewMode internal_only, matched
+// against the internalPathPatterns of the config merge-pr loaded for its own
+// repo root (the detector's own verdict reads patterns via process.cwd()). No
+// patterns, an invalid pattern, or a detection error fails closed.
+async function isInternalOnlyPr({ repo, pr, patterns }, { env, ghCommand, runChild }) {
+  if (!Array.isArray(patterns) || patterns.length === 0) return false;
   try {
+    const matchers = patterns.map((p) => new RegExp(p));
     const result = await detectInternalOnly({ repo, pr }, { env, ghCommand, runChild });
-    return result?.ok === true && result.internalOnly === true;
+    const files = Array.isArray(result?.files) ? result.files : [];
+    return result?.ok === true && files.length > 0 && files.every((f) => matchers.some((r) => r.test(f)));
   } catch {
     return false;
   }
@@ -383,7 +389,19 @@ export async function mergePr(options, runtime = {}) {
   });
 
   if (!verdict.ok) {
-    const error = new Error(`Merge preconditions not satisfied: ${verdict.failures.map((f) => `${f.precondition} (${f.reason})`).join("; ")}`);
+    // A light-dispatched PR merged without --lightweight resolves the full cap and
+    // can refuse where the composed cap would grant the round-cap fallback. Name
+    // the remedy in the refusal itself.
+    const capConfig = configLoad?.config ?? { version: 1 };
+    const lightweightRemedy = verdict.copilotConvergenceState === COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW
+      && options.lightweight !== true
+      && resolveEffectiveCopilotRoundCap(capConfig, { lightweight: true }) < resolveEffectiveCopilotRoundCap(capConfig);
+    const failures = lightweightRemedy
+      ? verdict.failures.map((f) => (f.precondition === "copilot_convergence"
+        ? { ...f, reason: `${f.reason}. If this PR was light-dispatched (and only then), re-run merge-pr with --lightweight so the composed lightweight round cap applies` }
+        : f))
+      : verdict.failures;
+    const error = new Error(`Merge preconditions not satisfied: ${failures.map((f) => `${f.precondition} (${f.reason})`).join("; ")}`);
     error.mergePrFailure = {
       ok: false,
       merged: false,
@@ -392,7 +410,7 @@ export async function mergePr(options, runtime = {}) {
       headSha: currentHeadSha,
       approvedBy: options.humanApprovedBy,
       mergeClass: verdict.mergeClass,
-      failures: verdict.failures,
+      failures,
       copilotConvergenceState: verdict.copilotConvergenceState,
       copilotDisposition: verdict.copilotDisposition,
     };

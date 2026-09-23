@@ -200,18 +200,37 @@ async function expectCopilotRefusal(label, overrides, options = {}) {
   assert.deepEqual(threw.mergePrFailure.failures?.map((f) => f.precondition), ["copilot_convergence"], label);
   assert.equal(threw.mergePrFailure.copilotDisposition, null, label);
   assert.ok(!calls.runChild.some((c) => c.args[0] === "pr" && c.args[1] === "merge"), `${label}: no merge`);
+  return threw;
 }
 
+// Internal-only patterns pinned through the runtime config, so the verdict does
+// not depend on the host checkout's .devloops.
+const INTERNAL_ONLY = { maxCopilotRounds: 3, configExtra: { internalPathPatterns: ["^tools/", "^notes/"] } };
+
 test("an internal-only PR with the Copilot gate enabled merges via copilot_gate_disabled", async () => {
-  const { runtime } = makeRuntime({ maxCopilotRounds: 3, prFiles: ["scripts/loop/x.mjs", "docs/guide.md", "test/x.test.mjs"] });
+  const { runtime } = makeRuntime({ ...INTERNAL_ONLY, prFiles: ["tools/x.mjs", "notes/guide.md"] });
   const result = await mergePr(baseOptions(), runtime);
   assert.equal(result.copilotConvergenceState, "no_current_head_review");
   assert.equal(result.copilotDisposition, "copilot_gate_disabled");
 });
 
-test("an internal-only detection failure or a consumer-facing file fails closed", async () => {
-  await expectCopilotRefusal("detection failure", { maxCopilotRounds: 3, prFiles: ["scripts/x.mjs"], prFilesCode: 1 });
-  await expectCopilotRefusal("consumer-facing file", { maxCopilotRounds: 3, prFiles: ["scripts/x.mjs", "packages/core/src/x.mjs"] });
+test("an internal-only detection failure, a non-matching file, or no configured patterns fails closed", async () => {
+  await expectCopilotRefusal("detection failure", { ...INTERNAL_ONLY, prFiles: ["tools/x.mjs"], prFilesCode: 1 });
+  await expectCopilotRefusal("file outside the configured patterns", { ...INTERNAL_ONLY, prFiles: ["tools/x.mjs", "scripts/x.mjs"] });
+  await expectCopilotRefusal("no configured patterns", { maxCopilotRounds: 3, prFiles: ["tools/x.mjs"] });
+});
+
+test("a no-current-head-review refusal names --lightweight only when the composed cap is lower and the flag is absent", async () => {
+  const LIGHTWEIGHT_REMEDY = "--lightweight";
+  const reasonOf = (threw) => threw.mergePrFailure.failures.find((f) => f.precondition === "copilot_convergence").reason;
+  const stale = { reviews: [copilotAt(OLD_HEAD, "### 🟡 Changes recommended", "2026-01-01T00:00:00Z")] };
+  const named = await expectCopilotRefusal("composed cap lower, flag absent", { maxCopilotRounds: 3, ...stale });
+  assert.ok(reasonOf(named).includes(LIGHTWEIGHT_REMEDY));
+  assert.ok(named.message.includes(LIGHTWEIGHT_REMEDY));
+  const flagPassed = await expectCopilotRefusal("flag passed", { maxCopilotRounds: 3 }, { lightweight: true });
+  assert.ok(!reasonOf(flagPassed).includes(LIGHTWEIGHT_REMEDY));
+  const equalCap = await expectCopilotRefusal("composed cap equals full cap", { maxCopilotRounds: 1 });
+  assert.ok(!reasonOf(equalCap).includes(LIGHTWEIGHT_REMEDY));
 });
 
 test("parse: --lightweight is a boolean flag that honors =false", () => {
@@ -284,6 +303,7 @@ test("docs_only_suppression refuses while a Copilot review is outstanding on the
   await expectCopilotRefusal("pending current-head review", { ...docsOnly, reviews: [clean, pending] });
   await expectCopilotRefusal("Copilot requested", { ...docsOnly, reviews: [clean], requestedReviewers: { users: [{ login: "Copilot" }], teams: [] } });
   await expectCopilotRefusal("requested-reviewers read failure", { ...docsOnly, reviews: [clean], requestedReviewers: new Error("gh failed") });
+  await expectCopilotRefusal("requested-reviewers users not an array", { ...docsOnly, reviews: [clean], requestedReviewers: {} });
 });
 
 test("docs_only_suppression refuses on an unproven or findings-bearing baseline", async () => {
