@@ -136,6 +136,19 @@ test("non-member angle: exit 1, ok:false, status non-member", async () => {
   }
 });
 
+test("non-member with --jq .persona --silent still exits 1 (result.ok, not jq truthiness, decides exit)", async () => {
+  const dir = await makeFixtureRepo({
+    devloops: "version: 1\ngates:\n  draft:\n    angles:\n      - correctness\n",
+  });
+  try {
+    const r = runCli(["--gate", "draft_gate", "--angle", "totally-unconfigured-angle", "--jq", ".persona", "--silent"], { cwd: dir });
+    assert.equal(r.status, 1, r.stderr);
+    assert.equal(r.stdout, "");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("angle valid for a different operation is rejected: exit 1", async () => {
   const dir = await makeFixtureRepo({
     devloops: "version: 1\ngates:\n  preApproval:\n    angles:\n      - security\n",

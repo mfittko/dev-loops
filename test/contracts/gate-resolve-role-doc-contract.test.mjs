@@ -60,17 +60,25 @@ test("generated Claude mirrors are in sync with the edited reviewer surfaces", (
 // literal is checked, keeping the false-positive rate low.
 const STATUS_LITERAL_RE = /[`"](resolved|fallback|prompt-missing|unresolved|config-error)[`"]/;
 
+// Scoped to paragraphs that actually name `resolve-role`: a bare status word
+// elsewhere in a reviewer surface (e.g. prose describing an unrelated
+// "unresolved" thread) is not a reviewer decision branch on the CLI's
+// diagnostic field.
 test("no reviewer surface branches a decision on the diagnostic `status` literal", () => {
   for (const rel of REVIEWER_SURFACES) {
     const content = read(rel);
-    const match = content.match(STATUS_LITERAL_RE);
-    assert.equal(match, null, `${rel} must not encode a reviewer decision branch on a \`status\` literal (found ${match?.[0]})`);
+    for (const paragraph of content.split(/\n\s*\n/)) {
+      if (!paragraph.includes("resolve-role")) continue;
+      const match = paragraph.match(STATUS_LITERAL_RE);
+      assert.equal(match, null, `${rel} must not encode a reviewer decision branch on a \`status\` literal near a resolve-role mention (found ${match?.[0]})`);
+    }
   }
 });
 
 // extension-defaults.yaml may be named only to warn a reviewer away from it
-// (a prohibition), never as an instruction for how to resolve a role.
-const PROHIBITION_RE = /\b(never|not|instead of|do not|must not)\b/i;
+// (a prohibition), never as an instruction for how to resolve a role. A bare
+// "not" (e.g. "does not", "cannot") is not itself a prohibition phrase.
+const PROHIBITION_RE = /\b(never|must not|do not|instead of)\b/i;
 
 test("extension-defaults.yaml is named only in a prohibition context on every reviewer surface", () => {
   for (const rel of REVIEWER_SURFACES) {

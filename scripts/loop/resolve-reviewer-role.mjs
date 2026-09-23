@@ -134,7 +134,13 @@ export async function runCli(argv = process.argv.slice(2), { repoRoot = resolveR
     angle: options.angle,
     harness: options.harness,
   });
-  process.exitCode = emitResult(result, { jq: options.jq, silent: options.silent, fields: options.fields });
+  const emitted = emitResult(result, { jq: options.jq, silent: options.silent, fields: options.fields });
+  // emitResult's --jq + --silent path reports the jq PREDICATE's truthiness
+  // (e.g. `.persona` is a non-empty string even for a non-member/fallback
+  // role), not `result.ok` — that would let a blocked reviewer read exit 0.
+  // The reviewer exit-code boundary is `result.ok`, full stop; only a genuine
+  // emit-time error (invalid --jq/--fields, exit 2) overrides it.
+  process.exitCode = emitted === 2 ? 2 : (result.ok ? 0 : 1);
   return result;
 }
 

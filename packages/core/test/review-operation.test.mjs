@@ -113,9 +113,9 @@ describe("resolveOperationAnglePool", () => {
     assert.ok(Object.isFrozen(REVIEW_OPERATIONS));
   });
 
-  test("a merged config shape resolveGateConfig itself rejects degrades to an empty pool, never throws", () => {
+  test("a merged config shape resolveGateConfig itself rejects throws (standalone review must fail loudly, unchanged from main)", () => {
     const config = { gates: { draft: { angles: [], blockCleanOnFindingSeverities: [] } } };
-    assert.deepEqual(resolveOperationAnglePool(config, "draft_gate"), []);
+    assert.throws(() => resolveOperationAnglePool(config, "draft_gate"));
   });
 });
 
@@ -198,6 +198,22 @@ describe("resolveOperationReviewerRole — exhaustive realizable-state table (48
       assert.deepEqual(result.configErrors, loadResult.errors);
     });
   }
+});
+
+describe("resolveOperationReviewerRole — pool-resolution throw handling", () => {
+  test("a merged config shape resolveGateConfig itself rejects degrades to an empty pool, never throws, when configErrors is non-empty", () => {
+    const config = { gates: { draft: { angles: [], blockCleanOnFindingSeverities: [] } } };
+    const loadResult = { config, errors: [{ path: ".devloops", message: "boom", layer: "devloops" }] };
+    const result = resolveOperationReviewerRole(loadResult, { operation: "draft_gate", angle: "correctness", harness: "claude" });
+    assert.equal(result.ok, false);
+    assert.equal(result.status, "config-error");
+  });
+
+  test("a merged config shape resolveGateConfig itself rejects rethrows when configErrors is empty", () => {
+    const config = { gates: { draft: { angles: [], blockCleanOnFindingSeverities: [] } } };
+    const loadResult = { config, errors: [] };
+    assert.throws(() => resolveOperationReviewerRole(loadResult, { operation: "draft_gate", angle: "correctness", harness: "claude" }));
+  });
 });
 
 describe("resolveOperationReviewerRole — payload shape", () => {

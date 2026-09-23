@@ -26,15 +26,15 @@
  * and skills/docs/gate-review-sub-loop-contract.md.
  */
 import { resolveGateAngleContract, resolveGateAngles, resolveReviewerRole, resolveRoleModel } from "../config/config.mjs";
+import { GATE_CONFIG_KEY } from "./gate-fanin.mjs";
 
 /** The closed review-operation vocabulary. Standalone `review` is only ever selected by name, never inferred. */
 export const REVIEW_OPERATIONS = Object.freeze(["draft_gate", "pre_approval_gate", "review", "spike"]);
 
-const OPERATION_GATE_KEY = Object.freeze({
-  draft_gate: "draft",
-  pre_approval_gate: "preApproval",
-  spike: "spike",
-});
+// GATE_CONFIG_KEY (gate-fanin.mjs) has no `spike` entry — other code relies on
+// its absence of review/spike — so this operation-scoped table adds it locally
+// instead of widening the shared one.
+const OPERATION_GATE_KEY = Object.freeze({ ...GATE_CONFIG_KEY, spike: "spike" });
 
 /**
  * Resolve the legal candidate angle pool for a review operation from the
@@ -56,24 +56,13 @@ export function resolveOperationAnglePool(config, operation) {
   if (!REVIEW_OPERATIONS.includes(operation)) {
     throw new Error(`Unknown review operation: ${JSON.stringify(operation)} (expected one of ${REVIEW_OPERATIONS.join(", ")})`);
   }
-  try {
-    if (operation === "review") {
-      return [...new Set([
-        ...(resolveGateAngles(config, "draft") ?? []),
-        ...(resolveGateAngles(config, "preApproval") ?? []),
-      ])];
-    }
-    return resolveGateAngleContract(config, OPERATION_GATE_KEY[operation]).pool ?? [];
-  } catch {
-    // A config that already failed merged schema validation (non-empty
-    // `errors` from loadDevLoopConfig) can still reach here with a gate shape
-    // resolveGateConfig itself rejects (e.g. an invalid
-    // `gates.<gate>.blockCleanOnFindingSeverities`). That is a config-layer
-    // failure, not an operation-identity error: degrade to an empty pool so
-    // the caller's own config-error fail-closed status still applies instead
-    // of an unhandled exception reaching the reviewer boundary.
-    return [];
+  if (operation === "review") {
+    return [...new Set([
+      ...(resolveGateAngles(config, "draft") ?? []),
+      ...(resolveGateAngles(config, "preApproval") ?? []),
+    ])];
   }
+  return resolveGateAngleContract(config, OPERATION_GATE_KEY[operation]).pool ?? [];
 }
 
 /**
@@ -104,9 +93,23 @@ export function resolveOperationAnglePool(config, operation) {
 export function resolveOperationReviewerRole(loadResult, { operation, angle, harness }) {
   const config = loadResult?.config;
   const configErrors = Array.isArray(loadResult?.errors) ? loadResult.errors : [];
-  const pool = resolveOperationAnglePool(config, operation);
-  const member = pool.includes(angle);
   const configErrorPresent = configErrors.length > 0;
+  let pool;
+  try {
+    pool = resolveOperationAnglePool(config, operation);
+  } catch (error) {
+    // A config that already failed merged schema validation (non-empty
+    // `errors` from loadDevLoopConfig) can still reach here with a gate shape
+    // resolveGateConfig itself rejects (e.g. an invalid
+    // `gates.<gate>.blockCleanOnFindingSeverities`). That is a config-layer
+    // failure the caller's own config-error fail-closed status already
+    // covers, so degrade to an empty pool instead of an unhandled exception
+    // reaching the reviewer boundary. With no config error on record, this is
+    // a real schema-invalid gate shape a caller must see: rethrow.
+    if (!configErrorPresent) throw error;
+    pool = [];
+  }
+  const member = pool.includes(angle);
   const ok = !configErrorPresent && member;
 
   const role = resolveReviewerRole(config, angle);
