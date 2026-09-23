@@ -23,8 +23,11 @@ This posts an INLINE verdict — it can only reconcile a PR that qualifies for
 the light-mode carve-out (localImplementation.lightMode, under
 maxFiles/maxLines, no gate:full label). When gates.requireFanoutEvidence is
 enabled and the PR is over that threshold, the reconciling post is refused:
-convert the PR to draft and run the real gate with --execution-mode
-fanout_fanin backed by a findings-log ledger instead of reconciling.
+run \`dev-loops pr convert-to-draft\`, post the real gate with
+\`dev-loops gate upsert-verdict --gate draft_gate --execution-mode
+fanout_fanin\` backed by a findings-log ledger from \`dev-loops gate
+write-findings-log\`, then \`dev-loops pr ready-for-review\` (or \`dev-loops pr
+restore-ready\` if CI is blocking) — instead of reconciling.
 Fail-closed guards:
   - Refuses to reconcile if any draft_gate evidence already exists on the PR.
   - Requires CI to be green on the current head SHA before posting the
@@ -187,13 +190,18 @@ const FANOUT_REFUSAL_MARKER = "inline gate verdicts are not accepted";
 function isFanoutRefusalError(error) {
   return error instanceof Error && error.message.includes(FANOUT_REFUSAL_MARKER);
 }
-function withFanoutRefusalGuidance(error) {
+function withFanoutRefusalGuidance(error, { repo, pr, headSha } = {}) {
   if (!isFanoutRefusalError(error)) return error;
+  const repoArg = repo ? `--repo ${repo} --pr ${pr}` : "--repo <repo> --pr <pr>";
+  const headShaArg = headSha || "<current head>";
   return new Error(
     `${error.message} reconcile-draft-gate only completes for a PR under the light-mode threshold ` +
-    `(it can only synthesize an inline verdict); this PR needs an actual fan-out gate run — convert it ` +
-    `to draft and post draft_gate with --execution-mode fanout_fanin backed by a findings-log ledger for ` +
-    `the current head, instead of reconciling.`
+    `(it can only synthesize an inline verdict); this PR needs an actual fan-out gate run — run ` +
+    `\`dev-loops pr convert-to-draft ${repoArg}\`, post \`dev-loops gate upsert-verdict ${repoArg} ` +
+    `--gate draft_gate --head-sha ${headShaArg} --execution-mode fanout_fanin --findings-ledger ` +
+    `<path from write-findings-log>\` backed by a findings-log ledger from \`dev-loops gate ` +
+    `write-findings-log\` for the current head, then \`dev-loops pr ready-for-review ${repoArg}\` (or ` +
+    `\`dev-loops pr restore-ready ${repoArg}\` if CI is blocking), instead of reconciling.`
   );
 }
 export async function reconcileDraftGate(options, { env = process.env, ghCommand = "gh", repoRoot = process.cwd(), runChild = defaultRunChild } = {}) {
@@ -266,7 +274,7 @@ export async function reconcileDraftGate(options, { env = process.env, ghCommand
       } catch {
       }
     }
-    throw withFanoutRefusalGuidance(error);
+    throw withFanoutRefusalGuidance(error, { repo: options.repo, pr: options.pr, headSha });
   }
   await markPrReady({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild });
   return {

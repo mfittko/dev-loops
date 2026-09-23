@@ -52,6 +52,8 @@ export const SANCTIONED_COMMANDS = Object.freeze({
   // so there is no standalone subagent-sanctioned board-sync op.
   lifecycle: Object.freeze({
     "ready-for-review": "scripts/github/ready-for-review.mjs",
+    "convert-to-draft": "scripts/github/convert-to-draft.mjs",
+    "restore-ready": "scripts/github/restore-ready.mjs",
     "pr-create": "scripts/github/create-pr.mjs",
     "copilot-request": "scripts/github/request-copilot-review.mjs",
     "reply-resolve-thread": "scripts/github/reply-resolve-review-thread.mjs",
@@ -64,6 +66,7 @@ export const SANCTIONED_COMMANDS = Object.freeze({
     "gh pr view",
     "gh pr checks",
     "gh pr edit",
+    "gh pr ready --undo",
     "gh issue view",
     "node -e",
     "node --input-type=module -e",

@@ -4135,6 +4135,207 @@ test("upsert-checkpoint-verdict self-heals a ready PR via draft transition, pres
   }, { prefix: "dev-loops-upsert-self-heal-transition-" });
 });
 
+test("upsert-checkpoint-verdict's draft-transition restore-failed error advises `dev-loops pr restore-ready` only after a CLEAN post (#2355)", async () => {
+  // Same self-heal shape as the #891 test above, but `markPrReady` fails after
+  // a successful post. `dev-loops pr restore-ready` requires a clean
+  // current-head marker verdict and refuses otherwise, so it is only an
+  // executable remedy when the verdict that was actually posted is "clean"
+  // (issue #2355 review fix).
+  await withTempDir(async (tempDir) => {
+    const headSha = "abc1234000000000000000000000000000000000";
+    const cleanPreApprovalComment = {
+      id: 501,
+      body: [
+        "### Gate review: `pre_approval_gate`",
+        "",
+        "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`",
+        "**Verdict:** clean",
+        "**Execution mode:** fanout_fanin",
+        "",
+        "**Findings summary:** no issues found",
+        "",
+        "**Next action:** await final human approval",
+      ].join("\n"),
+      html_url: "https://github.com/owner/repo/pull/17#issuecomment-501",
+      updated_at: "2026-05-30T17:00:00Z",
+    };
+    const copilotReviewOnHead = {
+      id: 1,
+      author: { login: "copilot-pull-request-reviewer" },
+      state: "COMMENTED",
+      submittedAt: "2026-05-30T16:00:00Z",
+      commit: { oid: headSha },
+    };
+    const prFacts = (isDraft) => JSON.stringify({
+      number: 17,
+      state: "OPEN",
+      isDraft,
+      headRefOid: headSha,
+      body: DEFAULT_TEST_PR_BODY,
+      closingIssuesReferences: [],
+      statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      reviews: [copilotReviewOnHead],
+    }) + "\n";
+
+    const ghEntries = [
+      // --- coordination pass 1 (isDraft: false → reconcile) ---
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"], stdout: prFacts(false) },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql", "pr=17"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([[cleanPreApprovalComment]]) + "\n" },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"], stdout: "src/index.ts\n" },
+      // --- resolve PR node id + convert to draft ---
+      { assertArgs: ["api", "graphql", "name=repo", "number=17"], stdout: '{"data":{"repository":{"pullRequest":{"id":"PR_node","isDraft":false}}}}\n' },
+      { assertArgs: ["api", "graphql", "pullRequestId=PR_node"], stdout: '{"data":{"convertPullRequestToDraft":{"pullRequest":{"id":"PR_node","isDraft":true}}}}\n' },
+      // --- coordination pass 2 (isDraft: true → posts normally) ---
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"], stdout: prFacts(true) },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql", "pr=17"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([[cleanPreApprovalComment]]) + "\n" },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"], stdout: "src/index.ts\n" },
+      // --- post the CLEAN draft_gate verdict, then fail the ready-restore ---
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["Gate review: `draft_gate`", "**Verdict:** clean"],
+        stdout: '{"id":900,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-900"}\n',
+      },
+      { assertArgs: ["pr", "ready", "17", "--repo", "owner/repo"], exitCode: 1, stderr: "network blip\n" },
+    ];
+    const { runChild } = makeGhMock(ghEntries, { matchMode: "claims" });
+    const env = runIdFreeEnv({ DEVLOOPS_RUN_ID: "" });
+
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(findingsPath, JSON.stringify([
+      { angle: "pr-description", verdict: "clean", findings: [] },
+      { angle: "holistic", verdict: "clean", findings: [] },
+    ]), "utf8");
+    await stageDurableLedger(tempDir, { headSha, gate: "draft_gate" });
+
+    await assert.rejects(
+      () => upsertCheckpointVerdict({
+        repo: "owner/repo",
+        pr: 17,
+        gate: "draft_gate",
+        headSha,
+        verdict: "clean",
+        findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "nice-to-have": 0 },
+        findingsJson: findingsPath,
+        nextAction: "mark ready for review",
+        executionMode: "fanout_fanin",
+      }, { env, repoRoot: tempDir, runChild }),
+      (error) => {
+        assert.match(error.message, /verdict was posted .* but restoring the PR to ready failed/);
+        assert.match(error.message, /Do not re-post the gate/);
+        assert.match(error.message, /dev-loops pr restore-ready --repo owner\/repo --pr 17/);
+        assert.doesNotMatch(error.message, /gh pr ready/);
+        return true;
+      },
+    );
+  }, { prefix: "dev-loops-upsert-restore-failed-clean-" });
+});
+
+test("upsert-checkpoint-verdict's draft-transition restore-failed error does NOT advise `dev-loops pr restore-ready` after a non-clean post (#2355)", async () => {
+  // Mirrors the CLEAN-verdict test above, but the posted verdict is
+  // findings_present. `dev-loops pr restore-ready` refuses on a non-clean
+  // current-head verdict, so advising it here would be a dead end — the
+  // message must instead point at resolving the findings and restoring ready
+  // through the sanctioned ready-for-review path / the dev-loop.
+  {
+    const headSha = "abc1234000000000000000000000000000000000";
+    const cleanPreApprovalComment = {
+      id: 501,
+      body: [
+        "### Gate review: `pre_approval_gate`",
+        "",
+        "**Reviewed head SHA:** `abc1234000000000000000000000000000000000`",
+        "**Verdict:** clean",
+        "**Execution mode:** fanout_fanin",
+        "",
+        "**Findings summary:** no issues found",
+        "",
+        "**Next action:** await final human approval",
+      ].join("\n"),
+      html_url: "https://github.com/owner/repo/pull/17#issuecomment-501",
+      updated_at: "2026-05-30T17:00:00Z",
+    };
+    const copilotReviewOnHead = {
+      id: 1,
+      author: { login: "copilot-pull-request-reviewer" },
+      state: "COMMENTED",
+      submittedAt: "2026-05-30T16:00:00Z",
+      commit: { oid: headSha },
+    };
+    const prFacts = (isDraft) => JSON.stringify({
+      number: 17,
+      state: "OPEN",
+      isDraft,
+      headRefOid: headSha,
+      body: DEFAULT_TEST_PR_BODY,
+      closingIssuesReferences: [],
+      statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      reviews: [copilotReviewOnHead],
+    }) + "\n";
+
+    const ghEntries = [
+      // --- coordination pass 1 (isDraft: false → reconcile) ---
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"], stdout: prFacts(false) },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql", "pr=17"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([[cleanPreApprovalComment]]) + "\n" },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"], stdout: "src/index.ts\n" },
+      // --- resolve PR node id + convert to draft ---
+      { assertArgs: ["api", "graphql", "name=repo", "number=17"], stdout: '{"data":{"repository":{"pullRequest":{"id":"PR_node","isDraft":false}}}}\n' },
+      { assertArgs: ["api", "graphql", "pullRequestId=PR_node"], stdout: '{"data":{"convertPullRequestToDraft":{"pullRequest":{"id":"PR_node","isDraft":true}}}}\n' },
+      // --- coordination pass 2 (isDraft: true → posts normally) ---
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"], stdout: prFacts(true) },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql", "pr=17"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234000000000000000000000000000000000"}\n' },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: JSON.stringify([[cleanPreApprovalComment]]) + "\n" },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"], stdout: "src/index.ts\n" },
+      // --- post the FINDINGS_PRESENT draft_gate verdict, then fail the ready-restore ---
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["Gate review: `draft_gate`", "**Verdict:** findings_present"],
+        stdout: '{"id":901,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-901"}\n',
+      },
+      { assertArgs: ["pr", "ready", "17", "--repo", "owner/repo"], exitCode: 1, stderr: "network blip\n" },
+    ];
+    const { runChild } = makeGhMock(ghEntries, { matchMode: "claims" });
+    const env = runIdFreeEnv({ DEVLOOPS_RUN_ID: "" });
+
+    await assert.rejects(
+      () => upsertCheckpointVerdict({
+        repo: "owner/repo",
+        pr: 17,
+        gate: "draft_gate",
+        headSha,
+        verdict: "findings_present",
+        findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 1, "nice-to-have": 0 },
+        findingsSummary: "one worth-fixing-now issue found",
+        nextAction: "address the finding, then restore ready",
+        executionMode: "inline_single_agent",
+        inlineReason: "single-agent inline review (test)",
+      }, { env, repoRoot: fanoutDisabledRepoRoot, runChild }),
+      (error) => {
+        assert.match(error.message, /verdict was posted .* but restoring the PR to ready failed/);
+        assert.match(error.message, /Do not re-post the gate/);
+        // The message may still NAME restore-ready to explain why it is a dead
+        // end here, but it must never tell the operator to RUN it for a
+        // non-clean post (restore-ready refuses on findings_present).
+        assert.doesNotMatch(error.message, /run `dev-loops pr restore-ready/);
+        assert.match(error.message, /`dev-loops pr restore-ready` refuses on a non-clean verdict/);
+        assert.match(error.message, /resolve the posted findings/);
+        assert.match(error.message, /dev-loops pr ready-for-review/);
+        return true;
+      },
+    );
+  }
+});
+
 test("upsert-checkpoint-verdict self-heals a ROUND-CAP ready PR via draft transition, posting draft_gate instead of a false noop (#2354)", async () => {
   // #2354 AC2 positive companion to the refusal test below: at the round cap
   // (5/5 Copilot rounds), a ready (non-draft) PR has clean current-head
@@ -4482,9 +4683,18 @@ test("upsert-checkpoint-verdict fails closed (no unbounded recursion) when the d
         executionMode: "fanout_fanin",
       }, { env, repoRoot: tempDir, runChild }),
       (error) => {
-        // Clear, actionable message — not a swallowed hang.
+        // Clear, actionable message — not a swallowed hang — that names only
+        // sanctioned recovery commands (issue #2355), never a raw `gh pr ready`
+        // or a bare node script invocation.
         assert.match(error.message, /still reports it as non-draft on re-entry/);
         assert.match(error.message, /Not recursing/);
+        assert.match(error.message, /dev-loops pr reconcile-draft\b/);
+        // No verdict has been posted for this head in this branch, so
+        // restore-ready (which requires clean current-head evidence) would
+        // only refuse here — it must not be advised (issue #2355 review fix).
+        assert.doesNotMatch(error.message, /restore-ready/);
+        assert.doesNotMatch(error.message, /gh pr ready/);
+        assert.doesNotMatch(error.message, /node scripts\//);
         return true;
       },
     );
