@@ -34,3 +34,19 @@ test("acceptance owner names both completeness fields and their verdict writer",
   // The linked-issue scope and reviewer/judge truthfulness duty are semantic
   // review obligations, not proved by matching a sentence about completeness.
 });
+
+test("step 8 composes the review verdict with deterministic gate blockers (#2389)", async () => {
+  const doc = await readRepo(OWNER);
+  const step = doc.split(/\n(?=\d+\. )/).find((text) => text.startsWith("8. "));
+  assert.ok(step, "missing step 8");
+  // The retired instruction mapped an unmet AC to findings_present.
+  assert.doesNotMatch(step, /findings_present` when any AC item is not satisfied/);
+  for (const row of [
+    /review ledger clean and all gate prerequisites satisfied \| `clean`/,
+    /blocking-severity review finding, no independent gate blocker \| `findings_present`/,
+    /unmet AC\/DoD or another deterministic gate blocker \| `blocked`/,
+    /review\/fan-in itself unable to complete[^|]*\| `blocked`/,
+  ]) {
+    assert.match(step, row);
+  }
+});
