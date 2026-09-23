@@ -52,7 +52,7 @@ describe("resolveOperationAnglePool", () => {
     assert.deepEqual(resolveOperationAnglePool(config, "draft_gate"), []);
   });
 
-  test("additive pool widens draft_gate/pre_approval_gate/spike (dynamic.additive) but never widens review", () => {
+  test("additive pool widens draft_gate (dynamic.additive) but never widens review", () => {
     const config = {
       gates: {
         anglePool: ["correctness", "extra-lens"],
@@ -113,7 +113,7 @@ describe("resolveOperationAnglePool", () => {
     assert.ok(Object.isFrozen(REVIEW_OPERATIONS));
   });
 
-  test("a merged config shape resolveGateConfig itself rejects throws (standalone review must fail loudly, unchanged from main)", () => {
+  test("a merged config shape resolveGateConfig itself rejects throws for draft_gate (unchanged from main)", () => {
     const config = { gates: { draft: { angles: [], blockCleanOnFindingSeverities: [] } } };
     assert.throws(() => resolveOperationAnglePool(config, "draft_gate"));
   });

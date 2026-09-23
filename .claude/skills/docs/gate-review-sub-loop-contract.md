@@ -482,7 +482,10 @@ dispatch path, and it closes three failure modes prose discipline never held:
   inline (`OPS-NO-INLINE-INTERPRETER`); the sanctioned standalone/defensive role source is
   `dev-loops gate resolve-role --gate <draft_gate|pre_approval_gate|review|spike> --angle <name>`
   (`@dev-loops/core/loop/review-operation`), the one authoritative exit-code boundary for
-  persona/prompt/model.
+  persona/prompt/model: use the returned payload only on exit 0; a nonzero exit means stop and
+  treat the angle as blocked. The owning definition of this rule is the Persona mapping bullet
+  under [Pre-approval gate contract](../copilot-pr-followup/SKILL.md#pre-approval-gate-contract)
+  in `skills/copilot-pr-followup/SKILL.md`.
 - **Every multi-angle resolved unit shares a reviewer — configured group or auto-chunk bundle
   alike (ADR 0048 reconciles this emitter to it).** The emitter shares one reviewer
   for ANY multi-angle `resolveFanoutGroups` unit: a configured `gates.fanout.groups` group, or an
