@@ -72,6 +72,7 @@
     "./loop/execution-record": "./src/loop/execution-record.mjs",
     "./loop/primer-evidence": "./src/loop/primer-evidence.mjs",
     "./loop/review-dispatch-plan": "./src/loop/review-dispatch-plan.mjs",
+    "./loop/review-operation": "./src/loop/review-operation.mjs",
     "./loop/reviewer-loop-state": "./src/loop/reviewer-loop-state.mjs",
     "./loop/role-budget-bound": "./src/loop/role-budget-bound.mjs",
     "./loop/run-context": "./src/loop/run-context.mjs",

@@ -247,7 +247,7 @@ This section owns only the comment-visible ledger path per gate:
 
 ## Review-angle ownership and non-substitution rules
 
-Each gate's review angles are defined in the project config (`gates.draft.angles` and `gates.preApproval.angles` in `.pi/dev-loop/defaults.yaml`). The reviewer persona for each angle is resolved via `resolveReviewerRole` from the gate's own angle entry, falling back to the built-in persona registry (`packages/core/src/config/config.mjs`). Consumer repos may override an angle's persona/prompt via its own `gates.<gate>.angles[]` entry in their config.
+Each gate's review angles are defined in the project config (`gates.draft.angles` and `gates.preApproval.angles` in `.pi/dev-loop/defaults.yaml`). A reviewer resolves each angle's authoritative persona, focus prompt, and model from the fully merged config with `dev-loops gate resolve-role --gate <draft_gate|pre_approval_gate> --angle <name>` — never by reading `packages/core/src/config/extension-defaults.yaml` directly, which carries only the shipped default and misses a consumer repo's `.devloops` override. Use the returned payload only on exit 0; a nonzero exit means stop and treat the angle as blocked. The owning definition of this rule is the Persona mapping bullet under [Pre-approval gate contract](../copilot-pr-followup/SKILL.md#pre-approval-gate-contract) in `skills/copilot-pr-followup/SKILL.md`. Consumer repos may override an angle's persona/prompt via its own `gates.<gate>.angles[]` entry in their config.
 
 Resolve angles at runtime with `resolveGateAngles(config, "draft")` and `resolveGateAngles(config, "preApproval")` from `@dev-loops/core/config`. Do not hardcode angle names in skill procedures or review prompts.
 
