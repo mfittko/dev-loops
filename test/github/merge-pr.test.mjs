@@ -29,6 +29,9 @@ function makeRuntime({
   configExtra = {},
   prFiles = [],
   prFilesCode = 0,
+  // The detector's own internal-only verdict, stubbed so it never reads the
+  // host checkout's .devloops.
+  detectorInternalOnly = true,
   requestedReviewers = { users: [], teams: [] },
 } = {}) {
   const calls = { ghJson: [], runChild: [] };
@@ -71,6 +74,7 @@ function makeRuntime({
         return { stdout: "", stderr: "", code: 0 };
       },
       detectEvidence: async () => ({ ...evidence, currentHeadSha: evidenceHead }),
+      detectInternalOnlyPr: async () => (prFilesCode ? { ok: false, error: "files read failed" } : { ok: true, internalOnly: detectorInternalOnly, files: prFiles }),
       loadConfig: async () => ({ config: { autonomy: { humanMergeOnly }, refinement: { maxCopilotRounds }, ...configExtra }, errors: [] }),
       cwd: process.cwd(),
     },
@@ -218,6 +222,10 @@ test("an internal-only detection failure, a non-matching file, or no configured 
   await expectCopilotRefusal("detection failure", { ...INTERNAL_ONLY, prFiles: ["tools/x.mjs"], prFilesCode: 1 });
   await expectCopilotRefusal("file outside the configured patterns", { ...INTERNAL_ONLY, prFiles: ["tools/x.mjs", "scripts/x.mjs"] });
   await expectCopilotRefusal("no configured patterns", { maxCopilotRounds: 3, prFiles: ["tools/x.mjs"] });
+});
+
+test("merge-pr refuses copilot_gate_disabled when its patterns match but the detector says not internal-only", async () => {
+  await expectCopilotRefusal("detector and merged patterns disagree", { ...INTERNAL_ONLY, prFiles: ["tools/x.mjs"], detectorInternalOnly: false });
 });
 
 test("a no-current-head-review refusal names --lightweight only when the composed cap is lower and the flag is absent", async () => {

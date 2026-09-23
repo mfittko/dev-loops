@@ -274,17 +274,19 @@ async function isCopilotReviewOutstanding({ repo, pr, currentHeadSha, rawReviews
   }
 }
 
-// Same whitelist rule the loop uses to route reviewMode internal_only, matched
-// against the internalPathPatterns of the config merge-pr loaded for its own
-// repo root (the detector's own verdict reads patterns via process.cwd()). No
-// patterns, an invalid pattern, or a detection error fails closed.
-async function isInternalOnlyPr({ repo, pr, patterns }, { env, ghCommand, runChild }) {
+// Internal-only needs two agreeing verdicts: the detector's own verdict (the
+// rule the loop uses to skip Copilot) AND a match against the
+// internalPathPatterns of the config merge-pr loaded for its own repo root.
+// A disagreement, no patterns, an invalid pattern, no files, or a detection
+// error fails closed.
+async function isInternalOnlyPr({ repo, pr, patterns }, { env, ghCommand, runChild, detectInternalOnlyPr }) {
   if (!Array.isArray(patterns) || patterns.length === 0) return false;
   try {
     const matchers = patterns.map((p) => new RegExp(p));
-    const result = await detectInternalOnly({ repo, pr }, { env, ghCommand, runChild });
-    const files = Array.isArray(result?.files) ? result.files : [];
-    return result?.ok === true && files.length > 0 && files.every((f) => matchers.some((r) => r.test(f)));
+    const result = await detectInternalOnlyPr({ repo, pr }, { env, ghCommand, runChild });
+    if (result?.ok !== true || result.internalOnly !== true) return false;
+    const files = Array.isArray(result.files) ? result.files : [];
+    return files.length > 0 && files.every((f) => matchers.some((r) => r.test(f)));
   } catch {
     return false;
   }
@@ -299,6 +301,7 @@ export async function mergePr(options, runtime = {}) {
     runChild = defaultRunChild,
     detectEvidence = defaultDetectEvidence,
     loadConfig = loadDevLoopConfig,
+    detectInternalOnlyPr = detectInternalOnly,
   } = runtime;
 
   assertGithubWriteStubbedInTestMode(runChild, "pr merge", { env });
@@ -361,7 +364,7 @@ export async function mergePr(options, runtime = {}) {
   const copilotAbsentReviewDisposition = evaluateCopilotConvergence({ currentHeadSha, reviews: rawReviews }).state === COPILOT_CONVERGENCE_STATE.NO_CURRENT_HEAD_REVIEW
     ? await resolveCopilotAbsentReviewDisposition(
       { repo: options.repo, pr: options.pr, currentHeadSha, rawReviews, config: configLoad?.config, draftGate: evidence.draftGate, lightweight: options.lightweight === true },
-      { env, ghCommand, runChild, ghJson },
+      { env, ghCommand, runChild, ghJson, detectInternalOnlyPr },
     )
     : null;
 

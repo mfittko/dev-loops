@@ -3611,13 +3611,18 @@ for (const [label, copilotConvergenceOk] of [["yellow", false], ["unknown", unde
   });
 }
 
-for (const [label, copilotReviewOnCurrentHead, granted] of [["absent", false, true], ["findings", true, false]]) {
+for (const [label, copilotReviewOnCurrentHead, granted, currentHeadSha = "29aa40b7deadbeef"] of [
+  ["absent", false, true],
+  ["findings", true, false],
+  ["absent (unknown head)", false, false, null],
+]) {
   test(`round_cap_reached with no-convergence and a ${label} current-head review ${granted ? "grants" : "blocks"} the round-cap fallback`, () => {
     // An absent current-head review at the cap IS the round-cap clean fallback;
     // the convergence evaluator's absent-review refusal must not block entry.
+    // An unknown head never opens that fallback.
     const result = evaluatePrGateCoordination({
       pr: 2392,
-      currentHeadSha: "29aa40b7deadbeef",
+      currentHeadSha,
       prDraft: false,
       lifecycleState: STATE.ROUND_CAP_REACHED,
       loopDisposition: DISPOSITION.BLOCKED,
