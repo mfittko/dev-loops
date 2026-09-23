@@ -391,6 +391,15 @@ describe("copilot-body-disposition record format and trust rule", () => {
     assert.equal((await resolveCopilotBodyDisposition({ repo: REPO, pr: PR, headSha: HEAD, reviewId: "R1", reviewCommitSha: PRIOR }, { runChild: uncontained.runChild })).cleared, false);
   });
 
+  it("does not clear when the comment stream holds a malformed line beside a trusted operator record", async () => {
+    const { runChild } = makeGhMock([
+      { matchByClaims: true, assertArgs: ["api", `repos/${REPO}/issues/${PR}/comments`], stdout: `{not json\n${line(dispositionComment({ reviewId: "R1" }))}` },
+    ]);
+    const record = await resolveCopilotBodyDisposition({ repo: REPO, pr: PR, headSha: HEAD, reviewId: "R1" }, { runChild });
+    assert.equal(record.cleared, false);
+    assert.match(record.reason, /unreadable/);
+  });
+
   it("clears on a fix commit strictly after the review commit and contained in the head", async () => {
     const { runChild } = makeGhMock([
       { matchByClaims: true, assertArgs: ["api", `repos/${REPO}/issues/${PR}/comments`], stdout: line(dispositionComment({ reviewId: "R1", kind: FIX })) },

@@ -60,8 +60,8 @@ export function isTrustedDispositionAuthor(comment) {
 }
 
 // Every trusted, well-formed disposition record on the PR's issue-comment
-// stream. Throws on a gh failure; resolveCopilotBodyDisposition turns that
-// into "not cleared".
+// stream. Throws on a gh failure or a malformed stream line;
+// resolveCopilotBodyDisposition turns that into "not cleared".
 export async function fetchCopilotBodyDispositionMarkers({ repo, pr }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   const result = await runChild(ghCommand, ["api", `repos/${repo}/issues/${pr}/comments`, "--paginate", "--jq", ".[]"], env);
   if (result.code !== 0) {
@@ -70,12 +70,8 @@ export async function fetchCopilotBodyDispositionMarkers({ repo, pr }, { env = p
   }
   const markers = [];
   for (const line of result.stdout.trim().split("\n").filter(Boolean)) {
-    let comment;
-    try {
-      comment = JSON.parse(line);
-    } catch {
-      continue;
-    }
+    // A malformed line throws: a partially unreadable stream never clears.
+    const comment = JSON.parse(line);
     const marker = parseCopilotBodyDispositionMarker(comment?.body);
     if (!marker || !isTrustedDispositionAuthor(comment)) continue;
     markers.push({ ...marker, commentId: comment?.id ?? null, author: comment?.user?.login ?? null });
