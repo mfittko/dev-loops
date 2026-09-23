@@ -5521,28 +5521,58 @@ test("#1601 buildGateContextArtifact omits fanout when no dispatch plan is suppl
 });
 
 // ---------------------------------------------------------------------------
-// #1971 — caller-boundary coverage for the Claude-harness concurrency clamp:
-// resolveFanoutDispatch is the in-process seam both write-gate-context.mjs
-// callers route through, so pinning its injectable `env` option here proves
-// the clamp actually reaches the emitted wave plan at the caller boundary,
-// not just at resolveFanoutEffectiveConcurrency's own unit tests.
+// #1971 (cap raised 2 -> 4 by #2366) — caller-boundary coverage for the
+// Claude-harness concurrency clamp: resolveFanoutDispatch is the in-process
+// seam both write-gate-context.mjs callers route through, so pinning its
+// injectable `env` option here proves the clamp actually reaches the emitted
+// wave plan at the caller boundary, not just at resolveFanoutEffectiveConcurrency's
+// own unit tests.
 // ---------------------------------------------------------------------------
 
-test("#1971 resolveFanoutDispatch: Claude-harness env clamps the emitted wave plan to CLAUDE_MAX_EFFECTIVE_CONCURRENT regardless of the configured cap", () => {
-  const config = { version: 1, gates: { fanout: { maxAnglesPerGroup: 1, maxConcurrent: 4 } } };
-  const plan = resolveFanoutDispatch(config, "draft", ["a", "b", "c", "d"], { fullLabel: false, env: { CLAUDECODE: "1" } });
-  assert.equal(plan.maxConcurrent, 4); // configured cap is unchanged...
-  assert.equal(plan.effectiveConcurrency, 2); // ...but the emitted wave plan is clamped.
+test("#2366 resolveFanoutDispatch: Claude-harness env clamps the emitted wave plan to CLAUDE_MAX_EFFECTIVE_CONCURRENT (4) regardless of a higher configured cap — per-angle dispatch", () => {
+  // maxAnglesPerGroup: 1 forces per-angle (one unit per angle); 6 angles / configured
+  // cap 8 → 6 dispatch units, more than the cap of 4, so the wave bound is exercised.
+  const config = { version: 1, gates: { fanout: { maxAnglesPerGroup: 1, maxConcurrent: 8 } } };
+  const plan = resolveFanoutDispatch(config, "draft", ["a", "b", "c", "d", "e", "f"], { fullLabel: false, env: { CLAUDECODE: "1" } });
+  assert.equal(plan.maxConcurrent, 8); // configured cap is unchanged...
+  assert.equal(plan.effectiveConcurrency, 4); // ...but the emitted wave plan is clamped.
   assert.equal(plan.wavePlan.length, 2);
-  assert.ok(plan.wavePlan.every((w) => w.length <= 2));
+  assert.deepEqual(plan.wavePlan.map((w) => w.length), [4, 2]);
+  assert.ok(plan.wavePlan.every((w) => w.length <= 4));
 });
 
-test("#1971 resolveFanoutDispatch: non-Claude env keeps the configured concurrency (no clamp)", () => {
+test("#2366 resolveFanoutDispatch: Claude-harness env clamps the emitted wave plan to CLAUDE_MAX_EFFECTIVE_CONCURRENT (4) regardless of a higher configured cap — shipped grouped-dispatch default (one unit carries several angles)", () => {
+  // Shipped default maxAnglesPerGroup (3): 15 angles auto-chunk into 5 dispatch
+  // units (each carrying several angles + one sentinel), more than the cap of 4.
+  const config = { version: 1, gates: { fanout: { maxConcurrent: 8 } } };
+  const angles = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o"];
+  const plan = resolveFanoutDispatch(config, "draft", angles, { fullLabel: false, env: { CLAUDECODE: "1" } });
+  assert.equal(plan.maxAnglesPerGroup, 3);
+  assert.equal(plan.groups.length, 5);
+  assert.ok(plan.groups.every((g) => g.angles.length > 1));
+  assert.equal(plan.maxConcurrent, 8); // configured cap is unchanged...
+  assert.equal(plan.effectiveConcurrency, 4); // ...but the emitted wave plan is clamped.
+  assert.equal(plan.wavePlan.length, 2);
+  assert.deepEqual(plan.wavePlan.map((w) => w.length), [4, 1]);
+  assert.ok(plan.wavePlan.every((w) => w.length <= 4));
+});
+
+test("#2366 resolveFanoutDispatch: for configured maxConcurrent 4 under a Claude env the emitted plan carries maxConcurrent: 4", () => {
   const config = { version: 1, gates: { fanout: { maxAnglesPerGroup: 1, maxConcurrent: 4 } } };
-  const plan = resolveFanoutDispatch(config, "draft", ["a", "b", "c", "d"], { fullLabel: false, env: {} });
+  const plan = resolveFanoutDispatch(config, "draft", ["a", "b", "c", "d", "e"], { fullLabel: false, env: { CLAUDECODE: "1" } });
+  assert.equal(plan.maxConcurrent, 4);
   assert.equal(plan.effectiveConcurrency, 4);
+  assert.equal(plan.wavePlan.length, 2);
+  assert.deepEqual(plan.wavePlan.map((w) => w.length), [4, 1]);
+  assert.ok(plan.wavePlan.every((w) => w.length <= 4));
+});
+
+test("#2366 resolveFanoutDispatch: non-Claude env keeps the configured concurrency (no clamp)", () => {
+  const config = { version: 1, gates: { fanout: { maxAnglesPerGroup: 1, maxConcurrent: 8 } } };
+  const plan = resolveFanoutDispatch(config, "draft", ["a", "b", "c", "d", "e", "f"], { fullLabel: false, env: {} });
+  assert.equal(plan.effectiveConcurrency, 8);
   assert.equal(plan.wavePlan.length, 1);
-  assert.equal(plan.wavePlan[0].length, 4);
+  assert.equal(plan.wavePlan[0].length, 6);
 });
 
 test("#1507 resolveFanoutDispatch emits a reviewer-budget preflight (unknown budget proceeds)", () => {

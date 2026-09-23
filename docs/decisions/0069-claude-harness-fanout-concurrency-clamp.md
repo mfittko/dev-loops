@@ -12,6 +12,8 @@ function instead of prose the conductor re-derives. `gates.fanout.maxConcurrent`
 ADR 0048) and this repo's `.devloops` override (3) are unchanged; no config surface or schema
 change ships.
 
+Amended by [0083](./0083-raise-claude-fanout-concurrency-cap-to-4.md): the Claude cap is raised from 2 to 4.
+
 ## Context
 
 Gate fan-out review under the Claude Code harness trips the single-driver session's aggregate

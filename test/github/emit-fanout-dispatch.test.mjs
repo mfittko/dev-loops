@@ -580,12 +580,13 @@ test("main(): a no-config-table angle set dispatches ONE shared reviewer per aut
   });
 });
 
-// #1971 — caller-boundary coverage for the Claude-harness concurrency clamp:
-// this CLI is the second (of two) resolveFanoutEffectiveConcurrency call
-// sites, and reads process.env directly rather than through an injectable
-// seam, so a caller-level test here has to pin the env at the OS-process
-// boundary (spawnSync's own `env` option) rather than via a function argument.
-test("emits maxConcurrent clamped to 2 under a Claude-harness env (#1971)", async () => {
+// #1971 (cap raised 2 -> 4 by #2366) — caller-boundary coverage for the
+// Claude-harness concurrency clamp: this CLI is the second (of two)
+// resolveFanoutEffectiveConcurrency call sites, and reads process.env
+// directly rather than through an injectable seam, so a caller-level test
+// here has to pin the env at the OS-process boundary (spawnSync's own `env`
+// option) rather than via a function argument.
+test("emits maxConcurrent 4 (configured default, unchanged by the cap) under a Claude-harness env (#2366)", async () => {
   await withTmpDir(async (tmpDir) => {
     await seedBundle(tmpDir);
     const result = runEmitCli(
@@ -594,7 +595,46 @@ test("emits maxConcurrent clamped to 2 under a Claude-harness env (#1971)", asyn
     );
     assert.equal(result.status, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
-    assert.equal(payload.maxConcurrent, 2);
+    // no .devloops in tmpDir → default gates.fanout.maxConcurrent (4); min(4, 4) = 4.
+    assert.equal(payload.maxConcurrent, 4);
+  });
+});
+
+test("emits maxConcurrent clamped to 4 from a higher configured value under a Claude-harness env (#2366)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await writeFile(
+      path.join(tmpDir, ".devloops"),
+      JSON.stringify({ version: 1, gates: { fanout: { maxConcurrent: 8 } } }),
+      "utf8",
+    );
+    await seedBundle(tmpDir);
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir, env: { ...process.env, CLAUDECODE: "1" } },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.maxConcurrent, 4);
+  });
+});
+
+test("emits the configured (unclamped) higher maxConcurrent under a non-Claude env (#2366)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await writeFile(
+      path.join(tmpDir, ".devloops"),
+      JSON.stringify({ version: 1, gates: { fanout: { maxConcurrent: 8 } } }),
+      "utf8",
+    );
+    await seedBundle(tmpDir);
+    const nonClaudeEnv = { ...process.env };
+    delete nonClaudeEnv.CLAUDECODE;
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir, env: nonClaudeEnv },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.maxConcurrent, 8);
   });
 });
 
