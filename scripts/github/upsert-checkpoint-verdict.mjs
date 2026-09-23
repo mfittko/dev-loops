@@ -1737,15 +1737,27 @@ async function verifyPostedSurface({ repo, pr, surface, commentId }, { env, ghCo
 // any failure mid-transition the PR is best-effort restored to ready before
 // rethrowing.
 //
-// Durability note: a process crash in the window between convertPrToDraft and
-// markPrReady leaves the PR in draft until a later dev-loop run (or a manual
-// `dev-loops pr reconcile-draft`) restores it — no verdict has been posted yet in
-// this window, so `restore-ready` (which requires clean current-head evidence)
-// would refuse here; the next run re-enters as a draft, posts normally, and
-// restores ready. The convert/markPrReady mutations are
-// individually idempotent, so concurrent cooperating runners cause at most a
-// transient draft flicker, never a stuck draft (only a hard crash mid-transition
-// can leave one).
+// Durability note: this window splits into two distinct crash sub-windows,
+// each with its own recovery path:
+//   - A crash before the verdict post completes (inside the re-entrant
+//     upsertCheckpointVerdict call above, before `result` is assigned) leaves
+//     no evidence on the PR: the catch block above best-effort restores ready
+//     and rethrows, but if the process dies before even that runs, the PR is
+//     left in draft with nothing posted. `restore-ready` refuses here (it
+//     requires clean current-head evidence, which does not exist yet); the
+//     sanctioned recovery is a later dev-loop run (or a manual
+//     `dev-loops pr reconcile-draft`), which re-enters as a draft and posts
+//     normally.
+//   - A crash after the verdict posts cleanly but before `markPrReady` runs
+//     (inside the block below, between `result` being assigned and the
+//     ready-restore call) leaves clean current-head evidence already on the
+//     PR. Here `dev-loops pr restore-ready` is the sanctioned recovery (it
+//     finds the clean verdict and only needs to flip the PR back to ready);
+//     `dev-loops pr reconcile-draft` instead refuses, because it fails
+//     closed on any draft_gate evidence already present.
+// The convert/markPrReady mutations are individually idempotent, so
+// concurrent cooperating runners cause at most a transient draft flicker,
+// never a stuck draft (only a hard crash mid-transition can leave one).
 async function postDraftGateViaDraftTransition(options, { env, ghCommand, repoRoot, runChild = defaultRunChild }) {
   process.stderr.write(
     `[draft_gate] ${options.repo}#${options.pr} is ready but needs clean draft_gate evidence; ` +
