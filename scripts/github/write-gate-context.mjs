@@ -1349,7 +1349,7 @@ export function renderBriefingPrefix({
   lines.push(`prefixMode: ${prefixMode}`);
   lines.push("");
   lines.push(
-    `Mandatory: before doing any angle-specific work, run \`dev-loops-run scripts/github/verify-fresh-review-context.mjs --scope ${gateScopePrefix(gate)}<your-dispatch-unit> --context-path ${contextPath} --prefix-file ${briefingPrefixPath}\` once — <your-dispatch-unit> is your angle name for a per-angle dispatch, or \`group-<name>\` for a grouped dispatch (run once for the whole group, never once per angle in it). Refuse to proceed on contamination or a missing artifact.`,
+    `Mandatory: before doing any angle-specific work, run \`dev-loops-run scripts/github/verify-fresh-review-context.mjs --scope <the exact --scope value your dispatch unit's angle section names> --context-path ${contextPath} --prefix-file ${briefingPrefixPath}\` once — run once for the whole dispatch unit, never once per angle in it. Refuse to proceed on contamination or a missing artifact.`,
   );
   lines.push("");
   const findingsDir = path.join(worktreeRoot, buildGateReviewsDir({ repo, pr, gate, headSha }));
