@@ -37,6 +37,8 @@ const COPILOT = "copilot-pull-request-reviewer[bot]";
 const YELLOW = "### 🟡 Changes recommended\n\nActionable feedback in the body.";
 const DOCS_DELTA = { status: "ahead", files: [{ filename: "docs/guide.md", status: "modified" }] };
 const CODE_DELTA = { status: "ahead", files: [{ filename: "scripts/loop/foo.mjs", status: "modified" }] };
+// Large enough for the round-cap significant-change check.
+const SIGNIFICANT_CODE_DELTA = { status: "ahead", files: [{ filename: "scripts/loop/foo.mjs", status: "modified", changes: 40 }] };
 
 let capRoot = null;
 // Round cap 5: multi-round scenarios stay below the cap.
@@ -107,9 +109,40 @@ function scenario({ priorBody = "", threads = [], delta = DOCS_DELTA, prOwn = de
   return { reviews, shared };
 }
 
+// The draft_gate evidence both tools read to adjust the round count at the cap.
+function gateEvidenceEntry() {
+  return {
+    matchByClaims: true,
+    assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/issues/${PR}/comments?per_page=100`],
+    stdout: line([[{
+      id: 21,
+      body: ["Gate review: draft_gate", `Reviewed head SHA: ${PRIOR}`, "Verdict: clean", "Findings summary: no issues found", "Next action: mark ready for review"].join("\n"),
+      html_url: "https://example.test/comment/21",
+      updated_at: "2026-09-22T09:00:00Z",
+    }]]),
+  };
+}
+
+const REVIEWS_ENTRY = { matchByClaims: true, assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/pulls/${PR}/reviews?per_page=100`], stdout: "[]\n" };
+
+// Every gh call must match a declared fixture: no row may pass on the mock's
+// unmatched-call exit code.
+function strictRunChild(entries) {
+  const mock = makeGhMock(entries);
+  const unmatched = [];
+  const runChild = async (...args) => {
+    const result = await mock.runChild(...args);
+    if (result.code === 97) unmatched.push(args[1].join(" "));
+    return result;
+  };
+  return { runChild, calls: mock.calls, unmatched };
+}
+
 function requestEntries({ reviews, shared }) {
   const prView = { matchByClaims: true, assertArgs: ["pr", "view", String(PR), "--json", "headRefOid,isDraft,state,number,reviews,statusCheckRollup"], stdout: line({ headRefOid: HEAD, isDraft: false, state: "OPEN", number: PR, reviews, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }] }) };
   return [
+    gateEvidenceEntry(),
+    REVIEWS_ENTRY,
     { matchByClaims: true, assertArgs: ["api", `repos/${REPO}/pulls/${PR}/requested_reviewers`, "-X", "POST"], stdout: line({ requested_reviewers: [{ login: COPILOT }] }) },
     { matchByClaims: true, assertArgs: ["api", `repos/${REPO}/pulls/${PR}/requested_reviewers`], stdout: line({ users: [], teams: [] }) },
     prView,
@@ -119,26 +152,17 @@ function requestEntries({ reviews, shared }) {
   ];
 }
 
-function detectorEntries({ reviews, shared }, { extra = [] } = {}) {
+function detectorEntries({ reviews, shared }, { extra = [], files } = {}) {
   return [
     {
       matchByClaims: true,
       assertArgs: ["pr", "view", String(PR), "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
-      stdout: line({ number: PR, state: "OPEN", isDraft: false, headRefOid: HEAD, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }], reviews }),
+      stdout: line({ number: PR, state: "OPEN", isDraft: false, headRefOid: HEAD, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }], reviews, ...(files ? { files } : {}) }),
     },
     { matchByClaims: true, assertArgs: ["api", `repos/${REPO}/pulls/${PR}/requested_reviewers`], stdout: line({ users: [], teams: [] }) },
     { matchByClaims: true, assertArgs: ["pr", "view", String(PR), "--json", "headRefOid"], stdout: line({ headRefOid: HEAD }) },
-    {
-      matchByClaims: true,
-      assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/issues/${PR}/comments?per_page=100`],
-      stdout: line([[{
-        id: 21,
-        body: ["Gate review: draft_gate", `Reviewed head SHA: ${PRIOR}`, "Verdict: clean", "Findings summary: no issues found", "Next action: mark ready for review"].join("\n"),
-        html_url: "https://example.test/comment/21",
-        updated_at: "2026-09-22T09:00:00Z",
-      }]]),
-    },
-    { matchByClaims: true, assertArgs: ["api", "--paginate", "--slurp", `repos/${REPO}/pulls/${PR}/reviews?per_page=100`], stdout: "[]\n" },
+    gateEvidenceEntry(),
+    REVIEWS_ENTRY,
     { matchByClaims: true, assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'], stdout: `${COPILOT}\n` },
     ...shared,
     ...extra,
@@ -151,16 +175,21 @@ function runtimeFor(entries, { root = capRoot, markerDir = checkpointDir } = {})
 }
 
 async function runRequestTool(fixture, { root = capRoot, markerDir = checkpointDir } = {}) {
-  const { runChild } = makeGhMock(requestEntries(fixture));
-  return performCopilotReviewRequest(
+  const { runChild, unmatched } = strictRunChild(requestEntries(fixture));
+  const result = await performCopilotReviewRequest(
     { repo: REPO, pr: PR, checkpointDir: markerDir },
     { env: { GH_SEQUENCE_PATH: "1" }, ghCommand: "gh", runChild, repoRoot: root, delayImpl: async () => {} },
   );
+  assert.deepEqual(unmatched, [], "request tool made an undeclared gh call");
+  return result;
 }
 
 async function runDetector(fixture, options = {}) {
-  const { runtime } = runtimeFor(detectorEntries(fixture, options), options);
-  return detectPrGateCoordinationState({ repo: REPO, pr: PR }, runtime);
+  const { runtime } = runtimeFor([], options);
+  const { runChild, unmatched } = strictRunChild(detectorEntries(fixture, options));
+  const result = await detectPrGateCoordinationState({ repo: REPO, pr: PR }, { ...runtime, runChild });
+  assert.deepEqual(unmatched, [], "detector made an undeclared gh call");
+  return result;
 }
 
 const CASES = [
@@ -316,19 +345,11 @@ describe("round cap: body-only Copilot feedback clears only through a recorded d
 
     it(`copilot loop detector: ${name}`, async () => {
       const fixture = capFixture(dispositions);
-      const mock = makeGhMock([
+      const { runChild, unmatched } = strictRunChild([
         { matchByClaims: true, assertArgs: ["pr", "view", String(PR)], stdout: line({ number: PR, state: "OPEN", isDraft: false, headRefOid: HEAD, statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }], reviews: fixture.reviews }) },
         ...fixture.shared,
         ...extra,
       ]);
-      // Every gh call must match a declared fixture: no row may pass on the
-      // mock's unmatched-call exit code.
-      const unmatched = [];
-      const runChild = async (...args) => {
-        const result = await mock.runChild(...args);
-        if (result.code === 97) unmatched.push(args[1].join(" "));
-        return result;
-      };
       const snapshot = await autoDetectSnapshot({ repo: REPO, pr: PR, reviewRequestStatusOverride: "none" }, { env: {}, ghCommand: "gh", runChild });
       assert.deepEqual(unmatched, []);
       assert.equal(snapshot.copilotBodyFeedbackUnresolved, !cleared);
@@ -427,7 +448,8 @@ describe("operator-marker suppression records its carried convergence", () => {
 
   it("does not suppress a body-only changes-recommended prior review with no own thread and no record", async () => {
     await withMarker(async (markerDir) => {
-      const fixture = scenario({ priorBody: YELLOW });
+      // The marker path and the carry predicate each read the shared facts.
+      const fixture = scenario({ priorBody: YELLOW, extraShared: scenario({ priorBody: YELLOW }).shared });
       const markerCarry = await resolvePostConvergenceReviewSuppressed(
         { repo: REPO, pr: PR, currentHeadSha: HEAD, prData: { reviews: fixture.reviews }, copilotReviewRequestStatus: "none", unresolvedThreadCount: 0, reviewThreads: [] },
         { ...runtimeFor(fixture.shared).runtime, checkpointDir: markerDir },
@@ -492,16 +514,34 @@ describe("round cap: an earlier-head body-only finding clears only through a rec
     { name: "trusted fix record after the review commit", dispositions: [dispositionComment({ reviewId: "PRR_round2", kind: FIX })], extra: [...FIX_AFTER_PRIOR, ...FIX_AFTER_PRIOR], cleared: true },
     { name: "trusted operator record for the current head", dispositions: [dispositionComment({ reviewId: "PRR_round2" })], cleared: true },
     { name: "operator record naming the earlier clean review", dispositions: [dispositionComment({ reviewId: "PRR_round1" })], cleared: false },
+    // A significant code fix opens a new Copilot cycle without a record. The
+    // significant-change check reads the delta a second time.
+    {
+      name: "no record, significant code fix after the review",
+      dispositions: [],
+      delta: SIGNIFICANT_CODE_DELTA,
+      extra: [{ matchByClaims: true, assertArgs: ["api", `repos/${REPO}/compare/${PRIOR}...${HEAD}`], stdout: line(SIGNIFICANT_CODE_DELTA) }],
+      files: [{ path: "scripts/loop/foo.mjs" }],
+      cleared: false,
+      reopened: true,
+    },
   ];
-  for (const { name, dispositions, extra = [], cleared } of PRIOR_CAP_CASES) {
-    const fixture = () => scenario({ reviews: priorRounds, dispositions, extraShared: extra });
+  for (const { name, dispositions, extra = [], delta, files, cleared, reopened = false } of PRIOR_CAP_CASES) {
+    const fixture = () => scenario({ reviews: priorRounds, dispositions, extraShared: extra, ...(delta ? { delta } : {}) });
 
     it(`gate coordination detector: ${name}`, async () => {
-      const detected = await runDetector(fixture());
-      if (cleared) {
+      const detected = await runDetector(fixture(), { files });
+      if (reopened) {
+        assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW);
+        assert.ok(detected.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REREQUEST_COPILOT_REVIEW));
+        assert.ok(detected.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+        assert.equal(detected.carriedConvergence, null);
+      } else if (cleared) {
         assert.equal(detected.lifecycleState, "round_cap_clean_fallback");
         assert.equal(detected.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
         assert.equal(detected.copilotBodyDispositionRequired, null);
+        assert.equal(detected.copilotBodyDisposition.reviewId, "PRR_round2");
+        assert.equal(detected.copilotBodyDisposition.headSha, HEAD);
       } else {
         assert.equal(detected.lifecycleState, "round_cap_reached");
         assert.ok(detected.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
@@ -526,6 +566,8 @@ describe("round cap: an earlier-head body-only finding clears only through a rec
       assert.equal(snapshot.copilotPriorHeadBodyFeedbackUnresolved, !cleared);
       const interpretation = interpretLoopState({ ...snapshot, ciStatus: "success" }, { maxCopilotRounds: 2 });
       assert.equal(interpretation.state, cleared ? "round_cap_clean_fallback" : "round_cap_reached");
+      // Every row stays open to a new cycle on a significant post-convergence change.
+      assert.equal(interpretation.roundCapReopenEligible, true);
       // Below the cap the earlier-head finding does not change routing: a fresh
       // Copilot review can still supersede it.
       assert.notEqual(interpretLoopState({ ...snapshot, ciStatus: "success" }, { maxCopilotRounds: 5 }).state, "round_cap_reached");

@@ -13,7 +13,7 @@ import {
 import { parsePositiveInteger, parsePrNumber, requireTokenValue, runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { loadDevLoopConfig, resolveEffectiveCopilotRoundCap, resolveGateConfig, resolveLightMode, resolveRefinement, resolveRefinementConfig } from "@dev-loops/core/config";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
-import { buildSnapshotFromPrFacts, interpretLoopState, isCopilotRoundCapReached, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
+import { buildSnapshotFromPrFacts, interpretLoopState, isCopilotRoundCapReached, reopenRoundCapCycle, STATE, summarizeLoopInterpretation } from "@dev-loops/core/loop/copilot-loop-state";
 import { evaluatePrGateCoordination, isRoundCapReachedCleanGrant, PR_CHECKPOINT, PR_CHECKPOINT_ACTION, REFINEMENT_ARTIFACT_SPEC_SOURCE } from "@dev-loops/core/loop/pr-gate-coordination";
 import { shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-coordination";
 import { PLAN_FILE_PROMOTION_DOC_PATH_PATTERN } from "@dev-loops/core/loop/plan-file-promote-contract";
@@ -1168,13 +1168,23 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
       currentHeadSha: context.currentHeadSha,
       reviews: context.prData?.reviews,
       changedFiles: context.prData?.files,
-      roundCapReached: roundCapReached && context.interpretation?.roundCapCleanEligible === true,
+      roundCapReached: roundCapReached && context.interpretation?.roundCapReopenEligible === true,
       regularCopilotRounds: (context.snapshot?.copilotReviewRoundCount ?? 0) > 0,
     },
     runtime,
   );
+  // An earlier-head body-only finding blocks the clean fallback at the cap, but
+  // a significant post-convergence change opens a new Copilot cycle instead,
+  // matching the cap reopen in copilot-pr-handoff.mjs.
+  const reopenedInterpretation = postConvergenceSignificantChange
+    && context.interpretation?.state === STATE.ROUND_CAP_REACHED
+    ? reopenRoundCapCycle(context.interpretation)
+    : null;
+  const evaluatorContext = reopenedInterpretation
+    ? { ...context, interpretation: reopenedInterpretation, disposition: summarizeLoopInterpretation(reopenedInterpretation) }
+    : context;
   const result = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
-    context,
+    context: evaluatorContext,
     maxCopilotRounds,
     draftGateConfig,
     preApprovalGateConfig,

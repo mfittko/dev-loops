@@ -363,7 +363,8 @@ export function applyConfirmedReviewRequest(snapshot, reviewRequestStatus) {
  *   nextAction: string,
  *   autoRerequestEligible: boolean,
  *   sameHeadCleanConverged: boolean,
- *   roundCapCleanEligible: boolean
+ *   roundCapCleanEligible: boolean,
+ *   roundCapReopenEligible: boolean
  * }}
  */
 export function interpretLoopState(snapshot, refinementConfig) {
@@ -408,14 +409,18 @@ export function interpretLoopState(snapshot, refinementConfig) {
   const maxRounds = refinementConfig?.maxCopilotRounds;
   const reviewInFlight = s.copilotReviewRequestStatus === "requested"
     || s.copilotReviewRequestStatus === "already-requested";
+  // Clean at the cap except for an earlier-head body-only finding. That finding
+  // blocks the clean fallback, but a significant post-convergence change still
+  // opens a new Copilot cycle, whose review supersedes it.
+  let roundCapBlockedOnlyByPriorHeadBody = false;
   if (isCopilotRoundCapReached({ copilotReviewRoundCount: s.copilotReviewRoundCount, maxCopilotRounds: maxRounds })
       && state !== STATE.NO_PR && state !== STATE.DONE
       && state !== STATE.PR_DRAFT && state !== STATE.REVIEW_REQUEST_UNAVAILABLE
       && state !== STATE.BLOCKED_NEEDS_USER_DECISION) {
     const ciClean = s.ciStatus === "success" || s.ciStatus === "crediblyGreen" || !preApprovalRequireCi;
-    const cleanThreads = s.unresolvedThreadCount === 0
-      && !s.copilotBodyFeedbackUnresolved
-      && !s.copilotPriorHeadBodyFeedbackUnresolved;
+    const cleanCurrentHead = s.unresolvedThreadCount === 0 && !s.copilotBodyFeedbackUnresolved;
+    const cleanThreads = cleanCurrentHead && !s.copilotPriorHeadBodyFeedbackUnresolved;
+    roundCapBlockedOnlyByPriorHeadBody = cleanCurrentHead && ciClean && !cleanThreads && !reviewInFlight;
     if (cleanThreads && ciClean) {
       state = STATE.ROUND_CAP_CLEAN_FALLBACK;
     } else if (!reviewInFlight) {
@@ -491,6 +496,9 @@ export function interpretLoopState(snapshot, refinementConfig) {
   }
 
   const roundCapCleanEligible = state === STATE.ROUND_CAP_CLEAN_FALLBACK;
+  // Cap states where a significant post-convergence change reopens a Copilot cycle.
+  const roundCapReopenEligible = roundCapCleanEligible
+    || (state === STATE.ROUND_CAP_REACHED && roundCapBlockedOnlyByPriorHeadBody);
 
   return {
     state,
@@ -499,6 +507,26 @@ export function interpretLoopState(snapshot, refinementConfig) {
     autoRerequestEligible,
     sameHeadCleanConverged,
     roundCapCleanEligible,
+    roundCapReopenEligible,
+  };
+}
+
+/**
+ * Reopen a Copilot cycle at the round cap after a significant post-convergence
+ * change landed on a newer head (see `roundCapReopenEligible`).
+ *
+ * @param {object} interpretation - interpretLoopState() output
+ * @returns {object} the interpretation routed to READY_TO_REREQUEST_REVIEW
+ */
+export function reopenRoundCapCycle(interpretation) {
+  return {
+    ...interpretation,
+    state: STATE.READY_TO_REREQUEST_REVIEW,
+    nextAction: NEXT_ACTIONS[STATE.READY_TO_REREQUEST_REVIEW],
+    allowedTransitions: [...TRANSITIONS[STATE.READY_TO_REREQUEST_REVIEW]],
+    autoRerequestEligible: true,
+    roundCapCleanEligible: false,
+    roundCapReopenEligible: false,
   };
 }
 

@@ -1410,12 +1410,12 @@ forward too, instead of forcing a fresh blocking round for already-merged main c
 delta WITHOUT that proof still fails closed. The Copilot request tool (at and below the
 round cap) and the gate coordination detector consume it through the one shared
 carried-convergence predicate owned by `COPILOT-STATE-CARRIED-CONVERGENCE` in
-[Copilot Loop State Graph](copilot-loop-state-graph.md): the request tool returns
-`suppressed_post_convergence_docs_only` (at the cap even under `--force-rerequest-review`)
-on the heads where the detector reports `postConvergenceReviewSuppressed` and allows
-`pre_approval_gate`: the request tool never re-requests on a head the detector reports as
-carried, and the detector never reports carried on a head where the request tool would
-re-request. An unresolved review thread, a non-linear (rebased/amended) advance, any
+[Copilot Loop State Graph](copilot-loop-state-graph.md): the request tool never
+re-requests on a head the detector reports as carried (`postConvergenceReviewSuppressed`,
+which allows `pre_approval_gate`), and the detector never reports carried on a head where
+the request tool would re-request. On a carried head the request tool returns
+`suppressed_post_convergence_docs_only` below the cap and at the cap under
+`--force-rerequest-review`; at the cap without that flag it returns `round_cap_reached`. An unresolved review thread, a non-linear (rebased/amended) advance, any
 rename/copy, an unavailable compare, or any non-doc/unclassifiable file re-opens the round,
 preserving the round cap and the significant-post-convergence-change exception
 (`COPILOT-FOLLOWUP-ROUND-CAP` in [Copilot PR Follow-up](../copilot-pr-followup/SKILL.md)).
