@@ -781,6 +781,11 @@ function applyDraftGateEvidenceGuard(result) {
  * sites (defense in depth); this wrapper additionally covers the pre-approval
  * gate boundary, which is reached before any pre-approval evidence exists and so
  * is not protected by the inline checks.
+ *
+ * Invariant: every return path passes through `applyDraftGateEvidenceGuard`,
+ * which rewrites the five DRAFT_GATE_EVIDENCE_GUARDED_BOUNDARIES boundaries to
+ * DRAFT_GATE_NEEDED / reconcile_draft_gate whenever clean draft_gate evidence
+ * is absent.
  */
 export function evaluatePrGateCoordination(input = {}) {
   const result = evaluatePrGateCoordinationCore(input);

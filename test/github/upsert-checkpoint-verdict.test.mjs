@@ -4024,57 +4024,63 @@ test("upsert-checkpoint-verdict treats draft_gate as an idempotent no-op when al
   }, { prefix: "dev-loops-upsert-gate-review-already-satisfied-" });
 });
 
-test("upsert-checkpoint-verdict does NOT convert a ready PR to draft when reconcile is not the allowed action (#891 narrowing)", async () => {
+test("upsert-checkpoint-verdict refuses draft_gate entry (not self-heal) for a blocked ready PR with no clean draft_gate evidence (#891 narrowing)", async () => {
   await withTempDir(async (tempDir) => {
     // The self-heal draft→post→ready transition must fire ONLY when coordination
     // allows RECONCILE_DRAFT_GATE — NOT for every ready PR where RUN_DRAFT_GATE is
-    // forbidden. An open ready PR with clean draft_gate evidence already recorded
-    // is draftGateAlreadySatisfied: RUN_DRAFT_GATE is forbidden (the boundary is
-    // already passed) and RECONCILE_DRAFT_GATE is not allowed (there is nothing to
-    // reconcile), so the poster must return the idempotent no-op WITHOUT
-    // converting the PR to draft.
+    // forbidden. This fixture is a ready (non-draft) PR with NO clean draft_gate
+    // evidence (draftGateAlreadySatisfied stays false, so the earlier idempotent
+    // no-op return at the top of the handler is bypassed and the self-heal clause
+    // itself is reached) AND failing CI with no Copilot review yet, which
+    // `interpretLoopState` resolves to BLOCKED_NEEDS_USER_DECISION — a boundary
+    // outside the five draft_gate-evidence-guarded boundaries
+    // (pr-gate-coordination.mjs's DRAFT_GATE_EVIDENCE_GUARDED_BOUNDARIES), so
+    // coordination forbids RUN_DRAFT_GATE without ever granting
+    // RECONCILE_DRAFT_GATE (allowedNextActions is just [report_blocked]). The
+    // poster must refuse gate entry, NOT convert the PR to draft.
+    //
+    // Mutation check: if the self-heal condition keyed off `gateActionForbidden`
+    // alone instead of `allowedNextActions.includes(RECONCILE_DRAFT_GATE)`, this
+    // fixture would ALSO satisfy it (RUN_DRAFT_GATE is forbidden here too) and the
+    // poster would wrongly convert this blocked-CI PR to draft instead of
+    // refusing — this test fails under that mutation.
     const headSha = "abc1234000000000000000000000000000000000";
-    const cleanDraftGateComment = {
-      id: 101,
-      body: [
-        "### Gate review: `draft_gate`",
-        "",
-        `**Reviewed head SHA:** \`${headSha}\``,
-        "**Verdict:** clean",
-        "",
-        "**Findings summary:** no issues found",
-        "",
-        "**Next action:** mark ready for review",
-      ].join("\n"),
-      html_url: "https://github.com/owner/repo/pull/17#issuecomment-101",
-      updated_at: "2026-05-30T17:00:00Z",
-    };
     const { env: logEnvRaw } = await writeGhStubHelper(tempDir, [
       ...buildGateCoordinationEntries({
         headSha,
         isDraft: false,
         state: "OPEN",
-        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
-        issueComments: [cleanDraftGateComment],
+        // FAILURE is the shared default statusCheckRollup for
+        // buildGateCoordinationEntries; kept explicit here because the blocked
+        // CI status is load-bearing for reaching BLOCKED_NEEDS_USER_DECISION.
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "FAILURE" }],
       }),
-    ], { repeatLastOnOverflow: true, logCalls: true });
+    ], { logCalls: true });
     const env = { ...logEnvRaw, DEVLOOPS_RUN_ID: "" };
 
-    const result = await upsertCheckpointVerdict({
-      repo: "owner/repo",
-      pr: 17,
-      gate: "draft_gate",
-      headSha,
-      verdict: "clean",
-      findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "nice-to-have": 0 },
-      findingsSummary: "no issues found",
-      nextAction: "mark ready for review",
-      executionMode: "fanout_fanin",
-    }, { env, repoRoot: tempDir });
-
-    assert.equal(result.ok, true);
-    assert.equal(result.action, "noop");
-    assert.equal(result.draftGateAlreadySatisfied, true);
+    await assert.rejects(
+      () => upsertCheckpointVerdict({
+        repo: "owner/repo",
+        pr: 17,
+        gate: "draft_gate",
+        headSha,
+        verdict: "clean",
+        findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "nice-to-have": 0 },
+        findingsSummary: "no issues found",
+        nextAction: "mark ready for review",
+        executionMode: "fanout_fanin",
+      }, { env, repoRoot: tempDir }),
+      (error) => {
+        assert.match(error.message, /Cannot enter draft_gate on owner\/repo#17/);
+        assert.match(error.message, /blocked lifecycle state/);
+        return true;
+      },
+    );
+    // The rejection itself proves draftGateAlreadySatisfied was NOT true for this
+    // fixture: draftGateAlreadySatisfied:true is the one condition (upsert-checkpoint-
+    // verdict.mjs's early "already satisfied" branch) that returns a resolved noop
+    // instead of ever reaching gate-entry refusal — a rejection is only reachable
+    // when that branch was skipped.
 
     // Critical: the PR must NOT have been converted to draft, and must NOT have been
     // re-marked ready — no draft-state toggle may happen in a non-reconcile state.
