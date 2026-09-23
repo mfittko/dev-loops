@@ -51,8 +51,7 @@ These routing guarantees are owned by [Copilot Loop State Graph](./copilot-loop-
    The latest submitted Copilot review decides. With zero unresolved threads and no outstanding
    request, a converged latest review on an earlier head stands for the current head, whatever the
    delta. `request-copilot-review.mjs` then returns `suppressed_post_convergence`, and the gate
-   coordination detector routes to `run_pre_approval_gate`. `pre_approval_gate` reviews the current
-   head. A later Copilot review, such as the ruleset review when a PR becomes ready, replaces the
+   coordination detector allows `pre_approval_gate`, which reviews the current head. A later Copilot review, such as the ruleset review when a PR becomes ready, replaces the
    earlier one and decides again. To require a Copilot review for every significant post-convergence
    change, set `refinement.requireCopilotConvergenceAtLatestHead: true` in `.devloops`. That strict
    mode carries convergence only across a docs-only or integrate-only delta
