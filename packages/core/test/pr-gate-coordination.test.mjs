@@ -1865,7 +1865,7 @@ test("converged non-draft PR without clean draft_gate evidence reconciles the dr
   assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_GATE_NEEDED);
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE);
   assert.equal(result.draftGate.anyVisible, false);
-  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE));
+  assert.deepEqual(result.allowedNextActions, [PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE]);
   assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
 });
 
@@ -2524,6 +2524,46 @@ test("LOW_SIGNAL_CONVERGED without clean draft_gate evidence is blocked from fin
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE);
   assert.equal(result.draftGate.cleanEvidenceExists, false);
   assert.match(result.reason, /no gate exemptions, #579/i);
+});
+
+// The draft_gate evidence guard applies before pre-approval evidence is ever
+// consulted: a below-cap LOW_SIGNAL_CONVERGED PR with neither draft_gate nor
+// pre_approval_gate evidence must still reconcile the draft gate, not fall
+// through to PRE_APPROVAL_GATE_WINDOW on the missing pre-approval evidence.
+test("LOW_SIGNAL_CONVERGED below the round cap with no draft_gate evidence reconciles the draft gate instead of entering pre-approval gate window", () => {
+  const result = evaluatePrGateCoordination({
+    repo: "owner/repo", pr: 17,
+    lifecycleState: STATE.LOW_SIGNAL_CONVERGED, loopDisposition: DISPOSITION.DONE,
+    copilotReviewRoundCount: 3,
+    maxCopilotRounds: 5,
+    copilotReviewOnCurrentHead: true,
+    prDraft: false, ciStatus: "success",
+    draftGate: { visible: false },
+    preApprovalGate: {},
+  });
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_GATE_NEEDED);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE);
+  assert.deepEqual(result.allowedNextActions, [PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE]);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+});
+
+// Control for the test above: the same below-cap LOW_SIGNAL_CONVERGED PR with
+// clean draft_gate evidence (still no pre-approval evidence) reaches
+// PRE_APPROVAL_GATE_WINDOW, proving the prior test's DRAFT_GATE_NEEDED result
+// comes from the missing draft_gate evidence, not from being below the cap.
+test("LOW_SIGNAL_CONVERGED below the round cap with clean draft_gate evidence enters the pre-approval gate window", () => {
+  const result = evaluatePrGateCoordination({
+    repo: "owner/repo", pr: 17,
+    lifecycleState: STATE.LOW_SIGNAL_CONVERGED, loopDisposition: DISPOSITION.DONE,
+    copilotReviewRoundCount: 3,
+    maxCopilotRounds: 5,
+    copilotReviewOnCurrentHead: true,
+    prDraft: false, ciStatus: "success",
+    draftGate: { visible: true, verdict: "clean", headSha: "abc1234" },
+    preApprovalGate: {},
+  });
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
 });
 
 test("internal-only PR without clean draft_gate evidence is blocked from final approval (#579)", () => {
