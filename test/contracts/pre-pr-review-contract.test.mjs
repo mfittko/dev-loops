@@ -216,6 +216,12 @@ test("every PR-creating route loads Copilot Loop Operations or the local SKILL",
       `${route} runtime requiredReads must include skills/docs/copilot-loop-operations.md`,
     );
   }
+  // issue_intake is the GitHub-first route that starts with no PR, so it loads the contract.
+  const intakeStart = resolver.indexOf("  issue_intake: [");
+  assert.ok(
+    resolver.slice(intakeStart, resolver.indexOf("],", intakeStart)).includes('"skills/docs/pre-pr-review-contract.md"'),
+    "issue_intake runtime requiredReads must include skills/docs/pre-pr-review-contract.md",
+  );
 });
 
 test("main-agent contract cites the route-neutral PRE-PR-BEFORE-FIRST-PUSH scope", () => {
