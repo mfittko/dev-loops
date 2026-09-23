@@ -1,7 +1,7 @@
 ---
 name: pi-session-audit
 description: >-
-  Audit Pi session transcripts (.jsonl files) via `dev-loops loop audit-session` to measure token efficiency,
+  Audit Pi or Claude Code session transcripts via `dev-loops loop audit-session` to measure token efficiency,
   identify context snowballing in coordinators, verify cache hit ratios, and report
   per-agent and per-model token breakdowns across runs.
 allowed-tools: read bash
@@ -11,7 +11,7 @@ claude-sync: false
 
 # Pi Session Audit
 
-The `pi-session-audit` skill inspects Pi session usage transcripts (`session.jsonl` files) to measure token efficiency, detect coordinator context snowballing, and report per-agent/per-unit token breakdowns.
+The `pi-session-audit` skill inspects Pi or Claude Code session usage transcripts to measure token efficiency, detect coordinator context snowballing, and report per-agent/per-unit token breakdowns. It is harness-agnostic: the metric and threshold logic is identical for both harnesses; only transcript-record extraction (field names and streaming-record dedupe) differs per harness, and harness is auto-detected from the record schema unless `--harness` overrides it.
 
 ## Motivation & Context
 
@@ -45,7 +45,23 @@ node scripts/loop/audit-pi-session.mjs --latest --jq '.summary.totalTokens'
 # cacheHitRatio is a 0-1 fraction in JSON (Markdown renders it as a percentage)
 node scripts/loop/audit-pi-session.mjs --latest --jq '.summary.cacheHitRatio'
 node scripts/loop/audit-pi-session.mjs --latest --jq '.sessions[] | select(.snowball.promptGrowthFactor > 10)'
+
+# Audit a Claude Code transcript directory (agent-<id>.jsonl / .output files); harness
+# auto-detects from the record schema, so --harness is only needed to force a mode:
+node scripts/loop/audit-pi-session.mjs --harness claude path/to/claude-transcripts --json
 ```
+
+## Pi vs Claude Code
+
+Harness auto-detects per record from the usage envelope's field-naming shape (Claude's
+`input_tokens`/`output_tokens`/... vs Pi's `input`/`output`/...); pass `--harness pi` or
+`--harness claude` only to force a mode. Claude Code streams one JSONL record per content
+block, so records sharing one `message.id` are deduped to a single turn using the last
+record's usage. A Claude subagent transcript's prompt size is `input + cacheRead +
+cacheCreate` on its first/last turn (Pi's is `input + cacheRead`, unchanged); this is the
+only place the two harnesses' metric definitions differ, per the issue that introduced
+Claude support. Role and session name come from the sibling `agent-<id>.meta.json`
+(`agentType` / `description`) when present.
 
 ## Interpreting Output
 

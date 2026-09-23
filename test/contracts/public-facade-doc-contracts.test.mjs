@@ -230,6 +230,13 @@ test("workflow-surface taxonomy stays explicit and guards the entrypoint asset s
   assert.equal((await readdir(fromRepoRoot("skills"))).includes("copilot-autopilot"), false);
 });
 
+test("pi-session-audit skill documents harness-agnostic use and the Claude invocation", async () => {
+  const skill = await readRepo("skills/pi-session-audit/SKILL.md");
+
+  assert.match(skill, /harness-agnostic/i);
+  assert.match(skill, /--harness\s+claude/);
+});
+
 test("status reporting contract requires authoritative state-first resolution and fail-closed reconcile behavior", async () => {
   const [publicContract, copilotFollowupSkill] = await Promise.all([
     readRepo("skills/docs/public-dev-loop-contract.md"),

@@ -1,0 +1,3 @@
+### Added
+
+- **Claude Code transcript mode for `dev-loops loop audit-session`.** `scripts/lib/audit-pi-session.mjs` now auto-detects Claude Code transcripts (`agent-<id>.jsonl`/`.output` files, including `.output` symlinks and their `agent-<id>.meta.json` role/description sidecar) alongside Pi session transcripts, from each record's usage-envelope field-naming shape, and emits the same summary shape (turns, total tokens, cache-hit ratio, per-model breakdown, per-session snowball). A `--harness auto|pi|claude` flag forces the extractor. Anti-pattern flags and the metric/threshold logic are shared between harnesses; only record extraction differs. `skills/pi-session-audit/SKILL.md` documents the tool as harness-agnostic with a Claude invocation example.

@@ -13,6 +13,54 @@ function isUsageBearing(turn) {
     .some((value) => typeof value === "number" && value > 0);
 }
 
+/**
+ * Detect which harness produced a usage envelope from its field-naming shape:
+ * Claude Code uses snake_case (`input_tokens`, ...); Pi uses camelCase (`input`, ...).
+ * @param {object} usage
+ * @returns {"claude" | "pi" | null}
+ */
+function detectHarnessFromUsageShape(usage) {
+  if (!usage || typeof usage !== "object") return null;
+  if (
+    "input_tokens" in usage ||
+    "output_tokens" in usage ||
+    "cache_read_input_tokens" in usage ||
+    "cache_creation_input_tokens" in usage
+  ) {
+    return "claude";
+  }
+  if ("input" in usage || "output" in usage || "cacheRead" in usage || "cacheWrite" in usage || "totalTokens" in usage) {
+    return "pi";
+  }
+  return null;
+}
+
+/**
+ * A background-task `.output` file may hold plain-text logs rather than a transcript.
+ * Only collect it if at least one line parses as JSON.
+ * @param {string} filePath
+ * @returns {boolean}
+ */
+function hasAnyParseableJsonLine(filePath) {
+  let content;
+  try {
+    content = fs.readFileSync(filePath, "utf8");
+  } catch {
+    return false;
+  }
+  for (const rawLine of content.split("\n")) {
+    const trimmed = rawLine.trim();
+    if (!trimmed) continue;
+    try {
+      JSON.parse(trimmed);
+      return true;
+    } catch {
+      // keep scanning; a stray plain-text line does not disqualify a later JSON line
+    }
+  }
+  return false;
+}
+
 function findRepositoryRoot(startPath) {
   let current = path.resolve(startPath);
   while (true) {
@@ -176,7 +224,27 @@ function collectTranscriptFilesWithMetadata(targetPath) {
       const full = path.join(current, e.name);
       if (e.isDirectory()) {
         walk(full);
-      } else if (e.isFile() && e.name.endsWith(".jsonl")) {
+        continue;
+      }
+      if (e.isFile() && e.name.endsWith(".jsonl")) {
+        files.push(full);
+        continue;
+      }
+      if (e.isFile() && e.name.endsWith(".output")) {
+        if (hasAnyParseableJsonLine(full)) files.push(full);
+        continue;
+      }
+      // Claude Code task directories hold `.output` symlinks to `agent-<id>.jsonl`
+      // transcripts. Dirent.isFile() is false for a symlink, so follow it via stat.
+      if (e.isSymbolicLink() && (e.name.endsWith(".jsonl") || e.name.endsWith(".output"))) {
+        let targetStat;
+        try {
+          targetStat = fs.statSync(full);
+        } catch {
+          continue; // broken symlink
+        }
+        if (!targetStat.isFile()) continue;
+        if (e.name.endsWith(".output") && !hasAnyParseableJsonLine(full)) continue;
         files.push(full);
       }
     }
@@ -192,9 +260,25 @@ function collectTranscriptFilesWithMetadata(targetPath) {
     ? rawList.filter((f) => !f.includes(`${path.sep}subagent-artifacts${path.sep}`))
     : rawList;
 
+  // A `.output` symlink and the `agent-<id>.jsonl` file it points at can both surface
+  // during the walk; dedupe by realpath so the transcript is only audited once.
+  const seenRealPaths = new Set();
+  const dedupedByRealPath = [];
+  for (const file of withoutArtifacts) {
+    let realPath;
+    try {
+      realPath = fs.realpathSync(file);
+    } catch {
+      realPath = file;
+    }
+    if (seenRealPaths.has(realPath)) continue;
+    seenRealPaths.add(realPath);
+    dedupedByRealPath.push(file);
+  }
+
   // Fork snapshots remain in the audit. parseTranscriptFile removes their inherited
   // replay prefix while retaining the fork's own continuation.
-  return { files: withoutArtifacts.sort() };
+  return { files: dedupedByRealPath.sort() };
 }
 
 /**
@@ -206,11 +290,78 @@ export function collectTranscriptFiles(targetPath) {
 }
 
 /**
- * Parse assistant usage entries from a single jsonl file.
- * @param {string} filePath
- * @returns {Promise<{ turns: any[], sessionInfo: any, agent: string | null, isForkSnapshot: boolean, inheritedTurnCount: number, unresolvedForkBoundary: boolean, malformedLineCount: number }>}
+ * Build a turn from a Claude Code assistant usage envelope
+ * (`input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`).
+ * Prompt size includes cache-creation tokens, per the issue's stated Claude definition.
+ * @returns {object}
  */
-export async function parseTranscriptFile(filePath) {
+function buildClaudeTurn(data, msg, usage, currentAgent, segmentId) {
+  const input = toNonNegativeFiniteNumber(usage.input_tokens);
+  const output = toNonNegativeFiniteNumber(usage.output_tokens);
+  const cacheRead = toNonNegativeFiniteNumber(usage.cache_read_input_tokens);
+  const cacheWrite = toNonNegativeFiniteNumber(usage.cache_creation_input_tokens);
+  const componentTotal = [input, output, cacheRead, cacheWrite].every((value) => value !== null)
+    ? input + output + cacheRead + cacheWrite
+    : null;
+  const promptTokens = [input, cacheRead, cacheWrite].every((value) => value !== null)
+    ? input + cacheRead + cacheWrite
+    : null;
+  return {
+    timestamp: data.timestamp || msg.timestamp || null,
+    model: msg.model || data.model || "unknown",
+    agent: data.agent || currentAgent || null,
+    segmentId,
+    promptTokens,
+    usage: {
+      input,
+      output,
+      cacheRead,
+      cacheWrite,
+      reasoning: null,
+      totalTokens: componentTotal,
+      cost: null, // Claude transcripts carry no cost; list-price estimation is out of scope.
+    },
+  };
+}
+
+function resolveClaudeMetaSidecarPath(filePath) {
+  let resolvedPath;
+  try {
+    resolvedPath = fs.realpathSync(filePath);
+  } catch {
+    resolvedPath = filePath;
+  }
+  const base = path.basename(resolvedPath).replace(/\.(jsonl|output)$/, "");
+  return path.join(path.dirname(resolvedPath), `${base}.meta.json`);
+}
+
+/**
+ * Read the `agent-<id>.meta.json` sidecar of a Claude subagent transcript (resolving
+ * symlinks first, since task dirs hold `.output` symlinks to the real transcript).
+ * @param {string} filePath
+ * @returns {{ role: string | null, sessionName: string | null }}
+ */
+function readClaudeMetaSidecar(filePath) {
+  const metaPath = resolveClaudeMetaSidecarPath(filePath);
+  try {
+    const data = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+    return {
+      role: typeof data.agentType === "string" && data.agentType ? data.agentType : null,
+      sessionName: typeof data.description === "string" && data.description ? data.description : null,
+    };
+  } catch {
+    return { role: null, sessionName: null };
+  }
+}
+
+/**
+ * Parse assistant usage entries from a single jsonl file. Auto-detects Pi vs Claude Code
+ * harness per record from the usage envelope's field-naming shape unless `harness` overrides it.
+ * @param {string} filePath
+ * @param {{ harness?: "auto" | "pi" | "claude" }} [options]
+ * @returns {Promise<{ turns: any[], sessionInfo: any, agent: string | null, isForkSnapshot: boolean, inheritedTurnCount: number, unresolvedForkBoundary: boolean, malformedLineCount: number, harness: "pi" | "claude" | null }>}
+ */
+export async function parseTranscriptFile(filePath, { harness = "auto" } = {}) {
   const stat = fs.statSync(filePath);
   if (stat.size === 0) {
     return {
@@ -221,6 +372,7 @@ export async function parseTranscriptFile(filePath) {
       inheritedTurnCount: 0,
       unresolvedForkBoundary: false,
       malformedLineCount: 0,
+      harness: null,
     };
   }
 
@@ -234,6 +386,8 @@ export async function parseTranscriptFile(filePath) {
   let forkBoundarySeen = false;
   let inheritedTurnCount = 0;
   let malformedLineCount = 0;
+  let pendingClaudeTurn = null;
+  let fileHarness = null;
 
   const rl = readline.createInterface({
     input: fs.createReadStream(filePath, { encoding: "utf8" }),
@@ -279,40 +433,65 @@ export async function parseTranscriptFile(filePath) {
 
       const isAssistant =
         (data.type === "message" && data.message?.role === "assistant") ||
+        (data.type === "assistant" && data.message?.role === "assistant") ||
         data.role === "assistant";
 
       if (isAssistant) {
         const msg = data.message || data;
         const usage = msg.usage || data.usage;
         if (usage) {
-          const input = toNonNegativeFiniteNumber(usage.input);
-          const output = toNonNegativeFiniteNumber(usage.output);
-          const cacheRead = toNonNegativeFiniteNumber(usage.cacheRead);
-          const cacheWrite = toNonNegativeFiniteNumber(usage.cacheWrite);
-          const explicitTotal = toNonNegativeFiniteNumber(usage.totalTokens);
-          const componentTotal = [input, output, cacheRead, cacheWrite].every((value) => value !== null)
-            ? input + output + cacheRead + cacheWrite
-            : null;
-          turns.push({
-            timestamp: data.timestamp || msg.timestamp || null,
-            model: msg.model || data.model || "unknown",
-            agent: data.agent || currentAgent || null,
-            segmentId,
-            usage: {
-              input,
-              output,
-              cacheRead,
-              cacheWrite,
-              reasoning: toNonNegativeFiniteNumber(usage.reasoning),
-              totalTokens: componentTotal ?? explicitTotal,
-              cost: toNonNegativeFiniteNumber(usage.cost?.total ?? usage.cost),
-            },
-          });
+          const detectedHarness = detectHarnessFromUsageShape(usage);
+          const effectiveHarness = harness === "auto" ? (detectedHarness ?? "pi") : harness;
+          fileHarness = effectiveHarness;
+
+          if (effectiveHarness === "claude") {
+            const claudeTurn = buildClaudeTurn(data, msg, usage, currentAgent, segmentId);
+            // Claude Code logs one record per content block; consecutive records sharing
+            // one message.id are one API call. Keep only the last record's usage per id.
+            const messageId = typeof msg.id === "string" ? msg.id : null;
+            if (messageId !== null && pendingClaudeTurn?.id === messageId) {
+              pendingClaudeTurn.turn = claudeTurn;
+            } else {
+              if (pendingClaudeTurn) turns.push(pendingClaudeTurn.turn);
+              pendingClaudeTurn = messageId !== null ? { id: messageId, turn: claudeTurn } : null;
+              if (messageId === null) turns.push(claudeTurn);
+            }
+          } else {
+            const input = toNonNegativeFiniteNumber(usage.input);
+            const output = toNonNegativeFiniteNumber(usage.output);
+            const cacheRead = toNonNegativeFiniteNumber(usage.cacheRead);
+            const cacheWrite = toNonNegativeFiniteNumber(usage.cacheWrite);
+            const explicitTotal = toNonNegativeFiniteNumber(usage.totalTokens);
+            const componentTotal = [input, output, cacheRead, cacheWrite].every((value) => value !== null)
+              ? input + output + cacheRead + cacheWrite
+              : null;
+            const promptTokens = input !== null && cacheRead !== null ? input + cacheRead : null;
+            turns.push({
+              timestamp: data.timestamp || msg.timestamp || null,
+              model: msg.model || data.model || "unknown",
+              agent: data.agent || currentAgent || null,
+              segmentId,
+              promptTokens,
+              usage: {
+                input,
+                output,
+                cacheRead,
+                cacheWrite,
+                reasoning: toNonNegativeFiniteNumber(usage.reasoning),
+                totalTokens: componentTotal ?? explicitTotal,
+                cost: toNonNegativeFiniteNumber(usage.cost?.total ?? usage.cost),
+              },
+            });
+          }
         }
       }
     } catch {
       malformedLineCount += 1;
     }
+  }
+
+  if (pendingClaudeTurn) {
+    turns.push(pendingClaudeTurn.turn);
   }
 
   return {
@@ -323,6 +502,7 @@ export async function parseTranscriptFile(filePath) {
     inheritedTurnCount,
     unresolvedForkBoundary: isForkSnapshot && !forkBoundarySeen,
     malformedLineCount,
+    harness: fileHarness,
   };
 }
 
@@ -434,11 +614,13 @@ function splitTurnsByAgentSegment(turns) {
 }
 
 /**
- * Audit an entire Pi session directory or file.
+ * Audit an entire Pi or Claude Code session directory or file. Harness is auto-detected
+ * per record from the usage envelope's field-naming shape unless `harness` overrides it.
  * @param {string} targetPath
+ * @param {{ harness?: "auto" | "pi" | "claude" }} [options]
  * @returns {Promise<object>}
  */
-export async function auditPiSession(targetPath) {
+export async function auditPiSession(targetPath, { harness = "auto" } = {}) {
   const { files } = collectTranscriptFilesWithMetadata(targetPath);
   if (files.length === 0) {
     throw new Error(`No .jsonl transcripts found in ${targetPath}`);
@@ -447,6 +629,7 @@ export async function auditPiSession(targetPath) {
   const sessions = [];
   const modelAggregates = Object.create(null);
   const overallAggregate = createUsageAggregate();
+  const harnessesSeen = new Set();
 
   let forkSnapshotsProcessed = 0;
   let retainedForkTurns = 0;
@@ -455,7 +638,9 @@ export async function auditPiSession(targetPath) {
   let malformedLines = 0;
 
   for (const file of files) {
-    const parsed = await parseTranscriptFile(file);
+    const parsed = await parseTranscriptFile(file, { harness });
+    if (parsed.harness) harnessesSeen.add(parsed.harness);
+    const claudeMeta = parsed.harness === "claude" ? readClaudeMetaSidecar(file) : null;
     const usageTurns = parsed.turns.filter(isUsageBearing);
     malformedLines += parsed.malformedLineCount;
     if (parsed.unresolvedForkBoundary) unresolvedForkBoundaries += 1;
@@ -482,30 +667,24 @@ export async function auditPiSession(targetPath) {
       }
 
       const promptTurns = group.turns.filter((turn) => (
-        turn.usage.input !== null &&
-        turn.usage.cacheRead !== null &&
-        turn.usage.input + turn.usage.cacheRead > 0
+        turn.promptTokens !== null && turn.promptTokens >= 1
       ));
       const firstTurn = promptTurns[0] ?? null;
       const lastTurn = promptTurns.at(-1) ?? null;
-      const initialPromptTokens = firstTurn
-        ? firstTurn.usage.input + firstTurn.usage.cacheRead
-        : null;
-      const finalPromptTokens = lastTurn
-        ? lastTurn.usage.input + lastTurn.usage.cacheRead
-        : null;
+      const initialPromptTokens = firstTurn ? firstTurn.promptTokens : null;
+      const finalPromptTokens = lastTurn ? lastTurn.promptTokens : null;
       const promptGrowthFactor = initialPromptTokens !== null && initialPromptTokens >= 1
         ? Number((finalPromptTokens / initialPromptTokens).toFixed(2))
         : null;
 
-      const role = deriveSessionRole(file, {
+      const role = claudeMeta?.role ?? deriveSessionRole(file, {
         sessionInfo: group.agent ? { name: group.agent } : null,
         agent: group.agent,
       });
       sessions.push({
         file: path.relative(process.cwd(), file),
         role,
-        sessionName: group.agent,
+        sessionName: claudeMeta?.sessionName ?? group.agent,
         models: Array.from(modelsInSession),
         turnCount: group.turns.length,
         inputTokens: aggregateValue(sessionAggregate, "input"),
@@ -544,9 +723,12 @@ export async function auditPiSession(targetPath) {
     };
   }
 
+  const resolvedHarness = harnessesSeen.size > 1 ? "mixed" : [...harnessesSeen][0] ?? "pi";
+
   return {
     ok: true,
     targetPath,
+    harness: resolvedHarness,
     totalFilesExamined: files.length,
     forkSnapshotsProcessed,
     retainedForkTurns,
@@ -625,10 +807,17 @@ export function formatMarkdownSummary(auditResult) {
     skippedInheritedForkTurns = 0,
     unresolvedForkBoundaries = summary.unresolvedForkBoundaries ?? 0,
     malformedLines = summary.malformedLines ?? 0,
+    harness = "pi",
   } = auditResult;
 
+  const heading = harness === "claude"
+    ? "Claude Code Session Token Audit"
+    : harness === "mixed"
+      ? "Session Token Audit"
+      : "Pi Session Token Audit";
+
   const lines = [];
-  lines.push("## Pi Session Token Audit");
+  lines.push(`## ${heading}`);
   lines.push("");
   lines.push(`- **Resolved Target**: \`${escapeMarkdown(targetPath ?? "unknown")}\``);
   lines.push(`- **Transcript Files Examined**: ${auditResult.totalFilesExamined ?? "unknown"}`);
