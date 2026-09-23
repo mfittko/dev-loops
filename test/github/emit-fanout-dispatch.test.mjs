@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, listPriorFindingsLogHeads, main, sanitizeScopeSegment, splitSubUnitName } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, listPriorFindingsLogHeads, main, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { buildGateEmitPlanPath, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { loadDevLoopConfig, resolveReviewerRole } from "@dev-loops/core/config";
 import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
@@ -1379,6 +1379,22 @@ test("expandDispatchUnits: a split sub-unit's scope never collides with a separa
   assert.equal(new Set(scopes).size, scopes.length);
 });
 
+// #2372: splitSubUnitName must disambiguate on exactly the string
+// dispatchUnitScope uses — including a candidate whose BASE NAME is itself an
+// auto-chunk `group:` bundle. A configured "a-b-c-d-part1" group and the
+// part1 candidate generated from splitting an oversized auto-chunk unit
+// "group:a+b+c+d" both derive the segment "a-b-c-d-part1" once the marker is
+// stripped, so the candidate must bump even though the raw strings (with and
+// without the "group:" marker) differ.
+test("splitSubUnitName bumps an auto-chunk split candidate colliding with a configured group's derived scope segment", () => {
+  const configured = new Set(["a-b-c-d-part1"]);
+  const name = splitSubUnitName("group:a+b+c+d", 1, configured);
+  assert.equal(name, "group:a+b+c+d-part1-x1");
+  const splitScope = dispatchUnitScope("pre_approval_gate", { name, angles: ["a", "b", "c", "d"] });
+  const configuredScope = dispatchUnitScope("pre_approval_gate", { name: "a-b-c-d-part1", angles: ["x", "y"] });
+  assert.notEqual(splitScope, configuredScope);
+});
+
 // Invalid---jq regression (Copilot review round 4, emit-fanout-dispatch.mjs): the
 // keyed plan was persisted BEFORE finish(payload, true) evaluated the --jq
 // filter, so an invalid filter (exit 2) left a keyed plan from a FAILED
@@ -1513,6 +1529,18 @@ test("dispatchUnitScope: deterministic for the same unit; two distinct auto-chun
   const b = { name: "group:another-angle+second-angle", angles: ["another-angle", "second-angle"] };
   assert.equal(dispatchUnitScope("draft_gate", a), dispatchUnitScope("draft_gate", a));
   assert.notEqual(dispatchUnitScope("draft_gate", a), dispatchUnitScope("draft_gate", b));
+});
+
+// #2372: a unit whose name is ONLY the `group:` marker (or the marker plus
+// characters sanitizeScopeSegment itself strips) sanitizes to an EMPTY
+// segment once the marker is stripped — unitScopeSegment must then fall back
+// to sanitizing the UNSTRIPPED name so the derived scope still satisfies
+// VALID_SCOPE_RE instead of collapsing to `<prefix>group-`.
+test("dispatchUnitScope: falls back to the unstripped name when stripping the group: marker leaves nothing to sanitize", () => {
+  const bare = dispatchUnitScope("draft_gate", { name: "group:", angles: ["a", "b"] });
+  assert.match(bare, VALID_SCOPE_RE);
+  const punctuated = dispatchUnitScope("draft_gate", { name: "group:!!", angles: ["a", "b"] });
+  assert.match(punctuated, VALID_SCOPE_RE);
 });
 
 test("sanitizeScopeSegment collapses non-alphanumeric runs to single hyphens", () => {

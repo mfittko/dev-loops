@@ -110,17 +110,15 @@ const parseError = buildParseError(USAGE);
 /**
  * Derive the reviewer-sentinel/prompt-layout scope for a resolved dispatch unit.
  * A singleton unit dispatches under its angle name (`<gatePrefix><angle>`); a
- * multi-angle unit dispatches under `<gatePrefix>group-<sanitized name>`. Unit
- * names from resolveFanoutGroups can carry `:`/`+`/`#` (auto-chunk units like
- * `group:a+b+c`), which VALID_SCOPE_RE forbids, so a multi-angle scope sanitizes
- * the name to alphanumeric/hyphen. An auto-chunk unit's name already starts
- * with the literal `group:` marker (see resolveFanoutGroups' chunk naming), so
- * that marker is stripped BEFORE sanitizing and the `group-` prefix is added —
- * otherwise the marker's `:` would sanitize to its own `group-` segment and
- * double up into `group-group-<angles>`. A configured group's name never
- * carries that marker, so its scope is unaffected. The scope keys the
- * sentinel/prompt layout only; the EXACT unit name is carried separately as
- * the provenance `group`. Pure.
+ * multi-angle unit dispatches under `<gatePrefix>group-<segment>`, where
+ * `<segment>` is unitScopeSegment(unit.name) — the leading `group:` auto-chunk
+ * marker (see resolveFanoutGroups' chunk naming) is stripped BEFORE
+ * sanitizing, whatever the unit's origin: a configured group's name is not
+ * guaranteed marker-free either (e.g. a split sub-unit's base name can itself
+ * be an auto-chunk name carrying the marker), so this never special-cases
+ * "came from config" vs "auto-chunked". The scope keys the sentinel/prompt
+ * layout only; the EXACT unit name is carried separately as the provenance
+ * `group`. Pure.
  * @param {string} gate normalized gate id
  * @param {{ name: string, angles: string[] }} unit
  * @returns {string}
@@ -129,9 +127,7 @@ export function dispatchUnitScope(gate, unit) {
   const prefix = gateScopePrefix(gate);
   const angles = Array.isArray(unit?.angles) ? unit.angles : [];
   if (angles.length === 1) return `${prefix}${sanitizeScopeSegment(angles[0])}`;
-  const rawName = unit?.name ?? "";
-  const name = rawName.startsWith("group:") ? rawName.slice("group:".length) : rawName;
-  return `${prefix}group-${sanitizeScopeSegment(name)}`;
+  return `${prefix}group-${unitScopeSegment(unit?.name)}`;
 }
 
 /**
@@ -146,6 +142,32 @@ export function sanitizeScopeSegment(value) {
     .replace(/[^a-zA-Z0-9]+/g, "-")
     .replace(/^-+/, "")
     .replace(/-+$/, "");
+}
+
+/**
+ * The shared scope-segment derivation for a unit name: strip a leading
+ * `group:` auto-chunk marker — otherwise the marker's `:` would sanitize to
+ * its own `group-` segment and double up into `group-group-<angles>` — then
+ * sanitize with sanitizeScopeSegment. The strip applies whatever the unit's
+ * origin: a configured group's name is not guaranteed marker-free either
+ * (e.g. a split sub-unit's base name can itself be an auto-chunk name), so
+ * this never special-cases config vs auto-chunk. If the stripped result
+ * sanitizes to an EMPTY string (a unit literally named `group:` or
+ * `group:!!`, whose only content is the marker and/or characters
+ * sanitizeScopeSegment strips), fall back to sanitizing the UNSTRIPPED name
+ * so the segment is never empty — an empty segment would collapse
+ * `<prefix>group-` to a scope VALID_SCOPE_RE rejects. Shared by
+ * dispatchUnitScope (deriving a unit's dispatch scope) and splitSubUnitName
+ * (disambiguating a split sub-unit's name against configured group names on
+ * exactly the string the scope uses). Pure.
+ * @param {string} name a resolved unit's name (may carry the `group:` marker)
+ * @returns {string}
+ */
+export function unitScopeSegment(name) {
+  const rawName = name ?? "";
+  const stripped = rawName.startsWith("group:") ? rawName.slice("group:".length) : rawName;
+  const sanitizedStripped = sanitizeScopeSegment(stripped);
+  return sanitizedStripped.length > 0 ? sanitizedStripped : sanitizeScopeSegment(rawName);
 }
 
 // Human phrasing for each PROHIBITED_REVIEWER_OPERATIONS kind. The RENDERED
@@ -187,9 +209,12 @@ const PROHIBITED_OPERATION_INSTRUCTIONS = {
  * exact `--scope` value for the mandatory verify-fresh-review-context.mjs
  * sentinel named in the invariant prefix, verbatim — the reviewer never
  * derives it from the unit name, which for an auto-chunk unit would carry
- * `:`/`+` that VALID_SCOPE_RE rejects.
+ * `:`/`+` that VALID_SCOPE_RE rejects. The caller MUST pass a scope already
+ * validated against VALID_SCOPE_RE — main validates the emitted scope before
+ * calling this — so this function does not itself re-validate the scope shape.
  * @param {{ name: string, angles: string[] }} unit
- * @param {string} scope this unit's emitted dispatchUnitScope value
+ * @param {string} scope this unit's emitted dispatchUnitScope value, already
+ *   validated against VALID_SCOPE_RE by the caller
  * @returns {string}
  */
 export function buildAngleNamingSuffix(unit, scope) {
@@ -216,26 +241,27 @@ If you exceed this budget (more than ${REVIEWER_UNIT_BUDGET.maxModelTurns} model
 
 /**
  * Generate a split sub-unit's scope-distinguishing name: `${baseName}-part${n}`,
- * disambiguated against `configuredGroupNames` on their SANITIZED form — the
- * same sanitizeScopeSegment dispatchUnitScope applies when deriving a
- * multi-angle unit's scope. Comparing raw names is not enough: a
+ * disambiguated against `configuredGroupNames` on their unitScopeSegment form —
+ * the SAME helper dispatchUnitScope applies when deriving a multi-angle unit's
+ * scope (strip a leading `group:` auto-chunk marker, then sanitize), so this
+ * checks exactly the string the scope uses. Comparing raw names is not enough: a
  * separately-configured "backend_part1" group sanitizes to the SAME
  * "group-backend-part1" scope as a generated "backend-part1" sub-unit even
  * though the raw strings differ, so the collision must be caught here too —
- * while the candidate's sanitized form is itself a configured group's
- * sanitized name, append a further suffix until it is not. The dispatch
- * loop's seenScopes guard below remains the final backstop for any residual
- * collision this cannot see. Deterministic, pure.
+ * while the candidate's unitScopeSegment form is itself a configured group's
+ * unitScopeSegment form, append a further suffix until it is not. The
+ * dispatch loop's seenScopes guard below remains the final backstop for any
+ * residual collision this cannot see. Deterministic, pure.
  * @param {string} baseName configured group name being split
  * @param {number} n 1-based split index
  * @param {Set<string>} configuredGroupNames configured gates.fanout.groups names
  * @returns {string}
  */
 export function splitSubUnitName(baseName, n, configuredGroupNames) {
-  const sanitizedConfiguredNames = new Set(Array.from(configuredGroupNames, (name) => sanitizeScopeSegment(name)));
+  const configuredSegments = new Set(Array.from(configuredGroupNames, (name) => unitScopeSegment(name)));
   let candidate = `${baseName}-part${n}`;
   let bump = 0;
-  while (sanitizedConfiguredNames.has(sanitizeScopeSegment(candidate))) {
+  while (configuredSegments.has(unitScopeSegment(candidate))) {
     bump += 1;
     candidate = `${baseName}-part${n}-x${bump}`;
   }
