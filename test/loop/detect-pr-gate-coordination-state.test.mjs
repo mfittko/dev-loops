@@ -563,7 +563,7 @@ test("#2381: a DRAFT PR with a clean draft_gate marker but ONE unresolved gate-a
       // ADR 0088: a candidate (marker-bearing) thread was found, so the
       // detector resolves the authenticated login before narrowing the count
       // to author identity — matches the thread's own gate-authored login.
-      { stdout: jsonLine({ login: "dev-loops-gate[bot]" }) },
+      { assertArgs: ["api", "user"], stdout: jsonLine({ login: "dev-loops-gate[bot]" }) },
       { stdout: jsonLine({ headRefOid: headSha }) },
       { stdout: jsonLine([[{ id: 11, body: cleanDraftGateBody, html_url: "https://example.test/comment/11", updated_at: "2026-05-31T20:00:00Z" }]]) },
       { stdout: "[]\n" }, // detectCheckpointEvidence's own PR-reviews read
@@ -612,6 +612,98 @@ test("#2381: a DRAFT PR with a clean draft_gate marker but ONE unresolved gate-a
     assert.equal(
       countUnresolvedGateAuthoredThreadsFromRawNodes([questionThreadNode], "dev-loops-gate[bot]"),
       1,
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// ADR 0088 agreement, paired with detect-checkpoint-evidence-gate-threads.test.mjs's
+// "#2381: a foreign marker-quoting thread ... does not block draftGateSatisfied":
+// a thread that merely QUOTES a gate finding marker, authored by someone
+// OTHER than the resolved gate login, must be narrowed out by BOTH
+// detectors — this one via countUnresolvedGateAuthoredThreadsFromRawNodes(...,
+// login), detect-checkpoint-evidence.mjs the same way since its own narrowing
+// landed alongside this test. Before that narrowing, this detector reported
+// mark_ready_for_review (foreign thread excluded here too) while
+// detect-checkpoint-evidence.mjs's marker-only count still reported the
+// thread as unresolved — a real cross-detector disagreement on this exact
+// fixture shape, not just a documentation claim (ADR 0088's now-removed
+// Known limitation (2)).
+test("#2381: a foreign marker-quoting thread (not the gate's own login) is narrowed out and mark_ready_for_review is allowed (cross-detector agreement)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-2381-foreign-"));
+  try {
+    const headSha = "abc1234567";
+    const questionMarker = buildFindingMarker({ fp: "d".repeat(16), severity: "question", angle: "scope", round: 1 });
+    const foreignThreadNode = {
+      id: "PRRT_F1",
+      isResolved: false,
+      isOutdated: false,
+      path: "src/scope.mjs",
+      line: 4,
+      comments: {
+        nodes: [{
+          id: "PRRC_F1",
+          databaseId: 9004,
+          body: `${questionMarker}\n**question** (\`scope\`): why this approach?`,
+          // Quotes a real gate finding marker, but is NOT authored by the
+          // gate's own login — a foreign comment forging the marker shape.
+          author: { login: "someone-else", __typename: "User" },
+        }],
+      },
+    };
+    const cleanDraftGateBody = renderGateReviewCommentBody({
+      gate: "draft_gate",
+      headSha,
+      verdict: "clean",
+      findingsSummary: "no blocking issues found",
+      nextAction: "mark ready for review",
+    });
+    const env = await writeGhStub(tempDir, [
+      {
+        stdout: JSON.stringify({
+          number: 10,
+          state: "OPEN",
+          isDraft: true,
+          headRefOid: headSha,
+          mergeStateStatus: "CLEAN",
+          body: "## Objective\n\nShip.\n\n## In scope\n\n- x\n\n## Explicit non-goals\n\n- y\n\n## Acceptance criteria\n\n- [ ] x\n\n## Definition of done\n\n- [ ] tests pass\n\n## Open questions/risks\n\n- none\n",
+          closingIssuesReferences: [],
+          reviews: [],
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+        }) + "\n",
+      },
+      { stdout: "{\"users\":[]}\n" },
+      { stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [foreignThreadNode], pageInfo: { hasNextPage: false } } } } } }) },
+      // ADR 0088: the marker-only pass finds one candidate, so the login is
+      // resolved to narrow the count — "someone-else" != "dev-loops-gate[bot]",
+      // so the narrowed count is 0.
+      { stdout: jsonLine({ login: "dev-loops-gate[bot]" }) },
+      { stdout: jsonLine({ headRefOid: headSha }) },
+      { stdout: jsonLine([[{ id: 11, body: cleanDraftGateBody, html_url: "https://example.test/comment/11", updated_at: "2026-05-31T20:00:00Z" }]]) },
+      { stdout: "[]\n" }, // detectCheckpointEvidence's own PR-reviews read
+      {
+        assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],
+        stdout: "\n",
+      },
+    ]);
+
+    const result = await detectPrGateCoordinationState(
+      { repo: "owner/repo", pr: 10 },
+      buildMockRuntime(env),
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.draftGate.currentHeadClean, true);
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
+    assert.ok(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+
+    // Same predicate detect-checkpoint-evidence.mjs's own narrowed count now
+    // uses for this exact fixture shape (see the paired test there): both
+    // detectors narrow the same raw thread node by the same login and agree
+    // the foreign thread does not count.
+    assert.equal(
+      countUnresolvedGateAuthoredThreadsFromRawNodes([foreignThreadNode], "dev-loops-gate[bot]"),
+      0,
     );
   } finally {
     await rm(tempDir, { recursive: true, force: true });

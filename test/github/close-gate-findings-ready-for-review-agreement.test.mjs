@@ -100,7 +100,15 @@ function buildSharedMockForThreads(threadStates) {
     if (args[0] === "api" && args[1] === "graphql" && joined.includes("resolveReviewThread")) {
       const threadIdArg = args.find((a) => typeof a === "string" && a.startsWith("threadId="));
       const targetId = threadIdArg?.slice("threadId=".length);
-      const target = threadStates.find((t) => t.threadId === targetId) ?? threadStates[0];
+      const target = threadStates.find((t) => t.threadId === targetId);
+      // No index-0 fallback (a misrouted resolve — e.g. reject-closing the
+      // wrong thread in a mixed question+defect fixture — must be caught by
+      // the test, not silently applied to whatever thread happens to be
+      // first in the array): a resolve for an unmatched/missing threadId is
+      // itself the bug under test, so this throws rather than guessing.
+      if (!target) {
+        throw new Error(`resolveReviewThread: no threadState matches threadId=${String(targetId)}`);
+      }
       target.isResolved = true;
       return { code: 0, stdout: `${JSON.stringify({ data: { resolveReviewThread: { thread: { id: target.threadId, isResolved: true } } } })}\n`, stderr: "" };
     }

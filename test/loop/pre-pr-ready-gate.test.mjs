@@ -360,6 +360,13 @@ test("#1584 reproduction: a draft_gate with a clean verdict + an unresolved nice
   assert.equal(stderrParsed.unresolvedGateThreadCount, 1);
   assert.match(stderrParsed.error, /unresolved gate-authored review thread/i);
   assert.match(stderrParsed.error, /close-gate-findings/);
+  // dod:5 (raw `gh pr ready` path): a DEFECT (non-question) thread must be
+  // named by the fixer fix-close/defer-close remedy, never the question
+  // remedy text — the old assertion above (matching only /close-gate-findings/)
+  // could not tell the two apart, since the question remedy text also
+  // contains that substring.
+  assert.match(stderrParsed.error, /1 open defect thread\(s\).*fixer fix-close.*disposition pass's defer-close/i);
+  assert.doesNotMatch(stderrParsed.error, /question thread\(s\)/i);
 });
 
 // A question finding thread authored by the gate's own login, unresolved,

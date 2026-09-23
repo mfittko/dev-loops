@@ -121,14 +121,25 @@ function toGateStatus(comment, marker, currentHeadSha, unresolvedGateThreadCount
   const anyVisible = normalizedComment.visible || normalizedMarker.visible;
 
   const cleanEvidenceExists = normalizedComment.visible && normalizedComment.verdict === "clean" && normalizedComment.headSha !== null;
-  const hasThreadSignal = Number.isInteger(unresolvedGateThreadCount);
-  const gateThreadsClean = !hasThreadSignal || unresolvedGateThreadCount === 0;
+  // Only null/undefined means "the caller supplied no signal" (preApprovalGate's
+  // own toGateStatus call never passes this argument). Anything else that is
+  // not a non-negative integer — NaN, a float, a string, a negative number
+  // other than -1 — is a malformed signal from a future caller, treated the
+  // same as -1 (unreadable) rather than "no signal": this is a public core
+  // export, and failing open on a malformed count would let a broken caller
+  // report currentHeadClean=true with a dangling thread.
+  const hasThreadSignal = unresolvedGateThreadCount !== null && unresolvedGateThreadCount !== undefined;
+  const safeThreadCount = hasThreadSignal
+    ? (Number.isInteger(unresolvedGateThreadCount) && unresolvedGateThreadCount >= 0 ? unresolvedGateThreadCount : -1)
+    : null;
+  const gateThreadsClean = !hasThreadSignal || safeThreadCount === 0;
   // -1 is a distinct signal from a real positive count: it means the caller
-  // could not even READ the thread state (API failure), not that a thread is
-  // known to dangle. Both still block MARK_READY_FOR_REVIEW, but the two get
-  // different reasons below (a real thread names its own remedy; an
-  // unreadable count names retrying the read instead).
-  const gateThreadCountUnreadable = unresolvedGateThreadCount === -1;
+  // could not even READ the thread state (API failure) or supplied a
+  // malformed value, not that a thread is known to dangle. Both still block
+  // MARK_READY_FOR_REVIEW, but the two get different reasons below (a real
+  // thread names its own remedy; an unreadable count names retrying the read
+  // instead).
+  const gateThreadCountUnreadable = safeThreadCount === -1;
   const markerVerdictClean = normalizedMarker.visible && markerHeadMatches && normalizedMarker.verdict === "clean" && normalizedMarker.contractComplete;
 
   return {

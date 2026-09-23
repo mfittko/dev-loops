@@ -571,7 +571,7 @@ test("#1585: ready-for-review refuses to mark ready when an unresolved gate-auth
 
 // #2381: the refusal text names a remedy PER blocking reason, not one
 // generic instruction that cannot clear every case.
-test("#1585: the refusal text for an open defect (non-question) thread names the fixer/disposition-pass remedy", async () => {
+test("#2381: the refusal text for an open defect (non-question) thread names the fixer/disposition-pass remedy", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-2381-defect-reason-"));
   try {
     const { env } = await writeGhStub(tempDir, [
@@ -629,6 +629,7 @@ test("describeUnresolvedGateThreadReasons: names both remedies when both buckets
   const both = describeUnresolvedGateThreadReasons({ question: 1, other: 2 }, 3);
   assert.match(both, /1 question thread\(s\)/);
   assert.match(both, /2 open defect thread\(s\)/);
+  assert.match(both, /ambiguous or unrecorded needs an operator decision/);
   const fallback = describeUnresolvedGateThreadReasons({ question: 0, other: 0 }, 5);
   assert.match(fallback, /5 unresolved gate-authored review thread\(s\)/);
 });

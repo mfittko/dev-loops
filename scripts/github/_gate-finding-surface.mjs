@@ -1215,7 +1215,12 @@ async function listLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, rep
     return { dir, filenames: [] };
   }
   const prefix = `${gate}-`;
-  return { dir, filenames: entries.filter((name) => name.startsWith(prefix) && name.endsWith(".json")) };
+  // Sorted so the matches[0]/winners[0] tie-break in
+  // findJudgeDispositionForFingerprint below is filesystem-order independent
+  // (readdir order is not guaranteed lexical — e.g. ext4 hash order vs APFS —
+  // so an unsorted list would let the same inputs post different reply text
+  // on different machines).
+  return { dir, filenames: entries.filter((name) => name.startsWith(prefix) && name.endsWith(".json")).sort() };
 }
 
 async function countLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot }) {

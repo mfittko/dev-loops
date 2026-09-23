@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { onTestFinished, test } from "bun:test";
 import { runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
-import { buildFindingMarker } from "../../scripts/github/_gate-finding-surface.mjs";
+import { buildFindingMarker, countUnresolvedGateAuthoredThreadsFromRawNodes } from "../../scripts/github/_gate-finding-surface.mjs";
 import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
 
 const scriptPath = path.resolve("scripts/github/detect-checkpoint-evidence.mjs");
@@ -59,6 +59,10 @@ test("#1585: an unresolved gate-authored thread carrying a finding marker fails 
         ] } } } },
       }) + "\n",
     },
+    // ADR 0088: the marker-only pass above found one candidate thread, so the
+    // count is narrowed by the authenticated gate login (same login the
+    // thread's own comment carries here, so the narrowed count stays 1).
+    { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "gate-bot" }) + "\n" },
   ], { repeatLastOnOverflow: true });
 
   const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
@@ -134,6 +138,111 @@ test("#1585: an unreadable thread-fetch state (-1) folds draftGateSatisfied to f
   assert.equal(result.code, 1, `Expected exit 1. Stderr: ${result.stderr}`);
   const parsed = JSON.parse(result.stderr);
   assert.equal(parsed.preMergeGateCheck.ok, false);
+  assert.match(parsed.preMergeGateCheck.failures.join("; "), /could not fetch review thread state/i);
+});
+
+// ADR 0088: a thread that merely QUOTES a gate finding marker, but was
+// authored by someone other than the authenticated gate login, must not
+// count as a GATE-AUTHORED thread here — narrowed the same way
+// detect-pr-gate-coordination-state.mjs narrows its own count (see the
+// paired "#2381: ... cross-detector agreement" test there, which asserts
+// mark_ready_for_review for this exact fixture shape). This PR still blocks
+// on the SEPARATE, unrelated generic-unresolved-thread invariant
+// (any unresolved thread, gate-authored or not — draft_gate's own evaluator
+// branch never reads that signal, only the narrowed gate-authored count),
+// so the login round-trip is exercised (assertArgs below requires it) and
+// the resulting narrowed count is proven to agree with the coordination
+// detector's own identical call, without claiming this fixture reaches
+// draftGateSatisfied=true end to end (structurally unobservable here: the
+// CLI's success JSON, where draftGateSatisfied is emitted, requires the
+// generic invariant to ALSO pass, which requires the thread resolved — and a
+// resolved thread never reaches the login-narrowing branch at all).
+test("#2381: a foreign marker-quoting thread narrows the gate-authored count to 0 (login round-trip runs; agrees with detect-pr-gate-coordination-state.mjs's own narrowing)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-2381-foreign-"));
+  onTestFinished(() => rm(tempDir, { recursive: true, force: true }));
+  await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+
+  const marker = buildFindingMarker({ fp: "c".repeat(16), severity: "nice-to-have", angle: "naming", round: 1 });
+  const rawThreadNodes = [
+    // Marker-bearing, unresolved — but authored by a FOREIGN login, not this
+    // gate's own authenticated login (resolved below as "gate-bot").
+    { id: "t1", isResolved: false, comments: { nodes: [{ databaseId: 9003, body: marker + "\n**nice-to-have** (`naming`): casing nit", author: { login: "someone-else" } }] } },
+  ];
+  const { env } = await writeGhStubHelper(tempDir, [
+    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+    {
+      assertArgs: ["api", "repos/owner/repo/issues/17/comments?per_page=100"],
+      stdout: JSON.stringify([
+        { id: 42, body: cleanGateBody("draft_gate", "abc1234"), updated_at: "2026-05-29T21:00:00Z" },
+        { id: 43, body: cleanGateBody("pre_approval_gate", "abc1234"), updated_at: "2026-05-29T22:00:00Z" },
+      ]) + "\n",
+    },
+    { stdout: "[]" },
+    {
+      assertArgs: ["api", "graphql"],
+      assertArgContains: ["reviewThreads"],
+      stdout: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: rawThreadNodes } } } } }) + "\n",
+    },
+    // The marker-only pass finds one candidate, so the count is narrowed by
+    // login — proves the round-trip actually runs for a foreign author too.
+    { assertArgs: ["api", "user"], stdout: JSON.stringify({ login: "gate-bot" }) + "\n" },
+  ], { repeatLastOnOverflow: true });
+
+  const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+  // Still blocked, but ONLY by the generic invariant (any unresolved thread) —
+  // never by the (now correctly narrowed-to-zero) gate-authored count.
+  assert.equal(result.code, 1, `Expected exit 1. Stderr: ${result.stderr}`);
+  const parsed = JSON.parse(result.stderr);
+  assert.match(parsed.preMergeGateCheck.failures.join("; "), /unresolved review threads present \(1\)/i);
+
+  // Same predicate detect-pr-gate-coordination-state.mjs's own narrowing
+  // uses for this exact raw payload — both detectors agree the foreign
+  // thread does not count as gate-authored.
+  assert.equal(countUnresolvedGateAuthoredThreadsFromRawNodes(rawThreadNodes, "gate-bot"), 0);
+});
+
+// ADR 0088: the login round-trip only runs when the marker-only pass found a
+// candidate thread; when that call itself fails, the whole read fails closed
+// (-1), the same as an unreadable thread payload — never falls back to the
+// wider marker-only count (which would under-narrow and could disagree with
+// the login-narrowed count detect-pr-gate-coordination-state.mjs reports for
+// the same failure). The login call shares the outer try/catch with the
+// thread-payload fetch, so a login failure here is indistinguishable from a
+// thread-fetch failure — both surface the same "could not fetch review
+// thread state" fail-closed message, never a crash.
+test("#2381: a login-resolution failure (after a marker-only candidate is found) fails closed, not the marker-only count", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-detect-2381-login-fail-"));
+  onTestFinished(() => rm(tempDir, { recursive: true, force: true }));
+  await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+
+  const marker = buildFindingMarker({ fp: "e".repeat(16), severity: "nice-to-have", angle: "naming", round: 1 });
+  const { env } = await writeGhStubHelper(tempDir, [
+    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: '{"headRefOid":"abc1234"}\n' },
+    {
+      assertArgs: ["api", "repos/owner/repo/issues/17/comments?per_page=100"],
+      stdout: JSON.stringify([
+        { id: 42, body: cleanGateBody("draft_gate", "abc1234"), updated_at: "2026-05-29T21:00:00Z" },
+        { id: 43, body: cleanGateBody("pre_approval_gate", "abc1234"), updated_at: "2026-05-29T22:00:00Z" },
+      ]) + "\n",
+    },
+    { stdout: "[]" },
+    {
+      assertArgs: ["api", "graphql"],
+      assertArgContains: ["reviewThreads"],
+      stdout: JSON.stringify({
+        data: { repository: { pullRequest: { reviewThreads: { nodes: [
+          { id: "t1", isResolved: false, comments: { nodes: [{ databaseId: 9005, body: marker + "\n**nice-to-have** (`naming`): casing nit", author: { login: "gate-bot" } }] } },
+        ] } } } },
+      }) + "\n",
+    },
+    { assertArgs: ["api", "user"], stdout: "", code: 1, stderr: "HTTP 500" },
+  ], { repeatLastOnOverflow: true });
+
+  const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+  assert.equal(result.code, 1, `Expected exit 1. Stderr: ${result.stderr}`);
+  const parsed = JSON.parse(result.stderr);
+  assert.equal(parsed.preMergeGateCheck.ok, false);
+  assert.equal(parsed.evidenceState, "violation");
   assert.match(parsed.preMergeGateCheck.failures.join("; "), /could not fetch review thread state/i);
 });
 

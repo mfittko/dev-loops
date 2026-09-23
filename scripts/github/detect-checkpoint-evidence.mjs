@@ -32,7 +32,7 @@ import { detectMergeBaseChangedFiles, detectMergeBaseScope, isEligibleForLightMo
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { normalizePrReviewsPayload, prReviewsApiArgs, prReviewsApiPath } from "./_gate-finding-surface.mjs";
-import { flattenPaginatedSlurp } from "./post-gate-findings.mjs";
+import { flattenPaginatedSlurp, resolveAuthenticatedLogin } from "./post-gate-findings.mjs";
 import { ensureAsyncRunnerOwnership } from "../loop/_pr-runner-coordination.mjs";
 import { detectStaleRunner } from "../loop/_stale-runner-detection.mjs";
 import { resolveLedgerCheckouts, resolveRepoRoot } from "../loop/_repo-root-resolver.mjs";
@@ -1160,14 +1160,27 @@ async function main() {
       const threadsPayload = await fetchGithubReviewThreadsPayload(options, { env: process.env });
       const parsedThreads = parseReviewThreads(threadsPayload);
       unresolvedThreadCount = coerceUnresolvedThreadCount(parsedThreads);
-      // The draftGateSatisfied field must assert 0 unresolved
-      // gate-authored threads (high, medium, low, question, AND nit),
-      // not just a clean verdict. Reuse the same raw thread payload already
-      // fetched for the total count (marker-only, fail-closed proxy — no extra
-      // gh round-trip; the read-only counter cannot under-count a real
-      // gate-authored thread, only over-count a foreign quote, which blocks
-      // safely).
-      unresolvedGateThreadCount = countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload);
+      // The draftGateSatisfied field must assert 0 unresolved gate-authored
+      // threads (high, medium, low, question, AND nit), not just a clean
+      // verdict. Narrowed by the authenticated gate login (ADR 0088), the
+      // same way detect-pr-gate-coordination-state.mjs narrows its own
+      // count from the same raw payload shape: a marker-only match from a
+      // FOREIGN author (a thread that merely quotes a gate marker) must not
+      // count here either, or the two detectors can disagree on the same PR
+      // state (a foreign marker-quoting thread would block this detector's
+      // draftGateSatisfied while the coordination detector's login-narrowed
+      // count already reports 0). The `gh api user` round-trip only runs
+      // when the cheap marker-only pass finds at least one candidate —
+      // login narrowing can only SHRINK that count, so a marker-only 0
+      // already proves the exact-author count is 0 too. A login-resolution
+      // failure fails closed to -1, same as an unreadable thread payload.
+      const markerOnlyGateThreadCount = countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload);
+      if (markerOnlyGateThreadCount === 0) {
+        unresolvedGateThreadCount = 0;
+      } else {
+        const login = await resolveAuthenticatedLogin({ env: process.env });
+        unresolvedGateThreadCount = countUnresolvedGateAuthoredThreadsFromRawNodes(threadsPayload, login);
+      }
     } catch {
       unresolvedThreadCount = -1;
       unresolvedGateThreadCount = -1;

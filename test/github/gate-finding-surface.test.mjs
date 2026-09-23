@@ -1015,6 +1015,26 @@ test("#2381: findJudgeDispositionForFingerprint picks the disposition from the l
   );
 });
 
+// Mirrors the test above with the NEWER ledger in headA.json (lexically
+// first) and the OLDER one in headB.json (lexically last) — the opposite
+// directory-order pairing. The original test's lexical order coincides with
+// "last readdir match wins"; this one's coincides with "first readdir match
+// wins". Together the two pin down newest-loggedAt selection regardless of
+// directory order, since only the real (loggedAt-based) implementation
+// passes both.
+test("#2381: findJudgeDispositionForFingerprint picks the GREATEST loggedAt regardless of directory order (mirrored fixture)", async () => {
+  await withLocalLedgerFiles(
+    {
+      [`${JDF_GATE}-headA.json`]: jdfLedger({ loggedAt: "2026-09-10T00:00:00.000Z", disposition: "act", rationale: "new reasoning" }),
+      [`${JDF_GATE}-headB.json`]: jdfLedger({ loggedAt: "2026-09-01T00:00:00.000Z", disposition: "reject", rationale: "old reasoning" }),
+    },
+    async (tmpRoot) => {
+      const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headA", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
+      assert.deepEqual(result, { disposition: "act", rationale: "new reasoning" });
+    },
+  );
+});
+
 test("#2381: findJudgeDispositionForFingerprint ignores a ledger whose own recorded repo/pr/gate does not match the inputs", async () => {
   await withLocalLedgerFiles(
     {
@@ -1056,6 +1076,28 @@ test("#2381: findJudgeDispositionForFingerprint returns { ambiguous: true } (not
     async (tmpRoot) => {
       const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
       assert.deepEqual(result, { ambiguous: true });
+    },
+  );
+});
+
+// listLocalFindingsLogFiles sorts its filename list (rather than trusting
+// readdir order) so the ALL-AGREE citation path (matches[0].rationale, used
+// when at least one candidate lacks a usable loggedAt) always cites the same
+// ledger's rationale regardless of filesystem directory order. Filenames are
+// written here in non-lexical order to show the result tracks sorted order,
+// not write/insertion order.
+test("#2381: findJudgeDispositionForFingerprint cites a deterministic (sorted-filename) rationale when every agreeing candidate lacks a usable loggedAt", async () => {
+  await withLocalLedgerFiles(
+    {
+      [`${JDF_GATE}-headC.json`]: jdfLedger({ loggedAt: undefined, disposition: "reject", rationale: "from headC" }),
+      [`${JDF_GATE}-headA.json`]: jdfLedger({ loggedAt: undefined, disposition: "reject", rationale: "from headA" }),
+      [`${JDF_GATE}-headB.json`]: jdfLedger({ loggedAt: undefined, disposition: "reject", rationale: "from headB" }),
+    },
+    async (tmpRoot) => {
+      const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
+      // Alphabetically-first filename (headA) wins the citation, not
+      // whatever order readdir happened to return the three files in.
+      assert.deepEqual(result, { disposition: "reject", rationale: "from headA" });
     },
   );
 });

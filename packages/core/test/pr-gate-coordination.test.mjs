@@ -111,21 +111,6 @@ test("#2381: unresolvedGateThreadCount: 0 still allows mark_ready_for_review (po
   assert.equal(result.draftGate.currentHeadClean, true);
 });
 
-test("#2381: a fail-closed unresolvedGateThreadCount (-1, unreadable thread state) also blocks mark_ready_for_review", () => {
-  const result = evaluatePrGateCoordination({
-    pr: 10,
-    currentHeadSha: "abc123456789",
-    prDraft: true,
-    lifecycleState: STATE.PR_DRAFT,
-    loopDisposition: DISPOSITION.ACTION_REQUIRED,
-    draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
-    draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
-    unresolvedGateThreadCount: -1,
-  });
-
-  assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
-});
-
 // -1 (thread state unreadable) gets its OWN reason — distinct from a real
 // dangling thread (markerCleanThreadsUnresolved above), which would
 // misleadingly name "resolve the thread" when there is no known thread to
@@ -147,6 +132,28 @@ test("#2381: unresolvedGateThreadCount: -1 names the unreadable-state reason, di
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS);
   assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
   assert.match(result.reason, /could not read review-thread state; re-run when API connectivity is restored/);
+});
+
+// toGateStatus is a public core export; a malformed unresolvedGateThreadCount
+// (NaN, a float, a string) from a future caller must fail closed the same as
+// -1, never fail open by treating it as "no signal" (currentHeadClean=true).
+test("#2381: a malformed unresolvedGateThreadCount (NaN, float, string) fails closed like -1, never treated as absent", () => {
+  for (const malformed of [Number.NaN, 1.5, "1"]) {
+    const result = evaluatePrGateCoordination({
+      pr: 10,
+      currentHeadSha: "abc123456789",
+      prDraft: true,
+      lifecycleState: STATE.PR_DRAFT,
+      loopDisposition: DISPOSITION.ACTION_REQUIRED,
+      draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+      draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+      unresolvedGateThreadCount: malformed,
+    });
+
+    assert.equal(result.draftGate.currentHeadClean, false, `malformed value ${String(malformed)} must not read as clean`);
+    assert.equal(result.draftGate.markerCleanThreadStateUnreadable, true);
+    assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
+  }
 });
 
 test("#2381: an absent unresolvedGateThreadCount input preserves the marker-only definition (backward compatible)", () => {

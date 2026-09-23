@@ -949,28 +949,125 @@ test("an UNANSWERED, judge-rejected question thread stays open (no reply/resolve
   ));
 });
 
-test("answering a previously-unanswered, judge-rejected question lets the pass close it", async () => {
+// hasAnswerReply's exclusion branches (ADR 0088): each of these replies is
+// NOT a genuine answer, so the reject-close pass must never reach
+// resolveJudgeRejection for any of them (a reply/resolve stub in the gh
+// queue would overflow if it did) — the thread stays open exactly like the
+// fully-unanswered case above. A regression in any one of these exclusions
+// would let an UNANSWERED (on the merits) judge-rejected question get
+// reject-closed, which ng:0 forbids.
+for (const [label, reply] of [
+  ["a [bot]-login reply", { body: "Looks fine to me.", author: "some-ci[bot]" }],
+  ["a whitespace-only reply body", { body: "   \n\t  ", author: "operator" }],
+  ["a reply carrying a finding marker", { body: `${buildFindingMarker({ fp: "f".repeat(16), severity: "low", angle: "naming", round: 1 })}\n**low** (\`naming\`): unrelated finding`, author: "operator" }],
+  ["a prior gate automation reply ('Closed at gate close (')", { body: "Closed at gate close (round 1, fingerprint aaaaaaaaaaaaaaaa, severity question, angle scope): already handled.", author: "operator" }],
+  ["a reply mixed with a bare @copilot summon", { body: "Answering now: see the design doc. @copilot please re-review.", author: "operator" }],
+]) {
+  test(`hasAnswerReply exclusion: ${label} does not count as an answer — the thread stays open`, async () => {
+    const finding = { severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "reject", judgeRationale: "Already decided elsewhere." };
+    const fp = fingerprintFinding(finding);
+    const questionBody = `${buildFindingMarker({ fp, severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): why this approach?`;
+    const thread = threadNode({
+      id: "THREAD_Q_EXCLUDED_REPLY",
+      commentId: 6273,
+      body: questionBody,
+      replies: [reply],
+    });
+    await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
+      // No reply/resolve stub: if hasAnswerReply wrongly treats this as an
+      // answer, the pass would call a gh entry past the end of this queue
+      // and the mock would throw "Unexpected gh call".
+      roundEntries({ threads: [thread] }),
+      async ({ env, ghCommand, runChild, repoRoot }) => {
+        const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+        assert.equal(result.rejectClosed, 0);
+        assert.equal(result.unresolvedGateThreadCount, 1);
+      },
+    ));
+  });
+}
+
+// The reject-close pass's per-candidate failure path (runQuestionRejectClosePass,
+// mirrors runDispositionPass's own #1973/#1882 fail-closed handling): when
+// the reply POST itself fails (a transient gh/API error, not a guard
+// refusal), the candidate is recorded in dispositionFailures with severity
+// "question" and the thread stays unresolved — not deadlocking the rest of
+// the batch, and merged (combinedDispositionFailures) alongside any
+// defer-pass failures from the same round.
+test("a reject-close reply POST failure is recorded in dispositionFailures (severity question) and the thread stays open", async () => {
   const finding = { severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "reject", judgeRationale: "Already decided elsewhere." };
   const fp = fingerprintFinding(finding);
   const questionBody = `${buildFindingMarker({ fp, severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): why this approach?`;
   const answeredThread = threadNode({
-    id: "THREAD_Q_NOW_ANSWERED",
-    commentId: 6272,
+    id: "THREAD_Q_REPLY_FAILS",
+    commentId: 6274,
     body: questionBody,
     replies: [{ body: "Answering now: see the design doc.", author: "operator" }],
   });
   await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
     [
       ...roundEntries({ threads: [answeredThread] }),
-      postReplyEntry(6272, { id: 7272 }),
-      resolveThreadEntry("THREAD_Q_NOW_ANSWERED"),
+      {
+        assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/6274/replies`, "--input", "-"],
+        stdout: "",
+        stderr: "HTTP 500",
+        exitCode: 1,
+      },
+      // No resolveThreadEntry: the POST failure must short-circuit before resolve.
     ],
     async ({ env, ghCommand, runChild, repoRoot }) => {
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
-      assert.equal(result.rejectClosed, 1);
-      assert.equal(result.unresolvedGateThreadCount, 0);
+      assert.equal(result.rejectClosed, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+      assert.ok(Array.isArray(result.dispositionFailures), "the failed candidate is surfaced");
+      assert.equal(result.dispositionFailures.length, 1);
+      assert.equal(result.dispositionFailures[0].commentId, 6274);
+      assert.equal(result.dispositionFailures[0].severity, "question");
+      assert.match(result.dispositionFailures[0].error, /gh command failed/);
     },
   ));
+});
+
+// Models the actual unanswered-to-answered TRANSITION dod:1 asks for: the
+// SAME thread/ledger, run through closeGateFindings twice — first with no
+// answer reply (stays open, no mutation), then again after an answer reply
+// lands (reject-closed). A single-call fixture that starts already-answered
+// (the shape most other tests in this file use) cannot show the transition
+// itself, only the already-answered end state.
+test("answering a previously-unanswered, judge-rejected question lets the pass close it (unanswered -> answered transition)", async () => {
+  const finding = { severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "reject", judgeRationale: "Already decided elsewhere." };
+  const fp = fingerprintFinding(finding);
+  const questionBody = `${buildFindingMarker({ fp, severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): why this approach?`;
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), async (ledgerPath) => {
+    const unansweredThread = threadNode({ id: "THREAD_Q_NOW_ANSWERED", commentId: 6272, body: questionBody });
+    await withGhStub(
+      roundEntries({ threads: [unansweredThread] }),
+      async ({ env, ghCommand, runChild, repoRoot }) => {
+        const first = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+        assert.equal(first.rejectClosed, 0);
+        assert.equal(first.unresolvedGateThreadCount, 1);
+      },
+    );
+
+    const answeredThread = threadNode({
+      id: "THREAD_Q_NOW_ANSWERED",
+      commentId: 6272,
+      body: questionBody,
+      replies: [{ body: "Answering now: see the design doc.", author: "operator" }],
+    });
+    await withGhStub(
+      [
+        ...roundEntries({ threads: [answeredThread] }),
+        postReplyEntry(6272, { id: 7272 }),
+        resolveThreadEntry("THREAD_Q_NOW_ANSWERED"),
+      ],
+      async ({ env, ghCommand, runChild, repoRoot }) => {
+        const second = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+        assert.equal(second.rejectClosed, 1);
+        assert.equal(second.unresolvedGateThreadCount, 0);
+      },
+    );
+  });
 });
 
 test("an answered question the judge did NOT reject (act) stays open (the fixer's own answer-and-resolve path owns it)", async () => {
