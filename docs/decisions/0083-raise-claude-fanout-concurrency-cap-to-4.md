@@ -7,16 +7,18 @@ Accepted — 2026-09-23 ([issue 2366](https://github.com/mfittko/dev-loops/issue
 Amends [0069](./0069-claude-harness-fanout-concurrency-clamp.md): the clamp mechanism <!-- secret-scan:allow relative ADR filename cross-reference links, not credentials -->
 (`resolveFanoutEffectiveConcurrency` scoping `CLAUDE_MAX_EFFECTIVE_CONCURRENT` to
 `isClaudeHarness(env)`) stands unchanged; this record raises only the constant's value, from 2
-to 4, because the retry/backoff policy 0069 itself introduced is expected to absorb the 429 risk
-that motivated the lower value, backed by the measured round below.
+to 4, because the retry/backoff policy 0056 introduced and 0069 turned into a tested function is
+expected to absorb the 429 risk that motivated the lower value, backed by the measured round
+below.
 
 ## Context
 
 ADR 0069 set `CLAUDE_MAX_EFFECTIVE_CONCURRENT = 2` to keep a single-driver Claude session's
-per-wave burst (driver + dispatch units) below the point where it 429s. That record also
-introduced `GATE-EXEC-DISPATCH-RETRY-BACKOFF` (`planDispatchRetry`,
-`packages/core/src/loop/gate-fanin.mjs`): a 429 or 5xx retries the same dispatch unit on a
-30s/60s/120s schedule, safe because each unit's write is idempotent and single-write
+per-wave burst (driver + dispatch units) below the point where it 429s. ADR 0056 introduced the
+retry-on-transient discipline (`GATE-EXEC-DISPATCH-RETRY-BACKOFF`); ADR 0069 turned it into the
+tested pure function `planDispatchRetry` (`packages/core/src/loop/gate-fanin.mjs`): a 429 or 5xx
+retries the same dispatch unit on a 30s/60s/120s schedule, safe because each unit's write is
+idempotent and single-write
 (`GATE-EXEC-COLLECTABLE-DISPATCH`), and from the third failed attempt the conductor halves the
 active batch via `backoffMaxConcurrent`. A 429 under that policy costs latency, not a dead
 drive.
@@ -43,8 +45,8 @@ Claude session is not routinely dispatching an unbounded number of concurrent hi
 per wave. A cap of 4 keeps that bound while removing the over-serialization the retry policy
 made unnecessary.
 
-Rejected: removing the clamp entirely. An operator repo whose configured
-`gates.fanout.maxConcurrent` is the shipped default (4) would then dispatch driver + 4 under
+Rejected: removing the clamp entirely. An operator repo configuring
+`gates.fanout.maxConcurrent` above 4 (for example 8) would then dispatch driver + 8 under
 Claude with no clamp at all — an unbounded residual risk with no known-safe ceiling. Keeping a
 cap, even a wider one, preserves a known bound that the retry policy backstops; removing it
 trades a bounded, retry-backstopped risk for an unbounded one. The residual risk this record
@@ -58,18 +60,32 @@ below is the evidence that the backstop holds in practice, not a mechanical guar
 
 ### Measured gate round
 
-MEASUREMENT-PENDING: the draft_gate round on this PR at effective concurrency 3 is recorded here before merge.
+The `draft_gate` round 1 on PR 2384 at head `ec831c65808ec3a9fe4d73486a5ad2a1f875e369`, run under
+the Claude harness with this branch's code, is the measured evidence:
+
+- Emitter `maxConcurrent` 3 (`min(3, 4)`); 6 dispatch units covering 10 config-resolved angles.
+- Executed as primer (1 unit, serialized per `GATE-EXEC-PRIME`) + 3 + 2: never more than 3
+  reviewers in flight.
+- Wall clock 2026-09-23T05:59:41Z to 06:18:13Z, 1112s total; reviewer critical path about 341s
+  (108 + 108 + 125s agent runtime). The remainder was conductor overhead relaying the per-unit
+  prompt, which is serial per wave and independent of concurrency.
+- 429 failures: 0; 5xx failures: 0; retries: 0; backoff halving: none. All 6 units completed on
+  the first attempt, with no unrecovered 429.
+
+One round with zero 429s is limited evidence: it shows driver + 3 did not 429 in this round; it
+does not prove it never will. The retry policy remains the backstop.
 
 ## Consequences
 
 - This repo's Claude effective concurrency rises from 2 to 3 (driver + 3), reducing the number
-  of waves a multi-unit gate round needs (issue 2366's PR-2250 example: 5 units now need two
-  waves, `[3][2]`, with the lead reviewer as the first unit of wave 1, instead of three).
+  of waves a multi-unit gate round needs. The measured round above (PR 2384, 6 units) ran as
+  primer + 3 + 2; at the old cap of 2 the same round would have run as primer + 2 + 2 + 1.
 - Pi and unknown-harness behavior is unchanged: `resolveFanoutEffectiveConcurrency` returns the
   configured value unclamped for both, exactly as under 0069.
-- 0069's retry/backoff policy (`planDispatchRetry`, `backoffMaxConcurrent`,
-  `GATE-EXEC-DISPATCH-RETRY-BACKOFF`) is unchanged and still the mechanism that turns a 429 into
-  latency instead of a failed drive; this record does not touch it.
+- The retry/backoff policy (`GATE-EXEC-DISPATCH-RETRY-BACKOFF`, introduced by 0056 and turned
+  into the tested `planDispatchRetry`/`backoffMaxConcurrent` by 0069) is unchanged and still the
+  mechanism that turns a 429 into latency instead of a failed drive; this record does not touch
+  it.
 - A consumer repo at the shipped default `gates.fanout.maxConcurrent: 4` now dispatches driver +
   4 under Claude (previously driver + 2). That is an accepted residual risk, bounded by the
   unchanged retry/backoff policy rather than by the clamp; if it proves insufficient, the fix is
