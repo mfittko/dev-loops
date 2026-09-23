@@ -1739,7 +1739,7 @@ async function verifyPostedSurface({ repo, pr, surface, commentId }, { env, ghCo
 //
 // Durability note: a process crash in the window between convertPrToDraft and
 // markPrReady leaves the PR in draft until a later dev-loop run (or a manual
-// `gh pr ready`) restores it — the next run re-enters as a draft, posts
+// `dev-loops pr restore-ready`) restores it — the next run re-enters as a draft, posts
 // normally, and restores ready. The convert/markPrReady mutations are
 // individually idempotent, so concurrent cooperating runners cause at most a
 // transient draft flicker, never a stuck draft (only a hard crash mid-transition
@@ -2311,9 +2311,9 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
         `draft_gate self-heal for ${options.repo}#${options.pr} failed: the PR was converted to draft ` +
         `to post the verdict, but GitHub still reports it as non-draft on re-entry (draft-state read lagged ` +
         `the conversion mutation, or the conversion did not take). Not recursing. Re-run the draft_gate post ` +
-        `once the PR reflects the draft state, or reconcile manually with ` +
-        `\`gh pr ready ${options.pr} --repo ${options.repo}\` / ` +
-        `\`node scripts/github/reconcile-draft-gate.mjs --repo ${options.repo} --pr ${options.pr}\`.`,
+        `once the PR reflects the draft state, or reconcile with ` +
+        `\`dev-loops pr restore-ready --repo ${options.repo} --pr ${options.pr}\` / ` +
+        `\`dev-loops pr reconcile-draft --repo ${options.repo} --pr ${options.pr}\`.`,
       );
     }
     if (gateActionForbidden) {

@@ -14,6 +14,7 @@ import { DEFAULT_TEST_PR_BODY, initSizeBudgetFixtureRepo, makeGhMock } from "../
 import { convertToDraft } from "../../scripts/github/convert-to-draft.mjs";
 import { upsertCheckpointVerdict } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { restoreReady } from "../../scripts/github/restore-ready.mjs";
+import { writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 
 const REPO = "owner/repo";
 const PR = 17;
@@ -46,13 +47,32 @@ test("convert-to-draft -> fan-out draft_gate post -> restore-ready composes with
       ]),
       "utf8",
     );
-    // The durable findings-log ledger + provenance mechanics that
-    // requireFanoutEvidence cross-checks are their own exhaustively-tested
-    // surface (upsert-checkpoint-verdict.test.mjs); this test's only concern
-    // is that the three sanctioned wrappers compose, so disable it here and
-    // let the executionMode itself (fanout_fanin, never inline_single_agent)
-    // stand for the real remedy shape.
-    await writeFile(path.join(tempDir, ".devloops"), "version: 1\ngates:\n  requireFanoutEvidence: false\n", "utf8");
+    // gates.requireFanoutEvidence stays at its DEFAULT (enabled): the
+    // fan-out chain reconcile-draft-gate.mjs prescribes really does need the
+    // sanctioned findings-log ledger, so this test writes one through
+    // write-gate-findings-log.mjs (dev-loops gate write-findings-log) — the
+    // same durable-ledger existence check upsert-checkpoint-verdict.mjs
+    // enforces post-time (see upsert-checkpoint-verdict.test.mjs's own
+    // stageDurableLedger/buildLogPath fixtures) — rather than disabling the
+    // gate the real remedy relies on.
+    await writeGateFindingsLog({
+      repo: REPO,
+      pr: PR,
+      gate: "draft_gate",
+      headSha,
+      verdict: "clean",
+      findings: "[]",
+      executionMode: "fanout_fanin",
+      // draft_gate's two shipped mandatory angles (pr-description, holistic)
+      // must be provable-covered before the ledger can be written at all.
+      provenance: JSON.stringify({
+        distinctReviewers: 2,
+        perAngle: [
+          { angle: "pr-description", reviewer: "agent-a" },
+          { angle: "holistic", reviewer: "agent-b" },
+        ],
+      }),
+    }, { repoRoot: tempDir });
 
     const { runChild, calls } = makeGhMock([
       // --- Phase 1: convert-to-draft.mjs (_draft-transition.mjs's own GraphQL
@@ -109,6 +129,15 @@ test("convert-to-draft -> fan-out draft_gate post -> restore-ready composes with
       // skipped through the internal runtime seam — no `gh pr checks` entry
       // exists here, so a regression that re-enables the CI check would
       // consume the wrong entry and fail loudly). ---
+      {
+        assertArgContains: ["pullRequest(number:$number)"],
+        stdout: JSON.stringify({
+          data: { repository: { pullRequest: { id: PR_NODE_ID, isDraft: true, headRefOid: headSha, baseRefName: baseBranch, state: "OPEN", mergeStateStatus: "CLEAN" } } },
+        }),
+      },
+      // restore-ready re-reads the head immediately before `gh pr ready`
+      // (issue #2355 review fix) and refuses on a mismatch — same PR-view
+      // shape, claimed a second time.
       {
         assertArgContains: ["pullRequest(number:$number)"],
         stdout: JSON.stringify({

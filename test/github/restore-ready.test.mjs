@@ -70,6 +70,22 @@ function cleanDraftGateComment(headSha) {
   };
 }
 
+// A legacy plain-text verdict that records only the ABBREVIATED head SHA:
+// the marker summary (summarizeGateReviewCommentMarkers) requires an EXACT
+// headSha match and so never selects this comment (currentHeadClean stays
+// false), while the legacy summary's manual startsWith compare still matches
+// it (legacyHeadMatch/effectiveHeadClean true). This is the "legacy-only"
+// evidence shape restore-ready must refuse on (issue #2355 review fix).
+function legacyOnlyDraftGateComment(headSha) {
+  return {
+    body: `Gate review: draft_gate\nReviewed head SHA: ${headSha.slice(0, 7)}\nVerdict: clean\nFindings summary: no issues found\nNext action: mark ready for review`,
+    id: 102,
+    html_url: "https://github.com/owner/repo/pull/17#issuecomment-102",
+    created_at: "2026-06-05T00:00:00Z",
+    updated_at: "2026-06-05T00:00:00Z",
+  };
+}
+
 function draftPrViewStub({ headSha, baseBranch }) {
   return {
     stdout: JSON.stringify({
@@ -122,6 +138,7 @@ test("restores ready when CI is blocking but current-head draft_gate evidence is
       // mismatch rather than silently passing.
       { stdout: JSON.stringify([cleanDraftGateComment(headSha)]) },
       ...gateCloseStubs(),
+      draftPrViewStub({ headSha, baseBranch }), // pre-ready head recheck
       { stdout: "" }, // gh pr ready
     ]);
 
@@ -153,6 +170,54 @@ test("refuses without clean current-head draft_gate evidence, and never calls gh
 
     assert.equal(result.code, 1);
     assert.match(result.stderr, /no visible clean draft_gate/i);
+
+    const calls = await readGhCalls(tempDir);
+    assert.ok(!calls.some((c) => c[0] === "pr" && c[1] === "ready"), "gh pr ready must not be called");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("refuses when the PR head moved between the evidence read and gh pr ready, and never calls gh pr ready", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-restore-ready-head-moved-"));
+  try {
+    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir);
+    // Guaranteed to differ from the real fixture commit SHA regardless of its
+    // actual first hex digit (a hardcoded literal first digit could coincide).
+    const movedHeadSha = `${headSha[0] === "0" ? "1" : "0"}${headSha.slice(1)}`;
+    const env = await writeGhStub(tempDir, [
+      draftPrViewStub({ headSha, baseBranch }),
+      { stdout: JSON.stringify([cleanDraftGateComment(headSha)]) },
+      ...gateCloseStubs(),
+      draftPrViewStub({ headSha: movedHeadSha, baseBranch }), // pre-ready head recheck: head moved
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /head changed/i);
+
+    const calls = await readGhCalls(tempDir);
+    assert.ok(!calls.some((c) => c[0] === "pr" && c[1] === "ready"), "gh pr ready must not be called");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("refuses on legacy-only (abbreviated-head) evidence, and never calls gh pr ready", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-restore-ready-legacy-only-"));
+  try {
+    const { headSha, baseBranch } = await initSizeBudgetFixtureRepo(tempDir);
+    const env = await writeGhStub(tempDir, [
+      draftPrViewStub({ headSha, baseBranch }),
+      { stdout: JSON.stringify([legacyOnlyDraftGateComment(headSha)]) },
+      ...gateCloseStubs(),
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /draft_gate marker/i);
 
     const calls = await readGhCalls(tempDir);
     assert.ok(!calls.some((c) => c[0] === "pr" && c[1] === "ready"), "gh pr ready must not be called");

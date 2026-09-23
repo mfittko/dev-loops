@@ -153,8 +153,15 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   if (titleMarkers.length > 0) throw new Error(`PR #${options.pr} cannot be marked ready: title contains merge-blocking marker(s): ${titleMarkers.join(", ")}. Remove them from the title first.`);
   if (requireCi) { const ci = await fetchCiStatus({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild: runChildImpl }); if (ci.status === "blocked") throw new Error(`PR #${options.pr} has blocking CI checks`); if (ci.status !== "success") throw new Error(`PR #${options.pr} CI is not green`); }
   const gate = await fetchDraftGateEvidence({ repo: options.repo, pr: options.pr, headSha }, { env, ghCommand, runChild: runChildImpl });
-  if (!gate.cleanEvidenceExists && !gate.effectiveHeadClean) throw new Error(`No visible clean draft_gate evidence on ${headSha.slice(0,7)}`);
-  if (!gate.effectiveHeadClean) { const mv = gate.draftGateMarker?.visible; const mh = gate.draftGateMarker?.headSha; throw new Error(mv && mh ? `PR #${options.pr} draft_gate marker does not match current head ${headSha.slice(0,7)}. Re-run draft gate.` : `PR #${options.pr} draft_gate marker is missing or incomplete on current head ${headSha.slice(0,7)}. Re-run draft gate.`); }
+  // skipCiPrecondition (restore-ready's seam) requires the STRICT marker
+  // verdict (currentHeadClean), never the legacy plain-text fallback
+  // (legacyHeadMatch, folded into effectiveHeadClean): the legacy match is
+  // unauthored free-text and never carried the gates.draft.requireCi
+  // precondition the way a contract-complete marker verdict does. Ordinary
+  // ready-for-review (skipCiPrecondition=false) keeps accepting either.
+  const gateHeadClean = skipCiPrecondition === true ? gate.currentHeadClean : gate.effectiveHeadClean;
+  if (!gate.cleanEvidenceExists && !gateHeadClean) throw new Error(`No visible clean draft_gate evidence on ${headSha.slice(0,7)}`);
+  if (!gateHeadClean) { const mv = gate.draftGateMarker?.visible; const mh = gate.draftGateMarker?.headSha; throw new Error(mv && mh ? `PR #${options.pr} draft_gate marker does not match current head ${headSha.slice(0,7)}. Re-run draft gate.` : `PR #${options.pr} draft_gate marker is missing or incomplete on current head ${headSha.slice(0,7)}. Re-run draft gate.`); }
   // #1585: a clean verdict is not enough — every gate-authored review thread
   // (high, medium, low, question, AND nit) must be resolved before the
   // PR leaves draft. The disposition pass (close-gate-findings) + fixer triage
@@ -222,6 +229,17 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   if (prBodySpec && !prBodySpec.ok) {
     throw new Error(`PR #${options.pr} closes ${prState.closingIssues.map((n) => `#${n}`).join(", ")} but its own body fails the PR-description contract (validate-pr-body-spec: ${prBodySpec.errors.map((e) => e.code).join(", ")}); the PR body must independently carry Acceptance criteria + Definition of done checklists, an explicit Non-goals section, and a Closes #N/Fixes #N reference.`);
   }
+  // restore-ready's seam (skipCiPrecondition) skipped CI, so the marker
+  // verdict read above is the ONLY evidence the head is still clean; re-read
+  // the head immediately before `gh pr ready` and refuse on a mismatch (a
+  // push landed on the PR mid-run) rather than restoring ready on stale
+  // evidence.
+  if (skipCiPrecondition === true) {
+    const recheck = await fetchPrState({ repo: options.repo, pr: options.pr }, { env, ghCommand, runChild: runChildImpl });
+    if (recheck.headRefOid !== headSha) {
+      throw new Error(`PR #${options.pr} head changed from ${headSha.slice(0,7)} to ${recheck.headRefOid ? recheck.headRefOid.slice(0,7) : "unknown"} since draft_gate evidence was read; refusing to restore ready. Re-run restore-ready.`);
+    }
+  }
   const readyResult = await runChildImpl(ghCommand, ["pr", "ready", String(options.pr), "--repo", options.repo], env);
   if (readyResult.code !== 0) throw new Error(`gh pr ready failed`);
   // #1069: couple the In-Progress board move to the ready transition. Best-effort
@@ -237,7 +255,7 @@ export async function readyForReview(options, { env = process.env, ghCommand = "
   } catch (err) {
     boardSync = [{ ok: true, skipped: true, reason: err?.message ?? "board sync failed" }];
   }
-  return { ok: true, action: "marked_ready", repo: options.repo, pr: options.pr, headSha, draftGateSatisfied: gate.effectiveHeadClean && gate.unresolvedGateThreadCount === 0, unresolvedGateThreadCount: gate.unresolvedGateThreadCount, sizeBudget, adrTripwire, prBodySpec, boardSync };
+  return { ok: true, action: "marked_ready", repo: options.repo, pr: options.pr, headSha, draftGateSatisfied: gateHeadClean && gate.unresolvedGateThreadCount === 0, unresolvedGateThreadCount: gate.unresolvedGateThreadCount, sizeBudget, adrTripwire, prBodySpec, boardSync };
 }
 
 export async function main(argv = process.argv.slice(2), runtime = {}) {

@@ -4482,9 +4482,15 @@ test("upsert-checkpoint-verdict fails closed (no unbounded recursion) when the d
         executionMode: "fanout_fanin",
       }, { env, repoRoot: tempDir, runChild }),
       (error) => {
-        // Clear, actionable message — not a swallowed hang.
+        // Clear, actionable message — not a swallowed hang — that names only
+        // sanctioned recovery commands (issue #2355), never a raw `gh pr ready`
+        // or a bare node script invocation.
         assert.match(error.message, /still reports it as non-draft on re-entry/);
         assert.match(error.message, /Not recursing/);
+        assert.match(error.message, /dev-loops pr restore-ready/);
+        assert.match(error.message, /dev-loops pr reconcile-draft\b/);
+        assert.doesNotMatch(error.message, /gh pr ready/);
+        assert.doesNotMatch(error.message, /node scripts\//);
         return true;
       },
     );

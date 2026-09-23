@@ -1,0 +1,7 @@
+### Added
+
+- **New sanctioned `dev-loops pr convert-to-draft` and `dev-loops pr restore-ready` CLI commands close the ready<->draft reconcile-draft-gate.mjs remedy's missing seam (issue [#2355](https://github.com/mfittko/dev-loops/issues/2355)).** `convert-to-draft.mjs` is an idempotent wrapper around the existing `convertPrToDraft` helper; `restore-ready.mjs` reuses every `ready-for-review.mjs` guard except the CI precondition, which it disables through an internal runtime-only seam (no CLI flag). Both are registered in `SANCTIONED_COMMANDS.lifecycle`, and `gh pr ready --undo` is now a forbidden raw command. `reconcile-draft-gate.mjs`'s and `upsert-checkpoint-verdict.mjs`'s remedy text now names only these sanctioned commands.
+
+### Fixed
+
+- **`restore-ready` now requires a contract-complete `draft_gate` marker verdict, not the legacy plain-text fallback, before restoring ready (issue [#2355](https://github.com/mfittko/dev-loops/issues/2355)).** The legacy plain-text match (`legacyHeadMatch`) is unauthored free text that never carried the `gates.draft.requireCi` precondition the way a contract-complete marker verdict does, so `restore-ready` (which itself skips the CI precondition) now requires `currentHeadClean` specifically; ordinary `ready-for-review` is unchanged. `restore-ready` also re-reads the PR head immediately before `gh pr ready` and refuses on a mismatch, so a push landing mid-run can never restore ready on stale evidence.

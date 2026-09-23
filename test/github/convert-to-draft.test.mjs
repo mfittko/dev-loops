@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { makeGhMock, runIdFreeEnv, runNode as runNodeHelper } from "../_helpers.mjs";
+import { makeGhMock, runIdFreeEnv, runNode as runNodeHelper, writeGhStub } from "../_helpers.mjs";
 
 import { convertToDraft, parseConvertToDraftCliArgs } from "../../scripts/github/convert-to-draft.mjs";
 
@@ -34,6 +36,10 @@ test("parseConvertToDraftCliArgs parses a valid repo and pr", () => {
   const options = parseConvertToDraftCliArgs(["--repo", "owner/repo", "--pr", "17"]);
   assert.equal(options.repo, "owner/repo");
   assert.equal(options.pr, 17);
+});
+
+test("parseConvertToDraftCliArgs rejects a non-numeric --pr value", () => {
+  assert.throws(() => parseConvertToDraftCliArgs(["--repo", "owner/repo", "--pr", "not-a-number"]), /--pr/);
 });
 
 test("--help prints usage to stdout", async () => {
@@ -69,4 +75,45 @@ test("is idempotent when the PR is already draft (no mutation call)", async () =
   assert.deepEqual(result, { ok: true, action: "already_draft", repo: "owner/repo", pr: 17, isDraft: true });
   const ghCalls = calls.filter((c) => c.command === "gh");
   assert.equal(ghCalls.length, 1, `expected only the resolve call, got ${JSON.stringify(ghCalls)}`);
+});
+
+// --- Real-CLI-subprocess failure modes (stderr JSON, exit 1) ---
+
+test("gh non-zero exit surfaces as a stderr JSON error, exit 1", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-convert-to-draft-gh-fail-"));
+  try {
+    const { env } = await writeGhStub(tempDir, [
+      { exitCode: 1, stderr: "gh: some transient API failure\n" },
+    ]);
+
+    const result = await runNodeHelper(scriptPath, ["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /Failed to resolve PR node ID for #17/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("refuses (stderr JSON, exit 1) when the mutation reports isDraft:false", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-convert-to-draft-not-draft-"));
+  try {
+    const { env } = await writeGhStub(tempDir, [
+      readyPrGraphqlStub({ isDraft: false }),
+      {
+        stdout: JSON.stringify({ data: { convertPullRequestToDraft: { pullRequest: { id: "PR_kwDOScHU78000017", isDraft: false } } } }),
+      },
+    ]);
+
+    const result = await runNodeHelper(scriptPath, ["--repo", "owner/repo", "--pr", "17"], { env, cwd: tempDir });
+
+    assert.equal(result.code, 1);
+    const payload = JSON.parse(result.stderr);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error, /PR #17 was not set to draft state after mutation/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });
