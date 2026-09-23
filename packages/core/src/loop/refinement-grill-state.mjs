@@ -95,6 +95,10 @@ const VALID_SURFACES = new Set(["issue", "pr", "plan"]);
 
 // The exact comment title provenance is keyed on (GRILL-SUBLOOP-RATIONALE-COMMENT).
 const RESULTS_COMMENT_TITLE = "🔬 Grill / refinement results";
+// The exact first-line heading a results comment must carry -- SKILL.md Step 4
+// and the output artifact contract require exactly "## " (one hash pair, one
+// space), never a bare title or a different heading level.
+const RESULTS_COMMENT_HEADING = `## ${RESULTS_COMMENT_TITLE}`;
 // A results comment's recorded bypass line: "bypass: operator-authorized by <handle>",
 // with an optional leading @ before the handle and a case-insensitive "bypass:" key.
 const BYPASS_LINE_RE = /^bypass: operator-authorized by @?([A-Za-z0-9][A-Za-z0-9-]{0,38})\s*$/i;
@@ -132,12 +136,13 @@ export function detectGrillProvenance(comments) {
 
     const lines = body.split(/\r?\n/);
     // A comment counts as a results comment only when its FIRST non-empty
-    // line (after trimming and stripping leading `#` characters) IS the
-    // title -- this rejects the title merely quoted in a code fence or
-    // appearing later in an unrelated reply.
+    // line, trimmed, is EXACTLY the "## " heading -- this rejects a bare
+    // title, a different heading level (`###`), a missing space (`##🔬`),
+    // the title merely quoted in a code fence, or the title appearing later
+    // in an unrelated reply.
     const firstNonEmpty = lines.find((line) => line.trim().length > 0);
     const isResultsComment = firstNonEmpty !== undefined
-      && firstNonEmpty.trim().replace(/^#+/, "").trim() === RESULTS_COMMENT_TITLE;
+      && firstNonEmpty.trim() === RESULTS_COMMENT_HEADING;
     if (!isResultsComment) continue;
 
     provenanceRecorded = true;

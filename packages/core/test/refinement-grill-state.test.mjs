@@ -205,8 +205,6 @@ test("non-zero-gap states carry a null reason and bypass false", () => {
 });
 
 test("detectGrillProvenance: string and object comment entries, ignoring anything else", () => {
-  const bare = `${RESULTS_TITLE}`;
-  assert.deepEqual(detectGrillProvenance([bare]), { provenanceRecorded: true, bypass: false, bypassBy: null });
   assert.deepEqual(detectGrillProvenance([{ body: `## ${RESULTS_TITLE}` }]), {
     provenanceRecorded: true,
     bypass: false,
@@ -217,6 +215,14 @@ test("detectGrillProvenance: string and object comment entries, ignoring anythin
     bypass: false,
     bypassBy: null,
   });
+});
+
+test("detectGrillProvenance: only the exact \"## \" heading counts -- a bare title, a different heading level, or a missing space is rejected", () => {
+  const bare = `${RESULTS_TITLE}`;
+  assert.deepEqual(detectGrillProvenance([bare]), { provenanceRecorded: false, bypass: false, bypassBy: null });
+  assert.equal(detectGrillProvenance([{ body: `### ${RESULTS_TITLE}` }]).provenanceRecorded, false);
+  assert.equal(detectGrillProvenance([{ body: `##${RESULTS_TITLE}` }]).provenanceRecorded, false);
+  assert.equal(detectGrillProvenance([{ body: `## ${RESULTS_TITLE}` }]).provenanceRecorded, true);
 });
 
 test("detectGrillProvenance: non-array input yields no provenance", () => {
