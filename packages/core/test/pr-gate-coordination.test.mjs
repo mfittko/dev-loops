@@ -126,6 +126,29 @@ test("#2381: a fail-closed unresolvedGateThreadCount (-1, unreadable thread stat
   assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
 });
 
+// -1 (thread state unreadable) gets its OWN reason — distinct from a real
+// dangling thread (markerCleanThreadsUnresolved above), which would
+// misleadingly name "resolve the thread" when there is no known thread to
+// resolve. mark_ready_for_review stays forbidden either way.
+test("#2381: unresolvedGateThreadCount: -1 names the unreadable-state reason, distinct from a real dangling thread", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 10,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+    unresolvedGateThreadCount: -1,
+  });
+
+  assert.equal(result.draftGate.markerCleanThreadsUnresolved, false);
+  assert.equal(result.draftGate.markerCleanThreadStateUnreadable, true);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS);
+  assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+  assert.match(result.reason, /could not read review-thread state; re-run when API connectivity is restored/);
+});
+
 test("#2381: an absent unresolvedGateThreadCount input preserves the marker-only definition (backward compatible)", () => {
   const result = evaluatePrGateCoordination({
     pr: 10,
@@ -2339,6 +2362,7 @@ test("guard rewrite deep-equals the exact expected shape when no draft_gate comm
     contractComplete: false,
     currentHeadClean: false,
     markerCleanThreadsUnresolved: false,
+    markerCleanThreadStateUnreadable: false,
     cleanEvidenceExists: false,
   };
 
@@ -2406,6 +2430,7 @@ test("guard rewrite deep-equals the exact expected shape when a non-clean draft_
       contractComplete: true,
       currentHeadClean: false,
       markerCleanThreadsUnresolved: false,
+      markerCleanThreadStateUnreadable: false,
       cleanEvidenceExists: false,
     },
     preApprovalGate: {
@@ -2420,6 +2445,7 @@ test("guard rewrite deep-equals the exact expected shape when a non-clean draft_
       contractComplete: false,
       currentHeadClean: false,
       markerCleanThreadsUnresolved: false,
+      markerCleanThreadStateUnreadable: false,
       cleanEvidenceExists: false,
     },
     allowedNextActions: [PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE],

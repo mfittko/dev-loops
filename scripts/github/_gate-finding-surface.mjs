@@ -1280,10 +1280,16 @@ async function collectLocalJudgeDispositionMatches({ dir, filenames, repo, pr, g
  * first one `readdir` happens to return (directory order is filesystem/SHA
  * order, not chronological). When the greatest `loggedAt` is unreadable/tied
  * across more than one candidate AND those candidates disagree on the
- * disposition, this fails closed (`null`, no reject-close) rather than
- * guessing — an unordered disagreement must never let a rejected disposition
- * win by accident, or vice versa. A corrupt/unreadable local ledger file, or
- * one whose own recorded repo/pr/gate does not match the inputs, is skipped,
+ * disposition, this returns `{ ambiguous: true }` rather than guessing — an
+ * unordered disagreement must never let a rejected disposition win by
+ * accident, or vice versa. That distinct shape (as opposed to a plain `null`
+ * cache-miss) tells resolveJudgeRejection (close-gate-findings.mjs) to STOP
+ * rather than fall through to tier 3's rendered-suffix lookup: tier 3 reads a
+ * snapshot of whatever disposition the FIRST posting of this finding
+ * rendered, which can be stale relative to the very disagreement tier 2 just
+ * detected, and letting it win on tier 2's ambiguity would defeat the
+ * fail-closed intent (#2381). A corrupt/unreadable local ledger file, or one
+ * whose own recorded repo/pr/gate does not match the inputs, is skipped,
  * never thrown — a stale/foreign/hand-edited local artifact must not block
  * or poison the lookup.
  */
@@ -1297,12 +1303,12 @@ export async function findJudgeDispositionForFingerprint({ repo, pr, gate, headS
     // At least one candidate ledger carries no usable loggedAt: "greatest" is
     // undecidable across the full set. Safe to proceed only when every
     // candidate already agrees on the disposition regardless of order.
-    return allAgree ? { disposition: matches[0].disposition, rationale: matches[0].rationale } : null;
+    return allAgree ? { disposition: matches[0].disposition, rationale: matches[0].rationale } : { ambiguous: true };
   }
   const maxLoggedAtMs = Math.max(...timestamped.map((m) => m.loggedAtMs));
   const winners = timestamped.filter((m) => m.loggedAtMs === maxLoggedAtMs);
   if (winners.length > 1 && !winners.every((m) => m.disposition === winners[0].disposition)) {
-    return null; // Tied on the greatest loggedAt, and those tied candidates disagree.
+    return { ambiguous: true }; // Tied on the greatest loggedAt, and those tied candidates disagree.
   }
   return { disposition: winners[0].disposition, rationale: winners[0].rationale };
 }

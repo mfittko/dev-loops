@@ -9,7 +9,7 @@ import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 import { detectPrGateCoordinationState, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, resolvePostConvergenceReviewSuppressed, countPrChangedLines, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
 import { detectPostConvergenceSignificantChange } from "../../scripts/loop/_post-convergence-change.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
-import { buildFindingMarker } from "../../scripts/github/_gate-finding-surface.mjs";
+import { buildFindingMarker, countUnresolvedGateAuthoredThreadsFromRawNodes } from "../../scripts/github/_gate-finding-surface.mjs";
 import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
 import { isRoundCapReachedCleanGrant } from "@dev-loops/core/loop/pr-gate-coordination";
 import { evaluateMergePreconditions } from "@dev-loops/core/loop/merge-approval";
@@ -278,6 +278,7 @@ test("detect-pr-gate-coordination-state allows post-draft flow for non-draft PRs
         contractComplete: false,
         currentHeadClean: false,
         markerCleanThreadsUnresolved: false,
+        markerCleanThreadStateUnreadable: false,
         cleanEvidenceExists: true,
       },
       preApprovalGate: {
@@ -292,6 +293,7 @@ test("detect-pr-gate-coordination-state allows post-draft flow for non-draft PRs
         contractComplete: false,
         currentHeadClean: false,
         markerCleanThreadsUnresolved: false,
+        markerCleanThreadStateUnreadable: false,
         cleanEvidenceExists: false,
       },
       allowedNextActions: ["request_copilot_review"],
@@ -550,7 +552,7 @@ test("#2381: a DRAFT PR with a clean draft_gate marker but ONE unresolved gate-a
           isDraft: true,
           headRefOid: headSha,
           mergeStateStatus: "CLEAN",
-          body: "## Objective\n\nShip.\n\n## In scope\n\n- x\n\n## Explicit non-goals\n\n- y\n\n## Acceptance criteria\n\n- [ ] x\n\n## Definition of done\n\n- [ ] tests pass\n",
+          body: "## Objective\n\nShip.\n\n## In scope\n\n- x\n\n## Explicit non-goals\n\n- y\n\n## Acceptance criteria\n\n- [ ] x\n\n## Definition of done\n\n- [ ] tests pass\n\n## Open questions/risks\n\n- none\n",
           closingIssuesReferences: [],
           reviews: [],
           statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
@@ -584,6 +586,12 @@ test("#2381: a DRAFT PR with a clean draft_gate marker but ONE unresolved gate-a
     assert.equal(result.draftGate.currentHeadClean, false);
     assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
     assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+    // ADR 0088 names the sanctioned remedy directly (reply/resolve the
+    // dangling thread) rather than only proving MARK_READY_FOR_REVIEW is
+    // absent — a regression that routed this state to some OTHER forbidding
+    // action (e.g. report_blocked) would pass the notEqual/ok assertions
+    // above but still be wrong.
+    assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS);
 
     // Assert the detector's OWN actual output (the exact predicate
     // detect-checkpoint-evidence.mjs's own thread counter uses,
@@ -594,6 +602,17 @@ test("#2381: a DRAFT PR with a clean draft_gate marker but ONE unresolved gate-a
     // PR ready.
     const context = await loadPrGateCoordinationContext({ repo: "owner/repo", pr: 10 }, buildMockRuntime(env));
     assert.equal(context.unresolvedGateThreadCount, 1);
+
+    // detect-checkpoint-evidence.mjs's own gate-authored thread count
+    // (countUnresolvedGateAuthoredThreadsFromRawNodes, imported unchanged
+    // from _gate-finding-surface.mjs — the same exported function
+    // detect-checkpoint-evidence.mjs itself calls) reports the same count 1
+    // for this fixture's raw thread nodes, without invoking or changing
+    // detect-checkpoint-evidence.mjs itself.
+    assert.equal(
+      countUnresolvedGateAuthoredThreadsFromRawNodes([questionThreadNode], "dev-loops-gate[bot]"),
+      1,
+    );
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

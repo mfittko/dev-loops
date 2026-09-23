@@ -123,6 +123,12 @@ function toGateStatus(comment, marker, currentHeadSha, unresolvedGateThreadCount
   const cleanEvidenceExists = normalizedComment.visible && normalizedComment.verdict === "clean" && normalizedComment.headSha !== null;
   const hasThreadSignal = Number.isInteger(unresolvedGateThreadCount);
   const gateThreadsClean = !hasThreadSignal || unresolvedGateThreadCount === 0;
+  // -1 is a distinct signal from a real positive count: it means the caller
+  // could not even READ the thread state (API failure), not that a thread is
+  // known to dangle. Both still block MARK_READY_FOR_REVIEW, but the two get
+  // different reasons below (a real thread names its own remedy; an
+  // unreadable count names retrying the read instead).
+  const gateThreadCountUnreadable = unresolvedGateThreadCount === -1;
   const markerVerdictClean = normalizedMarker.visible && markerHeadMatches && normalizedMarker.verdict === "clean" && normalizedMarker.contractComplete;
 
   return {
@@ -140,8 +146,13 @@ function toGateStatus(comment, marker, currentHeadSha, unresolvedGateThreadCount
     // gate-authored thread still dangles — distinct from "not clean at all"
     // (draftGate below uses this to name the thread blocker directly rather
     // than re-running the draft gate or blocking on CI, neither of which can
-    // ever clear a dangling thread).
-    markerCleanThreadsUnresolved: markerVerdictClean && !gateThreadsClean,
+    // ever clear a dangling thread). Excludes the -1 (unreadable) case below,
+    // which gets its own distinct reason.
+    markerCleanThreadsUnresolved: markerVerdictClean && !gateThreadsClean && !gateThreadCountUnreadable,
+    // The thread-state READ itself failed (-1) rather than reporting a real
+    // dangling thread — MARK_READY_FOR_REVIEW stays forbidden either way, but
+    // this names "retry the read" instead of "resolve a thread".
+    markerCleanThreadStateUnreadable: markerVerdictClean && gateThreadCountUnreadable,
     cleanEvidenceExists,
   };
 }
@@ -1267,7 +1278,40 @@ function evaluatePrGateCoordinationCore(input = {}) {
         allowedNextActions,
         forbiddenActions,
         nextAction: PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS,
-        reason: "The PR is still draft and this round's draft_gate verdict is clean, but a gate-authored review thread is still unresolved (ADR 0088) — reply/resolve it (close-gate-findings' reject-close pass for an answered, judge-rejected question, or fixer triage for an open defect thread) rather than re-running the draft gate.",
+        reason: "The PR is still draft and this round's draft_gate verdict is clean, but a gate-authored review thread is still unresolved (ADR 0088) — reply/resolve it (close-gate-findings' reject-close pass for an answered, judge-rejected question, or fixer triage for an open defect thread) rather than re-running the draft gate. An UNANSWERED question has its own remedy: answer it in-thread (reply_resolve_review_threads, or a plain reply) and rerun close-gate-findings, or stop for the operator if it cannot be answered.",
+        mergeStateStatus,
+        conflictFiles,
+        refinementArtifact,
+        copilotReviewRoundCount,
+      });
+    }
+
+    // Distinct from markerCleanThreadsUnresolved above: the thread-state READ
+    // itself failed (unresolvedGateThreadCount === -1), not a real dangling
+    // thread — naming "resolve the thread" would be misleading when there is
+    // no known thread to resolve. MARK_READY_FOR_REVIEW stays forbidden
+    // either way (draftReviewForbidden); reply_resolve_review_threads is
+    // reused as-is rather than adding a new action for "retry the read".
+    if (draftGate.markerCleanThreadStateUnreadable) {
+      pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS]);
+      pushUnique(forbiddenActions, [
+        PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+        ...draftReviewForbidden,
+      ]);
+      return buildResult({
+        repo: input.repo ?? null,
+        pr: Number.isInteger(input.pr) ? input.pr : null,
+        currentHeadSha,
+        lifecycleState: lifecycleState || STATE.PR_DRAFT,
+        loopDisposition: DISPOSITION.UNRESOLVED_FEEDBACK,
+        gateBoundary: PR_CHECKPOINT.FEEDBACK_RESOLUTION,
+        draftGateAlreadySatisfied,
+        draftGate,
+        preApprovalGate,
+        allowedNextActions,
+        forbiddenActions,
+        nextAction: PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS,
+        reason: "The PR is still draft and this round's draft_gate verdict is clean, but this round's gate-authored review-thread count could not be read (API failure) — could not read review-thread state; re-run when API connectivity is restored, rather than treating an unreadable count as either clean or a real dangling thread.",
         mergeStateStatus,
         conflictFiles,
         refinementArtifact,

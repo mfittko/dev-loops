@@ -1028,6 +1028,38 @@ test("#2381: findJudgeDispositionForFingerprint ignores a ledger whose own recor
   );
 });
 
+// #2381: an undecidable tier-2 disagreement returns a DISTINCT `{ ambiguous:
+// true }` shape, never a plain `null` — resolveJudgeRejection (close-gate-findings.mjs)
+// must be able to tell "no prior ledger matched at all" (a genuine cache
+// miss, safe to fall through to tier 3) apart from "prior ledgers disagree
+// with no decidable winner" (must STOP, never fall through to a possibly
+// stale tier-3 rendered suffix).
+test("#2381: findJudgeDispositionForFingerprint returns { ambiguous: true } (not null) when TIED loggedAt candidates disagree", async () => {
+  await withLocalLedgerFiles(
+    {
+      [`${JDF_GATE}-headA.json`]: jdfLedger({ loggedAt: "2026-09-10T00:00:00.000Z", disposition: "reject", rationale: "tied A" }),
+      [`${JDF_GATE}-headB.json`]: jdfLedger({ loggedAt: "2026-09-10T00:00:00.000Z", disposition: "act", rationale: "tied B" }),
+    },
+    async (tmpRoot) => {
+      const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
+      assert.deepEqual(result, { ambiguous: true });
+    },
+  );
+});
+
+test("#2381: findJudgeDispositionForFingerprint returns { ambiguous: true } (not null) when a MISSING loggedAt makes disagreeing candidates undecidable", async () => {
+  await withLocalLedgerFiles(
+    {
+      [`${JDF_GATE}-headA.json`]: jdfLedger({ loggedAt: undefined, disposition: "reject", rationale: "no timestamp" }),
+      [`${JDF_GATE}-headB.json`]: jdfLedger({ loggedAt: "2026-09-10T00:00:00.000Z", disposition: "act", rationale: "timestamped" }),
+    },
+    async (tmpRoot) => {
+      const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
+      assert.deepEqual(result, { ambiguous: true });
+    },
+  );
+});
+
 // ---------------------------------------------------------------------------
 // ADR 0088: parseRenderedJudgeDisposition tier 3 — only the exact
 // renderFindingLine suffix shape counts

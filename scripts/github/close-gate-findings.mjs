@@ -27,6 +27,7 @@ import { replyAndMaybeResolve } from "./_review-thread-mutations.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { loadDevLoopConfig, resolveGateConfig } from "@dev-loops/core/config";
 import { GATE_CONFIG_KEY } from "@dev-loops/core/loop/gate-fanin";
+import { neutralizeBareIssuePrIds } from "@dev-loops/core/github/comment-id-guard";
 
 const USAGE = `Usage: close-gate-findings.mjs --ledger <findings-log path> [--tmp-root <dir>]
 Run a closed gate round's THREAD DISPOSITION pass. This helper posts NO comment
@@ -513,9 +514,12 @@ async function runDispositionPass({ repo, pr, round, threads, snapshot, login, m
 // (parseFindingMarker) or starting with one of this file's own automation
 // reply prefixes (GATE_AUTOMATION_REPLY_PREFIXES — the disposition, reject-
 // close, or nit/low resolution replies this file itself posts) is the gate
-// talking to itself, not an answer; and a reply that is nothing but a bare
-// `@copilot`/`/copilot*` summon (containsBareCopilotSummon) is a re-review
-// trigger, not an answer either.
+// talking to itself, not an answer; and a reply that CONTAINS a bare
+// `@copilot`/`/copilot*` summon ANYWHERE in its body (containsBareCopilotSummon
+// scans the whole comment, not just a summon-only body) is a re-review
+// trigger, not an answer — fail-safe by design: a reply that mixes a real
+// answer with a summon is still excluded, erring toward "unanswered" rather
+// than risking a false-positive reject-close.
 function hasAnswerReply(thread, comments) {
   const markerCommentId = String(thread.commentId);
   return comments.some((c) => {
@@ -566,6 +570,16 @@ function findingFingerprintMatches(finding, fp) {
 // closing reply's citation — lives ONLY in the ledger, never in the rendered
 // comment; tier 3 alone would always find the disposition but never the
 // rationale.
+//
+// Tier 2 (findJudgeDispositionForFingerprint) returns a distinct
+// `{ ambiguous: true }` shape when prior ledgers disagree with no decidable
+// winner (a tie on the greatest loggedAt, or a disagreement with no usable
+// loggedAt at all) — that is a STOP, never a tier-3 fallthrough (#2381): a
+// stale render-time ` — judge: reject` suffix (tier 3) is only a snapshot of
+// whatever the finding's FIRST posting recorded, and letting it win on an
+// ambiguity tier 2 already flagged would reject-close a thread that this
+// pass cannot actually resolve on the merits. A plain `null` (no matching
+// prior ledger at all) is a genuine cache miss and still falls through.
 async function resolveJudgeRejection({ fp, threadBody, findings, repo, pr, gate, headSha, tmpRoot, repoRoot }) {
   const current = findings.find((f) =>
     f && typeof f.judgeDisposition === "string" && f.judgeDisposition.trim().length > 0 && findingFingerprintMatches(f, fp),
@@ -577,6 +591,7 @@ async function resolveJudgeRejection({ fp, threadBody, findings, repo, pr, gate,
     return { disposition: current.judgeDisposition.trim(), rationale };
   }
   const prior = await findJudgeDispositionForFingerprint({ repo, pr, gate, headSha, tmpRoot, repoRoot, fp });
+  if (prior?.ambiguous) return null;
   if (prior) return prior;
   const rendered = parseRenderedJudgeDisposition(threadBody);
   return rendered ? { disposition: rendered, rationale: null } : null;
@@ -584,8 +599,15 @@ async function resolveJudgeRejection({ fp, threadBody, findings, repo, pr, gate,
 
 const NO_JUDGE_RATIONALE_TEXT = "the judge rejected this finding on its merits; no rationale text is recorded for it";
 
+// judgeRationale is untrusted free text (the same trust boundary as a
+// finding's summary/angle, formatDeferredFindingEntry above): a rationale
+// citing a bare `#123` would otherwise throw inside replyAndMaybeResolve's
+// own guardCommentBodyNoIssuePrIds call, leaving the thread unresolved and
+// re-deadlocking on every rerun (#2381) — neutralizeBareIssuePrIds runs on
+// the raw text, before sanitizeInline, for the same reason
+// formatDeferredFindingEntry orders them that way.
 function rejectCloseMessage({ fp, angle, round, rationale }) {
-  const rationaleText = sanitizeInline(rationale ?? NO_JUDGE_RATIONALE_TEXT);
+  const rationaleText = sanitizeInline(neutralizeBareIssuePrIds(rationale ?? NO_JUDGE_RATIONALE_TEXT));
   return `${GATE_REJECT_CLOSE_REPLY_PREFIX}round ${round}, fingerprint ${fp}, severity question, angle ${angle}): this question was answered, and the judge rejected the finding — ${rationaleText}.`;
 }
 

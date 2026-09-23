@@ -896,6 +896,42 @@ test("an answered, judge-rejected question thread is reject-closed, citing the j
   ));
 });
 
+// #2381: judgeRationale is untrusted free text, same trust boundary as a
+// finding's summary/angle (formatDeferredFindingEntry) — a rationale citing a
+// bare `#123` must not throw inside replyAndMaybeResolve's own
+// guardCommentBodyNoIssuePrIds call (which would otherwise leave the thread
+// unresolved and re-deadlock on every rerun). rejectCloseMessage
+// neutralizes it (`#123` -> `123`) before sanitizeInline, same as the
+// defer-pass reply builders already do.
+test("a judge rationale citing a bare #123 is neutralized, not guard-rejected: the thread still reject-closes", async () => {
+  const finding = { severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "reject", judgeRationale: "Already discussed and settled in #123; no new information changes that." };
+  const fp = fingerprintFinding(finding);
+  const questionBody = `${buildFindingMarker({ fp, severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): why this approach?`;
+  const thread = threadNode({
+    id: "THREAD_Q_REJECTED_BARE_REF",
+    commentId: 6279,
+    body: questionBody,
+    replies: [{ body: "Here is my answer.", author: "operator" }],
+  });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [finding] }), (ledgerPath) => withGhStub(
+    [
+      ...roundEntries({ threads: [thread] }),
+      {
+        assertArgs: ["api", "-X", "POST", `repos/${REPO}/pulls/${PR}/comments/6279/replies`, "--input", "-"],
+        assertStdinIncludes: ["Already discussed and settled in 123"],
+        assertStdinNotIncludes: ["#123"],
+        stdout: `${JSON.stringify({ id: 7279, html_url: `https://github.com/${REPO}/pull/${PR}#discussion_r7279` })}\n`,
+      },
+      resolveThreadEntry("THREAD_Q_REJECTED_BARE_REF"),
+    ],
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.rejectClosed, 1);
+      assert.equal(result.unresolvedGateThreadCount, 0);
+    },
+  ));
+});
+
 test("an UNANSWERED, judge-rejected question thread stays open (no reply/resolve call is made)", async () => {
   const finding = { severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "reject", judgeRationale: "Already decided elsewhere." };
   const fp = fingerprintFinding(finding);
@@ -1055,6 +1091,78 @@ test("tier 1 (current ledger) wins over a disagreeing tier 2 (prior local ledger
       await writeFile(
         path.join(findingsDir, `draft_gate-${nthHeadSha(1)}.json`),
         JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", loggedAt: "2026-08-03T00:00:00.000Z", findings: [priorFinding] }),
+        "utf8",
+      );
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.rejectClosed, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+    },
+  ));
+});
+
+// #2381: tier 2's ambiguous result (a tied or undecidable disagreement across
+// prior local ledgers) must STOP resolveJudgeRejection, never fall through to
+// a stale tier-3 render-time suffix — even when that suffix says reject. Both
+// fixtures below carry NO current-ledger finding (tier 1 misses) and a
+// rendered " — judge: reject" suffix on the thread's own posted comment
+// (tier 3 would otherwise fire); no reply/resolve gh call is stubbed, so a
+// regression that reject-closes here overflows the stub and fails the test.
+test("#2381: a TIED loggedAt disagreement across prior ledgers is ambiguous — the thread stays open despite a tier-3 reject suffix", async () => {
+  const fp = fingerprintFinding({ summary: "why this approach?" });
+  const questionBody = `${buildFindingMarker({ fp, severity: "question", angle: "scope", round: 2 })}\n**question** (\`scope\`): why this approach? — judge: reject`;
+  const thread = threadNode({
+    id: "THREAD_Q_TIER2_TIED_AMBIGUOUS",
+    commentId: 6277,
+    body: questionBody,
+    replies: [{ body: "Answering now.", author: "operator" }],
+  });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    // No reply/resolve entries: an ambiguous tier 2 must never reject-close.
+    roundEntries({ issueComments: roundHistory("draft_gate", 2), threads: [thread] }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
+      await mkdir(findingsDir, { recursive: true });
+      await writeFile(
+        path.join(findingsDir, `draft_gate-${nthHeadSha(1)}.json`),
+        JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", loggedAt: "2026-09-10T00:00:00.000Z", findings: [{ severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "reject", judgeRationale: "tied A" }] }),
+        "utf8",
+      );
+      await writeFile(
+        path.join(findingsDir, `draft_gate-${nthHeadSha(2)}.json`),
+        JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", loggedAt: "2026-09-10T00:00:00.000Z", findings: [{ severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "act", judgeRationale: "tied B" }] }),
+        "utf8",
+      );
+      const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
+      assert.equal(result.rejectClosed, 0);
+      assert.equal(result.unresolvedGateThreadCount, 1);
+    },
+  ));
+});
+
+test("#2381: a MISSING-loggedAt disagreement across prior ledgers is ambiguous — the thread stays open despite a tier-3 reject suffix", async () => {
+  const fp = fingerprintFinding({ summary: "why this approach?" });
+  const questionBody = `${buildFindingMarker({ fp, severity: "question", angle: "scope", round: 2 })}\n**question** (\`scope\`): why this approach? — judge: reject`;
+  const thread = threadNode({
+    id: "THREAD_Q_TIER2_MISSING_LOGGEDAT_AMBIGUOUS",
+    commentId: 6278,
+    body: questionBody,
+    replies: [{ body: "Answering now.", author: "operator" }],
+  });
+  await withLedgerFile(makeLedger({ gate: "draft_gate", findings: [] }), (ledgerPath) => withGhStub(
+    // No reply/resolve entries: an ambiguous tier 2 must never reject-close.
+    roundEntries({ issueComments: roundHistory("draft_gate", 2), threads: [thread] }),
+    async ({ env, ghCommand, runChild, repoRoot }) => {
+      const findingsDir = path.join(repoRoot, "tmp", "gate-findings", REPO.replace("/", "-"), `pr-${PR}`);
+      await mkdir(findingsDir, { recursive: true });
+      await writeFile(
+        path.join(findingsDir, `draft_gate-${nthHeadSha(1)}.json`),
+        // No `loggedAt` at all: "greatest" is undecidable across the set.
+        JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", findings: [{ severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "reject", judgeRationale: "no timestamp" }] }),
+        "utf8",
+      );
+      await writeFile(
+        path.join(findingsDir, `draft_gate-${nthHeadSha(2)}.json`),
+        JSON.stringify({ repo: REPO, pr: PR, gate: "draft_gate", loggedAt: "2026-09-10T00:00:00.000Z", findings: [{ severity: "question", angle: "scope", summary: "why this approach?", judgeDisposition: "act", judgeRationale: "timestamped" }] }),
         "utf8",
       );
       const result = await closeGateFindings({ ledgerPath }, { env, ghCommand, runChild, repoRoot });
