@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { runCli } from "../../scripts/loop/detect-refinement-grill-state.mjs";
+import { evaluateJqFilter } from "../../scripts/lib/jq-output.mjs";
 
 // Minimal writable that accumulates written strings, matching how the detector
 // writes JSON to `stdout` / errors to `stderr` via emitResult.
@@ -233,6 +234,46 @@ test("detector round-trip: a hand-authored matrix with no comments gets a real s
     const third = JSON.parse((await runDetect(["--body-file", bodyPath, "--comments-file", gapFillingCommentsPath])).stdout);
     assert.equal(third.state, "grill_clean");
     assert.equal(third.reason, "provenance_recorded");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("the documented view-issue.mjs --jq extraction bridges the real wrapper envelope into --comments-file", async () => {
+  // Real-shaped view-issue.mjs --json comments stdout: { ok, issue: { comments: [...] } },
+  // each comment carrying the fields `gh issue view --json comments` actually returns
+  // (author, body, createdAt, id, url), not just `body`. Step 1 documents extracting past
+  // this envelope with `--jq '.issue.comments'` before handing the file to --comments-file
+  // (the wrapper's raw output fails closed there) -- this proves that documented path,
+  // using the SAME evaluateJqFilter engine emitResult's own --jq option runs, actually
+  // reaches grill_clean end to end.
+  const viewIssueWrapperOutput = {
+    ok: true,
+    issue: {
+      comments: [
+        {
+          id: "IC_kwABC",
+          url: "https://github.com/mfittko/dev-loops/issues/2364#issuecomment-1",
+          author: { login: "mfittko" },
+          createdAt: "2026-09-23T12:00:00Z",
+          body: `## ${RESULTS_TITLE}\n\nsource: auto (codebase, docs)\n\nNo gaps were found on this pass. Verdict: grill-clean.`,
+        },
+      ],
+    },
+  };
+  const [extractedComments] = evaluateJqFilter(viewIssueWrapperOutput, ".issue.comments");
+  assert.ok(Array.isArray(extractedComments), "the documented .issue.comments extraction yields the comments array");
+
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "grill-detect-real-envelope-"));
+  try {
+    const bodyPath = path.join(tempDir, "body.md");
+    const commentsPath = path.join(tempDir, "comments.json");
+    await writeFile(bodyPath, REFINED_BODY, "utf8");
+    await writeFile(commentsPath, JSON.stringify(extractedComments), "utf8");
+    const { stdout } = await runDetect(["--body-file", bodyPath, "--comments-file", commentsPath]);
+    const parsed = JSON.parse(stdout);
+    assert.equal(parsed.state, "grill_clean");
+    assert.equal(parsed.reason, "provenance_recorded");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

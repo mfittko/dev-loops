@@ -168,6 +168,33 @@ test("an existing results comment on a re-run reaches the zero-iteration clean e
   assert.equal(result.reason, "provenance_recorded");
 });
 
+test("open gaps outrank recorded provenance and bypass: never a false grill_clean when a gap is still open", () => {
+  const result = interpretRefinementGrillState({
+    loaded: true,
+    detectRan: true,
+    openGapCount: 2,
+    provenanceRecorded: true,
+    provenanceBypass: true,
+  });
+  assert.equal(result.state, GRILL_STATE.AWAIT_ANSWERS);
+  assert.equal(result.reason, null);
+  assert.equal(result.bypass, false);
+});
+
+test("a plan surface with a bypass flag set still resolves to plan_shape_only with bypass false", () => {
+  const result = interpretRefinementGrillState({
+    loaded: true,
+    detectRan: true,
+    openGapCount: 0,
+    surface: "plan",
+    provenanceRecorded: true,
+    provenanceBypass: true,
+  });
+  assert.equal(result.state, GRILL_STATE.GRILL_CLEAN);
+  assert.equal(result.reason, "plan_shape_only");
+  assert.equal(result.bypass, false);
+});
+
 test("non-zero-gap states carry a null reason and bypass false", () => {
   const detect = interpretRefinementGrillState({ loaded: true, detectRan: false });
   assert.equal(detect.reason, null);

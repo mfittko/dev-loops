@@ -232,6 +232,94 @@ test("Step 1 states the zero-iteration grill_clean exit requires recorded proven
   );
 });
 
+// Provenance detection (#2364): the detector recognizes a results comment only
+// by its exact first line, so the contract must pin that literal form, not
+// just "titled" prose that a bold or suffixed heading would also satisfy.
+test("Step 4 and the Output artifact format pin the results comment's exact required first line", () => {
+  const step4 = skill.split("## Step 4 — Write back")[1]?.split("## Output artifact format")[0] ?? "";
+  const outputFormat = skill.split("## Output artifact format")[1]?.split("## Step 5")[0] ?? "";
+  for (const section of [step4, outputFormat]) {
+    assert.match(
+      section,
+      /FIRST LINE MUST be exactly `## 🔬 Grill \/ refinement results`/,
+      "the exact required first line of the results comment must be pinned",
+    );
+  }
+  assert.match(
+    step4,
+    /Any `source:` and `bypass:` line comes immediately AFTER that first line/,
+    "Step 4 must state that source:/bypass: lines follow the title, never precede it",
+  );
+});
+
+// Determinism (#2364): Step 1 must name the exact deterministic invocation
+// (the --jq envelope extraction, the detector call, and the state==grill_clean
+// gate), not leave the provenance decision to agent judgment of raw comments.
+test("Step 1 names the deterministic comments fetch, the detector invocation, and the state==grill_clean gate", () => {
+  const step1 = skill.split("## Step 1 — Load the target")[1]?.split("## Step 1b")[0] ?? "";
+  assert.match(
+    step1,
+    /view-issue\.mjs --repo <owner\/repo> --issue <n> --json comments --jq '\.issue\.comments' > <comments-path>/,
+    "Step 1 must name the exact view-issue.mjs --jq extraction into a comments file",
+  );
+  assert.match(
+    step1,
+    /view-pr\.mjs.*--jq '\.pr\.comments' > <comments-path>/,
+    "Step 1 must name the exact view-pr.mjs --jq extraction into a comments file",
+  );
+  assert.match(
+    step1,
+    /node scripts\/loop\/detect-refinement-grill-state\.mjs --body-file <body-path> --surface <issue\|pr> --comments-file <comments-path>/,
+    "Step 1 must name the exact detector invocation",
+  );
+  assert.match(
+    step1,
+    /Take the zero-iteration exit ONLY when the detector's output has `state == grill_clean`/,
+    "Step 1 must key the zero-iteration exit on the detector's state==grill_clean output, not agent judgment",
+  );
+});
+
+// Bypass definition (#2364): a bypass is skipping an AVAILABLE zero-iteration
+// exit (already shape-clean AND already provenanced), never the now-mandated
+// first pass on an unprovenanced shape-clean target.
+test("the bypass definition is keyed on skipping an available zero-iteration exit, not on shape-clean alone", () => {
+  const step4 = skill.split("## Step 4 — Write back")[1]?.split("## Output artifact format")[0] ?? "";
+  assert.match(
+    step4,
+    /Bypass means skipping an AVAILABLE zero-iteration exit/,
+    "Step 4 must define bypass as skipping an available zero-iteration exit",
+  );
+  assert.match(
+    step4,
+    /A first pass on a shape-clean target with no recorded results comment is the normal REQUIRED pass.*carries no bypass line/,
+    "Step 4 must state a first pass on an unprovenanced shape-clean target is normal, not a bypass",
+  );
+
+  const adr = readFileSync(
+    fileURLToPath(new URL("../../docs/decisions/0084-grill-clean-requires-recorded-provenance.md", import.meta.url)),
+    "utf8",
+  );
+  assert.match(
+    adr,
+    /Bypass means skipping an AVAILABLE zero-iteration exit/,
+    "ADR 0084 must carry the same corrected bypass definition as SKILL.md, since accepted ADRs are immutable",
+  );
+  assert.match(
+    adr,
+    /normal REQUIRED pass this record mandates, not a bypass/,
+    "ADR 0084 must state the mandated first pass is not a bypass",
+  );
+});
+
+test("Step 5 applies write-back verification to tracker-first or PR-body alike", () => {
+  const step5 = skill.split("## Step 5 — Emit verdict")[1] ?? "";
+  assert.match(
+    step5,
+    /for tracker-first or PR-body, after the above verification passes/,
+    "Step 5 must cover PR-body, not only tracker-first",
+  );
+});
+
 test("Step 4 states a zero-gap semantic pass MUST post the results comment, and documents the bypass line", () => {
   const step4 = skill.split("## Step 4 — Write back")[1]?.split("## Output artifact format")[0] ?? "";
   assert.match(
