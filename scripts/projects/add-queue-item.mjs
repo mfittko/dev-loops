@@ -7,7 +7,7 @@ import { JQ_OUTPUT_PARSE_OPTIONS, JQ_OUTPUT_USAGE, emitResult, matchJqOutputToke
 import { loadStateColumnMap, LOGICAL_COLUMN, nonSuccessBoardColumn } from "@dev-loops/core/loop/queue-board-sync";
 import { runPickupRefinementGate } from "@dev-loops/core/loop/issue-refinement-artifact";
 import { ghGraphql, resolveOwner } from "@dev-loops/core/github/gh";
-import { validateProjectsRepo, discoverProjects, listProjectFields, extractStatus } from "@dev-loops/core/projects/projects-access";
+import { validateProjectsRepo, discoverProjects, listProjectFields, extractStatus, assertOnlyNotFoundErrors } from "@dev-loops/core/projects/projects-access";
 
 const USAGE = `Usage: dev-loops queue add --repo <owner/name> [--project <number|id>] --item <number>
        dev-loops project add … (back-compat alias for "queue add")
@@ -351,6 +351,7 @@ async function main(args, { env = process.env, runChild, cwd = process.cwd() } =
     repo: repoName,
     number: itemNumber,
   }, env, child, { allowErrors: true });
+  assertOnlyNotFoundErrors(contentPayload);
   const repoData = contentPayload?.data?.repository;
   const fullResult = repoData?.issueOrPullRequest;
   if (!fullResult) {

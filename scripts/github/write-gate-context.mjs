@@ -209,16 +209,17 @@ Optional:
   --branch <name>                Source branch name
   --touched-files <json>         JSON array of changed file path strings (separate from the diff-derived scope.changedFiles)
   --base <ref>                   Git ref to diff against (git diff <ref>...HEAD); populates scope.diffPath, scope.changedFiles, and adjacentCode (the full build-once bundle). Without it, the CLI emits an explicit thin briefing (scope.diffSource="none") — see skills/docs/gate-review-sub-loop-contract.md.
-  --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL); also used as the linked-issue label in the rendered briefing prefix. OPTIONAL: when omitted, every of the PR's closing issue references is resolved, comma-joined and cross-repo-qualified (e.g. #1496, #1511 or owner/other#12) — an umbrella PR resolves all of them. The linked issues' bodies are fetched only when --issue-body is also omitted (see below). An unreadable PR or linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering absence. A whitespace-only value is treated as absent (resolves exactly as if the flag were omitted, never recorded as caller-provided).
-  --validation-posture <text>    Short description of the validation posture
-  --pr-body <text>               PR description text, inlined into the rendered briefing prefix. OPTIONAL: when omitted the live PR body is fetched from GitHub. An unreadable PR fails closed rather than rendering the PR as description-less. A whitespace-only value is treated as absent (the live body is fetched; a sentinel is rendered only when the resolved source genuinely has no content).
-  --issue-body <text>            Linked-issue body text, inlined into the briefing prefix under --acceptance-criteria's label. OPTIONAL: when omitted it is fetched from every of the PR's closing issue references (an umbrella PR closes several), but ONLY when --acceptance-criteria is also omitted — supplying --acceptance-criteria suppresses the issue-body fetch, so pass --issue-body too if the prefix should still carry issue text. An unreadable linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering the section as absent; the bodies are omitted from the prefix entirely when the PR closes no issue. A whitespace-only value is treated as absent (resolved/fetched exactly as if the flag were omitted).
+  --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL); also used as the linked-issue label in the rendered briefing evidence file. OPTIONAL: when omitted, every of the PR's closing issue references is resolved, comma-joined and cross-repo-qualified (e.g. #1496, #1511 or owner/other#12) — an umbrella PR resolves all of them. The linked issues' bodies are fetched only when --issue-body is also omitted (see below). An unreadable PR or linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering absence. A whitespace-only value is treated as absent (resolves exactly as if the flag were omitted, never recorded as caller-provided).
+  --validation-posture <text>    Short description of the validation posture. Refused (fails closed, never truncated) past 500 chars; keep details in --validation-results.
+  --pr-body <text>               PR description text, inlined into the rendered briefing evidence file. OPTIONAL: when omitted the live PR body is fetched from GitHub. An unreadable PR fails closed rather than rendering the PR as description-less. A whitespace-only value is treated as absent (the live body is fetched; a sentinel is rendered only when the resolved source genuinely has no content).
+  --issue-body <text>            Linked-issue body text, inlined into the briefing evidence file under --acceptance-criteria's label. OPTIONAL: when omitted it is fetched from every of the PR's closing issue references (an umbrella PR closes several), but ONLY when --acceptance-criteria is also omitted — supplying --acceptance-criteria suppresses the issue-body fetch, so pass --issue-body too if the evidence file should still carry issue text. An unreadable linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering the section as absent; the bodies are omitted from the evidence file entirely when the PR closes no issue. A whitespace-only value is treated as absent (resolved/fetched exactly as if the flag were omitted).
   --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Skips the GitHub spec-of-record resolution (--pr-body/--issue-body/--acceptance-criteria) entirely — the recorded bytes come from this file, so a fetched PR/issue body could never reach them, and the CLI never touches GitHub in this mode at all (--base only runs local git reads). Omit for the default self-rendered prefix (prefixMode inline|pointer).
-  --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-ARTIFACT) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing prefix (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
+  --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-ARTIFACT) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing evidence file, bound by sha256 as an optional read (read field by field with jq; the sentinel still verifies its hash) (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
   --full-label                   The PR carries the gate:full label: dynamic angle resolution skips diff-class tier reduction (resolveGateTier returns gate_full_label) and resolves the untriered angle set. Only meaningful when --angles is omitted. When this flag is absent (and --prefix-file is not in use), the label is derived from the live PR via a labels read; a failed read fails closed to the untriered set. Under --prefix-file the CLI never touches GitHub, so the label cannot be derived and an omitted flag likewise fails closed to the untriered set (pass --angles to force a specific set there).
   --available-reviewers <n>      Harness remaining reviewer budget for the #1507 reviewer-budget preflight (non-negative integer). When supplied, the artifact's fanout.preflight reports whether the budget covers this round's dispatch units; on a shortfall, fanout.preflight.dispatch is false and the conductor MUST NOT spawn any reviewer (the shortfall is a resumable state — the artifact records it). Omit when the harness does not expose a budget; the preflight then proceeds (no shortfall can be proven).
   --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean head (mirrors consolidate-fanin.mjs's own --carried-angles vocabulary, minus its --carry-forward-plan proof check — the caller here IS the fail-closed carry-forward seam, resolve-angle-carry-forward.mjs, never a guess). Like consolidate-fanin.mjs's own mandatory-angle refusal, a name whose review surface always re-runs (a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE evidence/security/description angle) fails closed (exit 1) rather than being honored. A dispatch group whose angles are all carried-or-already-complete (already-complete: a clean per-angle artifact already stamped for this head, scanned automatically — see readCompletedAnglesForHead) is excluded from fanout.preflight.requiredReviewers and pendingGroups, so a head-bump re-gate does not over-count angles Phase 1.2 is about to carry. A wrong/stale value can only shrink the dispatch plan, never grow it past the true group count — it can under-dispatch, never over-spend the budget or fabricate findings for an angle that DID run: the configured-mandatory coverage check and the fail-closed merge check's clean current-head merge marker requirement catch an under-dispatched round ONLY when the wrongly-carried angle is a CONFIGURED mandatory angle — neither ever unions the hardcoded ALWAYS_INCLUDE set, so a wrong value naming only a non-mandatory, non-ALWAYS_INCLUDE angle under-dispatches with no mechanical refusal, visible only in the ledger's own carried-angle provenance (an ALWAYS_INCLUDE name is already refused at this CLI's own entry, above). Omit for today's full-count behavior (nothing excluded).
-  --prev-head <sha>              FULL head commit SHA (40 or 64 hex chars) of the prior round's durable gate findings-log (mirrors resolve-angle-carry-forward.mjs's own --prev-head vocabulary). When supplied, every prior reject/defer-disposed finding attributed to an angle re-running THIS round (an angle in --angles not named in --carried-angles) is seeded into the rendered volatile tail as a "do not re-raise" hint (AC3, skills/docs/gate-review-sub-loop-contract.md). Fails OPEN, never crashes the briefing: an absent, unreadable, or malformed prior log simply omits the hint block (byte-identical volatile tail to omitting this flag) — it never blocks the write, suppresses a finding, or converts a reject into an approval. Omit for today's behavior (no hint block).
+  --prev-head <sha>              FULL head commit SHA (40 or 64 hex chars) of the prior round's durable gate findings-log (mirrors resolve-angle-carry-forward.mjs's own --prev-head vocabulary). When supplied, every prior reject/defer-disposed finding attributed to an angle re-running THIS round (an angle in --angles not named in --carried-angles) is written to the round-bound <gate>-<headSha>.prior-dispositions.json and hash-bound as a required \`prior-dispositions\` read (a "do not re-raise" hint, skills/docs/gate-review-sub-loop-contract.md); the volatile tail carries only its entry count and read line. Fails OPEN, never crashes the briefing: an absent, unreadable, or malformed prior log simply omits the read (byte-identical volatile tail to omitting this flag) — it never blocks the write, suppresses a finding, or converts a reject into an approval. Omit for today's behavior (no hint block).
+  --known-findings <path>        Default \`capture-review-threads.mjs --repo --pr\` output (every open or resolved thread, full bodies). Rendered to the round-bound <gate>-<headSha>.known-findings.json and hash-bound as a required \`known-findings\` read (volatile tail and every work order; never the prefix) when at least one thread exists. Fails closed (exit 1) if unreadable or not that shape.
   --tmp-root <path>              Root tmp directory. Omitted, the worktree-local gate-context
                                  bundle is written under the worktree's tmp/ while the prior-head
                                  findings-log ledger is read from the MAIN worktree's tmp/ (the stable
@@ -352,6 +353,7 @@ export function parseWriteGateContextCliArgs(argv) {
       "available-reviewers": { type: "string" },
       "carried-angles": { type: "string" },
       "prev-head": { type: "string" },
+      "known-findings": { type: "string" },
       "tmp-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -379,6 +381,7 @@ export function parseWriteGateContextCliArgs(argv) {
     availableReviewers: null,
     carriedAngles: null,
     prevHead: null,
+    knownFindingsPath: null,
     // Default undefined (not "tmp") so an OMITTED --tmp-root reaches the
     // main-worktree ledger anchor at the prior-disposition read; every
     // worktree-local gate-context write site keeps its own `|| "tmp"` fallback,
@@ -535,6 +538,14 @@ export function parseWriteGateContextCliArgs(argv) {
         throw parseError("--prev-head must be the FULL head commit SHA (40 or 64 hex chars), not a short prefix — the prior findings-log path is keyed by the full SHA");
       }
       options.prevHead = sha;
+      continue;
+    }
+    if (token.name === "known-findings") {
+      const trimmed = requireTokenValue(token, parseError).trim();
+      if (trimmed.length === 0) {
+        throw parseError("--known-findings must not be empty/whitespace-only");
+      }
+      options.knownFindingsPath = trimmed;
       continue;
     }
     if (token.name === "tmp-root") {
@@ -722,6 +733,14 @@ export function buildGateDiffPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) 
 // `verify-fresh-review-context.mjs --prefix-file` agree on the path.
 export function buildGateBriefingPrefixPath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
   return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".briefing-prefix.txt" });
+}
+
+// Deterministic path for the referenced evidence file: the PR/issue bodies,
+// the diff (inline up to the cap, else a pointer), the changed-files summary
+// and the validation pointer. The briefing prefix binds it by sha256 in its
+// `## Required reads` manifest; reviewers read it in full.
+export function buildGateBriefingEvidencePath({ repo, pr, gate, headSha, tmpRoot = "tmp" }) {
+  return buildGateArtifactPath({ repo, pr, gate, headSha, tmpRoot, suffix: ".briefing-evidence.txt" });
 }
 
 // Deterministic path for a per-scope briefing companion file (AC3): a
@@ -1244,7 +1263,7 @@ function renderTokenDisciplineSection(contextPath) {
     "",
     "- Never `cat`/`head` dev-loops tool or artifact JSON: a dev-loops CLI takes its own `--jq`/`--silent` flags; an on-disk artifact file is read with plain `jq '<filter>' <path>`.",
     `- Read the gate-context artifact that way, e.g. \`jq '{resolvedAngles, scope}' "${contextPathDisplay}"\`.`,
-    "- This briefing already carries the diff it scopes (or a pointer to it) — open a source file only to widen PAST a hunk's edges, never to re-read a hunk interior already shown above.",
+    "- The diff under review lives in this round's required reads (listed in the briefing prefix's `## Required reads`) — open a source file only to widen PAST a hunk's edges, never to re-read a hunk interior you already read there.",
     "- Width-cap prose greps (`grep ... | cut -c1-200` or equivalent) — a line-count cap alone does not bound a single over-long prose line.",
     "- List in `contextWidened` only the files that actually moved your judgment, never every file opened — absence means \"not consulted\", never \"consulted and clean\" (skills/docs/gate-review-sub-loop-contract.md).",
   ].join("\n");
@@ -1276,17 +1295,91 @@ function renderValidationResultsSection(validationResultsPath, headSha) {
 }
 
 /**
+ * Render one `## Required reads` manifest line. `read.path` is stored
+ * cwd-relative (or absolute) and rendered worktree-absolute. Shared with the
+ * fan-out emitter's per-unit read so both render the same line shape.
+ * @param {{ kind: string, path: string, sha256?: string, bytes?: number, required: boolean }} read
+ * @param {string} worktreeRoot
+ * @returns {string}
+ */
+export function renderRequiredReadLine(read, worktreeRoot) {
+  const identity = typeof read.sha256 === "string" ? ` (sha256 ${read.sha256}, ${read.bytes} bytes)` : "";
+  return `- ${read.required ? "required" : "optional"} ${read.kind}: \`${path.resolve(worktreeRoot, read.path)}\`${identity}`;
+}
+
+function renderRequiredReadsSection(requiredReads, worktreeRoot) {
+  const reads = Array.isArray(requiredReads) ? requiredReads : [];
+  return [
+    "## Required reads",
+    "",
+    "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. The `context` entry's `.adjacentCode` is an optional navigation aid, never a required full read: query it on demand with `jq '.adjacentCode' <path>`, never `cat`. Every `optional` entry is for widening only. The `diff` entry is the filtered diff, with lockfiles and generated trees excluded; the optional `raw-diff` entry is the unfiltered `.diff`. Your angle section may name a scoped evidence read that replaces the shared `evidence` read for your unit.",
+    "",
+    ...(reads.length > 0 ? reads.map((read) => renderRequiredReadLine(read, worktreeRoot)) : ["- (no required reads recorded)"]),
+  ].join("\n");
+}
+
+/**
  * Render the invariant briefing-prefix text (GATE-EXEC-BRIEFING-PREFIX):
  * header (repo/PR/head/gate/worktree + the mandatory verify-fresh-review-context.mjs
- * instruction), reviewer token discipline, PR body, linked-issue body (when
- * present), the full diff at the reviewed head (inlined up to `capBytes`, else
- * a pointer to `diffPath`), and a changed-files/adjacent-code summary, in that
- * fixed order. Pure and deterministic: identical input always renders
- * identical bytes. The CLI resolves live PR/issue bodies from GitHub before
- * calling this, so a same-head rebuild after a live description edit yields
- * DIFFERENT prefix bytes — a conductor MUST NOT rebuild the context while reviewers
- * for that head are still running (GATE-EXEC-BRIEFING-PREFIX in the
- * gate-review sub-loop contract).
+ * instruction), the cwd and findings write-path invariants, the source-read
+ * invariant, reviewer token discipline, and the `## Required reads` manifest
+ * LAST, in that fixed order. Bulk evidence (PR/issue bodies, diff, changed
+ * files, validation pointer) lives in the referenced evidence file
+ * ({@link renderBriefingEvidence}); this prefix binds it by sha256 and byte
+ * count. Pure and deterministic: identical input always renders identical
+ * bytes. The CLI resolves live PR/issue bodies from GitHub before rendering the
+ * evidence, so a same-head rebuild after a live description edit changes the
+ * evidence hash and yields DIFFERENT prefix bytes — a conductor MUST NOT
+ * rebuild the context while reviewers for that head are still running
+ * (GATE-EXEC-BRIEFING-PREFIX in the gate-review sub-loop contract).
+ *
+ * @param {object} input
+ * @param {string} input.worktreeRoot — absolute path reviewers run in
+ * @param {string} input.contextPath — the sibling JSON artifact path
+ * @param {string} input.briefingPrefixPath — this rendered file's own path
+ * @param {{ kind: string, path: string, sha256?: string, bytes?: number, required: boolean }[]} [input.requiredReads]
+ * @returns {{ text: string }}
+ */
+export function renderBriefingPrefix({
+  repo, pr, gate, headSha, worktreeRoot, contextPath, briefingPrefixPath, requiredReads = [],
+}) {
+  const lines = [];
+  lines.push("# Gate Review Briefing — invariant prefix (GATE-EXEC-BRIEFING-PREFIX)");
+  lines.push("");
+  lines.push(`repo: ${repo}`);
+  lines.push(`pr: #${pr}`);
+  lines.push(`gate: ${gate}`);
+  lines.push(`head: ${headSha}`);
+  lines.push(`worktree: ${worktreeRoot}`);
+  lines.push("");
+  lines.push(
+    `Mandatory: before doing any angle-specific work, run \`dev-loops-run scripts/github/verify-fresh-review-context.mjs --scope <the exact --scope value your dispatch unit's angle section names> --context-path ${contextPath} --prefix-file ${briefingPrefixPath}\` once — run once for the whole dispatch unit, never once per angle in it. Refuse to proceed on contamination or a missing artifact.`,
+  );
+  lines.push("");
+  const findingsDir = path.join(worktreeRoot, buildGateReviewsDir({ repo, pr, gate, headSha }));
+  lines.push(
+    `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as ONE compound command that enters this worktree first (\`cd "${worktreeRoot}" && dev-loops-run scripts/github/verify-fresh-review-context.mjs ...\`) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${worktreeRoot}" ...\` and every file read via an absolute path under ${worktreeRoot}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
+  );
+  lines.push("");
+  lines.push(
+    `Findings write-path invariant: WRITE each per-angle findings artifact to the ABSOLUTE path \`${findingsDir}/<angle>.json\` (\`<angle>\` = your angle name) under THIS worktree's tmp/, never the primary checkout's. Cwd-relative \`tmp/...\` resolves against whatever checkout the command started in — a per-angle artifact written to the primary checkout's tmp/ is invisible to fan-in and fails the gate as missing evidence. Do NOT pin \`--tmp-root "${worktreeRoot}/tmp"\` on the findings-log LEDGER writer (\`write-gate-findings-log.mjs\`): the ledger is anchored at the MAIN worktree automatically so the orchestrator's merge can read it and it survives worktree pruning — pinning it to this worktree loses it on prune and refuses the merge for missing provenance.`,
+  );
+  lines.push("");
+  lines.push(renderSourceReadInvariantSection(worktreeRoot));
+  lines.push("");
+  lines.push(renderTokenDisciplineSection(contextPath));
+  lines.push("");
+  lines.push(renderRequiredReadsSection(requiredReads, worktreeRoot));
+  return { text: lines.join("\n") + "\n" };
+}
+
+/**
+ * Render the referenced evidence file: PR body, linked-issue body (when
+ * present), the diff at the reviewed head (inlined up to `capBytes`, else a
+ * pointer to `diffPath`), a changed-files/adjacent-code summary, and the
+ * validation pointer, in that fixed order. The briefing prefix binds this
+ * file by sha256 in its `## Required reads`; reviewers read it in full.
+ * Pure and deterministic.
  *
  * prBody/issueBody/issueSections/diffOutput are untrusted GitHub text (PR
  * author or linked-issue author controlled) and are each wrapped in their own
@@ -1304,27 +1397,23 @@ function renderValidationResultsSection(validationResultsPath, headSha) {
  * untrusted region).
  *
  * @param {object} input
- * @param {string} input.worktreeRoot — absolute path reviewers run in
- * @param {string} input.contextPath — the sibling JSON artifact path
- * @param {string} input.briefingPrefixPath — this rendered file's own path
  * @param {string|null} [input.prBody]
  * @param {string|null} [input.issueRef] — label for the linked-issue section heading (e.g. a single issue-reference label, or a comma-joined multi-issue list)
  * @param {string|null} [input.issueBody] — single-issue body, rendered under `issueRef` with no `### <label>` sub-heading. Ignored when `issueSections` is given.
  * @param {{label: string, body: string}[]|null} [input.issueSections] — per-issue bodies for a multi-issue PR (structured, never pre-joined): each renders as a renderer-emitted `### <label>` line OUTSIDE any fence, followed by that issue's OWN pickFence-sized fenced block. Takes precedence over `issueBody` when non-empty.
  * @param {string|null} [input.diffOutput] — full diff text, when captured
- * @param {string|null} [input.diffPath] — persisted `.diff` pointer (pointer-mode fallback)
+ * @param {string|null} [input.diffPath] — persisted filtered-diff pointer (pointer-mode fallback)
  * @param {string[]} [input.changedFiles]
  * @param {object|null} [input.adjacentCode] — buildAdjacentBundle output
  * @param {string|null} [input.validationResultsPath] — absolute path to the
  *   run-gate-validation.mjs artifact for this head SHA (GATE-EXEC-VALIDATION-ARTIFACT).
  *   When non-empty, ONE additional `## Validation results at this head` section is
- *   appended LAST, after the changed-files summary, without reordering or
- *   changing the fixed sections. Omitted entirely when absent.
+ *   appended LAST. Omitted entirely when absent.
  * @param {number} [input.capBytes] — default BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES
  * @returns {{ text: string, prefixMode: "inline"|"pointer", diffBytes: number }}
  */
-export function renderBriefingPrefix({
-  repo, pr, gate, headSha, worktreeRoot, contextPath, briefingPrefixPath,
+export function renderBriefingEvidence({
+  repo, pr, gate, headSha,
   prBody = null, issueRef = null, issueBody = null, issueSections = null,
   diffOutput = null, diffPath = null, changedFiles = [], adjacentCode = null,
   validationResultsPath = null,
@@ -1339,31 +1428,13 @@ export function renderBriefingPrefix({
   const prefixMode = hasDiffText && diffBytes > capBytes ? "pointer" : "inline";
 
   const lines = [];
-  lines.push("# Gate Review Briefing — invariant prefix (GATE-EXEC-BRIEFING-PREFIX)");
+  lines.push("# Gate Review Briefing — referenced evidence (GATE-EXEC-BUILD-ONCE-SEED)");
   lines.push("");
   lines.push(`repo: ${repo}`);
   lines.push(`pr: #${pr}`);
   lines.push(`gate: ${gate}`);
   lines.push(`head: ${headSha}`);
-  lines.push(`worktree: ${worktreeRoot}`);
   lines.push(`prefixMode: ${prefixMode}`);
-  lines.push("");
-  lines.push(
-    `Mandatory: before doing any angle-specific work, run \`dev-loops-run scripts/github/verify-fresh-review-context.mjs --scope ${gateScopePrefix(gate)}<your-dispatch-unit> --context-path ${contextPath} --prefix-file ${briefingPrefixPath}\` once — <your-dispatch-unit> is your angle name for a per-angle dispatch, or \`group-<name>\` for a grouped dispatch (run once for the whole group, never once per angle in it). Refuse to proceed on contamination or a missing artifact.`,
-  );
-  lines.push("");
-  const findingsDir = path.join(worktreeRoot, buildGateReviewsDir({ repo, pr, gate, headSha }));
-  lines.push(
-    `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as ONE compound command that enters this worktree first (\`cd "${worktreeRoot}" && dev-loops-run scripts/github/verify-fresh-review-context.mjs ...\`) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${worktreeRoot}" ...\` and every file read via an absolute path under ${worktreeRoot}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
-  );
-  lines.push("");
-  lines.push(
-    `Findings write-path invariant: WRITE each per-angle findings artifact to the ABSOLUTE path \`${findingsDir}/<angle>.json\` (\`<angle>\` = your angle name) under THIS worktree's tmp/, never the primary checkout's. Cwd-relative \`tmp/...\` resolves against whatever checkout the command started in — a per-angle artifact written to the primary checkout's tmp/ is invisible to fan-in and fails the gate as missing evidence. Do NOT pin \`--tmp-root "${worktreeRoot}/tmp"\` on the findings-log LEDGER writer (\`write-gate-findings-log.mjs\`): the ledger is anchored at the MAIN worktree automatically so the orchestrator's merge can read it and it survives worktree pruning — pinning it to this worktree loses it on prune and refuses the merge for missing provenance.`,
-  );
-  lines.push("");
-  lines.push(renderSourceReadInvariantSection(worktreeRoot));
-  lines.push("");
-  lines.push(renderTokenDisciplineSection(contextPath));
   lines.push("");
   lines.push("## PR body");
   lines.push("");
@@ -1422,7 +1493,7 @@ export function renderBriefingPrefix({
     lines.push(diffFence);
   } else {
     lines.push(
-      `Diff exceeds the ${capBytes}-byte inline cap (${diffBytes} bytes) — pointer mode. Read the full diff from:`,
+      `Diff exceeds the ${capBytes}-byte inline cap (${diffBytes} bytes) — pointer mode. Read the filtered diff from:`,
     );
     lines.push(`  ${diffPath ?? "(diff pointer unavailable — re-derive with git diff)"}`);
   }
@@ -1461,20 +1532,20 @@ export function renderBriefingPrefix({
  * same context for an angle whose configured `scope` is not "full" (see
  * GATE_ANGLE_SCOPES). Always carries the PR body, linked-issue body/sections,
  * and the validation-results pointer (a narrow angle still needs its
- * mandatory inputs — AC1) plus a pointer BACK to the full byte-identical
- * prefix so a reviewer can always widen. The diff itself differs by scope:
+ * mandatory inputs — AC1) plus a pointer BACK to the full referenced
+ * evidence file so a reviewer can always widen. The diff itself differs by scope:
  * - "changed-files": the full diff (AC8-collapsed), same cap/pointer
- *   behavior as the full prefix, but WITHOUT the adjacent-code bundle or the
- *   full prefix's "Changed files + adjacent-code summary" section (the diff
+ *   behavior as the full evidence file, but WITHOUT the adjacent-code bundle or the
+ *   full evidence file's "Changed files + adjacent-code summary" section (the diff
  *   text itself still names every changed file).
  * - "docs-only": only doc-file hunks (classifyFile === "docs"), AC8-collapsed,
  *   always inlined (doc-only slices are bounded by definition).
- * Pure and deterministic, mirroring renderBriefingPrefix's guarantee: same
+ * Pure and deterministic, mirroring renderBriefingEvidence's guarantee: same
  * input renders the same bytes.
  *
  * @param {"changed-files"|"docs-only"} scope
  * @param {object} input
- * @param {string} input.briefingPrefixPath — the full prefix's own path, for the widen-back pointer
+ * @param {string} input.evidencePath — the full referenced evidence file, for the widen-back pointer
  * @param {string|null} [input.contextPath] — the sibling JSON context-artifact path, for the widen-back pointer
  * @param {string|null} [input.worktreeRoot] — absolute path of the worktree at the reviewed head, stamped into the source-read invariant section (mirrors the full prefix's `worktree:` line so a scoped reviewer need not widen just to learn the tree)
  * @param {string|null} [input.prBody]
@@ -1482,15 +1553,17 @@ export function renderBriefingPrefix({
  * @param {string|null} [input.issueBody]
  * @param {{label: string, body: string}[]|null} [input.issueSections]
  * @param {string|null} [input.diffOutput] — full diff text, when captured
- * @param {string|null} [input.diffPath] — persisted `.diff` pointer (changed-files pointer-mode fallback), also linked unconditionally in the widen-back paragraph
+ * @param {string|null} [input.diffPath] — persisted unfiltered `.diff`, linked unconditionally in the widen-back paragraph
+ * @param {string|null} [input.filteredDiffPath] — persisted filtered diff (changed-files pointer-mode target; falls back to diffPath)
  * @param {string|null} [input.validationResultsPath]
  * @param {number} [input.capBytes] — default BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES; only consulted for "changed-files"
  * @returns {{ text: string }}
  */
 export function renderScopedBriefingVariant(scope, {
-  repo, pr, gate, headSha, briefingPrefixPath, contextPath = null, worktreeRoot = null,
+  repo, pr, gate, headSha, evidencePath, contextPath = null, worktreeRoot = null,
   prBody = null, issueRef = null, issueBody = null, issueSections = null,
   diffOutput = null, diffPath = null,
+  filteredDiffPath = null,
   validationResultsPath = null,
   capBytes = BRIEFING_PREFIX_INLINE_DIFF_CAP_BYTES,
 }) {
@@ -1507,7 +1580,7 @@ export function renderScopedBriefingVariant(scope, {
   lines.push(`scope: ${scope}`);
   lines.push("");
   lines.push(
-    `This is a narrowed companion to the full byte-identical briefing prefix, which always stays available at ${briefingPrefixPath} — read it directly to widen scope any time (AC1: a scoped briefing never loses access to the full bundle).`,
+    `This is a narrowed companion to the full referenced evidence file, which always stays available at ${evidencePath} — read it directly to widen scope any time (AC1: a scoped briefing never loses access to the full bundle).`,
   );
   // GATE-EXEC-BRIEFING-PREFIX: a scoped variant must ALSO link scope.diffPath
   // and the context artifact, unconditionally — not only in the changed-files
@@ -1593,9 +1666,9 @@ export function renderScopedBriefingVariant(scope, {
       lines.push(diffFence);
     } else {
       lines.push(
-        `Diff exceeds the ${capBytes}-byte inline cap (${diffBytes} bytes) — pointer mode. Read the full diff from:`,
+        `Diff exceeds the ${capBytes}-byte inline cap (${diffBytes} bytes) — pointer mode. Read the filtered diff from:`,
       );
-      lines.push(`  ${diffPath ?? "(diff pointer unavailable — re-derive with git diff)"}`);
+      lines.push(`  ${filteredDiffPath ?? diffPath ?? "(diff pointer unavailable — re-derive with git diff)"}`);
     }
   }
 
@@ -1620,32 +1693,11 @@ export function renderScopedBriefingVariant(scope, {
  */
 export const REQUEST_PLAN_BLOCK_BOUNDARIES = Object.freeze(["shared_prefix", "cache_boundary", "volatile_tail"]);
 
-// ponytail: the prior-round-dispositions block below is documented as
-// "bounded" (AC3, issue 2175) — these two constants ARE the bound. A
-// corrupted/adversarial prior ledger with thousands of findings, or a single
-// finding with an arbitrarily long free-form summary/judgeRationale, must
-// never make a reviewer prompt unboundedly large. Deterministic (no
-// content-dependent truncation choice, no random sampling): the first
-// PRIOR_DISPOSITIONS_MAX_ENTRIES entries in the prior log's OWN order are
-// kept, every free-form field is truncated at
-// PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH chars with an ellipsis marker, and any
-// overflow past the entry cap is summarized in one terse line rather than
-// silently dropped.
-export const PRIOR_DISPOSITIONS_MAX_ENTRIES = 20;
-export const PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH = 200;
-
-/**
- * Truncate a free-form field to {@link PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH}
- * chars, appending an ellipsis marker when truncated. Applied AFTER the
- * newline guard below, so the marker itself is always plain, single-line
- * text — it can never smuggle in a forged line.
- * @param {string} value
- * @returns {string}
- */
-function truncatePriorDispositionField(value) {
-  if (value.length <= PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH) return value;
-  return `${value.slice(0, PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH)}…`;
-}
+// Upper bound (chars) on --validation-posture, the one free-form caller value
+// the volatile tail still inlines. Refused past the bound, never truncated, so
+// the worst-case work order stays under the emitter's
+// REVIEWER_WORK_ORDER_MAX_BYTES ceiling (pinned by a worst-case test).
+export const VALIDATION_POSTURE_MAX_LENGTH = 500;
 
 /**
  * Render the materialized VOLATILE tail block (GATE-EXEC-BRIEFING-PREFIX's
@@ -1674,43 +1726,28 @@ function truncatePriorDispositionField(value) {
  * `.trim()`ed). Because this file is line-structured (`key: value` per
  * line), an embedded newline could forge additional lines (a second
  * `loggedAt:`, a fake `#` heading). Fails closed on a newline rather than
- * escaping it — an escape character is itself forgeable text.
+ * escaping it — an escape character is itself forgeable text. It also fails
+ * closed past {@link VALIDATION_POSTURE_MAX_LENGTH} chars.
  *
- * AC3 (issue 2175, head-bump re-gate disposition memory): `priorDispositions`
- * — each `{ fingerprint, angle, severity, summary, judgeRationale? }` — is an
- * OPTIONAL, ADDITIVE block rendered after the key/value lines above. Absent
- * or empty, the rendered bytes are byte-identical to today. Every string
- * field is newline-guarded exactly like `validationPosture` (same forged-line
- * hazard); this function's caller ({@link writeGateContext}'s `--prev-head`
- * handling) is expected to have already filtered out any malformed prior
- * finding rather than let one reach here, so this guard should never fire in
- * practice — it exists as the same defense-in-depth `validationPosture`
- * already has. This block only ever ADDS a "do not re-raise" hint; it never
- * suppresses a finding or converts a reject into an approval.
- *
- * BOUNDED, deterministically: at most {@link PRIOR_DISPOSITIONS_MAX_ENTRIES}
- * entries are rendered, kept in the prior log's own order (never re-sorted or
- * sampled), with any overflow summarized in one terse "+K more ... omitted"
- * line; every rendered field (`angle`, `severity`, `summary`,
- * `judgeRationale`) is truncated to {@link PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH}
- * chars. A large or corrupted
- * prior findings-log can therefore never make this block — or the reviewer
- * prompt it feeds — unboundedly large.
+ * AC3 (issue 2175, head-bump re-gate disposition memory): the prior-round
+ * dispositions are referenced, never inlined. `priorDispositionsRead` is the
+ * `prior-dispositions` required read {@link writeGateContext} hash-binds: the
+ * full, untruncated list in a round-bound JSON file. This block renders only
+ * its entry count and the read line. Absent, the rendered bytes carry no
+ * dispositions block. The hint only ever ADDS a "do not re-raise" signal; it
+ * never suppresses a finding or converts a reject into an approval.
  *
  * @param {string|null} [input.validationPosture] — must not contain a newline
- * @param {Array<{fingerprint: string, angle: string, severity: string, summary: string, judgeRationale?: string}>} [input.priorDispositions] — reject/defer-disposed findings from the prior head, attributed to an angle re-running this round
+ * @param {{ kind: "prior-dispositions", path: string, sha256: string, bytes: number, entries: number, required: true }|null} [input.priorDispositionsRead]
+ * @param {{ kind: "known-findings", path: string, sha256: string, bytes: number, entries: number, required: true }|null} [input.knownFindingsRead]
+ * @param {string} [input.worktreeRoot] — resolves the read's path worktree-absolute
  */
-export function renderBriefingVolatile({ gate, headSha, loggedAt, validationPosture = null, priorDispositions = [] }) {
+export function renderBriefingVolatile({ gate, headSha, loggedAt, validationPosture = null, priorDispositionsRead = null, knownFindingsRead = null, worktreeRoot = process.cwd() }) {
   if (validationPosture != null && /[\r\n]/.test(validationPosture)) {
     throw new Error("renderBriefingVolatile: validationPosture must not contain a newline — an embedded newline could forge additional key: value lines in this line-structured file");
   }
-  const dispositions = Array.isArray(priorDispositions) ? priorDispositions : [];
-  for (const entry of dispositions) {
-    for (const field of [entry?.fingerprint, entry?.angle, entry?.severity, entry?.summary, entry?.judgeRationale]) {
-      if (typeof field === "string" && /[\r\n]/.test(field)) {
-        throw new Error("renderBriefingVolatile: priorDispositions entries must not contain a newline — an embedded newline could forge additional lines in this line-structured file");
-      }
-    }
+  if (validationPosture != null && validationPosture.length > VALIDATION_POSTURE_MAX_LENGTH) {
+    throw new Error(`renderBriefingVolatile: validationPosture is ${validationPosture.length} chars, over the ${VALIDATION_POSTURE_MAX_LENGTH}-char bound — pass a short posture and keep the details in --validation-results`);
   }
   const lines = [];
   lines.push("# Gate Review Briefing — volatile tail (after the cache boundary)");
@@ -1720,26 +1757,14 @@ export function renderBriefingVolatile({ gate, headSha, loggedAt, validationPost
   lines.push(`loggedAt: ${loggedAt}`);
   lines.push(`validationPosture: ${validationPosture ?? "(none)"}`);
   lines.push("");
-  if (dispositions.length > 0) {
-    lines.push("Prior-round dispositions (do not re-raise a rejected finding at a shifted severity):");
-    // Bounded, deterministic: keep the first PRIOR_DISPOSITIONS_MAX_ENTRIES in
-    // the prior log's own order — never re-sorted, never sampled — and
-    // truncate each free-form field so one adversarial/corrupted entry cannot
-    // make this block (or the reviewer prompt it feeds) unboundedly large.
-    const kept = dispositions.slice(0, PRIOR_DISPOSITIONS_MAX_ENTRIES);
-    const omittedCount = dispositions.length - kept.length;
-    for (const entry of kept) {
-      const angle = truncatePriorDispositionField(entry.angle);
-      const severity = truncatePriorDispositionField(entry.severity);
-      const summary = truncatePriorDispositionField(entry.summary);
-      const rationale = typeof entry.judgeRationale === "string" && entry.judgeRationale.length > 0
-        ? ` — judge: ${truncatePriorDispositionField(entry.judgeRationale)}`
-        : "";
-      lines.push(`- ${entry.fingerprint} [${angle}] ${severity}: ${summary}${rationale}`);
-    }
-    if (omittedCount > 0) {
-      lines.push(`- +${omittedCount} more prior dispositions omitted`);
-    }
+  if (priorDispositionsRead) {
+    lines.push(`Prior-round dispositions (do not re-raise a rejected finding at a shifted severity): ${priorDispositionsRead.entries} entries, listed in full in this required read. Read it IN FULL with \`jq\` before judgment; the mandatory sentinel verifies its sha256.`);
+    lines.push(renderRequiredReadLine(priorDispositionsRead, worktreeRoot));
+    lines.push("");
+  }
+  if (knownFindingsRead) {
+    lines.push(`Known findings (do not re-raise what an open or resolved thread already covers): ${knownFindingsRead.entries} threads with full bodies, listed in this required read. Read it IN FULL with \`jq\` before judgment; the mandatory sentinel verifies its sha256.`);
+    lines.push(renderRequiredReadLine(knownFindingsRead, worktreeRoot));
     lines.push("");
   }
   return lines.join("\n") + "\n";
@@ -1803,6 +1828,29 @@ export function resolvePriorDispositions({ log, rerunningAngles }) {
     entries.push({ fingerprint, angle, severity, summary, ...(judgeRationale.length > 0 ? { judgeRationale } : {}) });
   }
   return entries;
+}
+
+/**
+ * Known-findings block (GATE-EXEC-FINDING-THREADS): every open or resolved
+ * review thread, any author, with full comment bodies, rendered from the
+ * default `capture-review-threads.mjs --repo --pr` output. Delivered as a
+ * hash-bound required read, never appended to a relayed work order.
+ * Throws on a capture without `threads`/`comments` arrays (fail closed).
+ *
+ * @param {{ threads: Array<{ id: string, isResolved: boolean }>, comments: Array<{ threadId: string, author?: { login?: string }, body?: string }> }} capture
+ * @returns {Array<{ threadId: string, isResolved: boolean, comments: Array<{ author: string, body: string }> }>}
+ */
+export function renderKnownFindings(capture) {
+  if (!capture || !Array.isArray(capture.threads) || !Array.isArray(capture.comments)) {
+    throw new Error("--known-findings must be capture-review-threads.mjs output with threads[] and comments[] arrays");
+  }
+  return capture.threads.map((thread) => ({
+    threadId: String(thread.id),
+    isResolved: thread.isResolved === true,
+    comments: capture.comments
+      .filter((comment) => comment?.threadId === thread.id)
+      .map((comment) => ({ author: comment.author?.login ?? "", body: comment.body ?? "" })),
+  }));
 }
 
 /**
@@ -2044,7 +2092,7 @@ export function buildGateContextArtifact(options) {
   if (options.adjacentCode && typeof options.adjacentCode === "object") {
     artifact.adjacentCode = options.adjacentCode;
   }
-  // Whether the rendered briefing prefix inlined the reviewed-head diff (in a
+  // Whether the rendered briefing evidence file inlined the reviewed-head diff (in a
   // fenced block), fell back to the diffPath pointer (size cap), or (CLI-only,
   // `--prefix-file`) recorded an orchestrator-authored prefix verbatim
   // ("file" — see writeGateContextWithPrefix below). Only set when a caller
@@ -2201,8 +2249,9 @@ export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 10
 /**
  * Write both the JSON context artifact AND its sibling rendered briefing
  * prefix (GATE-EXEC-BRIEFING-PREFIX): the byte-identical invariant block every
- * per-angle reviewer of this gate pass is seeded with. The prefix's
- * `prefixMode` (inline|pointer, from the diff-size cap; or file, when
+ * per-angle reviewer of this gate pass is seeded with, plus the referenced
+ * evidence file the prefix binds by sha256 in `artifact.requiredReads`. The
+ * evidence `prefixMode` (inline|pointer, from the diff-size cap; or file, when
  * `--prefix-file` records an orchestrator-authored prefix verbatim) is
  * recorded on the JSON artifact so both files stay in sync.
  *
@@ -2215,7 +2264,7 @@ export function captureDiffFromBase(base, { repoRoot, maxBuffer = 64 * 1024 * 10
  *   run-gate-validation.mjs artifact; fails closed when missing/unreadable —
  *   see the CLI's `--validation-results` doc above).
  * @param {{ repoRoot?: string }} [runtime]
- * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, prefixHash: string, prefixMode: "inline"|"pointer"|"file", warning?: string, volatilePath: string, requestPlanPath: string, requestPlan: object }>}
+ * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, evidencePath: string|null, prefixHash: string, prefixMode: "inline"|"pointer"|"file", warning?: string, volatilePath: string, requestPlanPath: string, requestPlan: object }>}
  */
 export async function writeGateContext(options, { repoRoot = process.cwd() } = {}) {
   // Validate/dedupe options.angles BEFORE any file write. The CLI path
@@ -2252,6 +2301,13 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     tmpRoot: options.tmpRoot || "tmp",
   });
   const briefingPrefixPath = buildGateBriefingPrefixPath({
+    repo: options.repo,
+    pr: options.pr,
+    gate: options.gate,
+    headSha: options.headSha,
+    tmpRoot: options.tmpRoot || "tmp",
+  });
+  const evidencePath = buildGateBriefingEvidencePath({
     repo: options.repo,
     pr: options.pr,
     gate: options.gate,
@@ -2312,10 +2368,11 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     }
   }
 
+  let validationBytes = null;
   if (typeof options.validationResultsPath === "string" && options.validationResultsPath.length > 0) {
     const resolvedValidationResultsPath = path.resolve(repoRoot, options.validationResultsPath);
     try {
-      await readFile(resolvedValidationResultsPath);
+      validationBytes = await readFile(resolvedValidationResultsPath);
     } catch (err) {
       throw new Error(`GATE-EXEC-VALIDATION-ARTIFACT: --validation-results ${JSON.stringify(options.validationResultsPath)} is unreadable: ${err?.message ?? err}`);
     }
@@ -2332,6 +2389,9 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   // before.
   let prefixBytes;
   let prefixMode;
+  let pendingEvidence = null;
+  let pendingFilteredDiff = null;
+  let requiredReads = null;
   // AC3: scope.<name> -> emitted companion-file path. Only built in
   // self-rendered mode — under --prefix-file the CLI never resolves
   // prBody/issueBody, so a variant rendered here would carry the
@@ -2364,17 +2424,63 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     }
     prefixMode = "file";
   } else {
-    // The diff INLINED into the invariant prefix (and its
-    // scoped "changed-files" variant below) is FILTERED — lockfiles,
-    // generated/vendored trees, and any --diff-exclude-glob configured here
-    // are dropped whole-file, so a lockfile-heavy diff no longer dominates
-    // the shared per-head block. The FULL, unfiltered diff stays persisted
-    // at options.diffPath (scope.diffPath) — an excluded file remains
-    // readable on demand from there, or via `git diff` in the reviewed
-    // worktree; only the INLINED copy is narrowed.
+    // The diff under review is FILTERED — lockfiles, generated/vendored
+    // trees, and any --diff-exclude-glob configured here are dropped
+    // whole-file. The evidence file inlines it (or points to it above the
+    // cap), and `<gate>-<headSha>.filtered.diff` persists it as the required
+    // `diff` read in both modes, so the required read never scales with
+    // lockfile churn. The unfiltered diff stays at options.diffPath
+    // (scope.diffPath) as the optional `raw-diff` widening read.
     const inlineDiffOutput = typeof options.diffOutput === "string" && options.diffOutput.length > 0
       ? filterDiffForInline(options.diffOutput, { excludeGlobs: options.diffExcludeGlobs ?? [] }).filteredDiff
       : (options.diffOutput ?? null);
+    pendingFilteredDiff = typeof inlineDiffOutput === "string" && inlineDiffOutput.length > 0
+      ? {
+        path: buildGateArtifactPath({ repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp", suffix: ".filtered.diff" }),
+        text: inlineDiffOutput.endsWith("\n") ? inlineDiffOutput : `${inlineDiffOutput}\n`,
+      }
+      : null;
+    const evidence = renderBriefingEvidence({
+      repo: options.repo,
+      pr: options.pr,
+      gate: options.gate,
+      headSha: options.headSha,
+      prBody: options.prBody ?? null,
+      issueRef: options.acceptanceCriteria ?? null,
+      issueBody: options.issueBody ?? null,
+      issueSections: options.issueSections ?? null,
+      diffOutput: inlineDiffOutput,
+      diffPath: pendingFilteredDiff?.path ?? null,
+      changedFiles: options.changedFiles ?? [],
+      adjacentCode: options.adjacentCode ?? null,
+      validationResultsPath: options.validationResultsPath ?? null,
+    });
+    prefixMode = evidence.prefixMode;
+    pendingEvidence = { path: evidencePath, text: evidence.text };
+    // Reference seeding: the prefix binds every bulk artifact by sha256 and
+    // byte count, so the sentinel's prefix-hash check and the
+    // no-rebuild-mid-fan-out guard cover the referenced bytes transitively.
+    // The context JSON carries no hash because it embeds the prefix identity.
+    const hashed = (kind, readPath, bytes, required) => ({
+      kind, path: readPath, sha256: createHash("sha256").update(bytes).digest("hex"), bytes: Buffer.byteLength(bytes), required,
+    });
+    requiredReads = [hashed("evidence", evidencePath, evidence.text, true)];
+    if (pendingFilteredDiff) requiredReads.push(hashed("diff", pendingFilteredDiff.path, pendingFilteredDiff.text, true));
+    if (options.diffPath) {
+      // Optional widening read. A diff this call does not write binds the
+      // on-disk bytes; an unreadable one is omitted, never required.
+      let diffBytes = options.diffToWrite?.text;
+      if (diffBytes === undefined) diffBytes = await readFile(path.resolve(repoRoot, options.diffPath)).catch(() => undefined);
+      if (diffBytes !== undefined) requiredReads.push(hashed("raw-diff", options.diffPath, diffBytes, false));
+    }
+    if (validationBytes !== null) {
+      const relative = path.relative(path.resolve(repoRoot), options.validationResultsPath);
+      const outside = relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+      const storedPath = outside ? options.validationResultsPath : relative;
+      // Read by field via jq, never whole; the sentinel still verifies the hash.
+      requiredReads.push(hashed("validation", storedPath, validationBytes, false));
+    }
+    requiredReads.push({ kind: "context", path: contextPath, required: false });
     const rendered = renderBriefingPrefix({
       repo: options.repo,
       pr: options.pr,
@@ -2383,18 +2489,9 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       worktreeRoot: path.resolve(repoRoot),
       contextPath,
       briefingPrefixPath,
-      prBody: options.prBody ?? null,
-      issueRef: options.acceptanceCriteria ?? null,
-      issueBody: options.issueBody ?? null,
-      issueSections: options.issueSections ?? null,
-      diffOutput: inlineDiffOutput,
-      diffPath: options.diffPath ?? null,
-      changedFiles: options.changedFiles ?? [],
-      adjacentCode: options.adjacentCode ?? null,
-      validationResultsPath: options.validationResultsPath ?? null,
+      requiredReads,
     });
     prefixBytes = Buffer.from(rendered.text, "utf8");
-    prefixMode = rendered.prefixMode;
 
     // AC3: render one companion file per DISTINCT non-"full" scope actually
     // declared by this round's resolved angles (never every GATE_ANGLE_SCOPES
@@ -2415,7 +2512,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
           pr: options.pr,
           gate: options.gate,
           headSha: options.headSha,
-          briefingPrefixPath,
+          evidencePath,
           contextPath,
           worktreeRoot: path.resolve(repoRoot),
           prBody: options.prBody ?? null,
@@ -2424,10 +2521,15 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
           issueSections: options.issueSections ?? null,
           diffOutput: inlineDiffOutput,
           diffPath: options.diffPath ?? null,
+          filteredDiffPath: pendingFilteredDiff?.path ?? null,
           validationResultsPath: options.validationResultsPath ?? null,
         });
         pendingVariants.set(scope, { path: scopePath, text: variant.text });
         briefingVariants[scope] = scopePath;
+        // Pushed after the prefix render: the shared prefix never lists a
+        // variant, but the sentinel verifies it and the emitter copies it.
+        const { kind, ...identity } = hashed("scoped-evidence", scopePath, variant.text, false);
+        requiredReads.push({ kind, scope, ...identity });
       } catch (err) {
         process.stderr.write(
           `[gate-context] scope variant "${scope}" failed to build (continuing without it; affected angles fail open to the full briefing): ${err?.message ?? err}\n`,
@@ -2473,16 +2575,12 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
   } catch (err) {
     if (err.code !== "ENOENT") readError = err;
   }
-  let rebuildWarning = null;
-  if (readError !== null) {
-    rebuildWarning = `Could not read the existing briefing prefix (${readError.code ?? readError.message}) before overwriting it — if the new bytes differ and reviewer sentinels of ${options.gate} exist for head ${options.headSha}, every one of them now fails closed. Retire the round explicitly before re-fanning: ${retireCommand}`;
-    process.stderr.write(`WARNING: ${rebuildWarning}\n`);
-  } else if (existingBytes !== null && !existingBytes.equals(prefixBytes)) {
-    // The rebuild would CHANGE the recorded prefix bytes. Scan THIS gate's live
-    // reviewer sentinels for the head (the other gate's live round at the same
-    // head is not invalidated by this rebuild), matched on the trailing
-    // full-SHA filename component with startsWith so a legitimately abbreviated
-    // --head-sha still detects them.
+  // THIS gate's live reviewer sentinels for the head (the other gate's live
+  // round at the same head is not invalidated by this rebuild), matched on the
+  // trailing full-SHA filename component with startsWith so a legitimately
+  // abbreviated --head-sha still detects them. Only a missing tmp/ dir means
+  // "no sentinels"; any other scan failure is returned as scanError.
+  const scanLiveSentinels = async () => {
     const sentinelScopePrefix = `${CHECKPOINT_SENTINEL_PREFIX}${gateScopePrefix(options.gate)}`;
     const headPrefix = String(options.headSha).trim().toLowerCase();
     let scanError = null;
@@ -2491,11 +2589,20 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       scanError = err;
       return [];
     });
-    const liveSentinelNames = tmpDirEntries.filter((e) => {
+    const names = tmpDirEntries.filter((e) => {
       if (!e.isFile() || !e.name.startsWith(sentinelScopePrefix) || !e.name.endsWith(".json")) return false;
       const shaComponent = e.name.slice(0, -".json".length).split("-").at(-1) ?? "";
       return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(shaComponent) && shaComponent.startsWith(headPrefix);
     }).map((e) => e.name);
+    return { names, scanError };
+  };
+  let rebuildWarning = null;
+  if (readError !== null) {
+    rebuildWarning = `Could not read the existing briefing prefix (${readError.code ?? readError.message}) before overwriting it — if the new bytes differ and reviewer sentinels of ${options.gate} exist for head ${options.headSha}, every one of them now fails closed. Retire the round explicitly before re-fanning: ${retireCommand}`;
+    process.stderr.write(`WARNING: ${rebuildWarning}\n`);
+  } else if (existingBytes !== null && !existingBytes.equals(prefixBytes)) {
+    // The rebuild would CHANGE the recorded prefix bytes.
+    const { names: liveSentinelNames, scanError } = await scanLiveSentinels();
     const priorPrefixHash = createHash("sha256").update(existingBytes).digest("hex");
     const newPrefixHash = createHash("sha256").update(prefixBytes).digest("hex");
     // Only a missing tmp/ dir means "no sentinels". Any other scan failure
@@ -2648,6 +2755,70 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       priorDispositions = [];
     }
   }
+  // Reference seeding, lossless: the full list goes to a round-bound file,
+  // hash-bound as a required read. The shared prefix never lists it (it is
+  // round-level, after the cache boundary); the volatile tail and every work
+  // order do, and the sentinel verifies it.
+  let pendingDispositions = null;
+  let priorDispositionsRead = null;
+  if (priorDispositions.length > 0) {
+    const text = `${JSON.stringify(priorDispositions, null, 2)}\n`;
+    const dispositionsPath = buildGateArtifactPath({
+      repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp", suffix: ".prior-dispositions.json",
+    });
+    pendingDispositions = { path: dispositionsPath, text };
+    priorDispositionsRead = {
+      kind: "prior-dispositions", path: dispositionsPath, sha256: createHash("sha256").update(text).digest("hex"), bytes: Buffer.byteLength(text), entries: priorDispositions.length, required: true,
+    };
+    (requiredReads ??= []).push(priorDispositionsRead);
+  }
+  // Known-findings block, same transport: a round-bound hash-bound read
+  // (only when threads exist). Unreadable or malformed input fails closed.
+  let pendingKnownFindings = null;
+  let knownFindingsRead = null;
+  if (typeof options.knownFindingsPath === "string" && options.knownFindingsPath.length > 0) {
+    let capture;
+    try {
+      capture = JSON.parse(await readFile(path.resolve(repoRoot, options.knownFindingsPath), "utf8"));
+    } catch (err) {
+      throw new Error(`--known-findings ${JSON.stringify(options.knownFindingsPath)} is unreadable or not JSON: ${err?.message ?? err}`);
+    }
+    const knownFindings = renderKnownFindings(capture);
+    if (knownFindings.length > 0) {
+      const text = `${JSON.stringify(knownFindings, null, 2)}\n`;
+      const knownFindingsPath = buildGateArtifactPath({
+        repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp", suffix: ".known-findings.json",
+      });
+      pendingKnownFindings = { path: knownFindingsPath, text };
+      knownFindingsRead = {
+        kind: "known-findings", path: knownFindingsPath, sha256: createHash("sha256").update(text).digest("hex"), bytes: Buffer.byteLength(text), entries: knownFindings.length, required: true,
+      };
+      (requiredReads ??= []).push(knownFindingsRead);
+    }
+  }
+  const pendingRoundReads = [...(pendingDispositions ? [pendingDispositions] : []), ...(pendingKnownFindings ? [pendingKnownFindings] : [])];
+  // The prefix never lists the prior-dispositions, known-findings or scoped-variant reads, so
+  // the prefix-byte guard above cannot see them change. Refuse the same way
+  // when a same-head rebuild would rewrite one under live sentinels: reviewers
+  // past the sentinel would read bytes that differ from the sha256 their work
+  // order names. An unreadable existing file counts as changed (fail closed).
+  const changedOutOfPrefix = [];
+  for (const pending of [...pendingVariants.values(), ...pendingRoundReads]) {
+    try {
+      if ((await readFile(path.resolve(repoRoot, pending.path), "utf8")) !== pending.text) changedOutOfPrefix.push(pending.path);
+    } catch (err) {
+      if (err.code !== "ENOENT") changedOutOfPrefix.push(pending.path);
+    }
+  }
+  if (changedOutOfPrefix.length > 0) {
+    const { names, scanError } = await scanLiveSentinels();
+    if (scanError !== null || names.length > 0) {
+      const cause = scanError !== null
+        ? `the live-sentinel scan failed (${scanError.code ?? scanError.message}), so an in-flight fan-out cannot be ruled out`
+        : `${names.length} reviewer sentinel(s) of ${options.gate} for head ${options.headSha} exist: ${names.map((n) => `tmp/${n}`).sort().join(", ")}`;
+      throw new Error(`Refusing to rewrite required read(s) ${changedOutOfPrefix.join(", ")} with DIFFERENT bytes while a fan-out for head ${options.headSha} may be in flight (${options.gate}): ${cause}. Retire the round explicitly before rebuilding: ${retireCommand}`);
+    }
+  }
 
   // Render the volatile tail before destructive writes, so malformed inputs
   // preserve any prior valid context. It is physically separate from the prefix.
@@ -2658,13 +2829,15 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     headSha: options.headSha,
     loggedAt,
     validationPosture: options.validationPosture ?? null,
-    priorDispositions,
+    priorDispositionsRead,
+    knownFindingsRead,
+    worktreeRoot: path.resolve(repoRoot),
   });
-  const artifact = { ...buildGateContextArtifact({ ...options, angleScopes, prefixMode, briefingVariants }), loggedAt };
+  const artifact = { ...buildGateContextArtifact({ ...options, angleScopes, prefixMode, briefingVariants }), ...(requiredReads ? { requiredReads } : {}), loggedAt };
   // Keep the marker available only when prefix AND referenced stable files
-  // are unchanged. A filtered/pointer diff can change without changing the prefix.
+  // are unchanged on disk (the prefix hash-binds the evidence and full diff).
   let markerUnchanged = existingBytes !== null && existingBytes.equals(prefixBytes);
-  const referencedWrites = [...pendingVariants.values(), ...(options.diffToWrite ? [options.diffToWrite] : [])];
+  const referencedWrites = [...(pendingEvidence ? [pendingEvidence] : []), ...(pendingFilteredDiff ? [pendingFilteredDiff] : []), ...pendingVariants.values(), ...(options.diffToWrite ? [options.diffToWrite] : []), ...pendingRoundReads];
   for (const pending of referencedWrites) {
     if (!markerUnchanged) break;
     try {
@@ -2688,12 +2861,15 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
         return await writeGateContext({ ...options, diffPath: null, diffToWrite: null }, { repoRoot });
       }
     }
+    if (pendingFilteredDiff) await writeFile(path.resolve(repoRoot, pendingFilteredDiff.path), pendingFilteredDiff.text, "utf8");
+    if (pendingEvidence) await writeFile(path.resolve(repoRoot, pendingEvidence.path), pendingEvidence.text, "utf8");
     for (const [scope, variant] of pendingVariants) {
       try {
         await writeFile(path.resolve(repoRoot, variant.path), variant.text, "utf8");
       } catch (error) {
         await rm(fullPath, { force: true });
         delete briefingVariants[scope];
+        artifact.requiredReads = artifact.requiredReads.filter((read) => !(read.kind === "scoped-evidence" && read.scope === scope));
         process.stderr.write(`[gate-context] scope variant "${scope}" failed to build (continuing without it; affected angles fail open to the full briefing): ${error.message}\n`);
         for (const [angle, s] of Object.entries(angleScopes)) {
           if (s === scope) angleScopes[angle] = "full";
@@ -2702,6 +2878,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     }
     if (Object.keys(briefingVariants).length === 0) delete artifact.briefingVariants;
     await writeFile(fullPrefixPath, prefixBytes);
+    for (const pending of pendingRoundReads) await writeFile(path.resolve(repoRoot, pending.path), pending.text, "utf8");
     await writeFile(fullVolatilePath, volatileText, "utf8");
     await writeFile(fullRequestPlanPath, JSON.stringify(requestPlan, null, 2) + "\n", "utf8");
     await writeFile(fullPath, JSON.stringify(artifact, null, 2) + "\n", "utf8");
@@ -2721,6 +2898,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     path: contextPath,
     artifact,
     prefixPath: briefingPrefixPath,
+    evidencePath: pendingEvidence ? evidencePath : null,
     prefixHash,
     prefixMode,
     volatilePath,
@@ -2750,22 +2928,23 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  * @param {string[]} [input.touchedFiles]
  * @param {string|null} [input.acceptanceCriteria]
  * @param {string|null} [input.validationPosture]
- * @param {string|null} [input.prBody] — PR description text, inlined into the rendered briefing prefix
+ * @param {string|null} [input.prBody] — PR description text, inlined into the rendered briefing evidence file
  * @param {string|null} [input.issueBody] — linked-issue body text, inlined under `acceptanceCriteria`'s label; omitted when absent
  * @param {number} [input.maxFileBytes] — per-file cap for the adjacent-code bundle (default DEFAULT_MAX_FILE_BYTES)
  * @param {number|null} [input.availableReviewers] — harness remaining reviewer budget for the preflight; null/omitted = unexposed (proceed, no shortfall proven)
  * @param {string[]|null} [input.carriedAngles] — angle names the fail-closed Phase 1.2 carry-forward seam (resolve-angle-carry-forward.mjs) has proven carried from a prior clean head; excluded from the preflight's `requiredReviewers`/`pendingGroups` alongside `completedAngles`; null/omitted = no carried angles known
  * @param {string} [input.tmpRoot]
  * @param {{ repoRoot?: string }} [opts]
- * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, prefixHash: string, prefixMode: "inline"|"pointer", resolver: object, warning?: string, volatilePath: string, requestPlanPath: string, requestPlan: object }>}
+ * @returns {Promise<{ ok: boolean, path: string, artifact: object, prefixPath: string, evidencePath: string, prefixHash: string, prefixMode: "inline"|"pointer", resolver: object, warning?: string, volatilePath: string, requestPlanPath: string, requestPlan: object }>}
  *   prefixMode is never "file" here — this programmatic entrypoint never threads a
  *   `prefixFile` into its internal writeGateContext() call, so it always self-renders.
  *   "file" mode is CLI-only (main()'s `--prefix-file` flag).
  *
  * The artifact additionally carries a deterministic, neutral `adjacentCode`
  * bundle when changed files are present: 1-hop import in/out-edges of the
- * changed files with size guards + a stripped/truncated manifest. Reviewers are
- * seeded with this verbatim instead of re-deriving the diff + adjacent code.
+ * changed files with size guards + a stripped/truncated manifest. Reviewers read
+ * it by reference through the `context` entry of `requiredReads`, as an
+ * optional navigation aid, instead of re-deriving the adjacent code.
  */
 // Review-gate coverage guard: hasAcChecklist reflects "an AC checklist
 // exists" (acItems.length > 0), independent of the Non-goals floor the

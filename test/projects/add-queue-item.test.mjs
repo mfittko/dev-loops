@@ -23,6 +23,7 @@ function mockRunChild(responses) {
       throw new Error(`Unexpected gh call #${callIndex + 1} (only ${responses.length} mocked)`);
     }
     const resp = responses[callIndex++];
+    if (resp.raw) return resp.raw;
     if (resp.error) {
       return { code: 1, stdout: "", stderr: resp.error };
     }
@@ -488,6 +489,27 @@ describe("add-queue-item", () => {
       } catch (err) {
         assert.equal(err.code, "CONTENT_NOT_FOUND");
       }
+    });
+
+    it("keeps a non-NOT_FOUND GraphQL error (gh exit 1) as GRAPHQL_ERROR with its message", async () => {
+      const payload = {
+        data: { repository: null },
+        errors: [{ type: "FORBIDDEN", message: "Resource not accessible by integration" }],
+      };
+      const responses = [
+        { payload: userPayload() },
+        { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+        { payload: getFieldsResponse([STATUS_FIELD]) },
+        { payload: emptyItemsResponse() },
+        { raw: { code: 1, stdout: JSON.stringify(payload), stderr: "gh: Resource not accessible by integration" } },
+      ];
+      await assert.rejects(
+        () => main(
+          { repo: "mfittko/dev-loops", project: "1", item: 10 },
+          { env: {}, runChild: mockRunChild(responses) },
+        ),
+        (err) => err.code === "GRAPHQL_ERROR" && /Resource not accessible by integration/.test(err.message),
+      );
     });
   });
 

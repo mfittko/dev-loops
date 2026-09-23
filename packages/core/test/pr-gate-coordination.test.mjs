@@ -40,6 +40,169 @@ test("draft PR only allows mark-ready after current-head clean draft gate eviden
   assert.equal(result.draftGate.currentHeadClean, true);
 });
 
+// ---------------------------------------------------------------------------
+// ADR 0088: unresolvedGateThreadCount folds into draftGate.currentHeadClean —
+// reconciling this detector's MARK_READY_FOR_REVIEW decision with
+// detect-checkpoint-evidence.mjs's own unresolved-gate-authored-thread report
+// for the same PR state (the previously deadlocked state).
+// ---------------------------------------------------------------------------
+
+test("#2381: a clean draft_gate marker with a dangling unresolvedGateThreadCount does NOT return mark_ready_for_review", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 10,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    ciStatus: "success",
+    draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+    // One dangling gate-authored thread (e.g. an answered, judge-rejected
+    // question close-gate-findings has not yet reject-closed) — the same
+    // state detect-checkpoint-evidence.mjs's own unresolved-thread report
+    // would refuse ready-for-review on.
+    unresolvedGateThreadCount: 1,
+  });
+
+  // The marker verdict is already clean — re-running draft_gate (run_draft_gate)
+  // can never clear a dangling thread, so this must name the real blocker
+  // instead (markerCleanThreadsUnresolved / reply_resolve_review_threads),
+  // never RUN_DRAFT_GATE.
+  assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
+  assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS);
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.FEEDBACK_RESOLUTION);
+  assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+  assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+  assert.equal(result.draftGate.currentHeadClean, false);
+  assert.equal(result.draftGate.markerCleanThreadsUnresolved, true);
+  // The reason text names "stop for the operator" as the remedy for an
+  // unanswered question that cannot be answered — that escalation must be a
+  // legal next action, not just prose with no sanctioned way to take it.
+  assert.ok(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REPORT_BLOCKED));
+  assert.ok(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REPORT_BLOCKED));
+});
+
+test("#2381: a clean draft_gate marker with a dangling unresolvedGateThreadCount names the thread blocker even while CI is pending (the marker blocker is never masked by CI)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 10,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    ciStatus: "pending",
+    draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+    unresolvedGateThreadCount: 1,
+  });
+
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS);
+  assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.WAIT_FOR_CI);
+});
+
+test("#2381: unresolvedGateThreadCount: 0 still allows mark_ready_for_review (positive counterpart)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 10,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+    unresolvedGateThreadCount: 0,
+  });
+
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
+  assert.equal(result.draftGate.currentHeadClean, true);
+});
+
+// -1 (thread state unreadable) gets its OWN reason — distinct from a real
+// dangling thread (markerCleanThreadsUnresolved above), which would
+// misleadingly name "resolve the thread" when there is no known thread to
+// resolve. mark_ready_for_review stays forbidden either way.
+test("#2381: unresolvedGateThreadCount: -1 names the unreadable-state reason, distinct from a real dangling thread", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 10,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+    unresolvedGateThreadCount: -1,
+  });
+
+  assert.equal(result.draftGate.markerCleanThreadsUnresolved, false);
+  assert.equal(result.draftGate.markerCleanThreadStateUnreadable, true);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REPLY_RESOLVE_REVIEW_THREADS);
+  assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
+  assert.match(result.reason, /could not read review-thread state; re-run when API connectivity is restored/);
+});
+
+// toGateStatus is a public core export; a malformed unresolvedGateThreadCount
+// (NaN, a float, a string) from a future caller must fail closed the same as
+// -1, never fail open by treating it as "no signal" (currentHeadClean=true).
+test("#2381: a malformed unresolvedGateThreadCount (NaN, float, string) fails closed like -1, never treated as absent", () => {
+  for (const malformed of [Number.NaN, 1.5, "1"]) {
+    const result = evaluatePrGateCoordination({
+      pr: 10,
+      currentHeadSha: "abc123456789",
+      prDraft: true,
+      lifecycleState: STATE.PR_DRAFT,
+      loopDisposition: DISPOSITION.ACTION_REQUIRED,
+      draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+      draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+      unresolvedGateThreadCount: malformed,
+    });
+
+    assert.equal(result.draftGate.currentHeadClean, false, `malformed value ${String(malformed)} must not read as clean`);
+    assert.equal(result.draftGate.markerCleanThreadStateUnreadable, true);
+    assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
+  }
+});
+
+test("#2381: an absent unresolvedGateThreadCount input preserves the marker-only definition (backward compatible)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 10,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
+  });
+
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW);
+  assert.equal(result.draftGate.currentHeadClean, true);
+});
+
+test("#2381: unresolvedGateThreadCount never affects preApprovalGate.currentHeadClean (draftGate-only guard)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 10,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.ROUND_CAP_CLEAN_FALLBACK,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: true,
+    copilotReviewRequestStatus: "none",
+    unresolvedThreadCount: 0,
+    ciStatus: "success",
+    copilotReviewRoundCount: 3,
+    maxCopilotRounds: 3,
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+    preApprovalGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    preApprovalGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
+    // unresolvedGateThreadCount is fed ONLY into draftGate's own toGateStatus
+    // call — a non-zero value here must never leak into preApprovalGate's
+    // currentHeadClean, which never receives this signal.
+    unresolvedGateThreadCount: 1,
+  });
+
+  assert.equal(result.draftGate.currentHeadClean, false);
+  assert.equal(result.preApprovalGate.currentHeadClean, true);
+});
+
 test("draft PR waits for CI before allowing draft gate when requireCi is enabled", () => {
   const result = evaluatePrGateCoordination({
     pr: 10,
@@ -2210,6 +2373,8 @@ test("guard rewrite deep-equals the exact expected shape when no draft_gate comm
     nextAction: null,
     contractComplete: false,
     currentHeadClean: false,
+    markerCleanThreadsUnresolved: false,
+    markerCleanThreadStateUnreadable: false,
     cleanEvidenceExists: false,
   };
 
@@ -2276,6 +2441,8 @@ test("guard rewrite deep-equals the exact expected shape when a non-clean draft_
       nextAction: null,
       contractComplete: true,
       currentHeadClean: false,
+      markerCleanThreadsUnresolved: false,
+      markerCleanThreadStateUnreadable: false,
       cleanEvidenceExists: false,
     },
     preApprovalGate: {
@@ -2289,6 +2456,8 @@ test("guard rewrite deep-equals the exact expected shape when a non-clean draft_
       nextAction: null,
       contractComplete: false,
       currentHeadClean: false,
+      markerCleanThreadsUnresolved: false,
+      markerCleanThreadStateUnreadable: false,
       cleanEvidenceExists: false,
     },
     allowedNextActions: [PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE],
@@ -4223,4 +4392,63 @@ test("incomplete fixerDisposition blocks even a draft PR's mark-ready-for-review
   assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
   assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW));
   assert.ok(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
+});
+
+// ADR 0088 (folded finding a): applyDraftGateEvidenceGuard must NOT rewrite an
+// in-progress draft-side COMPLETE_FIXER_DISPOSITION result to
+// reconcile_draft_gate. Absent/not-yet-clean draft_gate COMMENT evidence
+// (cleanEvidenceExists false — no draft_gate verdict posted yet for THIS
+// round) is the NORMAL state while a fixer is mid-remediation on a still-draft
+// PR; reconcile_draft_gate is the POST-draft merge-path remedy and would
+// misdirect the fixer here.
+test("#2381: incomplete fixerDisposition on a DRAFT PR with no clean draft_gate evidence yet is NOT rewritten to reconcile_draft_gate", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 10,
+    currentHeadSha: "abc123456789",
+    prDraft: true,
+    lifecycleState: STATE.PR_DRAFT,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    // No draft_gate evidence posted for this round yet (cleanEvidenceExists
+    // false) — the normal state mid-remediation, BEFORE upsert-checkpoint-
+    // verdict.mjs posts this round's verdict.
+    draftGate: gate({ visible: false }),
+    draftGateMarker: gate({ visible: false }),
+    fixerDisposition: {
+      complete: false,
+      incomplete: [{ threadId: "T1", expectedCommit: "abc1234", failedStep: "reply_missing" }],
+    },
+  });
+
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION);
+  assert.notEqual(result.nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE);
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.FEEDBACK_RESOLUTION);
+  assert.ok(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.COMPLETE_FIXER_DISPOSITION));
+});
+
+// Non-draft counterpart: the SAME absent draft_gate evidence, on a
+// NON-draft PR, still rewrites to reconcile_draft_gate — applyDraftGateEvidenceGuard's
+// prDraft exemption must not weaken the post-draft merge-path guard.
+test("#2381: incomplete fixerDisposition on a NON-draft PR with no clean draft_gate evidence IS rewritten to reconcile_draft_gate", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 10,
+    currentHeadSha: "abc123456789",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: true,
+    copilotReviewRequestStatus: "none",
+    unresolvedThreadCount: 0,
+    ciStatus: "success",
+    draftGate: gate({ visible: false }),
+    draftGateMarker: gate({ visible: false }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+    fixerDisposition: {
+      complete: false,
+      incomplete: [{ threadId: "T1", expectedCommit: "abc1234", failedStep: "reply_missing" }],
+    },
+  });
+
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE);
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_GATE_NEEDED);
 });

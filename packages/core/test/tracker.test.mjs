@@ -218,8 +218,9 @@ const STATUS_FIELD = {
   ],
 };
 const EXISTING_PROJECT = { id: "PVT_proj1", number: 1, title: "Dev Loop Queue", url: "https://x" };
-function getItemsByContentResponse(items) {
-  return { data: { node: { items: { nodes: items, pageInfo: { hasNextPage: false, endCursor: null } } } } };
+// The direct item node lookup envelope (`node(id)` as a ProjectV2Item on the project).
+function itemNodeResponse(node) {
+  return { data: { node: { isArchived: false, project: { id: EXISTING_PROJECT.id }, ...node } } };
 }
 function makeItemNode(itemId, content, status) {
   const fieldValues = status != null ? { nodes: [{ field: { id: "PVTSSF_status", name: "Status" }, name: status }] } : { nodes: [] };
@@ -245,7 +246,7 @@ test("github adapter setItemStatus maps a logical column to the configured Statu
     getFieldsResponse([STATUS_FIELD]),
     // The item is already at "In Progress" — the no-op/unchanged branch,
     // reached without needing a mutation-call stub.
-    getItemsByContentResponse([makeItemNode("PVTI_1", makeContent(10), "In Progress")]),
+    itemNodeResponse(makeItemNode("PVTI_1", makeContent(10), "In Progress")),
   ]);
   const adapter = createGithubTrackerAdapter({ run });
   const board = { repo: "acme/widgets", project: "1", columnNames: { in_progress: "In Progress" } };

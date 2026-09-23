@@ -5,6 +5,8 @@ import {
   userPayload,
   existingProject,
   itemsByContentResponse as getItemsByContentResponse,
+  issueSideItemsResponse,
+  itemNodeResponse,
 } from "./_fixtures.mjs";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -95,6 +97,10 @@ function updatePositionResponse() {
   };
 }
 
+// Each ref resolves through its own issue-side lookup (number) or node lookup
+// (item id); the board listing is read only for the before/after snapshot.
+const onIssueSide = (node) => ({ payload: issueSideItemsResponse([node]) });
+
 // ── move-to-top subcommand ────────────────────────────────────────────────
 
 describe("reorder — move-to-top subcommand", () => {
@@ -106,7 +112,8 @@ describe("reorder — move-to-top subcommand", () => {
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      { payload: getItemsByContentResponse(items) }, // single fetch: resolve + before snapshot
+      onIssueSide(items[1]), // resolve 630
+      { payload: getItemsByContentResponse(items) }, // before snapshot
       { payload: updatePositionResponse() },
       { payload: getItemsByContentResponse([items[1], items[0]]) }, // after-order snapshot
     ];
@@ -139,7 +146,9 @@ describe("reorder — move-after subcommand", () => {
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      { payload: getItemsByContentResponse(items) }, // single fetch: resolve both refs + before
+      onIssueSide(items[0]), // resolve 630
+      onIssueSide(items[1]), // resolve 625
+      { payload: getItemsByContentResponse(items) }, // before snapshot
       { payload: updatePositionResponse() },
       { payload: getItemsByContentResponse([items[1], items[0]]) }, // after snapshot
     ];
@@ -177,11 +186,14 @@ describe("reorder — order subcommand", () => {
       makeItemNode("PVTI_2", 102, "Issue", "Next Up"),
       makeItemNode("PVTI_3", 103, "Issue", "Next Up"),
     ];
-    // order 103 101 102: single fetch (resolve all + before), 3 mutations, after snapshot (1)
+    // order 103 101 102: resolve 3 refs, before snapshot, 3 mutations, after snapshot
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      { payload: getItemsByContentResponse(items) }, // single fetch: resolve all refs + before
+      onIssueSide(items[2]),
+      onIssueSide(items[0]),
+      onIssueSide(items[1]),
+      { payload: getItemsByContentResponse(items) }, // before snapshot
       { payload: updatePositionResponse() }, // 103 -> top
       { payload: updatePositionResponse() }, // 101 -> after 103
       { payload: updatePositionResponse() }, // 102 -> after 101
@@ -211,7 +223,8 @@ describe("reorder — order subcommand", () => {
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      { payload: getItemsByContentResponse(items) }, // single resolve fetch
+      onIssueSide(items[0]),
+      onIssueSide(items[1]),
     ];
     const runChild = mockRunChild(responses);
 
@@ -230,11 +243,14 @@ describe("reorder — order partial-failure recovery", () => {
       makeItemNode("PVTI_2", 102, "Issue", "Next Up"),
       makeItemNode("PVTI_3", 103, "Issue", "Next Up"),
     ];
-    // order 103 101 102: single fetch (resolve all + before), mutation 1 ok, mutation 2 fails
+    // order 103 101 102: resolve 3 refs, before snapshot, mutation 1 ok, mutation 2 fails
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      { payload: getItemsByContentResponse(items) }, // single fetch: resolve all refs + before
+      onIssueSide(items[2]),
+      onIssueSide(items[0]),
+      onIssueSide(items[1]),
+      { payload: getItemsByContentResponse(items) }, // before snapshot
       { payload: updatePositionResponse() }, // move 1 ok
       { error: "boom" }, // move 2 fails
     ];
@@ -264,7 +280,8 @@ describe("reorder — --dry-run", () => {
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      { payload: getItemsByContentResponse(items) }, // single fetch: resolve + before snapshot
+      onIssueSide(items[0]),
+      { payload: getItemsByContentResponse(items) }, // before snapshot
     ];
     const runChild = mockRunChild(responses);
 
@@ -292,7 +309,9 @@ describe("reorder — --dry-run", () => {
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      { payload: getItemsByContentResponse(items) }, // single fetch: resolve all refs + before
+      onIssueSide(items[1]),
+      onIssueSide(items[0]),
+      { payload: getItemsByContentResponse(items) }, // before snapshot
     ];
     const runChild = mockRunChild(responses);
 
@@ -328,7 +347,8 @@ describe("reorder — legacy flag form", () => {
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      { payload: getItemsByContentResponse(items) }, // single fetch: resolve + before snapshot
+      onIssueSide(items[0]),
+      { payload: getItemsByContentResponse(items) }, // before snapshot
     ];
     const runChild = mockRunChild(responses);
 
@@ -344,10 +364,10 @@ describe("reorder — legacy flag form", () => {
     assert.deepStrictEqual(result.before, [
       { itemId: "PVTI_b", issueNumber: 630, prNumber: null, status: "Next Up" },
     ]);
-    // Only ONE fetch-all-items call (no separate resolve + snapshot fetch).
+    // owner, projects, one item lookup, one snapshot listing.
     assert.strictEqual(
       runChild.calls.filter((args) => args.some((a) => typeof a === "string" && a.startsWith("query="))).length,
-      3,
+      4,
     );
     assert.strictEqual(countMutations(runChild.calls), 0);
   });
@@ -361,7 +381,8 @@ describe("reorder — issue and PR refs", () => {
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      { payload: getItemsByContentResponse(items) }, // single fetch: resolve + before
+      onIssueSide(items[0]),
+      { payload: getItemsByContentResponse(items) }, // before snapshot
       { payload: updatePositionResponse() },
       { payload: getItemsByContentResponse(items) }, // after snapshot
     ];
@@ -378,17 +399,79 @@ describe("reorder — issue and PR refs", () => {
   });
 });
 
+// ── items the lagging board listing omits ─────────────────────────────────
+
+describe("reorder — items missing from the board listing", () => {
+  // GitHub's ProjectV2.items listing can lag by hours and omit newly added
+  // items. Every listing fixture below is empty while the issue-side lookup
+  // returns the items, so each form must succeed without the listing.
+  const newA = makeItemNode("PVTI_newA", 2392, "Issue", "Backlog");
+  const newB = makeItemNode("PVTI_newB", 2397, "Issue", "Backlog");
+  const emptyListing = { payload: getItemsByContentResponse([]) };
+  const base = [{ payload: userPayload() }, { payload: listUserProjectsResponse([EXISTING_PROJECT]) }];
+
+  it("move-to-top succeeds", async () => {
+    const runChild = mockRunChild([
+      ...base, onIssueSide(newA), emptyListing, { payload: updatePositionResponse() }, emptyListing,
+    ]);
+    const result = await main(
+      { _subcommand: "move-to-top", _positional: ["2392"], repo: "mfittko/dev-loops", project: "1" },
+      { runChild },
+    );
+    assert.strictEqual(result.item.itemId, "PVTI_newA");
+    assert.strictEqual(result.item.position, "top");
+    assert.strictEqual(countMutations(runChild.calls), 1);
+  });
+
+  it("move-after succeeds with item and after-ref only on the issue side", async () => {
+    const runChild = mockRunChild([
+      ...base, onIssueSide(newA), onIssueSide(newB), emptyListing, { payload: updatePositionResponse() }, emptyListing,
+    ]);
+    const result = await main(
+      { _subcommand: "move-after", _positional: ["2392", "2397"], repo: "mfittko/dev-loops", project: "1" },
+      { runChild },
+    );
+    assert.strictEqual(result.item.itemId, "PVTI_newA");
+    assert.strictEqual(result.after_ref.itemId, "PVTI_newB");
+  });
+
+  it("order succeeds", async () => {
+    const runChild = mockRunChild([
+      ...base, onIssueSide(newB), onIssueSide(newA), emptyListing,
+      { payload: updatePositionResponse() }, { payload: updatePositionResponse() }, emptyListing,
+    ]);
+    const result = await main(
+      { _subcommand: "order", _positional: ["2397", "2392"], repo: "mfittko/dev-loops", project: "1" },
+      { runChild },
+    );
+    assert.deepStrictEqual(result.moves.map((m) => [m.itemId, m.afterId]), [
+      ["PVTI_newB", null],
+      ["PVTI_newA", "PVTI_newB"],
+    ]);
+    assert.strictEqual(countMutations(runChild.calls), 2);
+  });
+
+  it("flag form --item with --after node ID succeeds", async () => {
+    const runChild = mockRunChild([
+      ...base, onIssueSide(newA), { payload: itemNodeResponse(newB) }, { payload: updatePositionResponse() },
+    ]);
+    const result = await main(
+      { _positional: [], repo: "mfittko/dev-loops", project: "1", item: "2392", after: "PVTI_newB" },
+      { runChild },
+    );
+    assert.strictEqual(result.item.itemId, "PVTI_newA");
+    assert.strictEqual(result.after.itemId, "PVTI_newB");
+  });
+});
+
 // ── cross-project / not found error ───────────────────────────────────────
 
 describe("reorder — cross-project error", () => {
-  it("returns clear ITEM_NOT_FOUND when ref is not in the target project", async () => {
-    const items = [makeItemNode("PVTI_other", 630, "Issue", "Next Up", "Next Up")];
-    // item belongs to a different repo -> filtered out
-    items[0].content.repository.nameWithOwner = "other/repo";
+  it("returns clear ITEM_NOT_FOUND when the issue is only on another project", async () => {
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      { payload: getItemsByContentResponse(items) },
+      { payload: issueSideItemsResponse([makeItemNode("PVTI_other", 630, "Issue", "Next Up")], "PVT_other") },
     ];
     const runChild = mockRunChild(responses);
 
@@ -403,12 +486,12 @@ describe("reorder — cross-project error", () => {
 
   it("fails closed when an item NODE ID ref belongs to another repo", async () => {
     // The item id exists on the board but its content is in a different repo.
-    const items = [makeItemNode("PVTI_other", 630, "Issue", "Next Up", "Next Up")];
-    items[0].content.repository.nameWithOwner = "other/repo";
+    const node = makeItemNode("PVTI_other", 630, "Issue", "Next Up");
+    node.content.repository.nameWithOwner = "other/repo";
     const responses = [
       { payload: userPayload() },
       { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
-      { payload: getItemsByContentResponse(items) }, // single fetch
+      { payload: itemNodeResponse(node) },
     ];
     const runChild = mockRunChild(responses);
 
@@ -417,7 +500,25 @@ describe("reorder — cross-project error", () => {
         { _subcommand: "move-to-top", _positional: ["PVTI_other"], repo: "mfittko/dev-loops", project: "1" },
         { runChild },
       ),
-      (err) => err.code === "ITEM_NOT_FOUND" && /not found in project for repo/.test(err.message),
+      (err) => err.code === "ITEM_NOT_FOUND" && /is for repo "other\/repo"/.test(err.message),
     );
+  });
+
+  it("fails closed when an --item NODE ID belongs to another project", async () => {
+    const responses = [
+      { payload: userPayload() },
+      { payload: listUserProjectsResponse([EXISTING_PROJECT]) },
+      { payload: itemNodeResponse(makeItemNode("PVTI_other", 630, "Issue", "Next Up"), "PVT_other") },
+    ];
+    const runChild = mockRunChild(responses);
+
+    await assert.rejects(
+      () => main(
+        { _positional: [], repo: "mfittko/dev-loops", project: "1", item: "PVTI_other" },
+        { runChild },
+      ),
+      (err) => err.code === "ITEM_NOT_FOUND" && /belongs to project "PVT_other"/.test(err.message),
+    );
+    assert.strictEqual(countMutations(runChild.calls), 0);
   });
 });

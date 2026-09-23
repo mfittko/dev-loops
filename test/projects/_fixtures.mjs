@@ -57,3 +57,26 @@ export function fieldsResponse(fields) {
 export function itemsByContentResponse(items) {
   return { data: { node: { items: { nodes: items, pageInfo: { hasNextPage: false, endCursor: null } } } } };
 }
+
+// Place a listing-shaped item node on a project, as the single-item lookups
+// return it (project id + isArchived next to id/fieldValues/content).
+function onProject(node, projectId) {
+  return { isArchived: false, project: { id: projectId }, ...node };
+}
+
+// The issue-side lookup envelope: `issueOrPullRequest(n).projectItems`.
+export function issueSideItemsResponse(nodes, projectId = "PVT_proj1", pageInfo = { hasNextPage: false, endCursor: null }) {
+  return {
+    data: {
+      repository: {
+        issueOrPullRequest: { projectItems: { pageInfo, nodes: nodes.map((n) => onProject(n, projectId)) } },
+      },
+    },
+  };
+}
+
+// The direct item node lookup envelope: `node(id)` as a ProjectV2Item. A null
+// node models an unknown id.
+export function itemNodeResponse(node, projectId = "PVT_proj1") {
+  return { data: { node: node ? onProject(node, projectId) : null } };
+}

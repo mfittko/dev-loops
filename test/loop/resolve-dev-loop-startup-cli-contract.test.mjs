@@ -8,6 +8,13 @@ import { test } from "bun:test";
 
 import { resolverTestEnv, writeGhStub } from "../_helpers.mjs";
 import { RUN_ID_MARKERS } from "@dev-loops/core/loop/run-context";
+import { OPERATOR_BRIEFING } from "../../scripts/loop/resolve-dev-loop-startup.mjs";
+
+function assertOperatorBriefing(parsed) {
+  assert.equal(typeof parsed.operatorBriefing, "string");
+  assert.ok(parsed.operatorBriefing.length > 0);
+  assert.equal(parsed.operatorBriefing, OPERATOR_BRIEFING);
+}
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const cliPath = path.join(repoRoot, "scripts", "loop", "resolve-dev-loop-startup.mjs");
@@ -113,6 +120,7 @@ test("resolve-dev-loop-startup success stdout keeps documented JSON shape", asyn
       "bundleKind",
       "selectedStrategy",
       "requiredReads",
+      "operatorBriefing",
       "nextAction",
       "canonicalStateSummary",
       "bundle",
@@ -120,6 +128,7 @@ test("resolve-dev-loop-startup success stdout keeps documented JSON shape", asyn
     assert.equal(parsed.ok, true);
     assert.equal(parsed.bundleKind, "resolved");
     assert.equal(parsed.selectedStrategy, "issue_intake");
+    assertOperatorBriefing(parsed);
     assert.deepEqual(parsed.requiredReads, [
       "skills/docs/public-dev-loop-contract.md",
       "skills/docs/retrospective-checkpoint-contract.md",
@@ -272,6 +281,7 @@ test("--plan-file with a valid base plan resolves to a local_phase bundle with n
     assert.equal(parsed.bundleKind, "resolved");
     assert.equal(parsed.selectedStrategy, "local_implementation");
     assert.equal(parsed.planFileIntakeState, "new_plan_needs_refinement");
+    assertOperatorBriefing(parsed);
     const target = parsed.canonicalStateSummary.target;
     assert.equal(target.kind, "local_phase");
     assert.equal(target.issue, null);
@@ -443,6 +453,7 @@ test("--spike with a complete spike artifact resolves to a local_phase bundle wi
     assert.equal(parsed.bundleKind, "resolved");
     assert.equal(parsed.selectedStrategy, "local_implementation");
     assert.equal(parsed.spikeIntakeState, "spike_ready_for_exit");
+    assertOperatorBriefing(parsed);
     const target = parsed.canonicalStateSummary.target;
     assert.equal(target.kind, "local_phase");
     assert.equal(target.issue, null);
@@ -517,6 +528,7 @@ test("resolve-dev-loop-startup malformed args keep documented stderr JSON shape"
   assert.equal(result.status, 1);
   assert.equal(result.stdout, "");
   const parsed = JSON.parse(result.stderr);
+  // ok:false results carry no operatorBriefing: the key set stays ok/error/hint.
   assert.deepEqual(Object.keys(parsed), ["ok", "error", "hint"]);
   assert.equal(parsed.ok, false);
   assert.equal(parsed.error, "Unknown argument: --bogus");

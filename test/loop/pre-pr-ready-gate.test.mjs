@@ -360,6 +360,98 @@ test("#1584 reproduction: a draft_gate with a clean verdict + an unresolved nice
   assert.equal(stderrParsed.unresolvedGateThreadCount, 1);
   assert.match(stderrParsed.error, /unresolved gate-authored review thread/i);
   assert.match(stderrParsed.error, /close-gate-findings/);
+  // dod:5 (raw `gh pr ready` path): a DEFECT (non-question) thread must be
+  // named by the fixer fix-close/defer-close remedy, never the question
+  // remedy text — the old assertion above (matching only /close-gate-findings/)
+  // could not tell the two apart, since the question remedy text also
+  // contains that substring.
+  assert.match(stderrParsed.error, /1 open defect thread\(s\).*fixer fix-close.*disposition pass's defer-close/i);
+  assert.doesNotMatch(stderrParsed.error, /question thread\(s\)/i);
+});
+
+// A question finding thread authored by the gate's own login, unresolved,
+// answered by no one — the raw `gh pr ready` path must name the SAME
+// question-specific remedy ready-for-review.mjs's own refusal names (ADR
+// 0088), never the generic defect (fixer fix-close/defer-close) text, which
+// cannot clear a question thread at all.
+function questionThreadNode({ fp = "9".repeat(16), commentId = 9002, id = "THREAD_Q" } = {}) {
+  return {
+    id,
+    isResolved: false,
+    isOutdated: false,
+    path: null,
+    line: null,
+    comments: { nodes: [{ id: `gid-${commentId}`, databaseId: commentId, body: `${buildFindingMarker({ fp, severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): why this approach?`, author: { login: "pi-local-run", __typename: "User" } }] },
+  };
+}
+
+test("#2381: the raw `gh pr ready` path names the question-specific remedy for an unresolved question thread, distinct from the defect remedy", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-2381-question-repro-"));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
+
+  const { env } = await writeGhStub(tmpDir, [
+    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true })) },
+    { stdout: JSON.stringify([makeDraftGateComment(HEAD_SHA_SHORT)]) },
+    { stdout: "[]" }, // listPrReviews (fail-open)
+    { assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login: "pi-local-run" })}\n` },
+    {
+      assertArgs: ["api", "graphql"],
+      assertArgContains: ["reviewThreads"],
+      stdout: reviewThreadsResponse([questionThreadNode()]),
+    },
+  ]);
+
+  const result = await runNode(["--repo", "owner/repo", "--pr", "42"], { cwd: tmpDir, env });
+
+  assert.equal(result.code, 1);
+  const stderrParsed = JSON.parse(result.stderr);
+  assert.equal(stderrParsed.ok, false);
+  assert.equal(stderrParsed.unresolvedGateThreadCount, 1);
+  assert.match(stderrParsed.error, /1 question thread\(s\).*post a resolving answer reply.*rerun close-gate-findings.*reject-closes/i);
+  assert.doesNotMatch(stderrParsed.error, /open defect thread\(s\)/i);
+});
+
+// A nit finding thread authored by the gate's own login, unresolved.
+function nitThreadNode({ fp = "7".repeat(16), commentId = 9003, id = "THREAD_NIT" } = {}) {
+  return {
+    id,
+    isResolved: false,
+    isOutdated: false,
+    path: "src/naming.mjs",
+    line: 4,
+    comments: { nodes: [{ id: `gid-${commentId}`, databaseId: commentId, body: `${buildFindingMarker({ fp, severity: "nit", angle: "style", round: 1 })}\n**nit** (\`style\`): trailing whitespace`, author: { login: "pi-local-run", __typename: "User" } }] },
+  };
+}
+
+// Copilot review (PR 2402): a nit is never a fixer target — the raw
+// `gh pr ready` path must name close-gate-findings' unconditional
+// resolve-with-rationale remedy, never the fixer fix-close/defer-close text
+// that only applies to high/medium/low (a nit can never be cleared by it).
+test("#2381: the raw `gh pr ready` path names the nit-specific close-gate-findings remedy for an unresolved nit thread, distinct from the defect and question remedies", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-2381-nit-repro-"));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
+
+  const { env } = await writeGhStub(tmpDir, [
+    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true })) },
+    { stdout: JSON.stringify([makeDraftGateComment(HEAD_SHA_SHORT)]) },
+    { stdout: "[]" }, // listPrReviews (fail-open)
+    { assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login: "pi-local-run" })}\n` },
+    {
+      assertArgs: ["api", "graphql"],
+      assertArgContains: ["reviewThreads"],
+      stdout: reviewThreadsResponse([nitThreadNode()]),
+    },
+  ]);
+
+  const result = await runNode(["--repo", "owner/repo", "--pr", "42"], { cwd: tmpDir, env });
+
+  assert.equal(result.code, 1);
+  const stderrParsed = JSON.parse(result.stderr);
+  assert.equal(stderrParsed.ok, false);
+  assert.equal(stderrParsed.unresolvedGateThreadCount, 1);
+  assert.match(stderrParsed.error, /1 open nit thread\(s\): rerun close-gate-findings.*resolves a nit unconditionally/i);
+  assert.doesNotMatch(stderrParsed.error, /open defect thread\(s\)/i);
+  assert.doesNotMatch(stderrParsed.error, /question thread\(s\)/i);
 });
 
 test("#1585 (d) ordering: the fixer sees nice-to-haves BEFORE the disposition pass defers them — a clean verdict + 0 unresolved threads (fixer triaged/deferred) DOES reach ready-for-review", async () => {

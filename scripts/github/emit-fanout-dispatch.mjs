@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { validateZeroUnitCarryProof } from "./_carried-angles.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
@@ -7,11 +8,11 @@ import { buildParseError, formatCliError, isDirectCliRun } from "../_core-helper
 import { JQ_OUTPUT_USAGE, emitResult, preflightJqFilter } from "../lib/jq-output.mjs";
 import { gateScopePrefix, LIFECYCLE_GATES, normalizeGate } from "./_gate-names.mjs";
 import { HEAD_SHA_RE, VALID_SCOPE_RE } from "./record-dispatch-prompt-layout.mjs";
-import { buildCarryForwardPlanPath, buildGateContextPath, buildGateEmitPlanPath, mapGateToConfigKey } from "./write-gate-context.mjs";
+import { buildCarryForwardPlanPath, buildGateContextPath, buildGateEmitPlanPath, buildGateReviewsDir, mapGateToConfigKey, renderRequiredReadLine } from "./write-gate-context.mjs";
 import { buildLogPath } from "./write-gate-findings-log.mjs";
 import { resolveGateArtifactTmpRoot } from "../loop/_repo-root-resolver.mjs";
 import { composeAndRecordReviewerPrompt } from "./compose-reviewer-prompt.mjs";
-import { loadDevLoopConfig, resolveFanoutEffectiveConcurrency, resolveGateAngleContract } from "@dev-loops/core/config";
+import { loadDevLoopConfig, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveReviewerRole } from "@dev-loops/core/config";
 import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
 
 const USAGE = `Usage: emit-fanout-dispatch.mjs --repo <owner/name> --pr <number> --gate <draft_gate|pre_approval_gate|review> --head-sha <sha> [--pending] [--tmp-root <path>] [--help]
@@ -42,15 +43,17 @@ them honestly whether the unit is configured or auto-chunked. A singleton
 from an unsplit single-angle resolved unit records no group; a one-angle split
 tail retains its original unit's group.
 
-The per-unit angle-suffix this emits only NAMES the unit's angle(s) and instructs
-the reviewer to self-resolve each angle's persona/prompt (resolveReviewerRole) —
-it never inlines persona text extracted by the coordinator. Reviewer composition
-is resolved by the review agent + the neutral bundle (see the review agent's
-scoped angle-review mode), not re-derived here.
+Each emitted prompt is a bounded reviewer work order (reference seeding): the
+invariant prefix with its \`## Required reads\` manifest, the volatile tail, and
+a per-unit angle-suffix that carries each angle's persona and prompt, resolved
+here via resolveReviewerRole against the merged .devloops and shipped defaults.
+Bulk evidence (PR/issue bodies, diff, validation) stays in the referenced files;
+the reviewer reads them in full itself.
 
-Run write-gate-context.mjs FIRST (it writes the briefing prefix, volatile tail,
-and the fanout dispatch plan this reads). Then dispatch ONE fresh-context \`review\`
-subagent per emitted unit, seeded with that unit's promptPath bytes verbatim, and
+Run write-gate-context.mjs FIRST (it writes the briefing prefix, evidence file,
+volatile tail, and the fanout dispatch plan this reads). Then dispatch ONE
+fresh-context \`review\` subagent per emitted unit whose task is that unit's
+work order (its promptPath bytes, relayed unchanged), and
 record each unit's \`group\` on Phase 3's provenance (null for an unsplit singleton;
 the original resolved unit's name for a shared unit or any split sub-unit).
 
@@ -76,7 +79,11 @@ Optional:
                                must match the write-gate-context.mjs call).
 Output (stdout, JSON):
   { "ok": true, "gate": "...", "headSha": "...", "repo": "...", "pr": "...",
-    "pending": <true|false>, "count": <n>, "maxConcurrent": <n>, "units": [ { "scope": "...", "angles": ["..."], "group": <name|null>, "promptPath": "..." } ] }
+    "pending": <true|false>, "count": <n>, "maxConcurrent": <n>, "units": [ { "scope": "...", "angles": ["..."], "group": <name|null>, "promptPath": "...",
+      "promptBytes": <n>, "sectionBytes": { "prefix": <n>, "volatile": <n>, "suffix": <n> },
+      "workOrder": { "target", "operation", "roundIdentity", "headSha", "configSha256", "assignedAngles",
+        "angleInstructions": [ { "angle": "...", "persona": "...", "prompt": "..." } ],
+        "requiredReads", "outputRefs", "executionRules" } } ] }
   Wave the EMITTED units at most \`maxConcurrent\` at a time (1 when
   gates.fanout.sequential is set). Do NOT use the artifact's fanout.wavePlan to
   bound this step: that plan is computed over the UNSPLIT resolveFanoutGroups
@@ -100,8 +107,10 @@ Exit codes:
      first), carries no fanout dispatch plan, has a present-but-non-array
      pendingGroups under --pending, resolves zero units, a unit carries no
      angles, a dispatch unit's name sanitizes to an invalid scope, two units
-     derive a colliding scope, or a unit's invariant-prefix record is missing /
-     suffix could not be composed
+     derive a colliding scope, a unit's invariant-prefix record is missing /
+     suffix could not be composed, an angle has no resolvable prompt, or a
+     composed work order exceeds REVIEWER_WORK_ORDER_MAX_BYTES (30 KB) or
+     carries an inline "diff --git" line
   2  Usage or internal error (bad --repo/--pr/--gate/--head-sha shape, filesystem
      error, or invalid --jq filter)`.trim();
 
@@ -110,12 +119,15 @@ const parseError = buildParseError(USAGE);
 /**
  * Derive the reviewer-sentinel/prompt-layout scope for a resolved dispatch unit.
  * A singleton unit dispatches under its angle name (`<gatePrefix><angle>`); a
- * multi-angle unit dispatches under `<gatePrefix>group-<sanitized name>`. Unit
- * names from resolveFanoutGroups can carry `:`/`+`/`#` (auto-chunk units like
- * `group:a+b+c`), which VALID_SCOPE_RE forbids, so a multi-angle scope sanitizes
- * the name to alphanumeric/hyphen. The scope keys the sentinel/prompt layout
- * only; the EXACT unit name is carried separately as the provenance `group`.
- * Pure.
+ * multi-angle unit dispatches under `<gatePrefix>group-<segment>`, where
+ * `<segment>` is unitScopeSegment(unit.name) — the leading `group:` auto-chunk
+ * marker (see resolveFanoutGroups' chunk naming) is stripped BEFORE
+ * sanitizing, whatever the unit's origin: a configured group's name is not
+ * guaranteed marker-free either (e.g. a split sub-unit's base name can itself
+ * be an auto-chunk name carrying the marker), so this never special-cases
+ * "came from config" vs "auto-chunked". The scope keys the sentinel/prompt
+ * layout only; the EXACT unit name is carried separately as the provenance
+ * `group`. Pure.
  * @param {string} gate normalized gate id
  * @param {{ name: string, angles: string[] }} unit
  * @returns {string}
@@ -124,7 +136,7 @@ export function dispatchUnitScope(gate, unit) {
   const prefix = gateScopePrefix(gate);
   const angles = Array.isArray(unit?.angles) ? unit.angles : [];
   if (angles.length === 1) return `${prefix}${sanitizeScopeSegment(angles[0])}`;
-  return `${prefix}group-${sanitizeScopeSegment(unit?.name ?? "")}`;
+  return `${prefix}group-${unitScopeSegment(unit?.name)}`;
 }
 
 /**
@@ -139,6 +151,37 @@ export function sanitizeScopeSegment(value) {
     .replace(/[^a-zA-Z0-9]+/g, "-")
     .replace(/^-+/, "")
     .replace(/-+$/, "");
+}
+
+/**
+ * The shared scope-segment derivation for a unit name: strip a leading
+ * `group:` auto-chunk marker — otherwise the marker's `:` would sanitize to
+ * its own `group-` segment and double up into `group-group-<angles>` — then
+ * sanitize with sanitizeScopeSegment. The strip applies whatever the unit's
+ * origin: a configured group's name is not guaranteed marker-free either
+ * (e.g. a split sub-unit's base name can itself be an auto-chunk name), so
+ * this never special-cases config vs auto-chunk. If the stripped result
+ * sanitizes to an EMPTY string (a unit literally named `group:` or
+ * `group:!!`, whose only content is the marker and/or characters
+ * sanitizeScopeSegment strips), fall back to sanitizing the UNSTRIPPED name —
+ * this recovers a non-empty segment for a marker-only name like `group:`, but
+ * an empty or entirely-non-alphanumeric name (`""`, `undefined` coerced to
+ * `""`, or e.g. `"!!"`) still sanitizes to `""` either way, so the segment is
+ * NOT guaranteed non-empty. An empty segment collapses `<prefix>group-` to a
+ * scope VALID_SCOPE_RE rejects — the caller (dispatchUnitScope's VALID_SCOPE_RE
+ * check in main) then refuses the plan fail-closed rather than dispatching
+ * under a malformed scope. Shared by
+ * dispatchUnitScope (deriving a unit's dispatch scope) and splitSubUnitName
+ * (disambiguating a split sub-unit's name against configured group names on
+ * exactly the string the scope uses). Pure.
+ * @param {string} name a resolved unit's name (may carry the `group:` marker)
+ * @returns {string}
+ */
+export function unitScopeSegment(name) {
+  const rawName = name ?? "";
+  const stripped = rawName.startsWith("group:") ? rawName.slice("group:".length) : rawName;
+  const sanitizedStripped = sanitizeScopeSegment(stripped);
+  return sanitizedStripped.length > 0 ? sanitizedStripped : sanitizeScopeSegment(rawName);
 }
 
 // Human phrasing for each PROHIBITED_REVIEWER_OPERATIONS kind. The RENDERED
@@ -157,38 +200,71 @@ const PROHIBITED_OPERATION_INSTRUCTIONS = {
 };
 
 /**
+ * Hard ceiling (bytes) for one emitted reviewer work order: prefix + volatile
+ * tail + angle suffix. Bulk evidence is referenced through requiredReads, so a
+ * prompt over this ceiling means evidence leaked inline; the emitter refuses it.
+ */
+export const REVIEWER_WORK_ORDER_MAX_BYTES = 30 * 1024;
+
+/**
  * The deterministic angle-suffix for a dispatch unit: it NAMES the unit's
- * angle(s), instructs the reviewer to self-resolve each angle's persona/focus
- * via resolveReviewerRole and review adversarially per its scoped-mode contract,
- * and carries the bounded reviewer contract (REVIEWER_UNIT_BUDGET, assigned-
- * angles-only scope, PROHIBITED_REVIEWER_OPERATIONS, and the escape hatch for
- * BOTH ways a unit can fail its bound — budget exhaustion or incomplete angle
- * coverage, mirroring enforceReviewerUnitBound's own two REVOKE conditions in
+ * angle(s), carries each angle's resolved persona and focus prompt
+ * (`angleInstructions`, resolved by the emitter via resolveReviewerRole), any
+ * unit-scoped required read (a scoped evidence variant), and the bounded
+ * reviewer contract (REVIEWER_UNIT_BUDGET, assigned-angles-only scope,
+ * PROHIBITED_REVIEWER_OPERATIONS, and the escape hatch for BOTH ways a unit
+ * can fail its bound — budget exhaustion or incomplete angle coverage,
+ * mirroring enforceReviewerUnitBound's own two REVOKE conditions in
  * reviewer-unit-bound.mjs) so a reviewer never has to consult the primitive
  * directly to learn its own bound. The budget/prohibited numbers are read
  * from the primitive, never hard-coded, so this text can't drift from
- * reviewer-unit-bound.mjs. It never inlines persona text — reviewer
- * composition is the review agent's job. Pure: generates no new unit/scope
- * names, only references unit.angles/unit.name. The escape-hatch invocation
- * it names is described with PLACEHOLDERS the reviewer fills from values it
- * already has (self-reported coverage/consumption, and the head SHA /
- * findings directory named earlier in the briefing) — it never interpolates
- * a concrete angle name (or any other concrete value) into the shell-command
- * text, since an angle name is only required to be a non-empty string and
- * could otherwise carry shell metacharacters into a copy-pasted command.
+ * reviewer-unit-bound.mjs. Pure: generates no new unit/scope names, only
+ * references unit.angles/unit.name. The escape-hatch invocation it names is
+ * described with PLACEHOLDERS the reviewer fills from values it already has
+ * (self-reported coverage/consumption, and the head SHA / findings directory
+ * named earlier in the briefing) — it never interpolates a concrete angle
+ * name (or any other concrete value) into the shell-command text, since an
+ * angle name is only required to be a non-empty string and could otherwise
+ * carry shell metacharacters into a copy-pasted command. It also states the
+ * unit's own emitted `scope` (from dispatchUnitScope) as the exact `--scope`
+ * value for the mandatory verify-fresh-review-context.mjs sentinel named in
+ * the invariant prefix, verbatim — the reviewer never derives it from the
+ * unit name, which for an auto-chunk unit would carry `:`/`+` that
+ * VALID_SCOPE_RE rejects. The caller MUST pass a scope already validated
+ * against VALID_SCOPE_RE — main validates the emitted scope before calling
+ * this — so this function does not itself re-validate the scope shape, but
+ * it DOES fail closed if `scope` is missing entirely (not a non-empty
+ * string): omitting it would otherwise render the literal string `undefined`
+ * into the `--scope` instruction handed to the reviewer, which would then be
+ * silently wrong rather than caught.
  * @param {{ name: string, angles: string[] }} unit
+ * @param {string} scope this unit's emitted dispatchUnitScope value, already
+ *   validated against VALID_SCOPE_RE by the caller
+ * @param {{ angle: string, persona: string, prompt: string }[]} angleInstructions
+ * @param {{ kind: string, path: string, sha256?: string, bytes?: number, required: boolean }[]} [unitReads]
+ *   unit-scoped required reads, rendered worktree-absolute from the cwd
  * @returns {string}
  */
-export function buildAngleNamingSuffix(unit) {
+export function buildAngleNamingSuffix(unit, scope, angleInstructions = [], unitReads = []) {
+  if (typeof scope !== "string" || scope.length === 0) {
+    throw new TypeError(`buildAngleNamingSuffix requires a non-empty scope string, got ${JSON.stringify(scope)}`);
+  }
   const angles = Array.isArray(unit?.angles) ? unit.angles : [];
   const list = angles.join(", ");
   const single = angles.length === 1;
   const header = single
     ? `## Your review angle: ${list}`
     : `## Your review angles (dispatch unit "${unit?.name}"): ${list}`;
+  const scopeLine = `Dispatch scope: pass \`--scope ${scope}\` verbatim to the mandatory \`verify-fresh-review-context.mjs\` sentinel named in the briefing prefix above — this is your dispatch unit's exact emitted scope, never composed from the unit name.`;
+  const reads = unitReads.length > 0
+    ? `Unit required read. It REPLACES the shared \`evidence\` read of the prefix's \`## Required reads\` for this unit: read this scoped evidence IN FULL instead of the shared evidence file, and verify its sha256 before judgment. Every other prefix read still applies:\n${unitReads.map((read) => renderRequiredReadLine(read, process.cwd())).join("\n")}\n\n`
+    : "";
   const body = single
-    ? `Self-resolve this angle's persona and focus prompt via resolveReviewerRole(config, "${angles[0]}") from @dev-loops/core/config, then review adversarially per your scoped angle-review mode. Write one findings artifact for this angle at its per-angle path.`
-    : `For EACH angle above, self-resolve its persona and focus prompt via resolveReviewerRole(config, <angle>) from @dev-loops/core/config, then review adversarially per your scoped angle-review mode. Write one findings artifact PER ANGLE at its per-angle path — one artifact per angle, never one merged artifact for the unit.`;
+    ? `Review this angle adversarially per your scoped angle-review mode, using the persona and focus prompt below. Write one findings artifact for this angle at its per-angle path.`
+    : `Review EACH angle below adversarially per your scoped angle-review mode, using its persona and focus prompt. Write one findings artifact PER ANGLE at its per-angle path — one artifact per angle, never one merged artifact for the unit.`;
+  const instructions = angleInstructions
+    .map(({ angle, persona, prompt }) => `### Angle: ${angle} (persona: ${persona})\n${prompt}`)
+    .join("\n\n");
   const prohibited = PROHIBITED_REVIEWER_OPERATIONS
     .map((kind) => PROHIBITED_OPERATION_INSTRUCTIONS[kind] ?? `do not perform ${kind}`)
     .join("; ");
@@ -197,31 +273,32 @@ Budget: at most ${REVIEWER_UNIT_BUDGET.maxModelTurns} model turns and ${REVIEWER
 Scope: review ONLY the angle(s) named above — reviewing an unassigned angle is prohibited.
 Prohibited: ${prohibited}.
 If you exceed this budget (more than ${REVIEWER_UNIT_BUDGET.maxModelTurns} model turns or ${REVIEWER_UNIT_BUDGET.maxToolCalls} tool calls) OR cannot finish reviewing every assigned angle within it, do NOT report clean — emit a durable blocked result via: dev-loops-run scripts/github/emit-reviewer-blocked.mjs --run <reviewed head sha> --head-sha <reviewed head sha> --angles <your assigned angles, comma-separated> --completed-angles <angles you finished> --model-turns <model turns you used> --tool-calls <tool calls you used> --findings-dir <the per-angle findings directory named in the briefing prefix above>.`;
-  return `${header}\n\n${body}\n\n${contract}\n`;
+  return `${header}\n\n${scopeLine}\n\n${reads}${body}\n\n${instructions}\n\n${contract}\n`;
 }
 
 /**
  * Generate a split sub-unit's scope-distinguishing name: `${baseName}-part${n}`,
- * disambiguated against `configuredGroupNames` on their SANITIZED form — the
- * same sanitizeScopeSegment dispatchUnitScope applies when deriving a
- * multi-angle unit's scope. Comparing raw names is not enough: a
+ * disambiguated against `configuredGroupNames` on their unitScopeSegment form —
+ * the SAME helper dispatchUnitScope applies when deriving a multi-angle unit's
+ * scope (strip a leading `group:` auto-chunk marker, then sanitize), so this
+ * checks exactly the string the scope uses. Comparing raw names is not enough: a
  * separately-configured "backend_part1" group sanitizes to the SAME
  * "group-backend-part1" scope as a generated "backend-part1" sub-unit even
  * though the raw strings differ, so the collision must be caught here too —
- * while the candidate's sanitized form is itself a configured group's
- * sanitized name, append a further suffix until it is not. The dispatch
- * loop's seenScopes guard below remains the final backstop for any residual
- * collision this cannot see. Deterministic, pure.
+ * while the candidate's unitScopeSegment form is itself a configured group's
+ * unitScopeSegment form, append a further suffix until it is not. The
+ * dispatch loop's seenScopes guard below remains the final backstop for any
+ * residual collision this cannot see. Deterministic, pure.
  * @param {string} baseName configured group name being split
  * @param {number} n 1-based split index
  * @param {Set<string>} configuredGroupNames configured gates.fanout.groups names
  * @returns {string}
  */
 export function splitSubUnitName(baseName, n, configuredGroupNames) {
-  const sanitizedConfiguredNames = new Set(Array.from(configuredGroupNames, (name) => sanitizeScopeSegment(name)));
+  const configuredSegments = new Set(Array.from(configuredGroupNames, (name) => unitScopeSegment(name)));
   let candidate = `${baseName}-part${n}`;
   let bump = 0;
-  while (sanitizedConfiguredNames.has(sanitizeScopeSegment(candidate))) {
+  while (configuredSegments.has(unitScopeSegment(candidate))) {
     bump += 1;
     candidate = `${baseName}-part${n}-x${bump}`;
   }
@@ -382,6 +459,23 @@ export async function listPriorFindingsLogHeads({ repo, pr, gate, headSha, tmpRo
     if (identityOk) heads.add(sha);
   }
   return heads;
+}
+
+/**
+ * The unit-scoped required read: when every angle of the unit declares the
+ * same non-"full" scope and the context builder recorded that scope's
+ * `scoped-evidence` entry in `artifact.requiredReads`, the unit reads that
+ * variant in full INSTEAD of the shared evidence. The entry is copied (with
+ * `required: true`), never re-hashed, so the sentinel verifies the same
+ * sha256 the builder recorded. A unit with mixed or full scopes gets none.
+ * @returns {{ kind: string, scope: string, path: string, sha256: string, bytes: number, required: true }[]}
+ */
+function resolveUnitScopedReads(artifact, angles) {
+  const scopes = new Set(angles.map((angle) => artifact?.angleScopes?.[angle] ?? "full"));
+  const [scope] = scopes;
+  if (scopes.size !== 1 || scope === "full" || !Array.isArray(artifact?.requiredReads)) return [];
+  const entry = artifact.requiredReads.find((read) => read?.kind === "scoped-evidence" && read.scope === scope);
+  return entry ? [{ ...entry, required: true }] : [];
 }
 
 function resolveFlagValue(argv, flag) {
@@ -600,9 +694,10 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // is passed through only for split sub-unit name disambiguation. Load the same
   // config write-gate-context resolved against (this step runs in that worktree).
   let configuredGroupNames;
+  let config;
   let maxConcurrent;
   try {
-    const { config } = await loadDevLoopConfig({ repoRoot: process.cwd() });
+    ({ config } = await loadDevLoopConfig({ repoRoot: process.cwd() }));
     if (carryProof !== undefined) {
       const alwaysRerun = resolveGateAngleContract(config, mapGateToConfigKey(gate)).mandatoryAngles;
       if (carryProof.some(({ angle }) => angleReviewSurface(angle, { alwaysRerun }).kind !== "kinds")) {
@@ -624,6 +719,13 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
   // well-formed by construction.
   const dispatchUnits = expandDispatchUnits(units, configuredGroupNames);
 
+  // Round-level work-order identity shared by every unit: the required reads
+  // the context builder bound into the prefix, the merged-config hash, and the
+  // absolute per-angle findings directory.
+  const sharedReads = Array.isArray(artifact.requiredReads) ? artifact.requiredReads.filter((read) => read?.kind !== "scoped-evidence") : [];
+  const configSha256 = createHash("sha256").update(JSON.stringify(config ?? {})).digest("hex");
+  const findingsDir = path.resolve(buildGateReviewsDir({ repo, pr, gate, headSha, tmpRoot }));
+  let prefixSha256 = null;
   const emitted = [];
   const seenScopes = new Set();
   for (const unit of dispatchUnits) {
@@ -639,18 +741,32 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
       return finish({ ok: false, error: `dispatch unit ${JSON.stringify(unit?.name)} derives scope ${JSON.stringify(scope)}, which collides with an earlier unit's scope — distinct units must dispatch under distinct scopes` }, false);
     }
     seenScopes.add(scope);
+    const angleInstructions = [];
+    for (const angle of angles) {
+      const role = resolveReviewerRole(config, angle);
+      if (typeof role.prompt !== "string" || role.prompt.trim().length === 0) {
+        return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — angle ${JSON.stringify(angle)} (unit ${JSON.stringify(unit.name)}) has no resolvable prompt in the merged .devloops and shipped defaults; give it a prompt or disable it` }, false);
+      }
+      angleInstructions.push({ angle, persona: role.persona, prompt: role.prompt });
+    }
+    const unitReads = resolveUnitScopedReads(artifact, angles);
     const suffixPath = path.join(path.dirname(contextPath), `${gate}-${headSha}.angle-suffix-${scope}.txt`);
     try {
       await mkdir(path.dirname(suffixPath), { recursive: true });
-      await writeFile(suffixPath, buildAngleNamingSuffix(unit), "utf8");
+      await writeFile(suffixPath, buildAngleNamingSuffix(unit, scope, angleInstructions, unitReads), "utf8");
     } catch (err) {
       process.stderr.write(`${formatCliError(err)}\n`);
       return 2;
     }
 
     let result;
+    let promptText;
     try {
       result = await composeAndRecordReviewerPrompt({ repo, pr, gate, headSha, scope, angleSuffixFile: suffixPath, tmpRoot });
+      if (result.composed && result.recorded) {
+        promptText = await readFile(result.promptPath, "utf8");
+        prefixSha256 ??= createHash("sha256").update(await readFile(result.prefixPath)).digest("hex");
+      }
     } catch (err) {
       process.stderr.write(`${formatCliError(err)}\n`);
       return 2;
@@ -658,7 +774,31 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     if (!result.composed || !result.recorded) {
       return finish({ ok: false, error: `failed to compose reviewer prompt for unit ${JSON.stringify(unit?.name)} (scope ${scope}): ${result.reason}` }, false);
     }
-    emitted.push({ scope, angles, group: unit.group, promptPath: result.promptPath });
+    // Reference seeding: bulk evidence reaches the reviewer through
+    // requiredReads, so an oversized prompt or an inline diff line means
+    // evidence leaked into the work order. Refuse rather than relay it.
+    const promptBytes = Buffer.byteLength(promptText);
+    if (promptBytes > REVIEWER_WORK_ORDER_MAX_BYTES) {
+      return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — the work order for unit ${JSON.stringify(unit.name)} (scope ${scope}, angles ${angles.join(", ")}) is ${promptBytes} bytes (prefix ${result.sectionBytes.prefix}, volatile ${result.sectionBytes.volatile}, suffix ${result.sectionBytes.suffix}), over the REVIEWER_WORK_ORDER_MAX_BYTES ceiling of ${REVIEWER_WORK_ORDER_MAX_BYTES}; shrink the oversized section: shorten the configured angle prompts or split the unit, and reference bulk evidence through requiredReads instead of inlining it` }, false);
+    }
+    if (/^diff --git /m.test(promptText)) {
+      return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — the work order for unit ${JSON.stringify(unit.name)} (scope ${scope}) carries inline diff text (a "diff --git" line); reference the diff through requiredReads instead` }, false);
+    }
+    emitted.push({
+      scope, angles, group: unit.group, promptPath: result.promptPath, promptBytes, sectionBytes: result.sectionBytes,
+      workOrder: {
+        target: { repo, pr },
+        operation: "gate",
+        roundIdentity: { gate, headSha, prefixSha256 },
+        headSha,
+        configSha256,
+        assignedAngles: angles,
+        angleInstructions,
+        requiredReads: unitReads.length > 0 ? [...sharedReads.filter((read) => read.kind !== "evidence"), ...unitReads] : sharedReads,
+        outputRefs: angles.map((angle) => path.join(findingsDir, `${sanitizeScopeSegment(angle) || "angle"}.json`)),
+        executionRules: { budget: REVIEWER_UNIT_BUDGET, prohibited: PROHIBITED_REVIEWER_OPERATIONS },
+      },
+    });
   }
 
   // GATE-EXEC-FANOUT-DISPATCH-EMIT: success-only persist of the emitted round
