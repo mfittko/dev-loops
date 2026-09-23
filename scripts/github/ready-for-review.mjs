@@ -98,11 +98,23 @@ export function parseReadyForReviewCliArgs(argv) {
 // (the refusal text is asserted per blocking reason).
 export function describeUnresolvedGateThreadReasons(breakdown, fallbackCount) {
   const question = breakdown?.question ?? 0;
+  const nit = breakdown?.nit ?? 0;
   const other = breakdown?.other ?? 0;
   const reasons = [];
   if (question > 0) {
     reasons.push(
       `${question} question thread(s): if unanswered, post a resolving answer reply, then rerun close-gate-findings — it reject-closes an answered question the judge rejected (citing the judge's rejection rationale); an answered question the judge disposed act (or left undisposed) is resolved by the fixer's own answer-and-resolve path; an answered question the judge deferred, or whose judge disposition is ambiguous or unrecorded, needs an operator decision`,
+    );
+  }
+  if (nit > 0) {
+    // A nit is never a fixer target (unlike high/medium/low below): the
+    // disposition pass resolves it with an in-thread rationale
+    // unconditionally, at round 1, with no eligibility wait and no fixer
+    // triage cycle (gate-review-sub-loop-contract.md; NON_DEFECT_SEVERITIES,
+    // gate-fanin.mjs) — naming fixer fix-close here would send operators to
+    // a remedy that cannot clear this count.
+    reasons.push(
+      `${nit} open nit thread(s): rerun close-gate-findings — the disposition pass resolves a nit unconditionally with an in-thread rationale, no fixer triage or eligibility wait required`,
     );
   }
   if (other > 0) {
@@ -113,7 +125,7 @@ export function describeUnresolvedGateThreadReasons(breakdown, fallbackCount) {
     // human remedy for that case is more honest than implying fix-close or
     // defer-close always applies.
     reasons.push(
-      `${other} open defect thread(s) (high/medium/low/nit): resolve via fixer fix-close, or the disposition pass's defer-close (close-gate-findings) once it is eligible (medium past its fix window, low/nit at gate close) — a judge-rejected high or in-window medium is cleared by neither and needs an operator decision`,
+      `${other} open defect thread(s) (high/medium/low): resolve via fixer fix-close, or the disposition pass's defer-close (close-gate-findings) once it is eligible (medium past its fix window, low at gate close) — a judge-rejected high or in-window medium is cleared by neither and needs an operator decision`,
     );
   }
   if (reasons.length === 0) {

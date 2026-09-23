@@ -592,6 +592,44 @@ test("#2381: the refusal text for an open defect (non-question) thread names the
   }
 });
 
+function nitThreadNode({ commentId = 9003, fp = "7".repeat(16) } = {}) {
+  const marker = buildFindingMarker({ fp, severity: "nit", angle: "style", round: 1 });
+  return {
+    id: "THREAD_NIT",
+    isResolved: false,
+    isOutdated: false,
+    path: "src/naming.mjs",
+    line: 4,
+    comments: { nodes: [{ id: `gid-${commentId}`, databaseId: commentId, body: `${marker}\n**nit** (\`style\`): trailing whitespace`, author: { login: "pi-local-run", __typename: "User" } }] },
+  };
+}
+
+// Copilot review (PR 2402): a nit is never a fixer target — the refusal
+// text must name close-gate-findings' unconditional resolve-with-rationale
+// remedy, never the fixer fix-close/defer-close text (that only applies to
+// high/medium/low and cannot clear a nit).
+test("#2381: the refusal text for an open nit thread names the close-gate-findings unconditional-resolve remedy, distinct from the defect and question remedies", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-ready-2381-nit-reason-"));
+  try {
+    const { env } = await writeGhStub(tempDir, [
+      { stdout: JSON.stringify({ data: { repository: { pullRequest: { id: "PR_abc123", isDraft: true, headRefOid: "abc123def456", state: "OPEN", mergeStateStatus: "CLEAN" } } } }) },
+      { stdout: JSON.stringify([{ name: "test", state: "success", bucket: "pass" }]) },
+      { stdout: JSON.stringify([{ body: "Gate review: draft_gate\nReviewed head SHA: abc123def456\nVerdict: clean\nFindings summary: no issues found\nNext action: mark ready for review", id: 101, html_url: "x", created_at: "2026-06-05T00:00:00Z", updated_at: "2026-06-05T00:00:00Z" }]) },
+      { stdout: "[]" },
+      { assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login: "pi-local-run" })}\n` },
+      { assertArgs: ["api", "graphql"], assertArgContains: ["reviewThreads"], stdout: reviewThreadsResponse([nitThreadNode()]) },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "17"], { env });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /1 open nit thread\(s\): rerun close-gate-findings.*resolves a nit unconditionally/i);
+    assert.doesNotMatch(result.stderr, /open defect thread\(s\)/i);
+    assert.doesNotMatch(result.stderr, /question thread\(s\)/i);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 function questionThreadNode({ commentId = 9002, fp = "9".repeat(16) } = {}) {
   const marker = buildFindingMarker({ fp, severity: "question", angle: "scope", round: 1 });
   return {
@@ -625,12 +663,13 @@ test("#2381: the refusal text for a question thread names the answer-reply/rejec
   }
 });
 
-test("describeUnresolvedGateThreadReasons: names both remedies when both buckets are non-zero, and falls back on an all-zero breakdown", () => {
-  const both = describeUnresolvedGateThreadReasons({ question: 1, other: 2 }, 3);
-  assert.match(both, /1 question thread\(s\)/);
-  assert.match(both, /2 open defect thread\(s\)/);
-  assert.match(both, /the judge deferred, or whose judge disposition is ambiguous or unrecorded, needs an operator decision/);
-  const fallback = describeUnresolvedGateThreadReasons({ question: 0, other: 0 }, 5);
+test("describeUnresolvedGateThreadReasons: names all three remedies when all buckets are non-zero, and falls back on an all-zero breakdown", () => {
+  const all = describeUnresolvedGateThreadReasons({ question: 1, nit: 4, other: 2 }, 7);
+  assert.match(all, /1 question thread\(s\)/);
+  assert.match(all, /4 open nit thread\(s\): rerun close-gate-findings.*resolves a nit unconditionally/);
+  assert.match(all, /2 open defect thread\(s\)/);
+  assert.match(all, /the judge deferred, or whose judge disposition is ambiguous or unrecorded, needs an operator decision/);
+  const fallback = describeUnresolvedGateThreadReasons({ question: 0, nit: 0, other: 0 }, 5);
   assert.match(fallback, /5 unresolved gate-authored review thread\(s\)/);
 });
 

@@ -805,12 +805,17 @@ export function countUnresolvedGateAuthoredThreads(threads, login) {
 
 /**
  * Same predicate as countUnresolvedGateAuthoredThreads, split by severity
- * bucket ("question" vs every other gate-authored severity) so a refusal
- * surface (ready-for-review.mjs) can name a remedy specific to each reported
- * blocking reason, instead of one generic instruction that cannot clear
- * every case (a judge-rejected-but-unanswered question cannot be cleared by
- * fixer triage alone — GATE-EXEC-FINDING-THREADS, ADR 0088). `total`
- * always equals countUnresolvedGateAuthoredThreads's own result for the SAME
+ * bucket ("question", "nit", and every other (defect: high/medium/low)
+ * gate-authored severity) so a refusal surface (ready-for-review.mjs) can
+ * name a remedy specific to each reported blocking reason, instead of one
+ * generic instruction that cannot clear every case: a judge-rejected-but-
+ * unanswered question cannot be cleared by fixer triage alone
+ * (GATE-EXEC-FINDING-THREADS, ADR 0088), and a nit is never a fixer target
+ * at all — it is resolved-with-rationale unconditionally by the disposition
+ * pass (close-gate-findings.mjs), unlike a defect severity, which the fixer
+ * DOES triage (see gate-review-sub-loop-contract.md, SEVERITY_ORDER's
+ * NON_DEFECT_SEVERITIES in gate-fanin.mjs). `total` always equals
+ * countUnresolvedGateAuthoredThreads's own result for the SAME
  * threads/login — this only changes how the total is split, never the total
  * itself, so the two functions can never disagree on the count.
  */
@@ -820,6 +825,7 @@ export function countUnresolvedGateAuthoredThreadsBySeverity(threads, login) {
   }
   const loginKnown = typeof login === "string" && login.length > 0;
   let question = 0;
+  let nit = 0;
   let other = 0;
   for (const thread of threads) {
     if (thread.isResolved) continue;
@@ -827,9 +833,10 @@ export function countUnresolvedGateAuthoredThreadsBySeverity(threads, login) {
     const marker = parseFindingMarker(thread.body);
     if (!marker) continue;
     if (marker.severity === "question") question += 1;
+    else if (marker.severity === "nit") nit += 1;
     else other += 1;
   }
-  return { total: question + other, question, other };
+  return { total: question + nit + other, question, nit, other };
 }
 
 /**
@@ -928,7 +935,7 @@ export async function fetchDraftGateEvidence({ repo, pr, headSha }, gh) {
   // name a remedy specific to each reported blocking reason; it stays the
   // all-zero default on a fail-closed (-1) read, same as the count.
   let unresolvedGateThreadCount;
-  let unresolvedGateThreadBreakdown = { total: 0, question: 0, other: 0 };
+  let unresolvedGateThreadBreakdown = { total: 0, question: 0, nit: 0, other: 0 };
   try {
     const state = await fetchUnresolvedGateThreadState({ repo, pr }, gh);
     unresolvedGateThreadCount = state.count;
@@ -1211,8 +1218,16 @@ async function listLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, rep
   let entries;
   try {
     entries = await readdir(dir);
-  } catch {
-    return { dir, filenames: [] };
+  } catch (err) {
+    // An absent directory (ENOENT — the fresh-worktree/no-prior-round case)
+    // is a genuine cache miss: treat it as an empty history. Any OTHER
+    // readdir failure (EACCES, EIO, ENOTDIR, ...) means the directory's real
+    // contents are simply unknown, not empty — rethrow so callers that must
+    // fail closed on this (findJudgeDispositionForFingerprint, below) can
+    // tell the two cases apart, rather than silently surfacing "no local
+    // history" for a directory that may well hold a disagreeing verdict.
+    if (err?.code === "ENOENT") return { dir, filenames: [] };
+    throw err;
   }
   const prefix = `${gate}-`;
   // Sorted so the matches[0]/winners[0] tie-break in
@@ -1224,8 +1239,16 @@ async function listLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, rep
 }
 
 async function countLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot }) {
-  const { filenames } = await listLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot });
-  return filenames.length;
+  // The round-number fallback count must never throw: unlike the
+  // judge-disposition lookup below, an unreadable directory here just means
+  // "count as if no prior local ledgers exist" — this caller has no
+  // fail-closed obligation to preserve.
+  try {
+    const { filenames } = await listLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot });
+    return filenames.length;
+  } catch {
+    return 0;
+  }
 }
 
 // Every judge-disposition match found across every local ledger file, before
@@ -1308,10 +1331,27 @@ async function collectLocalJudgeDispositionMatches({ dir, filenames, repo, pr, g
  * resolve-angle-carry-forward.mjs — a `blocked`/other/missing verdict means
  * an unsettled round whose dispositions carry no guarantee), is skipped,
  * never thrown — a stale/foreign/hand-edited/unsettled local artifact must
- * not block or poison the lookup.
+ * not block or poison the lookup. A non-ENOENT failure reading the ledger
+ * DIRECTORY itself (permissions, I/O error, the path being a file, ...)
+ * also returns `{ ambiguous: true }`, not an empty-history cache miss: only
+ * an absent directory (ENOENT, the fresh-worktree/no-prior-round case) is
+ * genuinely "no local history".
  */
 export async function findJudgeDispositionForFingerprint({ repo, pr, gate, headSha, tmpRoot, repoRoot, fp }) {
-  const { dir, filenames } = await listLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot });
+  let dir, filenames;
+  try {
+    ({ dir, filenames } = await listLocalFindingsLogFiles({ repo, pr, gate, headSha, tmpRoot, repoRoot }));
+  } catch {
+    // A non-ENOENT readdir failure (permissions, I/O error, the path being
+    // a file, ...) means this lookup genuinely does not know whether a
+    // prior local ledger disagrees with tier 3's rendered suffix — reuse
+    // the { ambiguous: true } STOP shape below so resolveJudgeRejection
+    // (close-gate-findings.mjs) fails closed here exactly as it already
+    // does for an undecidable disagreement, instead of treating an unknown
+    // directory as an empty one and falling through to a possibly-stale
+    // tier-3 render.
+    return { ambiguous: true };
+  }
   const matches = await collectLocalJudgeDispositionMatches({ dir, filenames, repo, pr, gate, fp });
   if (matches.length === 0) return null;
   const allAgree = matches.every((m) => m.disposition === matches[0].disposition);

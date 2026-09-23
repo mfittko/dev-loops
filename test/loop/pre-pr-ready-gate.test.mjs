@@ -411,6 +411,49 @@ test("#2381: the raw `gh pr ready` path names the question-specific remedy for a
   assert.doesNotMatch(stderrParsed.error, /open defect thread\(s\)/i);
 });
 
+// A nit finding thread authored by the gate's own login, unresolved.
+function nitThreadNode({ fp = "7".repeat(16), commentId = 9003, id = "THREAD_NIT" } = {}) {
+  return {
+    id,
+    isResolved: false,
+    isOutdated: false,
+    path: "src/naming.mjs",
+    line: 4,
+    comments: { nodes: [{ id: `gid-${commentId}`, databaseId: commentId, body: `${buildFindingMarker({ fp, severity: "nit", angle: "style", round: 1 })}\n**nit** (\`style\`): trailing whitespace`, author: { login: "pi-local-run", __typename: "User" } }] },
+  };
+}
+
+// Copilot review (PR 2402): a nit is never a fixer target — the raw
+// `gh pr ready` path must name close-gate-findings' unconditional
+// resolve-with-rationale remedy, never the fixer fix-close/defer-close text
+// that only applies to high/medium/low (a nit can never be cleared by it).
+test("#2381: the raw `gh pr ready` path names the nit-specific close-gate-findings remedy for an unresolved nit thread, distinct from the defect and question remedies", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-2381-nit-repro-"));
+  onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));
+
+  const { env } = await writeGhStub(tmpDir, [
+    { stdout: JSON.stringify(buildPrStateResponse({ isDraft: true })) },
+    { stdout: JSON.stringify([makeDraftGateComment(HEAD_SHA_SHORT)]) },
+    { stdout: "[]" }, // listPrReviews (fail-open)
+    { assertArgs: ["api", "user"], stdout: `${JSON.stringify({ login: "pi-local-run" })}\n` },
+    {
+      assertArgs: ["api", "graphql"],
+      assertArgContains: ["reviewThreads"],
+      stdout: reviewThreadsResponse([nitThreadNode()]),
+    },
+  ]);
+
+  const result = await runNode(["--repo", "owner/repo", "--pr", "42"], { cwd: tmpDir, env });
+
+  assert.equal(result.code, 1);
+  const stderrParsed = JSON.parse(result.stderr);
+  assert.equal(stderrParsed.ok, false);
+  assert.equal(stderrParsed.unresolvedGateThreadCount, 1);
+  assert.match(stderrParsed.error, /1 open nit thread\(s\): rerun close-gate-findings.*resolves a nit unconditionally/i);
+  assert.doesNotMatch(stderrParsed.error, /open defect thread\(s\)/i);
+  assert.doesNotMatch(stderrParsed.error, /question thread\(s\)/i);
+});
+
 test("#1585 (d) ordering: the fixer sees nice-to-haves BEFORE the disposition pass defers them — a clean verdict + 0 unresolved threads (fixer triaged/deferred) DOES reach ready-for-review", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pre-pr-1585-clean-"));
   onTestFinished(() => rm(tmpDir, { recursive: true, force: true }));

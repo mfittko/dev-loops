@@ -31,6 +31,7 @@ import {
   renderFoldedFindingsBlock,
   renderInlineCommentBody,
   renderNonLocatableBlock,
+  resolveGateRound,
   updateGateReview,
 } from "../../scripts/github/_gate-finding-surface.mjs";
 import { renderGateReviewCommentBody } from "../../scripts/github/upsert-checkpoint-verdict.mjs";
@@ -951,15 +952,28 @@ test("#1585: an empty-string login falls back to the marker-only fail-closed pro
 });
 
 // #2381: countUnresolvedGateAuthoredThreadsBySeverity — same predicate,
-// split into a "question" and an "other" bucket for ready-for-review.mjs's
-// per-reason refusal text.
+// split into "question", "nit", and "other" (high/medium/low) buckets for
+// ready-for-review.mjs's per-reason refusal text.
 test("#2381: countUnresolvedGateAuthoredThreadsBySeverity splits question from every other severity, and the total always matches countUnresolvedGateAuthoredThreads", () => {
   const question = thread({ body: `${buildFindingMarker({ fp: "e".repeat(16), severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): why?` });
   const high = thread({ body: `${buildFindingMarker({ fp: "f".repeat(16), severity: "must-fix", angle: "sec", round: 1 })}\n**must-fix** (\`sec\`): x` });
   const resolvedQuestion = thread({ body: `${buildFindingMarker({ fp: "1".repeat(16), severity: "question", angle: "scope", round: 1 })}\n**question** (\`scope\`): resolved already`, isResolved: true });
   const threads = [question, high, resolvedQuestion];
   const breakdown = countUnresolvedGateAuthoredThreadsBySeverity(threads, GATE_LOGIN);
-  assert.deepEqual(breakdown, { total: 2, question: 1, other: 1 });
+  assert.deepEqual(breakdown, { total: 2, question: 1, nit: 0, other: 1 });
+  assert.equal(breakdown.total, countUnresolvedGateAuthoredThreads(threads, GATE_LOGIN));
+});
+
+// Copilot review (PR 2402): a nit must split out of "other" into its OWN
+// bucket — a nit is never a fixer target (NON_DEFECT_SEVERITIES,
+// gate-fanin.mjs), unlike high/medium/low, so lumping it into "other" told
+// operators to use a remedy (fixer fix-close) that cannot clear it.
+test("#2381: countUnresolvedGateAuthoredThreadsBySeverity splits nit into its own bucket, separate from question and other defect severities", () => {
+  const nit = thread({ body: `${buildFindingMarker({ fp: "9".repeat(16), severity: "nit", angle: "style", round: 1 })}\n**nit** (\`style\`): x` });
+  const low = thread({ body: `${buildFindingMarker({ fp: "8".repeat(16), severity: "nice-to-have", angle: "naming", round: 1 })}\n**nice-to-have** (\`naming\`): y` });
+  const threads = [nit, low];
+  const breakdown = countUnresolvedGateAuthoredThreadsBySeverity(threads, GATE_LOGIN);
+  assert.deepEqual(breakdown, { total: 2, question: 0, nit: 1, other: 1 });
   assert.equal(breakdown.total, countUnresolvedGateAuthoredThreads(threads, GATE_LOGIN));
 });
 
@@ -1124,6 +1138,56 @@ test("#2381: findJudgeDispositionForFingerprint cites a deterministic (sorted-fi
       assert.deepEqual(result, { disposition: "reject", rationale: "from headA" });
     },
   );
+});
+
+// Copilot review (PR 2402): a non-ENOENT readdir failure on the ledger
+// DIRECTORY (permissions, I/O error, the path being a file, ...) must fail
+// closed for the judge-disposition lookup — treating it as an empty history
+// would let a reject-close fall through to tier 3's possibly-stale rendered
+// suffix without knowing whether an unreadable prior ledger disagreed. Only
+// an ABSENT directory (ENOENT, the fresh-worktree/no-prior-round case) is a
+// genuine cache miss.
+async function withUnreadableLedgerDir(fn) {
+  const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "gate-finding-surface-unreadable-"));
+  try {
+    const parentDir = path.join(tmpRoot, "gate-findings", JDF_REPO.replace("/", "-"));
+    await mkdir(parentDir, { recursive: true });
+    // A FILE where the ledger directory should be: readdir() on it throws
+    // ENOTDIR, a non-ENOENT failure distinct from "directory absent" and
+    // reproducible cross-platform (no chmod/permission dependence).
+    await writeFile(path.join(parentDir, `pr-${JDF_PR}`), "not a directory", "utf8");
+    return await fn(tmpRoot);
+  } finally {
+    await rm(tmpRoot, { recursive: true, force: true });
+  }
+}
+
+test("#2381: findJudgeDispositionForFingerprint fails closed ({ ambiguous: true }) on a non-ENOENT ledger-directory read failure (ENOTDIR)", async () => {
+  await withUnreadableLedgerDir(async (tmpRoot) => {
+    const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
+    assert.deepEqual(result, { ambiguous: true });
+  });
+});
+
+test("#2381: findJudgeDispositionForFingerprint still treats an ABSENT ledger directory (ENOENT) as a cache miss (null)", async () => {
+  const tmpRoot = await mkdtemp(path.join(os.tmpdir(), "gate-finding-surface-absent-"));
+  try {
+    const result = await findJudgeDispositionForFingerprint({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", tmpRoot, repoRoot: tmpRoot, fp: JDF_FP });
+    assert.equal(result, null);
+  } finally {
+    await rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+// The round-number fallback count (resolveGateRound → countLocalFindingsLogFiles)
+// shares listLocalFindingsLogFiles with the judge-disposition lookup above,
+// but has no fail-closed obligation: it must keep working (not throw) on the
+// exact same non-ENOENT failure that the judge lookup fails closed on.
+test("#2381: resolveGateRound does not throw on a non-ENOENT ledger-directory read failure (ENOTDIR)", async () => {
+  await withUnreadableLedgerDir(async (tmpRoot) => {
+    const round = await resolveGateRound({ repo: JDF_REPO, pr: JDF_PR, gate: JDF_GATE, headSha: "headB", reviews: [], issueComments: [], tmpRoot, repoRoot: tmpRoot });
+    assert.equal(round, 1);
+  });
 });
 
 // ---------------------------------------------------------------------------
