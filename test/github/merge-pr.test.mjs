@@ -25,6 +25,11 @@ function makeRuntime({
   // review converges via copilot_gate_disabled.
   maxCopilotRounds = 0,
   compareFiles = null,
+  compare = {},
+  configExtra = {},
+  prFiles = [],
+  prFilesCode = 0,
+  requestedReviewers = { users: [], teams: [] },
 } = {}) {
   const calls = { ghJson: [], runChild: [] };
   const view = {
@@ -42,6 +47,10 @@ function makeRuntime({
       env: { GH_TOKEN: "t" },
       ghJson: async (args) => {
         calls.ghJson.push(args);
+        if (args.join(" ").includes("/requested_reviewers")) {
+          if (requestedReviewers instanceof Error) throw requestedReviewers;
+          return requestedReviewers;
+        }
         if (args.includes("pull") || (args.join(" ").includes("/pulls/"))) return reviews;
         if (args.join(" ").includes("/issues/")) return comments;
         if (args.includes("mergeCommit,state")) return { mergeCommit: { oid: MERGE_COMMIT }, state: postMergeState };
@@ -52,12 +61,16 @@ function makeRuntime({
       runChild: async (cmd, args, env) => {
         calls.runChild.push({ cmd, args, env });
         if (String(args[1]).includes("/compare/")) {
-          return { stdout: JSON.stringify({ status: "ahead", files: (compareFiles ?? []).map((filename) => ({ filename, status: "modified" })) }), stderr: "", code: 0 };
+          if (compare.code) return { stdout: "", stderr: "compare failed", code: compare.code };
+          return { stdout: JSON.stringify({ status: compare.status ?? "ahead", files: (compareFiles ?? []).map((filename) => ({ filename, status: "modified" })) }), stderr: "", code: 0 };
+        }
+        if (args[0] === "pr" && args[1] === "view" && args.includes("files")) {
+          return prFilesCode ? { stdout: "", stderr: "files read failed", code: prFilesCode } : { stdout: prFiles.join("\n"), stderr: "", code: 0 };
         }
         return { stdout: "", stderr: "", code: 0 };
       },
       detectEvidence: async () => ({ ...evidence, currentHeadSha: evidenceHead }),
-      loadConfig: async () => ({ config: { autonomy: { humanMergeOnly }, refinement: { maxCopilotRounds } }, errors: [] }),
+      loadConfig: async () => ({ config: { autonomy: { humanMergeOnly }, refinement: { maxCopilotRounds }, ...configExtra }, errors: [] }),
       cwd: process.cwd(),
     },
   };
@@ -176,6 +189,107 @@ test("no current-head Copilot review and no sanctioned disposition refuses via c
     assert.equal(threw.mergePrFailure.copilotDisposition, null, label);
     assert.ok(!calls.runChild.some((c) => c.args[0] === "pr" && c.args[1] === "merge"), `${label}: no merge`);
   }
+});
+
+async function expectCopilotRefusal(label, overrides, options = {}) {
+  const { runtime, calls } = makeRuntime(overrides);
+  let threw = null;
+  try { await mergePr(baseOptions(options), runtime); } catch (e) { threw = e; }
+  assert.ok(threw, `${label}: must refuse`);
+  assert.deepEqual(threw.mergePrFailure.failures?.map((f) => f.precondition), ["copilot_convergence"], label);
+  assert.equal(threw.mergePrFailure.copilotDisposition, null, label);
+  assert.ok(!calls.runChild.some((c) => c.args[0] === "pr" && c.args[1] === "merge"), `${label}: no merge`);
+}
+
+test("an internal-only PR with the Copilot gate enabled merges via copilot_gate_disabled", async () => {
+  const { runtime } = makeRuntime({ maxCopilotRounds: 3, prFiles: ["scripts/loop/x.mjs", "docs/guide.md", "test/x.test.mjs"] });
+  const result = await mergePr(baseOptions(), runtime);
+  assert.equal(result.copilotConvergenceState, "no_current_head_review");
+  assert.equal(result.copilotDisposition, "copilot_gate_disabled");
+});
+
+test("an internal-only detection failure or a consumer-facing file fails closed", async () => {
+  await expectCopilotRefusal("detection failure", { maxCopilotRounds: 3, prFiles: ["scripts/x.mjs"], prFilesCode: 1 });
+  await expectCopilotRefusal("consumer-facing file", { maxCopilotRounds: 3, prFiles: ["scripts/x.mjs", "packages/core/src/x.mjs"] });
+});
+
+test("parse: --lightweight is a boolean flag that honors =false", () => {
+  const argv = ["--repo", "o/r", "--pr", "5", "--human-approved-by", "mfittko"];
+  assert.equal(parseMergePrCliArgs(argv).lightweight, false);
+  assert.equal(parseMergePrCliArgs([...argv, "--lightweight"]).lightweight, true);
+  assert.equal(parseMergePrCliArgs([...argv, "--lightweight=false"]).lightweight, false);
+});
+
+test("--lightweight composes the round cap: a composed cap of 0 disables the Copilot gate", async () => {
+  const overrides = { maxCopilotRounds: 3, configExtra: { localImplementation: { lightMode: { maxCopilotRounds: 0 } } } };
+  const { runtime } = makeRuntime(overrides);
+  const result = await mergePr(baseOptions({ lightweight: true }), runtime);
+  assert.equal(result.copilotDisposition, "copilot_gate_disabled");
+  await expectCopilotRefusal("full-PR cap is not composed", overrides);
+});
+
+test("--lightweight composes the round cap: the composed cap drives the round-cap fallback", async () => {
+  const overrides = { maxCopilotRounds: 3, reviews: [copilotAt(OLD_HEAD, "### 🟡 Changes recommended", "2026-01-01T00:00:00Z")] };
+  const { runtime } = makeRuntime(overrides);
+  const result = await mergePr(baseOptions({ lightweight: true }), runtime);
+  assert.equal(result.copilotDisposition, "round_cap_clean_fallback");
+  await expectCopilotRefusal("full-PR cap not reached", overrides);
+});
+
+const MID_HEAD = "1".repeat(40);
+const CONVERGED_AT_CAP = [copilotAt(MID_HEAD, "### 🟡 Changes recommended", "2026-01-01T00:00:00Z"), copilotAt(OLD_HEAD, "### 🟢 Approval recommended", "2026-01-02T00:00:00Z")];
+
+test("at the round cap a significant change after a converged review opens a new cycle and refuses", async () => {
+  await expectCopilotRefusal("converged then code push", { maxCopilotRounds: 2, reviews: CONVERGED_AT_CAP, compareFiles: ["src/a.mjs", "src/b.mjs"] });
+});
+
+test("at the round cap a compare failure after a converged review fails closed", async () => {
+  await expectCopilotRefusal("compare failure", { maxCopilotRounds: 2, reviews: CONVERGED_AT_CAP, compare: { code: 1 } });
+});
+
+test("at the round cap a trivial change after a converged review keeps round_cap_clean_fallback", async () => {
+  const { runtime } = makeRuntime({ maxCopilotRounds: 2, reviews: CONVERGED_AT_CAP, compareFiles: ["docs/guide.md"] });
+  const result = await mergePr(baseOptions(), runtime);
+  assert.equal(result.copilotDisposition, "round_cap_clean_fallback");
+});
+
+test("at the round cap a fix pushed after a 🟡 review keeps round_cap_clean_fallback without a compare", async () => {
+  const { runtime, calls } = makeRuntime({
+    maxCopilotRounds: 2,
+    compareFiles: ["src/a.mjs", "src/b.mjs"],
+    reviews: [copilotAt(MID_HEAD, "### 🟢 Approval recommended", "2026-01-01T00:00:00Z"), copilotAt(OLD_HEAD, "### 🟡 Changes recommended", "2026-01-02T00:00:00Z")],
+  });
+  const result = await mergePr(baseOptions(), runtime);
+  assert.equal(result.copilotDisposition, "round_cap_clean_fallback");
+  assert.ok(!calls.runChild.some((c) => String(c.args[1]).includes("/compare/")));
+});
+
+test("docs_only_suppression refuses while a Copilot review is outstanding on the current head", async () => {
+  const docsOnly = { maxCopilotRounds: 3, compareFiles: ["docs/guide.md"] };
+  const clean = copilotAt(OLD_HEAD, "### 🟢 Approval recommended", "2026-01-01T00:00:00Z");
+  const pending = { user: { login: "copilot-pull-request-reviewer[bot]" }, state: "PENDING", commit_id: HEAD, body: "", submitted_at: null };
+  await expectCopilotRefusal("pending current-head review", { ...docsOnly, reviews: [clean, pending] });
+  await expectCopilotRefusal("Copilot requested", { ...docsOnly, reviews: [clean], requestedReviewers: { users: [{ login: "Copilot" }], teams: [] } });
+  await expectCopilotRefusal("requested-reviewers read failure", { ...docsOnly, reviews: [clean], requestedReviewers: new Error("gh failed") });
+});
+
+test("docs_only_suppression refuses on an unproven or findings-bearing baseline", async () => {
+  const clean = [copilotAt(OLD_HEAD, "### 🟢 Approval recommended", "2026-01-01T00:00:00Z")];
+  await expectCopilotRefusal("compare non-zero exit", { maxCopilotRounds: 3, reviews: clean, compareFiles: ["docs/guide.md"], compare: { code: 1 } });
+  await expectCopilotRefusal("compare not ahead", { maxCopilotRounds: 3, reviews: clean, compareFiles: ["docs/guide.md"], compare: { status: "diverged" } });
+  await expectCopilotRefusal("last reviewed head had findings", {
+    maxCopilotRounds: 3,
+    compareFiles: ["docs/guide.md"],
+    reviews: [copilotAt(OLD_HEAD, "### 🟡 Changes recommended", "2026-01-01T00:00:00Z")],
+  });
+});
+
+test("a clean draft_gate on an older head resets the round count below the cap and refuses", async () => {
+  await expectCopilotRefusal("draft-gate reset", {
+    maxCopilotRounds: 2,
+    reviews: [copilotAt(OLD_HEAD, "### 🟡 Changes recommended", "2026-01-01T00:00:00Z"), copilotAt(OLD_HEAD, "### 🟡 Changes recommended", "2026-01-02T00:00:00Z")],
+    evidence: { ok: true, sizeOutcome: "pass", touchesT1: false, failures: [], draftGate: { verdict: "clean", headSha: MID_HEAD, updatedAt: "2026-01-03T00:00:00Z" } },
+  });
 });
 
 test("each missing precondition refuses with a machine-readable reason naming it", async () => {
