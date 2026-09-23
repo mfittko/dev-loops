@@ -47,8 +47,10 @@ hold: (a) it carries a resolving ANSWER REPLY — a non-empty, non-automation, n
 comment on the thread other than its own finding/marker comment (identity is never
 "author != this gate's login": a single-account setup can post the finding AND every
 reply under the same login, so the reply is recognized by what it is — not gate
-automation output, not a bot/System comment, not a bare @copilot summon — never by
-who posted it; an unanswered question carries no such comment and keeps blocking);
+automation output, not a bot/System comment, and containing no unescaped @copilot or
+/copilot* summon anywhere in its body (post the answer and any re-review summon as
+separate replies) — never by who posted it; an unanswered question carries no such
+comment and keeps blocking);
 and (b) the judge's own disposition for that finding was
 \`reject\` (resolved current-ledger-first, then a prior local findings-log
 ledger for the same PR/gate, then the \` — judge: reject\` suffix already

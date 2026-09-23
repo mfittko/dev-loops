@@ -1238,7 +1238,8 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
   means. GATE-CLOSE is a third, stricter layer (see `GATE-EXEC-THREAD-DISPOSITION` below): a
   clean verdict is NOT sufficient to close the
   gate — every gate-authored review thread (any severity) must be resolved (fix-closed by the
-  fixer, answered for a locatable question, or defer-closed by the disposition pass) first, asserted by
+  fixer, answered for a locatable question, defer-closed by the disposition pass, or reject-closed
+  by `close-gate-findings.mjs` for an answered, judge-rejected question, ADR 0088) first, asserted by
   `fetchDraftGateEvidence` /
   `ready-for-review.mjs` / `pre-pr-ready-gate.mjs` (and the `draftGateSatisfied` field fold in
   `detect-checkpoint-evidence.mjs`) as 0 unresolved gate-authored threads
@@ -1552,9 +1553,10 @@ low findings runs AFTER the fixer triages them (#1585): the fixer sees every gat
 finding first (fix-if-cheap-in-the-same-commit, else defer), then the disposition pass acts as
 the closing sweep — stamping `disposition=deferred` for threads the fixer chose to defer and
 REPORTING `unresolvedGateThreadCount` (gate-authored threads still unresolved after the defer
-pass). The actual gate-close assertion is performed by the downstream callers
-(`fetchDraftGateEvidence` / `ready-for-review.mjs` / `pre-pr-ready-gate.mjs`, and the
-`draftGateSatisfied` fold in `detect-checkpoint-evidence.mjs`) on a non-zero count — the
+and reject-close passes). The actual gate-close assertion is performed by the downstream callers
+(`fetchDraftGateEvidence` / `ready-for-review.mjs` / `pre-pr-ready-gate.mjs`, the
+`draftGateSatisfied` fold in `detect-checkpoint-evidence.mjs`, and the `draftGate.currentHeadClean`
+fold in `detect-pr-gate-coordination-state.mjs`) on a non-zero count — the
 disposition pass does not assert the gate-close decision itself; it only REPORTS
 `unresolvedGateThreadCount` (its return always uses `ok:true`). It may still throw on gh or
 resolve failures inside the defer sweep, which the conductor must treat as a failed gate-close
