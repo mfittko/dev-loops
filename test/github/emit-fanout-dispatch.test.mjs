@@ -4,14 +4,19 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, listPriorFindingsLogHeads, main, sanitizeScopeSegment, splitSubUnitName } from "../../scripts/github/emit-fanout-dispatch.mjs";
-import { buildGateEmitPlanPath, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
+import { buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, listPriorFindingsLogHeads, main, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { buildGateEmitPlanPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { loadDevLoopConfig, resolveReviewerRole } from "@dev-loops/core/config";
 import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
 import { toFindingsLogShape } from "@dev-loops/core/loop/gate-fanin";
 import { consolidateGateFanin, parseConsolidateFaninCliArgs } from "../../scripts/loop/consolidate-fanin.mjs";
 import { verifyEmitPlanProvenance, writeGateFindingsLog } from "../../scripts/github/write-gate-findings-log.mjs";
 import { PROHIBITED_REVIEWER_OPERATIONS, REVIEWER_UNIT_BUDGET, REVIEWER_UNIT_MAX_ANGLES } from "@dev-loops/core/loop/reviewer-unit-bound";
+import { VALID_SCOPE_RE } from "../../scripts/github/record-dispatch-prompt-layout.mjs";
+import { verifyDispatchPromptLayoutForHead } from "../../scripts/github/verify-dispatch-prompt-layout.mjs";
+import { CHECKPOINT_SENTINEL_PREFIX } from "../../scripts/github/verify-fresh-review-context.mjs";
+import { verifyBriefingPrefixesForHead } from "../../scripts/github/verify-briefing-prefixes.mjs";
+import { createHash } from "node:crypto";
 
 const emitCliPath = path.resolve("scripts/github/emit-fanout-dispatch.mjs");
 
@@ -354,11 +359,14 @@ test("shares a reviewer for a configured group AND an auto-chunk bundle alike; o
     assert.ok(cfg, "configured group scope present");
     assert.deepEqual(cfg.angles, ["dry", "kiss"]);
     assert.equal(cfg.group, "design-simplicity");
-    // auto-chunk bundle → ONE shared reviewer, group = the bundle's own resolved name
-    const autoChunk = bySc["pre-approval-gate-group-group-determinism-state-concurrency"];
+    // auto-chunk bundle → ONE shared reviewer, group = the bundle's own resolved
+    // name; the scope drops the auto-chunk `group:` marker before sanitizing,
+    // so it carries no doubled `group-group-` prefix (#2372).
+    const autoChunk = bySc["pre-approval-gate-group-determinism-state-concurrency"];
     assert.ok(autoChunk, "auto-chunk bundle scope present, shared not split");
     assert.deepEqual(autoChunk.angles, ["determinism", "state-concurrency"]);
     assert.equal(autoChunk.group, "group:determinism+state-concurrency");
+    assert.ok(!("pre-approval-gate-group-group-determinism-state-concurrency" in bySc), "no doubled group-group- prefix");
     // no per-angle singleton was emitted for the bundled angles
     assert.ok(!("pre-approval-gate-determinism" in bySc));
     assert.ok(!("pre-approval-gate-state-concurrency" in bySc));
@@ -366,10 +374,117 @@ test("shares a reviewer for a configured group AND an auto-chunk bundle alike; o
     assert.equal(bySc["pre-approval-gate-contradiction-lens"].group, null);
 
     for (const unit of payload.units) {
+      // #2372: every emitted scope is a valid reviewer scope, and its composed
+      // prompt states that exact scope as the --scope value to pass.
+      assert.match(unit.scope, VALID_SCOPE_RE);
       const composed = await readFile(unit.promptPath, "utf8");
       assert.ok(composed.startsWith(PREFIX_BYTES), `prefix-first for ${unit.scope}`);
       for (const angle of unit.angles) assert.match(composed, new RegExp(angle));
       assert.match(composed, /resolveReviewerRole/);
+      assert.ok(composed.includes(`--scope ${unit.scope}`), `composed prompt for ${unit.scope} must state its own --scope value verbatim`);
+    }
+  });
+});
+
+// #2372 AC row 4 (fan-in join): a reviewer sentinel written under an emitted
+// unit's own scope must pair cleanly with the dispatch-prompt-layout record
+// the emit CLI already wrote for that same scope (compose-reviewer-prompt.mjs's
+// recordDispatchPromptLayout) — a doubled `group-group-` (or any other
+// hand-derived) scope would strand the sentinel from its record and fail
+// closed at consolidation.
+test("fan-in join: sentinels written under the emitted scopes pair with the dispatch-prompt-layout records (verify-dispatch-prompt-layout + verify-briefing-prefixes both pass)", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    const tmpRoot = path.join(tmpDir, "tmp");
+
+    // The dispatch-prompt-layout records the emit CLI itself wrote already
+    // bind to these emitted scopes.
+    const layout = await verifyDispatchPromptLayoutForHead(tmpRoot, HEAD_SHA);
+    assert.equal(layout.verified, true, JSON.stringify(layout));
+
+    // A reviewer sentinel written under each emitted scope, recording the
+    // actual on-disk briefing-prefix hash, pairs cleanly with its per-gate record.
+    const prefixHash = createHash("sha256").update(PREFIX_BYTES).digest("hex");
+    for (const unit of payload.units) {
+      await writeFile(
+        path.join(tmpRoot, `${CHECKPOINT_SENTINEL_PREFIX}${unit.scope}-${HEAD_SHA}.json`),
+        JSON.stringify({ scope: unit.scope, prefixHash }),
+        "utf8",
+      );
+    }
+    const prefixVerdict = await verifyBriefingPrefixesForHead(tmpRoot, HEAD_SHA);
+    assert.equal(prefixVerdict.verified, true, JSON.stringify(prefixVerdict));
+    assert.equal(prefixVerdict.reviewerCount, payload.units.length);
+  });
+});
+
+// #2372 fan-in join, end to end: the sentinel/layout pairing above proves the
+// dispatch join; this exercises the actual CONSOLIDATION join —
+// consolidateGateFanin() consuming a real per-angle findings artifact for
+// every emitted angle, including the auto-chunk bundle's own angles (whose
+// unit scope is the normalized "...group-<angles>" form, never a per-angle
+// scope, so nothing in its scope string names "determinism" or
+// "state-concurrency" directly).
+test("fan-in join: consolidateGateFanin consumes per-angle findings artifacts for every emitted angle, including the auto-chunk bundle's angles under its normalized group scope", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    const tmpRoot = path.join(tmpDir, "tmp");
+
+    // Same fresh-context evidence a real reviewer round leaves — required for
+    // consolidateGateFanin's own briefing-prefix guard to pass.
+    const prefixHash = createHash("sha256").update(PREFIX_BYTES).digest("hex");
+    for (const unit of payload.units) {
+      await writeFile(
+        path.join(tmpRoot, `${CHECKPOINT_SENTINEL_PREFIX}${unit.scope}-${HEAD_SHA}.json`),
+        JSON.stringify({ scope: unit.scope, prefixHash }),
+        "utf8",
+      );
+    }
+    assert.equal((await verifyDispatchPromptLayoutForHead(tmpRoot, HEAD_SHA)).verified, true);
+    assert.equal((await verifyBriefingPrefixesForHead(tmpRoot, HEAD_SHA)).verified, true);
+
+    // One per-angle findings artifact per emitted angle at the canonical
+    // per-angle path (packages/core/src/loop/gate-fanin.mjs header docs) —
+    // including determinism/state-concurrency, the auto-chunk bundle's own
+    // angles, even though that unit's emitted scope is the group form
+    // "pre-approval-gate-group-determinism-state-concurrency".
+    const findingsDir = buildGateReviewsDir({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    await mkdir(findingsDir, { recursive: true });
+    const emittedAngles = payload.units.flatMap((u) => u.angles);
+    for (const angle of emittedAngles) {
+      await writeFile(
+        path.join(findingsDir, `${angle}.json`),
+        JSON.stringify({ angle, verdict: "clean", headSha: HEAD_SHA, findings: [] }),
+        "utf8",
+      );
+    }
+
+    const emitPlan = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    const fanin = await consolidateGateFanin({
+      findingsDir, repoRoot: tmpDir, tmpRoot, gate: GATE, headSha: HEAD_SHA,
+      emitPlan, expectedDispatchUnits: payload.units.length, resolvedAngles: emittedAngles,
+    });
+    assert.equal(fanin.overallVerdict, "clean", JSON.stringify(fanin));
+    assert.deepEqual([...fanin.findingsJson.map((a) => a.angle)].sort(), [...emittedAngles].sort());
+    // The auto-chunk bundle's angles specifically consolidated, despite its
+    // own unit scope carrying no per-angle name.
+    for (const angle of ["determinism", "state-concurrency"]) {
+      assert.ok(emittedAngles.includes(angle), `fixture must still emit the auto-chunk angle "${angle}"`);
+      const section = fanin.findingsJson.find((a) => a.angle === angle);
+      assert.ok(section, `consolidation must cover auto-chunk angle "${angle}"`);
+      assert.equal(section.verdict, "clean");
     }
   });
 });
@@ -1329,6 +1444,22 @@ test("expandDispatchUnits: a split sub-unit's scope never collides with a separa
   assert.equal(new Set(scopes).size, scopes.length);
 });
 
+// #2372: splitSubUnitName must disambiguate on exactly the string
+// dispatchUnitScope uses — including a candidate whose BASE NAME is itself an
+// auto-chunk `group:` bundle. A configured "a-b-c-d-part1" group and the
+// part1 candidate generated from splitting an oversized auto-chunk unit
+// "group:a+b+c+d" both derive the segment "a-b-c-d-part1" once the marker is
+// stripped, so the candidate must bump even though the raw strings (with and
+// without the "group:" marker) differ.
+test("splitSubUnitName bumps an auto-chunk split candidate colliding with a configured group's derived scope segment", () => {
+  const configured = new Set(["a-b-c-d-part1"]);
+  const name = splitSubUnitName("group:a+b+c+d", 1, configured);
+  assert.equal(name, "group:a+b+c+d-part1-x1");
+  const splitScope = dispatchUnitScope("pre_approval_gate", { name, angles: ["a", "b", "c", "d"] });
+  const configuredScope = dispatchUnitScope("pre_approval_gate", { name: "a-b-c-d-part1", angles: ["x", "y"] });
+  assert.notEqual(splitScope, configuredScope);
+});
+
 // Invalid---jq regression (Copilot review round 4, emit-fanout-dispatch.mjs): the
 // keyed plan was persisted BEFORE finish(payload, true) evaluated the --jq
 // filter, so an invalid filter (exit 2) left a keyed plan from a FAILED
@@ -1447,18 +1578,66 @@ test("dispatchUnitScope: singleton uses the angle name; multi-angle sanitizes th
   assert.equal(dispatchUnitScope("pre_approval_gate", { name: "design-simplicity", angles: ["dry", "kiss"] }), "pre-approval-gate-group-design-simplicity");
 });
 
+// #2372: an auto-chunk unit's name already starts with the literal `group:`
+// marker, so dispatchUnitScope must drop it before sanitizing — otherwise the
+// marker's `:` sanitizes into its own `group-` segment and doubles up with
+// the prefix this function itself adds.
+test("dispatchUnitScope: drops the leading group: auto-chunk marker so the scope carries no doubled group-group- prefix", () => {
+  const unit = { name: "group:a+b+c", angles: ["a", "b", "c"] };
+  assert.equal(dispatchUnitScope("draft_gate", unit), "draft-gate-group-a-b-c");
+  assert.doesNotMatch(dispatchUnitScope("draft_gate", unit), /group-group-/);
+  assert.match(dispatchUnitScope("draft_gate", unit), VALID_SCOPE_RE);
+});
+
+test("dispatchUnitScope: deterministic for the same unit; two distinct auto-chunk groups in one plan derive distinct scopes", () => {
+  const a = { name: "group:contradiction-lens+acceptance-criteria+renderer-security", angles: ["contradiction-lens", "acceptance-criteria", "renderer-security"] };
+  const b = { name: "group:another-angle+second-angle", angles: ["another-angle", "second-angle"] };
+  assert.equal(dispatchUnitScope("draft_gate", a), dispatchUnitScope("draft_gate", a));
+  assert.notEqual(dispatchUnitScope("draft_gate", a), dispatchUnitScope("draft_gate", b));
+});
+
+// #2372: a unit whose name is ONLY the `group:` marker (or the marker plus
+// characters sanitizeScopeSegment itself strips) sanitizes to an EMPTY
+// segment once the marker is stripped — unitScopeSegment must then fall back
+// to sanitizing the UNSTRIPPED name so the derived scope still satisfies
+// VALID_SCOPE_RE instead of collapsing to `<prefix>group-`.
+test("dispatchUnitScope: falls back to the unstripped name when stripping the group: marker leaves nothing to sanitize", () => {
+  const bare = dispatchUnitScope("draft_gate", { name: "group:", angles: ["a", "b"] });
+  assert.match(bare, VALID_SCOPE_RE);
+  const punctuated = dispatchUnitScope("draft_gate", { name: "group:!!", angles: ["a", "b"] });
+  assert.match(punctuated, VALID_SCOPE_RE);
+});
+
 test("sanitizeScopeSegment collapses non-alphanumeric runs to single hyphens", () => {
   assert.equal(sanitizeScopeSegment("group:a+b+c"), "group-a-b-c");
   assert.equal(sanitizeScopeSegment("--edge--"), "edge");
 });
 
 test("buildAngleNamingSuffix names angles and instructs self-resolution, never inlining persona text", () => {
-  const single = buildAngleNamingSuffix({ name: "coverage", angles: ["coverage"] });
+  const single = buildAngleNamingSuffix({ name: "coverage", angles: ["coverage"] }, "draft-gate-coverage");
   assert.match(single, /coverage/);
   assert.match(single, /resolveReviewerRole/);
-  const group = buildAngleNamingSuffix({ name: "design-simplicity", angles: ["dry", "kiss"] });
+  const group = buildAngleNamingSuffix({ name: "design-simplicity", angles: ["dry", "kiss"] }, "pre-approval-gate-group-design-simplicity");
   assert.match(group, /dry, kiss/);
   assert.match(group, /one findings artifact PER ANGLE/);
+});
+
+// #2372: the suffix states the unit's own emitted scope verbatim as the
+// --scope value, never a value derived from the unit name inside the suffix
+// text itself (an auto-chunk unit's raw name is not a valid scope).
+test("buildAngleNamingSuffix states the unit's emitted scope verbatim as the --scope value", () => {
+  const scope = "pre-approval-gate-group-determinism-state-concurrency";
+  const suffix = buildAngleNamingSuffix({ name: "group:determinism+state-concurrency", angles: ["determinism", "state-concurrency"] }, scope);
+  assert.ok(suffix.includes(`--scope ${scope}`));
+});
+
+// Copilot review on PR 2404: a caller that omits `scope` must not render the
+// literal string "undefined" into the --scope instruction — fail closed.
+test("buildAngleNamingSuffix throws when scope is missing", () => {
+  const unit = { name: "coverage", angles: ["coverage"] };
+  assert.throws(() => buildAngleNamingSuffix(unit), TypeError);
+  assert.throws(() => buildAngleNamingSuffix(unit, ""), TypeError);
+  assert.throws(() => buildAngleNamingSuffix(unit, undefined), TypeError);
 });
 
 // Issue 2155 AC row 2 (slice b): the emitted suffix also carries the bounded
@@ -1472,7 +1651,7 @@ test("buildAngleNamingSuffix names angles and instructs self-resolution, never i
 test("buildAngleNamingSuffix carries the bounded reviewer contract: budget, prohibited probes, scope, blocked escape hatch for both bound failures", () => {
   assert.equal(REVIEWER_UNIT_BUDGET.maxModelTurns, 45);
   assert.equal(REVIEWER_UNIT_BUDGET.maxToolCalls, 50);
-  const suffix = buildAngleNamingSuffix({ name: "design-simplicity", angles: ["dry", "kiss"] });
+  const suffix = buildAngleNamingSuffix({ name: "design-simplicity", angles: ["dry", "kiss"] }, "pre-approval-gate-group-design-simplicity");
   assert.match(suffix, new RegExp(String(REVIEWER_UNIT_BUDGET.maxModelTurns)));
   assert.match(suffix, new RegExp(String(REVIEWER_UNIT_BUDGET.maxToolCalls)));
   assert.equal(PROHIBITED_REVIEWER_OPERATIONS.length, 7);

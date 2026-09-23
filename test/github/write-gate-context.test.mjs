@@ -2730,9 +2730,9 @@ test("renderBriefingPrefix: under-cap — inline mode, fixed section order, all 
   assert.ok(text.includes("Changed files (1):"));
   assert.ok(text.includes("- x.mjs"));
   assert.ok(text.includes("verify-fresh-review-context.mjs"));
-  // Reviewer scope is gate-prefixed so each reviewer's sentinel self-identifies
-  // its gate; renderInput() defaults to gate: "draft_gate".
-  assert.ok(text.includes("--scope draft-gate-<your-dispatch-unit>"));
+  // The prefix points the reviewer at the exact --scope value its own
+  // dispatch unit's angle section names, never a value composed here.
+  assert.ok(text.includes("--scope <the exact --scope value your dispatch unit's angle section names>"));
 });
 
 // #2307 AC2 composer-seam test: the config-level tests (config.test.mjs) only
@@ -2795,9 +2795,15 @@ test("renderBriefingPrefix: emits the fresh-context sentinel via the dev-loops-r
   assert.ok(text.includes(`--context-path ${renderInput().contextPath}`));
 });
 
-test("renderBriefingPrefix: gate scope hyphenation covers ALL underscores, not just the first", () => {
+// #2372: the mandatory scope instruction no longer composes a gate-prefixed
+// value here (that composition, `group-<name>`, is what produced a doubled
+// `group-group-` scope for an auto-chunk unit) — it points the reviewer at
+// the exact --scope value its own dispatch unit's angle section names, which
+// is the same regardless of gate.
+test("renderBriefingPrefix: the mandatory scope instruction names the dispatch unit's own angle section, never a gate-composed group-<name> value", () => {
   const { text } = renderBriefingPrefix(renderInput({ gate: "pre_approval_gate" }));
-  assert.ok(text.includes("--scope pre-approval-gate-<your-dispatch-unit>"));
+  assert.ok(text.includes("--scope <the exact --scope value your dispatch unit's angle section names>"));
+  assert.ok(!text.includes("group-<name>"));
 });
 
 test("renderBriefingPrefix: deterministic — two renders of identical input produce byte-identical text", () => {
@@ -3716,7 +3722,7 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       `worktree: ${path.resolve(repoRoot)}`,
       "prefixMode: inline",
       "",
-      "Mandatory: before doing any angle-specific work, run `dev-loops-run scripts/github/verify-fresh-review-context.mjs --scope draft-gate-<your-dispatch-unit> --context-path tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json --prefix-file tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.briefing-prefix.txt` once — <your-dispatch-unit> is your angle name for a per-angle dispatch, or `group-<name>` for a grouped dispatch (run once for the whole group, never once per angle in it). Refuse to proceed on contamination or a missing artifact.", // secret-scan:allow fixture head SHA in briefing snapshot (not a secret)
+      "Mandatory: before doing any angle-specific work, run `dev-loops-run scripts/github/verify-fresh-review-context.mjs --scope <the exact --scope value your dispatch unit's angle section names> --context-path tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json --prefix-file tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.briefing-prefix.txt` once — run once for the whole dispatch unit, never once per angle in it. Refuse to proceed on contamination or a missing artifact.", // secret-scan:allow fixture head SHA in briefing snapshot (not a secret)
       "",
       `Shell cwd is NOT trustworthy: each command may start in the primary checkout, not this worktree. Run the mandatory sentinel command above as ONE compound command that enters this worktree first (\`cd "${path.resolve(repoRoot)}" && dev-loops-run scripts/github/verify-fresh-review-context.mjs ...\`) keeping its cwd-relative --context-path exactly as written (the locality guard depends on that form; do not absolutize it). After it passes, address the tree explicitly for everything else — every git command as \`git -C "${path.resolve(repoRoot)}" ...\` and every file read via an absolute path under ${path.resolve(repoRoot)}. A bare \`git branch\`/\`git log\`/\`git diff\` can read the WRONG tree and produce confident false findings. The sentinel's fresh output echoes the directory it ran in as \`repoRoot\`; it must equal the worktree path above.`,
       "",
