@@ -835,10 +835,17 @@ test("reconcile-draft-gate refuses a non-light-mode PR with actionable fan-out g
     // The underlying reason (the shared merge-time predicate's wording) stays intact...
     assert.match(payload.error, /requireFanoutEvidence is enabled but executionMode is "inline_single_agent"/);
     assert.match(payload.error, /inline gate verdicts are not accepted/);
-    // ...and actionable guidance names the real recovery path.
+    // ...and actionable guidance names the real recovery path — sanctioned
+    // commands only, with the repo/PR (and, for upsert-verdict, the current
+    // head SHA) interpolated in so each remedy is directly executable, not a
+    // bare command name missing its required arguments.
     assert.match(payload.error, /reconcile-draft-gate only completes for a PR under the light-mode threshold/);
-    assert.match(payload.error, /--execution-mode fanout_fanin/);
+    assert.match(payload.error, /dev-loops pr convert-to-draft --repo owner\/repo --pr 17/);
+    assert.match(payload.error, /dev-loops gate upsert-verdict --repo owner\/repo --pr 17 --gate draft_gate --head-sha abc123456789 --execution-mode fanout_fanin --findings-ledger/);
     assert.match(payload.error, /findings-log ledger/);
+    assert.match(payload.error, /dev-loops pr ready-for-review --repo owner\/repo --pr 17/);
+    assert.match(payload.error, /dev-loops pr restore-ready --repo owner\/repo --pr 17/);
+    assert.doesNotMatch(payload.error, /gh pr edit/);
     // Every staged entry (including the rollback `pr ready`) was consumed —
     // proves the rollback ran and no extra/POST call happened.
     assert.equal(await readGhCallCount(tempDir), 14);

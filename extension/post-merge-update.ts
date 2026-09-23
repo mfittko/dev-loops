@@ -18,13 +18,13 @@ import {
 } from '@dev-loops/core/loop/bash-command-classify';
 import { parseMainWorktreePath } from '@dev-loops/core/loop/worktree-guard';
 import {
-  buildMainCheckoutFastForwardCommand,
   buildWorktreeCleanupCommand,
   buildPostMergeActionsCommand,
   WORKTREE_CLEANUP_TIMEOUT_MS,
   MAIN_CHECKOUT_FF_FETCH_TIMEOUT_MS,
   MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS,
   POST_MERGE_ACTIONS_TIMEOUT_MS,
+  syncMainCheckout,
 } from '@dev-loops/core/loop/main-checkout-ff';
 
 // The bash-command classifiers now live in `@dev-loops/core/loop/bash-command-classify` so the
@@ -233,13 +233,22 @@ async function queueIfEligible(
 
 
 /**
- * Best-effort main-checkout fast-forward (#1596).
+ * Best-effort main-checkout fast-forward.
  *
  * Resolves the main (primary) checkout via `git worktree list` (first entry) from
- * `pendingRoot`, then runs `fetch origin main && merge --ff-only origin/main` there.
- * `--ff-only` refuses a diverged main without rewriting history, so a diverged
- * checkout fails the merge step and the caller treats it as warn-and-continue.
- * Never throws — every failure path emits a warning notification instead.
+ * `pendingRoot`, then runs `syncMainCheckout`'s step-wise flow there: fetch,
+ * `rev-parse --symbolic-full-name HEAD`, and `merge --ff-only origin/main` only when
+ * that ref is `refs/heads/main`. `--ff-only` refuses a diverged main without
+ * rewriting history, so a diverged checkout fails the merge step and the caller
+ * treats it as warn-and-continue. When `git worktree list` fails, is killed, or its
+ * output doesn't parse, `mainCheckout` falls back to `pendingRoot` and the sync
+ * still runs there (unchanged from before the `not_on_main` diagnostic split). A
+ * resolved checkout that is detached or on another branch emits the
+ * `main_checkout_not_on_main` diagnostic at error level; the same outcome against
+ * an UNRESOLVED (fallback) checkout stays warning-only instead, since `pendingRoot`
+ * may be a linked feature worktree rather than the true main checkout. Every other
+ * failure path (fetch, unreadable ref, etc.) stays warning-only regardless of
+ * resolution.
  */
 async function fastForwardMainCheckout(
   runCommand: (args: RunCommandArgs) => Promise<RunCommandResult>,
@@ -247,6 +256,7 @@ async function fastForwardMainCheckout(
   ctx: Pick<HarnessContext, 'hasUI' | 'ui'>,
 ): Promise<void> {
   let mainCheckout = pendingRoot;
+  let mainCheckoutResolved = false;
   try {
     const wtResult = await runCommand({
       command: 'git worktree list',
@@ -255,34 +265,58 @@ async function fastForwardMainCheckout(
     });
     if (wtResult.code === 0 && !wtResult.killed) {
       const resolved = parseMainWorktreePath(wtResult.stdout ?? '');
-      if (resolved) mainCheckout = resolved;
+      if (resolved) {
+        mainCheckout = resolved;
+        mainCheckoutResolved = true;
+      }
     }
   } catch {
     // fall back to pendingRoot
   }
 
-  notify(
-    ctx,
-    `Post-merge main-checkout fast-forward running: ${buildMainCheckoutFastForwardCommand(mainCheckout)}`,
-    'info',
-  );
+  notify(ctx, `Post-merge main-checkout fast-forward running for ${mainCheckout}`, 'info');
 
-  try {
+  const run = async (fwCommand: string): Promise<{ ok: boolean; stdout: string; reason: string }> => {
     const result = await runCommand({
-      command: buildMainCheckoutFastForwardCommand(mainCheckout),
+      command: fwCommand,
       cwd: mainCheckout,
       timeout: MAIN_CHECKOUT_FF_MERGE_TIMEOUT_MS,
     });
-    if (result.code === 0 && !result.killed) {
+    const ok = result.code === 0 && !result.killed;
+    return { ok, stdout: result.stdout ?? '', reason: ok ? '' : buildFailureSummary(result) };
+  };
+
+  try {
+    const syncResult = await syncMainCheckout(mainCheckout, run);
+    if (syncResult.status === 'fast_forwarded') {
       notify(
         ctx,
         'Post-merge main-checkout fast-forward completed: local main advanced to origin/main',
         'info',
       );
+    } else if (syncResult.status === 'not_on_main') {
+      if (mainCheckoutResolved) {
+        const message = syncResult.diagnostic.message;
+        if (ctx.hasUI) {
+          ctx.ui.notify(message, 'error');
+        } else {
+          process.stderr.write(message + '\n');
+        }
+      } else {
+        // The checkout could not be resolved via `git worktree list`, so `mainCheckout`
+        // is the fallback `pendingRoot` (possibly a linked feature worktree, not the
+        // true main checkout). Downgrade to the generic warning instead of the
+        // `main_checkout_not_on_main` diagnostic, which would be a false signal here.
+        notify(
+          ctx,
+          `Post-merge main-checkout fast-forward skipped (warning only): ${syncResult.diagnostic.ref}`,
+          'warning',
+        );
+      }
     } else {
       notify(
         ctx,
-        `Post-merge main-checkout fast-forward skipped (warning only): ${buildFailureSummary(result)}`,
+        `Post-merge main-checkout fast-forward skipped (warning only): ${syncResult.reason}`,
         'warning',
       );
     }
