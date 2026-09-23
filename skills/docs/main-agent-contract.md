@@ -70,7 +70,9 @@ because "the user said yes," not because it is running from a worktree.
 - `git worktree list`, `git status`, `git log` (read-only git). `git fetch` is also allowed (updates local refs but does not touch tracked working-tree files).
 - Issue reads, edits, and comments through the wrappers in the [Sanctioned tooling](#sanctioned-tooling) index (GitHub API, not file mutations)
 - Issue creation through `scripts/github/create-issue.mjs` (orchestrator-owned)
+- Issue close through `gh issue close` (no sanctioned wrapper exists; GitHub API, not file mutations)
 - PR reads through `scripts/github/view-pr.mjs` (read-only GitHub API)
+- PR listing through `gh pr list` (no sanctioned wrapper exists; read-only GitHub API)
 - Write to `/tmp` or other non-repo paths (e.g., issue body drafts)
 - Delegate to the `dev-loop` agent (async, with worktree cwd)
 - Report findings, ask questions, get confirmation
