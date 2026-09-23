@@ -47,22 +47,25 @@ subagent routes them to the orchestrator:
 - Board status transitions, through `scripts/projects/sync-item-status.mjs` or `scripts/projects/move-queue-item.mjs`.
 - Issue creation, through `scripts/github/create-issue.mjs`.
 
-Two known gaps outside this contract's current scope still create issues directly with raw
-`gh issue create`: the epic-decomposition step in `skills/docs/issue-intake-procedure.md` and the
-issue-creation guidance in `AGENTS.md`.
+Known gaps outside this contract's current scope still create issues directly with raw
+`gh issue create`. They include the epic-decomposition step in `skills/docs/issue-intake-procedure.md`,
+the child-issue creation step in `skills/docs/sub-issue-tree-contract.md`, and the issue-creation
+guidance in `AGENTS.md`.
 
 Every `ok: true` result of `dev-loops loop startup` carries an `operatorBriefing` field that points
 to the index and to this section.
 
 <!-- pi-only -->
 > **Absolute read-only boundary (Pi).** The main agent must never mutate files tracked by the repository.
-> All mutations flow through the `dev-loop` async subagent.
+> All tracked-file mutations flow through the `dev-loop` async subagent.
 
 ## Contract
 
 The main agent is **read-only** for every file tracked by the repository. Every
 write, edit, delete, commit, branch, push, and PR lifecycle operation must flow
-through the `dev-loop` async subagent.
+through the `dev-loop` async subagent. The exceptions are the orchestrator-owned
+operations in [Sanctioned tooling](#sanctioned-tooling): merge, board status
+transitions, and issue creation. The main agent performs them through their wrappers.
 
 This contract is a hard rule, not a default or guideline. The main agent must
 never rationalize a direct mutation — not because the work is small, not
@@ -74,6 +77,8 @@ because "the user said yes," not because it is running from a worktree.
 - `git worktree list`, `git status`, `git log` (read-only git). `git fetch` is also allowed (updates local refs but does not touch tracked working-tree files).
 - Issue reads, edits, and comments through the wrappers in the [Sanctioned tooling](#sanctioned-tooling) index (GitHub API, not file mutations)
 - Issue creation through `scripts/github/create-issue.mjs` (orchestrator-owned)
+- Merge through `scripts/github/merge-pr.mjs` (orchestrator-owned)
+- Board status transitions through `scripts/projects/sync-item-status.mjs` or `scripts/projects/move-queue-item.mjs` (orchestrator-owned)
 - Issue close through `scripts/github/edit-issue.mjs --state closed [--reason completed|not_planned]` (GitHub API, not file mutations)
 - PR reads through `scripts/github/view-pr.mjs` (read-only GitHub API)
 - PR listing through `gh pr list` (no sanctioned wrapper exists; read-only GitHub API)
@@ -86,7 +91,7 @@ because "the user said yes," not because it is running from a worktree.
 
 - `write`, `edit`, or delete any file tracked by the repo
 - `git commit`, `git push`, create branches, create worktrees
-- Run state-changing dev-loops CLI subcommands (`gate`, any state-changing `loop` subcommand, `pr` commands — those belong inside `dev-loop`).
+- Run state-changing dev-loops CLI subcommands (`gate`, any state-changing `loop` subcommand, `pr` commands — those belong inside `dev-loop`). The orchestrator-owned operations in [Sanctioned tooling](#sanctioned-tooling) are the exception.
 - Delegate implementation to any agent other than `dev-loop`
 
 ## Dev-loop agent (async) owns

@@ -47,9 +47,10 @@ subagent routes them to the orchestrator:
 - Board status transitions, through `scripts/projects/sync-item-status.mjs` or `scripts/projects/move-queue-item.mjs`.
 - Issue creation, through `scripts/github/create-issue.mjs`.
 
-Two known gaps outside this contract's current scope still create issues directly with raw
-`gh issue create`: the epic-decomposition step in `skills/docs/issue-intake-procedure.md` and the
-issue-creation guidance in `AGENTS.md`.
+Known gaps outside this contract's current scope still create issues directly with raw
+`gh issue create`. They include the epic-decomposition step in `skills/docs/issue-intake-procedure.md`,
+the child-issue creation step in `skills/docs/sub-issue-tree-contract.md`, and the issue-creation
+guidance in `AGENTS.md`.
 
 Every `ok: true` result of `dev-loops loop startup` carries an `operatorBriefing` field that points
 to the index and to this section.

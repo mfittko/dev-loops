@@ -70,6 +70,9 @@ test("main-agent contract Pi-only lines do not contradict the index", () => {
     assert.equal(allowed.includes(raw), false, `allowed list must not name forbidden ${raw}`);
   }
   assert.doesNotMatch(allowed, /gh issue (view \/ )?create/);
+  for (const needle of ["merge-pr.mjs", "sync-item-status.mjs", "create-issue.mjs"]) {
+    assert.ok(allowed.includes(needle), `allowed list must name orchestrator-owned ${needle}`);
+  }
 
   const examples = section(doc, "Boundary examples");
   for (const row of examples.split("\n").filter((l) => l.startsWith("|"))) {
