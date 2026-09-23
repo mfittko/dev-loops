@@ -18,7 +18,7 @@ import {
   COPILOT_ABSENT_REVIEW_DISPOSITION,
 } from "@dev-loops/core/loop/merge-approval";
 import { summarizeCopilotReviews, resolveDraftGateRoundResetMs } from "@dev-loops/core/github/copilot-helpers";
-import { getLastCopilotReviewHeadSha, classifyDeltaSinceLastReview } from "./request-copilot-review.mjs";
+import { getLastCopilotReviewHeadSha, classifyDeltaSinceLastReview, fetchDeltaChangedFiles, isCopilotReviewObservableViaGraphql } from "./request-copilot-review.mjs";
 import { detectPostConvergenceSignificantChange } from "../loop/_post-convergence-change.mjs";
 import { detectInternalOnly } from "../loop/detect-internal-only-pr.mjs";
 import { resolveNamedContextState, LOOP_DERIVED_CI_CHECK_NAME } from "@dev-loops/core/loop/copilot-ci-status";
@@ -241,13 +241,19 @@ async function resolveCopilotAbsentReviewDisposition({ repo, pr, currentHeadSha,
 }
 
 // The loop's round-cap new-cycle rule, reusing its shared significance helper.
-// That helper fails open on an unreadable compare; here an unavailable delta
-// counts as significant (fail closed).
+// That helper fails open on an unreadable compare; here an untrusted delta
+// counts as significant (fail closed). Trust follows the shared compare
+// contract of fetchDeltaChangedFiles (linear "ahead", no rename/copy, below the
+// files page cap), replayed over the helper's own compare result, plus a
+// present files array (that contract reads a missing one as empty).
 async function hasSignificantChangeSinceLastReview({ repo, pr, currentHeadSha, reviews }, { env, ghCommand, runChild }) {
   let compareReadable = false;
   const probe = async (cmd, args, childEnv) => {
     const result = await runChild(cmd, args, childEnv);
-    try { compareReadable = result?.code === 0 && Array.isArray(JSON.parse(result.stdout)?.files); } catch { compareReadable = false; }
+    let hasFiles = false;
+    try { hasFiles = Array.isArray(JSON.parse(result?.stdout)?.files); } catch { hasFiles = false; }
+    compareReadable = hasFiles
+      && (await fetchDeltaChangedFiles({ repo, base: "", head: currentHeadSha }, { env, ghCommand, runChild: async () => result })) !== null;
     return result;
   };
   try {
@@ -263,12 +269,26 @@ async function hasSignificantChangeSinceLastReview({ repo, pr, currentHeadSha, r
 }
 
 // A PENDING Copilot review on the current head or a live Copilot review request
-// means a review is outstanding. A read failure counts as outstanding.
+// means a review is outstanding. REST goes blind once a request turns into an
+// in-progress review, so the GraphQL reviewRequests/review-node probe is also
+// consulted. That probe is fail-soft (an error reads as "not observed"); here an
+// unobservable GraphQL state or any read failure counts as outstanding.
 async function isCopilotReviewOutstanding({ repo, pr, currentHeadSha, rawReviews }, { env, ghCommand, runChild, ghJson }) {
   if (rawReviews.some((r) => isCopilotLogin(r.login) && String(r.state).toUpperCase() === "PENDING" && r.commit_id === currentHeadSha)) return true;
   try {
     const requested = await ghJson(["api", `repos/${repo}/pulls/${pr}/requested_reviewers`], { env, ghCommand, runChild });
-    return !Array.isArray(requested?.users) || requested.users.some((u) => isCopilotLogin(u?.login));
+    if (!Array.isArray(requested?.users) || requested.users.some((u) => isCopilotLogin(u?.login))) return true;
+    let observable = false;
+    const probe = async (cmd, args, childEnv) => {
+      const result = await runChild(cmd, args, childEnv);
+      try {
+        const pull = JSON.parse(result.stdout)?.data?.repository?.pullRequest;
+        observable = result.code === 0 && Array.isArray(pull?.reviewRequests?.nodes) && Array.isArray(pull?.reviews?.nodes);
+      } catch { observable = false; }
+      return result;
+    };
+    const seen = await isCopilotReviewObservableViaGraphql({ repo, pr, headSha: currentHeadSha }, { env, ghCommand, runChild: probe });
+    return seen || !observable;
   } catch {
     return true;
   }

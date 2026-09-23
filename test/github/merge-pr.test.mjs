@@ -33,6 +33,9 @@ function makeRuntime({
   // host checkout's .devloops.
   detectorInternalOnly = true,
   requestedReviewers = { users: [], teams: [] },
+  // The GraphQL reviewRequests/review-node read: a pull-request object, an
+  // Error (runChild throws), or { code, stdout } for a raw result.
+  graphql = { reviewRequests: { nodes: [] }, reviews: { nodes: [] } },
 } = {}) {
   const calls = { ghJson: [], runChild: [] };
   const view = {
@@ -63,6 +66,11 @@ function makeRuntime({
       // passed positionally, not wrapped in an options object.
       runChild: async (cmd, args, env) => {
         calls.runChild.push({ cmd, args, env });
+        if (args[0] === "api" && args[1] === "graphql") {
+          if (graphql instanceof Error) throw graphql;
+          if ("code" in graphql) return { stderr: "", ...graphql };
+          return { stdout: JSON.stringify({ data: { repository: { pullRequest: graphql } } }), stderr: "", code: 0 };
+        }
         if (String(args[1]).includes("/compare/")) {
           if (compare.code) return { stdout: "", stderr: "compare failed", code: compare.code };
           if (compare.stdout !== undefined) return { stdout: compare.stdout, stderr: "", code: 0 };
@@ -177,6 +185,7 @@ test("no current-head Copilot review after a clean review and a docs-only delta 
   assert.equal(result.copilotConvergenceState, "no_current_head_review");
   assert.equal(result.copilotDisposition, "docs_only_suppression");
   assert.ok(calls.runChild[0].args[1].includes(`/compare/${OLD_HEAD}...${HEAD}`));
+  assert.ok(calls.runChild.some((c) => c.args[0] === "api" && c.args[1] === "graphql"), "the GraphQL outstanding-review probe ran");
 });
 
 test("no current-head Copilot review and no sanctioned disposition refuses via copilot_convergence", async () => {
@@ -287,6 +296,18 @@ test("at the round cap an empty compare delta after a converged review keeps rou
   assert.equal(result.copilotDisposition, "round_cap_clean_fallback");
 });
 
+test("at the round cap an untrusted compare (not ahead, rename/copy, page cap) fails closed", async () => {
+  const docs = (n) => Array.from({ length: n }, (_, i) => ({ filename: `docs/g${i}.md`, status: "modified" }));
+  for (const [label, payload] of [
+    ["diverged, no files", { status: "diverged", files: [] }],
+    ["renamed entry", { status: "ahead", files: [{ filename: "docs/moved.md", status: "renamed", previous_filename: "src/a.mjs" }] }],
+    ["copied entry", { status: "ahead", files: [{ filename: "docs/copy.md", status: "copied" }] }],
+    ["300-file page cap", { status: "ahead", files: docs(300) }],
+  ]) {
+    await expectCopilotRefusal(label, { maxCopilotRounds: 2, reviews: CONVERGED_AT_CAP, compare: { stdout: JSON.stringify(payload) } });
+  }
+});
+
 test("at the round cap a trivial change after a converged review keeps round_cap_clean_fallback", async () => {
   const { runtime } = makeRuntime({ maxCopilotRounds: 2, reviews: CONVERGED_AT_CAP, compareFiles: ["docs/guide.md"] });
   const result = await mergePr(baseOptions(), runtime);
@@ -312,6 +333,12 @@ test("docs_only_suppression refuses while a Copilot review is outstanding on the
   await expectCopilotRefusal("Copilot requested", { ...docsOnly, reviews: [clean], requestedReviewers: { users: [{ login: "Copilot" }], teams: [] } });
   await expectCopilotRefusal("requested-reviewers read failure", { ...docsOnly, reviews: [clean], requestedReviewers: new Error("gh failed") });
   await expectCopilotRefusal("requested-reviewers users not an array", { ...docsOnly, reviews: [clean], requestedReviewers: {} });
+  const copilotBot = { __typename: "Bot", login: "copilot-pull-request-reviewer" };
+  await expectCopilotRefusal("GraphQL review request", { ...docsOnly, reviews: [clean], graphql: { reviewRequests: { nodes: [{ requestedReviewer: copilotBot }] }, reviews: { nodes: [] } } });
+  await expectCopilotRefusal("GraphQL PENDING current-head review", { ...docsOnly, reviews: [clean], graphql: { reviewRequests: { nodes: [] }, reviews: { nodes: [{ state: "PENDING", author: { login: "copilot-pull-request-reviewer" }, commit: { oid: HEAD } }] } } });
+  await expectCopilotRefusal("GraphQL read throws", { ...docsOnly, reviews: [clean], graphql: new Error("gh graphql failed") });
+  await expectCopilotRefusal("GraphQL non-zero exit", { ...docsOnly, reviews: [clean], graphql: { code: 1, stdout: "" } });
+  await expectCopilotRefusal("GraphQL state unobservable", { ...docsOnly, reviews: [clean], graphql: { code: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: null } } }) } });
 });
 
 test("docs_only_suppression refuses on an unproven or findings-bearing baseline", async () => {
