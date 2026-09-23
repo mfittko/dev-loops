@@ -1206,32 +1206,6 @@ export async function detectPrGateCoordinationState(options, runtime = {}) {
     result.reason = "No contract-complete pre_approval_gate marker exists for the current head SHA; run pre_approval_gate before proceeding.";
     result.allowedNextActions = [PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE];
   }
-  const draftGateEvidenceMissing = !(result.draftGate?.cleanEvidenceExists);
-  const gateBoundariesExpectingDraftGate = new Set([
-    PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW,
-    PR_CHECKPOINT.FEEDBACK_RESOLUTION,
-    PR_CHECKPOINT.PRE_APPROVAL_GATE_NEEDED,
-    PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW,
-    PR_CHECKPOINT.FINAL_APPROVAL_READY,
-  ]);
-  if (draftGateEvidenceMissing && gateBoundariesExpectingDraftGate.has(result.gateBoundary)) {
-    result.gateBoundary = PR_CHECKPOINT.DRAFT_GATE_NEEDED;
-    result.nextAction = PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE;
-    result.reason = result.draftGate?.anyVisible
-      ? "Clean draft_gate evidence is required before merge (no gate exemptions, #579). A draft_gate comment exists but is not clean; convert the PR back to draft before re-running draft_gate, or clear the existing evidence before running reconcile_draft_gate."
-      : "Clean draft_gate evidence is required before merge (no gate exemptions, #579). No visible clean draft_gate comment exists for this PR; run reconcile_draft_gate before proceeding.";
-    result.allowedNextActions = [PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE];
-    result.forbiddenActions = [
-      PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
-      PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
-      PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
-      PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW,
-      PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
-      PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
-      PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
-    ];
-    result.gateEvidenceNote = null;
-  }
   // Expose effective round count in output for testability
   result.copilotReviewRoundCount = context.snapshot?.copilotReviewRoundCount ?? 0;
   // Auto-release the runner-coordination lock at gate-coordination terminal stop

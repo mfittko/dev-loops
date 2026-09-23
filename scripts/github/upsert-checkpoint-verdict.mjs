@@ -2305,9 +2305,14 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // above) ONLY when coordination explicitly allows RECONCILE_DRAFT_GATE — the
     // state machine determined this ready PR genuinely needs draft-gate
     // evidence reconciled. RUN_DRAFT_GATE is forbidden on a ready PR in many
-    // OTHER states too (merge conflicts, waiting-for-CI, unresolved feedback,
-    // blocked); converting those to draft would be wrong, so this must NOT key
-    // off `gateActionForbidden` alone.
+    // OTHER states too (merge conflicts, blocked); converting those to draft
+    // would be wrong, so this must NOT key off `gateActionForbidden` alone.
+    // Waiting-for-CI and unresolved-feedback states stay protected from the
+    // transition only while clean draft_gate evidence exists. Without clean
+    // evidence, the core allows RECONCILE_DRAFT_GATE in those states too, so
+    // the self-heal converts the PR to draft. On a PR whose CI is not green,
+    // that draft re-entry then refuses (draft_review / wait_for_ci under the
+    // draft requireCi default), and the PR is restored to ready.
     if (
       options.gate === "draft_gate"
       && !prIsDraft

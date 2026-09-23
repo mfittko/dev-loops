@@ -724,6 +724,56 @@ function applyUnsettledCopilotReviewEntryGuard(input, result) {
 }
 
 /**
+ * Boundaries at which a PR must carry clean draft_gate evidence; without it
+ * the only legal next action is reconcile_draft_gate
+ * (skills/docs/pr-lifecycle-contract.md, LIFECYCLE-FAIL-CLOSED).
+ */
+const DRAFT_GATE_EVIDENCE_GUARDED_BOUNDARIES = Object.freeze([
+  PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW,
+  PR_CHECKPOINT.FEEDBACK_RESOLUTION,
+  PR_CHECKPOINT.PRE_APPROVAL_GATE_NEEDED,
+  PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW,
+  PR_CHECKPOINT.FINAL_APPROVAL_READY,
+]);
+
+function applyDraftGateEvidenceGuard(result) {
+  if (!result || typeof result !== "object") {
+    return result;
+  }
+  if (result.draftGate?.cleanEvidenceExists === true) {
+    return result;
+  }
+  if (!DRAFT_GATE_EVIDENCE_GUARDED_BOUNDARIES.includes(result.gateBoundary)) {
+    return result;
+  }
+
+  const allowedNextActions = [];
+  const forbiddenActions = [];
+  pushUnique(allowedNextActions, [PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE]);
+  pushUnique(forbiddenActions, [
+    PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+    PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
+    PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
+    PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW,
+    PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
+    PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
+    PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
+  ]);
+
+  return {
+    ...result,
+    gateBoundary: PR_CHECKPOINT.DRAFT_GATE_NEEDED,
+    nextAction: PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE,
+    allowedNextActions,
+    forbiddenActions,
+    reason: result.draftGate?.anyVisible
+      ? "Clean draft_gate evidence is required before merge (no gate exemptions, #579). A draft_gate comment exists but is not clean; convert the PR back to draft before re-running draft_gate, or clear the existing evidence before running reconcile_draft_gate."
+      : "Clean draft_gate evidence is required before merge (no gate exemptions, #579). No visible clean draft_gate comment exists for this PR; run reconcile_draft_gate before proceeding.",
+    gateEvidenceNote: null,
+  };
+}
+
+/**
  * Evaluates PR gate coordination, then re-asserts the merge-blocking title guard
  * at the pre-approval / final-approval boundary for non-draft PRs.
  *
@@ -731,13 +781,18 @@ function applyUnsettledCopilotReviewEntryGuard(input, result) {
  * sites (defense in depth); this wrapper additionally covers the pre-approval
  * gate boundary, which is reached before any pre-approval evidence exists and so
  * is not protected by the inline checks.
+ *
+ * Invariant: every return path passes through `applyDraftGateEvidenceGuard`,
+ * which rewrites the five DRAFT_GATE_EVIDENCE_GUARDED_BOUNDARIES boundaries to
+ * DRAFT_GATE_NEEDED / reconcile_draft_gate whenever clean draft_gate evidence
+ * is absent.
  */
 export function evaluatePrGateCoordination(input = {}) {
   const result = evaluatePrGateCoordinationCore(input);
 
   const unsettledReviewResult = applyUnsettledCopilotReviewEntryGuard(input, result);
   if (unsettledReviewResult) {
-    return unsettledReviewResult;
+    return applyDraftGateEvidenceGuard(unsettledReviewResult);
   }
 
   const prDraft = input.prDraft === true;
@@ -745,17 +800,17 @@ export function evaluatePrGateCoordination(input = {}) {
   // Draft PRs may legitimately carry a WIP title; the marker only blocks once
   // the PR has left draft and is at a pre-approval/final-approval boundary.
   if (prDraft || !result || typeof result !== "object") {
-    return result;
+    return applyDraftGateEvidenceGuard(result);
   }
   if (!TITLE_MARKER_GUARDED_BOUNDARIES.includes(result.gateBoundary)) {
-    return result;
+    return applyDraftGateEvidenceGuard(result);
   }
   const markers = findBlockingTitleMarkers(prTitle);
   if (markers.length === 0) {
-    return result;
+    return applyDraftGateEvidenceGuard(result);
   }
 
-  return buildTitleMarkerBlockedResult({
+  return applyDraftGateEvidenceGuard(buildTitleMarkerBlockedResult({
     input,
     currentHeadSha: result.currentHeadSha ?? null,
     draftGateAlreadySatisfied: result.draftGateAlreadySatisfied === true,
@@ -765,7 +820,7 @@ export function evaluatePrGateCoordination(input = {}) {
     conflictFiles: result.conflictFiles ?? [],
     markers,
     refinementArtifact: result.refinementArtifact ?? null,
-  });
+  }));
 }
 
 function evaluatePrGateCoordinationCore(input = {}) {

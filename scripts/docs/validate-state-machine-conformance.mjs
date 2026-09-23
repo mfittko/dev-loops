@@ -394,7 +394,13 @@ verified("draft_local_remediation->draft_local_review_gate", () => {
 
 // ready_state_needs_copilot_request -> waiting_for_copilot_review: explicit request/confirm succeeded.
 verified("ready_state_needs_copilot_request->waiting_for_copilot_review", () => {
-  const result = run({ prDraft: false, lifecycleState: STATE.PR_READY_NO_FEEDBACK, loopDisposition: DISPOSITION.ACTION_REQUIRED });
+  const result = run({
+    prDraft: false,
+    lifecycleState: STATE.PR_READY_NO_FEEDBACK,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    draftGate: CLEAN_GATE,
+    draftGateMarker: CLEAN_MARKER,
+  });
   const ok = result.gateBoundary === PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW
     && result.nextAction === PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW;
   return { ok, detail: result, result };
@@ -442,6 +448,8 @@ verified("waiting_for_copilot_review->final_local_preapproval_gate", () => {
     ciStatus: "success",
     sameHeadCleanConverged: true,
     copilotReviewRequestStatus: "requested",
+    draftGate: CLEAN_GATE,
+    draftGateMarker: CLEAN_MARKER,
     preApprovalGate: gate({ visible: false }),
   });
   const unsettledOk = unsettled.gateBoundary === PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW
@@ -478,6 +486,8 @@ verified("waiting_for_copilot_review->final_local_preapproval_gate", () => {
     ciStatus: "success",
     sameHeadCleanConverged: true,
     copilotReviewRequestStatus: "none",
+    draftGate: CLEAN_GATE,
+    draftGateMarker: CLEAN_MARKER,
     preApprovalGate: gate({ visible: false }),
   });
   const settledOk = settled.gateBoundary === PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW
@@ -494,6 +504,8 @@ verified("final_local_preapproval_gate->final_gate_remediation", () => {
     lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
     ciStatus: "success",
     sameHeadCleanConverged: true,
+    draftGate: CLEAN_GATE,
+    draftGateMarker: CLEAN_MARKER,
     preApprovalGate: FINDINGS_GATE,
   });
   const ok = result.gateBoundary === PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW
@@ -529,6 +541,8 @@ verified("final_gate_remediation->final_local_preapproval_gate", () => {
     lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
     ciStatus: "success",
     sameHeadCleanConverged: true,
+    draftGate: CLEAN_GATE,
+    draftGateMarker: CLEAN_MARKER,
     preApprovalGate: FINDINGS_GATE,
   });
   const ok = result.gateBoundary === PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW
