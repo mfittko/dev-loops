@@ -264,6 +264,8 @@ test("#1190: already-requested Copilot review also refuses pre_approval_gate ent
     sameHeadCleanConverged: true,
     copilotReviewRequestStatus: "already-requested",
     ciStatus: "success",
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
     preApprovalGate: gate({ visible: false }),
   });
 
@@ -322,6 +324,8 @@ test("#1190: internal_only reviewMode is exempt from the outstanding-review entr
     copilotReviewRequestStatus: "requested",
     reviewMode: "internal_only",
     ciStatus: "success",
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
     preApprovalGate: gate({ visible: false }),
   });
 
@@ -339,6 +343,8 @@ test("#1190: maxCopilotRounds: 0 (Copilot review disabled) is exempt from the ou
     copilotReviewRequestStatus: "requested",
     maxCopilotRounds: 0,
     ciStatus: "success",
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
     preApprovalGate: gate({ visible: false }),
   });
 
@@ -402,6 +408,8 @@ test("#2146: a clean same-head submitted Copilot review (incl. GitHub auto-revie
     copilotReviewRoundCount: 0,
     maxCopilotRounds: 2,
     ciStatus: "success",
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
     preApprovalGate: gate({ visible: false }),
   });
 
@@ -557,6 +565,8 @@ test("issue 1771: internal_only READY_TO_REREQUEST_REVIEW with no Copilot conver
     copilotReviewRequestStatus: "requested",
     reviewMode: "internal_only",
     ciStatus: "success",
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
     preApprovalGate: gate({ visible: false }),
   });
 
@@ -578,6 +588,8 @@ test("issue 1771 non-goal: a non-suppressed external-review PR in the same no-co
     sameHeadCleanConverged: false,
     copilotReviewRequestStatus: "requested",
     ciStatus: "success",
+    draftGate: gate({ visible: true, headSha: "fedcba9", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "fedcba9", verdict: "clean", contractComplete: true }),
     preApprovalGate: gate({ visible: false }),
   });
 
@@ -1373,7 +1385,7 @@ test("non-draft PR with clean draft_gate on a different head still allows post-d
   );
 });
 
-test("non-draft PR without any clean draft_gate evidence still enters post-draft external review", () => {
+test("non-draft PR without any clean draft_gate evidence reconciles the draft gate instead of entering post-draft external review", () => {
   const result = evaluatePrGateCoordination({
     pr: 266,
     currentHeadSha: "abc123456789",
@@ -1386,20 +1398,18 @@ test("non-draft PR without any clean draft_gate evidence still enters post-draft
     preApprovalGateMarker: gate({ visible: false }),
   });
 
-  assert.equal(result.gateBoundary, PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW);
-  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW);
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_GATE_NEEDED);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE);
   assert.equal(result.draftGate.cleanEvidenceExists, false);
   assert.equal(result.draftGateAlreadySatisfied, false);
-  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
+  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE));
+  assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
   assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
   assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
-  assert.equal(
-    result.reason,
-    "The PR is ready for review but the post-draft external review cycle has not started yet; request Copilot review before any `pre_approval_gate` entry.",
-  );
+  assert.match(result.reason, /no gate exemptions, #579/i);
 });
 
-test("non-draft PR with visible non-clean draft_gate evidence still follows post-draft flow", () => {
+test("non-draft PR with visible non-clean draft_gate evidence reconciles the draft gate instead of following post-draft flow", () => {
   const result = evaluatePrGateCoordination({
     pr: 266,
     currentHeadSha: "abc123456789",
@@ -1412,16 +1422,13 @@ test("non-draft PR with visible non-clean draft_gate evidence still follows post
     preApprovalGateMarker: gate({ visible: false }),
   });
 
-  assert.equal(result.gateBoundary, PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW);
-  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW);
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_GATE_NEEDED);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE);
   assert.equal(result.draftGate.cleanEvidenceExists, false);
   assert.equal(result.draftGate.anyVisible, true);
-  assert(!result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE));
+  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE));
   assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE));
-  assert.equal(
-    result.reason,
-    "The PR is ready for review but the post-draft external review cycle has not started yet; request Copilot review before any `pre_approval_gate` entry.",
-  );
+  assert.match(result.reason, /no gate exemptions, #579/i);
 });
 
 
@@ -1705,7 +1712,7 @@ test("shouldGuardCopilotReviewRequest: never forces a request when maxCopilotRou
   assert.equal(guardedDefault, true);
 });
 
-test("internal-only PR without clean draft gate still enters pre-approval gate window", () => {
+test("internal-only PR without clean draft gate reconciles the draft gate instead of entering pre-approval gate window", () => {
   const result = evaluatePrGateCoordination({
     pr: 298,
     currentHeadSha: "abc123456789",
@@ -1719,9 +1726,10 @@ test("internal-only PR without clean draft gate still enters pre-approval gate w
     preApprovalGateMarker: gate({ visible: false }),
   });
 
-  assert.equal(result.gateBoundary, PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW);
-  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
-  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_GATE_NEEDED);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE);
+  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE));
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
   assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW));
 });
 
@@ -1836,7 +1844,7 @@ test("draft PR with clean current-head draft_gate sets cleanEvidenceExists", () 
   assert.equal(result.draftGate.currentHeadClean, true);
 });
 
-test("converged non-draft PR without clean draft_gate evidence still enters pre-approval gate window", () => {
+test("converged non-draft PR without clean draft_gate evidence reconciles the draft gate instead of entering pre-approval gate window", () => {
   const result = evaluatePrGateCoordination({
     pr: 266,
     currentHeadSha: "abc123456789",
@@ -1851,11 +1859,11 @@ test("converged non-draft PR without clean draft_gate evidence still enters pre-
     preApprovalGateMarker: gate({ visible: false }),
   });
 
-  assert.equal(result.gateBoundary, PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW);
-  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE);
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_GATE_NEEDED);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE);
   assert.equal(result.draftGate.anyVisible, false);
-  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
-  assert(!result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert(result.allowedNextActions.includes(PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE));
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
 });
 
 test("converged non-draft PR without clean draft_gate evidence is blocked from final approval (#579 enforcement)", () => {
@@ -1995,13 +2003,13 @@ for (const scenario of [
     name: "ROUND_CAP_CLEAN_FALLBACK waits for CI",
     lifecycleState: STATE.ROUND_CAP_CLEAN_FALLBACK,
     ciStatus: "pending",
-    expectedGateBoundary: PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW,
+    expectedGateBoundary: PR_CHECKPOINT.DRAFT_GATE_NEEDED,
   },
   {
     name: "ROUND_CAP_CLEAN_FALLBACK reaches pre_approval_gate window",
     lifecycleState: STATE.ROUND_CAP_CLEAN_FALLBACK,
     ciStatus: "success",
-    expectedGateBoundary: PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW,
+    expectedGateBoundary: PR_CHECKPOINT.DRAFT_GATE_NEEDED,
   },
   {
     name: "ROUND_CAP_REACHED grant reaches pre_approval_gate window",
@@ -2009,7 +2017,7 @@ for (const scenario of [
     ciStatus: "success",
     unresolvedThreadCount: 0,
     copilotConvergenceOk: true,
-    expectedGateBoundary: PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW,
+    expectedGateBoundary: PR_CHECKPOINT.DRAFT_GATE_NEEDED,
   },
   {
     name: "READY_TO_REREQUEST_REVIEW blocked on failing CI at the round cap",
@@ -2023,14 +2031,14 @@ for (const scenario of [
     lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
     sameHeadCleanConverged: true,
     ciStatus: "pending",
-    expectedGateBoundary: PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW,
+    expectedGateBoundary: PR_CHECKPOINT.DRAFT_GATE_NEEDED,
   },
   {
     name: "READY_TO_REREQUEST_REVIEW reaches pre_approval_gate window at the round cap",
     lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
     sameHeadCleanConverged: true,
     ciStatus: "success",
-    expectedGateBoundary: PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW,
+    expectedGateBoundary: PR_CHECKPOINT.DRAFT_GATE_NEEDED,
   },
   {
     name: "LOW_SIGNAL_CONVERGED blocked on failing CI",
@@ -2042,13 +2050,13 @@ for (const scenario of [
     name: "LOW_SIGNAL_CONVERGED waits for CI",
     lifecycleState: STATE.LOW_SIGNAL_CONVERGED,
     ciStatus: "pending",
-    expectedGateBoundary: PR_CHECKPOINT.POST_DRAFT_EXTERNAL_REVIEW,
+    expectedGateBoundary: PR_CHECKPOINT.DRAFT_GATE_NEEDED,
   },
   {
     name: "LOW_SIGNAL_CONVERGED reaches pre_approval_gate window",
     lifecycleState: STATE.LOW_SIGNAL_CONVERGED,
     ciStatus: "success",
-    expectedGateBoundary: PR_CHECKPOINT.PRE_APPROVAL_GATE_WINDOW,
+    expectedGateBoundary: PR_CHECKPOINT.DRAFT_GATE_NEEDED,
   },
 ]) {
   test(`round cap never substitutes for draft_gate evidence: ${scenario.name} (#2354)`, () => {
@@ -2073,8 +2081,195 @@ for (const scenario of [
     assert.equal(result.gateBoundary, scenario.expectedGateBoundary);
     assert.equal(result.draftGate.cleanEvidenceExists, false);
     assert.equal(result.draftGateAlreadySatisfied, false);
+    if (scenario.expectedGateBoundary === PR_CHECKPOINT.DRAFT_GATE_NEEDED) {
+      assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE);
+      assert.deepEqual(result.allowedNextActions, [PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE]);
+      assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+    }
   });
 }
+
+// GATE-EXEC-DRAFT-EVIDENCE-GUARD: the core evaluator's own guard (mirrors the
+// detector's retired draftGateEvidenceMissing post-pass) fires at every one of
+// the five gate boundaries requiring clean draft_gate evidence — including
+// feedback_resolution, which has no inline draft_gate check of its own.
+test("non-draft PR with unresolved feedback and no draft_gate evidence reconciles the draft gate instead of following the feedback-resolution path", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 266,
+    currentHeadSha: "abc123456789",
+    prDraft: false,
+    lifecycleState: STATE.UNRESOLVED_FEEDBACK_PRESENT,
+    loopDisposition: DISPOSITION.UNRESOLVED_FEEDBACK,
+    draftGate: gate({ visible: false }),
+    draftGateMarker: gate({ visible: false }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_GATE_NEEDED);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE);
+  assert.deepEqual(result.allowedNextActions, [PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE]);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.ADDRESS_REVIEW_FEEDBACK) === false);
+});
+
+// The guard also covers results the unsettled-Copilot entry guard itself
+// produces (POST_DRAFT_EXTERNAL_REVIEW / wait_for_copilot_review): without
+// clean draft_gate evidence, reconcile_draft_gate wins over the wait.
+test("outstanding Copilot review request with no draft_gate evidence reconciles the draft gate instead of waiting on Copilot", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 266,
+    currentHeadSha: "fedcba987654",
+    prDraft: false,
+    lifecycleState: STATE.READY_TO_REREQUEST_REVIEW,
+    loopDisposition: DISPOSITION.CLEAN_CONVERGED,
+    sameHeadCleanConverged: true,
+    copilotReviewRequestStatus: "requested",
+    ciStatus: "success",
+    draftGate: gate({ visible: false }),
+    draftGateMarker: gate({ visible: false }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.equal(result.gateBoundary, PR_CHECKPOINT.DRAFT_GATE_NEEDED);
+  assert.equal(result.nextAction, PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE);
+  assert.deepEqual(result.allowedNextActions, [PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE]);
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE));
+  assert(result.forbiddenActions.includes(PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW));
+});
+
+// AC: the guarded result has the EXACT post-pass shape — deep-equal locks
+// every field, not just the ones a targeted assert would sample. Two cases:
+// no visible draft_gate comment at all (anyVisible: false), and a visible but
+// non-clean draft_gate comment (anyVisible: true).
+test("guard rewrite deep-equals the exact expected shape when no draft_gate comment is visible (anyVisible: false)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 266,
+    currentHeadSha: "abc123456789",
+    prDraft: false,
+    lifecycleState: STATE.PR_READY_NO_FEEDBACK,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    draftGate: gate({ visible: false }),
+    draftGateMarker: gate({ visible: false }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  const invisibleGateStatus = {
+    visible: false,
+    markerVisible: false,
+    anyVisible: false,
+    currentHead: false,
+    headSha: null,
+    verdict: null,
+    findingsSummary: null,
+    nextAction: null,
+    contractComplete: false,
+    currentHeadClean: false,
+    cleanEvidenceExists: false,
+  };
+
+  assert.deepEqual(result, {
+    ok: true,
+    pr: 266,
+    currentHeadSha: "abc123456789",
+    lifecycleState: STATE.PR_READY_NO_FEEDBACK,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    gateBoundary: PR_CHECKPOINT.DRAFT_GATE_NEEDED,
+    draftGate: invisibleGateStatus,
+    preApprovalGate: invisibleGateStatus,
+    allowedNextActions: [PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE],
+    forbiddenActions: [
+      PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+      PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
+      PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
+      PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW,
+      PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
+      PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
+      PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
+    ],
+    nextAction: PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE,
+    reason: "Clean draft_gate evidence is required before merge (no gate exemptions, #579). No visible clean draft_gate comment exists for this PR; run reconcile_draft_gate before proceeding.",
+    mergeStateStatus: null,
+    conflictFiles: [],
+    draftGateAlreadySatisfied: false,
+    copilotReviewRoundCount: 0,
+    gateEvidenceRequiredForMerge: true,
+    gateEvidenceNote: null,
+  });
+  assert.equal(result.lifecycleState, STATE.PR_READY_NO_FEEDBACK);
+  assert.equal(result.loopDisposition, DISPOSITION.ACTION_REQUIRED);
+});
+
+test("guard rewrite deep-equals the exact expected shape when a non-clean draft_gate comment is visible (anyVisible: true)", () => {
+  const result = evaluatePrGateCoordination({
+    pr: 266,
+    currentHeadSha: "abc123456789",
+    prDraft: false,
+    lifecycleState: STATE.PR_READY_NO_FEEDBACK,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    draftGate: gate({ visible: true, headSha: "abc1234", verdict: "findings_present" }),
+    draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "findings_present", contractComplete: true }),
+    preApprovalGate: gate({ visible: false }),
+    preApprovalGateMarker: gate({ visible: false }),
+  });
+
+  assert.deepEqual(result, {
+    ok: true,
+    pr: 266,
+    currentHeadSha: "abc123456789",
+    lifecycleState: STATE.PR_READY_NO_FEEDBACK,
+    loopDisposition: DISPOSITION.ACTION_REQUIRED,
+    gateBoundary: PR_CHECKPOINT.DRAFT_GATE_NEEDED,
+    draftGate: {
+      visible: true,
+      markerVisible: true,
+      anyVisible: true,
+      currentHead: true,
+      headSha: "abc1234",
+      verdict: "findings_present",
+      findingsSummary: null,
+      nextAction: null,
+      contractComplete: true,
+      currentHeadClean: false,
+      cleanEvidenceExists: false,
+    },
+    preApprovalGate: {
+      visible: false,
+      markerVisible: false,
+      anyVisible: false,
+      currentHead: false,
+      headSha: null,
+      verdict: null,
+      findingsSummary: null,
+      nextAction: null,
+      contractComplete: false,
+      currentHeadClean: false,
+      cleanEvidenceExists: false,
+    },
+    allowedNextActions: [PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE],
+    forbiddenActions: [
+      PR_CHECKPOINT_ACTION.RUN_DRAFT_GATE,
+      PR_CHECKPOINT_ACTION.MARK_READY_FOR_REVIEW,
+      PR_CHECKPOINT_ACTION.REQUEST_COPILOT_REVIEW,
+      PR_CHECKPOINT_ACTION.WAIT_FOR_COPILOT_REVIEW,
+      PR_CHECKPOINT_ACTION.RUN_PRE_APPROVAL_GATE,
+      PR_CHECKPOINT_ACTION.AWAIT_FINAL_HUMAN_APPROVAL,
+      PR_CHECKPOINT_ACTION.DECLARE_MERGE_READY,
+    ],
+    nextAction: PR_CHECKPOINT_ACTION.RECONCILE_DRAFT_GATE,
+    reason: "Clean draft_gate evidence is required before merge (no gate exemptions, #579). A draft_gate comment exists but is not clean; convert the PR back to draft before re-running draft_gate, or clear the existing evidence before running reconcile_draft_gate.",
+    mergeStateStatus: null,
+    conflictFiles: [],
+    draftGateAlreadySatisfied: false,
+    copilotReviewRoundCount: 0,
+    gateEvidenceRequiredForMerge: true,
+    gateEvidenceNote: null,
+  });
+  assert.equal(result.lifecycleState, STATE.PR_READY_NO_FEEDBACK);
+  assert.equal(result.loopDisposition, DISPOSITION.ACTION_REQUIRED);
+});
 
 // #2354 AC1 (continued): the round-cap title-marker-blocked return site
 // (ROUND_CAP_CLEAN_FALLBACK reaching buildTitleMarkerBlockedResult) used to
@@ -3053,8 +3248,8 @@ test("clean title still reaches the pre-approval gate boundary for a non-draft P
     sameHeadCleanConverged: true,
     ciStatus: "success",
     prTitle: "Converge the review loop",
-    draftGate: gate({ visible: false }),
-    draftGateMarker: gate({ visible: false }),
+    draftGate: gate({ visible: true, headSha: "abc1234", verdict: "clean" }),
+    draftGateMarker: gate({ visible: true, headSha: "abc1234", verdict: "clean", contractComplete: true }),
     preApprovalGate: gate({ visible: false }),
     preApprovalGateMarker: gate({ visible: false }),
   });
@@ -3694,6 +3889,8 @@ test("round_cap_reached grant branch and copilot-loop-state's round-cap fallback
           ...roundCap,
           unresolvedThreadCount,
           copilotConvergenceOk: true,
+          draftGate: gate({ visible: true, headSha: "29aa40b7", verdict: "clean" }),
+          draftGateMarker: gate({ visible: true, headSha: "29aa40b7", verdict: "clean", contractComplete: true }),
           preApprovalGate: gate({ visible: false }),
           preApprovalGateMarker: gate({ visible: false }),
         });

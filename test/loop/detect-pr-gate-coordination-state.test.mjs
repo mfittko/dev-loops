@@ -6,13 +6,15 @@ import { afterAll, beforeAll, describe, it, test } from "bun:test";
 import { makeGhMock, runIdFreeEnv, runNode as runNodeHelper, writeGhStub as writeGhStubHelper } from "../_helpers.mjs";
 import { runChild as defaultRunChild } from "../../scripts/_cli-primitives.mjs";
 
-import { detectPrGateCoordinationState, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, resolvePostConvergenceReviewSuppressed, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { detectPrGateCoordinationState, loadPrGateCoordinationContext, parseDetectPrGateCoordinationCliArgs, fetchPrFactsWithSettledMergeable, parseGitStatusConflictFiles, extractChangedFiles, deriveUiE2ePassed, deriveUiDesignerReviewExempt, deriveUiDesignerReviewEvidence, loadRecordedDesignerEvidence, loadRefinementArtifact, resolveRoundCapCleanFallback, buildGateCoordinationEvaluatorInput, resolvePostConvergenceReviewSuppressed, countPrChangedLines, TERMINAL_RUNNER_RELEASE_ACTIONS } from "../../scripts/loop/detect-pr-gate-coordination-state.mjs";
+import { detectPostConvergenceSignificantChange } from "../../scripts/loop/_post-convergence-change.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
 import { isRoundCapReachedCleanGrant } from "@dev-loops/core/loop/pr-gate-coordination";
 import { evaluateMergePreconditions } from "@dev-loops/core/loop/merge-approval";
 import { emitResult } from "../../scripts/lib/jq-output.mjs";
 import { formatCliError } from "../../scripts/_core-helpers.mjs";
-import { PR_CHECKPOINT, PR_CHECKPOINT_ACTION, shouldGuardCopilotReviewRequest } from "@dev-loops/core/loop/pr-gate-coordination";
+import { PR_CHECKPOINT, PR_CHECKPOINT_ACTION, shouldGuardCopilotReviewRequest, evaluatePrGateCoordination } from "@dev-loops/core/loop/pr-gate-coordination";
+import { loadDevLoopConfig, resolveGateConfig, resolveRefinementConfig } from "@dev-loops/core/config";
 import { evaluateUiDesignerReviewScoping, DESIGNER_REVIEW_SATISFIED_OUTCOME } from "../../packages/core/src/loop/ui-designer-review-scoping.mjs";
 import { buildPlanFilePromotionMarker, buildPromotionPrBody } from "@dev-loops/core/loop/plan-file-promote-contract";
 
@@ -538,6 +540,102 @@ test("detect-pr-gate-coordination-state flags draft_gate_needed for non-draft PR
     assert.equal(parsed.gateBoundary, "draft_gate_needed");
     assert.equal(parsed.nextAction, "reconcile_draft_gate");
     assert.equal(parsed.draftGateAlreadySatisfied, false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+// The core evaluator now owns the missing-draft_gate-evidence rule directly
+// (no detector post-pass rewrites it), so the detector's output for a
+// no-draft-evidence state must equal a direct evaluatePrGateCoordination
+// call fed the SAME production evaluator input — built via the same exported
+// buildGateCoordinationEvaluatorInput wiring detectPrGateCoordinationState
+// itself uses, not a hand-reconstructed guess.
+test("detect-pr-gate-coordination-state output equals a direct evaluatePrGateCoordination call for the same evaluator input (draft_gate_needed)", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-pr-gate-parity-"));
+
+  try {
+    const env = await writeGhStub(tempDir, [
+      {
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+        stdout: jsonLine({
+          number: 266,
+          state: "OPEN",
+          isDraft: false,
+          headRefOid: "def56789abcdef",
+          statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+          reviews: [],
+        }),
+      },
+      {
+        assertArgs: ["api", "repos/owner/repo/pulls/266/requested_reviewers"],
+        stdout: jsonLine({ users: [], teams: [] }),
+      },
+      {
+        assertArgs: ["api", "graphql", "pr=266"],
+        stdout: jsonLine({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }),
+      },
+      {
+        assertArgs: ["pr", "view", "266", "--repo", "owner/repo", "--json", "headRefOid"],
+        stdout: jsonLine({ headRefOid: "def56789abcdef" }),
+      },
+      {
+        assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/266/comments?per_page=100"],
+        stdout: jsonLine([[]]),
+      },
+      {
+        assertArgContains: ["api", "--paginate", "--jq", 'event == "review_requested"'],
+        stdout: "\n",
+      },
+    ]);
+
+    const result = await runNode(["--repo", "owner/repo", "--pr", "266"], { env });
+    assert.equal(result.code, 0);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.gateBoundary, "draft_gate_needed");
+
+    const options = { repo: "owner/repo", pr: 266 };
+    const runtime = buildMockRuntime(env, { repoRoot: capFixtureRepoRoot });
+    const context = await loadPrGateCoordinationContext(options, runtime);
+    const configLoadResult = await loadDevLoopConfig({ repoRoot: runtime.repoRoot });
+    const config = configLoadResult.config ?? {};
+    const draftGateConfig = resolveGateConfig(config, "draft");
+    const preApprovalGateConfig = resolveGateConfig(config, "preApproval");
+    const maxCopilotRounds = resolveRefinementConfig(config, "maxCopilotRounds");
+    const postConvergenceSignificantChange = await detectPostConvergenceSignificantChange(
+      {
+        repo: context.repo,
+        pr: context.pr,
+        currentHeadSha: context.currentHeadSha,
+        reviews: context.prData?.reviews,
+        changedFiles: context.prData?.files,
+        roundCapReached: false,
+        regularCopilotRounds: (context.snapshot?.copilotReviewRoundCount ?? 0) > 0,
+      },
+      runtime,
+    );
+    const directResult = evaluatePrGateCoordination(buildGateCoordinationEvaluatorInput({
+      context,
+      maxCopilotRounds,
+      draftGateConfig,
+      preApprovalGateConfig,
+      postConvergenceSignificantChange,
+      designerReviewExempt: deriveUiDesignerReviewExempt({
+        lightweight: false,
+        spike: false,
+        changedFiles: extractChangedFiles(context.prData),
+        changedLines: countPrChangedLines(context.prData),
+        config,
+      }),
+      designerReviewEvidence: null,
+    }));
+
+    assert.equal(directResult.gateBoundary, "draft_gate_needed");
+    assert.equal(parsed.gateBoundary, directResult.gateBoundary);
+    assert.equal(parsed.nextAction, directResult.nextAction);
+    assert.deepEqual(parsed.allowedNextActions, directResult.allowedNextActions);
+    assert.deepEqual(parsed.forbiddenActions, directResult.forbiddenActions);
+    assert.equal(parsed.reason, directResult.reason);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

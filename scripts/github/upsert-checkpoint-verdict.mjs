@@ -2305,9 +2305,13 @@ export async function upsertCheckpointVerdict(options, { env = process.env, ghCo
     // above) ONLY when coordination explicitly allows RECONCILE_DRAFT_GATE — the
     // state machine determined this ready PR genuinely needs draft-gate
     // evidence reconciled. RUN_DRAFT_GATE is forbidden on a ready PR in many
-    // OTHER states too (merge conflicts, waiting-for-CI, unresolved feedback,
-    // blocked); converting those to draft would be wrong, so this must NOT key
-    // off `gateActionForbidden` alone.
+    // OTHER states too (merge conflicts, blocked); converting those to draft
+    // would be wrong, so this must NOT key off `gateActionForbidden` alone.
+    // Waiting-for-CI and unresolved-feedback states stay protected from the
+    // transition only while clean draft_gate evidence already exists — with no
+    // clean evidence at all, the core evaluator's own guard now routes those
+    // states to RECONCILE_DRAFT_GATE too, so this condition intentionally
+    // allows the transition there as well.
     if (
       options.gate === "draft_gate"
       && !prIsDraft

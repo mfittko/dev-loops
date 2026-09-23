@@ -193,6 +193,7 @@ function buildGateCoordinationEntries({
   pr = 17,
   headSha = "abc1234000000000000000000000000000000000",
   isDraft = true,
+  state = "OPEN",
   statusCheckRollup = [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "FAILURE" }],
   reviews = [],
   reviewThreadsPayload = { data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } },
@@ -204,7 +205,7 @@ function buildGateCoordinationEntries({
       assertArgs: ["pr", "view", String(pr), "--repo", repo, "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
       stdout: JSON.stringify({
         number: pr,
-        state: "OPEN",
+        state,
         isDraft,
         headRefOid: headSha,
         body,
@@ -1344,6 +1345,7 @@ test("upsert-checkpoint-verdict posts pre_approval for a thread-clean current-he
             body: "### 🔵 Needs a closer look\n\nFindings: None",
           },
         ],
+        issueComments: [buildGateComment({ headSha })],
       }).map((entry) => ({ ...entry, matchByClaims: true })),
       {
         matchByClaims: true,
@@ -1384,6 +1386,7 @@ test("upsert-checkpoint-verdict auto-derives the size budget for pre_approval_ga
         isDraft: false,
         statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
         reviews: PRE_APPROVAL_READY_REVIEWS,
+        issueComments: [buildGateComment({})],
       }).map((entry) => ({ ...entry, matchByClaims: true })),
       {
         matchByClaims: true,
@@ -1448,6 +1451,7 @@ test("upsert-checkpoint-verdict auto-derived pre_approval_gate body reads back a
         isDraft: false,
         statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
         reviews: PRE_APPROVAL_READY_REVIEWS,
+        issueComments: [buildGateComment({})],
       }).map((entry) => ({ ...entry, matchByClaims: true })),
       {
         matchByClaims: true,
@@ -1517,6 +1521,7 @@ test("upsert-checkpoint-verdict pre_approval_gate size-budget auto-derive fails 
         isDraft: false,
         statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
         reviews: PRE_APPROVAL_READY_REVIEWS,
+        issueComments: [buildGateComment({})],
       }).map((entry) => ({ ...entry, matchByClaims: true })),
       {
         matchByClaims: true,
@@ -1558,6 +1563,7 @@ test("upsert-checkpoint-verdict --size-budget-json still overrides pre_approval_
         isDraft: false,
         statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
         reviews: PRE_APPROVAL_READY_REVIEWS,
+        issueComments: [buildGateComment({})],
       }).map((entry) => ({ ...entry, matchByClaims: true })),
       {
         matchByClaims: true,
@@ -3969,13 +3975,15 @@ test("upsert-checkpoint-verdict does NOT convert a ready PR to draft when reconc
   await withTempDir(async (tempDir) => {
     // The self-heal draft→post→ready transition must fire ONLY when coordination
     // allows RECONCILE_DRAFT_GATE — NOT for every ready PR where RUN_DRAFT_GATE is
-    // forbidden. Here the PR is ready and the post-draft external review cycle has
-    // not started (REQUEST_COPILOT_REVIEW), so the poster must refuse WITHOUT
-    // converting the PR to draft. Guards against wrongly drafting blocked /
-    // waiting-for-CI / unresolved-feedback / review-pending PRs. (#891, Copilot review)
+    // forbidden. A closed PR forbids BOTH RUN_DRAFT_GATE and RECONCILE_DRAFT_GATE
+    // (the done boundary allows only report_done, regardless of draft_gate
+    // evidence), so the poster must refuse WITHOUT converting the PR to draft.
+    const headSha = "abc1234000000000000000000000000000000000";
     const { env: logEnvRaw } = await writeGhStubHelper(tempDir, [
       ...buildGateCoordinationEntries({
+        headSha,
         isDraft: false,
+        state: "CLOSED",
         statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
         issueComments: [],
       }),
@@ -3987,14 +3995,14 @@ test("upsert-checkpoint-verdict does NOT convert a ready PR to draft when reconc
         repo: "owner/repo",
         pr: 17,
         gate: "draft_gate",
-        headSha: "abc1234000000000000000000000000000000000",
+        headSha,
         verdict: "clean",
         findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "nice-to-have": 0 },
         findingsSummary: "no issues found",
         nextAction: "mark ready for review",
         executionMode: "fanout_fanin",
       }, { env, repoRoot: tempDir }),
-      /Cannot enter|post-draft external review|request Copilot review/i,
+      /Cannot enter|already closed or merged/i,
     );
 
     // Critical: the PR must NOT have been converted to draft, and must NOT have been
@@ -4527,19 +4535,16 @@ test("upsert-checkpoint-verdict self-heals a ROUND-CAP ready PR via draft transi
   }, { prefix: "dev-loops-upsert-self-heal-roundcap-" });
 });
 
-test("upsert-checkpoint-verdict refuses draft_gate at the round cap without a false noop when pre_approval evidence is missing (#2354)", async () => {
-  // #2354 AC2: at the round cap, a ready (non-draft) PR with NO clean current-head
-  // pre_approval_gate evidence and no draft_gate evidence used to land on the
-  // ROUND_CAP_CLEAN_FALLBACK non-clean-head branch, which forced
-  // draftGateAlreadySatisfied: true unconditionally once the round cap was
-  // reached — regardless of preApprovalGate.currentHeadClean. upsert-checkpoint-
-  // verdict.mjs treated that forced true as "draft_gate already satisfied" and
-  // noop'd an explicit `gate: "draft_gate"` request, a false noop since no
-  // evidence actually existed. The fixed evaluator only reports
-  // draftGateAlreadySatisfied true when draftGate.cleanEvidenceExists is
-  // actually true, so this must now refuse with a gate-entry error naming
-  // `pre_approval_gate` (RUN_PRE_APPROVAL_GATE) as the next legal boundary,
-  // never noop.
+test("upsert-checkpoint-verdict self-heals draft_gate at the round cap without a false noop when pre_approval evidence is missing (#2354)", async () => {
+  // #2354 AC2/AC3: at the round cap, a ready (non-draft) PR with NO clean
+  // current-head pre_approval_gate evidence and no draft_gate evidence lands on
+  // the ROUND_CAP_CLEAN_FALLBACK non-clean-head branch, which the core
+  // evaluator's own guard now rewrites to DRAFT_GATE_NEEDED / reconcile_draft_gate
+  // (no clean draft_gate evidence at any of the five guarded boundaries, the
+  // round cap never substitutes for it). Because coordination now explicitly
+  // allows RECONCILE_DRAFT_GATE, an explicit `gate: "draft_gate"` request takes
+  // the self-heal draft-transition path — never a false noop, and
+  // draftGateAlreadySatisfied stays false throughout.
   await withTempDir(async (tempDir) => {
     const headSha = "abc1234000000000000000000000000000000000";
     // Five completed Copilot rounds (the default maxCopilotRounds cap) — the
@@ -4561,38 +4566,86 @@ test("upsert-checkpoint-verdict refuses draft_gate at the round cap without a fa
       commit: { oid: headSha },
     });
 
-    const { env: logEnvRaw } = await writeGhStubHelper(tempDir, [
-      ...buildGateCoordinationEntries({
-        headSha,
-        isDraft: false,
-        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
-        reviews: copilotReviews,
-        issueComments: [],
-      }),
-    ], { repeatLastOnOverflow: true, logCalls: true });
-    const env = { ...logEnvRaw, DEVLOOPS_RUN_ID: "" };
+    const prFacts = (isDraft) => JSON.stringify({
+      number: 17,
+      state: "OPEN",
+      isDraft,
+      headRefOid: headSha,
+      body: DEFAULT_TEST_PR_BODY,
+      closingIssuesReferences: [],
+      statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      reviews: copilotReviews,
+    }) + "\n";
 
-    await assert.rejects(
-      () => upsertCheckpointVerdict({
-        repo: "owner/repo",
-        pr: 17,
-        gate: "draft_gate",
-        headSha,
-        verdict: "clean",
-        findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "nice-to-have": 0 },
-        findingsSummary: "no issues found",
-        nextAction: "mark ready for review",
-        executionMode: "fanout_fanin",
-      }, { env, repoRoot: tempDir }),
-      /Cannot enter draft_gate.*pre_approval_gate.*next legal boundary/i,
-    );
+    // Claims-mode (order-independent) matching across the TWO coordination
+    // passes: pass 1 sees isDraft:false (yields reconcile); after
+    // convertPullRequestToDraft the recursive post re-enters and pass 2 sees
+    // isDraft:true (posts normally).
+    const ghEntries = [
+      // --- coordination pass 1 (isDraft: false -> reconcile) ---
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"], stdout: prFacts(false) },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql", "pr=17"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: JSON.stringify({ headRefOid: headSha }) + "\n" },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"], stdout: "src/index.ts\n" },
+      // --- resolve PR node id + convert to draft ---
+      { assertArgs: ["api", "graphql", "name=repo", "number=17"], stdout: '{"data":{"repository":{"pullRequest":{"id":"PR_node","isDraft":false}}}}\n' },
+      { assertArgs: ["api", "graphql", "pullRequestId=PR_node"], stdout: '{"data":{"convertPullRequestToDraft":{"pullRequest":{"id":"PR_node","isDraft":true}}}}\n' },
+      // --- coordination pass 2 (isDraft: true -> posts normally) ---
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"], stdout: prFacts(true) },
+      { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+      { assertArgs: ["api", "graphql", "pr=17"], stdout: '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}\n' },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: JSON.stringify({ headRefOid: headSha }) + "\n" },
+      { assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"], stdout: "[[]]\n" },
+      { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "files"], stdout: "src/index.ts\n" },
+      // --- post the draft_gate verdict + restore ready ---
+      {
+        assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+        assertStdinIncludes: ["Gate review: `draft_gate`", "**Execution mode:** fanout_fanin"],
+        stdout: '{"id":900,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-900"}\n',
+      },
+      { assertArgs: ["pr", "ready", "17", "--repo", "owner/repo"], stdout: "{}\n" },
+    ];
+    const { runChild, calls } = makeGhMock(ghEntries, { matchMode: "claims" });
+    const env = runIdFreeEnv({ DEVLOOPS_RUN_ID: "" });
 
-    // Critical: the round cap must never force a false noop, and a refusal must
-    // not toggle the PR's draft state.
-    const ghLog = await readFile(path.join(tempDir, "gh-log.jsonl"), "utf8");
-    assert.ok(!/convertPullRequestToDraft/.test(ghLog), "must not convert the PR to draft");
-    assert.ok(!/\["pr","ready"/.test(ghLog.replace(/\s/g, "")), "must not mark the PR ready");
-  }, { prefix: "dev-loops-upsert-round-cap-no-false-noop-" });
+    // draft_gate configures mandatory angles (pr-description, holistic); a
+    // fanout_fanin verdict requires coverage proof rather than a bare
+    // findingsSummary.
+    const findingsPath = path.join(tempDir, "findings.json");
+    await writeFile(findingsPath, JSON.stringify([
+      { angle: "pr-description", verdict: "clean", findings: [] },
+      { angle: "holistic", verdict: "clean", findings: [] },
+    ]), "utf8");
+    await stageDurableLedger(tempDir, { headSha, gate: "draft_gate" });
+
+    const result = await upsertCheckpointVerdict({
+      repo: "owner/repo",
+      pr: 17,
+      gate: "draft_gate",
+      headSha,
+      verdict: "clean",
+      findingsSeverityCounts: { "must-fix": 0, "worth-fixing-now": 0, "nice-to-have": 0 },
+      findingsJson: findingsPath,
+      nextAction: "mark ready for review",
+      executionMode: "fanout_fanin",
+    }, { env, repoRoot: tempDir, runChild });
+
+    // The round cap must never force a false noop: the verdict was posted via
+    // the self-heal transition (never the noop action, which is the only
+    // path that would report draftGateAlreadySatisfied: true) — evidence was
+    // genuinely missing, not forced true by the round cap.
+    assert.equal(result.ok, true);
+    assert.equal(result.action, "created");
+    assert.equal(result.gate, "draft_gate");
+    assert.equal(result.draftTransition, true);
+    assert.notEqual(result.draftGateAlreadySatisfied, true);
+
+    const ghLog = JSON.stringify(calls.map(({ args }) => args));
+    assert.ok(/convertPullRequestToDraft/.test(ghLog), "expected a convertPullRequestToDraft mutation");
+    assert.ok(/\["pr","ready","17"/.test(ghLog.replace(/\s/g, "")), "expected a `pr ready` call to restore the ready state");
+  }, { prefix: "dev-loops-upsert-round-cap-self-heal-" });
 });
 
 test("upsert-checkpoint-verdict fails closed (no unbounded recursion) when the draft-state read lags the conversion mutation (#1020)", async () => {
@@ -5927,6 +5980,7 @@ test("upsert-checkpoint-verdict rejects a fanout_fanin verdict whose --findings-
         isDraft: false,
         statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
         reviews: [{ author: { login: "copilot-pull-request-reviewer" }, state: "COMMENTED", submittedAt: "2026-05-31T20:00:00Z", commit: { oid: "abc1234000000000000000000000000000000000" } }],
+        issueComments: [buildGateComment({})],
       }),
     ]);
     const result = await runNode([
@@ -6947,6 +7001,7 @@ test("upsert-checkpoint-verdict refuses an inline pre_approval_gate verdict at p
         // "request Copilot review before any pre_approval_gate entry" before
         // enforcement runs — which would not exercise the marker path).
         reviews: [{ author: { login: "copilot-pull-request-reviewer" }, state: "COMMENTED", submittedAt: "2026-05-31T20:00:00Z", commit: { oid: "abc1234000000000000000000000000000000000" } }],
+        issueComments: [buildGateComment({})],
       }),
     ], { repeatLastOnOverflow: true });
     const result = await runNode([
