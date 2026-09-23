@@ -389,7 +389,7 @@ test("shares a reviewer for a configured group AND an auto-chunk bundle alike; o
       const composed = await readFile(unit.promptPath, "utf8");
       assert.ok(composed.startsWith(PREFIX_BYTES), `prefix-first for ${unit.scope}`);
       for (const angle of unit.angles) assert.match(composed, new RegExp(angle));
-      for (const instruction of unit.angleInstructions) assert.ok(composed.includes(instruction.prompt), `${unit.scope} carries ${instruction.angle} prompt`);
+      for (const instruction of unit.workOrder.angleInstructions) assert.ok(composed.includes(instruction.prompt), `${unit.scope} carries ${instruction.angle} prompt`);
       assert.ok(composed.includes(`--scope ${unit.scope}`), `composed prompt for ${unit.scope} must state its own --scope value verbatim`);
     }
   });
@@ -460,7 +460,7 @@ test("contradiction-lens's emitted unit leads with the invariant prefix and carr
     assert.ok(role.prompt && role.prompt.length > 0, "contradiction-lens must resolve a non-empty prompt");
     assert.match(role.prompt, /contradict/i);
     assert.ok(composed.slice(unit.sectionBytes.prefix).includes(role.prompt), "the work order carries the resolved angle prompt in its suffix");
-    assert.deepEqual(unit.angleInstructions, [{ angle: "contradiction-lens", persona: role.persona, prompt: role.prompt }]);
+    assert.deepEqual(unit.workOrder.angleInstructions, [{ angle: "contradiction-lens", persona: role.persona, prompt: role.prompt }]);
   });
 });
 
@@ -833,7 +833,7 @@ test("a successful run persists the keyed emit-plan artifact with the full resul
     assert.equal(persisted.maxConcurrent, stdoutPayload.maxConcurrent);
     assert.deepEqual(persisted.units, stdoutPayload.units);
     for (const unit of persisted.units) {
-      assert.deepEqual(Object.keys(unit).sort(), ["angleInstructions", "angles", "group", "promptBytes", "promptPath", "scope", "sectionBytes", "workOrder"].sort());
+      assert.deepEqual(Object.keys(unit).sort(), ["angles", "group", "promptBytes", "promptPath", "scope", "sectionBytes", "workOrder"].sort());
     }
   });
 });
@@ -1660,9 +1660,9 @@ test("emitter: angleInstructions carry the merged-config resolved prompt of ever
     const { config } = await loadDevLoopConfig({ repoRoot: tmpDir });
     assert.equal(resolveReviewerRole(config, "kiss").prompt, "CUSTOM-KISS-PROMPT from the repo layer");
     for (const unit of payload.units) {
-      assert.deepEqual(unit.angleInstructions.map((i) => i.angle), unit.angles);
+      assert.deepEqual(unit.workOrder.angleInstructions.map((i) => i.angle), unit.angles);
       const composed = await readFile(unit.promptPath, "utf8");
-      for (const instruction of unit.angleInstructions) {
+      for (const instruction of unit.workOrder.angleInstructions) {
         const role = resolveReviewerRole(config, instruction.angle);
         assert.equal(instruction.prompt, role.prompt);
         assert.equal(instruction.persona, role.persona);
@@ -1708,6 +1708,6 @@ test("emitter: an oversized consumer-configured angle prompt refuses (exit 1) na
     const { error } = JSON.parse(result.stdout);
     assert.match(error, /unit "design-simplicity"/);
     assert.match(error, /angles dry, kiss/);
-    assert.match(error, /is \d+ bytes, over the REVIEWER_WORK_ORDER_MAX_BYTES ceiling/);
+    assert.match(error, /is \d+ bytes \(prefix \d+, volatile \d+, suffix \d+\), over the REVIEWER_WORK_ORDER_MAX_BYTES ceiling/);
   });
 });

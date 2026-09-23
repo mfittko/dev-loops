@@ -18,6 +18,16 @@ function ruleBlock(content, id) {
   return rest.slice(0, Math.min(...ends));
 }
 
+// Old verbatim-seeding phrasings, matched against whitespace-collapsed text so
+// a clause wrapped across lines still counts.
+const OLD_VERBATIM_SEEDING = [
+  /seeded with that unit's `promptPath` bytes verbatim/,
+  /seed(ed)? [^.]*verbatim with (that|the neutral) bundle/i,
+  /seed(ed)? [^.]*with (that|the neutral( context)?) bundle verbatim/i,
+  /seed handed verbatim to every reviewer/i,
+];
+const collapse = (text) => text.replace(/\s+/g, " ");
+
 test("BUILD-ONCE-SEED and FANOUT-DISPATCH-EMIT describe reference seeding via requiredReads, without the old verbatim-seeding clauses", () => {
   const contract = read(CONTRACT);
   for (const id of ["GATE-EXEC-BUILD-ONCE-SEED", "GATE-EXEC-FANOUT-DISPATCH-EMIT"]) {
@@ -25,11 +35,12 @@ test("BUILD-ONCE-SEED and FANOUT-DISPATCH-EMIT describe reference seeding via re
     const block = ruleBlock(contract, id);
     assert.match(block, /requiredReads/, `${id} names requiredReads`);
     assert.match(block, /reference seed/i, `${id} names reference seeding`);
-    assert.doesNotMatch(block, /seeded with that unit's `promptPath` bytes verbatim/);
-    assert.doesNotMatch(block, /seed(ed)? .*verbatim with (that|the neutral) bundle/i);
   }
-  assert.doesNotMatch(contract, /seeded with that unit's `promptPath` bytes verbatim/);
-  assert.doesNotMatch(contract, /seed(ed)? .*verbatim with (that|the neutral) bundle/i);
+  for (const pattern of OLD_VERBATIM_SEEDING) assert.doesNotMatch(collapse(contract), pattern);
+});
+
+test("the old pointer-seeded non-compliance clause is scoped to prefix pointers: reference seeding of the bulk evidence is compliant", () => {
+  assert.match(collapse(read(CONTRACT)), /Reference seeding of the bulk evidence through `requiredReads` \(`GATE-EXEC-BUILD-ONCE-SEED`\) is compliant/);
 });
 
 test("contract forbids clipped/ellipsis evidence and requires a full referenced read", () => {
@@ -71,4 +82,12 @@ test("ADR 0086 records reference seeding as an accepted amendment of ADR 0021", 
   assert.match(adr, /## Status\s+Accepted — \d{4}-\d{2}-\d{2}/);
   assert.match(adr, /Amends 0021/);
   assert.match(adr, /reference seed/i);
+});
+
+test("`.adjacentCode` is an optional navigation aid on every prose surface, never a required full read", () => {
+  for (const rel of [CONTRACT, "agents/review.agent.md", "skills/copilot-pr-followup/SKILL.md", "scripts/github/write-gate-context.mjs"]) {
+    const text = collapse(read(rel));
+    assert.doesNotMatch(text, /required `\.adjacentCode`|`\.adjacentCode` is required/, `${rel} must not require .adjacentCode`);
+    assert.match(text, /optional `\.adjacentCode`|`\.adjacentCode` (\(an optional navigation aid|is an optional navigation aid)/, `${rel} names .adjacentCode optional`);
+  }
 });

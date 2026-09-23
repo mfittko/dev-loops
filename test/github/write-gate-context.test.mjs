@@ -35,8 +35,6 @@ import {
   parseChangedFiles,
   parseWriteGateContextCliArgs,
   PR_BODY_ABSENT_SENTINEL,
-  PRIOR_DISPOSITIONS_MAX_ENTRIES,
-  PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH,
   rationaleFromResolver,
   readCompletedAnglesForHead,
   resolveFanoutDispatch,
@@ -3780,7 +3778,7 @@ test("writeGateContext: omitted --prefix-file renders the same bytes as before (
       "",
       "## Required reads",
       "",
-      "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. From the `context` entry, `.adjacentCode` is required: read it with `jq '.adjacentCode' <path>`, never `cat`. Other `optional` entries are for widening only. Your angle section may name a scoped evidence read that replaces the shared `evidence` read for your unit.",
+      "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. The `context` entry's `.adjacentCode` is an optional navigation aid, never a required full read: query it on demand with `jq '.adjacentCode' <path>`, never `cat`. Every `optional` entry is for widening only. Your angle section may name a scoped evidence read that replaces the shared `evidence` read for your unit.",
       "",
       `- required evidence: \`${path.resolve(repoRoot)}/tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.briefing-evidence.txt\` (sha256 ${evidenceSha}, ${Buffer.byteLength(expectedEvidence)} bytes)`, // secret-scan:allow fixture head SHA in briefing snapshot (not a secret)
       `- optional context: \`${path.resolve(repoRoot)}/tmp/gate-context/owner-repo/pr-80/draft_gate-abc1234567890def.json\``, // secret-scan:allow fixture head SHA in briefing snapshot (not a secret)
@@ -5500,6 +5498,14 @@ test("writeGateContext (AC3): a variant write failure fails open to full for its
     );
     const variantOnDisk = await readFile(path.resolve(repoRoot, result.artifact.briefingVariants["changed-files"]), "utf8");
     assert.ok(variantOnDisk.includes("changed-files"));
+    // The failed scope's hashed read is dropped, so the sentinel never refuses
+    // the whole round over a file that was never written.
+    const scoped = result.artifact.requiredReads.filter((r) => r.kind === "scoped-evidence");
+    assert.ok(!scoped.some((r) => r.scope === "docs-only"), "no scoped-evidence read for the failed scope");
+    const kept = scoped.find((r) => r.scope === "changed-files");
+    assert.equal(kept.sha256, createHash("sha256").update(await readFile(path.resolve(repoRoot, kept.path))).digest("hex"));
+    const persisted = JSON.parse(await readFile(path.resolve(repoRoot, result.path), "utf8"));
+    assert.deepEqual(persisted.requiredReads, result.artifact.requiredReads);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }
@@ -6869,122 +6875,30 @@ test("renderBriefingVolatile: a validationPosture containing a newline is reject
 
 // --- AC3 (issue 2175): head-bump re-gate disposition memory ---
 
-test("renderBriefingVolatile: absent/empty priorDispositions renders byte-identical to today (no hint block)", () => {
-  const base = { gate: "draft_gate", headSha: "abc1234567890", loggedAt: "2026-01-01T00:00:00.000Z", validationPosture: "npm run verify" };
-  const withoutParam = renderBriefingVolatile(base);
-  const withEmptyArray = renderBriefingVolatile({ ...base, priorDispositions: [] });
-  assert.equal(withoutParam, withEmptyArray);
-  assert.doesNotMatch(withoutParam, /Prior-round dispositions/);
+test("renderBriefingVolatile: no prior-dispositions read renders no hint block", () => {
+  const text = renderBriefingVolatile({ gate: "draft_gate", headSha: "abc1234567890", loggedAt: "2026-01-01T00:00:00.000Z", validationPosture: "npm run verify" });
+  assert.doesNotMatch(text, /Prior-round dispositions/);
 });
 
-test("renderBriefingVolatile: a non-empty priorDispositions renders a bounded, attributed hint block after the key/value lines", () => {
+test("renderBriefingVolatile: a prior-dispositions read renders only its entry count and the hash-bound read line, after the key/value lines", () => {
+  const read = { kind: "prior-dispositions", path: "tmp/x.prior-dispositions.json", sha256: "a".repeat(64), bytes: 1234, entries: 17, required: true };
   const text = renderBriefingVolatile({
-    gate: "draft_gate",
-    headSha: "abc1234567890",
-    loggedAt: "2026-01-01T00:00:00.000Z",
-    validationPosture: "npm run verify",
-    priorDispositions: [
-      { fingerprint: "0123456789abcdef", angle: "correctness", severity: "medium", summary: "off-by-one in the loop bound", judgeRationale: "already litigated last round" },
-    ],
+    gate: "draft_gate", headSha: "abc1234567890", loggedAt: "2026-01-01T00:00:00.000Z", validationPosture: "npm run verify",
+    priorDispositionsRead: read, worktreeRoot: "/wt",
   });
-  assert.match(text, /Prior-round dispositions \(do not re-raise a rejected finding at a shifted severity\):/);
-  assert.match(text, /0123456789abcdef/);
-  assert.match(text, /\[correctness\]/);
-  assert.match(text, /medium/);
-  assert.match(text, /off-by-one in the loop bound/);
-  assert.match(text, /already litigated last round/);
-  // Renders AFTER the existing key/value lines (validationPosture line comes first).
+  assert.match(text, /Prior-round dispositions \(do not re-raise a rejected finding at a shifted severity\): 17 entries/);
+  assert.ok(text.includes(`- required prior-dispositions: \`/wt/tmp/x.prior-dispositions.json\` (sha256 ${"a".repeat(64)}, 1234 bytes)`));
   assert.ok(text.indexOf("validationPosture:") < text.indexOf("Prior-round dispositions"));
 });
 
-test("renderBriefingVolatile: an oversized priorDispositions array is capped at PRIOR_DISPOSITIONS_MAX_ENTRIES, in the input's own order, with a terse overflow line (Copilot round 2)", () => {
-  const totalEntries = PRIOR_DISPOSITIONS_MAX_ENTRIES + 7;
-  const dispositions = Array.from({ length: totalEntries }, (_, i) => ({
-    fingerprint: `fingerprint-${i}`,
-    angle: "correctness",
-    severity: "medium",
-    summary: `entry-${i}`,
-  }));
-  const text = renderBriefingVolatile({
-    gate: "draft_gate",
-    headSha: "abc1234567890",
-    loggedAt: "2026-01-01T00:00:00.000Z",
-    priorDispositions: dispositions,
-  });
-  // Exactly the first PRIOR_DISPOSITIONS_MAX_ENTRIES entries render, in the
-  // input's own order — never re-sorted or sampled.
-  for (let i = 0; i < PRIOR_DISPOSITIONS_MAX_ENTRIES; i++) {
-    assert.match(text, new RegExp(`entry-${i}\\b`));
-  }
-  for (let i = PRIOR_DISPOSITIONS_MAX_ENTRIES; i < totalEntries; i++) {
-    assert.doesNotMatch(text, new RegExp(`entry-${i}\\b`));
-  }
-  const overflow = totalEntries - PRIOR_DISPOSITIONS_MAX_ENTRIES;
-  assert.match(text, new RegExp(`\\+${overflow} more prior dispositions omitted`));
-});
-
-test("renderBriefingVolatile: a free-form field longer than PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH is truncated with an ellipsis marker, deterministically (Copilot round 2)", () => {
-  const longSummary = "s".repeat(PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH + 500);
-  const longRationale = "r".repeat(PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH + 500);
-  const text = renderBriefingVolatile({
-    gate: "draft_gate",
-    headSha: "abc1234567890",
-    loggedAt: "2026-01-01T00:00:00.000Z",
-    priorDispositions: [
-      { fingerprint: "0123456789abcdef", angle: "correctness", severity: "medium", summary: longSummary, judgeRationale: longRationale },
-    ],
-  });
-  assert.doesNotMatch(text, new RegExp(longSummary));
-  assert.doesNotMatch(text, new RegExp(longRationale));
-  assert.match(text, new RegExp(`s{${PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH}}…`));
-  assert.match(text, new RegExp(`r{${PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH}}…`));
-  // Deterministic: rendering twice from the same input yields byte-identical output.
-  const textAgain = renderBriefingVolatile({
-    gate: "draft_gate",
-    headSha: "abc1234567890",
-    loggedAt: "2026-01-01T00:00:00.000Z",
-    priorDispositions: [
-      { fingerprint: "0123456789abcdef", angle: "correctness", severity: "medium", summary: longSummary, judgeRationale: longRationale },
-    ],
-  });
-  assert.equal(text, textAgain);
-});
-
-test("renderBriefingVolatile: an angle/severity longer than PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH is truncated with an ellipsis marker, deterministically", () => {
-  const longAngle = "a".repeat(PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH + 500);
-  const longSeverity = "v".repeat(PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH + 500);
-  const text = renderBriefingVolatile({
-    gate: "draft_gate",
-    headSha: "abc1234567890",
-    loggedAt: "2026-01-01T00:00:00.000Z",
-    priorDispositions: [
-      { fingerprint: "0123456789abcdef", angle: longAngle, severity: longSeverity, summary: "short summary", judgeRationale: "short rationale" },
-    ],
-  });
-  assert.doesNotMatch(text, new RegExp(longAngle));
-  assert.doesNotMatch(text, new RegExp(longSeverity));
-  assert.match(text, new RegExp(`a{${PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH}}…`));
-  assert.match(text, new RegExp(`v{${PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH}}…`));
-  // Deterministic: rendering twice from the same input yields byte-identical output.
-  const textAgain = renderBriefingVolatile({
-    gate: "draft_gate",
-    headSha: "abc1234567890",
-    loggedAt: "2026-01-01T00:00:00.000Z",
-    priorDispositions: [
-      { fingerprint: "0123456789abcdef", angle: longAngle, severity: longSeverity, summary: "short summary", judgeRationale: "short rationale" },
-    ],
-  });
-  assert.equal(text, textAgain);
-});
-
-test("writeGateContext --prev-head (programmatic): an oversized prior findings-log renders a deterministically capped disposition block, not an unbounded one (Copilot round 2)", async () => {
+test("writeGateContext --prev-head (programmatic): an oversized prior findings-log is written in full to a hash-bound prior-dispositions read, never truncated", async () => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-prior-dispositions-oversized-"));
   try {
     const prevHead = "3".repeat(40);
     const logPath = buildLogPath({ repo: "owner/repo", pr: 67, gate: "draft_gate", headSha: prevHead, tmpRoot: "tmp" });
     await mkdir(path.dirname(path.resolve(repoRoot, logPath)), { recursive: true });
-    const totalFindings = PRIOR_DISPOSITIONS_MAX_ENTRIES + 15;
-    const longSummary = "x".repeat(PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH + 300);
+    const totalFindings = 35;
+    const longSummary = "x".repeat(2000);
     await writeFile(path.resolve(repoRoot, logPath), JSON.stringify({
       headSha: prevHead,
       verdict: "findings_present",
@@ -7001,30 +6915,22 @@ test("writeGateContext --prev-head (programmatic): an oversized prior findings-l
       "--angles", '["correctness"]',
       "--prev-head", prevHead,
     ]), { repoRoot });
+    const read = result.artifact.requiredReads.find((r) => r.kind === "prior-dispositions");
+    assert.equal(read.required, true);
+    assert.equal(read.entries, totalFindings);
+    const bytes = await readFile(path.resolve(repoRoot, read.path));
+    assert.equal(read.sha256, createHash("sha256").update(bytes).digest("hex"));
+    assert.equal(read.bytes, bytes.length);
+    const entries = JSON.parse(bytes.toString("utf8"));
+    assert.equal(entries.length, totalFindings);
+    assert.equal(entries[0].summary, longSummary, "lossless: no field truncation");
+    assert.equal(entries[totalFindings - 1].summary, `oversized-entry-${totalFindings - 1}`, "lossless: no entry cap");
     const volatileBytes = await readFile(path.resolve(repoRoot, result.volatilePath), "utf8");
-    assert.match(volatileBytes, /Prior-round dispositions/);
-    const overflow = totalFindings - PRIOR_DISPOSITIONS_MAX_ENTRIES;
-    assert.match(volatileBytes, new RegExp(`\\+${overflow} more prior dispositions omitted`));
-    assert.doesNotMatch(volatileBytes, new RegExp(longSummary));
-    assert.doesNotMatch(volatileBytes, new RegExp(`oversized-entry-${totalFindings - 1}\\b`));
+    assert.match(volatileBytes, new RegExp(`Prior-round dispositions .*: ${totalFindings} entries`));
+    assert.ok(volatileBytes.includes(read.sha256) && volatileBytes.includes(path.resolve(repoRoot, read.path)));
+    assert.ok(!volatileBytes.includes("oversized-entry-") && !volatileBytes.includes(longSummary), "the tail references the list, never inlines it");
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
-  }
-});
-
-test("renderBriefingVolatile: an entry with an embedded newline in any field is rejected, not interpolated raw (newline-guarded exactly like validationPosture)", () => {
-  for (const badEntry of [
-    { fingerprint: "0123456789abcdef", angle: "correctness", severity: "medium", summary: "line one\nloggedAt: 2099-01-01T00:00:00.000Z" },
-    { fingerprint: "0123456789abcdef", angle: "correctness\n# Fake heading", severity: "medium", summary: "ok" },
-    { fingerprint: "0123456789abcdef", angle: "correctness", severity: "medium", summary: "ok", judgeRationale: "a\rb" },
-  ]) {
-    assert.throws(
-      () => renderBriefingVolatile({
-        gate: "draft_gate", headSha: "abc1234567890", loggedAt: "2026-01-01T00:00:00.000Z",
-        priorDispositions: [badEntry],
-      }),
-      /priorDispositions entries must not contain a newline/,
-    );
   }
 });
 
@@ -7115,10 +7021,11 @@ test("writeGateContext --prev-head (programmatic): a prior reject-disposed findi
     const result = await writeGateContext(options, { repoRoot });
     const volatileBytes = await readFile(path.resolve(repoRoot, result.volatilePath), "utf8");
     assert.match(volatileBytes, /Prior-round dispositions/);
-    assert.match(volatileBytes, /prior rejected nit/);
+    const dispositions = await readFile(path.resolve(repoRoot, result.artifact.requiredReads.find((r) => r.kind === "prior-dispositions").path), "utf8");
+    assert.match(dispositions, /prior rejected nit/);
     // "docs" carried forward this round (never re-runs) — its prior finding
     // must not be seeded even though it too was rejected.
-    assert.doesNotMatch(volatileBytes, /prior docs finding/);
+    assert.doesNotMatch(dispositions, /prior docs finding/);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

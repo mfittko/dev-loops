@@ -12,11 +12,11 @@ import {
   buildGateDiffPath,
   buildGateEmitPlanPath,
   mapGateToConfigKey,
-  PRIOR_DISPOSITIONS_MAX_ENTRIES,
-  PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH,
   parseWriteGateContextCliArgs,
+  renderBriefingPrefix,
   renderBriefingVolatile,
   resolveFanoutDispatch,
+  VALIDATION_POSTURE_MAX_LENGTH,
   writeGateContext,
 } from "../../scripts/github/write-gate-context.mjs";
 import { loadDevLoopConfig } from "@dev-loops/core/config";
@@ -158,7 +158,8 @@ test("work order: schema carries target, operation, round identity, config ident
       assert.equal(order.headSha, HEAD_SHA);
       assert.match(order.configSha256, /^[0-9a-f]{64}$/);
       assert.deepEqual(order.assignedAngles, unit.angles);
-      assert.deepEqual(order.angleInstructions, unit.angleInstructions);
+      assert.deepEqual(order.angleInstructions.map((i) => i.angle), unit.angles);
+      assert.ok(!("angleInstructions" in unit), "angle instructions live only in the work order");
       assert.deepEqual(order.outputRefs.map((ref) => path.basename(ref)), unit.angles.map((a) => `${a}.json`));
       for (const ref of order.outputRefs) assert.ok(path.isAbsolute(ref));
       assert.ok(order.executionRules.budget.maxToolCalls > 0);
@@ -189,16 +190,16 @@ test("work order: siblings share the byte-identical prefix and identical shared 
     for (const prompt of prompts) assert.ok(prompt.startsWith(prefix));
     const shared = JSON.stringify(payload.units[0].workOrder.requiredReads);
     for (const unit of payload.units) assert.equal(JSON.stringify(unit.workOrder.requiredReads), shared);
-    assert.equal(new Set(payload.units.map((u) => JSON.stringify(u.angleInstructions))).size, payload.units.length);
+    assert.equal(new Set(payload.units.map((u) => JSON.stringify(u.workOrder.angleInstructions))).size, payload.units.length);
     payload.units.forEach((unit, i) => {
       for (const sibling of payload.units) {
         if (sibling === unit) continue;
-        for (const instruction of sibling.angleInstructions) {
+        for (const instruction of sibling.workOrder.angleInstructions) {
           assert.ok(!prompts[i].includes(instruction.prompt), `${unit.scope} must not carry ${instruction.angle}'s prompt`);
           assert.ok(!prompts[i].includes(`/${instruction.angle}.json`), `${unit.scope} must not carry ${instruction.angle}'s output ref`);
         }
       }
-      for (const instruction of unit.angleInstructions) assert.ok(prompts[i].includes(instruction.prompt));
+      for (const instruction of unit.workOrder.angleInstructions) assert.ok(prompts[i].includes(instruction.prompt));
     });
   });
 });
@@ -269,6 +270,19 @@ test("work order: a unit whose angles share a scoped variant reads the builder-h
   });
 });
 
+test("work order: a unit with mixed angle scopes gets no scoped read and keeps the shared evidence read", async () => {
+  await withTmpDir(async (repoRoot) => {
+    const written = await writeRound(repoRoot, { angleScopes: { dry: "docs-only" } });
+    assert.ok(written.artifact.requiredReads.some((r) => r.kind === "scoped-evidence" && r.scope === "docs-only"));
+    const payload = runEmit(repoRoot);
+    const mixed = payload.units.find((u) => u.angles.includes("dry"));
+    assert.ok(mixed.angles.some((a) => a !== "dry"), `dry shares its unit with a full-scope angle: ${mixed.angles}`);
+    assert.ok(mixed.workOrder.requiredReads.some((r) => r.kind === "evidence"));
+    assert.ok(!mixed.workOrder.requiredReads.some((r) => r.kind === "scoped-evidence"));
+    assert.doesNotMatch(await readFile(mixed.promptPath, "utf8"), /REPLACES the shared/);
+  });
+});
+
 // Every `prompt` string anywhere in the shipped defaults, longest first.
 function shippedPrompts(node, out = []) {
   if (Array.isArray(node)) for (const item of node) shippedPrompts(item, out);
@@ -281,29 +295,45 @@ function shippedPrompts(node, out = []) {
   return out.sort((a, b) => Buffer.byteLength(b) - Buffer.byteLength(a));
 }
 
-test("work order: the worst case (maximal prior dispositions, three longest shipped prompts, scoped read) stays under the ceiling", async () => {
-  await withTmpDir(async (repoRoot) => {
-    const written = await writeRound(repoRoot);
-    const prefixBytes = (await stat(path.join(repoRoot, written.prefixPath))).size;
-    // 3-byte UTF-8 characters: the largest byte count per UTF-16 unit the char-based truncation allows.
-    const wide = "中".repeat(PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH + 50);
-    const priorDispositions = Array.from({ length: PRIOR_DISPOSITIONS_MAX_ENTRIES + 5 }, () => ({
-      fingerprint: "f".repeat(16), angle: wide, severity: wide, summary: wide, judgeRationale: wide,
-    }));
-    const volatileBytes = Buffer.byteLength(renderBriefingVolatile({
-      gate: GATE, headSha: HEAD_SHA, loggedAt: new Date().toISOString(), validationPosture: "v".repeat(500), priorDispositions,
-    }));
-    const defaults = parseYaml(await readFile(path.resolve("packages/core/src/config/extension-defaults.yaml"), "utf8"));
-    const longest = shippedPrompts(defaults).slice(0, 3);
-    assert.equal(longest.length, 3);
-    const angles = ["a".repeat(64), "b".repeat(64), "c".repeat(64)];
-    const suffixBytes = Buffer.byteLength(buildAngleNamingSuffix(
-      { name: "n".repeat(64), angles },
-      `pre-approval-gate-group-${"s".repeat(64)}`,
-      angles.map((angle, i) => ({ angle, persona: "p".repeat(64), prompt: longest[i] })),
-      [{ kind: "scoped-evidence", scope: "changed-files", path: path.join(repoRoot, "p".repeat(200)), sha256: "f".repeat(64), bytes: 99999999, required: true }],
-    ));
-    const total = prefixBytes + volatileBytes + suffixBytes;
-    assert.ok(total < REVIEWER_WORK_ORDER_MAX_BYTES, `worst case ${total} bytes (prefix ${prefixBytes}, volatile ${volatileBytes}, suffix ${suffixBytes})`);
-  });
+test("work order: the worst case (maximal worktree path, every read kind, maximal posture, three longest shipped prompts, scoped read) stays under the ceiling", async () => {
+  // A fixed 255-char worktree root, so the bound is identical on every host
+  // (never the host tmpdir length).
+  const worktreeRoot = `/${"w".repeat(254)}`;
+  const hash = "f".repeat(64);
+  const round = { repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA };
+  const artifactPath = (suffix) => path.join("tmp", "gate-context", "o-r", `pr-${PR}`, `${GATE}-${HEAD_SHA}${suffix}`);
+  const read = (kind, suffix, required) => ({ kind, path: artifactPath(suffix), sha256: hash, bytes: 99999999, required });
+  const requiredReads = [
+    read("evidence", ".briefing-evidence.txt", true),
+    read("diff", ".diff", true),
+    read("validation", ".validation.json", false),
+    { kind: "context", path: artifactPath(".json"), required: false },
+  ];
+  const prefixBytes = Buffer.byteLength(renderBriefingPrefix({
+    ...round, worktreeRoot, contextPath: artifactPath(".json"), briefingPrefixPath: artifactPath(".briefing-prefix.txt"), requiredReads,
+  }).text);
+  // 3-byte UTF-8 characters: the largest byte count per UTF-16 unit the char bound allows.
+  const volatileBytes = Buffer.byteLength(renderBriefingVolatile({
+    gate: GATE, headSha: HEAD_SHA, loggedAt: new Date().toISOString(), validationPosture: "中".repeat(VALIDATION_POSTURE_MAX_LENGTH),
+    priorDispositionsRead: { ...read("prior-dispositions", ".prior-dispositions.json", true), entries: 99999999 }, worktreeRoot,
+  }));
+  const defaults = parseYaml(await readFile(path.resolve("packages/core/src/config/extension-defaults.yaml"), "utf8"));
+  const longest = shippedPrompts(defaults).slice(0, 3);
+  assert.equal(longest.length, 3);
+  const angles = ["a".repeat(64), "b".repeat(64), "c".repeat(64)];
+  const suffixBytes = Buffer.byteLength(buildAngleNamingSuffix(
+    { name: "n".repeat(64), angles },
+    `pre-approval-gate-group-${"s".repeat(64)}`,
+    angles.map((angle, i) => ({ angle, persona: "p".repeat(64), prompt: longest[i] })),
+    [{ kind: "scoped-evidence", scope: "changed-files", path: path.join(worktreeRoot, artifactPath(".briefing-changed-files.txt")), sha256: hash, bytes: 99999999, required: true }],
+  ));
+  const total = prefixBytes + volatileBytes + suffixBytes;
+  assert.ok(total < REVIEWER_WORK_ORDER_MAX_BYTES, `worst case ${total} bytes (prefix ${prefixBytes}, volatile ${volatileBytes}, suffix ${suffixBytes})`);
+});
+
+test("volatile tail: a validation posture past VALIDATION_POSTURE_MAX_LENGTH is refused, never truncated", () => {
+  assert.throws(
+    () => renderBriefingVolatile({ gate: GATE, headSha: HEAD_SHA, loggedAt: "t", validationPosture: "v".repeat(VALIDATION_POSTURE_MAX_LENGTH + 1) }),
+    /over the 500-char bound/,
+  );
 });

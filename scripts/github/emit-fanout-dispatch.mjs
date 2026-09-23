@@ -81,9 +81,9 @@ Output (stdout, JSON):
   { "ok": true, "gate": "...", "headSha": "...", "repo": "...", "pr": "...",
     "pending": <true|false>, "count": <n>, "maxConcurrent": <n>, "units": [ { "scope": "...", "angles": ["..."], "group": <name|null>, "promptPath": "...",
       "promptBytes": <n>, "sectionBytes": { "prefix": <n>, "volatile": <n>, "suffix": <n> },
-      "angleInstructions": [ { "angle": "...", "persona": "...", "prompt": "..." } ],
       "workOrder": { "target", "operation", "roundIdentity", "headSha", "configSha256", "assignedAngles",
-        "angleInstructions", "requiredReads", "outputRefs", "executionRules" } } ] }
+        "angleInstructions": [ { "angle": "...", "persona": "...", "prompt": "..." } ],
+        "requiredReads", "outputRefs", "executionRules" } } ] }
   Wave the EMITTED units at most \`maxConcurrent\` at a time (1 when
   gates.fanout.sequential is set). Do NOT use the artifact's fanout.wavePlan to
   bound this step: that plan is computed over the UNSPLIT resolveFanoutGroups
@@ -779,13 +779,13 @@ export async function main(argv = process.argv.slice(2), { tmpRootDefault = path
     // evidence leaked into the work order. Refuse rather than relay it.
     const promptBytes = Buffer.byteLength(promptText);
     if (promptBytes > REVIEWER_WORK_ORDER_MAX_BYTES) {
-      return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — the work order for unit ${JSON.stringify(unit.name)} (scope ${scope}, angles ${angles.join(", ")}) is ${promptBytes} bytes, over the REVIEWER_WORK_ORDER_MAX_BYTES ceiling of ${REVIEWER_WORK_ORDER_MAX_BYTES}; shorten the configured angle prompts or split the unit, and reference bulk evidence through requiredReads instead of inlining it` }, false);
+      return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — the work order for unit ${JSON.stringify(unit.name)} (scope ${scope}, angles ${angles.join(", ")}) is ${promptBytes} bytes (prefix ${result.sectionBytes.prefix}, volatile ${result.sectionBytes.volatile}, suffix ${result.sectionBytes.suffix}), over the REVIEWER_WORK_ORDER_MAX_BYTES ceiling of ${REVIEWER_WORK_ORDER_MAX_BYTES}; shrink the oversized section: shorten the configured angle prompts or split the unit, and reference bulk evidence through requiredReads instead of inlining it` }, false);
     }
     if (/^diff --git /m.test(promptText)) {
       return finish({ ok: false, error: `GATE-EXEC-FANOUT-DISPATCH-EMIT: refusing — the work order for unit ${JSON.stringify(unit.name)} (scope ${scope}) carries inline diff text (a "diff --git" line); reference the diff through requiredReads instead` }, false);
     }
     emitted.push({
-      scope, angles, group: unit.group, promptPath: result.promptPath, promptBytes, sectionBytes: result.sectionBytes, angleInstructions,
+      scope, angles, group: unit.group, promptPath: result.promptPath, promptBytes, sectionBytes: result.sectionBytes,
       workOrder: {
         target: { repo, pr },
         operation: "gate",

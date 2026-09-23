@@ -329,7 +329,7 @@ Each reviewer:
 
 - starts in fresh context: run the mandatory `verify-fresh-review-context.mjs` invocation exactly as Phase 1 specifies. In the fan-out, `--scope` additionally keeps parallel reviewers in the same working directory from tripping false contamination on each other's sentinels, and `--context-path` (the Phase 1 artifact) fails a reviewer in the wrong/isolated checkout closed. A grouped reviewer runs this ONCE for the whole group, passing the emitted unit's `scope` verbatim as `--scope` — exactly as its prompt states, never composed from the unit name — not once per angle it covers. The sentinel is keyed per review ROUND by the current head SHA, so a retry at a new head naturally gets a fresh sentinel — see [Sentinel lifecycle](#sentinel-lifecycle). Here "fresh" means the reviewer's context is the neutral builder artifact + its angle(s), and explicitly NOT the main agent's conversation/state or a prior reviewer session's state: the injected neutral bundle is the intended seed (allowed), while main-agent / cross-session state bleed fails closed.
 - is composed via the sanctioned composer (`GATE-EXEC-BRIEFING-PREFIX`'s "The composer" paragraph): the same step that runs `verify-fresh-review-context.mjs` (above) is `scripts/github/emit-fanout-dispatch.mjs --repo <repo> --pr <n> --gate <gate> --head-sha <sha>`, which for each dispatch unit writes that unit's angle-suffix and drives the composer core (`composeAndRecordReviewerPrompt`) internally — inlining this round's invariant-prefix bytes as the leading bytes, appending the volatile tail and the angle suffix, writing the composed prompt, and recording its dispatch-prompt layout ATOMICALLY (no separate `record-dispatch-prompt-layout.mjs` call needed on this path — the composer core already made it). The orchestrator then delivers each emitted unit's `promptPath` bytes to its reviewer per the "Per-harness delivery" paragraph below. Hand-composing a prompt and calling `record-dispatch-prompt-layout.mjs` directly against it remains possible as the underlying primitive, but is no longer the sanctioned fan-out path; the composer's own CLI (`compose-reviewer-prompt.mjs`) refuses every direct fan-out invocation (it never writes the keyed emit-plan.json fan-in requires) and names this emitter instead.
-- reads the neutral evidence its work order references (`requiredReads`: the evidence file with the diff, or for a scoped unit its `scoped-evidence` variant in place of that file, and the full `.diff` when the evidence points to it) in full as its base. It also reads the required `.adjacentCode` of the context artifact and the optional validation record field by field with `jq`, and widens (loads more files) only when a covered angle genuinely needs more — it does not re-derive the whole diff/adjacent-code graph. When it widens, it records in the findings artifact's optional `contextWidened` field ONLY the files that actually moved its judgment, never every file it opened. Absence of `contextWidened` (or an empty one) means "not consulted" — never "consulted and clean"; carry-forward and audit logic MUST NOT infer clean-ness from that omission.
+- reads the neutral evidence its work order references (`requiredReads`: the evidence file with the diff, or for a scoped unit its `scoped-evidence` variant in place of that file, and the full `.diff` when the evidence points to it) in full as its base. It reads the `prior-dispositions` list in full when the volatile tail names one. It queries the context artifact's `.adjacentCode` (an optional navigation aid, never a required full read) and the optional validation record field by field with `jq`, and widens (loads more files) only when a covered angle genuinely needs more — it does not re-derive the whole diff/adjacent-code graph. When it widens, it records in the findings artifact's optional `contextWidened` field ONLY the files that actually moved its judgment, never every file it opened. Absence of `contextWidened` (or an empty one) means "not consulted" — never "consulted and clean"; carry-forward and audit logic MUST NOT infer clean-ness from that omission.
 - is scoped to exactly one review angle (one angle per unit under `mode: per-angle`, which bypasses configured groups; every angle in its resolved group (grouped mode, the default — including `gate:full`, which dispatches grouped) — each angle keeps its own prompt, all appended after the one shared invariant prefix (`GATE-EXEC-BRIEFING-PREFIX`)
 - is **read-only**: inspects the diff and returns findings via output artifacts only; never edits files
 - runs in the PR's actual worktree/head — **never an isolated worktree** (the Phase 1
@@ -433,7 +433,7 @@ disk, the emitter reads the artifact's fan-out dispatch plan (`artifact.fanout.g
 `artifact.fanout.pendingGroups` under `--pending`) and, for EACH resolved dispatch unit,
 writes the unit's angle-suffix and drives the composer core above (`composeAndRecordReviewerPrompt`,
 the shared atomic compose-and-record core). It emits one
-`{ scope, angles, group, promptPath, promptBytes, sectionBytes, angleInstructions, workOrder }`
+`{ scope, angles, group, promptPath, promptBytes, sectionBytes, workOrder }`
 per DISPATCH unit plus a `maxConcurrent` field. Each unit's prompt is a bounded work order and
 uses reference seeding: the `workOrder` carries the target, the round identity (gate, head,
 prefix sha256), the merged-config sha256 (informational only; nothing verifies it), the assigned angles with each angle's resolved persona
@@ -1085,12 +1085,12 @@ re-gate, `write-gate-context.mjs --prev-head <A>` (mirrors `resolve-angle-carry-
 own `--prev-head` vocabulary) reads head A's durable findings-log and seeds every
 `reject`/`defer`-disposed finding attributed to an angle re-running THIS round (an angle in
 `--angles` not named in `--carried-angles` — a carried angle's reviewer never re-runs, so it
-gets no hint) into the rendered volatile tail as a "Prior-round dispositions (do not
-re-raise a rejected finding at a shifted severity)" block (fingerprint, angle, severity,
-summary, `judgeRationale`), deterministically bounded to a fixed max-entry count (kept in the
-prior log's own order) with each free-form field truncated to a fixed max length and a terse
-"+K more prior dispositions omitted" line on overflow — a large or corrupted prior log can
-never make a reviewer prompt unboundedly large. An `act` (still-open) disposition is
+gets no hint) by reference. The full list (fingerprint, angle, severity, summary,
+`judgeRationale`, in the prior log's own order, never truncated) goes to the round-bound
+`<gate>-<headSha>.prior-dispositions.json`, recorded as a hash-bound `prior-dispositions`
+required read in `requiredReads`. The rendered volatile tail carries only a "Prior-round
+dispositions (do not re-raise a rejected finding at a shifted severity)" line with the entry
+count and that read line, so a large prior log never grows the reviewer prompt. An `act` (still-open) disposition is
 deliberately excluded — it is live findings territory, not do-not-re-raise memory. `--prev-head`
 is rejected outright (fail-closed) when it names the same head as `--head-sha`, checked in both
 prefix directions so a full 64-char head and its 40-char prefix are also caught. Past that

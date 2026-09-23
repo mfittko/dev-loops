@@ -100,6 +100,7 @@ Output (stdout, JSON):
   { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "reason": "..." }
   { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "gateContextPath": "...", "gateContextPresent": false, "reason": "..." }
   { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "gateContextPath": "...", "gateContextPresent": true, "reason": "required read <kind> ..." }
+  { "ok": true, "fresh": false, "sentinelCreated": false, "round": "...", "gateContextPath": "...", "gateContextPresent": true, "reason": "gate-context artifact is unreadable ..." }
   repoRoot (fresh runs only) is the directory the sentinel ran in. With
   --context-path it is worktree-local (the locality guard proved it); without
   that flag it is simply the invocation cwd, unvalidated. Reviewer shells
@@ -115,8 +116,9 @@ Exit codes:
   1  Refuse to review: contaminated (prior session detected), OR (with
      --context-path) the seeded gate-context artifact is missing or resolves
      outside the reviewer's working directory, OR (with --context-path) a
-     hashed requiredReads entry of that artifact is missing, unreadable, or no
-     longer matches its recorded sha256, OR (with --prefix-file) the
+     requiredReads entry of that artifact is missing or unreadable, or a
+     hashed one no longer matches its recorded sha256 or byte count, OR (with
+     --context-path) the artifact itself is not parseable JSON, OR (with --prefix-file) the
      prefix file is missing, OR (with --same-head-retry) the existing
      sentinel's recorded prefix hash does not match the given one (or records
      none at all)
@@ -232,8 +234,9 @@ async function readSentinelPrefixHash(sentinelPath) {
   }
 }
 // Returns null when every `requiredReads` entry carrying a sha256 reads back
-// with that hash and byte count, else a reason naming the failing read. An
-// unparseable artifact is a failure: its required reads cannot be proven.
+// with that hash and byte count, and every other `required: true` entry is
+// readable, else a reason naming the failing read. An unparseable artifact is
+// a failure: its required reads cannot be proven.
 async function verifyRequiredReads(contextPath, cwd) {
   let artifact;
   try {
@@ -243,7 +246,8 @@ async function verifyRequiredReads(contextPath, cwd) {
   }
   const reads = Array.isArray(artifact?.requiredReads) ? artifact.requiredReads : [];
   for (const read of reads) {
-    if (typeof read?.sha256 !== "string") continue;
+    const hashed = typeof read?.sha256 === "string";
+    if (!hashed && read?.required !== true) continue;
     const label = `required read ${read.kind} "${read.path}"`;
     let bytes;
     try {
@@ -251,6 +255,7 @@ async function verifyRequiredReads(contextPath, cwd) {
     } catch (err) {
       return `${label} is unreadable (${err.code ?? "error"})`;
     }
+    if (!hashed) continue;
     const actual = createHash("sha256").update(bytes).digest("hex");
     if (actual !== read.sha256 || (typeof read.bytes === "number" && bytes.length !== read.bytes)) {
       return `${label} does not match its recorded sha256 ${read.sha256} (found ${actual}, ${bytes.length} bytes)`;

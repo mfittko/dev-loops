@@ -212,9 +212,9 @@ Optional:
   --acceptance-criteria <ptr>    Pointer to acceptance criteria (issue ref, doc path, URL); also used as the linked-issue label in the rendered briefing evidence file. OPTIONAL: when omitted, every of the PR's closing issue references is resolved, comma-joined and cross-repo-qualified (e.g. #1496, #1511 or owner/other#12) — an umbrella PR resolves all of them. The linked issues' bodies are fetched only when --issue-body is also omitted (see below). An unreadable PR or linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering absence. A whitespace-only value is treated as absent (resolves exactly as if the flag were omitted, never recorded as caller-provided).
   --validation-posture <text>    Short description of the validation posture
   --pr-body <text>               PR description text, inlined into the rendered briefing evidence file. OPTIONAL: when omitted the live PR body is fetched from GitHub. An unreadable PR fails closed rather than rendering the PR as description-less. A whitespace-only value is treated as absent (the live body is fetched; a sentinel is rendered only when the resolved source genuinely has no content).
-  --issue-body <text>            Linked-issue body text, inlined into the briefing evidence file under --acceptance-criteria's label. OPTIONAL: when omitted it is fetched from every of the PR's closing issue references (an umbrella PR closes several), but ONLY when --acceptance-criteria is also omitted — supplying --acceptance-criteria suppresses the issue-body fetch, so pass --issue-body too if the prefix should still carry issue text. An unreadable linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering the section as absent; the bodies are omitted from the prefix entirely when the PR closes no issue. A whitespace-only value is treated as absent (resolved/fetched exactly as if the flag were omitted).
+  --issue-body <text>            Linked-issue body text, inlined into the briefing evidence file under --acceptance-criteria's label. OPTIONAL: when omitted it is fetched from every of the PR's closing issue references (an umbrella PR closes several), but ONLY when --acceptance-criteria is also omitted — supplying --acceptance-criteria suppresses the issue-body fetch, so pass --issue-body too if the evidence file should still carry issue text. An unreadable linked issue FAILS CLOSED (exit 1, no artifact written) rather than rendering the section as absent; the bodies are omitted from the evidence file entirely when the PR closes no issue. A whitespace-only value is treated as absent (resolved/fetched exactly as if the flag were omitted).
   --prefix-file <path>           Record the EXACT BYTES of this file as the briefing-prefix record (<gate>-<headSha>.briefing-prefix.txt) instead of this module's self-rendered prefix — no rendering, no trailing-newline normalization. The emitted prefixHash is the sha256 of those exact bytes and the result/artifact report prefixMode:"file". For an orchestrator that already briefed reviewers with its OWN rendered prefix, this is what lets it record THAT byte sequence so verify-briefing-prefixes.mjs matches. Fails closed (exit 1) if the file is missing, unreadable, or empty. Skips the GitHub spec-of-record resolution (--pr-body/--issue-body/--acceptance-criteria) entirely — the recorded bytes come from this file, so a fetched PR/issue body could never reach them, and the CLI never touches GitHub in this mode at all (--base only runs local git reads). Omit for the default self-rendered prefix (prefixMode inline|pointer).
-  --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-ARTIFACT) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing evidence file, bound by sha256 as a required read (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
+  --validation-results <path>    Path to the run-gate-validation.mjs artifact (GATE-EXEC-VALIDATION-ARTIFACT) recording this round's validation suites, run once for every reviewer of this gate pass to read instead of re-running. Resolved to an absolute path and recorded at scope.validationResultsPath, and appends a trailing "## Validation results at this head" section to the rendered briefing evidence file, bound by sha256 as an optional read (read field by field with jq; the sentinel still verifies its hash) (self-rendered mode only — ignored under --prefix-file, whose bytes are recorded verbatim). Fails closed (exit 1) if the file is missing or unreadable. Omit for no validation-results section (byte-identical to before this flag existed).
   --full-label                   The PR carries the gate:full label: dynamic angle resolution skips diff-class tier reduction (resolveGateTier returns gate_full_label) and resolves the untriered angle set. Only meaningful when --angles is omitted. When this flag is absent (and --prefix-file is not in use), the label is derived from the live PR via a labels read; a failed read fails closed to the untriered set. Under --prefix-file the CLI never touches GitHub, so the label cannot be derived and an omitted flag likewise fails closed to the untriered set (pass --angles to force a specific set there).
   --available-reviewers <n>      Harness remaining reviewer budget for the #1507 reviewer-budget preflight (non-negative integer). When supplied, the artifact's fanout.preflight reports whether the budget covers this round's dispatch units; on a shortfall, fanout.preflight.dispatch is false and the conductor MUST NOT spawn any reviewer (the shortfall is a resumable state — the artifact records it). Omit when the harness does not expose a budget; the preflight then proceeds (no shortfall can be proven).
   --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean head (mirrors consolidate-fanin.mjs's own --carried-angles vocabulary, minus its --carry-forward-plan proof check — the caller here IS the fail-closed carry-forward seam, resolve-angle-carry-forward.mjs, never a guess). Like consolidate-fanin.mjs's own mandatory-angle refusal, a name whose review surface always re-runs (a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE evidence/security/description angle) fails closed (exit 1) rather than being honored. A dispatch group whose angles are all carried-or-already-complete (already-complete: a clean per-angle artifact already stamped for this head, scanned automatically — see readCompletedAnglesForHead) is excluded from fanout.preflight.requiredReviewers and pendingGroups, so a head-bump re-gate does not over-count angles Phase 1.2 is about to carry. A wrong/stale value can only shrink the dispatch plan, never grow it past the true group count — it can under-dispatch, never over-spend the budget or fabricate findings for an angle that DID run: the configured-mandatory coverage check and the fail-closed merge check's clean current-head merge marker requirement catch an under-dispatched round ONLY when the wrongly-carried angle is a CONFIGURED mandatory angle — neither ever unions the hardcoded ALWAYS_INCLUDE set, so a wrong value naming only a non-mandatory, non-ALWAYS_INCLUDE angle under-dispatches with no mechanical refusal, visible only in the ledger's own carried-angle provenance (an ALWAYS_INCLUDE name is already refused at this CLI's own entry, above). Omit for today's full-count behavior (nothing excluded).
@@ -1301,7 +1301,7 @@ function renderRequiredReadsSection(requiredReads, worktreeRoot) {
   return [
     "## Required reads",
     "",
-    "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. From the `context` entry, `.adjacentCode` is required: read it with `jq '.adjacentCode' <path>`, never `cat`. Other `optional` entries are for widening only. Your angle section may name a scoped evidence read that replaces the shared `evidence` read for your unit.",
+    "This prefix does not inline the review evidence. Every bulk artifact of this round is listed below by worktree-absolute path. Before any judgment, read every `required` entry IN FULL; page a large file with offset/limit until end of file. A summary, an excerpt, or a clipped view never substitutes for a required read. The sha256 and byte count bind each entry to this round, and the mandatory sentinel above re-checks them. If a required read is missing, unreadable, or its sha256 differs, stop: run `dev-loops-run scripts/github/emit-reviewer-blocked.mjs` as the bounded reviewer contract below names, omit `--completed-angles`, and never report clean. The `context` entry's `.adjacentCode` is an optional navigation aid, never a required full read: query it on demand with `jq '.adjacentCode' <path>`, never `cat`. Every `optional` entry is for widening only. Your angle section may name a scoped evidence read that replaces the shared `evidence` read for your unit.",
     "",
     ...(reads.length > 0 ? reads.map((read) => renderRequiredReadLine(read, worktreeRoot)) : ["- (no required reads recorded)"]),
   ].join("\n");
@@ -1680,34 +1680,11 @@ export function renderScopedBriefingVariant(scope, {
  */
 export const REQUEST_PLAN_BLOCK_BOUNDARIES = Object.freeze(["shared_prefix", "cache_boundary", "volatile_tail"]);
 
-// ponytail: the prior-round-dispositions block below is documented as
-// "bounded" (AC3, issue 2175) — these two constants ARE the bound. A
-// corrupted/adversarial prior ledger with thousands of findings, or a single
-// finding with an arbitrarily long free-form summary/judgeRationale, must
-// never make a reviewer prompt unboundedly large. Deterministic (no
-// content-dependent truncation choice, no random sampling): the first
-// PRIOR_DISPOSITIONS_MAX_ENTRIES entries in the prior log's OWN order are
-// kept, every free-form field is truncated at
-// PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH chars with an ellipsis marker, and any
-// overflow past the entry cap is summarized in one terse line rather than
-// silently dropped. Sized so the maximal block, the prefix and a suffix with
-// the three longest shipped angle prompts stay under the emitter's
+// Upper bound (chars) on --validation-posture, the one free-form caller value
+// the volatile tail still inlines. Refused past the bound, never truncated, so
+// the worst-case work order stays under the emitter's
 // REVIEWER_WORK_ORDER_MAX_BYTES ceiling (pinned by a worst-case test).
-export const PRIOR_DISPOSITIONS_MAX_ENTRIES = 10;
-export const PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH = 100;
-
-/**
- * Truncate a free-form field to {@link PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH}
- * chars, appending an ellipsis marker when truncated. Applied AFTER the
- * newline guard below, so the marker itself is always plain, single-line
- * text — it can never smuggle in a forged line.
- * @param {string} value
- * @returns {string}
- */
-function truncatePriorDispositionField(value) {
-  if (value.length <= PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH) return value;
-  return `${value.slice(0, PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH)}…`;
-}
+export const VALIDATION_POSTURE_MAX_LENGTH = 500;
 
 /**
  * Render the materialized VOLATILE tail block (GATE-EXEC-BRIEFING-PREFIX's
@@ -1736,43 +1713,27 @@ function truncatePriorDispositionField(value) {
  * `.trim()`ed). Because this file is line-structured (`key: value` per
  * line), an embedded newline could forge additional lines (a second
  * `loggedAt:`, a fake `#` heading). Fails closed on a newline rather than
- * escaping it — an escape character is itself forgeable text.
+ * escaping it — an escape character is itself forgeable text. It also fails
+ * closed past {@link VALIDATION_POSTURE_MAX_LENGTH} chars.
  *
- * AC3 (issue 2175, head-bump re-gate disposition memory): `priorDispositions`
- * — each `{ fingerprint, angle, severity, summary, judgeRationale? }` — is an
- * OPTIONAL, ADDITIVE block rendered after the key/value lines above. Absent
- * or empty, the rendered bytes are byte-identical to today. Every string
- * field is newline-guarded exactly like `validationPosture` (same forged-line
- * hazard); this function's caller ({@link writeGateContext}'s `--prev-head`
- * handling) is expected to have already filtered out any malformed prior
- * finding rather than let one reach here, so this guard should never fire in
- * practice — it exists as the same defense-in-depth `validationPosture`
- * already has. This block only ever ADDS a "do not re-raise" hint; it never
- * suppresses a finding or converts a reject into an approval.
- *
- * BOUNDED, deterministically: at most {@link PRIOR_DISPOSITIONS_MAX_ENTRIES}
- * entries are rendered, kept in the prior log's own order (never re-sorted or
- * sampled), with any overflow summarized in one terse "+K more ... omitted"
- * line; every rendered field (`angle`, `severity`, `summary`,
- * `judgeRationale`) is truncated to {@link PRIOR_DISPOSITIONS_MAX_FIELD_LENGTH}
- * chars. A large or corrupted
- * prior findings-log can therefore never make this block — or the reviewer
- * prompt it feeds — unboundedly large.
+ * AC3 (issue 2175, head-bump re-gate disposition memory): the prior-round
+ * dispositions are referenced, never inlined. `priorDispositionsRead` is the
+ * `prior-dispositions` required read {@link writeGateContext} hash-binds: the
+ * full, untruncated list in a round-bound JSON file. This block renders only
+ * its entry count and the read line. Absent, the rendered bytes carry no
+ * dispositions block. The hint only ever ADDS a "do not re-raise" signal; it
+ * never suppresses a finding or converts a reject into an approval.
  *
  * @param {string|null} [input.validationPosture] — must not contain a newline
- * @param {Array<{fingerprint: string, angle: string, severity: string, summary: string, judgeRationale?: string}>} [input.priorDispositions] — reject/defer-disposed findings from the prior head, attributed to an angle re-running this round
+ * @param {{ kind: "prior-dispositions", path: string, sha256: string, bytes: number, entries: number, required: true }|null} [input.priorDispositionsRead]
+ * @param {string} [input.worktreeRoot] — resolves the read's path worktree-absolute
  */
-export function renderBriefingVolatile({ gate, headSha, loggedAt, validationPosture = null, priorDispositions = [] }) {
+export function renderBriefingVolatile({ gate, headSha, loggedAt, validationPosture = null, priorDispositionsRead = null, worktreeRoot = process.cwd() }) {
   if (validationPosture != null && /[\r\n]/.test(validationPosture)) {
     throw new Error("renderBriefingVolatile: validationPosture must not contain a newline — an embedded newline could forge additional key: value lines in this line-structured file");
   }
-  const dispositions = Array.isArray(priorDispositions) ? priorDispositions : [];
-  for (const entry of dispositions) {
-    for (const field of [entry?.fingerprint, entry?.angle, entry?.severity, entry?.summary, entry?.judgeRationale]) {
-      if (typeof field === "string" && /[\r\n]/.test(field)) {
-        throw new Error("renderBriefingVolatile: priorDispositions entries must not contain a newline — an embedded newline could forge additional lines in this line-structured file");
-      }
-    }
+  if (validationPosture != null && validationPosture.length > VALIDATION_POSTURE_MAX_LENGTH) {
+    throw new Error(`renderBriefingVolatile: validationPosture is ${validationPosture.length} chars, over the ${VALIDATION_POSTURE_MAX_LENGTH}-char bound — pass a short posture and keep the details in --validation-results`);
   }
   const lines = [];
   lines.push("# Gate Review Briefing — volatile tail (after the cache boundary)");
@@ -1782,26 +1743,9 @@ export function renderBriefingVolatile({ gate, headSha, loggedAt, validationPost
   lines.push(`loggedAt: ${loggedAt}`);
   lines.push(`validationPosture: ${validationPosture ?? "(none)"}`);
   lines.push("");
-  if (dispositions.length > 0) {
-    lines.push("Prior-round dispositions (do not re-raise a rejected finding at a shifted severity):");
-    // Bounded, deterministic: keep the first PRIOR_DISPOSITIONS_MAX_ENTRIES in
-    // the prior log's own order — never re-sorted, never sampled — and
-    // truncate each free-form field so one adversarial/corrupted entry cannot
-    // make this block (or the reviewer prompt it feeds) unboundedly large.
-    const kept = dispositions.slice(0, PRIOR_DISPOSITIONS_MAX_ENTRIES);
-    const omittedCount = dispositions.length - kept.length;
-    for (const entry of kept) {
-      const angle = truncatePriorDispositionField(entry.angle);
-      const severity = truncatePriorDispositionField(entry.severity);
-      const summary = truncatePriorDispositionField(entry.summary);
-      const rationale = typeof entry.judgeRationale === "string" && entry.judgeRationale.length > 0
-        ? ` — judge: ${truncatePriorDispositionField(entry.judgeRationale)}`
-        : "";
-      lines.push(`- ${entry.fingerprint} [${angle}] ${severity}: ${summary}${rationale}`);
-    }
-    if (omittedCount > 0) {
-      lines.push(`- +${omittedCount} more prior dispositions omitted`);
-    }
+  if (priorDispositionsRead) {
+    lines.push(`Prior-round dispositions (do not re-raise a rejected finding at a shifted severity): ${priorDispositionsRead.entries} entries, listed in full in this required read. Read it IN FULL with \`jq\` before judgment; the mandatory sentinel verifies its sha256.`);
+    lines.push(renderRequiredReadLine(priorDispositionsRead, worktreeRoot));
     lines.push("");
   }
   return lines.join("\n") + "\n";
@@ -2763,6 +2707,23 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
       priorDispositions = [];
     }
   }
+  // Reference seeding, lossless: the full list goes to a round-bound file,
+  // hash-bound as a required read. The shared prefix never lists it (it is
+  // round-level, after the cache boundary); the volatile tail and every work
+  // order do, and the sentinel verifies it.
+  let pendingDispositions = null;
+  let priorDispositionsRead = null;
+  if (priorDispositions.length > 0) {
+    const text = `${JSON.stringify(priorDispositions, null, 2)}\n`;
+    const dispositionsPath = buildGateArtifactPath({
+      repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp", suffix: ".prior-dispositions.json",
+    });
+    pendingDispositions = { path: dispositionsPath, text };
+    priorDispositionsRead = {
+      kind: "prior-dispositions", path: dispositionsPath, sha256: createHash("sha256").update(text).digest("hex"), bytes: Buffer.byteLength(text), entries: priorDispositions.length, required: true,
+    };
+    (requiredReads ??= []).push(priorDispositionsRead);
+  }
 
   // Render the volatile tail before destructive writes, so malformed inputs
   // preserve any prior valid context. It is physically separate from the prefix.
@@ -2773,7 +2734,8 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     headSha: options.headSha,
     loggedAt,
     validationPosture: options.validationPosture ?? null,
-    priorDispositions,
+    priorDispositionsRead,
+    worktreeRoot: path.resolve(repoRoot),
   });
   const artifact = { ...buildGateContextArtifact({ ...options, angleScopes, prefixMode, briefingVariants }), ...(requiredReads ? { requiredReads } : {}), loggedAt };
   // Keep the marker available only when prefix AND referenced stable files
@@ -2819,6 +2781,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     }
     if (Object.keys(briefingVariants).length === 0) delete artifact.briefingVariants;
     await writeFile(fullPrefixPath, prefixBytes);
+    if (pendingDispositions) await writeFile(path.resolve(repoRoot, pendingDispositions.path), pendingDispositions.text, "utf8");
     await writeFile(fullVolatilePath, volatileText, "utf8");
     await writeFile(fullRequestPlanPath, JSON.stringify(requestPlan, null, 2) + "\n", "utf8");
     await writeFile(fullPath, JSON.stringify(artifact, null, 2) + "\n", "utf8");
@@ -2882,8 +2845,9 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
  *
  * The artifact additionally carries a deterministic, neutral `adjacentCode`
  * bundle when changed files are present: 1-hop import in/out-edges of the
- * changed files with size guards + a stripped/truncated manifest. Reviewers are
- * seeded with this verbatim instead of re-deriving the diff + adjacent code.
+ * changed files with size guards + a stripped/truncated manifest. Reviewers read
+ * it by reference through the `context` entry of `requiredReads`, as an
+ * optional navigation aid, instead of re-deriving the adjacent code.
  */
 // Review-gate coverage guard: hasAcChecklist reflects "an AC checklist
 // exists" (acItems.length > 0), independent of the Non-goals floor the

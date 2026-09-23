@@ -845,11 +845,13 @@ test("verify-fresh-review-context --context-path verifies every hashed required 
       assert.equal(output.sentinelCreated, false, label);
       assert.match(output.reason, /required read/, label);
       assert.match(output.reason, namePattern, label);
+      assert.match(output.reason, /emit-reviewer-blocked\.mjs/, `${label}: the refusal tells the reviewer to block`);
+      assert.match(output.reason, /omit --completed-angles/, label);
       const sentinels = (await readdir(path.join(tmpDir, "tmp"))).filter((n) => n.startsWith("checkpoint-context-sentinel"));
       assert.deepEqual(sentinels, [], `${label}: no sentinel on a bad required read`);
 
-      // The reviewer then blocks: no completed angles means every assigned angle
-      // gets a blocked artifact, which fan-in refuses to consolidate as clean.
+      // The blocked result the refusal names: with no completed angles, every
+      // assigned angle gets a blocked artifact.
       const findingsDir = path.join(tmpDir, "findings");
       const blocked = spawnSync("node", [path.resolve("scripts/github/emit-reviewer-blocked.mjs"), "--head-sha", "b".repeat(40), "--angles", "coverage,correctness",
         "--model-turns", "1", "--tool-calls", "1", "--findings-dir", findingsDir], { encoding: "utf8" });
@@ -871,6 +873,50 @@ test("verify-fresh-review-context --context-path passes when every hashed requir
     const result = runScript(["--scope", "draft-gate-coverage", "--context-path", ctxRelPath, "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(JSON.parse(result.stdout.trim()).fresh, true);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("verify-fresh-review-context --context-path refuses an unparseable, a hashless required, or a malformed-hash read", async () => {
+  const cases = [
+    ["unparseable artifact", async (tmpDir, ctxRelPath) => writeFile(path.join(tmpDir, ctxRelPath), "{", "utf8"), /cannot be verified/],
+    ["required read without sha256, missing on disk", async (tmpDir, ctxRelPath) => {
+      const artifact = JSON.parse(await readFile(path.join(tmpDir, ctxRelPath), "utf8"));
+      artifact.requiredReads.push({ kind: "prior-dispositions", path: "tmp/absent.json", required: true });
+      await writeFile(path.join(tmpDir, ctxRelPath), JSON.stringify(artifact), "utf8");
+    }, /required read prior-dispositions .*unreadable/],
+    ["malformed sha256", async (tmpDir, ctxRelPath) => {
+      const artifact = JSON.parse(await readFile(path.join(tmpDir, ctxRelPath), "utf8"));
+      artifact.requiredReads[0].sha256 = "not-a-hash";
+      await writeFile(path.join(tmpDir, ctxRelPath), JSON.stringify(artifact), "utf8");
+    }, /required read evidence .*does not match/],
+  ];
+  for (const [label, breakArtifact, reasonPattern] of cases) {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+    try {
+      const { ctxRelPath } = await seedRequiredReads(tmpDir);
+      await breakArtifact(tmpDir, ctxRelPath);
+      const result = runScript(["--scope", "draft-gate-coverage", "--context-path", ctxRelPath, "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
+      assert.equal(result.status, 1, `${label}: ${result.stderr}`);
+      const output = JSON.parse(result.stdout.trim());
+      assert.equal(output.sentinelCreated, false, label);
+      assert.match(output.reason, reasonPattern, label);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+});
+
+test("verify-fresh-review-context --context-path accepts a readable required read without sha256", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "dev-loops-verify-fresh-"));
+  try {
+    const { ctxRelPath, files } = await seedRequiredReads(tmpDir);
+    const artifact = JSON.parse(await readFile(path.join(tmpDir, ctxRelPath), "utf8"));
+    artifact.requiredReads.push({ kind: "evidence", path: files.evidence[0], required: true });
+    await writeFile(path.join(tmpDir, ctxRelPath), JSON.stringify(artifact), "utf8");
+    const result = runScript(["--scope", "draft-gate-coverage", "--context-path", ctxRelPath, "--prefix-hash", "a".repeat(64)], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr);
   } finally {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
