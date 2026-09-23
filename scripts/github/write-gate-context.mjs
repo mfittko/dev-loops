@@ -28,11 +28,12 @@ import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAngles, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
+import { GATE_ANGLE_SCOPES, GATE_FULL_LABEL, loadDevLoopConfig, resolveFanoutGroups, resolveFanoutMaxConcurrent, resolveFanoutSequential, resolveFanoutEffectiveConcurrency, resolveGateAngleContract, resolveGateAngleScope, resolveGateAnglesDynamic, resolveMaxAnglesPerGroup, resolveRoleModel } from "@dev-loops/core/config";
 import { evaluatePrSizeBudget } from "../loop/check-size-budget.mjs";
 import { angleReviewSurface } from "@dev-loops/core/loop/gate-carry-forward";
 import { baseAngleName, reviewerBudgetPreflight, scheduleFanoutWaves } from "@dev-loops/core/loop/gate-fanin";
 import { buildAngleRequestGroups, buildReviewDispatchPlan, filterDiffForInline, normalizeHarnessCapabilities } from "@dev-loops/core/loop/review-dispatch-plan";
+import { resolveOperationAnglePool } from "@dev-loops/core/loop/review-operation";
 import { classifyFile } from "@dev-loops/core/analysis/diff-analyzer";
 import { parseRepoSlug } from "@dev-loops/core/github/repo-slug";
 import { detectIssueRefinementArtifact } from "@dev-loops/core/loop/issue-refinement-artifact";
@@ -94,8 +95,11 @@ const SPEC_OF_RECORD_DEPENDENT_ANGLES = ["acceptance-criteria", "pr-checklist", 
 /**
  * `review` angle resolution — a standalone gate with no config key of
  * its own: its resolved angle set is the UNION of both gates' configured
- * angle sets (resolveGateAngles, the STATIC pool — dynamic/tiered subtractive
- * resolution is deliberately not applied to review), never resolveGateAnglesDynamic.
+ * angle sets, computed via `resolveOperationAnglePool(config, "review")`
+ * (`@dev-loops/core/loop/review-operation`, the shared operation-angle-pool
+ * authority so this union and `gate resolve-role`'s membership check can
+ * never drift) — the STATIC pool; dynamic/tiered subtractive resolution is
+ * deliberately not applied to review, never resolveGateAnglesDynamic.
  *
  * `acceptance-criteria`, `pr-checklist`, `pr-description`, and `gate-evidence`
  * — the angles that depend on a spec of record — are dropped from that union
@@ -112,10 +116,7 @@ const SPEC_OF_RECORD_DEPENDENT_ANGLES = ["acceptance-criteria", "pr-checklist", 
  * @returns {{ recommendedAngles: string[], skippedAngles: string[], reasons: Record<string,string>, fallbackToAll: false, dynamicAnglesActive: false, addedAngles: string[], addedReasons: Record<string,string> }}
  */
 export function resolveReviewGateAngles(config, { hasClosingIssue, hasAcChecklist }) {
-  const union = [...new Set([
-    ...(resolveGateAngles(config, "draft") ?? []),
-    ...(resolveGateAngles(config, "preApproval") ?? []),
-  ])];
+  const union = resolveOperationAnglePool(config, "review");
   const provablyNoSpecOfRecord = hasClosingIssue === false && hasAcChecklist === false;
   const anglesToDrop = provablyNoSpecOfRecord
     ? SPEC_OF_RECORD_DEPENDENT_ANGLES.filter((a) => union.includes(a))
