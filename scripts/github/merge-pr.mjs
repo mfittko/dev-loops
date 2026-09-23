@@ -262,20 +262,13 @@ function toSharedReviewShape(rawReviews) {
 // That helper fails open on an unreadable compare; here an untrusted delta
 // counts as significant (fail closed). Trust follows the shared compare
 // contract of fetchDeltaChangedFiles (linear "ahead", no rename/copy, below the
-// files page cap), replayed over the helper's own compare result, plus a
-// present files array whose every entry names a file (that contract reads a
-// missing array as empty and skips entries without a filename).
+// files page cap, a files array whose every entry names a file), replayed
+// over the helper's own compare result.
 async function hasSignificantChangeSinceLastReview({ repo, pr, currentHeadSha, reviews }, { env, ghCommand, runChild }) {
   let compareReadable = false;
   const probe = async (cmd, args, childEnv) => {
     const result = await runChild(cmd, args, childEnv);
-    let hasFiles = false;
-    try {
-      const files = JSON.parse(result?.stdout)?.files;
-      hasFiles = Array.isArray(files) && files.every((f) => typeof f?.filename === "string" && f.filename.trim() !== "");
-    } catch { hasFiles = false; }
-    compareReadable = hasFiles
-      && (await fetchDeltaChangedFiles({ repo, base: "", head: currentHeadSha }, { env, ghCommand, runChild: async () => result })) !== null;
+    compareReadable = (await fetchDeltaChangedFiles({ repo, base: "", head: currentHeadSha }, { env, ghCommand, runChild: async () => result })) !== null;
     return result;
   };
   try {

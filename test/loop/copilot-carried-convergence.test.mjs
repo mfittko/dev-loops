@@ -21,7 +21,7 @@ import {
   resolveCopilotBodyDisposition,
   resolveLatestCopilotReview,
 } from "../../scripts/github/_copilot-body-disposition.mjs";
-import { resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "../../scripts/loop/_copilot-convergence-carry.mjs";
+import { fetchDeltaChangedFiles, resolveCarriedConvergence, resolvePostConvergenceReviewSuppressed } from "../../scripts/loop/_copilot-convergence-carry.mjs";
 import { writeSuppressionMarker } from "../../scripts/loop/_post-convergence-review-suppression.mjs";
 import { summarizeCopilotReviews } from "@dev-loops/core/github/copilot-helpers";
 import { interpretLoopState } from "@dev-loops/core/loop/copilot-loop-state";
@@ -642,6 +642,18 @@ describe("latest-review timestamp tie fails closed", () => {
     assert.equal(ambiguous.ambiguousBlockingTie, true);
   });
 
+  it("orders by the raw submittedAt string, as summarizeCopilotReviews does, so a malformed later timestamp keeps the blocking review", () => {
+    const clean = tied("R_clean", "");
+    const malformed = { ...tied("R_yellow", YELLOW), submittedAt: "not-a-timestamp" };
+    assert.equal(resolveLatestCopilotReview({ reviews: [malformed, clean] }).review.id, "R_yellow");
+  });
+
+  it("treats reviews that all lack a timestamp as tied, so a blocking one wins in either array order", () => {
+    const untimed = (id, body) => ({ ...tied(id, body), submittedAt: undefined });
+    assert.equal(resolveLatestCopilotReview({ reviews: [untimed("R_yellow", YELLOW), untimed("R_clean", "")] }).review.id, "R_yellow");
+    assert.equal(resolveLatestCopilotReview({ reviews: [untimed("R_clean", ""), untimed("R_yellow", YELLOW)] }).review.id, "R_yellow");
+  });
+
   it("two tied clean reviews still carry", async () => {
     assert.equal((await carry([tied("R_a", ""), tied("R_b", "")])).carried, true);
   });
@@ -679,4 +691,25 @@ test("resolveCarriedConvergence refuses a docs-only carry when the review-thread
     runtime,
   );
   assert.deepEqual(carried, { carried: false, reason: "the review-thread list is unavailable" });
+});
+
+describe("fetchDeltaChangedFiles fails closed on a malformed compare payload", () => {
+  const fetchFor = (payload) => fetchDeltaChangedFiles(
+    { repo: REPO, base: PRIOR, head: HEAD },
+    { env: {}, ghCommand: "gh", runChild: async () => ({ code: 0, stdout: line(payload) }) },
+  );
+
+  it("reads a well-formed delta", async () => {
+    assert.deepEqual(await fetchFor(DOCS_DELTA), ["docs/guide.md"]);
+  });
+
+  it("returns null when the files array is missing or not an array", async () => {
+    assert.equal(await fetchFor({ status: "ahead" }), null);
+    assert.equal(await fetchFor({ status: "ahead", files: {} }), null);
+  });
+
+  it("returns null when any entry lacks a valid filename", async () => {
+    assert.equal(await fetchFor({ status: "ahead", files: [{ filename: "docs/guide.md", status: "modified" }, { status: "modified" }] }), null);
+    assert.equal(await fetchFor({ status: "ahead", files: [{ filename: "  ", status: "modified" }] }), null);
+  });
 });

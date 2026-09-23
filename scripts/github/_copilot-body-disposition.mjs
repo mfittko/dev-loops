@@ -136,46 +136,43 @@ export function isBodyOnlyBlockingReview(review) {
   return BODY_ONLY_BLOCKING_DISPOSITIONS.has(classifyCopilotReviewBodyDisposition(review?.state, review?.body));
 }
 
-function reviewTimestamp(review) {
-  for (const value of [review?.submittedAt, review?.submitted_at]) {
-    if (typeof value === "string") {
-      const parsed = Date.parse(value);
-      if (!Number.isNaN(parsed)) return parsed;
-    }
-  }
-  return NaN;
+// The raw submittedAt string (GraphQL or REST shape), or null. Compared as a
+// string, exactly as summarizeCopilotReviews and evaluateCopilotConvergence
+// compare it, so all three pick the same latest review.
+function reviewSubmittedAt(review) {
+  if (typeof review?.submittedAt === "string") return review.submittedAt;
+  return typeof review?.submitted_at === "string" ? review.submitted_at : null;
 }
 
 /**
  * The most recent SUBMITTED (non-PENDING) Copilot review. A PENDING review on
  * a stale head is never selected. Tolerates GraphQL (commit.oid, submittedAt)
- * and REST (commit_id, submitted_at) shapes; a missing timestamp falls back to
- * array position (later = more recent).
+ * and REST (commit_id, submitted_at) shapes. The latest is the greatest raw
+ * submittedAt string; a review without one loses to any review with one, and
+ * when no review has one, all are tied.
  *
- * FAIL CLOSED on an equal-timestamp tie: a tied changes-recommended or
- * unrecognized review wins over a tied clean one, so array order never drops
- * a body finding. `ambiguousBlockingTie` is true when two or more tied latest
- * reviews are body-blocking: no single review owns the finding, so no
- * disposition record can clear it.
+ * FAIL CLOSED on a tie (equal strings, or all missing): a tied
+ * changes-recommended or unrecognized review wins over a tied clean one, so
+ * array order never drops a body finding. `ambiguousBlockingTie` is true when
+ * two or more tied latest reviews are body-blocking: no single review owns
+ * the finding, so no disposition record can clear it.
  *
  * @returns {{ review: object|null, ambiguousBlockingTie: boolean }}
  */
 export function resolveLatestCopilotReview(prData) {
   const reviews = Array.isArray(prData?.reviews) ? prData.reviews : [];
-  const indexed = reviews
-    .filter((r) => r?.state !== "PENDING" && isCopilotLogin(r?.author?.login))
-    .map((review, index) => ({ review, index, ts: reviewTimestamp(review) }));
-  if (indexed.length === 0) return { review: null, ambiguousBlockingTie: false };
-  indexed.sort((a, b) => {
-    if (!Number.isNaN(a.ts) && !Number.isNaN(b.ts) && a.ts !== b.ts) return b.ts - a.ts;
-    if (Number.isNaN(a.ts) !== Number.isNaN(b.ts)) return Number.isNaN(a.ts) ? 1 : -1;
-    return b.index - a.index;
-  });
-  const top = indexed[0];
-  const tied = Number.isNaN(top.ts) ? [top] : indexed.filter((entry) => entry.ts === top.ts);
-  const blocking = tied.filter((entry) => isBodyOnlyBlockingReview(entry.review));
+  const candidates = reviews.filter((r) => r?.state !== "PENDING" && isCopilotLogin(r?.author?.login));
+  if (candidates.length === 0) return { review: null, ambiguousBlockingTie: false };
+  let latestAt = null;
+  for (const review of candidates) {
+    const at = reviewSubmittedAt(review);
+    if (at !== null && (latestAt === null || at > latestAt)) latestAt = at;
+  }
+  // Later array position wins among tied reviews of equal blocking weight.
+  const tied = candidates.filter((review) => reviewSubmittedAt(review) === latestAt).reverse();
+  const blocking = tied.filter(isBodyOnlyBlockingReview);
   return {
-    review: (blocking[0] ?? top).review,
+    review: blocking[0] ?? tied[0],
     ambiguousBlockingTie: blocking.length > 1,
   };
 }

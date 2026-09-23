@@ -35,7 +35,8 @@ const COMPARE_FILES_PAGE_CAP = 300;
 // call, a non-zero exit, unparseable JSON, a non-linear advance
 // (status !== "ahead"), any rename/copy entry (a destination-path
 // classification could misread a code file moved to a doc path as pure-doc),
-// or a possibly-truncated 300-file page.
+// a possibly-truncated 300-file page, a missing files array, or any entry
+// without a filename (an unnamed entry cannot be classified).
 export async function fetchDeltaChangedFiles({ repo, base, head }, { env = process.env, ghCommand = "gh", runChild = defaultRunChild } = {}) {
   let result;
   try {
@@ -43,7 +44,7 @@ export async function fetchDeltaChangedFiles({ repo, base, head }, { env = proce
   } catch {
     return null;
   }
-  if (result.code !== 0) {
+  if (result?.code !== 0) {
     return null;
   }
   let payload;
@@ -55,8 +56,8 @@ export async function fetchDeltaChangedFiles({ repo, base, head }, { env = proce
   if (payload?.status !== "ahead") {
     return null;
   }
-  const files = Array.isArray(payload.files) ? payload.files : [];
-  if (files.length >= COMPARE_FILES_PAGE_CAP) {
+  const files = payload.files;
+  if (!Array.isArray(files) || files.length >= COMPARE_FILES_PAGE_CAP) {
     return null;
   }
   const changed = [];
@@ -64,9 +65,10 @@ export async function fetchDeltaChangedFiles({ repo, base, head }, { env = proce
     if (file?.status === "renamed" || file?.status === "copied") {
       return null;
     }
-    if (typeof file?.filename === "string" && file.filename.length > 0) {
-      changed.push(file.filename);
+    if (typeof file?.filename !== "string" || file.filename.trim().length === 0) {
+      return null;
     }
+    changed.push(file.filename);
   }
   return changed;
 }
