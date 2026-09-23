@@ -524,7 +524,14 @@ export function analyzeDiff({ nameStatusOutput, diffOutput }) {
   const t0Ambiguous = !t0.renameOnly && !t0.allDocs && t0.files.length > 1 &&
     new Set(t0.files.map(classifyFile)).size > 1;
 
-  if (t0Ambiguous && diffOutput) {
+  // A full-diff capture is usable evidence only when it carries non-whitespace
+  // content. A whitespace-only capture (e.g. "   \n") must take the SAME
+  // fail-closed path as an absent/empty one: T1 must not run and
+  // `fullDiffMissing` must fire, so a gate needing the full diff cannot read a
+  // hunk-less whitespace capture as complete evidence.
+  const hasDiffText = typeof diffOutput === "string" && diffOutput.trim().length > 0;
+
+  if (t0Ambiguous && hasDiffText) {
     t1 = analyzeT1(diffOutput, t0);
   }
 
@@ -571,7 +578,7 @@ export function analyzeDiff({ nameStatusOutput, diffOutput }) {
   // complete evidence: `ambiguous` is now false for this case, so such a gate
   // would silently downgrade. Consumers that need the diff itself key off THIS
   // flag instead of piggybacking on the angle classifier's ambiguity flag.
-  const fullDiffMissing = t0Ambiguous && !diffOutput;
+  const fullDiffMissing = t0Ambiguous && !hasDiffText;
 
   return { t0, t1, ambiguous, fullDiffMissing };
 }

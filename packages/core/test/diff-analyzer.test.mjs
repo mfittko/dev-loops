@@ -577,6 +577,28 @@ test("analyzeDiff: hunk-less mixed code+docs diff infers the T0 surfaces and cod
   assert.equal(result.fullDiffMissing, true);
 });
 
+test("analyzeDiff: whitespace-only full-diff capture takes the fail-closed path", () => {
+  // A whitespace-only diffOutput is truthy, so a falsy test would run T1 with no
+  // hunks and leave fullDiffMissing false — silently downgrading the size gate's
+  // unwaivable block. The trimmed predicate must make it behave EXACTLY like an
+  // absent/empty capture: T1 skipped, fullDiffMissing true. This contrasts with a
+  // genuinely non-empty capture, which has its hunk evidence and stays false.
+  const nameStatusOutput = "M\tsrc/foo.mjs\nM\tdocs/specs/bar.md";
+
+  const ws = analyzeDiff({ nameStatusOutput, diffOutput: "   \n" });
+  assert.equal(ws.fullDiffMissing, true, "whitespace-only capture is missing diff evidence");
+  // The T0 surface fallback still classifies (see the hunk-less case above), so
+  // the angle classifier stays confident while the evidence flag fails closed.
+  assert.equal(ws.ambiguous, false);
+  assert.deepEqual(ws.t1.changeCategories, ["DOCS_ONLY", "LOGIC_CHANGE"]);
+
+  const real = analyzeDiff({
+    nameStatusOutput,
+    diffOutput: "@@ -1,1 +1,1 @@\n+const x = 1;\n",
+  });
+  assert.equal(real.fullDiffMissing, false, "a non-empty capture has its hunk evidence");
+});
+
 test("analyzeDiff: hunk-less mixed code+prose keeps prose and the code-review core", () => {
   // Without diffOutput the hunk-level T1 never runs. T0 presence inference
   // retains both the peripheral prose lenses and LOGIC_CHANGE, so best-effort
