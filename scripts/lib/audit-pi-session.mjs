@@ -9,7 +9,7 @@ function toNonNegativeFiniteNumber(value) {
 
 function isUsageBearing(turn) {
   const { usage } = turn;
-  return [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.totalTokens]
+  return [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.totalTokens, usage.cost]
     .some((value) => typeof value === "number" && value > 0);
 }
 
@@ -32,6 +32,37 @@ function canonicalRepositoryRoot(repositoryCwd) {
 
 function piSessionDirectoryPrefix(repositoryRoot) {
   return `--${repositoryRoot.replace(/^[/\\]+/, "").split(path.sep).join("-")}--`;
+}
+
+function latestTranscriptMtime(directoryPath) {
+  let latestMtime = null;
+
+  function walk(currentPath) {
+    let entries;
+    try {
+      entries = fs.readdirSync(currentPath, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (entry.name === "subagent-artifacts") continue;
+      const fullPath = path.join(currentPath, entry.name);
+      if (entry.isDirectory()) {
+        walk(fullPath);
+      } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+        try {
+          const mtime = fs.statSync(fullPath).mtimeMs;
+          latestMtime = latestMtime === null ? mtime : Math.max(latestMtime, mtime);
+        } catch {
+          // ignore stat errors
+        }
+      }
+    }
+  }
+
+  walk(directoryPath);
+  return latestMtime;
 }
 
 /**
@@ -59,36 +90,40 @@ export function findLatestPiSession(
 
   if (matchingDirs.length === 0) return null;
 
-  // Among all matching dirs, find the most recently modified session file or subfolder
+  // Among all matching dirs, find the session whose transcript was most recently modified.
   let latestPath = null;
-  let latestMtime = 0;
+  let latestMtime = -Infinity;
 
   for (const dir of matchingDirs) {
     const dirEntries = fs.readdirSync(dir, { withFileTypes: true });
     for (const entry of dirEntries) {
       if (entry.name === "subagent-artifacts") continue;
-      // We look for either .jsonl files directly under the dir, or session directories
-      if (entry.name.endsWith(".jsonl") || entry.isDirectory()) {
-        const fullPath = path.join(dir, entry.name);
+      const fullPath = path.join(dir, entry.name);
+      let candidatePath = null;
+      let candidateMtime = null;
+
+      if (entry.isFile() && entry.name.endsWith(".jsonl")) {
         try {
-          const stat = fs.statSync(fullPath);
-          if (stat.mtimeMs > latestMtime) {
-            latestMtime = stat.mtimeMs;
-            // If it's a .jsonl file, check if there's a matching directory without .jsonl
-            if (entry.name.endsWith(".jsonl")) {
-              const dirWithoutExt = fullPath.slice(0, -".jsonl".length);
-              if (fs.existsSync(dirWithoutExt) && fs.statSync(dirWithoutExt).isDirectory()) {
-                latestPath = dirWithoutExt;
-              } else {
-                latestPath = fullPath;
-              }
-            } else {
-              latestPath = fullPath;
-            }
+          candidateMtime = fs.statSync(fullPath).mtimeMs;
+          const dirWithoutExt = fullPath.slice(0, -".jsonl".length);
+          if (fs.existsSync(dirWithoutExt) && fs.statSync(dirWithoutExt).isDirectory()) {
+            candidatePath = dirWithoutExt;
+            const nestedMtime = latestTranscriptMtime(dirWithoutExt);
+            if (nestedMtime !== null) candidateMtime = Math.max(candidateMtime, nestedMtime);
+          } else {
+            candidatePath = fullPath;
           }
         } catch {
           // ignore stat errors
         }
+      } else if (entry.isDirectory()) {
+        candidatePath = fullPath;
+        candidateMtime = latestTranscriptMtime(fullPath);
+      }
+
+      if (candidatePath !== null && candidateMtime !== null && candidateMtime > latestMtime) {
+        latestMtime = candidateMtime;
+        latestPath = candidatePath;
       }
     }
   }
@@ -109,6 +144,16 @@ function collectTranscriptFilesWithMetadata(targetPath) {
 
   const stat = fs.statSync(targetPath);
   if (stat.isFile()) {
+    const matchingDirectory = targetPath.endsWith(".jsonl") && path.basename(targetPath) !== "session.jsonl"
+      ? targetPath.slice(0, -".jsonl".length)
+      : null;
+    if (
+      matchingDirectory !== null &&
+      fs.existsSync(matchingDirectory) &&
+      fs.statSync(matchingDirectory).isDirectory()
+    ) {
+      return collectTranscriptFilesWithMetadata(matchingDirectory);
+    }
     return { files: [targetPath] };
   }
 
@@ -557,8 +602,15 @@ function formatCost(value, availability) {
 
 function escapeMarkdown(value) {
   return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
     .replace(/\\/g, "&#92;")
     .replace(/`/g, "&#96;")
+    .replace(/\[/g, "&#91;")
+    .replace(/\]/g, "&#93;")
+    .replace(/\(/g, "&#40;")
+    .replace(/\)/g, "&#41;")
     .replace(/\|/g, "\\|")
     .replace(/\r\n?|\n/g, "<br>");
 }
@@ -608,13 +660,13 @@ export function formatMarkdownSummary(auditResult) {
 
   lines.push("### Session Breakdown & Context Snowballing");
   lines.push("");
-  lines.push("| Role | Turns | Models | Total Tokens | Cache Ratio | Init Prompt | Final Prompt | Growth |");
-  lines.push("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |");
+  lines.push("| Role | Turns | Models | Total Tokens | Cache Write | Cache Ratio | Init Prompt | Final Prompt | Growth |");
+  lines.push("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |");
   for (const s of sessions) {
     const modelsStr = s.models.map((model) => `\`${escapeMarkdown(model)}\``).join(", ");
     const growth = s.snowball.promptGrowthFactor === null ? "n/a" : `${s.snowball.promptGrowthFactor}x`;
     lines.push(
-      `| **${escapeMarkdown(s.role)}** | ${s.turnCount} | ${modelsStr} | ${formatTokenCount(s.totalTokens, s.availability?.totalTokens)} | ${formatRatio(s.snowball.cacheHitRatio, s.availability?.cacheHitRatio)} | ${formatTokenCount(s.snowball.initialPromptTokens)} | ${formatTokenCount(s.snowball.finalPromptTokens)} | ${growth} |`
+      `| **${escapeMarkdown(s.role)}** | ${s.turnCount} | ${modelsStr} | ${formatTokenCount(s.totalTokens, s.availability?.totalTokens)} | ${formatTokenCount(s.cacheWriteTokens, s.availability?.cacheWriteTokens)} | ${formatRatio(s.snowball.cacheHitRatio, s.availability?.cacheHitRatio)} | ${formatTokenCount(s.snowball.initialPromptTokens)} | ${formatTokenCount(s.snowball.finalPromptTokens)} | ${growth} |`
     );
   }
   lines.push("");

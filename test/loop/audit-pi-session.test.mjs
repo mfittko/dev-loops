@@ -99,6 +99,34 @@ describe("audit-pi-session unit & integration", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  it("retains and aggregates a cost-only usage envelope", async () => {
+    const tmpDir = createTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    fs.writeFileSync(
+      sessionFile,
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          model: "model-a",
+          usage: { cost: { total: 0.125 } },
+        },
+      }) + "\n",
+    );
+
+    const parsed = await parseTranscriptFile(sessionFile);
+    assert.equal(parsed.turns.length, 1);
+    assert.equal(parsed.turns[0].usage.cost, 0.125);
+
+    const audit = await auditPiSession(sessionFile);
+    assert.equal(audit.summary.totalTurns, 1);
+    assert.equal(audit.summary.totalTokens, null);
+    assert.equal(audit.summary.estimatedCost, 0.125);
+    assert.equal(audit.byModel["model-a"].cost, 0.125);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
   it("preserves absent usage dimensions and rejects invalid measurements", async () => {
     const tmpDir = createTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");
@@ -245,7 +273,7 @@ describe("audit-pi-session unit & integration", () => {
         message: {
           role: "assistant",
           model: "gemini-3.8-flash",
-          usage: { input: 1000, output: 50, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
+          usage: { input: 1000, output: 50, cacheRead: 0, cacheWrite: 25, cost: { total: 0.01 } },
         },
       }),
       JSON.stringify({
@@ -278,7 +306,8 @@ describe("audit-pi-session unit & integration", () => {
     assert.equal(s.inputTokens, 6000);
     assert.equal(s.cacheReadTokens, 35000);
     assert.equal(s.outputTokens, 300);
-    assert.equal(s.totalTokens, 41300);
+    assert.equal(s.cacheWriteTokens, 25);
+    assert.equal(s.totalTokens, 41325);
 
     // Initial prompt = 1,000. Final prompt = 3,000 + 27,000 = 30,000. Growth = 30x.
     assert.equal(s.snowball.initialPromptTokens, 1000);
@@ -295,6 +324,8 @@ describe("audit-pi-session unit & integration", () => {
     assert.ok(md.includes("dev-loop"));
     assert.ok(md.includes("30x"));
     assert.ok(md.includes("Severe context growth"));
+    assert.match(md, /\| Role \| Turns \| Models \| Total Tokens \| Cache Write \|/);
+    assert.match(md, /\| 41,325 \| 25 \| 85\.4% \|/);
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
@@ -515,7 +546,13 @@ describe("audit-pi-session unit & integration", () => {
     assert.equal(audit.sessions.find((session) => session.role === "judge")?.turnCount, 1);
     assert.match(formatMarkdownSummary(audit), /1 fork-own turns retained; 1 inherited turns excluded/);
 
+    const directParentAudit = await auditPiSession(parentFile);
+    assert.equal(directParentAudit.totalFilesExamined, 1);
+    assert.equal(directParentAudit.forkSnapshotsProcessed, 0);
+    assert.equal(directParentAudit.summary.totalTurns, 1);
+
     const directForkAudit = await auditPiSession(forkFile);
+    assert.equal(directForkAudit.totalFilesExamined, 1);
     assert.equal(directForkAudit.forkSnapshotsProcessed, 1);
     assert.equal(directForkAudit.retainedForkTurns, 1);
     assert.equal(directForkAudit.skippedInheritedForkTurns, 1);
@@ -669,6 +706,14 @@ describe("audit-pi-session unit & integration", () => {
     assert.equal(audit.activeSessionsCount, 2);
     assert.equal(audit.sessions.some((session) => session.role === "dev-loop"), true);
 
+    const coordinatorFileAudit = await auditPiSession(`${sessionDir}.jsonl`);
+    assert.equal(coordinatorFileAudit.totalFilesExamined, 2);
+    assert.equal(coordinatorFileAudit.activeSessionsCount, 2);
+    assert.deepEqual(
+      coordinatorFileAudit.sessions.map((session) => session.role).sort(),
+      ["dev-loop", "review"],
+    );
+
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -690,10 +735,16 @@ describe("audit-pi-session unit & integration", () => {
     fs.mkdirSync(worktreeDir);
     fs.mkdirSync(otherRepoDir);
     fs.mkdirSync(artifactsDir);
-    fs.utimesSync(repoDir, new Date(Date.now() + 10000), new Date(Date.now() + 10000));
-    fs.utimesSync(worktreeDir, new Date(Date.now() + 20000), new Date(Date.now() + 20000));
-    fs.utimesSync(otherRepoDir, new Date(Date.now() + 30000), new Date(Date.now() + 30000));
-    fs.utimesSync(artifactsDir, new Date(Date.now() + 40000), new Date(Date.now() + 40000));
+    const repoTranscript = path.join(repoDir, "session.jsonl");
+    const worktreeTranscript = path.join(worktreeDir, "session.jsonl");
+    fs.writeFileSync(repoTranscript, "repo");
+    fs.writeFileSync(worktreeTranscript, "worktree");
+
+    // Directory metadata points at repoDir, but the active worktree transcript is newer.
+    fs.utimesSync(repoDir, new Date("2026-01-04T00:00:00Z"), new Date("2026-01-04T00:00:00Z"));
+    fs.utimesSync(worktreeDir, new Date("2026-01-01T00:00:00Z"), new Date("2026-01-01T00:00:00Z"));
+    fs.utimesSync(repoTranscript, new Date("2026-01-02T00:00:00Z"), new Date("2026-01-02T00:00:00Z"));
+    fs.utimesSync(worktreeTranscript, new Date("2026-01-03T00:00:00Z"), new Date("2026-01-03T00:00:00Z"));
 
     const latest = findLatestPiSession(fakeSessionsBase, "/Users/tester/dev-loops");
     assert.equal(latest, worktreeDir);
@@ -740,7 +791,7 @@ describe("audit-pi-session unit & integration", () => {
   });
 
   it("escapes transcript-controlled role and model values in Markdown", () => {
-    const unsafe = "name|injected\n`code`";
+    const unsafe = "name|injected\n`code` <img src=x> [text](url)";
     const result = {
       targetPath: "/tmp/session",
       summary: {
@@ -767,7 +818,8 @@ describe("audit-pi-session unit & integration", () => {
 
     const markdown = formatMarkdownSummary(result);
     assert.doesNotMatch(markdown, /name\|injected\n/);
-    assert.match(markdown, /name\\\|injected<br>&#96;code&#96;/);
+    assert.match(markdown, /name\\\|injected<br>&#96;code&#96; &lt;img src=x&gt; &#91;text&#93;&#40;url&#41;/);
+    assert.doesNotMatch(markdown, /<img src=x>|\[text\]\(url\)/);
     assert.match(markdown, /High turn count/);
   });
 
