@@ -195,7 +195,9 @@ from the issue side (`issueOrPullRequest(number).projectItems`, filtered to the 
 project and to unarchived items). An item node ID ref is looked up directly with
 `node(id)` and must belong to the configured project and repository. A lookup miss, a
 project mismatch, a repository mismatch, or an archived item fails closed with
-`ITEM_NOT_FOUND` (exit 3). Any other GraphQL error stays `GRAPHQL_ERROR` (exit 2).
+`ITEM_NOT_FOUND` (exit 3). A number lookup that finds the item on the configured project
+succeeds even if the response also carries errors for other projects. Otherwise, any
+GraphQL error other than `NOT_FOUND` fails as `GRAPHQL_ERROR` (exit 2).
 
 ## Fail-closed behavior
 
