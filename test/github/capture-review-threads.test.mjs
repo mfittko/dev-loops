@@ -150,6 +150,7 @@ test("capture-review-threads exposes numeric comment database ids in normalized 
       {
         id: "THREAD_123",
         isResolved: false,
+        reviewId: null,
         isActionable: true,
         commentIds: ["PRRC_node_456"],
         commentDatabaseIds: ["456"],

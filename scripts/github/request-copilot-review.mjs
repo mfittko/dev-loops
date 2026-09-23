@@ -85,10 +85,12 @@ Request statuses:
                                 all of these hold: no request is outstanding, zero review threads are unresolved,
                                 the delta since the last Copilot-reviewed head is a provable pure doc/prose bump OR an
                                 integrate-only base-move (base-relative reduction empties the delta), and the prior
-                                review is not a body-only changes-recommended/unrecognized review (unless a trusted
-                                copilot-body-disposition record names it for the current head). The gate
-                                coordination detector reports postConvergenceReviewSuppressed from the same shared
-                                predicate, so pre_approval_gate is legal on exactly these heads. Any unresolved
+                                review is not a body-only changes-recommended/unrecognized review (unless that
+                                review opened a thread of its own, or a trusted copilot-body-disposition record
+                                names it for the current head). The gate coordination detector reports
+                                postConvergenceReviewSuppressed from the same shared predicate: this tool never
+                                re-requests on a head the detector reports as carried, and the detector never
+                                reports carried on a head where this tool would re-request. Any unresolved
                                 thread or code/test/config/CI/unclassifiable delta re-opens the round. The round-cap
                                 return carries completedRounds/maxRounds; the below-cap return omits them. An
                                 operator suppression marker written by withdraw-copilot-review-request.mjs for this
@@ -656,11 +658,11 @@ export async function performCopilotReviewRequest(
     ? before.prData.headRefOid.trim()
     : null;
   if (currentHeadSha && !before.requested && !before.hasPendingReviewOnCurrentHead && !before.hasSubmittedReviewOnCurrentHead) {
-    const markerSuppressed = await resolvePostConvergenceReviewSuppressed(
+    const markerCarry = await resolvePostConvergenceReviewSuppressed(
       { repo: options.repo, pr: options.pr, currentHeadSha, prData: before.prData, copilotReviewRequestStatus: "none" },
       { ...runtime, checkpointDir: options.checkpointDir },
     );
-    if (markerSuppressed) {
+    if (markerCarry.carried) {
       return {
         ok: true,
         status: SUPPRESSED_POST_CONVERGENCE_DOCS_ONLY_STATUS,

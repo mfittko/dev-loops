@@ -2796,7 +2796,7 @@ describe("resolvePostConvergenceReviewSuppressed (#1441)", () => {
         { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", ...snapshot, prData: prDataWithLastReview("oldsha") },
         { env: {}, ghCommand: "gh", runChild, checkpointDir },
       );
-      assert.equal(suppressed, true);
+      assert.equal(suppressed.carried, true);
     });
   });
 
@@ -2814,7 +2814,7 @@ describe("resolvePostConvergenceReviewSuppressed (#1441)", () => {
         { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", ...snapshot, prData: prDataWithLastReview("othersha") },
         { env: {}, ghCommand: "gh", runChild, checkpointDir },
       );
-      assert.equal(suppressed, false);
+      assert.equal(suppressed.carried, false);
       assert.equal(calls.length, 0, "must not classify a delta from an unverified base");
     });
   });
@@ -2826,7 +2826,7 @@ describe("resolvePostConvergenceReviewSuppressed (#1441)", () => {
         { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", ...snapshot },
         { env: {}, ghCommand: "gh", runChild, checkpointDir },
       );
-      assert.equal(suppressed, false);
+      assert.equal(suppressed.carried, false);
       assert.equal(calls.length, 0, "must not call gh when no marker is present");
     });
   });
@@ -2842,7 +2842,7 @@ describe("resolvePostConvergenceReviewSuppressed (#1441)", () => {
         { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", ...snapshot },
         { env: {}, ghCommand: "gh", runChild, checkpointDir },
       );
-      assert.equal(suppressed, false);
+      assert.equal(suppressed.carried, false);
       assert.equal(calls.length, 0);
     });
   });
@@ -2855,17 +2855,17 @@ describe("resolvePostConvergenceReviewSuppressed (#1441)", () => {
       );
       const { runChild } = makeGhMock([]);
       assert.equal(
-        await resolvePostConvergenceReviewSuppressed(
+        (await resolvePostConvergenceReviewSuppressed(
           { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", copilotReviewRequestStatus: "requested", unresolvedThreadCount: 0 },
           { env: {}, ghCommand: "gh", runChild, checkpointDir },
-        ),
+        )).carried,
         false,
       );
       assert.equal(
-        await resolvePostConvergenceReviewSuppressed(
+        (await resolvePostConvergenceReviewSuppressed(
           { repo: "owner/repo", pr: 17, currentHeadSha: "newsha", copilotReviewRequestStatus: "none", unresolvedThreadCount: 1 },
           { env: {}, ghCommand: "gh", runChild, checkpointDir },
-        ),
+        )).carried,
         false,
       );
     });

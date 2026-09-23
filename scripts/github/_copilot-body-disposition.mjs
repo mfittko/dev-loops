@@ -7,14 +7,16 @@
 // current head (format owned by skills/docs/copilot-loop-state-graph.md):
 //   <!-- dev-loops:copilot-body-disposition review=<review id> head=<40-hex> fix=<40-hex> -->
 //   <!-- dev-loops:copilot-body-disposition review=<review id> head=<40-hex> operator -->
-// `fix` names a commit that must be the head or one of its ancestors;
-// `operator` is an explicit human disposition with no fixing commit.
+// `fix` names a commit strictly after the dispositioned review's commit that
+// the head contains, so a `fix` record never clears a review of the current
+// head. `operator` is a human operator decision with no fixing commit.
 //
 // FAIL CLOSED: no record, a record for another head, a foreign review id, an
-// untrusted author, an unreachable fix commit, or an unreadable comment stream
-// all leave the finding blocking. Nothing here writes a record.
+// untrusted author, a fix commit not after the review commit or not in the
+// head, an unreadable comment stream, or a marker inside code or a quote all
+// leave the finding blocking. Nothing here writes a record.
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
-import { isCopilotLogin } from "@dev-loops/core/github/copilot-helpers";
+import { isCopilotLogin, stripMarkdownCodeForScan } from "@dev-loops/core/github/copilot-helpers";
 import { isCommitContainedByHead } from "./_commit-containment.mjs";
 
 const MARKER_RE = /<!--\s*dev-loops:copilot-body-disposition\s+review=(\S+)\s+head=([0-9a-fA-F]{40})\s+(?:fix=([0-9a-fA-F]{40})|operator)\s*-->/;
@@ -23,9 +25,16 @@ const MARKER_RE = /<!--\s*dev-loops:copilot-body-disposition\s+review=(\S+)\s+he
 // Any bot login (Copilot included) is rejected regardless of association.
 const TRUSTED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
+// Only bare markdown counts: fenced blocks, inline code spans, and `>` quote
+// lines are dropped before matching, so a quoted or code-formatted marker is
+// never a record.
 export function parseCopilotBodyDispositionMarker(body) {
   if (typeof body !== "string") return null;
-  const match = MARKER_RE.exec(body);
+  const bare = stripMarkdownCodeForScan(body)
+    .split("\n")
+    .filter((bodyLine) => !/^\s*>/.test(bodyLine))
+    .join("\n");
+  const match = MARKER_RE.exec(bare);
   if (!match) return null;
   return {
     reviewId: match[1],
@@ -69,13 +78,27 @@ export async function fetchCopilotBodyDispositionMarkers({ repo, pr }, { env = p
   return markers;
 }
 
+// A fix commit disposes a review only when it is strictly after the review's
+// commit (the review commit is a proper ancestor of the fix) and the head
+// contains it. An unknown review commit refuses.
+async function isFixAfterReviewAndInHead({ repo, fixSha, reviewCommitSha, headSha }, runtime) {
+  if (typeof reviewCommitSha !== "string" || reviewCommitSha.trim().length === 0) return false;
+  const reviewCommit = reviewCommitSha.trim().toLowerCase();
+  if (reviewCommit === fixSha) return false;
+  const after = await isCommitContainedByHead({ repo, commitSha: reviewCommit, headSha: fixSha }, runtime);
+  if (!after.contained) return false;
+  return (await isCommitContainedByHead({ repo, commitSha: fixSha, headSha }, runtime)).contained;
+}
+
 /**
  * Whether a trusted record clears the body finding of Copilot review
- * `reviewId` for `headSha` (always the PR's current head).
+ * `reviewId` for `headSha` (always the PR's current head). `reviewCommitSha`
+ * is the commit the review was submitted on; a `fix` record clears only when
+ * its commit is strictly after that commit and contained in the head.
  *
  * @returns {Promise<{ cleared: boolean, disposition: object|null, reason: string }>}
  */
-export async function resolveCopilotBodyDisposition({ repo, pr, headSha, reviewId }, runtime = {}) {
+export async function resolveCopilotBodyDisposition({ repo, pr, headSha, reviewId, reviewCommitSha }, runtime = {}) {
   const notCleared = (reason) => ({ cleared: false, disposition: null, reason });
   if (typeof headSha !== "string" || headSha.trim().length === 0 || reviewId === null || reviewId === undefined) {
     return notCleared("no head or source review to disposition");
@@ -92,8 +115,7 @@ export async function resolveCopilotBodyDisposition({ repo, pr, headSha, reviewI
     if (marker.operator) {
       return { cleared: true, disposition: marker, reason: `operator disposition recorded for review ${marker.reviewId} at head ${normalizedHead}` };
     }
-    const containment = await isCommitContainedByHead({ repo, commitSha: marker.fixSha, headSha: normalizedHead }, runtime);
-    if (containment.contained) {
+    if (await isFixAfterReviewAndInHead({ repo, fixSha: marker.fixSha, reviewCommitSha, headSha: normalizedHead }, runtime)) {
       return { cleared: true, disposition: marker, reason: `fix commit ${marker.fixSha} disposes review ${marker.reviewId} at head ${normalizedHead}` };
     }
   }
@@ -111,7 +133,12 @@ export async function resolveCurrentHeadBodyFeedback({ repo, pr, headSha, review
   if (reviewSummary?.hasBodyFindingOnCurrentHead !== true) {
     return { copilotBodyFeedbackUnresolved: false, bodyDisposition: null };
   }
-  const record = await resolveCopilotBodyDisposition({ repo, pr, headSha, reviewId: reviewSummary.bodyFindingReviewId }, runtime);
+  // The finding sits on a review of the current head, so its review commit is
+  // the head: only an `operator` record can clear it.
+  const record = await resolveCopilotBodyDisposition(
+    { repo, pr, headSha, reviewId: reviewSummary.bodyFindingReviewId, reviewCommitSha: headSha },
+    runtime,
+  );
   return record.cleared
     ? { copilotBodyFeedbackUnresolved: false, bodyDisposition: record.disposition }
     : { copilotBodyFeedbackUnresolved: true, bodyDisposition: null };

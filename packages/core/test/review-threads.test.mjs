@@ -60,6 +60,7 @@ test("parseReviewThreads normalizes fixture-backed review thread data", async ()
     {
       id: "t-1",
       isResolved: false,
+      reviewId: null,
       isActionable: true,
       commentIds: ["c-1"],
       commentDatabaseIds: [],
@@ -69,6 +70,7 @@ test("parseReviewThreads normalizes fixture-backed review thread data", async ()
     {
       id: "t-2",
       isResolved: true,
+      reviewId: null,
       isActionable: false,
       commentIds: ["c-2"],
       commentDatabaseIds: [],
@@ -78,6 +80,7 @@ test("parseReviewThreads normalizes fixture-backed review thread data", async ()
     {
       id: "t-3",
       isResolved: false,
+      reviewId: null,
       isActionable: false,
       commentIds: ["c-3", "c-4"],
       commentDatabaseIds: [],
@@ -154,6 +157,7 @@ test("parseReviewThreads preserves numeric review comment database ids for REST 
     {
       id: "THREAD_123",
       isResolved: false,
+      reviewId: null,
       isActionable: true,
       commentIds: ["PRRC_node_9"],
       commentDatabaseIds: ["9"],
@@ -245,4 +249,14 @@ test("classifyReviewThreadsSignal: null when no Copilot threads", () => {
 test("classifyReviewThreadsSignal: empty result returns null", () => {
   const isCopilot = (login) => /^copilot/i.test(login);
   assert.equal(classifyReviewThreadsSignal({ threads: [], comments: [] }, isCopilot), null);
+});
+
+test("parseReviewThreads attributes each thread to its root comment's review", () => {
+  const result = parseReviewThreads({
+    threads: [
+      { id: "t-1", isResolved: true, comments: [{ id: "c-1", body: "a", author: { login: "x" }, pullRequestReview: { id: "PRR_1" } }, { id: "c-2", body: "b", author: { login: "y" }, pullRequestReview: { id: "PRR_2" } }] },
+      { id: "t-2", isResolved: true, comments: [{ id: "c-3", body: "c", author: { login: "x" } }] },
+    ],
+  });
+  assert.deepEqual(result.threads.map((thread) => thread.reviewId), ["PRR_1", null]);
 });

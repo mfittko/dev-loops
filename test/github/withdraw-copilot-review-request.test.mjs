@@ -710,7 +710,7 @@ describe("withdraw-copilot-review-request", () => {
           },
           { env: {}, runChild: gh.runChild, checkpointDir: dir },
         );
-        assert.equal(postConvergenceReviewSuppressed, true);
+        assert.equal(postConvergenceReviewSuppressed.carried, true);
 
         const settled = { ...stranded, copilotReviewRequestStatus: "none" };
         const settledInterpretation = interpretLoopState(settled, { maxCopilotRounds: 5 });
@@ -720,7 +720,7 @@ describe("withdraw-copilot-review-request", () => {
           prDraft: false,
           lifecycleState: settledInterpretation.state,
           sameHeadCleanConverged: settledInterpretation.sameHeadCleanConverged,
-          postConvergenceReviewSuppressed,
+          postConvergenceReviewSuppressed: postConvergenceReviewSuppressed.carried,
           ciStatus: settled.ciStatus,
           copilotReviewRequestStatus: settled.copilotReviewRequestStatus,
           unresolvedThreadCount: settled.unresolvedThreadCount,

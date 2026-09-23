@@ -121,6 +121,11 @@ export function parseReviewThreads(payload) {
   const threads = rawThreads.map((thread, threadIndex) => {
     const threadId = normalizeId(thread?.id ?? thread?.databaseId, `thread-${threadIndex + 1}`);
     const isResolved = Boolean(thread?.isResolved);
+    // The review that opened the thread: the root (first) comment's
+    // pullRequestReview id. null when the payload does not carry it, so a
+    // consumer that needs attribution treats the thread as unattributed.
+    const rootReviewId = extractRawComments(thread)[0]?.pullRequestReview?.id;
+    const reviewId = typeof rootReviewId === "string" && rootReviewId.length > 0 ? rootReviewId : null;
     const normalizedComments = extractRawComments(thread)
       .map((comment, commentIndex) => normalizeComment(comment, threadId, commentIndex, { isResolved }))
       .sort((left, right) => compareIds(left.id, right.id));
@@ -141,6 +146,7 @@ export function parseReviewThreads(payload) {
     return {
       id: threadId,
       isResolved,
+      reviewId,
       isActionable: actionableCommentIds.length > 0,
       commentIds,
       commentDatabaseIds,

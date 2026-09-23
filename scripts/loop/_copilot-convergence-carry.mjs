@@ -3,15 +3,16 @@
 // review instead of forcing a fresh blocking round (ADR 0012).
 // request-copilot-review.mjs (marker site, cap site, below-cap site) and
 // detect-pr-gate-coordination-state.mjs (postConvergenceReviewSuppressed) both
-// call the resolvers here, so the request tool suppresses a re-request on a
-// head exactly when the gate coordination detector reports that head as
-// carried-converged.
+// call the resolvers here. The request tool never re-requests on a head the
+// detector reports as carried, and the detector never reports carried on a
+// head where the request tool would re-request.
 //
 // FAIL CLOSED in every uncertain case: an outstanding request on the current
 // head, any unresolved review thread (or an unreadable thread list), no prior
 // submitted Copilot review on a strict ancestor head, an unproven or
 // non-docs-only delta, or a body-only changes-recommended/unrecognized prior
-// review without a trusted disposition record all refuse to carry.
+// review with no thread of its own and no trusted disposition record all
+// refuse to carry.
 import { runChild as defaultRunChild } from "../_cli-primitives.mjs";
 import { resolveConvergenceCarryForward } from "@dev-loops/core/loop/gate-carry-forward";
 import {
@@ -164,7 +165,7 @@ export async function classifyDeltaSinceLastReview({ repo, base, head }, runtime
 async function fetchThreadFacts({ repo, pr }, runtime) {
   try {
     const parsed = parseReviewThreads(await fetchGithubReviewThreadsPayload({ repo, pr }, runtime));
-    return { unresolvedThreadCount: parsed.summary.unresolvedThreads, hasAnyThread: parsed.threads.length > 0 };
+    return { unresolvedThreadCount: parsed.summary.unresolvedThreads, reviewThreads: parsed.threads };
   } catch {
     return null;
   }
@@ -175,6 +176,46 @@ const BODY_ONLY_BLOCKING_DISPOSITIONS = new Set([
   COPILOT_DISPOSITION.UNRECOGNIZED,
 ]);
 
+// Whether `reviewId` opened at least one review thread. A thread with no
+// review attribution (reviewId null) never counts, so unknown attribution
+// fails closed.
+function reviewHasOwnThread(reviewThreads, reviewId) {
+  return reviewId !== null && reviewThreads.some((thread) => thread?.reviewId === reviewId);
+}
+
+// The shared tail of both carry paths, run after the delta carries: zero
+// unresolved threads, then the body-only condition on the prior review.
+async function finishCarry({ repo, pr, currentHeadSha, priorReview, sourceHeadSha, delta, source, unresolvedThreadCount, reviewThreads }, runtime) {
+  const sourceReviewId = priorReview?.id !== null && priorReview?.id !== undefined ? String(priorReview.id) : null;
+  const disposition = classifyCopilotReviewBodyDisposition(priorReview?.state, priorReview?.body);
+  const bodyBlocking = BODY_ONLY_BLOCKING_DISPOSITIONS.has(disposition);
+  let threadFacts = { unresolvedThreadCount, reviewThreads };
+  if (typeof unresolvedThreadCount !== "number" || (bodyBlocking && !Array.isArray(reviewThreads))) {
+    threadFacts = await fetchThreadFacts({ repo, pr }, runtime);
+    if (threadFacts === null) {
+      return { carried: false, reason: "the review-thread list is unavailable" };
+    }
+  }
+  if (threadFacts.unresolvedThreadCount !== 0) {
+    return { carried: false, reason: `${threadFacts.unresolvedThreadCount} unresolved review thread(s) remain; carried convergence refused (COPILOT-STATE-CARRIED-CONVERGENCE)` };
+  }
+  const carried = { carried: true, source, sourceReviewId, sourceHeadSha, reason: delta.reason, bodyDisposition: null };
+  if (!bodyBlocking || reviewHasOwnThread(threadFacts.reviewThreads, sourceReviewId)) {
+    return carried;
+  }
+  const record = await resolveCopilotBodyDisposition(
+    { repo, pr, headSha: currentHeadSha, reviewId: sourceReviewId, reviewCommitSha: sourceHeadSha },
+    runtime,
+  );
+  if (!record.cleared) {
+    return {
+      carried: false,
+      reason: `the prior Copilot review is body-only "${disposition}" with no thread of its own and no trusted disposition record naming it`,
+    };
+  }
+  return { ...carried, bodyDisposition: record.disposition };
+}
+
 /**
  * The carried-convergence predicate. All of the following must hold:
  *  1. no Copilot review request is outstanding on the current head;
@@ -183,18 +224,15 @@ const BODY_ONLY_BLOCKING_DISPOSITIONS = new Set([
  *  3. the delta since that head is provably docs-only or integrate-only
  *     (resolveConvergenceCarry);
  *  4. zero unresolved review threads;
- *  5. the prior review's body is not changes-recommended/unrecognized, OR the
- *     PR has at least one (now resolved) thread, OR a trusted disposition record
- *     names that review for the current head.
+ *  5. the prior review's body is not changes-recommended/unrecognized, OR that
+ *     review opened at least one (now resolved) thread of its own, OR a trusted
+ *     disposition record names that review for the current head.
  *
+ * `reviewThreads` is the parsed thread list (parseReviewThreads().threads).
  * Thread facts are fetched live only when the caller does not pass them and
  * only after the delta carries, so a non-carrying delta costs no thread read.
  *
- * ponytail: condition 5's "at least one thread" is PR-wide; the review-threads
- * query carries no thread-to-review link. Upgrade to per-review attribution if
- * multi-round PRs need it.
- *
- * @returns {Promise<{ carried: true, sourceReviewId: string|null, sourceHeadSha: string, reason: string, bodyDisposition: object|null }
+ * @returns {Promise<{ carried: true, source: "carried", sourceReviewId: string|null, sourceHeadSha: string, reason: string, bodyDisposition: object|null }
  *   | { carried: false, reason: string }>}
  */
 export async function resolveCarriedConvergence({
@@ -204,7 +242,7 @@ export async function resolveCarriedConvergence({
   prData,
   copilotReviewRequestStatus,
   unresolvedThreadCount,
-  hasAnyThread,
+  reviewThreads,
 }, runtime = {}) {
   if (copilotReviewRequestStatus !== "none") {
     return { carried: false, reason: "a Copilot review request is outstanding on the current head" };
@@ -221,44 +259,23 @@ export async function resolveCarriedConvergence({
   if (!delta) {
     return { carried: false, reason: "the delta since the prior reviewed head is not provably docs-only or integrate-only" };
   }
-  let threadFacts = { unresolvedThreadCount, hasAnyThread };
-  if (typeof unresolvedThreadCount !== "number" || typeof hasAnyThread !== "boolean") {
-    threadFacts = await fetchThreadFacts({ repo, pr }, runtime);
-    if (threadFacts === null) {
-      return { carried: false, reason: "the review-thread list is unavailable" };
-    }
-  }
-  if (threadFacts.unresolvedThreadCount !== 0) {
-    return { carried: false, reason: `${threadFacts.unresolvedThreadCount} unresolved review thread(s) remain; carried convergence refused (COPILOT-STATE-CARRIED-CONVERGENCE)` };
-  }
-  const sourceReviewId = priorReview.id !== null && priorReview.id !== undefined ? String(priorReview.id) : null;
-  const carried = { carried: true, sourceReviewId, sourceHeadSha: lastReviewSha, reason: delta.reason, bodyDisposition: null };
-  const disposition = classifyCopilotReviewBodyDisposition(priorReview.state, priorReview.body);
-  if (!BODY_ONLY_BLOCKING_DISPOSITIONS.has(disposition) || threadFacts.hasAnyThread) {
-    return carried;
-  }
-  const record = await resolveCopilotBodyDisposition({ repo, pr, headSha: currentHeadSha, reviewId: sourceReviewId }, runtime);
-  if (!record.cleared) {
-    return {
-      carried: false,
-      reason: `the prior Copilot review is body-only "${disposition}" with no thread and no trusted disposition record naming it`,
-    };
-  }
-  return { ...carried, bodyDisposition: record.disposition };
+  return finishCarry(
+    { repo, pr, currentHeadSha, priorReview, sourceHeadSha: lastReviewSha, delta, source: "carried", unresolvedThreadCount, reviewThreads },
+    runtime,
+  );
 }
 
 /**
  * Operator-marker suppression: withdraw-copilot-review-request.mjs recorded a
  * marker for this exact head after an explicit operator withdrawal. The
- * marker never suppresses on its own: the request status must be "none", no
- * review thread may be unresolved, the live last-reviewed head must equal the
- * marker's claim, and the live delta must carry on the shared basis
- * (resolveConvergenceCarry). Any further push changes the head and the marker
- * stops matching.
+ * marker never suppresses on its own: the request status must be "none", the
+ * live last-reviewed head must equal the marker's claim, the live delta must
+ * carry on the shared basis (resolveConvergenceCarry), and the shared tail
+ * (zero unresolved threads, the body-only condition) must hold. Any further
+ * push changes the head and the marker stops matching.
  *
- * `runtime.checkpointDir` overrides the marker location (tests). Thread facts
- * are fetched live only when `unresolvedThreadCount` is not passed, and only
- * after a matching marker and a carrying delta are found.
+ * `runtime.checkpointDir` overrides the marker location (tests). Returns the
+ * same shape as resolveCarriedConvergence with `source: "marker"`.
  */
 export async function resolvePostConvergenceReviewSuppressed({
   repo,
@@ -267,18 +284,31 @@ export async function resolvePostConvergenceReviewSuppressed({
   prData,
   copilotReviewRequestStatus,
   unresolvedThreadCount,
+  reviewThreads,
 }, runtime = {}) {
-  if (copilotReviewRequestStatus !== "none") return false;
-  if (typeof unresolvedThreadCount === "number" && unresolvedThreadCount !== 0) return false;
+  const refused = (reason) => ({ carried: false, reason });
+  if (copilotReviewRequestStatus !== "none") return refused("a Copilot review request is outstanding on the current head");
+  if (typeof unresolvedThreadCount === "number" && unresolvedThreadCount !== 0) return refused(`${unresolvedThreadCount} unresolved review thread(s) remain`);
   const marker = await readSuppressionMarker({ repo, pr, headSha: currentHeadSha }, { checkpointDir: runtime.checkpointDir });
-  if (!marker || marker.headSha !== currentHeadSha) return false;
+  if (!marker || marker.headSha !== currentHeadSha) return refused("no operator suppression marker for the current head");
   const liveLastReviewedHeadSha = getLastCopilotReviewHeadSha(prData);
-  if (!liveLastReviewedHeadSha || liveLastReviewedHeadSha !== marker.lastReviewedHeadSha) return false;
-  const delta = await resolveConvergenceCarry({ repo, pr }, runtime, { lastReviewSha: marker.lastReviewedHeadSha, currentHeadSha });
-  if (delta === null) return false;
-  if (typeof unresolvedThreadCount !== "number") {
-    const threadFacts = await fetchThreadFacts({ repo, pr }, runtime);
-    if (threadFacts === null || threadFacts.unresolvedThreadCount !== 0) return false;
+  if (!liveLastReviewedHeadSha || liveLastReviewedHeadSha !== marker.lastReviewedHeadSha) {
+    return refused("the marker's last-reviewed head disagrees with the live last Copilot review");
   }
-  return true;
+  const delta = await resolveConvergenceCarry({ repo, pr }, runtime, { lastReviewSha: marker.lastReviewedHeadSha, currentHeadSha });
+  if (delta === null) return refused("the delta since the prior reviewed head is not provably docs-only or integrate-only");
+  return finishCarry(
+    {
+      repo,
+      pr,
+      currentHeadSha,
+      priorReview: getLastCopilotReview(prData),
+      sourceHeadSha: marker.lastReviewedHeadSha,
+      delta,
+      source: "marker",
+      unresolvedThreadCount,
+      reviewThreads,
+    },
+    runtime,
+  );
 }

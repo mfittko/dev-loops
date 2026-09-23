@@ -264,7 +264,7 @@ export function sanitizeCopilotSummonTokens(text) {
 // line) from `text`, leaving only bare-text markdown to scan. Unlike
 // transformNonFencedLines, fenced content here must be REMOVED, not kept:
 // leaving it would let bare text inside a fence still match the summon scan.
-function stripMarkdownCodeForScan(text) {
+export function stripMarkdownCodeForScan(text) {
   const lines = String(text).split(/\r?\n/);
   let inFencedBlock = false;
   let fencedDelimiter = "";
@@ -804,20 +804,16 @@ export function summarizeCopilotReviews(reviews, { headSha, draftGateResetAtMs }
         latestSubmittedReviewOnCurrentHeadAt = submittedAt;
         hasBodyFindingOnCurrentHead = copilotReviewBodySignalsChanges(state, review?.body);
         bodyFindingReviewId = hasBodyFindingOnCurrentHead ? reviewId : null;
-      } else if (submittedAt !== null && submittedAt === latestSubmittedReviewOnCurrentHeadAt) {
-        // Equal-timestamp tie on the same head: fail toward surfacing so array
-        // order never silently drops a finding when two reviews share a timestamp.
+      } else if (submittedAt === latestSubmittedReviewOnCurrentHeadAt) {
+        // Equal-timestamp (or both-null) tie on the same head: fail toward
+        // surfacing so array order never silently drops a finding. When two
+        // tied reviews both signal, no single review owns the finding, so
+        // bodyFindingReviewId is null and no disposition record can clear it.
         const tieSignals = copilotReviewBodySignalsChanges(state, review?.body);
-        if (tieSignals && !hasBodyFindingOnCurrentHead) {
-          bodyFindingReviewId = reviewId;
+        if (tieSignals) {
+          bodyFindingReviewId = hasBodyFindingOnCurrentHead ? null : reviewId;
         }
         hasBodyFindingOnCurrentHead = hasBodyFindingOnCurrentHead || tieSignals;
-      } else if (submittedAt === null && latestSubmittedReviewOnCurrentHeadAt === null) {
-        const nullTsSignals = copilotReviewBodySignalsChanges(state, review?.body);
-        if (nullTsSignals && !hasBodyFindingOnCurrentHead) {
-          bodyFindingReviewId = reviewId;
-        }
-        hasBodyFindingOnCurrentHead = hasBodyFindingOnCurrentHead || nullTsSignals;
       }
     }
   }

@@ -930,10 +930,11 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     { repo: options.repo, prData, prDraft: isDraft, prClosed: isClosed, prMerged: isMerged, expectedIssue: options.expectedIssue },
     runtime,
   );
-  // postConvergenceReviewSuppressed is true exactly when request-copilot-review.mjs
-  // would suppress a re-request for this head: the operator marker path or a
-  // carried convergence, both from the shared _copilot-convergence-carry.mjs
-  // resolvers with the same request-status and thread facts.
+  // postConvergenceReviewSuppressed comes from the shared
+  // _copilot-convergence-carry.mjs resolvers (operator marker path, then
+  // carried convergence) with the same request-status and thread facts the
+  // request tool sees, so the detector never reports carried on a head where
+  // request-copilot-review.mjs would re-request.
   const suppressionFacts = {
     repo: options.repo,
     pr: options.pr,
@@ -941,21 +942,20 @@ export async function loadPrGateCoordinationContext(options, runtime = {}) {
     prData,
     copilotReviewRequestStatus: snapshot.copilotReviewRequestStatus,
     unresolvedThreadCount: snapshot.unresolvedThreadCount,
+    reviewThreads: parsedThreads.threads,
   };
-  const markerSuppressed = await resolvePostConvergenceReviewSuppressed(suppressionFacts, runtime);
-  const carried = await resolveCarriedConvergence(
-    { ...suppressionFacts, hasAnyThread: parsedThreads.threads.length > 0 },
-    runtime,
-  );
+  const markerCarry = await resolvePostConvergenceReviewSuppressed(suppressionFacts, runtime);
+  const carried = markerCarry.carried ? markerCarry : await resolveCarriedConvergence(suppressionFacts, runtime);
   const carriedConvergence = carried.carried
     ? {
+        source: carried.source,
         sourceReviewId: carried.sourceReviewId,
         sourceHeadSha: carried.sourceHeadSha,
         reason: carried.reason,
         bodyDisposition: carried.bodyDisposition,
       }
     : null;
-  const postConvergenceReviewSuppressed = markerSuppressed || carried.carried;
+  const postConvergenceReviewSuppressed = carried.carried;
   const fixerDisposition = await resolveFixerDispositionInput(
     { repo: options.repo, pr: options.pr, currentHeadSha, parsedThreads },
     runtime,
