@@ -3,24 +3,59 @@ import path from "node:path";
 import os from "node:os";
 import readline from "node:readline";
 
-function toFiniteNumber(value) {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : 0;
+function toNonNegativeFiniteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function isUsageBearing(turn) {
+  const { usage } = turn;
+  return [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.totalTokens]
+    .some((value) => typeof value === "number" && value > 0);
+}
+
+function findRepositoryRoot(startPath) {
+  let current = path.resolve(startPath);
+  while (true) {
+    if (fs.existsSync(path.join(current, ".git"))) return current;
+    const parent = path.dirname(current);
+    if (parent === current) return path.resolve(startPath);
+    current = parent;
+  }
+}
+
+function canonicalRepositoryRoot(repositoryCwd) {
+  const repositoryRoot = findRepositoryRoot(repositoryCwd);
+  const worktreeMarker = `${path.sep}tmp${path.sep}worktrees${path.sep}`;
+  const markerIndex = repositoryRoot.indexOf(worktreeMarker);
+  return markerIndex === -1 ? repositoryRoot : repositoryRoot.slice(0, markerIndex);
+}
+
+function piSessionDirectoryPrefix(repositoryRoot) {
+  return `--${repositoryRoot.replace(/^[/\\]+/, "").split(path.sep).join("-")}--`;
 }
 
 /**
- * Find the latest session directory or session file under ~/.pi/agent/sessions/--Users-*-dev-loops--/
+ * Find the latest session directory or session file for this repository,
+ * including sessions launched from one of its tmp/worktrees entries.
  * @param {string} [sessionsBaseDir]
+ * @param {string} [repositoryCwd]
  * @returns {string | null}
  */
-export function findLatestPiSession(sessionsBaseDir = path.join(os.homedir(), ".pi", "agent", "sessions")) {
+export function findLatestPiSession(
+  sessionsBaseDir = path.join(os.homedir(), ".pi", "agent", "sessions"),
+  repositoryCwd = process.cwd(),
+) {
   if (!fs.existsSync(sessionsBaseDir)) return null;
 
-  // Find candidate directories matching --Users-*-dev-loops--
+  const repositoryPrefix = piSessionDirectoryPrefix(canonicalRepositoryRoot(repositoryCwd));
+  const worktreePrefix = `${repositoryPrefix.slice(0, -2)}-tmp-worktrees-`;
   const entries = fs.readdirSync(sessionsBaseDir, { withFileTypes: true });
   const matchingDirs = entries
-    .filter((e) => e.isDirectory() && /^--Users-.*-dev-loops--$/.test(e.name))
-    .map((e) => path.join(sessionsBaseDir, e.name));
+    .filter((entry) => entry.isDirectory() && (
+      entry.name === repositoryPrefix ||
+      (entry.name.startsWith(worktreePrefix) && entry.name.endsWith("--"))
+    ))
+    .map((entry) => path.join(sessionsBaseDir, entry.name));
 
   if (matchingDirs.length === 0) return null;
 
@@ -65,7 +100,7 @@ export function findLatestPiSession(sessionsBaseDir = path.join(os.homedir(), ".
  * Collect all canonical session.jsonl files under the target path,
  * preferring true session.jsonl over mirrored/duplicated subagent-artifacts.
  * @param {string} targetPath
- * @returns {{ files: string[], skippedForkSnapshots: number }}
+ * @returns {{ files: string[] }}
  */
 function collectTranscriptFilesWithMetadata(targetPath) {
   if (!fs.existsSync(targetPath)) {
@@ -74,7 +109,7 @@ function collectTranscriptFilesWithMetadata(targetPath) {
 
   const stat = fs.statSync(targetPath);
   if (stat.isFile()) {
-    return { files: [targetPath], skippedForkSnapshots: 0 };
+    return { files: [targetPath] };
   }
 
   const files = [];
@@ -113,8 +148,8 @@ function collectTranscriptFilesWithMetadata(targetPath) {
     : rawList;
 
   // Fork snapshots remain in the audit. parseTranscriptFile removes their inherited
-  // prefix while retaining the fork's own continuation after its second session_info.
-  return { files: withoutArtifacts.sort(), skippedForkSnapshots: 0 };
+  // replay prefix while retaining the fork's own continuation.
+  return { files: withoutArtifacts.sort() };
 }
 
 /**
@@ -128,7 +163,7 @@ export function collectTranscriptFiles(targetPath) {
 /**
  * Parse assistant usage entries from a single jsonl file.
  * @param {string} filePath
- * @returns {Promise<{ turns: any[], sessionInfo: any, agent: string | null, isForkSnapshot: boolean, inheritedTurnCount: number }>}
+ * @returns {Promise<{ turns: any[], sessionInfo: any, agent: string | null, isForkSnapshot: boolean, inheritedTurnCount: number, malformedLineCount: number }>}
  */
 export async function parseTranscriptFile(filePath) {
   const stat = fs.statSync(filePath);
@@ -139,14 +174,20 @@ export async function parseTranscriptFile(filePath) {
       agent: null,
       isForkSnapshot: false,
       inheritedTurnCount: 0,
+      malformedLineCount: 0,
     };
   }
 
   let turns = [];
   let sessionInfo = null;
   let sessionInfoCount = 0;
-  let fileAgent = null;
+  let currentAgent = null;
+  let segmentId = 0;
+  let isForkSnapshot = false;
+  let sessionHeaderSeen = false;
+  let forkBoundarySeen = false;
   let inheritedTurnCount = 0;
+  let malformedLineCount = 0;
 
   const rl = readline.createInterface({
     input: fs.createReadStream(filePath, { encoding: "utf8" }),
@@ -159,20 +200,25 @@ export async function parseTranscriptFile(filePath) {
     try {
       const data = JSON.parse(trimmed);
 
-      if (data.type === "session_info" && data.name) {
-        sessionInfoCount += 1;
-        if (sessionInfoCount > 1) {
-          inheritedTurnCount += turns.length;
-          turns = [];
-          fileAgent = null;
-        }
-        sessionInfo = data;
-      }
-      if (data.agent && !fileAgent) {
-        fileAgent = data.agent;
+      // Pi marks a genuine fork on this transcript's own session header. A plain
+      // run-0 transcript may contain many session_info records and is not a fork.
+      if (data.type === "session" && !sessionHeaderSeen) {
+        sessionHeaderSeen = true;
+        isForkSnapshot = data.parentSession !== null && data.parentSession !== undefined;
       }
 
-      // Check for assistant message
+      if (data.type === "session_info" && data.name) {
+        sessionInfoCount += 1;
+        segmentId += 1;
+        if (isForkSnapshot && !forkBoundarySeen && sessionInfoCount > 1) {
+          inheritedTurnCount = turns.filter(isUsageBearing).length;
+          turns = [];
+          forkBoundarySeen = true;
+        }
+        sessionInfo = data;
+        currentAgent = data.name;
+      }
+
       const isAssistant =
         (data.type === "message" && data.message?.role === "assistant") ||
         data.role === "assistant";
@@ -181,41 +227,43 @@ export async function parseTranscriptFile(filePath) {
         const msg = data.message || data;
         const usage = msg.usage || data.usage;
         if (usage) {
-          const model = msg.model || data.model || "unknown";
-          const agent = data.agent || fileAgent || null;
-          const input = toFiniteNumber(usage.input);
-          const output = toFiniteNumber(usage.output);
-          const cacheRead = toFiniteNumber(usage.cacheRead);
-          const cacheWrite = toFiniteNumber(usage.cacheWrite);
+          const input = toNonNegativeFiniteNumber(usage.input);
+          const output = toNonNegativeFiniteNumber(usage.output);
+          const cacheRead = toNonNegativeFiniteNumber(usage.cacheRead);
+          const cacheWrite = toNonNegativeFiniteNumber(usage.cacheWrite);
+          const explicitTotal = toNonNegativeFiniteNumber(usage.totalTokens);
+          const componentTotal = [input, output, cacheRead, cacheWrite].every((value) => value !== null)
+            ? input + output + cacheRead + cacheWrite
+            : null;
           turns.push({
             timestamp: data.timestamp || msg.timestamp || null,
-            model,
-            agent,
+            model: msg.model || data.model || "unknown",
+            agent: data.agent || currentAgent || null,
+            segmentId,
             usage: {
               input,
               output,
               cacheRead,
               cacheWrite,
-              reasoning: toFiniteNumber(usage.reasoning),
-              totalTokens: usage.totalTokens == null
-                ? input + output + cacheRead + cacheWrite
-                : toFiniteNumber(usage.totalTokens),
-              cost: toFiniteNumber(usage.cost?.total ?? usage.cost),
+              reasoning: toNonNegativeFiniteNumber(usage.reasoning),
+              totalTokens: componentTotal ?? explicitTotal,
+              cost: toNonNegativeFiniteNumber(usage.cost?.total ?? usage.cost),
             },
           });
         }
       }
     } catch {
-      // ignore JSON parse error on malformed lines
+      malformedLineCount += 1;
     }
   }
 
   return {
     turns,
     sessionInfo,
-    agent: fileAgent,
-    isForkSnapshot: sessionInfoCount > 1,
+    agent: currentAgent,
+    isForkSnapshot,
     inheritedTurnCount,
+    malformedLineCount,
   };
 }
 
@@ -250,36 +298,80 @@ export function deriveSessionRole(filePath, parsed) {
   return "coordinator";
 }
 
+const AGGREGATE_DIMENSIONS = ["input", "output", "cacheRead", "cacheWrite", "totalTokens", "cost"];
+
+function createUsageAggregate() {
+  return {
+    turns: 0,
+    values: Object.fromEntries(AGGREGATE_DIMENSIONS.map((dimension) => [dimension, 0])),
+    available: Object.fromEntries(AGGREGATE_DIMENSIONS.map((dimension) => [dimension, true])),
+  };
+}
+
+function addUsageToAggregate(aggregate, usage) {
+  aggregate.turns += 1;
+  for (const dimension of AGGREGATE_DIMENSIONS) {
+    const value = usage[dimension];
+    if (value === null) {
+      aggregate.available[dimension] = false;
+    } else {
+      aggregate.values[dimension] += value;
+    }
+  }
+}
+
+function aggregateValue(aggregate, dimension) {
+  return aggregate.available[dimension] ? aggregate.values[dimension] : null;
+}
+
+function aggregateCacheHitRatio(aggregate) {
+  const input = aggregateValue(aggregate, "input");
+  const cacheRead = aggregateValue(aggregate, "cacheRead");
+  if (input === null || cacheRead === null || input + cacheRead < 1) return null;
+  return Number((cacheRead / (input + cacheRead)).toFixed(4));
+}
+
+function roundCost(value) {
+  return value === null ? null : Number(value.toFixed(4));
+}
+
+function splitTurnsByAgentSegment(turns) {
+  const groups = [];
+  for (const turn of turns) {
+    const previous = groups.at(-1);
+    if (!previous || previous.segmentId !== turn.segmentId || previous.agent !== turn.agent) {
+      groups.push({ segmentId: turn.segmentId, agent: turn.agent, turns: [turn] });
+    } else {
+      previous.turns.push(turn);
+    }
+  }
+  return groups;
+}
+
 /**
  * Audit an entire Pi session directory or file.
  * @param {string} targetPath
  * @returns {Promise<object>}
  */
 export async function auditPiSession(targetPath) {
-  const { files, skippedForkSnapshots } = collectTranscriptFilesWithMetadata(targetPath);
+  const { files } = collectTranscriptFilesWithMetadata(targetPath);
   if (files.length === 0) {
     throw new Error(`No .jsonl transcripts found in ${targetPath}`);
   }
 
   const sessions = [];
-  const modelAggregation = Object.create(null);
+  const modelAggregates = Object.create(null);
+  const overallAggregate = createUsageAggregate();
 
   let forkSnapshotsProcessed = 0;
   let retainedForkTurns = 0;
   let skippedInheritedForkTurns = 0;
-  let overallTotalInput = 0;
-  let overallTotalOutput = 0;
-  let overallTotalCacheRead = 0;
-  let overallTotalCacheWrite = 0;
-  let overallTotalCost = 0;
-  let overallTurns = 0;
+  let malformedLines = 0;
 
   for (const file of files) {
     const parsed = await parseTranscriptFile(file);
-    const usageTurns = parsed.turns.filter((turn) => {
-      const usage = turn.usage;
-      return usage.input + usage.output + usage.cacheRead + usage.cacheWrite > 0;
-    });
+    const usageTurns = parsed.turns.filter(isUsageBearing);
+    malformedLines += parsed.malformedLineCount;
     if (parsed.isForkSnapshot) {
       forkSnapshotsProcessed += 1;
       retainedForkTurns += usageTurns.length;
@@ -287,124 +379,101 @@ export async function auditPiSession(targetPath) {
     }
     if (usageTurns.length === 0) continue;
 
-    const role = deriveSessionRole(file, parsed);
-    let sessionInput = 0;
-    let sessionOutput = 0;
-    let sessionCacheRead = 0;
-    let sessionCacheWrite = 0;
-    let sessionCost = 0;
+    for (const group of splitTurnsByAgentSegment(usageTurns)) {
+      const sessionAggregate = createUsageAggregate();
+      const modelsInSession = new Set();
 
-    const modelsInSession = new Set();
+      for (const turn of group.turns) {
+        addUsageToAggregate(sessionAggregate, turn.usage);
+        addUsageToAggregate(overallAggregate, turn.usage);
+        modelsInSession.add(turn.model);
 
-    for (const turn of usageTurns) {
-      const u = turn.usage;
-      sessionInput += u.input;
-      sessionOutput += u.output;
-      sessionCacheRead += u.cacheRead;
-      sessionCacheWrite += u.cacheWrite;
-      sessionCost += u.cost;
-      modelsInSession.add(turn.model);
-
-      if (!modelAggregation[turn.model]) {
-        modelAggregation[turn.model] = {
-          turns: 0,
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: 0,
-        };
+        if (!modelAggregates[turn.model]) {
+          modelAggregates[turn.model] = createUsageAggregate();
+        }
+        addUsageToAggregate(modelAggregates[turn.model], turn.usage);
       }
-      const m = modelAggregation[turn.model];
-      m.turns++;
-      m.input += u.input;
-      m.output += u.output;
-      m.cacheRead += u.cacheRead;
-      m.cacheWrite += u.cacheWrite;
-      m.totalTokens += (u.input + u.output + u.cacheRead + u.cacheWrite);
-      m.cost += u.cost;
+
+      const promptTurns = group.turns.filter((turn) => (
+        turn.usage.input !== null &&
+        turn.usage.cacheRead !== null &&
+        turn.usage.input + turn.usage.cacheRead > 0
+      ));
+      const firstTurn = promptTurns[0] ?? null;
+      const lastTurn = promptTurns.at(-1) ?? null;
+      const initialPromptTokens = firstTurn
+        ? firstTurn.usage.input + firstTurn.usage.cacheRead
+        : null;
+      const finalPromptTokens = lastTurn
+        ? lastTurn.usage.input + lastTurn.usage.cacheRead
+        : null;
+      const promptGrowthFactor = initialPromptTokens !== null && initialPromptTokens >= 1
+        ? Number((finalPromptTokens / initialPromptTokens).toFixed(2))
+        : null;
+
+      const role = deriveSessionRole(file, {
+        sessionInfo: group.agent ? { name: group.agent } : null,
+        agent: group.agent,
+      });
+      sessions.push({
+        file: path.relative(process.cwd(), file),
+        role,
+        sessionName: group.agent,
+        models: Array.from(modelsInSession),
+        turnCount: group.turns.length,
+        inputTokens: aggregateValue(sessionAggregate, "input"),
+        outputTokens: aggregateValue(sessionAggregate, "output"),
+        cacheReadTokens: aggregateValue(sessionAggregate, "cacheRead"),
+        cacheWriteTokens: aggregateValue(sessionAggregate, "cacheWrite"),
+        totalTokens: aggregateValue(sessionAggregate, "totalTokens"),
+        cost: roundCost(aggregateValue(sessionAggregate, "cost")),
+        snowball: {
+          initialPromptTokens,
+          finalPromptTokens,
+          promptGrowthFactor,
+          cacheHitRatio: aggregateCacheHitRatio(sessionAggregate),
+        },
+      });
     }
-
-    const promptTurns = usageTurns.filter((turn) => turn.usage.input + turn.usage.cacheRead > 0);
-    const endpointTurns = promptTurns.length > 0 ? promptTurns : usageTurns;
-    const firstTurn = endpointTurns[0];
-    const lastTurn = endpointTurns[endpointTurns.length - 1];
-
-    const initialPromptTokens = firstTurn.usage.input + firstTurn.usage.cacheRead;
-    const finalPromptTokens = lastTurn.usage.input + lastTurn.usage.cacheRead;
-    const promptGrowthFactor = initialPromptTokens >= 1
-      ? Number((finalPromptTokens / initialPromptTokens).toFixed(2))
-      : 1;
-
-    const totalPromptTokens = sessionInput + sessionCacheRead;
-    const cacheHitRatio = totalPromptTokens >= 1
-      ? Number((sessionCacheRead / totalPromptTokens).toFixed(4))
-      : 0;
-
-    sessions.push({
-      file: path.relative(process.cwd(), file),
-      role,
-      sessionName: parsed.sessionInfo?.name || null,
-      models: Array.from(modelsInSession),
-      turnCount: usageTurns.length,
-      inputTokens: sessionInput,
-      outputTokens: sessionOutput,
-      cacheReadTokens: sessionCacheRead,
-      cacheWriteTokens: sessionCacheWrite,
-      totalTokens: sessionInput + sessionOutput + sessionCacheRead + sessionCacheWrite,
-      cost: Number(sessionCost.toFixed(4)),
-      snowball: {
-        initialPromptTokens,
-        finalPromptTokens,
-        promptGrowthFactor,
-        cacheHitRatio,
-      },
-    });
-
-    overallTotalInput += sessionInput;
-    overallTotalOutput += sessionOutput;
-    overallTotalCacheRead += sessionCacheRead;
-    overallTotalCacheWrite += sessionCacheWrite;
-    overallTotalCost += sessionCost;
-    overallTurns += usageTurns.length;
   }
 
   if (sessions.length === 0) {
     throw new Error(`No assistant turns with token usage found in ${targetPath}`);
   }
 
-  const overallTotalTokens = overallTotalInput + overallTotalOutput + overallTotalCacheRead + overallTotalCacheWrite;
-  const overallPromptTokens = overallTotalInput + overallTotalCacheRead;
-  const overallCacheHitRatio = overallPromptTokens >= 1
-    ? Number((overallTotalCacheRead / overallPromptTokens).toFixed(4))
-    : 0;
-
-  // Calculate overall model cache ratios
-  for (const m of Object.values(modelAggregation)) {
-    const prompt = m.input + m.cacheRead;
-    m.cacheHitRatio = prompt >= 1 ? Number((m.cacheRead / prompt).toFixed(4)) : 0;
-    m.cost = Number(m.cost.toFixed(4));
+  const modelAggregation = Object.create(null);
+  for (const [model, aggregate] of Object.entries(modelAggregates)) {
+    modelAggregation[model] = {
+      turns: aggregate.turns,
+      input: aggregateValue(aggregate, "input"),
+      output: aggregateValue(aggregate, "output"),
+      cacheRead: aggregateValue(aggregate, "cacheRead"),
+      cacheWrite: aggregateValue(aggregate, "cacheWrite"),
+      totalTokens: aggregateValue(aggregate, "totalTokens"),
+      cost: roundCost(aggregateValue(aggregate, "cost")),
+      cacheHitRatio: aggregateCacheHitRatio(aggregate),
+    };
   }
 
   return {
     ok: true,
     targetPath,
     totalFilesExamined: files.length,
-    skippedForkSnapshots,
     forkSnapshotsProcessed,
     retainedForkTurns,
     skippedInheritedForkTurns,
+    malformedLines,
     activeSessionsCount: sessions.length,
     summary: {
-      totalTurns: overallTurns,
-      inputTokens: overallTotalInput,
-      outputTokens: overallTotalOutput,
-      cacheReadTokens: overallTotalCacheRead,
-      cacheWriteTokens: overallTotalCacheWrite,
-      totalTokens: overallTotalTokens,
-      cacheHitRatio: overallCacheHitRatio,
-      estimatedCost: Number(overallTotalCost.toFixed(4)),
+      totalTurns: overallAggregate.turns,
+      inputTokens: aggregateValue(overallAggregate, "input"),
+      outputTokens: aggregateValue(overallAggregate, "output"),
+      cacheReadTokens: aggregateValue(overallAggregate, "cacheRead"),
+      cacheWriteTokens: aggregateValue(overallAggregate, "cacheWrite"),
+      totalTokens: aggregateValue(overallAggregate, "totalTokens"),
+      cacheHitRatio: aggregateCacheHitRatio(overallAggregate),
+      estimatedCost: roundCost(aggregateValue(overallAggregate, "cost")),
+      malformedLines,
     },
     byModel: modelAggregation,
     sessions,
@@ -417,7 +486,25 @@ export async function auditPiSession(targetPath) {
  * @returns {string}
  */
 function formatTokenCount(value) {
-  return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return value === null || value === undefined
+    ? "n/a"
+    : String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
+function formatRatio(value) {
+  return value === null || value === undefined ? "n/a" : `${(value * 100).toFixed(1)}%`;
+}
+
+function formatCost(value) {
+  return value === null || value === undefined ? "n/a" : `$${value.toFixed(4)}`;
+}
+
+function escapeMarkdown(value) {
+  return String(value)
+    .replace(/\\/g, "&#92;")
+    .replace(/`/g, "&#96;")
+    .replace(/\|/g, "\\|")
+    .replace(/\r\n?|\n/g, "<br>");
 }
 
 export function formatMarkdownSummary(auditResult) {
@@ -425,23 +512,30 @@ export function formatMarkdownSummary(auditResult) {
     summary,
     byModel,
     sessions,
+    targetPath,
     forkSnapshotsProcessed = 0,
     retainedForkTurns = 0,
     skippedInheritedForkTurns = 0,
+    malformedLines = summary.malformedLines ?? 0,
   } = auditResult;
 
   const lines = [];
   lines.push("## Pi Session Token Audit");
   lines.push("");
+  lines.push(`- **Resolved Target**: \`${escapeMarkdown(targetPath ?? "unknown")}\``);
   lines.push(`- **Total Turns**: ${summary.totalTurns}`);
-  lines.push(`- **Total Tokens**: ${formatTokenCount(summary.totalTokens)} (${(summary.totalTokens / 1_000_000).toFixed(2)}M)`);
+  const totalMillions = summary.totalTokens === null || summary.totalTokens === undefined
+    ? "n/a"
+    : `${(summary.totalTokens / 1_000_000).toFixed(2)}M`;
+  lines.push(`- **Total Tokens**: ${formatTokenCount(summary.totalTokens)} (${totalMillions})`);
   lines.push(`- **Uncached Input**: ${formatTokenCount(summary.inputTokens)}`);
   lines.push(`- **Cached Read**: ${formatTokenCount(summary.cacheReadTokens)}`);
   lines.push(`- **Output**: ${formatTokenCount(summary.outputTokens)}`);
-  lines.push(`- **Cache Hit Ratio**: ${(summary.cacheHitRatio * 100).toFixed(1)}%`);
-  lines.push(`- **Estimated Cost**: $${summary.estimatedCost.toFixed(4)}`);
-  if (forkSnapshotsProcessed > 0) {
-    lines.push(`- **Fork Snapshots**: ${forkSnapshotsProcessed} processed; ${retainedForkTurns} fork-own turns retained; ${skippedInheritedForkTurns} inherited turns excluded`);
+  lines.push(`- **Cache Hit Ratio**: ${formatRatio(summary.cacheHitRatio)}`);
+  lines.push(`- **Estimated Cost**: ${formatCost(summary.estimatedCost)}`);
+  lines.push(`- **Fork Snapshots**: ${forkSnapshotsProcessed} processed; ${retainedForkTurns} fork-own turns retained; ${skippedInheritedForkTurns} inherited turns excluded`);
+  if (malformedLines > 0) {
+    lines.push(`- **Malformed Lines**: ${malformedLines} skipped while parsing; totals may be incomplete`);
   }
   lines.push("");
 
@@ -451,7 +545,7 @@ export function formatMarkdownSummary(auditResult) {
   lines.push("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |");
   for (const [model, data] of Object.entries(byModel)) {
     lines.push(
-      `| \`${model}\` | ${data.turns} | ${formatTokenCount(data.input)} | ${formatTokenCount(data.cacheRead)} | ${formatTokenCount(data.output)} | ${(data.cacheHitRatio * 100).toFixed(1)}% | ${formatTokenCount(data.totalTokens)} | $${data.cost.toFixed(4)} |`
+      `| \`${escapeMarkdown(model)}\` | ${data.turns} | ${formatTokenCount(data.input)} | ${formatTokenCount(data.cacheRead)} | ${formatTokenCount(data.output)} | ${formatRatio(data.cacheHitRatio)} | ${formatTokenCount(data.totalTokens)} | ${formatCost(data.cost)} |`
     );
   }
   lines.push("");
@@ -461,24 +555,25 @@ export function formatMarkdownSummary(auditResult) {
   lines.push("| Role | Turns | Models | Total Tokens | Cache Ratio | Init Prompt | Final Prompt | Growth |");
   lines.push("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |");
   for (const s of sessions) {
-    const modelsStr = s.models.map((m) => `\`${m}\``).join(", ");
+    const modelsStr = s.models.map((model) => `\`${escapeMarkdown(model)}\``).join(", ");
+    const growth = s.snowball.promptGrowthFactor === null ? "n/a" : `${s.snowball.promptGrowthFactor}x`;
     lines.push(
-      `| **${s.role}** | ${s.turnCount} | ${modelsStr} | ${formatTokenCount(s.totalTokens)} | ${(s.snowball.cacheHitRatio * 100).toFixed(1)}% | ${formatTokenCount(s.snowball.initialPromptTokens)} | ${formatTokenCount(s.snowball.finalPromptTokens)} | ${s.snowball.promptGrowthFactor}x |`
+      `| **${escapeMarkdown(s.role)}** | ${s.turnCount} | ${modelsStr} | ${formatTokenCount(s.totalTokens)} | ${formatRatio(s.snowball.cacheHitRatio)} | ${formatTokenCount(s.snowball.initialPromptTokens)} | ${formatTokenCount(s.snowball.finalPromptTokens)} | ${growth} |`
     );
   }
   lines.push("");
 
-  // Context Snowball Warnings
   const warnings = [];
   for (const s of sessions) {
+    const role = escapeMarkdown(s.role);
     if (s.turnCount > 100) {
-      warnings.push(`- ⚠️ **High turn count**: Session \`${s.role}\` ran for ${s.turnCount} turns. Monolithic coordinators risk severe context snowballing.`);
+      warnings.push(`- ⚠️ **High turn count**: Session \`${role}\` ran for ${s.turnCount} turns. Monolithic coordinators risk severe context snowballing.`);
     }
-    if (s.snowball.promptGrowthFactor > 15) {
-      warnings.push(`- ⚠️ **Severe context growth**: Session \`${s.role}\` grew by ${s.snowball.promptGrowthFactor}x from initial prompt (${formatTokenCount(s.snowball.initialPromptTokens)} to ${formatTokenCount(s.snowball.finalPromptTokens)} tokens).`);
+    if (s.snowball.promptGrowthFactor !== null && s.snowball.promptGrowthFactor > 15) {
+      warnings.push(`- ⚠️ **Severe context growth**: Session \`${role}\` grew by ${s.snowball.promptGrowthFactor}x from initial prompt (${formatTokenCount(s.snowball.initialPromptTokens)} to ${formatTokenCount(s.snowball.finalPromptTokens)} tokens).`);
     }
-    if (s.snowball.cacheHitRatio < 0.70 && s.totalTokens >= 500_000) {
-      warnings.push(`- ⚠️ **Low cache hit ratio**: Session \`${s.role}\` has ${(s.snowball.cacheHitRatio * 100).toFixed(1)}% cache hit ratio with >500k tokens.`);
+    if (s.snowball.cacheHitRatio !== null && s.totalTokens !== null && s.snowball.cacheHitRatio < 0.70 && s.totalTokens >= 500_000) {
+      warnings.push(`- ⚠️ **Low cache hit ratio**: Session \`${role}\` has ${formatRatio(s.snowball.cacheHitRatio)} cache hit ratio with >500k tokens.`);
     }
   }
 

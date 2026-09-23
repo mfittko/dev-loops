@@ -28,7 +28,7 @@ This skill provides an automated inspection tool to:
 The skill is backed by `scripts/loop/audit-pi-session.mjs` (available directly or via the CLI as `dev-loops loop audit-session`):
 
 ```bash
-# Audit the latest session under ~/.pi/agent/sessions/--Users-*-dev-loops--/
+# Audit the latest session for this repository (including its tmp/worktrees runs)
 node scripts/loop/audit-pi-session.mjs --latest
 
 # Or using the dev-loops CLI:
@@ -42,6 +42,7 @@ node scripts/loop/audit-pi-session.mjs --latest --json
 
 # Query specific metrics via --jq (per BASE-JQ-OUTPUT-GUARANTEE):
 node scripts/loop/audit-pi-session.mjs --latest --jq '.summary.totalTokens'
+# cacheHitRatio is a 0-1 fraction in JSON (Markdown renders it as a percentage)
 node scripts/loop/audit-pi-session.mjs --latest --jq '.summary.cacheHitRatio'
 node scripts/loop/audit-pi-session.mjs --latest --jq '.sessions[] | select(.snowball.promptGrowthFactor > 10)'
 ```
@@ -49,11 +50,13 @@ node scripts/loop/audit-pi-session.mjs --latest --jq '.sessions[] | select(.snow
 ## Interpreting Output
 
 ### 1. Overall Summary
-- **Total Turns**: Sum of assistant turns carrying a non-zero token-usage envelope.
-- **Total Tokens**: Sum of `input + output + cacheRead + cacheWrite`.
+- **Resolved Target**: Absolute session path selected by `--latest` or supplied explicitly.
+- **Total Turns**: Sum of assistant turns carrying a non-zero token-usage envelope. For a genuine fork transcript (its `session` header has a non-null `parentSession`), this excludes the inherited replay prefix and includes the fork's own turns; multiple `session_info` records in an ordinary transcript are all retained.
+- **Total Tokens**: Sum of `input + output + cacheRead + cacheWrite` when those provider dimensions are reported.
 - **Uncached Input vs Cached Read**: Demonstrates cache effectiveness.
-- **Cache Hit Ratio**: Calculated as `cachedRead / (uncachedInput + cachedRead)`. In long coordinator sessions with good prefix alignment, this should typically exceed 85-90%.
-- **Estimated Cost**: Total provider billed cost when reported in message usage envelopes.
+- **Cache Hit Ratio**: Calculated as `cachedRead / (uncachedInput + cachedRead)`. JSON reports a 0-1 fraction; Markdown reports a percentage. In long coordinator sessions with good prefix alignment, this should typically exceed 85-90%.
+- **Estimated Cost**: Total provider billed cost when reported in message usage envelopes. Unreported dimensions render as `n/a`, not zero.
+- **Fork Snapshots**: Reports snapshots processed, fork-own turns retained, and inherited replay turns excluded in both JSON counters (`forkSnapshotsProcessed`, `retainedForkTurns`, and `skippedInheritedForkTurns`) and the Markdown summary.
 
 ### 2. Usage by Model
 Breaks down token volume and cache ratios per model provider (e.g., `gemini-3.8-flash`, `zai-org/GLM-5.3`).
@@ -61,9 +64,9 @@ Breaks down token volume and cache ratios per model provider (e.g., `gemini-3.8-
 ### 3. Session Breakdown & Context Snowballing
 Each subagent and coordinator session is listed with:
 - **Role**: Inferred agent role (`dev-loop`, `review`, `fixer`, etc.).
-- **Turns**: Count of assistant turns carrying a non-zero token-usage envelope for that specific subagent process.
-- **Init Prompt**: Size of the prompt (input + cacheRead) on Turn 1.
-- **Final Prompt**: Size of the prompt on the final turn.
+- **Turns**: Count of assistant turns carrying a non-zero token-usage envelope for that specific subagent process. In a fork snapshot, inherited replay turns are excluded.
+- **Init Prompt**: Size of the prompt (input + cacheRead) on the first prompt-bearing turn (the first post-fork prompt-bearing turn for a fork snapshot).
+- **Final Prompt**: Size of the prompt on the final prompt-bearing turn.
 - **Growth**: Growth factor `finalPromptTokens / initialPromptTokens`.
 
 ## Detecting Token Bloat Anti-Patterns

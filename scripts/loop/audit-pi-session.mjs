@@ -36,8 +36,8 @@ Arguments:
                     or subagent run folder. If omitted, defaults to --latest.
 
 Options:
-  --latest          Automatically find and inspect the latest session under
-                    ~/.pi/agent/sessions/--Users-*-dev-loops--/
+  --latest          Automatically find and inspect the latest session for this
+                    repository, including its tmp/worktrees session directories
   --json            Emit raw structured JSON instead of human-readable Markdown
   --help, -h        Show this help
 
@@ -84,7 +84,11 @@ export async function runAuditCli(
     options.silent = !!values.silent;
     options.fields = values.fields;
 
-    if (positionals.length > 0) {
+    if (positionals.length > 1) {
+      stderr.write(`${formatCliError("Pass at most one session path.", { usage: USAGE })}\n`);
+      return 2;
+    }
+    if (positionals.length === 1) {
       options.sessionPath = positionals[0];
     }
   } catch (error) {
