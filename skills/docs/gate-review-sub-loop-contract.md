@@ -207,7 +207,9 @@ gitignored, worktree-local `tmp/gate-context` bundle it writes is present for th
     A conductor MUST NOT rebuild context while reviewers for that head run.
     Live body edits change the stable prefix: the builder refuses a changed-byte
     same-head rebuild while that gate+head has live sentinels (exit 1, no writes),
-    naming their files and recorded hash. Sentinel-scan errors other than missing
+    naming their files and recorded hash. The same refusal covers a
+    same-head rebuild that would rewrite a prior-dispositions, known-findings or
+    scoped-variant file, even when the prefix bytes are unchanged. Sentinel-scan errors other than missing
     tmp/ also refuse; only an unreadable EXISTING prefix remains advisory because
     a difference cannot be proven. Retired rounds without live sentinels are
     unaffected. Follow `GATE-EXEC-ROUND-RETIREMENT`: retire THEN rebuild, never
@@ -236,7 +238,7 @@ Interpret the emitted plan within these shipped limits:
 
 The physically separate volatile tail follows that boundary. Put only values the stable renderer does not consume there, except its repeated identifying `gate`/`head` header. `validationPosture` belongs there (the evidence file receives only `validationResultsPath`) and rejects embedded newlines; `loggedAt` is a genuine per-write timestamp. `acceptanceCriteria` is never volatile: it feeds the stable linked-issue heading when issue body/sections exist and is recorded in `scope.acceptanceCriteria`. Volatile-only changes leave prefix bytes and hash unchanged.
 
-**Write ordering.** Both builder and CLI prepare the full diff without persisting it. The shared writer renders the evidence file and scoped briefings in memory, refuses changed-prefix rebuilds with live sentinels and validates the plan/volatile tail before overwriting any referenced file. Refusal preserves the prior set's bytes. The prefix binds the evidence file and the full diff by sha256, so a change to either changes the prefix. Before changing a prefix, evidence file, scoped briefing or full diff, the writer MUST invalidate the previous JSON marker. It then persists those stable files, volatile tail and dispatch plan, writing the JSON completion marker LAST. Successful reruns with unchanged stable bytes retain the marker in place. Optional diff/variant write failures retain their existing fallback only after invalidation: rebuild pointers/hash/plan without a failed diff, or downgrade failed variants to the full briefing. A failed required write MUST remove the marker even when prefix bytes are unchanged; landed siblings and round history remain for diagnosis. If cleanup also fails, report both errors and MUST NOT report success. `readGateContext`, dispatch emission and reviewer `--context-path` checks use the marker; after a failed write, repair the failure and rebuild the complete set before dispatching.
+**Write ordering.** Both builder and CLI prepare the full diff without persisting it. The shared writer renders the evidence file and scoped briefings in memory, refuses a rebuild with live sentinels that would change the prefix or any hash-bound read outside it (prior-dispositions, known-findings, scoped variants), and validates the plan/volatile tail before overwriting any referenced file. Refusal preserves the prior set's bytes. The prefix binds the evidence file and the full diff by sha256, so a change to either changes the prefix. Before changing a prefix, evidence file, scoped briefing or full diff, the writer MUST invalidate the previous JSON marker. It then persists those stable files, volatile tail and dispatch plan, writing the JSON completion marker LAST. Successful reruns with unchanged stable bytes retain the marker in place. Optional diff/variant write failures retain their existing fallback only after invalidation: rebuild pointers/hash/plan without a failed diff, or downgrade failed variants to the full briefing. A failed required write MUST remove the marker even when prefix bytes are unchanged; landed siblings and round history remain for diagnosis. If cleanup also fails, report both errors and MUST NOT report success. `readGateContext`, dispatch emission and reviewer `--context-path` checks use the marker; after a failed write, repair the failure and rebuild the complete set before dispatching.
 
 Use `requestPrefixFingerprint`/`sharedPrefixHash` for the following primer phase's ordering evidence. A plan alone does not prove that its primer barrier ran.
 
@@ -680,7 +682,8 @@ for exact exit semantics.
 <!-- rule: GATE-EXEC-ROUND-RETIREMENT -->
 `GATE-EXEC-ROUND-RETIREMENT`: A legitimate same-head rebuild, including correction
 of stale/bad seeding, MUST retire the round FIRST. Phase 1's builder refuses changed
-prefix bytes while this gate+head has live sentinels; it never retires implicitly.
+prefix bytes, or a rewrite of a prior-dispositions, known-findings or scoped-variant
+file, while this gate+head has live sentinels; it never retires implicitly.
 Rebuilding while reviewers run remains forbidden. A round already stranded by old
 tooling or an out-of-band prefix change also uses retirement: `--same-head-retry`
 cannot repair its hash mismatch.
@@ -1587,10 +1590,12 @@ defer-close timing moves to post-fix. That pass runs independently of
 `GATE-EXEC-POST-BEFORE-FIX` comment. The reviewer briefing's second, prose suppression layer is
 owned by the
 [fan-out procedure](../copilot-pr-followup/SKILL.md#gate-fan-outfan-in-procedure-agent-orchestrated):
-the orchestrator appends a known-findings block AFTER the angle-specific prompt in each
-reviewer's briefing, never into the byte-identical prefix `GATE-EXEC-BRIEFING-PREFIX` hashes —
-the prefix hash and the same-head-retry sentinel (`--same-head-retry`) stay untouched by a
-findings post.
+the context builder renders a known-findings block from `write-gate-context.mjs --known-findings`
+(`capture-review-threads.mjs` output) into the round-bound `<gate>-<headSha>.known-findings.json`
+and hash-binds it as a required read when at least one thread exists. The block stays outside the
+byte-identical prefix `GATE-EXEC-BRIEFING-PREFIX` hashes, so the prefix hash and the
+same-head-retry sentinel (`--same-head-retry`) stay untouched by a findings post. The conductor
+relays each work order's `promptPath` bytes unchanged and never appends anything after them.
 
 <!-- rule: GATE-EXEC-THREAD-DISPOSITION -->
 `GATE-EXEC-THREAD-DISPOSITION`: A gate-authored thread's severity decides how it closes. A

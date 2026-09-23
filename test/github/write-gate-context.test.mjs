@@ -6990,6 +6990,54 @@ test("writeGateContext REFUSES a same-head rebuild that would rewrite the prior 
   }
 });
 
+test("writeGateContext --known-findings: full thread bodies go to a hash-bound required read, never the prefix; no threads means no read; a live-sentinel rewrite is refused", async () => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "gate-context-known-findings-"));
+  try {
+    const capturePath = path.join(repoRoot, "threads.json");
+    const longBody = "y".repeat(5000);
+    const writeCapture = (threads, comments) => writeFile(capturePath, JSON.stringify({ ok: true, threads, comments }), "utf8");
+    const args = [
+      "--repo", "owner/repo", "--pr", "67", "--gate", "draft_gate", "--head-sha", "abc1234567890",
+      "--angles", '["correctness"]', "--known-findings", capturePath,
+    ];
+    await writeCapture([], []);
+    const empty = await writeGateContext(parseWriteGateContextCliArgs(args), { repoRoot });
+    assert.equal((empty.artifact.requiredReads ?? []).some((r) => r.kind === "known-findings"), false, "no threads, no read");
+
+    await writeCapture(
+      [{ id: "T1", isResolved: false }, { id: "T2", isResolved: true }],
+      [{ threadId: "T1", author: { login: "gate-bot" }, body: longBody }, { threadId: "T2", author: { login: "human" }, body: "resolved-body" }],
+    );
+    const result = await writeGateContext(parseWriteGateContextCliArgs(args), { repoRoot });
+    assert.equal(result.prefixHash, empty.prefixHash, "the shared prefix never lists the known findings");
+    const read = result.artifact.requiredReads.find((r) => r.kind === "known-findings");
+    assert.equal(read.required, true);
+    assert.equal(read.entries, 2);
+    assert.ok(read.path.endsWith(".known-findings.json"), read.path);
+    assert.ok(path.basename(read.path).startsWith("draft_gate-"), read.path);
+    const bytes = await readFile(path.resolve(repoRoot, read.path));
+    assert.equal(read.sha256, createHash("sha256").update(bytes).digest("hex"));
+    assert.deepEqual(JSON.parse(bytes.toString("utf8")), [
+      { threadId: "T1", isResolved: false, comments: [{ author: "gate-bot", body: longBody }] },
+      { threadId: "T2", isResolved: true, comments: [{ author: "human", body: "resolved-body" }] },
+    ]);
+    const volatileBytes = await readFile(path.resolve(repoRoot, result.volatilePath), "utf8");
+    assert.ok(volatileBytes.includes(read.sha256) && !volatileBytes.includes(longBody), "the tail references the block, never inlines it");
+
+    await writeFile(path.resolve(repoRoot, "tmp", `checkpoint-context-sentinel-draft-gate-correctness-${"abc1234567890".padEnd(40, "0")}.json`), "{}\n", "utf8");
+    await writeCapture([{ id: "T3", isResolved: false }], [{ threadId: "T3", author: { login: "gate-bot" }, body: "new" }]);
+    await assert.rejects(
+      writeGateContext(parseWriteGateContextCliArgs(args), { repoRoot }),
+      /Refusing to rewrite required read\(s\) .*known-findings\.json with DIFFERENT bytes/,
+    );
+
+    await writeFile(capturePath, "{\"threads\":1}", "utf8");
+    await assert.rejects(writeGateContext(parseWriteGateContextCliArgs(args), { repoRoot }), /threads\[\] and comments\[\]/);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("resolvePriorDispositions: a reject-disposed finding on a re-running angle is surfaced; an act-disposed finding is NOT (only reject/defer are do-not-re-raise memory)", () => {
   const log = {
     headSha: "a".repeat(40),

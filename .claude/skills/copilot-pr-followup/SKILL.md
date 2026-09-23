@@ -400,13 +400,16 @@ Both gates run this same checkpoint review chain, owned end-to-end by [Gate Revi
    Preserve the emitted `group` even on a one-angle split tail; its angle-shaped scope does not make it an ungrouped resolved unit (ADR0072).
    <!-- rule: COPILOT-FOLLOWUP-ADVERSARIAL-BRIEFING -->
    `COPILOT-FOLLOWUP-ADVERSARIAL-BRIEFING`: Each reviewer MUST be briefed to review like an external code reviewer hunting real bugs: read the diff in full from the round's required reads (`scope.diffPath` holds the full `.diff`; `git diff` when null) rather than re-deriving it, and query the bundled adjacent code (callers, callees, imports; the context artifact's optional `.adjacentCode`) on demand as a navigation aid, never as a required full read, then review adversarially for concrete defects (edge cases, input validation, numeric coercion incl. NaN/Infinity/floats/negatives, null/undefined, boundary conditions, mismatched caller/callee contracts, dedup/identity bugs) with `file:line` + the failing scenario — not process nits like "no test exists". Reviewers MAY widen scope (open adjacent repo files beyond the bundle) only when their angle genuinely needs more, recording in the optional `contextWidened` field only the widening that moved their judgment. This angle-specific text is what `scripts/github/emit-fanout-dispatch.mjs` writes as each dispatch unit's angle-suffix and feeds into the composer core (issue #1852/#2166) — the SANCTIONED way this briefing is actually assembled into one reviewer prompt, right after the same step's `resolve-angle-carry-forward.mjs`/`verify-fresh-review-context.mjs` calls and before spawning the reviewer, never a hand-assembled per-group preamble and never a per-unit conductor call to the composer's own CLI (which refuses every direct fan-out invocation). The LAYOUT of this briefing — invariant block first, this adversarial angle prompt last, so every reviewer's prompt shares one byte-identical cache-aligned prefix (the pointer line itself, when a harness seeds via a file pointer rather than inline bytes) — the composer, and the `--prefix-hash`/`--prefix-file` sentinel recording, are owned by `GATE-EXEC-BRIEFING-PREFIX` — not restated here.
-   Each reviewer's briefing also carries a known-findings block, appended AFTER this
-   angle-specific prompt and never into the byte-identical prefix `GATE-EXEC-BRIEFING-PREFIX`
-   hashes, listing every currently open or resolved finding thread regardless of author so the
-   reviewer does not re-raise what a thread already covers; build the block from
+   Each reviewer also reads a known-findings block that lists every currently open or resolved
+   finding thread regardless of author, so the reviewer does not re-raise what a thread already
+   covers. The block is delivered by reference: save
    `dev-loops-run scripts/github/capture-review-threads.mjs --repo <owner/name> --pr <number>` output
-   (the full-bodies read, not `list-review-threads.mjs`'s 200-char listing excerpt), never
-   an ad-hoc GraphQL call. The block's content, dedupe contract, and prefix-hash non-interference
+   (the full-bodies read, not `list-review-threads.mjs`'s 200-char listing excerpt, never an
+   ad-hoc GraphQL call) to a file and pass it as `--known-findings <path>` to every context
+   build of the round. The builder writes the round-bound `<gate>-<headSha>.known-findings.json`
+   and hash-binds it as a required read in every work order, outside the byte-identical prefix
+   `GATE-EXEC-BRIEFING-PREFIX` hashes. The conductor never appends anything after the
+   `promptPath` bytes. The block's content, dedupe contract, and prefix-hash non-interference
    are owned by `GATE-EXEC-FINDING-THREADS` in
    [Gate Review Sub-Loop Contract](../docs/gate-review-sub-loop-contract.md#finding-threads-and-disposition).
 5. **Fan-in (Phase 3):** read and follow the owner's [Phase 3](../docs/gate-review-sub-loop-contract.md#phase-3--consolidation-fan-in-synthesis-and-disposition-ledger) and [disposition-ledger contract](../docs/gate-review-sub-loop-contract.md#disposition-ledger-and-durable-logging). Consolidate once:

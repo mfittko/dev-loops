@@ -219,6 +219,7 @@ Optional:
   --available-reviewers <n>      Harness remaining reviewer budget for the #1507 reviewer-budget preflight (non-negative integer). When supplied, the artifact's fanout.preflight reports whether the budget covers this round's dispatch units; on a shortfall, fanout.preflight.dispatch is false and the conductor MUST NOT spawn any reviewer (the shortfall is a resumable state — the artifact records it). Omit when the harness does not expose a budget; the preflight then proceeds (no shortfall can be proven).
   --carried-angles <json>        JSON array of angle-name strings CARRIED FORWARD from a prior clean head (mirrors consolidate-fanin.mjs's own --carried-angles vocabulary, minus its --carry-forward-plan proof check — the caller here IS the fail-closed carry-forward seam, resolve-angle-carry-forward.mjs, never a guess). Like consolidate-fanin.mjs's own mandatory-angle refusal, a name whose review surface always re-runs (a configured mandatory angle, or a hardcoded ALWAYS_INCLUDE evidence/security/description angle) fails closed (exit 1) rather than being honored. A dispatch group whose angles are all carried-or-already-complete (already-complete: a clean per-angle artifact already stamped for this head, scanned automatically — see readCompletedAnglesForHead) is excluded from fanout.preflight.requiredReviewers and pendingGroups, so a head-bump re-gate does not over-count angles Phase 1.2 is about to carry. A wrong/stale value can only shrink the dispatch plan, never grow it past the true group count — it can under-dispatch, never over-spend the budget or fabricate findings for an angle that DID run: the configured-mandatory coverage check and the fail-closed merge check's clean current-head merge marker requirement catch an under-dispatched round ONLY when the wrongly-carried angle is a CONFIGURED mandatory angle — neither ever unions the hardcoded ALWAYS_INCLUDE set, so a wrong value naming only a non-mandatory, non-ALWAYS_INCLUDE angle under-dispatches with no mechanical refusal, visible only in the ledger's own carried-angle provenance (an ALWAYS_INCLUDE name is already refused at this CLI's own entry, above). Omit for today's full-count behavior (nothing excluded).
   --prev-head <sha>              FULL head commit SHA (40 or 64 hex chars) of the prior round's durable gate findings-log (mirrors resolve-angle-carry-forward.mjs's own --prev-head vocabulary). When supplied, every prior reject/defer-disposed finding attributed to an angle re-running THIS round (an angle in --angles not named in --carried-angles) is seeded into the rendered volatile tail as a "do not re-raise" hint (AC3, skills/docs/gate-review-sub-loop-contract.md). Fails OPEN, never crashes the briefing: an absent, unreadable, or malformed prior log simply omits the hint block (byte-identical volatile tail to omitting this flag) — it never blocks the write, suppresses a finding, or converts a reject into an approval. Omit for today's behavior (no hint block).
+  --known-findings <path>        Default \`capture-review-threads.mjs --repo --pr\` output (every open or resolved thread, full bodies). Rendered to the round-bound <gate>-<headSha>.known-findings.json and hash-bound as a required \`known-findings\` read (volatile tail and every work order; never the prefix) when at least one thread exists. Fails closed (exit 1) if unreadable or not that shape.
   --tmp-root <path>              Root tmp directory. Omitted, the worktree-local gate-context
                                  bundle is written under the worktree's tmp/ while the prior-head
                                  findings-log ledger is read from the MAIN worktree's tmp/ (the stable
@@ -352,6 +353,7 @@ export function parseWriteGateContextCliArgs(argv) {
       "available-reviewers": { type: "string" },
       "carried-angles": { type: "string" },
       "prev-head": { type: "string" },
+      "known-findings": { type: "string" },
       "tmp-root": { type: "string" },
       ...JQ_OUTPUT_PARSE_OPTIONS,
     },
@@ -379,6 +381,7 @@ export function parseWriteGateContextCliArgs(argv) {
     availableReviewers: null,
     carriedAngles: null,
     prevHead: null,
+    knownFindingsPath: null,
     // Default undefined (not "tmp") so an OMITTED --tmp-root reaches the
     // main-worktree ledger anchor at the prior-disposition read; every
     // worktree-local gate-context write site keeps its own `|| "tmp"` fallback,
@@ -535,6 +538,14 @@ export function parseWriteGateContextCliArgs(argv) {
         throw parseError("--prev-head must be the FULL head commit SHA (40 or 64 hex chars), not a short prefix — the prior findings-log path is keyed by the full SHA");
       }
       options.prevHead = sha;
+      continue;
+    }
+    if (token.name === "known-findings") {
+      const trimmed = requireTokenValue(token, parseError).trim();
+      if (trimmed.length === 0) {
+        throw parseError("--known-findings must not be empty/whitespace-only");
+      }
+      options.knownFindingsPath = trimmed;
       continue;
     }
     if (token.name === "tmp-root") {
@@ -1726,9 +1737,10 @@ export const VALIDATION_POSTURE_MAX_LENGTH = 500;
  *
  * @param {string|null} [input.validationPosture] — must not contain a newline
  * @param {{ kind: "prior-dispositions", path: string, sha256: string, bytes: number, entries: number, required: true }|null} [input.priorDispositionsRead]
+ * @param {{ kind: "known-findings", path: string, sha256: string, bytes: number, entries: number, required: true }|null} [input.knownFindingsRead]
  * @param {string} [input.worktreeRoot] — resolves the read's path worktree-absolute
  */
-export function renderBriefingVolatile({ gate, headSha, loggedAt, validationPosture = null, priorDispositionsRead = null, worktreeRoot = process.cwd() }) {
+export function renderBriefingVolatile({ gate, headSha, loggedAt, validationPosture = null, priorDispositionsRead = null, knownFindingsRead = null, worktreeRoot = process.cwd() }) {
   if (validationPosture != null && /[\r\n]/.test(validationPosture)) {
     throw new Error("renderBriefingVolatile: validationPosture must not contain a newline — an embedded newline could forge additional key: value lines in this line-structured file");
   }
@@ -1746,6 +1758,11 @@ export function renderBriefingVolatile({ gate, headSha, loggedAt, validationPost
   if (priorDispositionsRead) {
     lines.push(`Prior-round dispositions (do not re-raise a rejected finding at a shifted severity): ${priorDispositionsRead.entries} entries, listed in full in this required read. Read it IN FULL with \`jq\` before judgment; the mandatory sentinel verifies its sha256.`);
     lines.push(renderRequiredReadLine(priorDispositionsRead, worktreeRoot));
+    lines.push("");
+  }
+  if (knownFindingsRead) {
+    lines.push(`Known findings (do not re-raise what an open or resolved thread already covers): ${knownFindingsRead.entries} threads with full bodies, listed in this required read. Read it IN FULL with \`jq\` before judgment; the mandatory sentinel verifies its sha256.`);
+    lines.push(renderRequiredReadLine(knownFindingsRead, worktreeRoot));
     lines.push("");
   }
   return lines.join("\n") + "\n";
@@ -1809,6 +1826,29 @@ export function resolvePriorDispositions({ log, rerunningAngles }) {
     entries.push({ fingerprint, angle, severity, summary, ...(judgeRationale.length > 0 ? { judgeRationale } : {}) });
   }
   return entries;
+}
+
+/**
+ * Known-findings block (GATE-EXEC-FINDING-THREADS): every open or resolved
+ * review thread, any author, with full comment bodies, rendered from the
+ * default `capture-review-threads.mjs --repo --pr` output. Delivered as a
+ * hash-bound required read, never appended to a relayed work order.
+ * Throws on a capture without `threads`/`comments` arrays (fail closed).
+ *
+ * @param {{ threads: Array<{ id: string, isResolved: boolean }>, comments: Array<{ threadId: string, author?: { login?: string }, body?: string }> }} capture
+ * @returns {Array<{ threadId: string, isResolved: boolean, comments: Array<{ author: string, body: string }> }>}
+ */
+export function renderKnownFindings(capture) {
+  if (!capture || !Array.isArray(capture.threads) || !Array.isArray(capture.comments)) {
+    throw new Error("--known-findings must be capture-review-threads.mjs output with threads[] and comments[] arrays");
+  }
+  return capture.threads.map((thread) => ({
+    threadId: String(thread.id),
+    isResolved: thread.isResolved === true,
+    comments: capture.comments
+      .filter((comment) => comment?.threadId === thread.id)
+      .map((comment) => ({ author: comment.author?.login ?? "", body: comment.body ?? "" })),
+  }));
 }
 
 /**
@@ -2729,13 +2769,38 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     };
     (requiredReads ??= []).push(priorDispositionsRead);
   }
-  // The prefix never lists the prior-dispositions or scoped-variant reads, so
+  // Known-findings block, same transport: a round-bound hash-bound read
+  // (only when threads exist). Unreadable or malformed input fails closed.
+  let pendingKnownFindings = null;
+  let knownFindingsRead = null;
+  if (typeof options.knownFindingsPath === "string" && options.knownFindingsPath.length > 0) {
+    let capture;
+    try {
+      capture = JSON.parse(await readFile(path.resolve(repoRoot, options.knownFindingsPath), "utf8"));
+    } catch (err) {
+      throw new Error(`--known-findings ${JSON.stringify(options.knownFindingsPath)} is unreadable or not JSON: ${err?.message ?? err}`);
+    }
+    const knownFindings = renderKnownFindings(capture);
+    if (knownFindings.length > 0) {
+      const text = `${JSON.stringify(knownFindings, null, 2)}\n`;
+      const knownFindingsPath = buildGateArtifactPath({
+        repo: options.repo, pr: options.pr, gate: options.gate, headSha: options.headSha, tmpRoot: options.tmpRoot || "tmp", suffix: ".known-findings.json",
+      });
+      pendingKnownFindings = { path: knownFindingsPath, text };
+      knownFindingsRead = {
+        kind: "known-findings", path: knownFindingsPath, sha256: createHash("sha256").update(text).digest("hex"), bytes: Buffer.byteLength(text), entries: knownFindings.length, required: true,
+      };
+      (requiredReads ??= []).push(knownFindingsRead);
+    }
+  }
+  const pendingRoundReads = [...(pendingDispositions ? [pendingDispositions] : []), ...(pendingKnownFindings ? [pendingKnownFindings] : [])];
+  // The prefix never lists the prior-dispositions, known-findings or scoped-variant reads, so
   // the prefix-byte guard above cannot see them change. Refuse the same way
   // when a same-head rebuild would rewrite one under live sentinels: reviewers
   // past the sentinel would read bytes that differ from the sha256 their work
   // order names. An unreadable existing file counts as changed (fail closed).
   const changedOutOfPrefix = [];
-  for (const pending of [...pendingVariants.values(), ...(pendingDispositions ? [pendingDispositions] : [])]) {
+  for (const pending of [...pendingVariants.values(), ...pendingRoundReads]) {
     try {
       if ((await readFile(path.resolve(repoRoot, pending.path), "utf8")) !== pending.text) changedOutOfPrefix.push(pending.path);
     } catch (err) {
@@ -2762,13 +2827,14 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     loggedAt,
     validationPosture: options.validationPosture ?? null,
     priorDispositionsRead,
+    knownFindingsRead,
     worktreeRoot: path.resolve(repoRoot),
   });
   const artifact = { ...buildGateContextArtifact({ ...options, angleScopes, prefixMode, briefingVariants }), ...(requiredReads ? { requiredReads } : {}), loggedAt };
   // Keep the marker available only when prefix AND referenced stable files
   // are unchanged on disk (the prefix hash-binds the evidence and full diff).
   let markerUnchanged = existingBytes !== null && existingBytes.equals(prefixBytes);
-  const referencedWrites = [...(pendingEvidence ? [pendingEvidence] : []), ...pendingVariants.values(), ...(options.diffToWrite ? [options.diffToWrite] : []), ...(pendingDispositions ? [pendingDispositions] : [])];
+  const referencedWrites = [...(pendingEvidence ? [pendingEvidence] : []), ...pendingVariants.values(), ...(options.diffToWrite ? [options.diffToWrite] : []), ...pendingRoundReads];
   for (const pending of referencedWrites) {
     if (!markerUnchanged) break;
     try {
@@ -2808,7 +2874,7 @@ export async function writeGateContext(options, { repoRoot = process.cwd() } = {
     }
     if (Object.keys(briefingVariants).length === 0) delete artifact.briefingVariants;
     await writeFile(fullPrefixPath, prefixBytes);
-    if (pendingDispositions) await writeFile(path.resolve(repoRoot, pendingDispositions.path), pendingDispositions.text, "utf8");
+    for (const pending of pendingRoundReads) await writeFile(path.resolve(repoRoot, pending.path), pending.text, "utf8");
     await writeFile(fullVolatilePath, volatileText, "utf8");
     await writeFile(fullRequestPlanPath, JSON.stringify(requestPlan, null, 2) + "\n", "utf8");
     await writeFile(fullPath, JSON.stringify(artifact, null, 2) + "\n", "utf8");
