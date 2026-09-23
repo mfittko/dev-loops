@@ -11030,3 +11030,73 @@ test("#2257: the minimize sweep failing never blocks the verdict post, and surfa
     assert.ok(!calls.some((c) => c.args.some((a) => a.startsWith("id="))));
   }, { prefix: "dev-loops-upsert-2257-minimize-failopen-" });
 });
+
+// Carried convergence: Copilot reviewed an earlier head and left one thread,
+// the thread is resolved, and the fix commit only touched docs. The request
+// tool suppresses the re-request for this head, so the poster must accept the
+// pre_approval_gate verdict instead of refusing for a missing current-head
+// convergence point.
+test("upsert-checkpoint-verdict posts pre_approval_gate for a docs-only head bump after a resolved Copilot thread", async () => {
+  const head = "abc1234000000000000000000000000000000000";
+  const prior = "9".repeat(40);
+  const env = await writeGhStub(null, [
+    {
+      matchByClaims: true,
+      assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "number,state,isDraft,headRefOid,mergeable,mergeStateStatus,body,title,closingIssuesReferences,reviews,statusCheckRollup,files"],
+      stdout: `${JSON.stringify({
+        number: 17,
+        state: "OPEN",
+        isDraft: false,
+        headRefOid: head,
+        reviews: [{ id: "PRR_prior", author: { login: "copilot-pull-request-reviewer" }, state: "COMMENTED", body: "", submittedAt: "2026-09-22T10:00:00Z", commit: { oid: prior } }],
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      })}\n`,
+    },
+    { assertArgs: ["api", "repos/owner/repo/pulls/17/requested_reviewers"], stdout: '{"users":[],"teams":[]}\n' },
+    {
+      assertArgs: ["api", "graphql", "pr=17"],
+      stdout: `${JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{
+        id: "thread-1",
+        isResolved: true,
+        comments: { nodes: [{ id: "c1", databaseId: 1001, body: "Tighten this sentence.", author: { login: "copilot-pull-request-reviewer", __typename: "Bot" } }] },
+      }] } } } } })}\n`,
+    },
+    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "headRefOid"], stdout: `{"headRefOid":"${head}"}\n` },
+    {
+      assertArgs: ["api", "--paginate", "--slurp", "repos/owner/repo/issues/17/comments?per_page=100"],
+      stdout: `${JSON.stringify([[{
+        id: 91,
+        body: ["### Gate review: `draft_gate`", "", `**Reviewed head SHA:** \`${prior}\``, "**Verdict:** clean", "", "**Findings summary:** no issues found", "", "**Next action:** mark ready for review"].join("\n"),
+        html_url: "https://github.com/owner/repo/pull/17#issuecomment-91",
+        updated_at: "2026-09-22T09:00:00Z",
+      }]])}\n`,
+    },
+    {
+      assertArgs: ["api", `repos/owner/repo/compare/${prior}...${head}`],
+      stdout: `${JSON.stringify({ status: "ahead", files: [{ filename: "docs/guide.md", status: "modified" }] })}\n`,
+    },
+    { assertArgs: ["pr", "view", "17", "--repo", "owner/repo", "--json", "baseRefOid,labels"], stdout: '{"baseRefOid":"0000000000000000000000000000000000000000","labels":[]}\n' },
+    {
+      assertArgs: ["api", "-X", "POST", "repos/owner/repo/pulls/17/reviews", "--input", "-"],
+      assertStdinIncludes: ["### Gate review: `pre_approval_gate`"],
+      stdout: '{"id":101,"html_url":"https://github.com/owner/repo/pull/17#pullrequestreview-101"}\n',
+    },
+  ]);
+
+  const result = await runNode([
+    "--repo", "owner/repo",
+    "--pr", "17",
+    "--gate", "pre_approval_gate",
+    "--head-sha", head,
+    "--verdict", "clean",
+    "--findings-severity-counts", '{"must-fix":0,"worth-fixing-now":0,"nice-to-have":0}',
+    "--findings-summary", "no issues found",
+    "--next-action", "await final human approval",
+  ], { env });
+
+  assert.equal(result.code, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.action, "created");
+  assert.equal(parsed.gate, "pre_approval_gate");
+  assert.equal(parsed.headSha, head);
+});
