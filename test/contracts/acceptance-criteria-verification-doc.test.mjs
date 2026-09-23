@@ -39,6 +39,8 @@ test("step 8 composes the review verdict with deterministic gate blockers (#2389
   const doc = await readRepo(OWNER);
   const step = doc.split(/\n(?=\d+\. )/).find((text) => text.startsWith("8. "));
   assert.ok(step, "missing step 8");
+  // The always-post rule is scoped so it cannot contradict the refusal paragraphs.
+  assert.match(step, /always post a `pre_approval_gate` comment for every completed gate attempt; the precondition refusals described below post none/);
   // The retired instruction mapped an unmet AC to findings_present.
   assert.doesNotMatch(step, /findings_present` when any AC item is not satisfied/);
   for (const row of [
