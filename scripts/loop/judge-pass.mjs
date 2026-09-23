@@ -845,8 +845,9 @@ export async function judgePassCli(
 
   // A "clean" ledger verdict means no finding at a BLOCKING severity remains
   // open. It is invalid only when a finding at a blocking severity was acted on
-  // — non-blocking act findings (a medium in the fix window, a low the fixer
-  // triages) are expected under a clean verdict per GATE-EXEC-BLOCKING-ONLY-FIX.
+  // — the ledger's severity verdict may be clean with non-blocking act findings
+  // (a medium in the fix window, a low the fixer triages), while the posted
+  // review verdict is composed with the act list (ADR 0089).
   // Fail closed here, BEFORE any durable side effect (the approvals record or a
   // follow-up GitHub issue) is written, using the RAW (un-deduped) act list so
   // any acted blocking finding, clustered or not, prevents clean. The gate's

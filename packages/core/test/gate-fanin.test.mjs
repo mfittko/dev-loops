@@ -1694,6 +1694,17 @@ describe("composeReviewVerdict / listOpenActItems", () => {
     assert.equal(composeReviewVerdict("blocked", [medium("act")]), "blocked");
   });
 
+  test("a judge reject never lifts the blockCleanOnFindingSeverities floor", () => {
+    const consolidated = consolidateFanin({ angleResults: [findingAngle("correctness", "high")], blockCleanOnFindingSeverities: ["high"] });
+    const { findings } = applyJudgeDispositions(consolidated.findings, {
+      headSha: "abc123",
+      scopeDrift: { verdict: "within_scope", rationale: "diff matches the AC", driftedAreas: [] },
+      dispositions: [{ index: 0, disposition: "reject", rationale: "judged out of scope", criterion: "Non-goal 1" }],
+    });
+    assert.equal(findings[0].judgeDisposition, "reject");
+    assert.notEqual(composeReviewVerdict(consolidated.verdict, findings), "clean");
+  });
+
   test("tolerates a missing findings list", () => {
     assert.equal(composeReviewVerdict("clean", undefined), "clean");
     assert.deepEqual(listOpenActItems(null), []);

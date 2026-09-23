@@ -20,7 +20,7 @@ function probeWithActList(openActItems) {
     },
     0,
     null,
-    { required: true, gates: [{ name: "pre_approval_gate", executionMode: "fanout_fanin", ledgerExists: true, ledgerPath: "tmp/ledger.json", openActItems, provenance: null, mandatoryAngles: [], anglePool: null }] },
+    { required: false, gates: [], actList: { ledgerPath: "tmp/ledger.json", readable: true, unjudged: null, open: openActItems.length > 0 ? { path: "tmp/ledger.json", items: openActItems } : null } },
   );
   return async () => ({ ok: check.ok, sizeOutcome: "pass", touchesT1: false, currentHeadSha: HEAD, failures: check.failures });
 }
@@ -61,7 +61,7 @@ test("merge refuses a current-head pre_approval_gate ledger with open act items 
   assert.ok(threw, "a non-empty act list must refuse");
   const gateEvidence = threw.mergePrFailure.failures.find((f) => f.precondition === "gate_evidence");
   assert.ok(gateEvidence, JSON.stringify(threw.mergePrFailure.failures));
-  assert.match(threw.message, /judge act list is not empty \(1 open act item\(s\): \[medium\] retry loop never backs off\)/);
+  assert.match(threw.message, /judge act list is not empty in tmp\/ledger\.json \(1 open act item\(s\): \[medium\] retry loop never backs off\)/);
   assert.equal(calls.runChild.length, 0, "no merge with open act items");
 });
 

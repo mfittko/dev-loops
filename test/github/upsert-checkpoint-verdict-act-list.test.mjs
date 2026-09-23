@@ -107,6 +107,7 @@ test("medium and low findings with one judged act derive findings_present and re
     const explicitClean = await post(ledgerPath, "clean");
     assert.match(explicitClean.error, /--verdict "clean"/);
     assert.match(explicitClean.error, /"findings_present"/);
+    assert.match(explicitClean.error, /severity overallVerdict "clean" is composed with 1 open judge act item\(s\) \(ADR 0089\)/);
     const explicitFindings = await post(ledgerPath, "findings_present");
     assert.equal(explicitFindings.error, undefined);
   }, { prefix: "dev-loops-act-list-act-" });

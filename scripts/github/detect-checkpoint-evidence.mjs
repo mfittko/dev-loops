@@ -459,14 +459,6 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
         );
         continue;
       }
-      // ADR 0089: a non-empty judge act list on the current-head ledger keeps
-      // the round from clean, so merge refuses it.
-      const openActItems = Array.isArray(gate.openActItems) ? gate.openActItems : [];
-      if (openActItems.length > 0) {
-        failures.push(
-          `${gate.name}: judge act list is not empty (${openActItems.length} open act item(s): ${openActItems.map((f) => `[${f.severity}] ${f.summary}`).join("; ")})`,
-        );
-      }
       // Opt-in provenance enforcement (gates.requireFanoutProvenance), layered on
       // top of fan-out evidence. When off (default) requireProvenance is falsy so
       // NO new failure is added — behavior is byte-identical to today. When on, a
@@ -548,6 +540,25 @@ export function buildPreMergeGateCheck(evidence, unresolvedThreadCount = null, s
             }
           }
         }
+      }
+    }
+  }
+  // ADR 0089: the current-head pre_approval_gate ledger's judge act list keeps
+  // the round from clean. It runs whether or not requireFanoutEvidence is on,
+  // and client-side only: a stateless verifier has no ledger on disk.
+  const actList = fanoutEnforcement?.actList;
+  if (actList && !skipFanoutLedgerCheck) {
+    if (!actList.readable) {
+      failures.push(`pre_approval_gate: findings-log ledger is unreadable or malformed (${actList.ledgerPath}); cannot verify the judge act list`);
+    } else {
+      if (actList.unjudged) {
+        failures.push(`pre_approval_gate: judge act list unknown (${actList.unjudged.count} finding(s) carry no judge disposition); write the ledger with --judge-verdict`);
+      }
+      if (actList.open) {
+        const { path: openPath, items } = actList.open;
+        failures.push(
+          `pre_approval_gate: judge act list is not empty in ${openPath} (${items.length} open act item(s): ${items.map((f) => `[${f.severity}] ${f.summary}`).join("; ")})`,
+        );
       }
     }
   }
@@ -689,21 +700,36 @@ async function readLedgerProvenanceInAny(checkouts, ledgerPath, criteria = {}) {
   return firstNonNull;
 }
 /**
- * The judge act list of a ledger across the enumerated checkouts. Fails
- * closed: the first readable copy with open act items wins, so a copy with an
- * empty act list can never shadow one that still has them.
+ * The judge act list of the pre_approval_gate ledger across the enumerated
+ * checkouts, or null when no copy exists. Fails closed: `readable` is true
+ * when any copy parses to an object with a `findings` array, and the first
+ * copy with open act items (or with unjudged fan-out findings) wins, so a
+ * copy with an empty act list can never shadow one that still has them.
  */
-async function readOpenActItemsInAny(checkouts, ledgerPath) {
+async function readActListInAny(checkouts, ledgerPath) {
+  let exists = false;
+  let readable = false;
+  let open = null;
+  let unjudged = null;
   for (const root of checkouts) {
+    const full = path.resolve(root, ledgerPath);
+    let parsed;
     try {
-      const parsed = JSON.parse(await readFile(path.resolve(root, ledgerPath), "utf8"));
-      const items = listOpenActItems(parsed?.findings);
-      if (items.length > 0) return items;
-    } catch {
-      // Missing/unreadable/malformed ledger in this checkout — try the next.
+      parsed = JSON.parse(await readFile(full, "utf8"));
+    } catch (error) {
+      if (error?.code !== "ENOENT") exists = true;
+      continue;
     }
+    exists = true;
+    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.findings)) continue;
+    readable = true;
+    const items = listOpenActItems(parsed.findings);
+    if (!open && items.length > 0) open = { path: full, items };
+    // An inline (light-mode) ledger carries no judge pass, so only fan-out is checked.
+    const unjudgedCount = parsed.findings.filter((f) => !f?.judgeDisposition).length;
+    if (!unjudged && parsed.executionMode === "fanout_fanin" && unjudgedCount > 0) unjudged = { path: full, count: unjudgedCount };
   }
-  return [];
+  return exists ? { ledgerPath, readable, open, unjudged } : null;
 }
 // A committed `.devloops` is a small hand-authored config file; 8 MiB is
 // already many times larger than any legitimate one, so bounding `git show`
@@ -841,11 +867,18 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   // Fail open when config could not be loaded/validated. `== null` covers both
   // null and undefined; the loader only ever yields null on failure, but the
   // loose check defensively treats an absent config as unavailable.
+  const checkouts = resolveLedgerCheckouts(cwd);
+  // The act list is read independently of requireFanoutEvidence; `actList` is
+  // only added when the current-head pre_approval_gate ledger exists.
+  const paHead = preApprovalGateMarker?.headSha ?? currentHeadSha;
+  const actList = preApprovalGateMarker?.visible && paHead === currentHeadSha
+    ? await readActListInAny(checkouts, buildLogPath({ repo, pr, gate: "pre_approval_gate", headSha: paHead, tmpRoot: "tmp" }))
+    : null;
+  const withActList = (enforcement) => (actList ? { ...enforcement, actList } : enforcement);
   if (config == null || !resolveRequireFanoutEvidence(config)) {
-    // Disabled/unavailable return is intentionally byte-identical to before
-    // (no requireProvenance key): buildPreMergeGateCheck only reads it inside
-    // the `required` block, so this preserves the exact existing shape.
-    return { required: false, gates: [] };
+    // Disabled/unavailable return keeps its shape (no requireProvenance key):
+    // buildPreMergeGateCheck only reads `gates` inside the `required` block.
+    return withActList({ required: false, gates: [] });
   }
   // Provenance enforcement is opt-in and layered ON TOP of fan-out evidence: it
   // only takes effect while evidence enforcement (above) is active.
@@ -860,7 +893,6 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
   // false), preserving today's rejection.
   const lightThreshold = resolveLightMode(config);
   const lightMode = lightThreshold != null;
-  const checkouts = resolveLedgerCheckouts(cwd);
   // checkouts[0] is always resolveRepoRoot(cwd) (resolveLedgerCheckouts adds it
   // first, unconditionally, and never throws — it falls back to cwd on git
   // failure) — reuse it instead of a second `git rev-parse --show-toplevel`.
@@ -960,7 +992,6 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
       scopeUnderThreshold,
       ledgerPath,
       ledgerExists: await ledgerExistsInAny(checkouts, ledgerPath),
-      openActItems: spec.name === "pre_approval_gate" ? await readOpenActItemsInAny(checkouts, ledgerPath) : [],
       provenance,
       // The dispatch units THIS ledger's own fresh angles actually resolve to
       // (grouped or singleton, mode/gate:full-aware) — buildPreMergeGateCheck
@@ -971,7 +1002,7 @@ export async function buildFanoutEnforcement({ repo, pr, currentHeadSha, draftGa
       ...angleFields,
     });
   }
-  return { required: true, requireProvenance, rejectForeignAngles, lightMode, hasFullLabel, gates };
+  return withActList({ required: true, requireProvenance, rejectForeignAngles, lightMode, hasFullLabel, gates });
 }
 // Internal gatherer — carries the raw reviews/comments facts (comments carry
 // FULL PR comment bodies) that buildPreMergeGateCheck needs. NOT exported:

@@ -684,13 +684,15 @@ export async function writeGateFindingsLog(options, { repoRoot = process.cwd() }
     // Fail closed on a caller-passed --verdict that contradicts the
     // consolidator's computed verdict (GATE-COMMENT-VERDICT-VALUES).
     // The judge only enriches findings with act/defer/reject dispositions —
-    // it never revises the round verdict — so this comparison runs the same
+    // it never revises the ledger's severity verdict, which may be clean with
+    // non-blocking act items; the posted review verdict is composed with the
+    // act list (ADR 0089) — so this comparison runs the same
     // with or without --judge-verdict. A --judge-verdict run can still fail
     // earlier: an unreadable, malformed, or incomplete-coverage judge
     // artifact throws its own error before this contradiction check runs.
     if (callerVerdict !== normalizedOverallVerdict) {
       throw parseError(
-        `--verdict ${JSON.stringify(callerVerdict)} contradicts the wrapper's "overallVerdict" ${JSON.stringify(normalizedOverallVerdict)} (GATE-COMMENT-VERDICT-VALUES; skills/docs/gate-review-comment-contract.md) — the consolidator's computed round verdict, which judge dispositions from --judge-verdict never alter`,
+        `--verdict ${JSON.stringify(callerVerdict)} contradicts the wrapper's "overallVerdict" ${JSON.stringify(normalizedOverallVerdict)} (GATE-COMMENT-VERDICT-VALUES; skills/docs/gate-review-comment-contract.md) — the consolidator's computed round verdict (the severity verdict), which judge dispositions from --judge-verdict never alter; the posted review verdict is composed with the judge act list (ADR 0089)`,
       );
     }
   }
