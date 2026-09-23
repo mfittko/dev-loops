@@ -954,7 +954,16 @@ Consolidation:
   canonical replacement on read. A LOCATABLE `question` is answered, never deferred: the
   fixer replies (an answer that reveals a defect promotes it to `high`/`medium`/`low`; an
   unanswerable question escalates to the author), and an unanswered question blocks
-  gate-close exactly like an open defect. A NON-LOCATABLE `question` has no resolvable
+  gate-close exactly like an open defect. ONE exception (ADR 0088): a `question` the judge
+  disposed `reject` never enters the fixer's act list, so a question the operator or fixer
+  answers on the merits AFTER the judge rejected it has no reply-and-resolve actor left —
+  `close-gate-findings.mjs` reject-closes it instead, citing the judge's rejection rationale
+  in the closing reply; this is a reply-and-resolve, never a `disposition=deferred` stamp,
+  and files no follow-up issue (a question is never fileable). Still unanswered, it still
+  blocks; still judge-`act`, it is still owned by the fixer's own answer-and-resolve path,
+  unchanged. Still judge-`defer`, judge-pass only files the follow-up issue for it — no path
+  resolves the thread, so an answered, judge-deferred question needs an operator decision.
+  A NON-LOCATABLE `question` has no resolvable
   thread to answer through — it is body-filed and deferred by construction, exactly like
   every other non-`high` body-filed finding (`GATE-EXEC-DEFERRAL-RECORD`). A `nit` is a
   cosmetic, non-defect finding resolved-with-rationale immediately, with no fixer cycle
@@ -1262,7 +1271,8 @@ If findings with a severity in the gate's `blockCleanOnFindingSeverities` list a
   means. GATE-CLOSE is a third, stricter layer (see `GATE-EXEC-THREAD-DISPOSITION` below): a
   clean verdict is NOT sufficient to close the
   gate — every gate-authored review thread (any severity) must be resolved (fix-closed by the
-  fixer, answered for a locatable question, or defer-closed by the disposition pass) first, asserted by
+  fixer, answered for a locatable question, defer-closed by the disposition pass, or reject-closed
+  by `close-gate-findings.mjs` for an answered, judge-rejected question, ADR 0088) first, asserted by
   `fetchDraftGateEvidence` /
   `ready-for-review.mjs` / `pre-pr-ready-gate.mjs` (and the `draftGateSatisfied` field fold in
   `detect-checkpoint-evidence.mjs`) as 0 unresolved gate-authored threads
@@ -1576,9 +1586,10 @@ low findings runs AFTER the fixer triages them (#1585): the fixer sees every gat
 finding first (fix-if-cheap-in-the-same-commit, else defer), then the disposition pass acts as
 the closing sweep — stamping `disposition=deferred` for threads the fixer chose to defer and
 REPORTING `unresolvedGateThreadCount` (gate-authored threads still unresolved after the defer
-pass). The actual gate-close assertion is performed by the downstream callers
-(`fetchDraftGateEvidence` / `ready-for-review.mjs` / `pre-pr-ready-gate.mjs`, and the
-`draftGateSatisfied` fold in `detect-checkpoint-evidence.mjs`) on a non-zero count — the
+and reject-close passes). The actual gate-close assertion is performed by the downstream callers
+(`fetchDraftGateEvidence` / `ready-for-review.mjs` / `pre-pr-ready-gate.mjs`, the
+`draftGateSatisfied` fold in `detect-checkpoint-evidence.mjs`, and the `draftGate.currentHeadClean`
+fold in `detect-pr-gate-coordination-state.mjs`) on a non-zero count — the
 disposition pass does not assert the gate-close decision itself; it only REPORTS
 `unresolvedGateThreadCount` (its return always uses `ok:true`). It may still throw on gh or
 resolve failures inside the defer sweep, which the conductor must treat as a failed gate-close
@@ -1637,7 +1648,20 @@ high finding uses, since `isDeferredAtRound` never selects it for auto-deferral 
 enforced and tested). Which of the three replies a fixer sends — a plain answer, a
 promoting-to-defect-severity answer, or an escalation to the author — is a per-thread fixer
 judgment call, not a state machine this codebase drives or unit-tests; only the
-never-auto-deferred invariant above is. A nit thread is
+never-auto-deferred invariant above is. ONE reject-close exception (ADR 0088): a
+question the judge disposed `reject` never reaches the fixer's act list, so the fixer's own
+answer-and-resolve path above never runs for it — once the thread carries a resolving answer
+reply, `close-gate-findings.mjs` closes it directly, citing the judge's rejection rationale in
+the reply. A resolving answer reply is identified by WHAT IT IS, never by WHO POSTED IT (a
+non-empty, non-bot, non-System/ghost comment that is not the gate's own automation output and
+does not contain an unescaped `@copilot`/`/copilot*` summon anywhere in its body): a
+single-account setup can post the finding and every reply under the same authenticated login,
+so "posted by someone other than the gate" is never the criterion. A reply that mixes a real
+answer with a summon is still excluded — post the answer and the re-review summon as separate
+replies. This is still a reply-and-resolve, never a
+`disposition=deferred` stamp, and a question is still never fileable; an unanswered question, or
+one the judge disposed `act`/`defer`, is untouched by this exception and still follows the paths
+above. A nit thread is
 resolved-with-rationale immediately at round 1 by `close-gate-findings.mjs` — the fixer owes it no
 triage cycle (unlike low, it is not handed to the fixer as a fix/triage target on the severity
 axis; the one exception is a judge `act` on a nit, which reaches the fixer through judge-pass's
@@ -1663,7 +1687,8 @@ low findings (#1585), except a low the judge disposed `act`, which is a fix targ
 only on reproduction grounds (`GATE-EXEC-JUDGE-AUTHORITY-SPLIT`) — and answers every gate-authored question. Fix-close is the fixer's role; the disposition pass
 (`close-gate-findings`) then resolves every still-open DEFERRABLE gate-authored thread
 (low, nit, and out-of-window medium) as the closing sweep AFTER the fixer's
-triage — it never fix-closes, and it deliberately leaves high, question, and in-window
+triage — it never fix-closes, and it deliberately leaves high, question (except an
+answered, judge-rejected question, which it reject-closes per ADR 0088), and in-window
 medium threads unresolved (they keep `unresolvedGateThreadCount` non-zero, which
 blocks gate close until the fixer/fix-loop resolves them). Resolving and FILING (to the tracked
 follow-up issue, stamping `disposition=deferred`) are two separate decisions (#1846): out-of-window

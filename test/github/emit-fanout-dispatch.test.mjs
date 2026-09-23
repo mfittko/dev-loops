@@ -433,6 +433,71 @@ test("fan-in join: sentinels written under the emitted scopes pair with the disp
   });
 });
 
+// #2372 fan-in join, end to end: the sentinel/layout pairing above proves the
+// dispatch join; this exercises the actual CONSOLIDATION join —
+// consolidateGateFanin() consuming a real per-angle findings artifact for
+// every emitted angle, including the auto-chunk bundle's own angles (whose
+// unit scope is the normalized "...group-<angles>" form, never a per-angle
+// scope, so nothing in its scope string names "determinism" or
+// "state-concurrency" directly).
+test("fan-in join: consolidateGateFanin consumes per-angle findings artifacts for every emitted angle, including the auto-chunk bundle's angles under its normalized group scope", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await seedBundle(tmpDir);
+    const result = runEmitCli(
+      ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
+      { cwd: tmpDir },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    const tmpRoot = path.join(tmpDir, "tmp");
+
+    // Same fresh-context evidence a real reviewer round leaves — required for
+    // consolidateGateFanin's own briefing-prefix guard to pass.
+    const prefixHash = createHash("sha256").update(PREFIX_BYTES).digest("hex");
+    for (const unit of payload.units) {
+      await writeFile(
+        path.join(tmpRoot, `${CHECKPOINT_SENTINEL_PREFIX}${unit.scope}-${HEAD_SHA}.json`),
+        JSON.stringify({ scope: unit.scope, prefixHash }),
+        "utf8",
+      );
+    }
+    assert.equal((await verifyDispatchPromptLayoutForHead(tmpRoot, HEAD_SHA)).verified, true);
+    assert.equal((await verifyBriefingPrefixesForHead(tmpRoot, HEAD_SHA)).verified, true);
+
+    // One per-angle findings artifact per emitted angle at the canonical
+    // per-angle path (packages/core/src/loop/gate-fanin.mjs header docs) —
+    // including determinism/state-concurrency, the auto-chunk bundle's own
+    // angles, even though that unit's emitted scope is the group form
+    // "pre-approval-gate-group-determinism-state-concurrency".
+    const findingsDir = buildGateReviewsDir({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    await mkdir(findingsDir, { recursive: true });
+    const emittedAngles = payload.units.flatMap((u) => u.angles);
+    for (const angle of emittedAngles) {
+      await writeFile(
+        path.join(findingsDir, `${angle}.json`),
+        JSON.stringify({ angle, verdict: "clean", headSha: HEAD_SHA, findings: [] }),
+        "utf8",
+      );
+    }
+
+    const emitPlan = buildGateEmitPlanPath({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot });
+    const fanin = await consolidateGateFanin({
+      findingsDir, repoRoot: tmpDir, tmpRoot, gate: GATE, headSha: HEAD_SHA,
+      emitPlan, expectedDispatchUnits: payload.units.length, resolvedAngles: emittedAngles,
+    });
+    assert.equal(fanin.overallVerdict, "clean", JSON.stringify(fanin));
+    assert.deepEqual([...fanin.findingsJson.map((a) => a.angle)].sort(), [...emittedAngles].sort());
+    // The auto-chunk bundle's angles specifically consolidated, despite its
+    // own unit scope carrying no per-angle name.
+    for (const angle of ["determinism", "state-concurrency"]) {
+      assert.ok(emittedAngles.includes(angle), `fixture must still emit the auto-chunk angle "${angle}"`);
+      const section = fanin.findingsJson.find((a) => a.angle === angle);
+      assert.ok(section, `consolidation must cover auto-chunk angle "${angle}"`);
+      assert.equal(section.verdict, "clean");
+    }
+  });
+});
+
 // Invariant: every resolved gate angle carries a persona + prompt, and the
 // emitter carries that resolved prompt inside the unit's work order, so a
 // dispatched reviewer receives a defined task without loading config itself.
