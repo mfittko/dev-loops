@@ -91,3 +91,11 @@ test("a mismatched or invalid sibling spec-authority verdict fails closed and wr
     });
   }
 });
+
+test("a spec_cannot_decide sibling verdict fails closed at the human-spec-decision state and writes no ledger", async () => {
+  const siblingVerdict = { ...VERDICT, decisions: [VERDICT.decisions[0], decision(1, "spec_cannot_decide")] };
+  await withCase({ siblingVerdict }, async ({ run, ledgerPath }) => {
+    await assert.rejects(run(), /SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT: .* finding index\(es\) 1;/);
+    await assert.rejects(access(ledgerPath));
+  });
+});

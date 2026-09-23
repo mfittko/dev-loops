@@ -664,6 +664,9 @@ async function applySiblingSpecAuthorityVerdict(findings, judgePath, identity) {
       throw parseError(`spec-authority verdict ${verdictPath} ${key} ${JSON.stringify(validated[key])} does not match --spec-authority ${JSON.stringify(identity[key])} (fail closed)`);
     }
   }
+  if (validated.humanDecisionRequired) {
+    throw parseError(`SPEC-AUTHORITY-HUMAN-DECISION-LAST-RESORT: spec-authority verdict ${verdictPath} needs a human spec decision for finding index(es) ${validated.humanDecisionIndices.join(", ")}; stop at the human-spec-decision state (fail closed, no ledger written)`);
+  }
   const conflicts = validated.decisions
     .filter((d) => d.outcome === SPEC_AUTHORITY_OUTCOMES.FINDING_CONFLICTS)
     .map((d) => d.index);

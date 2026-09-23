@@ -728,11 +728,11 @@ async function readActListInAny(checkouts, ledgerPath, markerExecutionMode) {
       continue;
     }
     exists = true;
-    // A finding that is not a plain object, lacks a string summary, a canonical
-    // severity, or a non-empty angle, or carries a disposition outside the
+    // A finding that is not a plain object, lacks a non-empty string summary, a
+    // canonical severity, or a non-empty angle, or carries a disposition outside the
     // canonical set is malformed, not judged.
     if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.findings)
-      || parsed.findings.some((f) => !f || typeof f !== "object" || Array.isArray(f) || typeof f.summary !== "string"
+      || parsed.findings.some((f) => !f || typeof f !== "object" || Array.isArray(f) || typeof f.summary !== "string" || f.summary.trim().length === 0
         || !VALID_SEVERITIES.has(normalizeSeverity(f.severity)) || typeof f.angle !== "string" || f.angle.trim().length === 0
         || (f.judgeDisposition != null && !JUDGE_DISPOSITIONS.includes(f.judgeDisposition)))) {
       unreadable ??= { path: full };

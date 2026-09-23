@@ -163,3 +163,21 @@ test("--findings-json without a ledger refuses an explicit clean over an open ac
     );
   }, { prefix: "dev-loops-act-list-json-" });
 });
+
+test("--findings-json without a ledger fails closed on a judgeDisposition outside act/defer/reject", async () => {
+  await withTempDir(async (tempDir) => {
+    const jsonPath = path.join(tempDir, "findings.json");
+    await writeFile(jsonPath, JSON.stringify([{ angle: "correctness", findings: [finding("low", "bogus")] }]), "utf8");
+    const args = [
+      "--repo", "owner/repo", "--pr", "17", "--gate", "draft_gate", "--head-sha", HEAD,
+      "--findings-json", jsonPath, "--next-action", "follow the verdict", "--inline-reason", "act list test",
+      "--findings-severity-counts", JSON.stringify({ high: 0, medium: 0, low: 1, question: 0, nit: 0 }), "--verdict", "clean",
+    ];
+    await assert.rejects(
+      () => upsertCheckpointVerdict(parseUpsertCheckpointVerdictCliArgs(args), {
+        env: runIdFreeEnv({ DEVLOOPS_RUN_ID: "" }), ghCommand: "gh", repoRoot, runChild: makeRunChild([]),
+      }),
+      /\[low\] low finding judged bogus" carries judgeDisposition "bogus" outside act\/defer\/reject/,
+    );
+  }, { prefix: "dev-loops-act-list-json-bogus-" });
+});
