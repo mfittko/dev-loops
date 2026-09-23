@@ -38,7 +38,8 @@ const REFUSAL_MESSAGE = "scripts/github/compose-reviewer-prompt.mjs's CLI is not
  * artifact + resolveFanoutGroups units.
  *
  * @returns {Promise<{ composed: boolean, reason?: string, recorded?: boolean,
- *   promptPath?: string, prefixPath?: string, promptLength?: number, truncated?: boolean }>}
+ *   promptPath?: string, prefixPath?: string, promptLength?: number,
+ *   sectionBytes?: { prefix: number, volatile: number, suffix: number }, truncated?: boolean }>}
  *   `composed: false` (with `reason`) is a caller-recoverable refusal (missing
  *   prefix record, unreadable/empty suffix, or the composer's own shape refusal);
  *   filesystem/record errors reject.
@@ -87,7 +88,8 @@ export async function composeAndRecordReviewerPrompt({ repo, pr, gate, headSha, 
   if (!recordResult.recorded) {
     return { composed: true, recorded: false, promptPath: outPath, prefixPath, reason: recordResult.reason };
   }
-  return { composed: true, recorded: true, promptPath: outPath, prefixPath, promptLength: composed.length, truncated: recordResult.truncated };
+  const sectionBytes = { prefix: Buffer.byteLength(prefixBytes), volatile: Buffer.byteLength(volatileBytes), suffix: Buffer.byteLength(angleSuffix) };
+  return { composed: true, recorded: true, promptPath: outPath, prefixPath, promptLength: composed.length, sectionBytes, truncated: recordResult.truncated };
 }
 
 // This CLI refuses every direct fan-out invocation: the composer above is a

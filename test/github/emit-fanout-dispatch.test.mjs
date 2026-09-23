@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, listPriorFindingsLogHeads, main, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "../../scripts/github/emit-fanout-dispatch.mjs";
+import { REVIEWER_WORK_ORDER_MAX_BYTES, buildAngleNamingSuffix, dispatchUnitScope, expandDispatchUnits, listPriorFindingsLogHeads, main, sanitizeScopeSegment, splitSubUnitName, unitScopeSegment } from "../../scripts/github/emit-fanout-dispatch.mjs";
 import { buildGateEmitPlanPath, buildGateReviewsDir, mapGateToConfigKey, parseWriteGateContextCliArgs, resolveFanoutDispatch, writeGateContext } from "../../scripts/github/write-gate-context.mjs";
 import { loadDevLoopConfig, resolveReviewerRole } from "@dev-loops/core/config";
 import { buildCarryForwardPlan } from "../../scripts/github/resolve-angle-carry-forward.mjs";
@@ -52,6 +52,15 @@ const FANOUT = {
   ],
   pendingGroups: [{ name: "contradiction-lens", angles: ["contradiction-lens"] }],
 };
+
+
+// The emitter carries each angle's resolved prompt in the work order and
+// refuses a prompt-less angle, so fixtures using synthetic angle names give
+// them a prompt through the repo config layer.
+async function writeAnglePrompts(tmpDir, angles) {
+  const entries = angles.map((angle) => `      - name: ${JSON.stringify(angle)}\n        persona: review\n        prompt: Review the ${JSON.stringify(angle).slice(1, -1)} angle.`);
+  await writeFile(path.join(tmpDir, ".devloops"), `version: 1\ngates:\n  preApproval:\n    angles:\n${entries.join("\n")}\n`, "utf8");
+}
 
 async function seedBundle(tmpDir, { fanout = FANOUT, withPrefix = true, gate = GATE } = {}) {
   const dir = path.join(tmpDir, "tmp", "gate-context", "o-r", "pr-7");
@@ -380,7 +389,7 @@ test("shares a reviewer for a configured group AND an auto-chunk bundle alike; o
       const composed = await readFile(unit.promptPath, "utf8");
       assert.ok(composed.startsWith(PREFIX_BYTES), `prefix-first for ${unit.scope}`);
       for (const angle of unit.angles) assert.match(composed, new RegExp(angle));
-      assert.match(composed, /resolveReviewerRole/);
+      for (const instruction of unit.workOrder.angleInstructions) assert.ok(composed.includes(instruction.prompt), `${unit.scope} carries ${instruction.angle} prompt`);
       assert.ok(composed.includes(`--scope ${unit.scope}`), `composed prompt for ${unit.scope} must state its own --scope value verbatim`);
     }
   });
@@ -490,13 +499,9 @@ test("fan-in join: consolidateGateFanin consumes per-angle findings artifacts fo
 });
 
 // Invariant: every resolved gate angle carries a persona + prompt, and the
-// emitter names the angle in the composed prompt rather than copying its
-// prompt text — the contradiction-lens singleton unit's composed prompt
-// instructs the reviewer to self-resolve via resolveReviewerRole(config,
-// "contradiction-lens"). Prove that call, against the same shipped
-// extension-defaults config the emitter dispatches with, actually returns a
-// non-null prompt, so a dispatched reviewer receives a defined task.
-test("contradiction-lens's emitted unit leads with the invariant prefix, and its self-resolve instruction now resolves the new default prompt", async () => {
+// emitter carries that resolved prompt inside the unit's work order, so a
+// dispatched reviewer receives a defined task without loading config itself.
+test("contradiction-lens's emitted unit leads with the invariant prefix and carries the resolved default prompt", async () => {
   await withTmpDir(async (tmpDir) => {
     await seedBundle(tmpDir);
     const result = runEmitCli(
@@ -509,7 +514,7 @@ test("contradiction-lens's emitted unit leads with the invariant prefix, and its
     assert.ok(unit, "contradiction-lens singleton unit must be emitted");
     const composed = await readFile(unit.promptPath, "utf8");
     assert.ok(composed.startsWith(PREFIX_BYTES), "composed prompt must lead with the invariant prefix");
-    assert.match(composed, /resolveReviewerRole\(config, "contradiction-lens"\)/);
+    assert.doesNotMatch(composed, /resolveReviewerRole/);
 
     // tmpDir has no .devloops of its own, so this resolves the shipped
     // extension-defaults — the same layer a real reviewer resolves from.
@@ -519,7 +524,8 @@ test("contradiction-lens's emitted unit leads with the invariant prefix, and its
     assert.equal(role.persona, "review");
     assert.ok(role.prompt && role.prompt.length > 0, "contradiction-lens must resolve a non-empty prompt");
     assert.match(role.prompt, /contradict/i);
-    assert.ok(!composed.includes(role.prompt), "emitter must not copy the angle prompt");
+    assert.ok(composed.slice(unit.sectionBytes.prefix).includes(role.prompt), "the work order carries the resolved angle prompt in its suffix");
+    assert.deepEqual(unit.workOrder.angleInstructions, [{ angle: "contradiction-lens", persona: role.persona, prompt: role.prompt }]);
   });
 });
 
@@ -705,6 +711,7 @@ async function seedRealAutoChunkOnlyBundle(tmpDir, angles) {
 test("main(): a no-config-table angle set dispatches ONE shared reviewer per auto-chunk bundle, not one per angle (AC9, issue 2180)", async () => {
   await withTmpDir(async (tmpDir) => {
     const angles = ["a", "b", "c", "d", "e", "f", "g"];
+    await writeAnglePrompts(tmpDir, angles);
     await seedRealAutoChunkOnlyBundle(tmpDir, angles);
     const result = runEmitCli(
       ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
@@ -891,7 +898,7 @@ test("a successful run persists the keyed emit-plan artifact with the full resul
     assert.equal(persisted.maxConcurrent, stdoutPayload.maxConcurrent);
     assert.deepEqual(persisted.units, stdoutPayload.units);
     for (const unit of persisted.units) {
-      assert.deepEqual(Object.keys(unit).sort(), ["angles", "group", "promptPath", "scope"].sort());
+      assert.deepEqual(Object.keys(unit).sort(), ["angles", "group", "promptBytes", "promptPath", "scope", "sectionBytes", "workOrder"].sort());
     }
   });
 });
@@ -1102,7 +1109,7 @@ test("--pending falls back to groups only when pendingGroups is ABSENT", async (
       fanout: {
         groups: [
           { name: "coverage", angles: ["coverage"] },
-          { name: "consistency", angles: ["consistency"] },
+          { name: "correctness", angles: ["correctness"] },
         ],
       },
     });
@@ -1121,7 +1128,7 @@ test("--pending falls back to groups only when pendingGroups is ABSENT", async (
     assert.equal(persisted.units.length, 2);
     assert.deepEqual(
       persisted.units.flatMap((unit) => unit.angles).sort(),
-      ["consistency", "coverage"],
+      ["correctness", "coverage"],
     );
   });
 });
@@ -1212,6 +1219,7 @@ test("fails closed (exit 1) when a unit's invariant-prefix record is missing", a
 test("fails closed (exit 1) when two distinct singleton units derive a colliding scope", async () => {
   await withTmpDir(async (tmpDir) => {
     // Two distinct single-angle units whose angle names sanitize to the same scope segment.
+    await writeAnglePrompts(tmpDir, ["foo.bar", "foo-bar"]);
     await seedBundle(tmpDir, { fanout: { groups: [{ name: "foo.bar", angles: ["foo.bar"] }, { name: "foo-bar", angles: ["foo-bar"] }] } });
     const result = runEmitCli(
       ["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA],
@@ -1219,6 +1227,21 @@ test("fails closed (exit 1) when two distinct singleton units derive a colliding
     );
     assert.equal(result.status, 1, result.stderr);
     assert.match(JSON.parse(result.stdout).error, /collides with an earlier unit/);
+  });
+});
+
+test("work-order outputRefs use the canonical sanitized per-angle filename and stay inside the findings dir", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const angle = "../evil/x";
+    await writeAnglePrompts(tmpDir, [angle]);
+    await seedBundle(tmpDir, { fanout: { groups: [{ name: "evil", angles: [angle] }] } });
+    const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const [unit] = JSON.parse(result.stdout).units;
+    const [ref] = unit.workOrder.outputRefs;
+    const reviewsDir = buildGateReviewsDir({ repo: REPO, pr: PR, gate: GATE, headSha: HEAD_SHA, tmpRoot: "tmp" });
+    assert.ok(ref.endsWith(path.join(reviewsDir, `${sanitizeScopeSegment(angle) || "angle"}.json`)), ref);
+    assert.ok(!ref.includes("/evil/"), ref);
   });
 });
 
@@ -1613,11 +1636,12 @@ test("sanitizeScopeSegment collapses non-alphanumeric runs to single hyphens", (
   assert.equal(sanitizeScopeSegment("--edge--"), "edge");
 });
 
-test("buildAngleNamingSuffix names angles and instructs self-resolution, never inlining persona text", () => {
-  const single = buildAngleNamingSuffix({ name: "coverage", angles: ["coverage"] }, "draft-gate-coverage");
+test("buildAngleNamingSuffix names angles and carries their supplied instructions", () => {
+  const single = buildAngleNamingSuffix({ name: "coverage", angles: ["coverage"] }, "draft-gate-coverage", [{ angle: "coverage", persona: "review", prompt: "COVERAGE-PROMPT" }]);
   assert.match(single, /coverage/);
-  assert.match(single, /resolveReviewerRole/);
-  const group = buildAngleNamingSuffix({ name: "design-simplicity", angles: ["dry", "kiss"] }, "pre-approval-gate-group-design-simplicity");
+  assert.match(single, /COVERAGE-PROMPT/);
+  const group = buildAngleNamingSuffix({ name: "design-simplicity", angles: ["dry", "kiss"] }, "pre-approval-gate-group-design-simplicity",
+    [{ angle: "dry", persona: "review", prompt: "D" }, { angle: "kiss", persona: "review", prompt: "K" }]);
   assert.match(group, /dry, kiss/);
   assert.match(group, /one findings artifact PER ANGLE/);
 });
@@ -1691,4 +1715,79 @@ test("buildAngleNamingSuffix carries the bounded reviewer contract: budget, proh
   // plugin install that ships no scripts/ tree).
   assert.match(suffix, /dev-loops-run scripts\/github\/emit-reviewer-blocked\.mjs/);
   assert.doesNotMatch(suffix, /node scripts\/github\/emit-reviewer-blocked\.mjs/);
+});
+
+test("buildAngleNamingSuffix carries each angle's resolved persona and prompt, and any unit-scoped required read", () => {
+  const instructions = [
+    { angle: "dry", persona: "review", prompt: "DRY-PROMPT-TEXT" },
+    { angle: "kiss", persona: "review", prompt: "KISS-PROMPT-TEXT" },
+  ];
+  const suffix = buildAngleNamingSuffix({ name: "design-simplicity", angles: ["dry", "kiss"] }, "pre-approval-gate-group-design-simplicity", instructions,
+    [{ kind: "scoped-evidence", path: "/w/tmp/x.briefing-docs-only.txt", sha256: "f".repeat(64), bytes: 12, required: true }]);
+  assert.match(suffix, /### Angle: dry \(persona: review\)\nDRY-PROMPT-TEXT/);
+  assert.match(suffix, /### Angle: kiss \(persona: review\)\nKISS-PROMPT-TEXT/);
+  assert.ok(suffix.includes("/w/tmp/x.briefing-docs-only.txt") && suffix.includes("f".repeat(64)));
+  assert.doesNotMatch(suffix, /resolveReviewerRole/);
+});
+
+test("emitter: angleInstructions carry the merged-config resolved prompt of every covered angle, inside the prompt suffix", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await writeFile(path.join(tmpDir, ".devloops"), "version: 1\ngates:\n  preApproval:\n    angles:\n      - name: kiss\n        persona: review\n        prompt: CUSTOM-KISS-PROMPT from the repo layer\n", "utf8");
+    await seedBundle(tmpDir);
+    const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: tmpDir });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const payload = JSON.parse(result.stdout);
+    const { config } = await loadDevLoopConfig({ repoRoot: tmpDir });
+    assert.equal(resolveReviewerRole(config, "kiss").prompt, "CUSTOM-KISS-PROMPT from the repo layer");
+    for (const unit of payload.units) {
+      assert.deepEqual(unit.workOrder.angleInstructions.map((i) => i.angle), unit.angles);
+      const composed = await readFile(unit.promptPath, "utf8");
+      for (const instruction of unit.workOrder.angleInstructions) {
+        const role = resolveReviewerRole(config, instruction.angle);
+        assert.equal(instruction.prompt, role.prompt);
+        assert.equal(instruction.persona, role.persona);
+        assert.ok(composed.slice(unit.sectionBytes.prefix).includes(role.prompt), `${instruction.angle} prompt sits in the suffix`);
+      }
+    }
+  });
+});
+
+test("emitter: an angle with no resolvable prompt refuses (exit 1) naming the angle, and leaves no emit-plan", async () => {
+  await withTmpDir(async (tmpDir) => {
+    const contextDir = await seedBundle(tmpDir, { fanout: { groups: [{ name: "no-such-angle", angles: ["no-such-angle"] }, ...FANOUT.groups] } });
+    const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: tmpDir });
+    assert.equal(result.status, 1, result.stderr || result.stdout);
+    assert.match(result.stdout, /no-such-angle/);
+    assert.match(result.stdout, /no resolvable prompt/);
+    await assert.rejects(() => readFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.emit-plan.json`), "utf8"), { code: "ENOENT" });
+  });
+});
+
+test("emitter: refuses a composed prompt over the work-order ceiling or carrying inline diff text", async () => {
+  for (const [label, prefix, pattern] of [
+    ["ceiling", `${PREFIX_BYTES}${"x".repeat(REVIEWER_WORK_ORDER_MAX_BYTES)}\n`, /REVIEWER_WORK_ORDER_MAX_BYTES|ceiling/],
+    ["inline diff", `${PREFIX_BYTES}diff --git a/x b/x\n`, /inline diff/],
+  ]) {
+    await withTmpDir(async (tmpDir) => {
+      const contextDir = await seedBundle(tmpDir);
+      await writeFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.briefing-prefix.txt`), prefix, "utf8");
+      const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: tmpDir });
+      assert.equal(result.status, 1, `${label}: ${result.stderr || result.stdout}`);
+      assert.match(result.stdout, pattern);
+      await assert.rejects(() => readFile(path.join(contextDir, `${GATE}-${HEAD_SHA}.emit-plan.json`), "utf8"), { code: "ENOENT" });
+    });
+  }
+});
+
+test("emitter: an oversized consumer-configured angle prompt refuses (exit 1) naming the unit, its angles, and the byte count", async () => {
+  await withTmpDir(async (tmpDir) => {
+    await writeFile(path.join(tmpDir, ".devloops"), `version: 1\ngates:\n  preApproval:\n    angles:\n      - name: kiss\n        persona: review\n        prompt: ${"k".repeat(REVIEWER_WORK_ORDER_MAX_BYTES)}\n`, "utf8");
+    await seedBundle(tmpDir);
+    const result = runEmitCli(["--repo", REPO, "--pr", PR, "--gate", GATE, "--head-sha", HEAD_SHA], { cwd: tmpDir });
+    assert.equal(result.status, 1, result.stderr || result.stdout);
+    const { error } = JSON.parse(result.stdout);
+    assert.match(error, /unit "design-simplicity"/);
+    assert.match(error, /angles dry, kiss/);
+    assert.match(error, /is \d+ bytes \(prefix \d+, volatile \d+, suffix \d+\), over the REVIEWER_WORK_ORDER_MAX_BYTES ceiling/);
+  });
 });
